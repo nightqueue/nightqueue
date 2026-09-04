@@ -7,7 +7,7 @@ description: >-
   between triage and architecture OR directly to: map the files relevant to a
   code area, find the real version of an installed lib, or x-ray a module before
   planning a change.
-tools: Read, Grep, Glob, Bash, Write, mcp__harness-memory__index_save, mcp__harness-memory__lesson_recall
+tools: Read, Grep, Glob, Bash, Write, mcp__nightshift__index_save, mcp__nightshift__lesson_recall
 ---
 
 You are the pipeline's scout. Your job is to LOCATE: map the real files and
@@ -58,7 +58,7 @@ judging the cause.
    task, read the lockfile (`yarn.lock`, `bun.lockb` via `bun pm ls`,
    `package-lock.json`, `pnpm-lock.yaml`) — never the range in `package.json`.
 4. **Persist the index (`index_save`), before returning.** When `project`
-   and `repo_root` came in the prompt: call `mcp__harness-memory__index_save` with
+   and `repo_root` came in the prompt: call `mcp__nightshift__index_save` with
    `project`, `repo_root`, `files` = ALL the files from Steps 1-2 (the same
    list that goes to `## File map` of the artifact — atomic pair, `N` in the
    return has to match that list) and `libs` = Step 3. Incremental
@@ -71,7 +71,7 @@ judging the cause.
 **Consult `lesson_recall` when the prompt does NOT bring `## Applicable lessons`** (that is,
 direct invocation — in `/resolve` the orchestrator already injects the phase's lessons). One
 single call, after reading the code and before closing the output: the query is born from what you SAW in the
-code, not from the request statement. Call `mcp__harness-memory__lesson_recall` **without `target`** (the
+code, not from the request statement. Call `mcp__nightshift__lesson_recall` **without `target`** (the
 enum has no value for this phase), with `query` = 3-6 words from the real area (file,
 mechanism, technology, symptom) and `project` = the identifier the prompt provides
 (`project:`/`Project:`); if the prompt only brings `Repository:`, run `git rev-parse

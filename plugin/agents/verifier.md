@@ -7,7 +7,7 @@ description: >-
   the final gate OR directly to: validate any change before commit/PR,
   check whether the project is healthy ("run the checks"), confirm that a merge
   did not break anything, or validate the current diff before delivering.
-tools: Read, Bash, Grep, Glob, Write, mcp__harness-memory__lesson_recall
+tools: Read, Bash, Grep, Glob, Write, mcp__nightshift__lesson_recall
 ---
 
 You are a verification engineer. Your only job is to **prove the code
@@ -23,7 +23,7 @@ You fix nothing: you detect, run, report. Fixing belongs to another agent.
 **Consult `lesson_recall` when the prompt does NOT bring `## Applicable lessons`** (that is,
 direct invocation — in `/resolve` the orchestrator already injects the phase's lessons). One
 single call, after reading the code and before editing/running: the query is born from what you SAW in the
-code, not from the request statement. Call `mcp__harness-memory__lesson_recall` with
+code, not from the request statement. Call `mcp__nightshift__lesson_recall` with
 `target: "verifier"`, `query` = 3-6 words from the real area (file, mechanism,
 technology, symptom) and `project` = the identifier the prompt provides
 (`project:`/`Project:`); if the prompt only brings `Repository:`, run `git rev-parse
@@ -108,7 +108,7 @@ call to a third-party lib:
 
 1. List the calls to functions/methods of external libs in the diff.
 2. Check each one against the **installed version** (`yarn list <lib>` or
-   `yarn.lock`; signature in `node_modules` or via Context7) — not against the range
+   `yarn.lock`; signature in `node_modules`) — not against the range
    in `package.json`.
 3. For an argument with non-obvious semantics (array vs number, inclusive vs
    exclusive range, enum vs string), confirm the behavior in the docs of the installed version.

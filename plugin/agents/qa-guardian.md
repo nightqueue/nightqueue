@@ -7,7 +7,7 @@ description: >-
   Use it in the /resolve pipeline OR directly to: review a PR or diff, audit
   existing code before a release, attack a freshly implemented feature,
   or assess the robustness of a specific module.
-tools: Read, Glob, Grep, Bash, Write, mcp__harness-memory__lesson_recall
+tools: Read, Glob, Grep, Bash, Write, mcp__nightshift__lesson_recall
 ---
 
 You are a senior adversarial QA. Your only goal is to **break the code** — find
@@ -99,7 +99,7 @@ matrix of the SKILL.md and the review dimensions are merged here — do not dupl
 
 **Consult `lesson_recall` after reading the diff, before fixing the fronts.** One
 single call, and never before the reading: the query is born from what you SAW in the code, not from the
-request statement. Call `mcp__harness-memory__lesson_recall` with `target: "qa"`, `query` =
+request statement. Call `mcp__nightshift__lesson_recall` with `target: "qa"`, `query` =
 3-6 words from the real area (file, mechanism, technology, symptom) and `project` = the
 identifier the prompt provides (`project:`/`Project:`); if the prompt only brings
 `Repository:`, run `git rev-parse --path-format=absolute --git-common-dir` and pass the

@@ -75,7 +75,20 @@ agent, print a line in this format first:
 
 ### Phase 0 — Interpretation, routing, worktree and tasks
 
-0.5. **Run resume (FIRST THING in Phase 0 — before interpreting).** If the
+0.1. **Memory preflight (before anything else in Phase 0).** Call `lesson_recall`
+   (MCP `nightshift`) ONCE, with `project` = the current project, only to prove the server is
+   reachable — the return is not used here; the per-phase recall (below) is the one that feeds
+   the prompts. There is no memoryless mode.
+
+   - **The tool does not exist in the host** (no MCP server `nightshift` connected, the host
+     answers that there is no such tool) → **STOP the run right here**: print one short line —
+     `nightshift memory unavailable: run shift setup and retry` — and do not create the
+     worktree, do not write `state.json`, do not launch any subagent.
+   - **The tool answers** — including an EMPTY return or a read error → continue. An empty
+     memory is the normal state of a fresh install: an empty recall only makes the phase omit
+     the corresponding section.
+
+0.5. **Run resume (right after the preflight, before interpreting).** If the
    job context brought a block `RESUME CANDIDATE (slug \`<slug>\`)`, decide
    BEFORE re-interpreting the task whether this run continues a previous one:
 
@@ -530,7 +543,7 @@ agent, print a line in this format first:
 ### Lessons per phase (applies to every phase with a subagent)
 
 Before launching each subagent (Phases 1–6), run `lesson_recall` (MCP
-harness-memory) with `query` = 2–4 keywords from the brief, `project` = the current
+`nightshift`) with `query` = 2–4 keywords from the brief, `project` = the current
 project and `target` = the target phase (`triager` | `architect` | `coder` | `qa` |
 `verifier`). Inject into the subagent's prompt an `## Applicable lessons` section with
 up to 4 relevant preventions (1 line each). Nothing relevant → omit the section;
@@ -640,7 +653,7 @@ cause is a leaf of a family (the architect decides the fix level in their own St
 > **trivial** → does not execute. **simple** → does not execute (the architect locates it alone).
 
 **Structural index (recall — before launching the Explore):** call `index_recall`
-(MCP harness-memory) with `project` = the current project, `repo_root` = the pipeline's CWD
+(MCP `nightshift`) with `project` = the current project, `repo_root` = the pipeline's CWD
 and `query` = 1-2 words from the Affected area. The return brings the already known map of the
 project with real per-file freshness: `stale`/`missing` = revalidate; the rest are
 fresh. An empty index → proceed exactly as before (graceful degradation).
@@ -906,10 +919,6 @@ or any command that changes the git state is forbidden:
 a concurrent stash/checkout reverts files another batch is editing. The N
 coders go **in a single message** (N `tool_use` in the same content block),
 never with `run_in_background` — see ⛔ Hard rule for launching a subagent.
-
-After completing the implementation, update the feature's progress in
-memory: call `progress_update` (MCP harness-memory) with the project, the feature
-(the task's slug), the estimated pct and a 1-line note of what was delivered.
 
 ### Phase 5 — Adversarial QA (attack)
 
@@ -1782,7 +1791,7 @@ language (with no file and no identifier, as the section's spec already requires
 On both paths, proceed to the Telemetry below.
 
 **Telemetry (mandatory — one call per run, any outcome):** after
-assembling the tables, persist the run via `pipeline_log` (MCP harness-memory):
+assembling the tables, persist the run via `pipeline_log` (MCP `nightshift`):
 `project`, `slug`, `tier`, `task_type`, `outcome` (`pr_opened` | `local_commit`
 | `no_commit`), `gate_stop` when there was no delivery (which gate ended it:
 `critique` | `triage` | `architect` | `qa` | `verification` | `runtime` |
@@ -1792,19 +1801,6 @@ one entry per line of the complete table, in order (phase, model, status
 note ≤ 1 line). Terminations by gate are recorded too — they are the most
 valuable data of the runtime's report. A failure in `pipeline_log` does not block the report:
 record the ⚠️ open item and continue.
-
-**Vault (mandatory to check — an action conditional on the record):** right after the
-`pipeline_log`, call `memory_recall` (MCP harness-memory) with
-`project=<project>` and `query="vault"`. With no pointer (`key: "vault"`) for the
-project → skip in silence, with no open item (most projects do not yet
-have a vault registered). With a pointer found and `outcome` equal to
-`pr_opened` or `local_commit` (NEVER on `no_commit` — nothing was delivered),
-extract the vault path from the text and append an entry to
-`<vault>/changes/<YYYY-MM>.md` (create the file with the header
-`# Changes — <YYYY-MM>` if it does not exist yet): the date, the slug, 1–3 lines of
-what changed and why, and what was intentionally discarded (if any).
-A failure to write does not block the report: record the ⚠️ open item and continue —
-the same treatment as `pipeline_log`.
 
 ---
 

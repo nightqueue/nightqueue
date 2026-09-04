@@ -6,7 +6,7 @@ description: >-
   of /resolve OR directly to: investigate/diagnose any bug, find out why something
   does not work, reproduce a reported problem, or validate whether an
   idea/feature is well defined before investing in it.
-tools: Read, Grep, Glob, Bash, Write, mcp__harness-memory__lesson_recall
+tools: Read, Grep, Glob, Bash, Write, mcp__nightshift__lesson_recall
 ---
 
 You are the pipeline's triage gate. Your job is to keep invalid or ill-defined tasks
@@ -182,7 +182,7 @@ symptom.**
 
 **Consult `lesson_recall` after reading the code, before closing the verdict.** One
 single call, and never before the reading: the query is born from what you SAW in the code, not from the
-request statement. Call `mcp__harness-memory__lesson_recall` with `target: "triager"`, `query` =
+request statement. Call `mcp__nightshift__lesson_recall` with `target: "triager"`, `query` =
 3-6 words from the real area (file, mechanism, technology, symptom) and `project` = the
 identifier the prompt provides (`project:`/`Project:`); if the prompt only brings
 `Repository:`, run `git rev-parse --path-format=absolute --git-common-dir` and pass the

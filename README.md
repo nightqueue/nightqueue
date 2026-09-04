@@ -36,30 +36,28 @@ Everything the plugin needs from a runtime is described as a contract (see
 
 ## Requirements
 
-- Claude Code — the only hard requirement.
-- Recommended: an MCP server named `harness-memory`, exposing `lesson_recall`,
-  `memory_recall`, `index_save`, `index_recall`, `progress_update` and
-  `pipeline_log`.
-- Optional: the Context7 MCP server (used by the architect to read third-party
-  library docs).
+- Claude Code.
+- An MCP server named `nightshift`, exposing `lesson_recall`, `memory_recall`, `index_save`,
+  `index_recall` and `pipeline_log`. Both are hard requirements: there is no memoryless
+  mode — Phase 0 opens with a preflight call to `lesson_recall` and the run stops right
+  there when the host does not expose it.
 
-`harness-memory` is what makes a run cheaper than the last one, but **no phase
-aborts without it**. A memory read that fails, is unavailable or comes back
-empty is treated as "nothing relevant": the phase drops the corresponding
-section and moves on with what it already has. A memory write that fails
-(`index_save`, `pipeline_log`, the vault entry) is recorded as an open item in
-the artifact or the report, and the run continues.
-
-So without that MCP server the pipeline still runs end to end, only memoryless:
-no lessons injected per phase, no structural index reused, no project memory
-recalled and no run telemetry persisted. Every run then starts from zero and
-leaves nothing behind for the next one.
+An **empty** memory is not a problem: on a fresh install every recall comes back empty, and an
+empty recall only makes the phase drop the corresponding section and move on with what it
+already has. A memory **write** that fails is recorded as an open item in the artifact or in
+the report, and the run continues — that covers `index_save` and `pipeline_log`, and also
+`lesson_save`, which the Phase 0 critique gate calls when it avoided a wrong execution. What
+stops a run is the server being **absent**, never it being empty.
 
 ## Try it
 
 ```
 claude --plugin-dir ./plugin
 ```
+
+The plugin loads that way, but `/nightshift:resolve` stops at the Phase 0 preflight until an
+MCP server named `nightshift` is connected. That runtime is not distributed yet — it lands in
+a future version.
 
 ## The `shift` CLI
 
