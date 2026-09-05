@@ -16,11 +16,11 @@ survive between runs and make each run cheaper than the last.
 
 ## Status — v0
 
-There is **no** working runtime in this repository: the `shift` CLI is a
-placeholder that only prints an error (see the section on it below), and there
-is no database, no queue, no hooks and no scheduler. The only functional thing
-that ships today is the Claude Code plugin in `plugin/`; everything else at the
-root — `package.json`, `LICENSE`, `bin/shift.mjs` — is packaging around it.
+There is **no** working runtime in this repository: the `shift` CLI ships
+configuration commands only (see `## Configuration`); there is still no
+database, no queue, no hooks and no scheduler. The other functional thing that
+ships today is the Claude Code plugin in `plugin/`; everything else at the
+root — `package.json`, `LICENSE` — is packaging around them.
 Everything the plugin needs from a runtime is described as a contract (see
 `## Runtime contract`), not as code you can run from here.
 
@@ -37,10 +37,10 @@ Everything the plugin needs from a runtime is described as a contract (see
 ## Requirements
 
 - Claude Code.
-- An MCP server named `nightshift`, exposing `lesson_recall`, `memory_recall`, `index_save`,
-  `index_recall` and `pipeline_log`. Both are hard requirements: there is no memoryless
-  mode — Phase 0 opens with a preflight call to `lesson_recall` and the run stops right
-  there when the host does not expose it.
+- An MCP server named `nightshift`, exposing `lesson_recall`, `lesson_save`, `memory_recall`,
+  `index_save`, `index_recall` and `pipeline_log`. All six are hard requirements: there is no
+  memoryless mode — Phase 0 opens with a preflight call to `lesson_recall` and the run stops
+  right there when the host does not expose it.
 
 An **empty** memory is not a problem: on a fresh install every recall comes back empty, and an
 empty recall only makes the phase drop the corresponding section and move on with what it
@@ -61,10 +61,70 @@ a future version.
 
 ## The `shift` CLI
 
-`bin/shift.mjs` is a placeholder — it prints `not implemented yet` and exits
-with code 1. The runtime (queue, memory MCP server, hooks) lands in a future
-version and will be published as the npm package `nightshift`, of which this
-plugin is the pipeline half.
+`bin/shift.mjs` is the configuration CLI: it manages orgs, projects and the
+connections (and their secrets) that a future runtime will consume. It has no
+dependency beyond Node >= 20.
+
+- `shift --help` lists every command: `setup`, `init`, `org`, `project` and
+  `connection`.
+- Exit codes: `0` ok, `1` user error (a single line on stderr), `2` unexpected
+  error (a stack on stderr).
+- Every `list` accepts `--json`; on `--json`, stdout is either valid JSON or
+  empty, because warnings and errors always go to stderr.
+
+The rest of the runtime — queue, memory MCP server, hooks — does not exist yet
+and lands in a future version, published as the npm package `nightshift`, of
+which this plugin is the pipeline half.
+
+## Configuration
+
+`NIGHTSHIFT_HOME` (default `~/.nightshift`) is a single directory that holds
+both the configuration at its root and the run artifacts under `runs/` (see
+`## Runtime contract`) — one home, two kinds of content, not two environment
+variables:
+
+```
+$NIGHTSHIFT_HOME/          # 0700
+  config.json              # orgs, projects, queue settings
+  secrets.json             # 0600, connection secrets
+  runs/<project>/<slug>/   # run artifacts, written by the runtime
+```
+
+Secrets are kept in a `0600` file rather than in the operating system
+credential store, because the runtime is meant to run unattended, with nobody
+there to unlock anything.
+
+A command that writes holds the directory `$NIGHTSHIFT_HOME.lock` while it
+runs, so two `shift` processes never overwrite each other's changes; read-only
+commands such as `list` never take it.
+
+```sh
+shift setup                                   # create the home, config.json and secrets.json
+shift init                                    # register the current git repository as a project
+shift init ~/code/api --org acme --name api   # ...or an explicit path, org and name
+
+shift org add acme --display-name "Acme"      # create an org
+shift org list --json                         # orgs, connection slots, project counts
+shift org rename acme acme-inc                # rewrites every project pointing at it
+shift org remove acme-inc                     # refused while projects still point at it
+
+shift project list                            # name, path, org, whether the path still exists
+shift project move api acme                   # move a project to another org
+shift project remove api
+
+echo "$GITHUB_TOKEN" | shift connection add gh --type github
+shift connection bind gh --org acme           # bind (or rebind) an org slot
+shift connection test gh                      # prints login and scopes, never the token
+shift connection list --json
+shift connection remove gh                    # unbinds from every org, then deletes the secret
+```
+
+The secret is read from stdin when stdin is not a terminal, and asked for in a
+hidden prompt otherwise. It is never accepted as a command-line argument, and
+never printed back — not by `list`, not by `--json`, not by an error message.
+
+A path that starts with `-` has to come after `--` (`shift init -- -weird-dir`),
+otherwise it is parsed as an unknown option and rejected.
 
 ## Runtime contract
 

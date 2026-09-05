@@ -1,0 +1,82 @@
+import { UserError } from "../config/errors.mjs";
+import { addProject, listProjects, moveProject, removeProject } from "../config/projects.mjs";
+import { loadConfig } from "../config/store.mjs";
+import { checkArgs, parseCommand } from "./args.mjs";
+
+// Registra um repositorio git como projeto de uma org.
+export async function addFromArgs(argv, ctx, usage) {
+  const { values, positionals } = parseCommand(argv, { org: { type: "string" }, name: { type: "string" } });
+  checkArgs(positionals, { max: 1, usage });
+  const config = loadConfig(ctx.env, { warn: ctx.err });
+  const result = addProject(config, { path: positionals[0] ?? ".", name: values.name, org: values.org });
+  const { name, path, org } = result.project;
+  if (result.status === "unchanged") {
+    ctx.out(`project \`${name}\` already registered -> ${path} (org \`${org}\`)`);
+    return;
+  }
+  ctx.saveConfig(result.config, ctx.env);
+  ctx.out(`registered project \`${name}\` -> ${path} (org \`${org}\`)`);
+}
+
+// Executa `project add`.
+async function runAdd(argv, ctx) {
+  await addFromArgs(argv, ctx, "shift project add <path> [--org <name>] [--name <name>]");
+}
+
+// Executa `project list`.
+async function runList(argv, ctx) {
+  const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
+  checkArgs(positionals, { max: 0, usage: "shift project list [--json]" });
+  const projects = listProjects(loadConfig(ctx.env, { warn: ctx.err }));
+  if (values.json) {
+    ctx.out(JSON.stringify({ projects }));
+    return;
+  }
+  if (projects.length === 0) {
+    ctx.out("no projects registered");
+    return;
+  }
+  for (const project of projects) {
+    ctx.out(`${project.name}  ${project.path}  ${project.org}  ${project.exists ? "ok" : "missing"}`);
+  }
+}
+
+// Executa `project remove`.
+async function runRemove(argv, ctx) {
+  const { positionals } = parseCommand(argv);
+  checkArgs(positionals, { min: 1, usage: "shift project remove <name>" });
+  const name = positionals[0];
+  ctx.saveConfig(removeProject(loadConfig(ctx.env, { warn: ctx.err }), name), ctx.env);
+  ctx.out(`removed project \`${name}\``);
+}
+
+// Executa `project move`.
+async function runMove(argv, ctx) {
+  const { positionals } = parseCommand(argv);
+  checkArgs(positionals, { min: 2, usage: "shift project move <name> <org>" });
+  const [name, org] = positionals;
+  const result = moveProject(loadConfig(ctx.env, { warn: ctx.err }), name, org);
+  if (result.status === "unchanged") {
+    ctx.out(`project \`${name}\` is already in org \`${org}\``);
+    return;
+  }
+  ctx.saveConfig(result.config, ctx.env);
+  ctx.out(`moved project \`${name}\` to org \`${org}\``);
+}
+
+const SUBCOMMANDS = new Map([
+  ["add", runAdd],
+  ["list", runList],
+  ["remove", runRemove],
+  ["move", runMove],
+]);
+
+// Despacha os subcomandos de `shift project`.
+export async function run(argv, ctx) {
+  const [sub, ...rest] = argv;
+  const handler = SUBCOMMANDS.get(sub);
+  if (!handler) {
+    throw new UserError(`unknown project subcommand \`${sub ?? ""}\`; use: ${[...SUBCOMMANDS.keys()].join(", ")}`);
+  }
+  await handler(rest, ctx);
+}

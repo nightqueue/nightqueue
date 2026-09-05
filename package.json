@@ -1,10 +1,11 @@
 {
   "name": "nightshift",
   "version": "0.1.0",
-  "description": "Autonomous queue of coding agents with its own memory. v0 ships the Claude Code plugin only.",
+  "description": "Autonomous queue of coding agents with its own memory. Ships the Claude Code plugin and the shift configuration CLI.",
   "license": "BUSL-1.1",
   "private": false,
   "bin": { "shift": "./bin/shift.mjs" },
-  "files": ["bin", "plugin", "README.md", "LICENSE"],
+  "files": ["bin", "plugin", "src", "README.md", "LICENSE"],
+  "scripts": { "test": "node --test" },
   "engines": { "node": ">=20" }
 }

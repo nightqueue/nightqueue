@@ -1,0 +1,285 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { defaultContext, run } from "../src/cli/index.mjs";
+import { readSecret } from "../src/cli/prompt.mjs";
+
+const CLI = fileURLToPath(new URL("../bin/shift.mjs", import.meta.url));
+const SENTINEL = "s3cr3t-sentinel-do-not-print";
+
+// Cria um diretorio temporario removido ao fim do teste.
+function makeDir(t, name) {
+  const dir = mkdtempSync(join(tmpdir(), `nightshift-${name}-`));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+// Cria um repositorio git de verdade, sem rede nem commit.
+function makeRepo(t, name) {
+  const dir = makeDir(t, name);
+  execFileSync("git", ["init", "-q", dir]);
+  return dir;
+}
+
+// Roda a CLI num processo proprio, com o home de configuracao isolado.
+function shift(home, args, { input = "", cwd } = {}) {
+  return spawnSync(process.execPath, [CLI, ...args], {
+    env: { ...process.env, NIGHTSHIFT_HOME: home },
+    input,
+    cwd,
+    encoding: "utf8",
+  });
+}
+
+// Monta um contexto de CLI que captura a saida em vez de escrever no terminal.
+function makeContext(home, overrides = {}) {
+  const out = [];
+  const err = [];
+  const ctx = {
+    ...defaultContext(),
+    env: { NIGHTSHIFT_HOME: home },
+    out: (line) => out.push(line),
+    err: (line) => err.push(line),
+    stdout: { write: () => {} },
+    ...overrides,
+  };
+  return { ctx, out, err };
+}
+
+test("--help lists every command and exits 0", () => {
+  const result = shift(tmpdir(), ["--help"]);
+  assert.equal(result.status, 0);
+  for (const command of ["setup", "init", "org", "project", "connection"]) {
+    assert.match(result.stdout, new RegExp(`^  ${command}`, "m"));
+  }
+  assert.equal(shift(tmpdir(), []).status, 0);
+});
+
+test("setup is idempotent file by file", (t) => {
+  const home = join(makeDir(t, "setup"), "home");
+  const first = shift(home, ["setup"]);
+  assert.equal(first.status, 0);
+  assert.match(first.stdout, /created .* \(0700\)/);
+  assert.match(first.stdout, /created config\.json \(org `default`\)/);
+  assert.match(first.stdout, /created secrets\.json \(0600\)/);
+  const before = ["config.json", "secrets.json"].map((file) => readFileSync(join(home, file), "utf8"));
+  const second = shift(home, ["setup"]);
+  assert.equal(second.status, 0);
+  assert.match(second.stdout, /already exists/);
+  assert.deepEqual(["config.json", "secrets.json"].map((file) => readFileSync(join(home, file), "utf8")), before);
+  assert.equal(statSync(home).mode & 0o777, 0o700);
+  assert.equal(statSync(join(home, "secrets.json")).mode & 0o777, 0o600);
+});
+
+test("init registers the repository in the default org", (t) => {
+  const home = makeDir(t, "init-home");
+  const repo = makeRepo(t, "init-repo");
+  shift(home, ["setup"]);
+  const result = shift(home, ["init", repo, "--name", "api"]);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /registered project `api` -> .* \(org `default`\)/);
+  const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+  assert.equal(config.projects.api.org, "default");
+  const again = shift(home, ["init", repo, "--name", "api"]);
+  assert.equal(again.status, 0);
+  assert.match(again.stdout, /already registered/);
+});
+
+test("a write command works on a home that never went through setup", (t) => {
+  const home = join(makeDir(t, "virgin"), "home");
+  const result = shift(home, ["org", "add", "acme"]);
+  assert.equal(result.status, 0);
+  assert.equal(statSync(home).mode & 0o777, 0o700);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).orgs), ["default", "acme"]);
+});
+
+test("the secret never shows up in any output, in any format", (t) => {
+  const home = makeDir(t, "sweep-home");
+  const repo = makeRepo(t, "sweep-repo");
+  const runs = [
+    shift(home, ["setup"]),
+    shift(home, ["init", repo, "--name", "api"]),
+    shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` }),
+    shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` }),
+    shift(home, ["connection", "list"]),
+    shift(home, ["connection", "list", "--json"]),
+    shift(home, ["connection", "bind", "gh", "--org", "ghost"]),
+    shift(home, ["connection", "bind", "gh", "--org", "default"]),
+    shift(home, ["connection", "test", "gh", "--org", "default"]),
+    shift(home, ["org", "list"]),
+    shift(home, ["org", "list", "--json"]),
+    shift(home, ["project", "list"]),
+    shift(home, ["project", "list", "--json"]),
+    shift(home, ["connection", "remove", "gh"]),
+    shift(home, ["bogus"]),
+  ];
+  for (const [index, result] of runs.entries()) {
+    assert.equal(`${result.stdout}${result.stderr}`.includes(SENTINEL), false, `run ${index}`);
+  }
+  assert.equal(runs[2].status, 0);
+  assert.match(runs[3].stderr, /connection `gh` already exists/);
+  assert.equal(runs[3].status, 1);
+  assert.match(runs[6].stderr, /unknown org `ghost`/);
+  assert.equal(runs[14].status, 1);
+});
+
+test("the stored secret lives in secrets.json, which stays 0600", (t) => {
+  const home = makeDir(t, "secret-home");
+  shift(home, ["setup"]);
+  const added = shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` });
+  assert.equal(added.status, 0);
+  assert.match(added.stdout, /stored connection `gh` \(github\) and bound it to org `default`/);
+  const secretsFile = join(home, "secrets.json");
+  assert.equal(statSync(secretsFile).mode & 0o777, 0o600);
+  assert.equal(readFileSync(secretsFile, "utf8").includes(SENTINEL), true);
+  const listed = JSON.parse(shift(home, ["connection", "list", "--json"]).stdout);
+  assert.deepEqual(listed, { connections: [{ name: "gh", type: "github", present: true, orgs: ["default"] }] });
+  assert.equal(shift(home, ["connection", "remove", "gh"]).status, 0);
+  assert.equal(readFileSync(secretsFile, "utf8").includes(SENTINEL), false);
+});
+
+test("connection add warns when the org slot is already taken", (t) => {
+  const home = makeDir(t, "slot-home");
+  shift(home, ["setup"]);
+  shift(home, ["connection", "add", "gh", "--type", "github"], { input: "one\n" });
+  const second = shift(home, ["connection", "add", "gh2", "--type", "github"], { input: "two\n" });
+  assert.equal(second.status, 0);
+  assert.match(second.stderr, /already uses `gh` for github; run `shift connection bind gh2 --org default` to switch/);
+  const bound = shift(home, ["connection", "bind", "gh2", "--org", "default"]);
+  assert.match(bound.stdout, /bound `gh2` to org `default` \(github\) \(replaced `gh`\)/);
+});
+
+test("a JSON listing survives being piped, with warnings kept on stderr", (t) => {
+  const home = makeDir(t, "json-home");
+  shift(home, ["setup"]);
+  const repos = [];
+  for (let index = 0; index < 50; index += 1) {
+    const repo = join(makeDir(t, "json-repo"), `p${index}`);
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    repos.push(repo);
+    shift(home, ["project", "add", repo, "--name", `p${index}`]);
+  }
+  execFileSync("chmod", ["644", join(home, "secrets.json")]);
+  const result = shift(home, ["project", "list", "--json"]);
+  assert.equal(result.status, 0);
+  assert.equal(JSON.parse(result.stdout).projects.length, 50);
+  const connections = shift(home, ["connection", "list", "--json"]);
+  assert.match(connections.stderr, /is mode 0644, expected 0600/);
+  assert.deepEqual(JSON.parse(connections.stdout), { connections: [] });
+});
+
+test("unknown options are rejected instead of silently accepted", (t) => {
+  const home = makeDir(t, "opts-home");
+  shift(home, ["setup"]);
+  shift(home, ["org", "add", "acme"]);
+  const forced = shift(home, ["org", "remove", "acme", "--force"]);
+  assert.equal(forced.status, 1);
+  assert.match(forced.stderr, /Unknown option '--force'/);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).orgs), ["default", "acme"]);
+});
+
+test("a positional path that starts with a dash needs the -- separator", (t) => {
+  const base = makeDir(t, "dash");
+  const home = join(base, "home");
+  const repo = join(base, "-weird-dir");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  const rejected = shift(home, ["init", "-weird-dir"], { cwd: base });
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /Unknown option/);
+  const accepted = shift(home, ["init", "--", "-weird-dir"], { cwd: base });
+  assert.equal(accepted.status, 0);
+  assert.match(accepted.stdout, /registered project `weird-dir`/);
+});
+
+test("an unexpected failure exits 2 with a stack", () => {
+  const result = shift("/dev/null/nested", ["setup"]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /at /);
+  assert.doesNotMatch(result.stderr, /^shift: /m);
+});
+
+test("connection test reports login and scopes, and fails as a user error", async (t) => {
+  const home = makeDir(t, "test-home");
+  shift(home, ["setup"]);
+  shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` });
+  const okResponse = {
+    status: 200,
+    headers: new Headers({ "X-OAuth-Scopes": "repo" }),
+    json: async () => ({ login: "octocat" }),
+  };
+  const ok = makeContext(home, { fetchImpl: async () => okResponse });
+  assert.equal(await run(["connection", "test", "gh"], ok.ctx), 0);
+  assert.deepEqual(ok.out, ["gh (github): ok — login=octocat scopes=repo"]);
+  const denied = makeContext(home, {
+    fetchImpl: async () => ({ status: 401, headers: new Headers(), json: async () => ({}) }),
+  });
+  assert.equal(await run(["connection", "test", "gh"], denied.ctx), 1);
+  assert.deepEqual(denied.err, ["shift: gh (github): failed — HTTP 401"]);
+  assert.equal(JSON.stringify([ok.out, ok.err, denied.out, denied.err]).includes(SENTINEL), false);
+});
+
+test("a failed config write after the secret write points at the recovery command", async (t) => {
+  const home = makeDir(t, "partial-add");
+  const { ctx, err } = makeContext(home, {
+    stdin: Readable.from([`${SENTINEL}\n`]),
+    saveConfig: () => {
+      throw new Error("disk on fire");
+    },
+  });
+  assert.equal(await run(["connection", "add", "gh", "--type", "github"], ctx), 2);
+  assert.match(err.join("\n"), /secret stored for `gh`, but the config write failed: disk on fire/);
+  assert.match(err.join("\n"), /run `shift connection bind gh --org default`/);
+  assert.equal(readFileSync(join(home, "secrets.json"), "utf8").includes(SENTINEL), true);
+  assert.equal(statSync(join(home, "config.json"), { throwIfNoEntry: false }), undefined);
+});
+
+test("a failed secret write after the config write points at the recovery command", async (t) => {
+  const home = makeDir(t, "partial-remove");
+  shift(home, ["setup"]);
+  shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` });
+  const { ctx, err } = makeContext(home, {
+    saveSecrets: () => {
+      throw new Error("disk on fire");
+    },
+  });
+  assert.equal(await run(["connection", "remove", "gh"], ctx), 2);
+  assert.match(err.join("\n"), /unbound `gh` from all orgs, but the secret file write failed: disk on fire/);
+  assert.match(err.join("\n"), /run `shift connection remove gh` again/);
+  const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+  assert.equal(config.orgs.default.connections.github, null);
+  assert.equal(readFileSync(join(home, "secrets.json"), "utf8").includes(SENTINEL), true);
+});
+
+test("the hidden prompt never echoes and always restores the terminal", async () => {
+  const rawModeCalls = [];
+  let handler = null;
+  const stdin = {
+    isTTY: true,
+    setRawMode: (value) => rawModeCalls.push(value),
+    on: (event, fn) => {
+      if (event === "data") handler = fn;
+    },
+    off: () => {
+      handler = null;
+    },
+    pause: () => {},
+  };
+  const written = [];
+  const stdout = { write: (chunk) => written.push(chunk) };
+
+  const typed = readSecret({ stdin, stdout, prompt: "token: " });
+  handler(Buffer.from([0x61, 0x62, 0x78, 0x7f, 0x63, 0x0d]));
+  assert.equal(await typed, "abc");
+  assert.deepEqual(rawModeCalls, [true, false]);
+  assert.equal(written.join("").includes("abc"), false);
+
+  const aborted = readSecret({ stdin, stdout, prompt: "token: " });
+  handler(Buffer.from([0x03]));
+  await assert.rejects(aborted, /aborted/);
+  assert.deepEqual(rawModeCalls, [true, false, true, false]);
+});

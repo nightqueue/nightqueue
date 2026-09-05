@@ -5,4 +5,5 @@ node_modules/
 *.tgz
 .agent-os.json
 .claude/settings.local.json
+.claude/worktrees/
 .nightshift/
