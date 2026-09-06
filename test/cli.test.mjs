@@ -8,6 +8,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
 import { readSecret } from "../src/cli/prompt.mjs";
+import { closeDb } from "../src/memory/db.mjs";
+import { saveLesson } from "../src/memory/lessons.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/shift.mjs", import.meta.url));
 const SENTINEL = "s3cr3t-sentinel-do-not-print";
@@ -54,7 +56,8 @@ function makeContext(home, overrides = {}) {
 test("--help lists every command and exits 0", () => {
   const result = shift(tmpdir(), ["--help"]);
   assert.equal(result.status, 0);
-  for (const command of ["setup", "init", "org", "project", "connection"]) {
+  const commands = ["setup", "init", "org", "project", "connection", "mcp", "hook", "reflect", "embed", "memory"];
+  for (const command of commands) {
     assert.match(result.stdout, new RegExp(`^  ${command}`, "m"));
   }
   assert.equal(shift(tmpdir(), []).status, 0);
@@ -282,4 +285,43 @@ test("the hidden prompt never echoes and always restores the terminal", async ()
   handler(Buffer.from([0x03]));
   await assert.rejects(aborted, /aborted/);
   assert.deepEqual(rawModeCalls, [true, false, true, false]);
+});
+
+test("memory stats answers on a home that has no database yet", (t) => {
+  const home = makeDir(t, "memory-stats");
+  const result = shift(home, ["memory", "stats"]);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /^project\s+lessons\s+memory\s+index\s+libs\s+runs$/m);
+  assert.match(result.stdout, /^\(global\)/m);
+  assert.deepEqual(JSON.parse(shift(home, ["memory", "stats", "--json"]).stdout), { projects: [] });
+});
+
+test("the session start hook prints the lessons already stored for the repository", (t) => {
+  const home = makeDir(t, "hook-home");
+  const repo = makeRepo(t, "hook-repo");
+  assert.equal(shift(home, ["init", repo, "--name", "api"]).status, 0);
+  const env = { NIGHTSHIFT_HOME: home };
+  t.after(() => closeDb(env));
+  const { id } = saveLesson(
+    {
+      project: "api",
+      title: "the worker leaks a file descriptor on failure",
+      root_cause: "the early return skipped the close",
+      solution: "close it in a finally block",
+      prevention: "always close the file descriptor in a finally block",
+    },
+    env,
+  );
+  closeDb(env);
+
+  const result = shift(home, ["hook", "session-start"], { input: JSON.stringify({ session_id: "s1", cwd: repo }) });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, new RegExp(`\\[L${id}\\] the worker leaks a file descriptor on failure`));
+});
+
+test("an unknown hook names the valid ones", (t) => {
+  const home = makeDir(t, "hook-unknown");
+  const result = shift(home, ["hook", "nope"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /unknown hook `nope`; use: session-start, prompt-context, reflect/);
 });

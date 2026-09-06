@@ -6,6 +6,13 @@
   "private": false,
   "bin": { "shift": "./bin/shift.mjs" },
   "files": ["bin", "plugin", "src", "README.md", "LICENSE"],
-  "scripts": { "test": "node --test" },
-  "engines": { "node": ">=20" }
+  "scripts": { "test": "node --test --disable-warning=ExperimentalWarning" },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.5.4"
+  },
+  "optionalDependencies": {
+    "@huggingface/transformers": "^4.2.0"
+  }
 }

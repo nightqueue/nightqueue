@@ -16,3 +16,18 @@ export function configPath(env = process.env) {
 export function secretsPath(env = process.env) {
   return join(homeDir(env), "secrets.json");
 }
+
+// Path of the SQLite database of the memory runtime.
+export function dbPath(env = process.env) {
+  return join(homeDir(env), "nightshift.db");
+}
+
+// Directory of the embedding model weights, kept outside node_modules on purpose.
+export function modelsDir(env = process.env) {
+  return join(homeDir(env), "models");
+}
+
+// Directory of the per-session state written by the hooks.
+export function stateDir(env = process.env) {
+  return join(homeDir(env), "state");
+}

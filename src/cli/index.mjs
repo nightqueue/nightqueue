@@ -2,9 +2,14 @@ import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { saveConfig, saveSecrets } from "../config/store.mjs";
 import * as connection from "./connection.mjs";
+import * as embed from "./embed.mjs";
+import * as hook from "./hook.mjs";
 import * as init from "./init.mjs";
+import * as mcp from "./mcp.mjs";
+import * as memory from "./memory.mjs";
 import * as org from "./org.mjs";
 import * as project from "./project.mjs";
+import * as reflect from "./reflect.mjs";
 import * as setup from "./setup.mjs";
 
 const COMMANDS = new Map([
@@ -13,11 +18,18 @@ const COMMANDS = new Map([
   ["org", org.run],
   ["project", project.run],
   ["connection", connection.run],
+  ["mcp", mcp.run],
+  ["hook", hook.run],
+  ["reflect", reflect.run],
+  ["embed", embed.run],
+  ["memory", memory.run],
 ]);
 
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
+
+const SELF_LOCKING_COMMANDS = new Set(["mcp", "hook", "reflect", "embed", "memory"]);
 
 const USAGE = `shift — nightshift configuration
 
@@ -39,6 +51,12 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
+  mcp                                       start the stdio MCP server that exposes the six memory tools
+  hook session-start|prompt-context|reflect run a hook, reading the event JSON from stdin
+  reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground
+  embed download                            download the embedding weights into the home (the only network path)
+  embed backfill                            compute the embeddings of the lessons that still have none
+  memory stats [--json]                     count lessons, memories, index entries and runs per project
 
 options:
   -h, --help                                show this help
@@ -60,8 +78,9 @@ export function defaultContext() {
   };
 }
 
-// Tells whether the command only reads the configuration and therefore skips the write lock.
-function isReadOnly(command, subcommand) {
+// Tells whether the command runs without the configuration write lock: it only reads, or it owns its own concurrency control.
+function skipsLock(command, subcommand) {
+  if (SELF_LOCKING_COMMANDS.has(command)) return true;
   if (command === "setup" || command === "init") return false;
   return READ_ONLY_SUBCOMMANDS.has(subcommand);
 }
@@ -75,7 +94,7 @@ export async function main(argv, ctx) {
   }
   const handler = COMMANDS.get(command);
   if (!handler) throw new UserError(`unknown command \`${command}\`; run \`shift --help\``);
-  if (isReadOnly(command, rest[0])) {
+  if (skipsLock(command, rest[0])) {
     await handler(rest, ctx);
     return;
   }
