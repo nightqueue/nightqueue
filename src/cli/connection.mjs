@@ -14,14 +14,14 @@ import { loadConfig, loadSecrets } from "../config/store.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { readSecret } from "./prompt.mjs";
 
-// Formata uma linha de `connection list`.
+// Formats one line of `connection list`.
 function formatConnection(connection) {
   const orgs = connection.orgs.length ? connection.orgs.join(",") : "-";
   const missing = connection.present ? "" : "  MISSING SECRET";
   return `${connection.name}  ${connection.type}${missing}  orgs=${orgs}`;
 }
 
-// Grava o config depois do segredo, apontando a recuperacao quando essa escrita falha.
+// Writes the config after the secret, pointing at the recovery when that write fails.
 function saveConfigAfterSecret({ config, ctx, name, org }) {
   try {
     ctx.saveConfig(config, ctx.env);
@@ -32,7 +32,7 @@ function saveConfigAfterSecret({ config, ctx, name, org }) {
   }
 }
 
-// Grava o secrets depois do config, apontando a recuperacao quando essa escrita falha.
+// Writes the secrets after the config, pointing at the recovery when that write fails.
 function saveSecretsAfterConfig({ secrets, ctx, name }) {
   try {
     ctx.saveSecrets(secrets, ctx.env);
@@ -43,7 +43,7 @@ function saveSecretsAfterConfig({ secrets, ctx, name }) {
   }
 }
 
-// Executa `connection add`, lendo o segredo do stdin e nunca de argv.
+// Runs `connection add`, reading the secret from stdin and never from argv.
 async function runAdd(argv, ctx) {
   const usage = "shift connection add <name> --type <type> [--org <name>]";
   const { values, positionals } = parseCommand(argv, { type: { type: "string" }, org: { type: "string" } });
@@ -75,7 +75,7 @@ async function runAdd(argv, ctx) {
   );
 }
 
-// Executa `connection bind`.
+// Runs `connection bind`.
 async function runBind(argv, ctx) {
   const usage = "shift connection bind <name> --org <name>";
   const { values, positionals } = parseCommand(argv, { org: { type: "string" } });
@@ -93,7 +93,7 @@ async function runBind(argv, ctx) {
   ctx.out(`bound \`${name}\` to org \`${values.org}\` (${result.type})${replaced}`);
 }
 
-// Executa `connection list`.
+// Runs `connection list`.
 async function runList(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
   checkArgs(positionals, { max: 0, usage: "shift connection list [--json]" });
@@ -109,7 +109,7 @@ async function runList(argv, ctx) {
   for (const connection of connections) ctx.out(formatConnection(connection));
 }
 
-// Executa `connection test`.
+// Runs `connection test`.
 async function runTest(argv, ctx) {
   const { positionals } = parseCommand(argv);
   checkArgs(positionals, { min: 1, usage: "shift connection test <name>" });
@@ -123,7 +123,7 @@ async function runTest(argv, ctx) {
   ctx.out(`${name} (${result.type}): ok — login=${result.login ?? "(none)"} scopes=${result.scopes || "(none)"}`);
 }
 
-// Executa `connection remove`.
+// Runs `connection remove`.
 async function runRemove(argv, ctx) {
   const { positionals } = parseCommand(argv);
   checkArgs(positionals, { min: 1, usage: "shift connection remove <name>" });
@@ -147,7 +147,7 @@ const SUBCOMMANDS = new Map([
   ["remove", runRemove],
 ]);
 
-// Despacha os subcomandos de `shift connection`.
+// Dispatches the subcommands of `shift connection`.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);

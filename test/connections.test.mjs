@@ -16,12 +16,12 @@ import { emptyConfig, emptySecrets } from "../src/config/schema.mjs";
 
 const TOKEN = "s3cr3t-sentinel-do-not-print";
 
-// Monta config com duas orgs e secrets vazio.
+// Builds a config with two orgs and empty secrets.
 function fixture() {
   return { config: addOrg(emptyConfig(), "acme"), secrets: emptySecrets() };
 }
 
-// Dubla o fetch do GitHub, registrando os argumentos recebidos.
+// Doubles the GitHub fetch, recording the arguments it receives.
 function fakeFetch(response, calls = []) {
   return async (url, options) => {
     calls.push({ url, options });

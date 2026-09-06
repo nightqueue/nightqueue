@@ -7,17 +7,17 @@ const ACQUIRE_TIMEOUT_MS = 5000;
 const RETRY_INTERVAL_MS = 50;
 const STALE_AFTER_MS = 300000;
 
-// Caminho do diretorio que serve de lock de escrita do NIGHTSHIFT_HOME.
+// Path of the directory that acts as the write lock of NIGHTSHIFT_HOME.
 export function lockPath(env = process.env) {
   return `${homeDir(env)}.lock`;
 }
 
-// Espera um intervalo curto antes da proxima tentativa de aquisicao.
+// Waits a short interval before the next acquisition attempt.
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Tenta criar o diretorio de lock, devolvendo false quando ele ja pertence a outro processo.
+// Tries to create the lock directory, returning false when it already belongs to another process.
 function tryCreate(path) {
   mkdirSync(dirname(path), { recursive: true });
   try {
@@ -29,7 +29,7 @@ function tryCreate(path) {
   }
 }
 
-// Descarta um lock velho o bastante para so poder ter sido abandonado por um processo morto.
+// Drops a lock old enough that it can only have been abandoned by a dead process.
 function dropStale(path, staleAfterMs) {
   const stats = statSync(path, { throwIfNoEntry: false });
   if (!stats || Date.now() - stats.mtimeMs < staleAfterMs) return false;
@@ -37,7 +37,7 @@ function dropStale(path, staleAfterMs) {
   return true;
 }
 
-// Adquire o lock, falhando com erro de uso quando outro shift o mantem alem do timeout.
+// Acquires the lock, failing with a usage error when another shift holds it past the timeout.
 async function acquire(path, { timeoutMs, staleAfterMs }) {
   const deadline = Date.now() + timeoutMs;
   let staleDropped = false;
@@ -56,7 +56,7 @@ async function acquire(path, { timeoutMs, staleAfterMs }) {
   }
 }
 
-// Executa a acao com exclusao entre processos sobre o mesmo NIGHTSHIFT_HOME.
+// Runs the action with exclusion between processes over the same NIGHTSHIFT_HOME.
 export async function withLock(env, action, { timeoutMs = ACQUIRE_TIMEOUT_MS, staleAfterMs = STALE_AFTER_MS } = {}) {
   const path = lockPath(env);
   await acquire(path, { timeoutMs, staleAfterMs });

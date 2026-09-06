@@ -4,14 +4,14 @@ const CTRL_C = 0x03;
 const BACKSPACE = new Set([0x7f, 0x08]);
 const LINE_END = new Set([0x0d, 0x0a]);
 
-// Consome o stdin inteiro quando ele nao e um terminal.
+// Consumes the whole stdin when it is not a terminal.
 async function readFromStream(stdin) {
   let data = "";
   for await (const chunk of stdin) data += chunk;
   return data;
 }
 
-// Acumula os bytes digitados ate o enter, tratando backspace e Ctrl-C.
+// Accumulates the typed bytes until enter, handling backspace and Ctrl-C.
 function readRawLine(stdin) {
   return new Promise((resolve, reject) => {
     const bytes = [];
@@ -35,7 +35,7 @@ function readRawLine(stdin) {
   });
 }
 
-// Le uma linha do terminal em raw mode, sem ecoar o que foi digitado.
+// Reads a line from the terminal in raw mode, without echoing what was typed.
 async function readFromTty(stdin, stdout, prompt) {
   stdout.write(prompt);
   stdin.setRawMode(true);
@@ -48,7 +48,7 @@ async function readFromTty(stdin, stdout, prompt) {
   }
 }
 
-// Le um segredo do stdin, sem eco quando a entrada e um terminal.
+// Reads a secret from stdin, without echo when the input is a terminal.
 export async function readSecret({ stdin = process.stdin, stdout = process.stdout, prompt = "secret: " } = {}) {
   const raw = stdin.isTTY ? await readFromTty(stdin, stdout, prompt) : await readFromStream(stdin);
   const secret = raw.replace(/\r?\n$/, "");

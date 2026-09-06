@@ -1,14 +1,14 @@
 import { UserError } from "./errors.mjs";
 import { assertName, emptyMap, emptySlots } from "./schema.mjs";
 
-// Este modulo e puro sobre o objeto de config: muta e devolve o mesmo objeto, sem I/O.
+// This module is pure over the config object: it mutates and returns the same object, without I/O.
 
-// Devolve a entrada de uma org, ou null quando ela nao existe.
+// Returns an org entry, or null when it does not exist.
 export function getOrg(config, name) {
   return config?.orgs?.[name] ?? null;
 }
 
-// Devolve a org exigida, listando as existentes quando ela nao existe.
+// Returns the required org, listing the existing ones when it is missing.
 export function requireOrg(config, name) {
   const org = getOrg(config, name);
   if (org) return org;
@@ -16,12 +16,12 @@ export function requireOrg(config, name) {
   throw new UserError(`unknown org \`${name}\`; existing orgs: ${existing.length ? existing.join(", ") : "(none)"}`);
 }
 
-// Conta os projetos ligados a uma org.
+// Counts the projects bound to an org.
 function countProjects(config, name) {
   return Object.values(config.projects).filter((project) => project.org === name).length;
 }
 
-// Lista as orgs com display name, slots de connection e contagem de projetos.
+// Lists the orgs with display name, connection slots and project count.
 export function listOrgs(config) {
   return Object.entries(config.orgs).map(([name, org]) => ({
     name,
@@ -32,7 +32,7 @@ export function listOrgs(config) {
   }));
 }
 
-// Cria uma org nova.
+// Creates a new org.
 export function addOrg(config, name, { displayName } = {}) {
   assertName("org", name);
   if (config.orgs[name]) throw new UserError(`org \`${name}\` already exists`);
@@ -40,14 +40,14 @@ export function addOrg(config, name, { displayName } = {}) {
   return config;
 }
 
-// Reescreve um mapa trocando uma chave, mantendo a ordem original das chaves.
+// Rewrites a map replacing one key, keeping the original key order.
 function renameKey(map, oldKey, newKey) {
   const next = emptyMap();
   for (const [key, value] of Object.entries(map)) next[key === oldKey ? newKey : key] = value;
   return next;
 }
 
-// Renomeia uma org preservando posicao, display name, slots, projetos e a org default.
+// Renames an org preserving position, display name, slots, projects and the default org.
 export function renameOrg(config, oldName, newName) {
   requireOrg(config, oldName);
   assertName("org", newName);
@@ -61,7 +61,7 @@ export function renameOrg(config, oldName, newName) {
   return config;
 }
 
-// Remove uma org que nao seja a default e nao tenha projetos apontando para ela.
+// Removes an org that is neither the default one nor pointed at by any project.
 export function removeOrg(config, name) {
   requireOrg(config, name);
   if (name === config.defaultOrg) throw new UserError(`cannot remove org \`${name}\`: it is the default org`);

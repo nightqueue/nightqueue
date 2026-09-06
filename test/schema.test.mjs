@@ -33,7 +33,7 @@ test("normalizeName rescues names derived from a directory basename", () => {
   assert.equal(normalizeName("MyRepo"), "myrepo");
   assert.equal(normalizeName("feat+config-org-based"), "feat-config-org-based");
   assert.equal(normalizeName("--weird--"), "weird");
-  assert.equal(normalizeName("já"), "j");
+  assert.equal(normalizeName("j\u00e1"), "j");
   assert.equal(normalizeName("+++"), "");
 });
 

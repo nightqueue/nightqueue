@@ -4,7 +4,7 @@ import { UserError } from "../src/config/errors.mjs";
 import { addOrg, getOrg, listOrgs, removeOrg, renameOrg, requireOrg } from "../src/config/orgs.mjs";
 import { emptyConfig } from "../src/config/schema.mjs";
 
-// Monta um config com uma org extra e um projeto apontando para ela.
+// Builds a config with an extra org and a project pointing at it.
 function configWithAcme() {
   const config = addOrg(emptyConfig(), "acme", { displayName: "Acme" });
   config.orgs.acme.connections.github = "gh";

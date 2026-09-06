@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import { UserError } from "../config/errors.mjs";
 
-// Faz o parse estrito de argv, transformando opcao desconhecida em erro de uso.
+// Parses argv strictly, turning an unknown option into a usage error.
 export function parseCommand(args, options = {}) {
   try {
     return parseArgs({ args, options, allowPositionals: true, strict: true });
@@ -11,7 +11,7 @@ export function parseCommand(args, options = {}) {
   }
 }
 
-// Exige a quantidade de argumentos posicionais que o comando aceita.
+// Requires the amount of positional arguments the command accepts.
 export function checkArgs(positionals, { min = 0, max = min, usage }) {
   if (positionals.length < min) throw new UserError(`missing argument; usage: ${usage}`);
   if (positionals.length > max) throw new UserError(`unexpected argument \`${positionals[max]}\`; usage: ${usage}`);

@@ -3,20 +3,20 @@ import { addOrg, listOrgs, removeOrg, renameOrg } from "../config/orgs.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
-// Formata os slots de connection de uma org para a saida textual.
+// Formats the connection slots of an org for the text output.
 function formatSlots(connections) {
   return Object.entries(connections)
     .map(([type, name]) => `${type}=${name ?? "-"}`)
     .join(" ");
 }
 
-// Formata uma linha de `org list`.
+// Formats one line of `org list`.
 function formatOrg(org) {
   const marker = org.isDefault ? "*" : " ";
   return `${marker} ${org.name}  ${org.displayName}  ${formatSlots(org.connections)}  projects=${org.projects}`;
 }
 
-// Executa `org add`.
+// Runs `org add`.
 async function runAdd(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { "display-name": { type: "string" } });
   checkArgs(positionals, { min: 1, usage: 'shift org add <name> [--display-name "..."]' });
@@ -26,7 +26,7 @@ async function runAdd(argv, ctx) {
   ctx.out(`created org \`${name}\` (${config.orgs[name].displayName})`);
 }
 
-// Executa `org list`.
+// Runs `org list`.
 async function runList(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
   checkArgs(positionals, { max: 0, usage: "shift org list [--json]" });
@@ -39,7 +39,7 @@ async function runList(argv, ctx) {
   for (const org of orgs) ctx.out(formatOrg(org));
 }
 
-// Executa `org rename`.
+// Runs `org rename`.
 async function runRename(argv, ctx) {
   const { positionals } = parseCommand(argv);
   checkArgs(positionals, { min: 2, usage: "shift org rename <old> <new>" });
@@ -48,7 +48,7 @@ async function runRename(argv, ctx) {
   ctx.out(`renamed org \`${oldName}\` to \`${newName}\``);
 }
 
-// Executa `org remove`.
+// Runs `org remove`.
 async function runRemove(argv, ctx) {
   const { positionals } = parseCommand(argv);
   checkArgs(positionals, { min: 1, usage: "shift org remove <name>" });
@@ -64,7 +64,7 @@ const SUBCOMMANDS = new Map([
   ["remove", runRemove],
 ]);
 
-// Despacha os subcomandos de `shift org`.
+// Dispatches the subcommands of `shift org`.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);

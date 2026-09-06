@@ -46,7 +46,7 @@ options:
 exit codes: 0 ok · 1 user error · 2 unexpected error
 configuration home: $NIGHTSHIFT_HOME (default ~/.nightshift)`;
 
-// Cria o contexto default de execucao da CLI.
+// Creates the default execution context of the CLI.
 export function defaultContext() {
   return {
     out: (line) => process.stdout.write(`${line}\n`),
@@ -60,13 +60,13 @@ export function defaultContext() {
   };
 }
 
-// Diz se o comando so le a configuracao e por isso dispensa o lock de escrita.
+// Tells whether the command only reads the configuration and therefore skips the write lock.
 function isReadOnly(command, subcommand) {
   if (command === "setup" || command === "init") return false;
   return READ_ONLY_SUBCOMMANDS.has(subcommand);
 }
 
-// Despacha o comando pedido, sem tratar erro, com lock entre processos quando ele escreve.
+// Dispatches the requested command, without handling errors, with the cross-process lock when it writes.
 export async function main(argv, ctx) {
   const [command, ...rest] = argv;
   if (!command || HELP_FLAGS.has(command)) {
@@ -82,7 +82,7 @@ export async function main(argv, ctx) {
   await withLock(ctx.env, () => handler(rest, ctx));
 }
 
-// Executa a CLI e devolve o exit code: unico ponto que converte erro em codigo.
+// Runs the CLI and returns the exit code: the only place that turns an error into a code.
 export async function run(argv, ctx = defaultContext()) {
   try {
     await main(argv, ctx);

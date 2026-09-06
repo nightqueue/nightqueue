@@ -7,24 +7,24 @@ import { NAME_RE, assertName, normalizeName } from "./schema.mjs";
 
 const REMOTE_RE = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^/@]+@)?[^/:]+[/:]([^/]+)\/([^/]+)$/i;
 
-// Resolve um path para a forma absoluta e canonica usada na config.
+// Resolves a path to the absolute, canonical form used in the config.
 export function normalizePath(p) {
   const abs = resolve(p ?? ".");
   return existsSync(abs) ? realpathSync(abs) : abs;
 }
 
-// Devolve a entrada de projeto com o nome informado.
+// Returns the project entry with the given name.
 export function projectByName(config, name) {
   const entry = config?.projects?.[name];
   return entry ? { name, path: entry.path, org: entry.org } : null;
 }
 
-// Devolve a org de uma entrada de projeto.
+// Returns the org of a project entry.
 export function orgOf(project) {
   return project?.org ?? null;
 }
 
-// Lista os projetos registrados, marcando se o path ainda existe.
+// Lists the registered projects, marking whether the path still exists.
 export function listProjects(config) {
   return Object.entries(config.projects).map(([name, entry]) => ({
     name,
@@ -34,14 +34,14 @@ export function listProjects(config) {
   }));
 }
 
-// Deriva o nome do projeto a partir do basename do path.
+// Derives the project name from the basename of the path.
 function deriveName(abs) {
   const derived = normalizeName(basename(abs));
   if (!NAME_RE.test(derived)) throw new UserError(`cannot derive a valid project name from ${abs}; pass --name <name>`);
   return derived;
 }
 
-// Registra um repositorio git como projeto de uma org.
+// Registers a git repository as a project of an org.
 export function addProject(config, { path, name, org } = {}) {
   const abs = normalizePath(path ?? ".");
   if (!existsSync(abs)) throw new UserError(`path does not exist: ${abs}`);
@@ -65,14 +65,14 @@ export function addProject(config, { path, name, org } = {}) {
   return { config, status: "created", project: { name: projectName, path: abs, org: orgName } };
 }
 
-// Remove um projeto registrado.
+// Removes a registered project.
 export function removeProject(config, name) {
   if (!config.projects[name]) throw new UserError(`unknown project \`${name}\``);
   delete config.projects[name];
   return config;
 }
 
-// Move um projeto para outra org existente.
+// Moves a project to another existing org.
 export function moveProject(config, name, org) {
   const entry = config.projects[name];
   if (!entry) throw new UserError(`unknown project \`${name}\``);
@@ -82,13 +82,13 @@ export function moveProject(config, name, org) {
   return { config, status: "moved" };
 }
 
-// Diz se um diretorio e o proprio path registrado ou esta dentro dele.
+// Tells whether a directory is the registered path itself or lies inside it.
 function contains(path, target) {
   if (target === path) return true;
   return target.startsWith(path.endsWith(sep) ? path : `${path}${sep}`);
 }
 
-// Resolve o projeto que contem o diretorio informado, escolhendo o maior prefixo.
+// Resolves the project containing the given directory, choosing the longest prefix.
 export function resolveProject(config, { cwd } = {}) {
   const target = normalizePath(cwd ?? ".");
   let best = null;
@@ -102,7 +102,7 @@ export function resolveProject(config, { cwd } = {}) {
   return best;
 }
 
-// Extrai `owner/repo` em minusculo de uma URL de remote git.
+// Extracts lowercase `owner/repo` from a git remote URL.
 export function slugFromRemote(url) {
   const trimmed = String(url ?? "")
     .trim()
@@ -113,7 +113,7 @@ export function slugFromRemote(url) {
   return match ? `${match[1].toLowerCase()}/${match[2].toLowerCase()}` : null;
 }
 
-// Le a URL do remote origin de um diretorio.
+// Reads the origin remote URL of a directory.
 function defaultGitRemote(cwd) {
   return execFileSync("git", ["-C", cwd, "remote", "get-url", "origin"], {
     encoding: "utf8",
@@ -122,7 +122,7 @@ function defaultGitRemote(cwd) {
   }).trim();
 }
 
-// Devolve `owner/repo` do projeto, ou null quando nao ha origin nem git utilizavel.
+// Returns `owner/repo` of the project, or null when there is no origin nor usable git.
 export function repoSlugOf(project, { gitRemoteImpl = defaultGitRemote } = {}) {
   if (!project?.path) return null;
   try {

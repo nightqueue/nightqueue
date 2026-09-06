@@ -3,7 +3,7 @@ import { addProject, listProjects, moveProject, removeProject } from "../config/
 import { loadConfig } from "../config/store.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
-// Registra um repositorio git como projeto de uma org.
+// Registers a git repository as a project of an org.
 export async function addFromArgs(argv, ctx, usage) {
   const { values, positionals } = parseCommand(argv, { org: { type: "string" }, name: { type: "string" } });
   checkArgs(positionals, { max: 1, usage });
@@ -18,12 +18,12 @@ export async function addFromArgs(argv, ctx, usage) {
   ctx.out(`registered project \`${name}\` -> ${path} (org \`${org}\`)`);
 }
 
-// Executa `project add`.
+// Runs `project add`.
 async function runAdd(argv, ctx) {
   await addFromArgs(argv, ctx, "shift project add <path> [--org <name>] [--name <name>]");
 }
 
-// Executa `project list`.
+// Runs `project list`.
 async function runList(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
   checkArgs(positionals, { max: 0, usage: "shift project list [--json]" });
@@ -41,7 +41,7 @@ async function runList(argv, ctx) {
   }
 }
 
-// Executa `project remove`.
+// Runs `project remove`.
 async function runRemove(argv, ctx) {
   const { positionals } = parseCommand(argv);
   checkArgs(positionals, { min: 1, usage: "shift project remove <name>" });
@@ -50,7 +50,7 @@ async function runRemove(argv, ctx) {
   ctx.out(`removed project \`${name}\``);
 }
 
-// Executa `project move`.
+// Runs `project move`.
 async function runMove(argv, ctx) {
   const { positionals } = parseCommand(argv);
   checkArgs(positionals, { min: 2, usage: "shift project move <name> <org>" });
@@ -71,7 +71,7 @@ const SUBCOMMANDS = new Map([
   ["move", runMove],
 ]);
 
-// Despacha os subcomandos de `shift project`.
+// Dispatches the subcommands of `shift project`.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);

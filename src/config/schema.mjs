@@ -5,36 +5,36 @@ export const SCHEMA_VERSION = 1;
 
 const DEFAULT_ORG = "default";
 
-// Diz se o valor e um objeto simples aproveitavel como mapa.
+// Tells whether the value is a plain object usable as a map.
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Cria um mapa vazio sem prototipo: leitura por chave nunca herda nada de um arquivo editado a mao.
+// Creates an empty map without prototype: a key lookup never inherits anything from a hand-edited file.
 export function emptyMap() {
   return Object.create(null);
 }
 
-// Cria os slots de connection de uma org, um por tipo suportado.
+// Creates the connection slots of an org, one per supported type.
 export function emptySlots() {
   const slots = emptyMap();
   slots.github = null;
   return slots;
 }
 
-// Estrutura inicial de config.json.
+// Initial structure of config.json.
 export function emptyConfig() {
   const orgs = emptyMap();
   orgs[DEFAULT_ORG] = { displayName: "Default", connections: emptySlots() };
   return { version: SCHEMA_VERSION, defaultOrg: DEFAULT_ORG, orgs, projects: emptyMap(), queue: { maxConcurrent: 2 } };
 }
 
-// Estrutura inicial de secrets.json.
+// Initial structure of secrets.json.
 export function emptySecrets() {
   return { version: SCHEMA_VERSION, connections: emptyMap() };
 }
 
-// Valida um nome de org, projeto ou connection.
+// Validates an org, project or connection name.
 export function assertName(kind, value) {
   if (typeof value !== "string" || !NAME_RE.test(value)) {
     throw new UserError(
@@ -44,7 +44,7 @@ export function assertName(kind, value) {
   return value;
 }
 
-// Converte um nome derivado de basename para a forma aceita pelo validador.
+// Converts a name derived from a basename into the form the validator accepts.
 export function normalizeName(value) {
   return String(value ?? "")
     .toLowerCase()
@@ -53,7 +53,7 @@ export function normalizeName(value) {
     .replace(/[-._]+$/, "");
 }
 
-// Recusa um arquivo gravado por uma versao mais nova, em vez de rebaixa-lo na proxima escrita.
+// Refuses a file written by a newer version, instead of downgrading it on the next write.
 function assertSupportedVersion(fileName, raw) {
   const version = raw.version;
   if (typeof version === "number" && version > SCHEMA_VERSION) {
@@ -63,7 +63,7 @@ function assertSupportedVersion(fileName, raw) {
   }
 }
 
-// Normaliza os slots de connection de uma org.
+// Normalizes the connection slots of an org.
 function normalizeSlots(raw) {
   const slots = emptySlots();
   if (!isPlainObject(raw)) return slots;
@@ -73,7 +73,7 @@ function normalizeSlots(raw) {
   return slots;
 }
 
-// Normaliza uma entrada de org.
+// Normalizes an org entry.
 function normalizeOrg(name, entry) {
   const source = isPlainObject(entry) ? entry : {};
   const displayName = typeof source.displayName === "string" && source.displayName ? source.displayName : null;
@@ -83,7 +83,7 @@ function normalizeOrg(name, entry) {
   };
 }
 
-// Normaliza o mapa de orgs, garantindo a existencia da org default.
+// Normalizes the org map, making sure the default org exists.
 function normalizeOrgs(raw, defaultOrg) {
   const orgs = emptyMap();
   if (isPlainObject(raw)) {
@@ -93,7 +93,7 @@ function normalizeOrgs(raw, defaultOrg) {
   return orgs;
 }
 
-// Normaliza o mapa de projetos, descartando entradas sem path.
+// Normalizes the project map, dropping entries without a path.
 function normalizeProjects(raw, defaultOrg) {
   const projects = emptyMap();
   if (!isPlainObject(raw)) return projects;
@@ -104,7 +104,7 @@ function normalizeProjects(raw, defaultOrg) {
   return projects;
 }
 
-// Avisa sobre projeto apontando para org inexistente, sem reescrever o dado do operador.
+// Warns about a project pointing at an unknown org, without rewriting the operator data.
 function warnOnOrphanProjects(projects, orgs, warn) {
   for (const [name, entry] of Object.entries(projects)) {
     if (orgs[entry.org]) continue;
@@ -114,7 +114,7 @@ function warnOnOrphanProjects(projects, orgs, warn) {
   }
 }
 
-// Preenche defaults sobre um config lido do disco ou editado a mao.
+// Fills defaults over a config read from disk or edited by hand.
 export function normalizeConfig(raw, { warn = () => {} } = {}) {
   if (!isPlainObject(raw)) return emptyConfig();
   assertSupportedVersion("config.json", raw);
@@ -132,7 +132,7 @@ export function normalizeConfig(raw, { warn = () => {} } = {}) {
   };
 }
 
-// Preenche defaults sobre um secrets lido do disco.
+// Fills defaults over a secrets file read from disk.
 export function normalizeSecrets(raw) {
   const secrets = emptySecrets();
   if (!isPlainObject(raw)) return secrets;

@@ -4,7 +4,7 @@ import { emptyConfig, emptySecrets } from "../config/schema.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
-// Cria um arquivo da estrutura apenas quando ele ainda nao existe.
+// Creates one file of the structure only when it does not exist yet.
 function ensureFile({ path, create, createdMessage, existsMessage, out }) {
   if (existsSync(path)) {
     out(existsMessage);
@@ -14,7 +14,7 @@ function ensureFile({ path, create, createdMessage, existsMessage, out }) {
   out(createdMessage);
 }
 
-// Cria a estrutura de configuracao sem alterar nada do que ja existe.
+// Creates the configuration structure without changing anything that already exists.
 export async function run(argv, ctx) {
   const { positionals } = parseCommand(argv);
   checkArgs(positionals, { max: 0, usage: "shift setup" });

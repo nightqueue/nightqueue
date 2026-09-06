@@ -12,21 +12,21 @@ import { readSecret } from "../src/cli/prompt.mjs";
 const CLI = fileURLToPath(new URL("../bin/shift.mjs", import.meta.url));
 const SENTINEL = "s3cr3t-sentinel-do-not-print";
 
-// Cria um diretorio temporario removido ao fim do teste.
+// Creates a temporary directory removed at the end of the test.
 function makeDir(t, name) {
   const dir = mkdtempSync(join(tmpdir(), `nightshift-${name}-`));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
 
-// Cria um repositorio git de verdade, sem rede nem commit.
+// Creates a real git repository, without network or commits.
 function makeRepo(t, name) {
   const dir = makeDir(t, name);
   execFileSync("git", ["init", "-q", dir]);
   return dir;
 }
 
-// Roda a CLI num processo proprio, com o home de configuracao isolado.
+// Runs the CLI in its own process, with an isolated configuration home.
 function shift(home, args, { input = "", cwd } = {}) {
   return spawnSync(process.execPath, [CLI, ...args], {
     env: { ...process.env, NIGHTSHIFT_HOME: home },
@@ -36,7 +36,7 @@ function shift(home, args, { input = "", cwd } = {}) {
   });
 }
 
-// Monta um contexto de CLI que captura a saida em vez de escrever no terminal.
+// Builds a CLI context that captures the output instead of writing to the terminal.
 function makeContext(home, overrides = {}) {
   const out = [];
   const err = [];

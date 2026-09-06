@@ -8,14 +8,14 @@ import { configPath, homeDir, secretsPath } from "../src/config/paths.mjs";
 import { emptyConfig, emptySecrets } from "../src/config/schema.mjs";
 import { ensureHome, loadConfig, loadSecrets, saveConfig, saveSecrets, writeFileAtomic } from "../src/config/store.mjs";
 
-// Cria um home temporario isolado e o remove ao fim do teste.
+// Creates an isolated temporary home and removes it at the end of the test.
 function makeEnv(t, { nested = false } = {}) {
   const base = mkdtempSync(join(tmpdir(), "nightshift-store-"));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   return { NIGHTSHIFT_HOME: nested ? join(base, "home") : base };
 }
 
-// Devolve os bits de permissao de um arquivo ou diretorio.
+// Returns the permission bits of a file or directory.
 function modeOf(path) {
   return statSync(path).mode & 0o777;
 }

@@ -1,24 +1,59 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { run } from "../src/cli/index.mjs";
 import { UserError } from "../src/config/errors.mjs";
 import { lockPath, withLock } from "../src/config/lock.mjs";
 
-// Cria um home temporario isolado e o remove ao fim do teste.
+const CLI = fileURLToPath(new URL("../bin/shift.mjs", import.meta.url));
+const RACE_ATTEMPTS = 8;
+
+// Creates an isolated temporary home and removes it at the end of the test.
 function makeEnv(t) {
   const base = mkdtempSync(join(tmpdir(), "nightshift-lock-"));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   return { NIGHTSHIFT_HOME: join(base, "home") };
 }
 
-// Monta um contexto de CLI que captura a saida em vez de escrever no terminal.
+// Builds a CLI context that captures the output instead of writing to the terminal.
 function makeContext(env) {
   const out = [];
   const err = [];
   return { ctx: { env, out: (line) => out.push(line), err: (line) => err.push(line) }, out, err };
+}
+
+// Runs the CLI as a real child process; stays async (never spawnSync) so the Promise.all in `runRace` really overlaps the writes.
+function shiftAsync(home, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CLI, ...args], {
+      env: { ...process.env, NIGHTSHIFT_HOME: home },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("exit", (code) => resolve({ code, stderr }));
+  });
+}
+
+// Runs one round of two concurrent `org add` and reports what survived in config.json.
+async function runRace(t) {
+  const home = makeEnv(t).NIGHTSHIFT_HOME;
+  const setup = spawnSync(process.execPath, [CLI, "setup"], {
+    env: { ...process.env, NIGHTSHIFT_HOME: home },
+    encoding: "utf8",
+  });
+  assert.equal(setup.status, 0, `setup failed (stderr: ${setup.stderr})`);
+  const [a, b] = await Promise.all([shiftAsync(home, ["org", "add", "proc-a"]), shiftAsync(home, ["org", "add", "proc-b"])]);
+  const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+  return { a, b, hasA: Object.hasOwn(config.orgs, "proc-a"), hasB: Object.hasOwn(config.orgs, "proc-b") };
 }
 
 test("withLock excludes a second holder and releases the lock even when the action throws", async (t) => {
@@ -57,4 +92,14 @@ test("a read-only command runs while another process holds the write lock", asyn
   assert.deepEqual(out, ["no projects registered"]);
   assert.equal(await run(["--help"], ctx), 0);
   assert.equal(existsSync(join(env.NIGHTSHIFT_HOME, "config.json")), false);
+});
+
+test("two concurrent `shift org add` processes both keep their write", async (t) => {
+  for (let attempt = 1; attempt <= RACE_ATTEMPTS; attempt += 1) {
+    const { a, b, hasA, hasB } = await runRace(t);
+    assert.equal(a.code, 0, `attempt ${attempt}: process A exited ${a.code} (stderr: ${a.stderr})`);
+    assert.equal(b.code, 0, `attempt ${attempt}: process B exited ${b.code} (stderr: ${b.stderr})`);
+    assert.equal(hasA, true, `attempt ${attempt}: org \`proc-a\` was lost (lost update)`);
+    assert.equal(hasB, true, `attempt ${attempt}: org \`proc-b\` was lost (lost update)`);
+  }
 });
