@@ -567,6 +567,29 @@ subagent, because you have its text in your context and the subagent does NOT
 (a subagent receives no hook injection). A recall with `exclude_ids` coming back empty →
 repeat the call without `exclude_ids`.
 
+### Lesson-capture filter (shared rule for the four points below)
+
+Four points in this pipeline relaunch an agent or end the run with no delivery because of a
+finding: Phase 5's invalidated-assumption return to the architect, Phase 6's fix loop back to
+the coder, Phase 6.5's symptom-persisting return to the triager, and the gate_stop points of
+Phase 1 (triager refuses) and Phase 3 (architect refuses) — the last two counted together as a
+single block. At each of those points, apply both conditions below before recording anything;
+record only if both hold:
+
+- **(a) Real correction loop:** an agent was actually relaunched (marked by the re-run icon) or
+  the run ended at a gate with no delivery (`gate_stop`) — not a cosmetic tweak or a first-pass
+  improvement.
+- **(b) Cause generalizes:** the root cause would recur on another task in this project, not
+  something isolated to this one ticket; the record describes a class of error, not a one-off.
+  Positive example: "the plan assumed the session payload always includes a field the backend
+  sometimes omits — defensive reads on optional backend fields become mandatory in this
+  project." Negative example: "a typo on line 42 caught by the verifier" — an isolated slip, no
+  class in other tasks, do not record.
+
+One capture per loop, not one per individual finding inside it. A failed capture call never
+blocks the run: record it as an open item in Phase 8 and continue, the same way a
+`pipeline_log` failure is handled (step 5.3 / Phase 8 Telemetry).
+
 ### Phase 1 — Triage-Gate
 
 > **trivial** → does not execute (already routed by the Fast Lite Track).
@@ -639,7 +662,11 @@ invalid or ill-defined task. BEFORE terminating, write into `state.json` (step 5
 `triage` entry in `phases` **and** the field
 `"termination": { "phase": "triage", "reason": "<verdict>" }`, in the same
 atomic write: without it, a retry of this job would offer to resume from the `explore` phase as if
-the triage had been interrupted halfway.
+the triage had been interrupted halfway. Apply the lesson-capture filter above before
+terminating; if both conditions hold, call `lesson_save` with `target: "triager"` — the lesson
+is why the request as it arrived was not executable (not reproducible, or not clear enough) and
+what was missing from it. This same gate_stop rule covers Phase 3's insufficient-brief gate
+below, with `target: "architect"` there instead of `triager`.
 
 If the triager's return signals that it emitted `## Intent note` **or** `## Depth
 note`, the architect reads them straight from `01-triage.md` in Phase 3 (do not paste the
@@ -805,7 +832,8 @@ the symptom in silence.
 Read. If it does not contain `## Implementation plan`, `## Assumptions`,
 `## Pre-mortem` **and** `## Identified risks`, or if the architect flags an insufficient
 brief, inform the user and terminate — do not proceed with an invented plan nor without
-assumptions, pre-mortem and explicit risks.
+assumptions, pre-mortem and explicit risks. On the insufficient-brief branch, apply the same
+gate_stop lesson-capture rule described at Phase 1's terminal gate, with `target: "architect"`.
 
 **Coverage gate (bug):** also require `## Symptom coverage`, with at least one
 vector listed, each vector marked `covered` or `not-covered` **with a reason**, and
@@ -1261,7 +1289,9 @@ in the coder is masking. Relaunch the **architect** (🔁, the same model as Pha
 original plan + the invalidated assumption(s) + the QA's evidence, obtain the
 revised plan and go back to Phase 4 (coder) with it. **At most 1 return to the architect per
 pipeline** — if an assumption falls again in the revised plan, terminate without a commit and
-take it to the user (Phase 8).
+take it to the user (Phase 8). Apply the lesson-capture filter above before relaunching; if both
+conditions hold, call `lesson_save` with `target: "architect"` — the lesson is the flawed
+assumption or approach the plan was built on, plus what the QA's evidence proved instead.
 
 ### Phase 6 — Verification (final gate + correction loop)
 
@@ -1320,7 +1350,10 @@ the verifier.
 - If it is `## Verification: FAILED` (a project check OR a QA PoC failing) →
   relaunch the coder on the **same model** as Phase 4 passing the verifier's failures +
   the QA's `## Proven breaks` still open + the validated brief, then
-  relaunch the verifier (the same `model` as Phase 6 for the tier).
+  relaunch the verifier (the same `model` as Phase 6 for the tier). Apply the
+  lesson-capture filter above before relaunching; if both conditions hold, call
+  `lesson_save` with `target: "coder"` — the lesson is the implementation pattern that
+  failed verification plus what the verifier confirmed passing.
 - **Maximum of iterations per tier**: trivial = 1, simple/complex = 2.
   If it still fails after the limit, **do not mask it**: skip Phase 7 (no commit),
   go to Phase 8 and report the remaining failures/breaks to the user.
@@ -1459,7 +1492,10 @@ the bug STILL present, do NOT relaunch the coder automatically. First discrimina
    incomplete; look for the underestimated path (order of gates, preceding branch,
    race, data source)". With the new diagnosis, follow Phase 3 → 4 → 6 → 6.5.
    **At most 1 re-triage per pipeline** — if it persists again, terminate without a commit and
-   take the complete history to the user (Phase 8).
+   take the complete history to the user (Phase 8). Apply the lesson-capture filter above
+   before relaunching; if both conditions hold, call `lesson_save` with `target: "triager"` —
+   the lesson is why the confirmed cause was incomplete and which underestimated path the new
+   diagnosis had to cover.
 
 **Gate:** only move on to Phase 7 with the change confirmed at runtime — case (a)
 the 2 proofs, case (b) the screenshot, case (c) the user's verdict, case (d) every item
@@ -1588,6 +1624,15 @@ it opens the report in any outcome. Steps that did not run in the tier → ⏭�
 | 6.5 Runtime     | 📱 Runtime      | ✅/⏭️/⚠️ | <real payload confirmed (a) / screenshot of the emulator (b) / verdict on a physical device (c); ⏭️ only if a static change of the trivial tier — if PASSED-STATIC with 6.5 unviable, use ⚠️ (open item), never ⏭️> |
 | 7 Commit/PR     | 🚀 Commit/PR    | ✅/⚠️ | <branch + PR link or pending state> |
 ```
+
+**Lesson-capture audit line (mandatory on BOTH paths, printed right after this summary table; it
+does not count towards the ~30-line cap of the happy path — the same exemption the `## Notice`
+section already gets):** count every lesson successfully recorded during this run through the
+correction-loop capture points (Phase 5, Phase 6's fix loop, Phase 6.5's symptom-persisting
+loop, and the gate_stop block of Phase 1/Phase 3) and print one line: `Lessons saved: N
+(targets: <unique target list>)` when N > 0, or
+`Lessons saved: 0` when none were recorded. A failed capture call does not count towards N;
+record it as a separate open item and keep the run going, exactly like a `pipeline_log` failure.
 
 **Decide the outcome before continuing — the fail-safe rule.** A **happy** run requires
 POSITIVE confirmation of a clean success in EACH gate below, by the real verdict
@@ -1732,15 +1777,15 @@ a bug) and the verification
 evidence in `06-verification.md`. Do NOT print the complete execution table
 nor the 🔍 Diagnosis / QA / Verification / 🛡️ Prevention sections — record 5.1
 and the phase artifacts continue to exist and feed the telemetry below;
-only the display to the user is cut. Print also the `## Notice` section (rules
-above); it is mandatory and does not enter the ~30-line cap.
+only the display to the user is cut. Print also the `## Notice` section and the
+lesson-capture audit line (rules above); both are mandatory and do not enter the ~30-line cap.
 
 **Non-happy path (any ⚠️, ❌, 🔁 or gate_stop) — keep today's complete
 output:**
 
-Right after the summary table, the **complete execution table** (the record of step
-5.1) — one line per agent launched, including loop re-entries (🔁), with
-Time:
+Right after the summary table, the lesson-capture audit line (rules above), followed by the
+**complete execution table** (the record of step 5.1) — one line per agent launched, including
+loop re-entries (🔁), with Time:
 
 ```
 | Step | Agent | Status | Summary | Time |
