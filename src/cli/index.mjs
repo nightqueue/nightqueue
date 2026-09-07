@@ -15,6 +15,7 @@ import * as project from "./project.mjs";
 import * as queue from "./queue.mjs";
 import * as reflect from "./reflect.mjs";
 import * as setup from "./setup.mjs";
+import * as version from "./version.mjs";
 
 const COMMANDS = new Map([
   ["setup", setup.run],
@@ -29,11 +30,12 @@ const COMMANDS = new Map([
   ["embed", embed.run],
   ["memory", memory.run],
   ["queue", queue.run],
+  ["version", version.run],
 ]);
 
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
-const READ_ONLY_COMMANDS = new Set(["doctor"]);
+const READ_ONLY_COMMANDS = new Set(["doctor", "version"]);
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
@@ -72,9 +74,11 @@ commands:
   queue cancel <id> [--reason "..."]        cancel a pending or orphaned job
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow]                 print the accumulated stream of a job
+  version                                   print the installed shift version
 
 options:
   -h, --help                                show this help
+  --version                                 print the installed shift version and exit
 
 exit codes: 0 ok · 1 user error · 2 unexpected error
 configuration home: $NIGHTSHIFT_HOME (default ~/.nightshift)`;
@@ -109,6 +113,10 @@ export async function main(argv, ctx) {
   const [command, ...rest] = argv;
   if (!command || HELP_FLAGS.has(command)) {
     ctx.out(USAGE);
+    return 0;
+  }
+  if (command === "--version") {
+    ctx.out(version.readVersion());
     return 0;
   }
   const handler = COMMANDS.get(command);

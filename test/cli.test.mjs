@@ -74,11 +74,25 @@ test("--help lists every command and exits 0", () => {
     "embed",
     "memory",
     "queue",
+    "version",
   ];
   for (const command of commands) {
     assert.match(result.stdout, new RegExp(`^  ${command}`, "m"));
   }
   assert.equal(shift(tmpdir(), []).status, 0);
+});
+
+test("--version and version print the package version and exit 0", () => {
+  const packageJson = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
+  const flag = shift(tmpdir(), ["--version"]);
+  assert.equal(flag.status, 0);
+  assert.equal(flag.stdout.trim(), packageJson.version);
+  const subcommand = shift(tmpdir(), ["version"]);
+  assert.equal(subcommand.status, 0);
+  assert.equal(subcommand.stdout.trim(), packageJson.version);
+  const withExtraArg = shift(tmpdir(), ["version", "extra"]);
+  assert.equal(withExtraArg.status, 1);
+  assert.match(withExtraArg.stderr, /unexpected argument/);
 });
 
 test("setup is idempotent file by file", (t) => {

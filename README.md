@@ -167,8 +167,10 @@ registers it.
 their secrets), and it drives the memory runtime.
 
 - `shift --help` lists every command: `setup`, `doctor`, `init`, `org`,
-  `project`, `connection`, `mcp`, `hook`, `reflect`, `embed`, `memory` and
-  `queue`.
+  `project`, `connection`, `mcp`, `hook`, `reflect`, `embed`, `memory`,
+  `queue` and `version`.
+- `shift --version` (same as `shift version`) prints the installed version
+  and exits `0`.
 - Exit codes: `0` ok, `1` user error (a single line on stderr), `2` unexpected
   error (a stack on stderr). `shift doctor` also exits `1` when a check fails.
 - Every `list` accepts `--json`; on `--json`, stdout is either valid JSON or
