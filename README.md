@@ -18,12 +18,13 @@ survive between runs and make each run cheaper than the last.
 
 The memory half of the runtime ships in this repository: a SQLite database, the
 MCP server with the six tools the plugin requires, the three session hooks and
-the CLI commands that drive them (see `## Memory`). The plugin in `plugin/` is
-the pipeline half.
+the CLI commands that drive them (see `## Memory`). The queue that runs those
+pipelines unattended ships too, with its own four tools (see `## Queue`). The
+plugin in `plugin/` is the pipeline half.
 
-What is still missing: the queue and the scheduler that would run pipelines
-unattended, and any automatic registration in `~/.claude` - the MCP server and
-the hooks have to be wired into the host by hand.
+What is still missing: the scheduler that would start the queue by itself at
+night, any cockpit over it, and any automatic registration in `~/.claude` - the
+MCP server and the hooks have to be wired into the host by hand.
 
 ## What ships today
 
@@ -34,7 +35,10 @@ the hooks have to be wired into the host by hand.
   proven breaks, fuzz templates.
 - Six subagents, invoked as `nightshift:<agent>`: `architect`, `coder`,
   `explore`, `qa-guardian`, `triager`, `verifier`.
-- `shift mcp` - the stdio MCP server that answers those six tools.
+- `shift mcp` - the stdio MCP server that answers those six tools plus the four
+  of the queue.
+- `shift queue` - the unattended queue: enqueue a request, run it through
+  `/nightshift:resolve` and get a pull request back (see `## Queue`).
 
 ## Requirements
 
@@ -65,8 +69,8 @@ claude --plugin-dir ./plugin
 
 The plugin loads that way, but `/nightshift:resolve` stops at the Phase 0 preflight until an
 MCP server named `nightshift` is connected. `shift mcp` is that server: it speaks the protocol
-over stdio and exposes exactly the six tools. Registering it in the host is still manual, and
-so is registering the hooks.
+over stdio and exposes those six tools plus the four of the queue. Registering it in the host
+is still manual, and so is registering the hooks.
 
 ## The `shift` CLI
 
@@ -74,15 +78,15 @@ so is registering the hooks.
 their secrets), and it drives the memory runtime.
 
 - `shift --help` lists every command: `setup`, `init`, `org`, `project`,
-  `connection`, `mcp`, `hook`, `reflect`, `embed` and `memory`.
+  `connection`, `mcp`, `hook`, `reflect`, `embed`, `memory` and `queue`.
 - Exit codes: `0` ok, `1` user error (a single line on stderr), `2` unexpected
   error (a stack on stderr).
 - Every `list` accepts `--json`; on `--json`, stdout is either valid JSON or
   empty, because warnings and errors always go to stderr.
 
-The queue and the scheduler do not exist yet and land in a future version,
-published as the npm package `nightshift`, of which this plugin is the pipeline
-half.
+The queue lives in `shift queue` (see `## Queue`); the scheduler that would
+start it by itself lands in a future version, published as the npm package
+`nightshift`, of which this plugin is the pipeline half.
 
 ## Configuration
 
@@ -99,6 +103,8 @@ $NIGHTSHIFT_HOME/          # 0700
   models/                  # embedding weights, downloaded on demand
   state/                   # per-session hook state
   runs/<project>/<slug>/   # run artifacts, written by the runtime
+  logs/                    # one log per queue job plus one per runner
+  queue.paused             # sentinel file, present only while the queue is paused
 ```
 
 Secrets are kept in a `0600` file rather than in the operating system
@@ -107,9 +113,10 @@ there to unlock anything.
 
 A command that writes holds the directory `$NIGHTSHIFT_HOME.lock` while it
 runs, so two `shift` processes never overwrite each other's changes; read-only
-commands such as `list` never take it. The memory commands (`mcp`, `hook`,
-`reflect`, `embed`, `memory`) never take it either: they rely on SQLite for
-concurrency, so a running server never blocks a `shift init`.
+commands such as `list` never take it. The memory and queue commands (`mcp`,
+`hook`, `reflect`, `embed`, `memory`, `queue`) never take it either: they rely
+on SQLite for concurrency, so a running server - or a runner that works all
+night - never blocks a `shift init`.
 
 ```sh
 shift setup                                   # create the home, config.json and secrets.json
@@ -152,7 +159,7 @@ Only the `shift` runtime opens it: the plugin talks to the MCP tools, never to
 the file. The schema is created and migrated on first use, and reopening an
 existing database is a no-op.
 
-Six tables plus two full text mirrors:
+Seven tables plus two full text mirrors:
 
 | table | what it holds |
 |---|---|
@@ -162,6 +169,7 @@ Six tables plus two full text mirrors:
 | `project_libs` | the libraries of a project with the version that was actually resolved |
 | `pipeline_runs` | one row per `/resolve` run: tier, task type, outcome, gate stop, duration, model and session |
 | `pipeline_phases` | one row per phase of a run: sequence, phase, model, status, retry and duration |
+| `jobs` | one row per queue job: project, prompt, priority, status, attempts, lease, slug, session, branch, pull request, notice, usage and cost |
 | `lessons_fts`, `memory_fts` | FTS5 mirrors of the two text tables, kept in sync by triggers on insert, update and delete |
 
 **Hybrid recall.** A recall with a query always runs BM25 over the FTS mirror,
@@ -207,7 +215,7 @@ persisted, so a failed run reprocesses the same slice instead of losing it.
 **Commands.**
 
 ```sh
-shift mcp                     # start the stdio MCP server with the six tools
+shift mcp                     # start the stdio MCP server with the ten tools
 shift hook session-start      # run a hook, reading the event JSON from stdin
 shift reflect --transcript <path>   # reflect on a transcript now, in the foreground
 shift embed download          # download the embedding weights (the only network path)
@@ -223,7 +231,8 @@ shift memory stats [--json]   # counts per project
 | `NIGHTSHIFT_EMBED_DISABLED` | `1` turns the semantic side off; the recall stays BM25 only |
 | `NIGHTSHIFT_EMBED_DEADLINE_MS` | deadline of the embedding in the prompt hook, default `800` |
 | `NIGHTSHIFT_REFLECT_MODEL` | model of the reflection, default `haiku` |
-| `NIGHTSHIFT_CLAUDE_BIN` | path of the `claude` CLI used by the reflection |
+| `NIGHTSHIFT_CLAUDE_BIN` | path of the `claude` CLI used by the reflection and by the queue runner |
+| `NIGHTSHIFT_JOB_ID` | set by the runner in the environment of the job it spawns, never read from outside |
 | `NIGHTSHIFT_REFLECT` | `1` marks a process as the reflection itself: no context block and no new reflection |
 | `NIGHTSHIFT_MODEL`, `NIGHTSHIFT_SESSION_ID` | recorded in `pipeline_runs` by the server process |
 
@@ -244,6 +253,89 @@ The optional dependency is what makes the install heavy, and it degrades
 cleanly: if it fails to build or is skipped with `npm install --omit=optional`,
 every recall still answers through BM25 and the whole test suite still passes.
 
+## Queue
+
+The queue is what makes the runtime unattended: `shift queue add` records a
+request against a registered project, `shift queue run` claims it and spawns
+`claude -p /nightshift:resolve <request>` with the plugin of this package and
+this same MCP server attached, and the pipeline itself opens the pull request at
+the end. The runner reads the stream of the run and stores what
+`## Runtime contract` defines: the slug, the session id, the pull request URL,
+the `## Notice` and the token usage.
+
+```sh
+shift queue add api "fix the flaky worker" --priority 2   # enqueue a job
+shift queue status [--limit 10] [--json]                  # the tail of the queue plus the counts
+shift queue status 7 [--json]                             # one job, never with its prompt
+shift queue run [--job 7] [--max 2] [--dry]               # claim and run; --dry only reports
+shift queue run --watch [30]                              # keep claiming, one pass every N seconds
+shift queue log 7 [--follow]                              # the raw stream of the job
+shift queue cancel 7 --reason "not needed"                # cancel a pending or orphaned job
+shift queue pause | shift queue resume                    # stop claiming new jobs, or claim again
+```
+
+**The six states.** A job is `pending` while it waits, `running` while a runner
+owns it under a lease, and then one of four final states: `done` (the run
+delivered a pull request URL), `gate` (the pipeline stopped asking for a human
+decision, or ended with nothing to deliver), `failed` (a non-zero exit, a
+timeout, or an orphan that had already spent its attempts) and `cancelled`
+(cancelled by the operator, or stopped while running). Nothing in v1 moves a job
+out of a final state.
+
+**One job per project at a time.** Two jobs of the same project never run
+together: the pipeline of each job creates its own git worktree from the
+canonical checkout, and two of them in the same checkout collide (a shared
+branch, a worktree left inside the working tree). A project with an active job
+is skipped by the claim, so the jobs behind it never block the rest of the
+queue: the next job of ANOTHER project is claimed instead, and the queue of one
+repository drains strictly in series, in priority order. `queue run` of a busy
+project refuses with `queue: nothing to run (project-busy)`.
+
+**Ownership and orphans.** A claim is one atomic `UPDATE` inside SQLite, so two
+runners never share a job and `queue.maxConcurrent` (default `2`) is a ceiling
+over the whole home, not over one process - a ceiling across DISTINCT projects,
+since one project runs one job at a time. The claim arms a lease of
+`timeout_s + 600` seconds; while the job runs, the runner re-arms it every
+`queue.leaseHeartbeatS` seconds (default `5`, accepted range `1..20`), which is
+the same write that answers whether it still owns the job. A `running` row
+becomes an orphan only 60 seconds after its lease expired, and even then it is
+left alone while the process named in `worker` is alive on this host - unless
+`started_at + timeout_s + 600` has already passed, in which case it is recycled
+anyway, because reclaiming never depends on a healthy process. The next claim
+returns an orphan to `pending` (keeping its attempts) or fails it once it spent
+the `max_attempts` of its own row. A runner that loses ownership kills its child
+in the same heartbeat and writes nothing but one line in the job log: the row
+belongs to somebody else. `queue cancel` refuses a job that is running under a
+live lease: stop that runner first.
+
+**Timeouts.** Each job has its own total timeout (`--timeout`, default 4 hours)
+and every attempt also dies after 20 minutes without a single line on the
+stream. Neither is a transient failure: a timed out attempt is `failed` and is
+never retried. Only a provider failure (429, overload, connection reset) is
+retried, up to `--max-attempts`, backing off 5s, 15s and 45s.
+
+**Resuming by slug.** The pipeline writes `state.json` in the run directory of
+its slug, and the runner reads it: it stores the `branch`, and on a new run of
+the same job it asks the pipeline to resume from the phase after the last
+completed one instead of starting over. With `queue.resumeSession: true` in
+`config.json` it also passes `--resume <session id>` once the job has a session
+of its own. The default is `false`.
+
+**What the runner requires of the checkout.** Before spawning anything it
+checks, in this order: the project is registered by NAME, its checkout exists
+and has a `.git`, the `claude` CLI resolves (`NIGHTSHIFT_CLAUDE_BIN`, then
+`PATH`), the checkout is clean (`git status --porcelain` empty) and it sits on
+the default branch. A block is not a failure: the job goes back to `pending`
+without spending an attempt and the reason is stored in `result` (the operator
+note is never touched), so a later run picks it up once the checkout is in
+shape.
+
+**What it does NOT do in v1.** It never merges anything, never closes the cycle
+after the pull request, keeps no token budget, ships no launchd (or any other)
+scheduler, sends no notification and has no cockpit. It also never changes the
+state of a git repository: the only git commands it runs are reads of the
+checkout, and every branch and worktree is created by the pipeline itself.
+
 ## Runtime contract
 
 What a runtime has to provide, and what it can rely on:
@@ -262,12 +354,19 @@ What a runtime has to provide, and what it can rely on:
 - Literals a runtime parses from the pipeline's stdout: `QUEUE_SLUG:`,
   `## Requires user confirmation` (the run is waiting on a human gate) and
   `## Notice` (the executive summary to deliver).
+- Authority of each literal: the LAST standalone `QUEUE_SLUG:` line of the
+  orchestrator wins, and the `## Notice` and the pull request URL of the run are
+  read from the FINAL `result` event - an intermediate message that echoes an
+  earlier one never wins. A pull request URL only counts as delivered when it
+  closes a line outside any code fence and that line does not report a failure;
+  a URL cited inside a sentence, an example or an error message is a reference,
+  and a run that delivers none ends as `gate`, never as `done`.
 
 These names are a machine contract, not prose: the pipeline files are the
 source of truth for them, and any runtime that reads them must match them
 exactly.
 
-The six MCP tools, with the parameters `shift mcp` actually accepts:
+The ten MCP tools, with the parameters `shift mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -277,6 +376,17 @@ The six MCP tools, with the parameters `shift mcp` actually accepts:
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |
 | `pipeline_log` | `slug`, `tier`, `outcome`, `project?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?}]` |
+| `queue_add` | `project`, `prompt`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400) |
+| `queue_status` | `job_id?`, `limit?` (1-50) |
+| `queue_run` | `job_id?` |
+| `queue_cancel` | `job_id`, `reason?` |
+
+The four queue tools are the same subsystem as `shift queue` (see `## Queue`):
+`queue_add` takes the registered project NAME and never a path, `queue_status`
+never returns the prompt of a job and truncates `notice_md` and `result` at 500
+characters, `queue_run` starts the runner detached and answers right away with
+the path of its log, and `queue_cancel` refuses a job running under a live lease
+without writing anything.
 
 Every optional parameter accepts an explicit `null` and treats it exactly like
 an absent one, so a caller that fills its whole argument object never gets an

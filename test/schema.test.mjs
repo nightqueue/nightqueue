@@ -44,7 +44,28 @@ test("normalizeConfig fills defaults over a partial, hand-edited file", () => {
   assert.equal(config.orgs.acme.displayName, "acme");
   assert.deepEqual({ ...config.orgs.acme.connections }, { github: null });
   assert.deepEqual(config.projects.api, { path: "/tmp/api", org: "acme" });
-  assert.deepEqual(config.queue, { maxConcurrent: 2 });
+  assert.deepEqual(config.queue, { maxConcurrent: 2, resumeSession: false, leaseHeartbeatS: 5 });
+  assert.deepEqual(emptyConfig().queue, { maxConcurrent: 2, resumeSession: false, leaseHeartbeatS: 5 });
+});
+
+test("queue.resumeSession only accepts a literal true, so `--resume` stays off by accident", () => {
+  assert.equal(normalizeConfig({ queue: { resumeSession: true } }).queue.resumeSession, true);
+  for (const raw of ["true", 1, "yes", {}, null]) {
+    assert.equal(normalizeConfig({ queue: { resumeSession: raw } }).queue.resumeSession, false, `\`${String(raw)}\` turned it on`);
+  }
+});
+
+test("queue.leaseHeartbeatS is clamped to the range that keeps a live runner ahead of the reclaim grace", () => {
+  for (const valid of [1, 5, 20]) {
+    assert.equal(normalizeConfig({ queue: { leaseHeartbeatS: valid } }).queue.leaseHeartbeatS, valid, String(valid));
+  }
+  for (const invalid of [0, -3, 21, 600, 2.5, "5", null, {}, undefined]) {
+    assert.equal(
+      normalizeConfig({ queue: { leaseHeartbeatS: invalid } }).queue.leaseHeartbeatS,
+      5,
+      `\`${String(invalid)}\` was accepted as a heartbeat`,
+    );
+  }
 });
 
 test("normalizeConfig recreates the default org and drops broken project entries", () => {

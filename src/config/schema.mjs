@@ -5,6 +5,10 @@ export const SCHEMA_VERSION = 1;
 
 const DEFAULT_ORG = "default";
 
+// Seconds between two lease heartbeats of a runner; the upper bound keeps three heartbeats inside the lease grace.
+export const LEASE_HEARTBEAT_DEFAULT_S = 5;
+export const LEASE_HEARTBEAT_RANGE = { min: 1, max: 20 };
+
 // Tells whether the value is a plain object usable as a map.
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -26,7 +30,13 @@ export function emptySlots() {
 export function emptyConfig() {
   const orgs = emptyMap();
   orgs[DEFAULT_ORG] = { displayName: "Default", connections: emptySlots() };
-  return { version: SCHEMA_VERSION, defaultOrg: DEFAULT_ORG, orgs, projects: emptyMap(), queue: { maxConcurrent: 2 } };
+  return {
+    version: SCHEMA_VERSION,
+    defaultOrg: DEFAULT_ORG,
+    orgs,
+    projects: emptyMap(),
+    queue: { maxConcurrent: 2, resumeSession: false, leaseHeartbeatS: LEASE_HEARTBEAT_DEFAULT_S },
+  };
 }
 
 // Initial structure of secrets.json.
@@ -114,6 +124,13 @@ function warnOnOrphanProjects(projects, orgs, warn) {
   }
 }
 
+// Heartbeat of the queue lease, clamped to the range that keeps a live runner ahead of the reclaim grace.
+function normalizeHeartbeat(value) {
+  const inRange =
+    Number.isInteger(value) && value >= LEASE_HEARTBEAT_RANGE.min && value <= LEASE_HEARTBEAT_RANGE.max;
+  return inRange ? value : LEASE_HEARTBEAT_DEFAULT_S;
+}
+
 // Fills defaults over a config read from disk or edited by hand.
 export function normalizeConfig(raw, { warn = () => {} } = {}) {
   if (!isPlainObject(raw)) return emptyConfig();
@@ -128,7 +145,11 @@ export function normalizeConfig(raw, { warn = () => {} } = {}) {
     defaultOrg,
     orgs,
     projects,
-    queue: { maxConcurrent: Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 2 },
+    queue: {
+      maxConcurrent: Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 2,
+      resumeSession: raw.queue?.resumeSession === true,
+      leaseHeartbeatS: normalizeHeartbeat(raw.queue?.leaseHeartbeatS),
+    },
   };
 }
 

@@ -27,6 +27,34 @@ const LESSON_COLUMNS = [
   "embedding_model",
 ];
 
+const JOB_COLUMNS = [
+  "id",
+  "project",
+  "prompt",
+  "priority",
+  "status",
+  "attempts",
+  "max_attempts",
+  "timeout_s",
+  "lease_until",
+  "worker",
+  "session_id",
+  "slug",
+  "branch",
+  "pr_url",
+  "notice_md",
+  "result",
+  "operator_note",
+  "tokens_in",
+  "tokens_out",
+  "cache_read",
+  "cache_creation",
+  "cost_usd",
+  "created_at",
+  "started_at",
+  "finished_at",
+];
+
 // Inserts a lesson through raw SQL, so the test exercises the triggers and nothing else.
 function insertLesson(db, { title, root_cause = "root", solution = "solution", prevention = "prevention" }) {
   const result = db
@@ -49,16 +77,33 @@ test("the migration is idempotent and keeps the data across a reopen", (t) => {
   const env = makeHome(t, "db-migrate");
   const first = openDb(env);
   const id = insertLesson(first, { title: "the migration keeps the rows" });
-  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 1);
+  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 2);
   assert.deepEqual(columnsOf(first, "lessons"), LESSON_COLUMNS);
   closeDb(env);
 
   const second = openDb(env);
   assert.notEqual(second, first);
-  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 1);
+  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 2);
   assert.deepEqual(columnsOf(second, "lessons"), LESSON_COLUMNS);
   assert.equal(second.prepare("SELECT title FROM lessons WHERE id = ?").get(id).title, "the migration keeps the rows");
   assert.deepEqual(matchIds(second, "lessons_fts", '"migration"'), [id]);
+});
+
+test("the jobs table of the queue is created with its columns, defaults and claim indexes", (t) => {
+  const env = makeHome(t, "db-jobs");
+  const db = openDb(env);
+  assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS);
+  const indexes = db.prepare("PRAGMA index_list(jobs)").all().map((index) => index.name);
+  assert.ok(indexes.includes("jobs_claim_idx"), `claim index missing: ${indexes.join(", ")}`);
+  assert.ok(indexes.includes("jobs_project_slug_idx"), `project index missing: ${indexes.join(", ")}`);
+  db.prepare("INSERT INTO jobs (project, prompt) VALUES (?, ?)").run("alpha", "fix the worker");
+  const row = db.prepare("SELECT * FROM jobs").get();
+  assert.deepEqual(
+    { status: row.status, priority: row.priority, attempts: row.attempts, max_attempts: row.max_attempts, timeout_s: row.timeout_s },
+    { status: "pending", priority: 5, attempts: 0, max_attempts: 1, timeout_s: 14400 },
+  );
+  assert.equal(row.worker, null);
+  assert.match(row.created_at, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
 });
 
 test("the connection is opened in WAL with a busy timeout that survives a concurrent writer", (t) => {

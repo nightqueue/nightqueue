@@ -71,6 +71,33 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
   job_id INTEGER,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 5,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 1,
+  timeout_s INTEGER NOT NULL DEFAULT 14400,
+  lease_until TEXT,
+  worker TEXT,
+  session_id TEXT,
+  slug TEXT,
+  branch TEXT,
+  pr_url TEXT,
+  notice_md TEXT,
+  result TEXT,
+  operator_note TEXT,
+  tokens_in INTEGER,
+  tokens_out INTEGER,
+  cache_read INTEGER,
+  cache_creation INTEGER,
+  cost_usd REAL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  started_at TEXT,
+  finished_at TEXT
+);
 CREATE TABLE IF NOT EXISTS pipeline_phases (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id INTEGER NOT NULL,
@@ -107,6 +134,8 @@ CREATE INDEX IF NOT EXISTS memory_project_idx ON memory(project, created_at);
 CREATE INDEX IF NOT EXISTS project_index_project_idx ON project_index(project, updated_at);
 CREATE INDEX IF NOT EXISTS pipeline_runs_project_idx ON pipeline_runs(project, created_at);
 CREATE INDEX IF NOT EXISTS pipeline_phases_run_idx ON pipeline_phases(run_id, seq);
+CREATE INDEX IF NOT EXISTS jobs_claim_idx ON jobs(status, priority, created_at);
+CREATE INDEX IF NOT EXISTS jobs_project_slug_idx ON jobs(project, slug);
 `;
 
 const FTS = `
@@ -222,6 +251,7 @@ function migrate(db) {
     db.exec("INSERT INTO memory_fts(memory_fts) VALUES('rebuild')");
     db.exec("PRAGMA user_version = 1");
   }
+  if (version < 2) db.exec("PRAGMA user_version = 2");
 }
 
 // Migrates the database, turning a Node build without FTS5 into an actionable message.

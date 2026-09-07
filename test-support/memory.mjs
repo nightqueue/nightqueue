@@ -14,6 +14,7 @@ const OWN_ENV_KEYS = [
   "NIGHTSHIFT_CLAUDE_BIN",
   "NIGHTSHIFT_MODEL",
   "NIGHTSHIFT_SESSION_ID",
+  "NIGHTSHIFT_JOB_ID",
 ];
 
 // Creates a temporary directory removed at the end of the test.

@@ -9,6 +9,7 @@ import * as mcp from "./mcp.mjs";
 import * as memory from "./memory.mjs";
 import * as org from "./org.mjs";
 import * as project from "./project.mjs";
+import * as queue from "./queue.mjs";
 import * as reflect from "./reflect.mjs";
 import * as setup from "./setup.mjs";
 
@@ -23,13 +24,14 @@ const COMMANDS = new Map([
   ["reflect", reflect.run],
   ["embed", embed.run],
   ["memory", memory.run],
+  ["queue", queue.run],
 ]);
 
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
-const SELF_LOCKING_COMMANDS = new Set(["mcp", "hook", "reflect", "embed", "memory"]);
+const SELF_LOCKING_COMMANDS = new Set(["mcp", "hook", "reflect", "embed", "memory", "queue"]);
 
 const USAGE = `shift — nightshift configuration
 
@@ -57,6 +59,12 @@ commands:
   embed download                            download the embedding weights into the home (the only network path)
   embed backfill                            compute the embeddings of the lessons that still have none
   memory stats [--json]                     count lessons, memories, index entries and runs per project
+  queue add <project> <prompt>              enqueue an unattended /nightshift:resolve run for a project
+  queue status [id] [--limit] [--json]      show one job or the tail of the queue plus the counts per status
+  queue run [--job] [--max] [--watch]       claim pending jobs and run them; --dry only reports what it would do
+  queue cancel <id> [--reason "..."]        cancel a pending or orphaned job
+  queue pause | resume                      stop claiming new jobs, or claim again
+  queue log <id> [--follow]                 print the accumulated stream of a job
 
 options:
   -h, --help                                show this help

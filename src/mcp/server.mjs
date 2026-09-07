@@ -1,10 +1,25 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { UserError } from "../config/errors.mjs";
+import { projectByName } from "../config/projects.mjs";
+import { loadConfig } from "../config/store.mjs";
 import { saveLessonDeduped } from "../memory/dedup.mjs";
 import { recallProjectIndex, saveProjectIndex } from "../memory/index.mjs";
+import {
+  addJob,
+  cancelJob,
+  countsByStatus,
+  getJob,
+  jobView,
+  listJobs,
+  MAX_ATTEMPTS_RANGE,
+  PRIORITY_RANGE,
+  TIMEOUT_RANGE,
+} from "../memory/jobs.mjs";
 import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
+import { launchDetachedRunner } from "../queue/runner.mjs";
 import {
   logPipelineRun,
   PIPELINE_GATE_STOPS,
@@ -19,6 +34,7 @@ const SERVER_NAME = "nightshift";
 const SERVER_VERSION = "0.1.0";
 const RECALL_LIMIT = 8;
 const INDEX_LIMIT = 40;
+const JOB_LIST_LIMIT = { min: 1, max: 50, fallback: 10 };
 
 const target = z.enum(LESSON_TARGETS).nullable().optional();
 const optionalText = z.string().nullable().optional();
@@ -31,6 +47,21 @@ const phaseSchema = z.object({
   duration_s: z.number().int().min(0).nullable().optional(),
   note: z.string().nullable().optional(),
 });
+
+// Requires the project of a job to be a registered NAME, because a path never resolves to a project.
+function requireProjectName(name, env) {
+  const project = projectByName(loadConfig(env, { warn: () => {} }), name);
+  if (project) return project.name;
+  throw new UserError(
+    `unknown project \`${name}\`: pass the registered project NAME, not a path; list them with \`shift project list\``,
+  );
+}
+
+// Clamps the size of a job listing into the accepted window.
+function jobLimit(limit) {
+  if (!Number.isInteger(limit)) return JOB_LIST_LIMIT.fallback;
+  return Math.min(Math.max(limit, JOB_LIST_LIMIT.min), JOB_LIST_LIMIT.max);
+}
 
 // Wraps a tool result as the JSON text every tool of this server returns.
 function asText(data) {
@@ -48,7 +79,7 @@ function guard(name, handler) {
   };
 }
 
-// The six tools of the plugin contract, with the parameter names the plugin actually sends.
+// The ten tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env) {
   return [
     {
@@ -184,10 +215,77 @@ function toolDefinitions(env) {
         return { ok: true, runId: logged.runId, project: logged.project, phases: logged.phases };
       },
     },
+    {
+      name: "queue_add",
+      config: {
+        description:
+          "Enqueues an unattended /nightshift:resolve run for a registered project. `project` is the registered NAME, never a path.",
+        inputSchema: {
+          project: z.string(),
+          prompt: z.string(),
+          priority: z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).nullable().optional(),
+          max_attempts: z.number().int().min(MAX_ATTEMPTS_RANGE.min).max(MAX_ATTEMPTS_RANGE.max).nullable().optional(),
+          timeout_s: z.number().int().min(TIMEOUT_RANGE.min).max(TIMEOUT_RANGE.max).nullable().optional(),
+        },
+      },
+      handler: async (args) => {
+        const job = addJob(
+          {
+            project: requireProjectName(args.project, env),
+            prompt: args.prompt,
+            priority: args.priority,
+            maxAttempts: args.max_attempts,
+            timeoutS: args.timeout_s,
+          },
+          env,
+        );
+        return { ok: true, id: job.id, project: job.project, priority: job.priority, timeoutS: job.timeoutS };
+      },
+    },
+    {
+      name: "queue_status",
+      config: {
+        description:
+          "State of the queue: one job by id, or the most recent ones plus the counts per status. Never returns the prompt.",
+        inputSchema: {
+          job_id: z.number().int().min(1).nullable().optional(),
+          limit: z.number().int().min(JOB_LIST_LIMIT.min).max(JOB_LIST_LIMIT.max).nullable().optional(),
+        },
+      },
+      handler: async (args) => {
+        if (Number.isInteger(args.job_id)) {
+          const job = jobView(getJob(args.job_id, env));
+          if (!job) throw new UserError(`unknown job \`${args.job_id}\``);
+          return { job };
+        }
+        return { jobs: listJobs({ limit: jobLimit(args.limit) }, env).map(jobView), counts: countsByStatus(env) };
+      },
+    },
+    {
+      name: "queue_run",
+      config: {
+        description:
+          "Starts the queue runner detached, with its output going to a log file, and returns immediately with that path.",
+        inputSchema: { job_id: z.number().int().min(1).nullable().optional() },
+      },
+      handler: async (args) => {
+        const started = launchDetachedRunner({ jobId: Number.isInteger(args.job_id) ? args.job_id : null, env });
+        return { ok: true, pid: started.pid, logPath: started.logPath };
+      },
+    },
+    {
+      name: "queue_cancel",
+      config: {
+        description:
+          "Cancels a pending or orphaned job. A job running under a live lease is refused, with the exact reason and no write.",
+        inputSchema: { job_id: z.number().int().min(1), reason: optionalText },
+      },
+      handler: async (args) => ({ ok: true, job: cancelJob(args.job_id, { reason: args.reason }, env) }),
+    },
   ];
 }
 
-// Builds the MCP server with the six tools of the plugin contract.
+// Builds the MCP server with the ten tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
   for (const tool of toolDefinitions(env)) server.registerTool(tool.name, tool.config, guard(tool.name, tool.handler));

@@ -6,11 +6,26 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { homeDir, queuePausedPath } from "../../src/config/paths.mjs";
+import { openDb } from "../../src/memory/db.mjs";
+import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/shift.mjs", import.meta.url));
 
-const CONTRACT_TOOLS = ["index_recall", "index_save", "lesson_recall", "lesson_save", "memory_recall", "pipeline_log"];
+const CONTRACT_TOOLS = [
+  "index_recall",
+  "index_save",
+  "lesson_recall",
+  "lesson_save",
+  "memory_recall",
+  "pipeline_log",
+  "queue_add",
+  "queue_cancel",
+  "queue_run",
+  "queue_status",
+];
 
 const LESSON = {
   title: "the worker leaks a file descriptor on failure",
@@ -40,7 +55,7 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the six tools of the contract", async (t) => {
+test("the server exposes exactly the ten tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
@@ -75,7 +90,7 @@ test("a lesson saved through the server comes back in the recall, without its em
   assert.notEqual(tolerant.isError, true, textOf(tolerant));
 });
 
-test("an explicit null in any optional field of the six tools is accepted, never an error", async (t) => {
+test("an explicit null in any optional field of the memory tools is accepted, never an error", async (t) => {
   const env = makeHome(t, "mcp-null");
   const repo = makeProject(t, env, "alpha");
   const client = await connect(t, env);
@@ -197,11 +212,103 @@ test("memory_recall answers empty and pipeline_log holds the contract of its enu
 test("the running server does not hold the configuration lock of the home", async (t) => {
   const env = makeHome(t, "mcp-lock");
   const client = await connect(t, env);
-  assert.equal((await client.listTools()).tools.length, 6);
+  assert.equal((await client.listTools()).tools.length, CONTRACT_TOOLS.length);
 
   const repo = makeDir(t, "mcp-lock-repo");
   mkdirSync(join(repo, ".git"), { recursive: true });
   const result = spawnSync(process.execPath, [CLI, "init", repo, "--name", "locked"], { env, encoding: "utf8" });
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   assert.match(result.stdout, /registered project `locked`/);
+});
+
+// A home whose queue is paused, so a detached runner started by a test never claims anything.
+function makeQueueHome(t, name) {
+  const env = makeHome(t, name);
+  makeProject(t, env, "alpha");
+  env.NIGHTSHIFT_CLAUDE_BIN = FAKE_CLAUDE;
+  writeFileSync(queuePausedPath(env), `${new Date().toISOString()}\n`);
+  return env;
+}
+
+test("queue_add enqueues by project NAME and refuses a path or a project nobody registered", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-add");
+  const client = await connect(t, env);
+
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker", priority: 2, timeout_s: 600 } }));
+  assert.deepEqual(queued, { ok: true, id: 1, project: "alpha", priority: 2, timeoutS: 600 });
+  assert.equal(getJob(1, env).prompt, "fix the worker");
+
+  const byPath = await client.callTool({ name: "queue_add", arguments: { project: "/tmp/alpha", prompt: "fix the worker" } });
+  assert.equal(byPath.isError, true);
+  assert.match(textOf(byPath), /pass the registered project NAME, not a path/);
+
+  const unknown = await client.callTool({ name: "queue_add", arguments: { project: "ghost", prompt: "fix the worker" } });
+  assert.equal(unknown.isError, true);
+  assert.match(textOf(unknown), /unknown project `ghost`/);
+
+  const outOfRange = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix it", priority: 42 } });
+  assert.equal(outOfRange.isError, true);
+  assert.doesNotMatch(textOf(outOfRange), /\.mjs:\d+/);
+});
+
+test("queue_status never returns the prompt and truncates the free text at five hundred code points", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-status");
+  const id = addJob({ project: "alpha", prompt: "a prompt no tool may ever return" }, env).id;
+  addJob({ project: "alpha", prompt: "another one" }, env);
+  openDb(env)
+    .prepare("UPDATE jobs SET notice_md = ?, result = ? WHERE id = ?")
+    .run(`${"n".repeat(600)}`, `${"r".repeat(600)}`, id);
+  const client = await connect(t, env);
+
+  const one = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: id } }));
+  assert.equal("prompt" in one.job, false, "queue_status leaked the prompt");
+  assert.equal(one.job.notice_md, `${"n".repeat(500)}...`);
+  assert.equal(one.job.result, `${"r".repeat(500)}...`);
+
+  const listed = payloadOf(await client.callTool({ name: "queue_status", arguments: { limit: null, job_id: null } }));
+  assert.deepEqual(listed.jobs.map((job) => job.id), [2, 1]);
+  assert.equal(listed.counts.pending, 2);
+  for (const job of listed.jobs) assert.equal("prompt" in job, false, "the listing leaked a prompt");
+
+  const unknown = await client.callTool({ name: "queue_status", arguments: { job_id: 99 } });
+  assert.equal(unknown.isError, true);
+  assert.match(textOf(unknown), /unknown job `99`/);
+});
+
+test("queue_run comes back at once with the log of the detached runner, inside this home", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-run");
+  const client = await connect(t, env);
+
+  const started = payloadOf(await client.callTool({ name: "queue_run", arguments: { job_id: null } }));
+
+  assert.equal(started.ok, true);
+  assert.equal(Number.isInteger(started.pid), true, `no pid: ${JSON.stringify(started)}`);
+  assert.equal(started.logPath.startsWith(join(homeDir(env), "logs")), true, `the runner logs outside the home: ${started.logPath}`);
+  assert.match(started.logPath, /runner-\d{8}T\d{6}Z\.log$/);
+});
+
+test("queue_cancel takes a pending job and an orphan, and refuses a live run or a finished one", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-cancel");
+  const pending = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const running = addJob({ project: "alpha", prompt: "fix the parser" }, env).id;
+  claimJobById(running, { worker: "host:4242", cap: 4 }, env);
+  const client = await connect(t, env);
+
+  const refused = await client.callTool({ name: "queue_cancel", arguments: { job_id: running, reason: null } });
+  assert.equal(refused.isError, true);
+  assert.match(textOf(refused), /is running with a live lease on worker `host:4242`/);
+  assert.equal(getJob(running, env).status, "running", "the refused cancel wrote to the row");
+
+  const cancelled = payloadOf(await client.callTool({ name: "queue_cancel", arguments: { job_id: pending, reason: "no longer needed" } }));
+  assert.equal(cancelled.job.status, "cancelled");
+  assert.equal(cancelled.job.operator_note, "no longer needed");
+
+  const twice = await client.callTool({ name: "queue_cancel", arguments: { job_id: pending } });
+  assert.equal(twice.isError, true);
+  assert.match(textOf(twice), /already finished with status `cancelled`/);
+
+  openDb(env).prepare("UPDATE jobs SET lease_until = datetime('now', '-120 seconds') WHERE id = ?").run(running);
+  const orphan = payloadOf(await client.callTool({ name: "queue_cancel", arguments: { job_id: running } }));
+  assert.equal(orphan.job.status, "cancelled");
+  assert.equal(orphan.job.worker, null);
 });

@@ -31,3 +31,23 @@ export function modelsDir(env = process.env) {
 export function stateDir(env = process.env) {
   return join(homeDir(env), "state");
 }
+
+// Directory where the pipeline writes the artifacts and the state.json of one run.
+export function runDir(project, slug, env = process.env) {
+  return join(homeDir(env), "runs", project, slug);
+}
+
+// Directory of the queue logs: one file per job plus one per detached runner.
+export function logsDir(env = process.env) {
+  return join(homeDir(env), "logs");
+}
+
+// Path of the accumulated log of one queue job, appended once per attempt.
+export function jobLogPath(id, env = process.env) {
+  return join(logsDir(env), `job-${id}.log`);
+}
+
+// Path of the sentinel file that keeps the queue paused.
+export function queuePausedPath(env = process.env) {
+  return join(homeDir(env), "queue.paused");
+}
