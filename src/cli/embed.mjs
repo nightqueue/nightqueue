@@ -3,9 +3,17 @@ import { modelsDir } from "../config/paths.mjs";
 import { EMBEDDING_MODEL_TAG, embedTexts, isModelCached, warmupModel } from "../memory/embedding.mjs";
 import { lessonsMissingEmbedding, setLessonEmbedding } from "../memory/lessons.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
+import { setupEmbedding } from "./install-steps.mjs";
+import { makeReport } from "./report.mjs";
 
 const BATCH_SIZE = 100;
 const MAX_BATCHES = 200;
+
+// Runs `shift embed install`: puts the embedding library in its own prefix and downloads the weights.
+async function runInstall(argv, ctx) {
+  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "shift embed install" });
+  await setupEmbedding(ctx, makeReport(ctx), { embedding: true });
+}
 
 // Text a lesson is embedded by: title plus prevention.
 function lessonProbe(lesson) {
@@ -53,6 +61,7 @@ async function runBackfill(argv, ctx) {
 }
 
 const SUBCOMMANDS = new Map([
+  ["install", runInstall],
   ["download", runDownload],
   ["backfill", runBackfill],
 ]);

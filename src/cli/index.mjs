@@ -15,12 +15,14 @@ import * as project from "./project.mjs";
 import * as queue from "./queue.mjs";
 import * as reflect from "./reflect.mjs";
 import * as setup from "./setup.mjs";
+import * as update from "./update.mjs";
 import * as version from "./version.mjs";
 
 const COMMANDS = new Map([
   ["setup", setup.run],
   ["doctor", doctor.run],
   ["init", init.run],
+  ["update", update.run],
   ["org", org.run],
   ["project", project.run],
   ["connection", connection.run],
@@ -46,9 +48,10 @@ const USAGE = `shift — nightshift configuration
 usage: shift <command> [options]
 
 commands:
-  setup [--no-model] [--remove]             create the configuration home and register the MCP server, hooks and plugin in the host
+  setup [--from <dir>] [--remove]           install the runtime in the home and register the MCP server, hooks and plugin in the host
   doctor [--json]                           check the host and the home, one line per check; exits 1 on any failure
-  init [path] [--no-model] [--gh|--no-gh]   set up the host and register the git repository at [path] (default: .) as a project
+  init [path] [--gh|--no-gh]                install the runtime and register the git repository at [path] (default: .) as a project
+  update [--from <dir>]                     reinstall the runtime at the newest version and re-point the host at it
   org add <name> [--display-name "..."]     create an org
   org list [--json]                         list orgs, their connection slots and project counts
   org rename <old> <new>                    rename an org and every project pointing at it
@@ -65,6 +68,7 @@ commands:
   mcp                                       start the stdio MCP server that exposes the ten memory and queue tools
   hook session-start|prompt-context|reflect run a hook, reading the event JSON from stdin
   reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground
+  embed install                             install the embedding library into the home and download its weights
   embed download                            download the embedding weights into the home (the only network path)
   embed backfill                            compute the embeddings of the lessons that still have none
   memory stats [--json]                     count lessons, memories, index entries and runs per project
@@ -104,7 +108,7 @@ export function defaultContext() {
 function skipsLock(command, subcommand) {
   if (READ_ONLY_COMMANDS.has(command)) return true;
   if (SELF_LOCKING_COMMANDS.has(command)) return true;
-  if (command === "setup" || command === "init") return false;
+  if (command === "setup" || command === "init" || command === "update") return false;
   return READ_ONLY_SUBCOMMANDS.has(subcommand);
 }
 

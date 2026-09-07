@@ -3,12 +3,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { jobLogPath, homeDir } from "../../src/config/paths.mjs";
+import { packageRoot } from "../../src/host/paths.mjs";
 import {
   buildArgs,
   buildPrompt,
   cliEntrypoint,
   IDLE_TIMEOUT_S,
-  packageRoot,
   pluginDir,
   resolveClaudeBin,
   spawnClaude,

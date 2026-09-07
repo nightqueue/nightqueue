@@ -5,6 +5,7 @@ import { emptyConfig, emptySecrets } from "../config/schema.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { claudeCommandLine, runClaude } from "../host/claude.mjs";
 import { MCP_SERVER_NAME, mcpAddArgs, mcpRemoveArgs, readRegisteredServer, serverIsCurrent } from "../host/mcp.mjs";
+import { hostManifestPath, hostPackageRoot } from "../host/paths.mjs";
 import {
   marketplaceAddArgs,
   marketplaceIsCurrent,
@@ -14,35 +15,45 @@ import {
   pluginUninstallArgs,
   readInstalledPlugin,
   readKnownMarketplace,
-  readManifest,
 } from "../host/plugin.mjs";
-import { mergeHooks, readHostSettings, removeHooks, spacedRootWarning, writeHostSettings } from "../host/settings.mjs";
-import { warmupModel } from "../memory/embedding.mjs";
-import { checkArgs, parseCommand } from "./args.mjs";
+import {
+  desiredHooks,
+  mergeHooks,
+  readHostSettings,
+  removeHooks,
+  spacedRootWarning,
+  writeHostSettings,
+} from "../host/settings.mjs";
+import { checkArgs, flagChoice, parseCommand } from "./args.mjs";
+import {
+  removeInstalledDirs,
+  removePathStep,
+  removeShimStep,
+  setupEmbedding,
+  setupPath,
+  setupRuntime,
+  setupShim,
+} from "./install-steps.mjs";
+import { firstLine, makeReport } from "./report.mjs";
 
 const MARKETPLACE_LABEL = "plugin marketplace";
+const USAGE = "shift setup [--from <dir>] [--path|--no-path] [--embedding|--no-embedding] [--remove [--purge]]";
 
-// One line of the report, always `<label>: <status>` plus an optional detail.
-function stepLine(label, status, detail) {
-  return `${label}: ${status}${detail ? ` (${detail})` : ""}`;
-}
+// Flags every command that installs the host shares.
+export const INSTALL_OPTIONS = {
+  from: { type: "string" },
+  path: { type: "boolean" },
+  "no-path": { type: "boolean" },
+  embedding: { type: "boolean" },
+  "no-embedding": { type: "boolean" },
+};
 
-// First line of a subprocess error, short enough to sit inside a report line.
-function firstLine(text) {
-  return String(text ?? "").trim().split("\n")[0].slice(0, 200);
-}
-
-// Reporter of the run: prints every step and counts the ones that could not be finished.
-function makeReport(ctx) {
-  let degraded = 0;
+// Installation choices of one call, each opposite pair reduced to a tri-state.
+export function installOptions(values, usage) {
   return {
-    step: (label, status, detail) => ctx.out(stepLine(label, status, detail)),
-    degrade: (label, reason, command) => {
-      degraded += 1;
-      ctx.out(stepLine(label, "failed", reason));
-      if (command) ctx.err(`shift: finish this step by hand: ${command}`);
-    },
-    count: () => degraded,
+    from: values.from,
+    path: flagChoice(values, "path", usage),
+    embedding: flagChoice(values, "embedding", usage),
   };
 }
 
@@ -99,18 +110,18 @@ function setupHome(ctx, report) {
 function setupMcp(ctx, report) {
   const label = `mcp ${MCP_SERVER_NAME}`;
   const entry = readRegisteredServer(ctx.env);
-  if (serverIsCurrent(entry)) {
+  if (serverIsCurrent(entry, ctx.env)) {
     report.step(label, "already present");
     return;
   }
   if (entry && !runStep(ctx, report, label, mcpRemoveArgs())) return;
-  if (!runStep(ctx, report, label, mcpAddArgs())) return;
+  if (!runStep(ctx, report, label, mcpAddArgs(ctx.env))) return;
   report.step(label, entry ? "updated" : "created");
 }
 
-// Warns when the package path carries a space, the only case where the unquoted hook command breaks.
+// Warns when the runtime path carries a space, the only case where the unquoted hook command breaks.
 function warnOnSpacedRoot(ctx) {
-  const warning = spacedRootWarning();
+  const warning = spacedRootWarning(hostPackageRoot(ctx.env));
   if (warning) ctx.err(warning);
 }
 
@@ -118,29 +129,29 @@ function warnOnSpacedRoot(ctx) {
 function applyHooks(ctx, report, { remove }) {
   const settings = readHostSettings(ctx.env);
   const before = structuredClone(settings.data);
-  const steps = remove ? removeHooks(settings.data) : mergeHooks(settings.data);
+  const steps = remove ? removeHooks(settings.data, ctx.env) : mergeHooks(settings.data, ctx.env);
   if (!isDeepStrictEqual(before, settings.data)) writeHostSettings(ctx.env, settings);
   if (!remove) warnOnSpacedRoot(ctx);
   for (const step of steps) report.step(`hook ${step.event}`, step.status);
 }
 
-// Registers this package as a local marketplace of the host.
+// Registers the runtime as a local marketplace of the host.
 function setupMarketplace(ctx, report) {
   const known = readKnownMarketplace(ctx.env);
-  if (marketplaceIsCurrent(known)) {
+  if (marketplaceIsCurrent(known, ctx.env)) {
     report.step(MARKETPLACE_LABEL, "already present");
     return true;
   }
   if (known && !runStep(ctx, report, MARKETPLACE_LABEL, marketplaceRemoveArgs())) return false;
-  if (!runStep(ctx, report, MARKETPLACE_LABEL, marketplaceAddArgs())) return false;
+  if (!runStep(ctx, report, MARKETPLACE_LABEL, marketplaceAddArgs(ctx.env))) return false;
   report.step(MARKETPLACE_LABEL, known ? "updated" : "created");
   return true;
 }
 
-// Installs the plugin of this package at user scope.
+// Installs the plugin shipped by the runtime at user scope.
 function setupPlugin(ctx, report) {
-  if (!readManifest()) {
-    report.degrade(MARKETPLACE_LABEL, "no .claude-plugin/marketplace.json in the package");
+  if (!existsSync(hostManifestPath(ctx.env))) {
+    report.degrade(MARKETPLACE_LABEL, "no .claude-plugin/marketplace.json in the runtime");
     return;
   }
   if (!setupMarketplace(ctx, report)) return;
@@ -154,19 +165,25 @@ function setupPlugin(ctx, report) {
   report.step(label, "created");
 }
 
-// Downloads the embedding weights, the only network path of the setup.
-async function setupModel(ctx, report, { noModel }) {
-  if (noModel) {
-    report.step("model", "skipped", "--no-model");
+// Reports every step that would point at the runtime as skipped, the answer when there is no runtime to point them at.
+function skipHostSteps(ctx, report) {
+  const reason = "runtime missing";
+  report.step("shim", "skipped", reason);
+  report.step(`mcp ${MCP_SERVER_NAME}`, "skipped", reason);
+  for (const hook of desiredHooks(ctx.env)) report.step(`hook ${hook.event}`, "skipped", reason);
+  report.step(MARKETPLACE_LABEL, "skipped", reason);
+}
+
+// The single gate of every write that points at the runtime - shim, MCP server, hooks and plugin: without a ready runtime, none of them runs.
+export function registerHost(ctx, report, { ready } = {}) {
+  if (ready === false) {
+    skipHostSteps(ctx, report);
     return;
   }
-  try {
-    const warmup = ctx.warmupImpl ?? warmupModel;
-    const result = await warmup({ allowDownload: true }, ctx.env);
-    report.step("model", result.downloaded ? "created" : "already present", result.model);
-  } catch (err) {
-    report.degrade("model", firstLine(err?.message ?? String(err)), "shift embed download");
-  }
+  setupShim(ctx, report);
+  setupMcp(ctx, report);
+  applyHooks(ctx, report, { remove: false });
+  setupPlugin(ctx, report);
 }
 
 // Unregisters the MCP server, leaving every other server of the host alone.
@@ -194,39 +211,43 @@ function removePlugin(ctx, report) {
 }
 
 // Closes the run, pointing at the diagnosis when a step degraded; a degraded step is never an exit code.
-function finish(ctx, report) {
+export function finish(ctx, report) {
   if (report.count()) ctx.out(`setup finished with ${report.count()} step(s) degraded - run \`shift doctor\``);
   return 0;
 }
 
 // Installs everything the host needs to run nightshift, one idempotent step at a time.
-export async function install(ctx, { noModel }) {
+export async function install(ctx, { embedding, path, from } = {}) {
   const report = makeReport(ctx);
   setupHome(ctx, report);
-  setupMcp(ctx, report);
-  applyHooks(ctx, report, { remove: false });
-  setupPlugin(ctx, report);
-  await setupModel(ctx, report, { noModel });
+  const ready = setupRuntime(ctx, report, { from });
+  registerHost(ctx, report, { ready });
+  await setupPath(ctx, report, { path });
+  await setupEmbedding(ctx, report, { embedding });
   return finish(ctx, report);
 }
 
-// Takes the registrations of this package out of the host, keeping the configuration home untouched.
-function uninstall(ctx) {
+// Takes the registrations of this package out of the host, keeping the configuration home unless `--purge` says otherwise.
+async function uninstall(ctx, { purge }) {
   const report = makeReport(ctx);
   removeMcp(ctx, report);
   applyHooks(ctx, report, { remove: true });
   removePlugin(ctx, report);
-  ctx.out(`home: kept (${homeDir(ctx.env)})`);
+  removeShimStep(ctx, report);
+  removePathStep(ctx, report);
+  await removeInstalledDirs(ctx, report, { purge });
+  if (purge !== true) ctx.out(`home: kept (${homeDir(ctx.env)})`);
   return finish(ctx, report);
 }
 
-// Runs `shift setup`: registers this package in the host, or removes those registrations with `--remove`.
+// Runs `shift setup`: installs the runtime and registers it in the host, or removes both with `--remove`.
 export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, {
-    "no-model": { type: "boolean" },
+    ...INSTALL_OPTIONS,
     remove: { type: "boolean" },
+    purge: { type: "boolean" },
   });
-  checkArgs(positionals, { max: 0, usage: "shift setup [--no-model] [--remove]" });
-  if (values.remove === true) return uninstall(ctx);
-  return await install(ctx, { noModel: values["no-model"] === true });
+  checkArgs(positionals, { max: 0, usage: USAGE });
+  if (values.remove === true) return await uninstall(ctx, { purge: values.purge === true });
+  return await install(ctx, installOptions(values, USAGE));
 }

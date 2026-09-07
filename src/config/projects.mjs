@@ -49,6 +49,12 @@ export function requireGitPath(path) {
   return abs;
 }
 
+// Resolves a path only when it is an existing git repository, answering null instead of throwing when it is not.
+export function gitPathOrNull(path) {
+  const abs = normalizePath(path ?? ".");
+  return existsSync(join(abs, ".git")) ? abs : null;
+}
+
 // Registers a git repository as a project of an org.
 export function addProject(config, { path, name, org } = {}) {
   const abs = requireGitPath(path);

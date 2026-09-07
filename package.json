@@ -4,15 +4,12 @@
   "description": "Autonomous queue of coding agents with its own memory. Ships the Claude Code plugin and the shift configuration CLI.",
   "license": "BUSL-1.1",
   "private": false,
-  "bin": { "shift": "./bin/shift.mjs" },
+  "bin": { "shift": "./bin/shift.mjs", "nightshift": "./bin/shift.mjs" },
   "files": [".claude-plugin", "bin", "plugin", "src", "README.md", "LICENSE"],
   "scripts": { "test": "node --test --disable-warning=ExperimentalWarning" },
   "engines": { "node": ">=22" },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^4.5.4"
-  },
-  "optionalDependencies": {
-    "@huggingface/transformers": "^4.2.0"
   }
 }

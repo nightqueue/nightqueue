@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { modeOf, writeFileAtomic } from "../config/store.mjs";
 import { readJsonStrict } from "./json.mjs";
-import { claudeConfigDir, claudeSettingsPath, packageRoot, shiftEntryPath } from "./paths.mjs";
+import { claudeConfigDir, claudeSettingsPath, shiftEntryPath } from "./paths.mjs";
 
 const OWN_COMMAND_MARK = "bin/shift.mjs hook";
 
@@ -12,19 +12,19 @@ const HOOK_EVENTS = [
 ];
 
 // Command line registered in the host for one hook of this package.
-export function hookCommand(hook) {
-  return `node ${shiftEntryPath()} hook ${hook}`;
+export function hookCommand(hook, env = process.env) {
+  return `node ${shiftEntryPath(env)} hook ${hook}`;
 }
 
 // Warning for a package path that carries a space, the only case where the unquoted hook command breaks; null when it is safe.
-export function spacedRootWarning(root = packageRoot()) {
+export function spacedRootWarning(root) {
   if (typeof root !== "string" || !root.includes(" ")) return null;
   return `shift: warning: the package path contains a space (${root}); the host may fail to run the hook command`;
 }
 
 // The three hook entries this package wants in the host settings, each with the timeout its work needs.
-export function desiredHooks() {
-  return HOOK_EVENTS.map(({ event, hook, timeout }) => ({ event, command: hookCommand(hook), timeout }));
+export function desiredHooks(env = process.env) {
+  return HOOK_EVENTS.map(({ event, hook, timeout }) => ({ event, command: hookCommand(hook, env), timeout }));
 }
 
 // Reads the host settings file, treating absence as an empty object and broken content as a user error.
@@ -94,18 +94,18 @@ function removeEvent(data, event) {
 }
 
 // Brings the three hook entries of this package into the settings object, in place.
-export function mergeHooks(data) {
-  return desiredHooks().map((hook) => ({ event: hook.event, status: mergeEvent(data, hook) }));
+export function mergeHooks(data, env = process.env) {
+  return desiredHooks(env).map((hook) => ({ event: hook.event, status: mergeEvent(data, hook) }));
 }
 
 // Takes the three hook entries of this package out of the settings object, in place.
-export function removeHooks(data) {
-  return desiredHooks().map((hook) => ({ event: hook.event, status: removeEvent(data, hook.event) }));
+export function removeHooks(data, env = process.env) {
+  return desiredHooks(env).map((hook) => ({ event: hook.event, status: removeEvent(data, hook.event) }));
 }
 
 // State of each hook of this package in the settings object, for a diagnosis that writes nothing.
-export function hookStatus(data) {
-  return desiredHooks().map((hook) => {
+export function hookStatus(data, env = process.env) {
+  return desiredHooks(env).map((hook) => {
     const [own] = ownEntries(eventGroups(data, hook.event));
     return { event: hook.event, expected: hook.command, current: own ? own.entry.command : null };
   });

@@ -1,20 +1,21 @@
 import { existsSync, statSync } from "node:fs";
-import { createRequire } from "node:module";
-import { configPath, dbPath, queuePausedPath, secretsPath } from "../config/paths.mjs";
+import { binDir, configPath, dbPath, embeddingDir, queuePausedPath, runtimeDir, secretsPath } from "../config/paths.mjs";
 import { listProjects } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { claudeBin } from "../host/claude.mjs";
 import { MCP_SERVER_NAME, readRegisteredServer, serverIsCurrent } from "../host/mcp.mjs";
+import { npmBin } from "../host/npm.mjs";
 import { marketplaceIsCurrent, pluginRef, readInstalledPlugin, readKnownMarketplace } from "../host/plugin.mjs";
+import { packageVersion, runtimeVersion, shimState } from "../host/runtime.mjs";
 import { hookStatus, readHostSettings } from "../host/settings.mjs";
+import { binDirInPath, pathLine, rcFilePath } from "../host/shell.mjs";
 import { DB_USER_VERSION, openDbReadOnly } from "../memory/db.mjs";
-import { EMBEDDING_MODEL_TAG, isModelCached } from "../memory/embedding.mjs";
+import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
 import { ORPHAN_PREDICATE } from "../memory/jobs.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
 const COMMAND_TIMEOUT_MS = 5000;
 const MIN_NODE_MAJOR = 22;
-const TRANSFORMERS = "@huggingface/transformers";
 
 // One diagnosis line, with the hint the user needs when it is not `ok`.
 function check(name, status, detail, hint = null) {
@@ -88,7 +89,7 @@ function checkSecrets(ctx) {
 function checkMcp(ctx) {
   const entry = readRegisteredServer(ctx.env);
   if (!entry) return check("mcp", "fail", `\`${MCP_SERVER_NAME}\` not registered`, "run `shift setup`");
-  return serverIsCurrent(entry)
+  return serverIsCurrent(entry, ctx.env)
     ? check("mcp", "ok", `\`${MCP_SERVER_NAME}\` at user scope`)
     : check("mcp", "fail", "registered from another path", "run `shift setup` to point it at this package");
 }
@@ -101,7 +102,7 @@ function checkHooks(ctx) {
   } catch (err) {
     return [check("hooks", "fail", err?.message ?? String(err), "fix the host settings file")];
   }
-  return hookStatus(settings.data).map(({ event, expected, current }) => {
+  return hookStatus(settings.data, ctx.env).map(({ event, expected, current }) => {
     const name = `hook ${event}`;
     if (!current) return check(name, "fail", "not registered", "run `shift setup`");
     return current === expected
@@ -113,7 +114,7 @@ function checkHooks(ctx) {
 // Checks whether the plugin of this package is installed, and whether it really comes from the marketplace of this package.
 function checkPlugin(ctx) {
   const installed = readInstalledPlugin(ctx.env);
-  const fromThisPackage = marketplaceIsCurrent(readKnownMarketplace(ctx.env));
+  const fromThisPackage = marketplaceIsCurrent(readKnownMarketplace(ctx.env), ctx.env);
   if (installed.state === "unknown") {
     return check("plugin", "warn", "the host plugin file has an unknown shape", "run `claude plugin list`");
   }
@@ -134,14 +135,68 @@ function checkModel(ctx) {
     : check("model", "warn", "no weight on disk", "run `shift embed download`");
 }
 
-// Checks the optional embedding library, resolving it without ever loading it.
-function checkTransformers() {
-  try {
-    createRequire(import.meta.url).resolve(TRANSFORMERS);
-    return check("transformers", "ok", TRANSFORMERS);
-  } catch {
-    return check("transformers", "warn", `${TRANSFORMERS} not installed`, "the recall stays BM25 only; run `npm install`");
+// Checks that the runtime is installed and holds the version this process runs.
+function checkRuntime(ctx) {
+  const dir = runtimeDir(ctx.env);
+  const installed = runtimeVersion(ctx.env);
+  const running = packageVersion();
+  if (!installed) return check("runtime", "fail", `no runtime in ${dir}`, "run `shift setup`");
+  if (installed !== running) {
+    return check("runtime", "warn", `v${installed} installed, running v${running}`, "run `shift update`");
   }
+  return check("runtime", "ok", `v${installed} at ${dir}`);
+}
+
+// Checks the shim: the single command name the user types has to be there and be executable.
+function checkShim(ctx) {
+  const state = shimState(ctx.env);
+  if (!state.present) return check("shim", "fail", `no shim at ${state.path}`, "run `shift setup`");
+  if (!state.executable) return check("shim", "fail", `${state.path} is not executable`, `run \`chmod +x ${state.path}\``);
+  if (!state.current) return check("shim", "warn", `${state.path} points elsewhere`, "run `shift setup`");
+  return check("shim", "ok", state.path);
+}
+
+// Checks whether the shim directory is on the PATH, which is what makes `shift` resolve at all.
+function checkPath(ctx) {
+  const dir = binDir(ctx.env);
+  return binDirInPath(ctx.env)
+    ? check("path", "ok", `${dir} on PATH`)
+    : check("path", "warn", `${dir} not on PATH`, `add this line to ${rcFilePath(ctx.env)}: ${pathLine(ctx.env)}`);
+}
+
+// Checks the embedding library in its own prefix, resolving it without ever loading it.
+function checkEmbedding(ctx) {
+  return embeddingLibraryEntry(ctx.env)
+    ? check("embedding", "ok", embeddingDir(ctx.env))
+    : check("embedding", "warn", "not installed - keyword-only recall", "run `shift embed install`");
+}
+
+// Total of the advisories one `npm audit --json` report declares, or null when the report is unreadable.
+function auditTotal(stdout) {
+  try {
+    const total = JSON.parse(stdout)?.metadata?.vulnerabilities?.total;
+    return Number.isFinite(total) ? total : null;
+  } catch {
+    return null;
+  }
+}
+
+// Audits the embedding prefix, informative only: those advisories sit in code nightshift never executes.
+function checkEmbeddingAudit(ctx) {
+  const dir = embeddingDir(ctx.env);
+  const result = runCommand(ctx, npmBin(ctx.env), ["audit", "--prefix", dir, "--json"]);
+  const total = auditTotal(result.stdout);
+  if (total === null) return check("embedding audit", "warn", "audit did not answer", `run \`npm audit --prefix ${dir}\``);
+  if (total === 0) return check("embedding audit", "ok", "no advisory");
+  const detail = `${total} advisories in the embedding prefix`;
+  return check("embedding audit", "warn", detail, "they sit in parts of the library that nightshift never executes");
+}
+
+// Checks the embedding prefix: the library always, its audit only once the prefix is there.
+function checkEmbeddingPrefix(ctx) {
+  const checks = [checkEmbedding(ctx)];
+  if (existsSync(embeddingDir(ctx.env))) checks.push(checkEmbeddingAudit(ctx));
+  return checks;
 }
 
 // Hint for a database whose schema version is not the one this build knows.
@@ -231,11 +286,14 @@ function collect(ctx) {
     checkGh(ctx),
     checkConfig(ctx),
     checkSecrets(ctx),
+    checkRuntime(ctx),
+    checkShim(ctx),
+    checkPath(ctx),
     checkMcp(ctx),
     ...checkHooks(ctx),
     checkPlugin(ctx),
     checkModel(ctx),
-    checkTransformers(),
+    ...checkEmbeddingPrefix(ctx),
     checkDatabase(ctx),
     ...checkQueue(ctx),
     ...checkProjects(ctx),

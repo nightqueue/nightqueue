@@ -49,7 +49,7 @@ function makeContext(home, overrides = {}) {
   const err = [];
   const ctx = {
     ...defaultContext(),
-    env: assertIsolatedEnv({ ...HOST_VARS, HOME: HOST_DIR, NIGHTSHIFT_HOME: home }),
+    env: assertIsolatedEnv({ ...HOST_VARS, NIGHTSHIFT_HOME: home }),
     out: (line) => out.push(line),
     err: (line) => err.push(line),
     stdout: { write: () => {} },
@@ -65,6 +65,7 @@ test("--help lists every command and exits 0", () => {
     "setup",
     "doctor",
     "init",
+    "update",
     "org",
     "project",
     "connection",
@@ -97,13 +98,13 @@ test("--version and version print the package version and exit 0", () => {
 
 test("setup is idempotent file by file", (t) => {
   const home = join(makeDir(t, "setup"), "home");
-  const first = shift(home, ["setup", "--no-model"]);
+  const first = shift(home, ["setup"]);
   assert.equal(first.status, 0);
   assert.match(first.stdout, /^home: created \(.*, 0700\)$/m);
   assert.match(first.stdout, /^config\.json: created \(org `default`\)$/m);
   assert.match(first.stdout, /^secrets\.json: created \(0600\)$/m);
   const before = ["config.json", "secrets.json"].map((file) => readFileSync(join(home, file), "utf8"));
-  const second = shift(home, ["setup", "--no-model"]);
+  const second = shift(home, ["setup"]);
   assert.equal(second.status, 0);
   assert.match(second.stdout, /^home: already present/m);
   assert.match(second.stdout, /^config\.json: already present$/m);
@@ -116,7 +117,7 @@ test("setup is idempotent file by file", (t) => {
 test("init registers the repository in the default org", (t) => {
   const home = join(makeDir(t, "init-home"), "home");
   const repo = makeRepo(t, "init-repo");
-  const result = shift(home, ["init", repo, "--name", "api", "--no-model", "--no-gh"]);
+  const result = shift(home, ["init", repo, "--name", "api", "--no-gh"]);
   assert.equal(result.status, 0);
   assert.match(result.stdout, /^home: created \(.*, 0700\)$/m, "init did not run the setup before registering the project");
   assert.match(result.stdout, /^config\.json: created \(org `default`\)$/m);
@@ -128,7 +129,7 @@ test("init registers the repository in the default org", (t) => {
   assert.match(result.stdout, /registered project `api` -> .* \(org `default`\)/);
   const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
   assert.equal(config.projects.api.org, "default");
-  const again = shift(home, ["init", repo, "--name", "api", "--no-model", "--no-gh"]);
+  const again = shift(home, ["init", repo, "--name", "api", "--no-gh"]);
   assert.equal(again.status, 0);
   assert.match(again.stdout, /^home: already present/m);
   assert.match(again.stdout, /already registered/);
@@ -146,8 +147,8 @@ test("the secret never shows up in any output, in any format", (t) => {
   const home = makeDir(t, "sweep-home");
   const repo = makeRepo(t, "sweep-repo");
   const runs = [
-    shift(home, ["setup", "--no-model"]),
-    shift(home, ["init", repo, "--name", "api", "--no-model", "--no-gh"]),
+    shift(home, ["setup"]),
+    shift(home, ["init", repo, "--name", "api", "--no-gh"]),
     shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` }),
     shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` }),
     shift(home, ["connection", "list"]),
@@ -174,7 +175,7 @@ test("the secret never shows up in any output, in any format", (t) => {
 
 test("the stored secret lives in secrets.json, which stays 0600", (t) => {
   const home = makeDir(t, "secret-home");
-  shift(home, ["setup", "--no-model"]);
+  shift(home, ["setup"]);
   const added = shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` });
   assert.equal(added.status, 0);
   assert.match(added.stdout, /stored connection `gh` \(github\) and bound it to org `default`/);
@@ -189,7 +190,7 @@ test("the stored secret lives in secrets.json, which stays 0600", (t) => {
 
 test("connection add warns when the org slot is already taken", (t) => {
   const home = makeDir(t, "slot-home");
-  shift(home, ["setup", "--no-model"]);
+  shift(home, ["setup"]);
   shift(home, ["connection", "add", "gh", "--type", "github"], { input: "one\n" });
   const second = shift(home, ["connection", "add", "gh2", "--type", "github"], { input: "two\n" });
   assert.equal(second.status, 0);
@@ -200,7 +201,7 @@ test("connection add warns when the org slot is already taken", (t) => {
 
 test("a JSON listing survives being piped, with warnings kept on stderr", (t) => {
   const home = makeDir(t, "json-home");
-  shift(home, ["setup", "--no-model"]);
+  shift(home, ["setup"]);
   const repos = [];
   for (let index = 0; index < 50; index += 1) {
     const repo = join(makeDir(t, "json-repo"), `p${index}`);
@@ -219,7 +220,7 @@ test("a JSON listing survives being piped, with warnings kept on stderr", (t) =>
 
 test("unknown options are rejected instead of silently accepted", (t) => {
   const home = makeDir(t, "opts-home");
-  shift(home, ["setup", "--no-model"]);
+  shift(home, ["setup"]);
   shift(home, ["org", "add", "acme"]);
   const forced = shift(home, ["org", "remove", "acme", "--force"]);
   assert.equal(forced.status, 1);
@@ -232,16 +233,16 @@ test("a positional path that starts with a dash needs the -- separator", (t) => 
   const home = join(base, "home");
   const repo = join(base, "-weird-dir");
   mkdirSync(join(repo, ".git"), { recursive: true });
-  const rejected = shift(home, ["init", "-weird-dir", "--no-model", "--no-gh"], { cwd: base });
+  const rejected = shift(home, ["init", "-weird-dir", "--no-gh"], { cwd: base });
   assert.equal(rejected.status, 1);
   assert.match(rejected.stderr, /Unknown option/);
-  const accepted = shift(home, ["init", "--no-model", "--no-gh", "--", "-weird-dir"], { cwd: base });
+  const accepted = shift(home, ["init", "--no-gh", "--", "-weird-dir"], { cwd: base });
   assert.equal(accepted.status, 0);
   assert.match(accepted.stdout, /registered project `weird-dir`/);
 });
 
 test("an unexpected failure exits 2 with a stack", () => {
-  const result = shift("/dev/null/nested", ["setup", "--no-model"]);
+  const result = shift("/dev/null/nested", ["setup"]);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /at /);
   assert.doesNotMatch(result.stderr, /^shift: /m);
@@ -249,7 +250,7 @@ test("an unexpected failure exits 2 with a stack", () => {
 
 test("connection test reports login and scopes, and fails as a user error", async (t) => {
   const home = makeDir(t, "test-home");
-  shift(home, ["setup", "--no-model"]);
+  shift(home, ["setup"]);
   shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` });
   const okResponse = {
     status: 200,
@@ -284,7 +285,7 @@ test("a failed config write after the secret write points at the recovery comman
 
 test("a failed secret write after the config write points at the recovery command", async (t) => {
   const home = makeDir(t, "partial-remove");
-  shift(home, ["setup", "--no-model"]);
+  shift(home, ["setup"]);
   shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` });
   const { ctx, err } = makeContext(home, {
     saveSecrets: () => {
@@ -340,7 +341,7 @@ test("memory stats answers on a home that has no database yet", (t) => {
 test("the session start hook prints the lessons already stored for the repository", (t) => {
   const home = makeDir(t, "hook-home");
   const repo = makeRepo(t, "hook-repo");
-  assert.equal(shift(home, ["init", repo, "--name", "api", "--no-model", "--no-gh"]).status, 0);
+  assert.equal(shift(home, ["init", repo, "--name", "api", "--no-gh"]).status, 0);
   const env = { NIGHTSHIFT_HOME: home };
   t.after(() => closeDb(env));
   const { id } = saveLesson(

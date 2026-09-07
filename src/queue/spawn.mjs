@@ -3,8 +3,8 @@ import { accessSync, appendFileSync, constants, createWriteStream, existsSync, m
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { fileURLToPath } from "node:url";
 import { homeDir } from "../config/paths.mjs";
+import { packageRoot } from "../host/paths.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 
 // Silence of the stream that means a dead process: no event at all for this long ends the attempt.
@@ -18,11 +18,6 @@ export const CLAUDE_MISSING_MESSAGE =
 
 const MISSING_BIN = Object.freeze({ bin: null, via: "missing" });
 const DEFAULT_TIMEOUT_S = 14400;
-
-// Root of this package, the anchor of the plugin directory and of the MCP entrypoint.
-export function packageRoot() {
-  return fileURLToPath(new URL("../../", import.meta.url));
-}
 
 // Directory of the nightshift plugin handed to the child through --plugin-dir.
 export function pluginDir() {

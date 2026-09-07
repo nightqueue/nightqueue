@@ -1,8 +1,12 @@
-import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { UserError } from "../config/errors.mjs";
-import { modelsDir } from "../config/paths.mjs";
+import { embeddingDir, modelsDir } from "../config/paths.mjs";
 
+export const EMBEDDING_PACKAGE = "@huggingface/transformers";
+export const EMBEDDING_PACKAGE_RANGE = "^4.2.0";
 export const EMBEDDING_MODEL_ID = "Xenova/all-MiniLM-L6-v2";
 export const EMBEDDING_DTYPE = "q8";
 export const EMBEDDING_DIMS = 384;
@@ -20,11 +24,40 @@ export function isModelCached(env = process.env) {
   return existsSync(modelWeightPath(env));
 }
 
+// Directory the embedding library lives in, inside the isolated prefix and never inside the node_modules of this package.
+export function embeddingLibraryDir(env = process.env) {
+  return join(embeddingDir(env), "node_modules", ...EMBEDDING_PACKAGE.split("/"));
+}
+
+// Entry file of the embedding library, or null when the prefix does not hold it: a resolution that climbed above the prefix answers null, because a broken copy in the prefix must never be served by a copy from somewhere else on the machine.
+export function embeddingLibraryEntry(env = process.env) {
+  const dir = embeddingLibraryDir(env);
+  if (!existsSync(dir)) return null;
+  try {
+    const entry = createRequire(join(embeddingDir(env), "package.json")).resolve(EMBEDDING_PACKAGE);
+    return entry.startsWith(`${realpathSync(dir)}${sep}`) ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
+// Loads the embedding library from the isolated prefix, turning its absence into an actionable user error.
+async function loadLibrary(env) {
+  const entry = embeddingLibraryEntry(env);
+  if (!entry) {
+    throw new UserError(
+      `${EMBEDDING_PACKAGE} is not installed in ${embeddingDir(env)}; run \`shift embed install\` to enable the semantic recall`,
+    );
+  }
+  const mod = await import(pathToFileURL(entry).href);
+  return mod.pipeline ? mod : (mod.default ?? mod);
+}
+
 // Instantiates the extractor with the weight cache pinned outside node_modules; the network only opens when allowDownload is true.
 async function createPipeline(allowDownload, env) {
   const dir = modelsDir(env);
   if (allowDownload) mkdirSync(dir, { recursive: true });
-  const { pipeline, env: libEnv } = await import("@huggingface/transformers");
+  const { pipeline, env: libEnv } = await loadLibrary(env);
   libEnv.cacheDir = dir;
   libEnv.localModelPath = dir;
   libEnv.useFSCache = true;
@@ -67,12 +100,13 @@ export async function embedText(text, env = process.env) {
   return vector;
 }
 
-// Turns a missing optional dependency into an actionable message, keeping any other failure as is.
+// Turns a missing embedding library into an actionable message, keeping any other failure as is.
 function explainMissingLibrary(err) {
+  if (err instanceof UserError) return err;
   const message = String(err?.message ?? "");
-  if (err?.code !== "ERR_MODULE_NOT_FOUND" && !message.includes("@huggingface/transformers")) return err;
+  if (err?.code !== "ERR_MODULE_NOT_FOUND" && !message.includes(EMBEDDING_PACKAGE)) return err;
   return new UserError(
-    "optional dependency @huggingface/transformers is not installed; run npm install to enable the semantic recall",
+    `${EMBEDDING_PACKAGE} is not installed; run \`shift embed install\` to enable the semantic recall`,
   );
 }
 

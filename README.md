@@ -41,8 +41,9 @@ plugin in the host is no longer a manual step - `shift setup` does it (see
   of the queue.
 - `shift queue` - the unattended queue: enqueue a request, run it through
   `/nightshift:resolve` and get a pull request back (see `## Queue`).
-- `shift setup` - registers the MCP server, the three hooks and the plugin in
-  the host, idempotently and reversibly (see `## Install`).
+- `shift setup` - installs the runtime in `~/.nightshift` and registers the MCP
+  server, the three hooks and the plugin in the host, idempotently and
+  reversibly (see `## Install`).
 - `shift doctor` - the read-only diagnosis of the host and the home (see
   `## Doctor`).
 
@@ -56,9 +57,10 @@ plugin in the host is no longer a manual step - `shift setup` does it (see
   `index_save`, `index_recall` and `pipeline_log`. All six are hard requirements: there is no
   memoryless mode - Phase 0 opens with a preflight call to `lesson_recall` and the run stops
   right there when the host does not expose it. `shift mcp` is that server.
-- Two dependencies (`@modelcontextprotocol/sdk`, `zod`) and one optional
-  dependency (`@huggingface/transformers`) that costs most of the install (see
-  `## Memory`, honest numbers). Without it the recall is BM25 only.
+- Two dependencies (`@modelcontextprotocol/sdk`, `zod`). The embedding library
+  (`@huggingface/transformers`) is not one of them: it is opt-in and lands in
+  its own prefix, `~/.nightshift/embedding` (see `## Memory`, honest numbers).
+  Without it the recall is BM25 only.
 
 An **empty** memory is not a problem: on a fresh install every recall comes back empty, and an
 empty recall only makes the phase drop the corresponding section and move on with what it
@@ -69,21 +71,44 @@ stops a run is the server being **absent**, never it being empty.
 
 ## Install
 
-Two commands, from inside the repository you want to work on:
+Two commands, from anywhere, on a machine that has nothing installed yet:
 
 ```sh
-shift init                                 # set the host up and register this repository
+npx nightshift init                            # install the runtime and set the host up
 shift queue add "fix the flaky worker" --run   # enqueue the request and run it right here
 ```
 
-(`npm install -g nightshift` first, or `npm install` in a clone.)
+`npx nightshift init` is the whole installation. It puts the package in
+`~/.nightshift/runtime`, writes the shim `~/.nightshift/bin/shift`, offers to
+put that directory on your PATH, registers the MCP server, the hooks and the
+plugin **against the runtime**, and offers the semantic recall. Nothing depends
+on where the command ran from: the npx cache and a development checkout both
+converge on the same `~/.nightshift/runtime`.
 
-`shift init` is `shift setup` plus the project registration, in this order: it
-runs every step below, registers the repository of the current directory (or of
-`[path]`) as a project, and then offers to import the token of the GitHub CLI.
-It takes `--no-model` (skip the download of the weights), `--gh` / `--no-gh`
-(see below), `--org` and `--name`. Running it again changes nothing: every step
-reports `already present` and the project reports `already registered`.
+Outside a repository it stops right there and says so. Inside one, it also
+registers that repository as a project and offers to import the token of the
+GitHub CLI.
+
+Flags: `--from <dir>` installs a local checkout instead of the registry version,
+`--path` / `--no-path` answers the PATH question without a terminal,
+`--embedding` / `--no-embedding` answers the semantic recall question,
+`--gh` / `--no-gh` answers the GitHub CLI one, and `--org` / `--name` name the
+project. Without a terminal and without the flag, nothing is written and nothing
+is downloaded: both questions print the line to run by hand instead.
+
+`--from <dir>` is a development path and counts on npm linking the checkout
+rather than copying it: with `install-links=true` in your `.npmrc`, npm copies,
+and the runtime ends up without `@modelcontextprotocol/sdk` and `zod`, which it
+would otherwise resolve from the `node_modules` of the checkout.
+
+`shift update` reinstalls the runtime at the newest version (or from `--from`)
+and re-points the host at it; config, secrets and the database stay untouched.
+
+`shift init` is `shift setup` plus the project registration, always in that
+order: every step below first, then the repository of the current directory (or
+of `[path]`), then the token of the GitHub CLI. Running it again changes
+nothing: every step reports `already present` and the project reports
+`already registered`.
 
 **The token of the GitHub CLI.** When `gh` is installed and authenticated and
 the `github` slot of the org is still free, `shift init` on a terminal asks
@@ -105,10 +130,11 @@ echo "$GITHUB_TOKEN" | shift connection add gh --type github
 Restart Claude Code and the pipeline answers as `/nightshift:resolve`. To check
 the result of all of it at any point, run `shift doctor`.
 
-**The manual flow**, still supported one step at a time:
+**The manual flow**, still supported one step at a time, on top of a global
+install (`npm install -g nightshift`) or a clone (`npm install` plus `npm link`):
 
 ```sh
-shift setup                                    # register everything in the host
+shift setup                                    # install the runtime and register everything in the host
 shift init                                     # register this repository as a project
 echo "$GITHUB_TOKEN" | shift connection add gh --type github
 ```
@@ -117,16 +143,28 @@ echo "$GITHUB_TOKEN" | shift connection add gh --type github
 `already present` or `updated`), in this order:
 
 1. the configuration home (`0700`), `config.json` and `secrets.json` (`0600`).
-2. the MCP server `nightshift` at **user** scope, started as
-   `node <package>/bin/shift.mjs mcp`.
-3. the three hooks in `<claude config>/settings.json`: `SessionStart`,
-   `UserPromptSubmit` and `SessionEnd`.
-4. this package as a local marketplace, plus the plugin installed from it.
-5. the embedding weights (the only step that opens the network).
+2. the runtime in `$NIGHTSHIFT_HOME/runtime`, at the version of the package that
+   ran the command; already at that version means no reinstall.
+3. the shim `$NIGHTSHIFT_HOME/bin/shift` (`0755`), plus the offer to add that
+   directory to the PATH through a single line marked `# nightshift` in
+   `~/.zshrc`, `~/.bashrc` or `~/.config/fish/config.fish`.
+4. the MCP server `nightshift` at **user** scope, started as
+   `node $NIGHTSHIFT_HOME/runtime/node_modules/nightshift/bin/shift.mjs mcp`.
+5. the three hooks in `<claude config>/settings.json`: `SessionStart`,
+   `UserPromptSubmit` and `SessionEnd`, pointing at that same entry.
+6. the runtime as a local marketplace, plus the plugin installed from it.
+7. the semantic recall: the embedding library in `$NIGHTSHIFT_HOME/embedding`
+   and its weights - the only step that opens the network, and the only one
+   that is opt-in.
 
-Two flags: `--no-model` skips step 5, and `--remove` undoes steps 2 to 4 -
-the MCP server, the three hook entries, the plugin and the marketplace - while
-leaving `$NIGHTSHIFT_HOME` exactly where it is, database included.
+Steps 4 to 6 never run when step 2 could not finish: a hook pointing at a
+runtime that is not there would break every session of the host.
+
+`--remove` undoes steps 3 to 6 - the shim, the marked PATH line, the MCP server,
+the three hook entries, the plugin and the marketplace - and asks before
+deleting `runtime/` and `embedding/`. It never touches `config.json`,
+`secrets.json` or the database; only `--remove --purge` deletes
+`$NIGHTSHIFT_HOME` whole.
 
 **Coexistence with hooks of other tools.** The merge into `settings.json` is not
 destructive: every entry that is not this package's is left as it is, matcher
@@ -168,8 +206,8 @@ registers it.
 their secrets), and it drives the memory runtime.
 
 - `shift --help` lists every command: `setup`, `doctor`, `init`, `org`,
-  `project`, `connection`, `mcp`, `hook`, `reflect`, `embed`, `memory`,
-  `queue` and `version`.
+  `project`, `update`, `connection`, `mcp`, `hook`, `reflect`, `embed`,
+  `memory`, `queue` and `version`.
 - `shift --version` (same as `shift version`) prints the installed version
   and exits `0`.
 - Exit codes: `0` ok, `1` user error (a single line on stderr), `2` unexpected
@@ -193,6 +231,9 @@ $NIGHTSHIFT_HOME/          # 0700
   config.json              # orgs, projects, queue settings
   secrets.json             # 0600, connection secrets
   nightshift.db            # the memory database (see `## Memory`)
+  runtime/                 # the installed package the host is registered against
+  bin/shift                # the shim, the single command name on the PATH
+  embedding/               # npm prefix of the embedding library, opt-in
   models/                  # embedding weights, downloaded on demand
   state/                   # per-session hook state
   runs/<project>/<slug>/   # run artifacts, written by the runtime
@@ -212,12 +253,13 @@ on SQLite for concurrency, so a running server - or a runner that works all
 night - never blocks a `shift init`.
 
 ```sh
-shift setup                                   # create the home and register everything in the host
-shift setup --no-model --remove               # ...skip the weights, or undo the registrations
+shift setup                                   # install the runtime and register everything in the host
+shift setup --remove --purge                  # undo the registrations, or delete the home as well
+shift update                                  # reinstall the runtime and re-point the host at it
 shift doctor --json                           # check the host and the home, exit 1 on any failure
-shift init                                    # set the host up and register the current git repository
+shift init                                    # set the host up and register the current repository
 shift init ~/code/api --org acme --name api   # ...or an explicit path, org and name
-shift init --no-model --no-gh                 # ...without the weights and without asking about `gh`
+shift init --no-embedding --no-path --no-gh   # ...answering every question up front
 
 shift org add acme --display-name "Acme"      # create an org
 shift org list --json                         # orgs, connection slots, project counts
@@ -330,6 +372,7 @@ shift memory stats [--json]   # counts per project
 | `NIGHTSHIFT_EMBED_DEADLINE_MS` | deadline of the embedding in the prompt hook, default `800` |
 | `NIGHTSHIFT_REFLECT_MODEL` | model of the reflection, default `haiku` |
 | `NIGHTSHIFT_CLAUDE_BIN` | path of the `claude` CLI used by the reflection, by the queue runner, by `shift setup` and by `shift doctor` |
+| `NIGHTSHIFT_NPM_BIN` | path of the `npm` CLI that installs the runtime and the embedding prefix |
 | `NIGHTSHIFT_JOB_ID` | set by the runner in the environment of the job it spawns, never read from outside |
 | `CLAUDE_CONFIG_DIR` | configuration directory of the host that `shift setup` and `shift doctor` read and write, default `~/.claude` |
 | `NIGHTSHIFT_REFLECT` | `1` marks a process as the reflection itself: no context block and no new reflection |
@@ -340,17 +383,19 @@ shift memory stats [--json]   # counts per project
 
 | number | measured |
 |---|---|
-| `node_modules` without the optional dependency | 26 MB (94 packages) |
-| `node_modules` with it | 406 MB |
+| `node_modules` of the package itself | 26 MB (94 packages) |
+| the embedding prefix `$NIGHTSHIFT_HOME/embedding` | 380 MB |
 | of which `onnxruntime-node` plus `onnxruntime-web` | 340 MB |
 | embedding weights in `$NIGHTSHIFT_HOME/models` | 23 MB |
 | one prompt hook, weights cached, semantic side on | 191 ms (median of 5 cold processes) |
 | the same hook with `NIGHTSHIFT_EMBED_DISABLED=1` | 84 ms, so the semantic side costs about 107 ms |
 | peak RSS of `shift embed backfill` with the model loaded | 227 MB, against 76 MB for `shift memory stats` |
 
-The optional dependency is what makes the install heavy, and it degrades
-cleanly: if it fails to build or is skipped with `npm install --omit=optional`,
-every recall still answers through BM25 and the whole test suite still passes.
+That weight is exactly why the embedding library is not a dependency of the
+package: `shift embed install` (or a yes during `shift init`) puts it in
+`~/.nightshift/embedding` on demand, so the published package stays small and
+audits clean. Without it every recall still answers through BM25 and the whole
+test suite still passes.
 
 ## Queue
 

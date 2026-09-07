@@ -3,7 +3,6 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
-import { packageRoot } from "../../src/host/paths.mjs";
 import { marketplaceIsCurrent } from "../../src/host/plugin.mjs";
 import { makeHostEnv } from "../../test-support/host.mjs";
 
@@ -40,7 +39,7 @@ test("setup must fix a marketplace registered under our name but pointing elsewh
   const marketplacePath = writeAlienMarketplace(host.configDir);
   const { ctx, out } = makeCtx(host.env);
 
-  await run(["setup", "--no-model"], ctx);
+  await run(["setup"], ctx);
 
   // Correct behavior: setup detects the collision and re-registers the marketplace against this package.
   const calls = host.calls();
@@ -51,7 +50,7 @@ test("setup must fix a marketplace registered under our name but pointing elsewh
 
   // Correct behavior: once fixed, the known_marketplaces.json entry points at this package, not at the alien source.
   const after = JSON.parse(readFileSync(marketplacePath, "utf8"));
-  assert.equal(after.nightshift.source, packageRoot());
+  assert.equal(after.nightshift.source, host.runtimePackage);
 
   assert.equal(out.includes(`plugin marketplace: already present`), false, out.join("\n"));
 });

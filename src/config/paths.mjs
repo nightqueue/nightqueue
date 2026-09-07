@@ -27,6 +27,31 @@ export function modelsDir(env = process.env) {
   return join(homeDir(env), "models");
 }
 
+// Directory of the self-contained runtime: the npm prefix this package is installed into.
+export function runtimeDir(env = process.env) {
+  return join(homeDir(env), "runtime");
+}
+
+// Directory of the package inside the runtime prefix, the stable root the host is registered against.
+export function runtimePackageDir(env = process.env) {
+  return join(runtimeDir(env), "node_modules", "nightshift");
+}
+
+// Directory of the isolated npm prefix that holds the embedding library, installed on demand.
+export function embeddingDir(env = process.env) {
+  return join(homeDir(env), "embedding");
+}
+
+// Directory the user is invited to put on the PATH.
+export function binDir(env = process.env) {
+  return join(homeDir(env), "bin");
+}
+
+// Path of the shim that starts the CLI from the runtime.
+export function shimPath(env = process.env) {
+  return join(binDir(env), "shift");
+}
+
 // Directory of the per-session state written by the hooks.
 export function stateDir(env = process.env) {
   return join(homeDir(env), "state");

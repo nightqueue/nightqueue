@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { packageRoot } from "../../src/host/paths.mjs";
+import { hostPackageRoot } from "../../src/host/paths.mjs";
 import {
   desiredHooks,
   hookCommand,
@@ -10,7 +12,8 @@ import {
   spacedRootWarning,
 } from "../../src/host/settings.mjs";
 
-const [SESSION_START, PROMPT, SESSION_END] = desiredHooks();
+const ENV = { NIGHTSHIFT_HOME: join(tmpdir(), "nightshift-settings-fixture") };
+const [SESSION_START, PROMPT, SESSION_END] = desiredHooks(ENV);
 
 // Settings fixture with one third-party hook per event.
 function thirdPartySettings() {
@@ -25,16 +28,16 @@ function thirdPartySettings() {
 }
 
 test("each event carries its own timeout, and the reflection gets the longest one", () => {
-  assert.deepEqual(desiredHooks(), [
-    { event: "SessionStart", command: hookCommand("session-start"), timeout: 10 },
-    { event: "UserPromptSubmit", command: hookCommand("prompt-context"), timeout: 10 },
-    { event: "SessionEnd", command: hookCommand("reflect"), timeout: 15 },
+  assert.deepEqual(desiredHooks(ENV), [
+    { event: "SessionStart", command: hookCommand("session-start", ENV), timeout: 10 },
+    { event: "UserPromptSubmit", command: hookCommand("prompt-context", ENV), timeout: 10 },
+    { event: "SessionEnd", command: hookCommand("reflect", ENV), timeout: 15 },
   ]);
 });
 
 test("the merge appends one group per event and says so", () => {
   const data = {};
-  assert.deepEqual(mergeHooks(data), [
+  assert.deepEqual(mergeHooks(data, ENV), [
     { event: "SessionStart", status: "created" },
     { event: "UserPromptSubmit", status: "created" },
     { event: "SessionEnd", status: "created" },
@@ -49,9 +52,9 @@ test("the merge appends one group per event and says so", () => {
 
 test("a second merge changes nothing and reports every event as already present", () => {
   const data = thirdPartySettings();
-  mergeHooks(data);
+  mergeHooks(data, ENV);
   const snapshot = structuredClone(data);
-  assert.deepEqual(mergeHooks(data), [
+  assert.deepEqual(mergeHooks(data, ENV), [
     { event: "SessionStart", status: "already present" },
     { event: "UserPromptSubmit", status: "already present" },
     { event: "SessionEnd", status: "already present" },
@@ -62,7 +65,7 @@ test("a second merge changes nothing and reports every event as already present"
 test("a stale command is repaired in place, keeping the matcher and the neighbours", () => {
   const data = thirdPartySettings();
   data.hooks.SessionStart[0].hooks.push({ type: "command", command: "node /old/bin/shift.mjs hook session-start" });
-  const [first] = mergeHooks(data);
+  const [first] = mergeHooks(data, ENV);
   assert.equal(first.status, "updated");
   assert.equal(data.hooks.SessionStart.length, 1);
   assert.equal(data.hooks.SessionStart[0].matcher, "startup");
@@ -79,7 +82,7 @@ test("duplicated entries left by a hand edit collapse into one", () => {
   for (let index = 0; index < 3; index += 1) {
     data.hooks.UserPromptSubmit.push({ hooks: [{ type: "command", command: PROMPT.command, timeout: 1 }] });
   }
-  const status = mergeHooks(data).find((step) => step.event === "UserPromptSubmit");
+  const status = mergeHooks(data, ENV).find((step) => step.event === "UserPromptSubmit");
   assert.equal(status.status, "updated");
   assert.deepEqual(data.hooks.UserPromptSubmit, [
     { hooks: [{ type: "command", command: PROMPT.command, timeout: PROMPT.timeout }] },
@@ -88,20 +91,20 @@ test("duplicated entries left by a hand edit collapse into one", () => {
 
 test("the removal drops the event key only when nothing else is left in it", () => {
   const data = thirdPartySettings();
-  mergeHooks(data);
+  mergeHooks(data, ENV);
   const clean = { hooks: {} };
-  mergeHooks(clean);
+  mergeHooks(clean, ENV);
 
-  assert.deepEqual(removeHooks(data), [
+  assert.deepEqual(removeHooks(data, ENV), [
     { event: "SessionStart", status: "removed" },
     { event: "UserPromptSubmit", status: "removed" },
     { event: "SessionEnd", status: "removed" },
   ]);
   assert.deepEqual(data, thirdPartySettings());
 
-  removeHooks(clean);
+  removeHooks(clean, ENV);
   assert.deepEqual(clean, { hooks: {} });
-  assert.deepEqual(removeHooks(clean), [
+  assert.deepEqual(removeHooks(clean, ENV), [
     { event: "SessionStart", status: "not present" },
     { event: "UserPromptSubmit", status: "not present" },
     { event: "SessionEnd", status: "not present" },
@@ -111,15 +114,15 @@ test("the removal drops the event key only when nothing else is left in it", () 
 test("the status of the hooks compares the registered command with the wanted one", () => {
   const data = thirdPartySettings();
   data.hooks.SessionEnd[0].hooks.push({ type: "command", command: "node /old/bin/shift.mjs hook reflect" });
-  const status = hookStatus(data);
+  const status = hookStatus(data, ENV);
   assert.deepEqual(status[0], { event: "SessionStart", expected: SESSION_START.command, current: null });
   assert.deepEqual(status[2], {
     event: "SessionEnd",
     expected: SESSION_END.command,
     current: "node /old/bin/shift.mjs hook reflect",
   });
-  mergeHooks(data);
-  assert.equal(hookStatus(data)[2].current, SESSION_END.command);
+  mergeHooks(data, ENV);
+  assert.equal(hookStatus(data, ENV)[2].current, SESSION_END.command);
 });
 
 test("a package path with a space is reported, because the hook command is not quoted", () => {
@@ -129,14 +132,20 @@ test("a package path with a space is reported, because the hook command is not q
   assert.match(warning, /hook command/);
 });
 
-test("a package path without a space is silent, and the default argument is the root of this package", () => {
+test("a runtime path without a space is silent, and so is a root nobody passed", () => {
   assert.equal(spacedRootWarning("/Users/someone/tools/nightshift"), null);
-  assert.equal(spacedRootWarning(), spacedRootWarning(packageRoot()));
+  assert.equal(spacedRootWarning(hostPackageRoot(ENV)), null);
+  assert.equal(spacedRootWarning(), null);
+});
+
+test("the hooks of the host point at the runtime of the home, never at the checkout that ran the setup", () => {
+  assert.equal(SESSION_START.command.includes(hostPackageRoot(ENV)), true, SESSION_START.command);
+  assert.match(SESSION_START.command, /runtime\/node_modules\/nightshift\/bin\/shift\.mjs hook session-start$/);
 });
 
 test("an event holding something that is not an array is rebuilt without touching the others", () => {
   const data = { hooks: { SessionStart: "broken", Stop: thirdPartySettings().hooks.Stop } };
-  mergeHooks(data);
+  mergeHooks(data, ENV);
   assert.equal(data.hooks.SessionStart[0].hooks[0].command, SESSION_START.command);
   assert.deepEqual(data.hooks.Stop, thirdPartySettings().hooks.Stop);
 });

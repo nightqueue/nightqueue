@@ -2,12 +2,11 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
 import { assertIsolatedEnv, makeHostEnv, readSettingsFile, writeSettingsFixture } from "../test-support/host.mjs";
 
-const ENTRY = fileURLToPath(new URL("../bin/shift.mjs", import.meta.url));
-const PACKAGE_ROOT = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "");
+const SETUP = ["setup", "--no-path", "--no-embedding"];
+const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const MANIFEST = JSON.parse(readFileSync(new URL("../.claude-plugin/marketplace.json", import.meta.url), "utf8"));
 
 const THIRD_PARTY_SETTINGS = {
@@ -34,9 +33,9 @@ function makeCtx(env, overrides = {}) {
   return { ctx, out, err };
 }
 
-// The command registered by this package for one hook.
-function hookCommandOf(hook) {
-  return `node ${ENTRY} hook ${hook}`;
+// The command the host registers for one hook: the entry of the runtime, never the checkout that ran the setup.
+function hookCommandOf(host, hook) {
+  return `node ${host.entry} hook ${hook}`;
 }
 
 // Entries of one event that belong to this package.
@@ -60,16 +59,16 @@ test("setup creates the three hook entries when settings.json does not exist", a
   const host = makeHostEnv(t, "setup-fresh");
   const { ctx, out } = makeCtx(host.env);
 
-  assert.equal(await run(["setup", "--no-model"], ctx), 0);
+  assert.equal(await run(SETUP, ctx), 0);
   const settings = readSettingsFile(host.configDir);
   assert.deepEqual(settings.hooks.SessionStart, [
-    { hooks: [{ type: "command", command: hookCommandOf("session-start"), timeout: 10 }] },
+    { hooks: [{ type: "command", command: hookCommandOf(host, "session-start"), timeout: 10 }] },
   ]);
   assert.deepEqual(settings.hooks.UserPromptSubmit, [
-    { hooks: [{ type: "command", command: hookCommandOf("prompt-context"), timeout: 10 }] },
+    { hooks: [{ type: "command", command: hookCommandOf(host, "prompt-context"), timeout: 10 }] },
   ]);
   assert.deepEqual(settings.hooks.SessionEnd, [
-    { hooks: [{ type: "command", command: hookCommandOf("reflect"), timeout: 15 }] },
+    { hooks: [{ type: "command", command: hookCommandOf(host, "reflect"), timeout: 15 }] },
   ]);
   for (const event of ["SessionStart", "UserPromptSubmit", "SessionEnd"]) {
     assert.ok(out.includes(`hook ${event}: created`), out.join("\n"));
@@ -82,7 +81,7 @@ test("third-party hooks of the five events survive the merge untouched", async (
   writeSettingsFixture(host.configDir, THIRD_PARTY_SETTINGS);
   const { ctx } = makeCtx(host.env);
 
-  assert.equal(await run(["setup", "--no-model"], ctx), 0);
+  assert.equal(await run(SETUP, ctx), 0);
   const settings = readSettingsFile(host.configDir);
   assert.deepEqual(settings.hooks.SessionStart[0], THIRD_PARTY_SETTINGS.hooks.SessionStart[0]);
   assert.deepEqual(settings.hooks.UserPromptSubmit[0], THIRD_PARTY_SETTINGS.hooks.UserPromptSubmit[0]);
@@ -99,13 +98,13 @@ test("the second run writes nothing, backs nothing up again and calls no subcomm
   writeSettingsFixture(host.configDir, THIRD_PARTY_SETTINGS);
   const first = makeCtx(host.env);
 
-  assert.equal(await run(["setup", "--no-model"], first.ctx), 0);
+  assert.equal(await run(SETUP, first.ctx), 0);
   const afterFirst = readFileSync(host.settingsPath, "utf8");
   assert.equal(host.backups().length, 1);
   const callsAfterFirst = host.calls().length;
 
   const second = makeCtx(host.env);
-  assert.equal(await run(["setup", "--no-model"], second.ctx), 0);
+  assert.equal(await run(SETUP, second.ctx), 0);
   assert.equal(readFileSync(host.settingsPath, "utf8"), afterFirst);
   assert.equal(host.backups().length, 1);
   assert.equal(host.calls().length, callsAfterFirst);
@@ -133,12 +132,12 @@ test("a package path that changed updates only the entry of this package", async
   writeSettingsFixture(host.configDir, stale);
   const { ctx, out } = makeCtx(host.env);
 
-  assert.equal(await run(["setup", "--no-model"], ctx), 0);
+  assert.equal(await run(SETUP, ctx), 0);
   const settings = readSettingsFile(host.configDir);
   const group = settings.hooks.SessionStart[0];
   assert.equal(group.matcher, "startup|resume|clear");
   assert.deepEqual(group.hooks[0], stale.hooks.SessionStart[0].hooks[0]);
-  assert.deepEqual(group.hooks[1], { type: "command", command: hookCommandOf("session-start"), timeout: 10 });
+  assert.deepEqual(group.hooks[1], { type: "command", command: hookCommandOf(host, "session-start"), timeout: 10 });
   assert.deepEqual(settings.hooks.Stop, THIRD_PARTY_SETTINGS.hooks.Stop);
   assert.ok(out.includes("hook SessionStart: updated"), out.join("\n"));
   assert.ok(out.includes("hook SessionEnd: created"), out.join("\n"));
@@ -152,7 +151,7 @@ test("a reflect hook left at the shorter timeout is raised to fifteen, and the n
         {
           hooks: [
             { type: "command", command: "other-tool end", timeout: 5 },
-            { type: "command", command: hookCommandOf("reflect"), timeout: 10 },
+            { type: "command", command: hookCommandOf(host, "reflect"), timeout: 10 },
           ],
         },
       ],
@@ -162,11 +161,11 @@ test("a reflect hook left at the shorter timeout is raised to fifteen, and the n
   writeSettingsFixture(host.configDir, stale);
   const { ctx, out } = makeCtx(host.env);
 
-  assert.equal(await run(["setup", "--no-model"], ctx), 0);
+  assert.equal(await run(SETUP, ctx), 0);
   const settings = readSettingsFile(host.configDir);
   const group = settings.hooks.SessionEnd[0];
   assert.deepEqual(group.hooks[0], stale.hooks.SessionEnd[0].hooks[0]);
-  assert.deepEqual(group.hooks[1], { type: "command", command: hookCommandOf("reflect"), timeout: 15 });
+  assert.deepEqual(group.hooks[1], { type: "command", command: hookCommandOf(host, "reflect"), timeout: 15 });
   assert.equal(ownEntries(settings, "SessionEnd").length, 1);
   assert.deepEqual(settings.hooks.Stop, THIRD_PARTY_SETTINGS.hooks.Stop);
   assert.ok(out.includes("hook SessionEnd: updated"), out.join("\n"));
@@ -178,7 +177,7 @@ test("a settings.json closed with chmod 600 keeps that mode, and so does its bac
   chmodSync(host.settingsPath, 0o600);
   const { ctx } = makeCtx(host.env);
 
-  assert.equal(await run(["setup", "--no-model"], ctx), 0);
+  assert.equal(await run(SETUP, ctx), 0);
   assert.equal(ownEntries(readSettingsFile(host.configDir), "SessionStart").length, 1);
   assert.equal(fileMode(host.settingsPath).toString(8), "600");
   const [backup] = host.backups();
@@ -191,7 +190,7 @@ test("a settings.json created from scratch keeps the default mode of the process
   const reference = join(host.configDir, "reference.json");
   writeFileSync(reference, "{}\n");
 
-  assert.equal(await run(["setup", "--no-model"], makeCtx(host.env).ctx), 0);
+  assert.equal(await run(SETUP, makeCtx(host.env).ctx), 0);
   assert.equal(fileMode(host.settingsPath), fileMode(reference));
 });
 
@@ -199,12 +198,12 @@ test("the MCP server is registered at user scope with the absolute entry path", 
   const host = makeHostEnv(t, "setup-mcp");
   const { ctx, out } = makeCtx(host.env);
 
-  assert.equal(await run(["setup", "--no-model"], ctx), 0);
+  assert.equal(await run(SETUP, ctx), 0);
   assert.deepEqual(callsMatching(host.calls(), ["mcp", "add"]), [
-    ["mcp", "add", "--scope", "user", "nightshift", "--", "node", ENTRY, "mcp"],
+    ["mcp", "add", "--scope", "user", "nightshift", "--", "node", host.entry, "mcp"],
   ]);
   const registered = JSON.parse(readFileSync(join(host.configDir, ".claude.json"), "utf8"));
-  assert.deepEqual(registered.mcpServers.nightshift.args, [ENTRY, "mcp"]);
+  assert.deepEqual(registered.mcpServers.nightshift.args, [host.entry, "mcp"]);
   assert.ok(out.includes("mcp nightshift: created"), out.join("\n"));
 });
 
@@ -212,11 +211,11 @@ test("an MCP server already registered with the same command is not registered a
   const host = makeHostEnv(t, "setup-mcp-present");
   writeFileSync(
     join(host.configDir, ".claude.json"),
-    JSON.stringify({ mcpServers: { nightshift: { type: "stdio", command: "node", args: [ENTRY, "mcp"], env: {} } } }),
+    JSON.stringify({ mcpServers: { nightshift: { type: "stdio", command: "node", args: [host.entry, "mcp"], env: {} } } }),
   );
   const { ctx, out } = makeCtx(host.env);
 
-  assert.equal(await run(["setup", "--no-model"], ctx), 0);
+  assert.equal(await run(SETUP, ctx), 0);
   assert.deepEqual(callsMatching(host.calls(), ["mcp"]), []);
   assert.ok(out.includes("mcp nightshift: already present"), out.join("\n"));
 });
@@ -233,9 +232,9 @@ test("the marketplace manifest is valid and the setup registers and installs the
 
   const host = makeHostEnv(t, "setup-plugin");
   const { ctx, out } = makeCtx(host.env);
-  assert.equal(await run(["setup", "--no-model"], ctx), 0);
+  assert.equal(await run(SETUP, ctx), 0);
   assert.deepEqual(callsMatching(host.calls(), ["plugin", "marketplace", "add"]), [
-    ["plugin", "marketplace", "add", PACKAGE_ROOT],
+    ["plugin", "marketplace", "add", host.runtimePackage],
   ]);
   assert.deepEqual(callsMatching(host.calls(), ["plugin", "install"]), [
     ["plugin", "install", "nightshift@nightshift", "-y", "--scope", "user"],
@@ -247,7 +246,7 @@ test("the marketplace manifest is valid and the setup registers and installs the
 test("--remove takes out only the entries of this package and keeps the home", async (t) => {
   const host = makeHostEnv(t, "setup-remove");
   writeSettingsFixture(host.configDir, THIRD_PARTY_SETTINGS);
-  assert.equal(await run(["setup", "--no-model"], makeCtx(host.env).ctx), 0);
+  assert.equal(await run(SETUP, makeCtx(host.env).ctx), 0);
 
   const { ctx, out } = makeCtx(host.env);
   assert.equal(await run(["setup", "--remove"], ctx), 0);
@@ -265,34 +264,76 @@ test("--remove takes out only the entries of this package and keeps the home", a
   ]);
   assert.equal(existsSync(join(host.home, "config.json")), true);
   assert.equal(existsSync(join(host.home, "secrets.json")), true);
+  assert.equal(existsSync(host.shim), false, "--remove kept the shim behind");
+  assert.equal(existsSync(host.runtimeDir), true, "--remove deleted the runtime without being asked");
   assert.ok(out.some((line) => line.startsWith("home: kept")), out.join("\n"));
 });
 
-test("--no-model downloads nothing, and the download is the only path that opens the network", async (t) => {
-  const skipped = makeHostEnv(t, "setup-no-model");
+test("--no-embedding installs no library, downloads no weight and calls npm only for the runtime", async (t) => {
+  const host = makeHostEnv(t, "setup-no-embedding");
   const warmupCalls = [];
-  const spy = makeCtx(skipped.env, {
+  const { ctx, out } = makeCtx(host.env, {
     warmupImpl: async (options, env) => {
       warmupCalls.push({ options, env });
       return { model: "fake", modelDir: "fake", downloaded: true };
     },
   });
-  assert.equal(await run(["setup", "--no-model"], spy.ctx), 0);
-  assert.deepEqual(warmupCalls, []);
-  assert.equal(existsSync(join(skipped.home, "models")), false);
-  assert.ok(spy.out.includes("model: skipped (--no-model)"), spy.out.join("\n"));
 
-  const downloading = makeHostEnv(t, "setup-model");
-  const asked = [];
-  const full = makeCtx(downloading.env, {
-    warmupImpl: async (options) => {
-      asked.push(options);
-      return { model: "fake@v1", modelDir: "fake", downloaded: true };
-    },
-  });
-  assert.equal(await run(["setup"], full.ctx), 0);
-  assert.deepEqual(asked, [{ allowDownload: true }]);
-  assert.ok(full.out.includes("model: created (fake@v1)"), full.out.join("\n"));
+  assert.equal(await run(SETUP, ctx), 0);
+  assert.deepEqual(warmupCalls, []);
+  assert.equal(existsSync(join(host.home, "models")), false);
+  assert.equal(existsSync(host.embeddingDir), false);
+  assert.deepEqual(
+    host.npmCalls().filter((call) => call.includes(host.embeddingDir)),
+    [],
+    host.npmCalls().map((call) => call.join(" ")).join("\n"),
+  );
+  assert.ok(out.some((line) => line.startsWith("runtime: created")), out.join("\n"));
+});
+
+test("the runtime is installed once and the host is registered against it, never against the running checkout", async (t) => {
+  const host = makeHostEnv(t, "setup-runtime");
+  const first = makeCtx(host.env);
+
+  assert.equal(await run(SETUP, first.ctx), 0);
+  assert.deepEqual(host.npmCalls(), [
+    ["install", "--prefix", host.runtimeDir, "--no-audit", "--no-fund", "--loglevel", "error", `nightshift@${VERSION}`],
+  ]);
+  assert.equal(existsSync(join(host.runtimePackage, "package.json")), true);
+  assert.equal(readSettingsFile(host.configDir).hooks.SessionStart[0].hooks[0].command, hookCommandOf(host, "session-start"));
+
+  const second = makeCtx(host.env);
+  assert.equal(await run(SETUP, second.ctx), 0);
+  assert.equal(host.npmCalls().length, 1, "the second setup reinstalled the runtime");
+  assert.ok(second.out.includes(`runtime: already present (v${VERSION} at ${host.runtimeDir})`), second.out.join("\n"));
+});
+
+test("a runtime that npm could not install leaves the host untouched instead of pointing it at nothing", async (t) => {
+  const host = makeHostEnv(t, "setup-runtime-failed");
+  host.env.NIGHTSHIFT_FAKE_NPM_EXIT = "1";
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(SETUP, ctx), 0);
+  assert.equal(existsSync(host.runtimePackage), false);
+  assert.equal(existsSync(host.settingsPath), false, "a failed runtime still wrote hooks into the host");
+  assert.equal(existsSync(host.shim), false, "a failed runtime still wrote a shim pointing at nothing");
+  assert.deepEqual(callsMatching(host.calls(), ["mcp", "add"]), []);
+  assert.ok(out.some((line) => line.startsWith("runtime: failed")), out.join("\n"));
+  assert.ok(out.includes("shim: skipped (runtime missing)"), out.join("\n"));
+  assert.ok(out.includes("hook SessionStart: skipped (runtime missing)"), out.join("\n"));
+});
+
+test("a runtime whose npm exits non-zero is a failure even when an older install is still on disk", async (t) => {
+  const host = makeHostEnv(t, "setup-runtime-stale");
+  assert.equal(await run(SETUP, makeCtx(host.env).ctx), 0);
+  writeFileSync(join(host.runtimePackage, "package.json"), `${JSON.stringify({ name: "nightshift", version: "0.0.1" })}\n`);
+  host.env.NIGHTSHIFT_FAKE_NPM_EXIT = "1";
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(SETUP, ctx), 0);
+  assert.ok(out.some((line) => line.startsWith("runtime: failed")), out.join("\n"));
+  assert.equal(out.some((line) => line.startsWith("runtime: updated")), false, out.join("\n"));
+  assert.ok(out.includes("shim: skipped (runtime missing)"), out.join("\n"));
 });
 
 test("a claude CLI that cannot run degrades the steps that need it, never the hooks", async (t) => {
@@ -300,7 +341,7 @@ test("a claude CLI that cannot run degrades the steps that need it, never the ho
   host.env.NIGHTSHIFT_CLAUDE_BIN = join(host.configDir, "does-not-exist");
   const { ctx, out, err } = makeCtx(host.env);
 
-  assert.equal(await run(["setup", "--no-model"], ctx), 0);
+  assert.equal(await run(SETUP, ctx), 0);
   const settings = readSettingsFile(host.configDir);
   assert.equal(ownEntries(settings, "SessionStart").length, 1);
   assert.ok(out.includes("mcp nightshift: failed (claude CLI not found)"), out.join("\n"));
@@ -313,7 +354,7 @@ test("a broken settings.json is a user error, and the file is left alone", async
   writeFileSync(host.settingsPath, "{ not json");
   const { ctx, err } = makeCtx(host.env);
 
-  assert.equal(await run(["setup", "--no-model"], ctx), 1);
+  assert.equal(await run(SETUP, ctx), 1);
   assert.equal(readFileSync(host.settingsPath, "utf8"), "{ not json");
   assert.match(err.join("\n"), /is not valid JSON/);
 });
@@ -325,7 +366,7 @@ test("a settings directory that does not exist yet is created by the setup", asy
   mkdirSync(host.home, { recursive: true });
   const { ctx } = makeCtx(host.env);
 
-  assert.equal(await run(["setup", "--no-model"], ctx), 0);
+  assert.equal(await run(SETUP, ctx), 0);
   const settings = JSON.parse(readFileSync(join(nested, "settings.json"), "utf8"));
-  assert.equal(settings.hooks.SessionStart[0].hooks[0].command, hookCommandOf("session-start"));
+  assert.equal(settings.hooks.SessionStart[0].hooks[0].command, hookCommandOf(host, "session-start"));
 });

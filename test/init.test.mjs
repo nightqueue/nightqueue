@@ -71,7 +71,7 @@ test("init sets the host up, registers the project and stays idempotent", async 
   const repo = makeRepo(t, "init-bootstrap-repo");
   const first = makeCtx(host.env);
 
-  assert.equal(await run(["init", repo, "--name", "api", "--no-model", "--no-gh"], first.ctx), 0);
+  assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--no-gh"], first.ctx), 0);
   assert.ok(first.out.some((line) => line.startsWith("home: created")), first.out.join("\n"));
   assert.ok(first.out.some((line) => line.startsWith("secrets.json: created")), first.out.join("\n"));
   assert.match(first.out.join("\n"), /registered project `api` -> .* \(org `default`\)/);
@@ -83,7 +83,7 @@ test("init sets the host up, registers the project and stays idempotent", async 
   assert.deepEqual(host.ghCalls(), [], "`--no-gh` invoked the GitHub CLI");
 
   const second = makeCtx(host.env, { cwd: repo });
-  assert.equal(await run(["init", "--no-model", "--no-gh"], second.ctx), 0);
+  assert.equal(await run(["init", "--no-path", "--no-gh"], second.ctx), 0);
   assert.ok(second.out.some((line) => line.startsWith("home: already present")), second.out.join("\n"));
   assert.ok(second.out.some((line) => line.startsWith("config.json: already present")), second.out.join("\n"));
   assert.match(second.out.join("\n"), /project `api` already registered/);
@@ -95,7 +95,7 @@ test("--gh imports the token of the GitHub CLI, binds it to the org and reports 
   const repo = makeRepo(t, "init-gh-repo");
   const { ctx, out, text } = makeCtx(host.env);
 
-  assert.equal(await run(["init", repo, "--name", "api", "--no-model", "--gh"], ctx), 0);
+  assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--gh"], ctx), 0);
   assert.ok(out.includes("stored connection `gh` (github) and bound it to org `default`"), out.join("\n"));
   assert.ok(out.includes(`gh (github): ok — login=${FAKE_GH_LOGIN} scopes=repo`), out.join("\n"));
   assert.equal(readConfig(host.home).orgs.default.connections.github, "gh");
@@ -109,7 +109,7 @@ test("the token never shows up in any listing of the CLI", async (t) => {
   const repo = makeRepo(t, "init-gh-sweep-repo");
   const { ctx, text } = makeCtx(host.env);
 
-  assert.equal(await run(["init", repo, "--name", "api", "--no-model", "--gh"], ctx), 0);
+  assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--gh"], ctx), 0);
   for (const argv of [["connection", "list"], ["connection", "list", "--json"], ["project", "list", "--json"], ["queue", "status", "--json"]]) {
     assert.equal(await run(argv, ctx), 0, argv.join(" "));
   }
@@ -121,10 +121,10 @@ test("an occupied slot and a name already taken stop the import, with --gh inclu
   const host = makeAuthenticatedHost(t, "init-gh-slot");
   const repo = makeRepo(t, "init-gh-slot-repo");
   const first = makeCtx(host.env);
-  assert.equal(await run(["init", repo, "--name", "api", "--no-model", "--gh"], first.ctx), 0);
+  assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--gh"], first.ctx), 0);
 
   const again = makeCtx(host.env);
-  assert.equal(await run(["init", repo, "--name", "api", "--no-model", "--gh"], again.ctx), 0);
+  assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--gh"], again.ctx), 0);
   assert.ok(again.out.includes("org `default` already uses `gh` for github; nothing to import"), again.out.join("\n"));
   assert.deepEqual(ghSubcommands(host), ["auth status", "auth token"], "the occupied slot still called the GitHub CLI");
 
@@ -137,7 +137,7 @@ test("an occupied slot and a name already taken stop the import, with --gh inclu
     0,
   );
   const collision = makeCtx(host.env);
-  assert.equal(await run(["init", other, "--name", "web", "--no-model", "--gh"], collision.ctx), 0);
+  assert.equal(await run(["init", "--no-path", other, "--name", "web", "--gh"], collision.ctx), 0);
   assert.ok(collision.out.includes("connection `gh` already exists; run `shift connection bind gh --org default`"), collision.out.join("\n"));
   assert.equal(readConfig(host.home).projects.web.org, "default");
 });
@@ -147,7 +147,7 @@ test("without a terminal init only points at the flag, and never reads the token
   const repo = makeRepo(t, "init-gh-no-tty-repo");
   const { ctx, out } = makeCtx(host.env);
 
-  assert.equal(await run(["init", repo, "--name", "api", "--no-model"], ctx), 0);
+  assert.equal(await run(["init", "--no-path", repo, "--name", "api"], ctx), 0);
   assert.ok(
     out.includes(`GitHub CLI is authenticated as ${FAKE_GH_LOGIN}; run \`shift init --gh\` to import its token as connection \`gh\``),
     out.join("\n"),
@@ -160,7 +160,7 @@ test("on a terminal init asks the exact question and honours the answer", async 
   const accepted = makeAuthenticatedHost(t, "init-gh-yes");
   const yes = tty("y\n");
   const yesRun = makeCtx(accepted.env, { stdin: yes.stdin, stdout: yes.stdout });
-  assert.equal(await run(["init", makeRepo(t, "init-gh-yes-repo"), "--name", "api", "--no-model"], yesRun.ctx), 0);
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-yes-repo"), "--name", "api"], yesRun.ctx), 0);
   assert.equal(yes.written.join("").includes(QUESTION), true, `the question changed: ${yes.written.join("")}`);
   assert.equal(readConfig(accepted.home).orgs.default.connections.github, "gh");
   assert.deepEqual(ghSubcommands(accepted), ["auth status", "auth token"]);
@@ -168,7 +168,7 @@ test("on a terminal init asks the exact question and honours the answer", async 
   const refused = makeAuthenticatedHost(t, "init-gh-no");
   const no = tty("n\n");
   const noRun = makeCtx(refused.env, { stdin: no.stdin, stdout: no.stdout });
-  assert.equal(await run(["init", makeRepo(t, "init-gh-no-repo"), "--name", "api", "--no-model"], noRun.ctx), 0);
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-no-repo"), "--name", "api"], noRun.ctx), 0);
   assert.equal(no.written.join("").includes(QUESTION), true);
   assert.ok(
     noRun.out.includes('store a token with `echo "$GITHUB_TOKEN" | shift connection add gh --type github`'),
@@ -183,7 +183,7 @@ test("an input that ends without an answer is a no, and the command still finish
   const eof = tty("");
   const { ctx, out } = makeCtx(host.env, { stdin: eof.stdin, stdout: eof.stdout });
 
-  assert.equal(await run(["init", makeRepo(t, "init-gh-eof-repo"), "--name", "api", "--no-model"], ctx), 0);
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-eof-repo"), "--name", "api"], ctx), 0);
   assert.ok(out.some((line) => line.startsWith("store a token with")), out.join("\n"));
   assert.deepEqual(ghSubcommands(host), ["auth status"]);
 });
@@ -192,7 +192,7 @@ test("a GitHub CLI that is missing or logged out costs one line and never an err
   const missing = makeHostEnv(t, "init-gh-missing");
   missing.env.NIGHTSHIFT_GH_BIN = join(missing.configDir, "does-not-exist");
   const absent = makeCtx(missing.env);
-  assert.equal(await run(["init", makeRepo(t, "init-gh-missing-repo"), "--name", "api", "--no-model", "--gh"], absent.ctx), 0);
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-missing-repo"), "--name", "api", "--gh"], absent.ctx), 0);
   assert.ok(
     absent.out.includes('GitHub CLI not found; store a token with `echo "$GITHUB_TOKEN" | shift connection add gh --type github`'),
     absent.out.join("\n"),
@@ -200,7 +200,7 @@ test("a GitHub CLI that is missing or logged out costs one line and never an err
 
   const loggedOut = makeHostEnv(t, "init-gh-logged-out");
   const anonymous = makeCtx(loggedOut.env);
-  assert.equal(await run(["init", makeRepo(t, "init-gh-logged-out-repo"), "--name", "api", "--no-model", "--gh"], anonymous.ctx), 0);
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-logged-out-repo"), "--name", "api", "--gh"], anonymous.ctx), 0);
   assert.ok(
     anonymous.out.includes("GitHub CLI is not authenticated; run `gh auth login` and then `shift init --gh`"),
     anonymous.out.join("\n"),
@@ -212,7 +212,7 @@ test("--gh together with --no-gh is refused before anything is installed", async
   const host = makeHostEnv(t, "init-gh-conflict");
   const { ctx, err } = makeCtx(host.env);
 
-  assert.equal(await run(["init", makeRepo(t, "init-gh-conflict-repo"), "--gh", "--no-gh", "--no-model"], ctx), 1);
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-conflict-repo"), "--gh", "--no-gh"], ctx), 1);
   assert.match(err.join("\n"), /`--gh` and `--no-gh` cannot be used together/);
   assert.equal(existsSync(host.home), false, "a refused init still touched the host");
 });
@@ -221,7 +221,7 @@ test("a path that is not a git repository stops init before it touches the host"
   const host = makeHostEnv(t, "init-bad-path");
   const { ctx, err } = makeCtx(host.env);
 
-  assert.equal(await run(["init", makeDir(t, "init-bad-path-dir"), "--no-model", "--no-gh"], ctx), 1);
+  assert.equal(await run(["init", "--no-path", makeDir(t, "init-bad-path-dir"), "--no-gh"], ctx), 1);
   assert.match(err.join("\n"), /not a git repository \(no \.git\)/);
   assert.equal(existsSync(host.home), false);
 });

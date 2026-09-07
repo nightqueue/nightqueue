@@ -237,7 +237,7 @@ test("the running server does not hold the configuration lock of the home", asyn
 
   const repo = makeDir(t, "mcp-lock-repo");
   mkdirSync(join(repo, ".git"), { recursive: true });
-  const result = spawnSync(process.execPath, [CLI, "init", repo, "--name", "locked", "--no-model", "--no-gh"], {
+  const result = spawnSync(process.execPath, [CLI, "init", repo, "--name", "locked", "--no-gh"], {
     env: assertIsolatedEnv({ ...env, ...isolatedHostVars(makeDir(t, "mcp-lock-host")) }),
     encoding: "utf8",
   });

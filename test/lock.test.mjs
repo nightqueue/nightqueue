@@ -51,7 +51,7 @@ function shiftAsync(home, args) {
 // Runs one round of two concurrent `org add` and reports what survived in config.json.
 async function runRace(t) {
   const home = makeEnv(t).NIGHTSHIFT_HOME;
-  const setup = spawnSync(process.execPath, [CLI, "setup", "--no-model"], {
+  const setup = spawnSync(process.execPath, [CLI, "setup"], {
     env: assertIsolatedEnv({ ...process.env, ...HOST_VARS, NIGHTSHIFT_HOME: home }),
     encoding: "utf8",
   });

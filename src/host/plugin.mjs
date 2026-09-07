@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { readJsonOrNull } from "./json.mjs";
-import { installedPluginsPath, knownMarketplacesPath, marketplaceManifestPath, packageRoot } from "./paths.mjs";
+import { hostPackageRoot, installedPluginsPath, knownMarketplacesPath, marketplaceManifestPath } from "./paths.mjs";
 
 const DEFAULT_NAME = "nightshift";
 
@@ -49,9 +49,9 @@ export function readKnownMarketplace(env = process.env) {
 }
 
 // Tells whether the registered marketplace is this package: only an absolute path pointing at this root proves it, a matching name never does.
-export function marketplaceIsCurrent(entry) {
+export function marketplaceIsCurrent(entry, env = process.env) {
   if (!entry || typeof entry !== "object") return false;
-  const root = canonical(packageRoot());
+  const root = canonical(hostPackageRoot(env));
   return stringValues(entry).some((value) => value.startsWith("/") && canonical(value) === root);
 }
 
@@ -66,8 +66,8 @@ export function readInstalledPlugin(env = process.env) {
 }
 
 // Arguments of the call that registers this package as a local marketplace.
-export function marketplaceAddArgs() {
-  return ["plugin", "marketplace", "add", packageRoot()];
+export function marketplaceAddArgs(env = process.env) {
+  return ["plugin", "marketplace", "add", hostPackageRoot(env)];
 }
 
 // Arguments of the call that forgets the marketplace of this package.

@@ -1,19 +1,30 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runtimePackageDir } from "../config/paths.mjs";
 
-// Root of the installed package, derived from this module so that a global install resolves the real directory.
+// Root of the package this process runs from, the identity of the running version.
 export function packageRoot() {
   return resolve(fileURLToPath(new URL("../../", import.meta.url)));
 }
 
-// Absolute path of the CLI entry point, the one registered in the host.
-export function shiftEntryPath() {
-  return join(packageRoot(), "bin", "shift.mjs");
+// Root of the package the host is registered against: always the runtime prefix, never the directory this process runs from.
+export function hostPackageRoot(env = process.env) {
+  return runtimePackageDir(env);
 }
 
-// Home directory the host paths hang from, preferring the environment so a test never touches the real one.
-function hostHome(env) {
+// Absolute path of the CLI entry point, the one registered in the host.
+export function shiftEntryPath(env = process.env) {
+  return join(hostPackageRoot(env), "bin", "shift.mjs");
+}
+
+// Path of the marketplace manifest inside the runtime, the file the host reads.
+export function hostManifestPath(env = process.env) {
+  return join(hostPackageRoot(env), ".claude-plugin", "marketplace.json");
+}
+
+// Home directory of the user the host paths hang from, preferring the environment so a test never touches the real one.
+export function userHome(env = process.env) {
   const raw = typeof env?.HOME === "string" ? env.HOME.trim() : "";
   return raw ? resolve(raw) : homedir();
 }
@@ -26,7 +37,7 @@ function configDirOverride(env) {
 
 // Configuration directory of the Claude Code host.
 export function claudeConfigDir(env = process.env) {
-  return configDirOverride(env) || join(hostHome(env), ".claude");
+  return configDirOverride(env) || join(userHome(env), ".claude");
 }
 
 // Path of the host settings file, always inside the configuration directory.
@@ -37,7 +48,7 @@ export function claudeSettingsPath(env = process.env) {
 // Path of the user level JSON that holds the MCP servers: inside the configuration directory only when CLAUDE_CONFIG_DIR is set, a sibling of it otherwise.
 export function claudeUserConfigPath(env = process.env) {
   const override = configDirOverride(env);
-  return override ? join(override, ".claude.json") : join(hostHome(env), ".claude.json");
+  return override ? join(override, ".claude.json") : join(userHome(env), ".claude.json");
 }
 
 // Directory where the host keeps the plugin state.

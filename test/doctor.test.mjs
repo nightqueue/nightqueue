@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ import { makeHostEnv } from "../test-support/host.mjs";
 import { makeDir, makeProject } from "../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/shift.mjs", import.meta.url));
+const SETUP = ["setup", "--no-path", "--no-embedding"];
 
 // Subprocess runner that answers for `gh` instead of asking the real one, keeping the diagnosis hermetic.
 function withFakeGh(authenticated) {
@@ -48,7 +49,7 @@ function statusOf(report, name) {
 
 test("a host that went through setup has no failing check", async (t) => {
   const host = makeHostEnv(t, "doctor-ok");
-  await run(["setup", "--no-model"], { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
 
   const { code, report } = await diagnose(host.env);
   assert.equal(code, 0);
@@ -67,6 +68,44 @@ test("a host that went through setup has no failing check", async (t) => {
   assert.equal(statusOf(report, "model"), "warn");
   assert.equal(statusOf(report, "projects"), "warn");
   assert.equal(statusOf(report, "database"), "warn");
+  assert.equal(statusOf(report, "runtime"), "ok");
+  assert.equal(statusOf(report, "shim"), "ok");
+  assert.equal(statusOf(report, "path"), "warn");
+  assert.equal(statusOf(report, "embedding"), "warn");
+  assert.equal(report.checks.some((check) => check.name === "embedding audit"), false, "the audit ran on an absent prefix");
+});
+
+test("runtime, shim, path and embedding are checked, and the audit only once the prefix is there", async (t) => {
+  const host = makeHostEnv(t, "doctor-install");
+  const virgin = await diagnose(host.env);
+  assert.equal(statusOf(virgin.report, "runtime"), "fail");
+  assert.equal(statusOf(virgin.report, "shim"), "fail");
+  assert.match(virgin.report.checks.find((check) => check.name === "runtime").detail, /no runtime in .*runtime$/);
+
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+  writeFileSync(join(host.runtimePackage, "package.json"), `${JSON.stringify({ name: "nightshift", version: "0.0.1" })}\n`);
+  mkdirSync(host.embeddingDir, { recursive: true });
+
+  const { report } = await diagnose(host.env, { spawnSyncImpl: spawnSync });
+  assert.equal(statusOf(report, "runtime"), "warn");
+  assert.match(report.checks.find((check) => check.name === "runtime").hint, /shift update/);
+  assert.equal(statusOf(report, "embedding audit"), "ok");
+
+  host.env.NIGHTSHIFT_FAKE_NPM_AUDIT = "3";
+  const { report: risky } = await diagnose(host.env, { spawnSyncImpl: spawnSync });
+  assert.equal(statusOf(risky, "embedding audit"), "warn");
+  assert.equal(risky.checks.find((check) => check.name === "embedding audit").detail, "3 advisories in the embedding prefix");
+});
+
+test("a shim left without the execute bit fails with the command that repairs it", async (t) => {
+  const host = makeHostEnv(t, "doctor-shim");
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+  chmodSync(host.shim, 0o644);
+
+  const { code, report } = await diagnose(host.env);
+  assert.equal(code, 1);
+  assert.equal(statusOf(report, "shim"), "fail");
+  assert.match(report.checks.find((check) => check.name === "shim").hint, /chmod \+x /);
 });
 
 test("a home that never went through setup fails and exits 1", async (t) => {
@@ -98,7 +137,7 @@ test("the diagnosis writes nothing at all: no database, no settings, no home", a
 
 test("a claude CLI that cannot run is the only failure of an otherwise clean host", async (t) => {
   const host = makeHostEnv(t, "doctor-no-claude");
-  await run(["setup", "--no-model"], { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
   host.env.NIGHTSHIFT_CLAUDE_BIN = join(host.configDir, "does-not-exist");
 
   const { code, report } = await diagnose(host.env);
@@ -109,7 +148,7 @@ test("a claude CLI that cannot run is the only failure of an otherwise clean hos
 
 test("secrets more open than 0600 and a project that moved away are reported as failures", async (t) => {
   const host = makeHostEnv(t, "doctor-fixtures");
-  await run(["setup", "--no-model"], { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
   chmodSync(secretsPath(host.env), 0o644);
   const repo = makeProject(t, host.env, "alpha");
   const gone = makeProject(t, host.env, "beta");
