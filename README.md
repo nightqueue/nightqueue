@@ -371,7 +371,7 @@ shift queue status 7 [--json]                             # one job, never with 
 shift queue run [--job 7] [--max 2] [--dry]               # claim and run; --dry only reports
 shift queue run --watch [30]                              # keep claiming, one pass every N seconds
 shift queue log 7 [--follow]                              # the raw stream of the job
-shift queue cancel 7 --reason "not needed"                # cancel a pending or orphaned job
+shift queue cancel 7 --reason "not needed"                # cancel a pending, gated or orphaned job
 shift queue pause | shift queue resume                    # stop claiming new jobs, or claim again
 ```
 
@@ -403,8 +403,9 @@ owns it under a lease, and then one of four final states: `done` (the run
 delivered a pull request URL), `gate` (the pipeline stopped asking for a human
 decision, or ended with nothing to deliver), `failed` (a non-zero exit, a
 timeout, or an orphan that had already spent its attempts) and `cancelled`
-(cancelled by the operator, or stopped while running). Nothing in v1 moves a job
-out of a final state.
+(cancelled by the operator, or stopped while running). Only `queue cancel` moves
+a job out of a final state, and only from `gate`: the job becomes `cancelled` and
+is never resumed automatically - reopening it is a new job.
 
 **One job per project at a time.** Two jobs of the same project never run
 together: the pipeline of each job creates its own git worktree from the

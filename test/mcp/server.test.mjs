@@ -14,6 +14,7 @@ import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/shift.mjs", import.meta.url));
+const GATED_FINISHED_AT = "2020-01-01 00:00:00";
 
 const CONTRACT_TOOLS = [
   "index_recall",
@@ -310,7 +311,7 @@ test("queue_run comes back at once with the log of the detached runner, inside t
   assert.match(started.logPath, /runner-\d{8}T\d{6}Z\.log$/);
 });
 
-test("queue_cancel takes a pending job and an orphan, and refuses a live run or a finished one", async (t) => {
+test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a live run or a finished one", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-cancel");
   const pending = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   const running = addJob({ project: "alpha", prompt: "fix the parser" }, env).id;
@@ -334,4 +335,16 @@ test("queue_cancel takes a pending job and an orphan, and refuses a live run or 
   const orphan = payloadOf(await client.callTool({ name: "queue_cancel", arguments: { job_id: running } }));
   assert.equal(orphan.job.status, "cancelled");
   assert.equal(orphan.job.worker, null);
+
+  const gated = addJob({ project: "alpha", prompt: "wait for a human" }, env).id;
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'gate', finished_at = ?, result = ? WHERE id = ?")
+    .run(GATED_FINISHED_AT, '{"status":"gate","prUrl":null}', gated);
+  const closed = payloadOf(await client.callTool({ name: "queue_cancel", arguments: { job_id: gated, reason: "the human said no" } }));
+  assert.equal(closed.job.status, "cancelled");
+  assert.equal(closed.job.operator_note, "the human said no");
+
+  const gatedRow = getJob(gated, env);
+  assert.equal(gatedRow.finished_at, GATED_FINISHED_AT, "the cancel overwrote the finish of the gated run");
+  assert.deepEqual(JSON.parse(gatedRow.result), { status: "gate", prUrl: null, cancelledFrom: "gate" });
 });

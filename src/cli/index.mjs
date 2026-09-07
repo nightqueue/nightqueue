@@ -71,7 +71,7 @@ commands:
   queue add [project] <prompt...> [--run]   enqueue an unattended /nightshift:resolve run; --run also runs it in the foreground
   queue status [id] [--limit] [--json]      show one job or the tail of the queue plus the counts per status
   queue run [--job] [--max] [--watch]       claim pending jobs and run them; --dry only reports what it would do
-  queue cancel <id> [--reason "..."]        cancel a pending or orphaned job
+  queue cancel <id> [--reason "..."]        cancel a pending, gated or orphaned job
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow]                 print the accumulated stream of a job
   version                                   print the installed shift version

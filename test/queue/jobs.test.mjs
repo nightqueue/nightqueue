@@ -24,6 +24,7 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 const WORKER = "host:1000";
 const OTHER_WORKER = "host:2000";
 const CAP = 4;
+const GATED_FINISHED_AT = "2020-01-01 00:00:00";
 
 // A home with two registered projects and the queue table ready.
 function makeQueue(t, name) {
@@ -187,6 +188,7 @@ test("cancel accepts a pending job and an orphan, and refuses a live run without
 
   assert.equal(cancelJob(pending, { reason: "no longer needed" }, env).status, "cancelled");
   assert.equal(getJob(pending, env).operator_note, "no longer needed");
+  assert.deepEqual(JSON.parse(getJob(pending, env).result), { cancelledFrom: "pending" });
   assert.throws(() => cancelJob(pending, {}, env), /already finished with status `cancelled`/);
   assert.throws(() => cancelJob(9999, {}, env), /unknown job `9999`/);
   assert.throws(() => cancelJob(0, {}, env), /positive integer job id/);
@@ -195,6 +197,42 @@ test("cancel accepts a pending job and an orphan, and refuses a live run without
   const cancelled = cancelJob(running, { reason: "the runner died" }, env);
   assert.equal(cancelled.status, "cancelled");
   assert.equal(cancelled.worker, null);
+  assert.deepEqual(JSON.parse(getJob(running, env).result), { cancelledFrom: "running" });
+});
+
+test("cancel accepts a gated job, keeps its original finished_at and records where it came from", (t) => {
+  const env = makeQueue(t, "jobs-cancel-gate");
+  const id = enqueue(env);
+  claimJobById(id, { worker: WORKER, cap: CAP }, env);
+  finishJob(id, { worker: WORKER, status: "gate", result: { status: "gate", prUrl: null } }, env);
+  openDb(env).prepare("UPDATE jobs SET finished_at = ? WHERE id = ?").run(GATED_FINISHED_AT, id);
+
+  const cancelled = cancelJob(id, { reason: "abandoned at the gate" }, env);
+  assert.equal(cancelled.status, "cancelled");
+  assert.equal(cancelled.worker, null);
+  assert.equal(cancelled.lease_until, null);
+
+  const row = getJob(id, env);
+  assert.equal(row.finished_at, GATED_FINISHED_AT, "the cancel overwrote the finish of the gated run");
+  assert.equal(row.operator_note, "abandoned at the gate");
+  assert.deepEqual(JSON.parse(row.result), { status: "gate", prUrl: null, cancelledFrom: "gate" });
+
+  const freeText = enqueue(env);
+  claimJobById(freeText, { worker: WORKER, cap: CAP }, env);
+  finishJob(freeText, { worker: WORKER, status: "gate", result: "nothing to deliver" }, env);
+  cancelJob(freeText, {}, env);
+  assert.deepEqual(JSON.parse(getJob(freeText, env).result), { previousResult: "nothing to deliver", cancelledFrom: "gate" });
+});
+
+test("cancel refuses a job in every terminal state without touching the row", (t) => {
+  const env = makeQueue(t, "jobs-cancel-terminal");
+  for (const status of ["done", "failed", "cancelled"]) {
+    const id = enqueue(env);
+    openDb(env).prepare("UPDATE jobs SET status = ?, finished_at = datetime('now') WHERE id = ?").run(status, id);
+    const before = getJob(id, env);
+    assert.throws(() => cancelJob(id, { reason: "too late" }, env), new RegExp(`already finished with status \`${status}\``));
+    assert.deepEqual(getJob(id, env), before, `the refused cancel wrote to a ${status} job`);
+  }
 });
 
 test("the public view drops the prompt, truncates the free text by code point and returns ISO timestamps", (t) => {

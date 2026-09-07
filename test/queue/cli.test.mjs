@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { queuePausedPath } from "../../src/config/paths.mjs";
 import { addProject } from "../../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
+import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
@@ -211,6 +212,47 @@ test("queue cancel takes a pending job and refuses one that is running under a l
   assert.match(cancelled.stdout, /cancelled job #1/);
   assert.equal(getJob(pending, env).status, "cancelled");
   assert.match(shift(env, ["queue", "cancel", "99"]).stderr, /unknown job `99`/);
+});
+
+test("queue cancel closes a gated job and the status still shows it with its note", (t) => {
+  const env = makeCliHome(t, "cli-cancel-gate", [{ stdout: gateStream(), exitCode: 0 }]);
+  const gated = shift(env, ["queue", "add", "alpha", "fix the worker", "--run"]);
+  assert.equal(gated.status, 1, gated.stdout);
+  assert.equal(getJob(1, env).status, "gate");
+  const finishedAt = getJob(1, env).finished_at;
+
+  const cancelled = shift(env, ["queue", "cancel", "1", "--reason", "the human said no"]);
+  assert.equal(cancelled.status, 0, cancelled.stderr);
+  assert.match(cancelled.stdout, /cancelled job #1/);
+
+  const row = getJob(1, env);
+  assert.equal(row.status, "cancelled");
+  assert.equal(row.finished_at, finishedAt, "the cancel overwrote the finish of the gated run");
+  assert.equal(row.operator_note, "the human said no");
+  assert.equal(JSON.parse(row.result).cancelledFrom, "gate");
+
+  const status = shift(env, ["queue", "status", "1"]);
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /status\s+cancelled/);
+  assert.match(status.stdout, /operator_note\s+the human said no/);
+});
+
+test("queue cancel without --reason closes a gated job and keeps the note it already had", (t) => {
+  const env = makeCliHome(t, "cli-cancel-note");
+  const id = enqueue(env);
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'gate', finished_at = ?, operator_note = ? WHERE id = ?")
+    .run("2020-01-01 00:00:00", "the human asked for changes", id);
+
+  const cancelled = shift(env, ["queue", "cancel", String(id)]);
+  assert.equal(cancelled.status, 0, cancelled.stderr);
+  assert.match(cancelled.stdout, /cancelled job #1/);
+
+  const row = getJob(id, env);
+  assert.equal(row.status, "cancelled");
+  assert.equal(row.operator_note, "the human asked for changes", "the cancel without --reason erased the note of the gate");
+  assert.equal(row.finished_at, "2020-01-01 00:00:00", "the cancel overwrote the finish of the gated run");
+  assert.equal(JSON.parse(row.result).cancelledFrom, "gate");
 });
 
 test("an unrecognized token is always an error, and never falls through to running the whole queue", (t) => {

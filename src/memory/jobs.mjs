@@ -28,6 +28,12 @@ export const ORPHAN_PREDICATE =
   `status = 'running' AND (lease_until IS NULL
      OR datetime(lease_until) < datetime('now', '-${LEASE_GRACE_S} seconds'))`;
 
+// The `result` a cancel grafts `cancelledFrom` onto: the JSON object already there, or a new one keeping what was.
+const CANCEL_RESULT_BASE = `CASE
+              WHEN result IS NULL THEN '{}'
+              WHEN json_valid(result) AND json_type(result) = 'object' THEN result
+              ELSE json_object('previousResult', result) END`;
+
 const LEASE_EXPRESSION = `datetime('now', '+' || (timeout_s + ${LEASE_SLACK_S}) || ' seconds')`;
 const HARD_CEILING_OPEN = `datetime(started_at, '+' || (timeout_s + ${LEASE_SLACK_S}) || ' seconds') > datetime('now')`;
 
@@ -365,17 +371,18 @@ function cancelRefusal(id, row) {
   return `job \`${id}\` is already finished with status \`${row.status}\``;
 }
 
-// Cancels a pending or orphaned job; the decision is in the WHERE and a refusal writes nothing.
+// Cancels a pending, gated or orphaned job; the decision is in the WHERE and a refusal writes nothing.
 export function cancelJob(id, { reason } = {}, env = process.env) {
   const db = openDb(env);
   const statement = db.prepare(
     `UPDATE jobs
-        SET status = 'cancelled',
-            finished_at = datetime('now'),
+        SET result = json_set(${CANCEL_RESULT_BASE}, '$.cancelledFrom', status),
+            status = 'cancelled',
+            finished_at = COALESCE(finished_at, datetime('now')),
             operator_note = COALESCE(?, operator_note),
             worker = NULL,
             lease_until = NULL
-      WHERE id = ? AND (status = 'pending' OR (${ORPHAN_PREDICATE}))
+      WHERE id = ? AND (status IN ('pending', 'gate') OR (${ORPHAN_PREDICATE}))
       RETURNING *`,
   );
   const jobId = requireId(id);

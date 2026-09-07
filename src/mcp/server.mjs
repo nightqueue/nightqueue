@@ -281,7 +281,7 @@ function toolDefinitions(env) {
       name: "queue_cancel",
       config: {
         description:
-          "Cancels a pending or orphaned job. A job running under a live lease is refused, with the exact reason and no write.",
+          "Cancels a pending, gated or orphaned job. A job running under a live lease is refused, with the exact reason and no write.",
         inputSchema: { job_id: z.number().int().min(1), reason: optionalText },
       },
       handler: async (args) => ({ ok: true, job: cancelJob(args.job_id, { reason: args.reason }, env) }),
