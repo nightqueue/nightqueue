@@ -47,6 +47,7 @@ export async function runSessionStart({ input, env = process.env }) {
   const cwd = typeof input?.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
   const sessionId = typeof input?.session_id === "string" ? input.session_id : "unknown";
   const project = projectFromCwd(cwd, env);
+  if (!project) return "";
   const lessons = await recallLessons({ project: project?.name, limit: LESSON_LIMIT }, env);
   const memories = recentMemories({ project: project?.name, limit: MEMORY_LIMIT }, env);
   const sections = [

@@ -6,7 +6,7 @@ import { runSessionStart } from "../../src/hooks/session-start.mjs";
 import { sessionStatePath } from "../../src/hooks/state.mjs";
 import { getLesson, saveLesson } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // Stores one lesson of the project, returning its id.
 function addLesson(env, { project = "alpha", title, prevention = "always close the descriptor in a finally block" }) {
@@ -67,6 +67,27 @@ test("a corpus larger than the budget is cut at nine thousand characters", async
   }
   const block = await runSessionStart({ input: { session_id: "s1", cwd: repo }, env });
   assert.equal(block.length, 9000);
+});
+
+test("a working directory outside every registered project leaks nothing into the session", async (t) => {
+  const env = makeHome(t, "hook-start-outside");
+  makeProject(t, env, "alpha");
+  addLesson(env, { title: "the alpha worker leaks a file descriptor on failure" });
+  saveMemory({ project: "alpha", key: "deploy", value: "the deployment runs from the pipeline" }, env);
+  saveLesson(
+    {
+      project: null,
+      title: "a global lesson about the fun\u00e7\u00e3o that never closes",
+      root_cause: "the early return skipped the close",
+      solution: "close it in a finally block",
+      prevention: "always close the descriptor in a finally block",
+    },
+    env,
+  );
+  const outside = makeDir(t, "hook-start-outside-cwd");
+
+  assert.equal(await runSessionStart({ input: { session_id: "s1", cwd: outside }, env }), "");
+  assert.equal(existsSync(sessionStatePath("s1", env)), false);
 });
 
 test("a hostile session id cannot write outside the state directory", async (t) => {

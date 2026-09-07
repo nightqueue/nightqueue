@@ -8,6 +8,7 @@ const PR_URL_SOURCE = "https?://github\\.com/[\\w.-]+/[\\w.-]+/pull/\\d+";
 const PR_URL_RE = new RegExp(PR_URL_SOURCE, "g");
 const PR_DELIVERY_LINE_RE = new RegExp(`${PR_URL_SOURCE}[)\\]>.,;:'"\`*_ \\t]*$`);
 const PR_DENIAL_RE = /\b(?:fail(?:ed|s|ing|ure)?|could not|cannot|can't|unable|error|refused|denied|not opened?|no pull request|example|would be)\b/i;
+const USAGE_FIELDS = ["tokensIn", "tokensOut", "cacheRead", "cacheCreation"];
 
 // Parses one raw NDJSON line of the stream; a truncated or non-JSON line is simply not an event.
 function parseEvent(rawLine) {
@@ -178,18 +179,57 @@ function finite(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-// Adds every modelUsage entry of a result event into the total (one session may use several models).
-function addModelUsage(total, event) {
-  const models = event?.modelUsage && typeof event.modelUsage === "object" ? Object.values(event.modelUsage) : [];
-  for (const model of models) {
+// A usage block with every kind of token at zero.
+function emptyUsage() {
+  return { tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheCreation: 0 };
+}
+
+// Aggregated usage of a result event, in the snake_case shape the CLI emits; null when the block is absent.
+function usageFromAggregate(event) {
+  const usage = event?.usage;
+  if (!usage || typeof usage !== "object") return null;
+  return {
+    tokensIn: finite(usage.input_tokens),
+    tokensOut: finite(usage.output_tokens),
+    cacheRead: finite(usage.cache_read_input_tokens),
+    cacheCreation: finite(usage.cache_creation_input_tokens),
+  };
+}
+
+// Usage of a result event summed from its per-model breakdown (one session may use several models); null when absent.
+function usageFromModels(event) {
+  if (!event?.modelUsage || typeof event.modelUsage !== "object") return null;
+  const total = emptyUsage();
+  for (const model of Object.values(event.modelUsage)) {
     total.tokensIn += finite(model?.inputTokens);
     total.tokensOut += finite(model?.outputTokens);
     total.cacheRead += finite(model?.cacheReadInputTokens);
     total.cacheCreation += finite(model?.cacheCreationInputTokens);
   }
+  return total;
 }
 
-// Single rule of what counts as tokens in a parsed event: only an assistant with message.usage adds up.
+// How many tokens a usage block reports, counting every kind of them.
+function usageTotal(usage) {
+  return usage ? USAGE_FIELDS.reduce((sum, field) => sum + finite(usage[field]), 0) : 0;
+}
+
+// Usage of one result event: the two blocks describe the SAME tokens, so each field keeps the larger of them and a truncated block never shadows a complete one; nothing is ever summed twice.
+function resultUsage(event) {
+  const aggregate = usageFromAggregate(event);
+  const models = usageFromModels(event);
+  if (!aggregate || !models) return aggregate ?? models;
+  const merged = emptyUsage();
+  for (const field of USAGE_FIELDS) merged[field] = Math.max(aggregate[field], models[field]);
+  return merged;
+}
+
+// Adds one usage block into a running total.
+function addUsage(total, usage) {
+  for (const field of USAGE_FIELDS) total[field] += finite(usage?.[field]);
+}
+
+// Rule of what an assistant event contributes to the estimated fallback: only an assistant with message.usage adds up.
 export function tokensFromEvent(event) {
   if (event?.type !== "assistant" || !event.message?.usage) {
     return { id: null, tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheCreation: 0 };
@@ -209,54 +249,70 @@ export function tokensFromEventLine(rawLine) {
   return tokensFromEvent(parseEvent(rawLine));
 }
 
-// Usage of one attempt: the result events per session when they exist, otherwise the assistants deduped by message id.
-export function extractUsage(log) {
-  const bySession = new Map();
-  const assistantSessions = new Set();
+// Splits the stream into one entry per session: the result event of that session and the sum of its OWN assistant turns, deduped by message id.
+function sessionsFromLog(log) {
+  const sessions = new Map();
   const seenIds = new Set();
-  const estimate = { tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheCreation: 0 };
   for (const line of String(log ?? "").split("\n")) {
     const event = parseEvent(line);
-    if (!event) continue;
-    if (event.type === "result") {
-      bySession.set(String(event.session_id ?? ""), event);
+    const isResult = event?.type === "result";
+    if (!isResult && !(event?.type === "assistant" && event.message?.usage)) continue;
+    const id = String(event.session_id ?? "");
+    const session = sessions.get(id) ?? { result: null, estimate: emptyUsage(), hasAssistantUsage: false };
+    sessions.set(id, session);
+    if (isResult) {
+      session.result = event;
       continue;
     }
-    if (event.type !== "assistant" || !event.message?.usage) continue;
-    assistantSessions.add(String(event.session_id ?? ""));
-    const { id, tokensIn, tokensOut, cacheRead, cacheCreation } = tokensFromEvent(event);
-    if (id !== null) {
-      if (seenIds.has(id)) continue;
-      seenIds.add(id);
-    }
-    estimate.tokensIn += tokensIn;
-    estimate.tokensOut += tokensOut;
-    estimate.cacheRead += cacheRead;
-    estimate.cacheCreation += cacheCreation;
+    session.hasAssistantUsage = true;
+    const tokens = tokensFromEvent(event);
+    if (tokens.id !== null && seenIds.has(tokens.id)) continue;
+    if (tokens.id !== null) seenIds.add(tokens.id);
+    addUsage(session.estimate, tokens);
   }
-  if (bySession.size) {
-    const total = { tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheCreation: 0 };
-    let costUsd = null;
-    for (const event of bySession.values()) {
-      addModelUsage(total, event);
-      if (Number.isFinite(event?.total_cost_usd)) costUsd = (costUsd ?? 0) + event.total_cost_usd;
-    }
-    return { ...total, costUsd, sessions: bySession.size, estimated: false };
+  return sessions;
+}
+
+// What ONE session contributes: its own result telemetry when the result reported tokens, otherwise the estimate from its own assistants.
+function sessionUsage(session) {
+  const reported = resultUsage(session.result);
+  if (usageTotal(reported) > 0) return { usage: reported, estimated: false };
+  if (session.hasAssistantUsage) return { usage: session.estimate, estimated: true };
+  return { usage: reported ?? emptyUsage(), estimated: false };
+}
+
+// Cost of an attempt: the sum of what its result events reported, null when none of them reported any.
+function attemptCost(sessions) {
+  let costUsd = null;
+  for (const session of sessions) {
+    if (Number.isFinite(session.result?.total_cost_usd)) costUsd = (costUsd ?? 0) + session.result.total_cost_usd;
   }
-  if (!assistantSessions.size) return null;
-  return { ...estimate, costUsd: null, sessions: assistantSessions.size, estimated: true };
+  return costUsd;
+}
+
+// Usage of one attempt: every session contributes its own tokens, so a session whose result carried no telemetry falls back to its assistants instead of contributing zero.
+export function extractUsage(log) {
+  const sessions = sessionsFromLog(log);
+  if (!sessions.size) return null;
+  const total = emptyUsage();
+  let anyReported = false;
+  let anyEstimated = false;
+  for (const session of sessions.values()) {
+    const { usage, estimated } = sessionUsage(session);
+    addUsage(total, usage);
+    anyReported = anyReported || (!estimated && usageTotal(usage) > 0);
+    anyEstimated = anyEstimated || estimated;
+  }
+  return { ...total, costUsd: attemptCost(sessions.values()), sessions: sessions.size, estimated: anyEstimated && !anyReported };
 }
 
 // Consolidates the usage of several attempts into one total; nulls are ignored and an empty list stays null.
 export function sumUsage(usages) {
   const list = (Array.isArray(usages) ? usages : []).filter((usage) => usage && typeof usage === "object");
   if (!list.length) return null;
-  const total = { tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheCreation: 0, costUsd: null, sessions: 0, estimated: false };
+  const total = { ...emptyUsage(), costUsd: null, sessions: 0, estimated: false };
   for (const usage of list) {
-    total.tokensIn += finite(usage.tokensIn);
-    total.tokensOut += finite(usage.tokensOut);
-    total.cacheRead += finite(usage.cacheRead);
-    total.cacheCreation += finite(usage.cacheCreation);
+    addUsage(total, usage);
     total.sessions += finite(usage.sessions);
     if (Number.isFinite(usage.costUsd)) total.costUsd = (total.costUsd ?? 0) + usage.costUsd;
     if (usage.estimated) total.estimated = true;

@@ -37,7 +37,19 @@ export function slugEvent(slug = SLUG, options = {}) {
   return assistantEvent(`Registered the run.\nQUEUE_SLUG: ${slug}\n`, options);
 }
 
-// The final `result` event, with the cost and the per model usage the CLI reports.
+// Per model usage block of a result event, in the camelCase shape the CLI writes it.
+export function modelUsageBlock({ tokensIn = 0, tokensOut = 0, cacheRead = 0, cacheCreation = 0 } = {}) {
+  return {
+    [MODEL]: {
+      inputTokens: tokensIn,
+      outputTokens: tokensOut,
+      cacheReadInputTokens: cacheRead,
+      cacheCreationInputTokens: cacheCreation,
+    },
+  };
+}
+
+// The final `result` event; by default it carries the two usage blocks the real CLI reports, and `usageShape` picks one of them or none.
 export function resultEvent({
   text = "",
   sessionId = SESSION_ID,
@@ -47,22 +59,13 @@ export function resultEvent({
   cacheRead = 50,
   cacheCreation = 25,
   subtype = "success",
+  usageShape = "both",
 } = {}) {
-  return {
-    type: "result",
-    subtype,
-    session_id: sessionId,
-    result: text,
-    total_cost_usd: costUsd,
-    modelUsage: {
-      [MODEL]: {
-        inputTokens: tokensIn,
-        outputTokens: tokensOut,
-        cacheReadInputTokens: cacheRead,
-        cacheCreationInputTokens: cacheCreation,
-      },
-    },
-  };
+  const tokens = { tokensIn, tokensOut, cacheRead, cacheCreation };
+  const event = { type: "result", subtype, session_id: sessionId, result: text, total_cost_usd: costUsd };
+  if (usageShape === "both" || usageShape === "aggregate") event.usage = usageBlock(tokens);
+  if (usageShape === "both" || usageShape === "models") event.modelUsage = modelUsageBlock(tokens);
+  return event;
 }
 
 // A `## Notice` section, the executive summary the runner stores in notice_md.

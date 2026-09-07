@@ -161,6 +161,64 @@ test("usage adds up per message id and the result event of the session has the f
   assert.deepEqual(tokensFromEventLine(line(systemInitEvent())), { id: null, tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheCreation: 0 });
 });
 
+test("the aggregate usage block of the result event counts, in the snake_case shape the CLI emits", () => {
+  const stream = toNdjson([
+    systemInitEvent(),
+    resultEvent({ text: "done", tokensIn: 900, tokensOut: 120, cacheRead: 40, cacheCreation: 15, costUsd: 0.3, usageShape: "aggregate" }),
+  ]);
+  assert.deepEqual(extractUsage(stream), {
+    tokensIn: 900,
+    tokensOut: 120,
+    cacheRead: 40,
+    cacheCreation: 15,
+    costUsd: 0.3,
+    sessions: 1,
+    estimated: false,
+  });
+});
+
+test("a result event carrying both usage shapes counts the tokens once, never twice", () => {
+  const tokens = { tokensIn: 900, tokensOut: 120, cacheRead: 40, cacheCreation: 15, costUsd: 0.3 };
+  const both = extractUsage(toNdjson([systemInitEvent(), resultEvent({ text: "done", ...tokens, usageShape: "both" })]));
+  const models = extractUsage(toNdjson([systemInitEvent(), resultEvent({ text: "done", ...tokens, usageShape: "models" })]));
+  assert.deepEqual(both, models);
+  assert.deepEqual(both, { tokensIn: 900, tokensOut: 120, cacheRead: 40, cacheCreation: 15, costUsd: 0.3, sessions: 1, estimated: false });
+});
+
+test("when the result event reports tokens, it wins over the assistants of the same session", () => {
+  const stream = toNdjson([
+    systemInitEvent(),
+    assistantEvent("working", { messageId: "msg_work", usage: { tokensIn: 7, tokensOut: 3 } }),
+    resultEvent({ text: "done", tokensIn: 900, tokensOut: 120, cacheRead: 40, cacheCreation: 15, costUsd: 0.3, usageShape: "aggregate" }),
+  ]);
+  assert.deepEqual(extractUsage(stream), {
+    tokensIn: 900,
+    tokensOut: 120,
+    cacheRead: 40,
+    cacheCreation: 15,
+    costUsd: 0.3,
+    sessions: 1,
+    estimated: false,
+  });
+});
+
+test("a result event with no usage block at all falls back to the assistants and says the total is estimated", () => {
+  const stream = toNdjson([
+    systemInitEvent(),
+    assistantEvent("working", { messageId: "msg_work", usage: { tokensIn: 7, tokensOut: 3, cacheRead: 1, cacheCreation: 2 } }),
+    resultEvent({ text: "done", costUsd: 0.3, usageShape: "none" }),
+  ]);
+  assert.deepEqual(extractUsage(stream), {
+    tokensIn: 7,
+    tokensOut: 3,
+    cacheRead: 1,
+    cacheCreation: 2,
+    costUsd: 0.3,
+    sessions: 1,
+    estimated: true,
+  });
+});
+
 test("the usage of several attempts is one total, and a missing attempt never poisons it", () => {
   const first = { tokensIn: 10, tokensOut: 2, cacheRead: 1, cacheCreation: 0, costUsd: 0.5, sessions: 1, estimated: false };
   const second = { tokensIn: 5, tokensOut: 1, cacheRead: 0, cacheCreation: 3, costUsd: null, sessions: 1, estimated: true };

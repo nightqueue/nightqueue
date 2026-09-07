@@ -4,15 +4,20 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
 import { readSecret } from "../src/cli/prompt.mjs";
 import { closeDb } from "../src/memory/db.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
+import { assertIsolatedEnv, isolatedHostVars } from "../test-support/host.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/shift.mjs", import.meta.url));
 const SENTINEL = "s3cr3t-sentinel-do-not-print";
+const HOST_DIR = mkdtempSync(join(tmpdir(), "nightshift-cli-host-"));
+const HOST_VARS = isolatedHostVars(HOST_DIR);
+
+after(() => rmSync(HOST_DIR, { recursive: true, force: true }));
 
 // Creates a temporary directory removed at the end of the test.
 function makeDir(t, name) {
@@ -31,20 +36,20 @@ function makeRepo(t, name) {
 // Runs the CLI in its own process, with an isolated configuration home.
 function shift(home, args, { input = "", cwd } = {}) {
   return spawnSync(process.execPath, [CLI, ...args], {
-    env: { ...process.env, NIGHTSHIFT_HOME: home },
+    env: assertIsolatedEnv({ ...process.env, ...HOST_VARS, NIGHTSHIFT_HOME: home }),
     input,
     cwd,
     encoding: "utf8",
   });
 }
 
-// Builds a CLI context that captures the output instead of writing to the terminal.
+// Builds a CLI context that captures the output instead of writing to the terminal, always isolated from the real host.
 function makeContext(home, overrides = {}) {
   const out = [];
   const err = [];
   const ctx = {
     ...defaultContext(),
-    env: { NIGHTSHIFT_HOME: home },
+    env: assertIsolatedEnv({ ...HOST_VARS, HOME: HOST_DIR, NIGHTSHIFT_HOME: home }),
     out: (line) => out.push(line),
     err: (line) => err.push(line),
     stdout: { write: () => {} },
@@ -56,7 +61,20 @@ function makeContext(home, overrides = {}) {
 test("--help lists every command and exits 0", () => {
   const result = shift(tmpdir(), ["--help"]);
   assert.equal(result.status, 0);
-  const commands = ["setup", "init", "org", "project", "connection", "mcp", "hook", "reflect", "embed", "memory"];
+  const commands = [
+    "setup",
+    "doctor",
+    "init",
+    "org",
+    "project",
+    "connection",
+    "mcp",
+    "hook",
+    "reflect",
+    "embed",
+    "memory",
+    "queue",
+  ];
   for (const command of commands) {
     assert.match(result.stdout, new RegExp(`^  ${command}`, "m"));
   }
@@ -65,15 +83,17 @@ test("--help lists every command and exits 0", () => {
 
 test("setup is idempotent file by file", (t) => {
   const home = join(makeDir(t, "setup"), "home");
-  const first = shift(home, ["setup"]);
+  const first = shift(home, ["setup", "--no-model"]);
   assert.equal(first.status, 0);
-  assert.match(first.stdout, /created .* \(0700\)/);
-  assert.match(first.stdout, /created config\.json \(org `default`\)/);
-  assert.match(first.stdout, /created secrets\.json \(0600\)/);
+  assert.match(first.stdout, /^home: created \(.*, 0700\)$/m);
+  assert.match(first.stdout, /^config\.json: created \(org `default`\)$/m);
+  assert.match(first.stdout, /^secrets\.json: created \(0600\)$/m);
   const before = ["config.json", "secrets.json"].map((file) => readFileSync(join(home, file), "utf8"));
-  const second = shift(home, ["setup"]);
+  const second = shift(home, ["setup", "--no-model"]);
   assert.equal(second.status, 0);
-  assert.match(second.stdout, /already exists/);
+  assert.match(second.stdout, /^home: already present/m);
+  assert.match(second.stdout, /^config\.json: already present$/m);
+  assert.match(second.stdout, /^secrets\.json: already present$/m);
   assert.deepEqual(["config.json", "secrets.json"].map((file) => readFileSync(join(home, file), "utf8")), before);
   assert.equal(statSync(home).mode & 0o777, 0o700);
   assert.equal(statSync(join(home, "secrets.json")).mode & 0o777, 0o600);
@@ -82,7 +102,7 @@ test("setup is idempotent file by file", (t) => {
 test("init registers the repository in the default org", (t) => {
   const home = makeDir(t, "init-home");
   const repo = makeRepo(t, "init-repo");
-  shift(home, ["setup"]);
+  shift(home, ["setup", "--no-model"]);
   const result = shift(home, ["init", repo, "--name", "api"]);
   assert.equal(result.status, 0);
   assert.match(result.stdout, /registered project `api` -> .* \(org `default`\)/);
@@ -105,7 +125,7 @@ test("the secret never shows up in any output, in any format", (t) => {
   const home = makeDir(t, "sweep-home");
   const repo = makeRepo(t, "sweep-repo");
   const runs = [
-    shift(home, ["setup"]),
+    shift(home, ["setup", "--no-model"]),
     shift(home, ["init", repo, "--name", "api"]),
     shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` }),
     shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` }),
@@ -133,7 +153,7 @@ test("the secret never shows up in any output, in any format", (t) => {
 
 test("the stored secret lives in secrets.json, which stays 0600", (t) => {
   const home = makeDir(t, "secret-home");
-  shift(home, ["setup"]);
+  shift(home, ["setup", "--no-model"]);
   const added = shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` });
   assert.equal(added.status, 0);
   assert.match(added.stdout, /stored connection `gh` \(github\) and bound it to org `default`/);
@@ -148,7 +168,7 @@ test("the stored secret lives in secrets.json, which stays 0600", (t) => {
 
 test("connection add warns when the org slot is already taken", (t) => {
   const home = makeDir(t, "slot-home");
-  shift(home, ["setup"]);
+  shift(home, ["setup", "--no-model"]);
   shift(home, ["connection", "add", "gh", "--type", "github"], { input: "one\n" });
   const second = shift(home, ["connection", "add", "gh2", "--type", "github"], { input: "two\n" });
   assert.equal(second.status, 0);
@@ -159,7 +179,7 @@ test("connection add warns when the org slot is already taken", (t) => {
 
 test("a JSON listing survives being piped, with warnings kept on stderr", (t) => {
   const home = makeDir(t, "json-home");
-  shift(home, ["setup"]);
+  shift(home, ["setup", "--no-model"]);
   const repos = [];
   for (let index = 0; index < 50; index += 1) {
     const repo = join(makeDir(t, "json-repo"), `p${index}`);
@@ -178,7 +198,7 @@ test("a JSON listing survives being piped, with warnings kept on stderr", (t) =>
 
 test("unknown options are rejected instead of silently accepted", (t) => {
   const home = makeDir(t, "opts-home");
-  shift(home, ["setup"]);
+  shift(home, ["setup", "--no-model"]);
   shift(home, ["org", "add", "acme"]);
   const forced = shift(home, ["org", "remove", "acme", "--force"]);
   assert.equal(forced.status, 1);
@@ -200,7 +220,7 @@ test("a positional path that starts with a dash needs the -- separator", (t) => 
 });
 
 test("an unexpected failure exits 2 with a stack", () => {
-  const result = shift("/dev/null/nested", ["setup"]);
+  const result = shift("/dev/null/nested", ["setup", "--no-model"]);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /at /);
   assert.doesNotMatch(result.stderr, /^shift: /m);
@@ -208,7 +228,7 @@ test("an unexpected failure exits 2 with a stack", () => {
 
 test("connection test reports login and scopes, and fails as a user error", async (t) => {
   const home = makeDir(t, "test-home");
-  shift(home, ["setup"]);
+  shift(home, ["setup", "--no-model"]);
   shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` });
   const okResponse = {
     status: 200,
@@ -243,7 +263,7 @@ test("a failed config write after the secret write points at the recovery comman
 
 test("a failed secret write after the config write points at the recovery command", async (t) => {
   const home = makeDir(t, "partial-remove");
-  shift(home, ["setup"]);
+  shift(home, ["setup", "--no-model"]);
   shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` });
   const { ctx, err } = makeContext(home, {
     saveSecrets: () => {

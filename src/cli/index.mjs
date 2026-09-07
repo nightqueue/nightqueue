@@ -1,7 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { saveConfig, saveSecrets } from "../config/store.mjs";
+import { warmupModel } from "../memory/embedding.mjs";
 import * as connection from "./connection.mjs";
+import * as doctor from "./doctor.mjs";
 import * as embed from "./embed.mjs";
 import * as hook from "./hook.mjs";
 import * as init from "./init.mjs";
@@ -15,6 +18,7 @@ import * as setup from "./setup.mjs";
 
 const COMMANDS = new Map([
   ["setup", setup.run],
+  ["doctor", doctor.run],
   ["init", init.run],
   ["org", org.run],
   ["project", project.run],
@@ -29,6 +33,8 @@ const COMMANDS = new Map([
 
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
+const READ_ONLY_COMMANDS = new Set(["doctor"]);
+
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
 const SELF_LOCKING_COMMANDS = new Set(["mcp", "hook", "reflect", "embed", "memory", "queue"]);
@@ -38,7 +44,8 @@ const USAGE = `shift — nightshift configuration
 usage: shift <command> [options]
 
 commands:
-  setup                                     create the configuration home (0700), config.json and secrets.json (0600)
+  setup [--no-model] [--remove]             create the configuration home and register the MCP server, hooks and plugin in the host
+  doctor [--json]                           check the host and the home, one line per check; exits 1 on any failure
   init [path] [--org <n>] [--name <n>]      register the git repository at [path] (default: .) as a project
   org add <name> [--display-name "..."]     create an org
   org list [--json]                         list orgs, their connection slots and project counts
@@ -53,7 +60,7 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the six memory tools
+  mcp                                       start the stdio MCP server that exposes the ten memory and queue tools
   hook session-start|prompt-context|reflect run a hook, reading the event JSON from stdin
   reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground
   embed download                            download the embedding weights into the home (the only network path)
@@ -79,6 +86,8 @@ export function defaultContext() {
     err: (line) => process.stderr.write(`${line}\n`),
     env: process.env,
     fetchImpl: (...args) => fetch(...args),
+    spawnSyncImpl: (file, args, options) => spawnSync(file, args, options),
+    warmupImpl: (options, env) => warmupModel(options, env),
     stdin: process.stdin,
     stdout: process.stdout,
     saveConfig,
@@ -88,6 +97,7 @@ export function defaultContext() {
 
 // Tells whether the command runs without the configuration write lock: it only reads, or it owns its own concurrency control.
 function skipsLock(command, subcommand) {
+  if (READ_ONLY_COMMANDS.has(command)) return true;
   if (SELF_LOCKING_COMMANDS.has(command)) return true;
   if (command === "setup" || command === "init") return false;
   return READ_ONLY_SUBCOMMANDS.has(subcommand);
@@ -98,22 +108,19 @@ export async function main(argv, ctx) {
   const [command, ...rest] = argv;
   if (!command || HELP_FLAGS.has(command)) {
     ctx.out(USAGE);
-    return;
+    return 0;
   }
   const handler = COMMANDS.get(command);
   if (!handler) throw new UserError(`unknown command \`${command}\`; run \`shift --help\``);
-  if (skipsLock(command, rest[0])) {
-    await handler(rest, ctx);
-    return;
-  }
-  await withLock(ctx.env, () => handler(rest, ctx));
+  if (skipsLock(command, rest[0])) return await handler(rest, ctx);
+  return await withLock(ctx.env, () => handler(rest, ctx));
 }
 
 // Runs the CLI and returns the exit code: the only place that turns an error into a code.
 export async function run(argv, ctx = defaultContext()) {
   try {
-    await main(argv, ctx);
-    return 0;
+    const result = await main(argv, ctx);
+    return typeof result === "number" ? result : 0;
   } catch (err) {
     if (err instanceof UserError) {
       ctx.err(`shift: ${err.message}`);

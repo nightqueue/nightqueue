@@ -20,6 +20,8 @@ async function importSqlite() {
 
 const { DatabaseSync } = await importSqlite();
 
+export const DB_USER_VERSION = 2;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lessons (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,7 +253,7 @@ function migrate(db) {
     db.exec("INSERT INTO memory_fts(memory_fts) VALUES('rebuild')");
     db.exec("PRAGMA user_version = 1");
   }
-  if (version < 2) db.exec("PRAGMA user_version = 2");
+  if (version < DB_USER_VERSION) db.exec(`PRAGMA user_version = ${DB_USER_VERSION}`);
 }
 
 // Migrates the database, turning a Node build without FTS5 into an actionable message.
@@ -282,6 +284,11 @@ export function openDb(env = process.env) {
   withWriteRetry(() => initConnection(db, path));
   connections.set(path, db);
   return db;
+}
+
+// Opens the database read-only and outside the connection cache, for a caller that must never create or migrate it.
+export function openDbReadOnly(env = process.env) {
+  return new DatabaseSync(dbPath(env), { readOnly: true });
 }
 
 // Closes the cached connection of a home, so a test can reopen it from scratch.

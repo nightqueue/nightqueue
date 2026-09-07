@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const FAKE_CLAUDE = fileURLToPath(new URL("./fake-claude.mjs", import.meta.url));
+export const FAKE_CLAUDE = fileURLToPath(new URL("./fake-claude-stream.mjs", import.meta.url));
 
 // Writes the plan of the fake `claude` and points the environment at it, one attempt per entry.
 export function useFakeClaude(env, dir, attempts) {

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -8,6 +7,7 @@ import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { addJob, claimJobById, claimNextJob, finishJob, getJob, peekNextJob } from "../../src/memory/jobs.mjs";
 import { acquire } from "../../src/queue/claim.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
+import { initGitRepo } from "../../test-support/git.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const WORKER = "host:1000";
@@ -16,9 +16,7 @@ const CAP = 4;
 
 // Registers a REAL git repository (not the `.git` directory double of makeProject) as a project.
 function makeRealGitProject(t, env, name) {
-  const path = makeDir(t, `repo-${name}`);
-  execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q", path]);
-  execFileSync("git", ["-C", path, "commit", "--allow-empty", "-q", "-m", "init"]);
+  const path = initGitRepo(makeDir(t, `repo-${name}`));
   saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path, name }).config, env);
   return path;
 }

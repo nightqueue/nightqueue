@@ -1,0 +1,12 @@
+{
+  "name": "nightshift",
+  "owner": { "name": "nightshift" },
+  "description": "The nightshift pipeline plugin, installed from the package itself.",
+  "plugins": [
+    {
+      "name": "nightshift",
+      "source": "./plugin",
+      "description": "Autonomous coding pipeline: triage, exploration, architecture, implementation, adversarial QA and functional verification, run by a team of subagents."
+    }
+  ]
+}

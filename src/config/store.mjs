@@ -19,7 +19,7 @@ export function writeFileAtomic(filePath, content, { mode } = {}) {
 }
 
 // Returns the permission bits of the path, or null when it is missing.
-function modeOf(path) {
+export function modeOf(path) {
   const stats = statSync(path, { throwIfNoEntry: false });
   return stats ? stats.mode & 0o777 : null;
 }

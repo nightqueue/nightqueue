@@ -3,14 +3,19 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { run } from "../src/cli/index.mjs";
 import { UserError } from "../src/config/errors.mjs";
 import { lockPath, withLock } from "../src/config/lock.mjs";
+import { assertIsolatedEnv, isolatedHostVars } from "../test-support/host.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/shift.mjs", import.meta.url));
 const RACE_ATTEMPTS = 8;
+const HOST_DIR = mkdtempSync(join(tmpdir(), "nightshift-lock-host-"));
+const HOST_VARS = isolatedHostVars(HOST_DIR);
+
+after(() => rmSync(HOST_DIR, { recursive: true, force: true }));
 
 // Creates an isolated temporary home and removes it at the end of the test.
 function makeEnv(t) {
@@ -30,7 +35,7 @@ function makeContext(env) {
 function shiftAsync(home, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI, ...args], {
-      env: { ...process.env, NIGHTSHIFT_HOME: home },
+      env: assertIsolatedEnv({ ...process.env, ...HOST_VARS, NIGHTSHIFT_HOME: home }),
       stdio: ["ignore", "ignore", "pipe"],
     });
     let stderr = "";
@@ -46,8 +51,8 @@ function shiftAsync(home, args) {
 // Runs one round of two concurrent `org add` and reports what survived in config.json.
 async function runRace(t) {
   const home = makeEnv(t).NIGHTSHIFT_HOME;
-  const setup = spawnSync(process.execPath, [CLI, "setup"], {
-    env: { ...process.env, NIGHTSHIFT_HOME: home },
+  const setup = spawnSync(process.execPath, [CLI, "setup", "--no-model"], {
+    env: assertIsolatedEnv({ ...process.env, ...HOST_VARS, NIGHTSHIFT_HOME: home }),
     encoding: "utf8",
   });
   assert.equal(setup.status, 0, `setup failed (stderr: ${setup.stderr})`);

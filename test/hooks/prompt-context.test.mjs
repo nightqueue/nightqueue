@@ -4,7 +4,7 @@ import { promptBody, runPromptContext } from "../../src/hooks/prompt-context.mjs
 import { nextSeq, recordInjected, seenRefs } from "../../src/hooks/state.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const LEAK_PROMPT = "the worker leaks a file descriptor when the run fails";
 
@@ -65,6 +65,26 @@ test("after twenty prompts an injected lesson becomes eligible again", async (t)
   assert.deepEqual([...seenRefs("s1", {}, env)], []);
   const again = await runPromptContext({ input: { session_id: "s1", cwd: repo, prompt: LEAK_PROMPT }, env });
   assert.match(again, new RegExp(`\\[L${id}\\]`));
+});
+
+test("a working directory outside every registered project leaks nothing into the prompt", async (t) => {
+  const env = makeHome(t, "hook-prompt-outside");
+  makeProject(t, env, "alpha");
+  addLesson(env, { title: "the worker leaks a file descriptor on failure" });
+  saveMemory({ project: "alpha", key: "descriptor", value: "the worker owns the descriptor pool" }, env);
+  saveLesson(
+    {
+      project: null,
+      title: "a global lesson about the fun\u00e7\u00e3o that leaks a file descriptor",
+      root_cause: "the early return skipped the close",
+      solution: "close it in a finally block",
+      prevention: "always close the descriptor in a finally block",
+    },
+    env,
+  );
+  const outside = makeDir(t, "hook-prompt-outside-cwd");
+
+  assert.equal(await runPromptContext({ input: { session_id: "s1", cwd: outside, prompt: LEAK_PROMPT }, env }), "");
 });
 
 test("the reflection process gets no prompt block", async (t) => {

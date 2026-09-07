@@ -23,8 +23,9 @@ pipelines unattended ships too, with its own four tools (see `## Queue`). The
 plugin in `plugin/` is the pipeline half.
 
 What is still missing: the scheduler that would start the queue by itself at
-night, any cockpit over it, and any automatic registration in `~/.claude` - the
-MCP server and the hooks have to be wired into the host by hand.
+night, and any cockpit over it. Registering the MCP server, the hooks and the
+plugin in the host is no longer a manual step - `shift setup` does it (see
+`## Install`), and `shift doctor` says whether it took (see `## Doctor`).
 
 ## What ships today
 
@@ -39,6 +40,10 @@ MCP server and the hooks have to be wired into the host by hand.
   of the queue.
 - `shift queue` - the unattended queue: enqueue a request, run it through
   `/nightshift:resolve` and get a pull request back (see `## Queue`).
+- `shift setup` - registers the MCP server, the three hooks and the plugin in
+  the host, idempotently and reversibly (see `## Install`).
+- `shift doctor` - the read-only diagnosis of the host and the home (see
+  `## Doctor`).
 
 ## Requirements
 
@@ -61,7 +66,57 @@ the report, and the run continues - that covers `index_save` and `pipeline_log`,
 `lesson_save`, which the Phase 0 critique gate calls when it avoided a wrong execution. What
 stops a run is the server being **absent**, never it being empty.
 
-## Try it
+## Install
+
+```sh
+npm install -g nightshift                      # or `npm install` in a clone
+shift setup                                    # register everything in the host
+shift init                                     # register this repository as a project
+echo "$GITHUB_TOKEN" | shift connection add gh --type github
+```
+
+Restart Claude Code and the pipeline answers as `/nightshift:resolve`. To check
+the result of all of it at any point, run `shift doctor`.
+
+`shift setup` is idempotent and prints the state of every step (`created`,
+`already present` or `updated`), in this order:
+
+1. the configuration home (`0700`), `config.json` and `secrets.json` (`0600`).
+2. the MCP server `nightshift` at **user** scope, started as
+   `node <package>/bin/shift.mjs mcp`.
+3. the three hooks in `<claude config>/settings.json`: `SessionStart`,
+   `UserPromptSubmit` and `SessionEnd`.
+4. this package as a local marketplace, plus the plugin installed from it.
+5. the embedding weights (the only step that opens the network).
+
+Two flags: `--no-model` skips step 5, and `--remove` undoes steps 2 to 4 -
+the MCP server, the three hook entries, the plugin and the marketplace - while
+leaving `$NIGHTSHIFT_HOME` exactly where it is, database included.
+
+**Coexistence with hooks of other tools.** The merge into `settings.json` is not
+destructive: every entry that is not this package's is left as it is, matcher
+included, and events nightshift does not use are never even read. The file is
+backed up as `settings.json.bak-<timestamp>` before the first change of a run,
+and a run that has nothing to change does not rewrite the file at all - so a
+second `shift setup` leaves it byte for byte identical. A `settings.json` that
+is not valid JSON stops the step with an error instead of being overwritten.
+
+The hooks are registered at user scope, so they run in **every** Claude Code
+session of the machine - but the two that inject context produce no output at
+all outside a directory registered with `shift init`. The exception is
+`SessionEnd`, the reflection, which spends tokens on any session it sees: not
+registering it, or `NIGHTSHIFT_REFLECT=1`, turns it off (see `## Memory`).
+
+If the `claude` CLI is missing or one of its subcommands fails, the setup does
+not stop: it prints the step as `failed`, prints the exact command to run by
+hand, finishes the remaining steps and points at `shift doctor`. The hooks are
+plain file writes, so they land even with no `claude` at all.
+
+`CLAUDE_CONFIG_DIR` is honored everywhere, so a throwaway host is one variable
+away. `NIGHTSHIFT_CLAUDE_BIN` chooses which `claude` binary the setup and the
+diagnosis call.
+
+## Try it without installing
 
 ```
 claude --plugin-dir ./plugin
@@ -69,18 +124,19 @@ claude --plugin-dir ./plugin
 
 The plugin loads that way, but `/nightshift:resolve` stops at the Phase 0 preflight until an
 MCP server named `nightshift` is connected. `shift mcp` is that server: it speaks the protocol
-over stdio and exposes those six tools plus the four of the queue. Registering it in the host
-is still manual, and so is registering the hooks.
+over stdio and exposes those six tools plus the four of the queue, and `shift setup` is what
+registers it.
 
 ## The `shift` CLI
 
 `bin/shift.mjs` is the CLI: it manages orgs, projects and the connections (and
 their secrets), and it drives the memory runtime.
 
-- `shift --help` lists every command: `setup`, `init`, `org`, `project`,
-  `connection`, `mcp`, `hook`, `reflect`, `embed`, `memory` and `queue`.
+- `shift --help` lists every command: `setup`, `doctor`, `init`, `org`,
+  `project`, `connection`, `mcp`, `hook`, `reflect`, `embed`, `memory` and
+  `queue`.
 - Exit codes: `0` ok, `1` user error (a single line on stderr), `2` unexpected
-  error (a stack on stderr).
+  error (a stack on stderr). `shift doctor` also exits `1` when a check fails.
 - Every `list` accepts `--json`; on `--json`, stdout is either valid JSON or
   empty, because warnings and errors always go to stderr.
 
@@ -119,7 +175,9 @@ on SQLite for concurrency, so a running server - or a runner that works all
 night - never blocks a `shift init`.
 
 ```sh
-shift setup                                   # create the home, config.json and secrets.json
+shift setup                                   # create the home and register everything in the host
+shift setup --no-model --remove               # ...skip the weights, or undo the registrations
+shift doctor --json                           # check the host and the home, exit 1 on any failure
 shift init                                    # register the current git repository as a project
 shift init ~/code/api --org acme --name api   # ...or an explicit path, org and name
 
@@ -197,8 +255,10 @@ rest. When a query matched nothing, the same recent list comes back marked
 - `shift hook reflect` answers `{}` immediately and leaves a detached worker
   reading the transcript.
 
-None of them is registered anywhere by this repository: wiring them into the
-host is a manual step.
+`shift setup` registers the three of them at user scope, and `shift setup
+--remove` takes them out again (see `## Install`). The two that inject context
+answer with nothing when the working directory is outside a project registered
+with `shift init`.
 
 **Reflection.** The detached worker reads only the bytes appended to the
 transcript since its last run, and only when 60 seconds have passed since the
@@ -231,8 +291,9 @@ shift memory stats [--json]   # counts per project
 | `NIGHTSHIFT_EMBED_DISABLED` | `1` turns the semantic side off; the recall stays BM25 only |
 | `NIGHTSHIFT_EMBED_DEADLINE_MS` | deadline of the embedding in the prompt hook, default `800` |
 | `NIGHTSHIFT_REFLECT_MODEL` | model of the reflection, default `haiku` |
-| `NIGHTSHIFT_CLAUDE_BIN` | path of the `claude` CLI used by the reflection and by the queue runner |
+| `NIGHTSHIFT_CLAUDE_BIN` | path of the `claude` CLI used by the reflection, by the queue runner, by `shift setup` and by `shift doctor` |
 | `NIGHTSHIFT_JOB_ID` | set by the runner in the environment of the job it spawns, never read from outside |
+| `CLAUDE_CONFIG_DIR` | configuration directory of the host that `shift setup` and `shift doctor` read and write, default `~/.claude` |
 | `NIGHTSHIFT_REFLECT` | `1` marks a process as the reflection itself: no context block and no new reflection |
 | `NIGHTSHIFT_MODEL`, `NIGHTSHIFT_SESSION_ID` | recorded in `pipeline_runs` by the server process |
 
@@ -335,6 +396,22 @@ after the pull request, keeps no token budget, ships no launchd (or any other)
 scheduler, sends no notification and has no cockpit. It also never changes the
 state of a git repository: the only git commands it runs are reads of the
 checkout, and every branch and worktree is created by the pipeline itself.
+
+## Doctor
+
+```sh
+shift doctor            # one line per check: ok, warn or fail
+shift doctor --json     # the same report, as the only thing on stdout
+```
+
+`shift doctor` reads the host and the home and writes nothing: it never creates
+the database, never touches `settings.json` and never asks `claude` about
+anything but its version. It checks the Node version, the `claude` and `gh`
+CLIs, `config.json`, the mode of `secrets.json`, the MCP registration, each of
+the three hooks, the plugin, the embedding weights, the optional embedding
+library, the schema version of the database, the pause sentinel of the queue,
+the jobs whose runner died and every registered project. It exits `1` when any
+check fails, `0` otherwise - a `warn` never fails the run.
 
 ## Runtime contract
 
