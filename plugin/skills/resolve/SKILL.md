@@ -191,6 +191,14 @@ agent, print a line in this format first:
    the bug and lead to an inverted diagnosis. With no identifier in the ticket, record
    "not identified" and flag in triage that the cause depends on getting the real account.
 
+   **A brief with numbered stages.** When the request carries numbered stages
+   ("Stages:", "1) ... 2) ...", an ordered list), each stage is a unit of the run and the
+   order is binding: the Phase 3 plan is written per stage, in order; Phase 4 implements
+   stage by stage with the verifier between stages (a stage that fails is fixed before the
+   next one starts, never skipped); the execution table and the pull request list the
+   stages with their status. Stages are the internal order of ONE job, never a reason to
+   split the delivery: it is still one branch and ONE pull request at the end.
+
 2. **Classify the complexity** of the task to choose the execution track:
 
    | Tier | Criteria | Track |
@@ -232,6 +240,20 @@ agent, print a line in this format first:
    - `PROPOSE-ALTERNATIVE` → present the alternative and the trade-off to the user in
      ≤ 5 lines; wait for the decision before continuing.
    - `ASK` → ask ONE objective question and wait.
+
+   **A brief that depends on another job's pull request is not executable here.** When the
+   request conditions the work on another job ("after job #N", "once PR #N is merged",
+   "depends on job ..."), the verdict is `PROPOSE-ALTERNATIVE` — this case adds no new
+   verdict — and the alternative is fixed. Print it as a real `## Requires user
+   confirmation` heading (never inside a code fence — the runner ignores fenced lines, and
+   this heading is the marker that keeps the job in `gate`), with exactly this body:
+
+   ```
+   This brief depends on another job's pull request. A job must be self-contained: fold this work into that job (as a stage) or make it independent. Nothing was changed.
+   ```
+
+   Stop there, before step 3 — nothing was created, since the worktree of step 4 does not
+   exist yet — and record `gate_stop: critique` in the run telemetry (`pipeline_log`).
 
    Rules: a non-`EXECUTE` verdict requires concrete evidence — not a style
    opinion; do not stall the pipeline over preciousness. These count as evidence: lessons and

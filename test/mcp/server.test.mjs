@@ -63,6 +63,25 @@ test("the server exposes exactly the ten tools of the contract", async (t) => {
   assert.deepEqual(names, CONTRACT_TOOLS);
 });
 
+test("the queue_add tool states the job-cutting rule on the tool and on the prompt field", async (t) => {
+  const env = makeHome(t, "mcp-queue-add-rule");
+  const client = await connect(t, env);
+  const tools = (await client.listTools()).tools;
+
+  const add = tools.find((tool) => tool.name === "queue_add");
+  assert.ok(add, "the queue_add tool is missing");
+  for (const word of ["self-contained", "stages"]) {
+    assert.ok(add.description.includes(word), `\`${word}\` is missing from the queue_add description`);
+    assert.ok(
+      add.inputSchema.properties.prompt.description?.includes(word),
+      `\`${word}\` is missing from the description of the prompt parameter`,
+    );
+  }
+
+  const status = tools.find((tool) => tool.name === "queue_status");
+  assert.ok(status.description.startsWith("State of the queue"), "queue_status must not be touched");
+});
+
 test("a lesson saved through the server comes back in the recall, without its embedding", async (t) => {
   const env = makeHome(t, "mcp-lesson");
   makeProject(t, env, "alpha");

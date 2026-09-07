@@ -19,6 +19,18 @@ const USAGE = {
   log: "shift queue log <id> [--follow]",
 };
 
+const ADD_HELP_FLAGS = new Set(["--help", "-h"]);
+
+const ADD_HELP = `usage: ${USAGE.add}
+
+One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job
+with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs
+another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in
+parallel and merge in any order.
+
+example:
+  shift queue add "Self-contained install. Stages: 1) runtime under ~/.nightshift; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."`;
+
 // Waits the given number of milliseconds.
 function sleep(ms) {
   return new Promise((done) => setTimeout(done, ms));
@@ -71,6 +83,10 @@ async function runInForeground(job, ctx) {
 
 // Runs `queue add`, with the project taken from the arguments or from the current directory.
 async function runAdd(argv, ctx) {
+  if (argv.length === 1 && ADD_HELP_FLAGS.has(argv[0])) {
+    ctx.out(ADD_HELP);
+    return 0;
+  }
   const { values, positionals } = parseAdd(argv);
   const target = resolveTarget(loadConfig(ctx.env, { warn: ctx.err }), positionals, ctx);
   const prompt = target.words.join(" ").trim();

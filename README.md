@@ -460,6 +460,29 @@ scheduler, sends no notification and has no cockpit. It also never changes the
 state of a git repository: the only git commands it runs are reads of the
 checkout, and every branch and worktree is created by the pipeline itself.
 
+## Writing a job
+
+One job is one self-contained deliverable that can be reviewed and merged on its
+own. Large work is ONE job with numbered stages written in the prompt — never
+several jobs that depend on each other. A job that needs another job's pull
+request merged first is cut wrong: fold it into that job. Independent jobs may
+run in parallel and merge in any order.
+
+```sh
+shift queue add "Self-contained install. Stages: 1) runtime under ~/.nightshift; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."
+```
+
+**There is no `--after`.** A job that waits for another job's pull request is an
+incomplete deliverable: what it lands on main is half a change that nobody can
+review on its own. It also breaks the unattended queue, which claims jobs by
+priority across projects and has no way to hold one back until a pull request it
+never sees is merged.
+
+**Branch chains are v1.1**, and only for work that genuinely does not fit in one
+run. Until then, the answer to "this depends on that" is one job with stages.
+
+`shift queue add --help` prints this rule and the example.
+
 ## Doctor
 
 ```sh

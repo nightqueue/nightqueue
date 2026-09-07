@@ -53,6 +53,26 @@ test("--help lists the queue commands next to the ones that were already there",
   }
 });
 
+test("queue add --help prints the job-cutting rule and the example, and enqueues nothing", (t) => {
+  const env = makeCliHome(t, "cli-add-help");
+  for (const flag of ["--help", "-h"]) {
+    const helped = shift(env, ["queue", "add", flag]);
+    assert.equal(helped.status, 0, helped.stderr);
+    assert.ok(helped.stdout.includes("shift queue add [project] <prompt...>"), `\`${flag}\` did not print the usage line`);
+    assert.ok(helped.stdout.includes("self-contained deliverable"), `\`${flag}\` did not print the rule`);
+    assert.ok(helped.stdout.includes("numbered stages"), `\`${flag}\` did not print the rule`);
+    assert.ok(
+      helped.stdout.includes('shift queue add "Self-contained install. Stages: 1) runtime under ~/.nightshift;'),
+      `\`${flag}\` did not print the example`,
+    );
+  }
+  assert.equal(getJob(1, env), null, "the help enqueued a job");
+
+  const queued = shift(env, ["queue", "add", "alpha", "fix the worker"], { cwd: makeDir(t, "cli-add-help-outside") });
+  assert.equal(queued.status, 0, queued.stderr);
+  assert.equal(getJob(1, env).prompt, "fix the worker");
+});
+
 test("queue add takes the registered NAME and reports the job it queued", (t) => {
   const env = makeCliHome(t, "cli-add");
   const outside = makeDir(t, "cli-add-outside");

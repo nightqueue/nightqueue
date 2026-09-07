@@ -75,3 +75,27 @@ test("a prompt that only mentions --priority without the -- escape keeps the def
     "the job priority silently changed even though the operator never meant to set --priority",
   );
 });
+
+test("--help is help only as the single argument of queue add; every other shape keeps today's meaning", (t) => {
+  const { env, repo } = makeCliHome(t, "help-flag-collision");
+
+  const midList = shift(env, ["queue", "add", "explain", "the", "--help", "flag", "to", "me"], { cwd: repo });
+  assert.equal(midList.status, 0, midList.stderr);
+  assert.equal(getJob(1, env).prompt, "explain the --help flag to me", "a prompt mentioning --help lost a word");
+
+  const quoted = shift(env, ["queue", "add", "alpha", "fix the --help output"], { cwd: repo });
+  assert.equal(quoted.status, 0, quoted.stderr);
+  assert.equal(getJob(2, env).prompt, "fix the --help output");
+
+  const bareToken = shift(env, ["queue", "add", "help"], { cwd: repo });
+  assert.equal(bareToken.status, 0, bareToken.stderr);
+  assert.equal(getJob(3, env).prompt, "help", "the bare token `help` stopped being a prompt");
+
+  const trailing = shift(env, ["queue", "add", "alpha", "fix", "the", "--help"], { cwd: repo });
+  assert.equal(trailing.status, 1, trailing.stdout);
+  assert.match(trailing.stderr, /Unknown option '--help'/);
+
+  const leading = shift(env, ["queue", "add", "--help", "fix", "the", "worker"], { cwd: repo });
+  assert.equal(leading.status, 1, leading.stdout);
+  assert.match(leading.stderr, /Unknown option '--help'/);
+});
