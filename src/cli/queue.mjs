@@ -1,7 +1,7 @@
 import { closeSync, existsSync, openSync, readSync, rmSync, statSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
-import { projectByName } from "../config/projects.mjs";
+import { projectByName, resolveProject } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { addJob, cancelJob, countsByStatus, getJob, jobView, listJobs } from "../memory/jobs.mjs";
 import { runCycle, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
@@ -10,7 +10,7 @@ import { checkArgs, parseCommand } from "./args.mjs";
 const FOLLOW_POLL_MS = 1000;
 
 const USAGE = {
-  add: "shift queue add <project> <prompt> [--priority <n>] [--max-attempts <n>] [--timeout <s>]",
+  add: "shift queue add [project] <prompt...> [--run] [--priority <n>] [--max-attempts <n>] [--timeout <s>]",
   status: "shift queue status [id] [--limit <n>] [--json]",
   run: "shift queue run [--job <id>] [--max <n>] [--watch [seconds]] [--dry] [--json]",
   cancel: "shift queue cancel <id> [--reason <text>]",
@@ -44,16 +44,41 @@ function normalizeWatchArgv(argv) {
   );
 }
 
-// Runs `queue add`, refusing a project that is not registered by NAME.
+// Chooses the project of the job: the first positional when it is a registered NAME, otherwise the project of the current directory.
+function resolveTarget(config, positionals, ctx) {
+  const named = projectByName(config, positionals[0]);
+  if (named) return { project: named, words: positionals.slice(1), fromCwd: false };
+  const cwd = ctx.cwd ?? process.cwd();
+  const resolved = resolveProject(config, { cwd });
+  if (!resolved) {
+    throw new UserError(`no project registered for ${cwd}; run \`shift init\` here, or pass the project NAME (\`shift project list\`)`);
+  }
+  return { project: resolved, words: positionals, fromCwd: true };
+}
+
+// Runs the job in the foreground and turns its outcome into the exit code: 0 only when it finished as `done`.
+async function runInForeground(job, ctx) {
+  ctx.out(`running job #${job.id} in the foreground; follow the stream with \`shift queue log ${job.id} --follow\``);
+  const cycle = await runCycle({ jobId: job.id, max: 1, env: ctx.env });
+  const processed = cycle.processed.find((entry) => entry.id === job.id);
+  if (!processed) {
+    ctx.out(`job #${job.id} did not start (${cycle.reason}); it stays in the queue`);
+    return 1;
+  }
+  ctx.out(formatProcessed(processed));
+  return processed.status === "done" ? 0 : 1;
+}
+
+// Runs `queue add`, with the project taken from the arguments or from the current directory.
 async function runAdd(argv, ctx) {
   const { values, positionals } = parseAdd(argv);
-  const [name, prompt] = positionals;
-  if (!projectByName(loadConfig(ctx.env, { warn: ctx.err }), name)) {
-    throw new UserError(`unknown project \`${name}\`; pass the registered project NAME, not a path (\`shift project list\`)`);
-  }
+  const target = resolveTarget(loadConfig(ctx.env, { warn: ctx.err }), positionals, ctx);
+  const prompt = target.words.join(" ").trim();
+  if (!prompt) throw new UserError(`missing argument; usage: ${USAGE.add}`);
+  if (target.fromCwd) ctx.out(`project \`${target.project.name}\` resolved from the current directory`);
   const job = addJob(
     {
-      project: name,
+      project: target.project.name,
       prompt,
       priority: requireInt("--priority", values.priority),
       maxAttempts: requireInt("--max-attempts", values["max-attempts"]),
@@ -62,17 +87,64 @@ async function runAdd(argv, ctx) {
     ctx.env,
   );
   ctx.out(`queued job #${job.id} for project \`${job.project}\` (priority ${job.priority}, timeout ${job.timeoutS}s)`);
+  return values.run === true ? await runInForeground(job, ctx) : 0;
 }
 
-// Parses the arguments of `queue add`, which takes exactly the project name and one quoted prompt.
+const ADD_OPTIONS = {
+  priority: { type: "string" },
+  "max-attempts": { type: "string" },
+  timeout: { type: "string" },
+  run: { type: "boolean" },
+};
+
+// Tells whether a token is written as an option, the only shape the edges of `queue add` read as one.
+function isOptionToken(token) {
+  return typeof token === "string" && token.length > 1 && token.startsWith("-") && token !== "--";
+}
+
+// Tells whether an option token takes the token after it as its value.
+function takesNextValue(token) {
+  return !token.includes("=") && ADD_OPTIONS[token.slice(2)]?.type === "string";
+}
+
+// End of the leading run of options of `queue add`, where the free text begins.
+function optionPrefixEnd(argv) {
+  let index = 0;
+  while (index < argv.length && isOptionToken(argv[index])) {
+    index += takesNextValue(argv[index]) && index + 1 < argv.length ? 2 : 1;
+  }
+  return Math.min(index, argv.length);
+}
+
+// Start of the trailing run of options of `queue add`, where the free text ends.
+function optionSuffixStart(tokens) {
+  let index = tokens.length;
+  while (index > 0) {
+    if (isOptionToken(tokens[index - 1])) index -= 1;
+    else if (index > 1 && isOptionToken(tokens[index - 2]) && takesNextValue(tokens[index - 2])) index -= 2;
+    else break;
+  }
+  return index;
+}
+
+// Splits the argv of `queue add` into the options of the two edges and the free text between them, kept byte for byte.
+function splitAddArgv(argv) {
+  const prefixEnd = optionPrefixEnd(argv);
+  const rest = argv.slice(prefixEnd);
+  const escape = rest.indexOf("--");
+  if (escape !== -1) {
+    return { optionTokens: argv.slice(0, prefixEnd), words: [...rest.slice(0, escape), ...rest.slice(escape + 1)] };
+  }
+  const suffixStart = optionSuffixStart(rest);
+  return { optionTokens: [...argv.slice(0, prefixEnd), ...rest.slice(suffixStart)], words: rest.slice(0, suffixStart) };
+}
+
+// Parses the arguments of `queue add`: an optional project name and the words of the prompt, with options read only at the edges.
 function parseAdd(argv) {
-  const parsed = parseCommand(argv, {
-    priority: { type: "string" },
-    "max-attempts": { type: "string" },
-    timeout: { type: "string" },
-  });
-  checkArgs(parsed.positionals, { min: 2, max: 2, usage: USAGE.add });
-  return parsed;
+  const { optionTokens, words } = splitAddArgv(argv);
+  const { values } = parseCommand(optionTokens, ADD_OPTIONS);
+  checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
+  return { values, positionals: words };
 }
 
 // One line of the job table of `queue status`.
@@ -134,11 +206,15 @@ function formatDry(report) {
   ];
 }
 
+// Report line of one processed job, with only the fields the operator may read.
+function formatProcessed(job) {
+  const details = [job.code, job.prUrl, job.error].filter(Boolean);
+  return `job #${job.id} ${job.status}${details.map((detail) => ` ${detail}`).join("")}`;
+}
+
 // One line of report for each job the cycle processed.
 function printCycle(cycle, ctx) {
-  for (const job of cycle.processed) {
-    ctx.out(`job #${job.id} ${job.status}${job.code ? ` ${job.code}` : ""}${job.prUrl ? ` ${job.prUrl}` : ""}`);
-  }
+  for (const job of cycle.processed) ctx.out(formatProcessed(job));
   if (!cycle.processed.length) ctx.out(`queue: nothing to run (${cycle.reason})`);
 }
 
@@ -234,12 +310,12 @@ const SUBCOMMANDS = new Map([
   ["log", runLog],
 ]);
 
-// Dispatches the subcommands of `shift queue`.
+// Dispatches the subcommands of `shift queue`, returning the exit code the subcommand decided.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);
   if (!handler) {
     throw new UserError(`unknown queue subcommand \`${sub ?? ""}\`; use: ${[...SUBCOMMANDS.keys()].join(", ")}`);
   }
-  await handler(rest, ctx);
+  return await handler(rest, ctx);
 }

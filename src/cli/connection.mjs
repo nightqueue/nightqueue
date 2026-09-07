@@ -22,7 +22,7 @@ function formatConnection(connection) {
 }
 
 // Writes the config after the secret, pointing at the recovery when that write fails.
-function saveConfigAfterSecret({ config, ctx, name, org }) {
+export function saveConfigAfterSecret({ config, ctx, name, org }) {
   try {
     ctx.saveConfig(config, ctx.env);
   } catch (err) {

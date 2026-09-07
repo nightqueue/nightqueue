@@ -1,3 +1,4 @@
+import { createInterface } from "node:readline/promises";
 import { UserError } from "../config/errors.mjs";
 
 const CTRL_C = 0x03;
@@ -54,4 +55,26 @@ export async function readSecret({ stdin = process.stdin, stdout = process.stdou
   const secret = raw.replace(/\r?\n$/, "");
   if (!secret) throw new UserError("no secret on stdin");
   return secret;
+}
+
+// Asks one line, letting an answer win over the close readline emits right before it, and resolving to null when the input ends with no answer.
+function askLine(rl, question) {
+  return new Promise((resolve) => {
+    rl.once("close", () => setImmediate(() => resolve(null)));
+    rl.question(question).then(resolve, () => resolve(null));
+  });
+}
+
+// Asks a yes/no question with echo: an empty answer means yes, anything else than y/yes (the end of the input included) means no.
+export async function confirm({ stdin = process.stdin, stdout = process.stdout, question }) {
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    const answer = await askLine(rl, question);
+    if (answer === null) return false;
+    const normalized = answer.trim().toLowerCase();
+    return normalized === "" || normalized === "y" || normalized === "yes";
+  } finally {
+    rl.close();
+    stdin.pause?.();
+  }
 }

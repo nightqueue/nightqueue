@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 import { closeDb } from "../src/memory/db.mjs";
 import { makeDir } from "./memory.mjs";
 
-const FAKE_SOURCE = fileURLToPath(new URL("./fake-claude-host.mjs", import.meta.url));
+const FAKE_CLAUDE_SOURCE = fileURLToPath(new URL("./fake-claude-host.mjs", import.meta.url));
+const FAKE_GH_SOURCE = fileURLToPath(new URL("./fake-gh.mjs", import.meta.url));
+
+export const FAKE_GH_TOKEN = "gh-fake-token-do-not-print";
+export const FAKE_GH_LOGIN = "octocat";
 
 const OWN_ENV_KEYS = [
   "NIGHTSHIFT_HOME",
@@ -13,10 +17,15 @@ const OWN_ENV_KEYS = [
   "NIGHTSHIFT_CLAUDE_BIN",
   "NIGHTSHIFT_FAKE_CLAUDE_LOG",
   "NIGHTSHIFT_FAKE_CLAUDE_EXIT",
+  "NIGHTSHIFT_GH_BIN",
+  "NIGHTSHIFT_FAKE_GH_LOG",
+  "NIGHTSHIFT_FAKE_GH_STATE",
+  "NIGHTSHIFT_FAKE_GH_TOKEN",
+  "NIGHTSHIFT_FAKE_GH_LOGIN",
   "CLAUDE_CONFIG_DIR",
 ];
 
-const ISOLATION_KEYS = ["NIGHTSHIFT_HOME", "CLAUDE_CONFIG_DIR", "NIGHTSHIFT_CLAUDE_BIN"];
+const ISOLATION_KEYS = ["NIGHTSHIFT_HOME", "CLAUDE_CONFIG_DIR", "NIGHTSHIFT_CLAUDE_BIN", "NIGHTSHIFT_GH_BIN"];
 
 // Refuses an environment that would let a test reach the real host instead of a temporary one.
 export function assertIsolatedEnv(env) {
@@ -25,10 +34,10 @@ export function assertIsolatedEnv(env) {
   throw new Error(`this environment is not isolated from the real host (missing ${missing.join(", ")}); build it with makeHostEnv or isolatedHostVars`);
 }
 
-// Copies the fake claude CLI into the temporary directory, always executable.
-function installFakeClaude(dir) {
-  const bin = join(dir, "claude");
-  copyFileSync(FAKE_SOURCE, bin);
+// Copies one fake CLI into the temporary directory, always executable.
+function installFakeBin(dir, source, name) {
+  const bin = join(dir, name);
+  copyFileSync(source, bin);
   chmodSync(bin, 0o755);
   return bin;
 }
@@ -42,14 +51,19 @@ function readCalls(log) {
     .map((line) => JSON.parse(line));
 }
 
-// Environment variables that keep any process away from the real host: isolated config dir plus the fake claude CLI.
+// Environment variables that keep any process away from the real host: isolated config dir plus the fake claude and gh CLIs.
 export function isolatedHostVars(dir) {
   const configDir = join(dir, "claude-config");
   mkdirSync(configDir, { recursive: true });
   return {
     CLAUDE_CONFIG_DIR: configDir,
-    NIGHTSHIFT_CLAUDE_BIN: installFakeClaude(dir),
+    NIGHTSHIFT_CLAUDE_BIN: installFakeBin(dir, FAKE_CLAUDE_SOURCE, "claude"),
     NIGHTSHIFT_FAKE_CLAUDE_LOG: join(dir, "claude-calls.log"),
+    NIGHTSHIFT_GH_BIN: installFakeBin(dir, FAKE_GH_SOURCE, "gh"),
+    NIGHTSHIFT_FAKE_GH_LOG: join(dir, "gh-calls.log"),
+    NIGHTSHIFT_FAKE_GH_STATE: "logged-out",
+    NIGHTSHIFT_FAKE_GH_TOKEN: FAKE_GH_TOKEN,
+    NIGHTSHIFT_FAKE_GH_LOGIN: FAKE_GH_LOGIN,
   };
 }
 
@@ -70,6 +84,7 @@ export function makeHostEnv(t, name, { exitCode } = {}) {
     configDir: vars.CLAUDE_CONFIG_DIR,
     settingsPath: join(vars.CLAUDE_CONFIG_DIR, "settings.json"),
     calls: () => readCalls(vars.NIGHTSHIFT_FAKE_CLAUDE_LOG),
+    ghCalls: () => readCalls(vars.NIGHTSHIFT_FAKE_GH_LOG),
     backups: () => readdirSync(vars.CLAUDE_CONFIG_DIR).filter((file) => file.includes(".bak-")),
   };
 }

@@ -41,11 +41,17 @@ function deriveName(abs) {
   return derived;
 }
 
-// Registers a git repository as a project of an org.
-export function addProject(config, { path, name, org } = {}) {
+// Resolves a path and requires it to be an existing git repository, the only gate a project has to pass.
+export function requireGitPath(path) {
   const abs = normalizePath(path ?? ".");
   if (!existsSync(abs)) throw new UserError(`path does not exist: ${abs}`);
   if (!existsSync(join(abs, ".git"))) throw new UserError(`not a git repository (no .git): ${abs}`);
+  return abs;
+}
+
+// Registers a git repository as a project of an org.
+export function addProject(config, { path, name, org } = {}) {
+  const abs = requireGitPath(path);
   const orgName = org ?? config.defaultOrg;
   requireOrg(config, orgName);
   const projectName = name === undefined ? deriveName(abs) : assertName("project", name);

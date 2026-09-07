@@ -68,15 +68,49 @@ stops a run is the server being **absent**, never it being empty.
 
 ## Install
 
+Two commands, from inside the repository you want to work on:
+
 ```sh
-npm install -g nightshift                      # or `npm install` in a clone
+shift init                                 # set the host up and register this repository
+shift queue add "fix the flaky worker" --run   # enqueue the request and run it right here
+```
+
+(`npm install -g nightshift` first, or `npm install` in a clone.)
+
+`shift init` is `shift setup` plus the project registration, in this order: it
+runs every step below, registers the repository of the current directory (or of
+`[path]`) as a project, and then offers to import the token of the GitHub CLI.
+It takes `--no-model` (skip the download of the weights), `--gh` / `--no-gh`
+(see below), `--org` and `--name`. Running it again changes nothing: every step
+reports `already present` and the project reports `already registered`.
+
+**The token of the GitHub CLI.** When `gh` is installed and authenticated and
+the `github` slot of the org is still free, `shift init` on a terminal asks
+`GitHub CLI is authenticated as <login> — import its token as connection "gh"?
+[Y/n]`. A yes reads `gh auth token`, stores it in `secrets.json` (`0600`), binds
+it to the org and checks it against the API; the value never goes through argv,
+stdout or stderr. `--gh` imports without asking, `--no-gh` never even calls the
+binary, and without a terminal nothing is asked - only a line pointing at
+`shift init --gh`. A slot already taken, a connection already named `gh`, a
+missing `gh` or one that is logged out all cost a single line and never an
+error; the manual path stays open:
+
+```sh
+echo "$GITHUB_TOKEN" | shift connection add gh --type github
+```
+
+`NIGHTSHIFT_GH_BIN` chooses which `gh` binary the import calls.
+
+Restart Claude Code and the pipeline answers as `/nightshift:resolve`. To check
+the result of all of it at any point, run `shift doctor`.
+
+**The manual flow**, still supported one step at a time:
+
+```sh
 shift setup                                    # register everything in the host
 shift init                                     # register this repository as a project
 echo "$GITHUB_TOKEN" | shift connection add gh --type github
 ```
-
-Restart Claude Code and the pipeline answers as `/nightshift:resolve`. To check
-the result of all of it at any point, run `shift doctor`.
 
 `shift setup` is idempotent and prints the state of every step (`created`,
 `already present` or `updated`), in this order:
@@ -178,8 +212,9 @@ night - never blocks a `shift init`.
 shift setup                                   # create the home and register everything in the host
 shift setup --no-model --remove               # ...skip the weights, or undo the registrations
 shift doctor --json                           # check the host and the home, exit 1 on any failure
-shift init                                    # register the current git repository as a project
+shift init                                    # set the host up and register the current git repository
 shift init ~/code/api --org acme --name api   # ...or an explicit path, org and name
+shift init --no-model --no-gh                 # ...without the weights and without asking about `gh`
 
 shift org add acme --display-name "Acme"      # create an org
 shift org list --json                         # orgs, connection slots, project counts
@@ -326,6 +361,8 @@ the `## Notice` and the token usage.
 
 ```sh
 shift queue add api "fix the flaky worker" --priority 2   # enqueue a job
+shift queue add "fix the flaky worker"                    # same, for the project of the current directory
+shift queue add fix the flaky worker --run                # enqueue and run it here, in the foreground
 shift queue status [--limit 10] [--json]                  # the tail of the queue plus the counts
 shift queue status 7 [--json]                             # one job, never with its prompt
 shift queue run [--job 7] [--max 2] [--dry]               # claim and run; --dry only reports
@@ -334,6 +371,29 @@ shift queue log 7 [--follow]                              # the raw stream of th
 shift queue cancel 7 --reason "not needed"                # cancel a pending or orphaned job
 shift queue pause | shift queue resume                    # stop claiming new jobs, or claim again
 ```
+
+**The project is optional, the prompt is variadic.** Omitted, the project is the
+one whose registered path contains the current directory (`shift init` is what
+registers it), and the command says which one it picked. Given, the first word
+is the project only when it is a registered NAME; anything else is already part
+of the prompt, so the words of the request need no quotes.
+
+**Options are read only at the two edges of the command line**, before the first
+word of the request and after the last one. Everything between them is the
+prompt, kept exactly as it was typed: `shift queue add explain the --run flag to
+the team` queues those seven words and starts nothing. A prompt that begins or
+ends with a flag is the ambiguous case, and goes after `--`:
+`shift queue add -- explain --run to me`. An option that does not exist is still
+a usage error at either edge, never a silent word of the prompt.
+
+**`--run` runs the job right there**, in the same process, instead of leaving it
+for `shift queue run`. It prints the job id first, then the stream goes to the
+log of the job (`shift queue log <id> --follow`), and the exit code answers only
+about this run: `0` when the job ended as `done`, `1` for any other outcome
+(`gate`, `failed`, `cancelled`, an interrupted run) and `1` when the job never
+started, with the reason on the line `job #<id> did not start (<reason>)` - the
+job stays in the queue. An explicit job id ignores the pause sentinel, so
+`--run` runs even on a paused queue.
 
 **The six states.** A job is `pending` while it waits, `running` while a runner
 owns it under a lease, and then one of four final states: `done` (the run

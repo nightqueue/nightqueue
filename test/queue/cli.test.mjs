@@ -9,13 +9,13 @@ import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream, PR_URL, SLUG } from "../../test-support/streams.mjs";
+import { doneStream, gateStream, PR_URL, SLUG } from "../../test-support/streams.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/shift.mjs", import.meta.url));
 
 // Runs the real CLI in its own process, with the isolated home of the test.
-function shift(env, args) {
-  return spawnSync(process.execPath, [CLI, ...args], { env, encoding: "utf8" });
+function shift(env, args, { cwd } = {}) {
+  return spawnSync(process.execPath, [CLI, ...args], { env, cwd, encoding: "utf8" });
 }
 
 // Registers a real (and empty) git repository as a project of the home.
@@ -34,6 +34,11 @@ function makeCliHome(t, name, attempts = [{ stdout: doneStream(), exitCode: 0 }]
   return env;
 }
 
+// Path of the registered project of a home, the directory a `queue add` without project runs from.
+function projectPath(env) {
+  return loadConfig(env, { warn: () => {} }).projects.alpha.path;
+}
+
 // Enqueues one job of the test project straight in the database.
 function enqueue(env, prompt = "fix the worker") {
   return addJob({ project: "alpha", prompt }, env).id;
@@ -48,20 +53,63 @@ test("--help lists the queue commands next to the ones that were already there",
   }
 });
 
-test("queue add takes the registered NAME, never a path, and reports the job it queued", (t) => {
+test("queue add takes the registered NAME and reports the job it queued", (t) => {
   const env = makeCliHome(t, "cli-add");
-  const queued = shift(env, ["queue", "add", "alpha", "fix the worker", "--priority", "2", "--timeout", "600"]);
+  const outside = makeDir(t, "cli-add-outside");
+  const queued = shift(env, ["queue", "add", "alpha", "fix the worker", "--priority", "2", "--timeout", "600"], { cwd: outside });
   assert.equal(queued.status, 0, queued.stderr);
   assert.match(queued.stdout, /queued job #1 for project `alpha` \(priority 2, timeout 600s\)/);
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
-  const byPath = shift(env, ["queue", "add", "/tmp/alpha", "fix the worker"]);
+  const byPath = shift(env, ["queue", "add", "/tmp/alpha", "fix the worker"], { cwd: outside });
   assert.equal(byPath.status, 1);
-  assert.match(byPath.stderr, /pass the registered project NAME, not a path/);
+  assert.match(byPath.stderr, /no project registered for .*; run `shift init` here, or pass the project NAME/);
 
-  assert.equal(shift(env, ["queue", "add", "ghost", "fix it"]).status, 1);
+  assert.equal(shift(env, ["queue", "add", "ghost", "fix it"], { cwd: outside }).status, 1);
   assert.match(shift(env, ["queue", "add", "alpha", "fix it", "--priority", "0"]).stderr, /`--priority` expects a positive integer/);
   assert.match(shift(env, ["queue", "add", "alpha"]).stderr, /missing argument; usage: shift queue add/);
+});
+
+test("queue add without a project takes the one of the current directory and joins the words of the prompt", (t) => {
+  const env = makeCliHome(t, "cli-add-cwd");
+  const repo = projectPath(env);
+  const queued = shift(env, ["queue", "add", "fix", "the", "flaky", "worker"], { cwd: repo });
+  assert.equal(queued.status, 0, queued.stderr);
+  assert.match(queued.stdout, /project `alpha` resolved from the current directory/);
+  assert.match(queued.stdout, /queued job #1 for project `alpha`/);
+  assert.equal(getJob(1, env).prompt, "fix the flaky worker");
+
+  const escaped = shift(env, ["queue", "add", "--", "explain", "--run", "to", "me"], { cwd: repo });
+  assert.equal(escaped.status, 0, escaped.stderr);
+  assert.equal(getJob(2, env).prompt, "explain --run to me");
+  assert.equal(escaped.stdout.includes("running job"), false, "a prompt that mentions --run ran the job");
+});
+
+test("queue add --run runs the job in the foreground and answers with its outcome", (t) => {
+  const env = makeCliHome(t, "cli-add-run");
+  const ran = shift(env, ["queue", "add", "alpha", "fix the worker", "--run"]);
+  assert.equal(ran.status, 0, ran.stderr);
+  assert.ok(
+    ran.stdout.indexOf("queued job #1") < ran.stdout.indexOf("running job #1"),
+    "the id has to be printed before the job runs",
+  );
+  assert.match(ran.stdout, /running job #1 in the foreground; follow the stream with `shift queue log 1 --follow`/);
+  assert.match(ran.stdout, /job #1 done https:\/\/github\.com\/acme\/api\/pull\/42/);
+  assert.equal(getJob(1, env).status, "done");
+});
+
+test("queue add --run exits 1 on any outcome other than done, and when the job never started", (t) => {
+  const env = makeCliHome(t, "cli-add-run-gate", [{ stdout: gateStream(), exitCode: 0 }]);
+  const gated = shift(env, ["queue", "add", "alpha", "fix the worker", "--run"]);
+  assert.equal(gated.status, 1, gated.stdout);
+  assert.match(gated.stdout, /job #1 gate/);
+  assert.equal(getJob(1, env).status, "gate");
+
+  claimJobById(addJob({ project: "alpha", prompt: "hold the only slot" }, env).id, { worker: "host:4242", cap: 4 }, env);
+  const busy = shift(env, ["queue", "add", "alpha", "fix the parser", "--run"]);
+  assert.equal(busy.status, 1, busy.stdout);
+  assert.match(busy.stdout, /job #3 did not start \(project-busy\); it stays in the queue/);
+  assert.equal(getJob(3, env).status, "pending");
 });
 
 test("queue status --json answers with the jobs and the counts, and never with the prompt", (t) => {

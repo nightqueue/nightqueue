@@ -46,7 +46,7 @@ usage: shift <command> [options]
 commands:
   setup [--no-model] [--remove]             create the configuration home and register the MCP server, hooks and plugin in the host
   doctor [--json]                           check the host and the home, one line per check; exits 1 on any failure
-  init [path] [--org <n>] [--name <n>]      register the git repository at [path] (default: .) as a project
+  init [path] [--no-model] [--gh|--no-gh]   set up the host and register the git repository at [path] (default: .) as a project
   org add <name> [--display-name "..."]     create an org
   org list [--json]                         list orgs, their connection slots and project counts
   org rename <old> <new>                    rename an org and every project pointing at it
@@ -66,7 +66,7 @@ commands:
   embed download                            download the embedding weights into the home (the only network path)
   embed backfill                            compute the embeddings of the lessons that still have none
   memory stats [--json]                     count lessons, memories, index entries and runs per project
-  queue add <project> <prompt>              enqueue an unattended /nightshift:resolve run for a project
+  queue add [project] <prompt...> [--run]   enqueue an unattended /nightshift:resolve run; --run also runs it in the foreground
   queue status [id] [--limit] [--json]      show one job or the tail of the queue plus the counts per status
   queue run [--job] [--max] [--watch]       claim pending jobs and run them; --dry only reports what it would do
   queue cancel <id> [--reason "..."]        cancel a pending or orphaned job
@@ -85,6 +85,7 @@ export function defaultContext() {
     out: (line) => process.stdout.write(`${line}\n`),
     err: (line) => process.stderr.write(`${line}\n`),
     env: process.env,
+    cwd: process.cwd(),
     fetchImpl: (...args) => fetch(...args),
     spawnSyncImpl: (file, args, options) => spawnSync(file, args, options),
     warmupImpl: (options, env) => warmupModel(options, env),

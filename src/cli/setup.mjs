@@ -200,7 +200,7 @@ function finish(ctx, report) {
 }
 
 // Installs everything the host needs to run nightshift, one idempotent step at a time.
-async function install(ctx, { noModel }) {
+export async function install(ctx, { noModel }) {
   const report = makeReport(ctx);
   setupHome(ctx, report);
   setupMcp(ctx, report);

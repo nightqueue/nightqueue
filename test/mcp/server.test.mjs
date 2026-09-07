@@ -9,6 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { homeDir, queuePausedPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
+import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 
@@ -216,7 +217,10 @@ test("the running server does not hold the configuration lock of the home", asyn
 
   const repo = makeDir(t, "mcp-lock-repo");
   mkdirSync(join(repo, ".git"), { recursive: true });
-  const result = spawnSync(process.execPath, [CLI, "init", repo, "--name", "locked"], { env, encoding: "utf8" });
+  const result = spawnSync(process.execPath, [CLI, "init", repo, "--name", "locked", "--no-model", "--no-gh"], {
+    env: assertIsolatedEnv({ ...env, ...isolatedHostVars(makeDir(t, "mcp-lock-host")) }),
+    encoding: "utf8",
+  });
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   assert.match(result.stdout, /registered project `locked`/);
 });

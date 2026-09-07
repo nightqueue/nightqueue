@@ -100,16 +100,23 @@ test("setup is idempotent file by file", (t) => {
 });
 
 test("init registers the repository in the default org", (t) => {
-  const home = makeDir(t, "init-home");
+  const home = join(makeDir(t, "init-home"), "home");
   const repo = makeRepo(t, "init-repo");
-  shift(home, ["setup", "--no-model"]);
-  const result = shift(home, ["init", repo, "--name", "api"]);
+  const result = shift(home, ["init", repo, "--name", "api", "--no-model", "--no-gh"]);
   assert.equal(result.status, 0);
+  assert.match(result.stdout, /^home: created \(.*, 0700\)$/m, "init did not run the setup before registering the project");
+  assert.match(result.stdout, /^config\.json: created \(org `default`\)$/m);
+  assert.match(result.stdout, /^secrets\.json: created \(0600\)$/m);
+  assert.ok(
+    result.stdout.indexOf("home: created") < result.stdout.indexOf("registered project `api`"),
+    "the project was registered before the host was set up",
+  );
   assert.match(result.stdout, /registered project `api` -> .* \(org `default`\)/);
   const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
   assert.equal(config.projects.api.org, "default");
-  const again = shift(home, ["init", repo, "--name", "api"]);
+  const again = shift(home, ["init", repo, "--name", "api", "--no-model", "--no-gh"]);
   assert.equal(again.status, 0);
+  assert.match(again.stdout, /^home: already present/m);
   assert.match(again.stdout, /already registered/);
 });
 
@@ -126,7 +133,7 @@ test("the secret never shows up in any output, in any format", (t) => {
   const repo = makeRepo(t, "sweep-repo");
   const runs = [
     shift(home, ["setup", "--no-model"]),
-    shift(home, ["init", repo, "--name", "api"]),
+    shift(home, ["init", repo, "--name", "api", "--no-model", "--no-gh"]),
     shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` }),
     shift(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` }),
     shift(home, ["connection", "list"]),
@@ -211,10 +218,10 @@ test("a positional path that starts with a dash needs the -- separator", (t) => 
   const home = join(base, "home");
   const repo = join(base, "-weird-dir");
   mkdirSync(join(repo, ".git"), { recursive: true });
-  const rejected = shift(home, ["init", "-weird-dir"], { cwd: base });
+  const rejected = shift(home, ["init", "-weird-dir", "--no-model", "--no-gh"], { cwd: base });
   assert.equal(rejected.status, 1);
   assert.match(rejected.stderr, /Unknown option/);
-  const accepted = shift(home, ["init", "--", "-weird-dir"], { cwd: base });
+  const accepted = shift(home, ["init", "--no-model", "--no-gh", "--", "-weird-dir"], { cwd: base });
   assert.equal(accepted.status, 0);
   assert.match(accepted.stdout, /registered project `weird-dir`/);
 });
@@ -319,7 +326,7 @@ test("memory stats answers on a home that has no database yet", (t) => {
 test("the session start hook prints the lessons already stored for the repository", (t) => {
   const home = makeDir(t, "hook-home");
   const repo = makeRepo(t, "hook-repo");
-  assert.equal(shift(home, ["init", repo, "--name", "api"]).status, 0);
+  assert.equal(shift(home, ["init", repo, "--name", "api", "--no-model", "--no-gh"]).status, 0);
   const env = { NIGHTSHIFT_HOME: home };
   t.after(() => closeDb(env));
   const { id } = saveLesson(

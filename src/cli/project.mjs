@@ -3,19 +3,25 @@ import { addProject, listProjects, moveProject, removeProject } from "../config/
 import { loadConfig } from "../config/store.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
-// Registers a git repository as a project of an org.
+// Registers a git repository as a project of an org, reports what happened and returns the entry it landed on.
+export function registerProject(ctx, { path, name, org } = {}) {
+  const config = loadConfig(ctx.env, { warn: ctx.err });
+  const result = addProject(config, { path, name, org });
+  const project = result.project;
+  if (result.status === "unchanged") {
+    ctx.out(`project \`${project.name}\` already registered -> ${project.path} (org \`${project.org}\`)`);
+    return project;
+  }
+  ctx.saveConfig(result.config, ctx.env);
+  ctx.out(`registered project \`${project.name}\` -> ${project.path} (org \`${project.org}\`)`);
+  return project;
+}
+
+// Registers a git repository as a project of an org, from the arguments of a command.
 export async function addFromArgs(argv, ctx, usage) {
   const { values, positionals } = parseCommand(argv, { org: { type: "string" }, name: { type: "string" } });
   checkArgs(positionals, { max: 1, usage });
-  const config = loadConfig(ctx.env, { warn: ctx.err });
-  const result = addProject(config, { path: positionals[0] ?? ".", name: values.name, org: values.org });
-  const { name, path, org } = result.project;
-  if (result.status === "unchanged") {
-    ctx.out(`project \`${name}\` already registered -> ${path} (org \`${org}\`)`);
-    return;
-  }
-  ctx.saveConfig(result.config, ctx.env);
-  ctx.out(`registered project \`${name}\` -> ${path} (org \`${org}\`)`);
+  registerProject(ctx, { path: positionals[0] ?? ".", name: values.name, org: values.org });
 }
 
 // Runs `project add`.
