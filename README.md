@@ -415,7 +415,7 @@ shift queue status [--limit 10] [--json]                  # the tail of the queu
 shift queue status 7 [--json]                             # one job, never with its prompt
 shift queue run [--job 7] [--max 2] [--dry]               # claim and run; --dry only reports
 shift queue run --watch [30]                              # keep claiming, one pass every N seconds
-shift queue log 7 [--follow]                              # the raw stream of the job
+shift queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
 shift queue cancel 7 --reason "not needed"                # cancel a pending, gated or orphaned job
 shift queue pause | shift queue resume                    # stop claiming new jobs, or claim again
 ```
@@ -442,6 +442,42 @@ about this run: `0` when the job ended as `done`, `1` for any other outcome
 started, with the reason on the line `job #<id> did not start (<reason>)` - the
 job stays in the queue. An explicit job id ignores the pause sentinel, so
 `--run` runs even on a paused queue.
+
+**`queue status` says what a running job is doing.** The table is one line per
+job, and the line of a `running` job carries two more columns: how long it has
+been running, from its own `started_at`, and the last thing the orchestrator
+said in its log (`» ...`, clipped to fit the line). Only running jobs are read
+from disk, and only the tail of their log, so listing a job whose stream is
+already hundreds of kilobytes costs nothing. A job with no log yet (it is still
+in the preflight of the run) and a log that cannot be read both show `-` instead
+of a narration: the table is always printed in full and the exit code stays `0`.
+A job in a final state keeps exactly the line it always had, and `--json`
+answers with the same fields as before.
+
+**The log is narrated by default.** `shift queue log <id>` prints one line per
+relevant event of the stream, timed relative to the `=== attempt N ===` marker
+that opens each attempt: `»` what the orchestrator said, `·` each tool with its
+file or command, `▶`/`◀` each subagent lane with its phase and what it reported
+back, the actions of that lane indented under it, and `⚑` the slug, `⚠` the gate,
+`✓` the pull request, `ℹ` the notice and `✗` a tool that failed. Nothing else of
+an event is printed: no prompt, no task summary, no output of a tool that
+worked; an MCP tool shows only a field that names its target (a project, a path,
+a pattern, a query), never the rest of its input. A line the narration cannot read is counted and reported at the end
+instead of vanishing. `--raw` prints the stream exactly as it was written,
+`--all` adds the text of the subagents, and the two together are a usage error.
+
+**`--follow` ends by itself.** It keeps reading the file by offset (no `watch`,
+no missed append), and stops as soon as the job leaves `running`, closing with
+`═ job #<id> <status>`; a job whose row is gone or a status that cannot be read
+stops it too, with the reason on stderr and the exit code still `0`. While the
+job runs and the stream has nothing to narrate, it ticks `· still running` every
+30 seconds, so silence never means the follow died. A log file that cannot be
+read is treated as a glitch first: the failure is reported on stderr, the follow
+keeps polling and only gives up after five failures in a row, and the closing
+reason always says that the log became unreadable instead of claiming a complete
+narration - the exit code stays `0` and a stack trace is never printed. `NIGHTSHIFT_FOLLOW_DEBUG=1`
+traces every poll on stderr (`follow: t=<iso> size=<n> offset=<n> lines=<n>`),
+which is what to turn on if the output ever stalls again.
 
 **The six states.** A job is `pending` while it waits, `running` while a runner
 owns it under a lease, and then one of four final states: `done` (the run

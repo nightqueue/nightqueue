@@ -77,7 +77,7 @@ commands:
   queue run [--job] [--max] [--watch]       claim pending jobs and run them; --dry only reports what it would do
   queue cancel <id> [--reason "..."]        cancel a pending, gated or orphaned job
   queue pause | resume                      stop claiming new jobs, or claim again
-  queue log <id> [--follow]                 print the accumulated stream of a job
+  queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written
   version                                   print the installed shift version
 
 options:

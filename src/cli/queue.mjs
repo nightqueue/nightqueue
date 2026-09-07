@@ -1,13 +1,13 @@
-import { closeSync, existsSync, openSync, readSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
 import { projectByName, resolveProject } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
-import { addJob, cancelJob, countsByStatus, getJob, jobView, listJobs } from "../memory/jobs.mjs";
+import { addJob, cancelJob, countsByStatus, getJob, jobView, listJobs, truncateByCodePoint } from "../memory/jobs.mjs";
+import { followLog, readLogTail } from "../queue/follow.mjs";
+import { createNarrator, formatDuration, formatNarration, lastOrchestratorLine, narrateLog } from "../queue/narrate.mjs";
 import { runCycle, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
-
-const FOLLOW_POLL_MS = 1000;
 
 const USAGE = {
   add: "shift queue add [project] <prompt...> [--run] [--priority <n>] [--max-attempts <n>] [--timeout <s>]",
@@ -16,7 +16,7 @@ const USAGE = {
   cancel: "shift queue cancel <id> [--reason <text>]",
   pause: "shift queue pause",
   resume: "shift queue resume",
-  log: "shift queue log <id> [--follow]",
+  log: "shift queue log <id> [--follow] [--raw] [--all]",
 };
 
 const ADD_HELP_FLAGS = new Set(["--help", "-h"]);
@@ -163,6 +163,9 @@ function parseAdd(argv) {
   return { values, positionals: words };
 }
 
+const NARRATION_LIMIT = 60;
+const JOB_LINE_WIDTH = 58;
+
 // One line of the job table of `queue status`.
 function formatJob(job) {
   return [
@@ -173,6 +176,30 @@ function formatJob(job) {
     `${job.attempts}/${job.max_attempts}`.padEnd(6),
     job.pr_url ?? job.slug ?? "-",
   ].join("");
+}
+
+// How long a running job has been up, read from its own `started_at`.
+function formatRunningFor(job, nowMs) {
+  const startedMs = Date.parse(String(job.started_at ?? ""));
+  return Number.isFinite(startedMs) ? formatDuration(nowMs - startedMs) : "-";
+}
+
+// Last narration line of the log of a job; a log that is missing or unreadable says so instead of inventing one.
+function lastNarration(id, env) {
+  const tail = readLogTail(jobLogPath(id, env));
+  const line = typeof tail === "string" ? lastOrchestratorLine(tail) : "";
+  return line ? `» ${truncateByCodePoint(line, NARRATION_LIMIT)}` : "-";
+}
+
+// Line of a running job: the columns of the table plus how long it has been running and what it last said.
+function formatRunningJob(job, nowMs, env) {
+  return `${formatJob(job).padEnd(JOB_LINE_WIDTH)}${formatRunningFor(job, nowMs).padEnd(8)}${lastNarration(job.id, env)}`;
+}
+
+// One line for each job of the table, with the live columns of the ones that are running.
+function formatJobLines(jobs, env) {
+  const nowMs = Date.now();
+  return jobs.map((job) => (job.status === "running" ? formatRunningJob(job, nowMs, env) : formatJob(job)));
 }
 
 // Detail block of a single job, one field per line.
@@ -204,7 +231,7 @@ async function runStatus(argv, ctx) {
     ctx.out("no jobs in the queue");
     return;
   }
-  for (const job of jobs) ctx.out(formatJob(job));
+  for (const line of formatJobLines(jobs, ctx.env)) ctx.out(line);
   ctx.out(Object.entries(counts).map(([status, total]) => `${status}=${total}`).join("  "));
 }
 
@@ -286,6 +313,15 @@ async function runResume(argv, ctx) {
   ctx.out("queue resumed");
 }
 
+// Runs a read of the log file, turning an I/O failure into a message for the operator instead of a stack.
+function readingLog(path, read) {
+  try {
+    return read();
+  } catch (err) {
+    throw new UserError(`could not read the log at ${path}: ${err?.message ?? String(err)}`);
+  }
+}
+
 // Prints the part of the file after the given offset and returns the new offset.
 function printFrom(path, offset, ctx) {
   const size = statSync(path).size;
@@ -302,18 +338,105 @@ function printFrom(path, offset, ctx) {
   }
 }
 
-// Runs `queue log`, printing the accumulated stream of a job and optionally following it.
+// Tells whether the narration may paint its lines: only a real terminal, and never with NO_COLOR set.
+function useColor(ctx) {
+  return ctx.stdout?.isTTY === true && !ctx.env?.NO_COLOR;
+}
+
+// Reads the status of a job for the follow loop; a job whose row is gone has no status at all.
+function jobStatusReader(id, env) {
+  return () => getJob(id, env)?.status ?? null;
+}
+
+// Watches the output of the process, so a closed pipe ends the follow instead of crashing it.
+function watchOutputClosed(ctx) {
+  let closed = false;
+  ctx.stdout?.on?.("error", () => {
+    closed = true;
+  });
+  return () => (closed ? "output closed" : null);
+}
+
+// Traces every poll of the follow on stderr, the hook that captures a stream that went quiet in the wild.
+function pollTracer(ctx) {
+  if (ctx.env?.NIGHTSHIFT_FOLLOW_DEBUG !== "1") return null;
+  return (notice) => ctx.err(`follow: t=${notice.at} size=${notice.size} offset=${notice.offset} lines=${notice.lines}`);
+}
+
+// Reports why a follow that did not end on a clean outcome of the job stopped, without changing the exit code.
+function reportStop(result, ctx) {
+  if (!result.status || result.logError) ctx.err(`queue log stopped: ${result.reason}`);
+}
+
+// Runs `queue log --raw`, which prints the stream exactly as it was written, byte for byte.
+async function runLogRaw(path, id, follow, ctx) {
+  const offset = readingLog(path, () => printFrom(path, 0, ctx));
+  if (!follow) return;
+  const trace = pollTracer(ctx);
+  const result = await followLog(
+    {
+      path,
+      offset,
+      readStatus: jobStatusReader(id, ctx.env),
+      stopReason: watchOutputClosed(ctx),
+      onLine: (line) => ctx.out(line),
+      onNotice: (notice) => {
+        if (notice.kind === "poll") trace?.(notice);
+        if (notice.kind === "error") ctx.err(notice.message);
+        if (notice.kind === "truncated") ctx.err("log truncated; following it from the start");
+      },
+    },
+    { quietMs: 0 },
+  );
+  if (result.status) ctx.err(`job #${id} ${result.status}`);
+  reportStop(result, ctx);
+}
+
+// Turns a notice of the follow loop into a narration line, a warning on stderr, or the debug trace of one poll.
+function narrateNotice(notice, { narrator, print, trace, warn }) {
+  if (notice.kind === "poll") trace?.(notice);
+  if (notice.kind === "error") warn(notice.message);
+  if (notice.kind === "truncated") print(narrator.note("truncated", "log truncated; narration restarted"));
+  if (notice.kind === "quiet") print(narrator.note("quiet", `still running (${Math.round(notice.silentMs / 1000)}s quiet)`));
+}
+
+// Runs `queue log` in narrated mode, the default: one line for each relevant event of the stream.
+async function runLogNarrated(path, id, { follow, all }, ctx) {
+  const color = useColor(ctx);
+  const print = (event) => ctx.out(formatNarration(event, { color }));
+  if (!follow) {
+    const text = readingLog(path, () => readFileSync(path, "utf8"));
+    for (const event of narrateLog(text, { all })) print(event);
+    return;
+  }
+  const narrator = createNarrator({ all });
+  const trace = pollTracer(ctx);
+  const result = await followLog({
+    path,
+    readStatus: jobStatusReader(id, ctx.env),
+    stopReason: watchOutputClosed(ctx),
+    onLine: (line) => {
+      for (const event of narrator.push(line)) print(event);
+    },
+    onNotice: (notice) => narrateNotice(notice, { narrator, print, trace, warn: (message) => ctx.err(message) }),
+  });
+  for (const event of narrator.finish()) print(event);
+  if (result.logError) print(narrator.note("toolError", `${result.logError}; this narration is missing the tail of the log`));
+  if (result.status) print(narrator.note("resultEnd", `job #${id} ${result.status}`));
+  reportStop(result, ctx);
+}
+
+// Runs `queue log`, which narrates the stream of a job by default and can keep following it.
 async function runLog(argv, ctx) {
-  const { values, positionals } = parseCommand(argv, { follow: { type: "boolean" } });
+  const { values, positionals } = parseCommand(argv, { follow: { type: "boolean" }, raw: { type: "boolean" }, all: { type: "boolean" } });
   checkArgs(positionals, { min: 1, usage: USAGE.log });
   const id = requireInt("id", positionals[0]);
+  if (values.raw && values.all) throw new UserError("`--all` has no meaning with `--raw`; the raw stream already carries every event");
   const path = jobLogPath(id, ctx.env);
   if (!existsSync(path)) throw new UserError(`no log for job \`${id}\`; expected ${path}`);
-  let offset = printFrom(path, 0, ctx);
-  while (values.follow) {
-    await sleep(FOLLOW_POLL_MS);
-    offset = printFrom(path, offset, ctx);
-  }
+  const follow = values.follow === true;
+  if (values.raw) return await runLogRaw(path, id, follow, ctx);
+  return await runLogNarrated(path, id, { follow, all: values.all === true }, ctx);
 }
 
 const SUBCOMMANDS = new Map([

@@ -11,7 +11,7 @@ const PR_DENIAL_RE = /\b(?:fail(?:ed|s|ing|ure)?|could not|cannot|can't|unable|e
 const USAGE_FIELDS = ["tokensIn", "tokensOut", "cacheRead", "cacheCreation"];
 
 // Parses one raw NDJSON line of the stream; a truncated or non-JSON line is simply not an event.
-function parseEvent(rawLine) {
+export function parseEventLine(rawLine) {
   try {
     const event = JSON.parse(rawLine);
     return event && typeof event === "object" ? event : null;
@@ -39,7 +39,7 @@ export function orchestratorText(event) {
 
 // Text the orchestrator said in one raw NDJSON line, or null.
 function orchestratorTextFromLine(rawLine) {
-  return orchestratorText(parseEvent(rawLine));
+  return orchestratorText(parseEventLine(rawLine));
 }
 
 // Tells whether a fence marker closes the open one: same character and at least as long, as markdown requires.
@@ -90,7 +90,7 @@ export function isSessionIdSafe(id) {
 
 // Reads the top-level session_id of any raw NDJSON event, returning only what passes the safety gate.
 export function extractSessionIdFromEventLine(rawLine) {
-  const event = parseEvent(rawLine);
+  const event = parseEventLine(rawLine);
   return isSessionIdSafe(event?.session_id) ? event.session_id : null;
 }
 
@@ -99,7 +99,7 @@ export function extractResultText(log) {
   let text = null;
   let sawResult = false;
   for (const line of String(log ?? "").split("\n")) {
-    const event = parseEvent(line);
+    const event = parseEventLine(line);
     if (event?.type !== "result") continue;
     sawResult = true;
     if (typeof event.result === "string") text = event.result;
@@ -246,7 +246,7 @@ export function tokensFromEvent(event) {
 
 // Applies the token rule to one raw NDJSON line; a line that is not an assistant with usage counts zero.
 export function tokensFromEventLine(rawLine) {
-  return tokensFromEvent(parseEvent(rawLine));
+  return tokensFromEvent(parseEventLine(rawLine));
 }
 
 // Splits the stream into one entry per session: the result event of that session and the sum of its OWN assistant turns, deduped by message id.
@@ -254,7 +254,7 @@ function sessionsFromLog(log) {
   const sessions = new Map();
   const seenIds = new Set();
   for (const line of String(log ?? "").split("\n")) {
-    const event = parseEvent(line);
+    const event = parseEventLine(line);
     const isResult = event?.type === "result";
     if (!isResult && !(event?.type === "assistant" && event.message?.usage)) continue;
     const id = String(event.session_id ?? "");

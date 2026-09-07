@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { queuePausedPath } from "../../src/config/paths.mjs";
+import { jobLogPath, queuePausedPath } from "../../src/config/paths.mjs";
 import { addProject } from "../../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream, gateStream, PR_URL, SLUG } from "../../test-support/streams.mjs";
+import { assistantEvent, doneStream, gateStream, PR_URL, SLUG } from "../../test-support/streams.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/shift.mjs", import.meta.url));
 
@@ -155,6 +156,69 @@ test("queue status --json answers with the jobs and the counts, and never with t
   assert.match(shift(env, ["queue", "status", "99"]).stderr, /unknown job `99`/);
 });
 
+// Writes the log of a job, the file `queue status` reads the last narration from.
+function writeJobLog(env, id, texts) {
+  const path = jobLogPath(id, env);
+  mkdirSync(dirname(path), { recursive: true });
+  const events = texts.map((text) => JSON.stringify(assistantEvent(text)));
+  writeFileSync(path, [`=== attempt 1 @ ${new Date().toISOString()} ===`, ...events, ""].join("\n"));
+}
+
+// The line of the table of `queue status` that belongs to a job.
+function tableLine(stdout, id) {
+  return stdout.split("\n").find((line) => line.startsWith(`#${id} `)) ?? "";
+}
+
+test("queue status shows the elapsed time and the last narration of a running job, and never breaks without a log", (t) => {
+  const env = makeCliHome(t, "cli-status-running");
+  makeGitProject(t, env, "beta");
+  const narrating = enqueue(env, "fix the worker");
+  const silent = addJob({ project: "beta", prompt: "fix the parser" }, env).id;
+  const finished = enqueue(env, "fix the docs");
+  claimJobById(narrating, { worker: "host:4242", cap: 4 }, env);
+  claimJobById(silent, { worker: "host:4243", cap: 4 }, env);
+  assert.equal(shift(env, ["queue", "cancel", String(finished)]).status, 0);
+  writeJobLog(env, narrating, ["Reading the runner and its tests.", "Opening the pull request now, and this sentence is long enough to be clipped by the table."]);
+
+  const table = shift(env, ["queue", "status"]);
+  assert.equal(table.status, 0, table.stderr);
+
+  const live = tableLine(table.stdout, narrating);
+  assert.match(live, /^#1\s+running\s+alpha\s+p5\s+1\/1\s+-\s+\d+s\s+» Opening the pull request now,/);
+  assert.equal(live.includes("Reading the runner"), false, "the table showed an older narration than the last one");
+  assert.equal(live.includes("clipped by the table"), false, "the table printed the whole narration instead of a short one");
+  assert.ok(live.endsWith("..."), `the long narration was not clipped: ${live}`);
+
+  const noLog = tableLine(table.stdout, silent);
+  assert.match(noLog, /^#2\s+running\s+beta\s+p5\s+1\/1\s+-\s+\d+s\s+-$/);
+  assert.equal(existsSync(jobLogPath(silent, env)), false, "the job without a log had one");
+
+  assert.equal(tableLine(table.stdout, finished), "#3    cancelled alpha               p5  0/1   -", "a job in a final state changed shape");
+  assert.match(table.stdout, /running=2/);
+});
+
+test("queue status keeps the shape of its json when a job is running with a log", (t) => {
+  const env = makeCliHome(t, "cli-status-running-json");
+  const id = enqueue(env);
+  claimJobById(id, { worker: "host:4242", cap: 4 }, env);
+  writeJobLog(env, id, ["Opening the pull request now."]);
+  const payload = JSON.parse(shift(env, ["queue", "status", "--json"]).stdout);
+  assert.equal(payload.jobs[0].status, "running");
+  assert.equal("prompt" in payload.jobs[0], false, "the CLI printed the prompt of a job");
+  assert.deepEqual(payload.counts, { pending: 0, running: 1, done: 0, gate: 0, failed: 0, cancelled: 0 });
+});
+
+test("a log that cannot be read leaves the row of a running job without a narration, never without a table", (t) => {
+  const env = makeCliHome(t, "cli-status-unreadable-log");
+  const id = enqueue(env);
+  claimJobById(id, { worker: "host:4242", cap: 4 }, env);
+  mkdirSync(jobLogPath(id, env), { recursive: true });
+  const table = shift(env, ["queue", "status"]);
+  assert.equal(table.status, 0, table.stderr);
+  assert.match(tableLine(table.stdout, id), /^#1\s+running\s+alpha\s+p5\s+1\/1\s+-\s+\d+s\s+-$/);
+  assert.match(table.stdout, /running=1/);
+});
+
 test("the queue runs a job end to end: add, run, status and log", (t) => {
   const env = makeCliHome(t, "cli-smoke");
   assert.equal(shift(env, ["queue", "add", "alpha", "fix the worker"]).status, 0);
@@ -169,9 +233,34 @@ test("the queue runs a job end to end: add, run, status and log", (t) => {
 
   const log = shift(env, ["queue", "log", "1"]);
   assert.equal(log.status, 0, log.stderr);
-  assert.match(log.stdout, /=== attempt 1 @ /);
-  assert.match(log.stdout, /"type":"result"/);
+  assert.match(log.stdout, /═ attempt 1/);
+  assert.match(log.stdout, /» Opening the pull request now\./);
+  assert.match(log.stdout, new RegExp(`⚑ slug: ${SLUG}`));
+  assert.match(log.stdout, /✓ pull request: https:\/\/github\.com\/acme\/api\/pull\/42/);
+  assert.match(log.stdout, /═ result: success/);
+  assert.equal(log.stdout.includes('"type":"result"'), false, "the narration printed the raw stream");
+  assert.equal(log.stdout.includes("\u001b["), false, "the narration coloured an output that is not a terminal");
+
+  const raw = shift(env, ["queue", "log", "1", "--raw"]);
+  assert.equal(raw.status, 0, raw.stderr);
+  assert.match(raw.stdout, /=== attempt 1 @ /);
+  assert.match(raw.stdout, /"type":"result"/);
+  assert.equal(raw.stdout, `${readFileSync(jobLogPath(1, env), "utf8").replace(/\n$/, "")}\n`, "--raw is not the log byte for byte");
+
+  assert.match(shift(env, ["queue", "log", "1", "--raw", "--all"]).stderr, /`--all` has no meaning with `--raw`/);
   assert.match(shift(env, ["queue", "log", "2"]).stderr, /no log for job `2`/);
+});
+
+test("a log that is there but cannot be read is a message and an exit code of 1, never a stack trace", (t) => {
+  const env = makeCliHome(t, "cli-log-unreadable");
+  enqueue(env);
+  mkdirSync(jobLogPath(1, env), { recursive: true });
+  for (const args of [["queue", "log", "1"], ["queue", "log", "1", "--raw"]]) {
+    const result = shift(env, args);
+    assert.equal(result.status, 1, `\`${args.join(" ")}\` did not exit 1: ${result.stderr}`);
+    assert.match(result.stderr, /shift: could not read the log at /);
+    assert.equal(result.stderr.includes("\n    at "), false, `\`${args.join(" ")}\` printed a stack trace`);
+  }
 });
 
 test("queue run --dry only reports, and pause stops the claiming until resume", (t) => {
