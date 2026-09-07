@@ -1574,15 +1574,27 @@ inform that the commit/PR was not generated.
      branches with the `worktree-` prefix and `+` in place of `/` (e.g.
      `worktree-feat+login-google`). Rename with:
      `git branch -m <current-name> <type>/<slug>`
-   - Do `git push -u origin <type>/<slug>` and open the PR with `gh pr create`,
-     using the commit message as the basis for the title/description.
+   - Do `git push -u origin <type>/<slug>` and open the PR with `gh pr create`.
+     Assemble the title and the body EXCLUSIVELY from `references/pr-template.md`,
+     filling every section with this run's artifacts (`01-triage.md`, `03-plan.md`,
+     `04-implementation.md`, `05-qa.md`, `06-verification.md`, `state.json` and the
+     execution log of step 5.1). Invent nothing: a mandatory section with no real data
+     reads `None`, and only the lines the template marks as optional may be omitted.
      In the PR description, when you need to identify the automation, use the nickname
-     `nightshift`; do not use names of agents, models or vendors.
-   - **The PR description must point out the tests run and passed** in a
-     `## Tests run and passed` section: list each check/verification that
-     passed (verifier: tsc/lint/build/tests; QA: validated risks; runtime:
-     a real payload, a screenshot of the emulator or a verdict on a device). Include only what was
-     in fact executed and approved — do not list a test that did not run.
+     `nightshift`; do not use names of agents, models or vendors, and do not add a
+     `Co-Authored-By` trailer.
+   - **The PR description must point out the tests run and passed** in its
+     `## Tests run and passed` section, with today's rule kept: list each check that
+     in fact ran and passed (verifier: tsc/lint/build/tests; QA: validated risks;
+     runtime: the real acceptance — a payload, a screenshot of the emulator or a
+     verdict on a device). Never list a test that did not run.
+   - **Check the assembled body BEFORE `gh pr create`** — the check runs over the
+     string that goes to the command, never over the model in the template file: the
+     six sections `## Summary`, `## Changes`, `## Tests run and passed`, `## QA`,
+     `## Open items` and `## Run` all present and in that order, no placeholder in
+     double curly braces and no `<...>` example left over from the model. Any failure
+     → fix the body and only then open the PR. A PR outside this standard is never
+     opened.
    - If there is no remote configured or `gh` is unavailable, inform it and leave the
      local commit ready for the user to publish manually.
 
@@ -1666,9 +1678,16 @@ suffix, as a level-2 section of the report, and it does **not** count towards th
 - No line of the body may start with `# ` or `## ` (that would end the section).
 - Plain, executive and **non-technical** language: no function, file, component or
   internal identifier name. Describe the effect for whoever uses it, not the code mechanism.
-- The job does **not know** the ticket, the PR nor the form of delivery. Use the literal
-  placeholders `{{ticket}}`, `{{pr}}` and `{{delivery}}`, each exactly once, in the
-  positions of the model below. Do not invent a PR number, a hash nor a channel.
+- The job does **not know** a ticket ID nor a form of delivery, and the v1 runtime has
+  neither an issue tracker nor a delivery channel. **The notice must never contain a
+  placeholder in double curly braces; when a value is unknown, omit the line.** Name the
+  PR by its real URL — Phase 7 already opened it and knows the link. The line has
+  exactly three forms, one per value of `outcome` in the telemetry below: the real
+  URL, closing the line with nothing after it (`pr_opened`); `local commit, no PR`
+  when there is a commit but nothing was pushed (`local_commit`);
+  `no delivery — stopped at the <gate> gate`, naming the gate recorded in
+  `gate_stop`, when the run ended before any commit (`no_commit`). The last two never
+  carry a URL. Never invent a PR number, a hash, a ticket ID nor a channel.
 - **The cap is a writing constraint, not a target.** Target: **≤1000 characters**; hard
   cap: **1900 characters** — the runtime refuses the whole notice above it. The number is
   inherited from the runtime and is not re-derived here. Write it already fitting: trim to
@@ -1679,7 +1698,7 @@ suffix, as a level-2 section of the report, and it does **not** count towards th
   half a notice: it delivers nothing.
 - **Count the characters of the body before emitting** (code points). Past 1000:
   cut CONTENT — a whole bullet, the least important conditional section, an
-  example, a sentence of context — never half a sentence, never a placeholder,
+  example, a sentence of context — never half a sentence, never the outcome line,
   never a section header.
 - **Trimming is never an excuse to hide.** Cutting content can NEVER remove a real
   open item ("Still open") nor the QA's result ("What the review found"): omitting an open item
@@ -1721,7 +1740,7 @@ suffix, as a level-2 section of the report, and it does **not** count towards th
   `✅` family — `✅ Fixed and live` when the fix is in production at the
   moment of the notice, `✅ Fixed — ships in the next release` when it is still going to
   ship, `✅ Delivered — <what changed>` when the task is not a bug fix. Do not
-  let the reader infer the outcome from "{{delivery}}" over in the middle of the text.
+  let the reader infer the outcome from the support line down in the middle of the text.
 - **What the writing checks (a closed enum).** The writing refuses the notice as a
   whole — the same mechanism as the character cap, nothing is written and the closing
   is stuck until someone rewrites it in the cockpit — when:
@@ -1737,6 +1756,8 @@ suffix, as a level-2 section of the report, and it does **not** count towards th
     `Verdict` column: `not-covered` in the `## Symptom coverage` table of the
     `03-plan.md`, or `NOT MET` (with or without `/ to confirm`) in the table of the acceptance
     gate of Phase 6.5. A gate written in prose is **not** read mechanically.
+  - some line carries a placeholder in double curly braces instead of a real value — an
+    unknown value is omitted, never templated.
 
 Model (the fence below delimits the MODEL in this document; the real report emits
 the content **without** a fence):
@@ -1744,7 +1765,7 @@ the content **without** a fence):
 ```
 ## Notice
 
-✅ Fixed and live — <short symptom> ({{ticket}})
+✅ Fixed and live — <short symptom>
 
 What was happening: <the symptom in user language, with the cause in one sentence>.
 
@@ -1755,17 +1776,18 @@ What the review found: <only when there was adversarial QA; max 3 bullets>
 
 How it was validated: <what was in fact exercised>.
 
-For support to guide whoever uses it: {{delivery}}
+For support to guide whoever uses it: <how whoever uses it gets the fix; only when there is a real delivery channel, otherwise omit the whole line>
 
 Still open — a DIFFERENT problem, does not affect this fix: <only when there is one; max 3 bullets>
 • <open item 1 (TICKET when there is one), saying in one sentence that it will be handled separately>
 
-Record: • PR {{pr}}
+Record: • PR <the real URL of the PR opened in Phase 7, closing the line; or "local commit, no PR"; or "no delivery — stopped at the <gate> gate" when the run ended before any commit>
 ```
 
 In a task that is not a bug fix (feature, refactor), swap only the header
-for `✅ Delivered — <what changed> ({{ticket}})` and adapt "What was happening" to
+for `✅ Delivered — <what changed>` and adapt "What was happening" to
 "What was missing"; the rest of the model is the same.
+The header only ends with a `(<ID>)` when the task came from an issue tracker with a real ID; with no tracker — the v1 default — there is no parenthesis.
 
 **Happy path — output ≤~30 lines.** Print only the summary table above and,
 right after, the section **🎯 Objective met**: repeat the `Expected outcome` of Phase 0

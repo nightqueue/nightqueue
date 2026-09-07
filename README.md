@@ -31,7 +31,8 @@ plugin in the host is no longer a manual step - `shift setup` does it (see
 
 - `/nightshift:resolve` - the 8-phase pipeline (triage, exploration,
   architecture, implementation, adversarial QA, verification, runtime
-  validation, commit and report).
+  validation, commit and report). The pull request it opens follows the fixed
+  template in `plugin/skills/resolve/references/pr-template.md`.
 - `/nightshift:qa-guardian` - self-contained adversarial QA: risk matrix,
   proven breaks, fuzz templates.
 - Six subagents, invoked as `nightshift:<agent>`: `architect`, `coder`,
