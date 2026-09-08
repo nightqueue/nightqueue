@@ -43,9 +43,9 @@ const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
 const SELF_LOCKING_COMMANDS = new Set(["mcp", "hook", "reflect", "embed", "memory", "queue"]);
 
-const USAGE = `shift — nightshift configuration
+const USAGE = `nightshift — configuration CLI
 
-usage: shift <command> [options]
+usage: nightshift <command> [options]
 
 commands:
   setup [--from <dir>] [--remove]           install the runtime in the home and register the MCP server, hooks and plugin in the host
@@ -78,11 +78,11 @@ commands:
   queue cancel <id> [--reason "..."]        cancel a pending, gated or orphaned job
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written
-  version                                   print the installed shift version
+  version                                   print the installed nightshift version
 
 options:
   -h, --help                                show this help
-  --version                                 print the installed shift version and exit
+  --version                                 print the installed nightshift version and exit
 
 exit codes: 0 ok · 1 user error · 2 unexpected error
 configuration home: $NIGHTSHIFT_HOME (default ~/.nightshift)`;
@@ -124,7 +124,7 @@ export async function main(argv, ctx) {
     return 0;
   }
   const handler = COMMANDS.get(command);
-  if (!handler) throw new UserError(`unknown command \`${command}\`; run \`shift --help\``);
+  if (!handler) throw new UserError(`unknown command \`${command}\`; run \`nightshift --help\``);
   if (skipsLock(command, rest[0])) return await handler(rest, ctx);
   return await withLock(ctx.env, () => handler(rest, ctx));
 }
@@ -136,7 +136,7 @@ export async function run(argv, ctx = defaultContext()) {
     return typeof result === "number" ? result : 0;
   } catch (err) {
     if (err instanceof UserError) {
-      ctx.err(`shift: ${err.message}`);
+      ctx.err(`nightshift: ${err.message}`);
       return 1;
     }
     ctx.err(err?.stack ?? String(err));

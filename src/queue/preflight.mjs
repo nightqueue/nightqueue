@@ -60,7 +60,7 @@ function checkCheckout(gitImpl, cwd) {
 export function preflight({ job, env = process.env, gitImpl = defaultGitImpl, existsImpl = existsSync, resolveBinImpl = resolveClaudeBin } = {}) {
   const name = String(job?.project ?? "");
   const project = projectByName(loadConfig(env, { warn: () => {} }), name);
-  if (!project) return blocked(BLOCK_CODES.UNKNOWN_PROJECT, `unknown project \`${name}\`; register it with \`shift project add\``);
+  if (!project) return blocked(BLOCK_CODES.UNKNOWN_PROJECT, `unknown project \`${name}\`; register it with \`nightshift project add\``);
   if (!existsImpl(project.path) || !existsImpl(join(project.path, ".git"))) {
     return blocked(BLOCK_CODES.MISSING_CHECKOUT, `checkout of \`${name}\` is missing at ${project.path}`);
   }

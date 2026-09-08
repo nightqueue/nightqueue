@@ -14,6 +14,7 @@ import {
 
 const ENV = { NIGHTSHIFT_HOME: join(tmpdir(), "nightshift-settings-fixture") };
 const [SESSION_START, PROMPT, SESSION_END] = desiredHooks(ENV);
+const LEGACY_SESSION_START = `node ${join(hostPackageRoot(ENV), "bin", "shift.mjs")} hook session-start`;
 
 // Settings fixture with one third-party hook per event.
 function thirdPartySettings() {
@@ -64,7 +65,7 @@ test("a second merge changes nothing and reports every event as already present"
 
 test("a stale command is repaired in place, keeping the matcher and the neighbours", () => {
   const data = thirdPartySettings();
-  data.hooks.SessionStart[0].hooks.push({ type: "command", command: "node /old/bin/shift.mjs hook session-start" });
+  data.hooks.SessionStart[0].hooks.push({ type: "command", command: "node /old/bin/nightshift.mjs hook session-start" });
   const [first] = mergeHooks(data, ENV);
   assert.equal(first.status, "updated");
   assert.equal(data.hooks.SessionStart.length, 1);
@@ -113,13 +114,13 @@ test("the removal drops the event key only when nothing else is left in it", () 
 
 test("the status of the hooks compares the registered command with the wanted one", () => {
   const data = thirdPartySettings();
-  data.hooks.SessionEnd[0].hooks.push({ type: "command", command: "node /old/bin/shift.mjs hook reflect" });
+  data.hooks.SessionEnd[0].hooks.push({ type: "command", command: "node /old/bin/nightshift.mjs hook reflect" });
   const status = hookStatus(data, ENV);
   assert.deepEqual(status[0], { event: "SessionStart", expected: SESSION_START.command, current: null });
   assert.deepEqual(status[2], {
     event: "SessionEnd",
     expected: SESSION_END.command,
-    current: "node /old/bin/shift.mjs hook reflect",
+    current: "node /old/bin/nightshift.mjs hook reflect",
   });
   mergeHooks(data, ENV);
   assert.equal(hookStatus(data, ENV)[2].current, SESSION_END.command);
@@ -127,7 +128,7 @@ test("the status of the hooks compares the registered command with the wanted on
 
 test("a package path with a space is reported, because the hook command is not quoted", () => {
   const warning = spacedRootWarning("/Users/someone/My Tools/nightshift");
-  assert.match(warning, /^shift: warning: the package path contains a space/);
+  assert.match(warning, /^nightshift: warning: the package path contains a space/);
   assert.ok(warning.includes("/Users/someone/My Tools/nightshift"), warning);
   assert.match(warning, /hook command/);
 });
@@ -140,7 +141,7 @@ test("a runtime path without a space is silent, and so is a root nobody passed",
 
 test("the hooks of the host point at the runtime of the home, never at the checkout that ran the setup", () => {
   assert.equal(SESSION_START.command.includes(hostPackageRoot(ENV)), true, SESSION_START.command);
-  assert.match(SESSION_START.command, /runtime\/node_modules\/nightshift\/bin\/shift\.mjs hook session-start$/);
+  assert.match(SESSION_START.command, /runtime\/node_modules\/nightshift\/bin\/nightshift\.mjs hook session-start$/);
 });
 
 test("an event holding something that is not an array is rebuilt without touching the others", () => {
@@ -148,4 +149,39 @@ test("an event holding something that is not an array is rebuilt without touchin
   mergeHooks(data, ENV);
   assert.equal(data.hooks.SessionStart[0].hooks[0].command, SESSION_START.command);
   assert.deepEqual(data.hooks.Stop, thirdPartySettings().hooks.Stop);
+});
+
+test("an entry left by the previous command name is updated in place, never duplicated", () => {
+  const data = {
+    hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: LEGACY_SESSION_START, timeout: 10 }] }],
+    },
+  };
+  assert.deepEqual(mergeHooks(data, ENV)[0], { event: "SessionStart", status: "updated" });
+  assert.equal(data.hooks.SessionStart.length, 1);
+  assert.deepEqual(data.hooks.SessionStart[0].hooks, [{ type: "command", command: SESSION_START.command, timeout: 10 }]);
+});
+
+test("a host carrying the previous entry and the current one ends with a single entry per event", () => {
+  const data = {
+    hooks: {
+      SessionStart: [
+        { hooks: [{ type: "command", command: LEGACY_SESSION_START, timeout: 10 }] },
+        { hooks: [{ type: "command", command: SESSION_START.command, timeout: 10 }] },
+      ],
+    },
+  };
+  assert.deepEqual(mergeHooks(data, ENV)[0], { event: "SessionStart", status: "updated" });
+  assert.equal(data.hooks.SessionStart.length, 1);
+  assert.deepEqual(data.hooks.SessionStart[0].hooks, [{ type: "command", command: SESSION_START.command, timeout: 10 }]);
+});
+
+test("the removal also takes out an entry left by the previous command name", () => {
+  const data = {
+    hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: LEGACY_SESSION_START, timeout: 10 }] }],
+    },
+  };
+  assert.deepEqual(removeHooks(data, ENV)[0], { event: "SessionStart", status: "removed" });
+  assert.equal(data.hooks.SessionStart, undefined);
 });

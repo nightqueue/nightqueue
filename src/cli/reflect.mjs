@@ -2,7 +2,7 @@ import { UserError } from "../config/errors.mjs";
 import { runReflectWorker } from "../hooks/reflect-worker.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
-const USAGE = "shift reflect [--transcript <path>] [--session <id>]";
+const USAGE = "nightshift reflect [--transcript <path>] [--session <id>]";
 
 // Summary line of one reflection run.
 function formatResult(result) {
@@ -10,14 +10,14 @@ function formatResult(result) {
   return result.skipped ? `${counts} skipped=${result.skipped}` : counts;
 }
 
-// Runs `shift reflect`: extracts the lessons of a transcript now, in the foreground.
+// Runs `nightshift reflect`: extracts the lessons of a transcript now, in the foreground.
 export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, {
     transcript: { type: "string" },
     session: { type: "string" },
   });
   checkArgs(positionals, { max: 0, usage: USAGE });
-  if (!values.transcript) throw new UserError(`\`shift reflect\` requires --transcript <path>; usage: ${USAGE}`);
+  if (!values.transcript) throw new UserError(`\`nightshift reflect\` requires --transcript <path>; usage: ${USAGE}`);
   const result = await runReflectWorker(
     { transcriptPath: values.transcript, cwd: process.cwd(), sessionId: values.session ?? "manual" },
     { env: ctx.env, log: ctx.err },

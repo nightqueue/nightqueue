@@ -138,7 +138,7 @@ test("an occupied slot and a name already taken stop the import, with --gh inclu
   );
   const collision = makeCtx(host.env);
   assert.equal(await run(["init", "--no-path", other, "--name", "web", "--gh"], collision.ctx), 0);
-  assert.ok(collision.out.includes("connection `gh` already exists; run `shift connection bind gh --org default`"), collision.out.join("\n"));
+  assert.ok(collision.out.includes("connection `gh` already exists; run `nightshift connection bind gh --org default`"), collision.out.join("\n"));
   assert.equal(readConfig(host.home).projects.web.org, "default");
 });
 
@@ -149,7 +149,7 @@ test("without a terminal init only points at the flag, and never reads the token
 
   assert.equal(await run(["init", "--no-path", repo, "--name", "api"], ctx), 0);
   assert.ok(
-    out.includes(`GitHub CLI is authenticated as ${FAKE_GH_LOGIN}; run \`shift init --gh\` to import its token as connection \`gh\``),
+    out.includes(`GitHub CLI is authenticated as ${FAKE_GH_LOGIN}; run \`nightshift init --gh\` to import its token as connection \`gh\``),
     out.join("\n"),
   );
   assert.deepEqual(ghSubcommands(host), ["auth status"]);
@@ -171,7 +171,7 @@ test("on a terminal init asks the exact question and honours the answer", async 
   assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-no-repo"), "--name", "api"], noRun.ctx), 0);
   assert.equal(no.written.join("").includes(QUESTION), true);
   assert.ok(
-    noRun.out.includes('store a token with `echo "$GITHUB_TOKEN" | shift connection add gh --type github`'),
+    noRun.out.includes('store a token with `echo "$GITHUB_TOKEN" | nightshift connection add gh --type github`'),
     noRun.out.join("\n"),
   );
   assert.deepEqual(ghSubcommands(refused), ["auth status"]);
@@ -194,7 +194,7 @@ test("a GitHub CLI that is missing or logged out costs one line and never an err
   const absent = makeCtx(missing.env);
   assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-missing-repo"), "--name", "api", "--gh"], absent.ctx), 0);
   assert.ok(
-    absent.out.includes('GitHub CLI not found; store a token with `echo "$GITHUB_TOKEN" | shift connection add gh --type github`'),
+    absent.out.includes('GitHub CLI not found; store a token with `echo "$GITHUB_TOKEN" | nightshift connection add gh --type github`'),
     absent.out.join("\n"),
   );
 
@@ -202,7 +202,7 @@ test("a GitHub CLI that is missing or logged out costs one line and never an err
   const anonymous = makeCtx(loggedOut.env);
   assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-logged-out-repo"), "--name", "api", "--gh"], anonymous.ctx), 0);
   assert.ok(
-    anonymous.out.includes("GitHub CLI is not authenticated; run `gh auth login` and then `shift init --gh`"),
+    anonymous.out.includes("GitHub CLI is not authenticated; run `gh auth login` and then `nightshift init --gh`"),
     anonymous.out.join("\n"),
   );
   assert.deepEqual(ghSubcommands(loggedOut), ["auth status"]);

@@ -4,9 +4,9 @@ import { setupRuntime } from "./install-steps.mjs";
 import { makeReport } from "./report.mjs";
 import { finish, registerHost } from "./setup.mjs";
 
-const USAGE = "shift update [--from <dir>]";
+const USAGE = "nightshift update [--from <dir>]";
 
-// Runs `shift update`: reinstalls the runtime and re-points the host at it, never touching config, secrets or database.
+// Runs `nightshift update`: reinstalls the runtime and re-points the host at it, never touching config, secrets or database.
 export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { from: { type: "string" } });
   checkArgs(positionals, { max: 0, usage: USAGE });

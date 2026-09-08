@@ -10,7 +10,7 @@ import { UserError } from "../src/config/errors.mjs";
 import { lockPath, withLock } from "../src/config/lock.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../test-support/host.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/shift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
 const RACE_ATTEMPTS = 8;
 const HOST_DIR = mkdtempSync(join(tmpdir(), "nightshift-lock-host-"));
 const HOST_VARS = isolatedHostVars(HOST_DIR);
@@ -67,7 +67,7 @@ test("withLock excludes a second holder and releases the lock even when the acti
     withLock(env, async () => {
       await assert.rejects(withLock(env, async () => "never", { timeoutMs: 100 }), (err) => {
         assert.ok(err instanceof UserError);
-        assert.match(err.message, /another shift command is writing to the configuration home/);
+        assert.match(err.message, /another nightshift command is writing to the configuration home/);
         assert.match(err.message, /remove `.*home\.lock`/);
         return true;
       });
@@ -99,7 +99,7 @@ test("a read-only command runs while another process holds the write lock", asyn
   assert.equal(existsSync(join(env.NIGHTSHIFT_HOME, "config.json")), false);
 });
 
-test("two concurrent `shift org add` processes both keep their write", async (t) => {
+test("two concurrent `nightshift org add` processes both keep their write", async (t) => {
   for (let attempt = 1; attempt <= RACE_ATTEMPTS; attempt += 1) {
     const { a, b, hasA, hasB } = await runRace(t);
     assert.equal(a.code, 0, `attempt ${attempt}: process A exited ${a.code} (stderr: ${a.stderr})`);

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
 import { PATH_MARK, pathLine } from "../src/host/shell.mjs";
-import { assertIsolatedEnv, makeHostEnv, readSettingsFile } from "../test-support/host.mjs";
+import { assertIsolatedEnv, makeHostEnv, readSettingsFile, writeLegacyShim } from "../test-support/host.mjs";
 import { makeDir } from "../test-support/memory.mjs";
 
 const CHECKOUT = fileURLToPath(new URL("../", import.meta.url));
@@ -67,7 +67,7 @@ test("init outside a repository installs the whole host and only skips the proje
   assert.equal(existsSync(join(host.home, "config.json")), true);
   assert.ok(readSettingsFile(host.configDir).hooks.SessionStart.length, "the hooks were not merged into the host");
   assert.ok(
-    out.includes(`no git repository in ${plain}; run \`shift init <path>\` inside one to register a project`),
+    out.includes(`no git repository in ${plain}; run \`nightshift init <path>\` inside one to register a project`),
     out.join("\n"),
   );
   assert.deepEqual(JSON.parse(readFileSync(join(host.home, "config.json"), "utf8")).projects, {});
@@ -85,14 +85,69 @@ test("--from installs the given checkout and reinstalls even when the version al
   assert.equal(installsInto(host, host.runtimeDir).length, 2, "--from short-circuited instead of reinstalling");
 });
 
-test("the shim is created executable and points at the entry of the runtime", async (t) => {
+test("the three shims are created executable and all point at the entry of the runtime", async (t) => {
   const host = makeHostEnv(t, "install-shim");
   const { ctx, out } = makeCtx(host.env);
 
   assert.equal(await run(["setup", "--no-path", "--no-embedding"], ctx), 0);
-  assert.equal(statSync(host.shim).mode & 0o777, 0o755);
-  assert.equal(readFileSync(host.shim, "utf8"), `#!/bin/sh\nexec node "${host.entry}" "$@"\n`);
-  assert.ok(out.includes(`shim: created (${host.shim})`), out.join("\n"));
+  for (const [name, path] of Object.entries(host.shims)) {
+    assert.equal(statSync(path).mode & 0o777, 0o755, `${name} is not executable`);
+    assert.equal(readFileSync(path, "utf8"), `#!/bin/sh\nexec node "${host.entry}" "$@"\n`);
+    assert.ok(out.includes(`shim ${name}: created (${path})`), out.join("\n"));
+  }
+});
+
+test("--no-shortcuts writes the canonical shim alone, on setup and on init", async (t) => {
+  const host = makeHostEnv(t, "install-no-shortcuts");
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["setup", "--no-path", "--no-embedding", "--no-shortcuts"], ctx), 0);
+  assert.equal(existsSync(host.shims.nightshift), true);
+  assert.equal(existsSync(host.shims.nshift), false);
+  assert.equal(existsSync(host.shims.nsft), false);
+  assert.ok(out.includes("shim shortcuts: skipped (--no-shortcuts)"), out.join("\n"));
+
+  const other = makeHostEnv(t, "init-no-shortcuts");
+  const init = makeCtx(other.env, { cwd: makeDir(t, "init-no-shortcuts-cwd") });
+  assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh", "--no-shortcuts"], init.ctx), 0);
+  assert.equal(existsSync(other.shims.nightshift), true);
+  assert.equal(existsSync(other.shims.nshift), false);
+  assert.equal(existsSync(other.shims.nsft), false);
+});
+
+test("--shortcuts together with --no-shortcuts is refused before anything is installed", async (t) => {
+  const host = makeHostEnv(t, "install-shortcuts-clash");
+  const { ctx, err } = makeCtx(host.env);
+
+  assert.equal(await run(["setup", "--shortcuts", "--no-shortcuts"], ctx), 1);
+  assert.match(err.join("\n"), /`--shortcuts` and `--no-shortcuts` cannot be used together/);
+  assert.equal(existsSync(host.shims.nightshift), false);
+});
+
+test("a setup over the shim of the previous command name removes it and says why", async (t) => {
+  const host = makeHostEnv(t, "install-legacy-shim");
+  writeLegacyShim(host);
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["setup", "--no-path", "--no-embedding"], ctx), 0);
+  assert.equal(existsSync(host.legacyShim), false);
+  assert.ok(out.includes(`legacy shim: removed (${host.legacyShim})`), out.join("\n"));
+  assert.ok(
+    out.some((line) => line.includes("the `shift` command was renamed to `nightshift`")),
+    out.join("\n"),
+  );
+  assert.equal(existsSync(host.shims.nightshift), true);
+});
+
+test("a file of another tool under the previous command name is kept, never deleted", async (t) => {
+  const host = makeHostEnv(t, "install-legacy-foreign");
+  const foreign = "#!/bin/sh\necho other-tool\n";
+  writeLegacyShim(host, foreign);
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["setup", "--no-path", "--no-embedding"], ctx), 0);
+  assert.equal(readFileSync(host.legacyShim, "utf8"), foreign);
+  assert.ok(out.includes(`legacy shim: kept (${host.legacyShim} was not written by nightshift)`), out.join("\n"));
 });
 
 test("the PATH step asks on a terminal, writes one marked line and never asks again once the directory is there", async (t) => {
@@ -168,12 +223,13 @@ test("--embedding installs the library into its own prefix and then downloads th
 test("update reinstalls the runtime, re-points a host left on another path and keeps config, secrets and database", async (t) => {
   const host = makeHostEnv(t, "install-update");
   const first = makeCtx(host.env);
-  assert.equal(await run(["setup", "--no-path", "--no-embedding"], first.ctx), 0);
+  assert.equal(await run(["setup", "--no-path", "--no-embedding", "--no-shortcuts"], first.ctx), 0);
+  writeLegacyShim(host);
   writeFileSync(join(host.home, "nightshift.db"), "database bytes");
   const before = ["config.json", "secrets.json", "nightshift.db"].map((file) => readFileSync(join(host.home, file), "utf8"));
 
   const stale = readSettingsFile(host.configDir);
-  stale.hooks.SessionStart[0].hooks[0].command = "node /old/checkout/bin/shift.mjs hook session-start";
+  stale.hooks.SessionStart[0].hooks[0].command = "node /old/checkout/bin/nightshift.mjs hook session-start";
   writeFileSync(host.settingsPath, `${JSON.stringify(stale, null, 2)}\n`);
 
   const { ctx, out } = makeCtx(host.env);
@@ -187,21 +243,25 @@ test("update reinstalls the runtime, re-points a host left on another path and k
     `node ${host.entry} hook session-start`,
   );
   assert.ok(out.includes("hook SessionStart: updated"), out.join("\n"));
+  for (const path of Object.values(host.shims)) assert.equal(existsSync(path), true, `update left ${path} behind`);
+  assert.equal(existsSync(host.legacyShim), false, "update kept the shim of the previous command name");
   assert.deepEqual(
     ["config.json", "secrets.json", "nightshift.db"].map((file) => readFileSync(join(host.home, file), "utf8")),
     before,
   );
 });
 
-test("--remove takes out the shim and the marked line, keeps the runtime and never touches config or secrets", async (t) => {
+test("--remove takes out every shim and the marked line, keeps the runtime and never touches config or secrets", async (t) => {
   const host = makeHostEnv(t, "install-remove");
   writeFileSync(host.rcPath, `${THIRD_PARTY}\n`);
   assert.equal(await run(["setup", "--path", "--no-embedding"], makeCtx(host.env).ctx), 0);
-  assert.equal(existsSync(host.shim), true);
+  writeLegacyShim(host);
+  for (const path of Object.values(host.shims)) assert.equal(existsSync(path), true);
 
   const { ctx, out } = makeCtx(host.env);
   assert.equal(await run(["setup", "--remove"], ctx), 0);
-  assert.equal(existsSync(host.shim), false);
+  for (const path of Object.values(host.shims)) assert.equal(existsSync(path), false);
+  assert.equal(existsSync(host.legacyShim), false);
   assert.equal(readRc(host), `${THIRD_PARTY}\n`);
   assert.equal(readRc(host).includes(PATH_MARK), false);
   assert.equal(existsSync(join(host.home, "config.json")), true);

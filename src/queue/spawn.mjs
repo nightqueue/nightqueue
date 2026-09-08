@@ -26,7 +26,7 @@ export function pluginDir() {
 
 // Entrypoint of this CLI, used to start the nightshift MCP server and the detached runner.
 export function cliEntrypoint() {
-  return join(packageRoot(), "bin", "shift.mjs");
+  return join(packageRoot(), "bin", "nightshift.mjs");
 }
 
 // Inline --mcp-config value: one single argv string, no shell and no temporary file.

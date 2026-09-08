@@ -37,7 +37,7 @@ function dropStale(path, staleAfterMs) {
   return true;
 }
 
-// Acquires the lock, failing with a usage error when another shift holds it past the timeout.
+// Acquires the lock, failing with a usage error when another nightshift holds it past the timeout.
 async function acquire(path, { timeoutMs, staleAfterMs }) {
   const deadline = Date.now() + timeoutMs;
   let staleDropped = false;
@@ -49,7 +49,7 @@ async function acquire(path, { timeoutMs, staleAfterMs }) {
     }
     if (Date.now() >= deadline) {
       throw new UserError(
-        `another shift command is writing to the configuration home; try again in a moment, or remove \`${path}\` if no other shift is running`,
+        `another nightshift command is writing to the configuration home; try again in a moment, or remove \`${path}\` if no other nightshift is running`,
       );
     }
     await delay(RETRY_INTERVAL_MS);

@@ -40,6 +40,8 @@ test("the command carries the plugin of this package and the nightshift MCP serv
   assert.deepEqual(Object.keys(mcp.mcpServers), ["nightshift"]);
   assert.equal(mcp.mcpServers.nightshift.command, process.execPath);
   assert.deepEqual(mcp.mcpServers.nightshift.args, [cliEntrypoint(), "mcp"]);
+  assert.equal(cliEntrypoint(), join(packageRoot(), "bin", "nightshift.mjs"));
+  assert.equal(existsSync(cliEntrypoint()), true, "the entrypoint handed to the child does not exist");
   assert.equal(mcp.mcpServers.nightshift.env.NIGHTSHIFT_HOME, homeDir(env));
 });
 

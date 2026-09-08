@@ -71,7 +71,7 @@ test("a missing library is a user error pointing at the install command, never a
   const env = makeEnv(t, "embedding-prefix-missing");
   await assert.rejects(warmupModel({ allowDownload: false }, env), (err) => {
     assert.ok(err instanceof UserError, `expected a UserError, got ${err?.name}`);
-    assert.match(err.message, /is not installed in .*embedding; run `shift embed install`/);
+    assert.match(err.message, /is not installed in .*embedding; run `nightshift embed install`/);
     return true;
   });
 });

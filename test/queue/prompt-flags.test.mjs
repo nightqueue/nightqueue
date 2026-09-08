@@ -9,10 +9,10 @@ import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream } from "../../test-support/streams.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/shift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
 
 // Runs the real CLI in its own process, with the isolated home of the test.
-function shift(env, args, { cwd } = {}) {
+function runCli(env, args, { cwd } = {}) {
   return spawnSync(process.execPath, [CLI, ...args], { env, cwd, encoding: "utf8" });
 }
 
@@ -36,7 +36,7 @@ test("a prompt that only mentions --run without the -- escape never starts a job
   const { env, repo, planPath } = makeCliHome(t, "flag-swallow-run");
   const words = ["explain", "the", "--run", "flag", "to", "the", "team"];
 
-  const added = shift(env, ["queue", "add", ...words], { cwd: repo });
+  const added = runCli(env, ["queue", "add", ...words], { cwd: repo });
 
   assert.equal(added.status, 0, added.stderr);
   assert.equal(
@@ -60,7 +60,7 @@ test("a prompt that only mentions --priority without the -- escape keeps the def
   const { env, repo } = makeCliHome(t, "flag-swallow-priority");
   const words = ["remember", "to", "set", "--priority", "3", "as", "the", "default"];
 
-  const added = shift(env, ["queue", "add", ...words], { cwd: repo });
+  const added = runCli(env, ["queue", "add", ...words], { cwd: repo });
 
   assert.equal(added.status, 0, added.stderr);
   const job = getJob(1, env);
@@ -79,23 +79,23 @@ test("a prompt that only mentions --priority without the -- escape keeps the def
 test("--help is help only as the single argument of queue add; every other shape keeps today's meaning", (t) => {
   const { env, repo } = makeCliHome(t, "help-flag-collision");
 
-  const midList = shift(env, ["queue", "add", "explain", "the", "--help", "flag", "to", "me"], { cwd: repo });
+  const midList = runCli(env, ["queue", "add", "explain", "the", "--help", "flag", "to", "me"], { cwd: repo });
   assert.equal(midList.status, 0, midList.stderr);
   assert.equal(getJob(1, env).prompt, "explain the --help flag to me", "a prompt mentioning --help lost a word");
 
-  const quoted = shift(env, ["queue", "add", "alpha", "fix the --help output"], { cwd: repo });
+  const quoted = runCli(env, ["queue", "add", "alpha", "fix the --help output"], { cwd: repo });
   assert.equal(quoted.status, 0, quoted.stderr);
   assert.equal(getJob(2, env).prompt, "fix the --help output");
 
-  const bareToken = shift(env, ["queue", "add", "help"], { cwd: repo });
+  const bareToken = runCli(env, ["queue", "add", "help"], { cwd: repo });
   assert.equal(bareToken.status, 0, bareToken.stderr);
   assert.equal(getJob(3, env).prompt, "help", "the bare token `help` stopped being a prompt");
 
-  const trailing = shift(env, ["queue", "add", "alpha", "fix", "the", "--help"], { cwd: repo });
+  const trailing = runCli(env, ["queue", "add", "alpha", "fix", "the", "--help"], { cwd: repo });
   assert.equal(trailing.status, 1, trailing.stdout);
   assert.match(trailing.stderr, /Unknown option '--help'/);
 
-  const leading = shift(env, ["queue", "add", "--help", "fix", "the", "worker"], { cwd: repo });
+  const leading = runCli(env, ["queue", "add", "--help", "fix", "the", "worker"], { cwd: repo });
   assert.equal(leading.status, 1, leading.stdout);
   assert.match(leading.stderr, /Unknown option '--help'/);
 });

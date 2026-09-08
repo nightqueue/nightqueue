@@ -3,7 +3,14 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync
 import { join } from "node:path";
 import { test } from "node:test";
 import { defaultContext, run } from "../src/cli/index.mjs";
-import { assertIsolatedEnv, makeHostEnv, readSettingsFile, writeSettingsFixture } from "../test-support/host.mjs";
+import {
+  assertIsolatedEnv,
+  legacyHookCommand,
+  makeHostEnv,
+  readSettingsFile,
+  writeLegacyShim,
+  writeSettingsFixture,
+} from "../test-support/host.mjs";
 
 const SETUP = ["setup", "--no-path", "--no-embedding"];
 const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -41,7 +48,7 @@ function hookCommandOf(host, hook) {
 // Entries of one event that belong to this package.
 function ownEntries(settings, event) {
   return (settings.hooks?.[event] ?? []).flatMap((group) =>
-    (group.hooks ?? []).filter((entry) => entry.command.includes("bin/shift.mjs hook")),
+    (group.hooks ?? []).filter((entry) => entry.command.includes("bin/nightshift.mjs hook")),
   );
 }
 
@@ -122,7 +129,7 @@ test("a package path that changed updates only the entry of this package", async
           matcher: "startup|resume|clear",
           hooks: [
             { type: "command", command: "other-tool session", timeout: 20 },
-            { type: "command", command: "node /old/pkg/bin/shift.mjs hook session-start", timeout: 3 },
+            { type: "command", command: "node /old/pkg/bin/nightshift.mjs hook session-start", timeout: 3 },
           ],
         },
       ],
@@ -220,6 +227,42 @@ test("an MCP server already registered with the same command is not registered a
   assert.ok(out.includes("mcp nightshift: already present"), out.join("\n"));
 });
 
+test("a setup over an installation of the previous command name updates it in place, without a duplicate", async (t) => {
+  const host = makeHostEnv(t, "setup-legacy");
+  const legacyEntry = join(host.runtimePackage, "bin", "shift.mjs");
+  writeLegacyShim(host);
+  writeSettingsFixture(host.configDir, {
+    hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: legacyHookCommand(host, "session-start"), timeout: 10 }] }],
+      UserPromptSubmit: [{ hooks: [{ type: "command", command: legacyHookCommand(host, "prompt-context"), timeout: 10 }] }],
+      SessionEnd: [{ hooks: [{ type: "command", command: legacyHookCommand(host, "reflect"), timeout: 15 }] }],
+    },
+  });
+  writeFileSync(
+    join(host.configDir, ".claude.json"),
+    JSON.stringify({ mcpServers: { nightshift: { type: "stdio", command: "node", args: [legacyEntry, "mcp"], env: {} } } }),
+  );
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(SETUP, ctx), 0);
+  const settings = readSettingsFile(host.configDir);
+  for (const [event, hook] of [
+    ["SessionStart", "session-start"],
+    ["UserPromptSubmit", "prompt-context"],
+    ["SessionEnd", "reflect"],
+  ]) {
+    assert.deepEqual(ownEntries(settings, event).map((entry) => entry.command), [hookCommandOf(host, hook)]);
+  }
+  assert.deepEqual(callsMatching(host.calls(), ["mcp"]).map((call) => call[1]), ["remove", "add"]);
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(host.configDir, ".claude.json"), "utf8")).mcpServers.nightshift.args,
+    [host.entry, "mcp"],
+  );
+  assert.equal(existsSync(host.legacyShim), false);
+  for (const path of Object.values(host.shims)) assert.equal(existsSync(path), true);
+  assert.ok(out.includes(`legacy shim: removed (${host.legacyShim})`), out.join("\n"));
+});
+
 test("the marketplace manifest is valid and the setup registers and installs the plugin", async (t) => {
   assert.equal(MANIFEST.name, "nightshift");
   assert.equal(typeof MANIFEST.owner.name, "string");
@@ -251,7 +294,7 @@ test("--remove takes out only the entries of this package and keeps the home", a
   const { ctx, out } = makeCtx(host.env);
   assert.equal(await run(["setup", "--remove"], ctx), 0);
   const settings = readSettingsFile(host.configDir);
-  assert.equal(JSON.stringify(settings).includes("bin/shift.mjs hook"), false);
+  assert.equal(JSON.stringify(settings).includes("bin/nightshift.mjs hook"), false);
   assert.deepEqual(settings.hooks.SessionStart, THIRD_PARTY_SETTINGS.hooks.SessionStart);
   assert.deepEqual(settings.hooks.PostToolUse, THIRD_PARTY_SETTINGS.hooks.PostToolUse);
   assert.deepEqual(settings.hooks.Stop, THIRD_PARTY_SETTINGS.hooks.Stop);
@@ -319,7 +362,7 @@ test("a runtime that npm could not install leaves the host untouched instead of 
   assert.equal(existsSync(host.shim), false, "a failed runtime still wrote a shim pointing at nothing");
   assert.deepEqual(callsMatching(host.calls(), ["mcp", "add"]), []);
   assert.ok(out.some((line) => line.startsWith("runtime: failed")), out.join("\n"));
-  assert.ok(out.includes("shim: skipped (runtime missing)"), out.join("\n"));
+  assert.ok(out.includes("shim nightshift: skipped (runtime missing)"), out.join("\n"));
   assert.ok(out.includes("hook SessionStart: skipped (runtime missing)"), out.join("\n"));
 });
 
@@ -333,7 +376,7 @@ test("a runtime whose npm exits non-zero is a failure even when an older install
   assert.equal(await run(SETUP, ctx), 0);
   assert.ok(out.some((line) => line.startsWith("runtime: failed")), out.join("\n"));
   assert.equal(out.some((line) => line.startsWith("runtime: updated")), false, out.join("\n"));
-  assert.ok(out.includes("shim: skipped (runtime missing)"), out.join("\n"));
+  assert.ok(out.includes("shim nightshift: skipped (runtime missing)"), out.join("\n"));
 });
 
 test("a claude CLI that cannot run degrades the steps that need it, never the hooks", async (t) => {

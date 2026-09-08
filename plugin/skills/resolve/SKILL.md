@@ -82,7 +82,7 @@ agent, print a line in this format first:
 
    - **The tool does not exist in the host** (no MCP server `nightshift` connected, the host
      answers that there is no such tool) → **STOP the run right here**: print one short line —
-     `nightshift memory unavailable: run shift setup and retry` — and do not create the
+     `nightshift memory unavailable: run nightshift setup and retry` — and do not create the
      worktree, do not write `state.json`, do not launch any subagent.
    - **The tool answers** — including an EMPTY return or a read error → continue. An empty
      memory is the normal state of a fresh install: an empty recall only makes the phase omit

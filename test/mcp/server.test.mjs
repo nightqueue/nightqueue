@@ -13,7 +13,7 @@ import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/shift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
 const GATED_FINISHED_AT = "2020-01-01 00:00:00";
 
 const CONTRACT_TOOLS = [
@@ -37,7 +37,7 @@ const LESSON = {
   attempts: 2,
 };
 
-// Connects a real stdio client to `shift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
 async function connect(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
   const client = new Client({ name: "nightshift-tests", version: "0.0.0" });

@@ -1,7 +1,15 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { binDir, embeddingDir, homeDir, runtimeDir, shimPath } from "../config/paths.mjs";
+import { binDir, embeddingDir, homeDir, legacyShimPath, runtimeDir } from "../config/paths.mjs";
 import { npmInstall } from "../host/npm.mjs";
-import { packageVersion, removeShim, runtimeReady, runtimeSpec, runtimeVersion, writeShim } from "../host/runtime.mjs";
+import {
+  packageVersion,
+  removeLegacyShim,
+  removeShims,
+  runtimeReady,
+  runtimeSpec,
+  runtimeVersion,
+  writeShims,
+} from "../host/runtime.mjs";
 import { PATH_MARK, addPathLine, binDirInPath, pathLine, rcFilePath, removePathLine } from "../host/shell.mjs";
 import { EMBEDDING_PACKAGE, EMBEDDING_PACKAGE_RANGE, embeddingLibraryEntry, warmupModel } from "../memory/embedding.mjs";
 import { confirm } from "./prompt.mjs";
@@ -9,6 +17,7 @@ import { firstLine } from "./report.mjs";
 
 const RUNTIME_LABEL = "runtime";
 const SHIM_LABEL = "shim";
+const LEGACY_SHIM_LABEL = "legacy shim";
 const PATH_LABEL = "PATH";
 const EMBEDDING_LABEL = "embedding";
 const DIRS_LABEL = "installed directories";
@@ -48,12 +57,29 @@ export function setupRuntime(ctx, report, { from, force } = {}) {
   return true;
 }
 
-// Writes the shim that starts the CLI of the runtime, the single command name the user needs.
-export function setupShim(ctx, report) {
-  guarded(report, SHIM_LABEL, `mkdir -p ${binDir(ctx.env)}`, () => {
-    const { path, status } = writeShim(ctx.env);
-    report.step(SHIM_LABEL, status, path);
+// Deletes the shim of the previous command name, telling the user why the old command stopped resolving.
+export function dropLegacyShim(ctx, report) {
+  guarded(report, LEGACY_SHIM_LABEL, `rm -f ${legacyShimPath(ctx.env)}`, () => {
+    const { path, status } = removeLegacyShim(ctx.env);
+    if (status === "not present") return;
+    if (status === "kept") {
+      report.step(LEGACY_SHIM_LABEL, status, `${path} was not written by nightshift`);
+      return;
+    }
+    report.step(LEGACY_SHIM_LABEL, status, path);
+    ctx.out("the `shift` command was renamed to `nightshift`; use `nightshift`, `nshift` or `nsft` from now on");
   });
+}
+
+// Writes the shims that start the CLI of the runtime, the command names the user types.
+export function setupShim(ctx, report, { shortcuts } = {}) {
+  guarded(report, SHIM_LABEL, `mkdir -p ${binDir(ctx.env)}`, () => {
+    for (const { name, path, status } of writeShims(ctx.env, { shortcuts })) {
+      report.step(`${SHIM_LABEL} ${name}`, status, path);
+    }
+    if (shortcuts === false) report.step(`${SHIM_LABEL} shortcuts`, "skipped", "--no-shortcuts");
+  });
+  dropLegacyShim(ctx, report);
 }
 
 // Question asked before a single line is appended to the rc file of the user.
@@ -114,7 +140,7 @@ async function downloadModel(ctx, report) {
     const result = await warmup({ allowDownload: true }, ctx.env);
     report.step("model", result.downloaded ? "created" : "already present", result.model);
   } catch (err) {
-    report.degrade("model", firstLine(err?.message ?? String(err)), "shift embed download");
+    report.degrade("model", firstLine(err?.message ?? String(err)), "nightshift embed download");
   }
 }
 
@@ -150,18 +176,21 @@ export async function setupEmbedding(ctx, report, { embedding } = {}) {
   const wanted = await wantsEmbedding(ctx, embedding);
   if (wanted !== true) {
     report.step(EMBEDDING_LABEL, "skipped", wanted === false ? "declined" : "no terminal");
-    ctx.out("semantic recall skipped; run `shift embed install` to enable it");
+    ctx.out("semantic recall skipped; run `nightshift embed install` to enable it");
     return;
   }
   await installEmbedding(ctx, report);
 }
 
-// Deletes the shim, and only when the file on disk is the one this package wrote.
+// Deletes every shim, and only the ones whose content on disk is what this package wrote.
 export function removeShimStep(ctx, report) {
-  guarded(report, SHIM_LABEL, `rm -f ${shimPath(ctx.env)}`, () => {
-    const { path, status } = removeShim(ctx.env);
-    report.step(SHIM_LABEL, status, status === "kept" ? `${path} was not written by nightshift` : path);
+  guarded(report, SHIM_LABEL, `rm -f ${binDir(ctx.env)}/nightshift`, () => {
+    for (const { name, path, status } of removeShims(ctx.env)) {
+      const detail = status === "kept" ? `${path} was not written by nightshift` : path;
+      report.step(`${SHIM_LABEL} ${name}`, status, detail);
+    }
   });
+  dropLegacyShim(ctx, report);
 }
 
 // Takes our PATH line out of the rc file, leaving every other line exactly as it was.

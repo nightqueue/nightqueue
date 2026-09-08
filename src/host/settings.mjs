@@ -1,9 +1,9 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { modeOf, writeFileAtomic } from "../config/store.mjs";
 import { readJsonStrict } from "./json.mjs";
-import { claudeConfigDir, claudeSettingsPath, shiftEntryPath } from "./paths.mjs";
+import { claudeConfigDir, claudeSettingsPath, cliEntryPath } from "./paths.mjs";
 
-const OWN_COMMAND_MARK = "bin/shift.mjs hook";
+const OWN_COMMAND_MARKS = ["bin/nightshift.mjs hook", "bin/shift.mjs hook"];
 
 const HOOK_EVENTS = [
   { event: "SessionStart", hook: "session-start", timeout: 10 },
@@ -13,13 +13,13 @@ const HOOK_EVENTS = [
 
 // Command line registered in the host for one hook of this package.
 export function hookCommand(hook, env = process.env) {
-  return `node ${shiftEntryPath(env)} hook ${hook}`;
+  return `node ${cliEntryPath(env)} hook ${hook}`;
 }
 
 // Warning for a package path that carries a space, the only case where the unquoted hook command breaks; null when it is safe.
 export function spacedRootWarning(root) {
   if (typeof root !== "string" || !root.includes(" ")) return null;
-  return `shift: warning: the package path contains a space (${root}); the host may fail to run the hook command`;
+  return `nightshift: warning: the package path contains a space (${root}); the host may fail to run the hook command`;
 }
 
 // The three hook entries this package wants in the host settings, each with the timeout its work needs.
@@ -48,13 +48,18 @@ function ensureEventGroups(data, event) {
   return data.hooks[event];
 }
 
+// Tells whether one registered command is ours, under the current entry name or the one an older install wrote.
+function isOwnCommand(command) {
+  return typeof command === "string" && OWN_COMMAND_MARKS.some((mark) => command.includes(mark));
+}
+
 // Entries of one event that belong to this package, each with the group holding it.
 function ownEntries(groups) {
   const found = [];
   for (const group of groups) {
     const entries = Array.isArray(group?.hooks) ? group.hooks : [];
     for (const entry of entries) {
-      if (typeof entry?.command === "string" && entry.command.includes(OWN_COMMAND_MARK)) found.push({ group, entry });
+      if (isOwnCommand(entry?.command)) found.push({ group, entry });
     }
   }
   return found;

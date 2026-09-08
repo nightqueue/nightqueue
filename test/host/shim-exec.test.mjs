@@ -14,12 +14,12 @@ import { makeDir } from "../../test-support/memory.mjs";
 
 const CHECKOUT_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
-// Materializes a real `bin/shift.mjs` inside the runtime prefix, the same way the real
+// Materializes a real `bin/nightshift.mjs` inside the runtime prefix, the same way the real
 // `npm install` would leave it (mirrors test-support/fake-npm.mjs#installNightshift),
 // but pointed straight at this checkout's CLI so no network/npm is involved at all.
 function installRealCli(env) {
   const dir = runtimePackageDir(env);
-  const entry = join(dir, "bin", "shift.mjs");
+  const entry = join(dir, "bin", "nightshift.mjs");
   mkdirSync(dirname(entry), { recursive: true });
   writeFileSync(
     entry,
@@ -58,7 +58,7 @@ test("the shim runs the real CLI through sh, with and without a space in the hom
 
   assert.equal(plain.code, 0, plain.stderr);
   assert.equal(spaced.code, 0, spaced.stderr);
-  assert.match(plain.stdout, /^shift — nightshift configuration/);
+  assert.match(plain.stdout, /^nightshift — configuration CLI/);
   assert.equal(spaced.stdout, plain.stdout, "a space in NIGHTSHIFT_HOME must not change what the shim prints");
 });
 

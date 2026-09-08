@@ -9,9 +9,9 @@ import { makeReport } from "./report.mjs";
 const BATCH_SIZE = 100;
 const MAX_BATCHES = 200;
 
-// Runs `shift embed install`: puts the embedding library in its own prefix and downloads the weights.
+// Runs `nightshift embed install`: puts the embedding library in its own prefix and downloads the weights.
 async function runInstall(argv, ctx) {
-  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "shift embed install" });
+  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "nightshift embed install" });
   await setupEmbedding(ctx, makeReport(ctx), { embedding: true });
 }
 
@@ -20,9 +20,9 @@ function lessonProbe(lesson) {
   return [lesson.title, lesson.prevention].filter(Boolean).join(" ");
 }
 
-// Runs `shift embed download`: the only command of the CLI that opens the network.
+// Runs `nightshift embed download`: the only command of the CLI that opens the network.
 async function runDownload(argv, ctx) {
-  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "shift embed download" });
+  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "nightshift embed download" });
   const result = await warmupModel({ allowDownload: true }, ctx.env);
   ctx.out(
     result.downloaded
@@ -43,11 +43,11 @@ async function fillBatch(lessons, env) {
   return filled;
 }
 
-// Runs `shift embed backfill`: computes the missing embeddings from the weights already on disk.
+// Runs `nightshift embed backfill`: computes the missing embeddings from the weights already on disk.
 async function runBackfill(argv, ctx) {
-  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "shift embed backfill" });
+  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "nightshift embed backfill" });
   if (!isModelCached(ctx.env)) {
-    throw new UserError(`no model weight in ${modelsDir(ctx.env)}; run \`shift embed download\` first`);
+    throw new UserError(`no model weight in ${modelsDir(ctx.env)}; run \`nightshift embed download\` first`);
   }
   let filled = 0;
   for (let batch = 0; batch < MAX_BATCHES; batch += 1) {
@@ -66,7 +66,7 @@ const SUBCOMMANDS = new Map([
   ["backfill", runBackfill],
 ]);
 
-// Dispatches the subcommands of `shift embed`.
+// Dispatches the subcommands of `nightshift embed`.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);

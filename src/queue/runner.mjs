@@ -276,7 +276,7 @@ function compactStamp() {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 }
 
-// Starts `shift queue run` detached, with its output going to a log file, and returns right away.
+// Starts `nightshift queue run` detached, with its output going to a log file, and returns right away.
 export function launchDetachedRunner({ jobId = null, env = process.env, spawnImpl = spawn } = {}) {
   ensureHome(env);
   const logPath = join(logsDir(env), `runner-${compactStamp()}.log`);

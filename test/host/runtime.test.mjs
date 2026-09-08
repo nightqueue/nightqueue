@@ -2,17 +2,21 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { runtimePackageDir, shimPath } from "../../src/config/paths.mjs";
+import { legacyShimPath, runtimePackageDir, shimPath } from "../../src/config/paths.mjs";
 import { hostPackageRoot } from "../../src/host/paths.mjs";
 import {
+  legacyShimState,
   packageVersion,
+  removeLegacyShim,
   removeShim,
+  removeShims,
   runtimeReady,
   runtimeSpec,
   runtimeVersion,
   shimContent,
   shimState,
   writeShim,
+  writeShims,
 } from "../../src/host/runtime.mjs";
 import { makeDir } from "../../test-support/memory.mjs";
 
@@ -68,11 +72,11 @@ test("the shim is executable, points at the runtime and survives a space in the 
   assert.equal(fileMode(created.path), 0o755);
   const content = readFileSync(created.path, "utf8");
   assert.equal(content, shimContent(env));
-  assert.equal(content.includes(`"${join(hostPackageRoot(env), "bin", "shift.mjs")}"`), true, content);
+  assert.equal(content.includes(`"${join(hostPackageRoot(env), "bin", "nightshift.mjs")}"`), true, content);
   assert.match(content, /^#!\/bin\/sh\n/);
 
   const spaced = { NIGHTSHIFT_HOME: join(makeDir(t, "runtime shim spaced"), "home") };
-  assert.match(shimContent(spaced), /exec node "\/.*shim spaced.*\/bin\/shift\.mjs" "\$@"/);
+  assert.match(shimContent(spaced), /exec node "\/.*shim spaced.*\/bin\/nightshift\.mjs" "\$@"/);
 });
 
 test("a second write changes nothing, and a shim left without the execute bit is rewritten", (t) => {
@@ -90,7 +94,7 @@ test("a second write changes nothing, and a shim left without the execute bit is
 test("a shim pointing somewhere else is rewritten, and a shim of another tool is never deleted", (t) => {
   const env = makeEnv(t, "runtime-shim-foreign");
   writeShim(env);
-  writeFileSync(shimPath(env), "#!/bin/sh\nexec node /somewhere/else/bin/shift.mjs \"$@\"\n");
+  writeFileSync(shimPath(env), "#!/bin/sh\nexec node /somewhere/else/bin/nightshift.mjs \"$@\"\n");
   assert.equal(shimState(env).current, false);
   assert.equal(removeShim(env).status, "kept");
   assert.equal(existsSync(shimPath(env)), true);
@@ -99,4 +103,58 @@ test("a shim pointing somewhere else is rewritten, and a shim of another tool is
   assert.equal(removeShim(env).status, "removed");
   assert.equal(existsSync(shimPath(env)), false);
   assert.equal(removeShim(env).status, "not present");
+});
+
+test("writeShims writes the three command names, and --no-shortcuts writes only the canonical one", (t) => {
+  const env = makeEnv(t, "runtime-shims");
+  assert.deepEqual(
+    writeShims(env).map((shim) => shim.name),
+    ["nightshift", "nshift", "nsft"],
+  );
+  for (const name of ["nightshift", "nshift", "nsft"]) {
+    assert.equal(readFileSync(shimPath(env, name), "utf8"), shimContent(env));
+    assert.equal(fileMode(shimPath(env, name)), 0o755);
+  }
+
+  const lean = makeEnv(t, "runtime-shims-lean");
+  assert.deepEqual(
+    writeShims(lean, { shortcuts: false }).map((shim) => shim.name),
+    ["nightshift"],
+  );
+  assert.equal(existsSync(shimPath(lean, "nshift")), false);
+  assert.equal(existsSync(shimPath(lean, "nsft")), false);
+});
+
+test("removeShims takes out every command name, even the shortcuts a --no-shortcuts install never wrote", (t) => {
+  const env = makeEnv(t, "runtime-shims-remove");
+  writeShims(env, { shortcuts: false });
+  assert.deepEqual(
+    removeShims(env).map((shim) => shim.status),
+    ["removed", "not present", "not present"],
+  );
+  assert.equal(existsSync(shimPath(env, "nightshift")), false);
+});
+
+test("the shim of the previous command name is removed by its shape, and a file of another tool is kept", (t) => {
+  const env = makeEnv(t, "runtime-legacy-shim");
+  const path = legacyShimPath(env);
+  assert.equal(legacyShimState(env).present, false);
+  assert.equal(removeLegacyShim(env).status, "not present");
+
+  mkdirSync(join(env.NIGHTSHIFT_HOME, "bin"), { recursive: true });
+  writeFileSync(path, '#!/bin/sh\nexec node "/some/old/home/runtime/node_modules/nightshift/bin/shift.mjs" "$@"\n');
+  assert.deepEqual(legacyShimState(env), { path, present: true, own: true });
+  assert.equal(removeLegacyShim(env).status, "removed");
+  assert.equal(existsSync(path), false);
+
+  writeFileSync(path, "#!/bin/sh\necho other-tool\n");
+  assert.equal(legacyShimState(env).own, false);
+  assert.equal(removeLegacyShim(env).status, "kept");
+  assert.equal(readFileSync(path, "utf8"), "#!/bin/sh\necho other-tool\n");
+
+  const foreign = '#!/bin/sh\nexec node "/opt/some-other-tool/bin/shift.mjs" "$@"\n';
+  writeFileSync(path, foreign);
+  assert.equal(legacyShimState(env).own, false, "a shim of another tool must never look like ours");
+  assert.equal(removeLegacyShim(env).status, "kept");
+  assert.equal(readFileSync(path, "utf8"), foreign);
 });

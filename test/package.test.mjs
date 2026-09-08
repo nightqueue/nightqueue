@@ -18,8 +18,8 @@ function packedFiles() {
   }
 }
 
-test("both command names point at the same entry and the embedding library is not a dependency", () => {
-  assert.deepEqual(MANIFEST.bin, { shift: "./bin/shift.mjs", nightshift: "./bin/shift.mjs" });
+test("`nightshift` is the only command name npm installs and the embedding library is not a dependency", () => {
+  assert.deepEqual(MANIFEST.bin, { nightshift: "./bin/nightshift.mjs" });
   assert.equal(MANIFEST.optionalDependencies, undefined);
   assert.equal(Object.hasOwn(MANIFEST.dependencies, "@huggingface/transformers"), false);
   assert.deepEqual(MANIFEST.files, [".claude-plugin", "bin", "plugin", "src", "README.md", "LICENSE"]);
@@ -32,7 +32,7 @@ test("the tarball carries the CLI, the plugin and the manifest, and no test at a
     "package.json",
     "README.md",
     "LICENSE",
-    "bin/shift.mjs",
+    "bin/nightshift.mjs",
     "src/cli/index.mjs",
     ".claude-plugin/marketplace.json",
     "plugin/.claude-plugin/plugin.json",
@@ -40,5 +40,6 @@ test("the tarball carries the CLI, the plugin and the manifest, and no test at a
   ]) {
     assert.ok(files.includes(expected), `${expected} is missing from the tarball`);
   }
+  assert.equal(files.includes("bin/shift.mjs"), false, "the tarball still carries the entry of the previous command name");
   assert.deepEqual(files.filter((path) => path.startsWith("test/") || path.startsWith("test-support/")), []);
 });

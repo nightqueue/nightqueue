@@ -6,7 +6,7 @@ import { registerProject } from "./project.mjs";
 import { INSTALL_OPTIONS, install, installOptions } from "./setup.mjs";
 
 const USAGE =
-  "shift init [path] [--org <name>] [--name <name>] [--from <dir>] [--path|--no-path] [--embedding|--no-embedding] [--gh|--no-gh]";
+  "nightshift init [path] [--org <name>] [--name <name>] [--from <dir>] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--gh|--no-gh]";
 
 // Turns the two GitHub CLI flags into the single mode the import understands, refusing the contradictory pair.
 function ghMode(values) {
@@ -23,7 +23,7 @@ function projectPath(positionals, ctx) {
   return gitPathOrNull(ctx.cwd ?? ".");
 }
 
-// Runs `shift init`: installs the runtime, registers it in the host and, inside a repository, registers the project too.
+// Runs `nightshift init`: installs the runtime, registers it in the host and, inside a repository, registers the project too.
 export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, {
     ...INSTALL_OPTIONS,
@@ -37,7 +37,7 @@ export async function run(argv, ctx) {
   const path = projectPath(positionals, ctx);
   await install(ctx, installOptions(values, USAGE));
   if (!path) {
-    ctx.out(`no git repository in ${ctx.cwd ?? "."}; run \`shift init <path>\` inside one to register a project`);
+    ctx.out(`no git repository in ${ctx.cwd ?? "."}; run \`nightshift init <path>\` inside one to register a project`);
     return 0;
   }
   const project = registerProject(ctx, { path, name: values.name, org: values.org });

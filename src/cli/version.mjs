@@ -8,10 +8,10 @@ export function readVersion() {
   return JSON.parse(readFileSync(path, "utf8")).version;
 }
 
-// Runs `shift version`: prints the installed version, with no arguments accepted.
+// Runs `nightshift version`: prints the installed version, with no arguments accepted.
 export async function run(argv, ctx) {
   const { positionals } = parseCommand(argv, {});
-  checkArgs(positionals, { max: 0, usage: "shift version" });
+  checkArgs(positionals, { max: 0, usage: "nightshift version" });
   ctx.out(readVersion());
   return 0;
 }

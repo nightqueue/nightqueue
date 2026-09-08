@@ -45,7 +45,7 @@ function writeLegacyDatabase(path) {
   db.close();
 }
 
-test("shift doctor must not migrate an existing database it only diagnoses", async (t) => {
+test("nightshift doctor must not migrate an existing database it only diagnoses", async (t) => {
   const host = makeHostEnv(t, "doctor-readonly-db");
   const path = dbPath(host.env);
   ensureHome(host.env);
@@ -67,7 +67,7 @@ test("shift doctor must not migrate an existing database it only diagnoses", asy
     userVersion: new DatabaseSync(path, { readOnly: true }).prepare("PRAGMA user_version").get().user_version,
   };
 
-  assert.equal(after.userVersion, before.userVersion, "`shift doctor` bumped PRAGMA user_version of a database it should only read");
-  assert.deepEqual(after.bytes, before.bytes, "`shift doctor` rewrote the bytes of a database it should only read");
-  assert.equal(existsSync(`${path}-wal`), false, "`shift doctor` left a -wal file behind a diagnosis run");
+  assert.equal(after.userVersion, before.userVersion, "`nightshift doctor` bumped PRAGMA user_version of a database it should only read");
+  assert.deepEqual(after.bytes, before.bytes, "`nightshift doctor` rewrote the bytes of a database it should only read");
+  assert.equal(existsSync(`${path}-wal`), false, "`nightshift doctor` left a -wal file behind a diagnosis run");
 });

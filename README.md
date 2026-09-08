@@ -24,8 +24,8 @@ plugin in `plugin/` is the pipeline half.
 
 What is still missing: the scheduler that would start the queue by itself at
 night, and any cockpit over it. Registering the MCP server, the hooks and the
-plugin in the host is no longer a manual step - `shift setup` does it (see
-`## Install`), and `shift doctor` says whether it took (see `## Doctor`).
+plugin in the host is no longer a manual step - `nightshift setup` does it (see
+`## Install`), and `nightshift doctor` says whether it took (see `## Doctor`).
 
 ## What ships today
 
@@ -37,14 +37,14 @@ plugin in the host is no longer a manual step - `shift setup` does it (see
   proven breaks, fuzz templates.
 - Six subagents, invoked as `nightshift:<agent>`: `architect`, `coder`,
   `explore`, `qa-guardian`, `triager`, `verifier`.
-- `shift mcp` - the stdio MCP server that answers those six tools plus the four
+- `nightshift mcp` - the stdio MCP server that answers those six tools plus the four
   of the queue.
-- `shift queue` - the unattended queue: enqueue a request, run it through
+- `nightshift queue` - the unattended queue: enqueue a request, run it through
   `/nightshift:resolve` and get a pull request back (see `## Queue`).
-- `shift setup` - installs the runtime in `~/.nightshift` and registers the MCP
+- `nightshift setup` - installs the runtime in `~/.nightshift` and registers the MCP
   server, the three hooks and the plugin in the host, idempotently and
   reversibly (see `## Install`).
-- `shift doctor` - the read-only diagnosis of the host and the home (see
+- `nightshift doctor` - the read-only diagnosis of the host and the home (see
   `## Doctor`).
 
 ## Requirements
@@ -56,7 +56,7 @@ plugin in the host is no longer a manual step - `shift setup` does it (see
 - An MCP server named `nightshift`, exposing `lesson_recall`, `lesson_save`, `memory_recall`,
   `index_save`, `index_recall` and `pipeline_log`. All six are hard requirements: there is no
   memoryless mode - Phase 0 opens with a preflight call to `lesson_recall` and the run stops
-  right there when the host does not expose it. `shift mcp` is that server.
+  right there when the host does not expose it. `nightshift mcp` is that server.
 - Two dependencies (`@modelcontextprotocol/sdk`, `zod`). The embedding library
   (`@huggingface/transformers`) is not one of them: it is opt-in and lands in
   its own prefix, `~/.nightshift/embedding` (see `## Memory`, honest numbers).
@@ -74,12 +74,13 @@ stops a run is the server being **absent**, never it being empty.
 Two commands, from anywhere, on a machine that has nothing installed yet:
 
 ```sh
-npx nightshift init                            # install the runtime and set the host up
-shift queue add "fix the flaky worker" --run   # enqueue the request and run it right here
+npx nightshift init                                # install the runtime and set the host up
+nightshift queue add "fix the flaky worker" --run  # enqueue the request and run it right here
 ```
 
 `npx nightshift init` is the whole installation. It puts the package in
-`~/.nightshift/runtime`, writes the shim `~/.nightshift/bin/shift`, offers to
+`~/.nightshift/runtime`, writes the shims `~/.nightshift/bin/nightshift`,
+`nshift` and `nsft` (`--no-shortcuts` writes only `nightshift`), offers to
 put that directory on your PATH, registers the MCP server, the hooks and the
 plugin **against the runtime**, and offers the semantic recall. Nothing depends
 on where the command ran from: the npx cache and a development checkout both
@@ -92,8 +93,9 @@ GitHub CLI.
 Flags: `--from <dir>` installs a local checkout instead of the registry version,
 `--path` / `--no-path` answers the PATH question without a terminal,
 `--embedding` / `--no-embedding` answers the semantic recall question,
-`--gh` / `--no-gh` answers the GitHub CLI one, and `--org` / `--name` name the
-project. Without a terminal and without the flag, nothing is written and nothing
+`--gh` / `--no-gh` answers the GitHub CLI one, `--shortcuts` / `--no-shortcuts`
+decides whether the short command names are written, and `--org` / `--name` name
+the project. Without a terminal and without the flag, nothing is written and nothing
 is downloaded: both questions print the line to run by hand instead.
 
 `--from <dir>` is a development path and counts on npm linking the checkout
@@ -101,55 +103,56 @@ rather than copying it: with `install-links=true` in your `.npmrc`, npm copies,
 and the runtime ends up without `@modelcontextprotocol/sdk` and `zod`, which it
 would otherwise resolve from the `node_modules` of the checkout.
 
-`shift update` reinstalls the runtime at the newest version (or from `--from`)
+`nightshift update` reinstalls the runtime at the newest version (or from `--from`)
 and re-points the host at it; config, secrets and the database stay untouched.
 
-`shift init` is `shift setup` plus the project registration, always in that
+`nightshift init` is `nightshift setup` plus the project registration, always in that
 order: every step below first, then the repository of the current directory (or
 of `[path]`), then the token of the GitHub CLI. Running it again changes
 nothing: every step reports `already present` and the project reports
 `already registered`.
 
 **The token of the GitHub CLI.** When `gh` is installed and authenticated and
-the `github` slot of the org is still free, `shift init` on a terminal asks
+the `github` slot of the org is still free, `nightshift init` on a terminal asks
 `GitHub CLI is authenticated as <login> — import its token as connection "gh"?
 [Y/n]`. A yes reads `gh auth token`, stores it in `secrets.json` (`0600`), binds
 it to the org and checks it against the API; the value never goes through argv,
 stdout or stderr. `--gh` imports without asking, `--no-gh` never even calls the
 binary, and without a terminal nothing is asked - only a line pointing at
-`shift init --gh`. A slot already taken, a connection already named `gh`, a
+`nightshift init --gh`. A slot already taken, a connection already named `gh`, a
 missing `gh` or one that is logged out all cost a single line and never an
 error; the manual path stays open:
 
 ```sh
-echo "$GITHUB_TOKEN" | shift connection add gh --type github
+echo "$GITHUB_TOKEN" | nightshift connection add gh --type github
 ```
 
 `NIGHTSHIFT_GH_BIN` chooses which `gh` binary the import calls.
 
 Restart Claude Code and the pipeline answers as `/nightshift:resolve`. To check
-the result of all of it at any point, run `shift doctor`.
+the result of all of it at any point, run `nightshift doctor`.
 
 **The manual flow**, still supported one step at a time, on top of a global
 install (`npm install -g nightshift`) or a clone (`npm install` plus `npm link`):
 
 ```sh
-shift setup                                    # install the runtime and register everything in the host
-shift init                                     # register this repository as a project
-echo "$GITHUB_TOKEN" | shift connection add gh --type github
+nightshift setup                                   # install the runtime and register everything in the host
+nightshift init                                    # register this repository as a project
+echo "$GITHUB_TOKEN" | nightshift connection add gh --type github
 ```
 
-`shift setup` is idempotent and prints the state of every step (`created`,
+`nightshift setup` is idempotent and prints the state of every step (`created`,
 `already present` or `updated`), in this order:
 
 1. the configuration home (`0700`), `config.json` and `secrets.json` (`0600`).
 2. the runtime in `$NIGHTSHIFT_HOME/runtime`, at the version of the package that
    ran the command; already at that version means no reinstall.
-3. the shim `$NIGHTSHIFT_HOME/bin/shift` (`0755`), plus the offer to add that
-   directory to the PATH through a single line marked `# nightshift` in
-   `~/.zshrc`, `~/.bashrc` or `~/.config/fish/config.fish`.
+3. the shims `$NIGHTSHIFT_HOME/bin/nightshift`, `nshift` and `nsft` (`0755`
+   each), plus the offer to add that directory to the PATH through a single line
+   marked `# nightshift` in `~/.zshrc`, `~/.bashrc` or
+   `~/.config/fish/config.fish`.
 4. the MCP server `nightshift` at **user** scope, started as
-   `node $NIGHTSHIFT_HOME/runtime/node_modules/nightshift/bin/shift.mjs mcp`.
+   `node $NIGHTSHIFT_HOME/runtime/node_modules/nightshift/bin/nightshift.mjs mcp`.
 5. the three hooks in `<claude config>/settings.json`: `SessionStart`,
    `UserPromptSubmit` and `SessionEnd`, pointing at that same entry.
 6. the runtime as a local marketplace, plus the plugin installed from it.
@@ -160,7 +163,7 @@ echo "$GITHUB_TOKEN" | shift connection add gh --type github
 Steps 4 to 6 never run when step 2 could not finish: a hook pointing at a
 runtime that is not there would break every session of the host.
 
-`--remove` undoes steps 3 to 6 - the shim, the marked PATH line, the MCP server,
+`--remove` undoes steps 3 to 6 - the shims, the marked PATH line, the MCP server,
 the three hook entries, the plugin and the marketplace - and asks before
 deleting `runtime/` and `embedding/`. It never touches `config.json`,
 `secrets.json` or the database; only `--remove --purge` deletes
@@ -171,23 +174,29 @@ destructive: every entry that is not this package's is left as it is, matcher
 included, and events nightshift does not use are never even read. The file is
 backed up as `settings.json.bak-<timestamp>` before the first change of a run,
 and a run that has nothing to change does not rewrite the file at all - so a
-second `shift setup` leaves it byte for byte identical. A `settings.json` that
+second `nightshift setup` leaves it byte for byte identical. A `settings.json` that
 is not valid JSON stops the step with an error instead of being overwritten.
 
 The hooks are registered at user scope, so they run in **every** Claude Code
 session of the machine - but the two that inject context produce no output at
-all outside a directory registered with `shift init`. The exception is
+all outside a directory registered with `nightshift init`. The exception is
 `SessionEnd`, the reflection, which spends tokens on any session it sees: not
 registering it, or `NIGHTSHIFT_REFLECT=1`, turns it off (see `## Memory`).
 
 If the `claude` CLI is missing or one of its subcommands fails, the setup does
 not stop: it prints the step as `failed`, prints the exact command to run by
-hand, finishes the remaining steps and points at `shift doctor`. The hooks are
+hand, finishes the remaining steps and points at `nightshift doctor`. The hooks are
 plain file writes, so they land even with no `claude` at all.
 
 `CLAUDE_CONFIG_DIR` is honored everywhere, so a throwaway host is one variable
 away. `NIGHTSHIFT_CLAUDE_BIN` chooses which `claude` binary the setup and the
 diagnosis call.
+
+**Upgrading from the `shift` command.** The CLI used to be called `shift`. Run
+`nightshift setup` again: it re-points the hooks and the MCP server at
+`bin/nightshift.mjs` without duplicating any entry, writes the three new shims
+and removes the old `~/.nightshift/bin/shift`. A file of another tool sitting
+under that name is kept, and `nightshift doctor` says so instead of deleting it.
 
 ## Try it without installing
 
@@ -196,26 +205,26 @@ claude --plugin-dir ./plugin
 ```
 
 The plugin loads that way, but `/nightshift:resolve` stops at the Phase 0 preflight until an
-MCP server named `nightshift` is connected. `shift mcp` is that server: it speaks the protocol
-over stdio and exposes those six tools plus the four of the queue, and `shift setup` is what
+MCP server named `nightshift` is connected. `nightshift mcp` is that server: it speaks the protocol
+over stdio and exposes those six tools plus the four of the queue, and `nightshift setup` is what
 registers it.
 
-## The `shift` CLI
+## The `nightshift` CLI
 
-`bin/shift.mjs` is the CLI: it manages orgs, projects and the connections (and
+`bin/nightshift.mjs` is the CLI: it manages orgs, projects and the connections (and
 their secrets), and it drives the memory runtime.
 
-- `shift --help` lists every command: `setup`, `doctor`, `init`, `org`,
+- `nightshift --help` lists every command: `setup`, `doctor`, `init`, `org`,
   `project`, `update`, `connection`, `mcp`, `hook`, `reflect`, `embed`,
   `memory`, `queue` and `version`.
-- `shift --version` (same as `shift version`) prints the installed version
+- `nightshift --version` (same as `nightshift version`) prints the installed version
   and exits `0`.
 - Exit codes: `0` ok, `1` user error (a single line on stderr), `2` unexpected
-  error (a stack on stderr). `shift doctor` also exits `1` when a check fails.
+  error (a stack on stderr). `nightshift doctor` also exits `1` when a check fails.
 - Every `list` accepts `--json`; on `--json`, stdout is either valid JSON or
   empty, because warnings and errors always go to stderr.
 
-The queue lives in `shift queue` (see `## Queue`); the scheduler that would
+The queue lives in `nightshift queue` (see `## Queue`); the scheduler that would
 start it by itself lands in a future version, published as the npm package
 `nightshift`, of which this plugin is the pipeline half.
 
@@ -232,7 +241,7 @@ $NIGHTSHIFT_HOME/          # 0700
   secrets.json             # 0600, connection secrets
   nightshift.db            # the memory database (see `## Memory`)
   runtime/                 # the installed package the host is registered against
-  bin/shift                # the shim, the single command name on the PATH
+  bin/                     # the shims: nightshift, nshift and nsft
   embedding/               # npm prefix of the embedding library, opt-in
   models/                  # embedding weights, downloaded on demand
   state/                   # per-session hook state
@@ -246,42 +255,42 @@ credential store, because the runtime is meant to run unattended, with nobody
 there to unlock anything.
 
 A command that writes holds the directory `$NIGHTSHIFT_HOME.lock` while it
-runs, so two `shift` processes never overwrite each other's changes; read-only
+runs, so two `nightshift` processes never overwrite each other's changes; read-only
 commands such as `list` never take it. The memory and queue commands (`mcp`,
 `hook`, `reflect`, `embed`, `memory`, `queue`) never take it either: they rely
 on SQLite for concurrency, so a running server - or a runner that works all
-night - never blocks a `shift init`.
+night - never blocks a `nightshift init`.
 
 ```sh
-shift setup                                   # install the runtime and register everything in the host
-shift setup --remove --purge                  # undo the registrations, or delete the home as well
-shift update                                  # reinstall the runtime and re-point the host at it
-shift doctor --json                           # check the host and the home, exit 1 on any failure
-shift init                                    # set the host up and register the current repository
-shift init ~/code/api --org acme --name api   # ...or an explicit path, org and name
-shift init --no-embedding --no-path --no-gh   # ...answering every question up front
+nightshift setup                                   # install the runtime and register everything in the host
+nightshift setup --remove --purge                  # undo the registrations, or delete the home as well
+nightshift update                                  # reinstall the runtime and re-point the host at it
+nightshift doctor --json                           # check the host and the home, exit 1 on any failure
+nightshift init                                    # set the host up and register the current repository
+nightshift init ~/code/api --org acme --name api   # ...or an explicit path, org and name
+nightshift init --no-embedding --no-path --no-gh   # ...answering every question up front
 
-shift org add acme --display-name "Acme"      # create an org
-shift org list --json                         # orgs, connection slots, project counts
-shift org rename acme acme-inc                # rewrites every project pointing at it
-shift org remove acme-inc                     # refused while projects still point at it
+nightshift org add acme --display-name "Acme"      # create an org
+nightshift org list --json                         # orgs, connection slots, project counts
+nightshift org rename acme acme-inc                # rewrites every project pointing at it
+nightshift org remove acme-inc                     # refused while projects still point at it
 
-shift project list                            # name, path, org, whether the path still exists
-shift project move api acme                   # move a project to another org
-shift project remove api
+nightshift project list                            # name, path, org, whether the path still exists
+nightshift project move api acme                   # move a project to another org
+nightshift project remove api
 
-echo "$GITHUB_TOKEN" | shift connection add gh --type github
-shift connection bind gh --org acme           # bind (or rebind) an org slot
-shift connection test gh                      # prints login and scopes, never the token
-shift connection list --json
-shift connection remove gh                    # unbinds from every org, then deletes the secret
+echo "$GITHUB_TOKEN" | nightshift connection add gh --type github
+nightshift connection bind gh --org acme           # bind (or rebind) an org slot
+nightshift connection test gh                      # prints login and scopes, never the token
+nightshift connection list --json
+nightshift connection remove gh                    # unbinds from every org, then deletes the secret
 ```
 
 The secret is read from stdin when stdin is not a terminal, and asked for in a
 hidden prompt otherwise. It is never accepted as a command-line argument, and
 never printed back - not by `list`, not by `--json`, not by an error message.
 
-A path that starts with `-` has to come after `--` (`shift init -- -weird-dir`),
+A path that starts with `-` has to come after `--` (`nightshift init -- -weird-dir`),
 otherwise it is parsed as an unknown option and rejected.
 
 ## Memory
@@ -293,7 +302,7 @@ the reflection worker - so every write is retried while the lock is held by
 someone else, and every transaction starts as `BEGIN IMMEDIATE` instead of being
 promoted from a read. A write that is still refused after the retries comes back
 as a message asking to run the command again, never as a raw SQLite error.
-Only the `shift` runtime opens it: the plugin talks to the MCP tools, never to
+Only the `nightshift` runtime opens it: the plugin talks to the MCP tools, never to
 the file. The schema is created and migrated on first use, and reopening an
 existing database is a no-op.
 
@@ -326,19 +335,19 @@ rest. When a query matched nothing, the same recent list comes back marked
 
 **Hooks.** Three, all reading the event JSON from stdin:
 
-- `shift hook session-start` prints the block injected at the start of a
+- `nightshift hook session-start` prints the block injected at the start of a
   session: the top lessons of the project plus its memories, and it records
   what it injected in `state/<session>.json` and in the corpus.
-- `shift hook prompt-context` prints the lessons and memories relevant to the
+- `nightshift hook prompt-context` prints the lessons and memories relevant to the
   prompt that was just submitted, skipping what this session already saw, and
   ignoring prompts too short to carry a request.
-- `shift hook reflect` answers `{}` immediately and leaves a detached worker
+- `nightshift hook reflect` answers `{}` immediately and leaves a detached worker
   reading the transcript.
 
-`shift setup` registers the three of them at user scope, and `shift setup
+`nightshift setup` registers the three of them at user scope, and `nightshift setup
 --remove` takes them out again (see `## Install`). The two that inject context
 answer with nothing when the working directory is outside a project registered
-with `shift init`.
+with `nightshift init`.
 
 **Reflection.** The detached worker reads only the bytes appended to the
 transcript since its last run, and only when 60 seconds have passed since the
@@ -355,12 +364,12 @@ persisted, so a failed run reprocesses the same slice instead of losing it.
 **Commands.**
 
 ```sh
-shift mcp                     # start the stdio MCP server with the ten tools
-shift hook session-start      # run a hook, reading the event JSON from stdin
-shift reflect --transcript <path>   # reflect on a transcript now, in the foreground
-shift embed download          # download the embedding weights (the only network path)
-shift embed backfill          # embed the lessons that still have no vector
-shift memory stats [--json]   # counts per project
+nightshift mcp                     # start the stdio MCP server with the ten tools
+nightshift hook session-start      # run a hook, reading the event JSON from stdin
+nightshift reflect --transcript <path>   # reflect on a transcript now, in the foreground
+nightshift embed download          # download the embedding weights (the only network path)
+nightshift embed backfill          # embed the lessons that still have no vector
+nightshift memory stats [--json]   # counts per project
 ```
 
 **Environment variables.**
@@ -371,10 +380,10 @@ shift memory stats [--json]   # counts per project
 | `NIGHTSHIFT_EMBED_DISABLED` | `1` turns the semantic side off; the recall stays BM25 only |
 | `NIGHTSHIFT_EMBED_DEADLINE_MS` | deadline of the embedding in the prompt hook, default `800` |
 | `NIGHTSHIFT_REFLECT_MODEL` | model of the reflection, default `haiku` |
-| `NIGHTSHIFT_CLAUDE_BIN` | path of the `claude` CLI used by the reflection, by the queue runner, by `shift setup` and by `shift doctor` |
+| `NIGHTSHIFT_CLAUDE_BIN` | path of the `claude` CLI used by the reflection, by the queue runner, by `nightshift setup` and by `nightshift doctor` |
 | `NIGHTSHIFT_NPM_BIN` | path of the `npm` CLI that installs the runtime and the embedding prefix |
 | `NIGHTSHIFT_JOB_ID` | set by the runner in the environment of the job it spawns, never read from outside |
-| `CLAUDE_CONFIG_DIR` | configuration directory of the host that `shift setup` and `shift doctor` read and write, default `~/.claude` |
+| `CLAUDE_CONFIG_DIR` | configuration directory of the host that `nightshift setup` and `nightshift doctor` read and write, default `~/.claude` |
 | `NIGHTSHIFT_REFLECT` | `1` marks a process as the reflection itself: no context block and no new reflection |
 | `NIGHTSHIFT_MODEL`, `NIGHTSHIFT_SESSION_ID` | recorded in `pipeline_runs` by the server process |
 
@@ -389,18 +398,18 @@ shift memory stats [--json]   # counts per project
 | embedding weights in `$NIGHTSHIFT_HOME/models` | 23 MB |
 | one prompt hook, weights cached, semantic side on | 191 ms (median of 5 cold processes) |
 | the same hook with `NIGHTSHIFT_EMBED_DISABLED=1` | 84 ms, so the semantic side costs about 107 ms |
-| peak RSS of `shift embed backfill` with the model loaded | 227 MB, against 76 MB for `shift memory stats` |
+| peak RSS of `nightshift embed backfill` with the model loaded | 227 MB, against 76 MB for `nightshift memory stats` |
 
 That weight is exactly why the embedding library is not a dependency of the
-package: `shift embed install` (or a yes during `shift init`) puts it in
+package: `nightshift embed install` (or a yes during `nightshift init`) puts it in
 `~/.nightshift/embedding` on demand, so the published package stays small and
 audits clean. Without it every recall still answers through BM25 and the whole
 test suite still passes.
 
 ## Queue
 
-The queue is what makes the runtime unattended: `shift queue add` records a
-request against a registered project, `shift queue run` claims it and spawns
+The queue is what makes the runtime unattended: `nightshift queue add` records a
+request against a registered project, `nightshift queue run` claims it and spawns
 `claude -p /nightshift:resolve <request>` with the plugin of this package and
 this same MCP server attached, and the pipeline itself opens the pull request at
 the end. The runner reads the stream of the run and stores what
@@ -408,35 +417,35 @@ the end. The runner reads the stream of the run and stores what
 the `## Notice` and the token usage.
 
 ```sh
-shift queue add api "fix the flaky worker" --priority 2   # enqueue a job
-shift queue add "fix the flaky worker"                    # same, for the project of the current directory
-shift queue add fix the flaky worker --run                # enqueue and run it here, in the foreground
-shift queue status [--limit 10] [--json]                  # the tail of the queue plus the counts
-shift queue status 7 [--json]                             # one job, never with its prompt
-shift queue run [--job 7] [--max 2] [--dry]               # claim and run; --dry only reports
-shift queue run --watch [30]                              # keep claiming, one pass every N seconds
-shift queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
-shift queue cancel 7 --reason "not needed"                # cancel a pending, gated or orphaned job
-shift queue pause | shift queue resume                    # stop claiming new jobs, or claim again
+nightshift queue add api "fix the flaky worker" --priority 2   # enqueue a job
+nightshift queue add "fix the flaky worker"                    # same, for the project of the current directory
+nightshift queue add fix the flaky worker --run                # enqueue and run it here, in the foreground
+nightshift queue status [--limit 10] [--json]                  # the tail of the queue plus the counts
+nightshift queue status 7 [--json]                             # one job, never with its prompt
+nightshift queue run [--job 7] [--max 2] [--dry]               # claim and run; --dry only reports
+nightshift queue run --watch [30]                              # keep claiming, one pass every N seconds
+nightshift queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
+nightshift queue cancel 7 --reason "not needed"                # cancel a pending, gated or orphaned job
+nightshift queue pause | nightshift queue resume                    # stop claiming new jobs, or claim again
 ```
 
 **The project is optional, the prompt is variadic.** Omitted, the project is the
-one whose registered path contains the current directory (`shift init` is what
+one whose registered path contains the current directory (`nightshift init` is what
 registers it), and the command says which one it picked. Given, the first word
 is the project only when it is a registered NAME; anything else is already part
 of the prompt, so the words of the request need no quotes.
 
 **Options are read only at the two edges of the command line**, before the first
 word of the request and after the last one. Everything between them is the
-prompt, kept exactly as it was typed: `shift queue add explain the --run flag to
+prompt, kept exactly as it was typed: `nightshift queue add explain the --run flag to
 the team` queues those seven words and starts nothing. A prompt that begins or
 ends with a flag is the ambiguous case, and goes after `--`:
-`shift queue add -- explain --run to me`. An option that does not exist is still
+`nightshift queue add -- explain --run to me`. An option that does not exist is still
 a usage error at either edge, never a silent word of the prompt.
 
 **`--run` runs the job right there**, in the same process, instead of leaving it
-for `shift queue run`. It prints the job id first, then the stream goes to the
-log of the job (`shift queue log <id> --follow`), and the exit code answers only
+for `nightshift queue run`. It prints the job id first, then the stream goes to the
+log of the job (`nightshift queue log <id> --follow`), and the exit code answers only
 about this run: `0` when the job ended as `done`, `1` for any other outcome
 (`gate`, `failed`, `cancelled`, an interrupted run) and `1` when the job never
 started, with the reason on the line `job #<id> did not start (<reason>)` - the
@@ -454,7 +463,7 @@ of a narration: the table is always printed in full and the exit code stays `0`.
 A job in a final state keeps exactly the line it always had, and `--json`
 answers with the same fields as before.
 
-**The log is narrated by default.** `shift queue log <id>` prints one line per
+**The log is narrated by default.** `nightshift queue log <id>` prints one line per
 relevant event of the stream, timed relative to the `=== attempt N ===` marker
 that opens each attempt: `»` what the orchestrator said, `·` each tool with its
 file or command, `▶`/`◀` each subagent lane with its phase and what it reported
@@ -551,7 +560,7 @@ request merged first is cut wrong: fold it into that job. Independent jobs may
 run in parallel and merge in any order.
 
 ```sh
-shift queue add "Self-contained install. Stages: 1) runtime under ~/.nightshift; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."
+nightshift queue add "Self-contained install. Stages: 1) runtime under ~/.nightshift; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."
 ```
 
 **There is no `--after`.** A job that waits for another job's pull request is an
@@ -563,20 +572,22 @@ never sees is merged.
 **Branch chains are v1.1**, and only for work that genuinely does not fit in one
 run. Until then, the answer to "this depends on that" is one job with stages.
 
-`shift queue add --help` prints this rule and the example.
+`nightshift queue add --help` prints this rule and the example.
 
 ## Doctor
 
 ```sh
-shift doctor            # one line per check: ok, warn or fail
-shift doctor --json     # the same report, as the only thing on stdout
+nightshift doctor            # one line per check: ok, warn or fail
+nightshift doctor --json     # the same report, as the only thing on stdout
 ```
 
-`shift doctor` reads the host and the home and writes nothing: it never creates
+`nightshift doctor` reads the host and the home and writes nothing: it never creates
 the database, never touches `settings.json` and never asks `claude` about
 anything but its version. It checks the Node version, the `claude` and `gh`
-CLIs, `config.json`, the mode of `secrets.json`, the MCP registration, each of
-the three hooks, the plugin, the embedding weights, the optional embedding
+CLIs, `config.json`, the mode of `secrets.json`, each of the three shims (a
+missing shortcut only warns), a shim left over from the `shift` command, the
+MCP registration, each of the three hooks, the plugin, the embedding weights,
+the optional embedding
 library, the schema version of the database, the pause sentinel of the queue,
 the jobs whose runner died and every registered project. It exits `1` when any
 check fails, `0` otherwise - a `warn` never fails the run.
@@ -611,7 +622,7 @@ These names are a machine contract, not prose: the pipeline files are the
 source of truth for them, and any runtime that reads them must match them
 exactly.
 
-The ten MCP tools, with the parameters `shift mcp` actually accepts:
+The ten MCP tools, with the parameters `nightshift mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -626,7 +637,7 @@ The ten MCP tools, with the parameters `shift mcp` actually accepts:
 | `queue_run` | `job_id?` |
 | `queue_cancel` | `job_id`, `reason?` |
 
-The four queue tools are the same subsystem as `shift queue` (see `## Queue`):
+The four queue tools are the same subsystem as `nightshift queue` (see `## Queue`):
 `queue_add` takes the registered project NAME and never a path, `queue_status`
 never returns the prompt of a job and truncates `notice_md` and `result` at 500
 characters, `queue_run` starts the runner detached and answers right away with

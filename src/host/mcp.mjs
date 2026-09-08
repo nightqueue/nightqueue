@@ -1,12 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { readJsonOrNull } from "./json.mjs";
-import { claudeUserConfigPath, shiftEntryPath } from "./paths.mjs";
+import { claudeUserConfigPath, cliEntryPath } from "./paths.mjs";
 
 export const MCP_SERVER_NAME = "nightshift";
 
 // Server entry this package wants registered at user scope, always starting the CLI from the runtime.
 export function desiredServer(env = process.env) {
-  return { command: "node", args: [shiftEntryPath(env), "mcp"] };
+  return { command: "node", args: [cliEntryPath(env), "mcp"] };
 }
 
 // Reads the entry registered for this package, or null when the host does not know it.
@@ -25,7 +25,7 @@ export function serverIsCurrent(entry, env = process.env) {
   const args = Array.isArray(entry.args) ? entry.args : [];
   if (entry.command === wanted.command && isDeepStrictEqual(args, wanted.args)) return true;
   const line = [entry.command, ...args].filter((part) => typeof part === "string").join(" ");
-  return line.endsWith(`${shiftEntryPath(env)} mcp`);
+  return line.endsWith(`${cliEntryPath(env)} mcp`);
 }
 
 // Arguments of the call that registers the server at user scope.

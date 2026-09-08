@@ -53,7 +53,7 @@ function requireProjectName(name, env) {
   const project = projectByName(loadConfig(env, { warn: () => {} }), name);
   if (project) return project.name;
   throw new UserError(
-    `unknown project \`${name}\`: pass the registered project NAME, not a path; list them with \`shift project list\``,
+    `unknown project \`${name}\`: pass the registered project NAME, not a path; list them with \`nightshift project list\``,
   );
 }
 

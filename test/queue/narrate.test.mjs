@@ -178,12 +178,12 @@ test("what is not JSON is either the text the runner wrote or a line counted as 
     attemptMarker(1),
     JSON.stringify(assistantEvent("working", { timestamp: secondsIntoAttempt(1) })),
     '{"type":"assistant","message":{"content":[{"type":"text","tex',
-    "claude: command not found; install it and run `shift doctor`",
+    "claude: command not found; install it and run `nightshift doctor`",
     `=== ownership lost @ ${secondsIntoAttempt(20)} ===`,
     "",
   ].join("\n");
   const lines = narrate(log);
-  assert.ok(lines.includes("00:01  ℹ claude: command not found; install it and run `shift doctor`"), lines.join("\n"));
+  assert.ok(lines.includes("00:01  ℹ claude: command not found; install it and run `nightshift doctor`"), lines.join("\n"));
   assert.ok(lines.includes("00:20  ⚠ ownership lost"), lines.join("\n"));
   assert.ok(lines.includes("00:20  ℹ 1 unreadable log lines skipped"), lines.join("\n"));
 });

@@ -32,9 +32,12 @@ export function runtimeDir(env = process.env) {
   return join(homeDir(env), "runtime");
 }
 
+// Trail from the configuration home down to the installed package, the layout every shim this package writes points into.
+export const RUNTIME_PACKAGE_TRAIL = "runtime/node_modules/nightshift";
+
 // Directory of the package inside the runtime prefix, the stable root the host is registered against.
 export function runtimePackageDir(env = process.env) {
-  return join(runtimeDir(env), "node_modules", "nightshift");
+  return join(homeDir(env), RUNTIME_PACKAGE_TRAIL);
 }
 
 // Directory of the isolated npm prefix that holds the embedding library, installed on demand.
@@ -47,9 +50,23 @@ export function binDir(env = process.env) {
   return join(homeDir(env), "bin");
 }
 
-// Path of the shim that starts the CLI from the runtime.
-export function shimPath(env = process.env) {
-  return join(binDir(env), "shift");
+export const SHIM_NAME = "nightshift";
+export const SHORTCUT_SHIM_NAMES = ["nshift", "nsft"];
+export const LEGACY_SHIM_NAME = "shift";
+
+// Path of one shim that starts the CLI from the runtime, the canonical name unless another is asked for.
+export function shimPath(env = process.env, name = SHIM_NAME) {
+  return join(binDir(env), name);
+}
+
+// Names of the shims one installation writes: the canonical one always, the shortcuts unless they were turned off.
+export function shimNames({ shortcuts } = {}) {
+  return shortcuts === false ? [SHIM_NAME] : [SHIM_NAME, ...SHORTCUT_SHIM_NAMES];
+}
+
+// Path of the shim an older installation wrote under the previous command name.
+export function legacyShimPath(env = process.env) {
+  return shimPath(env, LEGACY_SHIM_NAME);
 }
 
 // Directory of the per-session state written by the hooks.

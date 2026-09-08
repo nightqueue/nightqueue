@@ -117,9 +117,15 @@ export function makeHostEnv(t, name, { exitCode } = {}) {
     home: env.NIGHTSHIFT_HOME,
     runtimeDir: join(env.NIGHTSHIFT_HOME, "runtime"),
     runtimePackage,
-    entry: join(runtimePackage, "bin", "shift.mjs"),
+    entry: join(runtimePackage, "bin", "nightshift.mjs"),
     binDir: join(env.NIGHTSHIFT_HOME, "bin"),
-    shim: join(env.NIGHTSHIFT_HOME, "bin", "shift"),
+    shim: join(env.NIGHTSHIFT_HOME, "bin", "nightshift"),
+    shims: {
+      nightshift: join(env.NIGHTSHIFT_HOME, "bin", "nightshift"),
+      nshift: join(env.NIGHTSHIFT_HOME, "bin", "nshift"),
+      nsft: join(env.NIGHTSHIFT_HOME, "bin", "nsft"),
+    },
+    legacyShim: join(env.NIGHTSHIFT_HOME, "bin", "shift"),
     embeddingDir: join(env.NIGHTSHIFT_HOME, "embedding"),
     userHome: vars.HOME,
     rcPath: join(vars.HOME, ".zshrc"),
@@ -130,6 +136,19 @@ export function makeHostEnv(t, name, { exitCode } = {}) {
     npmCalls: () => readCalls(vars.NIGHTSHIFT_FAKE_NPM_LOG),
     backups: () => readdirSync(vars.CLAUDE_CONFIG_DIR).filter((file) => file.includes(".bak-")),
   };
+}
+
+// Writes the shim an older installation left behind, pointing at the entry the previous command name used.
+export function writeLegacyShim(host, content = null) {
+  mkdirSync(host.binDir, { recursive: true });
+  const body = content ?? `#!/bin/sh\nexec node "${join(host.runtimePackage, "bin", "shift.mjs")}" "$@"\n`;
+  writeFileSync(host.legacyShim, body, { mode: 0o755 });
+  return host.legacyShim;
+}
+
+// Hook entries an older installation registered, pointing at the entry the previous command name used.
+export function legacyHookCommand(host, hook) {
+  return `node ${join(host.runtimePackage, "bin", "shift.mjs")} hook ${hook}`;
 }
 
 // Writes a settings.json fixture in the isolated configuration directory.

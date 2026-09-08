@@ -68,7 +68,7 @@ function assertSupportedVersion(fileName, raw) {
   const version = raw.version;
   if (typeof version === "number" && version > SCHEMA_VERSION) {
     throw new UserError(
-      `${fileName} was written by a newer shift (version ${version}); this shift supports version ${SCHEMA_VERSION} — upgrade shift or move the file out of the way`,
+      `${fileName} was written by a newer nightshift (version ${version}); this nightshift supports version ${SCHEMA_VERSION} — upgrade nightshift or move the file out of the way`,
     );
   }
 }
@@ -119,7 +119,7 @@ function warnOnOrphanProjects(projects, orgs, warn) {
   for (const [name, entry] of Object.entries(projects)) {
     if (orgs[entry.org]) continue;
     warn(
-      `shift: warning: project \`${name}\` points to unknown org \`${entry.org}\`; run \`shift project move ${name} <org>\``,
+      `nightshift: warning: project \`${name}\` points to unknown org \`${entry.org}\`; run \`nightshift project move ${name} <org>\``,
     );
   }
 }

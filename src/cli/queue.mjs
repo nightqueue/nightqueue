@@ -10,13 +10,13 @@ import { runCycle, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mj
 import { checkArgs, parseCommand } from "./args.mjs";
 
 const USAGE = {
-  add: "shift queue add [project] <prompt...> [--run] [--priority <n>] [--max-attempts <n>] [--timeout <s>]",
-  status: "shift queue status [id] [--limit <n>] [--json]",
-  run: "shift queue run [--job <id>] [--max <n>] [--watch [seconds]] [--dry] [--json]",
-  cancel: "shift queue cancel <id> [--reason <text>]",
-  pause: "shift queue pause",
-  resume: "shift queue resume",
-  log: "shift queue log <id> [--follow] [--raw] [--all]",
+  add: "nightshift queue add [project] <prompt...> [--run] [--priority <n>] [--max-attempts <n>] [--timeout <s>]",
+  status: "nightshift queue status [id] [--limit <n>] [--json]",
+  run: "nightshift queue run [--job <id>] [--max <n>] [--watch [seconds]] [--dry] [--json]",
+  cancel: "nightshift queue cancel <id> [--reason <text>]",
+  pause: "nightshift queue pause",
+  resume: "nightshift queue resume",
+  log: "nightshift queue log <id> [--follow] [--raw] [--all]",
 };
 
 const ADD_HELP_FLAGS = new Set(["--help", "-h"]);
@@ -29,7 +29,7 @@ another job's pull request merged first is cut wrong: fold it into that job. Ind
 parallel and merge in any order.
 
 example:
-  shift queue add "Self-contained install. Stages: 1) runtime under ~/.nightshift; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."`;
+  nightshift queue add "Self-contained install. Stages: 1) runtime under ~/.nightshift; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."`;
 
 // Waits the given number of milliseconds.
 function sleep(ms) {
@@ -63,14 +63,14 @@ function resolveTarget(config, positionals, ctx) {
   const cwd = ctx.cwd ?? process.cwd();
   const resolved = resolveProject(config, { cwd });
   if (!resolved) {
-    throw new UserError(`no project registered for ${cwd}; run \`shift init\` here, or pass the project NAME (\`shift project list\`)`);
+    throw new UserError(`no project registered for ${cwd}; run \`nightshift init\` here, or pass the project NAME (\`nightshift project list\`)`);
   }
   return { project: resolved, words: positionals, fromCwd: true };
 }
 
 // Runs the job in the foreground and turns its outcome into the exit code: 0 only when it finished as `done`.
 async function runInForeground(job, ctx) {
-  ctx.out(`running job #${job.id} in the foreground; follow the stream with \`shift queue log ${job.id} --follow\``);
+  ctx.out(`running job #${job.id} in the foreground; follow the stream with \`nightshift queue log ${job.id} --follow\``);
   const cycle = await runCycle({ jobId: job.id, max: 1, env: ctx.env });
   const processed = cycle.processed.find((entry) => entry.id === job.id);
   if (!processed) {
@@ -449,7 +449,7 @@ const SUBCOMMANDS = new Map([
   ["log", runLog],
 ]);
 
-// Dispatches the subcommands of `shift queue`, returning the exit code the subcommand decided.
+// Dispatches the subcommands of `nightshift queue`, returning the exit code the subcommand decided.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);

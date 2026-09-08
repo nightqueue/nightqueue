@@ -16,7 +16,7 @@ export function makeReport(ctx) {
     degrade: (label, reason, command) => {
       degraded += 1;
       ctx.out(stepLine(label, "failed", reason));
-      if (command) ctx.err(`shift: finish this step by hand: ${command}`);
+      if (command) ctx.err(`nightshift: finish this step by hand: ${command}`);
     },
     count: () => degraded,
   };

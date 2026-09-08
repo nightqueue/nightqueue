@@ -10,10 +10,10 @@ import { ensureHome } from "../src/config/store.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
 import { addJob, claimJobById } from "../src/memory/jobs.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
-import { makeHostEnv } from "../test-support/host.mjs";
+import { makeHostEnv, writeLegacyShim } from "../test-support/host.mjs";
 import { makeDir, makeProject } from "../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/shift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
 const SETUP = ["setup", "--no-path", "--no-embedding"];
 
 // Subprocess runner that answers for `gh` instead of asking the real one, keeping the diagnosis hermetic.
@@ -69,7 +69,7 @@ test("a host that went through setup has no failing check", async (t) => {
   assert.equal(statusOf(report, "projects"), "warn");
   assert.equal(statusOf(report, "database"), "warn");
   assert.equal(statusOf(report, "runtime"), "ok");
-  assert.equal(statusOf(report, "shim"), "ok");
+  assert.equal(statusOf(report, "shim nightshift"), "ok");
   assert.equal(statusOf(report, "path"), "warn");
   assert.equal(statusOf(report, "embedding"), "warn");
   assert.equal(report.checks.some((check) => check.name === "embedding audit"), false, "the audit ran on an absent prefix");
@@ -79,7 +79,7 @@ test("runtime, shim, path and embedding are checked, and the audit only once the
   const host = makeHostEnv(t, "doctor-install");
   const virgin = await diagnose(host.env);
   assert.equal(statusOf(virgin.report, "runtime"), "fail");
-  assert.equal(statusOf(virgin.report, "shim"), "fail");
+  assert.equal(statusOf(virgin.report, "shim nightshift"), "fail");
   assert.match(virgin.report.checks.find((check) => check.name === "runtime").detail, /no runtime in .*runtime$/);
 
   await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
@@ -88,7 +88,7 @@ test("runtime, shim, path and embedding are checked, and the audit only once the
 
   const { report } = await diagnose(host.env, { spawnSyncImpl: spawnSync });
   assert.equal(statusOf(report, "runtime"), "warn");
-  assert.match(report.checks.find((check) => check.name === "runtime").hint, /shift update/);
+  assert.match(report.checks.find((check) => check.name === "runtime").hint, /nightshift update/);
   assert.equal(statusOf(report, "embedding audit"), "ok");
 
   host.env.NIGHTSHIFT_FAKE_NPM_AUDIT = "3";
@@ -104,8 +104,41 @@ test("a shim left without the execute bit fails with the command that repairs it
 
   const { code, report } = await diagnose(host.env);
   assert.equal(code, 1);
-  assert.equal(statusOf(report, "shim"), "fail");
-  assert.match(report.checks.find((check) => check.name === "shim").hint, /chmod \+x /);
+  assert.equal(statusOf(report, "shim nightshift"), "fail");
+  assert.match(report.checks.find((check) => check.name === "shim nightshift").hint, /chmod \+x /);
+});
+
+test("the three command names are checked, and a missing shortcut only warns", async (t) => {
+  const host = makeHostEnv(t, "doctor-shortcuts");
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+  const full = await diagnose(host.env);
+  for (const name of ["nightshift", "nshift", "nsft"]) assert.equal(statusOf(full.report, `shim ${name}`), "ok");
+
+  const lean = makeHostEnv(t, "doctor-no-shortcuts");
+  await run([...SETUP, "--no-shortcuts"], { ...defaultContext(), env: lean.env, out: () => {}, err: () => {} });
+  const { code, report } = await diagnose(lean.env);
+  assert.equal(statusOf(report, "shim nightshift"), "ok");
+  assert.equal(statusOf(report, "shim nshift"), "warn");
+  assert.equal(statusOf(report, "shim nsft"), "warn");
+  assert.match(report.checks.find((check) => check.name === "shim nshift").hint, /--no-shortcuts/);
+  assert.equal(code, 0, "a missing shortcut must never fail the diagnosis");
+});
+
+test("a shim left over from the previous command name warns, with a hint that depends on who wrote it", async (t) => {
+  const host = makeHostEnv(t, "doctor-legacy-shim");
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+  assert.equal((await diagnose(host.env)).report.checks.some((check) => check.name === "legacy shim"), false);
+
+  writeLegacyShim(host);
+  const ours = await diagnose(host.env);
+  assert.equal(statusOf(ours.report, "legacy shim"), "warn");
+  assert.match(ours.report.checks.find((check) => check.name === "legacy shim").hint, /nightshift setup/);
+
+  writeLegacyShim(host, "#!/bin/sh\necho other-tool\n");
+  const foreign = await diagnose(host.env);
+  assert.equal(statusOf(foreign.report, "legacy shim"), "warn");
+  assert.match(foreign.report.checks.find((check) => check.name === "legacy shim").hint, /by hand$/);
+  assert.equal(foreign.code, 0);
 });
 
 test("a home that never went through setup fails and exits 1", async (t) => {
@@ -122,6 +155,10 @@ test("a home that never went through setup fails and exits 1", async (t) => {
   assert.equal(statusOf(report, "hook SessionEnd"), "fail");
   assert.equal(statusOf(report, "plugin"), "fail");
   assert.equal(statusOf(report, "gh"), "warn");
+  for (const name of ["nshift", "nsft"]) {
+    const hint = report.checks.find((check) => check.name === `shim ${name}`).hint;
+    assert.equal(hint, "run `nightshift setup`", "a home with no shim at all must never be sent to turn a flag off");
+  }
   for (const check of report.checks) {
     if (check.status !== "ok") assert.ok(check.hint, `check ${check.name} has no hint`);
   }
@@ -194,7 +231,7 @@ test("the queue check reads the pause sentinel of the home, and a paused queue i
   assert.equal(statusOf(paused, "queue"), "warn");
   const check = paused.checks.find((entry) => entry.name === "queue");
   assert.equal(check.detail, "paused");
-  assert.match(check.hint, /shift queue resume/);
+  assert.match(check.hint, /nightshift queue resume/);
 });
 
 test("the queue jobs check counts the jobs whose runner died, and only once the database exists", async (t) => {

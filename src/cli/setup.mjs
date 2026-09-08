@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import { configPath, homeDir, secretsPath } from "../config/paths.mjs";
+import { configPath, homeDir, secretsPath, shimNames } from "../config/paths.mjs";
 import { emptyConfig, emptySecrets } from "../config/schema.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { claudeCommandLine, runClaude } from "../host/claude.mjs";
@@ -37,7 +37,8 @@ import {
 import { firstLine, makeReport } from "./report.mjs";
 
 const MARKETPLACE_LABEL = "plugin marketplace";
-const USAGE = "shift setup [--from <dir>] [--path|--no-path] [--embedding|--no-embedding] [--remove [--purge]]";
+const USAGE =
+  "nightshift setup [--from <dir>] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--remove [--purge]]";
 
 // Flags every command that installs the host shares.
 export const INSTALL_OPTIONS = {
@@ -46,6 +47,8 @@ export const INSTALL_OPTIONS = {
   "no-path": { type: "boolean" },
   embedding: { type: "boolean" },
   "no-embedding": { type: "boolean" },
+  shortcuts: { type: "boolean" },
+  "no-shortcuts": { type: "boolean" },
 };
 
 // Installation choices of one call, each opposite pair reduced to a tri-state.
@@ -54,6 +57,7 @@ export function installOptions(values, usage) {
     from: values.from,
     path: flagChoice(values, "path", usage),
     embedding: flagChoice(values, "embedding", usage),
+    shortcuts: flagChoice(values, "shortcuts", usage),
   };
 }
 
@@ -166,21 +170,21 @@ function setupPlugin(ctx, report) {
 }
 
 // Reports every step that would point at the runtime as skipped, the answer when there is no runtime to point them at.
-function skipHostSteps(ctx, report) {
+function skipHostSteps(ctx, report, { shortcuts } = {}) {
   const reason = "runtime missing";
-  report.step("shim", "skipped", reason);
+  for (const name of shimNames({ shortcuts })) report.step(`shim ${name}`, "skipped", reason);
   report.step(`mcp ${MCP_SERVER_NAME}`, "skipped", reason);
   for (const hook of desiredHooks(ctx.env)) report.step(`hook ${hook.event}`, "skipped", reason);
   report.step(MARKETPLACE_LABEL, "skipped", reason);
 }
 
-// The single gate of every write that points at the runtime - shim, MCP server, hooks and plugin: without a ready runtime, none of them runs.
-export function registerHost(ctx, report, { ready } = {}) {
+// The single gate of every write that points at the runtime - shims, MCP server, hooks and plugin: without a ready runtime, none of them runs.
+export function registerHost(ctx, report, { ready, shortcuts } = {}) {
   if (ready === false) {
-    skipHostSteps(ctx, report);
+    skipHostSteps(ctx, report, { shortcuts });
     return;
   }
-  setupShim(ctx, report);
+  setupShim(ctx, report, { shortcuts });
   setupMcp(ctx, report);
   applyHooks(ctx, report, { remove: false });
   setupPlugin(ctx, report);
@@ -212,16 +216,16 @@ function removePlugin(ctx, report) {
 
 // Closes the run, pointing at the diagnosis when a step degraded; a degraded step is never an exit code.
 export function finish(ctx, report) {
-  if (report.count()) ctx.out(`setup finished with ${report.count()} step(s) degraded - run \`shift doctor\``);
+  if (report.count()) ctx.out(`setup finished with ${report.count()} step(s) degraded - run \`nightshift doctor\``);
   return 0;
 }
 
 // Installs everything the host needs to run nightshift, one idempotent step at a time.
-export async function install(ctx, { embedding, path, from } = {}) {
+export async function install(ctx, { embedding, path, from, shortcuts } = {}) {
   const report = makeReport(ctx);
   setupHome(ctx, report);
   const ready = setupRuntime(ctx, report, { from });
-  registerHost(ctx, report, { ready });
+  registerHost(ctx, report, { ready, shortcuts });
   await setupPath(ctx, report, { path });
   await setupEmbedding(ctx, report, { embedding });
   return finish(ctx, report);
@@ -240,7 +244,7 @@ async function uninstall(ctx, { purge }) {
   return finish(ctx, report);
 }
 
-// Runs `shift setup`: installs the runtime and registers it in the host, or removes both with `--remove`.
+// Runs `nightshift setup`: installs the runtime and registers it in the host, or removes both with `--remove`.
 export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, {
     ...INSTALL_OPTIONS,

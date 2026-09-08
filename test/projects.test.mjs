@@ -89,7 +89,7 @@ test("the same path is a no-op in the same org and an error in another org", (t)
   addProject(config, { path: repo, name: "api" });
   assert.equal(addProject(config, { path: repo, name: "api" }).status, "unchanged");
   assert.throws(() => addProject(config, { path: repo, name: "api", org: "acme" }), (err) => {
-    assert.match(err.message, /is already registered as `api` in org `default`; use `shift project move api acme`/);
+    assert.match(err.message, /is already registered as `api` in org `default`; use `nightshift project move api acme`/);
     return true;
   });
 });

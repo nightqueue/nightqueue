@@ -68,7 +68,7 @@ export function addProject(config, { path, name, org } = {}) {
       return { config, status: "unchanged", project: { name: existingName, path: entry.path, org: entry.org } };
     }
     throw new UserError(
-      `${abs} is already registered as \`${existingName}\` in org \`${entry.org}\`; use \`shift project move ${existingName} ${orgName}\``,
+      `${abs} is already registered as \`${existingName}\` in org \`${entry.org}\`; use \`nightshift project move ${existingName} ${orgName}\``,
     );
   }
   const taken = config.projects[projectName];

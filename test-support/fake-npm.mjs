@@ -86,9 +86,9 @@ function installNightshift(prefix, version) {
   writeJson(join(dir, "package.json"), {
     name: "nightshift",
     version,
-    bin: { shift: "./bin/shift.mjs", nightshift: "./bin/shift.mjs" },
+    bin: { nightshift: "./bin/nightshift.mjs" },
   });
-  const entry = join(dir, "bin", "shift.mjs");
+  const entry = join(dir, "bin", "nightshift.mjs");
   mkdirSync(dirname(entry), { recursive: true });
   writeFileSync(
     entry,

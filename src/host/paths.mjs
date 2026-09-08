@@ -14,8 +14,8 @@ export function hostPackageRoot(env = process.env) {
 }
 
 // Absolute path of the CLI entry point, the one registered in the host.
-export function shiftEntryPath(env = process.env) {
-  return join(hostPackageRoot(env), "bin", "shift.mjs");
+export function cliEntryPath(env = process.env) {
+  return join(hostPackageRoot(env), "bin", "nightshift.mjs");
 }
 
 // Path of the marketplace manifest inside the runtime, the file the host reads.
