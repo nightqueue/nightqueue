@@ -19,7 +19,7 @@ survive between runs and make each run cheaper than the last.
 The memory half of the runtime ships in this repository: a SQLite database, the
 MCP server with the six tools the plugin requires, the three session hooks and
 the CLI commands that drive them (see `## Memory`). The queue that runs those
-pipelines unattended ships too, with its own four tools (see `## Queue`). The
+pipelines unattended ships too, with its own five tools (see `## Queue`). The
 plugin in `plugin/` is the pipeline half.
 
 What is still missing: the scheduler that would start the queue by itself at
@@ -37,7 +37,7 @@ plugin in the host is no longer a manual step - `nightshift setup` does it (see
   proven breaks, fuzz templates.
 - Six subagents, invoked as `nightshift:<agent>`: `architect`, `coder`,
   `explore`, `qa-guardian`, `triager`, `verifier`.
-- `nightshift mcp` - the stdio MCP server that answers those six tools plus the four
+- `nightshift mcp` - the stdio MCP server that answers those six tools plus the five
   of the queue.
 - `nightshift queue` - the unattended queue: enqueue a request, run it through
   `/nightshift:resolve` and get a pull request back (see `## Queue`).
@@ -90,21 +90,46 @@ Outside a repository it stops right there and says so. Inside one, it also
 registers that repository as a project and offers to import the token of the
 GitHub CLI.
 
-Flags: `--from <dir>` installs a local checkout instead of the registry version,
-`--path` / `--no-path` answers the PATH question without a terminal,
+Flags: `--from <dir>` installs another checkout or tarball instead of the
+package that is running, `--path` / `--no-path` answers the PATH question
+without a terminal,
 `--embedding` / `--no-embedding` answers the semantic recall question,
 `--gh` / `--no-gh` answers the GitHub CLI one, `--shortcuts` / `--no-shortcuts`
 decides whether the short command names are written, and `--org` / `--name` name
 the project. Without a terminal and without the flag, nothing is written and nothing
-is downloaded: both questions print the line to run by hand instead.
+is downloaded: both questions print what to run by hand instead.
 
-`--from <dir>` is a development path and counts on npm linking the checkout
-rather than copying it: with `install-links=true` in your `.npmrc`, npm copies,
-and the runtime ends up without `@modelcontextprotocol/sdk` and `zod`, which it
-would otherwise resolve from the `node_modules` of the checkout.
+`init` and `setup` install the package that is running: they pack it with
+`npm pack` (honouring the `files` of its `package.json`) and install the tarball
+into the runtime prefix. Nothing is ever linked, so the runtime never borrows the
+`node_modules` of a checkout, and the registry is not consulted. `--from <dir>`
+packs that directory instead, and `--from <file.tgz>` installs that tarball as it
+is.
 
-`nightshift update` reinstalls the runtime at the newest version (or from `--from`)
-and re-points the host at it; config, secrets and the database stay untouched.
+Every step of `init` the runtime cannot work without is fatal: a failed home,
+runtime or shim exits 1, and the PATH block is only written once
+`~/.nightshift/bin/nightshift --version` has answered. A step that only degrades
+the experience - MCP server, hooks, plugin, semantic recall - is reported and the
+command still exits 0, pointing at `nightshift doctor`. The PATH block itself is
+guarded, so sourcing your rc file again never prepends the directory twice:
+
+```sh
+# nightshift
+case ":$PATH:" in
+  *":$HOME/.nightshift/bin:"*) ;;
+  *) export PATH="$HOME/.nightshift/bin:$PATH" ;;
+esac
+# nightshift end
+```
+
+The two marker lines delimit the block, and nothing between them is ours unless BOTH
+are there: a `# nightshift` you wrote for your own reason, followed by lines that happen
+to look like ours, is never rewritten and never removed.
+
+`nightshift update` reinstalls the runtime from the registry at the newest version
+(or from `--from`) and re-points the host at it; config, secrets and the database
+stay untouched. It is the only command that falls back to the registry, and a
+runtime it could not reinstall is an exit code, never a quiet degraded line.
 
 `nightshift init` is `nightshift setup` plus the project registration, always in that
 order: every step below first, then the repository of the current directory (or
@@ -148,8 +173,8 @@ echo "$GITHUB_TOKEN" | nightshift connection add gh --type github
 2. the runtime in `$NIGHTSHIFT_HOME/runtime`, at the version of the package that
    ran the command; already at that version means no reinstall.
 3. the shims `$NIGHTSHIFT_HOME/bin/nightshift`, `nshift` and `nsft` (`0755`
-   each), plus the offer to add that directory to the PATH through a single line
-   marked `# nightshift` in `~/.zshrc`, `~/.bashrc` or
+   each), plus the offer to add that directory to the PATH through a guarded
+   block marked `# nightshift` in `~/.zshrc`, `~/.bashrc` or
    `~/.config/fish/config.fish`.
 4. the MCP server `nightshift` at **user** scope, started as
    `node $NIGHTSHIFT_HOME/runtime/node_modules/nightshift/bin/nightshift.mjs mcp`.
@@ -163,7 +188,7 @@ echo "$GITHUB_TOKEN" | nightshift connection add gh --type github
 Steps 4 to 6 never run when step 2 could not finish: a hook pointing at a
 runtime that is not there would break every session of the host.
 
-`--remove` undoes steps 3 to 6 - the shims, the marked PATH line, the MCP server,
+`--remove` undoes steps 3 to 6 - the shims, the marked PATH block, the MCP server,
 the three hook entries, the plugin and the marketplace - and asks before
 deleting `runtime/` and `embedding/`. It never touches `config.json`,
 `secrets.json` or the database; only `--remove --purge` deletes
@@ -206,7 +231,7 @@ claude --plugin-dir ./plugin
 
 The plugin loads that way, but `/nightshift:resolve` stops at the Phase 0 preflight until an
 MCP server named `nightshift` is connected. `nightshift mcp` is that server: it speaks the protocol
-over stdio and exposes those six tools plus the four of the queue, and `nightshift setup` is what
+over stdio and exposes those six tools plus the five of the queue, and `nightshift setup` is what
 registers it.
 
 ## The `nightshift` CLI
@@ -364,7 +389,7 @@ persisted, so a failed run reprocesses the same slice instead of losing it.
 **Commands.**
 
 ```sh
-nightshift mcp                     # start the stdio MCP server with the ten tools
+nightshift mcp                     # start the stdio MCP server with the eleven tools
 nightshift hook session-start      # run a hook, reading the event JSON from stdin
 nightshift reflect --transcript <path>   # reflect on a transcript now, in the foreground
 nightshift embed download          # download the embedding weights (the only network path)
@@ -426,6 +451,7 @@ nightshift queue run [--job 7] [--max 2] [--dry]               # claim and run; 
 nightshift queue run --watch [30]                              # keep claiming, one pass every N seconds
 nightshift queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
 nightshift queue cancel 7 --reason "not needed"                # cancel a pending, gated or orphaned job
+nightshift queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue
 nightshift queue pause | nightshift queue resume                    # stop claiming new jobs, or claim again
 ```
 
@@ -493,9 +519,29 @@ owns it under a lease, and then one of four final states: `done` (the run
 delivered a pull request URL), `gate` (the pipeline stopped asking for a human
 decision, or ended with nothing to deliver), `failed` (a non-zero exit, a
 timeout, or an orphan that had already spent its attempts) and `cancelled`
-(cancelled by the operator, or stopped while running). Only `queue cancel` moves
-a job out of a final state, and only from `gate`: the job becomes `cancelled` and
-is never resumed automatically - reopening it is a new job.
+(cancelled by the operator, or stopped while running). A job in `gate` ALWAYS
+carries the reason it stopped in `notice_md`: without a `## Notice` the reason is
+the whole final text of the orchestrator, and a run that ended saying nothing at
+all is `failed` with a fixed warning instead of a gate nobody can read.
+
+`queue cancel` moves a job out of a final state into `cancelled` (from `pending`,
+`gate` or an orphan), and `queue retry` moves it back to `pending` (from `gate`,
+`failed` or `cancelled`). A gated job only moves with `--note`, and that note is
+the only thing that ever reaches the prompt of the run, in a block labelled
+`OPERATOR ANSWER TO THE GATE:` - a retry without `--note` clears whatever was in
+`operator_note`, so the label never lies about where the text came from. Each
+retry widens the allowance of attempts by one, capped at 10, and never rewrites
+the attempts already spent.
+
+Without `--fresh` the retry keeps slug, branch, session and run directory, and
+the pipeline resumes from the last completed phase. The ceiling of those resumes
+lives in the `state.json` of the run (`resumeCount` against `maxResumes`, default
+`1`), not in the database: a SECOND retry without `--fresh` starts the run from
+scratch because the runtime decided so, which is the intended behaviour and not a
+bug of the retry. `--fresh` asks for that from the start: it clears slug, branch
+and session and drops the run directory - and only a plain directory of this home,
+never a symlink, never a path outside `<home>/runs/`; anything else is kept, with
+the reason printed, and the retry goes on.
 
 **One job per project at a time.** Two jobs of the same project never run
 together: the pipeline of each job creates its own git worktree from the
@@ -622,7 +668,7 @@ These names are a machine contract, not prose: the pipeline files are the
 source of truth for them, and any runtime that reads them must match them
 exactly.
 
-The ten MCP tools, with the parameters `nightshift mcp` actually accepts:
+The eleven MCP tools, with the parameters `nightshift mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -636,13 +682,16 @@ The ten MCP tools, with the parameters `nightshift mcp` actually accepts:
 | `queue_status` | `job_id?`, `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_cancel` | `job_id`, `reason?` |
+| `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` |
 
-The four queue tools are the same subsystem as `nightshift queue` (see `## Queue`):
+The five queue tools are the same subsystem as `nightshift queue` (see `## Queue`):
 `queue_add` takes the registered project NAME and never a path, `queue_status`
 never returns the prompt of a job and truncates `notice_md` and `result` at 500
 characters, `queue_run` starts the runner detached and answers right away with
-the path of its log, and `queue_cancel` refuses a job running under a live lease
-without writing anything.
+the path of its log, `queue_cancel` refuses a job running under a live lease
+without writing anything, and `queue_retry` sends a gated, failed or cancelled
+job back to the queue - its `run` starts a DETACHED runner, unlike the `--run`
+of the CLI, which runs the job in the foreground.
 
 Every optional parameter accepts an explicit `null` and treats it exactly like
 an absent one, so a caller that fills its whole argument object never gets an

@@ -5,7 +5,7 @@ import { PassThrough, Readable } from "node:stream";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
-import { PATH_MARK, pathLine } from "../src/host/shell.mjs";
+import { PATH_MARK, pathBlock } from "../src/host/shell.mjs";
 import { assertIsolatedEnv, makeHostEnv, readSettingsFile, writeLegacyShim } from "../test-support/host.mjs";
 import { makeDir } from "../test-support/memory.mjs";
 
@@ -51,6 +51,16 @@ function installsInto(host, prefix) {
   return host.npmCalls().filter((call) => call[0] === "install" && call.includes(prefix));
 }
 
+// Specifiers the run installed into the given prefix, in the order npm received them.
+function specsInto(host, prefix) {
+  return installsInto(host, prefix).map((call) => call.at(-1));
+}
+
+// Directories the run packed into a tarball, in the order npm received them.
+function packedDirs(host) {
+  return host.npmCalls().filter((call) => call[0] === "pack").map((call) => call.at(-1));
+}
+
 // Content of the rc file of the isolated user home, or an empty string when it was never written.
 function readRc(host) {
   return existsSync(host.rcPath) ? readFileSync(host.rcPath, "utf8") : "";
@@ -73,11 +83,12 @@ test("init outside a repository installs the whole host and only skips the proje
   assert.deepEqual(JSON.parse(readFileSync(join(host.home, "config.json"), "utf8")).projects, {});
 });
 
-test("--from installs the given checkout and reinstalls even when the version already matches", async (t) => {
+test("--from packs the given checkout and reinstalls even when the version already matches", async (t) => {
   const host = makeHostEnv(t, "install-from");
   const first = makeCtx(host.env);
   assert.equal(await run(["init", "--from", CHECKOUT, "--no-path", "--no-embedding", "--no-gh"], first.ctx), 0);
-  assert.deepEqual(installsInto(host, host.runtimeDir).map((call) => call.at(-1)), [CHECKOUT.replace(/\/$/, "")]);
+  assert.deepEqual(packedDirs(host), [CHECKOUT.replace(/\/$/, "")]);
+  assert.deepEqual(specsInto(host, host.runtimeDir).map((spec) => spec.endsWith(".tgz")), [true], "--from installed a directory instead of a tarball of it");
   assert.equal(JSON.parse(readFileSync(join(host.runtimePackage, "package.json"), "utf8")).version, VERSION);
 
   const second = makeCtx(host.env);
@@ -159,16 +170,16 @@ test("the PATH step asks on a terminal, writes one marked line and never asks ag
   assert.equal(await run(["setup", "--no-embedding"], asked.ctx), 0);
   assert.equal(terminal.written().includes(`Add ${host.binDir} to your PATH?`), true, terminal.written());
   assert.equal(terminal.written().includes(host.rcPath), true, terminal.written());
-  assert.equal(readRc(host), `${THIRD_PARTY}\n${pathLine(host.env)}\n`);
+  assert.equal(readRc(host), `${THIRD_PARTY}\n${pathBlock(host.env)}\n`);
 
   const onPath = { ...host.env, PATH: [host.binDir, host.env.PATH ?? ""].join(delimiter) };
   const again = makeCtx(onPath, { stdin: tty("y\n").stdin });
   assert.equal(await run(["setup", "--no-embedding"], again.ctx), 0);
-  assert.equal(readRc(host), `${THIRD_PARTY}\n${pathLine(host.env)}\n`);
+  assert.equal(readRc(host), `${THIRD_PARTY}\n${pathBlock(host.env)}\n`);
   assert.ok(again.out.includes(`PATH: already present (${host.binDir})`), again.out.join("\n"));
 });
 
-test("--no-path never writes, and without a terminal the line is only printed", async (t) => {
+test("--no-path never writes, and without a terminal the block is only printed", async (t) => {
   const refused = makeHostEnv(t, "install-path-refused");
   const { ctx, out } = makeCtx(refused.env);
   assert.equal(await run(["setup", "--no-path", "--no-embedding"], ctx), 0);
@@ -180,14 +191,17 @@ test("--no-path never writes, and without a terminal the line is only printed", 
   assert.equal(await run(["setup", "--no-embedding"], silent.ctx), 0);
   assert.equal(existsSync(quiet.rcPath), false, "a run without a terminal wrote to an rc file");
   assert.ok(silent.out.includes("PATH: skipped (no terminal)"), silent.out.join("\n"));
-  assert.ok(silent.out.some((line) => line.includes(pathLine(quiet.env))), silent.out.join("\n"));
+  assert.ok(silent.out.includes(`add this block to ${quiet.rcPath}:`), silent.out.join("\n"));
+  for (const line of pathBlock(quiet.env).split("\n")) {
+    assert.ok(silent.out.includes(`  ${line}`), silent.out.join("\n"));
+  }
 });
 
 test("--path writes without asking, and a terminal that says no leaves the rc file alone", async (t) => {
   const forced = makeHostEnv(t, "install-path-forced");
   const { ctx } = makeCtx(forced.env);
   assert.equal(await run(["setup", "--path", "--no-embedding"], ctx), 0);
-  assert.equal(readRc(forced), `${pathLine(forced.env)}\n`);
+  assert.equal(readRc(forced), `${pathBlock(forced.env)}\n`);
 
   const declined = makeHostEnv(t, "install-path-declined");
   const terminal = tty("n\n");
@@ -234,10 +248,11 @@ test("update reinstalls the runtime, re-points a host left on another path and k
 
   const { ctx, out } = makeCtx(host.env);
   assert.equal(await run(["update"], ctx), 0);
-  assert.deepEqual(installsInto(host, host.runtimeDir).map((call) => call.at(-1)), [
-    `nightshift@${VERSION}`,
-    "nightshift@latest",
-  ]);
+  const specs = specsInto(host, host.runtimeDir);
+  assert.equal(specs.length, 2);
+  assert.equal(specs[0].endsWith(".tgz"), true, "the setup installed from the registry instead of packing this package");
+  assert.equal(specs[1], "nightshift@latest", "update is the only command allowed to fall back to the registry");
+  assert.equal(packedDirs(host).length, 1, "update packed this package instead of asking the registry");
   assert.equal(
     readSettingsFile(host.configDir).hooks.SessionStart[0].hooks[0].command,
     `node ${host.entry} hook session-start`,
@@ -290,4 +305,50 @@ test("a home whose runtime directory is missing installs it again on the next se
   assert.equal(await run(["setup", "--no-path", "--no-embedding"], ctx), 0);
   assert.ok(out.some((line) => line.startsWith("runtime: already present")), out.join("\n"));
   assert.equal(existsSync(join(host.runtimePackage, "package.json")), true);
+});
+
+test("--from a tarball installs it as it is, without packing anything", async (t) => {
+  const host = makeHostEnv(t, "install-from-tarball");
+  const tarball = join(makeDir(t, "install-from-tarball-src"), `nightshift-${VERSION}.tgz`);
+  writeFileSync(tarball, `${JSON.stringify({ name: "nightshift", version: VERSION })}\n`);
+  const { ctx } = makeCtx(host.env);
+
+  assert.equal(await run(["setup", "--from", tarball, "--no-path", "--no-embedding"], ctx), 0);
+  assert.deepEqual(packedDirs(host), [], "a tarball was packed again instead of being installed as it is");
+  assert.deepEqual(specsInto(host, host.runtimeDir), [tarball]);
+});
+
+test("--from a path that is neither a directory nor a tarball fails the runtime step instead of installing something else", async (t) => {
+  const host = makeHostEnv(t, "install-from-missing");
+  const missing = join(host.home, "no-such-checkout");
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["setup", "--from", missing, "--no-path", "--no-embedding"], ctx), 0);
+  assert.ok(out.includes(`runtime: failed (no directory or tarball at ${missing})`), out.join("\n"));
+  assert.deepEqual(host.npmCalls(), [], "a missing --from still reached npm");
+});
+
+test("no installation ever asks for a global prefix, and never for sudo", async (t) => {
+  const host = makeHostEnv(t, "install-never-global");
+  const forbidden = ["-g", "--global", "sudo"];
+
+  assert.equal(await run(["setup", "--no-path", "--no-embedding"], makeCtx(host.env).ctx), 0);
+  assert.equal(await run(["update"], makeCtx(host.env).ctx), 0);
+  for (const call of host.npmCalls()) {
+    assert.equal(call.some((arg) => forbidden.includes(arg)), false, call.join(" "));
+    if (call[0] !== "install") continue;
+    assert.equal(call[1], "--prefix", call.join(" "));
+    assert.equal(call[2].startsWith(host.home), true, `an install left the configuration home: ${call.join(" ")}`);
+  }
+});
+
+test("an update whose runtime npm could not reinstall exits 1 and prints the command to finish by hand", async (t) => {
+  const host = makeHostEnv(t, "install-update-failed");
+  assert.equal(await run(["setup", "--no-path", "--no-embedding"], makeCtx(host.env).ctx), 0);
+  host.env.NIGHTSHIFT_FAKE_NPM_EXIT = "1";
+  const { ctx, out, err } = makeCtx(host.env);
+
+  assert.equal(await run(["update"], ctx), 1);
+  assert.ok(out.some((line) => line.startsWith("runtime: failed")), out.join("\n"));
+  assert.ok(err.some((line) => line.includes("nightshift@latest")), err.join("\n"));
 });

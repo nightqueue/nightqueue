@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { join } from "node:path";
 
 const INSTALL_TIMEOUT_MS = 600000;
 
@@ -31,13 +32,39 @@ export function runNpm(args, { env = process.env, spawnSyncImpl = spawnSync, tim
   };
 }
 
-// Arguments of an installation into an isolated prefix, quiet and without the audit npm would run on its own.
+// Arguments of an installation into an isolated prefix, quiet, without development dependencies and without the audit npm would run on its own.
 export function npmInstallArgs(prefix, spec) {
-  return ["install", "--prefix", prefix, "--no-audit", "--no-fund", "--loglevel", "error", spec];
+  return ["install", "--prefix", prefix, "--omit=dev", "--no-audit", "--no-fund", "--loglevel", "error", spec];
 }
 
 // Installs one package specifier into an isolated prefix, returning the result plus the command line to retry by hand.
 export function npmInstall({ prefix, spec, env = process.env, spawnSyncImpl = spawnSync, timeoutMs } = {}) {
   const args = npmInstallArgs(prefix, spec);
   return { ...runNpm(args, { env, spawnSyncImpl, timeoutMs }), command: npmCommandLine(args, env) };
+}
+
+// Arguments of a pack of one directory into a chosen destination, never running the lifecycle scripts of the packed package.
+export function npmPackArgs(dir, destDir) {
+  return ["pack", "--json", "--pack-destination", destDir, "--ignore-scripts", dir];
+}
+
+// Name of the tarball one `npm pack --json` call reported, or null when its output is not the array npm documents.
+function packedFilename(stdout) {
+  try {
+    const filename = JSON.parse(stdout)?.[0]?.filename;
+    return typeof filename === "string" && filename ? filename : null;
+  } catch {
+    return null;
+  }
+}
+
+// Packs one directory into a tarball, returning its path plus the command line to retry by hand; unreadable output is a declared failure, never a silent fallback.
+export function npmPack({ dir, destDir, env = process.env, spawnSyncImpl = spawnSync, timeoutMs } = {}) {
+  const args = npmPackArgs(dir, destDir);
+  const result = runNpm(args, { env, spawnSyncImpl, timeoutMs });
+  const command = npmCommandLine(args, env);
+  if (!result.ok) return { ...result, file: null, command };
+  const filename = packedFilename(result.stdout);
+  if (!filename) return { ...result, ok: false, file: null, command, stderr: `npm pack printed no tarball name for ${dir}` };
+  return { ...result, file: join(destDir, filename), command };
 }

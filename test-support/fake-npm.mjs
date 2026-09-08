@@ -46,22 +46,28 @@ function optionValue(name) {
   return index === -1 ? null : (args[index + 1] ?? null);
 }
 
-// The single package specifier of the call: the first argument that is not a flag nor the value of one.
-function specifier(list) {
+// The arguments of the call that are neither a flag nor the value of one, in the order they appear.
+function operands(list, valued) {
   const kept = [];
   for (let index = 0; index < list.length; index += 1) {
-    if (list[index] === "--prefix" || list[index] === "--loglevel") {
+    if (valued.includes(list[index])) {
       index += 1;
       continue;
     }
     if (list[index].startsWith("-")) continue;
     kept.push(list[index]);
   }
-  return kept[0] ?? null;
+  return kept;
 }
 
-// Version the specifier asks for: the tag when it carries one, the version of the source otherwise.
+// The single package specifier of the call: the first argument that is not a flag nor the value of one.
+function specifier(list) {
+  return operands(list, ["--prefix", "--loglevel"])[0] ?? null;
+}
+
+// Version the specifier asks for: the one recorded in the tarball, the tag when it carries one, the version of the source otherwise.
 function versionOf(spec) {
+  if (spec.endsWith(".tgz")) return readJson(spec).version ?? "0.0.0";
   const at = spec.lastIndexOf("@");
   const tag = at > 0 ? spec.slice(at + 1) : "";
   if (tag && tag !== "latest") return tag;
@@ -113,6 +119,19 @@ function runInstall(rest) {
   return installNightshift(prefix, version);
 }
 
+// Emulates `npm pack --json --pack-destination <dir> <target>`, writing the stand-in tarball the install call reads back.
+function runPack(rest) {
+  const destDir = optionValue("--pack-destination");
+  const dir = operands(rest, ["--pack-destination"])[0] ?? null;
+  if (!destDir || !dir) return fail(`unsupported pack call \`${rest.join(" ")}\``);
+  const manifest = readJson(join(dir, "package.json"));
+  const name = manifest.name ?? "package";
+  const version = manifest.version ?? "0.0.0";
+  const filename = `${name}-${version}.tgz`;
+  writeJson(join(destDir, filename), { name, version, root: dir });
+  process.stdout.write(`${JSON.stringify([{ id: `${name}@${version}`, name, version, filename }])}\n`);
+}
+
 // Emulates `npm audit --json`, which prints a valid report even when it exits 1.
 function runAudit() {
   const total = Number.parseInt(process.env.NIGHTSHIFT_FAKE_NPM_AUDIT ?? "0", 10) || 0;
@@ -129,6 +148,7 @@ function main() {
   const [command, ...rest] = args;
   if (command === "--version" || command === "-v") return process.stdout.write("10.9.0\n");
   if (command === "install") return runInstall(rest);
+  if (command === "pack") return runPack(rest);
   if (command === "audit") return runAudit();
   return fail(`unknown command \`${args.join(" ")}\``);
 }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { classifyJobResult } from "../../src/queue/classify.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
 import {
   extractNotice,
@@ -110,6 +111,28 @@ test("the notice is the LAST `## Notice` section, and a fenced heading never ope
   assert.equal(extractNoticeFromStream(doneStream({ notice: "the pull request is open" })), "the pull request is open");
   assert.equal(extractNoticeFromStream(toNdjson([resultEvent({ text: noticeText("only in the result") })])), "only in the result");
   assert.equal(extractNoticeFromStream(doneStream({ notice: undefined }).replace(/## Notice/g, "Notice")), null);
+});
+
+test("the gate block the skill prescribes opens a gate and carries the way to answer it", () => {
+  const block = [
+    GATE_MARKER,
+    "",
+    "Renaming the column drops the old one; keeping both costs a migration. I need a decision.",
+    "",
+    "## Notice",
+    "",
+    "The migration can rename `total` or keep both columns.",
+    "Decide which one before the pipeline touches the schema.",
+    'Answer with: nightshift queue retry 7 --note "<your answer>"',
+  ].join("\n");
+  const log = toNdjson([systemInitEvent(), resultEvent({ text: block })]);
+
+  assert.equal(hasGateMarker(block), true, "the block did not keep the job at the gate");
+  const notice = extractNoticeFromStream(log);
+  assert.ok(notice.includes("nightshift queue retry"), notice);
+  assert.equal(notice.endsWith('--note "<your answer>"'), true, notice);
+  assert.equal(classifyJobResult({ log, exitCode: 0 }).status, "gate");
+  assert.equal(classifyJobResult({ log, exitCode: 0 }).noticeMd, notice);
 });
 
 test("the notice reported is the run's FINAL decision, not a Notice echoed by an earlier assistant message", () => {

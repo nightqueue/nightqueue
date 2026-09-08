@@ -1,21 +1,26 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { binDir, embeddingDir, homeDir, legacyShimPath, runtimeDir } from "../config/paths.mjs";
-import { npmInstall } from "../host/npm.mjs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { binDir, embeddingDir, homeDir, legacyShimPath, runtimeDir, shimPath } from "../config/paths.mjs";
+import { npmInstall, npmPack } from "../host/npm.mjs";
+import { packageRoot } from "../host/paths.mjs";
 import {
   packageVersion,
+  registrySpec,
   removeLegacyShim,
   removeShims,
   runtimeReady,
-  runtimeSpec,
   runtimeVersion,
   writeShims,
 } from "../host/runtime.mjs";
-import { PATH_MARK, addPathLine, binDirInPath, pathLine, rcFilePath, removePathLine } from "../host/shell.mjs";
+import { PATH_MARK, addPathLine, binDirInPath, pathBlock, rcFilePath, removePathLine } from "../host/shell.mjs";
 import { EMBEDDING_PACKAGE, EMBEDDING_PACKAGE_RANGE, embeddingLibraryEntry, warmupModel } from "../memory/embedding.mjs";
 import { confirm } from "./prompt.mjs";
 import { firstLine } from "./report.mjs";
 
 const RUNTIME_LABEL = "runtime";
+const RUNTIME_CHECK_LABEL = "runtime check";
+const SHIM_CHECK_TIMEOUT_MS = 15000;
 const SHIM_LABEL = "shim";
 const LEGACY_SHIM_LABEL = "legacy shim";
 const PATH_LABEL = "PATH";
@@ -37,6 +42,42 @@ function guarded(report, label, hint, action) {
   }
 }
 
+// Description of one path on disk, or null when nothing is there.
+function statOrNull(path) {
+  try {
+    return statSync(path);
+  } catch {
+    return null;
+  }
+}
+
+// Packs one directory into a tarball of its own temporary directory, so the install never links a checkout into the runtime.
+function packDirectory(ctx, report, dir) {
+  const destDir = mkdtempSync(join(tmpdir(), "nightshift-pack-"));
+  const cleanup = () => rmSync(destDir, { recursive: true, force: true });
+  const result = npmPack({ dir, destDir, env: ctx.env, spawnSyncImpl: ctx.spawnSyncImpl });
+  if (result.ok) return { ok: true, spec: result.file, cleanup };
+  report.degrade(RUNTIME_LABEL, npmFailure(result), result.command);
+  cleanup();
+  return { ok: false, cleanup: () => {} };
+}
+
+// Where the runtime comes from: the package this process runs from, the directory or tarball of `--from`, the registry only when an update forces it.
+function openRuntimeSource(ctx, report, { from, force } = {}) {
+  const target = typeof from === "string" && from.trim() ? resolve(from.trim()) : "";
+  if (!target) {
+    if (force === true) return { ok: true, spec: registrySpec("latest"), cleanup: () => {} };
+    return packDirectory(ctx, report, packageRoot());
+  }
+  const stat = statOrNull(target);
+  if (!stat) {
+    report.degrade(RUNTIME_LABEL, `no directory or tarball at ${target}`, `ls ${target}`);
+    return { ok: false, cleanup: () => {} };
+  }
+  if (stat.isDirectory()) return packDirectory(ctx, report, target);
+  return { ok: true, spec: target, cleanup: () => {} };
+}
+
 // Installs the package into the runtime prefix and reports whether the prefix really ended up holding it.
 export function setupRuntime(ctx, report, { from, force } = {}) {
   const prefix = runtimeDir(ctx.env);
@@ -46,14 +87,45 @@ export function setupRuntime(ctx, report, { from, force } = {}) {
     report.step(RUNTIME_LABEL, "already present", `v${current} at ${prefix}`);
     return runtimeReady(ctx.env);
   }
-  mkdirSync(prefix, { recursive: true });
-  const spec = runtimeSpec({ from, version: force && !from ? "latest" : wanted });
-  const result = npmInstall({ prefix, spec, env: ctx.env, spawnSyncImpl: ctx.spawnSyncImpl });
-  if (!result.ok || !runtimeReady(ctx.env)) {
-    report.degrade(RUNTIME_LABEL, npmFailure(result), result.command);
+  const source = openRuntimeSource(ctx, report, { from, force });
+  if (!source.ok) return false;
+  try {
+    mkdirSync(prefix, { recursive: true });
+    const result = npmInstall({ prefix, spec: source.spec, env: ctx.env, spawnSyncImpl: ctx.spawnSyncImpl });
+    if (!result.ok || !runtimeReady(ctx.env)) {
+      report.degrade(RUNTIME_LABEL, npmFailure(result), result.command);
+      return false;
+    }
+    report.step(RUNTIME_LABEL, current ? "updated" : "created", `v${runtimeVersion(ctx.env) ?? "?"} at ${prefix}`);
+    return true;
+  } finally {
+    source.cleanup();
+  }
+}
+
+// Reason the shim could not prove itself, short enough for a report line.
+function shimCheckFailure(result) {
+  const message = result?.error?.message ?? result?.stderr ?? "";
+  return firstLine(message) || `exit ${result?.status ?? "?"}`;
+}
+
+// Runs the command the user will type, the only proof that the installed runtime really starts.
+export function verifyShim(ctx, report) {
+  const path = shimPath(ctx.env);
+  const hint = `${path} --version`;
+  let result;
+  try {
+    result = ctx.spawnSyncImpl(path, ["--version"], { env: ctx.env, encoding: "utf8", timeout: SHIM_CHECK_TIMEOUT_MS });
+  } catch (err) {
+    report.degrade(RUNTIME_CHECK_LABEL, firstLine(err?.message ?? String(err)), hint);
     return false;
   }
-  report.step(RUNTIME_LABEL, current ? "updated" : "created", `v${runtimeVersion(ctx.env) ?? "?"} at ${prefix}`);
+  const version = typeof result?.stdout === "string" ? result.stdout.trim() : "";
+  if (result?.error || result?.status !== 0 || !version) {
+    report.degrade(RUNTIME_CHECK_LABEL, shimCheckFailure(result), hint);
+    return false;
+  }
+  report.step(RUNTIME_CHECK_LABEL, "ok", `v${version}`);
   return true;
 }
 
@@ -82,9 +154,9 @@ export function setupShim(ctx, report, { shortcuts } = {}) {
   dropLegacyShim(ctx, report);
 }
 
-// Question asked before a single line is appended to the rc file of the user.
+// Question asked before a guarded block is appended to the rc file of the user.
 function pathQuestion(env) {
-  return `Add ${binDir(env)} to your PATH? This appends one line to ${rcFilePath(env)} [Y/n] `;
+  return `Add ${binDir(env)} to your PATH? This appends a guarded block to ${rcFilePath(env)} [Y/n] `;
 }
 
 // Decides whether the PATH line may be written: `--path` when it is there, the terminal otherwise, null with neither.
@@ -94,9 +166,10 @@ async function wantsPath(ctx, path) {
   return await confirm({ stdin: ctx.stdin, stdout: ctx.stdout, question: pathQuestion(ctx.env) });
 }
 
-// Prints the line the user has to add by hand, the only thing this step does without an explicit yes.
-function printPathLine(ctx) {
-  ctx.out(`add this line to ${rcFilePath(ctx.env)}: ${pathLine(ctx.env)}`);
+// Prints the block the user has to add by hand, the only thing this step does without an explicit yes.
+function printPathBlock(ctx) {
+  ctx.out(`add this block to ${rcFilePath(ctx.env)}:`);
+  for (const line of pathBlock(ctx.env).split("\n")) ctx.out(`  ${line}`);
 }
 
 // Puts the shim directory on the PATH, asking first and never writing to an rc file on its own.
@@ -112,10 +185,10 @@ export async function setupPath(ctx, report, { path } = {}) {
   const wanted = await wantsPath(ctx, path);
   if (wanted !== true) {
     report.step(PATH_LABEL, "skipped", wanted === false ? "declined" : "no terminal");
-    printPathLine(ctx);
+    printPathBlock(ctx);
     return;
   }
-  guarded(report, PATH_LABEL, pathLine(ctx.env), () => {
+  guarded(report, PATH_LABEL, `add the \`${PATH_MARK}\` block to ${rcFilePath(ctx.env)}`, () => {
     const result = addPathLine(ctx.env);
     report.step(PATH_LABEL, result.status, result.path);
   });

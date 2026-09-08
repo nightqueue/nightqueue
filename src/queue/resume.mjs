@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { runDir } from "../config/paths.mjs";
+import { lstatSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { homeDir, runDir } from "../config/paths.mjs";
 import { NAME_RE } from "../config/schema.mjs";
 
 // Canonical phase order written by the plugin into state.json; "next phase" derives from the highest one completed.
@@ -130,4 +130,47 @@ export function readRunState({ project, slug, env = process.env } = {}) {
   } catch {
     return null;
   }
+}
+
+// State of a path WITHOUT following a link, the only reading that tells a run directory from a link into somebody else's tree.
+function lstatOrNull(path) {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+// Real path of a directory, links of every component already followed, or null when nothing is there.
+function realPathOrNull(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+// Refusal to delete, always with the same shape as a deletion.
+function keptRunDir(dir, reason) {
+  return { dir, status: "kept", reason };
+}
+
+// Deletes the run directory of a job, and only when the segments are safe, no component of the path was redirected by a link and what is there is a plain directory.
+export function discardRunDir({ project, slug, env = process.env } = {}) {
+  if (!NAME_RE.test(String(project ?? "")) || !isSafeSegment(slug)) return keptRunDir(null, "unsafe project or slug");
+  const dir = resolve(runDir(project, slug, env));
+  const runsRoot = realPathOrNull(join(homeDir(env), "runs"));
+  const projectDir = realPathOrNull(join(homeDir(env), "runs", project));
+  if (!runsRoot || !projectDir) return { dir, status: "not present", reason: null };
+  if (projectDir !== join(runsRoot, project)) return keptRunDir(dir, `runs/${project} resolves outside the runs directory`);
+  const leaf = join(projectDir, slug);
+  const stats = lstatOrNull(leaf);
+  if (!stats) return { dir, status: "not present", reason: null };
+  if (stats.isSymbolicLink() || !stats.isDirectory()) return keptRunDir(dir, "the run directory is not a plain directory");
+  try {
+    rmSync(leaf, { recursive: true, force: true });
+  } catch (err) {
+    return keptRunDir(dir, String(err?.message ?? err).split("\n")[0]);
+  }
+  return { dir, status: "removed", reason: null };
 }

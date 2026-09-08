@@ -18,7 +18,7 @@ import { npmBin } from "../host/npm.mjs";
 import { marketplaceIsCurrent, pluginRef, readInstalledPlugin, readKnownMarketplace } from "../host/plugin.mjs";
 import { legacyShimState, packageVersion, runtimeVersion, shimState } from "../host/runtime.mjs";
 import { hookStatus, readHostSettings } from "../host/settings.mjs";
-import { binDirInPath, pathLine, rcFilePath } from "../host/shell.mjs";
+import { PATH_MARK, binDirInPath, rcFilePath } from "../host/shell.mjs";
 import { DB_USER_VERSION, openDbReadOnly } from "../memory/db.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
 import { ORPHAN_PREDICATE } from "../memory/jobs.mjs";
@@ -195,7 +195,7 @@ function checkPath(ctx) {
   const dir = binDir(ctx.env);
   return binDirInPath(ctx.env)
     ? check("path", "ok", `${dir} on PATH`)
-    : check("path", "warn", `${dir} not on PATH`, `add this line to ${rcFilePath(ctx.env)}: ${pathLine(ctx.env)}`);
+    : check("path", "warn", `${dir} not on PATH`, `run \`nightshift setup --path\` to add the guarded \`${PATH_MARK}\` block to ${rcFilePath(ctx.env)}`);
 }
 
 // Checks the embedding library in its own prefix, resolving it without ever loading it.

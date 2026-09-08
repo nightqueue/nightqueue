@@ -17,6 +17,7 @@ import {
   persistRunFacts,
   releaseJob,
   renewLease,
+  retryJob,
 } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
@@ -25,6 +26,7 @@ const WORKER = "host:1000";
 const OTHER_WORKER = "host:2000";
 const CAP = 4;
 const GATED_FINISHED_AT = "2020-01-01 00:00:00";
+const SESSION_ID = "11111111-2222-3333-4444-555555555555";
 
 // A home with two registered projects and the queue table ready.
 function makeQueue(t, name) {
@@ -233,6 +235,96 @@ test("cancel refuses a job in every terminal state without touching the row", (t
     assert.throws(() => cancelJob(id, { reason: "too late" }, env), new RegExp(`already finished with status \`${status}\``));
     assert.deepEqual(getJob(id, env), before, `the refused cancel wrote to a ${status} job`);
   }
+});
+
+test("retry takes a gated job back to pending, keeping what makes the pipeline resume from where it stopped", (t) => {
+  const env = makeQueue(t, "jobs-retry-gate");
+  const id = enqueue(env);
+  claimJobById(id, { worker: WORKER, cap: CAP }, env);
+  finishJob(id, { worker: WORKER, status: "gate", result: { status: "gate", prUrl: null } }, env);
+  openDb(env).prepare("UPDATE jobs SET slug = ?, branch = ?, session_id = ? WHERE id = ?").run("fix-it", "fix/it", SESSION_ID, id);
+
+  const job = retryJob(id, { note: "rename the column" }, env);
+  assert.equal(job.status, "pending");
+  assert.equal(job.operator_note, "rename the column");
+  assert.equal(job.slug, "fix-it");
+  assert.equal(job.branch, "fix/it");
+  assert.equal(job.session_id, SESSION_ID);
+  assert.equal(job.attempts, 1, "the retry rewrote the history of attempts");
+  assert.equal(job.max_attempts, 2, "the retry did not widen the allowance");
+  assert.equal(job.worker, null);
+  assert.equal(job.lease_until, null);
+  assert.equal(job.started_at, null);
+  assert.equal(job.finished_at, null);
+  assert.deepEqual(JSON.parse(getJob(id, env).result), { status: "gate", prUrl: null, retriedFrom: "gate" });
+});
+
+test("a gated job is only retried with a note, and the refusal prints the reason it is waiting", (t) => {
+  const env = makeQueue(t, "jobs-retry-gate-note");
+  const id = enqueue(env);
+  claimJobById(id, { worker: WORKER, cap: CAP }, env);
+  finishJob(id, { worker: WORKER, status: "gate", noticeMd: "Rename the column or keep both?" }, env);
+
+  const before = getJob(id, env);
+  assert.throws(() => retryJob(id, {}, env), /Rename the column or keep both\?/);
+  assert.throws(() => retryJob(id, { note: "   " }, env), /This job is waiting for a decision/);
+  assert.deepEqual(getJob(id, env), before, "the refused retry wrote to the row");
+});
+
+test("retry accepts a failed and a cancelled job without a note, and refuses every other status", (t) => {
+  const env = makeQueue(t, "jobs-retry-statuses");
+  for (const status of ["failed", "cancelled"]) {
+    const id = enqueue(env);
+    openDb(env).prepare("UPDATE jobs SET status = ?, finished_at = datetime('now') WHERE id = ?").run(status, id);
+    const job = retryJob(id, {}, env);
+    assert.equal(job.status, "pending");
+    assert.deepEqual(JSON.parse(getJob(id, env).result), { retriedFrom: status });
+  }
+
+  const pending = enqueue(env);
+  assert.throws(() => retryJob(pending, { note: "again" }, env), /already pending; there is nothing to retry/);
+  const done = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(done);
+  assert.throws(() => retryJob(done, { note: "again" }, env), /cannot be retried from status `done`/);
+  const running = enqueue(env);
+  claimJobById(running, { worker: WORKER, cap: CAP }, env);
+  const before = getJob(running, env);
+  assert.throws(() => retryJob(running, { note: "again" }, env), /is running with a live lease/);
+  assert.deepEqual(getJob(running, env), before);
+  assert.throws(() => retryJob(9999, { note: "again" }, env), /unknown job `9999`/);
+  assert.throws(() => retryJob(0, { note: "again" }, env), /positive integer job id/);
+});
+
+test("--fresh gives up the slug, the branch and the session, so the next run starts from phase 0", (t) => {
+  const env = makeQueue(t, "jobs-retry-fresh");
+  const id = enqueue(env);
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'failed', slug = ?, branch = ?, session_id = ?, finished_at = datetime('now') WHERE id = ?")
+    .run("fix-it", "fix/it", SESSION_ID, id);
+
+  const job = retryJob(id, { fresh: true }, env);
+  assert.equal(job.slug, null);
+  assert.equal(job.branch, null);
+  assert.equal(job.session_id, null);
+});
+
+test("the allowance of attempts grows by one per retry and stops at the ceiling the queue accepts", (t) => {
+  const env = makeQueue(t, "jobs-retry-allowance");
+  const id = enqueue(env, { maxAttempts: 9 });
+  openDb(env).prepare("UPDATE jobs SET status = 'failed' WHERE id = ?").run(id);
+
+  assert.equal(retryJob(id, {}, env).max_attempts, 10);
+  openDb(env).prepare("UPDATE jobs SET status = 'failed' WHERE id = ?").run(id);
+  assert.equal(retryJob(id, {}, env).max_attempts, 10, "the retry pushed the allowance past the accepted range");
+});
+
+test("a retry without a note clears the reason of a cancel instead of passing it off as an answer to the gate", (t) => {
+  const env = makeQueue(t, "jobs-retry-note-ownership");
+  const id = enqueue(env);
+  cancelJob(id, { reason: "no longer needed" }, env);
+  assert.equal(getJob(id, env).operator_note, "no longer needed");
+
+  assert.equal(retryJob(id, {}, env).operator_note, null, "the reason of the cancel survived as an answer to the gate");
 });
 
 test("the public view drops the prompt, truncates the free text by code point and returns ISO timestamps", (t) => {

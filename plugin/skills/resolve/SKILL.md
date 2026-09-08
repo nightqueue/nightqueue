@@ -237,16 +237,38 @@ agent, print a line in this format first:
    ```
 
    - `EXECUTE` → follow the pipeline normally.
-   - `PROPOSE-ALTERNATIVE` → present the alternative and the trade-off to the user in
-     ≤ 5 lines; wait for the decision before continuing.
-   - `ASK` → ask ONE objective question and wait.
+   - `PROPOSE-ALTERNATIVE` → stop the run with the gate block below, carrying the
+     alternative and its trade-off in ≤ 5 lines.
+   - `ASK` → stop the run with the gate block below, carrying ONE objective question.
+
+   **The gate block is the only documented way to stop and wait.** Both non-`EXECUTE`
+   verdicts end the run by printing it as the final text, outside any code fence (the
+   runner ignores fenced lines), in exactly this order:
+
+   ```
+   ## Requires user confirmation
+
+   <the alternative and its trade-off, or the single objective question — ≤ 5 lines>
+
+   ## Notice
+
+   <what is being asked, in one or two lines>
+   <what the operator has to decide>
+   Answer with: nightshift queue retry <id> --note "<your answer>"
+   ```
+
+   `<id>` is the number of this job, in the header of the run ("Unattended run, job #N").
+   The heading `## Requires user confirmation` is the marker that keeps the job in `gate`,
+   and `## Notice` has to be the LAST section of the final text, because the runtime reads
+   the body of the last `## Notice` to the end of the text. A final text without this
+   structure no longer stops at the gate: the runtime records the job as `failed`, because
+   a gate nobody can read is worse than a failure.
 
    **A brief that depends on another job's pull request is not executable here.** When the
    request conditions the work on another job ("after job #N", "once PR #N is merged",
    "depends on job ..."), the verdict is `PROPOSE-ALTERNATIVE` — this case adds no new
-   verdict — and the alternative is fixed. Print it as a real `## Requires user
-   confirmation` heading (never inside a code fence — the runner ignores fenced lines, and
-   this heading is the marker that keeps the job in `gate`), with exactly this body:
+   verdict — and the alternative is fixed. Print the gate block above with exactly this
+   body under `## Requires user confirmation`:
 
    ```
    This brief depends on another job's pull request. A job must be self-contained: fold this work into that job (as a stage) or make it independent. Nothing was changed.
@@ -262,6 +284,11 @@ agent, print a line in this format first:
    code. Without evidence, the verdict is `EXECUTE`.
    Ambiguity in *reading* the request is NOT resolved here — that is Step 3.5
    of the architect. This gate only decides whether **this is worth executing**.
+   **An empty repository is greenfield, never a reason to stop:** a repository with no
+   tracked files (or with a single empty commit) whose request creates files is executable
+   as it is — record `greenfield repository` in the Brief of step 1 and keep `EXECUTE`.
+   What the repository is *for*, when two readings are plausible, is the architect's Step
+   3.5, never this gate.
 
    After the user's answer (`PROPOSE-ALTERNATIVE`/`ASK`): update the
    affected fields of the Brief with the decision and proceed from step 3. If the gate avoided

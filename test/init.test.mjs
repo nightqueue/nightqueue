@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
 import { ghAuthStatus } from "../src/host/gh.mjs";
-import { FAKE_GH_LOGIN, FAKE_GH_TOKEN, makeHostEnv, readSettingsFile } from "../test-support/host.mjs";
+import { PATH_MARK, PATH_MARK_END, pathBlock } from "../src/host/shell.mjs";
+import { FAKE_GH_LOGIN, FAKE_GH_TOKEN, assertIsolatedEnv, makeHostEnv, readSettingsFile } from "../test-support/host.mjs";
 import { makeDir } from "../test-support/memory.mjs";
 
 const QUESTION = `GitHub CLI is authenticated as ${FAKE_GH_LOGIN} — import its token as connection "gh"? [Y/n] `;
+const PACKAGE_ROOT = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "");
+const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 // Response of a GitHub API that accepts the token, in the shape `testConnection` reads.
 function okResponse() {
@@ -224,6 +229,102 @@ test("a path that is not a git repository stops init before it touches the host"
   assert.equal(await run(["init", "--no-path", makeDir(t, "init-bad-path-dir"), "--no-gh"], ctx), 1);
   assert.match(err.join("\n"), /not a git repository \(no \.git\)/);
   assert.equal(existsSync(host.home), false);
+});
+
+test("a runtime npm could not install stops init before anything else is written", async (t) => {
+  const host = makeHostEnv(t, "init-fatal-runtime");
+  host.env.NIGHTSHIFT_FAKE_NPM_EXIT = "1";
+  const { ctx, out, err } = makeCtx(host.env, { cwd: makeDir(t, "init-fatal-runtime-cwd") });
+
+  assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], ctx), 1);
+  assert.ok(out.some((line) => line.startsWith("runtime: failed")), out.join("\n"));
+  assert.match(err.join("\n"), /the `runtime` step failed/);
+  assert.equal(existsSync(host.rcPath), false, "a failed runtime still wrote to the rc file of the user");
+  assert.equal(existsSync(host.shim), false, "a failed runtime still wrote a shim pointing at nothing");
+  assert.equal(existsSync(host.settingsPath), false, "a failed runtime still registered hooks in the host");
+});
+
+test("a shim that cannot answer `--version` stops init before the PATH is touched", async (t) => {
+  const host = makeHostEnv(t, "init-fatal-check");
+  const refuse = (file, args, options) =>
+    file === host.shim ? { status: 1, stdout: "", stderr: "cannot execute binary file" } : spawnSync(file, args, options);
+  const { ctx, out, err } = makeCtx(host.env, { cwd: makeDir(t, "init-fatal-check-cwd"), spawnSyncImpl: refuse });
+
+  assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], ctx), 1);
+  assert.ok(out.some((line) => line.startsWith("runtime check: failed")), out.join("\n"));
+  assert.match(err.join("\n"), /the `runtime check` step failed/);
+  assert.equal(existsSync(host.rcPath), false, "the PATH was written before the runtime had proven itself");
+});
+
+test("a claude CLI that cannot run degrades the host services and still finishes init", async (t) => {
+  const host = makeHostEnv(t, "init-claude-broken", { exitCode: 1 });
+  const { ctx, out } = makeCtx(host.env, { cwd: makeDir(t, "init-claude-broken-cwd") });
+
+  assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], ctx), 0);
+  assert.ok(out.some((line) => line.startsWith("mcp nightshift: failed")), out.join("\n"));
+  assert.ok(out.some((line) => line.startsWith("setup finished with")), out.join("\n"));
+  assert.equal(readFileSync(host.rcPath, "utf8").includes(pathBlock(host.env)), true, "a degraded host service held the PATH back");
+});
+
+test("the PATH block lands once however many times init runs, and the line of an older installation is migrated", async (t) => {
+  const host = makeHostEnv(t, "init-path-block");
+  const third = 'export PATH="/opt/x:$PATH"';
+  const legacy = `export PATH="${host.binDir}:$PATH" ${PATH_MARK}`;
+  writeFileSync(host.rcPath, `${third}\n${legacy}\n`);
+  const cwd = makeDir(t, "init-path-block-cwd");
+
+  assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], makeCtx(host.env, { cwd }).ctx), 0);
+  assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], makeCtx(host.env, { cwd }).ctx), 0);
+  const rc = readFileSync(host.rcPath, "utf8");
+  assert.deepEqual(rc.split("\n"), [third, ...pathBlock(host.env).split("\n"), ""]);
+  const opened = rc.split("\n").filter((line) => line === PATH_MARK);
+  const closed = rc.split("\n").filter((line) => line === PATH_MARK_END);
+  assert.deepEqual([opened.length, closed.length], [1, 1], `the rc file carries more than one block of ours: ${rc}`);
+});
+
+test("init closes by saying what it installed, where the block went and how to make the command resolve", async (t) => {
+  const host = makeHostEnv(t, "init-final-message");
+  const { ctx, out } = makeCtx(host.env, { cwd: makeDir(t, "init-final-message-cwd") });
+
+  assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], ctx), 0);
+  assert.ok(out.includes(`installed nightshift v${VERSION} in ${host.runtimeDir}`), out.join("\n"));
+  assert.ok(out.includes(`commands: ${Object.values(host.shims).join(", ")}`), out.join("\n"));
+  assert.ok(out.includes(`PATH block written to ${host.rcPath}:`), out.join("\n"));
+  for (const line of pathBlock(host.env).split("\n")) assert.ok(out.includes(`  ${line}`), out.join("\n"));
+  assert.ok(
+    out.includes("Open a new terminal or run `source ~/.zshrc` (or your shell's rc) to use `nightshift`."),
+    out.join("\n"),
+  );
+});
+
+test("a skipped PATH step is never sold as written", async (t) => {
+  const host = makeHostEnv(t, "init-no-path-message");
+  const { ctx, out } = makeCtx(host.env, { cwd: makeDir(t, "init-no-path-message-cwd") });
+
+  assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh"], ctx), 0);
+  assert.ok(out.includes(`installed nightshift v${VERSION} in ${host.runtimeDir}`), out.join("\n"));
+  assert.equal(out.some((line) => line.startsWith("PATH block written to")), false, out.join("\n"));
+  assert.equal(out.some((line) => line.startsWith("Open a new terminal")), false, out.join("\n"));
+});
+
+test("init packs this package, installs the tarball and leaves a host the doctor passes", async (t) => {
+  const host = makeHostEnv(t, "init-e2e");
+  assertIsolatedEnv(host.env);
+  const { ctx, out } = makeCtx(host.env, { cwd: makeDir(t, "init-e2e-cwd") });
+
+  assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], ctx), 0);
+  const [pack, install] = host.npmCalls();
+  assert.equal(pack[0], "pack");
+  assert.equal(pack.at(-1), PACKAGE_ROOT);
+  assert.equal(existsSync(pack[pack.indexOf("--pack-destination") + 1]), false, "the pack left its temporary directory behind");
+  assert.equal(install.at(-1).endsWith(".tgz"), true, install.join(" "));
+  assert.equal(host.npmCalls().some((call) => call.includes("-g") || call.includes("--global") || call.includes("sudo")), false);
+  assert.ok(out.some((line) => line.startsWith(`runtime check: ok (v${VERSION}`)), out.join("\n"));
+
+  const report = [];
+  const doctor = { ...ctx, out: (line) => report.push(line) };
+  assert.equal(await run(["doctor", "--json"], doctor), 0, report.join("\n"));
+  assert.deepEqual(JSON.parse(report[0]).checks.filter((check) => check.status === "fail"), []);
 });
 
 test("the login is read from either stream of `gh auth status`", () => {

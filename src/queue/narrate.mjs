@@ -210,6 +210,11 @@ function noticeBody(notice) {
     .join("\n");
 }
 
+// Text of a `notice` narration line, so a notice read from the row of a job prints exactly like one that came from the stream.
+export function noticeNarration(notice) {
+  return `notice\n${noticeBody(notice)}`;
+}
+
 // Emits a marker only when its VALUE changed, because the slug and the pull request echo in many events.
 function pushMarker(state, out, kind, value, text) {
   if (state.seen.get(kind) === value) return;
@@ -226,7 +231,7 @@ function narrateMarkers(state, text) {
   const prUrl = extractPrUrl(text);
   if (prUrl) pushMarker(state, out, "pr", prUrl, `pull request: ${prUrl}`);
   const notice = extractNotice(text);
-  if (notice) pushMarker(state, out, "notice", notice, `notice\n${noticeBody(notice)}`);
+  if (notice) pushMarker(state, out, "notice", notice, noticeNarration(notice));
   return out;
 }
 

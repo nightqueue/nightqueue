@@ -28,8 +28,8 @@ export const ORPHAN_PREDICATE =
   `status = 'running' AND (lease_until IS NULL
      OR datetime(lease_until) < datetime('now', '-${LEASE_GRACE_S} seconds'))`;
 
-// The `result` a cancel grafts `cancelledFrom` onto: the JSON object already there, or a new one keeping what was.
-const CANCEL_RESULT_BASE = `CASE
+// The `result` a cancel or a retry grafts its own field onto: the JSON object already there, or a new one keeping what was.
+const RESULT_OBJECT_BASE = `CASE
               WHEN result IS NULL THEN '{}'
               WHEN json_valid(result) AND json_type(result) = 'object' THEN result
               ELSE json_object('previousResult', result) END`;
@@ -376,7 +376,7 @@ export function cancelJob(id, { reason } = {}, env = process.env) {
   const db = openDb(env);
   const statement = db.prepare(
     `UPDATE jobs
-        SET result = json_set(${CANCEL_RESULT_BASE}, '$.cancelledFrom', status),
+        SET result = json_set(${RESULT_OBJECT_BASE}, '$.cancelledFrom', status),
             status = 'cancelled',
             finished_at = COALESCE(finished_at, datetime('now')),
             operator_note = COALESCE(?, operator_note),
@@ -389,6 +389,43 @@ export function cancelJob(id, { reason } = {}, env = process.env) {
   const row = withWriteRetry(() => statement.get(optionalText(reason), jobId));
   if (row) return jobView(row);
   throw new UserError(cancelRefusal(jobId, getJob(jobId, env)));
+}
+
+// Explains, from the current row, why a retry was refused; it never decides anything, only phrases it.
+function retryRefusal(id, row, { note } = {}) {
+  if (!row) return `unknown job \`${id}\``;
+  if (row.status === "running") return `job \`${id}\` is running with a live lease on worker \`${row.worker}\`; stop that runner first`;
+  if (row.status === "pending") return `job \`${id}\` is already pending; there is nothing to retry`;
+  if (row.status === "gate" && !note) {
+    const reason = jobView(row).notice_md;
+    return [reason, 'This job is waiting for a decision. Re-run with --note "<your answer>".'].filter(Boolean).join("\n");
+  }
+  return `job \`${id}\` cannot be retried from status \`${row.status}\``;
+}
+
+// Columns a `--fresh` retry gives up, so the next run starts from phase 0 with a worktree of its own.
+const RETRY_FRESH_COLUMNS = ", slug = NULL, branch = NULL, session_id = NULL";
+
+// Sends a gated, failed or cancelled job back to the queue; the decision is in the WHERE and a refusal writes nothing.
+export function retryJob(id, { note, fresh } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET result = json_set(${RESULT_OBJECT_BASE}, '$.retriedFrom', status),
+            status = 'pending',
+            worker = NULL,
+            lease_until = NULL,
+            started_at = NULL,
+            finished_at = NULL,
+            max_attempts = min(max_attempts + 1, ${MAX_ATTEMPTS_RANGE.max}),
+            operator_note = ?${fresh === true ? RETRY_FRESH_COLUMNS : ""}
+      WHERE id = ? AND (status IN ('failed', 'cancelled') OR (status = 'gate' AND ? IS NOT NULL))
+      RETURNING *`,
+  );
+  const jobId = requireId(id);
+  const answer = optionalText(note);
+  const row = withWriteRetry(() => statement.get(answer, jobId, answer));
+  if (row) return jobView(row);
+  throw new UserError(retryRefusal(jobId, getJob(jobId, env), { note: answer }));
 }
 
 // Returns the raw row of a job, or null.

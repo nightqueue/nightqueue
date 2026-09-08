@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { backoffMs, classifyJobResult, isTransientFailure } from "../../src/queue/classify.mjs";
+import { SILENT_STOP_NOTICE, backoffMs, classifyJobResult, isTransientFailure } from "../../src/queue/classify.mjs";
 import {
   doneStream,
   failureStream,
@@ -49,11 +49,36 @@ test("a timeout is a failure that no retry may pick up, and a stop is a cancella
   );
 });
 
-test("a clean exit with nothing to deliver asks for a human instead of failing silently", () => {
+test("a clean exit with nothing to deliver asks for a human, and says why it is asking", () => {
   const outcome = classifyJobResult({ log: doneStream().replace(PR_URL, "no link here"), exitCode: 0 });
   assert.equal(outcome.status, "gate");
   assert.equal(outcome.prUrl, null);
-  assert.equal(classifyJobResult({ log: "", exitCode: 0 }).status, "gate");
+  assert.ok(outcome.noticeMd, "a gate without a reason is exactly the bug this classification exists to prevent");
+});
+
+test("a clean exit that said nothing at all is a failure with the fixed warning, never a silent gate", () => {
+  const outcome = classifyJobResult({ log: "", exitCode: 0 });
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.noticeMd, SILENT_STOP_NOTICE);
+});
+
+test("a run without a `## Notice` falls back to the whole final text of the orchestrator, capped at eight thousand code points", () => {
+  const outcome = classifyResultText("  I need you to decide between renaming the column or keeping both.  ");
+  assert.equal(outcome.status, "gate");
+  assert.equal(outcome.noticeMd, "I need you to decide between renaming the column or keeping both.");
+
+  const long = classifyResultText("a".repeat(9000));
+  assert.equal(long.status, "gate");
+  assert.equal(Array.from(long.noticeMd).length, 8003, "the fallback notice was not capped");
+  assert.equal(long.noticeMd.endsWith("..."), true);
+});
+
+test("a real failure never gets the warning of a silent stop, because that text claims a clean exit", () => {
+  for (const ending of [{ exitCode: 1 }, { exitCode: 0, timedOut: true }, { exitCode: 0, idleTimedOut: true }]) {
+    const outcome = classifyJobResult({ log: "", ...ending });
+    assert.equal(outcome.status, "failed", JSON.stringify(ending));
+    assert.equal(outcome.noticeMd, null, JSON.stringify(ending));
+  }
 });
 
 test("a pull request URL cited only as a reference, with no PR actually opened, is never done", () => {

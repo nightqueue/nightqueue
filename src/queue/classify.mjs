@@ -1,25 +1,45 @@
+import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { extractNoticeFromStream, extractPrUrl, extractResultText, hasGateMarker, hasGateMarkerInStream } from "./stream.mjs";
 
 const BACKOFF_BASE_MS = 5000;
 const BACKOFF_FACTOR = 3;
 const BACKOFF_CAP_MS = 60000;
+const NOTICE_FALLBACK_LIMIT = 8000;
 
-// Explicit precedence of the outcome: a stop wins over a timeout, and a timeout is never a retryable failure.
-function decideStatus({ exitCode, timedOut, idleTimedOut, stopped, prUrl, gate }) {
+export const SILENT_STOP_NOTICE = "Pipeline stopped without a PR and without explanation (exit 0). See the log.";
+
+// Explicit precedence of the outcome: a stop wins over a timeout, a timeout is never a retryable failure, and a job only waits at the gate when it said why.
+function decideStatus({ exitCode, timedOut, idleTimedOut, stopped, prUrl, gate, reason }) {
   if (stopped) return "cancelled";
   if (timedOut || idleTimedOut) return "failed";
   if (exitCode !== 0) return "failed";
   if (prUrl && !gate) return "done";
-  return "gate";
+  return reason ? "gate" : "failed";
+}
+
+// Why the run stopped: the `## Notice` it wrote, or the whole final text of the orchestrator when it wrote none.
+function gateReason(log, resultText) {
+  const notice = extractNoticeFromStream(log);
+  if (notice) return notice;
+  const text = String(resultText ?? "").trim();
+  return text ? truncateByCodePoint(text, NOTICE_FALLBACK_LIMIT) : null;
+}
+
+// Tells whether the process ended cleanly, the only case where a missing reason is a silent stop instead of a real failure.
+function endedCleanly({ exitCode, timedOut, idleTimedOut, stopped }) {
+  return exitCode === 0 && !timedOut && !idleTimedOut && !stopped;
 }
 
 // Classifies one attempt of a job from its stream and how the process ended.
 export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false } = {}) {
   const resultText = extractResultText(log) ?? "";
   const prUrl = extractPrUrl(resultText);
-  const noticeMd = extractNoticeFromStream(log);
   const gate = hasGateMarker(resultText) || hasGateMarkerInStream(log);
-  return { status: decideStatus({ exitCode, timedOut, idleTimedOut, stopped, prUrl, gate }), prUrl, noticeMd, resultText };
+  const reason = gateReason(log, resultText);
+  const ending = { exitCode, timedOut, idleTimedOut, stopped };
+  const status = decideStatus({ ...ending, prUrl, gate, reason });
+  const silentStop = status === "failed" && !reason && endedCleanly(ending);
+  return { status, prUrl, noticeMd: silentStop ? SILENT_STOP_NOTICE : reason, resultText };
 }
 
 // Tells whether the failure was a transient network or provider overload, the only kind worth an automatic retry.

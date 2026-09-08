@@ -1,12 +1,20 @@
+import { readFileSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
+import { homeDir, runtimeDir, shimNames, shimPath } from "../config/paths.mjs";
 import { gitPathOrNull, requireGitPath } from "../config/projects.mjs";
+import { packageVersion, shimState } from "../host/runtime.mjs";
+import { pathBlock, rcFilePath } from "../host/shell.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { importGhConnection } from "./gh-import.mjs";
+import { setupEmbedding, setupPath, setupRuntime, setupShim, verifyShim } from "./install-steps.mjs";
 import { registerProject } from "./project.mjs";
-import { INSTALL_OPTIONS, install, installOptions } from "./setup.mjs";
+import { firstLine, makeReport } from "./report.mjs";
+import { INSTALL_OPTIONS, finish, installOptions, registerHostServices, setupHome } from "./setup.mjs";
 
 const USAGE =
   "nightshift init [path] [--org <name>] [--name <name>] [--from <dir>] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--gh|--no-gh]";
+
+const SOURCE_HINT = "Open a new terminal or run `source ~/.zshrc` (or your shell's rc) to use `nightshift`.";
 
 // Turns the two GitHub CLI flags into the single mode the import understands, refusing the contradictory pair.
 function ghMode(values) {
@@ -23,6 +31,70 @@ function projectPath(positionals, ctx) {
   return gitPathOrNull(ctx.cwd ?? ".");
 }
 
+// Stops the whole init the moment a step the installation cannot work without has failed.
+function requireStep(ok, label) {
+  if (ok === true) return;
+  throw new UserError(`the \`${label}\` step failed; fix it and run \`nightshift init\` again`);
+}
+
+// Creates the configuration home, turning an I/O failure into a failed step instead of a stack trace.
+function createHome(ctx, report) {
+  try {
+    setupHome(ctx, report);
+    return true;
+  } catch (err) {
+    report.degrade("home", firstLine(err?.message ?? String(err)), `mkdir -p ${homeDir(ctx.env)}`);
+    return false;
+  }
+}
+
+// Writes the shims and answers whether the canonical command really ended up on disk, current and executable.
+function installShims(ctx, report, { shortcuts }) {
+  setupShim(ctx, report, { shortcuts });
+  const state = shimState(ctx.env);
+  return state.present && state.current && state.executable;
+}
+
+// Puts the shim directory on the PATH and answers whether the rc file could be written; a skipped step is a choice, never a failure.
+async function installPath(ctx, report, { path }) {
+  const degraded = report.count();
+  await setupPath(ctx, report, { path });
+  return report.count() === degraded;
+}
+
+// Tells whether the rc file carries our PATH block, the only case where opening a new terminal is what makes the command resolve.
+function rcCarriesBlock(env) {
+  try {
+    return readFileSync(rcFilePath(env), "utf8").includes(pathBlock(env));
+  } catch {
+    return false;
+  }
+}
+
+// Prints what the installation left on disk and what the user still has to do to type `nightshift`.
+function printInstalled(ctx, { shortcuts }) {
+  ctx.out(`installed nightshift v${packageVersion()} in ${runtimeDir(ctx.env)}`);
+  ctx.out(`commands: ${shimNames({ shortcuts }).map((name) => shimPath(ctx.env, name)).join(", ")}`);
+  if (!rcCarriesBlock(ctx.env)) return;
+  ctx.out(`PATH block written to ${rcFilePath(ctx.env)}:`);
+  for (const line of pathBlock(ctx.env).split("\n")) ctx.out(`  ${line}`);
+  ctx.out(SOURCE_HINT);
+}
+
+// Installs the host for `nightshift init`: every step the runtime cannot work without stops the command, and the PATH is only written once the shim has proven itself.
+async function installForInit(ctx, { embedding, path, from, shortcuts } = {}) {
+  const report = makeReport(ctx);
+  requireStep(createHome(ctx, report), "home");
+  requireStep(setupRuntime(ctx, report, { from }), "runtime");
+  requireStep(installShims(ctx, report, { shortcuts }), "shim");
+  requireStep(verifyShim(ctx, report), "runtime check");
+  registerHostServices(ctx, report);
+  requireStep(await installPath(ctx, report, { path }), "PATH");
+  await setupEmbedding(ctx, report, { embedding });
+  printInstalled(ctx, { shortcuts });
+  return finish(ctx, report);
+}
+
 // Runs `nightshift init`: installs the runtime, registers it in the host and, inside a repository, registers the project too.
 export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, {
@@ -35,7 +107,7 @@ export async function run(argv, ctx) {
   checkArgs(positionals, { max: 1, usage: USAGE });
   const mode = ghMode(values);
   const path = projectPath(positionals, ctx);
-  await install(ctx, installOptions(values, USAGE));
+  await installForInit(ctx, installOptions(values, USAGE));
   if (!path) {
     ctx.out(`no git repository in ${ctx.cwd ?? "."}; run \`nightshift init <path>\` inside one to register a project`);
     return 0;

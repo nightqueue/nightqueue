@@ -9,6 +9,7 @@ import {
   buildPrompt,
   cliEntrypoint,
   IDLE_TIMEOUT_S,
+  mcpConfigArg,
   pluginDir,
   resolveClaudeBin,
   spawnClaude,
@@ -45,6 +46,24 @@ test("the command carries the plugin of this package and the nightshift MCP serv
   assert.equal(mcp.mcpServers.nightshift.env.NIGHTSHIFT_HOME, homeDir(env));
 });
 
+test("the MCP server of an unattended child is pinned to the job it runs, and an operator session carries no job at all", (t) => {
+  const env = makeHome(t, "spawn-mcp-job-scope");
+
+  const owned = JSON.parse(mcpConfigArg(env, 7)).mcpServers.nightshift.env;
+  assert.equal(owned.NIGHTSHIFT_JOB_ID, "7");
+  assert.equal(owned.NIGHTSHIFT_HOME, homeDir(env));
+
+  const operator = JSON.parse(mcpConfigArg(env)).mcpServers.nightshift.env;
+  assert.equal("NIGHTSHIFT_JOB_ID" in operator, false, "an operator session pinned a job identity it does not have");
+
+  const args = buildArgs({ prompt: "do the work", env, jobId: 7 });
+  assert.equal(JSON.parse(argValue(args, "--mcp-config")).mcpServers.nightshift.env.NIGHTSHIFT_JOB_ID, "7");
+  assert.equal(
+    "NIGHTSHIFT_JOB_ID" in JSON.parse(argValue(buildArgs({ prompt: "p", env }), "--mcp-config")).mcpServers.nightshift.env,
+    false,
+  );
+});
+
 test("--resume is only appended for a session id that is safe as argv", (t) => {
   const env = makeHome(t, "spawn-resume");
   assert.equal(buildArgs({ prompt: "p", env }).includes("--resume"), false);
@@ -54,13 +73,13 @@ test("--resume is only appended for a session id that is safe as argv", (t) => {
   }
 });
 
-test("the prompt asks for the pipeline, the slug line and the gate, and carries the operator decision", () => {
+test("the prompt asks for the pipeline, the slug line and the gate, and carries the answer of the operator", () => {
   const prompt = buildPrompt({ job: { ...JOB, operator_note: "ship without the migration" } });
   assert.match(prompt, /^\/nightshift:resolve fix the worker\n/);
   assert.match(prompt, /job #7/);
   assert.match(prompt, /QUEUE_SLUG: <slug>/);
-  assert.match(prompt, /OPERATOR DECISION: ship without the migration/);
-  assert.equal(buildPrompt({ job: JOB }).includes("OPERATOR DECISION"), false);
+  assert.match(prompt, /OPERATOR ANSWER TO THE GATE: ship without the migration/);
+  assert.equal(buildPrompt({ job: JOB }).includes("OPERATOR ANSWER TO THE GATE"), false);
   assert.equal(buildPrompt({ job: JOB }).includes("RESUME:"), false);
 
   const resumed = buildPrompt({ job: JOB, resume: { resume: true, lastPhase: "explore", fromPhase: "architecture" } });

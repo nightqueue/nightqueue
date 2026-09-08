@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import {
   RUNTIME_PACKAGE_TRAIL,
   SHIM_NAME,
@@ -45,9 +45,8 @@ export function runtimeReady(env = process.env) {
   return existsSync(join(runtimePackageDir(env), "package.json"));
 }
 
-// Specifier npm installs from: a local checkout when `--from` was given, the registry otherwise.
-export function runtimeSpec({ from, version } = {}) {
-  if (typeof from === "string" && from.trim()) return resolve(from.trim());
+// Specifier of the package in the registry, the source of `nightshift update` alone.
+export function registrySpec(version = "latest") {
   return `${PACKAGE_NAME}@${version || "latest"}`;
 }
 

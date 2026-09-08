@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
 import {
   assertIsolatedEnv,
@@ -14,6 +15,7 @@ import {
 
 const SETUP = ["setup", "--no-path", "--no-embedding"];
 const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+const PACKAGE_ROOT = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "");
 const MANIFEST = JSON.parse(readFileSync(new URL("../.claude-plugin/marketplace.json", import.meta.url), "utf8"));
 
 const THIRD_PARTY_SETTINGS = {
@@ -334,20 +336,25 @@ test("--no-embedding installs no library, downloads no weight and calls npm only
   assert.ok(out.some((line) => line.startsWith("runtime: created")), out.join("\n"));
 });
 
-test("the runtime is installed once and the host is registered against it, never against the running checkout", async (t) => {
+test("the runtime is packed from this package, installed once and registered in the host, never against the running checkout", async (t) => {
   const host = makeHostEnv(t, "setup-runtime");
   const first = makeCtx(host.env);
 
   assert.equal(await run(SETUP, first.ctx), 0);
-  assert.deepEqual(host.npmCalls(), [
-    ["install", "--prefix", host.runtimeDir, "--no-audit", "--no-fund", "--loglevel", "error", `nightshift@${VERSION}`],
-  ]);
+  const [pack, install] = host.npmCalls();
+  assert.equal(host.npmCalls().length, 2, host.npmCalls().map((call) => call.join(" ")).join("\n"));
+  assert.deepEqual(pack.slice(0, 2), ["pack", "--json"]);
+  assert.equal(pack.includes("--ignore-scripts"), true, "the pack ran the lifecycle scripts of the packed package");
+  assert.equal(pack.at(-1), PACKAGE_ROOT);
+  assert.deepEqual(install.slice(0, 7), ["install", "--prefix", host.runtimeDir, "--omit=dev", "--no-audit", "--no-fund", "--loglevel"]);
+  assert.equal(install.at(-1).endsWith(".tgz"), true, `the install did not take the packed tarball: ${install.join(" ")}`);
+  assert.equal(install.some((arg) => arg.includes("nightshift@")), false, "setup asked the registry for the runtime");
   assert.equal(existsSync(join(host.runtimePackage, "package.json")), true);
   assert.equal(readSettingsFile(host.configDir).hooks.SessionStart[0].hooks[0].command, hookCommandOf(host, "session-start"));
 
   const second = makeCtx(host.env);
   assert.equal(await run(SETUP, second.ctx), 0);
-  assert.equal(host.npmCalls().length, 1, "the second setup reinstalled the runtime");
+  assert.equal(host.npmCalls().length, 2, "the second setup packed or reinstalled the runtime again");
   assert.ok(second.out.includes(`runtime: already present (v${VERSION} at ${host.runtimeDir})`), second.out.join("\n"));
 });
 

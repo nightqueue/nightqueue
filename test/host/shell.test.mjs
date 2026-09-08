@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 import { binDir } from "../../src/config/paths.mjs";
 import {
   PATH_MARK,
+  PATH_MARK_END,
   addPathLine,
   binDirInPath,
-  pathLine,
+  pathBlock,
   rcFilePath,
   removePathLine,
 } from "../../src/host/shell.mjs";
@@ -35,10 +37,23 @@ test("the rc file follows SHELL, and anything unknown lands on zsh", (t) => {
   assert.equal(rcFilePath({ ...zsh, SHELL: "" }), join(zsh.HOME, ".zshrc"));
 });
 
-test("the line is marked, and fish gets the only syntax fish understands", (t) => {
+test("the block is marked and guarded, and fish gets the only syntax fish understands", (t) => {
   const zsh = makeEnv(t, "shell-line");
-  assert.equal(pathLine(zsh), `export PATH="${binDir(zsh)}:$PATH" ${PATH_MARK}`);
-  assert.equal(pathLine({ ...zsh, SHELL: "/bin/fish" }), `fish_add_path ${binDir(zsh)} ${PATH_MARK}`);
+  assert.equal(
+    pathBlock(zsh),
+    [
+      PATH_MARK,
+      'case ":$PATH:" in',
+      `  *":${binDir(zsh)}:"*) ;;`,
+      `  *) export PATH="${binDir(zsh)}:$PATH" ;;`,
+      "esac",
+      PATH_MARK_END,
+    ].join("\n"),
+  );
+  assert.equal(
+    pathBlock({ ...zsh, SHELL: "/bin/fish" }),
+    [PATH_MARK, `fish_add_path ${binDir(zsh)}`, PATH_MARK_END].join("\n"),
+  );
 });
 
 test("the PATH check compares resolved directories, not strings", (t) => {
@@ -49,37 +64,37 @@ test("the PATH check compares resolved directories, not strings", (t) => {
   assert.equal(binDirInPath({ ...env, PATH: undefined }), false);
 });
 
-test("the line is appended once to a file that has none, and a second call writes nothing", (t) => {
+test("the block is appended once to a file that has none, and a second call writes nothing", (t) => {
   const env = makeEnv(t, "shell-append");
   writeFileSync(rcFilePath(env), `${THIRD_PARTY}\n`);
 
   assert.equal(addPathLine(env).status, "created");
-  assert.equal(readRc(env), `${THIRD_PARTY}\n${pathLine(env)}\n`);
+  assert.equal(readRc(env), `${THIRD_PARTY}\n${pathBlock(env)}\n`);
   assert.equal(addPathLine(env).status, "already present");
-  assert.equal(readRc(env), `${THIRD_PARTY}\n${pathLine(env)}\n`);
+  assert.equal(readRc(env), `${THIRD_PARTY}\n${pathBlock(env)}\n`);
 });
 
-test("an rc file that does not exist yet is created with the single line", (t) => {
+test("an rc file that does not exist yet is created with the block alone", (t) => {
   const env = makeEnv(t, "shell-create");
   assert.equal(existsSync(rcFilePath(env)), false);
   assert.equal(addPathLine(env).status, "created");
-  assert.equal(readRc(env), `${pathLine(env)}\n`);
+  assert.equal(readRc(env), `${pathBlock(env)}\n`);
 });
 
-test("a file whose last line has no newline still gets the line on its own line", (t) => {
+test("a file whose last line has no newline still gets the block on its own lines", (t) => {
   const env = makeEnv(t, "shell-no-newline");
   writeFileSync(rcFilePath(env), THIRD_PARTY);
   addPathLine(env);
-  assert.equal(readRc(env), `${THIRD_PARTY}\n${pathLine(env)}\n`);
+  assert.equal(readRc(env), `${THIRD_PARTY}\n${pathBlock(env)}\n`);
 });
 
-test("stale marked lines collapse into one current line, and unmarked lines are never touched", (t) => {
+test("stale regions of ours collapse into one current block, and unmarked lines are never touched", (t) => {
   const env = makeEnv(t, "shell-collapse");
   const stale = `export PATH="/old/one/bin:$PATH" ${PATH_MARK}`;
   writeFileSync(rcFilePath(env), [THIRD_PARTY, stale, "alias ll='ls -l'", stale, ""].join("\n"));
 
   assert.equal(addPathLine(env).status, "updated");
-  assert.deepEqual(readRc(env).split("\n"), [THIRD_PARTY, pathLine(env), "alias ll='ls -l'", ""]);
+  assert.deepEqual(readRc(env).split("\n"), [THIRD_PARTY, ...pathBlock(env).split("\n"), "alias ll='ls -l'", ""]);
   assert.equal(addPathLine(env).status, "already present");
 });
 
@@ -87,6 +102,8 @@ test("a line of the user that merely mentions the mark is neither replaced nor r
   const env = makeEnv(t, "shell-decoys");
   const decoys = [
     `${PATH_MARK}: review this later`,
+    PATH_MARK,
+    "alias deploy='make deploy'",
     `echo "installed with ${PATH_MARK}"`,
     `# ${PATH_MARK}`,
     `export PATH="/opt/x:$PATH" # nightshift-old`,
@@ -95,25 +112,25 @@ test("a line of the user that merely mentions the mark is neither replaced nor r
   writeFileSync(rcFilePath(env), `${decoys.join("\n")}\n`);
 
   assert.equal(addPathLine(env).status, "created");
-  assert.deepEqual(readRc(env).split("\n"), [...decoys, pathLine(env), ""]);
+  assert.deepEqual(readRc(env).split("\n"), [...decoys, ...pathBlock(env).split("\n"), ""]);
 
   assert.equal(removePathLine(env).status, "removed");
   assert.deepEqual(readRc(env).split("\n"), [...decoys, ""]);
   assert.equal(removePathLine(env).status, "not present", "a decoy was taken for our own line");
 });
 
-test("a fish line of a previous home is replaced, and only the first survives", (t) => {
+test("a fish region of a previous home is replaced, and only the first survives", (t) => {
   const env = makeEnv(t, "shell-fish-stale", { shell: "/opt/homebrew/bin/fish" });
   const stale = `fish_add_path /old/home/bin ${PATH_MARK}`;
   mkdirSync(dirname(rcFilePath(env)), { recursive: true });
   writeFileSync(rcFilePath(env), [`set -x EDITOR vim`, stale, stale, ""].join("\n"));
 
   assert.equal(addPathLine(env).status, "updated");
-  assert.deepEqual(readRc(env).split("\n"), ["set -x EDITOR vim", pathLine(env), ""]);
+  assert.deepEqual(readRc(env).split("\n"), ["set -x EDITOR vim", ...pathBlock(env).split("\n"), ""]);
   assert.equal(addPathLine(env).status, "already present");
 });
 
-test("the removal takes out only the marked lines, and says nothing to remove when there are none", (t) => {
+test("the removal takes out only the regions of ours, and says nothing to remove when there are none", (t) => {
   const env = makeEnv(t, "shell-remove");
   writeFileSync(rcFilePath(env), `${THIRD_PARTY}\n`);
   addPathLine(env);
@@ -132,8 +149,94 @@ test("the write keeps the mode of the rc file and follows it when it is a symlin
   symlinkSync(real, rcFilePath(env));
 
   addPathLine(env);
-  assert.equal(readFileSync(real, "utf8"), `${THIRD_PARTY}\n${pathLine(env)}\n`);
+  assert.equal(readFileSync(real, "utf8"), `${THIRD_PARTY}\n${pathBlock(env)}\n`);
   assert.equal(statSync(rcFilePath(env), { throwIfNoEntry: false }).isSymbolicLink?.() ?? false, false);
   assert.equal(statSync(real).mode & 0o777, 0o600);
   assert.equal(existsSync(rcFilePath(env)), true);
+});
+
+test("the single line of an older installation becomes the block, without ever leaving both behind", (t) => {
+  const env = makeEnv(t, "shell-migrate");
+  const legacy = `export PATH="${binDir(env)}:$PATH" ${PATH_MARK}`;
+  writeFileSync(rcFilePath(env), [THIRD_PARTY, legacy, ""].join("\n"));
+
+  assert.equal(addPathLine(env).status, "updated");
+  assert.deepEqual(readRc(env).split("\n"), [THIRD_PARTY, ...pathBlock(env).split("\n"), ""]);
+  assert.equal(readRc(env).includes(legacy), false, "the line of the older installation survived next to the block");
+  assert.equal(addPathLine(env).status, "already present");
+  assert.equal(removePathLine(env).status, "removed");
+  assert.deepEqual(readRc(env).split("\n"), [THIRD_PARTY, ""]);
+});
+
+test("the block a fish installation left behind is replaced by the block of this home", (t) => {
+  const env = makeEnv(t, "shell-fish-block", { shell: "/opt/homebrew/bin/fish" });
+  mkdirSync(dirname(rcFilePath(env)), { recursive: true });
+  writeFileSync(rcFilePath(env), [PATH_MARK, "fish_add_path /old/home/bin", PATH_MARK_END, ""].join("\n"));
+
+  assert.equal(addPathLine(env).status, "updated");
+  assert.deepEqual(readRc(env).split("\n"), [...pathBlock(env).split("\n"), ""]);
+});
+
+test("the block of a previous home is replaced whole, never nested inside the new one", (t) => {
+  const env = makeEnv(t, "shell-stale-block");
+  const stale = [
+    PATH_MARK,
+    'case ":$PATH:" in',
+    '  *":/old/home/bin:"*) ;;',
+    '  *) export PATH="/old/home/bin:$PATH" ;;',
+    "esac",
+    PATH_MARK_END,
+  ];
+  writeFileSync(rcFilePath(env), [THIRD_PARTY, ...stale, "alias ll='ls -l'", ""].join("\n"));
+
+  assert.equal(addPathLine(env).status, "updated");
+  assert.deepEqual(readRc(env).split("\n"), [THIRD_PARTY, ...pathBlock(env).split("\n"), "alias ll='ls -l'", ""]);
+  assert.equal(readRc(env).includes("/old/home/bin"), false);
+});
+
+test("the block of an older build, written before the closing marker existed, is migrated instead of left orphaned", (t) => {
+  const env = makeEnv(t, "shell-migrate-unterminated");
+  const previous = [
+    PATH_MARK,
+    'case ":$PATH:" in',
+    `  *":${binDir(env)}:"*) ;;`,
+    `  *) export PATH="${binDir(env)}:$PATH" ;;`,
+    "esac",
+  ];
+  writeFileSync(rcFilePath(env), [THIRD_PARTY, ...previous, "alias ll='ls -l'", ""].join("\n"));
+
+  assert.equal(addPathLine(env).status, "updated");
+  assert.deepEqual(readRc(env).split("\n"), [THIRD_PARTY, ...pathBlock(env).split("\n"), "alias ll='ls -l'", ""]);
+  assert.equal(addPathLine(env).status, "already present");
+  assert.equal(removePathLine(env).status, "removed");
+  assert.deepEqual(readRc(env).split("\n"), [THIRD_PARTY, "alias ll='ls -l'", ""]);
+});
+
+test("a block of the same shape pointing at another home is left alone without the closing marker, because only its own home can claim it", (t) => {
+  const env = makeEnv(t, "shell-unterminated-foreign-home");
+  const foreign = [
+    PATH_MARK,
+    'case ":$PATH:" in',
+    '  *":/opt/other-home/bin:"*) ;;',
+    '  *) export PATH="/opt/other-home/bin:$PATH" ;;',
+    "esac",
+  ];
+  writeFileSync(rcFilePath(env), [...foreign, ""].join("\n"));
+
+  assert.equal(addPathLine(env).status, "created");
+  assert.deepEqual(readRc(env).split("\n"), [...foreign, ...pathBlock(env).split("\n"), ""]);
+  assert.equal(removePathLine(env).status, "removed");
+  assert.deepEqual(readRc(env).split("\n"), [...foreign, ""]);
+});
+
+test("the block is valid syntax for the shells that source it", (t) => {
+  const env = makeEnv(t, "shell-syntax");
+  const path = join(env.HOME, "block.sh");
+  writeFileSync(path, `${pathBlock(env)}\n`);
+
+  for (const shell of ["sh", "bash"]) {
+    const result = spawnSync(shell, ["-n", path], { encoding: "utf8" });
+    if (result.error) continue;
+    assert.equal(result.status, 0, `${shell} refused the block: ${result.stderr}`);
+  }
 });

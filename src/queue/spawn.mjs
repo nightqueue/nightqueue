@@ -5,6 +5,7 @@ import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { homeDir } from "../config/paths.mjs";
 import { packageRoot } from "../host/paths.mjs";
+import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 
 // Silence of the stream that means a dead process: no event at all for this long ends the attempt.
@@ -18,6 +19,7 @@ export const CLAUDE_MISSING_MESSAGE =
 
 const MISSING_BIN = Object.freeze({ bin: null, via: "missing" });
 const DEFAULT_TIMEOUT_S = 14400;
+const OPERATOR_NOTE_LIMIT = 4000;
 
 // Directory of the nightshift plugin handed to the child through --plugin-dir.
 export function pluginDir() {
@@ -29,14 +31,20 @@ export function cliEntrypoint() {
   return join(packageRoot(), "bin", "nightshift.mjs");
 }
 
-// Inline --mcp-config value: one single argv string, no shell and no temporary file.
-export function mcpConfigArg(env = process.env) {
+// Environment of the MCP server of the child: the home it answers for and, inside an unattended run, the job it is allowed to act on.
+function mcpServerEnv(env, jobId) {
+  const home = { NIGHTSHIFT_HOME: homeDir(env) };
+  return jobId === null || jobId === undefined ? home : { ...home, NIGHTSHIFT_JOB_ID: String(jobId) };
+}
+
+// Inline --mcp-config value: one single argv string, no shell and no temporary file; the job identity is pinned here, never inherited from the parent process.
+export function mcpConfigArg(env = process.env, jobId = null) {
   return JSON.stringify({
     mcpServers: {
       nightshift: {
         command: process.execPath,
         args: [cliEntrypoint(), "mcp"],
-        env: { NIGHTSHIFT_HOME: homeDir(env) },
+        env: mcpServerEnv(env, jobId),
       },
     },
   });
@@ -80,10 +88,10 @@ export function resolveClaudeBin(env = process.env) {
   }
 }
 
-// Extra block appended to the prompt when the operator left a decision on the job.
+// Extra block appended to the prompt when the operator answered the gate of this job, the only thing that ever writes `operator_note` into a run.
 function operatorBlock(operatorNote) {
   const note = typeof operatorNote === "string" ? operatorNote.trim() : "";
-  return note ? `\n\nOPERATOR DECISION: ${note}` : "";
+  return note ? `\n\nOPERATOR ANSWER TO THE GATE: ${truncateByCodePoint(note, OPERATOR_NOTE_LIMIT)}` : "";
 }
 
 // Extra block appended to the prompt when the previous run of this job can be resumed.
@@ -113,7 +121,7 @@ export function buildPrompt({ job, resume } = {}) {
 }
 
 // Builds the argv of the child: an array, never a shell, with --resume only behind the session id gate.
-export function buildArgs({ prompt, resumeSessionId = null, env = process.env } = {}) {
+export function buildArgs({ prompt, resumeSessionId = null, env = process.env, jobId = null } = {}) {
   const args = [
     "-p",
     String(prompt ?? ""),
@@ -125,7 +133,7 @@ export function buildArgs({ prompt, resumeSessionId = null, env = process.env } 
     "--plugin-dir",
     pluginDir(),
     "--mcp-config",
-    mcpConfigArg(env),
+    mcpConfigArg(env, jobId),
   ];
   if (isSessionIdSafe(resumeSessionId)) args.push("--resume", resumeSessionId);
   return args;
@@ -192,7 +200,7 @@ export function spawnClaude({
   return new Promise((settle) => {
     const stream = openAttemptLog(logPath, attempt);
     const resolved = resolveBinImpl(env);
-    const args = buildArgs({ prompt, resumeSessionId, env });
+    const args = buildArgs({ prompt, resumeSessionId, env, jobId });
     const childEnv = jobId === null ? { ...env } : { ...env, NIGHTSHIFT_JOB_ID: String(jobId) };
     const child = spawnImpl(resolved?.bin ?? "claude", args, { cwd, env: childEnv, stdio: SPAWN_STDIO });
     const chunks = [];

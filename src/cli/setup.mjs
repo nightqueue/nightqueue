@@ -90,7 +90,7 @@ function ensureFile({ path, create, label, detail, report }) {
 }
 
 // Creates the configuration home and its two files, without changing anything that already exists.
-function setupHome(ctx, report) {
+export function setupHome(ctx, report) {
   const home = ensureHome(ctx.env);
   report.step("home", home.created ? "created" : "already present", `${home.path}, 0700`);
   const config = emptyConfig();
@@ -178,6 +178,13 @@ function skipHostSteps(ctx, report, { shortcuts } = {}) {
   report.step(MARKETPLACE_LABEL, "skipped", reason);
 }
 
+// Registers everything of the host that points at the runtime and is not a command name: MCP server, hooks and plugin.
+export function registerHostServices(ctx, report) {
+  setupMcp(ctx, report);
+  applyHooks(ctx, report, { remove: false });
+  setupPlugin(ctx, report);
+}
+
 // The single gate of every write that points at the runtime - shims, MCP server, hooks and plugin: without a ready runtime, none of them runs.
 export function registerHost(ctx, report, { ready, shortcuts } = {}) {
   if (ready === false) {
@@ -185,9 +192,7 @@ export function registerHost(ctx, report, { ready, shortcuts } = {}) {
     return;
   }
   setupShim(ctx, report, { shortcuts });
-  setupMcp(ctx, report);
-  applyHooks(ctx, report, { remove: false });
-  setupPlugin(ctx, report);
+  registerHostServices(ctx, report);
 }
 
 // Unregisters the MCP server, leaving every other server of the host alone.

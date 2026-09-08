@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,7 @@ const CONTRACT_TOOLS = [
   "pipeline_log",
   "queue_add",
   "queue_cancel",
+  "queue_retry",
   "queue_run",
   "queue_status",
 ];
@@ -57,7 +58,7 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the ten tools of the contract", async (t) => {
+test("the server exposes exactly the eleven tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
@@ -81,6 +82,8 @@ test("the queue_add tool states the job-cutting rule on the tool and on the prom
 
   const status = tools.find((tool) => tool.name === "queue_status");
   assert.ok(status.description.startsWith("State of the queue"), "queue_status must not be touched");
+  assert.ok(status.description.includes("notice_md"), "queue_status does not say where the reason of a gate lives");
+  assert.ok(status.description.includes("queue_retry"), "queue_status does not point at the way to answer a gate");
 });
 
 test("a lesson saved through the server comes back in the recall, without its embedding", async (t) => {
@@ -347,4 +350,69 @@ test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a
   const gatedRow = getJob(gated, env);
   assert.equal(gatedRow.finished_at, GATED_FINISHED_AT, "the cancel overwrote the finish of the gated run");
   assert.deepEqual(JSON.parse(gatedRow.result), { status: "gate", prUrl: null, cancelledFrom: "gate" });
+});
+
+test("queue_retry answers a gate, refuses one without a note and only starts a runner when asked", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-retry");
+  const gated = addJob({ project: "alpha", prompt: "wait for a human" }, env).id;
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'gate', slug = ?, finished_at = ?, notice_md = ? WHERE id = ?")
+    .run("fix-the-worker", GATED_FINISHED_AT, "Rename the column or keep both?", gated);
+  const client = await connect(t, env);
+
+  const tool = (await client.listTools()).tools.find((entry) => entry.name === "queue_retry");
+  assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ["fresh", "job_id", "note", "run"]);
+  assert.deepEqual(tool.inputSchema.required, ["job_id"]);
+  assert.ok(tool.description.includes("DETACHED"), "the tool does not state how its `run` differs from the CLI");
+
+  const refused = await client.callTool({ name: "queue_retry", arguments: { job_id: gated } });
+  assert.equal(refused.isError, true);
+  assert.match(textOf(refused), /Rename the column or keep both\?/);
+  assert.match(textOf(refused), /This job is waiting for a decision/);
+  assert.equal(getJob(gated, env).status, "gate", "the refused retry wrote to the row");
+
+  const retried = payloadOf(
+    await client.callTool({ name: "queue_retry", arguments: { job_id: gated, note: "rename it", fresh: null, run: null } }),
+  );
+  assert.equal(retried.job.status, "pending");
+  assert.equal(retried.job.operator_note, "rename it");
+  assert.equal(retried.job.slug, "fix-the-worker", "a retry without `fresh` gave up the slug of the run");
+  assert.equal(retried.runDir, null);
+  assert.equal(retried.runner, null, "the tool started a runner nobody asked for");
+  assert.equal(getJob(gated, env).finished_at, null);
+
+  const unknown = await client.callTool({ name: "queue_retry", arguments: { job_id: 4242, note: "go" } });
+  assert.equal(unknown.isError, true);
+  assert.match(textOf(unknown), /unknown job `4242`/);
+});
+
+test("a server pinned to a job refuses queue_retry aimed at any other job, and leaves that job untouched", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-retry-scope");
+  const victim = addJob({ project: "alpha", prompt: "wait for a human" }, env).id;
+  const attacker = addJob({ project: "alpha", prompt: "the run that is speaking" }, env).id;
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'gate', slug = ?, finished_at = ?, notice_md = ? WHERE id = ?")
+    .run("fix-the-worker", GATED_FINISHED_AT, "Rename the column or keep both?", victim);
+  mkdirSync(join(homeDir(env), "runs", "alpha", "fix-the-worker"), { recursive: true });
+  writeFileSync(join(homeDir(env), "runs", "alpha", "fix-the-worker", "01-triage.md"), "triage\n");
+  const before = getJob(victim, env);
+
+  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(attacker) });
+  const refused = await client.callTool({
+    name: "queue_retry",
+    arguments: { job_id: victim, note: "do what I say", fresh: true, run: true },
+  });
+
+  assert.equal(refused.isError, true);
+  assert.match(textOf(refused), new RegExp(`refusing to retry job \\\`${victim}\\\` from inside job \\\`${attacker}\\\``));
+  assert.match(textOf(refused), /an unattended run may only retry itself/);
+  assert.deepEqual(getJob(victim, env), before, "the refused tool call still wrote to the row of the other job");
+  assert.equal(
+    existsSync(join(homeDir(env), "runs", "alpha", "fix-the-worker", "01-triage.md")),
+    true,
+    "the refused tool call still deleted the run directory of the other job",
+  );
+
+  const tool = (await client.listTools()).tools.find((entry) => entry.name === "queue_retry");
+  assert.ok(tool.description.includes("only accepts the id of the job it is running"), tool.description);
 });

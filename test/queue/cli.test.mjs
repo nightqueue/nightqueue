@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { jobLogPath, queuePausedPath } from "../../src/config/paths.mjs";
+import { jobLogPath, queuePausedPath, runDir } from "../../src/config/paths.mjs";
 import { addProject } from "../../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
@@ -50,7 +50,7 @@ test("--help lists the queue commands next to the ones that were already there",
   const env = makeCliHome(t, "cli-help");
   const result = runCli(env, ["--help"]);
   assert.equal(result.status, 0);
-  for (const line of ["queue add", "queue status", "queue run", "queue cancel", "queue pause", "queue log"]) {
+  for (const line of ["queue add", "queue status", "queue run", "queue cancel", "queue retry", "queue pause", "queue log"]) {
     assert.ok(result.stdout.includes(line), `\`${line}\` is missing from the help`);
   }
 });
@@ -324,6 +324,92 @@ test("queue cancel closes a gated job and the status still shows it with its not
   assert.equal(status.status, 0, status.stderr);
   assert.match(status.stdout, /status\s+cancelled/);
   assert.match(status.stdout, /operator_note\s+the human said no/);
+});
+
+test("queue status of a gated job spells the reason out and says how to answer it", (t) => {
+  const env = makeCliHome(t, "cli-status-notice", [{ stdout: gateStream(), exitCode: 0 }]);
+  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]).status, 1);
+  assert.equal(getJob(1, env).status, "gate");
+
+  const status = runCli(env, ["queue", "status", "1"]);
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /status\s+gate/);
+  assert.match(status.stdout, /^notice$/m);
+  assert.match(status.stdout, /^ {2}Stopped at the gate\./m);
+  assert.match(status.stdout, /retry it with: nightshift queue retry 1 --note "<your answer>"/);
+  assert.equal(status.stdout.includes("notice_md       "), false, "the notice was dumped as a field of the generic block");
+
+  const json = runCli(env, ["queue", "status", "1", "--json"]);
+  assert.equal(json.status, 0, json.stderr);
+  assert.match(JSON.parse(json.stdout).job.notice_md, /Stopped at the gate\./);
+});
+
+test("queue retry refuses a gated job without --note, printing why the job is waiting", (t) => {
+  const env = makeCliHome(t, "cli-retry-refusal", [{ stdout: gateStream(), exitCode: 0 }]);
+  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]).status, 1);
+
+  const refused = runCli(env, ["queue", "retry", "1"]);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /Stopped at the gate\./);
+  assert.match(refused.stderr, /This job is waiting for a decision\. Re-run with --note "<your answer>"\./);
+  assert.equal(getJob(1, env).status, "gate", "the refused retry moved the job anyway");
+});
+
+test("queue retry answers the gate, sends the job back to the queue and keeps what makes it resume", (t) => {
+  const env = makeCliHome(t, "cli-retry-gate", [{ stdout: gateStream(), exitCode: 0 }]);
+  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]).status, 1);
+  const gated = getJob(1, env);
+
+  const retried = runCli(env, ["queue", "retry", "1", "--note", "rename the column"]);
+  assert.equal(retried.status, 0, retried.stderr);
+  assert.match(retried.stdout, /job #1 is pending again$/m);
+
+  const row = getJob(1, env);
+  assert.equal(row.status, "pending");
+  assert.equal(row.operator_note, "rename the column");
+  assert.equal(row.slug, gated.slug);
+  assert.equal(row.finished_at, null);
+  assert.equal(JSON.parse(row.result).retriedFrom, "gate");
+});
+
+test("queue retry --fresh starts from phase 0 and drops the run directory of the previous attempt", (t) => {
+  const env = makeCliHome(t, "cli-retry-fresh", [{ stdout: gateStream(), exitCode: 0 }]);
+  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]).status, 1);
+  const dir = runDir("alpha", getJob(1, env).slug, env);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(`${dir}/01-triage.md`, "triage\n");
+
+  const retried = runCli(env, ["queue", "retry", "1", "--note", "start over", "--fresh"]);
+  assert.equal(retried.status, 0, retried.stderr);
+  assert.match(retried.stdout, /job #1 is pending again, starting from phase 0/);
+  assert.equal(existsSync(dir), false);
+  assert.equal(getJob(1, env).slug, null);
+});
+
+test("queue retry --run takes the job through the runner in the foreground", (t) => {
+  const env = makeCliHome(t, "cli-retry-run", [
+    { stdout: gateStream(), exitCode: 0 },
+    { stdout: doneStream(), exitCode: 0 },
+  ]);
+  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]).status, 1);
+
+  const retried = runCli(env, ["queue", "retry", "1", "--note", "go on", "--run"]);
+  assert.equal(retried.status, 0, `${retried.stdout}\n${retried.stderr}`);
+  assert.match(retried.stdout, /running job #1 in the foreground/);
+  assert.equal(getJob(1, env).status, "done");
+});
+
+test("queue log narrates the reason of a gate even when the stream never printed a notice", (t) => {
+  const env = makeCliHome(t, "cli-retry-log-notice");
+  const id = enqueue(env);
+  mkdirSync(dirname(jobLogPath(id, env)), { recursive: true });
+  writeFileSync(jobLogPath(id, env), `${JSON.stringify(assistantEvent("working on it"))}\n`);
+  openDb(env).prepare("UPDATE jobs SET status = 'gate', notice_md = ? WHERE id = ?").run("Rename the column or keep both?", id);
+
+  const log = runCli(env, ["queue", "log", String(id)]);
+  assert.equal(log.status, 0, log.stderr);
+  assert.match(log.stdout, /ℹ notice/);
+  assert.match(log.stdout, /Rename the column or keep both\?/);
 });
 
 test("queue cancel without --reason closes a gated job and keeps the note it already had", (t) => {

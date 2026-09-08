@@ -19,6 +19,7 @@ import {
 } from "../memory/jobs.mjs";
 import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
+import { applyRetry } from "../queue/retry.mjs";
 import { launchDetachedRunner } from "../queue/runner.mjs";
 import {
   logPipelineRun,
@@ -79,7 +80,7 @@ function guard(name, handler) {
   };
 }
 
-// The ten tools of the plugin contract, with the parameter names the plugin actually sends.
+// The eleven tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env) {
   return [
     {
@@ -250,7 +251,8 @@ function toolDefinitions(env) {
       name: "queue_status",
       config: {
         description:
-          "State of the queue: one job by id, or the most recent ones plus the counts per status. Never returns the prompt.",
+          "State of the queue: one job by id, or the most recent ones plus the counts per status. Never returns the prompt. " +
+          "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`.",
         inputSchema: {
           job_id: z.number().int().min(1).nullable().optional(),
           limit: z.number().int().min(JOB_LIST_LIMIT.min).max(JOB_LIST_LIMIT.max).nullable().optional(),
@@ -286,10 +288,31 @@ function toolDefinitions(env) {
       },
       handler: async (args) => ({ ok: true, job: cancelJob(args.job_id, { reason: args.reason }, env) }),
     },
+    {
+      name: "queue_retry",
+      config: {
+        description:
+          "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate. " +
+          "Without `fresh` the run resumes from the last phase, keeping slug, branch, session and run directory; with `fresh` it starts from phase 0 and the run directory is dropped. " +
+          "`run` starts a DETACHED runner, the same one `queue_run` starts - unlike the `--run` of the CLI, which runs the job in the foreground. " +
+          "Inside an unattended run this tool only accepts the id of the job it is running: retrying another job is refused, because the note is delivered as a human answer in that job's next prompt.",
+        inputSchema: {
+          job_id: z.number().int().min(1),
+          note: optionalText,
+          fresh: z.boolean().nullable().optional(),
+          run: z.boolean().nullable().optional(),
+        },
+      },
+      handler: async (args) => {
+        const { job, runDir } = applyRetry({ id: args.job_id, note: args.note, fresh: args.fresh === true, env });
+        const started = args.run === true ? launchDetachedRunner({ jobId: job.id, env }) : null;
+        return { ok: true, job, runDir, runner: started ? { pid: started.pid, logPath: started.logPath } : null };
+      },
+    },
   ];
 }
 
-// Builds the MCP server with the ten tools of the plugin contract.
+// Builds the MCP server with the eleven tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
   for (const tool of toolDefinitions(env)) server.registerTool(tool.name, tool.config, guard(tool.name, tool.handler));

@@ -7,11 +7,11 @@ import { hostPackageRoot } from "../../src/host/paths.mjs";
 import {
   legacyShimState,
   packageVersion,
+  registrySpec,
   removeLegacyShim,
   removeShim,
   removeShims,
   runtimeReady,
-  runtimeSpec,
   runtimeVersion,
   shimContent,
   shimState,
@@ -58,10 +58,10 @@ test("a runtime whose package.json is broken reads as absent instead of throwing
   assert.equal(runtimeReady(env), true, "the file is there, only its content is unreadable");
 });
 
-test("the specifier is the registry version by default and the resolved directory with --from", () => {
-  assert.equal(runtimeSpec({ version: "1.2.3" }), "nightshift@1.2.3");
-  assert.equal(runtimeSpec({}), "nightshift@latest");
-  assert.equal(runtimeSpec({ from: "/tmp/checkout", version: "1.2.3" }), "/tmp/checkout");
+test("the registry specifier names the package and the version asked for, defaulting to the newest one", () => {
+  assert.equal(registrySpec("1.2.3"), "nightshift@1.2.3");
+  assert.equal(registrySpec(), "nightshift@latest");
+  assert.equal(registrySpec(""), "nightshift@latest");
 });
 
 test("the shim is executable, points at the runtime and survives a space in the path", (t) => {

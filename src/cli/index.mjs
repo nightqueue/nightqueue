@@ -65,7 +65,7 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the ten memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the eleven memory and queue tools
   hook session-start|prompt-context|reflect run a hook, reading the event JSON from stdin
   reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground
   embed install                             install the embedding library into the home and download its weights
@@ -76,6 +76,7 @@ commands:
   queue status [id] [--limit] [--json]      show one job or the tail of the queue plus the counts per status
   queue run [--job] [--max] [--watch]       claim pending jobs and run them; --dry only reports what it would do
   queue cancel <id> [--reason "..."]        cancel a pending, gated or orphaned job
+  queue retry <id> [--note] [--fresh]       send a gated, failed or cancelled job back to the queue; --run also runs it here
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written
   version                                   print the installed nightshift version

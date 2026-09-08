@@ -5,7 +5,15 @@ import { projectByName, resolveProject } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { addJob, cancelJob, countsByStatus, getJob, jobView, listJobs, truncateByCodePoint } from "../memory/jobs.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
-import { createNarrator, formatDuration, formatNarration, lastOrchestratorLine, narrateLog } from "../queue/narrate.mjs";
+import {
+  createNarrator,
+  formatDuration,
+  formatNarration,
+  lastOrchestratorLine,
+  narrateLog,
+  noticeNarration,
+} from "../queue/narrate.mjs";
+import { applyRetry } from "../queue/retry.mjs";
 import { runCycle, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
@@ -14,6 +22,7 @@ const USAGE = {
   status: "nightshift queue status [id] [--limit <n>] [--json]",
   run: "nightshift queue run [--job <id>] [--max <n>] [--watch [seconds]] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
+  retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run]",
   pause: "nightshift queue pause",
   resume: "nightshift queue resume",
   log: "nightshift queue log <id> [--follow] [--raw] [--all]",
@@ -202,11 +211,22 @@ function formatJobLines(jobs, env) {
   return jobs.map((job) => (job.status === "running" ? formatRunningJob(job, nowMs, env) : formatJob(job)));
 }
 
-// Detail block of a single job, one field per line.
+// The notice of a job, printed under its own line and indented, plus the way to answer it while the job waits at the gate.
+function formatNotice(job) {
+  if (!job.notice_md) return [];
+  const body = String(job.notice_md).split("\n").map((line) => `  ${line}`);
+  const answer = job.status === "gate" ? [`retry it with: nightshift queue retry ${job.id} --note "<your answer>"`] : [];
+  return ["notice", ...body, ...answer];
+}
+
+// Detail block of a single job, one field per line, with the reason it stopped spelled out instead of dumped on one line.
 function formatDetail(job) {
-  return Object.entries(job)
-    .filter(([, value]) => value !== null && value !== undefined)
+  const fields = Object.entries(job)
+    .filter(([key, value]) => key !== "notice_md" && value !== null && value !== undefined)
     .map(([key, value]) => `${key.padEnd(16)}${value}`);
+  const at = fields.findIndex((line) => line.startsWith("status".padEnd(16)));
+  const notice = formatNotice(job);
+  return at < 0 ? [...fields, ...notice] : [...fields.slice(0, at + 1), ...notice, ...fields.slice(at + 1)];
 }
 
 // Runs `queue status`, for one job or for the tail of the queue.
@@ -294,6 +314,33 @@ async function runCancel(argv, ctx) {
   checkArgs(positionals, { min: 1, usage: USAGE.cancel });
   const job = cancelJob(requireInt("id", positionals[0]), { reason: values.reason }, ctx.env);
   ctx.out(values.json ? JSON.stringify({ job }) : `cancelled job #${job.id}`);
+}
+
+// Reports what happened to the run directory of a `--fresh` retry: a directory that was kept says why, and never brings the retry down.
+function reportRunDir(discarded, ctx) {
+  if (!discarded || discarded.status !== "kept") return;
+  ctx.out(`run directory kept (${discarded.reason}): ${discarded.dir ?? "no safe path"}`);
+}
+
+// Runs `queue retry`, which sends a gated, failed or cancelled job back to the queue; a gated one only moves with a note.
+async function runRetry(argv, ctx) {
+  const { values, positionals } = parseCommand(argv, {
+    note: { type: "string" },
+    fresh: { type: "boolean" },
+    run: { type: "boolean" },
+    json: { type: "boolean" },
+  });
+  checkArgs(positionals, { min: 1, usage: USAGE.retry });
+  const { job, runDir } = applyRetry({
+    id: requireInt("id", positionals[0]),
+    note: values.note,
+    fresh: values.fresh === true,
+    env: ctx.env,
+  });
+  if (values.json) ctx.out(JSON.stringify({ job }));
+  else ctx.out(`job #${job.id} is pending again${values.fresh === true ? ", starting from phase 0" : ""}`);
+  reportRunDir(runDir, ctx);
+  return values.run === true ? await runInForeground(job, ctx) : 0;
 }
 
 // Runs `queue pause`, which stops new claims without touching any job.
@@ -400,16 +447,30 @@ function narrateNotice(notice, { narrator, print, trace, warn }) {
   if (notice.kind === "quiet") print(narrator.note("quiet", `still running (${Math.round(notice.silentMs / 1000)}s quiet)`));
 }
 
+// Prints the reason the job is stopped when the stream itself never carried one, so a gate is never narrated in silence.
+function printJobNotice(id, { narrator, print, sawNotice }, ctx) {
+  if (sawNotice()) return;
+  const notice = jobView(getJob(id, ctx.env))?.notice_md;
+  if (!notice) return;
+  print(narrator.note("notice", noticeNarration(notice)));
+}
+
 // Runs `queue log` in narrated mode, the default: one line for each relevant event of the stream.
 async function runLogNarrated(path, id, { follow, all }, ctx) {
   const color = useColor(ctx);
-  const print = (event) => ctx.out(formatNarration(event, { color }));
+  let seen = false;
+  const print = (event) => {
+    if (event.kind === "notice") seen = true;
+    ctx.out(formatNarration(event, { color }));
+  };
+  const narrator = createNarrator({ all });
+  const tail = { narrator, print, sawNotice: () => seen };
   if (!follow) {
     const text = readingLog(path, () => readFileSync(path, "utf8"));
     for (const event of narrateLog(text, { all })) print(event);
+    printJobNotice(id, tail, ctx);
     return;
   }
-  const narrator = createNarrator({ all });
   const trace = pollTracer(ctx);
   const result = await followLog({
     path,
@@ -422,6 +483,7 @@ async function runLogNarrated(path, id, { follow, all }, ctx) {
   });
   for (const event of narrator.finish()) print(event);
   if (result.logError) print(narrator.note("toolError", `${result.logError}; this narration is missing the tail of the log`));
+  printJobNotice(id, tail, ctx);
   if (result.status) print(narrator.note("resultEnd", `job #${id} ${result.status}`));
   reportStop(result, ctx);
 }
@@ -444,6 +506,7 @@ const SUBCOMMANDS = new Map([
   ["status", runStatus],
   ["run", runRun],
   ["cancel", runCancel],
+  ["retry", runRetry],
   ["pause", runPause],
   ["resume", runResume],
   ["log", runLog],
