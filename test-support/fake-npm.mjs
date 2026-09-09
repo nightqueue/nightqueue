@@ -132,6 +132,14 @@ function runPack(rest) {
   process.stdout.write(`${JSON.stringify([{ id: `${name}@${version}`, name, version, filename }])}\n`);
 }
 
+// Emulates `npm view <spec> version --json`, answering with the version the test asked for, or with the one of the source checkout.
+function runView(rest) {
+  const spec = operands(rest, [])[0] ?? null;
+  if (!spec) return fail(`unsupported view call \`${rest.join(" ")}\``);
+  const version = process.env.NIGHTSHIFT_FAKE_NPM_LATEST || versionOf(spec);
+  process.stdout.write(`${JSON.stringify(version)}\n`);
+}
+
 // Emulates `npm audit --json`, which prints a valid report even when it exits 1.
 function runAudit() {
   const total = Number.parseInt(process.env.NIGHTSHIFT_FAKE_NPM_AUDIT ?? "0", 10) || 0;
@@ -149,6 +157,7 @@ function main() {
   if (command === "--version" || command === "-v") return process.stdout.write("10.9.0\n");
   if (command === "install") return runInstall(rest);
   if (command === "pack") return runPack(rest);
+  if (command === "view") return runView(rest);
   if (command === "audit") return runAudit();
   return fail(`unknown command \`${args.join(" ")}\``);
 }

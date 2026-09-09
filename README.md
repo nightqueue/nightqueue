@@ -71,11 +71,14 @@ stops a run is the server being **absent**, never it being empty.
 
 ## Install
 
-Two commands, from anywhere, on a machine that has nothing installed yet:
+From anywhere, on a machine that has nothing installed yet:
 
 ```sh
 npx nightshift init                                # install the runtime and set the host up
+# then open a new terminal, or source your rc file, so `nightshift` resolves
+nightshift doctor                                  # check the host and the home
 nightshift queue add "fix the flaky worker" --run  # enqueue the request and start the runner on it
+nightshift queue log <id> --follow                 # watch the run as it happens
 ```
 
 `npx nightshift init` is the whole installation. It puts the package in
@@ -90,21 +93,15 @@ Outside a repository it stops right there and says so. Inside one, it also
 registers that repository as a project and offers to import the token of the
 GitHub CLI.
 
-Flags: `--from <dir>` installs another checkout or tarball instead of the
-package that is running, `--path` / `--no-path` answers the PATH question
+Flags: `--path` / `--no-path` answers the PATH question
 without a terminal,
 `--embedding` / `--no-embedding` answers the semantic recall question,
 `--gh` / `--no-gh` answers the GitHub CLI one, `--shortcuts` / `--no-shortcuts`
 decides whether the short command names are written, and `--org` / `--name` name
 the project. Without a terminal and without the flag, nothing is written and nothing
 is downloaded: both questions print what to run by hand instead.
-
-`init` and `setup` install the package that is running: they pack it with
-`npm pack` (honouring the `files` of its `package.json`) and install the tarball
-into the runtime prefix. Nothing is ever linked, so the runtime never borrows the
-`node_modules` of a checkout, and the registry is not consulted. `--from <dir>`
-packs that directory instead, and `--from <file.tgz>` installs that tarball as it
-is.
+`--from <dir|tgz>` installs another checkout or tarball instead of the package
+that is running (see `## Developing nightshift`).
 
 Every step of `init` the runtime cannot work without is fatal: a failed home,
 runtime or shim exits 1, and the PATH block is only written once
@@ -126,10 +123,16 @@ The two marker lines delimit the block, and nothing between them is ours unless 
 are there: a `# nightshift` you wrote for your own reason, followed by lines that happen
 to look like ours, is never rewritten and never removed.
 
-`nightshift update` reinstalls the runtime from the registry at the newest version
-(or from `--from`) and re-points the host at it; config, secrets and the database
-stay untouched. It is the only command that falls back to the registry, and a
-runtime it could not reinstall is an exit code, never a quiet degraded line.
+`nightshift update` reinstalls the runtime from the registry at the newest
+version and re-points the host at it; config, secrets and the database stay
+untouched. `nightshift update 0.2.0` asks the registry for that exact version
+instead (a tag such as `next` works too), and `--from <dir|tgz>` installs a local
+source instead of asking the registry at all (see `## Developing nightshift`); a
+version and `--from` together are a usage error, because they are two different
+sources. The runtime line names both versions, as in
+`runtime: updated (v0.1.0 -> v0.2.0 at ~/.nightshift/runtime)`. `update` is the
+only command that reaches the registry to install, and a runtime it could not
+reinstall is an exit code, never a quiet degraded line.
 
 `nightshift init` is `nightshift setup` plus the project registration, always in that
 order: every step below first, then the repository of the current directory (or
@@ -291,7 +294,9 @@ night - never blocks a `nightshift init`.
 nightshift setup                                   # install the runtime and register everything in the host
 nightshift setup --remove --purge                  # undo the registrations, or delete the home as well
 nightshift update                                  # reinstall the runtime and re-point the host at it
+nightshift update 0.2.0                            # ...at one exact version from the registry
 nightshift doctor --json                           # check the host and the home, exit 1 on any failure
+nightshift doctor --check-updates                  # ...and ask the registry for the newest version
 nightshift init                                    # set the host up and register the current repository
 nightshift init ~/code/api --org acme --name api   # ...or an explicit path, org and name
 nightshift init --no-embedding --no-path --no-gh   # ...answering every question up front
@@ -682,8 +687,9 @@ run. Until then, the answer to "this depends on that" is one job with stages.
 ## Doctor
 
 ```sh
-nightshift doctor            # one line per check: ok, warn or fail
-nightshift doctor --json     # the same report, as the only thing on stdout
+nightshift doctor                  # one line per check: ok, warn or fail
+nightshift doctor --json           # the same report, as the only thing on stdout
+nightshift doctor --check-updates  # ...plus the newest version published in the registry
 ```
 
 `nightshift doctor` reads the host and the home and writes nothing: it never creates
@@ -699,6 +705,13 @@ whose pid belongs to another user; the diagnosis never removes either), the jobs
 runner died and every registered
 project. It exits `1` when any check fails, `0` otherwise - a `warn` never fails
 the run.
+
+The diagnosis is offline: without `--check-updates` it opens no network
+connection at all. With the flag it adds one last check, `registry`, which asks
+the registry for the newest published version and compares it with the installed
+runtime. That check is never a `fail`: a registry that does not answer is a
+`warn` carrying the message of npm, because a registry being down says nothing
+about this host and must not turn a local diagnosis into a failing exit code.
 
 ## Runtime contract
 
@@ -778,10 +791,48 @@ comes back as an error message, never as a stack.
 server reads them from `NIGHTSHIFT_MODEL` and `NIGHTSHIFT_SESSION_ID` in its own
 environment, and stores `NULL` when they are not set.
 
+## Developing nightshift
+
+`init` and `setup` install the package that is running: they pack it with
+`npm pack` (honouring the `files` of its `package.json`) and install the tarball
+into the runtime prefix. Nothing is ever linked, so the runtime never borrows the
+`node_modules` of a checkout, and the registry is not consulted.
+
+That is what makes a checkout testable end to end: `--from <dir>` packs that
+directory instead, and `--from <file.tgz>` installs that tarball as it is. It
+works the same on `setup`, on `init` and on `update`.
+
+```sh
+nightshift setup --from ~/code/nightshift   # install the runtime from a checkout
+nightshift update --from ~/code/nightshift  # ...and again, after a change
+nightshift update --from ./nightshift.tgz   # install a tarball exactly as it is
+npm test                                    # the whole suite, hermetic, no network
+npm run release:check                       # the suite, then the tarball and the versions
+```
+
+`npm run release:check` is the checklist before a release: it runs the suite,
+runs `npm pack --dry-run` to prove the tarball still builds, and checks that
+`package.json`, the top entry of `CHANGELOG.md` and the `Licensed Work:` line of
+`LICENSE` all declare the same version. Any divergence prints what disagrees and
+exits 1. It never publishes anything.
+
+The decisions that shape the project live in `docs/decisions/`, one record per
+decision, and neither that directory nor `scripts/` is part of the published
+tarball.
+
 ## License
 
 Business Source License 1.1. Change Date 2029-09-04, Change License
-Apache License, Version 2.0. See `LICENSE`.
+Apache License, Version 2.0. See `LICENSE`, which is the text that governs; what
+follows is a summary of it.
+
+- You may use nightshift in production, for any purpose, including commercial
+  ones, and inside a company for internal use.
+- You may not offer nightshift, or a derivative of it, to third parties as a
+  hosted service or as a competing product.
+- You may not redistribute it commercially.
+- On 2029-09-04 the Change Date arrives, every restriction above ends, and the
+  licensed work becomes available under the Apache License, Version 2.0.
 
 **Project note, not part of the license text:** this BSL 1.1 text and its
 parameters have not been through legal review yet. That review is pending and

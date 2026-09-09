@@ -266,6 +266,26 @@ test("update reinstalls the runtime, re-points a host left on another path and k
   );
 });
 
+test("update <version> asks the registry for that exact version and the runtime line names both versions", async (t) => {
+  const host = makeHostEnv(t, "install-update-version");
+  assert.equal(await run(["setup", "--no-path", "--no-embedding"], makeCtx(host.env).ctx), 0);
+
+  const { ctx, out } = makeCtx(host.env);
+  assert.equal(await run(["update", "0.2.0"], ctx), 0);
+  assert.equal(specsInto(host, host.runtimeDir).at(-1), "nightshift@0.2.0");
+  assert.ok(out.includes(`runtime: updated (v${VERSION} -> v0.2.0 at ${host.runtimeDir})`), out.join("\n"));
+});
+
+test("a version npm would read as another package or as a flag never reaches it", async (t) => {
+  const host = makeHostEnv(t, "install-update-bad-version");
+  for (const argv of [["update", "evil@1.0.0"], ["update", "--force-real"], ["update", "0.2.0", "--from", host.home]]) {
+    const { ctx, err } = makeCtx(host.env);
+    assert.equal(await run(argv, ctx), 1, argv.join(" "));
+    assert.ok(err.some((line) => line.startsWith("nightshift: ")), err.join("\n"));
+  }
+  assert.deepEqual(host.npmCalls(), [], "a refused update still reached npm");
+});
+
 test("--remove takes out every shim and the marked line, keeps the runtime and never touches config or secrets", async (t) => {
   const host = makeHostEnv(t, "install-remove");
   writeFileSync(host.rcPath, `${THIRD_PARTY}\n`);

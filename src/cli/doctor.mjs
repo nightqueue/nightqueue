@@ -14,9 +14,9 @@ import { listProjects } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { claudeBin } from "../host/claude.mjs";
 import { MCP_SERVER_NAME, readRegisteredServer, serverIsCurrent } from "../host/mcp.mjs";
-import { npmBin } from "../host/npm.mjs";
+import { npmBin, npmView } from "../host/npm.mjs";
 import { marketplaceIsCurrent, pluginRef, readInstalledPlugin, readKnownMarketplace } from "../host/plugin.mjs";
-import { legacyShimState, packageVersion, runtimeVersion, shimState } from "../host/runtime.mjs";
+import { legacyShimState, packageVersion, registrySpec, runtimeVersion, shimState } from "../host/runtime.mjs";
 import { hookStatus, readHostSettings } from "../host/settings.mjs";
 import { PATH_MARK, binDirInPath, rcFilePath } from "../host/shell.mjs";
 import { DB_USER_VERSION, openDbReadOnly } from "../memory/db.mjs";
@@ -24,6 +24,7 @@ import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../me
 import { ORPHAN_PREDICATE } from "../memory/jobs.mjs";
 import { runnerPidfileState } from "../queue/pidfile.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
+import { firstLine } from "./report.mjs";
 
 const COMMAND_TIMEOUT_MS = 5000;
 const MIN_NODE_MAJOR = 22;
@@ -334,8 +335,29 @@ function checkProjects(ctx) {
   return projects.map((project) => checkProject(ctx, project));
 }
 
+// Reason the registry could not answer, short enough for a report line.
+function registryFailure(result) {
+  if (result.missing) return "npm not found";
+  return firstLine(result.stderr) || `exit ${result.status}`;
+}
+
+// Compares the installed runtime with the newest published version, the only network call of the diagnosis and never a failure: a registry that is down says nothing about this host.
+function checkRegistry(ctx) {
+  const result = npmView({ spec: registrySpec(), env: ctx.env, spawnSyncImpl: ctx.spawnSyncImpl });
+  if (!result.ok) return check("registry", "warn", registryFailure(result), result.command);
+  const installed = runtimeVersion(ctx.env);
+  if (result.version === installed) return check("registry", "ok", `v${installed} is the newest published`);
+  const detail = `v${result.version} published, v${installed ?? "none"} installed`;
+  return check("registry", "warn", detail, "run `nightshift update`");
+}
+
+// Asks the registry only when the user opted in, which is what keeps the diagnosis offline by default.
+function checkUpdates(ctx, values) {
+  return values["check-updates"] === true ? [checkRegistry(ctx)] : [];
+}
+
 // Runs every check, in the order the report prints them.
-function collect(ctx) {
+function collect(ctx, values) {
   return [
     checkNode(),
     checkClaude(ctx),
@@ -354,6 +376,7 @@ function collect(ctx) {
     checkDatabase(ctx),
     ...checkQueue(ctx),
     ...checkProjects(ctx),
+    ...checkUpdates(ctx, values),
   ];
 }
 
@@ -365,9 +388,10 @@ function reportLine({ status, name, detail, hint }) {
 
 // Runs `nightshift doctor`: reads the state of the host and of the home, writes nothing, and exits 1 on any failure.
 export async function run(argv, ctx) {
-  const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
-  checkArgs(positionals, { max: 0, usage: "nightshift doctor [--json]" });
-  const checks = collect(ctx);
+  const options = { json: { type: "boolean" }, "check-updates": { type: "boolean" } };
+  const { values, positionals } = parseCommand(argv, options);
+  checkArgs(positionals, { max: 0, usage: "nightshift doctor [--json] [--check-updates]" });
+  const checks = collect(ctx, values);
   const ok = !checks.some((entry) => entry.status === "fail");
   if (values.json === true) ctx.out(JSON.stringify({ ok, checks }));
   else for (const entry of checks) ctx.out(reportLine(entry));

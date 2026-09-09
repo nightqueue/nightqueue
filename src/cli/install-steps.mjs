@@ -63,10 +63,10 @@ function packDirectory(ctx, report, dir) {
 }
 
 // Where the runtime comes from: the package this process runs from, the directory or tarball of `--from`, the registry only when an update forces it.
-function openRuntimeSource(ctx, report, { from, force } = {}) {
+function openRuntimeSource(ctx, report, { from, force, version } = {}) {
   const target = typeof from === "string" && from.trim() ? resolve(from.trim()) : "";
   if (!target) {
-    if (force === true) return { ok: true, spec: registrySpec("latest"), cleanup: () => {} };
+    if (force === true) return { ok: true, spec: registrySpec(version), cleanup: () => {} };
     return packDirectory(ctx, report, packageRoot());
   }
   const stat = statOrNull(target);
@@ -78,8 +78,14 @@ function openRuntimeSource(ctx, report, { from, force } = {}) {
   return { ok: true, spec: target, cleanup: () => {} };
 }
 
+// Detail of an installed runtime: an update that replaced a version states the transition, every other path states only what is there now.
+function runtimeDetail({ prefix, current, installed, force }) {
+  const now = `v${installed ?? "?"} at ${prefix}`;
+  return force === true && current ? `v${current} -> ${now}` : now;
+}
+
 // Installs the package into the runtime prefix and reports whether the prefix really ended up holding it.
-export function setupRuntime(ctx, report, { from, force } = {}) {
+export function setupRuntime(ctx, report, { from, force, version } = {}) {
   const prefix = runtimeDir(ctx.env);
   const wanted = packageVersion();
   const current = runtimeVersion(ctx.env);
@@ -87,7 +93,7 @@ export function setupRuntime(ctx, report, { from, force } = {}) {
     report.step(RUNTIME_LABEL, "already present", `v${current} at ${prefix}`);
     return runtimeReady(ctx.env);
   }
-  const source = openRuntimeSource(ctx, report, { from, force });
+  const source = openRuntimeSource(ctx, report, { from, force, version });
   if (!source.ok) return false;
   try {
     mkdirSync(prefix, { recursive: true });
@@ -96,7 +102,8 @@ export function setupRuntime(ctx, report, { from, force } = {}) {
       report.degrade(RUNTIME_LABEL, npmFailure(result), result.command);
       return false;
     }
-    report.step(RUNTIME_LABEL, current ? "updated" : "created", `v${runtimeVersion(ctx.env) ?? "?"} at ${prefix}`);
+    const detail = runtimeDetail({ prefix, current, installed: runtimeVersion(ctx.env), force });
+    report.step(RUNTIME_LABEL, current ? "updated" : "created", detail);
     return true;
   } finally {
     source.cleanup();

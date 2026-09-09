@@ -6,40 +6,83 @@ import { test } from "node:test";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const PACKED_DIRS = ["bin", "src", "plugin", ".claude-plugin"];
+const DEV_PREFIXES = ["test/", "test-support/", "docs/", "scripts/", ".claude/", ".github/"];
+const MAX_UNPACKED_BYTES = 2 * 1024 * 1024;
 
-// Files the published tarball would carry, or null when npm is not installed on this machine.
-function packedFiles() {
-  const result = spawnSync("npm", ["pack", "--dry-run", "--json"], { cwd: ROOT, encoding: "utf8", timeout: 120000 });
+// Description of the tarball npm would publish, or null when npm is not installed on this machine.
+function packedTarball() {
+  const args = ["pack", "--dry-run", "--json", "--ignore-scripts"];
+  const result = spawnSync("npm", args, { cwd: ROOT, encoding: "utf8", timeout: 120000 });
   if (result.error || result.status !== 0) return null;
   try {
-    return JSON.parse(result.stdout)[0].files.map((entry) => entry.path);
+    const entry = JSON.parse(result.stdout)[0];
+    return { files: entry.files.map((file) => file.path), unpackedSize: entry.unpackedSize };
   } catch {
     return null;
   }
+}
+
+// Files git tracks under the directories the package publishes, or null when git does not answer.
+function trackedFiles() {
+  const result = spawnSync("git", ["ls-files", ...PACKED_DIRS], { cwd: ROOT, encoding: "utf8", timeout: 120000 });
+  if (result.error || result.status !== 0) return null;
+  const files = result.stdout.split("\n").filter(Boolean);
+  return files.length ? files : null;
 }
 
 test("`nightshift` is the only command name npm installs and the embedding library is not a dependency", () => {
   assert.deepEqual(MANIFEST.bin, { nightshift: "./bin/nightshift.mjs" });
   assert.equal(MANIFEST.optionalDependencies, undefined);
   assert.equal(Object.hasOwn(MANIFEST.dependencies, "@huggingface/transformers"), false);
-  assert.deepEqual(MANIFEST.files, [".claude-plugin", "bin", "plugin", "src", "README.md", "LICENSE"]);
+  assert.deepEqual(MANIFEST.files, [".claude-plugin", "bin", "plugin", "src", "README.md", "LICENSE", "CHANGELOG.md"]);
+});
+
+test("the manifest carries the metadata a published package needs, and the engine and the dependencies it always had", () => {
+  assert.equal(MANIFEST.homepage, "https://github.com/maykonVinicius/nightshift#readme");
+  assert.deepEqual(MANIFEST.repository, { type: "git", url: "git+https://github.com/maykonVinicius/nightshift.git" });
+  assert.deepEqual(MANIFEST.bugs, { url: "https://github.com/maykonVinicius/nightshift/issues" });
+  assert.deepEqual(MANIFEST.publishConfig, { access: "public" });
+  assert.ok(MANIFEST.keywords.includes("claude-code"), MANIFEST.keywords.join(", "));
+  assert.deepEqual(MANIFEST.engines, { node: ">=22" });
+  assert.deepEqual(Object.keys(MANIFEST.dependencies), ["@modelcontextprotocol/sdk", "zod"]);
 });
 
 test("the tarball carries the CLI, the plugin and the manifest, and no test at all", (t) => {
-  const files = packedFiles();
-  if (!files) return t.skip("npm did not answer `pack --dry-run`");
+  const tarball = packedTarball();
+  if (!tarball) return t.skip("npm did not answer `pack --dry-run`");
   for (const expected of [
     "package.json",
     "README.md",
     "LICENSE",
+    "CHANGELOG.md",
     "bin/nightshift.mjs",
     "src/cli/index.mjs",
     ".claude-plugin/marketplace.json",
     "plugin/.claude-plugin/plugin.json",
     "plugin/skills/resolve/SKILL.md",
   ]) {
-    assert.ok(files.includes(expected), `${expected} is missing from the tarball`);
+    assert.ok(tarball.files.includes(expected), `${expected} is missing from the tarball`);
   }
-  assert.equal(files.includes("bin/shift.mjs"), false, "the tarball still carries the entry of the previous command name");
-  assert.deepEqual(files.filter((path) => path.startsWith("test/") || path.startsWith("test-support/")), []);
+  assert.equal(tarball.files.includes("bin/shift.mjs"), false, "the tarball still carries the entry of the previous command name");
+  assert.deepEqual(tarball.files.filter((path) => DEV_PREFIXES.some((prefix) => path.startsWith(prefix))), []);
+});
+
+test("every versioned file of the published directories is in the tarball", (t) => {
+  const tarball = packedTarball();
+  if (!tarball) return t.skip("npm did not answer `pack --dry-run`");
+  const tracked = trackedFiles();
+  if (!tracked) return t.skip("git did not answer `ls-files`");
+  const packed = new Set(tarball.files);
+  for (const file of tracked) {
+    assert.ok(packed.has(file), `${file} is versioned under ${PACKED_DIRS.join(", ")} and is missing from the tarball`);
+  }
+});
+
+test("the unpacked package stays under two megabytes", (t) => {
+  const tarball = packedTarball();
+  if (!tarball) return t.skip("npm did not answer `pack --dry-run`");
+  const { unpackedSize } = tarball;
+  assert.ok(Number.isFinite(unpackedSize), "npm reported no unpacked size");
+  assert.ok(unpackedSize < MAX_UNPACKED_BYTES, `the unpacked package is ${unpackedSize} bytes, over the ${MAX_UNPACKED_BYTES} allowed`);
 });
