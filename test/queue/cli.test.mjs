@@ -9,6 +9,7 @@ import { addProject } from "../../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
+import { writeRunnerPidfile } from "../../src/queue/pidfile.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { assistantEvent, doneStream, gateStream, PR_URL, SLUG } from "../../test-support/streams.mjs";
@@ -80,7 +81,7 @@ test("queue add takes the registered NAME and reports the job it queued", (t) =>
   const outside = makeDir(t, "cli-add-outside");
   const queued = runCli(env, ["queue", "add", "alpha", "fix the worker", "--priority", "2", "--timeout", "600"], { cwd: outside });
   assert.equal(queued.status, 0, queued.stderr);
-  assert.match(queued.stdout, /queued job #1 for project `alpha` \(priority 2, timeout 600s\)/);
+  assert.match(queued.stdout, /queued job #1 for `alpha` \(1 pending\)\. Start the batch: nightshift queue run/);
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
   const byPath = runCli(env, ["queue", "add", "/tmp/alpha", "fix the worker"], { cwd: outside });
@@ -98,7 +99,7 @@ test("queue add without a project takes the one of the current directory and joi
   const queued = runCli(env, ["queue", "add", "fix", "the", "flaky", "worker"], { cwd: repo });
   assert.equal(queued.status, 0, queued.stderr);
   assert.match(queued.stdout, /project `alpha` resolved from the current directory/);
-  assert.match(queued.stdout, /queued job #1 for project `alpha`/);
+  assert.match(queued.stdout, /queued job #1 for `alpha` \(1 pending\)\. Start the batch: nightshift queue run/);
   assert.equal(getJob(1, env).prompt, "fix the flaky worker");
 
   const escaped = runCli(env, ["queue", "add", "--", "explain", "--run", "to", "me"], { cwd: repo });
@@ -115,6 +116,8 @@ test("queue add --run --foreground runs the job here and answers with its outcom
     ran.stdout.indexOf("queued job #1") < ran.stdout.indexOf("running job #1"),
     "the id has to be printed before the job runs",
   );
+  assert.match(ran.stdout, /queued job #1 for project `alpha` \(priority \d+, timeout \d+s\)/);
+  assert.equal(ran.stdout.includes("Start the batch"), false, "a job that is about to run still nudged for a batch");
   assert.match(ran.stdout, /running job #1 in the foreground; follow the stream with `nightshift queue log 1 --follow`/);
   assert.match(ran.stdout, /job #1 done https:\/\/github\.com\/acme\/api\/pull\/42/);
   assert.equal(getJob(1, env).status, "done");
@@ -154,6 +157,41 @@ test("queue status --json answers with the jobs and the counts, and never with t
   assert.match(table.stdout, /#1\s+pending\s+alpha/);
   assert.match(table.stdout, /pending=2/);
   assert.match(runCli(env, ["queue", "status", "99"]).stderr, /unknown job `99`/);
+});
+
+// The last line the CLI printed, the place the backlog nudge belongs to.
+function lastLine(stdout) {
+  const lines = stdout.trimEnd().split("\n");
+  return lines[lines.length - 1];
+}
+
+test("queue status closes with the backlog nudge only when pending jobs sit with nobody working them", (t) => {
+  const env = makeCliHome(t, "cli-status-backlog");
+  const first = enqueue(env, "fix the worker");
+  const one = runCli(env, ["queue", "status"]);
+  assert.equal(one.status, 0, one.stderr);
+  assert.equal(lastLine(one.stdout), "1 pending job waiting - start the batch: nightshift queue run");
+
+  enqueue(env, "fix the parser");
+  const two = runCli(env, ["queue", "status"]);
+  assert.equal(lastLine(two.stdout), "2 pending jobs waiting - start the batch: nightshift queue run");
+  assert.ok(
+    two.stdout.indexOf("pending=2") < two.stdout.indexOf("2 pending jobs waiting"),
+    "the nudge has to come after the counts",
+  );
+
+  claimJobById(first, { worker: "host:4242", cap: 4 }, env);
+  const claimed = runCli(env, ["queue", "status"]);
+  assert.equal(claimed.stdout.includes("start the batch"), false, "the nudge showed up while a job was running");
+
+  const watched = makeCliHome(t, "cli-status-backlog-watched");
+  enqueue(watched, "fix the worker");
+  writeRunnerPidfile({ pid: process.pid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, watched);
+  const alive = runCli(watched, ["queue", "status"]);
+  assert.equal(alive.stdout.includes("start the batch"), false, "the nudge showed up while a watcher was alive");
+
+  const empty = runCli(makeCliHome(t, "cli-status-backlog-empty"), ["queue", "status"]);
+  assert.equal(empty.stdout.includes("start the batch"), false, "an empty queue got a nudge");
 });
 
 // Writes the log of a job, the file `queue status` reads the last narration from.

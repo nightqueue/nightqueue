@@ -4,8 +4,18 @@ import { withLock } from "../config/lock.mjs";
 import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
 import { projectByName, resolveProject } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
-import { addJob, cancelJob, countsByStatus, getJob, jobView, listJobs, truncateByCodePoint } from "../memory/jobs.mjs";
+import {
+  addJob,
+  cancelJob,
+  countActiveJobs,
+  countsByStatus,
+  getJob,
+  jobView,
+  listJobs,
+  truncateByCodePoint,
+} from "../memory/jobs.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
+import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
 import {
   createNarrator,
   formatDuration,
@@ -153,6 +163,12 @@ function checkForegroundNeedsRun(values, usage) {
   }
 }
 
+// The line `queue add` answers with: the old confirmation when the job is about to run, the backlog nudge otherwise.
+function addedLine(job, willRun, env) {
+  if (willRun) return `queued job #${job.id} for project \`${job.project}\` (priority ${job.priority}, timeout ${job.timeoutS}s)`;
+  return `queued job #${job.id} for \`${job.project}\` (${countsByStatus(env).pending} pending). Start the batch: nightshift queue run`;
+}
+
 // Runs `queue add`, with the project taken from the arguments or from the current directory.
 async function runAdd(argv, ctx) {
   if (argv.length === 1 && ADD_HELP_FLAGS.has(argv[0])) {
@@ -175,7 +191,7 @@ async function runAdd(argv, ctx) {
     },
     ctx.env,
   );
-  ctx.out(`queued job #${job.id} for project \`${job.project}\` (priority ${job.priority}, timeout ${job.timeoutS}s)`);
+  ctx.out(addedLine(job, values.run === true, ctx.env));
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }
 
@@ -300,6 +316,12 @@ function formatRunner(runner) {
   return `runner: running (pid ${runner.pid}, ${runner.mode} every ${runner.intervalS} s, since ${runner.startedAt})`;
 }
 
+// The line `queue status` closes with when a backlog is sitting there with nobody working it.
+function backlogLine({ activeJobs, counts, runner }) {
+  if (!isQueueIdle({ activeJobs, runner }) || counts.pending === 0) return null;
+  return `${pendingJobs(counts.pending)} waiting - start the batch: nightshift queue run`;
+}
+
 // Runs `queue status`, for one job or for the tail of the queue.
 async function runStatus(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" }, limit: { type: "string" } });
@@ -326,6 +348,8 @@ async function runStatus(argv, ctx) {
   }
   for (const line of formatJobLines(jobs, ctx.env)) ctx.out(line);
   ctx.out(Object.entries(counts).map(([status, total]) => `${status}=${total}`).join("  "));
+  const backlog = backlogLine({ activeJobs: countActiveJobs(ctx.env), counts, runner });
+  if (backlog) ctx.out(backlog);
 }
 
 // Report lines of `queue run --dry`, the cycle that only reads.

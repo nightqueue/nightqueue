@@ -9,6 +9,7 @@ import { recallProjectIndex, saveProjectIndex } from "../memory/index.mjs";
 import {
   addJob,
   cancelJob,
+  countActiveJobs,
   countsByStatus,
   getJob,
   jobView,
@@ -19,6 +20,7 @@ import {
 } from "../memory/jobs.mjs";
 import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
+import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
 import { runnerPidfileState, runnerView } from "../queue/pidfile.mjs";
 import { applyRetry } from "../queue/retry.mjs";
 import { launchDetachedRunner } from "../queue/runner.mjs";
@@ -34,6 +36,14 @@ import { recallLessons, recallMemories } from "../memory/search.mjs";
 
 const SERVER_NAME = "nightshift";
 const SERVER_VERSION = "0.1.0";
+const SERVER_INSTRUCTIONS = [
+  "nightshift is a backlog of unattended coding jobs, not a synchronous executor: `queue_add` records work, it never runs it.",
+  "Queue every task or plan the moment it comes up - one job is one self-contained deliverable, and a large plan is ONE job with numbered stages written in the prompt, never several jobs that depend on each other.",
+  "Do not start jobs as they are queued: the whole batch starts with `queue_run` without `job_id`, when the user is about to step away.",
+  "Start a single job now, with `queue_run` and its `job_id`, only when the user asks for that one job now.",
+  "Every job ends as an open pull request (`done`) or stopped at a gate with its reason in `notice_md`, which is answered with `queue_retry`.",
+  "Call `queue_status` to see what is pending before suggesting a batch.",
+].join("\n");
 const RECALL_LIMIT = 8;
 const INDEX_LIMIT = 40;
 const JOB_LIST_LIMIT = { min: 1, max: 50, fallback: 10 };
@@ -79,6 +89,13 @@ function guard(name, handler) {
       return { content: [{ type: "text", text: `${name}: ${err?.message ?? String(err)}` }], isError: true };
     }
   };
+}
+
+// The one-line nudge queue_status answers with, or null when the queue has nothing to suggest.
+function queueHint({ activeJobs, counts, runner }) {
+  if (!isQueueIdle({ activeJobs, runner })) return `runner active — ${counts.pending} pending after this one`;
+  if (counts.pending === 0) return null;
+  return `${pendingJobs(counts.pending)} waiting — start the batch with queue_run.`;
 }
 
 // The eleven tools of the plugin contract, with the parameter names the plugin actually sends.
@@ -221,7 +238,8 @@ function toolDefinitions(env) {
       name: "queue_add",
       config: {
         description:
-          "Enqueues an unattended /nightshift:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order.",
+          "Enqueues an unattended /nightshift:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
+          "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now.",
         inputSchema: {
           project: z.string(),
           prompt: z
@@ -245,7 +263,15 @@ function toolDefinitions(env) {
           },
           env,
         );
-        return { ok: true, id: job.id, project: job.project, priority: job.priority, timeoutS: job.timeoutS };
+        const pending = countsByStatus(env).pending;
+        return {
+          ok: true,
+          id: job.id,
+          project: job.project,
+          priority: job.priority,
+          timeoutS: job.timeoutS,
+          hint: `queued job #${job.id} for \`${job.project}\` (${pending} pending). Start the batch with queue_run when you are ready.`,
+        };
       },
     },
     {
@@ -266,14 +292,21 @@ function toolDefinitions(env) {
           return { job };
         }
         const runner = runnerView(runnerPidfileState(env));
-        return { runner, jobs: listJobs({ limit: jobLimit(args.limit) }, env).map(jobView), counts: countsByStatus(env) };
+        const counts = countsByStatus(env);
+        return {
+          runner,
+          jobs: listJobs({ limit: jobLimit(args.limit) }, env).map(jobView),
+          counts,
+          hint: queueHint({ activeJobs: countActiveJobs(env), counts, runner }),
+        };
       },
     },
     {
       name: "queue_run",
       config: {
         description:
-          "Starts the queue runner DETACHED, with its output going to a log file, and returns immediately with that path. " +
+          "starts the whole batch (all pending jobs, in priority order) detached; pass job_id only to start a single job. " +
+          "The batch runs DETACHED, with its output going to a log file, and this tool returns immediately with that path. " +
           "A runner started this way runs one cycle and exits; `nightshift queue run --stop` ends a watcher started from the CLI.",
         inputSchema: { job_id: z.number().int().min(1).nullable().optional() },
       },
@@ -317,7 +350,7 @@ function toolDefinitions(env) {
 
 // Builds the MCP server with the eleven tools of the plugin contract.
 export function createServer(env = process.env) {
-  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
   for (const tool of toolDefinitions(env)) server.registerTool(tool.name, tool.config, guard(tool.name, tool.handler));
   return server;
 }

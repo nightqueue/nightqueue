@@ -69,17 +69,49 @@ the report, and the run continues - that covers `index_save` and `pipeline_log`,
 `lesson_save`, which the Phase 0 critique gate calls when it avoided a wrong execution. What
 stops a run is the server being **absent**, never it being empty.
 
+## How nightshift is meant to be used
+
+nightshift is a backlog, not a chat: `queue add` only records the work, and
+nothing runs until you start the batch.
+
+- **During the day, queue.** Every task or plan becomes a `nightshift queue add`
+  the moment it comes up. One job is one deliverable that can be reviewed and
+  merged on its own; large work goes in as ONE job with numbered stages written
+  in the prompt, never as several jobs that depend on each other (see
+  `## Writing a job`).
+- **When you step away, start the batch.** `nightshift queue run` takes the whole
+  backlog, in priority order, detached - and `--watch` keeps a runner picking up
+  whatever you queue afterwards (see `### Running the queue`).
+- **When you come back, review.** `nightshift queue status` says what each job
+  became: an open pull request, or a stop at a gate with the reason in its
+  notice. A gate is answered with
+  `nightshift queue retry <id> --note "<your answer>"`.
+- **`--run` is the exception.** It starts that one job right away, for the work
+  you need now instead of tonight.
+
 ## Install
 
-From anywhere, on a machine that has nothing installed yet:
+One command installs everything; the rest is the daily flow, from anywhere, on a
+machine that has nothing installed yet:
 
 ```sh
-npx nightshift init                                # install the runtime and set the host up
+npx nightshift init                                    # install the runtime and set the host up
 # then open a new terminal, or source your rc file, so `nightshift` resolves
-nightshift doctor                                  # check the host and the home
-nightshift queue add "fix the flaky worker" --run  # enqueue the request and start the runner on it
-nightshift queue log <id> --follow                 # watch the run as it happens
+nightshift doctor                                      # check the host and the home
+nightshift queue add "fix the flaky worker"            # queue one deliverable
+nightshift queue add "add the retry to the uploader"   # and the next one
+nightshift queue add api "rotate the webhook secrets"  # a job of another registered project
+nightshift queue run                                   # start the whole batch, detached, when you step away
 ```
+
+The next morning, `nightshift queue status` says what each job became and the
+pull requests are waiting for review; `nightshift queue run --watch` keeps a
+runner picking up whatever you queue afterwards (see `### Running the queue`).
+
+**Run one job now.** `nightshift queue add "fix the flaky worker" --run` queues
+the request and starts the runner on that job right away, instead of leaving it
+in the backlog, and `nightshift queue log <id> --follow` watches that run as it
+happens.
 
 `npx nightshift init` is the whole installation. It puts the package in
 `~/.nightshift/runtime`, writes the shims `~/.nightshift/bin/nightshift`,
@@ -225,6 +257,15 @@ diagnosis call.
 `bin/nightshift.mjs` without duplicating any entry, writes the three new shims
 and removes the old `~/.nightshift/bin/shift`. A file of another tool sitting
 under that name is kept, and `nightshift doctor` says so instead of deleting it.
+
+### Using nightshift from Claude
+
+With the MCP server registered, Claude drives the same backlog from inside a
+session: ask it to queue the tasks as they come up, and to start the batch later
+with `queue_run`. Claude does not start a job the moment it queues it - it waits
+for the batch - unless you ask for that one job now. What each job became comes
+back through `queue_status`, and a job stopped at a gate is answered with
+`queue_retry`.
 
 ## Try it without installing
 

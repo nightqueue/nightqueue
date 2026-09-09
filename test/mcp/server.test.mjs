@@ -66,6 +66,26 @@ test("the server exposes exactly the eleven tools of the contract", async (t) =>
   assert.deepEqual(names, CONTRACT_TOOLS);
 });
 
+test("the handshake carries the instructions that teach the backlog model", async (t) => {
+  const env = makeHome(t, "mcp-instructions");
+  const client = await connect(t, env);
+
+  const instructions = client.getInstructions();
+  assert.equal(typeof instructions, "string", "the server answered the handshake without instructions");
+  assert.ok(instructions.length > 0, "the instructions came back empty");
+  for (const idea of [
+    "backlog",
+    "self-contained",
+    "numbered stages",
+    "Do not start jobs as they are queued",
+    "`queue_run` without `job_id`",
+    "queue_retry",
+    "queue_status",
+  ]) {
+    assert.ok(instructions.includes(idea), `\`${idea}\` is missing from the instructions:\n${instructions}`);
+  }
+});
+
 test("the queue_add tool states the job-cutting rule on the tool and on the prompt field", async (t) => {
   const env = makeHome(t, "mcp-queue-add-rule");
   const client = await connect(t, env);
@@ -263,8 +283,22 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
   const client = await connect(t, env);
 
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker", priority: 2, timeout_s: 600 } }));
-  assert.deepEqual(queued, { ok: true, id: 1, project: "alpha", priority: 2, timeoutS: 600 });
+  assert.deepEqual(queued, {
+    ok: true,
+    id: 1,
+    project: "alpha",
+    priority: 2,
+    timeoutS: 600,
+    hint: "queued job #1 for `alpha` (1 pending). Start the batch with queue_run when you are ready.",
+  });
   assert.equal(getJob(1, env).prompt, "fix the worker");
+
+  const second = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the parser" } }));
+  assert.equal(second.hint, "queued job #2 for `alpha` (2 pending). Start the batch with queue_run when you are ready.");
+
+  const add = (await client.listTools()).tools.find((tool) => tool.name === "queue_add");
+  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["max_attempts", "priority", "project", "prompt", "timeout_s"]);
+  assert.ok(add.description.includes("start the whole batch later with `queue_run`"), add.description);
 
   const byPath = await client.callTool({ name: "queue_add", arguments: { project: "/tmp/alpha", prompt: "fix the worker" } });
   assert.equal(byPath.isError, true);
@@ -310,6 +344,38 @@ test("queue_status never returns the prompt and truncates the free text at five 
   assert.match(textOf(unknown), /unknown job `99`/);
 });
 
+test("queue_status answers with the nudge that matches the state of the queue, and never on the detail of a job", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-hint");
+  const client = await connect(t, env);
+
+  assert.equal(payloadOf(await client.callTool({ name: "queue_status", arguments: {} })).hint, null, "an empty queue got a nudge");
+
+  const first = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const one = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(one.hint, "1 pending job waiting — start the batch with queue_run.");
+
+  addJob({ project: "alpha", prompt: "fix the parser" }, env);
+  const two = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(two.hint, "2 pending jobs waiting — start the batch with queue_run.");
+
+  claimJobById(first, { worker: "host:4242", cap: 4 }, env);
+  const claimed = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(claimed.hint, "runner active — 1 pending after this one");
+
+  const detail = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: first } }));
+  assert.deepEqual(Object.keys(detail), ["job"], "the detail of a job grew a hint");
+
+  const watchedEnv = makeQueueHome(t, "mcp-queue-hint-watch");
+  addJob({ project: "alpha", prompt: "fix the worker" }, watchedEnv);
+  writeRunnerPidfile(
+    { pid: process.pid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/runner.log" },
+    watchedEnv,
+  );
+  const watchedClient = await connect(t, watchedEnv);
+  const watched = payloadOf(await watchedClient.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(watched.hint, "runner active — 1 pending after this one", "a live watcher was told to start a second batch");
+});
+
 test("queue_run comes back at once with the log of the detached runner, inside this home", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-run");
   const client = await connect(t, env);
@@ -322,6 +388,10 @@ test("queue_run comes back at once with the log of the detached runner, inside t
   assert.match(started.logPath, /runner-\d{8}T\d{6}Z\.log$/);
 
   const tool = (await client.listTools()).tools.find((entry) => entry.name === "queue_run");
+  assert.ok(
+    tool.description.startsWith("starts the whole batch (all pending jobs, in priority order) detached; pass job_id only to start a single job."),
+    `the tool does not open on the batch it starts: ${tool.description}`,
+  );
   assert.ok(tool.description.includes("DETACHED"), "the tool does not say the runner is detached");
   assert.ok(tool.description.includes("nightshift queue run --stop"), "the tool does not say how a watcher is stopped");
 });
