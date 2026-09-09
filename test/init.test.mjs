@@ -314,6 +314,11 @@ const NEXT_STEPS = [
   '  3. Come back to `nightshift queue status` and review the PRs; a job waiting at the gate is answered with `nightshift queue retry <id> --note "..."`.',
 ];
 
+const NEXT_STEPS_UNREGISTERED = [
+  ...NEXT_STEPS,
+  "  4. Run `nightshift init` inside a repository to register it - or just `nightshift queue add` there, it offers to register.",
+];
+
 test("init closes with the next steps, with no PATH block written and outside a repository too", async (t) => {
   const bare = makeHostEnv(t, "init-next-steps-bare");
   const outside = makeCtx(bare.env, { cwd: makeDir(t, "init-next-steps-bare-cwd") });
@@ -321,7 +326,7 @@ test("init closes with the next steps, with no PATH block written and outside a 
   assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh"], outside.ctx), 0);
   assert.equal(existsSync(bare.rcPath), false, "the run under test wrote the PATH block after all");
   assert.equal(outside.out.some((line) => line.startsWith("no git repository in")), true, outside.out.join("\n"));
-  assert.deepEqual(outside.out.slice(-NEXT_STEPS.length), NEXT_STEPS, outside.out.join("\n"));
+  assert.deepEqual(outside.out.slice(-NEXT_STEPS_UNREGISTERED.length), NEXT_STEPS_UNREGISTERED, outside.out.join("\n"));
 
   const host = makeHostEnv(t, "init-next-steps-repo");
   const inside = makeCtx(host.env, { cwd: makeRepo(t, "init-next-steps-repo-cwd") });
@@ -329,6 +334,7 @@ test("init closes with the next steps, with no PATH block written and outside a 
   assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], inside.ctx), 0);
   assert.equal(readFileSync(host.rcPath, "utf8").includes(pathBlock(host.env)), true);
   assert.deepEqual(inside.out.slice(-NEXT_STEPS.length), NEXT_STEPS, inside.out.join("\n"));
+  assert.equal(inside.out.some((line) => line.startsWith("  4.")), false, inside.out.join("\n"));
 });
 
 test("init packs this package, installs the tarball and leaves a host the doctor passes", async (t) => {

@@ -117,6 +117,12 @@ the request and starts the runner on that job right away, instead of leaving it
 in the backlog, and `nightshift queue log <id> --follow` watches that run as it
 happens.
 
+**A repository nobody registered yet.** Inside a git repository that is not a
+registered project, `nightshift queue add` asks one question — register it under
+the basename of its root and queue the job — and does both in the same run.
+`--yes` answers it for a script; with no terminal and no `--yes` the command
+keeps failing as before, without registering anything.
+
 `npx @maykonv/nightshift init` is the whole installation. It puts the package
 in `~/.nightshift/runtime`, writes the shims `~/.nightshift/bin/nightshift`,
 `nshift` and `nsft` (`--no-shortcuts` writes only `nightshift`), offers to
@@ -355,7 +361,10 @@ runs, so two `nightshift` processes never overwrite each other's changes; read-o
 commands such as `list` never take it. The memory and queue commands (`mcp`,
 `hook`, `reflect`, `embed`, `memory`, `queue`) never take it either: they rely
 on SQLite for concurrency, so a running server - or a runner that works all
-night - never blocks a `nightshift init`.
+night - never blocks a `nightshift init`. The one exception is the registration
+`nightshift queue add` (and `queue_add`) offers inside an unregistered
+repository: that single write of `config.json` takes the lock by itself, so it
+never races a `nightshift project add`.
 
 ```sh
 nightshift setup                                   # install the runtime and register everything in the host
@@ -518,6 +527,7 @@ the `## Notice` and the token usage.
 nightshift queue add api "fix the flaky worker" --priority 2   # enqueue a job
 nightshift queue add "fix the flaky worker"                    # same, for the project of the current directory
 nightshift queue add fix the flaky worker --run                # enqueue and start the runner on it, detached
+nightshift queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
 nightshift queue status [--limit 10] [--json]                  # the state of the runner, the tail of the queue and the counts
 nightshift queue status 7 [--json]                             # one job, never with its prompt
 nightshift queue run [--job 7] [--max 2] [--dry]               # start the runner detached; --dry only reports
@@ -535,6 +545,14 @@ one whose registered path contains the current directory (`nightshift init` is w
 registers it), and the command says which one it picked. Given, the first word
 is the project only when it is a registered NAME; anything else is already part
 of the prompt, so the words of the request need no quotes.
+
+**No project registered for the current directory.** Inside a git repository, on
+a terminal, the command asks `Register it as <name> in org <org> and queue the
+job?`, with `<name>` derived from the basename of the repository root (`-2`,
+`-3` ... when that name is taken). A yes registers the root and queues the job in
+the same run; a no changes nothing. `--yes` answers the question for a script.
+Without a terminal and without `--yes`, or outside any repository, the command
+fails exactly as it did before and registers nothing.
 
 **Options are read only at the two edges of the command line**, before the first
 word of the request and after the last one. Everything between them is the
@@ -740,6 +758,10 @@ run in parallel and merge in any order.
 nightshift queue add "Self-contained install. Stages: 1) runtime under ~/.nightshift; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."
 ```
 
+Run it from inside the repository the job is about: when that repository is not
+a registered project yet, `queue add` offers to register it (`--yes` accepts the
+offer without asking) and queues the job in the same step.
+
 **There is no `--after`.** A job that waits for another job's pull request is an
 incomplete deliverable: what it lands on main is half a change that nobody can
 review on its own. It also breaks the unattended queue, which claims jobs by
@@ -831,14 +853,20 @@ The eleven MCP tools, with the parameters `nightshift mcp` actually accepts:
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |
 | `pipeline_log` | `slug`, `tier`, `outcome`, `project?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?}]` |
-| `queue_add` | `project`, `prompt`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400) |
+| `queue_add` | `project?`, `prompt`, `cwd?`, `register?`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400) |
 | `queue_status` | `job_id?`, `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_cancel` | `job_id`, `reason?` |
 | `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` |
 
 The five queue tools are the same subsystem as `nightshift queue` (see `## Queue`):
-`queue_add` takes the registered project NAME and never a path, `queue_status`
+`queue_add` takes the registered project NAME and never a path - or, with
+`project` omitted, the absolute `cwd` of the caller, which resolves the project
+that contains it; a `cwd` inside a git repository that is registered nowhere
+answers `{ "needs_registration": true, "cwd", "suggested_name", "org", "hint" }`
+instead of failing, and only a second call carrying `register: true` (after the
+user confirmed it) registers the repository and queues the job. An unattended run
+never registers anything: inside a job the call is refused. `queue_status`
 never returns the prompt of a job and truncates `notice_md` and `result` at 500
 characters and answers with the state of the runner next to the jobs, `queue_run`
 starts the runner detached and answers right away with the path of its log,

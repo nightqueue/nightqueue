@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { UserError } from "./errors.mjs";
 import { requireOrg } from "./orgs.mjs";
 import { NAME_RE, assertName, normalizeName } from "./schema.mjs";
 
 const REMOTE_RE = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^/@]+@)?[^/:]+[/:]([^/]+)\/([^/]+)$/i;
+const NAME_SUGGESTION_LIMIT = 99;
 
 // Resolves a path to the absolute, canonical form used in the config.
 export function normalizePath(p) {
@@ -34,10 +35,16 @@ export function listProjects(config) {
   }));
 }
 
+// Derives the project name from the basename of the path, or null when the basename carries no valid name.
+function deriveNameOrNull(abs) {
+  const derived = normalizeName(basename(abs));
+  return NAME_RE.test(derived) ? derived : null;
+}
+
 // Derives the project name from the basename of the path.
 function deriveName(abs) {
-  const derived = normalizeName(basename(abs));
-  if (!NAME_RE.test(derived)) throw new UserError(`cannot derive a valid project name from ${abs}; pass --name <name>`);
+  const derived = deriveNameOrNull(abs);
+  if (derived === null) throw new UserError(`cannot derive a valid project name from ${abs}; pass --name <name>`);
   return derived;
 }
 
@@ -53,6 +60,40 @@ export function requireGitPath(path) {
 export function gitPathOrNull(path) {
   const abs = normalizePath(path ?? ".");
   return existsSync(join(abs, ".git")) ? abs : null;
+}
+
+// Walks up from a directory to the root of the git repository containing it, answering null when there is none.
+export function gitRootOrNull(path) {
+  let current = normalizePath(path ?? ".");
+  if (!existsSync(current)) return null;
+  for (;;) {
+    if (existsSync(join(current, ".git"))) return current;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+// First project name free in the config for this path: the derived basename, then `-2`, `-3` ...; null when none is valid and free.
+export function suggestName(config, path) {
+  const base = deriveNameOrNull(normalizePath(path));
+  if (base === null) return null;
+  for (let suffix = 1; suffix <= NAME_SUGGESTION_LIMIT; suffix += 1) {
+    const candidate = suffix === 1 ? base : `${base}-${suffix}`;
+    if (config.projects[candidate] === undefined && NAME_RE.test(candidate)) return candidate;
+  }
+  return null;
+}
+
+// Repository the directory belongs to, with the free name and the org it would be registered under; null when the directory is inside no repository.
+export function registrationOffer(config, cwd) {
+  const root = gitRootOrNull(cwd);
+  if (root === null) return null;
+  const name = suggestName(config, root);
+  if (name === null) {
+    throw new UserError(`cannot derive a free project name for ${root}; register it with \`nightshift project add ${root} --name <name>\``);
+  }
+  return { path: root, name, org: config.defaultOrg };
 }
 
 // Registers a git repository as a project of an org.

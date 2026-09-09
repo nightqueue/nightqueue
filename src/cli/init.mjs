@@ -22,6 +22,9 @@ const NEXT_STEPS = [
   'Come back to `nightshift queue status` and review the PRs; a job waiting at the gate is answered with `nightshift queue retry <id> --note "..."`.',
 ];
 
+const REGISTER_STEP =
+  "Run `nightshift init` inside a repository to register it - or just `nightshift queue add` there, it offers to register.";
+
 // Turns the two GitHub CLI flags into the single mode the import understands, refusing the contradictory pair.
 function ghMode(values) {
   if (values.gh === true && values["no-gh"] === true) {
@@ -87,10 +90,11 @@ function printInstalled(ctx, { shortcuts }) {
   ctx.out(SOURCE_HINT);
 }
 
-// Prints what to do with the installation, the block every init closes with whatever else it did.
-function printNextSteps(ctx) {
+// Prints what to do with the installation, with the way to register a repository when this run registered none.
+function printNextSteps(ctx, { registered } = {}) {
+  const steps = registered === true ? NEXT_STEPS : [...NEXT_STEPS, REGISTER_STEP];
   ctx.out("Next steps:");
-  for (const [index, step] of NEXT_STEPS.entries()) ctx.out(`  ${index + 1}. ${step}`);
+  for (const [index, step] of steps.entries()) ctx.out(`  ${index + 1}. ${step}`);
 }
 
 // Installs the host for `nightshift init`: every step the runtime cannot work without stops the command, and the PATH is only written once the shim has proven itself.
@@ -128,6 +132,6 @@ export async function run(argv, ctx) {
   await installForInit(ctx, installOptions(values, USAGE));
   if (path) await registerHere(ctx, { path, name: values.name, org: values.org, mode });
   else ctx.out(`no git repository in ${ctx.cwd ?? "."}; run \`nightshift init <path>\` inside one to register a project`);
-  printNextSteps(ctx);
+  printNextSteps(ctx, { registered: Boolean(path) });
   return 0;
 }

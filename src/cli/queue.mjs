@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSy
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
-import { projectByName, resolveProject } from "../config/projects.mjs";
+import { projectByName, registrationOffer, resolveProject } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import {
   addJob,
@@ -33,12 +33,14 @@ import {
   STOP_TIMEOUT_MS,
   writeRunnerPidfile,
 } from "../queue/pidfile.mjs";
-import { applyRetry } from "../queue/retry.mjs";
+import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { launchDetachedRunner, runCycle, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
+import { saveProject } from "./project.mjs";
+import { confirm } from "./prompt.mjs";
 
 const USAGE = {
-  add: "nightshift queue add [project] <prompt...> [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>]",
+  add: "nightshift queue add [project] <prompt...> [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes]",
   status: "nightshift queue status [id] [--limit <n>] [--json]",
   run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <n>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
@@ -85,16 +87,57 @@ function normalizeWatchArgv(argv) {
   );
 }
 
+// The error `queue add` ends on whenever the current directory resolves to no project and nothing is registered for it.
+function unregisteredError(cwd) {
+  return new UserError(`no project registered for ${cwd}; run \`nightshift init\` here, or pass the project NAME (\`nightshift project list\`)`);
+}
+
+// The question `queue add` asks before it registers the repository of the current directory.
+function registerQuestion(cwd, offer) {
+  return `No project registered for ${cwd}. Register it as \`${offer.name}\` in org \`${offer.org}\` and queue the job? [Y/n] `;
+}
+
+// Tells whether the operator accepted the registration: `--yes` answers for a script, the terminal answers for a person.
+async function wantsRegistration(offer, cwd, values, ctx) {
+  if (values.yes === true) return true;
+  return await confirm({ stdin: ctx.stdin, stdout: ctx.stdout, question: registerQuestion(cwd, offer) });
+}
+
+// Registers the repository of the current directory, taking the configuration lock `queue` never takes for itself.
+async function registerFromCwd(offer, ctx) {
+  const { project } = await withLock(ctx.env, () => saveProject(ctx, { path: offer.path, name: offer.name }));
+  ctx.out(`registered project \`${project.name}\` (${project.path})`);
+  return project;
+}
+
+// Refuses to register a project from inside an unattended run: there is no user there to confirm it.
+function refuseRegistrationInsideJob(cwd, env) {
+  const own = callerJobId(env);
+  if (own === null) return;
+  throw new UserError(
+    `refusing to register ${cwd} from inside job \`${own}\`: an unattended run never registers a project; ` +
+      "pass the registered project NAME (`nightshift project list`), or ask the operator to run `nightshift init` there",
+  );
+}
+
+// Offers to register the repository of the current directory, and answers the project it landed on.
+async function offerRegistration(config, values, ctx) {
+  const cwd = ctx.cwd ?? process.cwd();
+  refuseRegistrationInsideJob(cwd, ctx.env);
+  if (values.yes !== true && !ctx.stdin?.isTTY) throw unregisteredError(cwd);
+  const offer = registrationOffer(config, cwd);
+  if (!offer) throw unregisteredError(cwd);
+  if (!(await wantsRegistration(offer, cwd, values, ctx))) throw unregisteredError(cwd);
+  return await registerFromCwd(offer, ctx);
+}
+
 // Chooses the project of the job: the first positional when it is a registered NAME, otherwise the project of the current directory.
-function resolveTarget(config, positionals, ctx) {
+async function resolveTarget(config, positionals, values, ctx) {
   const named = projectByName(config, positionals[0]);
   if (named) return { project: named, words: positionals.slice(1), fromCwd: false };
-  const cwd = ctx.cwd ?? process.cwd();
-  const resolved = resolveProject(config, { cwd });
-  if (!resolved) {
-    throw new UserError(`no project registered for ${cwd}; run \`nightshift init\` here, or pass the project NAME (\`nightshift project list\`)`);
-  }
-  return { project: resolved, words: positionals, fromCwd: true };
+  const resolved = resolveProject(config, { cwd: ctx.cwd ?? process.cwd() });
+  if (resolved) return { project: resolved, words: positionals, fromCwd: true };
+  return { project: await offerRegistration(config, values, ctx), words: positionals, fromCwd: false };
 }
 
 // Runs the job in the foreground and turns its outcome into the exit code: 0 only when it finished as `done`.
@@ -177,7 +220,8 @@ async function runAdd(argv, ctx) {
   }
   const { values, positionals } = parseAdd(argv);
   checkForegroundNeedsRun(values, USAGE.add);
-  const target = resolveTarget(loadConfig(ctx.env, { warn: ctx.err }), positionals, ctx);
+  if (positionals.join(" ").trim() === "") throw new UserError(`missing argument; usage: ${USAGE.add}`);
+  const target = await resolveTarget(loadConfig(ctx.env, { warn: ctx.err }), positionals, values, ctx);
   const prompt = target.words.join(" ").trim();
   if (!prompt) throw new UserError(`missing argument; usage: ${USAGE.add}`);
   if (target.fromCwd) ctx.out(`project \`${target.project.name}\` resolved from the current directory`);
@@ -201,6 +245,7 @@ const ADD_OPTIONS = {
   timeout: { type: "string" },
   run: { type: "boolean" },
   foreground: { type: "boolean" },
+  yes: { type: "boolean" },
 };
 
 // Tells whether a token is written as an option, the only shape the edges of `queue add` read as one.

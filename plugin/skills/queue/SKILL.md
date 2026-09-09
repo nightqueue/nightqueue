@@ -32,9 +32,10 @@ You turn what the user just asked for into ONE job in the nightshift backlog.
   project, each with its `name` and its `path`.
 - Pick the project whose `path` is the longest prefix of the current working
   directory. That is the same rule the CLI applies.
-- No project matches: stop there and say that the current directory belongs to
-  no registered project, and that `nightshift project add <path>` registers it.
-  Do not queue the job against another project.
+- No project matches: ask the user `Register <cwd> as <name> and queue the job?`,
+  with `<name>` the basename of the repository root. On yes, call `queue_add`
+  with `cwd` (absolute) and `register: true`. On no, stop and queue nothing.
+  One question, never more. Do not queue the job against another project.
 
 ## 3. Write the prompt
 
@@ -48,10 +49,11 @@ runs unattended, with no access to this conversation:
 
 ## 4. Call `queue_add`
 
-- `project` is the registered NAME of the project, never a path.
+- `project` is the registered NAME of the project, never a path. It is replaced
+  by `cwd` (absolute) when no project is registered for the current directory.
 - `prompt` is the text of step 3.
-- There is no `run` parameter, and there is nothing to ask for: recording the
-  job is all this tool does.
+- There is no `run` parameter: recording the job is all this tool does.
+- `register: true` is only ever sent after the user answered yes in step 2.
 - Never start the job. Only when the user explicitly asks for that one job now
   do you call `queue_run` with its `job_id`; otherwise the whole batch is
   started by the user, later, with `nightshift queue run`.

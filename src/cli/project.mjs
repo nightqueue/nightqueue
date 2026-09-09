@@ -3,16 +3,22 @@ import { addProject, listProjects, moveProject, removeProject } from "../config/
 import { loadConfig } from "../config/store.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
-// Registers a git repository as a project of an org, reports what happened and returns the entry it landed on.
-export function registerProject(ctx, { path, name, org } = {}) {
+// Registers a git repository as a project of an org and answers what happened, printing nothing.
+export function saveProject(ctx, { path, name, org } = {}) {
   const config = loadConfig(ctx.env, { warn: ctx.err });
   const result = addProject(config, { path, name, org });
+  if (result.status === "created") ctx.saveConfig(result.config, ctx.env);
+  return result;
+}
+
+// Registers a git repository as a project of an org, reports what happened and returns the entry it landed on.
+export function registerProject(ctx, { path, name, org } = {}) {
+  const result = saveProject(ctx, { path, name, org });
   const project = result.project;
   if (result.status === "unchanged") {
     ctx.out(`project \`${project.name}\` already registered -> ${project.path} (org \`${project.org}\`)`);
     return project;
   }
-  ctx.saveConfig(result.config, ctx.env);
   ctx.out(`registered project \`${project.name}\` -> ${project.path} (org \`${project.org}\`)`);
   return project;
 }

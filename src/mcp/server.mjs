@@ -1,9 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { isAbsolute } from "node:path";
 import { z } from "zod";
+import { saveProject } from "../cli/project.mjs";
 import { UserError } from "../config/errors.mjs";
-import { projectByName } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
+import { withLock } from "../config/lock.mjs";
+import { projectByName, registrationOffer, resolveProject } from "../config/projects.mjs";
+import { loadConfig, saveConfig } from "../config/store.mjs";
 import { saveLessonDeduped } from "../memory/dedup.mjs";
 import { recallProjectIndex, saveProjectIndex } from "../memory/index.mjs";
 import {
@@ -22,7 +25,7 @@ import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
 import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
 import { runnerPidfileState, runnerView } from "../queue/pidfile.mjs";
-import { applyRetry } from "../queue/retry.mjs";
+import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { launchDetachedRunner } from "../queue/runner.mjs";
 import {
   logPipelineRun,
@@ -67,6 +70,64 @@ function requireProjectName(name, env) {
   throw new UserError(
     `unknown project \`${name}\`: pass the registered project NAME, not a path; list them with \`nightshift project list\``,
   );
+}
+
+// Refuses to register a project from inside an unattended run: there is no user there to confirm it.
+function refuseRegistrationInsideJob(cwd, env) {
+  const own = callerJobId(env);
+  if (own === null) return;
+  throw new UserError(
+    `refusing to register ${cwd} from inside job \`${own}\`: an unattended run never registers a project; ` +
+      "ask the operator to run `nightshift init` there",
+  );
+}
+
+// Requires the absolute working directory of the caller, because the directory of this server is never the user's.
+function requireCwd(cwd) {
+  const path = typeof cwd === "string" ? cwd.trim() : "";
+  if (path === "" || !isAbsolute(path)) {
+    throw new UserError(
+      "pass the registered project NAME in `project`, or the absolute path of the working directory in `cwd`",
+    );
+  }
+  return path;
+}
+
+// Project the job goes to, or the offer to register the directory of the caller when nothing is registered for it.
+function resolveQueueTarget({ project, cwd }, env) {
+  if (typeof project === "string" && project.trim() !== "") return { project: requireProjectName(project, env) };
+  const path = requireCwd(cwd);
+  const config = loadConfig(env, { warn: () => {} });
+  const resolved = resolveProject(config, { cwd: path });
+  if (resolved) return { project: resolved.name };
+  refuseRegistrationInsideJob(path, env);
+  const offer = registrationOffer(config, path);
+  if (!offer) {
+    throw new UserError(
+      `no project registered for ${path}, and it is not inside a git repository; pass the registered project NAME (\`nightshift project list\`)`,
+    );
+  }
+  return { cwd: path, offer };
+}
+
+// The answer that asks the agent to confirm the registration with the user, without queueing anything.
+function needsRegistration({ cwd, offer }) {
+  return {
+    needs_registration: true,
+    cwd,
+    suggested_name: offer.name,
+    org: offer.org,
+    hint:
+      `no project is registered for \`${cwd}\`; ask the user to confirm registering it as \`${offer.name}\` in org ` +
+      `\`${offer.org}\`, then call queue_add again with the same \`cwd\` and \`register: true\`. Nothing was queued.`,
+  };
+}
+
+// Registers the repository the offer names, taking the configuration lock this server never takes for itself.
+async function registerOffer(offer, env) {
+  const ctx = { env, out: () => {}, err: () => {}, saveConfig };
+  const { project } = await withLock(env, () => saveProject(ctx, { path: offer.path, name: offer.name }));
+  return project;
 }
 
 // Clamps the size of a job listing into the accepted window.
@@ -239,9 +300,20 @@ function toolDefinitions(env) {
       config: {
         description:
           "Enqueues an unattended /nightshift:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
-          "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now.",
+          "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. " +
+          "With `project` omitted, `cwd` (the absolute working directory of the caller) resolves the project. When no project is registered for it, the answer is `needs_registration`: ask the user to confirm, then call again with the same `cwd` and `register: true`. Registration never happens without `register: true`.",
         inputSchema: {
-          project: z.string(),
+          project: z.string().nullable().optional(),
+          cwd: z
+            .string()
+            .nullable()
+            .optional()
+            .describe("Absolute path of the working directory of the caller, used to resolve the project when `project` is omitted."),
+          register: z
+            .boolean()
+            .nullable()
+            .optional()
+            .describe("Registers the git repository of `cwd` as a project before queueing. Only ever sent after the user confirmed it."),
           prompt: z
             .string()
             .describe(
@@ -253,9 +325,12 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
+        const target = resolveQueueTarget(args, env);
+        if (target.offer && args.register !== true) return needsRegistration(target);
+        const registered = target.offer ? await registerOffer(target.offer, env) : null;
         const job = addJob(
           {
-            project: requireProjectName(args.project, env),
+            project: registered?.name ?? target.project,
             prompt: args.prompt,
             priority: args.priority,
             maxAttempts: args.max_attempts,
@@ -264,13 +339,14 @@ function toolDefinitions(env) {
           env,
         );
         const pending = countsByStatus(env).pending;
+        const done = registered ? `registered project \`${registered.name}\` (${registered.path}). ` : "";
         return {
           ok: true,
           id: job.id,
           project: job.project,
           priority: job.priority,
           timeoutS: job.timeoutS,
-          hint: `queued job #${job.id} for \`${job.project}\` (${pending} pending). Start the batch with queue_run when you are ready.`,
+          hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending). Start the batch with queue_run when you are ready.`,
         };
       },
     },

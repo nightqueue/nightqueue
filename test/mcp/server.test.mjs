@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -269,6 +269,18 @@ test("the running server does not hold the configuration lock of the home", asyn
   assert.match(result.stdout, /registered project `locked`/);
 });
 
+// A directory that looks like a git repository, without calling git.
+function makeRepo(t, name) {
+  const dir = makeDir(t, name);
+  mkdirSync(join(dir, ".git"), { recursive: true });
+  return dir;
+}
+
+// Parsed config.json of a home.
+function readConfig(env) {
+  return JSON.parse(readFileSync(join(homeDir(env), "config.json"), "utf8"));
+}
+
 // A home whose queue is paused, so a detached runner started by a test never claims anything.
 function makeQueueHome(t, name) {
   const env = makeHome(t, name);
@@ -297,7 +309,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
   assert.equal(second.hint, "queued job #2 for `alpha` (2 pending). Start the batch with queue_run when you are ready.");
 
   const add = (await client.listTools()).tools.find((tool) => tool.name === "queue_add");
-  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["max_attempts", "priority", "project", "prompt", "timeout_s"]);
+  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "max_attempts", "priority", "project", "prompt", "register", "timeout_s"]);
   assert.ok(add.description.includes("start the whole batch later with `queue_run`"), add.description);
 
   const byPath = await client.callTool({ name: "queue_add", arguments: { project: "/tmp/alpha", prompt: "fix the worker" } });
@@ -311,6 +323,63 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
   const outOfRange = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix it", priority: 42 } });
   assert.equal(outOfRange.isError, true);
   assert.doesNotMatch(textOf(outOfRange), /\.mjs:\d+/);
+});
+
+test("queue_add resolves the project of the caller `cwd`, and answers needs_registration for a repository nobody registered", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-add-cwd");
+  const registered = readConfig(env).projects.alpha.path;
+  const repo = makeRepo(t, "mcp-queue-add-repo");
+  const client = await connect(t, env);
+
+  const known = payloadOf(await client.callTool({ name: "queue_add", arguments: { cwd: registered, prompt: "fix the worker" } }));
+  assert.equal(known.project, "alpha");
+  assert.equal(known.id, 1);
+
+  const offered = payloadOf(await client.callTool({ name: "queue_add", arguments: { cwd: repo, prompt: "fix the parser" } }));
+  assert.deepEqual(Object.keys(offered).sort(), ["cwd", "hint", "needs_registration", "org", "suggested_name"]);
+  assert.equal(offered.needs_registration, true);
+  assert.equal(offered.cwd, repo);
+  assert.equal(offered.org, "default");
+  assert.ok(offered.hint.includes("call queue_add again with the same `cwd` and `register: true`"), offered.hint);
+  assert.equal(getJob(2, env), null, "the offer queued a job");
+  assert.equal(readConfig(env).projects[offered.suggested_name], undefined, "the offer registered the repository");
+
+  const missing = await client.callTool({ name: "queue_add", arguments: { prompt: "fix the worker" } });
+  assert.equal(missing.isError, true);
+  assert.match(textOf(missing), /pass the registered project NAME in `project`, or the absolute path of the working directory in `cwd`/);
+
+  const relative = await client.callTool({ name: "queue_add", arguments: { cwd: "./somewhere", prompt: "fix the worker" } });
+  assert.equal(relative.isError, true);
+  assert.match(textOf(relative), /absolute path of the working directory in `cwd`/);
+
+  const outside = await client.callTool({ name: "queue_add", arguments: { cwd: makeDir(t, "mcp-queue-add-bare"), prompt: "fix it", register: true } });
+  assert.equal(outside.isError, true);
+  assert.match(textOf(outside), /it is not inside a git repository/);
+});
+
+test("queue_add registers the repository of the `cwd` only with register: true, and never from inside a job", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-add-register");
+  const repo = makeRepo(t, "mcp-queue-register-repo");
+  const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "7" });
+
+  const refused = await inJob.callTool({ name: "queue_add", arguments: { cwd: repo, prompt: "fix the worker", register: true } });
+  assert.equal(refused.isError, true);
+  assert.match(textOf(refused), /refusing to register .* from inside job `7`: an unattended run never registers a project/);
+  assert.equal(getJob(1, env), null, "an unattended run queued a job through the registration branch");
+  assert.deepEqual(Object.keys(readConfig(env).projects), ["alpha"], "an unattended run registered a project");
+
+  const client = await connect(t, env);
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { cwd: repo, prompt: "fix the worker", register: true } }));
+  const name = queued.project;
+  const entry = readConfig(env).projects[name];
+  assert.ok(entry, `\`${name}\` is missing from the config`);
+  assert.equal(entry.org, "default");
+  assert.equal(getJob(queued.id, env).prompt, "fix the worker");
+  assert.ok(queued.hint.startsWith(`registered project \`${name}\` (${entry.path}). queued job #${queued.id}`), queued.hint);
+
+  const again = payloadOf(await client.callTool({ name: "queue_add", arguments: { cwd: repo, prompt: "fix the parser" } }));
+  assert.equal(again.project, name, "the registered repository was offered for registration again");
+  assert.equal(again.needs_registration, undefined);
 });
 
 test("queue_status never returns the prompt and truncates the free text at five hundred code points", async (t) => {

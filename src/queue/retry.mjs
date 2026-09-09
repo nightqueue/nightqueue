@@ -3,7 +3,7 @@ import { getJob, retryJob } from "../memory/jobs.mjs";
 import { discardRunDir } from "./resume.mjs";
 
 // Job this process is running inside, when the queue spawned it; null in a session of the operator.
-function callerJobId(env) {
+export function callerJobId(env) {
   const raw = typeof env?.NIGHTSHIFT_JOB_ID === "string" ? env.NIGHTSHIFT_JOB_ID.trim() : "";
   return /^[1-9]\d*$/.test(raw) ? Number(raw) : null;
 }

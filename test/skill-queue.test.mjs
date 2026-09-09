@@ -31,10 +31,13 @@ test("the queue skill carries the three cutting rules of a job", () => {
   );
 });
 
-test("the queue skill resolves the project by the longest registered path prefix, and stops when none matches", () => {
+test("the queue skill resolves the project by the longest registered path prefix, and offers to register when none matches", () => {
   assert.ok(SKILL.includes("nightshift project list --json"), SKILL);
   assert.ok(SKILL.includes("longest prefix of the current working"), SKILL);
-  assert.ok(SKILL.includes("nightshift project add <path>"), SKILL);
+  assert.ok(SKILL.includes("Register <cwd> as <name> and queue the job?"), SKILL);
+  assert.ok(SKILL.includes("`register: true`"), SKILL);
+  assert.ok(SKILL.includes("One question, never more."), SKILL);
+  assert.equal(SKILL.includes("nightshift project add <path>"), false, "the skill still sends the user to `project add`");
 });
 
 test("the queue skill only records the job, never starts it, and knows `queue_add` has no `run` parameter", () => {
