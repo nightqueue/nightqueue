@@ -99,7 +99,7 @@ One command installs everything; the rest is the daily flow, from anywhere, on a
 machine that has nothing installed yet:
 
 ```sh
-npx nightshift init                                    # install the runtime and set the host up
+npx @maykonv/nightshift init                           # install the runtime and set the host up
 # then open a new terminal, or source your rc file, so `nightshift` resolves
 nightshift doctor                                      # check the host and the home
 nightshift queue add "fix the flaky worker"            # queue one deliverable
@@ -117,13 +117,14 @@ the request and starts the runner on that job right away, instead of leaving it
 in the backlog, and `nightshift queue log <id> --follow` watches that run as it
 happens.
 
-`npx nightshift init` is the whole installation. It puts the package in
-`~/.nightshift/runtime`, writes the shims `~/.nightshift/bin/nightshift`,
+`npx @maykonv/nightshift init` is the whole installation. It puts the package
+in `~/.nightshift/runtime`, writes the shims `~/.nightshift/bin/nightshift`,
 `nshift` and `nsft` (`--no-shortcuts` writes only `nightshift`), offers to
 put that directory on your PATH, registers the MCP server, the hooks and the
 plugin **against the runtime**, and offers the semantic recall. Nothing depends
 on where the command ran from: the npx cache and a development checkout both
-converge on the same `~/.nightshift/runtime`.
+converge on the same `~/.nightshift/runtime`. The npm package is scoped,
+`@maykonv/nightshift`; the command it installs is still `nightshift`.
 
 Outside a repository it stops right there and says so. Inside one, it also
 registers that repository as a project and offers to import the token of the
@@ -200,7 +201,8 @@ Restart Claude Code and the pipeline answers as `/nightshift:resolve`. To check
 the result of all of it at any point, run `nightshift doctor`.
 
 **The manual flow**, still supported one step at a time, on top of a global
-install (`npm install -g nightshift`) or a clone (`npm install` plus `npm link`):
+install (`npm install -g @maykonv/nightshift`) or a clone (`npm install` plus
+`npm link`):
 
 ```sh
 nightshift setup                                   # install the runtime and register everything in the host
@@ -219,7 +221,7 @@ echo "$GITHUB_TOKEN" | nightshift connection add gh --type github
    block marked `# nightshift` in `~/.zshrc`, `~/.bashrc` or
    `~/.config/fish/config.fish`.
 4. the MCP server `nightshift` at **user** scope, started as
-   `node $NIGHTSHIFT_HOME/runtime/node_modules/nightshift/bin/nightshift.mjs mcp`.
+   `node $NIGHTSHIFT_HOME/runtime/node_modules/@maykonv/nightshift/bin/nightshift.mjs mcp`.
 5. the same server in the configuration of the Claude Desktop app
    (`claude_desktop_config.json`), when that app is installed - an app that is
    not installed is a `skipped` step and never a directory this CLI creates.

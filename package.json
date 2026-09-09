@@ -1,5 +1,5 @@
 {
-  "name": "nightshift",
+  "name": "@maykonv/nightshift",
   "version": "0.1.0",
   "description": "Autonomous queue of coding agents with its own memory. Ships the Claude Code plugin and the nightshift configuration CLI.",
   "license": "BUSL-1.1",

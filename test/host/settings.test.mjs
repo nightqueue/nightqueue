@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { RUNTIME_PACKAGE_TRAIL } from "../../src/config/paths.mjs";
 import { hostPackageRoot } from "../../src/host/paths.mjs";
 import {
   desiredHooks,
@@ -141,7 +142,7 @@ test("a runtime path without a space is silent, and so is a root nobody passed",
 
 test("the hooks of the host point at the runtime of the home, never at the checkout that ran the setup", () => {
   assert.equal(SESSION_START.command.includes(hostPackageRoot(ENV)), true, SESSION_START.command);
-  assert.match(SESSION_START.command, /runtime\/node_modules\/nightshift\/bin\/nightshift\.mjs hook session-start$/);
+  assert.ok(SESSION_START.command.endsWith(`${RUNTIME_PACKAGE_TRAIL}/bin/nightshift.mjs hook session-start`), SESSION_START.command);
 });
 
 test("an event holding something that is not an array is rebuilt without touching the others", () => {

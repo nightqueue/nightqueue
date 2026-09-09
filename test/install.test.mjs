@@ -251,7 +251,7 @@ test("update reinstalls the runtime, re-points a host left on another path and k
   const specs = specsInto(host, host.runtimeDir);
   assert.equal(specs.length, 2);
   assert.equal(specs[0].endsWith(".tgz"), true, "the setup installed from the registry instead of packing this package");
-  assert.equal(specs[1], "nightshift@latest", "update is the only command allowed to fall back to the registry");
+  assert.equal(specs[1], "@maykonv/nightshift@latest", "update is the only command allowed to fall back to the registry");
   assert.equal(packedDirs(host).length, 1, "update packed this package instead of asking the registry");
   assert.equal(
     readSettingsFile(host.configDir).hooks.SessionStart[0].hooks[0].command,
@@ -272,7 +272,7 @@ test("update <version> asks the registry for that exact version and the runtime 
 
   const { ctx, out } = makeCtx(host.env);
   assert.equal(await run(["update", "0.2.0"], ctx), 0);
-  assert.equal(specsInto(host, host.runtimeDir).at(-1), "nightshift@0.2.0");
+  assert.equal(specsInto(host, host.runtimeDir).at(-1), "@maykonv/nightshift@0.2.0");
   assert.ok(out.includes(`runtime: updated (v${VERSION} -> v0.2.0 at ${host.runtimeDir})`), out.join("\n"));
 });
 
@@ -370,5 +370,5 @@ test("an update whose runtime npm could not reinstall exits 1 and prints the com
 
   assert.equal(await run(["update"], ctx), 1);
   assert.ok(out.some((line) => line.startsWith("runtime: failed")), out.join("\n"));
-  assert.ok(err.some((line) => line.includes("nightshift@latest")), err.join("\n"));
+  assert.ok(err.some((line) => line.includes("@maykonv/nightshift@latest")), err.join("\n"));
 });

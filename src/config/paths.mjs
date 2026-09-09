@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Resolves the configuration home, reading the environment on every call.
 export function homeDir(env = process.env) {
@@ -32,8 +34,25 @@ export function runtimeDir(env = process.env) {
   return join(homeDir(env), "runtime");
 }
 
+// Name this package declares to npm, read once because it is the identity the installed layout is built from.
+function declaredPackageName() {
+  const path = fileURLToPath(new URL("../../package.json", import.meta.url));
+  let name;
+  try {
+    name = JSON.parse(readFileSync(path, "utf8"))?.name;
+  } catch (err) {
+    throw new Error(
+      `cannot read ${path}: ${err?.message ?? String(err)}; this installation of nightshift is incomplete, reinstall it with \`npm i -g @maykonv/nightshift\``,
+    );
+  }
+  if (typeof name !== "string" || !name.trim()) throw new Error(`${path} declares no name; this installation of nightshift is incomplete, reinstall it`);
+  return name.trim();
+}
+
+export const PACKAGE_NAME = declaredPackageName();
+
 // Trail from the configuration home down to the installed package, the layout every shim this package writes points into.
-export const RUNTIME_PACKAGE_TRAIL = "runtime/node_modules/nightshift";
+export const RUNTIME_PACKAGE_TRAIL = `runtime/node_modules/${PACKAGE_NAME}`;
 
 // Directory of the package inside the runtime prefix, the stable root the host is registered against.
 export function runtimePackageDir(env = process.env) {

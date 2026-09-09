@@ -85,12 +85,20 @@ function installEmbedding(prefix, version) {
   );
 }
 
-// Materializes the package inside the prefix, with a bin that runs the CLI of the source checkout.
+// Name one checkout declares, the identity the real npm builds the installed layout from.
+function packageNameAt(dir) {
+  const name = readJson(join(dir, "package.json")).name;
+  if (typeof name !== "string" || !name) fail(`${dir} declares no package name; refusing to install anything`, 2);
+  return name;
+}
+
+// Materializes the package inside the prefix, nesting the scope the way npm does, with a bin that runs the CLI of the source checkout.
 function installNightshift(prefix, version) {
   const source = sourceRoot();
-  const dir = join(prefix, "node_modules", "nightshift");
+  const name = packageNameAt(source);
+  const dir = join(prefix, "node_modules", ...name.split("/"));
   writeJson(join(dir, "package.json"), {
-    name: "nightshift",
+    name,
     version,
     bin: { nightshift: "./bin/nightshift.mjs" },
   });
@@ -119,6 +127,11 @@ function runInstall(rest) {
   return installNightshift(prefix, version);
 }
 
+// Tarball name npm writes for one package: the scope flattened into the file name, never a directory of its own.
+function tarballName(name, version) {
+  return `${name.replace(/^@/, "").replaceAll("/", "-")}-${version}.tgz`;
+}
+
 // Emulates `npm pack --json --pack-destination <dir> <target>`, writing the stand-in tarball the install call reads back.
 function runPack(rest) {
   const destDir = optionValue("--pack-destination");
@@ -127,7 +140,7 @@ function runPack(rest) {
   const manifest = readJson(join(dir, "package.json"));
   const name = manifest.name ?? "package";
   const version = manifest.version ?? "0.0.0";
-  const filename = `${name}-${version}.tgz`;
+  const filename = tarballName(name, version);
   writeJson(join(destDir, filename), { name, version, root: dir });
   process.stdout.write(`${JSON.stringify([{ id: `${name}@${version}`, name, version, filename }])}\n`);
 }

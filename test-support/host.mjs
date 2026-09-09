@@ -2,6 +2,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSy
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runtimePackageDir } from "../src/config/paths.mjs";
 import { closeDb } from "../src/memory/db.mjs";
 import { makeDir } from "./memory.mjs";
 
@@ -112,7 +113,7 @@ export function makeHostEnv(t, name, { exitCode } = {}) {
   env.NIGHTSHIFT_EMBED_DISABLED = "1";
   if (exitCode) env.NIGHTSHIFT_FAKE_CLAUDE_EXIT = String(exitCode);
   t.after(() => closeDb(env));
-  const runtimePackage = join(env.NIGHTSHIFT_HOME, "runtime", "node_modules", "nightshift");
+  const runtimePackage = runtimePackageDir(env);
   return {
     env,
     home: env.NIGHTSHIFT_HOME,

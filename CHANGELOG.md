@@ -31,5 +31,6 @@ First public release.
   published version only behind `--check-updates`.
 - Orgs, projects and connections: named scopes for the memory and for the queue,
   with the secrets kept in a file only the owner can read.
+- Published to npm as `@maykonv/nightshift`; the command it installs is `nightshift`.
 
 [0.1.0]: https://github.com/maykonVinicius/nightshift/releases/tag/v0.1.0

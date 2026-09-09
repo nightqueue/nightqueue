@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { legacyShimPath, runtimePackageDir, shimPath } from "../../src/config/paths.mjs";
+import { RUNTIME_PACKAGE_TRAIL, legacyShimPath, runtimePackageDir, shimPath } from "../../src/config/paths.mjs";
 import { hostPackageRoot } from "../../src/host/paths.mjs";
 import {
   legacyShimState,
@@ -59,9 +59,9 @@ test("a runtime whose package.json is broken reads as absent instead of throwing
 });
 
 test("the registry specifier names the package and the version asked for, defaulting to the newest one", () => {
-  assert.equal(registrySpec("1.2.3"), "nightshift@1.2.3");
-  assert.equal(registrySpec(), "nightshift@latest");
-  assert.equal(registrySpec(""), "nightshift@latest");
+  assert.equal(registrySpec("1.2.3"), "@maykonv/nightshift@1.2.3");
+  assert.equal(registrySpec(), "@maykonv/nightshift@latest");
+  assert.equal(registrySpec(""), "@maykonv/nightshift@latest");
 });
 
 test("the shim is executable, points at the runtime and survives a space in the path", (t) => {
@@ -142,7 +142,7 @@ test("the shim of the previous command name is removed by its shape, and a file 
   assert.equal(removeLegacyShim(env).status, "not present");
 
   mkdirSync(join(env.NIGHTSHIFT_HOME, "bin"), { recursive: true });
-  writeFileSync(path, '#!/bin/sh\nexec node "/some/old/home/runtime/node_modules/nightshift/bin/shift.mjs" "$@"\n');
+  writeFileSync(path, `#!/bin/sh\nexec node "/some/old/home/${RUNTIME_PACKAGE_TRAIL}/bin/shift.mjs" "$@"\n`);
   assert.deepEqual(legacyShimState(env), { path, present: true, own: true });
   assert.equal(removeLegacyShim(env).status, "removed");
   assert.equal(existsSync(path), false);

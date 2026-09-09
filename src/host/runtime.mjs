@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  PACKAGE_NAME,
   RUNTIME_PACKAGE_TRAIL,
   SHIM_NAME,
   legacyShimPath,
@@ -11,13 +12,16 @@ import {
 import { modeOf, writeFileAtomic } from "../config/store.mjs";
 import { hostPackageRoot, packageRoot } from "./paths.mjs";
 
-export const PACKAGE_NAME = "nightshift";
-
 const SHIM_MODE = 0o755;
+
+// Escapes the characters of one path fragment a regular expression would read as syntax.
+function escapeForRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 // Shape every shim this package ever wrote has: the CLI of a runtime prefix under some configuration home, the only proof that a file under the previous name is ours to delete.
 const SHIM_SHAPE = new RegExp(
-  `^#!/bin/sh\\nexec node "/.+/${RUNTIME_PACKAGE_TRAIL}/bin/(?:nightshift|shift)\\.mjs" "\\$@"\\n$`,
+  `^#!/bin/sh\\nexec node "/.+/${escapeForRegExp(RUNTIME_PACKAGE_TRAIL)}/bin/(?:nightshift|shift)\\.mjs" "\\$@"\\n$`,
 );
 
 // Version declared by one package.json, or null when the file is missing or unreadable.

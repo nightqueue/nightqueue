@@ -25,10 +25,17 @@ function manifestVersion(text) {
   return version;
 }
 
+// Name the manifest declares, which is the identity npm has to publish and the one the installed layout is built from.
+function manifestName(text) {
+  const name = JSON.parse(text)?.name;
+  if (typeof name !== "string" || !name) throw new Error("package.json declares no name");
+  return name;
+}
+
 // Tarball one `npm pack --dry-run --json` call described, as a declared failure when the output is not the array npm documents.
 function packedTarball(stdout) {
   const entry = JSON.parse(stdout)?.[0];
-  if (!entry?.filename || !Number.isFinite(entry?.unpackedSize)) throw new Error("npm pack printed no tarball description");
+  if (!entry?.name || !entry?.filename || !Number.isFinite(entry?.unpackedSize)) throw new Error("npm pack printed no tarball description");
   return entry;
 }
 
@@ -52,8 +59,10 @@ function checkPack() {
   if (!result.ok) throw new Error(`${result.stderr.trim() || `exit ${result.status}`}\nrun \`${npmCommandLine(PACK_ARGS)}\` by hand`);
   const corrected = result.stderr.split("\n").filter((line) => /auto-corrected|was invalid and removed/i.test(line));
   if (corrected.length) throw new Error(`npm would correct package.json at publish time:\n${corrected.join("\n")}\nrun \`npm pkg fix\`, review the diff and commit it`);
-  const { filename, unpackedSize } = packedTarball(result.stdout);
-  return `${filename}, ${unpackedSize} bytes unpacked`;
+  const { name, filename, unpackedSize } = packedTarball(result.stdout);
+  const declared = manifestName(readRootFile("package.json"));
+  if (name !== declared) throw new Error(`npm would publish ${name}, package.json declares ${declared}`);
+  return `${name}, ${filename}, ${unpackedSize} bytes unpacked`;
 }
 
 // Runs the release checklist, printing one line per check and exiting 1 on the first thing that would make a bad publish.
