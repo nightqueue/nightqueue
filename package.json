@@ -5,17 +5,46 @@
   "license": "BUSL-1.1",
   "private": false,
   "homepage": "https://github.com/maykonVinicius/nightshift#readme",
-  "repository": { "type": "git", "url": "git+https://github.com/maykonVinicius/nightshift.git" },
-  "bugs": { "url": "https://github.com/maykonVinicius/nightshift/issues" },
-  "keywords": ["claude-code", "claude", "mcp", "agent", "queue", "memory", "cli", "plugin", "automation"],
-  "bin": { "nightshift": "./bin/nightshift.mjs" },
-  "files": [".claude-plugin", "bin", "plugin", "src", "README.md", "LICENSE", "CHANGELOG.md"],
-  "publishConfig": { "access": "public" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maykonVinicius/nightshift.git"
+  },
+  "bugs": {
+    "url": "https://github.com/maykonVinicius/nightshift/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "mcp",
+    "agent",
+    "queue",
+    "memory",
+    "cli",
+    "plugin",
+    "automation"
+  ],
+  "bin": {
+    "nightshift": "bin/nightshift.mjs"
+  },
+  "files": [
+    ".claude-plugin",
+    "bin",
+    "plugin",
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "node --test --disable-warning=ExperimentalWarning",
     "release:check": "npm test && node scripts/release-check.mjs"
   },
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^4.5.4"

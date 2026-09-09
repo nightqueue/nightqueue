@@ -44,10 +44,14 @@ function checkVersions() {
   return manifest;
 }
 
-// Checks that npm can still build the tarball, and returns its name and its unpacked size.
+// Checks that npm can still build the tarball without correcting the manifest, and returns its name and its unpacked size.
+// A "was invalid and removed" warning means npm publishes a manifest that differs from the one in the repository -
+// for `bin` that ships a package with no command at all - so any such warning fails the check.
 function checkPack() {
   const result = runNpm(PACK_ARGS, { env: process.env });
   if (!result.ok) throw new Error(`${result.stderr.trim() || `exit ${result.status}`}\nrun \`${npmCommandLine(PACK_ARGS)}\` by hand`);
+  const corrected = result.stderr.split("\n").filter((line) => /auto-corrected|was invalid and removed/i.test(line));
+  if (corrected.length) throw new Error(`npm would correct package.json at publish time:\n${corrected.join("\n")}\nrun \`npm pkg fix\`, review the diff and commit it`);
   const { filename, unpackedSize } = packedTarball(result.stdout);
   return `${filename}, ${unpackedSize} bytes unpacked`;
 }
