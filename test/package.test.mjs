@@ -61,6 +61,7 @@ test("the tarball carries the CLI, the plugin and the manifest, and no test at a
     ".claude-plugin/marketplace.json",
     "plugin/.claude-plugin/plugin.json",
     "plugin/skills/resolve/SKILL.md",
+    "plugin/skills/queue/SKILL.md",
   ]) {
     assert.ok(tarball.files.includes(expected), `${expected} is missing from the tarball`);
   }

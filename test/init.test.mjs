@@ -307,6 +307,30 @@ test("a skipped PATH step is never sold as written", async (t) => {
   assert.equal(out.some((line) => line.startsWith("Open a new terminal")), false, out.join("\n"));
 });
 
+const NEXT_STEPS = [
+  "Next steps:",
+  '  1. In Claude Code (any project registered with `nightshift project add`), plan as usual, then say "queue this for tonight" or run /nightshift:queue.',
+  '  2. When you leave, say "run the queue" or run `nightshift queue run` - every queued job runs unattended and opens a pull request.',
+  '  3. Come back to `nightshift queue status` and review the PRs; a job waiting at the gate is answered with `nightshift queue retry <id> --note "..."`.',
+];
+
+test("init closes with the next steps, with no PATH block written and outside a repository too", async (t) => {
+  const bare = makeHostEnv(t, "init-next-steps-bare");
+  const outside = makeCtx(bare.env, { cwd: makeDir(t, "init-next-steps-bare-cwd") });
+
+  assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh"], outside.ctx), 0);
+  assert.equal(existsSync(bare.rcPath), false, "the run under test wrote the PATH block after all");
+  assert.equal(outside.out.some((line) => line.startsWith("no git repository in")), true, outside.out.join("\n"));
+  assert.deepEqual(outside.out.slice(-NEXT_STEPS.length), NEXT_STEPS, outside.out.join("\n"));
+
+  const host = makeHostEnv(t, "init-next-steps-repo");
+  const inside = makeCtx(host.env, { cwd: makeRepo(t, "init-next-steps-repo-cwd") });
+
+  assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], inside.ctx), 0);
+  assert.equal(readFileSync(host.rcPath, "utf8").includes(pathBlock(host.env)), true);
+  assert.deepEqual(inside.out.slice(-NEXT_STEPS.length), NEXT_STEPS, inside.out.join("\n"));
+});
+
 test("init packs this package, installs the tarball and leaves a host the doctor passes", async (t) => {
   const host = makeHostEnv(t, "init-e2e");
   assertIsolatedEnv(host.env);

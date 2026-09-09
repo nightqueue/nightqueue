@@ -302,7 +302,15 @@ test("the queue jobs check counts the jobs whose runner died, and only once the 
 test("--json is the only thing on stdout of the real process, and the exit code follows the report", (t) => {
   const home = join(makeDir(t, "doctor-stdout"), "home");
   const configDir = makeDir(t, "doctor-stdout-config");
-  const env = { ...process.env, NIGHTSHIFT_HOME: home, CLAUDE_CONFIG_DIR: configDir, PATH: "" };
+  const userHome = makeDir(t, "doctor-stdout-user-home");
+  const env = {
+    ...process.env,
+    HOME: userHome,
+    APPDATA: join(userHome, "AppData", "Roaming"),
+    NIGHTSHIFT_HOME: home,
+    CLAUDE_CONFIG_DIR: configDir,
+    PATH: "",
+  };
   delete env.NIGHTSHIFT_CLAUDE_BIN;
 
   const json = spawnSync(process.execPath, [CLI, "doctor", "--json"], { env, encoding: "utf8" });

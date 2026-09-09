@@ -1,5 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { modeOf, writeFileAtomic } from "../config/store.mjs";
+import { backupPath, modeOf, writeFileAtomic } from "../config/store.mjs";
 import { readJsonStrict } from "./json.mjs";
 import { claudeConfigDir, claudeSettingsPath, cliEntryPath } from "./paths.mjs";
 
@@ -114,11 +114,6 @@ export function hookStatus(data, env = process.env) {
     const [own] = ownEntries(eventGroups(data, hook.event));
     return { event: hook.event, expected: hook.command, current: own ? own.entry.command : null };
   });
-}
-
-// Timestamped name of the backup taken before the first write of a run.
-function backupPath(path) {
-  return `${path}.bak-${new Date().toISOString().replace(/[-:.]/g, "")}`;
 }
 
 // Writes the settings back, keeping a backup and the permission bits the user had set on the file.

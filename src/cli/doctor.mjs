@@ -13,6 +13,7 @@ import {
 import { listProjects } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { claudeBin } from "../host/claude.mjs";
+import { DESKTOP_LABEL, desktopState } from "../host/desktop.mjs";
 import { MCP_SERVER_NAME, readRegisteredServer, serverIsCurrent } from "../host/mcp.mjs";
 import { npmBin, npmView } from "../host/npm.mjs";
 import { marketplaceIsCurrent, pluginRef, readInstalledPlugin, readKnownMarketplace } from "../host/plugin.mjs";
@@ -104,6 +105,17 @@ function checkMcp(ctx) {
   return serverIsCurrent(entry, ctx.env)
     ? check("mcp", "ok", `\`${MCP_SERVER_NAME}\` at user scope`)
     : check("mcp", "fail", "registered from another path", "run `nightshift setup` to point it at this package");
+}
+
+// Checks the registration in the Claude Desktop app, an optional client: an app that is not installed is never a failure.
+function checkDesktopMcp(ctx) {
+  const state = desktopState(ctx.env);
+  if (!state.installed) return check(DESKTOP_LABEL, "ok", "Claude Desktop not installed");
+  if (state.error) return check(DESKTOP_LABEL, "warn", state.error, `fix ${state.path} and run \`nightshift setup\``);
+  if (!state.entry) return check(DESKTOP_LABEL, "warn", `\`${MCP_SERVER_NAME}\` not registered`, "run `nightshift setup`");
+  return serverIsCurrent(state.entry, ctx.env)
+    ? check(DESKTOP_LABEL, "ok", `\`${MCP_SERVER_NAME}\` at ${state.path}`)
+    : check(DESKTOP_LABEL, "warn", "registered from another path", "run `nightshift setup`");
 }
 
 // Checks the three hook entries of this package in the host settings.
@@ -369,6 +381,7 @@ function collect(ctx, values) {
     ...checkLegacyShim(ctx),
     checkPath(ctx),
     checkMcp(ctx),
+    checkDesktopMcp(ctx),
     ...checkHooks(ctx),
     checkPlugin(ctx),
     checkModel(ctx),

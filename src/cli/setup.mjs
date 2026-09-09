@@ -4,6 +4,15 @@ import { configPath, homeDir, secretsPath, shimNames } from "../config/paths.mjs
 import { emptyConfig, emptySecrets } from "../config/schema.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { claudeCommandLine, runClaude } from "../host/claude.mjs";
+import {
+  DESKTOP_LABEL,
+  desktopInstalled,
+  mergeDesktopServer,
+  readDesktopConfig,
+  removeDesktopServer,
+  unsafeKeyOf,
+  writeDesktopConfig,
+} from "../host/desktop.mjs";
 import { MCP_SERVER_NAME, mcpAddArgs, mcpRemoveArgs, readRegisteredServer, serverIsCurrent } from "../host/mcp.mjs";
 import { hostManifestPath, hostPackageRoot } from "../host/paths.mjs";
 import {
@@ -38,7 +47,7 @@ import { firstLine, makeReport } from "./report.mjs";
 
 const MARKETPLACE_LABEL = "plugin marketplace";
 const USAGE =
-  "nightshift setup [--from <dir>] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--remove [--purge]]";
+  "nightshift setup [--from <dir>] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--remove [--purge]]";
 
 // Flags every command that installs the host shares.
 export const INSTALL_OPTIONS = {
@@ -49,6 +58,8 @@ export const INSTALL_OPTIONS = {
   "no-embedding": { type: "boolean" },
   shortcuts: { type: "boolean" },
   "no-shortcuts": { type: "boolean" },
+  desktop: { type: "boolean" },
+  "no-desktop": { type: "boolean" },
 };
 
 // Installation choices of one call, each opposite pair reduced to a tri-state.
@@ -58,6 +69,7 @@ export function installOptions(values, usage) {
     path: flagChoice(values, "path", usage),
     embedding: flagChoice(values, "embedding", usage),
     shortcuts: flagChoice(values, "shortcuts", usage),
+    desktop: flagChoice(values, "desktop", usage),
   };
 }
 
@@ -123,6 +135,53 @@ function setupMcp(ctx, report) {
   report.step(label, entry ? "updated" : "created");
 }
 
+// Reads the configuration of the Claude Desktop app for a write, degrading the step when the file cannot be trusted instead of rewriting it.
+function desktopConfigForWrite(ctx, report) {
+  let config;
+  try {
+    config = readDesktopConfig(ctx.env);
+  } catch (err) {
+    report.degrade(DESKTOP_LABEL, firstLine(err?.message ?? String(err)));
+    return null;
+  }
+  const unsafe = unsafeKeyOf(config.data);
+  if (!unsafe) return config;
+  report.degrade(DESKTOP_LABEL, `unsafe \`${unsafe}\` key`, `remove the \`${unsafe}\` key from ${config.path}`);
+  return null;
+}
+
+// Applies one change to the configuration of the Claude Desktop app, writing only when something actually changed.
+function applyDesktop(ctx, report, { remove }) {
+  const config = desktopConfigForWrite(ctx, report);
+  if (!config) return;
+  const before = structuredClone(config.data);
+  const status = remove ? removeDesktopServer(config.data) : mergeDesktopServer(config.data, ctx.env);
+  if (!isDeepStrictEqual(before, config.data)) writeDesktopConfig(config);
+  report.step(DESKTOP_LABEL, status);
+}
+
+// Registers the MCP server in the Claude Desktop app, whose configuration directory only exists once that app is installed.
+function setupDesktop(ctx, report, { desktop } = {}) {
+  if (desktop === false) {
+    report.step(DESKTOP_LABEL, "skipped", "--no-desktop");
+    return;
+  }
+  if (!desktopInstalled(ctx.env)) {
+    report.step(DESKTOP_LABEL, "skipped", "Claude Desktop not installed");
+    return;
+  }
+  applyDesktop(ctx, report, { remove: false });
+}
+
+// Takes the MCP server out of the Claude Desktop app, leaving every other server of that app alone.
+function removeDesktop(ctx, report) {
+  if (!desktopInstalled(ctx.env)) {
+    report.step(DESKTOP_LABEL, "not present");
+    return;
+  }
+  applyDesktop(ctx, report, { remove: true });
+}
+
 // Warns when the runtime path carries a space, the only case where the unquoted hook command breaks.
 function warnOnSpacedRoot(ctx) {
   const warning = spacedRootWarning(hostPackageRoot(ctx.env));
@@ -174,25 +233,27 @@ function skipHostSteps(ctx, report, { shortcuts } = {}) {
   const reason = "runtime missing";
   for (const name of shimNames({ shortcuts })) report.step(`shim ${name}`, "skipped", reason);
   report.step(`mcp ${MCP_SERVER_NAME}`, "skipped", reason);
+  report.step(DESKTOP_LABEL, "skipped", reason);
   for (const hook of desiredHooks(ctx.env)) report.step(`hook ${hook.event}`, "skipped", reason);
   report.step(MARKETPLACE_LABEL, "skipped", reason);
 }
 
-// Registers everything of the host that points at the runtime and is not a command name: MCP server, hooks and plugin.
-export function registerHostServices(ctx, report) {
+// Registers everything of the host that points at the runtime and is not a command name: MCP server, Claude Desktop, hooks and plugin.
+export function registerHostServices(ctx, report, { desktop } = {}) {
   setupMcp(ctx, report);
+  setupDesktop(ctx, report, { desktop });
   applyHooks(ctx, report, { remove: false });
   setupPlugin(ctx, report);
 }
 
-// The single gate of every write that points at the runtime - shims, MCP server, hooks and plugin: without a ready runtime, none of them runs.
-export function registerHost(ctx, report, { ready, shortcuts } = {}) {
+// The single gate of every write that points at the runtime - shims, MCP server, Claude Desktop, hooks and plugin: without a ready runtime, none of them runs.
+export function registerHost(ctx, report, { ready, shortcuts, desktop } = {}) {
   if (ready === false) {
     skipHostSteps(ctx, report, { shortcuts });
     return;
   }
   setupShim(ctx, report, { shortcuts });
-  registerHostServices(ctx, report);
+  registerHostServices(ctx, report, { desktop });
 }
 
 // Unregisters the MCP server, leaving every other server of the host alone.
@@ -226,11 +287,11 @@ export function finish(ctx, report) {
 }
 
 // Installs everything the host needs to run nightshift, one idempotent step at a time.
-export async function install(ctx, { embedding, path, from, shortcuts } = {}) {
+export async function install(ctx, { embedding, path, from, shortcuts, desktop } = {}) {
   const report = makeReport(ctx);
   setupHome(ctx, report);
   const ready = setupRuntime(ctx, report, { from });
-  registerHost(ctx, report, { ready, shortcuts });
+  registerHost(ctx, report, { ready, shortcuts, desktop });
   await setupPath(ctx, report, { path });
   await setupEmbedding(ctx, report, { embedding });
   return finish(ctx, report);
@@ -240,6 +301,7 @@ export async function install(ctx, { embedding, path, from, shortcuts } = {}) {
 async function uninstall(ctx, { purge }) {
   const report = makeReport(ctx);
   removeMcp(ctx, report);
+  removeDesktop(ctx, report);
   applyHooks(ctx, report, { remove: true });
   removePlugin(ctx, report);
   removeShimStep(ctx, report);

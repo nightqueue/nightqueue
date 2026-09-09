@@ -18,6 +18,11 @@ export function writeFileAtomic(filePath, content, { mode } = {}) {
   }
 }
 
+// Timestamped name of the backup taken before the first write of a run.
+export function backupPath(path) {
+  return `${path}.bak-${new Date().toISOString().replace(/[-:.]/g, "")}`;
+}
+
 // Returns the permission bits of the path, or null when it is missing.
 export function modeOf(path) {
   const stats = statSync(path, { throwIfNoEntry: false });

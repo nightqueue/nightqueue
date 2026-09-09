@@ -35,6 +35,10 @@ plugin in the host is no longer a manual step - `nightshift setup` does it (see
   template in `plugin/skills/resolve/references/pr-template.md`.
 - `/nightshift:qa-guardian` - self-contained adversarial QA: risk matrix,
   proven breaks, fuzz templates.
+- `/nightshift:queue` - queues the current plan or request as one unattended
+  job, without running it: it cuts the job, resolves the project of the current
+  directory, writes the prompt and answers with the job id and the pending
+  count.
 - Six subagents, invoked as `nightshift:<agent>`: `architect`, `coder`,
   `explore`, `qa-guardian`, `triager`, `verifier`.
 - `nightshift mcp` - the stdio MCP server that answers those six tools plus the five
@@ -123,13 +127,16 @@ converge on the same `~/.nightshift/runtime`.
 
 Outside a repository it stops right there and says so. Inside one, it also
 registers that repository as a project and offers to import the token of the
-GitHub CLI.
+GitHub CLI. Either way it closes with the same `Next steps` block: how to queue
+work from Claude Code, how to start the batch and how to review it.
 
 Flags: `--path` / `--no-path` answers the PATH question
 without a terminal,
 `--embedding` / `--no-embedding` answers the semantic recall question,
 `--gh` / `--no-gh` answers the GitHub CLI one, `--shortcuts` / `--no-shortcuts`
-decides whether the short command names are written, and `--org` / `--name` name
+decides whether the short command names are written, `--desktop` /
+`--no-desktop` decides whether the MCP server is registered in the Claude
+Desktop app, and `--org` / `--name` name
 the project. Without a terminal and without the flag, nothing is written and nothing
 is downloaded: both questions print what to run by hand instead.
 `--from <dir|tgz>` installs another checkout or tarball instead of the package
@@ -213,17 +220,22 @@ echo "$GITHUB_TOKEN" | nightshift connection add gh --type github
    `~/.config/fish/config.fish`.
 4. the MCP server `nightshift` at **user** scope, started as
    `node $NIGHTSHIFT_HOME/runtime/node_modules/nightshift/bin/nightshift.mjs mcp`.
-5. the three hooks in `<claude config>/settings.json`: `SessionStart`,
+5. the same server in the configuration of the Claude Desktop app
+   (`claude_desktop_config.json`), when that app is installed - an app that is
+   not installed is a `skipped` step and never a directory this CLI creates.
+   `--no-desktop` skips it.
+6. the three hooks in `<claude config>/settings.json`: `SessionStart`,
    `UserPromptSubmit` and `SessionEnd`, pointing at that same entry.
-6. the runtime as a local marketplace, plus the plugin installed from it.
-7. the semantic recall: the embedding library in `$NIGHTSHIFT_HOME/embedding`
+7. the runtime as a local marketplace, plus the plugin installed from it.
+8. the semantic recall: the embedding library in `$NIGHTSHIFT_HOME/embedding`
    and its weights - the only step that opens the network, and the only one
    that is opt-in.
 
-Steps 4 to 6 never run when step 2 could not finish: a hook pointing at a
+Steps 4 to 7 never run when step 2 could not finish: a hook pointing at a
 runtime that is not there would break every session of the host.
 
-`--remove` undoes steps 3 to 6 - the shims, the marked PATH block, the MCP server,
+`--remove` undoes steps 3 to 7 - the shims, the marked PATH block, the MCP server,
+its entry in the Claude Desktop configuration,
 the three hook entries, the plugin and the marketplace - and asks before
 deleting `runtime/` and `embedding/`. It never touches `config.json`,
 `secrets.json` or the database; only `--remove --purge` deletes
@@ -265,7 +277,19 @@ session: ask it to queue the tasks as they come up, and to start the batch later
 with `queue_run`. Claude does not start a job the moment it queues it - it waits
 for the batch - unless you ask for that one job now. What each job became comes
 back through `queue_status`, and a job stopped at a gate is answered with
-`queue_retry`.
+`queue_retry`. In Claude Code, `/nightshift:queue` is the shortcut for that
+first step: it turns the plan under discussion into one job and records it.
+
+`nightshift setup` registers the same server in `claude_desktop_config.json`,
+so the Claude Desktop chat, Cowork, and every other client that reads that file
+see the same server and the same queue as Claude Code; restart the Claude
+Desktop app once after the setup for it to pick the server up. The merge is not destructive: every other
+server and every other key of that file is left exactly as it was, the file is
+backed up as `claude_desktop_config.json.bak-<timestamp>` before the first
+change of a run, and a run with nothing to change does not rewrite it at all. A
+file that is not valid JSON, or that carries a `__proto__`, `constructor` or
+`prototype` key, is never rewritten: the step is reported as `failed` and the
+rest of the setup goes on.
 
 ## Try it without installing
 
@@ -738,7 +762,10 @@ the database, never touches `settings.json` and never asks `claude` about
 anything but its version. It checks the Node version, the `claude` and `gh`
 CLIs, `config.json`, the mode of `secrets.json`, each of the three shims (a
 missing shortcut only warns), a shim left over from the `shift` command, the
-MCP registration, each of the three hooks, the plugin, the embedding weights,
+MCP registration, the registration in the Claude Desktop app (`claude desktop
+mcp`, which is a `warn` when the app is installed and does not know the server
+and an `ok` when the app is not installed at all), each of the three hooks, the
+plugin, the embedding weights,
 the optional embedding
 library, the schema version of the database, the pause sentinel of the queue, the
 pidfile of the runner (a registration whose process is gone only warns, and so does one
