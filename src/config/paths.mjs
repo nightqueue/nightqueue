@@ -93,3 +93,8 @@ export function jobLogPath(id, env = process.env) {
 export function queuePausedPath(env = process.env) {
   return join(homeDir(env), "queue.paused");
 }
+
+// Path of the file that registers the watch runner of the queue, the one `queue run --stop` ends.
+export function runnerPidPath(env = process.env) {
+  return join(homeDir(env), "runner.pid");
+}

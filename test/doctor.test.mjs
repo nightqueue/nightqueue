@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
-import { dbPath, queuePausedPath, secretsPath } from "../src/config/paths.mjs";
+import { dbPath, queuePausedPath, runnerPidPath, secretsPath } from "../src/config/paths.mjs";
 import { ensureHome } from "../src/config/store.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
 import { addJob, claimJobById } from "../src/memory/jobs.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
+import { writeRunnerPidfile } from "../src/queue/pidfile.mjs";
 import { makeHostEnv, writeLegacyShim } from "../test-support/host.mjs";
 import { makeDir, makeProject } from "../test-support/memory.mjs";
 
@@ -232,6 +233,49 @@ test("the queue check reads the pause sentinel of the home, and a paused queue i
   const check = paused.checks.find((entry) => entry.name === "queue");
   assert.equal(check.detail, "paused");
   assert.match(check.hint, /nightshift queue resume/);
+});
+
+// The check of the report by name, for the assertions that read more than its status.
+function checkOf(report, name) {
+  return report.checks.find((entry) => entry.name === name);
+}
+
+test("the runner pidfile check reads the five states it can find, and removes nothing", async (t) => {
+  const host = makeHostEnv(t, "doctor-runner");
+  const pid = 4242;
+  const gone = () => {
+    throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+  };
+  const anotherUser = () => {
+    throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+  };
+
+  const { report: none } = await diagnose(host.env, { killImpl: gone });
+  assert.equal(statusOf(none, "runner pidfile"), "ok");
+  assert.equal(checkOf(none, "runner pidfile").detail, "no runner registered");
+
+  writeRunnerPidfile({ pid, startedAt: "2026-09-08T21:04:11.000Z", mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, host.env);
+  const { report: alive } = await diagnose(host.env, { killImpl: () => true });
+  assert.equal(statusOf(alive, "runner pidfile"), "ok");
+  assert.equal(checkOf(alive, "runner pidfile").detail, `running (pid ${pid}, watch every 30 s)`);
+
+  const { report: stale } = await diagnose(host.env, { killImpl: gone });
+  assert.equal(statusOf(stale, "runner pidfile"), "warn");
+  assert.equal(checkOf(stale, "runner pidfile").detail, `stale (pid ${pid} is gone)`);
+  assert.match(checkOf(stale, "runner pidfile").hint, /nightshift queue run --stop/);
+  assert.equal(existsSync(runnerPidPath(host.env)), true, "the diagnosis removed the pidfile it only had to read");
+
+  const { report: foreign } = await diagnose(host.env, { killImpl: anotherUser });
+  assert.equal(statusOf(foreign, "runner pidfile"), "warn");
+  assert.match(checkOf(foreign, "runner pidfile").detail, /another user/);
+  assert.match(checkOf(foreign, "runner pidfile").hint, /^remove /);
+  assert.equal(existsSync(runnerPidPath(host.env)), true, "the diagnosis removed the pidfile of another user");
+
+  writeFileSync(runnerPidPath(host.env), "{not json");
+  const { report: unreadable } = await diagnose(host.env, { killImpl: gone });
+  assert.equal(statusOf(unreadable, "runner pidfile"), "warn");
+  assert.match(checkOf(unreadable, "runner pidfile").detail, /^unreadable: /);
+  assert.match(checkOf(unreadable, "runner pidfile").hint, /^remove /);
 });
 
 test("the queue jobs check counts the jobs whose runner died, and only once the database exists", async (t) => {

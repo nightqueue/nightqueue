@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { saveConfig, saveSecrets } from "../config/store.mjs";
@@ -72,11 +72,11 @@ commands:
   embed download                            download the embedding weights into the home (the only network path)
   embed backfill                            compute the embeddings of the lessons that still have none
   memory stats [--json]                     count lessons, memories, index entries and runs per project
-  queue add [project] <prompt...> [--run]   enqueue an unattended /nightshift:resolve run; --run also runs it in the foreground
+  queue add [project] <prompt...> [--run]   enqueue an unattended /nightshift:resolve run; --run starts it detached
   queue status [id] [--limit] [--json]      show one job or the tail of the queue plus the counts per status
-  queue run [--job] [--max] [--watch]       claim pending jobs and run them; --dry only reports what it would do
+  queue run [--job | --watch] [--max]       start the runner detached; --foreground runs it here, --stop ends a watcher
   queue cancel <id> [--reason "..."]        cancel a pending, gated or orphaned job
-  queue retry <id> [--note] [--fresh]       send a gated, failed or cancelled job back to the queue; --run also runs it here
+  queue retry <id> [--note] [--fresh]       send a gated, failed or cancelled job back to the queue; --run starts it detached
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written
   version                                   print the installed nightshift version
@@ -97,6 +97,8 @@ export function defaultContext() {
     cwd: process.cwd(),
     fetchImpl: (...args) => fetch(...args),
     spawnSyncImpl: (file, args, options) => spawnSync(file, args, options),
+    spawnImpl: (file, args, options) => spawn(file, args, options),
+    killImpl: (pid, signal) => process.kill(pid, signal),
     warmupImpl: (options, env) => warmupModel(options, env),
     stdin: process.stdin,
     stdout: process.stdout,

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { homeDir } from "../../src/config/paths.mjs";
 import { runReflect } from "../../src/hooks/reflect.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 
@@ -92,4 +95,21 @@ test("a spawn that fails still answers the host", (t) => {
   });
   assert.equal(answer, "{}");
   assert.ok(errors.join("").includes("the reflection worker could not be started"));
+});
+
+test("a spawn failure that only arrives later goes to the reflection log instead of crashing the hook process", (t) => {
+  const env = makeHome(t, "hook-reflect-async-failure");
+  const child = new EventEmitter();
+  child.unref = () => {};
+
+  const answer = runReflect({
+    input: { session_id: "s1", cwd: "/tmp/repo", transcript_path: "/tmp/session.jsonl" },
+    env,
+    spawnImpl: () => child,
+  });
+  assert.equal(answer, "{}");
+  assert.equal(child.listenerCount("error"), 1, "without an error listener a later EMFILE/ENOENT becomes an uncaught exception in the hook");
+
+  child.emit("error", new Error("no process for you"));
+  assert.match(readFileSync(join(homeDir(env), "reflect.log"), "utf8"), /the reflection worker could not be started: no process for you/);
 });

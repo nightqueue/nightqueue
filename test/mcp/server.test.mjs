@@ -9,6 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { homeDir, queuePausedPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
+import { writeRunnerPidfile } from "../../src/queue/pidfile.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
@@ -296,6 +297,13 @@ test("queue_status never returns the prompt and truncates the free text at five 
   assert.deepEqual(listed.jobs.map((job) => job.id), [2, 1]);
   assert.equal(listed.counts.pending, 2);
   for (const job of listed.jobs) assert.equal("prompt" in job, false, "the listing leaked a prompt");
+  assert.deepEqual(listed.runner, { running: false, pid: null, mode: null, intervalS: null, startedAt: null, logPath: null });
+
+  const startedAt = "2026-09-08T21:04:11.000Z";
+  writeRunnerPidfile({ pid: process.pid, startedAt, mode: "watch", intervalS: 30, logPath: "/tmp/runner.log" }, env);
+  const watched = payloadOf(await client.callTool({ name: "queue_status", arguments: { limit: null, job_id: null } }));
+  assert.deepEqual(watched.runner, { running: true, pid: process.pid, mode: "watch", intervalS: 30, startedAt, logPath: "/tmp/runner.log" });
+  assert.equal("runner" in payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: id } })), false, "the detail of a job grew a runner");
 
   const unknown = await client.callTool({ name: "queue_status", arguments: { job_id: 99 } });
   assert.equal(unknown.isError, true);
@@ -312,6 +320,10 @@ test("queue_run comes back at once with the log of the detached runner, inside t
   assert.equal(Number.isInteger(started.pid), true, `no pid: ${JSON.stringify(started)}`);
   assert.equal(started.logPath.startsWith(join(homeDir(env), "logs")), true, `the runner logs outside the home: ${started.logPath}`);
   assert.match(started.logPath, /runner-\d{8}T\d{6}Z\.log$/);
+
+  const tool = (await client.listTools()).tools.find((entry) => entry.name === "queue_run");
+  assert.ok(tool.description.includes("DETACHED"), "the tool does not say the runner is detached");
+  assert.ok(tool.description.includes("nightshift queue run --stop"), "the tool does not say how a watcher is stopped");
 });
 
 test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a live run or a finished one", async (t) => {
@@ -364,6 +376,11 @@ test("queue_retry answers a gate, refuses one without a note and only starts a r
   assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ["fresh", "job_id", "note", "run"]);
   assert.deepEqual(tool.inputSchema.required, ["job_id"]);
   assert.ok(tool.description.includes("DETACHED"), "the tool does not state how its `run` differs from the CLI");
+  assert.equal(
+    tool.description.includes("runs the job in the foreground"),
+    false,
+    "the tool still claims the `--run` of the CLI runs the job in the foreground",
+  );
 
   const refused = await client.callTool({ name: "queue_retry", arguments: { job_id: gated } });
   assert.equal(refused.isError, true);

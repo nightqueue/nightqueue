@@ -75,7 +75,7 @@ Two commands, from anywhere, on a machine that has nothing installed yet:
 
 ```sh
 npx nightshift init                                # install the runtime and set the host up
-nightshift queue add "fix the flaky worker" --run  # enqueue the request and run it right here
+nightshift queue add "fix the flaky worker" --run  # enqueue the request and start the runner on it
 ```
 
 `npx nightshift init` is the whole installation. It puts the package in
@@ -273,6 +273,7 @@ $NIGHTSHIFT_HOME/          # 0700
   runs/<project>/<slug>/   # run artifacts, written by the runtime
   logs/                    # one log per queue job plus one per runner
   queue.paused             # sentinel file, present only while the queue is paused
+  runner.pid               # registration of the watch runner, present only while one is up
 ```
 
 Secrets are kept in a `0600` file rather than in the operating system
@@ -444,11 +445,13 @@ the `## Notice` and the token usage.
 ```sh
 nightshift queue add api "fix the flaky worker" --priority 2   # enqueue a job
 nightshift queue add "fix the flaky worker"                    # same, for the project of the current directory
-nightshift queue add fix the flaky worker --run                # enqueue and run it here, in the foreground
-nightshift queue status [--limit 10] [--json]                  # the tail of the queue plus the counts
+nightshift queue add fix the flaky worker --run                # enqueue and start the runner on it, detached
+nightshift queue status [--limit 10] [--json]                  # the state of the runner, the tail of the queue and the counts
 nightshift queue status 7 [--json]                             # one job, never with its prompt
-nightshift queue run [--job 7] [--max 2] [--dry]               # claim and run; --dry only reports
-nightshift queue run --watch [30]                              # keep claiming, one pass every N seconds
+nightshift queue run [--job 7] [--max 2] [--dry]               # start the runner detached; --dry only reports
+nightshift queue run --watch [30]                              # start a watcher, one pass every N seconds
+nightshift queue run --stop                                    # end the watcher registered in the home
+nightshift queue run --foreground [--job 7]                    # run it in this process instead, for a script or CI
 nightshift queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
 nightshift queue cancel 7 --reason "not needed"                # cancel a pending, gated or orphaned job
 nightshift queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue
@@ -469,14 +472,66 @@ ends with a flag is the ambiguous case, and goes after `--`:
 `nightshift queue add -- explain --run to me`. An option that does not exist is still
 a usage error at either edge, never a silent word of the prompt.
 
-**`--run` runs the job right there**, in the same process, instead of leaving it
-for `nightshift queue run`. It prints the job id first, then the stream goes to the
-log of the job (`nightshift queue log <id> --follow`), and the exit code answers only
-about this run: `0` when the job ended as `done`, `1` for any other outcome
-(`gate`, `failed`, `cancelled`, an interrupted run) and `1` when the job never
-started, with the reason on the line `job #<id> did not start (<reason>)` - the
-job stays in the queue. An explicit job id ignores the pause sentinel, so
+**`--run` starts the runner on the job right away**, detached, instead of leaving
+it for the next `nightshift queue run`. It prints the job id first, then the line
+`job #<id> started (pid <pid>) - follow with: nightshift queue log <id> --follow`,
+and exits `0` as soon as the child is up: the exit code answers for the start, not
+for the outcome of the job, which is read with `queue status` or `queue log`. Add
+`--foreground` to get the old behaviour back - the job runs in this very process,
+the stream goes to the log of the job, and the exit code answers only about this
+run: `0` when the job ended as `done`, `1` for any other outcome (`gate`,
+`failed`, `cancelled`, an interrupted run) and `1` when the job never started,
+with the reason on the line `job #<id> did not start (<reason>)` - the job stays
+in the queue. `--foreground` on a command that was not given `--run` is a usage
+error, never a silent no-op. An explicit job id ignores the pause sentinel, so
 `--run` runs even on a paused queue.
+
+### Running the queue
+
+**The runner is detached by default.** `nightshift queue add --run`,
+`nightshift queue retry --run` and `nightshift queue run` all spawn a child that runs
+the queue on its own and return as soon as that child is up, with exit code `0`.
+The child is this same CLI started as `nightshift queue run --foreground ...`, so
+`--foreground` is both the flag you type for a blocking run and the flag that tells
+the child it is the worker. A start that cannot spawn exits `1` with the reason and
+never falls back to running the job in the foreground behind your back.
+
+Its output goes to `$NIGHTSHIFT_HOME/logs/runner-<stamp>.log`, which
+`queue run` prints on the line `runner started (pid <pid>) - log: <path>`. When the
+start is aimed at a single job the line points at that job's own narrated stream
+instead: `job #<id> started (pid <pid>) - follow with: nightshift queue log <id> --follow`.
+
+**`--foreground` is the mode for a script or for CI**: it runs the cycle in the very
+process you started, prints one line per processed job and answers with an exit code
+that depends on the outcome (`0` only for `done` on `--run`). `--dry` never detaches
+either: it is a read-only report of what a cycle would do.
+
+**`--watch [seconds]` is the daemon**, one pass every `N` seconds (30 by default).
+It registers itself in `$NIGHTSHIFT_HOME/runner.pid` with `pid`, `startedAt`, `mode`,
+`intervalS` and `logPath`, and prints
+`runner started (pid <pid>, every <n> s) - stop with: nightshift queue run --stop`.
+Only one watcher at a time: a second one is refused with the pid of the first, while a
+registration whose process is gone is cleared and the start goes on. A single-shot
+runner (`--run`, `--job`, a bare `queue run`) writes no pidfile - two of them never
+collide because a job is claimed under a lease, not under a file. `--job` and `--watch`
+are refused together: running one job and watching the whole queue are opposite intents.
+
+**`nightshift queue run --stop` ends the watcher**: it sends a `SIGTERM` and waits up
+to ten seconds for the process to go. It answers `runner stopped (pid <pid>)`,
+`runner was not running (stale pidfile removed)` or `runner is not running`, and exits
+`0` in the three cases; it exits `1` only when the process is still there after those
+ten seconds, saying that the runner finishes the job it is running and exits by
+itself. `--stop` takes no other option. Known limitation: if the watcher died and the
+system handed its pid number to another process inside the same boot session, `--stop`
+trusts the registration and signals that pid; confirming the real identity of a process
+would need `ps`//proc/ and is out of the scope of this command.
+
+**A watcher stopped in the middle of a job never corrupts it.** The signal makes the
+runner stop claiming and end the child of the job it was running; that job is released
+back to `pending`, with its lease dropped and its attempt given back, so the next
+runner picks it up as if it had never started. The watcher then removes its own
+registration - and only its own, matched by pid, so it never clears the pidfile of
+another runner.
 
 **`queue status` says what a running job is doing.** The table is one line per
 job, and the line of a `running` job carries two more columns: how long it has
@@ -487,7 +542,11 @@ already hundreds of kilobytes costs nothing. A job with no log yet (it is still
 in the preflight of the run) and a log that cannot be read both show `-` instead
 of a narration: the table is always printed in full and the exit code stays `0`.
 A job in a final state keeps exactly the line it always had, and `--json`
-answers with the same fields as before.
+answers with the same fields as before. The listing opens with the state of the
+runner - `runner: running (pid <pid>, watch every <n> s, since <iso>)` or
+`runner: stopped` - and `--json` carries the same thing under `runner`. Reading the
+state never changes it: a registration whose process is gone reads as stopped, and
+only `--stop` or the start of a new watcher removes the file.
 
 **The log is narrated by default.** `nightshift queue log <id>` prints one line per
 relevant event of the stream, timed relative to the `=== attempt N ===` marker
@@ -634,15 +693,26 @@ CLIs, `config.json`, the mode of `secrets.json`, each of the three shims (a
 missing shortcut only warns), a shim left over from the `shift` command, the
 MCP registration, each of the three hooks, the plugin, the embedding weights,
 the optional embedding
-library, the schema version of the database, the pause sentinel of the queue,
-the jobs whose runner died and every registered project. It exits `1` when any
-check fails, `0` otherwise - a `warn` never fails the run.
+library, the schema version of the database, the pause sentinel of the queue, the
+pidfile of the runner (a registration whose process is gone only warns, and so does one
+whose pid belongs to another user; the diagnosis never removes either), the jobs whose
+runner died and every registered
+project. It exits `1` when any check fails, `0` otherwise - a `warn` never fails
+the run.
 
 ## Runtime contract
 
 What a runtime has to provide, and what it can rely on:
 
 - `NIGHTSHIFT_HOME` - home directory of the runtime, default `~/.nightshift`.
+- `${NIGHTSHIFT_HOME}/runner.pid` registers the watch runner while one is up, as
+  `{ "pid", "startedAt", "mode", "intervalS", "logPath", "uptimeS" }` with `startedAt` in
+  ISO 8601. `uptimeS` is the uptime of the machine at the instant of the registration,
+  which is what tells a registration left by an earlier boot session apart from a live
+  one. It is written by the process that starts the watcher and removed by the
+  watcher itself on a clean exit, or by `nightshift queue run --stop`.
+- The output of a detached runner lives in
+  `${NIGHTSHIFT_HOME}/logs/runner-<stamp>.log`, next to the one log per job.
 - Run artifacts live in `${NIGHTSHIFT_HOME}/runs/<project>/<slug>/`, always
   outside the worktree, because the worktree is removed before the last phase
   reads them.
@@ -687,11 +757,12 @@ The eleven MCP tools, with the parameters `nightshift mcp` actually accepts:
 The five queue tools are the same subsystem as `nightshift queue` (see `## Queue`):
 `queue_add` takes the registered project NAME and never a path, `queue_status`
 never returns the prompt of a job and truncates `notice_md` and `result` at 500
-characters, `queue_run` starts the runner detached and answers right away with
-the path of its log, `queue_cancel` refuses a job running under a live lease
-without writing anything, and `queue_retry` sends a gated, failed or cancelled
-job back to the queue - its `run` starts a DETACHED runner, unlike the `--run`
-of the CLI, which runs the job in the foreground.
+characters and answers with the state of the runner next to the jobs, `queue_run`
+starts the runner detached and answers right away with the path of its log,
+`queue_cancel` refuses a job running under a live lease without writing anything,
+and `queue_retry` sends a gated, failed or cancelled job back to the queue - its
+`run` starts a DETACHED runner, the same one the `--run` of the CLI starts unless
+it is asked for `--foreground`.
 
 Every optional parameter accepts an explicit `null` and treats it exactly like
 an absent one, so a caller that fills its whole argument object never gets an

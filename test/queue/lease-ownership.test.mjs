@@ -53,10 +53,10 @@ function writeHoldingClaude(t) {
   return bin;
 }
 
-// Runs the real CLI `queue run --job <id>` as its own process, resolving with its outcome.
+// Runs the real CLI `queue run --job <id> --foreground` as its own process, resolving with its outcome.
 function runQueueCli(env, jobId) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliEntrypoint(), "queue", "run", "--job", String(jobId)], {
+    const child = spawn(process.execPath, [cliEntrypoint(), "queue", "run", "--job", String(jobId), "--foreground"], {
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });

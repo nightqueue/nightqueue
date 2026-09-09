@@ -19,6 +19,7 @@ import {
 } from "../memory/jobs.mjs";
 import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
+import { runnerPidfileState, runnerView } from "../queue/pidfile.mjs";
 import { applyRetry } from "../queue/retry.mjs";
 import { launchDetachedRunner } from "../queue/runner.mjs";
 import {
@@ -251,7 +252,7 @@ function toolDefinitions(env) {
       name: "queue_status",
       config: {
         description:
-          "State of the queue: one job by id, or the most recent ones plus the counts per status. Never returns the prompt. " +
+          "State of the queue: one job by id, or the most recent ones plus the counts per status and the state of the runner. Never returns the prompt. " +
           "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`.",
         inputSchema: {
           job_id: z.number().int().min(1).nullable().optional(),
@@ -264,14 +265,16 @@ function toolDefinitions(env) {
           if (!job) throw new UserError(`unknown job \`${args.job_id}\``);
           return { job };
         }
-        return { jobs: listJobs({ limit: jobLimit(args.limit) }, env).map(jobView), counts: countsByStatus(env) };
+        const runner = runnerView(runnerPidfileState(env));
+        return { runner, jobs: listJobs({ limit: jobLimit(args.limit) }, env).map(jobView), counts: countsByStatus(env) };
       },
     },
     {
       name: "queue_run",
       config: {
         description:
-          "Starts the queue runner detached, with its output going to a log file, and returns immediately with that path.",
+          "Starts the queue runner DETACHED, with its output going to a log file, and returns immediately with that path. " +
+          "A runner started this way runs one cycle and exits; `nightshift queue run --stop` ends a watcher started from the CLI.",
         inputSchema: { job_id: z.number().int().min(1).nullable().optional() },
       },
       handler: async (args) => {
@@ -294,7 +297,7 @@ function toolDefinitions(env) {
         description:
           "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate. " +
           "Without `fresh` the run resumes from the last phase, keeping slug, branch, session and run directory; with `fresh` it starts from phase 0 and the run directory is dropped. " +
-          "`run` starts a DETACHED runner, the same one `queue_run` starts - unlike the `--run` of the CLI, which runs the job in the foreground. " +
+          "`run` starts a DETACHED runner, the same one `queue_run` starts - and the same one the `--run` of the CLI starts, unless it is asked for `--foreground`. " +
           "Inside an unattended run this tool only accepts the id of the job it is running: retrying another job is refused, because the note is delivered as a human answer in that job's next prompt.",
         inputSchema: {
           job_id: z.number().int().min(1),

@@ -1,5 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
+import { withLock } from "../config/lock.mjs";
 import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
 import { projectByName, resolveProject } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
@@ -13,16 +14,25 @@ import {
   narrateLog,
   noticeNarration,
 } from "../queue/narrate.mjs";
+import {
+  removeOwnRunnerPidfile,
+  removeRunnerPidfile,
+  runnerPidfileState,
+  runnerView,
+  stopRunner,
+  STOP_TIMEOUT_MS,
+  writeRunnerPidfile,
+} from "../queue/pidfile.mjs";
 import { applyRetry } from "../queue/retry.mjs";
-import { runCycle, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
+import { launchDetachedRunner, runCycle, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
 const USAGE = {
-  add: "nightshift queue add [project] <prompt...> [--run] [--priority <n>] [--max-attempts <n>] [--timeout <s>]",
+  add: "nightshift queue add [project] <prompt...> [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>]",
   status: "nightshift queue status [id] [--limit <n>] [--json]",
-  run: "nightshift queue run [--job <id>] [--max <n>] [--watch [seconds]] [--dry] [--json]",
+  run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <n>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
-  retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run]",
+  retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
   pause: "nightshift queue pause",
   resume: "nightshift queue resume",
   log: "nightshift queue log <id> [--follow] [--raw] [--all]",
@@ -90,6 +100,59 @@ async function runInForeground(job, ctx) {
   return processed.status === "done" ? 0 : 1;
 }
 
+// Refuses a second watcher while one is alive, and clears a pidfile no live process answers for.
+function guardSingleWatcher(ctx) {
+  const state = runnerPidfileState(ctx.env, ctx.killImpl);
+  if (state.status === "alive") {
+    throw new UserError(`runner already running (pid ${state.info.pid}) - stop it first with: nightshift queue run --stop`);
+  }
+  if (state.status !== "missing") removeRunnerPidfile(ctx.env);
+}
+
+// Registers the watcher that was just started, naming its pid when the registration itself fails.
+function registerWatcher({ pid, intervalS, logPath }, ctx) {
+  try {
+    writeRunnerPidfile({ pid, startedAt: new Date().toISOString(), mode: "watch", intervalS, logPath }, ctx.env);
+  } catch (err) {
+    throw new UserError(`the runner started (pid ${pid}) but its pidfile could not be written: ${err?.message ?? String(err)}; stop it with \`kill ${pid}\``);
+  }
+}
+
+// The line that tells the operator what started and how to follow it or stop it.
+function startedLine({ jobId, pid, watchIntervalS, logPath }) {
+  if (watchIntervalS !== null) return `runner started (pid ${pid}, every ${watchIntervalS} s) - stop with: nightshift queue run --stop`;
+  if (jobId !== null) return `job #${jobId} started (pid ${pid}) - follow with: nightshift queue log ${jobId} --follow`;
+  return `runner started (pid ${pid}) - log: ${logPath}`;
+}
+
+// Starts the runner detached and tells the operator where to follow it; only the watch mode is registered in the pidfile.
+function startRunner({ jobId, max, watchIntervalS }, ctx) {
+  if (watchIntervalS !== null) guardSingleWatcher(ctx);
+  const { pid, logPath } = launchDetachedRunner({ jobId, max, watchIntervalS, env: ctx.env, spawnImpl: ctx.spawnImpl });
+  if (!Number.isInteger(pid) || pid <= 0) throw new UserError("the detached runner did not report a pid; nothing was started");
+  if (watchIntervalS !== null) registerWatcher({ pid, intervalS: watchIntervalS, logPath }, ctx);
+  ctx.out(startedLine({ jobId, pid, watchIntervalS, logPath }));
+  return 0;
+}
+
+// Starts the detached runner, holding the home lock across the guard and the registration so two watchers never race.
+async function startDetached({ jobId = null, max = null, watchIntervalS = null }, ctx) {
+  if (watchIntervalS === null) return startRunner({ jobId, max, watchIntervalS: null }, ctx);
+  return await withLock(ctx.env, () => startRunner({ jobId, max, watchIntervalS }, ctx));
+}
+
+// Takes the job the command just queued through the runner: in this process with `--foreground`, detached otherwise.
+async function runNow(job, values, ctx) {
+  return values.foreground === true ? await runInForeground(job, ctx) : await startDetached({ jobId: job.id }, ctx);
+}
+
+// Refuses `--foreground` on a command that was never asked to run the job.
+function checkForegroundNeedsRun(values, usage) {
+  if (values.foreground === true && values.run !== true) {
+    throw new UserError(`\`--foreground\` only has meaning with \`--run\`; usage: ${usage}`);
+  }
+}
+
 // Runs `queue add`, with the project taken from the arguments or from the current directory.
 async function runAdd(argv, ctx) {
   if (argv.length === 1 && ADD_HELP_FLAGS.has(argv[0])) {
@@ -97,6 +160,7 @@ async function runAdd(argv, ctx) {
     return 0;
   }
   const { values, positionals } = parseAdd(argv);
+  checkForegroundNeedsRun(values, USAGE.add);
   const target = resolveTarget(loadConfig(ctx.env, { warn: ctx.err }), positionals, ctx);
   const prompt = target.words.join(" ").trim();
   if (!prompt) throw new UserError(`missing argument; usage: ${USAGE.add}`);
@@ -112,7 +176,7 @@ async function runAdd(argv, ctx) {
     ctx.env,
   );
   ctx.out(`queued job #${job.id} for project \`${job.project}\` (priority ${job.priority}, timeout ${job.timeoutS}s)`);
-  return values.run === true ? await runInForeground(job, ctx) : 0;
+  return values.run === true ? await runNow(job, values, ctx) : 0;
 }
 
 const ADD_OPTIONS = {
@@ -120,6 +184,7 @@ const ADD_OPTIONS = {
   "max-attempts": { type: "string" },
   timeout: { type: "string" },
   run: { type: "boolean" },
+  foreground: { type: "boolean" },
 };
 
 // Tells whether a token is written as an option, the only shape the edges of `queue add` read as one.
@@ -229,6 +294,12 @@ function formatDetail(job) {
   return at < 0 ? [...fields, ...notice] : [...fields.slice(0, at + 1), ...notice, ...fields.slice(at + 1)];
 }
 
+// The `runner:` line of `queue status`, the first thing the operator reads about the queue.
+function formatRunner(runner) {
+  if (!runner.running) return "runner: stopped";
+  return `runner: running (pid ${runner.pid}, ${runner.mode} every ${runner.intervalS} s, since ${runner.startedAt})`;
+}
+
 // Runs `queue status`, for one job or for the tail of the queue.
 async function runStatus(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" }, limit: { type: "string" } });
@@ -243,10 +314,12 @@ async function runStatus(argv, ctx) {
   }
   const jobs = listJobs({ limit: requireInt("--limit", values.limit) }, ctx.env).map(jobView);
   const counts = countsByStatus(ctx.env);
+  const runner = runnerView(runnerPidfileState(ctx.env, ctx.killImpl));
   if (values.json) {
-    ctx.out(JSON.stringify({ jobs, counts }));
+    ctx.out(JSON.stringify({ runner, jobs, counts }));
     return;
   }
+  ctx.out(formatRunner(runner));
   if (!jobs.length) {
     ctx.out("no jobs in the queue");
     return;
@@ -281,16 +354,63 @@ function printCycle(cycle, ctx) {
   if (!cycle.processed.length) ctx.out(`queue: nothing to run (${cycle.reason})`);
 }
 
-// Runs `queue run`: one cycle, one job, a dry report or the watch loop.
+const RUN_OPTIONS = {
+  job: { type: "string" },
+  max: { type: "string" },
+  watch: { type: "string" },
+  dry: { type: "boolean" },
+  json: { type: "boolean" },
+  foreground: { type: "boolean" },
+  stop: { type: "boolean" },
+};
+
+// Refuses `--stop` next to any other option: ending the runner reads nothing else of the command line.
+function checkStopAlone(values) {
+  const others = Object.keys(values).filter((name) => name !== "stop");
+  if (others.length) throw new UserError(`\`--stop\` takes no other option; usage: ${USAGE.run}`);
+}
+
+// Refuses `--job` next to `--watch`: running one job and watching the whole queue are opposite intents.
+function checkJobNotWatched(values) {
+  if (values.job !== undefined && values.watch !== undefined) {
+    throw new UserError(`\`--job\` and \`--watch\` cannot be used together; usage: ${USAGE.run}`);
+  }
+}
+
+// What the operator reads after a stop, and the exit code it answers with: only a runner that refuses to die fails.
+function stopReport({ outcome, pid }) {
+  if (outcome === "absent") return { line: "runner is not running", code: 0 };
+  if (outcome === "stale") return { line: "runner was not running (stale pidfile removed)", code: 0 };
+  if (outcome === "stopped") return { line: `runner stopped (pid ${pid})`, code: 0 };
+  const seconds = STOP_TIMEOUT_MS / 1000;
+  return { line: `runner (pid ${pid}) did not stop within ${seconds}s; it finishes the job it is running and exits by itself`, code: 1 };
+}
+
+// Runs `queue run --stop`, which ends the watcher registered in the pidfile.
+async function runStop(ctx) {
+  const report = stopReport(await stopRunner({ env: ctx.env, killImpl: ctx.killImpl }));
+  ctx.out(report.line);
+  return report.code;
+}
+
+// Runs the watch loop in this process, clearing the registration this very process was started under.
+async function runWatchHere({ intervalS, jobId, max }, ctx) {
+  try {
+    await runWatch({ intervalS, jobId, max, env: ctx.env, onCycle: (cycle) => printCycle(cycle, ctx) });
+  } finally {
+    removeOwnRunnerPidfile(ctx.env);
+  }
+}
+
+// Runs `queue run`: it starts the runner detached unless `--foreground`, `--dry` or `--stop` says otherwise.
 async function runRun(argv, ctx) {
-  const { values, positionals } = parseCommand(normalizeWatchArgv(argv), {
-    job: { type: "string" },
-    max: { type: "string" },
-    watch: { type: "string" },
-    dry: { type: "boolean" },
-    json: { type: "boolean" },
-  });
+  const { values, positionals } = parseCommand(normalizeWatchArgv(argv), RUN_OPTIONS);
   checkArgs(positionals, { max: 0, usage: USAGE.run });
+  if (values.stop === true) {
+    checkStopAlone(values);
+    return await runStop(ctx);
+  }
+  checkJobNotWatched(values);
   const jobId = requireInt("--job", values.job) ?? null;
   const max = requireInt("--max", values.max) ?? null;
   if (values.dry) {
@@ -299,10 +419,9 @@ async function runRun(argv, ctx) {
     else for (const line of formatDry(report)) ctx.out(line);
     return;
   }
-  if (values.watch !== undefined) {
-    await runWatch({ intervalS: requireInt("--watch", values.watch), jobId, max, env: ctx.env, onCycle: (cycle) => printCycle(cycle, ctx) });
-    return;
-  }
+  const intervalS = values.watch === undefined ? null : requireInt("--watch", values.watch);
+  if (values.foreground !== true) return await startDetached({ jobId, max, watchIntervalS: intervalS }, ctx);
+  if (intervalS !== null) return await runWatchHere({ intervalS, jobId, max }, ctx);
   const cycle = await runCycle({ jobId, max, env: ctx.env });
   if (values.json) ctx.out(JSON.stringify(cycle));
   else printCycle(cycle, ctx);
@@ -328,9 +447,11 @@ async function runRetry(argv, ctx) {
     note: { type: "string" },
     fresh: { type: "boolean" },
     run: { type: "boolean" },
+    foreground: { type: "boolean" },
     json: { type: "boolean" },
   });
   checkArgs(positionals, { min: 1, usage: USAGE.retry });
+  checkForegroundNeedsRun(values, USAGE.retry);
   const { job, runDir } = applyRetry({
     id: requireInt("id", positionals[0]),
     note: values.note,
@@ -340,7 +461,7 @@ async function runRetry(argv, ctx) {
   if (values.json) ctx.out(JSON.stringify({ job }));
   else ctx.out(`job #${job.id} is pending again${values.fresh === true ? ", starting from phase 0" : ""}`);
   reportRunDir(runDir, ctx);
-  return values.run === true ? await runInForeground(job, ctx) : 0;
+  return values.run === true ? await runNow(job, values, ctx) : 0;
 }
 
 // Runs `queue pause`, which stops new claims without touching any job.

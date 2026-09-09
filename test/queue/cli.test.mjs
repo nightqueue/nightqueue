@@ -107,9 +107,9 @@ test("queue add without a project takes the one of the current directory and joi
   assert.equal(escaped.stdout.includes("running job"), false, "a prompt that mentions --run ran the job");
 });
 
-test("queue add --run runs the job in the foreground and answers with its outcome", (t) => {
+test("queue add --run --foreground runs the job here and answers with its outcome", (t) => {
   const env = makeCliHome(t, "cli-add-run");
-  const ran = runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]);
+  const ran = runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]);
   assert.equal(ran.status, 0, ran.stderr);
   assert.ok(
     ran.stdout.indexOf("queued job #1") < ran.stdout.indexOf("running job #1"),
@@ -120,15 +120,15 @@ test("queue add --run runs the job in the foreground and answers with its outcom
   assert.equal(getJob(1, env).status, "done");
 });
 
-test("queue add --run exits 1 on any outcome other than done, and when the job never started", (t) => {
+test("queue add --run --foreground exits 1 on any outcome other than done, and when the job never started", (t) => {
   const env = makeCliHome(t, "cli-add-run-gate", [{ stdout: gateStream(), exitCode: 0 }]);
-  const gated = runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]);
+  const gated = runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]);
   assert.equal(gated.status, 1, gated.stdout);
   assert.match(gated.stdout, /job #1 gate/);
   assert.equal(getJob(1, env).status, "gate");
 
   claimJobById(addJob({ project: "alpha", prompt: "hold the only slot" }, env).id, { worker: "host:4242", cap: 4 }, env);
-  const busy = runCli(env, ["queue", "add", "alpha", "fix the parser", "--run"]);
+  const busy = runCli(env, ["queue", "add", "alpha", "fix the parser", "--run", "--foreground"]);
   assert.equal(busy.status, 1, busy.stdout);
   assert.match(busy.stdout, /job #3 did not start \(project-busy\); it stays in the queue/);
   assert.equal(getJob(3, env).status, "pending");
@@ -223,7 +223,7 @@ test("the queue runs a job end to end: add, run, status and log", (t) => {
   const env = makeCliHome(t, "cli-smoke");
   assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker"]).status, 0);
 
-  const ran = runCli(env, ["queue", "run", "--job", "1"]);
+  const ran = runCli(env, ["queue", "run", "--job", "1", "--foreground"]);
   assert.equal(ran.status, 0, ran.stderr);
   assert.match(ran.stdout, /job #1 done https:\/\/github\.com\/acme\/api\/pull\/42/);
 
@@ -277,12 +277,12 @@ test("queue run --dry only reports, and pause stops the claiming until resume", 
 
   assert.equal(runCli(env, ["queue", "pause"]).status, 0);
   assert.equal(existsSync(queuePausedPath(env)), true);
-  assert.match(runCli(env, ["queue", "run"]).stdout, /nothing to run \(paused\)/);
+  assert.match(runCli(env, ["queue", "run", "--foreground"]).stdout, /nothing to run \(paused\)/);
   assert.equal(getJob(id, env).status, "pending");
 
   assert.equal(runCli(env, ["queue", "resume"]).status, 0);
   assert.equal(existsSync(queuePausedPath(env)), false);
-  assert.match(runCli(env, ["queue", "run"]).stdout, /job #1 done/);
+  assert.match(runCli(env, ["queue", "run", "--foreground"]).stdout, /job #1 done/);
 });
 
 test("queue cancel takes a pending job and refuses one that is running under a live lease", (t) => {
@@ -305,7 +305,7 @@ test("queue cancel takes a pending job and refuses one that is running under a l
 
 test("queue cancel closes a gated job and the status still shows it with its note", (t) => {
   const env = makeCliHome(t, "cli-cancel-gate", [{ stdout: gateStream(), exitCode: 0 }]);
-  const gated = runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]);
+  const gated = runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]);
   assert.equal(gated.status, 1, gated.stdout);
   assert.equal(getJob(1, env).status, "gate");
   const finishedAt = getJob(1, env).finished_at;
@@ -328,7 +328,7 @@ test("queue cancel closes a gated job and the status still shows it with its not
 
 test("queue status of a gated job spells the reason out and says how to answer it", (t) => {
   const env = makeCliHome(t, "cli-status-notice", [{ stdout: gateStream(), exitCode: 0 }]);
-  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]).status, 1);
+  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 1);
   assert.equal(getJob(1, env).status, "gate");
 
   const status = runCli(env, ["queue", "status", "1"]);
@@ -346,7 +346,7 @@ test("queue status of a gated job spells the reason out and says how to answer i
 
 test("queue retry refuses a gated job without --note, printing why the job is waiting", (t) => {
   const env = makeCliHome(t, "cli-retry-refusal", [{ stdout: gateStream(), exitCode: 0 }]);
-  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]).status, 1);
+  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 1);
 
   const refused = runCli(env, ["queue", "retry", "1"]);
   assert.equal(refused.status, 1);
@@ -357,7 +357,7 @@ test("queue retry refuses a gated job without --note, printing why the job is wa
 
 test("queue retry answers the gate, sends the job back to the queue and keeps what makes it resume", (t) => {
   const env = makeCliHome(t, "cli-retry-gate", [{ stdout: gateStream(), exitCode: 0 }]);
-  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]).status, 1);
+  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 1);
   const gated = getJob(1, env);
 
   const retried = runCli(env, ["queue", "retry", "1", "--note", "rename the column"]);
@@ -374,7 +374,7 @@ test("queue retry answers the gate, sends the job back to the queue and keeps wh
 
 test("queue retry --fresh starts from phase 0 and drops the run directory of the previous attempt", (t) => {
   const env = makeCliHome(t, "cli-retry-fresh", [{ stdout: gateStream(), exitCode: 0 }]);
-  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]).status, 1);
+  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 1);
   const dir = runDir("alpha", getJob(1, env).slug, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(`${dir}/01-triage.md`, "triage\n");
@@ -386,14 +386,14 @@ test("queue retry --fresh starts from phase 0 and drops the run directory of the
   assert.equal(getJob(1, env).slug, null);
 });
 
-test("queue retry --run takes the job through the runner in the foreground", (t) => {
+test("queue retry --run --foreground takes the job through the runner in this process", (t) => {
   const env = makeCliHome(t, "cli-retry-run", [
     { stdout: gateStream(), exitCode: 0 },
     { stdout: doneStream(), exitCode: 0 },
   ]);
-  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"]).status, 1);
+  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 1);
 
-  const retried = runCli(env, ["queue", "retry", "1", "--note", "go on", "--run"]);
+  const retried = runCli(env, ["queue", "retry", "1", "--note", "go on", "--run", "--foreground"]);
   assert.equal(retried.status, 0, `${retried.stdout}\n${retried.stderr}`);
   assert.match(retried.stdout, /running job #1 in the foreground/);
   assert.equal(getJob(1, env).status, "done");
@@ -442,6 +442,10 @@ test("an unrecognized token is always an error, and never falls through to runni
     [["queue", "run", "1"], /unexpected argument `1`/],
     [["queue", "status", "1", "2"], /unexpected argument `2`/],
     [["queue", "cancel"], /missing argument/],
+    [["queue", "run", "--stop", "--job", "1"], /`--stop` takes no other option/],
+    [["queue", "run", "--stop", "--foreground"], /`--stop` takes no other option/],
+    [["queue", "add", "alpha", "fix it", "--foreground"], /`--foreground` only has meaning with `--run`/],
+    [["queue", "retry", "1", "--foreground"], /`--foreground` only has meaning with `--run`/],
   ];
   for (const [args, message] of cases) {
     const result = runCli(env, args);

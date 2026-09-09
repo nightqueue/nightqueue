@@ -22,6 +22,7 @@ import { PATH_MARK, binDirInPath, rcFilePath } from "../host/shell.mjs";
 import { DB_USER_VERSION, openDbReadOnly } from "../memory/db.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
 import { ORPHAN_PREDICATE } from "../memory/jobs.mjs";
+import { runnerPidfileState } from "../queue/pidfile.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
 const COMMAND_TIMEOUT_MS = 5000;
@@ -282,9 +283,30 @@ function checkQueueJobs(ctx) {
   }
 }
 
-// Checks the queue: the pause sentinel always, the orphaned jobs only once the database exists.
+// How a live runner is described in the report, with its cadence only when the pidfile carries one.
+function liveRunnerDetail(info) {
+  const cadence = Number.isInteger(info.intervalS) ? `, ${info.mode} every ${info.intervalS} s` : "";
+  return `running (pid ${info.pid}${cadence})`;
+}
+
+// Checks the pidfile of the watch runner, which the diagnosis only ever reads.
+function checkRunner(ctx) {
+  const name = "runner pidfile";
+  const state = runnerPidfileState(ctx.env, ctx.killImpl);
+  if (state.status === "missing") return check(name, "ok", "no runner registered");
+  if (state.status === "alive") return check(name, "ok", liveRunnerDetail(state.info));
+  if (state.status === "stale") {
+    return check(name, "warn", `stale (pid ${state.info.pid} is gone)`, "run `nightshift queue run --stop` to clear it");
+  }
+  if (state.status === "foreign") {
+    return check(name, "warn", `pid ${state.info.pid} belongs to another user, so it is not the runner`, `remove ${state.path}`);
+  }
+  return check(name, "warn", `unreadable: ${state.error}`, `remove ${state.path}`);
+}
+
+// Checks the queue: the pause sentinel and the runner always, the orphaned jobs only once the database exists.
 function checkQueue(ctx) {
-  const checks = [checkQueuePause(ctx)];
+  const checks = [checkQueuePause(ctx), checkRunner(ctx)];
   if (existsSync(dbPath(ctx.env))) checks.push(checkQueueJobs(ctx));
   return checks;
 }

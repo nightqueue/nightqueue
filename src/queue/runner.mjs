@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, openSync } from "node:fs";
+import { appendFileSync, closeSync, mkdirSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, logsDir } from "../config/paths.mjs";
@@ -15,9 +15,14 @@ import { extractSessionIdFromEventLine, extractSlugFromEventLine, extractUsage, 
 // Interval between two cycles of `queue run --watch` when the operator gives no number.
 export const WATCH_INTERVAL_DEFAULT_S = 30;
 
-// Waits the given number of milliseconds.
+// Waits the given number of milliseconds, through a promise that can be cancelled before its timer fires.
 function sleep(ms) {
-  return new Promise((done) => setTimeout(done, ms));
+  let timer = null;
+  const waiting = new Promise((done) => {
+    timer = setTimeout(done, ms);
+  });
+  waiting.cancel = () => clearTimeout(timer);
+  return waiting;
 }
 
 const DEFAULT_DEPS = {
@@ -43,6 +48,7 @@ function withDefaults(deps, env) {
 function installShutdown(state) {
   const onSignal = () => {
     state.stopping = true;
+    state.wake?.();
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
@@ -251,6 +257,22 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
   return { processed, reason, cap, stopped: ctx.state.stopping };
 }
 
+// Waits until the next pass over the queue, or until a shutdown signal wakes the runner up first.
+function waitNextPass(ms, state, sleepImpl) {
+  const waiting = sleepImpl(ms);
+  return new Promise((done) => {
+    const finish = () => {
+      state.wake = null;
+      done();
+    };
+    state.wake = () => {
+      waiting?.cancel?.();
+      finish();
+    };
+    Promise.resolve(waiting).then(finish);
+  });
+}
+
 // Repeats the cycle while the runner lives, sleeping between two passes over the queue.
 export async function runWatch({ intervalS = WATCH_INTERVAL_DEFAULT_S, jobId = null, max = null, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {
   const options = withDefaults(deps, env);
@@ -263,7 +285,7 @@ export async function runWatch({ intervalS = WATCH_INTERVAL_DEFAULT_S, jobId = n
       passes.push(pass);
       onCycle(pass);
       if (state.stopping || (cycles !== null && passes.length >= cycles)) break;
-      await options.sleepImpl(Math.max(1, Number(intervalS) || WATCH_INTERVAL_DEFAULT_S) * 1000);
+      await waitNextPass(Math.max(1, Number(intervalS) || WATCH_INTERVAL_DEFAULT_S) * 1000, state, options.sleepImpl);
     }
   } finally {
     uninstall();
@@ -276,17 +298,47 @@ function compactStamp() {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 }
 
+// Arguments of the detached child: `--foreground` is what makes it run the queue instead of detaching again.
+function detachedArgs({ jobId, max, watchIntervalS }) {
+  return [
+    cliEntrypoint(),
+    "queue",
+    "run",
+    "--foreground",
+    ...(jobId === null ? [] : ["--job", String(jobId)]),
+    ...(max === null ? [] : ["--max", String(max)]),
+    ...(watchIntervalS === null ? [] : ["--watch", String(watchIntervalS)]),
+  ];
+}
+
+// Records an asynchronous spawn failure in the runner log, the file the started line already points at.
+function recordSpawnFailure(logPath, err) {
+  try {
+    appendFileSync(logPath, `could not start the detached runner: ${err?.message ?? String(err)}\n`);
+  } catch {}
+}
+
+// Starts the child on the open log descriptor and takes over the failures that arrive after this call returned.
+function spawnRunner({ args, fd, logPath, env, spawnImpl }) {
+  const child = spawnImpl(process.execPath, args, { detached: true, stdio: ["ignore", fd, fd], env: { ...env } });
+  child?.on?.("error", (err) => recordSpawnFailure(logPath, err));
+  child?.unref?.();
+  return { pid: child?.pid ?? null, logPath };
+}
+
 // Starts `nightshift queue run` detached, with its output going to a log file, and returns right away.
-export function launchDetachedRunner({ jobId = null, env = process.env, spawnImpl = spawn } = {}) {
+export function launchDetachedRunner({ jobId = null, max = null, watchIntervalS = null, env = process.env, spawnImpl = spawn } = {}) {
   ensureHome(env);
   const logPath = join(logsDir(env), `runner-${compactStamp()}.log`);
   try {
     mkdirSync(logsDir(env), { recursive: true });
     const fd = openSync(logPath, "a");
-    const args = [cliEntrypoint(), "queue", "run", ...(jobId === null ? [] : ["--job", String(jobId)])];
-    const child = spawnImpl(process.execPath, args, { detached: true, stdio: ["ignore", fd, fd], env: { ...env } });
-    child?.unref?.();
-    return { pid: child?.pid ?? null, logPath };
+    const args = detachedArgs({ jobId, max, watchIntervalS });
+    try {
+      return spawnRunner({ args, fd, logPath, env, spawnImpl });
+    } finally {
+      closeSync(fd);
+    }
   } catch (err) {
     throw new UserError(`could not start the detached runner: ${err?.message ?? String(err)}`);
   }
