@@ -1,0 +1,53 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+      # Node 22 bundles npm 10.9.8 and npm OIDC trusted publishing requires npm >= 11.5.1,
+      # so without this upgrade the first pushed tag fails at publish time with an auth error.
+      - name: npm supports trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+          node -e 'const v=process.argv[1].split(".").map(Number);const f=[11,5,1];for(let i=0;i<3;i++){if(v[i]>f[i])process.exit(0);if(v[i]<f[i]){console.error(`npm ${process.argv[1]} is below the 11.5.1 floor of npm OIDC trusted publishing`);process.exit(1);}}' "$(npm --version)"
+      - run: npm ci
+      - run: npm run release:check
+      - name: tag matches the manifest
+        run: |
+          declared="v$(node -p "require('./package.json').version")"
+          [ "$GITHUB_REF_NAME" = "$declared" ] || { echo "tag $GITHUB_REF_NAME does not match package.json ($declared)"; exit 1; }
+      - run: npm publish --provenance --access public
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: release notes from the changelog
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          node scripts/changelog-section.mjs "$version" > notes.md
+      - name: create the github release
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md

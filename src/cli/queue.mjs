@@ -4,6 +4,7 @@ import { withLock } from "../config/lock.mjs";
 import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
 import { projectByName, registrationOffer, resolveProject } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
+import { updateNoticeLine } from "../host/update-notice.mjs";
 import {
   addJob,
   cancelJob,
@@ -367,8 +368,8 @@ function backlogLine({ activeJobs, counts, runner }) {
   return `${pendingJobs(counts.pending)} waiting - start the batch: nightshift queue run`;
 }
 
-// Runs `queue status`, for one job or for the tail of the queue.
-async function runStatus(argv, ctx) {
+// Prints `queue status`, for one job or for the tail of the queue, and tells whether it answered in json.
+function printStatus(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" }, limit: { type: "string" } });
   checkArgs(positionals, { max: 1, usage: USAGE.status });
   if (positionals.length === 1) {
@@ -377,24 +378,32 @@ async function runStatus(argv, ctx) {
     if (!job) throw new UserError(`unknown job \`${id}\``);
     if (values.json) ctx.out(JSON.stringify({ job }));
     else for (const line of formatDetail(job)) ctx.out(line);
-    return;
+    return values.json === true;
   }
   const jobs = listJobs({ limit: requireInt("--limit", values.limit) }, ctx.env).map(jobView);
   const counts = countsByStatus(ctx.env);
   const runner = runnerView(runnerPidfileState(ctx.env, ctx.killImpl));
   if (values.json) {
     ctx.out(JSON.stringify({ runner, jobs, counts }));
-    return;
+    return true;
   }
   ctx.out(formatRunner(runner));
   if (!jobs.length) {
     ctx.out("no jobs in the queue");
-    return;
+    return false;
   }
   for (const line of formatJobLines(jobs, ctx.env)) ctx.out(line);
   ctx.out(Object.entries(counts).map(([status, total]) => `${status}=${total}`).join("  "));
   const backlog = backlogLine({ activeJobs: countActiveJobs(ctx.env), counts, runner });
   if (backlog) ctx.out(backlog);
+  return false;
+}
+
+// Runs `queue status` and closes the text output with the update notice, which the json output never carries.
+async function runStatus(argv, ctx) {
+  if (printStatus(argv, ctx)) return;
+  const notice = await updateNoticeLine({ env: ctx.env, fetchImpl: ctx.fetchImpl });
+  if (notice) ctx.out(notice);
 }
 
 // Report lines of `queue run --dry`, the cycle that only reads.

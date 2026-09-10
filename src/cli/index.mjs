@@ -51,7 +51,7 @@ commands:
   setup [--from <dir>] [--remove]           install the runtime in the home and register the MCP server, hooks and plugin in the host
   doctor [--json] [--check-updates]         check the host and the home, one line per check; exits 1 on any failure
   init [path] [--gh|--no-gh]                install the runtime and register the git repository at [path] (default: .) as a project
-  update [<version>] [--from <dir>]         reinstall the runtime at the newest version (or at <version>) and re-point the host at it
+  update [<version>] [--from] [--force]     reinstall the runtime at the newest version (or at <version>) and re-point the host at it
   org add <name> [--display-name "..."]     create an org
   org list [--json]                         list orgs, their connection slots and project counts
   org rename <old> <new>                    rename an org and every project pointing at it

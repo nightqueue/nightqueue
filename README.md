@@ -299,6 +299,52 @@ file that is not valid JSON, or that carries a `__proto__`, `constructor` or
 `prototype` key, is never rewritten: the step is reported as `failed` and the
 rest of the setup goes on.
 
+## Updating
+
+You find out that a new version exists without asking for it. `nightshift queue
+status` and the context block the session hook injects at the start of a Claude
+Code session inside a registered project close with a single line whenever the
+registry has something newer than the runtime you have installed:
+
+```
+nightshift 0.2.0 is available (installed 0.1.0) - run `nightshift update`
+```
+
+That line is passive and cheap. The registry is asked at most once every 24
+hours; the answer is cached in `$NIGHTSHIFT_HOME/update-check.json` as
+`{ "checkedAt", "latest" }` and every invocation in between reads that file
+instead of the network. The request has a three second timeout and the whole
+check is fail-open: a registry that does not answer, a reply that is not a
+version or a cache that cannot be read never breaks the command and never prints
+anything - the line simply does not appear. `--json` output never carries it,
+and neither does a job the runner spawned, because an unattended session has
+nobody to read a notice. `nightshift doctor --check-updates` asks the same
+question on demand (see `## Doctor`).
+
+`nightshift update` is how you take the new version (see `## Install` for what it
+reinstalls). It refuses while the queue is working:
+
+```
+nightshift: a job is running - update after it finishes, or stop the runner first (nightshift queue run --stop)
+```
+
+The refusal exits `1` and has two causes: a job holding a live lease, or a
+watcher registered in `$NIGHTSHIFT_HOME/runner.pid`. A job left behind by a crash
+does not count - its lease is dead, so it never blocks the command that repairs
+the installation. `nightshift update --force` overrides both, for when you know
+the state of the machine better than the pidfile does.
+
+`NIGHTSHIFT_NO_UPDATE_CHECK=1` turns the check off entirely: no cache read, no
+request, no line, on every surface.
+
+**There is no auto-update, and that is a decision.** This runtime executes
+unattended jobs: a batch started at night runs for hours with nobody watching it.
+Code that replaced itself under a job already in flight would change the
+pipeline, the hooks and the MCP server mid-run, and the failure would land on a
+pull request nobody could explain the next morning. So the upgrade is always a
+command you run, at a moment you chose - and it refuses on its own when that
+moment is the wrong one.
+
 ## Try it without installing
 
 ```
@@ -909,10 +955,15 @@ npm run release:check                       # the suite, then the tarball and th
 ```
 
 `npm run release:check` is the checklist before a release: it runs the suite,
-runs `npm pack --dry-run` to prove the tarball still builds, and checks that
-`package.json`, the top entry of `CHANGELOG.md` and the `Licensed Work:` line of
-`LICENSE` all declare the same version. Any divergence prints what disagrees and
-exits 1. It never publishes anything.
+refuses a working tree with uncommitted changes, runs `npm pack --dry-run` to
+prove the tarball still builds, and checks that `package.json`, the top entry of
+`CHANGELOG.md` and the `Licensed Work:` line of `LICENSE` all declare the same
+version. Any divergence prints what disagrees and exits 1. It never publishes
+anything.
+
+Publishing itself is a pushed tag, never a local `npm publish`:
+`docs/RELEASING.md` has the four-step flow and the one-time npmjs.com setup that
+the release workflow depends on.
 
 The decisions that shape the project live in `docs/decisions/`, one record per
 decision, and neither that directory nor `scripts/` is part of the published

@@ -28,3 +28,20 @@ export function versionMismatches({ manifest, changelog, license }) {
     mismatch({ file: "LICENSE", format: LICENSE_FORMAT, version: licenseVersion(license), manifest }),
   ].filter((message) => message !== null);
 }
+
+// Escapes a value so it can sit literally inside a regular expression.
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Body of the changelog entry of one version - the text between its `## <version>` heading and the next `## ` heading - or null when that version has no heading.
+export function changelogSection(text, version) {
+  if (typeof version !== "string" || !version) return null;
+  const lines = String(text ?? "").split("\n");
+  const heading = new RegExp(`^## ${escapeRegExp(version)}(?:\\s|$)`);
+  const start = lines.findIndex((line) => heading.test(line));
+  if (start === -1) return null;
+  const rest = lines.slice(start + 1);
+  const next = rest.findIndex((line) => line.startsWith("## "));
+  return (next === -1 ? rest : rest.slice(0, next)).join("\n").trim();
+}

@@ -4,6 +4,33 @@ Every notable change of this project is recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- Release by tag: pushing a `v*` tag publishes the package to npm with
+  provenance, through OIDC trusted publishing and without any npm token in the
+  repository, and opens the GitHub Release of that tag with the CHANGELOG
+  section of the version. A second workflow runs the suite on Node 22 and Node
+  24 for every pull request and every push to `main`, and `docs/RELEASING.md`
+  documents the flow plus the one-time trusted publisher setup on npmjs.com.
+- Passive update notice: `nightshift queue status` and the session-start context
+  block close with one line when a newer version is published. The registry is
+  asked at most once every 24 hours and the answer is cached in
+  `$NIGHTSHIFT_HOME/update-check.json`; the check is fail-open, so a registry
+  that does not answer costs nothing and prints nothing. `--json` output and
+  unattended jobs never carry the line, and `NIGHTSHIFT_NO_UPDATE_CHECK=1` turns
+  the check off entirely.
+- `nightshift update` refuses while a job holds a live lease or a watcher is
+  registered, pointing at `nightshift queue run --stop`; a job left behind by a
+  crash never blocks it, and `--force` overrides both refusals.
+
+### Changed
+
+- `npm run release:check` also refuses a working tree with uncommitted changes,
+  before the version and the pack checks, because a publish ships what is on
+  disk and not what is committed.
+
 ## 0.1.0 - 2026-09-09
 
 First public release.

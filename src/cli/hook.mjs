@@ -50,7 +50,7 @@ async function readStdinJson(stdin, { timeoutMs = STDIN_TIMEOUT_MS } = {}) {
 // Runs a hook, turning any failure into its neutral answer, because a hook must never break the session.
 async function safeRun({ handler, fallback }, input, ctx) {
   try {
-    return await handler({ input, env: ctx.env });
+    return await handler({ input, env: ctx.env, fetchImpl: ctx.fetchImpl });
   } catch (err) {
     ctx.err(`nightshift hook: ${err?.message ?? String(err)}`);
     return fallback;

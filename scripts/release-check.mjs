@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +40,18 @@ function packedTarball(stdout) {
   return entry;
 }
 
+// Checks that the working tree has nothing uncommitted, because a publish ships what is on disk, not what is committed.
+// A git that does not answer is its own failure, never reported as a clean or as a dirty tree.
+function checkTree() {
+  const result = spawnSync("git", ["status", "--porcelain"], { cwd: ROOT, encoding: "utf8" });
+  if (result.error || result.status !== 0) {
+    throw new Error(`cannot read the git status of ${ROOT}: ${result.error?.message || result.stderr?.trim() || `exit ${result.status}`}`);
+  }
+  const dirty = result.stdout.split("\n").filter(Boolean);
+  if (dirty.length) throw new Error(`the working tree has uncommitted changes:\n${dirty.join("\n")}\ncommit or stash them before releasing`);
+  return "clean";
+}
+
 // Checks that the manifest, the changelog and the license declare the same version, and returns the one they agree on.
 function checkVersions() {
   const manifest = manifestVersion(readRootFile("package.json"));
@@ -68,6 +81,7 @@ function checkPack() {
 // Runs the release checklist, printing one line per check and exiting 1 on the first thing that would make a bad publish.
 function main() {
   try {
+    process.stdout.write(`${stepLine("tree", "ok", checkTree())}\n`);
     process.stdout.write(`${stepLine("versions", "ok", checkVersions())}\n`);
     process.stdout.write(`${stepLine("pack", "ok", checkPack())}\n`);
   } catch (err) {

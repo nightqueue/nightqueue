@@ -1,3 +1,4 @@
+import { updateNoticeLine } from "../host/update-notice.mjs";
 import { projectFromCwd } from "../memory/db.mjs";
 import { markInjected } from "../memory/lessons.mjs";
 import { recentMemories } from "../memory/memory.mjs";
@@ -42,7 +43,7 @@ function stampInjection(sessionId, lessons, env) {
 }
 
 // Builds the context block injected at the start of a session: top lessons plus the project memories.
-export async function runSessionStart({ input, env = process.env }) {
+export async function runSessionStart({ input, env = process.env, fetchImpl = null }) {
   if (env?.NIGHTSHIFT_REFLECT === "1") return "";
   const cwd = typeof input?.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
   const sessionId = typeof input?.session_id === "string" ? input.session_id : "unknown";
@@ -56,5 +57,7 @@ export async function runSessionStart({ input, env = process.env }) {
   ].filter(Boolean);
   if (!sections.length) return "";
   stampInjection(sessionId, lessons, env);
-  return `# Nightshift context\n\n${sections.join("\n\n")}\n\n${FOOTER}`.slice(0, MAX_OUTPUT);
+  const notice = await updateNoticeLine({ env, fetchImpl });
+  const block = `# Nightshift context\n\n${sections.join("\n\n")}\n\n${FOOTER}`;
+  return (notice ? `${block}\n\n${notice}` : block).slice(0, MAX_OUTPUT);
 }
