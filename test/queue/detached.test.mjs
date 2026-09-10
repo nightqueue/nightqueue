@@ -203,7 +203,7 @@ test("queue status opens with the state of the runner, in the table and in the j
 
   const table = await runCli(env, ["queue", "status"], { alive });
   assert.equal(table.out[0], `runner: running (pid ${CHILD_PID}, watch every 30 s, since ${startedAt})`);
-  assert.match(table.stdout, /#1\s+pending\s+alpha/, "the runner line took the place of the table");
+  assert.match(table.stdout, /#1\s+○ pending\s+-\s+-\s+alpha/, "the runner line took the place of the table");
 
   const payload = JSON.parse((await runCli(env, ["queue", "status", "--json"], { alive })).stdout);
   assert.deepEqual(payload.runner, { running: true, pid: CHILD_PID, mode: "watch", intervalS: 30, startedAt, logPath: "/tmp/a.log" });

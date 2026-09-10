@@ -574,7 +574,8 @@ nightshift queue add api "fix the flaky worker" --priority 2   # enqueue a job
 nightshift queue add "fix the flaky worker"                    # same, for the project of the current directory
 nightshift queue add fix the flaky worker --run                # enqueue and start the runner on it, detached
 nightshift queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
-nightshift queue status [--limit 10] [--json]                  # the state of the runner, the tail of the queue and the counts
+nightshift queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
+nightshift queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
 nightshift queue status 7 [--json]                             # one job, never with its prompt
 nightshift queue run [--job 7] [--max 2] [--dry]               # start the runner detached; --dry only reports
 nightshift queue run --watch [30]                              # start a watcher, one pass every N seconds
@@ -669,15 +670,23 @@ runner picks it up as if it had never started. The watcher then removes its own
 registration - and only its own, matched by pid, so it never clears the pidfile of
 another runner.
 
-**`queue status` says what a running job is doing.** The table is one line per
-job, and the line of a `running` job carries two more columns: how long it has
-been running, from its own `started_at`, and the last thing the orchestrator
-said in its log (`» ...`, clipped to fit the line). Only running jobs are read
-from disk, and only the tail of their log, so listing a job whose stream is
-already hundreds of kilobytes costs nothing. A job with no log yet (it is still
-in the preflight of the run) and a log that cannot be read both show `-` instead
-of a narration: the table is always printed in full and the exit code stays `0`.
-A job in a final state keeps exactly the line it always had, and `--json`
+**`queue status` is a table, and `--follow` keeps it live.** One row per job with
+the columns of the cockpit: `ID STATUS DURATION TOKENS PROJECT SLUG/LAST PR`.
+`STATUS` carries an icon (`● running`, `✓ done`, `⚑ gate`, `✗ failed`,
+`⊘ cancelled`, `○ pending`) and a color on a terminal. `DURATION` is how long a
+running job has been up (from its own `started_at`) or how long a finished one
+took; `TOKENS` is what it spent so far (`374k`, `1.2M`). `SLUG/LAST` is the last
+thing the orchestrator said in its log while the job runs (`» ...`), the first
+line of the notice of a `gate` or `failed` job, and the slug otherwise; `PR` is
+the URL of the pull request, bare, so the terminal makes it clickable on its own. Only running jobs are read from disk, and only the tail of their log, so
+listing a job whose stream is already hundreds of kilobytes costs nothing; a job
+with no log yet and a log that cannot be read both show `-`, the table is always
+printed in full and the exit code stays `0`. The columns adapt to the width of
+the terminal and `SLUG/LAST` is cut with an ellipsis, never wrapped; on a pipe there
+is no color and no cursor movement. `nightshift queue status --follow [seconds]`
+(default 2) redraws the table in place until Ctrl-C - the terminal equivalent of
+a queue panel - and `--until-idle` makes it exit by itself once nothing is
+running or pending. `--follow` refuses `--json` and a single job id. `--json`
 answers with the same fields as before. The listing opens with the state of the
 runner - `runner: running (pid <pid>, watch every <n> s, since <iso>)` or
 `runner: stopped` - and `--json` carries the same thing under `runner`. Reading the

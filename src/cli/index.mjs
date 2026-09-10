@@ -73,7 +73,8 @@ commands:
   embed backfill                            compute the embeddings of the lessons that still have none
   memory stats [--json]                     count lessons, memories, index entries and runs per project
   queue add [project] <prompt...> [--run]   enqueue an unattended /nightshift:resolve run; --run starts it detached
-  queue status [id] [--limit] [--json]      show one job or the tail of the queue plus the counts per status
+  queue status [id] [--limit] [--json]      show one job or the table of the queue plus the counts per status
+  queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)
   queue run [--job | --watch] [--max]       start the runner detached; --foreground runs it here, --stop ends a watcher
   queue cancel <id> [--reason "..."]        cancel a pending, gated or orphaned job
   queue retry <id> [--note] [--fresh]       send a gated, failed or cancelled job back to the queue; --run starts it detached

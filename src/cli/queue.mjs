@@ -42,7 +42,7 @@ import { confirm } from "./prompt.mjs";
 
 const USAGE = {
   add: "nightshift queue add [project] <prompt...> [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes]",
-  status: "nightshift queue status [id] [--limit <n>] [--json]",
+  status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle]",
   run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <n>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
   retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
@@ -299,43 +299,131 @@ function parseAdd(argv) {
   return { values, positionals: words };
 }
 
-const NARRATION_LIMIT = 60;
-const JOB_LINE_WIDTH = 58;
+const FOLLOW_INTERVAL_DEFAULT_S = 2;
+const DEFAULT_WIDTH = 120;
+const MIN_LAST_WIDTH = 20;
 
-// One line of the job table of `queue status`.
-function formatJob(job) {
-  return [
-    `#${job.id}`.padEnd(6),
-    String(job.status).padEnd(10),
-    String(job.project).padEnd(20),
-    `p${job.priority}`.padEnd(4),
-    `${job.attempts}/${job.max_attempts}`.padEnd(6),
-    job.pr_url ?? job.slug ?? "-",
-  ].join("");
+// Fixed columns of the table of `queue status`, in the order of the cockpit; SLUG/LAST takes whatever width is left and PR closes the row.
+const COLUMNS = [
+  { key: "id", title: "ID", width: 6 },
+  { key: "status", title: "STATUS", width: 13 },
+  { key: "duration", title: "DURATION", width: 10 },
+  { key: "tokens", title: "TOKENS", width: 8 },
+  { key: "project", title: "PROJECT", width: 22 },
+];
+
+// Icon and ANSI color of each status; the icon is always printed, the color only on a real terminal.
+const STATUS_STYLE = {
+  running: { icon: "●", color: "33" },
+  done: { icon: "✓", color: "32" },
+  gate: { icon: "⚑", color: "35" },
+  failed: { icon: "✗", color: "31" },
+  cancelled: { icon: "⊘", color: "2" },
+  pending: { icon: "○", color: "2" },
+};
+
+// Paints a text with an ANSI code, or leaves it alone when color is off.
+function paint(text, code, color) {
+  return color && code ? `\u001b[${code}m${text}\u001b[0m` : text;
 }
 
-// How long a running job has been up, read from its own `started_at`.
-function formatRunningFor(job, nowMs) {
+// Width of the terminal the table is drawn on, with a sane default when nobody knows.
+function terminalWidth(ctx) {
+  const columns = ctx.stdout?.columns;
+  return Number.isInteger(columns) && columns > 40 ? columns : DEFAULT_WIDTH;
+}
+
+// Width left for SLUG/LAST once the fixed columns and PR took theirs; never below the minimum, so a narrow terminal still shows something.
+function lastWidth(ctx, pr) {
+  const fixed = COLUMNS.reduce((total, column) => total + column.width, 0) + pr + 1;
+  return Math.max(MIN_LAST_WIDTH, terminalWidth(ctx) - fixed);
+}
+
+// Cuts a cell to its column, with an ellipsis when something was left out.
+function fit(text, width) {
+  const value = String(text ?? "").replace(/\s+/g, " ");
+  if (value.length <= width) return value;
+  return width <= 3 ? value.slice(0, width) : `${value.slice(0, width - 3)}...`;
+}
+
+// How long a job ran: since its start while it runs, start to finish once it stopped, nothing before it started.
+function formatDurationCell(job, nowMs) {
   const startedMs = Date.parse(String(job.started_at ?? ""));
-  return Number.isFinite(startedMs) ? formatDuration(nowMs - startedMs) : "-";
+  if (!Number.isFinite(startedMs)) return "-";
+  const finishedMs = Date.parse(String(job.finished_at ?? ""));
+  return formatDuration((Number.isFinite(finishedMs) ? finishedMs : nowMs) - startedMs);
 }
 
+// Tokens the job spent, in and out, compact: `374k`, `1.2M`, `-` before the first usage report.
+function formatTokens(job) {
+  const total = (job.tokens_in ?? 0) + (job.tokens_out ?? 0);
+  if (!Number.isFinite(total) || total <= 0) return "-";
+  if (total < 1000) return String(total);
+  if (total < 1_000_000) return `${Math.round(total / 1000)}k`;
+  return `${(total / 1_000_000).toFixed(1)}M`;
+}
+
+// The pull request of a job as its plain URL: terminals turn a bare URL into a link on their own, which an escape sequence cannot count on.
+function formatPr(job) {
+  return job.pr_url ? String(job.pr_url) : "-";
+}
+
+// Width of the PR column for this listing: the longest URL present, never less than the header.
+function prWidth(jobs) {
+  return jobs.reduce((width, job) => Math.max(width, formatPr(job).length), "PR".length);
+}
 // Last narration line of the log of a job; a log that is missing or unreadable says so instead of inventing one.
 function lastNarration(id, env) {
   const tail = readLogTail(jobLogPath(id, env));
   const line = typeof tail === "string" ? lastOrchestratorLine(tail) : "";
-  return line ? `» ${truncateByCodePoint(line, NARRATION_LIMIT)}` : "-";
+  return line ? `» ${line}` : "-";
 }
 
-// Line of a running job: the columns of the table plus how long it has been running and what it last said.
-function formatRunningJob(job, nowMs, env) {
-  return `${formatJob(job).padEnd(JOB_LINE_WIDTH)}${formatRunningFor(job, nowMs).padEnd(8)}${lastNarration(job.id, env)}`;
+// First line of the notice of a job, the reason it stopped, for the table.
+function firstNoticeLine(job) {
+  const line = String(job.notice_md ?? "").split("\n").find((entry) => entry.trim());
+  return line ? line.trim() : null;
 }
 
-// One line for each job of the table, with the live columns of the ones that are running.
-function formatJobLines(jobs, env) {
-  const nowMs = Date.now();
-  return jobs.map((job) => (job.status === "running" ? formatRunningJob(job, nowMs, env) : formatJob(job)));
+// What SLUG/LAST says about a job: what it is doing while it runs, why it stopped at the gate, its slug otherwise.
+function lastCell(job, env) {
+  if (job.status === "running") return lastNarration(job.id, env);
+  if (job.status === "gate" || job.status === "failed") return firstNoticeLine(job) ?? job.slug ?? "-";
+  return job.slug ?? "-";
+}
+
+// Cells of one row of the table, before any cut or paint.
+function rowCells(job, nowMs, env) {
+  return {
+    id: `#${job.id}`,
+    status: `${(STATUS_STYLE[job.status] ?? { icon: "·" }).icon} ${job.status}`,
+    duration: formatDurationCell(job, nowMs),
+    tokens: formatTokens(job),
+    project: String(job.project),
+    last: lastCell(job, env),
+  };
+}
+
+// One row of the table: fixed columns padded to their width, SLUG/LAST cut to what is left, the status painted on a terminal.
+function formatRow(job, { nowMs, env, width, color }) {
+  const cells = rowCells(job, nowMs, env);
+  const fixed = COLUMNS.map((column) => {
+    const cell = fit(cells[column.key], column.width - 1).padEnd(column.width);
+    return column.key === "status" ? paint(cell, STATUS_STYLE[job.status]?.color, color) : cell;
+  });
+  const last = fit(cells.last, width - 1).padEnd(width);
+  return `${fixed.join("")}${last}${formatPr(job)}`.trimEnd();
+}
+
+// Header of the table and the rule under it, dimmed on a terminal.
+function formatHeader({ width, color }) {
+  const titles = `${COLUMNS.map((column) => column.title.padEnd(column.width)).join("")}${"SLUG/LAST".padEnd(width)}PR`;
+  return [paint(titles, "2", color), paint("─".repeat(titles.length), "2", color)];
+}
+// The whole table: header, one row per job, nothing else.
+function formatTable(jobs, ctx) {
+  const layout = { nowMs: Date.now(), env: ctx.env, width: lastWidth(ctx, prWidth(jobs)), color: useColor(ctx) };
+  return [...formatHeader(layout), ...jobs.map((job) => formatRow(job, layout))];
 }
 
 // The notice of a job, printed under its own line and indented, plus the way to answer it while the job waits at the gate.
@@ -368,10 +456,71 @@ function backlogLine({ activeJobs, counts, runner }) {
   return `${pendingJobs(counts.pending)} waiting - start the batch: nightshift queue run`;
 }
 
+const STATUS_OPTIONS = {
+  json: { type: "boolean" },
+  limit: { type: "string" },
+  follow: { type: "string" },
+  "until-idle": { type: "boolean" },
+};
+
+// Gives `--follow` its default interval when the operator wrote it without one, the same way `run --watch` does.
+function normalizeFollowArgv(argv) {
+  return argv.flatMap((token, index) =>
+    token === "--follow" && !isPositiveIntToken(argv[index + 1]) ? [`--follow=${FOLLOW_INTERVAL_DEFAULT_S}`] : [token],
+  );
+}
+
+// Lines of the queue view: runner, table, counts and the backlog hint, in that order.
+function queueViewLines(values, ctx) {
+  const jobs = listJobs({ limit: requireInt("--limit", values.limit) }, ctx.env).map(jobView);
+  const counts = countsByStatus(ctx.env);
+  const runner = runnerView(runnerPidfileState(ctx.env, ctx.killImpl));
+  const lines = [formatRunner(runner)];
+  if (!jobs.length) return { lines: [...lines, "no jobs in the queue"], idle: true };
+  lines.push(...formatTable(jobs, ctx));
+  lines.push(Object.entries(counts).map(([status, total]) => `${status}=${total}`).join("  "));
+  const activeJobs = countActiveJobs(ctx.env);
+  const backlog = backlogLine({ activeJobs, counts, runner });
+  if (backlog) lines.push(backlog);
+  return { lines, idle: isQueueIdle({ activeJobs, runner }) && counts.pending === 0 };
+}
+
+// Keeps redrawing the queue view until Ctrl-C, or until the queue goes idle when asked; on a pipe it only prints what changed.
+async function followStatus(values, intervalS, ctx) {
+  const wait = ctx.sleep ?? sleep;
+  const tty = ctx.stdout?.isTTY === true;
+  let previous = null;
+  let stop = false;
+  const onSignal = () => {
+    stop = true;
+  };
+  process.once("SIGINT", onSignal);
+  try {
+    while (!stop) {
+      const view = queueViewLines(values, ctx);
+      const text = view.lines.join("\n");
+      if (tty) {
+        ctx.stdout.write(`\u001b[2J\u001b[H${text}\n${paint(`every ${intervalS}s - Ctrl-C to stop`, "2", useColor(ctx))}\n`);
+      } else if (text !== previous) {
+        for (const line of view.lines) ctx.out(line);
+        ctx.out("");
+      }
+      previous = text;
+      if (values["until-idle"] === true && view.idle) return;
+      await wait(intervalS * 1000);
+    }
+  } finally {
+    process.removeListener("SIGINT", onSignal);
+  }
+}
+
 // Prints `queue status`, for one job or for the tail of the queue, and tells whether it answered in json.
-function printStatus(argv, ctx) {
-  const { values, positionals } = parseCommand(argv, { json: { type: "boolean" }, limit: { type: "string" } });
+async function printStatus(argv, ctx) {
+  const { values, positionals } = parseCommand(normalizeFollowArgv(argv), STATUS_OPTIONS);
   checkArgs(positionals, { max: 1, usage: USAGE.status });
+  const intervalS = values.follow === undefined ? null : Math.max(1, requireInt("--follow", values.follow));
+  if (intervalS !== null && values.json) throw new UserError(`\`--follow\` cannot be used with \`--json\`; usage: ${USAGE.status}`);
+  if (intervalS !== null && positionals.length) throw new UserError(`\`--follow\` shows the whole queue, not one job; usage: ${USAGE.status}`);
   if (positionals.length === 1) {
     const id = requireInt("id", positionals[0]);
     const job = jobView(getJob(id, ctx.env));
@@ -380,28 +529,22 @@ function printStatus(argv, ctx) {
     else for (const line of formatDetail(job)) ctx.out(line);
     return values.json === true;
   }
-  const jobs = listJobs({ limit: requireInt("--limit", values.limit) }, ctx.env).map(jobView);
-  const counts = countsByStatus(ctx.env);
-  const runner = runnerView(runnerPidfileState(ctx.env, ctx.killImpl));
   if (values.json) {
-    ctx.out(JSON.stringify({ runner, jobs, counts }));
+    const jobs = listJobs({ limit: requireInt("--limit", values.limit) }, ctx.env).map(jobView);
+    ctx.out(JSON.stringify({ runner: runnerView(runnerPidfileState(ctx.env, ctx.killImpl)), jobs, counts: countsByStatus(ctx.env) }));
     return true;
   }
-  ctx.out(formatRunner(runner));
-  if (!jobs.length) {
-    ctx.out("no jobs in the queue");
-    return false;
+  if (intervalS !== null) {
+    await followStatus(values, intervalS, ctx);
+    return true;
   }
-  for (const line of formatJobLines(jobs, ctx.env)) ctx.out(line);
-  ctx.out(Object.entries(counts).map(([status, total]) => `${status}=${total}`).join("  "));
-  const backlog = backlogLine({ activeJobs: countActiveJobs(ctx.env), counts, runner });
-  if (backlog) ctx.out(backlog);
+  for (const line of queueViewLines(values, ctx).lines) ctx.out(line);
   return false;
 }
 
-// Runs `queue status` and closes the text output with the update notice, which the json output never carries.
+// Runs `queue status` and closes the text output with the update notice, which the json output and the follow never carry.
 async function runStatus(argv, ctx) {
-  if (printStatus(argv, ctx)) return;
+  if (await printStatus(argv, ctx)) return;
   const notice = await updateNoticeLine({ env: ctx.env, fetchImpl: ctx.fetchImpl });
   if (notice) ctx.out(notice);
 }

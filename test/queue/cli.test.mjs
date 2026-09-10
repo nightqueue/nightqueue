@@ -154,7 +154,7 @@ test("queue status --json answers with the jobs and the counts, and never with t
   assert.equal(JSON.parse(runCli(env, ["queue", "status", "--limit", "1", "--json"]).stdout).jobs.length, 1);
 
   const table = runCli(env, ["queue", "status"]);
-  assert.match(table.stdout, /#1\s+pending\s+alpha/);
+  assert.match(table.stdout, /#1\s+○ pending\s+-\s+-\s+alpha/);
   assert.match(table.stdout, /pending=2/);
   assert.match(runCli(env, ["queue", "status", "99"]).stderr, /unknown job `99`/);
 });
@@ -222,16 +222,18 @@ test("queue status shows the elapsed time and the last narration of a running jo
   assert.equal(table.status, 0, table.stderr);
 
   const live = tableLine(table.stdout, narrating);
-  assert.match(live, /^#1\s+running\s+alpha\s+p5\s+1\/1\s+-\s+\d+s\s+» Opening the pull request now,/);
+  assert.match(live, /^#1\s+● running\s+\d+s\s+-\s+alpha\s+» Opening the pull request now,/);
   assert.equal(live.includes("Reading the runner"), false, "the table showed an older narration than the last one");
   assert.equal(live.includes("clipped by the table"), false, "the table printed the whole narration instead of a short one");
-  assert.ok(live.endsWith("..."), `the long narration was not clipped: ${live}`);
+  assert.ok(live.includes("... "), `the long narration was not clipped: ${live}`);
 
   const noLog = tableLine(table.stdout, silent);
-  assert.match(noLog, /^#2\s+running\s+beta\s+p5\s+1\/1\s+-\s+\d+s\s+-$/);
+  assert.match(noLog, /^#2\s+● running\s+\d+s\s+-\s+beta\s+-\s+-$/);
   assert.equal(existsSync(jobLogPath(silent, env)), false, "the job without a log had one");
 
-  assert.equal(tableLine(table.stdout, finished), "#3    cancelled alpha               p5  0/1   -", "a job in a final state changed shape");
+  assert.match(tableLine(table.stdout, finished), /^#3\s+⊘ cancelled\s+-\s+-\s+alpha\s+-\s+-$/, "a job in a final state changed shape");
+  assert.match(table.stdout, /^ID\s+STATUS\s+DURATION\s+TOKENS\s+PROJECT\s+SLUG\/LAST\s+PR$/m, "the table has no header");
+  assert.equal(/\u001b\[/.test(table.stdout), false, "a piped table carried ANSI color");
   assert.match(table.stdout, /running=2/);
 });
 
@@ -253,7 +255,7 @@ test("a log that cannot be read leaves the row of a running job without a narrat
   mkdirSync(jobLogPath(id, env), { recursive: true });
   const table = runCli(env, ["queue", "status"]);
   assert.equal(table.status, 0, table.stderr);
-  assert.match(tableLine(table.stdout, id), /^#1\s+running\s+alpha\s+p5\s+1\/1\s+-\s+\d+s\s+-$/);
+  assert.match(tableLine(table.stdout, id), /^#1\s+● running\s+\d+s\s+-\s+alpha\s+-\s+-$/);
   assert.match(table.stdout, /running=1/);
 });
 
