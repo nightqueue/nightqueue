@@ -21,18 +21,24 @@ function isFresh(cache, now) {
 }
 
 // Asks the registry for the `latest` dist-tag of this package, answering null on anything that is not a version.
+// The timeout is a referenced timer on purpose: `AbortSignal.timeout` unrefs its timer, so a registry that never
+// answers would let the process exit before the abort fired, and the attempt would never be stamped in the cache.
 async function askRegistry(fetchImpl) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("registry timeout")), REGISTRY_TIMEOUT_MS);
   try {
     const res = await fetchImpl(DIST_TAGS_URL, {
       method: "GET",
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS),
+      signal: controller.signal,
     });
     if (!res?.ok) return null;
     const body = await res.json();
     return typeof body?.latest === "string" && body.latest ? body.latest : null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
