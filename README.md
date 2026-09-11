@@ -633,10 +633,20 @@ The child is this same CLI started as `nightshift queue run --foreground ...`, s
 the child it is the worker. A start that cannot spawn exits `1` with the reason and
 never falls back to running the job in the foreground behind your back.
 
-Its output goes to `$NIGHTSHIFT_HOME/logs/runner-<stamp>.log`, which
-`queue run` prints on the line `runner started (pid <pid>) - log: <path>`. When the
-start is aimed at a single job the line points at that job's own narrated stream
-instead: `job #<id> started (pid <pid>) - follow with: nightshift queue log <id> --follow`.
+**`nightshift queue run` with no other option drains the queue**: the child runs
+cycle after cycle until nothing is pending, waiting 15 s between passes while the
+pending jobs are held back by a busy project or the concurrency cap, and exits by
+itself when the queue is empty. It registers itself in `$NIGHTSHIFT_HOME/runner.pid`
+with `mode: "drain"` for as long as it lives, so `queue status` shows
+`runner: running (pid <pid>, drain, since <iso>)` and `--stop` ends it. Its output
+goes to `$NIGHTSHIFT_HOME/logs/runner-<stamp>.log`; the start prints
+`runner started (pid <pid>) - draining the queue until nothing is pending; follow with:
+nightshift queue status --follow`. When the start is aimed at a single job the child
+runs that job alone and the line points at its narrated stream instead:
+`job #<id> started (pid <pid>) - follow with: nightshift queue log <id> --follow`. A job
+running with no registered runner (a single-job start, or a drain that died) is still
+visible: the `runner:` line says `1 running job under a one-shot runner - no watcher
+registered` instead of `stopped`.
 
 **`--foreground` is the mode for a script or for CI**: it runs the cycle in the very
 process you started, prints one line per processed job and answers with an exit code

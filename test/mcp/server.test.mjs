@@ -458,7 +458,7 @@ test("queue_run comes back at once with the log of the detached runner, inside t
 
   const tool = (await client.listTools()).tools.find((entry) => entry.name === "queue_run");
   assert.ok(
-    tool.description.startsWith("starts the whole batch (all pending jobs, in priority order) detached; pass job_id only to start a single job."),
+    tool.description.startsWith("starts a detached runner that drains the queue: every pending job, in priority order, until nothing is pending"),
     `the tool does not open on the batch it starts: ${tool.description}`,
   );
   assert.ok(tool.description.includes("DETACHED"), "the tool does not say the runner is detached");

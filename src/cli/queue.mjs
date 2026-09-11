@@ -35,7 +35,7 @@ import {
   writeRunnerPidfile,
 } from "../queue/pidfile.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
-import { launchDetachedRunner, runCycle, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
+import { launchDetachedRunner, runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { saveProject } from "./project.mjs";
 import { confirm } from "./prompt.mjs";
@@ -176,7 +176,7 @@ function registerWatcher({ pid, intervalS, logPath }, ctx) {
 function startedLine({ jobId, pid, watchIntervalS, logPath }) {
   if (watchIntervalS !== null) return `runner started (pid ${pid}, every ${watchIntervalS} s) - stop with: nightshift queue run --stop`;
   if (jobId !== null) return `job #${jobId} started (pid ${pid}) - follow with: nightshift queue log ${jobId} --follow`;
-  return `runner started (pid ${pid}) - log: ${logPath}`;
+  return `runner started (pid ${pid}) - draining the queue until nothing is pending; follow with: nightshift queue status --follow (log: ${logPath})`;
 }
 
 // Starts the runner detached and tells the operator where to follow it; only the watch mode is registered in the pidfile.
@@ -444,10 +444,14 @@ function formatDetail(job) {
   return at < 0 ? [...fields, ...notice] : [...fields.slice(0, at + 1), ...notice, ...fields.slice(at + 1)];
 }
 
-// The `runner:` line of `queue status`, the first thing the operator reads about the queue.
-function formatRunner(runner) {
-  if (!runner.running) return "runner: stopped";
-  return `runner: running (pid ${runner.pid}, ${runner.mode} every ${runner.intervalS} s, since ${runner.startedAt})`;
+// The `runner:` line of `queue status`, the first thing the operator reads about the queue: the registered runner, or the job that runs without one.
+function formatRunner(runner, activeJobs = 0) {
+  if (runner.running) {
+    const cadence = runner.mode === "watch" ? `watch every ${runner.intervalS} s` : `${runner.mode ?? "runner"}`;
+    return `runner: running (pid ${runner.pid}, ${cadence}, since ${runner.startedAt})`;
+  }
+  if (activeJobs > 0) return `runner: ${pendingJobs(activeJobs).replace("pending", "running")} under a one-shot runner - no watcher registered (start one with: nightshift queue run --watch)`;
+  return "runner: stopped";
 }
 
 // The line `queue status` closes with when a backlog is sitting there with nobody working it.
@@ -475,11 +479,11 @@ function queueViewLines(values, ctx) {
   const jobs = listJobs({ limit: requireInt("--limit", values.limit) }, ctx.env).map(jobView);
   const counts = countsByStatus(ctx.env);
   const runner = runnerView(runnerPidfileState(ctx.env, ctx.killImpl));
-  const lines = [formatRunner(runner)];
+  const activeJobs = countActiveJobs(ctx.env);
+  const lines = [formatRunner(runner, activeJobs)];
   if (!jobs.length) return { lines: [...lines, "no jobs in the queue"], idle: true };
   lines.push(...formatTable(jobs, ctx));
   lines.push(Object.entries(counts).map(([status, total]) => `${status}=${total}`).join("  "));
-  const activeJobs = countActiveJobs(ctx.env);
   const backlog = backlogLine({ activeJobs, counts, runner });
   if (backlog) lines.push(backlog);
   return { lines, idle: isQueueIdle({ activeJobs, runner }) && counts.pending === 0 };
@@ -583,6 +587,7 @@ const RUN_OPTIONS = {
   json: { type: "boolean" },
   foreground: { type: "boolean" },
   stop: { type: "boolean" },
+  drain: { type: "boolean" },
 };
 
 // Refuses `--stop` next to any other option: ending the runner reads nothing else of the command line.
@@ -614,6 +619,21 @@ async function runStop(ctx) {
   return report.code;
 }
 
+// Runs the drain loop in this process: registers itself unless a watcher already owns the queue, and clears the registration when the queue is empty.
+async function runDrainHere({ max }, ctx) {
+  const state = runnerPidfileState(ctx.env, ctx.killImpl);
+  const registered = state.status !== "alive";
+  if (registered) {
+    if (state.status !== "missing") removeRunnerPidfile(ctx.env);
+    writeRunnerPidfile({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", intervalS: null, logPath: null }, ctx.env);
+  }
+  try {
+    await runDrain({ max, env: ctx.env, onCycle: (cycle) => printCycle(cycle, ctx) });
+  } finally {
+    if (registered) removeOwnRunnerPidfile(ctx.env);
+  }
+}
+
 // Runs the watch loop in this process, clearing the registration this very process was started under.
 async function runWatchHere({ intervalS, jobId, max }, ctx) {
   try {
@@ -643,6 +663,7 @@ async function runRun(argv, ctx) {
   const intervalS = values.watch === undefined ? null : requireInt("--watch", values.watch);
   if (values.foreground !== true) return await startDetached({ jobId, max, watchIntervalS: intervalS }, ctx);
   if (intervalS !== null) return await runWatchHere({ intervalS, jobId, max }, ctx);
+  if (values.drain === true && jobId === null) return await runDrainHere({ max }, ctx);
   const cycle = await runCycle({ jobId, max, env: ctx.env });
   if (values.json) ctx.out(JSON.stringify(cycle));
   else printCycle(cycle, ctx);

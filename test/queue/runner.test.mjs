@@ -7,7 +7,7 @@ import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, countsByStatus, getJob } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
-import { runCycle, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../../src/queue/runner.mjs";
+import { DRAIN_INTERVAL_S, runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../../src/queue/runner.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, failureStream, gateStream, PR_URL, resultEvent, SESSION_ID, SLUG, slugEvent, systemInitEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
@@ -381,4 +381,34 @@ test("the watch loop repeats the cycle and hands each pass to the caller", async
   assert.equal(getJob(id, env).status, "done");
   assert.deepEqual(slept, [7000]);
   assert.equal(WATCH_INTERVAL_DEFAULT_S, 30);
+});
+
+test("the drain runs the job it can claim and stops by itself once the queue is empty, without sleeping", async (t) => {
+  const { env } = makeRunnerHome(t, "runner-drain", [{ stdout: doneStream(), exitCode: 0 }]);
+  const id = enqueue(env);
+  const seen = [];
+  const slept = [];
+
+  const passes = await runDrain({ env, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
+
+  assert.equal(getJob(id, env).status, "done");
+  assert.equal(seen.at(-1), "empty-queue", seen.join(","));
+  assert.ok(passes.length >= 1);
+  assert.deepEqual(slept, [], "a drain that found the queue empty still went to sleep");
+  assert.equal(DRAIN_INTERVAL_S, 15);
+});
+
+test("a drain held back by a busy project waits and tries again instead of exiting", async (t) => {
+  const { env } = makeRunnerHome(t, "runner-drain-busy", []);
+  const first = enqueue(env);
+  claimJobById(first, { worker: "other-host:1", cap: 4 }, env);
+  enqueue(env);
+  const seen = [];
+  const slept = [];
+
+  const passes = await runDrain({ env, cycles: 2, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
+
+  assert.equal(passes.length, 2);
+  assert.deepEqual(seen, ["project-busy", "project-busy"]);
+  assert.deepEqual(slept, [DRAIN_INTERVAL_S * 1000]);
 });

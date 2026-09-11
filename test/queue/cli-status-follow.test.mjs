@@ -42,7 +42,7 @@ test("queue status --follow --until-idle redraws on change and stops by itself o
   assert.equal(result.code, 0, result.err.join("\n"));
   const snapshots = result.out.join("\n").split("\n\n").filter((block) => block.trim());
   assert.equal(snapshots.length, 2, `expected one snapshot per change, got ${snapshots.length}:\n${result.out.join("\n")}`);
-  assert.match(snapshots[0], /^runner: stopped\nID\s+STATUS.*\n─+\n#1\s+● running\s+\d+s\s+-\s+alpha/);
+  assert.match(snapshots[0], /^runner: 1 running job under a one-shot runner - no watcher registered.*\nID\s+STATUS.*\n─+\n#1\s+● running\s+\d+s\s+-\s+alpha/);
   assert.match(snapshots[1], /#1\s+✓ done\s+\d+s\s+-\s+alpha\s+-\s+https:\/\/github\.com\/acme\/api\/pull\/7$/m);
   assert.ok(result.ticks >= 2, "the loop stopped before the change it was waiting for");
   assert.equal(result.out.some((line) => /is available/.test(line)), false, "the follow printed the update notice");

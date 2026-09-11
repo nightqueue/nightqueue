@@ -76,17 +76,17 @@ test("queue run starts the runner detached, hands it `--foreground` and comes ba
   assert.equal(getJob(id, env).status, "pending", "the parent claimed the job instead of leaving it to the child");
 });
 
-test("a run with no single job reports the log of the runner, and `--max` reaches the child", async (t) => {
+test("a run with no single job drains the queue detached, and `--max` reaches the child", async (t) => {
   const env = makeQueueHome(t, "detached-cycle");
   const calls = [];
 
   const ran = await runCli(env, ["queue", "run", "--max", "2"], { calls });
 
   assert.equal(ran.code, 0, ran.stderr);
-  assert.match(ran.stdout, /^runner started \(pid 4242\) - log: /);
+  assert.match(ran.stdout, /^runner started \(pid 4242\) - draining the queue until nothing is pending; follow with: nightshift queue status --follow/);
   assert.equal(ran.stdout.includes(join(homeDir(env), "logs")), true, `the runner logs outside the home: ${ran.stdout}`);
-  assert.deepEqual(calls[0].args.slice(1), ["queue", "run", "--foreground", "--max", "2"]);
-  assert.equal(existsSync(runnerPidPath(env)), false, "a runner of a single cycle registered itself as a watcher");
+  assert.deepEqual(calls[0].args.slice(1), ["queue", "run", "--foreground", "--max", "2", "--drain"]);
+  assert.equal(existsSync(runnerPidPath(env)), false, "the parent registered the drain instead of leaving it to the child");
 });
 
 test("queue add --run and queue retry --run start the same detached runner", async (t) => {

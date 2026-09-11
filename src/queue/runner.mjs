@@ -293,6 +293,32 @@ export async function runWatch({ intervalS = WATCH_INTERVAL_DEFAULT_S, jobId = n
   return passes;
 }
 
+export const DRAIN_INTERVAL_S = 15;
+
+// Reasons of a cycle after which a drain has nothing left to do: the queue is empty, paused, or the cycle was told to stop.
+const DRAIN_DONE_REASONS = new Set(["empty-queue", "paused", "already-tried"]);
+
+// Runs cycles until the queue has nothing pending, waiting between passes while the pending jobs are held back by a busy project or the concurrency cap - what "run the queue" means to an operator.
+export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {
+  const options = withDefaults(deps, env);
+  const state = { stopping: false };
+  const uninstall = installShutdown(state);
+  const passes = [];
+  try {
+    while (!state.stopping && (cycles === null || passes.length < cycles)) {
+      const pass = await runCycle({ max, env, deps: options });
+      passes.push(pass);
+      onCycle(pass);
+      if (pass.stopped || DRAIN_DONE_REASONS.has(pass.reason)) break;
+      if (cycles !== null && passes.length >= cycles) break;
+      await waitNextPass(Math.max(1, Number(intervalS) || DRAIN_INTERVAL_S) * 1000, state, options.sleepImpl);
+    }
+  } finally {
+    uninstall();
+  }
+  return passes;
+}
+
 // Timestamp of the runner log file name, compact enough to stay one path segment.
 function compactStamp() {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
@@ -308,6 +334,7 @@ function detachedArgs({ jobId, max, watchIntervalS }) {
     ...(jobId === null ? [] : ["--job", String(jobId)]),
     ...(max === null ? [] : ["--max", String(max)]),
     ...(watchIntervalS === null ? [] : ["--watch", String(watchIntervalS)]),
+    ...(jobId === null && watchIntervalS === null ? ["--drain"] : []),
   ];
 }
 

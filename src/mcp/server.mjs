@@ -381,9 +381,9 @@ function toolDefinitions(env) {
       name: "queue_run",
       config: {
         description:
-          "starts the whole batch (all pending jobs, in priority order) detached; pass job_id only to start a single job. " +
+          "starts a detached runner that drains the queue: every pending job, in priority order, until nothing is pending - the runner registers itself, so queue_status shows it. Pass job_id only to start a single job. " +
           "The batch runs DETACHED, with its output going to a log file, and this tool returns immediately with that path. " +
-          "A runner started this way runs one cycle and exits; `nightshift queue run --stop` ends a watcher started from the CLI.",
+          "The runner exits by itself once the queue is empty; `nightshift queue run --stop` ends it earlier, and also ends a watcher started from the CLI.",
         inputSchema: { job_id: z.number().int().min(1).nullable().optional() },
       },
       handler: async (args) => {
