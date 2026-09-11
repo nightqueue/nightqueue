@@ -36,6 +36,7 @@ export function emptyConfig() {
     orgs,
     projects: emptyMap(),
     queue: { maxConcurrent: 2, resumeSession: false, leaseHeartbeatS: LEASE_HEARTBEAT_DEFAULT_S },
+    embedding: null,
   };
 }
 
@@ -131,6 +132,11 @@ function normalizeHeartbeat(value) {
   return inRange ? value : LEASE_HEARTBEAT_DEFAULT_S;
 }
 
+// Answer already recorded for the semantic recall: only a decline is remembered, because an accepted answer is the installed library itself.
+function normalizeEmbedding(value) {
+  return value === "declined" ? "declined" : null;
+}
+
 // Fills defaults over a config read from disk or edited by hand.
 export function normalizeConfig(raw, { warn = () => {} } = {}) {
   if (!isPlainObject(raw)) return emptyConfig();
@@ -150,6 +156,7 @@ export function normalizeConfig(raw, { warn = () => {} } = {}) {
       resumeSession: raw.queue?.resumeSession === true,
       leaseHeartbeatS: normalizeHeartbeat(raw.queue?.leaseHeartbeatS),
     },
+    embedding: normalizeEmbedding(raw.embedding),
   };
 }
 

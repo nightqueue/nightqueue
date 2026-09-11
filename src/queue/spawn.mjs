@@ -4,8 +4,9 @@ import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { homeDir } from "../config/paths.mjs";
-import { packageRoot } from "../host/paths.mjs";
+import { claudeConfigDir, packageRoot } from "../host/paths.mjs";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
+import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "./home-guard.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 
 // Silence of the stream that means a dead process: no event at all for this long ends the attempt.
@@ -31,10 +32,19 @@ export function cliEntrypoint() {
   return join(packageRoot(), "bin", "nightshift.mjs");
 }
 
+// Identity of an unattended run, pinned on the child: the job it may act on plus the home and the Claude settings it may never change.
+function jobIdentity(env, jobId) {
+  return {
+    NIGHTSHIFT_JOB_ID: String(jobId),
+    [JOB_HOME_ENV]: homeDir(env),
+    [JOB_CLAUDE_DIR_ENV]: claudeConfigDir(env),
+  };
+}
+
 // Environment of the MCP server of the child: the home it answers for and, inside an unattended run, the job it is allowed to act on.
 function mcpServerEnv(env, jobId) {
   const home = { NIGHTSHIFT_HOME: homeDir(env) };
-  return jobId === null || jobId === undefined ? home : { ...home, NIGHTSHIFT_JOB_ID: String(jobId) };
+  return jobId === null || jobId === undefined ? home : { ...home, ...jobIdentity(env, jobId) };
 }
 
 // Inline --mcp-config value: one single argv string, no shell and no temporary file; the job identity is pinned here, never inherited from the parent process.
@@ -202,7 +212,7 @@ export function spawnClaude({
     const stream = openAttemptLog(logPath, attempt);
     const resolved = resolveBinImpl(env);
     const args = buildArgs({ prompt, resumeSessionId, env, jobId });
-    const childEnv = jobId === null ? { ...env } : { ...env, NIGHTSHIFT_JOB_ID: String(jobId) };
+    const childEnv = jobId === null ? { ...env } : { ...env, ...jobIdentity(env, jobId) };
     const child = spawnImpl(resolved?.bin ?? "claude", args, { cwd, env: childEnv, stdio: SPAWN_STDIO });
     const chunks = [];
     let timedOut = false;

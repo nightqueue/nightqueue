@@ -11,15 +11,10 @@ export function saveProject(ctx, { path, name, org } = {}) {
   return result;
 }
 
-// Registers a git repository as a project of an org, reports what happened and returns the entry it landed on.
+// Registers a git repository as a project of an org, reports the one fact that matters and returns the entry it landed on.
 export function registerProject(ctx, { path, name, org } = {}) {
-  const result = saveProject(ctx, { path, name, org });
-  const project = result.project;
-  if (result.status === "unchanged") {
-    ctx.out(`project \`${project.name}\` already registered -> ${project.path} (org \`${project.org}\`)`);
-    return project;
-  }
-  ctx.out(`registered project \`${project.name}\` -> ${project.path} (org \`${project.org}\`)`);
+  const { project } = saveProject(ctx, { path, name, org });
+  ctx.out(`registered project \`${project.name}\` (${project.path})`);
   return project;
 }
 

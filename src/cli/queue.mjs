@@ -37,7 +37,7 @@ import {
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { launchDetachedRunner, runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
-import { saveProject } from "./project.mjs";
+import { registerProject } from "./project.mjs";
 import { confirm } from "./prompt.mjs";
 
 const USAGE = {
@@ -106,9 +106,7 @@ async function wantsRegistration(offer, cwd, values, ctx) {
 
 // Registers the repository of the current directory, taking the configuration lock `queue` never takes for itself.
 async function registerFromCwd(offer, ctx) {
-  const { project } = await withLock(ctx.env, () => saveProject(ctx, { path: offer.path, name: offer.name }));
-  ctx.out(`registered project \`${project.name}\` (${project.path})`);
-  return project;
+  return await withLock(ctx.env, () => registerProject(ctx, { path: offer.path, name: offer.name }));
 }
 
 // Refuses to register a project from inside an unattended run: there is no user there to confirm it.

@@ -132,10 +132,13 @@ on where the command ran from: the npx cache and a development checkout both
 converge on the same `~/.nightshift/runtime`. The npm package is scoped,
 `@maykonv/nightshift`; the command it installs is still `nightshift`.
 
-Outside a repository it stops right there and says so. Inside one, it also
-registers that repository as a project and offers to import the token of the
-GitHub CLI. Either way it closes with the same `Next steps` block: how to queue
-work from Claude Code, how to start the batch and how to review it.
+Inside a repository it also registers that repository as a project and offers to
+import the token of the GitHub CLI. Outside one it installs the host all the same
+and closes by pointing at the single command that registers a project when you get
+there: `nightshift queue add "<task>"`, which offers to register it on the spot.
+Either way the `Next steps` block says how to queue work from Claude Code, how to
+start the batch and how to review it. A second `init` on an installed host prints
+one line instead of the whole report; `--verbose` brings every step back.
 
 Flags: `--path` / `--no-path` answers the PATH question
 without a terminal,
@@ -183,8 +186,11 @@ reinstall is an exit code, never a quiet degraded line.
 `nightshift init` is `nightshift setup` plus the project registration, always in that
 order: every step below first, then the repository of the current directory (or
 of `[path]`), then the token of the GitHub CLI. Running it again changes
-nothing: every step reports `already present` and the project reports
-`already registered`.
+nothing and says so in one line, `host already installed (v<version>) - nothing to
+do`, followed by the registration line and the `Next steps` block; `--verbose`
+prints every step as before. A semantic recall you turned down once is recorded in
+`config.json` and never asked about again — `nightshift embed install` (or
+`init --embedding`) still installs it whenever you change your mind.
 
 **The token of the GitHub CLI.** When `gh` is installed and authenticated and
 the `github` slot of the org is still free, `nightshift init` on a terminal asks

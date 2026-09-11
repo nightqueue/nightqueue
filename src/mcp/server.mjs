@@ -24,6 +24,7 @@ import {
 import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
 import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
+import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { runnerPidfileState, runnerView } from "../queue/pidfile.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { launchDetachedRunner } from "../queue/runner.mjs";
@@ -297,6 +298,7 @@ function toolDefinitions(env) {
     },
     {
       name: "queue_add",
+      guardsHome: true,
       config: {
         description:
           "Enqueues an unattended /nightshift:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
@@ -393,6 +395,7 @@ function toolDefinitions(env) {
     },
     {
       name: "queue_cancel",
+      guardsHome: true,
       config: {
         description:
           "Cancels a pending, gated or orphaned job. A job running under a live lease is refused, with the exact reason and no write.",
@@ -424,10 +427,21 @@ function toolDefinitions(env) {
   ];
 }
 
+// Handler of one tool, refusing first the ones that would change the home the unattended runner itself uses.
+function toolHandler(tool, env) {
+  if (tool.guardsHome !== true) return tool.handler;
+  return async (args) => {
+    refuseHomeWriteInsideJob(env);
+    return await tool.handler(args);
+  };
+}
+
 // Builds the MCP server with the eleven tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
-  for (const tool of toolDefinitions(env)) server.registerTool(tool.name, tool.config, guard(tool.name, tool.handler));
+  for (const tool of toolDefinitions(env)) {
+    server.registerTool(tool.name, tool.config, guard(tool.name, toolHandler(tool, env)));
+  }
   return server;
 }
 

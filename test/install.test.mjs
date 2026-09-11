@@ -76,8 +76,9 @@ test("init outside a repository installs the whole host and only skips the proje
   assert.equal(existsSync(host.shim), true);
   assert.equal(existsSync(join(host.home, "config.json")), true);
   assert.ok(readSettingsFile(host.configDir).hooks.SessionStart.length, "the hooks were not merged into the host");
+  assert.equal(out.some((line) => line.startsWith("no git repository in")), false, out.join("\n"));
   assert.ok(
-    out.includes(`no git repository in ${plain}; run \`nightshift init <path>\` inside one to register a project`),
+    out.includes('  1. cd into a repository and run `nightshift queue add "<task>"` - it offers to register the project on the spot. In Claude Code, plan as usual and say "queue this for tonight" or run /nightshift:queue.'),
     out.join("\n"),
   );
   assert.deepEqual(JSON.parse(readFileSync(join(host.home, "config.json"), "utf8")).projects, {});
@@ -232,6 +233,29 @@ test("--embedding installs the library into its own prefix and then downloads th
   assert.equal(await run(["setup", "--no-path", "--embedding"], again.ctx), 0);
   assert.equal(installsInto(host, host.embeddingDir).length, 1, "a prefix that already holds the library reached npm again");
   assert.ok(again.out.includes(`embedding: already present (${host.embeddingDir})`), again.out.join("\n"));
+});
+
+test("a semantic recall that was turned down is recorded once, never asked again and still installable on demand", async (t) => {
+  const host = makeEmbeddingHost(t, "install-embedding-declined");
+  const embedded = (env) => JSON.parse(readFileSync(join(env.NIGHTSHIFT_HOME, "config.json"), "utf8")).embedding;
+
+  const declined = makeCtx(host.env);
+  assert.equal(await run(["setup", "--no-path", "--no-embedding"], declined.ctx), 0);
+  assert.ok(declined.out.includes("embedding: skipped (--no-embedding)"), declined.out.join("\n"));
+  assert.equal(embedded(host.env), "declined");
+
+  const terminal = tty("y\n");
+  const remembered = makeCtx(host.env, { stdin: terminal.stdin, stdout: terminal.stdout });
+  assert.equal(await run(["setup", "--no-path"], remembered.ctx), 0);
+  assert.equal(terminal.written().includes("Enable semantic recall?"), false, terminal.written());
+  assert.ok(remembered.out.includes("embedding: skipped (declined)"), remembered.out.join("\n"));
+  assert.equal(remembered.out.some((line) => line.startsWith("semantic recall skipped")), false, remembered.out.join("\n"));
+  assert.deepEqual(installsInto(host, host.embeddingDir), [], "a recorded decline still reached npm");
+
+  const asked = makeCtx(host.env, { warmupImpl: async () => ({ model: "fake@v1", modelDir: "fake", downloaded: true }) });
+  assert.equal(await run(["setup", "--no-path", "--embedding"], asked.ctx), 0);
+  assert.ok(asked.out.includes(`embedding: created (${host.embeddingDir})`), asked.out.join("\n"));
+  assert.equal(embedded(host.env), "declined", "an explicit --embedding rewrote the answer of the operator");
 });
 
 test("update reinstalls the runtime, re-points a host left on another path and keeps config, secrets and database", async (t) => {

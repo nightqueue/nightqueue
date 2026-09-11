@@ -3,6 +3,7 @@ import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { saveConfig, saveSecrets } from "../config/store.mjs";
 import { warmupModel } from "../memory/embedding.mjs";
+import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import * as connection from "./connection.mjs";
 import * as doctor from "./doctor.mjs";
 import * as embed from "./embed.mjs";
@@ -37,11 +38,23 @@ const COMMANDS = new Map([
 
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
+const HELP_OPTIONS = new Set(["--help", "-h"]);
+
 const READ_ONLY_COMMANDS = new Set(["doctor", "version"]);
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
 const SELF_LOCKING_COMMANDS = new Set(["mcp", "hook", "reflect", "embed", "memory", "queue"]);
+
+const HOME_WRITE_COMMANDS = new Set(["init", "setup", "update"]);
+
+const HOME_WRITE_SUBCOMMANDS = new Map([
+  ["org", new Set(["add", "rename", "remove"])],
+  ["project", new Set(["add", "remove", "move"])],
+  ["connection", new Set(["add", "bind", "remove"])],
+  ["embed", new Set(["install", "download", "backfill"])],
+  ["queue", new Set(["add", "cancel", "pause", "resume"])],
+]);
 
 const USAGE = `nightshift — configuration CLI
 
@@ -116,6 +129,25 @@ function skipsLock(command, subcommand) {
   return READ_ONLY_SUBCOMMANDS.has(subcommand);
 }
 
+// Tells whether the command writes the configuration home, and whether it registers the host too.
+function writesOperatorHome(command, subcommand) {
+  if (HOME_WRITE_COMMANDS.has(command)) return { writes: true, host: true };
+  return { writes: HOME_WRITE_SUBCOMMANDS.get(command)?.has(subcommand) === true, host: false };
+}
+
+// Tells whether the destination command reads what is left of its arguments as a request for help: only a lone flag is one, never a word of free text.
+function asksForHelp(args) {
+  return args.length === 1 && HELP_OPTIONS.has(args[0]);
+}
+
+// Refuses a write aimed at the operator's own home before the lock creates anything there; asking for help is never a write.
+function guardOperatorHome(command, rest, env) {
+  const { writes, host } = writesOperatorHome(command, rest[0]);
+  if (!writes) return;
+  if (asksForHelp(HOME_WRITE_COMMANDS.has(command) ? rest : rest.slice(1))) return;
+  refuseHomeWriteInsideJob(env, { host });
+}
+
 // Dispatches the requested command, without handling errors, with the cross-process lock when it writes.
 export async function main(argv, ctx) {
   const [command, ...rest] = argv;
@@ -129,6 +161,7 @@ export async function main(argv, ctx) {
   }
   const handler = COMMANDS.get(command);
   if (!handler) throw new UserError(`unknown command \`${command}\`; run \`nightshift --help\``);
+  guardOperatorHome(command, rest, ctx.env);
   if (skipsLock(command, rest[0])) return await handler(rest, ctx);
   return await withLock(ctx.env, () => handler(rest, ctx));
 }

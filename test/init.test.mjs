@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
 import { ghAuthStatus } from "../src/host/gh.mjs";
 import { PATH_MARK, PATH_MARK_END, pathBlock } from "../src/host/shell.mjs";
-import { FAKE_GH_LOGIN, FAKE_GH_TOKEN, assertIsolatedEnv, makeHostEnv, readSettingsFile } from "../test-support/host.mjs";
+import { FAKE_GH_LOGIN, FAKE_GH_TOKEN, assertIsolatedEnv, makeHostEnv, readSettingsFile, writeLegacyShim } from "../test-support/host.mjs";
 import { makeDir } from "../test-support/memory.mjs";
 
 const QUESTION = `GitHub CLI is authenticated as ${FAKE_GH_LOGIN} — import its token as connection "gh"? [Y/n] `;
@@ -79,7 +79,7 @@ test("init sets the host up, registers the project and stays idempotent", async 
   assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--no-gh"], first.ctx), 0);
   assert.ok(first.out.some((line) => line.startsWith("home: created")), first.out.join("\n"));
   assert.ok(first.out.some((line) => line.startsWith("secrets.json: created")), first.out.join("\n"));
-  assert.match(first.out.join("\n"), /registered project `api` -> .* \(org `default`\)/);
+  assert.match(first.out.join("\n"), /^registered project `api` \(.+\)$/m);
   assert.equal(statSync(host.home).mode & 0o777, 0o700);
   assert.equal(statSync(join(host.home, "secrets.json")).mode & 0o777, 0o600);
   assert.equal(readConfig(host.home).projects.api.org, "default");
@@ -89,10 +89,37 @@ test("init sets the host up, registers the project and stays idempotent", async 
 
   const second = makeCtx(host.env, { cwd: repo });
   assert.equal(await run(["init", "--no-path", "--no-gh"], second.ctx), 0);
-  assert.ok(second.out.some((line) => line.startsWith("home: already present")), second.out.join("\n"));
-  assert.ok(second.out.some((line) => line.startsWith("config.json: already present")), second.out.join("\n"));
-  assert.match(second.out.join("\n"), /project `api` already registered/);
+  assert.equal(second.out[0], `host already installed (v${VERSION}) - nothing to do`, second.out.join("\n"));
+  assert.match(second.out[1], /^registered project `api` \(.+\)$/);
+  assert.equal(second.out[2], "Next steps:", second.out.join("\n"));
+  assert.equal(second.out.some((line) => line.includes("already present")), false, second.out.join("\n"));
   assert.deepEqual(host.ghCalls(), []);
+
+  const verbose = makeCtx(host.env, { cwd: repo });
+  assert.equal(await run(["init", "--no-path", "--no-gh", "--verbose"], verbose.ctx), 0);
+  assert.ok(verbose.out.some((line) => line.startsWith("home: already present")), verbose.out.join("\n"));
+  assert.ok(verbose.out.some((line) => line.startsWith("config.json: already present")), verbose.out.join("\n"));
+  assert.equal(verbose.out.some((line) => line.startsWith("host already installed")), false, verbose.out.join("\n"));
+});
+
+test("the semantic recall question is asked once and the second init never brings it back", async (t) => {
+  const host = makeHostEnv(t, "init-embedding-question");
+  delete host.env.NIGHTSHIFT_EMBED_DISABLED;
+  const repo = makeRepo(t, "init-embedding-question-repo");
+  const no = tty("n\n");
+  const first = makeCtx(host.env, { stdin: no.stdin, stdout: no.stdout });
+
+  assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--no-gh"], first.ctx), 0, first.err.join("\n"));
+  assert.equal(no.written.join("").includes("Enable semantic recall?"), true, no.written.join(""));
+  assert.ok(first.out.includes("embedding: skipped (declined)"), first.out.join("\n"));
+  assert.ok(first.out.includes("semantic recall skipped; run `nightshift embed install` to enable it"), first.out.join("\n"));
+  assert.equal(readConfig(host.home).embedding, "declined");
+
+  const again = tty("n\n");
+  const second = makeCtx(host.env, { cwd: repo, stdin: again.stdin, stdout: again.stdout });
+  assert.equal(await run(["init", "--no-path", "--no-gh"], second.ctx), 0, second.err.join("\n"));
+  assert.equal(again.written.join("").includes("Enable semantic recall?"), false, again.written.join(""));
+  assert.equal(second.out[0], `host already installed (v${VERSION}) - nothing to do`, second.out.join("\n"));
 });
 
 test("--gh imports the token of the GitHub CLI, binds it to the org and reports the connection test", async (t) => {
@@ -264,6 +291,39 @@ test("a claude CLI that cannot run degrades the host services and still finishes
   assert.ok(out.some((line) => line.startsWith("mcp nightshift: failed")), out.join("\n"));
   assert.ok(out.some((line) => line.startsWith("setup finished with")), out.join("\n"));
   assert.equal(readFileSync(host.rcPath, "utf8").includes(pathBlock(host.env)), true, "a degraded host service held the PATH back");
+
+  const again = makeCtx(host.env, { cwd: makeDir(t, "init-claude-broken-again") });
+  assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], again.ctx), 0);
+  assert.ok(again.out.some((line) => line.startsWith("mcp nightshift: failed")), again.out.join("\n"));
+  assert.equal(again.out.some((line) => line.startsWith("host already installed")), false, "a degraded step was hidden behind the summary");
+});
+
+test("host settings that are not valid JSON stop init with every step it held back on screen", async (t) => {
+  const host = makeHostEnv(t, "init-broken-settings");
+  const cwd = makeDir(t, "init-broken-settings-cwd");
+  const first = makeCtx(host.env, { cwd });
+  assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh"], first.ctx), 0, first.err.join("\n"));
+  writeFileSync(host.settingsPath, "{ this is not json");
+
+  const broken = makeCtx(host.env, { cwd });
+  assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh"], broken.ctx), 1);
+  assert.match(broken.err.join("\n"), /is not valid JSON/);
+  assert.ok(broken.out.some((line) => line.startsWith("home: already present")), broken.out.join("\n"));
+  assert.ok(broken.out.some((line) => line.startsWith("runtime: already present")), broken.out.join("\n"));
+});
+
+test("a foreign file at the legacy shim path is a no-op and never breaks the quiet re-run", async (t) => {
+  const host = makeHostEnv(t, "init-legacy-shim-kept");
+  const cwd = makeDir(t, "init-legacy-shim-kept-cwd");
+  const first = makeCtx(host.env, { cwd });
+  assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh"], first.ctx), 0, first.err.join("\n"));
+  writeLegacyShim(host, "#!/bin/sh\necho a script of somebody else\n");
+
+  const again = makeCtx(host.env, { cwd });
+  assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh"], again.ctx), 0, again.err.join("\n"));
+  assert.equal(again.out[0], `host already installed (v${VERSION}) - nothing to do`, again.out.join("\n"));
+  assert.equal(again.out.some((line) => line.includes("legacy shim")), false, again.out.join("\n"));
+  assert.equal(readFileSync(host.legacyShim, "utf8").includes("somebody else"), true, "init deleted a file it did not write");
 });
 
 test("the PATH block lands once however many times init runs, and the line of an older installation is migrated", async (t) => {
@@ -307,16 +367,21 @@ test("a skipped PATH step is never sold as written", async (t) => {
   assert.equal(out.some((line) => line.startsWith("Open a new terminal")), false, out.join("\n"));
 });
 
-const NEXT_STEPS = [
-  "Next steps:",
-  '  1. In Claude Code (any project registered with `nightshift project add`), plan as usual, then say "queue this for tonight" or run /nightshift:queue.',
+const LAST_STEPS = [
   '  2. When you leave, say "run the queue" or run `nightshift queue run` - every queued job runs unattended and opens a pull request.',
   '  3. Come back to `nightshift queue status` and review the PRs; a job waiting at the gate is answered with `nightshift queue retry <id> --note "..."`.',
 ];
 
+const NEXT_STEPS_REGISTERED = [
+  "Next steps:",
+  '  1. In Claude Code, plan as usual, then say "queue this for tonight" or run /nightshift:queue.',
+  ...LAST_STEPS,
+];
+
 const NEXT_STEPS_UNREGISTERED = [
-  ...NEXT_STEPS,
-  "  4. Run `nightshift init` inside a repository to register it - or just `nightshift queue add` there, it offers to register.",
+  "Next steps:",
+  '  1. cd into a repository and run `nightshift queue add "<task>"` - it offers to register the project on the spot. In Claude Code, plan as usual and say "queue this for tonight" or run /nightshift:queue.',
+  ...LAST_STEPS,
 ];
 
 test("init closes with the next steps, with no PATH block written and outside a repository too", async (t) => {
@@ -325,7 +390,7 @@ test("init closes with the next steps, with no PATH block written and outside a 
 
   assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh"], outside.ctx), 0);
   assert.equal(existsSync(bare.rcPath), false, "the run under test wrote the PATH block after all");
-  assert.equal(outside.out.some((line) => line.startsWith("no git repository in")), true, outside.out.join("\n"));
+  assert.equal(outside.out.some((line) => line.startsWith("no git repository in")), false, outside.out.join("\n"));
   assert.deepEqual(outside.out.slice(-NEXT_STEPS_UNREGISTERED.length), NEXT_STEPS_UNREGISTERED, outside.out.join("\n"));
 
   const host = makeHostEnv(t, "init-next-steps-repo");
@@ -333,8 +398,9 @@ test("init closes with the next steps, with no PATH block written and outside a 
 
   assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], inside.ctx), 0);
   assert.equal(readFileSync(host.rcPath, "utf8").includes(pathBlock(host.env)), true);
-  assert.deepEqual(inside.out.slice(-NEXT_STEPS.length), NEXT_STEPS, inside.out.join("\n"));
+  assert.deepEqual(inside.out.slice(-NEXT_STEPS_REGISTERED.length), NEXT_STEPS_REGISTERED, inside.out.join("\n"));
   assert.equal(inside.out.some((line) => line.startsWith("  4.")), false, inside.out.join("\n"));
+  assert.equal(inside.out.some((line) => line.includes("nightshift project add")), false, inside.out.join("\n"));
 });
 
 test("init packs this package, installs the tarball and leaves a host the doctor passes", async (t) => {

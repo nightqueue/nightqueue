@@ -126,13 +126,13 @@ test("init registers the repository in the default org", (t) => {
     result.stdout.indexOf("home: created") < result.stdout.indexOf("registered project `api`"),
     "the project was registered before the host was set up",
   );
-  assert.match(result.stdout, /registered project `api` -> .* \(org `default`\)/);
+  assert.match(result.stdout, /^registered project `api` \(.+\)$/m);
   const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
   assert.equal(config.projects.api.org, "default");
   const again = runCli(home, ["init", repo, "--name", "api", "--no-gh"]);
   assert.equal(again.status, 0);
   assert.match(again.stdout, /^home: already present/m);
-  assert.match(again.stdout, /already registered/);
+  assert.match(again.stdout, /^registered project `api` \(.+\)$/m);
 });
 
 test("a write command works on a home that never went through setup", (t) => {

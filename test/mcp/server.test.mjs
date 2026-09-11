@@ -16,6 +16,8 @@ import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
 const GATED_FINISHED_AT = "2020-01-01 00:00:00";
+const HOME_REFUSAL =
+  "refused: this command would change the operator's nightshift home from inside job #9; verify against a temporary home (NIGHTSHIFT_HOME=$(mktemp -d)) instead";
 
 const CONTRACT_TOOLS = [
   "index_recall",
@@ -380,6 +382,32 @@ test("queue_add registers the repository of the `cwd` only with register: true, 
   const again = payloadOf(await client.callTool({ name: "queue_add", arguments: { cwd: repo, prompt: "fix the parser" } }));
   assert.equal(again.project, name, "the registered repository was offered for registration again");
   assert.equal(again.needs_registration, undefined);
+});
+
+test("queue_add and queue_cancel refuse the home of the runner from inside a job, and accept a temporary one", async (t) => {
+  const env = makeQueueHome(t, "mcp-home-guard");
+  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "9", NIGHTSHIFT_JOB_HOME: homeDir(env) });
+
+  for (const call of [
+    { name: "queue_add", arguments: { project: "alpha", prompt: "an acceptance test job created from inside a verifier" } },
+    { name: "queue_cancel", arguments: { job_id: id, reason: "test artifact of an acceptance run" } },
+  ]) {
+    const refused = await inJob.callTool(call);
+    assert.equal(refused.isError, true, textOf(refused));
+    assert.ok(textOf(refused).includes(HOME_REFUSAL), textOf(refused));
+  }
+  assert.equal(getJob(id, env).status, "pending", "a refused tool call still moved the job of the operator");
+  assert.equal(getJob(id + 1, env), null, "a refused tool call still queued a job in the home of the operator");
+  assert.ok(payloadOf(await inJob.callTool({ name: "queue_status", arguments: {} })).counts, "the refusal ended the session");
+
+  const temp = makeQueueHome(t, "mcp-home-guard-temp");
+  const allowed = await connect(t, { ...temp, NIGHTSHIFT_JOB_ID: "9", NIGHTSHIFT_JOB_HOME: homeDir(env) });
+  const queued = payloadOf(await allowed.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "verify the acceptance of this change" } }));
+  assert.equal(getJob(queued.id, temp).prompt, "verify the acceptance of this change");
+  const cancelled = payloadOf(await allowed.callTool({ name: "queue_cancel", arguments: { job_id: queued.id } }));
+  assert.equal(cancelled.job.status, "cancelled");
+  assert.equal(getJob(id + 1, env), null, "a call isolated in a temporary home reached the home of the operator");
 });
 
 test("queue_status never returns the prompt and truncates the free text at five hundred code points", async (t) => {

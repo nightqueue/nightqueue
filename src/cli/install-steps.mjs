@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { binDir, embeddingDir, homeDir, legacyShimPath, runtimeDir, shimPath } from "../config/paths.mjs";
+import { loadConfig } from "../config/store.mjs";
 import { npmInstall, npmPack } from "../host/npm.mjs";
 import { packageRoot } from "../host/paths.mjs";
 import {
@@ -174,9 +175,9 @@ async function wantsPath(ctx, path) {
 }
 
 // Prints the block the user has to add by hand, the only thing this step does without an explicit yes.
-function printPathBlock(ctx) {
-  ctx.out(`add this block to ${rcFilePath(ctx.env)}:`);
-  for (const line of pathBlock(ctx.env).split("\n")) ctx.out(`  ${line}`);
+function printPathBlock(ctx, report) {
+  report.note(`add this block to ${rcFilePath(ctx.env)}:`);
+  for (const line of pathBlock(ctx.env).split("\n")) report.note(`  ${line}`);
 }
 
 // Puts the shim directory on the PATH, asking first and never writing to an rc file on its own.
@@ -192,7 +193,7 @@ export async function setupPath(ctx, report, { path } = {}) {
   const wanted = await wantsPath(ctx, path);
   if (wanted !== true) {
     report.step(PATH_LABEL, "skipped", wanted === false ? "declined" : "no terminal");
-    printPathBlock(ctx);
+    printPathBlock(ctx, report);
     return;
   }
   guarded(report, PATH_LABEL, `add the \`${PATH_MARK}\` block to ${rcFilePath(ctx.env)}`, () => {
@@ -243,20 +244,51 @@ async function installEmbedding(ctx, report) {
   await downloadModel(ctx, report);
 }
 
-// Offers the semantic recall, which is opt-in and never brings the installation down when it fails.
+// Tells whether a previous run already recorded that the operator turned the semantic recall down.
+function embeddingDeclined(ctx) {
+  try {
+    return loadConfig(ctx.env, { warn: ctx.err }).embedding === "declined";
+  } catch {
+    return false;
+  }
+}
+
+// Records the decline, so no later run asks the question again; a configuration that cannot be written is a warning, never the end of the installation.
+function recordDecline(ctx) {
+  if (typeof ctx.saveConfig !== "function") return;
+  try {
+    const config = loadConfig(ctx.env, { warn: ctx.err });
+    if (config.embedding === "declined") return;
+    ctx.saveConfig({ ...config, embedding: "declined" }, ctx.env);
+  } catch (err) {
+    ctx.err(`nightshift: the answer to the semantic recall could not be recorded: ${firstLine(err?.message ?? String(err))}`);
+  }
+}
+
+// Offers the semantic recall, which is opt-in and never brings the installation down when it fails; the question is asked once and never again.
 export async function setupEmbedding(ctx, report, { embedding } = {}) {
   if (ctx.env?.NIGHTSHIFT_EMBED_DISABLED === "1") {
     report.step(EMBEDDING_LABEL, "skipped", "NIGHTSHIFT_EMBED_DISABLED");
     return;
   }
+  if (embedding !== true && embeddingLibraryEntry(ctx.env)) {
+    report.step(EMBEDDING_LABEL, "already present", embeddingDir(ctx.env));
+    return;
+  }
+  if (embedding !== true && embeddingDeclined(ctx)) {
+    report.step(EMBEDDING_LABEL, "skipped", "declined");
+    return;
+  }
   if (embedding === false) {
+    recordDecline(ctx);
     report.step(EMBEDDING_LABEL, "skipped", "--no-embedding");
     return;
   }
   const wanted = await wantsEmbedding(ctx, embedding);
   if (wanted !== true) {
+    if (wanted === false) recordDecline(ctx);
     report.step(EMBEDDING_LABEL, "skipped", wanted === false ? "declined" : "no terminal");
-    ctx.out("semantic recall skipped; run `nightshift embed install` to enable it");
+    report.note("semantic recall skipped; run `nightshift embed install` to enable it");
     return;
   }
   await installEmbedding(ctx, report);

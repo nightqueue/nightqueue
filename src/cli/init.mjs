@@ -12,18 +12,20 @@ import { firstLine, makeReport } from "./report.mjs";
 import { INSTALL_OPTIONS, finish, installOptions, registerHostServices, setupHome } from "./setup.mjs";
 
 const USAGE =
-  "nightshift init [path] [--org <name>] [--name <name>] [--from <dir>] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--gh|--no-gh]";
+  "nightshift init [path] [--org <name>] [--name <name>] [--from <dir>] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--gh|--no-gh] [--verbose]";
 
 const SOURCE_HINT = "Open a new terminal or run `source ~/.zshrc` (or your shell's rc) to use `nightshift`.";
 
+const FIRST_STEP_REGISTERED =
+  'In Claude Code, plan as usual, then say "queue this for tonight" or run /nightshift:queue.';
+
+const FIRST_STEP_UNREGISTERED =
+  'cd into a repository and run `nightshift queue add "<task>"` - it offers to register the project on the spot. In Claude Code, plan as usual and say "queue this for tonight" or run /nightshift:queue.';
+
 const NEXT_STEPS = [
-  'In Claude Code (any project registered with `nightshift project add`), plan as usual, then say "queue this for tonight" or run /nightshift:queue.',
   'When you leave, say "run the queue" or run `nightshift queue run` - every queued job runs unattended and opens a pull request.',
   'Come back to `nightshift queue status` and review the PRs; a job waiting at the gate is answered with `nightshift queue retry <id> --note "..."`.',
 ];
-
-const REGISTER_STEP =
-  "Run `nightshift init` inside a repository to register it - or just `nightshift queue add` there, it offers to register.";
 
 // Turns the two GitHub CLI flags into the single mode the import understands, refusing the contradictory pair.
 function ghMode(values) {
@@ -81,25 +83,24 @@ function rcCarriesBlock(env) {
 }
 
 // Prints what the installation left on disk and what the user still has to do to type `nightshift`.
-function printInstalled(ctx, { shortcuts }) {
-  ctx.out(`installed nightshift v${packageVersion()} in ${runtimeDir(ctx.env)}`);
-  ctx.out(`commands: ${shimNames({ shortcuts }).map((name) => shimPath(ctx.env, name)).join(", ")}`);
+function printInstalled(ctx, report, { shortcuts }) {
+  report.note(`installed nightshift v${packageVersion()} in ${runtimeDir(ctx.env)}`);
+  report.note(`commands: ${shimNames({ shortcuts }).map((name) => shimPath(ctx.env, name)).join(", ")}`);
   if (!rcCarriesBlock(ctx.env)) return;
-  ctx.out(`PATH block written to ${rcFilePath(ctx.env)}:`);
-  for (const line of pathBlock(ctx.env).split("\n")) ctx.out(`  ${line}`);
-  ctx.out(SOURCE_HINT);
+  report.note(`PATH block written to ${rcFilePath(ctx.env)}:`);
+  for (const line of pathBlock(ctx.env).split("\n")) report.note(`  ${line}`);
+  report.note(SOURCE_HINT);
 }
 
-// Prints what to do with the installation, with the way to register a repository when this run registered none.
+// Prints what to do with the installation; the first step is the one command that fits a run that registered a repository, or one that did not.
 function printNextSteps(ctx, { registered } = {}) {
-  const steps = registered === true ? NEXT_STEPS : [...NEXT_STEPS, REGISTER_STEP];
+  const steps = [registered === true ? FIRST_STEP_REGISTERED : FIRST_STEP_UNREGISTERED, ...NEXT_STEPS];
   ctx.out("Next steps:");
   for (const [index, step] of steps.entries()) ctx.out(`  ${index + 1}. ${step}`);
 }
 
-// Installs the host for `nightshift init`: every step the runtime cannot work without stops the command, and the PATH is only written once the shim has proven itself.
-async function installForInit(ctx, { embedding, path, from, shortcuts, desktop } = {}) {
-  const report = makeReport(ctx);
+// Runs the steps of `nightshift init` in order: every step the runtime cannot work without stops the command, and the PATH is only written once the shim has proven itself.
+async function runInstallSteps(ctx, report, { embedding, path, from, shortcuts, desktop } = {}) {
   requireStep(createHome(ctx, report), "home");
   requireStep(setupRuntime(ctx, report, { from }), "runtime");
   requireStep(installShims(ctx, report, { shortcuts }), "shim");
@@ -107,8 +108,20 @@ async function installForInit(ctx, { embedding, path, from, shortcuts, desktop }
   registerHostServices(ctx, report, { desktop });
   requireStep(await installPath(ctx, report, { path }), "PATH");
   await setupEmbedding(ctx, report, { embedding });
-  printInstalled(ctx, { shortcuts });
+  if (report.quiet()) ctx.out(`host already installed (v${packageVersion()}) - nothing to do`);
+  else printInstalled(ctx, report, { shortcuts });
   return finish(ctx, report);
+}
+
+// Installs the host for `nightshift init`: a step that fails, however it fails, still prints every step held back so far as the diagnosis.
+async function installForInit(ctx, { verbose, ...options } = {}) {
+  const report = makeReport(ctx, { collapse: verbose !== true });
+  try {
+    return await runInstallSteps(ctx, report, options);
+  } catch (err) {
+    report.flush();
+    throw err;
+  }
 }
 
 // Registers the repository of this run and offers it the token of the GitHub CLI, the part of init that only a repository gets.
@@ -125,13 +138,13 @@ export async function run(argv, ctx) {
     name: { type: "string" },
     gh: { type: "boolean" },
     "no-gh": { type: "boolean" },
+    verbose: { type: "boolean" },
   });
   checkArgs(positionals, { max: 1, usage: USAGE });
   const mode = ghMode(values);
   const path = projectPath(positionals, ctx);
-  await installForInit(ctx, installOptions(values, USAGE));
+  await installForInit(ctx, { ...installOptions(values, USAGE), verbose: values.verbose === true });
   if (path) await registerHere(ctx, { path, name: values.name, org: values.org, mode });
-  else ctx.out(`no git repository in ${ctx.cwd ?? "."}; run \`nightshift init <path>\` inside one to register a project`);
   printNextSteps(ctx, { registered: Boolean(path) });
   return 0;
 }

@@ -48,6 +48,14 @@ test("normalizeConfig fills defaults over a partial, hand-edited file", () => {
   assert.deepEqual(emptyConfig().queue, { maxConcurrent: 2, resumeSession: false, leaseHeartbeatS: 5 });
 });
 
+test("the answer to the semantic recall is remembered only as a decline, and an old file simply has none", () => {
+  assert.equal(emptyConfig().embedding, null);
+  assert.equal(normalizeConfig({ embedding: "declined" }).embedding, "declined");
+  for (const raw of ["accepted", "nonsense", true, 1, {}, null, undefined]) {
+    assert.equal(normalizeConfig({ embedding: raw }).embedding, null, `\`${String(raw)}\` was kept as an answer`);
+  }
+});
+
 test("queue.resumeSession only accepts a literal true, so `--resume` stays off by accident", () => {
   assert.equal(normalizeConfig({ queue: { resumeSession: true } }).queue.resumeSession, true);
   for (const raw of ["true", 1, "yes", {}, null]) {

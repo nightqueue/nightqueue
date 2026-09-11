@@ -161,6 +161,23 @@ distinct fixes have already passed the build and broken in the browser.
   prove the real round-trip (mutate + revert a test record) before PASSED. A catch-all masks
   HTTP 400; unit/tsc do not catch a malformed query.
 
+### Step 2.9 — Manual acceptance never runs against the operator's own home
+
+Manual acceptance of a CLI/MCP behavior runs against a throwaway home, never the
+operator's: export `NIGHTSHIFT_HOME=$(mktemp -d)` before the first command and,
+whenever the command registers the host (`init`, `setup`, `update`), export
+`CLAUDE_CONFIG_DIR=$(mktemp -d)` as well — a temporary home alone still repoints the
+operator's live Claude settings at a directory about to be deleted.
+
+- The operator's home, database, queue and Claude settings are never a test fixture:
+  no job, org, project, connection or config entry is created, cancelled or deleted
+  there to "prove" that a command works.
+- A verification that can only run against the real home is reported as
+  `not verifiable here` in the report, never performed.
+- The commands that write the home refuse to run from inside a job when they aim at the
+  runner's own home; that refusal is the guard working, not a failure of the change —
+  point the command at the temporary home instead of working around it.
+
 ### Step 3 — Report
 
 For each check, record the result and, if it fails, the **relevant snippet** of the
