@@ -228,3 +228,12 @@ test("the last narrated line is what the bottom of `queue log` shows: a lane ope
   assert.match(lastNarratedLine(`${task}\n${lane}\n`), /^· .*Edit/);
   assert.equal(lastNarratedLine(""), "");
 });
+
+test("a lane still open at the end of the log is in progress while the job runs, and an orphan only once the job is over", () => {
+  const task = JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Task", input: { subagent_type: "qa-guardian", description: "HA: PoC of the races" } }] } });
+  const running = narrateLog(`${task}\n`, { running: true }).map((event) => `${event.kind}:${event.text}`);
+  assert.ok(running.some((line) => /^laneOpen:qa-guardian.*still running$/.test(line)), running.join("\n"));
+  assert.equal(running.some((line) => line.startsWith("laneOrphan:")), false, "a running job was called an orphan");
+  const over = narrateLog(`${task}\n`).map((event) => `${event.kind}:${event.text}`);
+  assert.ok(over.some((line) => /^laneOrphan:qa-guardian.*never reported back$/.test(line)), over.join("\n"));
+});

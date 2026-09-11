@@ -326,6 +326,13 @@ agent, print a line in this format first:
        runs inside it — the agents inherit that directory. If `EnterWorktree` is
        unavailable in the host, create it with `git worktree add <path> -b <type>/<slug>
        origin/main` and pass the absolute path to every phase.
+   - **Shell rule for every phase from here on (the host enforces it):** the worktree
+     isolation refuses any Bash command it cannot prove stays inside the worktree
+     ("this command is too complex to verify that it stays inside the worktree").
+     One simple command per Bash call; no heredocs (`<<`), no `\` continuations, no
+     `cd … && …`, no `python3 -`/`node -e` fed by stdin. Anything longer is a file:
+     `Write` it under the worktree (`tmp/<name>.mjs|.py|.sh`), run it by path, delete
+     it before the commit. Every agent brief you write repeats this rule in one line.
    - If you are **not** on `main`, **do not ask** — assume the current branch
      was chosen on purpose: do not create a worktree and follow the pipeline in the
      current directory/branch. Warn in 1 line:

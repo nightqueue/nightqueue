@@ -377,9 +377,12 @@ function narrateLine(state, rawLine) {
 }
 
 // What is left to say when the stream ends: the lanes that never came back and the lines nobody could read.
-function finishNarration(state) {
+// Closes the narration. A lane still open when the job is over never reported back; while the job is still running it is simply in progress, and saying otherwise would be a lie.
+function finishNarration(state, { running = false } = {}) {
   const out = [];
-  for (const lane of state.lanes.values()) out.push(narrationEvent(state, "laneOrphan", `${lane.label} never reported back`));
+  for (const lane of state.lanes.values()) {
+    out.push(running ? narrationEvent(state, "laneOpen", `${lane.label} still running`) : narrationEvent(state, "laneOrphan", `${lane.label} never reported back`));
+  }
   state.lanes.clear();
   return [...out, ...flushSkipped(state)];
 }
@@ -389,7 +392,7 @@ export function createNarrator({ all = false } = {}) {
   const state = { all: all === true, anchorMs: null, clockMs: null, lanes: new Map(), closedLanes: new Map(), tools: new Map(), seen: new Map(), skipped: 0, plain: 0 };
   return {
     push: (rawLine) => narrateLine(state, rawLine),
-    finish: () => finishNarration(state),
+    finish: (options) => finishNarration(state, options),
     note: (kind, text) => narrationEvent(state, kind, text),
   };
 }
@@ -399,7 +402,7 @@ export function narrateLog(text, options = {}) {
   const narrator = createNarrator(options);
   const events = [];
   for (const line of String(text ?? "").split("\n")) events.push(...narrator.push(line));
-  return [...events, ...narrator.finish()];
+  return [...events, ...narrator.finish({ running: options.running === true })];
 }
 
 // Last thing the orchestrator said in a log, the one narration line a table of jobs has room for.
@@ -416,8 +419,11 @@ const LIVE_KINDS = new Set(["text", "tool", "laneOpen", "laneClose", "slug", "ga
 
 // Last line of the narration as `queue log` prints it, glyph and lane label included: the same line the operator would read at the bottom of the log.
 export function lastNarratedLine(text) {
+  const narrator = createNarrator();
   let last = "";
-  for (const event of narrateLog(text)) {
+  const events = [];
+  for (const line of String(text ?? "").split("\n")) events.push(...narrator.push(line));
+  for (const event of events) {
     if (!LIVE_KINDS.has(event.kind)) continue;
     const label = event.lane ? `[${event.lane}] ` : "";
     last = `${GLYPHS[event.kind] ?? GLYPHS.tool} ${label}${event.text ?? ""}`;

@@ -809,7 +809,8 @@ async function runLogNarrated(path, id, { follow, all }, ctx) {
   const tail = { narrator, print, sawNotice: () => seen };
   if (!follow) {
     const text = readingLog(path, () => readFileSync(path, "utf8"));
-    for (const event of narrateLog(text, { all })) print(event);
+    const running = getJob(id, ctx.env)?.status === "running";
+    for (const event of narrateLog(text, { all, running })) print(event);
     printJobNotice(id, tail, ctx);
     return;
   }

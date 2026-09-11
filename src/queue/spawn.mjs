@@ -116,6 +116,7 @@ export function buildPrompt({ job, resume } = {}) {
     "Print `QUEUE_SLUG: <slug>` alone on a line as soon as the slug exists.",
     "Open the pull request at the end.",
     "If you need a human decision, stop at the gate and print `## Requires user confirmation`.",
+    "Shell rule: the worktree isolation refuses commands it cannot verify - one simple command per Bash call, no heredocs, no `\\` continuations, no `cd … && …`; longer snippets are files written with Write and run by path.",
   ].join("\n");
   return `${base}${operatorBlock(job?.operator_note)}${resumeBlock(resume)}`;
 }
