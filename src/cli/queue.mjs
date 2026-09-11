@@ -1,5 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
+import { closeDb, openDbReadOnly } from "../memory/db.mjs";
 import { withLock } from "../config/lock.mjs";
 import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
 import { projectByName, registrationOffer, resolveProject } from "../config/projects.mjs";
@@ -499,6 +500,7 @@ async function followStatus(values, intervalS, ctx) {
   process.once("SIGINT", onSignal);
   try {
     while (!stop) {
+      closeDb(ctx.env);
       const view = queueViewLines(values, ctx);
       const text = view.lines.join("\n");
       if (tty) {
@@ -752,8 +754,17 @@ function useColor(ctx) {
 }
 
 // Reads the status of a job for the follow loop; a job whose row is gone has no status at all.
+// Each poll opens its own read-only connection and closes it: a follow lives for hours, and a cached connection
+// can sit on a WAL read snapshot and keep answering `running` long after the runner wrote `done`.
 function jobStatusReader(id, env) {
-  return () => getJob(id, env)?.status ?? null;
+  return () => {
+    const db = openDbReadOnly(env);
+    try {
+      return db.prepare("SELECT status FROM jobs WHERE id = ?").get(id)?.status ?? null;
+    } finally {
+      db.close();
+    }
+  };
 }
 
 // Watches the output of the process, so a closed pipe ends the follow instead of crashing it.
