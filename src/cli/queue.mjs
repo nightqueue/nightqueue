@@ -424,10 +424,24 @@ function firstNoticeLine(job) {
   return line ? line.trim() : null;
 }
 
-// What SLUG/LAST says about a job: what it is doing while it runs, why it stopped at the gate, its slug otherwise.
+// The preflight block a pending job carries in its result, or null: the reason the runner gave it back.
+function blockedOf(job) {
+  if (job.status !== "pending") return null;
+  try {
+    const parsed = typeof job.result === "string" ? JSON.parse(job.result) : job.result;
+    const blocked = parsed?.blocked;
+    return blocked?.code ? { code: String(blocked.code), message: String(blocked.message ?? "") } : null;
+  } catch {
+    return null;
+  }
+}
+
+// What SLUG/LAST says about a job: what it is doing while it runs, why it stopped at the gate, why the runner gave it back, its slug otherwise.
 function lastCell(job, env) {
   if (job.status === "running") return lastNarration(job.id, env);
   if (job.status === "gate" || job.status === "failed") return firstNoticeLine(job) ?? job.slug ?? "-";
+  const blocked = blockedOf(job);
+  if (blocked) return `⛔ ${blocked.code}: ${blocked.message}`;
   return job.slug ?? "-";
 }
 
@@ -501,8 +515,10 @@ function formatRunner(runner, activeJobs = 0, env = process.env) {
   return "runner: stopped";
 }
 
-// The line `queue status` closes with when a backlog is sitting there with nobody working it.
-function backlogLine({ activeJobs, counts, runner }) {
+// The line `queue status` closes with when a backlog is sitting there with nobody working it, or when the runner gave a job back.
+function backlogLine({ activeJobs, counts, runner, jobs = [] }) {
+  const blocked = jobs.map(blockedOf).filter(Boolean);
+  if (blocked.length) return `${blocked.length} job${blocked.length === 1 ? "" : "s"} blocked (${[...new Set(blocked.map((entry) => entry.code))].join(", ")}) - fix the cause, the runner retries by itself`;
   if (!isQueueIdle({ activeJobs, runner }) || counts.pending === 0) return null;
   return `${pendingJobs(counts.pending)} waiting - start the batch: nightshift queue run`;
 }
@@ -537,7 +553,7 @@ function queueViewLines(values, ctx) {
   if (!jobs.length) return { lines: [...lines, "no jobs in the queue"], idle: true };
   lines.push(...formatTable(jobs, ctx));
   lines.push(Object.entries(counts).map(([status, total]) => `${status}=${total}`).join("  "));
-  const backlog = backlogLine({ activeJobs, counts, runner });
+  const backlog = backlogLine({ activeJobs, counts, runner, jobs });
   if (backlog) lines.push(backlog);
   return { lines, idle: isQueueIdle({ activeJobs, runner }) && counts.pending === 0 };
 }

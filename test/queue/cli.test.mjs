@@ -609,3 +609,13 @@ test("an unrecognized token is always an error, and never falls through to runni
   }
   assert.equal(getJob(id, env).status, "pending", "a refused command still claimed a job");
 });
+
+test("queue status names a job the runner gave back, with the preflight code, and says the runner retries by itself", (t) => {
+  const env = makeCliHome(t, "cli-status-blocked");
+  const id = enqueue(env, "fix the worker");
+  openDb(env).prepare("UPDATE jobs SET result = ? WHERE id = ?").run(JSON.stringify({ blocked: { code: "dirty-checkout", message: "/repo has uncommitted changes" } }), id);
+  const table = runCli(env, ["queue", "status"]);
+  assert.equal(table.status, 0, table.stderr);
+  assert.match(tableLine(table.stdout, id), /○ pending\s+-\s+-\s+alpha\s+⛔ dirty-checkout: \/repo has uncommitted changes/);
+  assert.match(table.stdout, /1 job blocked \(dirty-checkout\) - fix the cause, the runner retries by itself/);
+});

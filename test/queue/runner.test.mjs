@@ -9,6 +9,7 @@ import { packageRoot } from "../../src/host/paths.mjs";
 import { addJob, claimJobById, countsByStatus, getJob } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { DRAIN_INTERVAL_S, runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../../src/queue/runner.mjs";
+import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, failureStream, gateStream, PR_URL, resultEvent, SESSION_ID, SLUG, slugEvent, systemInitEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
@@ -191,7 +192,7 @@ test("a job blocked by the preflight is never claimed twice in the same cycle", 
   const cycle = await runCycle({ env, deps: { gitImpl: fakeGit({ status: " M file.mjs" }) } });
 
   assert.deepEqual(cycle.processed.map((job) => job.status), ["blocked"]);
-  assert.equal(cycle.reason, "already-tried");
+  assert.equal(cycle.reason, "blocked", "a cycle that gave a job back to the operator must say so, so a drain waits instead of exiting");
   assert.equal(getJob(id, env).status, "pending");
 });
 
@@ -445,4 +446,41 @@ test("a drain held back by a busy project waits and tries again instead of exiti
   assert.equal(passes.length, 2);
   assert.deepEqual(seen, ["project-busy", "project-busy"]);
   assert.deepEqual(slept, [DRAIN_INTERVAL_S * 1000]);
+});
+
+test("a finish the database refused to commit still leaves the witness, is reported, and the reconciliation restores the row from it", async (t) => {
+  const { env } = makeRunnerHome(t, "runner-finish-refused", [{ stdout: doneStream(), exitCode: 0 }]);
+  const id = enqueue(env);
+  const refused = () => {
+    throw new Error("the nightshift database is still locked by another process after 24 attempts");
+  };
+
+  const cycle = await runJobCycle(env, id, { finishJobImpl: refused });
+
+  assert.deepEqual(cycle.processed, [{ id, status: "unrecorded", prUrl: PR_URL, attempts: 1, error: "the nightshift database is still locked by another process after 24 attempts" }]);
+  assert.equal(getJob(id, env).status, "running", "the row kept the state the refused commit left it in");
+  assert.match(readFileSync(jobLogPath(id, env), "utf8"), /finish verification failed\nthe finish of job #\d+ did not commit: the nightshift database is still locked/);
+  const state = JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"));
+  assert.deepEqual({ status: state.terminal.status, prUrl: state.terminal.prUrl }, { status: "done", prUrl: PR_URL }, "the witness was not written from the outcome in memory");
+
+  openDb(env).prepare("UPDATE jobs SET lease_until = datetime('now', '-1 hour') WHERE id = ?").run(id);
+  reconcileFromWitness(env);
+  const row = getJob(id, env);
+  assert.deepEqual({ status: row.status, pr: row.pr_url, worker: row.worker, lease: row.lease_until }, { status: "done", pr: PR_URL, worker: null, lease: null }, "the reconciliation did not restore the row from the witness");
+  assert.match(String(row.result), /repairedFrom/);
+});
+
+test("a drain waits on a job the preflight gave back instead of exiting, so the operator's fix is picked up", async (t) => {
+  const { env } = makeRunnerHome(t, "runner-drain-blocked", []);
+  const id = enqueue(env);
+  const seen = [];
+  const slept = [];
+
+  const passes = await runDrain({ env, cycles: 2, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: fakeGit({ status: " M src/a.mjs" }), sleepImpl: async (ms) => slept.push(ms) } });
+
+  assert.equal(passes.length, 2, "the drain exited on a blocked job instead of waiting");
+  assert.deepEqual(seen, ["blocked", "blocked"]);
+  assert.deepEqual(slept, [DRAIN_INTERVAL_S * 1000]);
+  assert.equal(getJob(id, env).status, "pending");
+  assert.match(String(getJob(id, env).result), /dirty-checkout/);
 });

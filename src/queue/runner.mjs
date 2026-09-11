@@ -48,6 +48,7 @@ const DEFAULT_DEPS = {
   stopSignalImpl: null,
   idleTimeoutS: IDLE_TIMEOUT_S,
   refreshMergedImpl: refreshMergedJobs,
+  finishJobImpl: finishJob,
 };
 
 // Merges the injected seams over the real implementations; the ownership poll is the configured heartbeat.
@@ -174,17 +175,20 @@ function noteWitnessFailure(jobId, reason, env) {
 }
 
 // Writes the witness of the outcome next to the run: the durable record the database is verified against.
-function writeWitness(job, env) {
+// The witness comes from the outcome the runner holds in memory, never from the row: when the finish itself
+// failed to commit, the row still says `running`, and the witness is exactly what the reconciliation needs then.
+function writeWitness(job, outcome, env) {
   try {
     const row = getJob(job.id, env);
-    if (!row) return;
+    const slug = row?.slug ?? job.slug;
+    if (!slug) return;
     const written = writeRunTerminal({
-      project: row.project,
-      slug: row.slug,
+      project: row?.project ?? job.project,
+      slug,
       terminal: {
-        status: row.status,
-        prUrl: row.pr_url ?? null,
-        finishedAt: sqliteToIso(row.finished_at),
+        status: outcome.status,
+        prUrl: outcome.prUrl ?? null,
+        finishedAt: row?.status === outcome.status && row?.finished_at ? sqliteToIso(row.finished_at) : new Date().toISOString(),
         writtenBy: packageRoot(),
         pid: process.pid,
       },
@@ -196,36 +200,56 @@ function writeWitness(job, env) {
   }
 }
 
+// Runs the finish, turning a database that refused the commit into a reported failure instead of a crash of the runner.
+function tryFinish(job, outcome, env) {
+  try {
+    return { written: outcome.write(), error: null };
+  } catch (err) {
+    const message = err?.message ?? String(err);
+    try {
+      appendFileSync(jobLogPath(job.id, env), `finish verification failed\nthe finish of job #${job.id} did not commit: ${message}\n`);
+      process.stderr.write(`job #${job.id}: the finish did not commit: ${message}\n`);
+    } catch {}
+    return { written: false, error: message };
+  }
+}
+
 // Writes the outcome of a finished job, together with the branch the pipeline registered in its state.
-function finalize(job, run, env) {
+function finalize(job, run, env, finishJobImpl = finishJob) {
   const state = readRunState({ project: job.project, slug: run.facts.slug, env });
   if (state?.branch) persistRunFacts(job.id, { worker: job.worker, branch: state.branch }, env);
-  const written = finishJob(
-    job.id,
-    {
-      worker: job.worker,
-      status: run.outcome.status,
-      result: {
-        status: run.outcome.status,
-        prUrl: run.outcome.prUrl,
-        logPath: jobLogPath(job.id, env),
-        exitCode: run.result.exitCode,
-        timedOut: run.result.timedOut,
-        idleTimedOut: run.result.idleTimedOut,
-        attempts: run.attempt,
-      },
-      prUrl: run.outcome.prUrl,
-      noticeMd: run.outcome.noticeMd,
-      usage: run.usage,
-    },
-    env,
-  );
-  if (written) {
-    checkpointWal(env);
-    writeWitness(job, env);
-  }
-  if (written && run.outcome.status === "done") closeRoadmapItem(job.id, env);
-  return { id: job.id, status: written ? run.outcome.status : "lost", prUrl: run.outcome.prUrl, attempts: run.attempt };
+  const finish = tryFinish(job, {
+    write: () =>
+      finishJobImpl(
+        job.id,
+        {
+          worker: job.worker,
+          status: run.outcome.status,
+          result: {
+            status: run.outcome.status,
+            prUrl: run.outcome.prUrl,
+            logPath: jobLogPath(job.id, env),
+            exitCode: run.result.exitCode,
+            timedOut: run.result.timedOut,
+            idleTimedOut: run.result.idleTimedOut,
+            attempts: run.attempt,
+          },
+          prUrl: run.outcome.prUrl,
+          noticeMd: run.outcome.noticeMd,
+          usage: run.usage,
+        },
+        env,
+      ),
+  }, env);
+  // The witness is written when the row took the finish AND when the database refused the commit - the second case is exactly
+  // what the reconciliation repairs from. A finish that returned false means the row is no longer ours (another worker owns
+  // it): no witness then, or the reconciliation would close a job someone else is still running.
+  if (finish.written || finish.error) writeWitness(job, run.outcome, env);
+  if (finish.written) checkpointWal(env);
+  if (finish.written && run.outcome.status === "done") closeRoadmapItem(job.id, env);
+  const status = finish.written ? run.outcome.status : finish.error ? "unrecorded" : "lost";
+  const report = { id: job.id, status, prUrl: run.outcome.prUrl, attempts: run.attempt };
+  return finish.error ? { ...report, error: finish.error } : report;
 }
 
 // Runs one claimed job end to end: preflight, attempts and the single write of the outcome.
@@ -247,7 +271,7 @@ async function runJob(job, ctx) {
     release(job, { interrupted: true }, env);
     return { id: job.id, status: "interrupted", attempts: run.attempt };
   }
-  return finalize(job, run, env);
+  return finalize(job, run, env, deps.finishJobImpl);
 }
 
 // Directory this runner loaded its code from: the one it registered when it started, or the tree this process is running.
@@ -306,6 +330,7 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
   const processed = [];
   const pool = new Set();
   const seen = new Set();
+  const blocked = new Set();
   let reason = "empty-queue";
   try {
     while (!ctx.state.stopping) {
@@ -329,7 +354,10 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
       }
       if (seen.has(claimed.job.id)) {
         release(claimed.job, null, env);
-        reason = "already-tried";
+        await Promise.allSettled([...pool]);
+        // A job released by a preflight block (dirty checkout, missing binary) stays pending on purpose: the operator fixes the
+        // cause and the drain must be there to pick it up, so this pass ends as `blocked`, which the drain waits on.
+        reason = blocked.has(claimed.job.id) ? "blocked" : "already-tried";
         break;
       }
       seen.add(claimed.job.id);
@@ -337,6 +365,7 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
       const task = runJob(claimed.job, ctx)
         .catch((err) => ({ id: claimed.job.id, status: "error", error: err?.message ?? String(err) }))
         .then((result) => {
+          if (result.status === "blocked") blocked.add(result.id);
           processed.push(result);
           pool.delete(task);
         });
@@ -390,6 +419,8 @@ export const DRAIN_INTERVAL_S = 15;
 
 // Reasons of a cycle after which a drain has nothing left to do: the queue is empty, paused, the cycle was told to stop, or the tree it runs from is gone.
 const DRAIN_DONE_REASONS = new Set(["empty-queue", "paused", "already-tried", "runtime-gone"]);
+// Reasons the drain keeps waiting on: the pending job is held back by something the operator or another runner will clear.
+const DRAIN_WAIT_REASONS = new Set(["project-busy", "blocked", "concurrency-cap"]);
 
 // Runs cycles until the queue has nothing pending, waiting between passes while the pending jobs are held back by a busy project or the concurrency cap - what "run the queue" means to an operator.
 export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {
@@ -403,6 +434,7 @@ export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env =
       passes.push(pass);
       onCycle(pass);
       if (pass.stopped || DRAIN_DONE_REASONS.has(pass.reason)) break;
+      if (!DRAIN_WAIT_REASONS.has(pass.reason) && pass.reason !== "claimed") break;
       if (cycles !== null && passes.length >= cycles) break;
       await waitNextPass(Math.max(1, Number(intervalS) || DRAIN_INTERVAL_S) * 1000, state, options.sleepImpl);
     }
