@@ -21,7 +21,7 @@ import {
   createNarrator,
   formatDuration,
   formatNarration,
-  lastOrchestratorLine,
+  lastNarratedLine,
   narrateLog,
   noticeNarration,
 } from "../queue/narrate.mjs";
@@ -372,11 +372,11 @@ function formatPr(job) {
 function prWidth(jobs) {
   return jobs.reduce((width, job) => Math.max(width, formatPr(job).length), "PR".length);
 }
-// Last narration line of the log of a job; a log that is missing or unreadable says so instead of inventing one.
+// Last narrated line of the log of a job, as `queue log` would print it; a log that is missing or unreadable says so instead of inventing one.
 function lastNarration(id, env) {
   const tail = readLogTail(jobLogPath(id, env));
-  const line = typeof tail === "string" ? lastOrchestratorLine(tail) : "";
-  return line ? `» ${line}` : "-";
+  const line = typeof tail === "string" ? lastNarratedLine(tail) : "";
+  return line || "-";
 }
 
 // First line of the notice of a job, the reason it stopped, for the table.

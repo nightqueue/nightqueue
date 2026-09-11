@@ -411,6 +411,20 @@ export function lastOrchestratorLine(text) {
   return last;
 }
 
+// Kinds of narration that say what the job is doing right now; the bookkeeping of the narration (attempt separators, quiet ticks, summaries) never does.
+const LIVE_KINDS = new Set(["text", "tool", "laneOpen", "laneClose", "slug", "gate", "marker", "pr", "notice"]);
+
+// Last line of the narration as `queue log` prints it, glyph and lane label included: the same line the operator would read at the bottom of the log.
+export function lastNarratedLine(text) {
+  let last = "";
+  for (const event of narrateLog(text)) {
+    if (!LIVE_KINDS.has(event.kind)) continue;
+    const label = event.lane ? `[${event.lane}] ` : "";
+    last = `${GLYPHS[event.kind] ?? GLYPHS.tool} ${label}${event.text ?? ""}`;
+  }
+  return last;
+}
+
 // Wraps a text in an SGR color, or returns it untouched when there is no color to apply.
 function paint(text, code) {
   return code ? `\u001b[${code}m${text}\u001b[0m` : text;

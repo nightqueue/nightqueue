@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createNarrator, formatNarration, narrateLog } from "../../src/queue/narrate.mjs";
+import { createNarrator, formatNarration, lastNarratedLine, narrateLog } from "../../src/queue/narrate.mjs";
 import {
   agentToolUseEvent,
   assistantEvent,
@@ -219,4 +219,12 @@ test("color is opt in, and never leaks into a redirected output", () => {
   const [line] = narrate(narrationStream());
   assert.equal(line.includes("\u001b["), false);
   assert.equal(formatNarration(narrateLog(narrationStream())[0], { color: true }).includes("\u001b["), true);
+});
+
+test("the last narrated line is what the bottom of `queue log` shows: a lane opening with its goal, or the tool a lane is on", () => {
+  const task = JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Task", input: { subagent_type: "coder", description: "implement stage 1 of the plan" } }] } });
+  const lane = JSON.stringify({ type: "assistant", subagent_type: "coder", parent_tool_use_id: "t1", message: { content: [{ type: "tool_use", id: "t2", name: "Edit", input: { file_path: "/repo/src/a.mjs" } }] } });
+  assert.match(lastNarratedLine(`${task}\n`), /^▶ coder.*— implement stage 1 of the plan/);
+  assert.match(lastNarratedLine(`${task}\n${lane}\n`), /^· .*Edit/);
+  assert.equal(lastNarratedLine(""), "");
 });
