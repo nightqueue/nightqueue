@@ -647,3 +647,18 @@ test("a server pinned to a job refuses queue_retry aimed at any other job, and l
   const tool = (await client.listTools()).tools.find((entry) => entry.name === "queue_retry");
   assert.ok(tool.description.includes("only accepts the id of the job it is running"), tool.description);
 });
+
+test("a refused call names every issue, the whole contract of the tool and what was received", async (t) => {
+  const env = makeHome(t, "mcp-contract-refusal");
+  const client = await connect(t, env);
+  const refused = await client.callTool({ name: "lesson_save", arguments: { title: "x", root_cause: "y", prevention: "z" } }).catch((err) => err);
+  const text = String(refused?.message ?? textOf(refused));
+  assert.match(text, /Invalid arguments for tool lesson_save/);
+  assert.match(text, /solution/, "the missing field is not named");
+  assert.match(text, /lesson_save contract:\nrequired: .*solution/, "the contract does not list the required fields");
+  assert.match(text, /received: title, root_cause, prevention/, "what was sent is not echoed back");
+  const enumRefused = await client.callTool({ name: "pipeline_log", arguments: { slug: "s", tier: "simple", outcome: "success", task_type: "bug" } }).catch((err) => err);
+  const enumText = String(enumRefused?.message ?? textOf(enumRefused));
+  assert.match(enumText, /task_type/);
+  assert.match(enumText, /bug\/error \| feature\/refactor/, "the enum values are not listed in the contract");
+});

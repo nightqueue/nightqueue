@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
@@ -217,6 +218,36 @@ function jobLimit(limit) {
 // Wraps a tool result as the JSON text every tool of this server returns.
 function asText(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+}
+
+// One line describing a zod field of an input schema, so a refused call learns the whole contract instead of one missing key.
+function describeField(name, schema) {
+  const optional = schema.isOptional?.() || schema.isNullable?.();
+  let inner = schema;
+  while (inner?.def?.innerType) inner = inner.def.innerType;
+  const def = inner?.def ?? {};
+  const kind = def.type === "enum" ? Object.values(def.entries ?? {}).join(" | ") : def.type === "array" ? "array" : def.type ?? "value";
+  return `${name}${optional ? "?" : ""}: ${kind}`;
+}
+
+// The contract of a tool as one readable block: required fields first, then the optional ones.
+function describeSchema(inputSchema) {
+  const entries = Object.entries(inputSchema ?? {});
+  const required = entries.filter(([, schema]) => !(schema.isOptional?.() || schema.isNullable?.()));
+  const optional = entries.filter(([, schema]) => schema.isOptional?.() || schema.isNullable?.());
+  return [
+    `required: ${required.map(([name, schema]) => describeField(name, schema)).join(", ") || "none"}`,
+    `optional: ${optional.map(([name, schema]) => describeField(name, schema)).join(", ") || "none"}`,
+  ].join("\n");
+}
+
+// Validates the arguments here instead of leaving it to the SDK, so the refusal names every issue, the whole contract and what was received - an agent fixes that on the next call instead of repeating the same payload.
+function validateArgs(name, inputSchema, args) {
+  const parsed = z.object(inputSchema).safeParse(args ?? {});
+  if (parsed.success) return parsed.data;
+  const issues = parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ");
+  const received = Object.keys(args ?? {}).join(", ") || "nothing";
+  throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for tool ${name}: ${issues}\n${name} contract:\n${describeSchema(inputSchema)}\nreceived: ${received}`);
 }
 
 // Wraps a handler so a business failure comes back as a clear message instead of a raw exception.
@@ -691,9 +722,13 @@ function toolHandler(tool, env) {
 // Builds the MCP server with the eighteen tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
+  const schemas = new Map();
   for (const tool of toolDefinitions(env)) {
+    schemas.set(tool.name, tool.config.inputSchema);
     server.registerTool(tool.name, tool.config, guard(tool.name, toolHandler(tool, env)));
   }
+  // The SDK validates the call before the handler and refuses with one issue; this refusal carries every issue, the whole contract and what was received, which is what lets an agent fix the next call instead of repeating the same payload.
+  server.validateToolInput = async (tool, args, toolName) => validateArgs(toolName, schemas.get(toolName) ?? tool.inputSchema, args);
   return server;
 }
 
