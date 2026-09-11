@@ -32,28 +32,36 @@ You turn what the user just asked for into ONE job in the nightshift backlog.
   project, each with its `name` and its `path`.
 - Pick the project whose `path` is the longest prefix of the current working
   directory. That is the same rule the CLI applies.
-- No project matches: ask the user `Register <cwd> as <name> and queue the job?`,
-  with `<name>` the basename of the repository root. On yes, call `queue_add`
-  with `cwd` (absolute) and `register: true`. On no, stop and queue nothing.
-  One question, never more. Do not queue the job against another project.
+- No project matches: the job goes to the current directory and step 4's single
+  question asks for the registration in the same line, with `<name>` the basename
+  of the repository root. Never queue the job against another project.
 
 ## 3. Write the prompt
 
 Write it in English, between 20 and 10000 characters, self-contained — the job
 runs unattended, with no access to this conversation:
 
-- the area affected (files, module, command, surface);
-- the expected result;
-- the constraints (what must not change, what must not be touched);
-- how the result is verified (test command, check, observable behaviour).
+- the area affected (files, module, command, surface) and the expected result;
+- the constraints (what must not change) and how the result is verified.
 
-## 4. Call `queue_add`
+## 4. Confirm once, then call `queue_add`
 
 - `project` is the registered NAME of the project, never a path. It is replaced
   by `cwd` (absolute) when no project is registered for the current directory.
 - `prompt` is the text of step 3.
+- `tier` is your reading of the risk: `trivial` (the prompt fully describes the
+  result — docs, copy, config, a rename), `simple` (a local change whose
+  behaviour the prompt defines, one subsystem), `complex` (a design decision,
+  concurrency/security/money, more than one subsystem, or stages). In doubt
+  propose the lower one: the pipeline may raise it with evidence, never lower it.
+- Ask ONCE before the call, naming the project, the job title (the first line of
+  the prompt, shortened to fit) and the tier:
+  `Queue "<title>" for <project> as <tier>? [Y/n]` — or, when step 2 matched no
+  project, `Queue "<title>" for <cwd> (register as <name>) as <tier>? [Y/n]`,
+  which is the registration question too and, on yes, sends `register: true`.
+- One question, never more. Yes or an empty answer queues it as proposed; an
+  answer naming another tier queues it with that tier; no queues nothing.
 - There is no `run` parameter: recording the job is all this tool does.
-- `register: true` is only ever sent after the user answered yes in step 2.
 - Never start the job. Only when the user explicitly asks for that one job now
   do you call `queue_run` with its `job_id`; otherwise the whole batch is
   started by the user, later, with `nightshift queue run`.
@@ -62,7 +70,7 @@ runs unattended, with no access to this conversation:
 
 Three short lines, no more:
 
-- the job id `queue_add` returned;
+- the job id `queue_add` returned and the `tier` it was queued as;
 - how many jobs are pending;
 - the one-line hint the tool itself returned in `hint`, reused as it came
   (`queued job #<id> for <project> (<pending> pending). Start the batch with

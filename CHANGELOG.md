@@ -51,6 +51,26 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `queue retry` refuse a `merged` job, and `queue retry` still accepts only
   `failed`, `cancelled` and `gate`.
 
+- The operator sets the risk tier of a job, and the pipeline runs the track of
+  that tier: `nightshift queue add --tier trivial|simple|complex` and the `tier`
+  parameter of `queue_add` store it in a new nullable column of `jobs` (one
+  migration, schema v5), `nightshift queue status <id>` and the `--json` of the
+  list and the detail show it, and the unattended prompt carries the line
+  `Tier: <tier> (set by the operator - the pipeline may only raise it, with
+  evidence, never lower it)` into the run. The `/nightshift:queue` skill proposes
+  a tier, names it in the single confirmation it already asks and lets the user
+  override it in that same answer. `/resolve` gained three tracks: `trivial`
+  (coder plus a verifier on tsc, lint and the tests of the touched files, under 5
+  minutes), `simple` (a triager only when the request is a bug, then a coder and
+  a verifier on the FULL test suite, under 15 minutes, with no architect and no
+  qa-guardian) and `complex` (the whole pipeline, unchanged). The mandatory
+  escalation to `complex` whenever a fix changed a condition is gone: a tier is
+  raised only on evidence found, never on the shape of the change, and the raise
+  is written into the Brief as `Tier raised: <from> -> <to>: <evidence>`. An
+  operator tier is never lowered. `pipeline_log` records `tier_operator` and
+  `tier_raise_reason` next to the final `tier`, so a raised run is the runs whose
+  two tiers differ, with the evidence beside them.
+
 - Decisions and roadmap, per project and private to the home: a numbered
   decisions log (context, decision, consequences and a status among `proposed`,
   `accepted`, `superseded` and `rejected`) and a `now`/`next`/`later` roadmap,

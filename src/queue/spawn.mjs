@@ -117,12 +117,20 @@ function resumeBlock(resume) {
   ].join("\n");
 }
 
+// The line that carries the operator's tier into the run; a job with no tier carries nothing.
+function tierLine(tier) {
+  const value = typeof tier === "string" ? tier.trim() : "";
+  if (!value) return [];
+  return [`Tier: ${value} (set by the operator - the pipeline may only raise it, with evidence, never lower it)`];
+}
+
 // Builds the prompt of the unattended run; every marker is quoted inline, so the echo never looks like one.
 export function buildPrompt({ job, resume } = {}) {
   const base = [
     `/nightshift:resolve ${String(job?.prompt ?? "").trim()}`,
     "",
     `Unattended run, job #${job?.id}, no operator available.`,
+    ...tierLine(job?.tier),
     "Print `QUEUE_SLUG: <slug>` alone on a line as soon as the slug exists.",
     "Open the pull request at the end.",
     "If you need a human decision, stop at the gate and print `## Requires user confirmation`.",

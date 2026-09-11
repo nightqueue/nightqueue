@@ -673,6 +673,7 @@ nightshift queue add api "fix the flaky worker" --priority 2   # enqueue a job
 nightshift queue add "fix the flaky worker"                    # same, for the project of the current directory
 nightshift queue add fix the flaky worker --run                # enqueue and start the runner on it, detached
 nightshift queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
+nightshift queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
 nightshift queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightshift queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
 nightshift queue status 7 [--json]                             # one job, never with its prompt
@@ -721,6 +722,27 @@ with the reason on the line `job #<id> did not start (<reason>)` - the job stays
 in the queue. `--foreground` on a command that was not given `--run` is a usage
 error, never a silent no-op. An explicit job id ignores the pause sentinel, so
 `--run` runs even on a paused queue.
+
+**`--tier` declares the risk of the job.** `queue add --tier trivial|simple|complex`
+(and the `tier` parameter of `queue_add`) records the tier on
+the job, and the unattended prompt carries it into the run as
+`Tier: <tier> (set by the operator - the pipeline may only raise it, with evidence,
+never lower it)`. Each tier is a track: `trivial` is a coder plus a verifier that runs
+tsc, lint and the tests of the touched files, **under 5 minutes**, for a result the
+prompt fully describes (docs, copy, config values, a rename, a test-only change);
+`simple` is a triager only when the request is a bug, then a coder and a verifier that
+runs the FULL test suite, **under 15 minutes**, for a local change whose behaviour the
+prompt defines, in one subsystem; `complex` is the whole pipeline (triager, exploration,
+architect, coder, QA and verifier), for a design decision, a concurrency/security/money
+surface, more than one subsystem or a brief that needs stages. The pipeline **raises** a
+tier only on evidence it finds — a stack trace, a security/concurrency/money surface, a
+schema/contract/tool change the brief did not name, or an ambiguous brief — and writes
+the raise into the Brief as `Tier raised: <from> -> <to>: <evidence>`. It never lowers
+one, and it never raises on the shape of the change. A value that is not one of the
+three is a usage error naming the three accepted values, and nothing is queued.
+A job with no tier keeps the pipeline's
+own classification. The tier shows up in `nightshift queue status <id>` and in the
+`--json` of both the list and the detail; a job with no tier simply has no `tier` line.
 
 ### Running the queue
 
@@ -973,6 +995,11 @@ never sees is merged.
 **Branch chains are v1.1**, and only for work that genuinely does not fit in one
 run. Until then, the answer to "this depends on that" is one job with stages.
 
+**The tier is yours to set.** `--tier trivial|simple|complex` on `queue add` (or the
+`tier` parameter of `queue_add`) tells the pipeline how much risk the job carries, and
+the run executes the track of that tier. The criteria of each one, their time targets
+and what raises a tier are in `## Queue`.
+
 `nightshift queue add --help` prints this rule and the example.
 
 ## Doctor
@@ -1094,8 +1121,8 @@ The eighteen MCP tools, with the parameters `nightshift mcp` actually accepts:
 | `memory_recall` | `query?`, `project?` |
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |
-| `pipeline_log` | `slug`, `tier`, `outcome`, `project?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?}]` |
-| `queue_add` | `project?`, `prompt?`, `roadmap_item_id?`, `cwd?`, `register?`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400) |
+| `pipeline_log` | `slug`, `tier`, `outcome`, `project?`, `tier_operator?`, `tier_raise_reason?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?}]` |
+| `queue_add` | `project?`, `prompt?`, `roadmap_item_id?`, `cwd?`, `register?`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`) |
 | `queue_status` | `job_id?`, `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_cancel` | `job_id`, `reason?` |
@@ -1107,6 +1134,12 @@ The eighteen MCP tools, with the parameters `nightshift mcp` actually accepts:
 | `roadmap_save` | `project`, `horizon` (`now`, `next`, `later`), `title`, `detail?`, `decision_id?` |
 | `roadmap_update` | `id`, `horizon?`, `title?`, `detail?`, `status?` (`open`, `done`, `dropped`; `queued` is refused), `position?`, `decision_id?` |
 | `roadmap_get` | `project` |
+
+In `pipeline_log`, `tier` is the FINAL tier the run executed, `tier_operator` is the
+tier the operator declared on the job (absent when there was none), and a run whose
+`tier_operator` differs from its `tier` is a run whose tier was raised, with the
+evidence of that raise in `tier_raise_reason`. There is no "raised" flag: it is derived
+from those two values.
 
 The five queue tools are the same subsystem as `nightshift queue` (see `## Queue`):
 `queue_add` takes the registered project NAME and never a path - or, with

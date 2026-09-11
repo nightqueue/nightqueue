@@ -76,6 +76,25 @@ test("a prompt that only mentions --priority without the -- escape keeps the def
   );
 });
 
+test("a prompt that mentions --tier mid-sentence keeps every word and stays tier-less, while the leading flag sets it", (t) => {
+  const { env, repo } = makeCliHome(t, "flag-swallow-tier");
+  const words = ["remember", "to", "send", "--tier", "simple", "next", "time"];
+
+  const added = runCli(env, ["queue", "add", ...words], { cwd: repo });
+
+  assert.equal(added.status, 0, added.stderr);
+  const job = getJob(1, env);
+  assert.equal(job.prompt, words.join(" "), "the persisted prompt lost the words the operator actually typed");
+  assert.equal(job.tier, null, "a --tier in the middle of the prompt silently set the tier of the job");
+
+  const flagged = runCli(env, ["queue", "add", "--tier", "trivial", "fix", "the", "worker"], { cwd: repo });
+  assert.equal(flagged.status, 0, flagged.stderr);
+  assert.deepEqual(
+    { prompt: getJob(2, env).prompt, tier: getJob(2, env).tier },
+    { prompt: "fix the worker", tier: "trivial" },
+  );
+});
+
 test("--help is help only as the single argument of queue add; every other shape keeps today's meaning", (t) => {
   const { env, repo } = makeCliHome(t, "help-flag-collision");
 

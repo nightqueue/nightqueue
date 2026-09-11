@@ -261,6 +261,35 @@ test("memory_recall answers empty and pipeline_log holds the contract of its enu
   });
   assert.equal(rejected.isError, true);
   assert.doesNotMatch(textOf(rejected), /\.mjs:\d+/);
+
+  const raised = payloadOf(
+    await client.callTool({
+      name: "pipeline_log",
+      arguments: {
+        project: "alpha",
+        slug: "raise-the-tier",
+        tier: "complex",
+        tier_operator: "simple",
+        tier_raise_reason: "stack trace in the claim path",
+        outcome: "pr_opened",
+      },
+    }),
+  );
+  const rows = openDb(env).prepare("SELECT * FROM pipeline_runs ORDER BY id").all();
+  const stored = rows.find((row) => row.id === raised.runId);
+  assert.deepEqual(
+    { tier: stored.tier, operator: stored.tier_operator, reason: stored.tier_raise_reason },
+    { tier: "complex", operator: "simple", reason: "stack trace in the claim path" },
+  );
+  const plain = rows.find((row) => row.slug === "fix-the-worker");
+  assert.deepEqual({ operator: plain.tier_operator, reason: plain.tier_raise_reason }, { operator: null, reason: null });
+
+  const badTier = await client.callTool({
+    name: "pipeline_log",
+    arguments: { project: "alpha", slug: "fix-the-worker", tier: "simple", tier_operator: "urgent", outcome: "pr_opened" },
+  });
+  assert.equal(badTier.isError, true);
+  assert.doesNotMatch(textOf(badTier), /\.mjs:\d+/);
 });
 
 test("the running server does not hold the configuration lock of the home", async (t) => {
@@ -318,7 +347,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
   assert.equal(second.hint, "queued job #2 for `alpha` (2 pending). Start the batch with queue_run when you are ready.");
 
   const add = (await client.listTools()).tools.find((tool) => tool.name === "queue_add");
-  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "max_attempts", "priority", "project", "prompt", "register", "roadmap_item_id", "timeout_s"]);
+  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "max_attempts", "priority", "project", "prompt", "register", "roadmap_item_id", "tier", "timeout_s"]);
   assert.ok(add.description.includes("start the whole batch later with `queue_run`"), add.description);
 
   const byPath = await client.callTool({ name: "queue_add", arguments: { project: "/tmp/alpha", prompt: "fix the worker" } });
@@ -332,6 +361,26 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
   const outOfRange = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix it", priority: 42 } });
   assert.equal(outOfRange.isError, true);
   assert.doesNotMatch(textOf(outOfRange), /\.mjs:\d+/);
+});
+
+test("queue_add carries the operator's tier, echoes it only when there is one, and refuses an unknown value", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-add-tier");
+  const client = await connect(t, env);
+
+  const tiered = payloadOf(
+    await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker", tier: "complex" } }),
+  );
+  assert.equal(tiered.tier, "complex");
+  assert.equal(getJob(tiered.id, env).tier, "complex");
+
+  const plain = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the parser" } }));
+  assert.equal("tier" in plain, false, "a job with no tier echoed a `tier` key");
+  assert.equal(getJob(plain.id, env).tier, null);
+
+  const unknown = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix it", tier: "urgent" } });
+  assert.equal(unknown.isError, true);
+  assert.doesNotMatch(textOf(unknown), /\.mjs:\d+/);
+  assert.equal(getJob(3, env), null, "the refused tier still queued a job");
 });
 
 test("queue_add resolves the project of the caller `cwd`, and answers needs_registration for a repository nobody registered", async (t) => {

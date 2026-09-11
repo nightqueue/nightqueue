@@ -213,30 +213,34 @@ agent, print a line in this format first:
    stages with their status. Stages are the internal order of ONE job, never a reason to
    split the delivery: it is still one branch and ONE pull request at the end.
 
-2. **Classify the complexity** of the task to choose the execution track:
+2. **Classify the risk** of the task to choose the execution track — the risk the
+   change carries, never the size of the diff.
+
+   **An operator tier replaces this classification.** When the prompt of this run
+   carries the line
+   `Tier: <tier> (set by the operator - the pipeline may only raise it, with evidence, never lower it)`,
+   that tier IS the tier of this run: do not reclassify it. The pipeline may **RAISE**
+   it (trivial → simple → complex) only when Phase 0 or Phase 1 finds concrete evidence:
+   - a stack trace;
+   - a security, concurrency or money surface;
+   - a schema, contract or tool change the brief did not name;
+   - an ambiguous brief.
+   A raise is written into the Brief, on its own line:
+   `Tier raised: <from> -> <to>: <evidence>`.
+   The pipeline **never lowers an operator tier**, and it may
+   raise only on evidence found, never on the shape of the change. With no operator
+   tier, classify by the criteria below.
 
    | Tier | Criteria | Track |
    | ----------- | --------------------------------------------------------- | ----------- |
-   | **trivial** | 1 file · < 20 lines · no third-party API · e.g. rename, typo, config | Fast Lite |
-   | **simple** | ≤ 5 files · < 100 estimated lines · no new third-party API · static content swap with no conditional branch | Fast |
-   | **complex** | > 5 files OR > 100 lines OR new third-party API OR bug with a stack trace OR logic/conditional/input bug (see escalation below) | Standard |
+   | **trivial** | the result is fully described by the brief and carries no behaviour decision — docs, README, copy, config values, CLI messages, table columns, a rename, a comment, a test-only change | Fast Lite |
+   | **simple** | a local change with behaviour the brief defines, even when it adds or changes a condition, in one subsystem, with existing test patterns to follow | Fast |
+   | **complex** | needs a design decision (new table, tool, flag, contract, schema, public API) · touches concurrency, security, money, auth or payments · crosses more than one subsystem · the brief needs a plan (stages) | Standard |
 
-   **Mandatory escalation to complex (regardless of the file/line count):**
-   a bug is not "simple" just because it touches few files. Escalate to **complex**
-   — which triggers the full QA Guardian — whenever the cause involves conditional
-   logic or an input value, and is not a mere static content swap.
-   Triggers:
-   - the fix changes a condition, guard, validation or branch;
-   - it depends on external data (API/DB/env/query/form/payload) or on
-     type coercion/truthiness;
-   - it affects permission, blocking, confirmation or conditional feature display flow.
-
-   It stays **simple** only for a bug that is a static content swap (text,
-   copy, label, constant, style) with no new conditional branch.
-
-   Classify **before** launching any agent, based solely on the task description.
-   When in doubt, escalate to the tier above (conservative).
-   Declare it explicitly: `"Track: Fast Lite / Fast / Standard"`.
+   Classify **before** launching any agent, from the brief alone. **When in doubt:**
+   pick the tier the criteria say and write the doubt in the Brief — a doubt is not
+   evidence, and the verifier's full test suite is the safety net of the `simple`
+   tier. Declare it explicitly: `"Track: Fast Lite / Fast / Standard"`.
 
 2.5. **Request critique (gate — mandatory on simple/complex; skip on trivial).**
    Before routing, answer inline in this fixed format (≤ 8 lines):
@@ -308,6 +312,11 @@ agent, print a line in this format first:
    affected fields of the Brief with the decision and proceed from step 3. If the gate avoided
    a wrong execution (the user accepted the alternative or reformulated the request),
    record it via `lesson_save` — that is the kind of hit that should become a pattern.
+
+   **In the `simple` tier the critique is ONE line**, not the block above:
+   `## Request critique — <EXECUTE | PROPOSE-ALTERNATIVE | ASK>: <the core assumption,
+   or the question/alternative in one sentence>`. A non-`EXECUTE` verdict stops the run
+   with the same gate block, in either tier.
 
 3. **Define the commit type** (Conventional Commits) that describes the task.
    That type names the branch/worktree and prefixes the Phase 7 commit:
@@ -510,14 +519,15 @@ agent, print a line in this format first:
 
    | Agent         | trivial | simple  | complex  |
    | ------------- | ------- | ------- | -------- |
-   | 🔍 triager       | —       | haiku   | sonnet   |
+   | 🔍 triager       | —       | haiku (bug only) | sonnet   |
    | 🧭 Explore       | —       | —       | sonnet   |
-   | 📐 architect     | —       | sonnet  | opus     |
+   | 📐 architect     | —       | —       | opus     |
    | ⚙️ coder         | sonnet  | sonnet  | opus     |
-   | 🛡️ qa-guardian   | —       | sonnet  | sonnet   |
+   | 🛡️ qa-guardian   | —       | —       | sonnet   |
    | ✅ verifier      | haiku   | haiku   | sonnet   |
 
-   `—` = the agent does not run in that tier. In the fix loops, the relaunched coder
+   `—` = the agent does not run in that tier. `haiku (bug only)` = in `simple` the
+   triager runs only when the request is a bug. In the fix loops, the relaunched coder
    keeps the `model` of the task's tier. Each phase below repeats the expected `model`
    in parentheses — in case of divergence, this table is the source of truth.
 
@@ -568,9 +578,9 @@ agent, print a line in this format first:
 
 ### Fast Lite Track — execute this block if the tier is "trivial"
 
-> Skips Phases 1–5 (Triage, Exploration, Architecture, QA). Once done, go straight
-> to Phase 7. There is no bug to reproduce and no requirement to validate in a
-> rename/typo/config.
+> Skips Phases 1–6.5 (Triage, Exploration, Architecture, QA, Runtime). Once done, go
+> straight to Phase 7. Target: **under 5 minutes**. No triager, no architect, no
+> qa-guardian and no request-critique gate in this tier.
 
 1. **Read the affected files inline** using the Read tool, with no subagent.
    Use the `**Affected area:**` field of the brief to locate them.
@@ -599,7 +609,7 @@ agent, print a line in this format first:
 
    Repository: [CWD PATH]
 
-   Run only tsc and lint. Do not run build or tests.
+   Run tsc and lint, plus the tests of the files that were touched. Do not run the build and do not run the full test suite.
    Produce the verdict ## Verification: PASSED or ## Verification: FAILED.
    ```
 
@@ -607,6 +617,85 @@ agent, print a line in this format first:
    - `PASSED` → go to Phase 7.
    - `FAILED` → relaunch the coder with the failures, then relaunch the verifier.
    - Still failing → **do not commit**, go to Phase 8 and report the failures.
+
+`state.json` is written by step 5.3 as in any other run, with the canonical phase names
+(`implementation`, `verification`, `commit`) — the phase order never changes.
+
+---
+
+### Fast Track — execute this block if the tier is "simple"
+
+> Triager only when the request is a bug, then coder and verifier. Skips Phases 2, 3, 5
+> and 6.5 (Exploration, Architecture, QA, Runtime). Once done, go straight to Phase 7.
+> Target: **under 15 minutes**. There is no architect and no qa-guardian in this tier:
+> the verifier's full test suite is the safety net.
+
+1. **Read the affected files inline** using the Read tool, with no subagent, plus
+   `<CWD>/CLAUDE.md` when it exists. Use the `**Affected area:**` field of the brief to
+   locate them; `index_recall` (MCP `nightshift`) locates them faster when the project
+   is already indexed.
+
+2. **Triager — only when `Type = bug/error`** (a feature/refactor goes straight to step
+   3): run **Phase 1** exactly as written (artifact `01-triage.md`, existence gate and
+   PROCEED gate included) with `model: "haiku"`. The bug is reproduced before a line is
+   changed; `NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION` terminates the run there, as Phase
+   1 defines.
+
+3. **Launch 1 coder agent** (subagent_type="nightshift:coder", `model: "sonnet"`):
+
+   ```
+   Brief:
+   [BRIEF FROM PHASE 0]
+
+   [Include only when the triager ran:]
+   Read before acting (via Read):
+   - `<RUN_DIR>/01-triage.md` — ## Validated brief and the confirmed cause.
+
+   Content of the affected files:
+   [CONTENT READ INLINE]
+
+   [Include only if <CWD>/CLAUDE.md exists:]
+   Project conventions (CLAUDE.md):
+   [CONTENT READ INLINE]
+
+   [Include only if lesson_recall returned something:]
+   ## Applicable lessons
+   - [L<id>] <prevention, 1 line>
+
+   Apply the change the brief defines, following the test patterns already in the
+   project, and cover the new behaviour in the test file that already covers this area.
+   Do not introduce abstractions.
+
+   MANDATORY: finish with the section:
+   ## Modified files
+   /absolute/path/file.ts
+
+   Repository: [CWD PATH]
+   ```
+
+4. **Launch 1 verifier agent** (subagent_type="nightshift:verifier", `model: "haiku"`):
+
+   ```
+   Modified files:
+   [FILE LIST]
+
+   Repository: [CWD PATH]
+
+   Tier: simple
+
+   Run tsc, lint and the project's FULL test suite. There are no QA PoCs in this tier.
+   Produce the verdict ## Verification: PASSED or ## Verification: FAILED.
+   ```
+
+5. **Fix loop — maximum 2 iterations**:
+   - `PASSED` → go to Phase 7.
+   - `FAILED` → relaunch the coder with the verifier's failures, then relaunch the
+     verifier.
+   - Still failing after the second iteration → **do not commit**, go to Phase 8 and
+     report the failures.
+
+`state.json` is written by step 5.3 as in any other run, with the canonical phase names
+(`triage`, `implementation`, `verification`, `commit`) — the phase order never changes.
 
 ---
 
@@ -662,7 +751,9 @@ blocks the run: record it as an open item in Phase 8 and continue, the same way 
 
 ### Phase 1 — Triage-Gate
 
-> **trivial** → does not execute (already routed by the Fast Lite Track).
+> **trivial** → does not execute (already routed by the Fast Lite Track). **simple** →
+> runs ONLY when `Type = bug/error`, launched by the Fast Track with `haiku`; a
+> feature/refactor in `simple` skips it.
 
 It always runs, both for bug/error and for feature/refactor. It validates before
 spending exploration, architecture and implementation.
@@ -747,7 +838,8 @@ cause is a leaf of a family (the architect decides the fix level in their own St
 
 ### Phase 2 — Exploration
 
-> **trivial** → does not execute. **simple** → does not execute (the architect locates it alone).
+> **trivial** → does not execute. **simple** → does not execute (there is no Explore and
+> no architect in this tier: the coder reads the files inline).
 
 **Structural index (recall — before launching the Explore):** call `index_recall`
 (MCP `nightshift`) with `project` = the current project, `repo_root` = the pipeline's CWD
@@ -802,18 +894,16 @@ Limit: at most 30 relevant files.
 Wait for the Explore to finish. Apply the existence gate (step 5.2) to
 `02-explore.md` before proceeding. Phase 3 reads the findings from there.
 
-**Before Phase 3 (every non-trivial tier):** read `<CWD>/CLAUDE.md` inline
+**Before Phase 3 (complex only):** read `<CWD>/CLAUDE.md` inline
 with the Read tool (if it exists) and keep the content to pass to the architect.
 If it does not exist, record "No CLAUDE.md found." It avoids an agent just for conventions.
-**In the simple tier** (no Explore): run the same `index_recall` and, if there is a map,
-include in the architect's prompt a `Known map of the project:` section with up to 15
-files relevant to the area (path — responsibility, flagging the stale ones) — the
-architect locates things faster starting from the map.
 
 ### Phase 3 — Architecture
 
-Launch **1 architect agent** (subagent_type="nightshift:architect", `model`: `sonnet` if the
-tier is simple, `opus` if the tier is complex):
+> **trivial** → does not execute. **simple** → does not execute.
+
+Launch **1 architect agent** (subagent_type="nightshift:architect", `model: "opus"`) —
+complex only:
 
 **What you may NOT inject into the architect's prompt (a prohibition without exception):** the
 DESIGN is theirs. You inject context and a DELIVERY constraint — never a solution. It is
@@ -993,8 +1083,11 @@ Never write code before that confirmation.
 
 ### Phase 4 — Implementation
 
-Launch 1 coder agent (subagent_type="nightshift:coder", `model`: `sonnet` if the tier is simple,
-`opus` if the tier is complex). The `coder.md` already requires the `## Modified files` section
+> **trivial** → does not execute (the Fast Lite Track launches its own coder). **simple** →
+> does not execute (the Fast Track launches its own coder).
+
+Launch 1 coder agent (subagent_type="nightshift:coder", `model: "opus"`).
+The `coder.md` already requires the `## Modified files` section
 and the completeness rule on a textual refactor — the prompt only injects the data:
 
 ```
@@ -1042,7 +1135,7 @@ never with `run_in_background` — see ⛔ Hard rule for launching a subagent.
 
 ### Phase 5 — Adversarial QA (attack)
 
-> **trivial** → does not execute.
+> **trivial** → does not execute. **simple** → does not execute (no qa-guardian in this tier).
 
 The QA is **adversarial and fixes nothing**: it attacks the code on every front,
 proves each break with an executable PoC and hands the breaks back to the coder. The fixes
@@ -1060,8 +1153,8 @@ a bug) lives in `qa-guardian.md`. The prompt only injects the data and selects t
 by the tier. Every qa-guardian runs in **read/PoC mode, it does not edit source** (it only
 creates PoC/test files).
 
-**simple → LITE (1 agent, single flow):** launch the qa-guardian agent
-(subagent_type="nightshift:qa-guardian", `model: "sonnet"`) with the prompt below, `Mode: LITE`.
+**trivial / simple → the QA does not run**: those tracks go from the coder straight to the
+verifier.
 
 **complex → two stages (analyst → parallel provers):** the analysis stays
 in a single head — it is the one that groups breaks by root (4 symptoms with the same cause
@@ -1069,7 +1162,8 @@ in a single head — it is the one that groups breaks by root (4 symptoms with t
 write→run→iterate loop of each PoC, which is the serial bottleneck of the phase — is distributed
 across parallel provers. Stages A and B below replace the single launch.
 
-Prompt of the LITE mode (simple):
+Prompt of the LITE mode (the single-flow mode of `qa-guardian.md`; no tier routes here
+today — `complex` always runs the two stages below):
 
 ```
 ## File handoff (contract — read first)
@@ -1407,7 +1501,8 @@ verdict + artifact path + key failures. Do NOT paste the complete detail.
 
 Tier: [trivial | simple | complex]
 
-trivial/simple → run tsc + lint + the QA's PoCs (no build and no full test suite).
+trivial → run tsc + lint + the tests of the files that were touched (no build, no full suite).
+simple → run tsc + lint + the project's FULL test suite (this tier has no QA PoCs).
 complex → detect and run the project's real checks (typecheck, lint, build,
 tests) + the QA's PoCs.
 Apply your methodology (the QA's PoCs and the Runtime API Check when they apply).
@@ -1487,7 +1582,8 @@ works. A verification that can only run against the real home is reported as
 
 ### Phase 6.5 — Runtime validation (real execution)
 
-> **trivial** → does not execute. A purely static change (typo, config, rename, types,
+> **trivial** → does not execute. **simple** → does not execute (the Fast Track goes from
+> the verifier to Phase 7). A purely static change (typo, config, rename, types,
 > pure logic already covered by a test) → does not execute: the Phase 6 checks are enough.
 
 Runs when the change (fix OR feature) is **observable at runtime**
@@ -1724,10 +1820,10 @@ inform that the commit/PR was not generated.
 
 Use the visual identity of the legend and the status icons throughout the report.
 
-**Fast Lite Track (trivial)**: present it in 2–3 lines — what was changed, the
-result of the verification (✅/❌) and the PR link (if opened).
+**Fast Lite Track (trivial) and Fast Track (simple)**: present it in 2–3 lines — what was
+changed, the result of the verification (✅/❌) and the PR link (if opened).
 
-**Fast / Standard Track**: ALWAYS start with the **summary table per step** —
+**Standard Track (complex)**: ALWAYS start with the **summary table per step** —
 it opens the report in any outcome. Steps that did not run in the tier → ⏭️.
 
 ```
@@ -1771,6 +1867,9 @@ of them already makes the run **not happy**:
 - Record 5.1: no line with the status `🔁` (no loop re-run).
 - Pipeline: `outcome` is `pr_opened` or `local_commit` (not `no_commit`) **and**
   no `gate_stop` was triggered.
+- A gate of a phase that does not run in this tier counts as satisfied (it is `⏭️`, never a
+  deviation): in `trivial`/`simple` that covers the triager when the request is not a bug,
+  the architect, the QA and 6.5.
 
 **Golden rule:** when in doubt about any of the points above, treat it as
 **not happy** — the complete detail is the safe behavior; hiding is the risk.
@@ -1967,7 +2066,11 @@ On both paths, proceed to the Telemetry below.
 
 **Telemetry (mandatory — one call per run, any outcome):** after
 assembling the tables, persist the run via `pipeline_log` (MCP `nightshift`):
-`project`, `slug`, `tier`, `task_type`, `outcome` (`pr_opened` | `local_commit`
+`project`, `slug`, `tier` (the FINAL tier the run executed), `tier_operator` (the tier of
+the `Tier:` line of the prompt, when the operator set one; omit it when there was none),
+`tier_raise_reason` (the `<evidence>` half of the Brief's `Tier raised: <from> -> <to>:
+<evidence>` line — send it when, and only when, the tier was raised, and omit it
+otherwise), `task_type`, `outcome` (`pr_opened` | `local_commit`
 | `no_commit`), `gate_stop` when there was no delivery (which gate ended it:
 `critique` | `triage` | `architect` | `qa` | `verification` | `runtime` |
 `user`), total `duration_s`, and `phases` =
@@ -1975,7 +2078,9 @@ one entry per line of the complete table, in order (phase, model, status
 `ok`/`failed`/`skipped`, `retry: true` on the 🔁 re-runs, duration_s,
 note ≤ 1 line). Terminations by gate are recorded too — they are the most
 valuable data of the runtime's report. A failure in `pipeline_log` does not block the report:
-record the ⚠️ open item and continue.
+record the ⚠️ open item and continue. A run whose `tier_operator` differs from its `tier` is
+a run whose tier was raised, and `tier_raise_reason` says on what evidence: the raise is
+never a field of its own.
 
 ---
 
@@ -1995,3 +2100,7 @@ reasoning + regression analysis → `sonnet`, not `opus`. **Triager** does not e
 but reproduces the bug by running/instrumenting the
 code → `haiku` (simple) / `sonnet` (complex). Phases 0/7/8 run in the orchestrator
 (the skill's model, without routing).
+
+The `simple` tier has no architect and no qa-guardian: its safety net is the verifier's full
+test suite, not a second reviewer — a tier is raised to `complex` on evidence found, never on
+the shape of the change.

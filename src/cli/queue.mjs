@@ -45,7 +45,7 @@ import { confirm } from "./prompt.mjs";
 import { runtimeLabel } from "./runtime-versions.mjs";
 
 const USAGE = {
-  add: "nightshift queue add [project] <prompt...> [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--roadmap <id>]",
+  add: "nightshift queue add [project] <prompt...> [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id>]",
   status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle]",
   run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <n>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
@@ -232,12 +232,13 @@ function addedLine(job, willRun, env) {
   return `queued job #${job.id} for \`${job.project}\` (${countsByStatus(env).pending} pending). Start the batch: nightshift queue run`;
 }
 
-// Priority, attempts and timeout of a `queue add`, each refused as a usage error when it is not a positive integer.
+// The knobs of a `queue add` that reach the job: priority, attempts, timeout and the operator's tier.
 function addLimits(values) {
   return {
     priority: requireInt("--priority", values.priority),
     maxAttempts: requireInt("--max-attempts", values["max-attempts"]),
     timeoutS: requireInt("--timeout", values.timeout),
+    tier: values.tier,
   };
 }
 
@@ -283,6 +284,7 @@ const ADD_OPTIONS = {
   foreground: { type: "boolean" },
   yes: { type: "boolean" },
   roadmap: { type: "string" },
+  tier: { type: "string" },
 };
 
 // Tells whether a token is written as an option, the only shape the edges of `queue add` read as one.

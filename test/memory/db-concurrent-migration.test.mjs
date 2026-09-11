@@ -90,7 +90,7 @@ test(`${RACERS} processes racing to migrate the SAME v3 database converge on v4,
       assert.equal(result.code, 0, `pass ${pass} racer ${idx} exited ${result.code}: ${result.stderr}`);
       const parsed = JSON.parse(result.stdout);
       assert.equal(parsed.error, null, `pass ${pass} racer ${idx} threw an unhandled error: ${parsed.error}`);
-      assert.equal(parsed.version, 4, `pass ${pass} racer ${idx} ended at user_version ${parsed.version}, not 4`);
+      assert.equal(parsed.version, 5, `pass ${pass} racer ${idx} ended at user_version ${parsed.version}, not 5`);
       assert.deepEqual(
         MERGE_COLUMNS.filter((name) => parsed.columns.includes(name)).sort(),
         [...MERGE_COLUMNS].sort(),
@@ -99,7 +99,7 @@ test(`${RACERS} processes racing to migrate the SAME v3 database converge on v4,
     }
 
     const after = openDb(env);
-    assert.equal(after.prepare("PRAGMA user_version").get().user_version, 4, `pass ${pass}: final user_version`);
+    assert.equal(after.prepare("PRAGMA user_version").get().user_version, 5, `pass ${pass}: final user_version`);
     const columns = after.prepare("PRAGMA table_info(jobs)").all().map((c) => c.name);
     for (const name of MERGE_COLUMNS) {
       assert.equal(columns.filter((c) => c === name).length, 1, `pass ${pass}: ${name} duplicated: ${columns.join(", ")}`);

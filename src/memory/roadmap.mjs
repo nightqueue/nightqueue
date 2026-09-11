@@ -339,13 +339,13 @@ function requireItemProject(item, project) {
 
 // Queues the job a roadmap item builds and links the two, so a job born from the roadmap never survives unlinked.
 export async function queueRoadmapItem(
-  { id, project, priority, maxAttempts, timeoutS, embedder } = {},
+  { id, project, priority, maxAttempts, timeoutS, tier, embedder } = {},
   env = process.env,
 ) {
   const item = queueableRoadmapItem(id, env);
   requireItemProject(item, project);
   const prompt = await buildRoadmapPrompt({ item, embedder }, env);
-  const job = addJob({ project: item.project, prompt, priority, maxAttempts, timeoutS }, env);
+  const job = addJob({ project: item.project, prompt, priority, maxAttempts, timeoutS, tier }, env);
   if (markRoadmapItemQueued(item.id, job.id, env)) return { job, item };
   cancelJob(job.id, { reason: "roadmap item was queued by another caller" }, env);
   throw new UserError(

@@ -214,6 +214,27 @@ test("nightshift queue add --roadmap builds the same prompt as the tool, from an
   assert.match(malformed.stderr, /`--roadmap` expects a positive integer, got `zero`/);
 });
 
+test("a job built from a roadmap item carries the operator's tier, through the tool and through the CLI", async (t) => {
+  const { env, item } = makeRoadmapHome(t, "roadmap-queue-tier");
+  const elsewhere = makeDir(t, "roadmap-queue-tier-cwd");
+  const client = await connect(t, env);
+
+  const queued = payloadOf(
+    await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id, tier: "complex" } }),
+  );
+  assert.equal(queued.tier, "complex");
+  assert.equal(getJob(queued.id, env).tier, "complex");
+  cancelJob(queued.id, { reason: "queued again through the CLI" }, env);
+
+  const added = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", String(item.id), "--tier", "complex"], {
+    env,
+    cwd: elsewhere,
+    encoding: "utf8",
+  });
+  assert.equal(added.status, 0, added.stderr);
+  assert.equal(getJob(getRoadmapItem(item.id, env).job_id, env).tier, "complex");
+});
+
 const RELATED_HEADING = "## Related decisions";
 const FAKE_MODEL = "fake-embedder@v1";
 const FAKE_VECTOR = [1, 0, 0, 0];

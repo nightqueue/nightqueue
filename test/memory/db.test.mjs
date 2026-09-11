@@ -65,6 +65,9 @@ DROP TRIGGER decisions_fts_au;
 DROP TABLE decisions_fts;
 DROP TABLE decisions;
 DROP TABLE roadmap_items;
+ALTER TABLE jobs DROP COLUMN tier;
+ALTER TABLE pipeline_runs DROP COLUMN tier_operator;
+ALTER TABLE pipeline_runs DROP COLUMN tier_raise_reason;
 PRAGMA user_version = 2;
 `;
 
@@ -97,6 +100,7 @@ const JOB_COLUMNS = [
   "merged_at",
   "merge_sha",
   "pr_checked_at",
+  "tier",
 ];
 
 // Everything a database written by the schema version before the merge sweep does NOT have yet.
@@ -104,7 +108,18 @@ const DOWNGRADE_TO_V3 = `
 ALTER TABLE jobs DROP COLUMN merged_at;
 ALTER TABLE jobs DROP COLUMN merge_sha;
 ALTER TABLE jobs DROP COLUMN pr_checked_at;
+ALTER TABLE jobs DROP COLUMN tier;
+ALTER TABLE pipeline_runs DROP COLUMN tier_operator;
+ALTER TABLE pipeline_runs DROP COLUMN tier_raise_reason;
 PRAGMA user_version = 3;
+`;
+
+// Everything a database written by the schema version before the operator tier does NOT have yet.
+const DOWNGRADE_TO_V4 = `
+ALTER TABLE jobs DROP COLUMN tier;
+ALTER TABLE pipeline_runs DROP COLUMN tier_operator;
+ALTER TABLE pipeline_runs DROP COLUMN tier_raise_reason;
+PRAGMA user_version = 4;
 `;
 
 // Inserts a lesson through raw SQL, so the test exercises the triggers and nothing else.
@@ -129,13 +144,13 @@ test("the migration is idempotent and keeps the data across a reopen", (t) => {
   const env = makeHome(t, "db-migrate");
   const first = openDb(env);
   const id = insertLesson(first, { title: "the migration keeps the rows" });
-  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 4);
+  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 5);
   assert.deepEqual(columnsOf(first, "lessons"), LESSON_COLUMNS);
   closeDb(env);
 
   const second = openDb(env);
   assert.notEqual(second, first);
-  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 4);
+  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 5);
   assert.deepEqual(columnsOf(second, "lessons"), LESSON_COLUMNS);
   assert.equal(second.prepare("SELECT title FROM lessons WHERE id = ?").get(id).title, "the migration keeps the rows");
   assert.deepEqual(matchIds(second, "lessons_fts", '"migration"'), [id]);
@@ -189,12 +204,19 @@ test("the migration from user_version 2 keeps every row and adds the decisions s
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 4, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 5, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
     assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
+    assert.ok(columnsOf(db, "jobs").includes("tier"), `jobs.tier missing on pass ${pass}`);
+    assert.ok(columnsOf(db, "pipeline_runs").includes("tier_operator"), `pipeline_runs.tier_operator missing on pass ${pass}`);
+    assert.ok(
+      columnsOf(db, "pipeline_runs").includes("tier_raise_reason"),
+      `pipeline_runs.tier_raise_reason missing on pass ${pass}`,
+    );
     assert.equal(db.prepare("SELECT title FROM lessons WHERE id = ?").get(lesson).title, "the migration keeps the rows");
     assert.deepEqual(matchIds(db, "lessons_fts", '"migration"'), [lesson]);
     assert.equal(db.prepare("SELECT prompt FROM jobs").get().prompt, "fix the worker");
+    assert.equal(db.prepare("SELECT tier FROM jobs").get().tier, null, `pass ${pass}`);
     assert.equal(db.prepare("SELECT COUNT(*) AS total FROM decisions").get().total, 0);
     closeDb(env);
   }
@@ -221,12 +243,37 @@ test("the migration from user_version 3 adds the merge columns once and keeps ev
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 4, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 5, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     const row = db.prepare("SELECT * FROM jobs").get();
     assert.equal(row.prompt, "fix the worker");
     assert.equal(row.pr_url, "https://github.com/acme/api/pull/42");
     assert.deepEqual({ merged_at: row.merged_at, merge_sha: row.merge_sha, pr_checked_at: row.pr_checked_at }, { merged_at: null, merge_sha: null, pr_checked_at: null });
+    closeDb(env);
+  }
+});
+
+test("the migration from user_version 4 adds the tier columns once and keeps every job row", (t) => {
+  const env = makeHome(t, "db-migrate-v4");
+  const first = openDb(env);
+  first.prepare("INSERT INTO jobs (project, prompt) VALUES (?, ?)").run("alpha", "fix the worker");
+  first.exec(DOWNGRADE_TO_V4);
+  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 4);
+  assert.equal(columnsOf(first, "jobs").includes("tier"), false, "the downgrade kept the tier column");
+  closeDb(env);
+
+  for (const pass of [1, 2, 3]) {
+    const db = openDb(env);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 5, `pass ${pass}`);
+    assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
+    assert.ok(columnsOf(db, "pipeline_runs").includes("tier_operator"), `pipeline_runs.tier_operator missing on pass ${pass}`);
+    assert.ok(
+      columnsOf(db, "pipeline_runs").includes("tier_raise_reason"),
+      `pipeline_runs.tier_raise_reason missing on pass ${pass}`,
+    );
+    const row = db.prepare("SELECT * FROM jobs").get();
+    assert.equal(row.prompt, "fix the worker");
+    assert.equal(row.tier, null, `pass ${pass}`);
     closeDb(env);
   }
 });

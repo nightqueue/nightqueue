@@ -10,6 +10,7 @@ import {
   withFullSync,
   withWriteRetry,
 } from "./db.mjs";
+import { PIPELINE_TIERS } from "./runs.mjs";
 
 export const JOB_STATUSES = ["pending", "running", "done", "gate", "failed", "cancelled", "merged"];
 export const PRIORITY_RANGE = { min: 1, max: 9, fallback: 5 };
@@ -52,6 +53,7 @@ const JOB_VIEW_COLUMNS = [
   "project",
   "status",
   "priority",
+  "tier",
   "attempts",
   "max_attempts",
   "timeout_s",
@@ -100,6 +102,15 @@ function optionalRangedInt(field, value, range) {
 function requireStatus(status) {
   if (JOB_STATUSES.includes(status)) return status;
   throw new UserError(`invalid job \`status\`: \`${String(status)}\`; expected one of ${JOB_STATUSES.join("|")}`);
+}
+
+// Requires the operator's tier when one was informed; nothing informed stays null.
+function optionalTier(value) {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  if (PIPELINE_TIERS.includes(text)) return text;
+  throw new UserError(`invalid \`tier\`: \`${text}\`; expected one of ${PIPELINE_TIERS.join("|")}`);
 }
 
 // Returns the trimmed string, or null when there is nothing to store.
@@ -166,19 +177,27 @@ export function jobView(row) {
 }
 
 // Enqueues a job for a project, validating every range before the write.
-export function addJob({ project, prompt, priority, maxAttempts, timeoutS } = {}, env = process.env) {
+export function addJob({ project, prompt, priority, maxAttempts, timeoutS, tier } = {}, env = process.env) {
   const values = [
     requireText("project", project),
     requireText("prompt", prompt),
     optionalRangedInt("priority", priority, PRIORITY_RANGE),
     optionalRangedInt("max_attempts", maxAttempts, MAX_ATTEMPTS_RANGE),
     optionalRangedInt("timeout_s", timeoutS, TIMEOUT_RANGE),
+    optionalTier(tier),
   ];
   const statement = openDb(env).prepare(
-    "INSERT INTO jobs (project, prompt, priority, max_attempts, timeout_s) VALUES (?, ?, ?, ?, ?)",
+    "INSERT INTO jobs (project, prompt, priority, max_attempts, timeout_s, tier) VALUES (?, ?, ?, ?, ?, ?)",
   );
   const inserted = withWriteRetry(() => statement.run(...values));
-  return { id: Number(inserted.lastInsertRowid), project: values[0], priority: values[2], maxAttempts: values[3], timeoutS: values[4] };
+  return {
+    id: Number(inserted.lastInsertRowid),
+    project: values[0],
+    priority: values[2],
+    maxAttempts: values[3],
+    timeoutS: values[4],
+    tier: values[5],
+  };
 }
 
 const CLAIM_ASSIGNMENT = `SET status = 'running',

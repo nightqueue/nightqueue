@@ -55,8 +55,29 @@ test("addJob refuses an empty prompt and every value outside the accepted ranges
   assert.throws(() => enqueue(env, { maxAttempts: 99 }), /invalid `max_attempts`/);
   assert.throws(() => enqueue(env, { timeoutS: 30 }), /invalid `timeout_s`/);
   const job = addJob({ project: "alpha", prompt: "  fix the worker  " }, env);
-  assert.deepEqual({ ...job, id: undefined }, { id: undefined, project: "alpha", priority: 5, maxAttempts: 1, timeoutS: 14400 });
+  assert.deepEqual({ ...job, id: undefined }, { id: undefined, project: "alpha", priority: 5, maxAttempts: 1, timeoutS: 14400, tier: null });
   assert.equal(getJob(job.id, env).prompt, "fix the worker");
+});
+
+test("the operator's tier is stored, refused when it is not one of the three, and absent when nothing was informed", (t) => {
+  const env = makeQueue(t, "jobs-tier");
+  const job = addJob({ project: "alpha", prompt: "fix the worker", tier: "complex" }, env);
+  assert.equal(job.tier, "complex");
+  assert.equal(getJob(job.id, env).tier, "complex");
+  assert.equal(jobView(getJob(job.id, env)).tier, "complex");
+
+  assert.throws(
+    () => addJob({ project: "alpha", prompt: "fix the parser", tier: "urgent" }, env),
+    /invalid `tier`: `urgent`; expected one of trivial\|simple\|complex/,
+  );
+  assert.equal(countsByStatus(env).pending, 1, "the refused tier still wrote a job row");
+
+  for (const tier of ["", "   ", undefined, null]) {
+    const none = addJob({ project: "alpha", prompt: "fix the parser", tier }, env);
+    assert.equal(none.tier, null, `\`${String(tier)}\` should store no tier`);
+    assert.equal(getJob(none.id, env).tier, null);
+  }
+  assert.equal(addJob({ project: "alpha", prompt: "trim it", tier: " simple " }, env).tier, "simple");
 });
 
 test("the claim takes the highest priority first, arms the lease and spends one attempt", (t) => {

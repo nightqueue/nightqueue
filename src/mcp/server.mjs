@@ -206,6 +206,7 @@ function queuedAnswer({ job, registered = null, roadmapItemId = null }, env) {
     priority: job.priority,
     timeoutS: job.timeoutS,
     ...(roadmapItemId === null ? {} : { roadmapItemId }),
+    ...(job.tier ? { tier: job.tier } : {}),
     hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending). Start the batch with queue_run when you are ready.`,
   };
 }
@@ -392,11 +393,15 @@ function toolDefinitions(env) {
     {
       name: "pipeline_log",
       config: {
-        description: "Records the telemetry of one /resolve run, gate terminations included. One call per run.",
+        description:
+          "Records the telemetry of one /resolve run, gate terminations included. One call per run. " +
+          "`tier` is the FINAL tier the run executed, `tier_operator` is the tier the operator declared (omit it when there was none) and `tier_raise_reason` carries the evidence of a raise — send it when, and only when, the tier was raised.",
         inputSchema: {
           project: optionalText,
           slug: z.string(),
           tier: z.enum(PIPELINE_TIERS),
+          tier_operator: z.enum(PIPELINE_TIERS).nullable().optional(),
+          tier_raise_reason: z.string().nullable().optional(),
           task_type: z.enum(PIPELINE_TASK_TYPES).nullable().optional(),
           outcome: z.enum(PIPELINE_OUTCOMES),
           gate_stop: z.enum(PIPELINE_GATE_STOPS).nullable().optional(),
@@ -410,6 +415,8 @@ function toolDefinitions(env) {
             project: args.project,
             slug: args.slug,
             tier: args.tier,
+            tierOperator: args.tier_operator,
+            tierRaiseReason: args.tier_raise_reason,
             taskType: args.task_type,
             outcome: args.outcome,
             gateStop: args.gate_stop,
@@ -453,6 +460,11 @@ function toolDefinitions(env) {
           priority: z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).nullable().optional(),
           max_attempts: z.number().int().min(MAX_ATTEMPTS_RANGE.min).max(MAX_ATTEMPTS_RANGE.max).nullable().optional(),
           timeout_s: z.number().int().min(TIMEOUT_RANGE.min).max(TIMEOUT_RANGE.max).nullable().optional(),
+          tier: z
+            .enum(PIPELINE_TIERS)
+            .nullable()
+            .optional()
+            .describe("Risk tier of the job, set by the operator. The pipeline may only raise it, with evidence, never lower it."),
         },
       },
       handler: async (args) => {
@@ -464,6 +476,7 @@ function toolDefinitions(env) {
               priority: args.priority,
               maxAttempts: args.max_attempts,
               timeoutS: args.timeout_s,
+              tier: args.tier,
             },
             env,
           );
@@ -479,6 +492,7 @@ function toolDefinitions(env) {
             priority: args.priority,
             maxAttempts: args.max_attempts,
             timeoutS: args.timeout_s,
+            tier: args.tier,
           },
           env,
         );

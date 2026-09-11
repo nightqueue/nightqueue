@@ -87,6 +87,24 @@ test("the prompt asks for the pipeline, the slug line and the gate, and carries 
   assert.match(resumed, /Resume from the `architecture` phase/);
 });
 
+test("the prompt carries the operator's tier only when the job has one", () => {
+  const tiered = buildPrompt({ job: { ...JOB, tier: "simple" } });
+  assert.ok(
+    tiered.includes(
+      "Tier: simple (set by the operator - the pipeline may only raise it, with evidence, never lower it)",
+    ),
+    tiered,
+  );
+  for (const tier of [null, undefined, "", "   "]) {
+    assert.equal(
+      buildPrompt({ job: { ...JOB, tier } }).includes("Tier:"),
+      false,
+      `\`${String(tier)}\` still produced a tier line`,
+    );
+  }
+  assert.equal(buildPrompt({ job: JOB }).includes("Tier:"), false);
+});
+
 test("a spawned attempt streams every line, appends its own separator to the log and reports the exit code", async (t) => {
   const { env, planPath } = makeSpawnHome(t, "spawn-run", [{ stdout: doneStream(), exitCode: 0 }]);
   const logPath = jobLogPath(JOB.id, env);

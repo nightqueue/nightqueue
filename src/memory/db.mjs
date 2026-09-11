@@ -20,7 +20,7 @@ async function importSqlite() {
 
 const { DatabaseSync } = await importSqlite();
 
-export const DB_USER_VERSION = 4;
+export const DB_USER_VERSION = 5;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lessons (
@@ -161,6 +161,9 @@ const EVOLVING_COLUMNS = [
   ["jobs", "merged_at", "TEXT"],
   ["jobs", "merge_sha", "TEXT"],
   ["jobs", "pr_checked_at", "TEXT"],
+  ["jobs", "tier", "TEXT"],
+  ["pipeline_runs", "tier_operator", "TEXT"],
+  ["pipeline_runs", "tier_raise_reason", "TEXT"],
 ];
 
 const INDEXES = `

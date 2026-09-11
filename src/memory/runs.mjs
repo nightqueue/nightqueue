@@ -38,7 +38,7 @@ function optionalText(value) {
 }
 
 // Validates every field of a run before any write, so an invalid enum never leaves an orphan row.
-function validateRun({ slug, tier, taskType, outcome, gateStop, phases }) {
+function validateRun({ slug, tier, tierOperator, taskType, outcome, gateStop, phases }) {
   const cleanSlug = optionalText(slug);
   if (!cleanSlug) throw new UserError("`slug` is required and cannot be empty");
   const list = Array.isArray(phases) ? phases : [];
@@ -49,6 +49,7 @@ function validateRun({ slug, tier, taskType, outcome, gateStop, phases }) {
   return {
     slug: cleanSlug,
     tier: requireEnum("tier", tier, PIPELINE_TIERS),
+    tierOperator: optionalEnum("tier_operator", tierOperator, PIPELINE_TIERS),
     taskType: optionalEnum("task_type", taskType, PIPELINE_TASK_TYPES),
     outcome: requireEnum("outcome", outcome, PIPELINE_OUTCOMES),
     gateStop: optionalEnum("gate_stop", gateStop, PIPELINE_GATE_STOPS),
@@ -91,8 +92,8 @@ function insertRun(db, { run, projectName, values }) {
   try {
     const inserted = db
       .prepare(
-        `INSERT INTO pipeline_runs (project, slug, tier, task_type, outcome, gate_stop, duration_s, model, session_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO pipeline_runs (project, slug, tier, tier_operator, tier_raise_reason, task_type, outcome, gate_stop, duration_s, model, session_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(...values);
     const runId = Number(inserted.lastInsertRowid);
@@ -152,15 +153,17 @@ function ensureRunDurable(inserted, write, env) {
 
 // Persists the telemetry of one pipeline run: the run and its phases in a single transaction.
 export function logPipelineRun(
-  { project, slug, tier, taskType, outcome, gateStop, durationS, phases = [] },
+  { project, slug, tier, tierOperator, tierRaiseReason, taskType, outcome, gateStop, durationS, phases = [] },
   env = process.env,
 ) {
-  const run = validateRun({ slug, tier, taskType, outcome, gateStop, phases });
+  const run = validateRun({ slug, tier, tierOperator, taskType, outcome, gateStop, phases });
   const projectName = resolveProjectName(project, env);
   const values = [
     projectName,
     run.slug,
     run.tier,
+    run.tierOperator,
+    optionalText(tierRaiseReason),
     run.taskType,
     run.outcome,
     run.gateStop,
