@@ -450,7 +450,7 @@ function formatRunner(runner, activeJobs = 0) {
     const cadence = runner.mode === "watch" ? `watch every ${runner.intervalS} s` : `${runner.mode ?? "runner"}`;
     return `runner: running (pid ${runner.pid}, ${cadence}, since ${runner.startedAt})`;
   }
-  if (activeJobs > 0) return `runner: ${pendingJobs(activeJobs).replace("pending", "running")} under a one-shot runner - no watcher registered (start one with: nightshift queue run --watch)`;
+  if (activeJobs > 0) return `runner: ${pendingJobs(activeJobs).replace("pending", "running")} under a one-shot runner - nothing will pick up the pending jobs after it (start a drain with: nightshift queue run)`;
   return "runner: stopped";
 }
 

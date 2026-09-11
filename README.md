@@ -645,8 +645,8 @@ nightshift queue status --follow`. When the start is aimed at a single job the c
 runs that job alone and the line points at its narrated stream instead:
 `job #<id> started (pid <pid>) - follow with: nightshift queue log <id> --follow`. A job
 running with no registered runner (a single-job start, or a drain that died) is still
-visible: the `runner:` line says `1 running job under a one-shot runner - no watcher
-registered` instead of `stopped`.
+visible: the `runner:` line says `1 running job under a one-shot runner - nothing will
+pick up the pending jobs after it` instead of `stopped`.
 
 **`--foreground` is the mode for a script or for CI**: it runs the cycle in the very
 process you started, prints one line per processed job and answers with an exit code
