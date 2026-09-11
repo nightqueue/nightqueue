@@ -8,7 +8,7 @@ import { addProject } from "../../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, countActiveJobs, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
-import { liveLocalWorker } from "../../src/queue/claim.mjs";
+import { acquire, liveLocalWorker } from "../../src/queue/claim.mjs";
 import { cliEntrypoint } from "../../src/queue/spawn.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
@@ -140,7 +140,12 @@ test("a lease that expires while its owner is ALIVE never gives a second real ru
 
   assert.equal(result2.code, 0, `the second runner failed: ${result2.stderr}`);
   assert.equal(existsSync(marker2), false, `a SECOND real child started for job #${jobId} while the first one was alive`);
-  assert.match(result2.stdout, /nothing to run \((?:not-pending|project-busy)\)/, `the second runner did not refuse: ${result2.stdout}`);
+  assert.match(result2.stdout, /^runner already active \(pid \d+, once\) - it will pick the job up$/m, `the second runner did not refuse: ${result2.stdout}`);
+  assert.deepEqual(
+    acquire({ jobId, cap: CAP, env }),
+    { job: null, reason: "not-pending" },
+    "the claim itself stopped protecting the job of a live owner whose lease expired",
+  );
   assert.equal(isAlive(child1.pid), true, "the first real child was killed by the second runner");
   const row = getJob(jobId, env);
   assert.deepEqual({ status: row.status, worker: row.worker }, { status: "running", worker: owner }, "the job changed hands");

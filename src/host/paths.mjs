@@ -1,11 +1,21 @@
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runtimePackageDir } from "../config/paths.mjs";
 
-// Root of the package this process runs from, the identity of the running version.
+// Real path of a directory, every component of the trail followed, or the path itself when it cannot be read any more.
+function realPathOrSelf(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+// Root of the package this process runs from, the identity of the running version: the fixed directory, never the mutable link that points at it.
 export function packageRoot() {
-  return resolve(fileURLToPath(new URL("../../", import.meta.url)));
+  return realPathOrSelf(resolve(fileURLToPath(new URL("../../", import.meta.url))));
 }
 
 // Root of the package the host is registered against: always the runtime prefix, never the directory this process runs from.

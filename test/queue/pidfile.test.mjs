@@ -45,9 +45,11 @@ test("the pidfile of a live runner reads back with its five fields, and is gone 
     running: true,
     pid: 4242,
     mode: "watch",
+    jobId: null,
     intervalS: 30,
     startedAt: "2026-09-08T21:04:11.000Z",
     logPath: "/tmp/runner.log",
+    runtimeDir: null,
   });
 
   removeRunnerPidfile(env);
@@ -77,7 +79,7 @@ test("a runner nobody answers for is stale, and every state but `alive` reads as
   assert.equal(stale.status, "stale");
   assert.equal(stale.info.pid, WATCHER.pid);
 
-  const stopped = { running: false, pid: null, mode: null, intervalS: null, startedAt: null, logPath: null };
+  const stopped = { running: false, pid: null, mode: null, jobId: null, intervalS: null, startedAt: null, logPath: null, runtimeDir: null };
   for (const state of [stale, runnerPidfileState(makeHome(t, "pidfile-none"), fakeKill(new Set()))]) {
     assert.deepEqual(runnerView(state), stopped, `the state \`${state.status}\` was read as a running runner`);
   }

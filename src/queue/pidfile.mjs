@@ -66,10 +66,10 @@ export function runnerPidfileState(env = process.env, killImpl = killProcess) {
 // The state of the runner as every reader of it prints it: only a live pidfile carries fields.
 export function runnerView(state) {
   if (state.status !== "alive") {
-    return { running: false, pid: null, mode: null, intervalS: null, startedAt: null, logPath: null };
+    return { running: false, pid: null, mode: null, jobId: null, intervalS: null, startedAt: null, logPath: null, runtimeDir: null };
   }
-  const { pid, mode = null, intervalS = null, startedAt = null, logPath = null } = state.info;
-  return { running: true, pid, mode, intervalS, startedAt, logPath };
+  const { pid, mode = null, jobId = null, intervalS = null, startedAt = null, logPath = null, runtimeDir = null } = state.info;
+  return { running: true, pid, mode, jobId, intervalS, startedAt, logPath, runtimeDir };
 }
 
 // Registers the runner that was just started, so `queue status`, `doctor` and `--stop` can find it.

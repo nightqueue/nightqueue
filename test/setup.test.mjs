@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
+import { resolvedRuntimeDir } from "../src/config/paths.mjs";
 import {
   assertIsolatedEnv,
   legacyHookCommand,
@@ -346,7 +347,12 @@ test("the runtime is packed from this package, installed once and registered in 
   assert.deepEqual(pack.slice(0, 2), ["pack", "--json"]);
   assert.equal(pack.includes("--ignore-scripts"), true, "the pack ran the lifecycle scripts of the packed package");
   assert.equal(pack.at(-1), PACKAGE_ROOT);
-  assert.deepEqual(install.slice(0, 7), ["install", "--prefix", host.runtimeDir, "--omit=dev", "--no-audit", "--no-fund", "--loglevel"]);
+  assert.deepEqual(
+    [install[0], install[1], ...install.slice(3, 7)],
+    ["install", "--prefix", "--omit=dev", "--no-audit", "--no-fund", "--loglevel"],
+  );
+  assert.equal(dirname(install[2]), host.runtimeVersions, `the install wrote outside the versions directory: ${install[2]}`);
+  assert.match(basename(install[2]), /^\.staging-\d{8}T\d{6}Z$/, `the install wrote into a final version directory: ${install[2]}`);
   assert.equal(install.at(-1).endsWith(".tgz"), true, `the install did not take the packed tarball: ${install.join(" ")}`);
   assert.equal(install.some((arg) => arg.includes("nightshift@")), false, "setup asked the registry for the runtime");
   assert.equal(existsSync(join(host.runtimePackage, "package.json")), true);
@@ -355,7 +361,8 @@ test("the runtime is packed from this package, installed once and registered in 
   const second = makeCtx(host.env);
   assert.equal(await run(SETUP, second.ctx), 0);
   assert.equal(host.npmCalls().length, 2, "the second setup packed or reinstalled the runtime again");
-  assert.ok(second.out.includes(`runtime: already present (v${VERSION} at ${host.runtimeDir})`), second.out.join("\n"));
+  const location = `${host.runtimeCurrent} -> ${resolvedRuntimeDir(host.env)}`;
+  assert.ok(second.out.includes(`runtime: already present (v${VERSION} at ${location})`), second.out.join("\n"));
 });
 
 test("a runtime that npm could not install leaves the host untouched instead of pointing it at nothing", async (t) => {

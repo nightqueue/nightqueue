@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { test } from "node:test";
-import { PACKAGE_NAME, runtimeDir, runtimePackageDir } from "../src/config/paths.mjs";
+import { finishVersion, stageInstall, switchCurrent, versionStamp } from "../src/cli/runtime-versions.mjs";
+import { PACKAGE_NAME, runtimeCurrentLink, runtimePackageDir } from "../src/config/paths.mjs";
 import { cliEntryPath } from "../src/host/paths.mjs";
 import { makeDir } from "../test-support/memory.mjs";
 
@@ -47,12 +48,14 @@ test("npm installs this package under the directory the path resolution derives 
   assert.equal(entry.name, PACKAGE_NAME, "npm packed a name this package does not declare");
 
   const home = { NIGHTSHIFT_HOME: join(base, "home") };
+  const stamp = versionStamp();
+  const staging = stageInstall(home, stamp);
   const installed = spawnSync(
     "npm",
     [
       "install",
       "--prefix",
-      runtimeDir(home),
+      staging,
       "--offline",
       "--omit=dev",
       "--no-audit",
@@ -65,11 +68,15 @@ test("npm installs this package under the directory the path resolution derives 
     { encoding: "utf8", env, timeout: NPM_TIMEOUT_MS },
   );
   assert.equal(installed.status, 0, installed.stderr);
+  const versionDir = finishVersion(staging, "0.0.0", stamp);
+  switchCurrent(versionDir, home);
 
   assert.ok(existsSync(join(runtimePackageDir(home), "package.json")), "the installed package is not where the path resolution looks for it");
   assert.ok(existsSync(cliEntryPath(home)), "the CLI entry the host is registered against is not the file npm installed");
+  assert.equal(realpathSync(runtimeCurrentLink(home)), realpathSync(versionDir), "`current` does not name the version directory npm installed into");
+  assert.equal(readlinkSync(runtimeCurrentLink(home)), join("versions", basename(versionDir)), "`current` is not a relative link, so a moved home stops resolving");
   assert.equal(
-    existsSync(join(runtimeDir(home), "node_modules", "nightshift")),
+    existsSync(join(versionDir, "node_modules", "nightshift")),
     false,
     "npm installed the unscoped layout, so a path resolution went back to the hardcoded name",
   );

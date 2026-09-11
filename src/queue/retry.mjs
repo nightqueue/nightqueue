@@ -1,6 +1,6 @@
 import { UserError } from "../config/errors.mjs";
 import { getJob, retryJob } from "../memory/jobs.mjs";
-import { discardRunDir } from "./resume.mjs";
+import { clearRunTerminal, discardRunDir } from "./resume.mjs";
 
 // Job this process is running inside, when the queue spawned it; null in a session of the operator.
 export function callerJobId(env) {
@@ -23,6 +23,7 @@ export function applyRetry({ id, note, fresh = false, env = process.env } = {}) 
   requireOwnJob(id, env);
   const before = getJob(id, env);
   const job = retryJob(id, { note, fresh }, env);
-  if (fresh !== true) return { job, runDir: null };
-  return { job, runDir: discardRunDir({ project: before?.project, slug: before?.slug, env }) };
+  const run = { project: before?.project, slug: before?.slug, env };
+  if (fresh !== true) return { job, runDir: null, witness: clearRunTerminal(run) };
+  return { job, runDir: discardRunDir(run), witness: { status: "absent", path: null, reason: null } };
 }

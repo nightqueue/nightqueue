@@ -1,18 +1,19 @@
 import { readFileSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
-import { homeDir, runtimeDir, shimNames, shimPath } from "../config/paths.mjs";
+import { homeDir, resolvedRuntimeDir, runtimeDir, shimNames, shimPath } from "../config/paths.mjs";
 import { gitPathOrNull, requireGitPath } from "../config/projects.mjs";
 import { packageVersion, shimState } from "../host/runtime.mjs";
 import { pathBlock, rcFilePath } from "../host/shell.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { importGhConnection } from "./gh-import.mjs";
+import { guardIdleRuntime } from "./install-guard.mjs";
 import { setupEmbedding, setupPath, setupRuntime, setupShim, verifyShim } from "./install-steps.mjs";
 import { registerProject } from "./project.mjs";
 import { firstLine, makeReport } from "./report.mjs";
 import { INSTALL_OPTIONS, finish, installOptions, registerHostServices, setupHome } from "./setup.mjs";
 
 const USAGE =
-  "nightshift init [path] [--org <name>] [--name <name>] [--from <dir>] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--gh|--no-gh] [--verbose]";
+  "nightshift init [path] [--org <name>] [--name <name>] [--from <dir>] [--force] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--gh|--no-gh] [--verbose]";
 
 const SOURCE_HINT = "Open a new terminal or run `source ~/.zshrc` (or your shell's rc) to use `nightshift`.";
 
@@ -84,7 +85,7 @@ function rcCarriesBlock(env) {
 
 // Prints what the installation left on disk and what the user still has to do to type `nightshift`.
 function printInstalled(ctx, report, { shortcuts }) {
-  report.note(`installed nightshift v${packageVersion()} in ${runtimeDir(ctx.env)}`);
+  report.note(`installed nightshift v${packageVersion()} in ${resolvedRuntimeDir(ctx.env) ?? runtimeDir(ctx.env)}`);
   report.note(`commands: ${shimNames({ shortcuts }).map((name) => shimPath(ctx.env, name)).join(", ")}`);
   if (!rcCarriesBlock(ctx.env)) return;
   report.note(`PATH block written to ${rcFilePath(ctx.env)}:`);
@@ -100,7 +101,8 @@ function printNextSteps(ctx, { registered } = {}) {
 }
 
 // Runs the steps of `nightshift init` in order: every step the runtime cannot work without stops the command, and the PATH is only written once the shim has proven itself.
-async function runInstallSteps(ctx, report, { embedding, path, from, shortcuts, desktop } = {}) {
+async function runInstallSteps(ctx, report, { embedding, path, from, force, shortcuts, desktop } = {}) {
+  guardIdleRuntime(ctx, { force });
   requireStep(createHome(ctx, report), "home");
   requireStep(setupRuntime(ctx, report, { from }), "runtime");
   requireStep(installShims(ctx, report, { shortcuts }), "shim");

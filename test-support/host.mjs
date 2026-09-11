@@ -127,6 +127,8 @@ export function makeHostEnv(t, name, { exitCode } = {}) {
     env,
     home: env.NIGHTSHIFT_HOME,
     runtimeDir: join(env.NIGHTSHIFT_HOME, "runtime"),
+    runtimeVersions: join(env.NIGHTSHIFT_HOME, "runtime", "versions"),
+    runtimeCurrent: join(env.NIGHTSHIFT_HOME, "runtime", "current"),
     runtimePackage,
     entry: join(runtimePackage, "bin", "nightshift.mjs"),
     binDir: join(env.NIGHTSHIFT_HOME, "bin"),

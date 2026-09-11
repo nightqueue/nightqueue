@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,9 +34,19 @@ export function modelsDir(env = process.env) {
   return join(homeDir(env), "models");
 }
 
-// Directory of the self-contained runtime: the npm prefix this package is installed into.
+// Directory of the self-contained runtime: the root that holds every installed version and the link that names the live one.
 export function runtimeDir(env = process.env) {
   return join(homeDir(env), "runtime");
+}
+
+// Directory that holds one npm prefix per installed version, the only place an install ever writes a new tree into.
+export function runtimeVersionsDir(env = process.env) {
+  return join(runtimeDir(env), "versions");
+}
+
+// Path of the link that names the version the host runs, the single thing an install ever swaps.
+export function runtimeCurrentLink(env = process.env) {
+  return join(runtimeDir(env), "current");
 }
 
 // Name this package declares to npm, read once because it is the identity the installed layout is built from.
@@ -57,11 +67,30 @@ function declaredPackageName() {
 export const PACKAGE_NAME = declaredPackageName();
 
 // Trail from the configuration home down to the installed package, the layout every shim this package writes points into.
-export const RUNTIME_PACKAGE_TRAIL = `runtime/node_modules/${PACKAGE_NAME}`;
+export const RUNTIME_PACKAGE_TRAIL = `runtime/current/node_modules/${PACKAGE_NAME}`;
 
-// Directory of the package inside the runtime prefix, the stable root the host is registered against.
+// Trail an installation written before the versioned layout still points into, kept resolvable so an old install never breaks.
+export const LEGACY_RUNTIME_PACKAGE_TRAIL = `runtime/node_modules/${PACKAGE_NAME}`;
+
+// Tells whether the runtime of this home is still the one an installation before the versioned layout wrote: no link at all, but a package under the old trail.
+function legacyRuntimeOnly(env) {
+  if (lstatSync(runtimeCurrentLink(env), { throwIfNoEntry: false })) return false;
+  return existsSync(join(homeDir(env), LEGACY_RUNTIME_PACKAGE_TRAIL, "package.json"));
+}
+
+// Directory of the package the host is registered against: through the `current` link, and only through the old trail while no link was ever written.
 export function runtimePackageDir(env = process.env) {
-  return join(homeDir(env), RUNTIME_PACKAGE_TRAIL);
+  const trail = legacyRuntimeOnly(env) ? LEGACY_RUNTIME_PACKAGE_TRAIL : RUNTIME_PACKAGE_TRAIL;
+  return join(homeDir(env), trail);
+}
+
+// Version directory the `current` link really names, or null when nothing is behind it.
+export function resolvedRuntimeDir(env = process.env) {
+  try {
+    return realpathSync(runtimeCurrentLink(env));
+  } catch {
+    return null;
+  }
 }
 
 // Directory of the isolated npm prefix that holds the embedding library, installed on demand.

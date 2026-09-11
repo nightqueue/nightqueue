@@ -34,6 +34,7 @@ import {
   writeHostSettings,
 } from "../host/settings.mjs";
 import { checkArgs, flagChoice, parseCommand } from "./args.mjs";
+import { guardIdleRuntime } from "./install-guard.mjs";
 import {
   removeInstalledDirs,
   removePathStep,
@@ -47,11 +48,12 @@ import { firstLine, makeReport } from "./report.mjs";
 
 const MARKETPLACE_LABEL = "plugin marketplace";
 const USAGE =
-  "nightshift setup [--from <dir>] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--remove [--purge]]";
+  "nightshift setup [--from <dir>] [--force] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--remove [--purge]]";
 
 // Flags every command that installs the host shares.
 export const INSTALL_OPTIONS = {
   from: { type: "string" },
+  force: { type: "boolean" },
   path: { type: "boolean" },
   "no-path": { type: "boolean" },
   embedding: { type: "boolean" },
@@ -66,6 +68,7 @@ export const INSTALL_OPTIONS = {
 export function installOptions(values, usage) {
   return {
     from: values.from,
+    force: values.force === true,
     path: flagChoice(values, "path", usage),
     embedding: flagChoice(values, "embedding", usage),
     shortcuts: flagChoice(values, "shortcuts", usage),
@@ -286,8 +289,9 @@ export function finish(ctx, report) {
   return 0;
 }
 
-// Installs everything the host needs to run nightshift, one idempotent step at a time.
-export async function install(ctx, { embedding, path, from, shortcuts, desktop } = {}) {
+// Installs everything the host needs to run nightshift, one idempotent step at a time; `force` only ever overrides the refusal to install under a live runner.
+export async function install(ctx, { embedding, path, from, force, shortcuts, desktop } = {}) {
+  guardIdleRuntime(ctx, { force });
   const report = makeReport(ctx);
   setupHome(ctx, report);
   const ready = setupRuntime(ctx, report, { from });

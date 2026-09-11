@@ -6,6 +6,7 @@ import { PassThrough, Readable } from "node:stream";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
+import { resolvedRuntimeDir } from "../src/config/paths.mjs";
 import { ghAuthStatus } from "../src/host/gh.mjs";
 import { PATH_MARK, PATH_MARK_END, pathBlock } from "../src/host/shell.mjs";
 import { FAKE_GH_LOGIN, FAKE_GH_TOKEN, assertIsolatedEnv, makeHostEnv, readSettingsFile, writeLegacyShim } from "../test-support/host.mjs";
@@ -347,7 +348,7 @@ test("init closes by saying what it installed, where the block went and how to m
   const { ctx, out } = makeCtx(host.env, { cwd: makeDir(t, "init-final-message-cwd") });
 
   assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], ctx), 0);
-  assert.ok(out.includes(`installed nightshift v${VERSION} in ${host.runtimeDir}`), out.join("\n"));
+  assert.ok(out.includes(`installed nightshift v${VERSION} in ${resolvedRuntimeDir(host.env)}`), out.join("\n"));
   assert.ok(out.includes(`commands: ${Object.values(host.shims).join(", ")}`), out.join("\n"));
   assert.ok(out.includes(`PATH block written to ${host.rcPath}:`), out.join("\n"));
   for (const line of pathBlock(host.env).split("\n")) assert.ok(out.includes(`  ${line}`), out.join("\n"));
@@ -362,7 +363,7 @@ test("a skipped PATH step is never sold as written", async (t) => {
   const { ctx, out } = makeCtx(host.env, { cwd: makeDir(t, "init-no-path-message-cwd") });
 
   assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh"], ctx), 0);
-  assert.ok(out.includes(`installed nightshift v${VERSION} in ${host.runtimeDir}`), out.join("\n"));
+  assert.ok(out.includes(`installed nightshift v${VERSION} in ${resolvedRuntimeDir(host.env)}`), out.join("\n"));
   assert.equal(out.some((line) => line.startsWith("PATH block written to")), false, out.join("\n"));
   assert.equal(out.some((line) => line.startsWith("Open a new terminal")), false, out.join("\n"));
 });

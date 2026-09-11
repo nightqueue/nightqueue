@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { binDir, embeddingDir, homeDir, legacyShimPath, runtimeDir, shimPath } from "../config/paths.mjs";
+import { binDir, embeddingDir, homeDir, legacyShimPath, runtimeDir, runtimeVersionsDir, shimPath } from "../config/paths.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { npmInstall, npmPack } from "../host/npm.mjs";
 import { packageRoot } from "../host/paths.mjs";
 import {
   packageVersion,
+  prefixVersion,
   registrySpec,
   removeLegacyShim,
   removeShims,
@@ -18,8 +19,10 @@ import { PATH_MARK, addPathLine, binDirInPath, pathBlock, rcFilePath, removePath
 import { EMBEDDING_PACKAGE, EMBEDDING_PACKAGE_RANGE, embeddingLibraryEntry, warmupModel } from "../memory/embedding.mjs";
 import { confirm } from "./prompt.mjs";
 import { firstLine } from "./report.mjs";
+import { finishVersion, pruneVersions, runtimeLocation, stageInstall, switchCurrent, versionStamp } from "./runtime-versions.mjs";
 
 const RUNTIME_LABEL = "runtime";
+const OLD_RUNTIMES_LABEL = "old runtimes";
 const RUNTIME_CHECK_LABEL = "runtime check";
 const SHIM_CHECK_TIMEOUT_MS = 15000;
 const SHIM_LABEL = "shim";
@@ -80,33 +83,47 @@ function openRuntimeSource(ctx, report, { from, force, version } = {}) {
 }
 
 // Detail of an installed runtime: an update that replaced a version states the transition, every other path states only what is there now.
-function runtimeDetail({ prefix, current, installed, force }) {
-  const now = `v${installed ?? "?"} at ${prefix}`;
+function runtimeDetail({ env, current, installed, force }) {
+  const now = `v${installed ?? "?"} at ${runtimeLocation(env)}`;
   return force === true && current ? `v${current} -> ${now}` : now;
 }
 
-// Installs the package into the runtime prefix and reports whether the prefix really ended up holding it.
+// Publishes a finished staging prefix: it becomes a version directory of its own and `current` is renamed onto it in one step.
+function publishVersion(ctx, report, { staging, installed, stamp }) {
+  try {
+    switchCurrent(finishVersion(staging, installed, stamp), ctx.env);
+    return true;
+  } catch (err) {
+    report.degrade(RUNTIME_LABEL, firstLine(err?.message ?? String(err)), `ls ${runtimeVersionsDir(ctx.env)}`);
+    return false;
+  }
+}
+
+// Installs the package into a new version directory and swaps `current` onto it, so a process already running keeps executing the tree it loaded from.
 export function setupRuntime(ctx, report, { from, force, version } = {}) {
-  const prefix = runtimeDir(ctx.env);
   const wanted = packageVersion();
   const current = runtimeVersion(ctx.env);
   if (!force && !from && current && current === wanted) {
-    report.step(RUNTIME_LABEL, "already present", `v${current} at ${prefix}`);
+    report.step(RUNTIME_LABEL, "already present", `v${current} at ${runtimeLocation(ctx.env)}`);
     return runtimeReady(ctx.env);
   }
   const source = openRuntimeSource(ctx, report, { from, force, version });
   if (!source.ok) return false;
+  const stamp = versionStamp();
+  const staging = stageInstall(ctx.env, stamp);
   try {
-    mkdirSync(prefix, { recursive: true });
-    const result = npmInstall({ prefix, spec: source.spec, env: ctx.env, spawnSyncImpl: ctx.spawnSyncImpl });
-    if (!result.ok || !runtimeReady(ctx.env)) {
+    const result = npmInstall({ prefix: staging, spec: source.spec, env: ctx.env, spawnSyncImpl: ctx.spawnSyncImpl });
+    const installed = result.ok ? prefixVersion(staging) : null;
+    if (!installed) {
       report.degrade(RUNTIME_LABEL, npmFailure(result), result.command);
       return false;
     }
-    const detail = runtimeDetail({ prefix, current, installed: runtimeVersion(ctx.env), force });
-    report.step(RUNTIME_LABEL, current ? "updated" : "created", detail);
+    if (!publishVersion(ctx, report, { staging, installed, stamp })) return false;
+    report.step(RUNTIME_LABEL, current ? "updated" : "created", runtimeDetail({ env: ctx.env, current, installed, force }));
+    guarded(report, OLD_RUNTIMES_LABEL, `ls ${runtimeVersionsDir(ctx.env)}`, () => pruneVersions(ctx.env));
     return true;
   } finally {
+    rmSync(staging, { recursive: true, force: true });
     source.cleanup();
   }
 }

@@ -178,8 +178,10 @@ untouched. `nightshift update 0.2.0` asks the registry for that exact version
 instead (a tag such as `next` works too), and `--from <dir|tgz>` installs a local
 source instead of asking the registry at all (see `## Developing nightshift`); a
 version and `--from` together are a usage error, because they are two different
-sources. The runtime line names both versions, as in
-`runtime: updated (v0.1.0 -> v0.2.0 at ~/.nightshift/runtime)`. `update` is the
+sources. The runtime line names both versions and the directory the new one was
+installed into, as in `runtime: updated (v0.1.0 -> v0.2.0 at
+~/.nightshift/runtime/current -> ~/.nightshift/runtime/versions/0.2.0-<stamp>)`.
+`update` refuses while a runner is live, exactly as `setup` and `init` do. `update` is the
 only command that reaches the registry to install, and a runtime it could not
 reinstall is an exit code, never a quiet degraded line.
 
@@ -233,7 +235,8 @@ echo "$GITHUB_TOKEN" | nightshift connection add gh --type github
    block marked `# nightshift` in `~/.zshrc`, `~/.bashrc` or
    `~/.config/fish/config.fish`.
 4. the MCP server `nightshift` at **user** scope, started as
-   `node $NIGHTSHIFT_HOME/runtime/node_modules/@maykonv/nightshift/bin/nightshift.mjs mcp`.
+   `node $NIGHTSHIFT_HOME/runtime/current/node_modules/@maykonv/nightshift/bin/nightshift.mjs mcp`
+   - through the `current` link, so an install of a new version never rewrites it.
 5. the same server in the configuration of the Claude Desktop app
    (`claude_desktop_config.json`), when that app is installed - an app that is
    not installed is a `skipped` step and never a directory this CLI creates.
@@ -393,7 +396,8 @@ $NIGHTSHIFT_HOME/          # 0700
   config.json              # orgs, projects, queue settings
   secrets.json             # 0600, connection secrets
   nightshift.db            # the memory database (see `## Memory`)
-  runtime/                 # the installed package the host is registered against
+  runtime/versions/        # one directory per installed version, the last two kept
+  runtime/current          # symlink into versions/, what the host is registered against
   bin/                     # the shims: nightshift, nshift and nsft
   embedding/               # npm prefix of the embedding library, opt-in
   models/                  # embedding weights, downloaded on demand
@@ -401,7 +405,7 @@ $NIGHTSHIFT_HOME/          # 0700
   runs/<project>/<slug>/   # run artifacts, written by the runtime
   logs/                    # one log per queue job plus one per runner
   queue.paused             # sentinel file, present only while the queue is paused
-  runner.pid               # registration of the watch runner, present only while one is up
+  runner.pid               # registration of the runner that owns the queue, while one is up
 ```
 
 Secrets are kept in a `0600` file rather than in the operating system
@@ -731,17 +735,19 @@ never falls back to running the job in the foreground behind your back.
 **`nightshift queue run` with no other option drains the queue**: the child runs
 cycle after cycle until nothing is pending, waiting 15 s between passes while the
 pending jobs are held back by a busy project or the concurrency cap, and exits by
-itself when the queue is empty. It registers itself in `$NIGHTSHIFT_HOME/runner.pid`
-with `mode: "drain"` for as long as it lives, so `queue status` shows
-`runner: running (pid <pid>, drain, since <iso>)` and `--stop` ends it. Its output
+itself when the queue is empty. The command that starts it registers it in
+`$NIGHTSHIFT_HOME/runner.pid` with `mode: "drain"` for as long as it lives, so
+`queue status` shows `runner: running (pid <pid>, drain, runtime <version>, since <iso>)`
+the instant the start returns, and `--stop` ends it. Its output
 goes to `$NIGHTSHIFT_HOME/logs/runner-<stamp>.log`; the start prints
 `runner started (pid <pid>) - draining the queue until nothing is pending; follow with:
 nightshift queue status --follow`. When the start is aimed at a single job the child
 runs that job alone and the line points at its narrated stream instead:
-`job #<id> started (pid <pid>) - follow with: nightshift queue log <id> --follow`. A job
-running with no registered runner (a single-job start, or a drain that died) is still
-visible: the `runner:` line says `1 running job under a one-shot runner - nothing will
-pick up the pending jobs after it` instead of `stopped`.
+`job #<id> started (pid <pid>) - follow with: nightshift queue log <id> --follow`; that
+one registers too, as `once, job #<id>`. A job running with no registered runner at all
+(a runner that died without clearing its registration) is still visible: the `runner:`
+line says `1 running job under a one-shot runner - nothing will pick up the pending jobs
+after it` instead of `stopped`.
 
 **`--foreground` is the mode for a script or for CI**: it runs the cycle in the very
 process you started, prints one line per processed job and answers with an exit code
@@ -749,16 +755,26 @@ that depends on the outcome (`0` only for `done` on `--run`). `--dry` never deta
 either: it is a read-only report of what a cycle would do.
 
 **`--watch [seconds]` is the daemon**, one pass every `N` seconds (30 by default).
-It registers itself in `$NIGHTSHIFT_HOME/runner.pid` with `pid`, `startedAt`, `mode`,
-`intervalS` and `logPath`, and prints
+It is registered in `$NIGHTSHIFT_HOME/runner.pid` with `pid`, `startedAt`, `mode`,
+`jobId`, `intervalS`, `logPath` and `runtimeDir`, and prints
 `runner started (pid <pid>, every <n> s) - stop with: nightshift queue run --stop`.
-Only one watcher at a time: a second one is refused with the pid of the first, while a
-registration whose process is gone is cleared and the start goes on. A single-shot
-runner (`--run`, `--job`, a bare `queue run`) writes no pidfile - two of them never
-collide because a job is claimed under a lease, not under a file. `--job` and `--watch`
-are refused together: running one job and watching the whole queue are opposite intents.
+`--job` and `--watch` are refused together: running one job and watching the whole
+queue are opposite intents.
 
-**`nightshift queue run --stop` ends the watcher**: it sends a `SIGTERM` and waits up
+**One runner at a time, whatever started it.** A watcher, a drain and a single-job
+runner are all registered the same way, and every start path - `queue run`, `--watch`,
+`--job`, `queue add --run`, `queue retry --run`, their `--foreground` forms and the
+`queue_run` and `queue_retry` MCP tools - passes the same guard, under the home lock and
+in the same critical section as the registration, so two starts a few milliseconds apart
+can never both win. While one is live the others answer
+`runner already active (pid <pid>, <mode>) - it will pick the job up` and exit `0`,
+spawning nothing and leaving the job `pending` for the live runner to take; when the live
+runner is a single-job one, a refused drain adds `the live runner runs one job only -
+start the batch again once it exits: nightshift queue run`, because that runner will not
+pick the backlog up. A registration whose process is gone is cleared on the way and the
+start goes on.
+
+**`nightshift queue run --stop` ends the registered runner**: it sends a `SIGTERM` and waits up
 to ten seconds for the process to go. It answers `runner stopped (pid <pid>)`,
 `runner was not running (stale pidfile removed)` or `runner is not running`, and exits
 `0` in the three cases; it exits `1` only when the process is still there after those
@@ -793,10 +809,16 @@ is no color and no cursor movement. `nightshift queue status --follow [seconds]`
 a queue panel - and `--until-idle` makes it exit by itself once nothing is
 running or pending. `--follow` refuses `--json` and a single job id. `--json`
 answers with the same fields as before. The listing opens with the state of the
-runner - `runner: running (pid <pid>, watch every <n> s, since <iso>)` or
-`runner: stopped` - and `--json` carries the same thing under `runner`. Reading the
-state never changes it: a registration whose process is gone reads as stopped, and
-only `--stop` or the start of a new watcher removes the file.
+runner - `runner: running (pid <pid>, watch every <n> s, runtime <version>, since <iso>)`
+or `runner: stopped` - and `--json` carries the same thing under `runner`. Reading the
+registration never changes it: one whose process is gone reads as stopped, and only
+`--stop` or the start of a new runner removes the file. The one thing `queue status`
+does write is the repair: before it prints anything it restores any job whose row says
+`running` or `pending` while the `terminal` witness of its run directory already says how
+it ended, and a repair it could not write is a warning on stderr, never a failed listing.
+A job under a live lease is never touched, and neither is one an operator has just
+retried: the retry records that it reopened the row in the very write that sends it back
+to the queue, so the witness of the attempt before it can never close it again.
 
 **The log is narrated by default.** `nightshift queue log <id>` prints one line per
 relevant event of the stream, timed relative to the `=== attempt N ===` marker
@@ -990,12 +1012,20 @@ about this host and must not turn a local diagnosis into a failing exit code.
 What a runtime has to provide, and what it can rely on:
 
 - `NIGHTSHIFT_HOME` - home directory of the runtime, default `~/.nightshift`.
-- `${NIGHTSHIFT_HOME}/runner.pid` registers the watch runner while one is up, as
-  `{ "pid", "startedAt", "mode", "intervalS", "logPath", "uptimeS" }` with `startedAt` in
-  ISO 8601. `uptimeS` is the uptime of the machine at the instant of the registration,
-  which is what tells a registration left by an earlier boot session apart from a live
-  one. It is written by the process that starts the watcher and removed by the
-  watcher itself on a clean exit, or by `nightshift queue run --stop`.
+- `${NIGHTSHIFT_HOME}/runtime/versions/<version>-<stamp>/` is one installed runtime, and
+  `${NIGHTSHIFT_HOME}/runtime/current` is the symlink that names the one in use. Every
+  path the host is registered against goes through the link, as
+  `${NIGHTSHIFT_HOME}/runtime/current/node_modules/@maykonv/nightshift`.
+- `${NIGHTSHIFT_HOME}/runner.pid` registers the runner that owns the queue while one is
+  up - `watch`, `drain` and `once` alike - as `{ "pid", "startedAt", "mode", "jobId",
+  "intervalS", "logPath", "runtimeDir", "uptimeS" }` with `startedAt` in ISO 8601.
+  `uptimeS` is the uptime of the machine at the instant of the registration, which is
+  what tells a registration left by an earlier boot session apart from a live one, and
+  `runtimeDir` is the version directory that runner loaded from. It is written by the
+  process that STARTS the runner, inside the home lock and in the same critical section
+  as the guard that allowed the start; a runner started with `--foreground` registers
+  itself under that same lock. It is removed by the runner itself on a clean exit,
+  matched by pid, or by `nightshift queue run --stop`.
 - The output of a detached runner lives in
   `${NIGHTSHIFT_HOME}/logs/runner-<stamp>.log`, next to the one log per job.
 - Run artifacts live in `${NIGHTSHIFT_HOME}/runs/<project>/<slug>/`, always
@@ -1007,7 +1037,11 @@ What a runtime has to provide, and what it can rely on:
 - `state.json` in the same directory carries the resumable state:
   `schemaVersion`, `slug`, `project`, `type`, `tier`, `branch`, `worktree`,
   `resumeCount`, `updatedAt`, `termination`, `qaStageA` and
-  `phases[{phase, artifact, verdict}]`.
+  `phases[{phase, artifact, verdict}]`. Once a runner has closed the job it merges one
+  more key into that same file, `terminal{status, prUrl, finishedAt, writtenBy, pid}`:
+  the witness of the outcome, written only by the runner and read only by the
+  reconciliation. Nothing else of the file is touched, and the direction is never
+  reversed - the row is rebuilt from the file, the file is never rebuilt from the row.
 - Literals a runtime parses from the pipeline's stdout: `QUEUE_SLUG:`,
   `## Requires user confirmation` (the run is waiting on a human gate) and
   `## Notice` (the executive summary to deliver).
@@ -1022,6 +1056,34 @@ What a runtime has to provide, and what it can rely on:
 These names are a machine contract, not prose: the pipeline files are the
 source of truth for them, and any runtime that reads them must match them
 exactly.
+
+**The runtime is versioned, and never replaced under a live process.** An install
+writes a new directory, `runtime/versions/<version>-<stamp>/`, and publishes it by
+pointing `runtime/current` at it with a single rename, so no instant leaves the host
+without a runtime and a failed install never touches the link. The shims, the MCP
+server, the hooks, the Claude Desktop entry and the plugin marketplace all name
+`current`, so they follow the switch without being rewritten. A process that is already
+running keeps the directory it loaded from - the old version stays on disk, and the
+runner records its path in `runner.pid`. After a successful switch the install keeps the
+last two version directories and deletes the rest, never the one `current` names nor the
+one a live runner is running from. An installation made before this layout, directly
+under `runtime/node_modules/`, keeps working and is never deleted by an install.
+
+**`setup`, `setup --from`, `update` and `init` refuse to replace the runtime while it
+is in use.** When a runner is registered alive or a job holds a live lease, they exit
+`1` with `a runner is active (pid P / job #N) - the runtime cannot be replaced while it
+runs; stop it with nightshift queue run --stop or wait for the queue to drain` and
+install nothing. `--force` installs anyway and says so on stderr. A runner whose version
+directory disappears anyway - a `--force`, or a hand-deleted tree - stops claiming,
+finishes the job it is running and exits saying so.
+
+**One runner owns the queue.** Every start goes through the same guard, under the home
+lock, in the same critical section as the registration: `queue run`, `queue run --watch`,
+`queue run --job`, `queue add --run`, `queue retry --run`, their `--foreground` forms and
+the `queue_run` and `queue_retry` MCP tools. While a live runner is registered, any of
+them answers `runner already active (pid P, <mode>) - it will pick the job up` and exits
+`0` - the work is queued, so a second runner is never needed and never started. A
+registration whose process is gone is cleared on the way and the start goes on.
 
 The eighteen MCP tools, with the parameters `nightshift mcp` actually accepts:
 
@@ -1096,7 +1158,10 @@ into the runtime prefix. Nothing is ever linked, so the runtime never borrows th
 
 That is what makes a checkout testable end to end: `--from <dir>` packs that
 directory instead, and `--from <file.tgz>` installs that tarball as it is. It
-works the same on `setup`, on `init` and on `update`.
+works the same on `setup`, on `init` and on `update`. Each of them installs into a
+new `runtime/versions/<version>-<stamp>/` and moves the `current` link onto it, so
+reinstalling from a checkout while a job is running is refused rather than pulled out
+from under the runner - `--force` is the way to say you mean it anyway.
 
 ```sh
 nightshift setup --from ~/code/nightshift   # install the runtime from a checkout

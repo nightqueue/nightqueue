@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
+import { resolvedRuntimeDir } from "../src/config/paths.mjs";
 import { PATH_MARK, pathBlock } from "../src/host/shell.mjs";
 import { assertIsolatedEnv, makeHostEnv, readSettingsFile, writeLegacyShim } from "../test-support/host.mjs";
 import { makeDir } from "../test-support/memory.mjs";
@@ -46,9 +47,9 @@ function makeEmbeddingHost(t, name) {
   return host;
 }
 
-// npm calls of the run that installed something into the given prefix.
+// npm calls of the run that installed something into the given prefix, or into a staging prefix under it.
 function installsInto(host, prefix) {
-  return host.npmCalls().filter((call) => call[0] === "install" && call.includes(prefix));
+  return host.npmCalls().filter((call) => call[0] === "install" && call[2].startsWith(prefix));
 }
 
 // Specifiers the run installed into the given prefix, in the order npm received them.
@@ -297,7 +298,9 @@ test("update <version> asks the registry for that exact version and the runtime 
   const { ctx, out } = makeCtx(host.env);
   assert.equal(await run(["update", "0.2.0"], ctx), 0);
   assert.equal(specsInto(host, host.runtimeDir).at(-1), "@maykonv/nightshift@0.2.0");
-  assert.ok(out.includes(`runtime: updated (v${VERSION} -> v0.2.0 at ${host.runtimeDir})`), out.join("\n"));
+  const installed = `${host.runtimeCurrent} -> ${resolvedRuntimeDir(host.env)}`;
+  assert.ok(out.includes(`runtime: updated (v${VERSION} -> v0.2.0 at ${installed})`), out.join("\n"));
+  assert.equal(basename(resolvedRuntimeDir(host.env)).startsWith("0.2.0-"), true, "the new version did not get a version directory of its own");
 });
 
 test("a version npm would read as another package or as a flag never reaches it", async (t) => {

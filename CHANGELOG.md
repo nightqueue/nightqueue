@@ -8,6 +8,35 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Versioned runtime: an install writes a new
+  `~/.nightshift/runtime/versions/<version>-<stamp>/` and publishes it by
+  renaming a symlink onto `~/.nightshift/runtime/current`, in one step, so no
+  instant leaves the host without a runtime and a failed install never touches
+  the link. The shims, the MCP server, the hooks, the Claude Desktop entry and
+  the plugin marketplace all resolve through `current`, a process that is
+  already running keeps executing the directory it loaded from, and the last two
+  version directories are kept - never the one `current` names, never the one a
+  live runner recorded. `doctor` reports the installed version and the directory
+  it resolves to, and an installation still at the old
+  `runtime/node_modules/` layout keeps working and is never deleted by an
+  install. The decision is recorded in
+  `docs/decisions/0003-versioned-runtime-single-runner.md`.
+- A terminal write is now durable, verified and witnessed: the transaction of a
+  finish commits with `PRAGMA synchronous = FULL`, a fresh read-only connection
+  reads the three terminal columns back, a mismatch is reported as `finish
+  verification failed` in the log of the job and on stderr and retried once, and
+  the write-ahead log is checkpointed afterwards. The same shape guards the
+  `pipeline_log` insert. The runner then writes `terminal { status, prUrl,
+  finishedAt, writtenBy, pid }` into the `state.json` of the run, and
+  `nightshift queue status`, every runner cycle and the MCP `queue_status`
+  restore any job whose row still says `running` or `pending` while that witness
+  says how it ended, marking the result `repairedFrom: "state.json"`. A job
+  under a live lease is never touched, and a retry clears the witness so the
+  previous attempt can never close the next one.
+- A runner records the version directory it loaded from, and watches it: when
+  that tree disappears it warns once, finishes the job it is running and exits
+  without claiming another. `queue status` and `doctor` name the runtime of the
+  live runner.
 - A terminal `merged` status for the queue: a job that delivered a pull request
   is checked with `gh pr view` and becomes `⇡ merged` once that pull request is
   merged, carrying the instant of the merge in `merged_at` and the commit in
@@ -61,6 +90,25 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The refusal `nightshift update` already had is now shared by `nightshift
+  setup`, `setup --from` and `nightshift init`: while a runner is registered
+  alive or a job holds a live lease, all four exit 1 with `a runner is active
+  (pid P / job #N) - the runtime cannot be replaced while it runs; stop it with
+  nightshift queue run --stop or wait for the queue to drain` and install
+  nothing. `--force` installs anyway and warns on stderr, naming the tree it is
+  replacing.
+- One runner owns the queue. Every start path - `queue run`, `--watch`,
+  `--job`, `queue add --run`, `queue retry --run`, their `--foreground` forms
+  and the `queue_run` and `queue_retry` MCP tools - passes the same guard, under
+  the home lock and in the same critical section as the registration, so two
+  starts a few milliseconds apart can never both win. A start refused because a
+  runner is live now answers `runner already active (pid <pid>, <mode>) - it
+  will pick the job up` and exits 0, spawning nothing and leaving the job
+  pending; a second watcher used to exit 1 and every other path used to spawn
+  unconditionally. The process that starts a runner is the one that registers
+  it, so `runner.pid` exists as soon as the command returns, for `watch`,
+  `drain` and `once` alike - which also means `queue status`, `doctor` and
+  `queue run --stop` now see all three.
 - `npm run release:check` also refuses a working tree with uncommitted changes,
   before the version and the pack checks, because a publish ships what is on
   disk and not what is committed.

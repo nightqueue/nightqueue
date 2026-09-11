@@ -1,5 +1,15 @@
+import { appendFileSync, mkdirSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
-import { openDb, sqliteToIso, withWriteRetry } from "./db.mjs";
+import { jobLogPath, logsDir } from "../config/paths.mjs";
+import {
+  finishVerificationReport,
+  isoToSqlite,
+  openDb,
+  openDbReadOnly,
+  sqliteToIso,
+  withFullSync,
+  withWriteRetry,
+} from "./db.mjs";
 
 export const JOB_STATUSES = ["pending", "running", "done", "gate", "failed", "cancelled", "merged"];
 export const PRIORITY_RANGE = { min: 1, max: 9, fallback: 5 };
@@ -323,6 +333,78 @@ export function linkPipelineRun(jobId, { project, slug } = {}, env = process.env
   return inTransaction(db, () => linkRun(db, requireId(jobId), optionalText(project), optionalText(slug)));
 }
 
+const FINISH_COLUMNS = ["status", "pr_url", "finished_at"];
+
+// The terminal columns of a finish, in the fixed order the verification message prints them.
+function describeFinish(row) {
+  return FINISH_COLUMNS.map((column) => `${column}=${row?.[column] ?? "null"}`).join(" ");
+}
+
+// Reads the terminal columns of a job through a connection of its own, so no cached snapshot answers for the file.
+function readFinishedColumns(id, env) {
+  const db = openDbReadOnly(env);
+  try {
+    return db.prepare(`SELECT ${FINISH_COLUMNS.join(", ")} FROM jobs WHERE id = ?`).get(id) ?? null;
+  } finally {
+    db.close();
+  }
+}
+
+// Appends a line to the log of a job; a log that cannot be written never costs the outcome it describes.
+function appendJobLog(id, text, env) {
+  try {
+    mkdirSync(logsDir(env), { recursive: true });
+    appendFileSync(jobLogPath(id, env), text);
+  } catch {
+    return;
+  }
+}
+
+// Writes a verification failure where the operator reads it: the log of the job and the stderr of the runner.
+function reportFinishMismatch(id, detail, env) {
+  const text = finishVerificationReport(detail);
+  appendJobLog(id, text, env);
+  try {
+    process.stderr.write(text);
+  } catch {
+    return;
+  }
+}
+
+// Compares what the transaction committed with what a fresh connection reads back, reporting the difference.
+function verifyFinish(id, written, env) {
+  const read = readFinishedColumns(id, env);
+  if (read && FINISH_COLUMNS.every((column) => (read[column] ?? null) === (written[column] ?? null))) return true;
+  reportFinishMismatch(id, `expected ${describeFinish(written)}; read ${describeFinish(read)}`, env);
+  return false;
+}
+
+// Writes the terminal columns again, by id: after a successful commit the claim predicate matches nothing anymore.
+function reapplyFinish(id, written, env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET status = ?,
+            pr_url = COALESCE(?, pr_url),
+            finished_at = COALESCE(finished_at, ?),
+            worker = NULL,
+            lease_until = NULL
+      WHERE id = ?`,
+  );
+  withWriteRetry(() => statement.run(written.status, written.pr_url ?? null, written.finished_at ?? null, id));
+}
+
+// Confirms on disk what the finish committed and repairs it once; a failure that survives is logged, never a lost job.
+function ensureFinishDurable(id, written, env) {
+  try {
+    if (verifyFinish(id, written, env)) return true;
+    reapplyFinish(id, written, env);
+    return verifyFinish(id, written, env);
+  } catch (err) {
+    reportFinishMismatch(id, `expected ${describeFinish(written)}; read failed: ${err?.message ?? String(err)}`, env);
+    return false;
+  }
+}
+
 // Closes a job with its outcome and links the pipeline run, in one transaction; false means the job was lost.
 export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage } = {}, env = process.env) {
   const db = openDb(env);
@@ -342,7 +424,7 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage }
             cache_creation = COALESCE(?, cache_creation),
             cost_usd = COALESCE(?, cost_usd)
       WHERE id = ? AND status = 'running' AND worker = ?
-      RETURNING project, slug`,
+      RETURNING project, slug, status, pr_url, finished_at`,
   );
   const values = [
     requireStatus(status),
@@ -357,12 +439,16 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage }
     requireId(id),
     requireText("worker", worker),
   ];
-  return inTransaction(db, () => {
-    const row = statement.get(...values);
-    if (!row) return false;
-    linkRun(db, id, row.project, row.slug);
-    return true;
-  });
+  const written = withFullSync(db, () =>
+    inTransaction(db, () => {
+      const row = statement.get(...values);
+      if (row) linkRun(db, id, row.project, row.slug);
+      return row ?? null;
+    }),
+  );
+  if (!written) return false;
+  ensureFinishDurable(requireId(id), written, env);
+  return true;
 }
 
 // Explains, from the current row, why a cancel was refused; it never decides anything, only phrases it.
@@ -481,6 +567,44 @@ export function countsByStatus(env = process.env) {
 // Counts the jobs currently running under a live lease, the number the concurrency ceiling compares against.
 export function countActiveJobs(env = process.env) {
   return openDb(env).prepare(`SELECT COUNT(*) AS total FROM jobs AS slot WHERE ${ACTIVE_JOB_PREDICATE}`).get().total;
+}
+
+// Id of the lowest numbered job running under a live lease, or null when none is: the job the install guard names.
+export function firstActiveJobId(env = process.env) {
+  const id = openDb(env).prepare(`SELECT MIN(slot.id) AS id FROM jobs AS slot WHERE ${ACTIVE_JOB_PREDICATE}`).get().id;
+  return Number.isInteger(id) ? id : null;
+}
+
+// Tells whether this job is running under a live lease: the liveness predicate the ceiling counts, never the raw status.
+export function isJobActive(id, env = process.env) {
+  const row = openDb(env)
+    .prepare(`SELECT COUNT(*) AS total FROM jobs AS slot WHERE slot.id = ? AND ${ACTIVE_JOB_PREDICATE}`)
+    .get(requireId(id));
+  return row.total > 0;
+}
+
+// A retry writes `retriedFrom` in the same statement that flips the row back to pending, so a row carrying it was reopened after its witness was written and no witness speaks for it any more.
+const NEVER_REOPENED_BY_RETRY = `json_extract(${RESULT_OBJECT_BASE}, '$.retriedFrom') IS NULL`;
+
+// Restores a job from the witness its runner left on disk; it writes the row only, never the file, and never touches a job that already ended or that an operator just retried.
+export function repairJobFromWitness(id, terminal, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET result = json_set(${RESULT_OBJECT_BASE}, '$.repairedFrom', 'state.json'),
+            status = ?,
+            pr_url = COALESCE(?, pr_url),
+            finished_at = COALESCE(?, finished_at),
+            worker = NULL,
+            lease_until = NULL
+      WHERE id = ? AND (status = 'running' OR (status = 'pending' AND ${NEVER_REOPENED_BY_RETRY}))`,
+  );
+  const values = [
+    requireStatus(terminal?.status),
+    optionalText(terminal?.prUrl),
+    isoToSqlite(terminal?.finishedAt),
+    requireId(id),
+  ];
+  return withWriteRetry(() => statement.run(...values)).changes === 1;
 }
 
 // Tells whether a project already has an active job, which is what makes a second job of the same repository wait.

@@ -6,7 +6,6 @@ import {
   dbPath,
   embeddingDir,
   queuePausedPath,
-  runtimeDir,
   secretsPath,
   shimNames,
 } from "../config/paths.mjs";
@@ -26,6 +25,7 @@ import { ORPHAN_PREDICATE } from "../memory/jobs.mjs";
 import { runnerPidfileState } from "../queue/pidfile.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { firstLine } from "./report.mjs";
+import { runtimeLabel, runtimeLocation } from "./runtime-versions.mjs";
 
 const COMMAND_TIMEOUT_MS = 5000;
 const MIN_NODE_MAJOR = 22;
@@ -159,16 +159,17 @@ function checkModel(ctx) {
     : check("model", "warn", "no weight on disk", "run `nightshift embed download`");
 }
 
-// Checks that the runtime is installed and holds the version this process runs.
+// Checks that the runtime is installed, names the version directory `current` resolves to and holds the version this process runs.
 function checkRuntime(ctx) {
-  const dir = runtimeDir(ctx.env);
+  const location = runtimeLocation(ctx.env);
   const installed = runtimeVersion(ctx.env);
   const running = packageVersion();
-  if (!installed) return check("runtime", "fail", `no runtime in ${dir}`, "run `nightshift setup`");
+  if (!installed) return check("runtime", "fail", `no runtime in ${location}`, "run `nightshift setup`");
   if (installed !== running) {
-    return check("runtime", "warn", `v${installed} installed, running v${running}`, "run `nightshift update`");
+    const detail = `v${installed} installed at ${location}, running v${running}`;
+    return check("runtime", "warn", detail, "run `nightshift update`");
   }
-  return check("runtime", "ok", `v${installed} at ${dir}`);
+  return check("runtime", "ok", `v${installed} at ${location}`);
 }
 
 // Hint for a command name that is not on disk: only an installation that already has the canonical shim can have turned the shortcuts off.
@@ -296,18 +297,28 @@ function checkQueueJobs(ctx) {
   }
 }
 
-// How a live runner is described in the report, with its cadence only when the pidfile carries one.
-function liveRunnerDetail(info) {
+// How a live runner is described in the report, with its cadence and the tree it loaded from only when the pidfile carries them.
+function liveRunnerDetail(info, env) {
   const cadence = Number.isInteger(info.intervalS) ? `, ${info.mode} every ${info.intervalS} s` : "";
-  return `running (pid ${info.pid}${cadence})`;
+  const label = runtimeLabel(info.runtimeDir, env);
+  return `running (pid ${info.pid}${cadence}${label ? `, runtime ${label}` : ""})`;
 }
 
-// Checks the pidfile of the watch runner, which the diagnosis only ever reads.
+// Report of a live runner: a warning when the tree it loaded from is gone, because it stops claiming after the job it holds.
+function liveRunnerCheck(name, info, env) {
+  const detail = liveRunnerDetail(info, env);
+  if (typeof info.runtimeDir === "string" && info.runtimeDir && !existsSync(info.runtimeDir)) {
+    return check(name, "warn", `${detail}: the runtime directory of this runner is gone (${info.runtimeDir})`, "start a new runner with `nightshift queue run` once it exits");
+  }
+  return check(name, "ok", detail);
+}
+
+// Checks the pidfile of the runner, which the diagnosis only ever reads.
 function checkRunner(ctx) {
   const name = "runner pidfile";
   const state = runnerPidfileState(ctx.env, ctx.killImpl);
   if (state.status === "missing") return check(name, "ok", "no runner registered");
-  if (state.status === "alive") return check(name, "ok", liveRunnerDetail(state.info));
+  if (state.status === "alive") return liveRunnerCheck(name, state.info, ctx.env);
   if (state.status === "stale") {
     return check(name, "warn", `stale (pid ${state.info.pid} is gone)`, "run `nightshift queue run --stop` to clear it");
   }

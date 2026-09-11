@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { jobLogPath, runDir } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
-import { openDb } from "../../src/memory/db.mjs";
+import { openDb, sqliteToIso } from "../../src/memory/db.mjs";
+import { packageRoot } from "../../src/host/paths.mjs";
 import { addJob, claimJobById, countsByStatus, getJob } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { DRAIN_INTERVAL_S, runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../../src/queue/runner.mjs";
@@ -88,6 +89,21 @@ test("a run that opens a pull request ends as done, with its facts, usage and pi
   assert.deepEqual(JSON.parse(row.result), { status: "done", prUrl: PR_URL, logPath: jobLogPath(id, env), exitCode: 0, timedOut: false, idleTimedOut: false, attempts: 1 });
   assert.equal(openDb(env).prepare("SELECT job_id FROM pipeline_runs WHERE id = ?").get(logged.runId).job_id, id);
   assert.match(readFileSync(jobLogPath(id, env), "utf8"), /=== attempt 1 @ /);
+});
+
+test("the runner leaves the witness of the outcome next to the run, with its five keys and the tree it loaded from", async (t) => {
+  const { env } = makeRunnerHome(t, "runner-witness", [{ stdout: doneStream(), exitCode: 0 }]);
+  const id = enqueue(env);
+
+  await runJobCycle(env, id);
+
+  const state = JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"));
+  assert.deepEqual(Object.keys(state.terminal), ["status", "prUrl", "finishedAt", "writtenBy", "pid"]);
+  assert.deepEqual(
+    { status: state.terminal.status, prUrl: state.terminal.prUrl, writtenBy: state.terminal.writtenBy, pid: state.terminal.pid },
+    { status: "done", prUrl: PR_URL, writtenBy: packageRoot(), pid: process.pid },
+  );
+  assert.equal(state.terminal.finishedAt, sqliteToIso(getJob(id, env).finished_at));
 });
 
 test("a run that stops at the gate ends as gate and keeps the notice for the operator", async (t) => {

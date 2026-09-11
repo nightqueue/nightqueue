@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  LEGACY_RUNTIME_PACKAGE_TRAIL,
   PACKAGE_NAME,
   RUNTIME_PACKAGE_TRAIL,
   SHIM_NAME,
@@ -19,9 +20,12 @@ function escapeForRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Trails a shim of this package can point into: the versioned layout and the one an installation before it wrote.
+const SHIM_TRAILS = [RUNTIME_PACKAGE_TRAIL, LEGACY_RUNTIME_PACKAGE_TRAIL].map(escapeForRegExp).join("|");
+
 // Shape every shim this package ever wrote has: the CLI of a runtime prefix under some configuration home, the only proof that a file under the previous name is ours to delete.
 const SHIM_SHAPE = new RegExp(
-  `^#!/bin/sh\\nexec node "/.+/${escapeForRegExp(RUNTIME_PACKAGE_TRAIL)}/bin/(?:nightshift|shift)\\.mjs" "\\$@"\\n$`,
+  `^#!/bin/sh\\nexec node "/.+/(?:${SHIM_TRAILS})/bin/(?:nightshift|shift)\\.mjs" "\\$@"\\n$`,
 );
 
 // Version declared by one package.json, or null when the file is missing or unreadable.
@@ -42,6 +46,11 @@ export function packageVersion() {
 // Version installed in the runtime prefix, or null when no runtime is there.
 export function runtimeVersion(env = process.env) {
   return versionAt(runtimePackageDir(env));
+}
+
+// Version one npm prefix really holds, the proof an install wrote the package into the directory it was given.
+export function prefixVersion(prefix) {
+  return versionAt(join(prefix, "node_modules", PACKAGE_NAME));
 }
 
 // Tells whether the runtime prefix really holds the package, which is the only proof that an install worked.

@@ -86,7 +86,14 @@ test("a run with no single job drains the queue detached, and `--max` reaches th
   assert.match(ran.stdout, /^runner started \(pid 4242\) - draining the queue until nothing is pending; follow with: nightshift queue status --follow/);
   assert.equal(ran.stdout.includes(join(homeDir(env), "logs")), true, `the runner logs outside the home: ${ran.stdout}`);
   assert.deepEqual(calls[0].args.slice(1), ["queue", "run", "--foreground", "--max", "2", "--drain"]);
-  assert.equal(existsSync(runnerPidPath(env)), false, "the parent registered the drain instead of leaving it to the child");
+  assert.equal(existsSync(runnerPidPath(env)), true, "the parent left the registration of the drain to a child that has not booted yet");
+  const info = JSON.parse(readFileSync(runnerPidPath(env), "utf8"));
+  assert.deepEqual(
+    { pid: info.pid, mode: info.mode, jobId: info.jobId },
+    { pid: CHILD_PID, mode: "drain", jobId: null },
+    "the drain was registered under something other than the pid of the child that runs it",
+  );
+  assert.equal(typeof info.runtimeDir, "string", "the registration does not name the tree the runner loaded from");
 });
 
 test("queue add --run and queue retry --run start the same detached runner", async (t) => {
@@ -158,8 +165,8 @@ test("a second watcher is refused while the first is alive, and a stale pidfile 
   const calls = [];
 
   const refused = await runCli(env, ["queue", "run", "--watch", "10"], { calls, alive: new Set([CHILD_PID]) });
-  assert.equal(refused.code, 1);
-  assert.match(refused.stderr, /runner already running \(pid 4242\) - stop it first with: nightshift queue run --stop/);
+  assert.equal(refused.code, 0, refused.stderr);
+  assert.equal(refused.stdout, "runner already active (pid 4242, watch) - it will pick the job up");
   assert.deepEqual(calls, [], "the guard let a second watcher be spawned");
 
   const started = await runCli(env, ["queue", "run", "--watch", "10"], { calls });
@@ -206,7 +213,16 @@ test("queue status opens with the state of the runner, in the table and in the j
   assert.match(table.stdout, /#1\s+○ pending\s+-\s+-\s+alpha/, "the runner line took the place of the table");
 
   const payload = JSON.parse((await runCli(env, ["queue", "status", "--json"], { alive })).stdout);
-  assert.deepEqual(payload.runner, { running: true, pid: CHILD_PID, mode: "watch", intervalS: 30, startedAt, logPath: "/tmp/a.log" });
+  assert.deepEqual(payload.runner, {
+    running: true,
+    pid: CHILD_PID,
+    mode: "watch",
+    jobId: null,
+    intervalS: 30,
+    startedAt,
+    logPath: "/tmp/a.log",
+    runtimeDir: null,
+  });
   assert.equal(payload.jobs.length, 1);
   assert.equal(payload.counts.pending, 1);
 

@@ -30,18 +30,19 @@ import {
 } from "../queue/narrate.mjs";
 import {
   removeOwnRunnerPidfile,
-  removeRunnerPidfile,
   runnerPidfileState,
   runnerView,
   stopRunner,
   STOP_TIMEOUT_MS,
-  writeRunnerPidfile,
 } from "../queue/pidfile.mjs";
+import { repairWarningLine } from "../queue/reconcile.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
-import { launchDetachedRunner, runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
+import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
+import { registerForegroundRunner, runnerBusyAdvisory, runnerBusyLine, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { registerProject } from "./project.mjs";
 import { confirm } from "./prompt.mjs";
+import { runtimeLabel } from "./runtime-versions.mjs";
 
 const USAGE = {
   add: "nightshift queue add [project] <prompt...> [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--roadmap <id>]",
@@ -142,8 +143,61 @@ async function resolveTarget(config, positionals, values, ctx) {
   return { project: await offerRegistration(config, values, ctx), words: positionals, fromCwd: false };
 }
 
-// Runs the job in the foreground and turns its outcome into the exit code: 0 only when it finished as `done`.
-async function runInForeground(job, ctx) {
+// Tells the operator the job of a refused single-job start will not be picked up, because its row is no longer pending.
+function notPendingLine(jobId, env) {
+  if (jobId === null) return null;
+  const job = getJob(jobId, env);
+  if (!job || job.status === "pending") return null;
+  return `job #${jobId} is ${job.status}, not pending - it will not be picked up`;
+}
+
+// Everything a refused start says: the refusal itself, the advisory of a runner that stops after one job, and the row that stays where it is.
+function busyLines({ pid, mode }, { jobId, watchIntervalS }, env) {
+  const advisory = runnerBusyAdvisory(mode, runnerMode({ jobId, watchIntervalS }));
+  return [runnerBusyLine(pid, mode), advisory, notPendingLine(jobId, env)].filter(Boolean);
+}
+
+// Reports the live runner that made this start unnecessary; a start nobody needed is not a failure.
+function reportBusy(guard, options, ctx) {
+  for (const line of busyLines(guard, options, ctx.env)) ctx.out(line);
+  return 0;
+}
+
+// The line that tells the operator what started and how to follow it or stop it.
+function startedLine({ jobId, pid, watchIntervalS, logPath }) {
+  if (watchIntervalS !== null) return `runner started (pid ${pid}, every ${watchIntervalS} s) - stop with: nightshift queue run --stop`;
+  if (jobId !== null) return `job #${jobId} started (pid ${pid}) - follow with: nightshift queue log ${jobId} --follow`;
+  return `runner started (pid ${pid}) - draining the queue until nothing is pending; follow with: nightshift queue status --follow (log: ${logPath})`;
+}
+
+// Starts the runner detached, with the guard and the registration inside one hold of the home lock, and says what happened.
+async function startDetached({ jobId = null, max = null, watchIntervalS = null }, ctx) {
+  const started = await startQueueRunner({
+    jobId,
+    max,
+    watchIntervalS,
+    env: ctx.env,
+    spawnImpl: ctx.spawnImpl,
+    killImpl: ctx.killImpl,
+  });
+  if (!started.started) return reportBusy(started, { jobId, watchIntervalS }, ctx);
+  ctx.out(startedLine({ jobId, pid: started.pid, watchIntervalS, logPath: started.logPath }));
+  return 0;
+}
+
+// Runs the queue in THIS process as the registered runner, unless another one already owns it; the registration never outlives the run.
+async function runGuardedHere({ jobId = null, watchIntervalS = null, ctx, run }) {
+  const guard = await registerForegroundRunner({ jobId, watchIntervalS, env: ctx.env, killImpl: ctx.killImpl });
+  if (!guard.ok) return reportBusy(guard, { jobId, watchIntervalS }, ctx);
+  try {
+    return await run();
+  } finally {
+    removeOwnRunnerPidfile(ctx.env);
+  }
+}
+
+// Runs one job here and turns its outcome into the exit code: 0 only when it finished as `done`.
+async function runJobHere(job, ctx) {
   ctx.out(`running job #${job.id} in the foreground; follow the stream with \`nightshift queue log ${job.id} --follow\``);
   const cycle = await runCycle({ jobId: job.id, max: 1, env: ctx.env });
   const processed = cycle.processed.find((entry) => entry.id === job.id);
@@ -155,45 +209,9 @@ async function runInForeground(job, ctx) {
   return processed.status === "done" ? 0 : 1;
 }
 
-// Refuses a second watcher while one is alive, and clears a pidfile no live process answers for.
-function guardSingleWatcher(ctx) {
-  const state = runnerPidfileState(ctx.env, ctx.killImpl);
-  if (state.status === "alive") {
-    throw new UserError(`runner already running (pid ${state.info.pid}) - stop it first with: nightshift queue run --stop`);
-  }
-  if (state.status !== "missing") removeRunnerPidfile(ctx.env);
-}
-
-// Registers the watcher that was just started, naming its pid when the registration itself fails.
-function registerWatcher({ pid, intervalS, logPath }, ctx) {
-  try {
-    writeRunnerPidfile({ pid, startedAt: new Date().toISOString(), mode: "watch", intervalS, logPath }, ctx.env);
-  } catch (err) {
-    throw new UserError(`the runner started (pid ${pid}) but its pidfile could not be written: ${err?.message ?? String(err)}; stop it with \`kill ${pid}\``);
-  }
-}
-
-// The line that tells the operator what started and how to follow it or stop it.
-function startedLine({ jobId, pid, watchIntervalS, logPath }) {
-  if (watchIntervalS !== null) return `runner started (pid ${pid}, every ${watchIntervalS} s) - stop with: nightshift queue run --stop`;
-  if (jobId !== null) return `job #${jobId} started (pid ${pid}) - follow with: nightshift queue log ${jobId} --follow`;
-  return `runner started (pid ${pid}) - draining the queue until nothing is pending; follow with: nightshift queue status --follow (log: ${logPath})`;
-}
-
-// Starts the runner detached and tells the operator where to follow it; only the watch mode is registered in the pidfile.
-function startRunner({ jobId, max, watchIntervalS }, ctx) {
-  if (watchIntervalS !== null) guardSingleWatcher(ctx);
-  const { pid, logPath } = launchDetachedRunner({ jobId, max, watchIntervalS, env: ctx.env, spawnImpl: ctx.spawnImpl });
-  if (!Number.isInteger(pid) || pid <= 0) throw new UserError("the detached runner did not report a pid; nothing was started");
-  if (watchIntervalS !== null) registerWatcher({ pid, intervalS: watchIntervalS, logPath }, ctx);
-  ctx.out(startedLine({ jobId, pid, watchIntervalS, logPath }));
-  return 0;
-}
-
-// Starts the detached runner, holding the home lock across the guard and the registration so two watchers never race.
-async function startDetached({ jobId = null, max = null, watchIntervalS = null }, ctx) {
-  if (watchIntervalS === null) return startRunner({ jobId, max, watchIntervalS: null }, ctx);
-  return await withLock(ctx.env, () => startRunner({ jobId, max, watchIntervalS }, ctx));
+// Takes the job through a runner in this process, unless a live runner already owns the queue.
+async function runInForeground(job, ctx) {
+  return await runGuardedHere({ jobId: job.id, ctx, run: () => runJobHere(job, ctx) });
 }
 
 // Takes the job the command just queued through the runner: in this process with `--foreground`, detached otherwise.
@@ -463,11 +481,19 @@ function formatDetail(job) {
   return at < 0 ? [...fields, ...notice] : [...fields.slice(0, at + 1), ...notice, ...fields.slice(at + 1)];
 }
 
+// What the registered runner does: how often it looks at the queue, or the single job it was started for.
+function runnerCadence(runner) {
+  if (runner.mode === "watch") return `watch every ${runner.intervalS} s`;
+  if (runner.mode === "once") return runner.jobId === null ? "once" : `once, job #${runner.jobId}`;
+  return `${runner.mode ?? "runner"}`;
+}
+
 // The `runner:` line of `queue status`, the first thing the operator reads about the queue: the registered runner, or the job that runs without one.
-function formatRunner(runner, activeJobs = 0) {
+function formatRunner(runner, activeJobs = 0, env = process.env) {
   if (runner.running) {
-    const cadence = runner.mode === "watch" ? `watch every ${runner.intervalS} s` : `${runner.mode ?? "runner"}`;
-    return `runner: running (pid ${runner.pid}, ${cadence}, since ${runner.startedAt})`;
+    const label = runtimeLabel(runner.runtimeDir, env);
+    const runtime = label ? `, runtime ${label}` : "";
+    return `runner: running (pid ${runner.pid}, ${runnerCadence(runner)}${runtime}, since ${runner.startedAt})`;
   }
   if (activeJobs > 0) return `runner: ${pendingJobs(activeJobs).replace("pending", "running")} under a one-shot runner - nothing will pick up the pending jobs after it (start a drain with: nightshift queue run)`;
   return "runner: stopped";
@@ -505,7 +531,7 @@ function queueViewLines(values, ctx) {
   const counts = countsByStatus(ctx.env);
   const runner = runnerView(runnerPidfileState(ctx.env, ctx.killImpl));
   const activeJobs = countActiveJobs(ctx.env);
-  const lines = [formatRunner(runner, activeJobs)];
+  const lines = [formatRunner(runner, activeJobs, ctx.env)];
   if (!jobs.length) return { lines: [...lines, "no jobs in the queue"], idle: true };
   lines.push(...formatTable(jobs, ctx));
   lines.push(Object.entries(counts).map(([status, total]) => `${status}=${total}`).join("  "));
@@ -527,6 +553,7 @@ async function followStatus(values, intervalS, ctx) {
   try {
     while (!stop) {
       closeDb(ctx.env);
+      repairFromWitness(ctx);
       const view = queueViewLines(values, ctx);
       const text = view.lines.join("\n");
       if (tty) {
@@ -544,10 +571,17 @@ async function followStatus(values, intervalS, ctx) {
   }
 }
 
+// Restores the jobs whose run directory already says how they ended; a repair that cannot be written only warns.
+function repairFromWitness(ctx) {
+  const warning = repairWarningLine(ctx.env);
+  if (warning) ctx.err(`warning: ${warning}`);
+}
+
 // Prints `queue status`, for one job or for the tail of the queue, and tells whether it answered in json.
 async function printStatus(argv, ctx) {
   const { values, positionals } = parseCommand(normalizeFollowArgv(argv), STATUS_OPTIONS);
   checkArgs(positionals, { max: 1, usage: USAGE.status });
+  repairFromWitness(ctx);
   const intervalS = values.follow === undefined ? null : Math.max(1, requireInt("--follow", values.follow));
   if (intervalS !== null && values.json) throw new UserError(`\`--follow\` cannot be used with \`--json\`; usage: ${USAGE.status}`);
   if (intervalS !== null && positionals.length) throw new UserError(`\`--follow\` shows the whole queue, not one job; usage: ${USAGE.status}`);
@@ -647,28 +681,30 @@ async function runStop(ctx) {
   return report.code;
 }
 
-// Runs the drain loop in this process: registers itself unless a watcher already owns the queue, and clears the registration when the queue is empty.
+// Runs the drain loop in this process, as the registered runner of the queue.
 async function runDrainHere({ max }, ctx) {
-  const state = runnerPidfileState(ctx.env, ctx.killImpl);
-  const registered = state.status !== "alive";
-  if (registered) {
-    if (state.status !== "missing") removeRunnerPidfile(ctx.env);
-    writeRunnerPidfile({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", intervalS: null, logPath: null }, ctx.env);
-  }
-  try {
-    await runDrain({ max, env: ctx.env, onCycle: (cycle) => printCycle(cycle, ctx) });
-  } finally {
-    if (registered) removeOwnRunnerPidfile(ctx.env);
-  }
+  return await runGuardedHere({
+    ctx,
+    run: () => runDrain({ max, env: ctx.env, onCycle: (cycle) => printCycle(cycle, ctx) }).then(() => 0),
+  });
 }
 
-// Runs the watch loop in this process, clearing the registration this very process was started under.
+// Runs the watch loop in this process, as the registered runner of the queue.
 async function runWatchHere({ intervalS, jobId, max }, ctx) {
-  try {
-    await runWatch({ intervalS, jobId, max, env: ctx.env, onCycle: (cycle) => printCycle(cycle, ctx) });
-  } finally {
-    removeOwnRunnerPidfile(ctx.env);
-  }
+  return await runGuardedHere({
+    jobId,
+    watchIntervalS: intervalS,
+    ctx,
+    run: () => runWatch({ intervalS, jobId, max, env: ctx.env, onCycle: (cycle) => printCycle(cycle, ctx) }).then(() => 0),
+  });
+}
+
+// Runs one cycle over the queue in this process and reports it, as text or as the json a script reads.
+async function runCycleHere({ jobId, max, json }, ctx) {
+  const cycle = await runCycle({ jobId, max, env: ctx.env });
+  if (json) ctx.out(JSON.stringify(cycle));
+  else printCycle(cycle, ctx);
+  return 0;
 }
 
 // Runs `queue run`: it starts the runner detached unless `--foreground`, `--dry` or `--stop` says otherwise.
@@ -692,9 +728,7 @@ async function runRun(argv, ctx) {
   if (values.foreground !== true) return await startDetached({ jobId, max, watchIntervalS: intervalS }, ctx);
   if (intervalS !== null) return await runWatchHere({ intervalS, jobId, max }, ctx);
   if (values.drain === true && jobId === null) return await runDrainHere({ max }, ctx);
-  const cycle = await runCycle({ jobId, max, env: ctx.env });
-  if (values.json) ctx.out(JSON.stringify(cycle));
-  else printCycle(cycle, ctx);
+  return await runGuardedHere({ jobId, ctx, run: () => runCycleHere({ jobId, max, json: values.json === true }, ctx) });
 }
 
 // Runs `queue cancel`, which refuses without writing when the job is running under a live lease.

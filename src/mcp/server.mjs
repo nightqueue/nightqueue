@@ -50,8 +50,9 @@ import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { refreshMergedJobs } from "../queue/merged.mjs";
 import { runnerPidfileState, runnerView } from "../queue/pidfile.mjs";
+import { repairWarningLine } from "../queue/reconcile.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
-import { launchDetachedRunner } from "../queue/runner.mjs";
+import { runnerBusyLine, startQueueRunner } from "../queue/start.mjs";
 import {
   logPipelineRun,
   PIPELINE_GATE_STOPS,
@@ -268,6 +269,22 @@ function queueHint({ activeJobs, counts, runner }) {
   return `${pendingJobs(counts.pending)} waiting — start the batch with queue_run.`;
 }
 
+// What a tool that was asked to start a runner answers: the runner that started, or the live one that already owns the queue.
+function runnerAnswer(started) {
+  return {
+    started: started.started,
+    pid: started.pid,
+    logPath: started.logPath,
+    runner: { pid: started.pid, mode: started.mode, logPath: started.logPath },
+    message: started.started ? null : runnerBusyLine(started.pid, started.mode),
+  };
+}
+
+// What a status answer says about a repair the database refused: the same line the CLI warns with, and nothing at all when every repair went through.
+function warningAnswer(warning) {
+  return warning ? { warning } : {};
+}
+
 // The eighteen tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env) {
   return [
@@ -481,10 +498,11 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         refreshMergedJobs({ env });
+        const warning = repairWarningLine(env);
         if (Number.isInteger(args.job_id)) {
           const job = jobView(getJob(args.job_id, env));
           if (!job) throw new UserError(`unknown job \`${args.job_id}\``);
-          return { job };
+          return { job, ...warningAnswer(warning) };
         }
         const runner = runnerView(runnerPidfileState(env));
         const counts = countsByStatus(env);
@@ -493,6 +511,7 @@ function toolDefinitions(env) {
           jobs: listJobs({ limit: jobLimit(args.limit) }, env).map(jobView),
           counts,
           hint: queueHint({ activeJobs: countActiveJobs(env), counts, runner }),
+          ...warningAnswer(warning),
         };
       },
     },
@@ -506,8 +525,8 @@ function toolDefinitions(env) {
         inputSchema: { job_id: z.number().int().min(1).nullable().optional() },
       },
       handler: async (args) => {
-        const started = launchDetachedRunner({ jobId: Number.isInteger(args.job_id) ? args.job_id : null, env });
-        return { ok: true, pid: started.pid, logPath: started.logPath };
+        const started = await startQueueRunner({ jobId: Number.isInteger(args.job_id) ? args.job_id : null, env });
+        return { ok: true, ...runnerAnswer(started) };
       },
     },
     {
@@ -537,8 +556,8 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const { job, runDir } = applyRetry({ id: args.job_id, note: args.note, fresh: args.fresh === true, env });
-        const started = args.run === true ? launchDetachedRunner({ jobId: job.id, env }) : null;
-        return { ok: true, job, runDir, runner: started ? { pid: started.pid, logPath: started.logPath } : null };
+        const started = args.run === true ? await startQueueRunner({ jobId: job.id, env }) : null;
+        return { ok: true, job, runDir, ...(started ? runnerAnswer(started) : { runner: null }) };
       },
     },
     {

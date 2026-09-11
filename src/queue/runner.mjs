@@ -1,16 +1,28 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, closeSync, mkdirSync, openSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, logsDir } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
-import { countActiveJobs, countAttempt, countsByStatus, finishJob, peekNextJob, persistRunFacts } from "../memory/jobs.mjs";
+import { packageRoot } from "../host/paths.mjs";
+import { checkpointWal, sqliteToIso } from "../memory/db.mjs";
+import {
+  countActiveJobs,
+  countAttempt,
+  countsByStatus,
+  finishJob,
+  getJob,
+  peekNextJob,
+  persistRunFacts,
+} from "../memory/jobs.mjs";
 import { markRoadmapItemDone } from "../memory/roadmap.mjs";
 import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isTransientFailure } from "./classify.mjs";
 import { refreshMergedJobs } from "./merged.mjs";
 import { preflight } from "./preflight.mjs";
-import { decideResume, isSafeSegment, readRunState } from "./resume.mjs";
+import { runnerPidfileState } from "./pidfile.mjs";
+import { repairWarningLine } from "./reconcile.mjs";
+import { decideResume, isSafeSegment, readRunState, writeRunTerminal } from "./resume.mjs";
 import { buildPrompt, cliEntrypoint, IDLE_TIMEOUT_S, spawnClaude } from "./spawn.mjs";
 import { extractSessionIdFromEventLine, extractSlugFromEventLine, extractUsage, sumUsage } from "./stream.mjs";
 
@@ -152,6 +164,38 @@ function closeRoadmapItem(jobId, env) {
   }
 }
 
+// Records in the job log that the outcome could not be witnessed on disk; the job keeps the outcome it was given.
+function noteWitnessFailure(jobId, reason, env) {
+  try {
+    appendFileSync(jobLogPath(jobId, env), `could not write the terminal witness: ${reason}\n`);
+  } catch {
+    return;
+  }
+}
+
+// Writes the witness of the outcome next to the run: the durable record the database is verified against.
+function writeWitness(job, env) {
+  try {
+    const row = getJob(job.id, env);
+    if (!row) return;
+    const written = writeRunTerminal({
+      project: row.project,
+      slug: row.slug,
+      terminal: {
+        status: row.status,
+        prUrl: row.pr_url ?? null,
+        finishedAt: sqliteToIso(row.finished_at),
+        writtenBy: packageRoot(),
+        pid: process.pid,
+      },
+      env,
+    });
+    if (written.status !== "written") noteWitnessFailure(job.id, written.reason ?? written.status, env);
+  } catch (err) {
+    noteWitnessFailure(job.id, err?.message ?? String(err), env);
+  }
+}
+
 // Writes the outcome of a finished job, together with the branch the pipeline registered in its state.
 function finalize(job, run, env) {
   const state = readRunState({ project: job.project, slug: run.facts.slug, env });
@@ -176,6 +220,10 @@ function finalize(job, run, env) {
     },
     env,
   );
+  if (written) {
+    checkpointWal(env);
+    writeWitness(job, env);
+  }
   if (written && run.outcome.status === "done") closeRoadmapItem(job.id, env);
   return { id: job.id, status: written ? run.outcome.status : "lost", prUrl: run.outcome.prUrl, attempts: run.attempt };
 }
@@ -202,6 +250,30 @@ async function runJob(job, ctx) {
   return finalize(job, run, env);
 }
 
+// Directory this runner loaded its code from: the one it registered when it started, or the tree this process is running.
+function ownRuntimeDir(env) {
+  try {
+    const state = runnerPidfileState(env);
+    const dir = state.status === "alive" && state.info.pid === process.pid ? state.info.runtimeDir : null;
+    return typeof dir === "string" && dir ? dir : packageRoot();
+  } catch {
+    return packageRoot();
+  }
+}
+
+// Repairs the jobs whose run directory already says how they ended, and writes a repair the database refused into the log of this runner.
+function warnRepairRefused(env) {
+  const warning = repairWarningLine(env);
+  if (warning) process.stderr.write(`warning: ${warning}\n`);
+}
+
+// Warns, once, that the tree this runner runs from is gone; the detached runner writes its stderr straight into its own log.
+function warnRuntimeGone(dir) {
+  process.stderr.write(
+    `runtime directory ${dir} is gone - this runner finishes the job it is running and exits; start a new runner with: nightshift queue run\n`,
+  );
+}
+
 // Read-only report of what the cycle would do, the answer of `queue run --dry`.
 function dryReport({ jobId, cap, env }) {
   return {
@@ -225,16 +297,23 @@ function localLimit(max, cap) {
 export async function runCycle({ jobId = null, max = null, dry = false, env = process.env, deps = {} } = {}) {
   const cap = concurrencyCap(env);
   if (dry) return dryReport({ jobId, cap, env });
+  warnRepairRefused(env);
   const ctx = { env, deps: withDefaults(deps, env), state: { stopping: false } };
   ctx.deps.refreshMergedImpl({ env });
   const uninstall = installShutdown(ctx.state);
   const limit = localLimit(max, cap);
+  const runtime = ownRuntimeDir(env);
   const processed = [];
   const pool = new Set();
   const seen = new Set();
   let reason = "empty-queue";
   try {
     while (!ctx.state.stopping) {
+      if (!existsSync(runtime)) {
+        reason = "runtime-gone";
+        warnRuntimeGone(runtime);
+        break;
+      }
       if (pool.size >= limit) {
         await Promise.race(pool);
         continue;
@@ -298,7 +377,7 @@ export async function runWatch({ intervalS = WATCH_INTERVAL_DEFAULT_S, jobId = n
       const pass = await runCycle({ jobId, max, env, deps: options });
       passes.push(pass);
       onCycle(pass);
-      if (state.stopping || (cycles !== null && passes.length >= cycles)) break;
+      if (state.stopping || pass.reason === "runtime-gone" || (cycles !== null && passes.length >= cycles)) break;
       await waitNextPass(Math.max(1, Number(intervalS) || WATCH_INTERVAL_DEFAULT_S) * 1000, state, options.sleepImpl);
     }
   } finally {
@@ -309,8 +388,8 @@ export async function runWatch({ intervalS = WATCH_INTERVAL_DEFAULT_S, jobId = n
 
 export const DRAIN_INTERVAL_S = 15;
 
-// Reasons of a cycle after which a drain has nothing left to do: the queue is empty, paused, or the cycle was told to stop.
-const DRAIN_DONE_REASONS = new Set(["empty-queue", "paused", "already-tried"]);
+// Reasons of a cycle after which a drain has nothing left to do: the queue is empty, paused, the cycle was told to stop, or the tree it runs from is gone.
+const DRAIN_DONE_REASONS = new Set(["empty-queue", "paused", "already-tried", "runtime-gone"]);
 
 // Runs cycles until the queue has nothing pending, waiting between passes while the pending jobs are held back by a busy project or the concurrency cap - what "run the queue" means to an operator.
 export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {

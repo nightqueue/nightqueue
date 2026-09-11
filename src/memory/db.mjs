@@ -360,11 +360,58 @@ export function sqliteToIso(ts) {
   return ts ? `${String(ts).replace(" ", "T")}Z` : null;
 }
 
-// Instant (Date or ISO 8601 text) as the timestamp SQLite stores ("YYYY-MM-DD HH:MM:SS", UTC), or null when it cannot be read.
+const ZONELESS_TIMESTAMP = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
+
+// Milliseconds of a timestamp, reading a zone-less one as UTC: every timestamp this database stores is UTC, while `Date.parse` would take it as local time.
+function timestampMs(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  const zoneless = ZONELESS_TIMESTAMP.exec(text);
+  return Date.parse(zoneless ? `${zoneless[1]}T${zoneless[2]}Z` : text);
+}
+
+// Instant (Date, ISO 8601 text or a zone-less timestamp read as UTC) in the shape SQLite writes it ("YYYY-MM-DD HH:MM:SS", UTC); anything unusable is null.
 export function isoToSqlite(value) {
-  const date = value instanceof Date ? value : new Date(String(value ?? ""));
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString().slice(0, 19).replace("T", " ");
+  const ms = value instanceof Date ? value.getTime() : timestampMs(value);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
+}
+
+export const FINISH_VERIFICATION_FAILED = "finish verification failed";
+
+// The two lines a failed verification always writes: the literal on its own line, the detail under it.
+export function finishVerificationReport(detail) {
+  return `${FINISH_VERIFICATION_FAILED}\n${detail}\n`;
+}
+
+// Restores the durability level of a connection without ever masking the error of the action it wrapped.
+function restoreSynchronous(db, level) {
+  if (!Number.isInteger(level)) return;
+  try {
+    db.exec(`PRAGMA synchronous = ${level}`);
+  } catch {
+    return;
+  }
+}
+
+// Runs an action with SQLite fsyncing every commit; it must wrap the transaction from the outside, never run inside one.
+export function withFullSync(db, action) {
+  const previous = db.prepare("PRAGMA synchronous").get()?.synchronous;
+  db.exec("PRAGMA synchronous = FULL");
+  try {
+    return action();
+  } finally {
+    restoreSynchronous(db, previous);
+  }
+}
+
+// Folds the write-ahead log back into the database file; a checkpoint nobody could take is never an error of the caller.
+export function checkpointWal(env = process.env) {
+  try {
+    openDb(env).exec("PRAGMA wal_checkpoint(PASSIVE)");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Tells whether every value of a vector is finite, because a single NaN silently kills every cosine.

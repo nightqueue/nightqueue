@@ -1,7 +1,8 @@
-import { lstatSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homeDir, runDir } from "../config/paths.mjs";
 import { NAME_RE } from "../config/schema.mjs";
+import { writeFileAtomic } from "../config/store.mjs";
 
 // Canonical phase order written by the plugin into state.json; "next phase" derives from the highest one completed.
 export const RESUME_PHASE_ORDER = [
@@ -130,6 +131,40 @@ export function readRunState({ project, slug, env = process.env } = {}) {
   } catch {
     return null;
   }
+}
+
+// Tells whether a parsed state.json is an object the witness can be merged into.
+function isStateObject(state) {
+  return Boolean(state) && typeof state === "object" && !Array.isArray(state);
+}
+
+// Writes the state.json of a run atomically, creating its directory; an unsafe project or slug writes nothing.
+function saveRunState({ project, slug, env, state }) {
+  if (!NAME_RE.test(String(project ?? "")) || !isSafeSegment(slug)) {
+    return { status: "kept", path: null, reason: "unsafe project or slug" };
+  }
+  const path = join(runDir(project, slug, env), "state.json");
+  try {
+    mkdirSync(runDir(project, slug, env), { recursive: true });
+    writeFileAtomic(path, `${JSON.stringify(state, null, 2)}\n`);
+    return { status: "written", path, reason: null };
+  } catch (err) {
+    return { status: "kept", path, reason: String(err?.message ?? err).split("\n")[0] };
+  }
+}
+
+// Writes the terminal section of a run: the witness of the outcome, durable and independent of the database.
+export function writeRunTerminal({ project, slug, terminal, env = process.env } = {}) {
+  const state = readRunState({ project, slug, env });
+  return saveRunState({ project, slug, env, state: { ...(isStateObject(state) ? state : {}), terminal } });
+}
+
+// Drops the terminal section of a run, so the witness of the previous attempt never speaks for the next one.
+export function clearRunTerminal({ project, slug, env = process.env } = {}) {
+  const state = readRunState({ project, slug, env });
+  if (!isStateObject(state) || state.terminal === undefined) return { status: "absent", path: null, reason: null };
+  const { terminal, ...rest } = state;
+  return saveRunState({ project, slug, env, state: rest });
 }
 
 // State of a path WITHOUT following a link, the only reading that tells a run directory from a link into somebody else's tree.

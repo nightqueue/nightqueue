@@ -1,5 +1,12 @@
 import { UserError } from "../config/errors.mjs";
-import { openDb, resolveProjectName, withWriteRetry } from "./db.mjs";
+import {
+  finishVerificationReport,
+  openDb,
+  openDbReadOnly,
+  resolveProjectName,
+  withFullSync,
+  withWriteRetry,
+} from "./db.mjs";
 
 export const PIPELINE_TIERS = ["trivial", "simple", "complex"];
 export const PIPELINE_TASK_TYPES = ["bug/error", "feature/refactor"];
@@ -98,6 +105,51 @@ function insertRun(db, { run, projectName, values }) {
   }
 }
 
+// Reads a pipeline run back through a connection of its own, so no cached snapshot answers for the file.
+function readRunRow(runId, env) {
+  const db = openDbReadOnly(env);
+  try {
+    return db.prepare("SELECT slug, outcome FROM pipeline_runs WHERE id = ?").get(runId) ?? null;
+  } finally {
+    db.close();
+  }
+}
+
+// Compares a committed run with what a fresh connection reads back; a read that fails is "unknown", never "absent".
+function verifyRun(runId, expected, env) {
+  let read = null;
+  try {
+    read = readRunRow(runId, env);
+  } catch (err) {
+    return { ok: false, absent: false, read: `read failed: ${err?.message ?? String(err)}` };
+  }
+  if (read && read.slug === expected.slug && read.outcome === expected.outcome) return { ok: true, absent: false, read: null };
+  return { ok: false, absent: read === null, read: read ? `slug=${read.slug} outcome=${read.outcome}` : "no row" };
+}
+
+// Announces on stderr that a committed run did not read back, with the same literal a lost finish uses.
+function reportRunMismatch(runId, expected, verified) {
+  const detail = `expected run #${runId} slug=${expected.slug} outcome=${expected.outcome}; read ${verified.read}`;
+  try {
+    process.stderr.write(finishVerificationReport(detail));
+  } catch {
+    return;
+  }
+}
+
+// Confirms the run landed on disk; only a row that is genuinely absent is inserted once more.
+function ensureRunDurable(inserted, write, env) {
+  const expected = { slug: write.run.slug, outcome: write.run.outcome };
+  const verified = verifyRun(inserted.runId, expected, env);
+  if (verified.ok) return inserted;
+  reportRunMismatch(inserted.runId, expected, verified);
+  if (!verified.absent) return inserted;
+  const again = withFullSync(write.db, () => withWriteRetry(() => insertRun(write.db, write)));
+  const reverified = verifyRun(again.runId, expected, env);
+  if (!reverified.ok) reportRunMismatch(again.runId, expected, reverified);
+  return again;
+}
+
 // Persists the telemetry of one pipeline run: the run and its phases in a single transaction.
 export function logPipelineRun(
   { project, slug, tier, taskType, outcome, gateStop, durationS, phases = [] },
@@ -117,5 +169,6 @@ export function logPipelineRun(
     optionalText(env?.NIGHTSHIFT_SESSION_ID),
   ];
   const db = openDb(env);
-  return withWriteRetry(() => insertRun(db, { run, projectName, values }));
+  const write = { db, run, projectName, values };
+  return ensureRunDurable(withFullSync(db, () => withWriteRetry(() => insertRun(db, write))), write, env);
 }

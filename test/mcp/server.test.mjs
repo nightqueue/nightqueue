@@ -435,12 +435,31 @@ test("queue_status never returns the prompt and truncates the free text at five 
   assert.deepEqual(listed.jobs.map((job) => job.id), [2, 1]);
   assert.equal(listed.counts.pending, 2);
   for (const job of listed.jobs) assert.equal("prompt" in job, false, "the listing leaked a prompt");
-  assert.deepEqual(listed.runner, { running: false, pid: null, mode: null, intervalS: null, startedAt: null, logPath: null });
+  assert.deepEqual(listed.runner, {
+    running: false,
+    pid: null,
+    mode: null,
+    jobId: null,
+    intervalS: null,
+    startedAt: null,
+    logPath: null,
+    runtimeDir: null,
+  });
 
   const startedAt = "2026-09-08T21:04:11.000Z";
-  writeRunnerPidfile({ pid: process.pid, startedAt, mode: "watch", intervalS: 30, logPath: "/tmp/runner.log" }, env);
+  const runtimeDir = "/tmp/runtime/versions/1.0.0-20260911T031500Z";
+  writeRunnerPidfile({ pid: process.pid, startedAt, mode: "watch", intervalS: 30, logPath: "/tmp/runner.log", runtimeDir }, env);
   const watched = payloadOf(await client.callTool({ name: "queue_status", arguments: { limit: null, job_id: null } }));
-  assert.deepEqual(watched.runner, { running: true, pid: process.pid, mode: "watch", intervalS: 30, startedAt, logPath: "/tmp/runner.log" });
+  assert.deepEqual(watched.runner, {
+    running: true,
+    pid: process.pid,
+    mode: "watch",
+    jobId: null,
+    intervalS: 30,
+    startedAt,
+    logPath: "/tmp/runner.log",
+    runtimeDir,
+  });
   assert.equal("runner" in payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: id } })), false, "the detail of a job grew a runner");
 
   const unknown = await client.callTool({ name: "queue_status", arguments: { job_id: 99 } });
@@ -538,6 +557,27 @@ test("queue_run comes back at once with the log of the detached runner, inside t
   );
   assert.ok(tool.description.includes("DETACHED"), "the tool does not say the runner is detached");
   assert.ok(tool.description.includes("nightshift queue run --stop"), "the tool does not say how a watcher is stopped");
+});
+
+test("queue_run and queue_retry start nothing while a runner is live, and answer with the runner that owns the queue", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-run-guard");
+  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const busy = `runner already active (pid ${process.pid}, drain) - it will pick the job up`;
+  writeRunnerPidfile({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", intervalS: null, logPath: null }, env);
+  const client = await connect(t, env);
+
+  const started = payloadOf(await client.callTool({ name: "queue_run", arguments: { job_id: null } }));
+  assert.deepEqual(
+    { ok: started.ok, started: started.started, message: started.message, pid: started.pid },
+    { ok: true, started: false, message: busy, pid: process.pid },
+  );
+  assert.deepEqual(started.runner, { pid: process.pid, mode: "drain", logPath: null });
+  assert.equal(existsSync(join(homeDir(env), "logs")), false, "a refused start opened the log of a runner nobody started");
+
+  assert.equal(payloadOf(await client.callTool({ name: "queue_cancel", arguments: { job_id: id, reason: "not needed" } })).ok, true);
+  const retried = payloadOf(await client.callTool({ name: "queue_retry", arguments: { job_id: id, run: true } }));
+  assert.deepEqual({ started: retried.started, message: retried.message }, { started: false, message: busy });
+  assert.equal(getJob(id, env).status, "pending", "the retried job is not pending, so the live runner will never claim it");
 });
 
 test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a live run or a finished one", async (t) => {

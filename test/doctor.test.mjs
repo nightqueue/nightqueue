@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
-import { dbPath, queuePausedPath, runnerPidPath, secretsPath } from "../src/config/paths.mjs";
+import { dbPath, queuePausedPath, resolvedRuntimeDir, runnerPidPath, secretsPath } from "../src/config/paths.mjs";
 import { ensureHome } from "../src/config/store.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
 import { addJob, claimJobById } from "../src/memory/jobs.mjs";
@@ -16,6 +16,7 @@ import { makeDir, makeProject } from "../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
 const SETUP = ["setup", "--no-path", "--no-embedding"];
+const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 // Subprocess runner that answers for `gh` instead of asking the real one, keeping the diagnosis hermetic.
 function withFakeGh(authenticated) {
@@ -56,6 +57,11 @@ test("a host that went through setup has no failing check", async (t) => {
   assert.equal(code, 0);
   assert.equal(report.ok, true);
   assert.deepEqual(report.checks.filter((check) => check.status === "fail"), []);
+  assert.equal(
+    report.checks.find((check) => check.name === "runtime").detail,
+    `v${VERSION} at ${host.runtimeCurrent} -> ${resolvedRuntimeDir(host.env)}`,
+    "the diagnosis does not name the version directory `current` resolves to",
+  );
   assert.equal(statusOf(report, "node"), "ok");
   assert.equal(statusOf(report, "claude"), "ok");
   assert.equal(statusOf(report, "gh"), "ok");
@@ -270,6 +276,17 @@ test("the runner pidfile check reads the five states it can find, and removes no
   assert.match(checkOf(foreign, "runner pidfile").detail, /another user/);
   assert.match(checkOf(foreign, "runner pidfile").hint, /^remove /);
   assert.equal(existsSync(runnerPidPath(host.env)), true, "the diagnosis removed the pidfile of another user");
+
+  const runtimeDir = makeDir(t, "doctor-runner-runtime");
+  writeRunnerPidfile({ pid, startedAt: "2026-09-08T21:04:11.000Z", mode: "drain", intervalS: null, logPath: null, runtimeDir }, host.env);
+  const { report: withRuntime } = await diagnose(host.env, { killImpl: () => true });
+  assert.equal(statusOf(withRuntime, "runner pidfile"), "ok");
+  assert.equal(checkOf(withRuntime, "runner pidfile").detail, `running (pid ${pid}, runtime ${runtimeDir})`);
+
+  rmSync(runtimeDir, { recursive: true, force: true });
+  const { report: runtimeGone } = await diagnose(host.env, { killImpl: () => true });
+  assert.equal(statusOf(runtimeGone, "runner pidfile"), "warn");
+  assert.match(checkOf(runtimeGone, "runner pidfile").detail, /the runtime directory of this runner is gone \(/);
 
   writeFileSync(runnerPidPath(host.env), "{not json");
   const { report: unreadable } = await diagnose(host.env, { killImpl: gone });
