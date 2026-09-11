@@ -5,6 +5,7 @@ import { saveConfig, saveSecrets } from "../config/store.mjs";
 import { warmupModel } from "../memory/embedding.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import * as connection from "./connection.mjs";
+import * as decision from "./decision.mjs";
 import * as doctor from "./doctor.mjs";
 import * as embed from "./embed.mjs";
 import * as hook from "./hook.mjs";
@@ -15,6 +16,7 @@ import * as org from "./org.mjs";
 import * as project from "./project.mjs";
 import * as queue from "./queue.mjs";
 import * as reflect from "./reflect.mjs";
+import * as roadmap from "./roadmap.mjs";
 import * as setup from "./setup.mjs";
 import * as update from "./update.mjs";
 import * as version from "./version.mjs";
@@ -32,6 +34,8 @@ const COMMANDS = new Map([
   ["reflect", reflect.run],
   ["embed", embed.run],
   ["memory", memory.run],
+  ["decision", decision.run],
+  ["roadmap", roadmap.run],
   ["queue", queue.run],
   ["version", version.run],
 ]);
@@ -40,7 +44,7 @@ const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
 const HELP_OPTIONS = new Set(["--help", "-h"]);
 
-const READ_ONLY_COMMANDS = new Set(["doctor", "version"]);
+const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "roadmap"]);
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
@@ -78,13 +82,16 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the eleven memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the eighteen memory and queue tools
   hook session-start|prompt-context|reflect run a hook, reading the event JSON from stdin
   reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground
   embed install                             install the embedding library into the home and download its weights
   embed download                            download the embedding weights into the home (the only network path)
-  embed backfill                            compute the embeddings of the lessons that still have none
+  embed backfill                            compute the embeddings of the lessons and decisions that still have none
   memory stats [--json]                     count lessons, memories, index entries and runs per project
+  decision list [--project] [--status]      list the architecture decisions of a project
+  decision show <number> [--project]        print one decision in full
+  roadmap [--project]                       print the now/next/later roadmap of a project
   queue add [project] <prompt...> [--run]   enqueue an unattended /nightshift:resolve run; --run starts it detached
   queue status [id] [--limit] [--json]      show one job or the table of the queue plus the counts per status
   queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)

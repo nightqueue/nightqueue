@@ -20,6 +20,10 @@ const HOME_REFUSAL =
   "refused: this command would change the operator's nightshift home from inside job #9; verify against a temporary home (NIGHTSHIFT_HOME=$(mktemp -d)) instead";
 
 const CONTRACT_TOOLS = [
+  "decision_list",
+  "decision_recall",
+  "decision_save",
+  "decision_update",
   "index_recall",
   "index_save",
   "lesson_recall",
@@ -31,6 +35,9 @@ const CONTRACT_TOOLS = [
   "queue_retry",
   "queue_run",
   "queue_status",
+  "roadmap_get",
+  "roadmap_save",
+  "roadmap_update",
 ];
 
 const LESSON = {
@@ -61,7 +68,7 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the eleven tools of the contract", async (t) => {
+test("the server exposes exactly the eighteen tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
@@ -311,7 +318,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
   assert.equal(second.hint, "queued job #2 for `alpha` (2 pending). Start the batch with queue_run when you are ready.");
 
   const add = (await client.listTools()).tools.find((tool) => tool.name === "queue_add");
-  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "max_attempts", "priority", "project", "prompt", "register", "timeout_s"]);
+  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "max_attempts", "priority", "project", "prompt", "register", "roadmap_item_id", "timeout_s"]);
   assert.ok(add.description.includes("start the whole batch later with `queue_run`"), add.description);
 
   const byPath = await client.callTool({ name: "queue_add", arguments: { project: "/tmp/alpha", prompt: "fix the worker" } });

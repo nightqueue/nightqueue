@@ -40,12 +40,12 @@ export function normalizeExcludeIds(excludeIds) {
 }
 
 // Caps a limit to a positive integer.
-function safeLimit(limit, fallback) {
+export function safeLimit(limit, fallback) {
   return Number.isInteger(limit) && limit > 0 ? limit : fallback;
 }
 
 // Stamps the recall path each row came from, without copying the row and its embedding BLOB.
-function markVia(rows, via) {
+export function markVia(rows, via) {
   for (const row of rows) row.via = via;
   return rows;
 }
@@ -180,7 +180,7 @@ export function searchLessonsLexical({ query, project, target, excludeIds, limit
 }
 
 // First pass of the brute force: keeps the ids above the cut, ordered by cosine.
-function rankByCosine(rows, vector, cut, limit) {
+export function rankByCosine(rows, vector, cut, limit) {
   const scored = [];
   for (const row of rows) {
     let candidate;
@@ -263,7 +263,7 @@ function withDeadline(promise, ms) {
 }
 
 // Vector of a text within the deadline; empty text or any failure returns null and the caller keeps the lexical path.
-async function embedWithDeadline(embedder, text, deadlineMs) {
+export async function embedWithDeadline(embedder, text, deadlineMs) {
   const source = String(text ?? "").trim();
   if (!source) return null;
   try {

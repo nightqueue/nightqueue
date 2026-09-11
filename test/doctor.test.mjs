@@ -217,7 +217,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v2/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v3/);
 });
 
 test("the queue check reads the pause sentinel of the home, and a paused queue is a warning", async (t) => {

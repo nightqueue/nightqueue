@@ -465,7 +465,7 @@ Only the `nightshift` runtime opens it: the plugin talks to the MCP tools, never
 the file. The schema is created and migrated on first use, and reopening an
 existing database is a no-op.
 
-Seven tables plus two full text mirrors:
+Nine tables plus three full text mirrors:
 
 | table | what it holds |
 |---|---|
@@ -476,7 +476,9 @@ Seven tables plus two full text mirrors:
 | `pipeline_runs` | one row per `/resolve` run: tier, task type, outcome, gate stop, duration, model and session |
 | `pipeline_phases` | one row per phase of a run: sequence, phase, model, status, retry and duration |
 | `jobs` | one row per queue job: project, prompt, priority, status, attempts, lease, slug, session, branch, pull request, notice, usage and cost |
-| `lessons_fts`, `memory_fts` | FTS5 mirrors of the two text tables, kept in sync by triggers on insert, update and delete |
+| `decisions` | one architecture decision per row: number inside its project, title, context, decision, consequences, status, the decision that superseded it, and its embedding |
+| `roadmap_items` | one intent per row: horizon (`now`, `next`, `later`), title, detail, status, position inside its horizon, the decision that motivated it and the job it was queued as |
+| `lessons_fts`, `memory_fts`, `decisions_fts` | FTS5 mirrors of the three text tables, kept in sync by triggers on insert, update and delete |
 
 **Hybrid recall.** A recall with a query always runs BM25 over the FTS mirror,
 with a coverage floor: a row only counts as a hit when it matches enough of the
@@ -523,12 +525,15 @@ persisted, so a failed run reprocesses the same slice instead of losing it.
 **Commands.**
 
 ```sh
-nightshift mcp                     # start the stdio MCP server with the eleven tools
+nightshift mcp                     # start the stdio MCP server with the eighteen tools
 nightshift hook session-start      # run a hook, reading the event JSON from stdin
 nightshift reflect --transcript <path>   # reflect on a transcript now, in the foreground
 nightshift embed download          # download the embedding weights (the only network path)
-nightshift embed backfill          # embed the lessons that still have no vector
+nightshift embed backfill          # embed the lessons and the decisions that still have no vector
 nightshift memory stats [--json]   # counts per project
+nightshift decision list [--project <name>] [--status <status>]   # the decisions log of a project
+nightshift decision show <number> [--project <name>]              # one decision, in full
+nightshift roadmap [--project <name>]                             # the now/next/later roadmap
 ```
 
 **Environment variables.**
@@ -564,6 +569,90 @@ package: `nightshift embed install` (or a yes during `nightshift init`) puts it 
 `~/.nightshift/embedding` on demand, so the published package stays small and
 audits clean. Without it every recall still answers through BM25 and the whole
 test suite still passes.
+
+### Decisions and roadmap
+
+Two more things the runtime remembers per project, next to the lessons and the
+memories.
+
+A **decision** is one architecture decision of a project, numbered inside it
+(`#1`, `#2`, ... , and the numbering of one project never touches another's): a
+title, the `context` that forced the choice, the `decision` itself, the
+`consequences` it costs, and a status among `proposed`, `accepted`, `superseded`
+and `rejected`. A decision that was replaced points at the one that replaced it
+through `superseded_by`. Only `accepted` decisions are ever recalled as standing
+constraints; the other three statuses are read with `decision_list`,
+`nightshift decision list` and `nightshift decision show`, and never reach a
+prompt.
+
+The **roadmap** is where "what next" lives: one line per intent, in one of the
+three horizons `now`, `next` and `later`, ordered inside its horizon by a
+contiguous position (`1..N`, renumbered on every move). An item carries a status
+among `open`, `queued`, `done` and `dropped`, may link to the decision that
+motivated it, and, once queued, to the job built from it.
+
+**Private by design.** Both live only in `$NIGHTSHIFT_HOME/nightshift.db`, the
+same file as the rest of the memory. Nothing is written into the repository,
+nothing is published, nothing travels in a pull request: no `docs/adr/` tree, no
+`ROADMAP.md`. The only ways in are the MCP tools below, and the only ways to
+read them from a terminal are the three read-only commands
+(`nightshift decision list`, `nightshift decision show <number>` and
+`nightshift roadmap`), which resolve the project from the current directory when
+`--project` is omitted, never write, and never register a project. Read-only
+means the database too: the three open it read-only, so they never create it and
+never migrate it, and a home where nothing was ever saved reads as an empty one
+(`no decisions for <project>`, every horizon empty) instead of a SQLite error.
+
+**The seven MCP tools** (parameters marked `?` are optional):
+
+| tool | what it does |
+|---|---|
+| `decision_save` | records one decision: `project`, `title`, `context`, `decision`, `consequences?`, `status?` (default `accepted`); answers the `id` and the `number` it got |
+| `decision_update` | changes a decision by `id`: any of `title`, `context`, `decision`, `consequences`, `status`, `superseded_by` — this is how a `proposed` one is accepted or rejected; the row it answers is a compact one, truncated like `decision_list` |
+| `decision_list` | the log of a project in numbering order: `project`, `status?`; compact rows |
+| `decision_recall` | the standing constraints: `project`, `query?`, `limit?`; only `accepted` decisions, hybrid BM25 plus semantic, and the text comes back untruncated because it feeds prompts |
+| `roadmap_save` | adds an intent at the end of a horizon: `project`, `horizon`, `title`, `detail?`, `decision_id?` |
+| `roadmap_update` | changes an item by `id`: `horizon`, `title`, `detail`, `status`, `position`, `decision_id`; `queued` is not a status that can be set by hand |
+| `roadmap_get` | the whole roadmap of a project: `project`; the three horizons in order, each item with its position, its linked decision and the live status of its job |
+
+As everywhere else in the server, an explicit `null` is treated exactly like an
+absent parameter, and `project` is the registered NAME, never a path.
+`decision_update` and `roadmap_update` take an `id` and no project, so inside an
+unattended run they are restricted to the project of the job that is running:
+an `id` belonging to another project is refused, naming both projects, the same
+way `queue_retry` only retries its own job. Outside a job the restriction does
+not exist, and the operator updates any project from anywhere.
+
+**Queueing from the roadmap.** `queue_add` with `roadmap_item_id` and no
+`prompt` (or `nightshift queue add --roadmap <id>`) builds the prompt from the
+item instead of asking for it again: `## Task` with the title and the detail,
+`## Linked decision` when the item links one, and `## Related decisions` with at
+most three accepted decisions the title recalled - each heading disappears when
+it has nothing under it. The item's own project decides where the job goes, so
+nothing is resolved from the current directory. The item is then marked `queued`
+with the job id, and flips to `done` when that job finishes `done`. Passing both
+`prompt` and `roadmap_item_id` is refused, because a silent precedence would let
+the caller believe the item drove the job when it did not. Re-queueing an item
+whose job is still alive is refused too, naming that job. The text the operator
+wrote - the title, the detail and the text of the decisions quoted under them -
+is escaped on its way into that prompt: a line that would read as a heading
+(`# ...` to `###### ...`) or as a `QUEUE_SLUG:` line is prefixed with a
+backslash, so operator text stays readable but can never forge one of the three
+headings above nor a literal of `## Runtime contract`.
+
+**How `/resolve` uses them.** Phase 0 pings `decision_recall` next to
+`lesson_recall` in its preflight, and calls it again once the Brief is compiled,
+with the affected area and the objective as the query: at most five accepted
+decisions become the `## Standing decisions` section of the Brief. That section
+is passed to the architect as binding context - a design that contradicts a
+standing decision either follows it or takes the conflict to
+`## Requires user confirmation` naming its number. When a plan takes a
+structural decision no standing decision covers, the architect emits a
+`## Proposed decision` block, and the orchestrator saves it right after Phase 3 with
+`status: "proposed"`, so it survives a run that later stops at a gate; the pull
+request lists it under `## Open items` for the operator to accept or reject with
+`decision_update`. A `decision_recall` that fails is fail-open: the run
+continues without the section and records it as an open item.
 
 ## Queue
 
@@ -914,7 +1003,7 @@ These names are a machine contract, not prose: the pipeline files are the
 source of truth for them, and any runtime that reads them must match them
 exactly.
 
-The eleven MCP tools, with the parameters `nightshift mcp` actually accepts:
+The eighteen MCP tools, with the parameters `nightshift mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -924,11 +1013,18 @@ The eleven MCP tools, with the parameters `nightshift mcp` actually accepts:
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |
 | `pipeline_log` | `slug`, `tier`, `outcome`, `project?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?}]` |
-| `queue_add` | `project?`, `prompt`, `cwd?`, `register?`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400) |
+| `queue_add` | `project?`, `prompt?`, `roadmap_item_id?`, `cwd?`, `register?`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400) |
 | `queue_status` | `job_id?`, `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_cancel` | `job_id`, `reason?` |
 | `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` |
+| `decision_save` | `project`, `title`, `context`, `decision`, `consequences?`, `status?` (`proposed`, `accepted`, `superseded`, `rejected`; default `accepted`) |
+| `decision_update` | `id`, `title?`, `context?`, `decision?`, `consequences?`, `status?`, `superseded_by?` |
+| `decision_list` | `project`, `status?` |
+| `decision_recall` | `project`, `query?`, `limit?` (1-20) |
+| `roadmap_save` | `project`, `horizon` (`now`, `next`, `later`), `title`, `detail?`, `decision_id?` |
+| `roadmap_update` | `id`, `horizon?`, `title?`, `detail?`, `status?` (`open`, `done`, `dropped`; `queued` is refused), `position?`, `decision_id?` |
+| `roadmap_get` | `project` |
 
 The five queue tools are the same subsystem as `nightshift queue` (see `## Queue`):
 `queue_add` takes the registered project NAME and never a path - or, with
@@ -937,14 +1033,22 @@ that contains it; a `cwd` inside a git repository that is registered nowhere
 answers `{ "needs_registration": true, "cwd", "suggested_name", "org", "hint" }`
 instead of failing, and only a second call carrying `register: true` (after the
 user confirmed it) registers the repository and queues the job. An unattended run
-never registers anything: inside a job the call is refused. `queue_status`
-never returns the prompt of a job and truncates `notice_md` and `result` at 500
+never registers anything: inside a job the call is refused. `prompt` is required
+unless `roadmap_item_id` names a roadmap item, which builds the prompt and owns
+the project (see `### Decisions and roadmap`); passing both is refused.
+`queue_status` never returns the prompt of a job and truncates `notice_md` and `result` at 500
 characters and answers with the state of the runner next to the jobs, `queue_run`
 starts the runner detached and answers right away with the path of its log,
 `queue_cancel` refuses a job running under a live lease without writing anything,
 and `queue_retry` sends a gated, failed or cancelled job back to the queue - its
 `run` starts a DETACHED runner, the same one the `--run` of the CLI starts unless
 it is asked for `--foreground`.
+
+Inside a job, a tool that takes a free id only reaches its own: `queue_retry`
+retries the job it is running, and `decision_update` and `roadmap_update` accept
+only ids belonging to the project of that job - another project's id is refused
+naming both projects, and nothing is written. Outside a job none of these
+restrictions apply.
 
 Every optional parameter accepts an explicit `null` and treats it exactly like
 an absent one, so a caller that fills its whole argument object never gets an
@@ -953,8 +1057,11 @@ vocabularies are `target` (`triager`, `architect`, `coder`, `qa`, `verifier`),
 `tier` (`trivial`, `simple`, `complex`), `task_type` (`bug/error`,
 `feature/refactor`), `outcome` (`pr_opened`, `local_commit`, `no_commit`),
 `gate_stop` (`critique`, `triage`, `architect`, `qa`, `verification`, `runtime`,
-`user`) and the phase `status` (`ok`, `failed`, `skipped`). A value outside them
-comes back as an error message, never as a stack.
+`user`), the phase `status` (`ok`, `failed`, `skipped`), the decision `status`
+(`proposed`, `accepted`, `superseded`, `rejected`), the roadmap `horizon` (`now`,
+`next`, `later`) and the roadmap `status` (`open`, `queued`, `done`, `dropped`,
+of which `queued` is the only one `roadmap_update` refuses to set). A value
+outside them comes back as an error message, never as a stack.
 
 `pipeline_runs.model` and `pipeline_runs.session_id` are not parameters: the
 server reads them from `NIGHTSHIFT_MODEL` and `NIGHTSHIFT_SESSION_ID` in its own

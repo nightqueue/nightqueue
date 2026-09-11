@@ -8,6 +8,26 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Decisions and roadmap, per project and private to the home: a numbered
+  decisions log (context, decision, consequences and a status among `proposed`,
+  `accepted`, `superseded` and `rejected`) and a `now`/`next`/`later` roadmap,
+  both reachable through seven new MCP tools and never written into the
+  repository. `queue_add` with `roadmap_item_id`, and its CLI twin
+  `nightshift queue add --roadmap <id>`, build the job prompt from a roadmap
+  item, its linked decision and the accepted decisions around it instead of
+  asking for it again, mark the item `queued` and close it as `done` when the
+  job finishes. `/resolve` recalls the accepted decisions as the
+  `## Standing decisions` of its Brief, passes them to the architect as binding
+  constraints, and records the decision a plan takes as `proposed` for the
+  operator to accept on the pull request. Three read-only commands print all of
+  it in a terminal: `nightshift decision list`,
+  `nightshift decision show <number>` and `nightshift roadmap`, each resolving
+  the project from the current directory when `--project` is omitted, opening
+  the database read-only - they never create it, and a home where nothing was
+  saved reads as an empty one. Inside an unattended run, `decision_update` and
+  `roadmap_update` only accept ids of the project of the job that is running,
+  and the operator text a roadmap prompt carries is escaped, so it can never
+  forge one of the prompt's headings nor a literal of the runtime contract.
 - Release by tag: pushing a `v*` tag publishes the package to npm with
   provenance, through OIDC trusted publishing and without any npm token in the
   repository, and opens the GitHub Release of that tag with the CHANGELOG

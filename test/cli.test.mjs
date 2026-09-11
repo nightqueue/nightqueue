@@ -74,6 +74,8 @@ test("--help lists every command and exits 0", () => {
     "reflect",
     "embed",
     "memory",
+    "decision",
+    "roadmap",
     "queue",
     "version",
   ];

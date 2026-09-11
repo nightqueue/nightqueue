@@ -5,6 +5,7 @@ import { UserError } from "../config/errors.mjs";
 import { jobLogPath, logsDir } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { countActiveJobs, countAttempt, countsByStatus, finishJob, peekNextJob, persistRunFacts } from "../memory/jobs.mjs";
+import { markRoadmapItemDone } from "../memory/roadmap.mjs";
 import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isTransientFailure } from "./classify.mjs";
 import { preflight } from "./preflight.mjs";
@@ -140,6 +141,15 @@ async function runAttempts(job, ctx) {
   }
 }
 
+// Closes the roadmap item this job came from; bookkeeping never costs the outcome that was just written.
+function closeRoadmapItem(jobId, env) {
+  try {
+    markRoadmapItemDone(jobId, env);
+  } catch {
+    return;
+  }
+}
+
 // Writes the outcome of a finished job, together with the branch the pipeline registered in its state.
 function finalize(job, run, env) {
   const state = readRunState({ project: job.project, slug: run.facts.slug, env });
@@ -164,6 +174,7 @@ function finalize(job, run, env) {
     },
     env,
   );
+  if (written && run.outcome.status === "done") closeRoadmapItem(job.id, env);
   return { id: job.id, status: written ? run.outcome.status : "lost", prUrl: run.outcome.prUrl, attempts: run.attempt };
 }
 

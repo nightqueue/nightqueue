@@ -16,6 +16,7 @@ import {
   listJobs,
   truncateByCodePoint,
 } from "../memory/jobs.mjs";
+import { PROMPT_SOURCE_CONFLICT, queueRoadmapItem } from "../memory/roadmap.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
 import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
 import {
@@ -42,7 +43,7 @@ import { registerProject } from "./project.mjs";
 import { confirm } from "./prompt.mjs";
 
 const USAGE = {
-  add: "nightshift queue add [project] <prompt...> [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes]",
+  add: "nightshift queue add [project] <prompt...> [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--roadmap <id>]",
   status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle]",
   run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <n>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
@@ -212,7 +213,34 @@ function addedLine(job, willRun, env) {
   return `queued job #${job.id} for \`${job.project}\` (${countsByStatus(env).pending} pending). Start the batch: nightshift queue run`;
 }
 
-// Runs `queue add`, with the project taken from the arguments or from the current directory.
+// Priority, attempts and timeout of a `queue add`, each refused as a usage error when it is not a positive integer.
+function addLimits(values) {
+  return {
+    priority: requireInt("--priority", values.priority),
+    maxAttempts: requireInt("--max-attempts", values["max-attempts"]),
+    timeoutS: requireInt("--timeout", values.timeout),
+  };
+}
+
+// Queues the job the words of the command line describe, with the project taken from them or from the current directory.
+async function addFromPrompt(positionals, values, ctx) {
+  if (positionals.join(" ").trim() === "") throw new UserError(`missing argument; usage: ${USAGE.add}`);
+  const target = await resolveTarget(loadConfig(ctx.env, { warn: ctx.err }), positionals, values, ctx);
+  const prompt = target.words.join(" ").trim();
+  if (!prompt) throw new UserError(`missing argument; usage: ${USAGE.add}`);
+  if (target.fromCwd) ctx.out(`project \`${target.project.name}\` resolved from the current directory`);
+  return addJob({ project: target.project.name, prompt, ...addLimits(values) }, ctx.env);
+}
+
+// Queues the job a roadmap item builds; the item owns the project, so nothing is resolved from the current directory.
+async function addFromRoadmap(positionals, values, ctx) {
+  if (positionals.length) throw new UserError(PROMPT_SOURCE_CONFLICT);
+  const queued = await queueRoadmapItem({ id: requireInt("--roadmap", values.roadmap), ...addLimits(values) }, ctx.env);
+  ctx.out(`roadmap item #${queued.item.id} of \`${queued.item.project}\` is now \`queued\``);
+  return queued.job;
+}
+
+// Runs `queue add`, with the job built from the words of the command line or from the roadmap item `--roadmap` names.
 async function runAdd(argv, ctx) {
   if (argv.length === 1 && ADD_HELP_FLAGS.has(argv[0])) {
     ctx.out(ADD_HELP);
@@ -220,21 +248,10 @@ async function runAdd(argv, ctx) {
   }
   const { values, positionals } = parseAdd(argv);
   checkForegroundNeedsRun(values, USAGE.add);
-  if (positionals.join(" ").trim() === "") throw new UserError(`missing argument; usage: ${USAGE.add}`);
-  const target = await resolveTarget(loadConfig(ctx.env, { warn: ctx.err }), positionals, values, ctx);
-  const prompt = target.words.join(" ").trim();
-  if (!prompt) throw new UserError(`missing argument; usage: ${USAGE.add}`);
-  if (target.fromCwd) ctx.out(`project \`${target.project.name}\` resolved from the current directory`);
-  const job = addJob(
-    {
-      project: target.project.name,
-      prompt,
-      priority: requireInt("--priority", values.priority),
-      maxAttempts: requireInt("--max-attempts", values["max-attempts"]),
-      timeoutS: requireInt("--timeout", values.timeout),
-    },
-    ctx.env,
-  );
+  const job =
+    values.roadmap === undefined
+      ? await addFromPrompt(positionals, values, ctx)
+      : await addFromRoadmap(positionals, values, ctx);
   ctx.out(addedLine(job, values.run === true, ctx.env));
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }
@@ -246,6 +263,7 @@ const ADD_OPTIONS = {
   run: { type: "boolean" },
   foreground: { type: "boolean" },
   yes: { type: "boolean" },
+  roadmap: { type: "string" },
 };
 
 // Tells whether a token is written as an option, the only shape the edges of `queue add` read as one.
@@ -294,7 +312,7 @@ function splitAddArgv(argv) {
 function parseAdd(argv) {
   const { optionTokens, words } = splitAddArgv(argv);
   const { values } = parseCommand(optionTokens, ADD_OPTIONS);
-  checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
+  if (values.roadmap === undefined) checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
   return { values, positionals: words };
 }
 

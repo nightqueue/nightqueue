@@ -75,10 +75,10 @@ agent, print a line in this format first:
 
 ### Phase 0 — Interpretation, routing, worktree and tasks
 
-0.1. **Memory preflight (before anything else in Phase 0).** Call `lesson_recall`
-   (MCP `nightshift`) ONCE, with `project` = the current project, only to prove the server is
-   reachable — the return is not used here; the per-phase recall (below) is the one that feeds
-   the prompts. There is no memoryless mode.
+0.1. **Memory preflight (before anything else in Phase 0).** Call `lesson_recall` **and**
+   `decision_recall` (MCP `nightshift`) ONCE, with `project` = the current project, only to
+   prove the server is reachable — the return is not used here; the per-phase recall (below)
+   is the one that feeds the prompts. There is no memoryless mode.
 
    - **The tool does not exist in the host** (no MCP server `nightshift` connected, the host
      answers that there is no such tool) → **STOP the run right here**: print one short line —
@@ -87,6 +87,10 @@ agent, print a line in this format first:
    - **The tool answers** — including an EMPTY return or a read error → continue. An empty
      memory is the normal state of a fresh install: an empty recall only makes the phase omit
      the corresponding section.
+   - **`decision_recall` failed or is unavailable while `lesson_recall` answered** (an older
+     runtime) → continue WITHOUT a `## Standing decisions` section and record it as an open
+     item of Phase 8. An empty return is different: it means the project has no accepted
+     decision, and the section is simply omitted, with no open item.
 
 0.5. **Run resume (right after the preflight, before interpreting).** If the
    job context brought a block `RESUME CANDIDATE (slug \`<slug>\`)`, decide
@@ -163,7 +167,17 @@ agent, print a line in this format first:
    **Type:** [bug/error | feature/refactor]
    **Bug account:** [phone/email/user ID from the ticket that reproduces the bug — or "not identified"]
    **Key evidence:** [max 5 lines of the stack trace — omit if feature]
+
+   ## Standing decisions   [omit the whole section when the recall came back empty]
+   - #<number> <title> — <the `decision` field in 1 line>
    ```
+
+   **How `## Standing decisions` is filled in.** After compiling the Brief, call
+   `decision_recall` (MCP `nightshift`) with `project` = the current project and `query` =
+   the `**Affected area:**` plus the `**Objective:**` of the Brief. The tool only ever returns
+   accepted decisions, so a `proposed`, a `superseded` or a `rejected` one can never reach
+   this section. Take at most 5; a row marked `via: "fallback"` did not match the query and is
+   dropped. Nothing left after that (or the tool failed, per step 0.1) → omit the section.
 
    The **raw input is never passed to Explore**. Only the triager (Phase 1), on
    bugs, may receive the raw error/stack trace block — it is the only agent that
@@ -820,6 +834,10 @@ shallower or cheaper, that does not become an instruction: the architect decides
 own Step 1.5 and takes the trade-off to the user via `## Requires user confirmation` when the
 risk deserves it. A prompt that embeds design turns Step 1.5 into a rubber stamp — that is how
 a plan covered half a bug and went through 4 phases without anyone noticing.
+The `## Standing decisions` section of the prompt below is NOT an exception to this
+prohibition: a standing decision was already settled by the operator before this task, it is
+in the same family as `Delivery constraints:`, and it never names the mechanism, file or line
+where THIS task's solution goes.
 
 ```
 ## File handoff (contract — read first)
@@ -852,6 +870,13 @@ Project conventions:
 [Include only if memory_recall returned something:]
 ## Project memory
 - [M<id>] <key>: <value>
+
+[Include only if the Standing decisions section of the Brief exists:]
+## Standing decisions
+- #<number> <title> — <decision>
+These are the project's standing constraints, decided before this task. They are binding
+context, never a proposed solution: a design that contradicts one either follows the
+decision or takes the conflict to `## Requires user confirmation` naming its number.
 
 Repository: [CWD PATH]
 ```
@@ -890,6 +915,17 @@ Read. If it does not contain `## Implementation plan`, `## Assumptions`,
 brief, inform the user and terminate — do not proceed with an invented plan nor without
 assumptions, pre-mortem and explicit risks. On the insufficient-brief branch, apply the same
 gate_stop lesson-capture rule described at Phase 1's terminal gate, with `target: "architect"`.
+
+**Proposed decision (right after that gate, before any other gate and before Phase 4):** if
+`03-plan.md` contains a `## Proposed decision` block, call `decision_save` (MCP `nightshift`)
+with `project` = the current project, the block's **Title**, **Context**, **Decision** and
+**Consequences** fields and `status: "proposed"`; keep the returned `number` and carry it to
+Phase 7. Saving it here, and not at Phase 8, is what makes the decision survive a run that
+later stops at a gate. Save it ONCE per run: an architect relaunched (🔁) over the same plan
+does not produce a second `decision_save`. A failed `decision_save` NEVER blocks the run —
+it becomes an open item, exactly like a failed `pipeline_log`. The block is optional and most
+plans do not have one: no block → nothing is saved, nothing is recorded, and the run proceeds
+normally.
 
 **Coverage gate (bug):** also require `## Symptom coverage`, with at least one
 vector listed, each vector marked `covered` or `not-covered` **with a reason**, and
@@ -1656,6 +1692,10 @@ inform that the commit/PR was not generated.
      in fact ran and passed (verifier: tsc/lint/build/tests; QA: validated risks;
      runtime: the real acceptance — a payload, a screenshot of the emulator or a
      verdict on a device). Never list a test that did not run.
+   - **A decision proposed by this run is an open item of the body.** When Phase 3 saved a
+     `## Proposed decision` block, the `## Open items` section carries one line:
+     `` Proposed decision #<number>: <title> — recorded as `proposed`; accept or reject it with `decision_update`. ``
+     No block saved in Phase 3 → no line, and the section follows its usual rule.
    - **Check the assembled body BEFORE `gh pr create`** — the check runs over the
      string that goes to the command, never over the model in the template file: the
      six sections `## Summary`, `## Changes`, `## Tests run and passed`, `## QA`,

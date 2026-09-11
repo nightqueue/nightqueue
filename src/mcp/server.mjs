@@ -7,6 +7,16 @@ import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { projectByName, registrationOffer, resolveProject } from "../config/projects.mjs";
 import { loadConfig, saveConfig } from "../config/store.mjs";
+import {
+  DECISION_STATUSES,
+  decisionFullView,
+  decisionView,
+  getDecision,
+  listDecisions,
+  recallDecisions,
+  saveDecision,
+  updateDecision,
+} from "../memory/decisions.mjs";
 import { saveLessonDeduped } from "../memory/dedup.mjs";
 import { recallProjectIndex, saveProjectIndex } from "../memory/index.mjs";
 import {
@@ -23,6 +33,18 @@ import {
 } from "../memory/jobs.mjs";
 import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
+import {
+  getRoadmapItem,
+  listRoadmap,
+  PROMPT_SOURCE_CONFLICT,
+  PROMPT_SOURCE_MISSING,
+  queueRoadmapItem,
+  ROADMAP_HORIZONS,
+  ROADMAP_STATUSES,
+  roadmapItemView,
+  saveRoadmapItem,
+  updateRoadmapItem,
+} from "../memory/roadmap.mjs";
 import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { runnerPidfileState, runnerView } from "../queue/pidfile.mjs";
@@ -47,6 +69,8 @@ const SERVER_INSTRUCTIONS = [
   "Start a single job now, with `queue_run` and its `job_id`, only when the user asks for that one job now.",
   "Every job ends as an open pull request (`done`) or stopped at a gate with its reason in `notice_md`, which is answered with `queue_retry`.",
   "Call `queue_status` to see what is pending before suggesting a batch.",
+  "decisions are the project's standing constraints - recall them before proposing architecture and save one when the user settles a design question",
+  'the roadmap is where "what next" lives - read it before suggesting work, and queue from it with `roadmap_item_id`',
 ].join("\n");
 const RECALL_LIMIT = 8;
 const INDEX_LIMIT = 40;
@@ -54,6 +78,9 @@ const JOB_LIST_LIMIT = { min: 1, max: 50, fallback: 10 };
 
 const target = z.enum(LESSON_TARGETS).nullable().optional();
 const optionalText = z.string().nullable().optional();
+const optionalId = z.number().int().min(1).nullable().optional();
+const optionalDecisionStatus = z.enum(DECISION_STATUSES).nullable().optional();
+const optionalRoadmapStatus = z.enum(ROADMAP_STATUSES).nullable().optional();
 
 const phaseSchema = z.object({
   phase: z.string(),
@@ -83,6 +110,24 @@ function refuseRegistrationInsideJob(cwd, env) {
   );
 }
 
+// Project of the run this process belongs to; null outside a job, and null too when the job id names no job.
+function callerProject(own, env) {
+  return getJob(own, env)?.project ?? null;
+}
+
+// Refuses a row of ANOTHER project from inside an unattended run: a job may only rewrite the decisions and the roadmap of its own project.
+function requireOwnProject({ kind, id, project }, env) {
+  const own = callerJobId(env);
+  if (own === null) return;
+  const mine = callerProject(own, env);
+  if (mine !== null && mine === (project ?? null)) return;
+  throw new UserError(
+    `refusing to update ${kind} \`${id}\` from inside job \`${own}\`: it belongs to project \`${project ?? "global"}\`, ` +
+      `not \`${mine ?? "unknown"}\`; an unattended run may only update its own project, ` +
+      "so ask the operator to do it outside the queue",
+  );
+}
+
 // Requires the absolute working directory of the caller, because the directory of this server is never the user's.
 function requireCwd(cwd) {
   const path = typeof cwd === "string" ? cwd.trim() : "";
@@ -94,9 +139,16 @@ function requireCwd(cwd) {
   return path;
 }
 
+// The registered NAME the caller asked for, or null when it named no project at all.
+function namedProject(project, env) {
+  if (typeof project !== "string" || project.trim() === "") return null;
+  return requireProjectName(project, env);
+}
+
 // Project the job goes to, or the offer to register the directory of the caller when nothing is registered for it.
 function resolveQueueTarget({ project, cwd }, env) {
-  if (typeof project === "string" && project.trim() !== "") return { project: requireProjectName(project, env) };
+  const named = namedProject(project, env);
+  if (named) return { project: named };
   const path = requireCwd(cwd);
   const config = loadConfig(env, { warn: () => {} });
   const resolved = resolveProject(config, { cwd: path });
@@ -131,6 +183,30 @@ async function registerOffer(offer, env) {
   return project;
 }
 
+// Requires exactly one source for the prompt of a job: the text itself, or the roadmap item that builds it.
+function wantsRoadmapItem(args) {
+  const hasPrompt = typeof args.prompt === "string" && args.prompt.trim() !== "";
+  const hasItem = args.roadmap_item_id !== undefined && args.roadmap_item_id !== null;
+  if (hasPrompt && hasItem) throw new UserError(PROMPT_SOURCE_CONFLICT);
+  if (!hasPrompt && !hasItem) throw new UserError(PROMPT_SOURCE_MISSING);
+  return hasItem;
+}
+
+// The answer of `queue_add`: the job it recorded, and the roadmap item behind it when there is one.
+function queuedAnswer({ job, registered = null, roadmapItemId = null }, env) {
+  const pending = countsByStatus(env).pending;
+  const done = registered ? `registered project \`${registered.name}\` (${registered.path}). ` : "";
+  return {
+    ok: true,
+    id: job.id,
+    project: job.project,
+    priority: job.priority,
+    timeoutS: job.timeoutS,
+    ...(roadmapItemId === null ? {} : { roadmapItemId }),
+    hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending). Start the batch with queue_run when you are ready.`,
+  };
+}
+
 // Clamps the size of a job listing into the accepted window.
 function jobLimit(limit) {
   if (!Number.isInteger(limit)) return JOB_LIST_LIMIT.fallback;
@@ -160,7 +236,7 @@ function queueHint({ activeJobs, counts, runner }) {
   return `${pendingJobs(counts.pending)} waiting — start the batch with queue_run.`;
 }
 
-// The eleven tools of the plugin contract, with the parameter names the plugin actually sends.
+// The eighteen tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env) {
   return [
     {
@@ -303,7 +379,8 @@ function toolDefinitions(env) {
         description:
           "Enqueues an unattended /nightshift:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
           "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. " +
-          "With `project` omitted, `cwd` (the absolute working directory of the caller) resolves the project. When no project is registered for it, the answer is `needs_registration`: ask the user to confirm, then call again with the same `cwd` and `register: true`. Registration never happens without `register: true`.",
+          "With `project` omitted, `cwd` (the absolute working directory of the caller) resolves the project. When no project is registered for it, the answer is `needs_registration`: ask the user to confirm, then call again with the same `cwd` and `register: true`. Registration never happens without `register: true`. " +
+          "With `roadmap_item_id` and no `prompt`, the job prompt is built from that roadmap item, its linked decision and the accepted decisions related to it; the item is marked `queued` and flips to `done` when the job finishes.",
         inputSchema: {
           project: z.string().nullable().optional(),
           cwd: z
@@ -318,15 +395,31 @@ function toolDefinitions(env) {
             .describe("Registers the git repository of `cwd` as a project before queueing. Only ever sent after the user confirmed it."),
           prompt: z
             .string()
+            .nullable()
+            .optional()
             .describe(
               "The whole request, as prose. One self-contained deliverable that can be reviewed and merged on its own; large work goes here as ONE prompt with numbered stages (`Stages: 1) ... 2) ...`), never as several jobs that depend on each other.",
             ),
+          roadmap_item_id: optionalId,
           priority: z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).nullable().optional(),
           max_attempts: z.number().int().min(MAX_ATTEMPTS_RANGE.min).max(MAX_ATTEMPTS_RANGE.max).nullable().optional(),
           timeout_s: z.number().int().min(TIMEOUT_RANGE.min).max(TIMEOUT_RANGE.max).nullable().optional(),
         },
       },
       handler: async (args) => {
+        if (wantsRoadmapItem(args)) {
+          const queued = await queueRoadmapItem(
+            {
+              id: args.roadmap_item_id,
+              project: namedProject(args.project, env),
+              priority: args.priority,
+              maxAttempts: args.max_attempts,
+              timeoutS: args.timeout_s,
+            },
+            env,
+          );
+          return queuedAnswer({ job: queued.job, roadmapItemId: queued.item.id }, env);
+        }
         const target = resolveQueueTarget(args, env);
         if (target.offer && args.register !== true) return needsRegistration(target);
         const registered = target.offer ? await registerOffer(target.offer, env) : null;
@@ -340,16 +433,7 @@ function toolDefinitions(env) {
           },
           env,
         );
-        const pending = countsByStatus(env).pending;
-        const done = registered ? `registered project \`${registered.name}\` (${registered.path}). ` : "";
-        return {
-          ok: true,
-          id: job.id,
-          project: job.project,
-          priority: job.priority,
-          timeoutS: job.timeoutS,
-          hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending). Start the batch with queue_run when you are ready.`,
-        };
+        return queuedAnswer({ job, registered }, env);
       },
     },
     {
@@ -424,6 +508,172 @@ function toolDefinitions(env) {
         return { ok: true, job, runDir, runner: started ? { pid: started.pid, logPath: started.logPath } : null };
       },
     },
+    {
+      name: "decision_save",
+      config: {
+        description:
+          "Records one architecture decision of a project: the context that forced it, what was decided and what it costs. " +
+          "Numbered per project and `accepted` unless another status is given. `project` is the registered NAME, never a path.",
+        inputSchema: {
+          project: z.string(),
+          title: z.string(),
+          context: z.string(),
+          decision: z.string(),
+          consequences: optionalText,
+          status: optionalDecisionStatus,
+        },
+      },
+      handler: async (args) => {
+        const saved = saveDecision(
+          {
+            project: requireProjectName(args.project, env),
+            title: args.title,
+            context: args.context,
+            decision: args.decision,
+            consequences: args.consequences,
+            status: args.status,
+          },
+          env,
+        );
+        return { ok: true, id: saved.id, number: saved.number };
+      },
+    },
+    {
+      name: "decision_update",
+      config: {
+        description:
+          "Changes a decision by its `id`: accept or reject a proposed one, correct its text, or point `superseded_by` at the decision that replaced it. " +
+          "Only the fields present are touched; an explicit `null` is treated exactly like an absent one.",
+        inputSchema: {
+          id: z.number().int().min(1),
+          title: optionalText,
+          context: optionalText,
+          decision: optionalText,
+          consequences: optionalText,
+          status: optionalDecisionStatus,
+          superseded_by: optionalId,
+        },
+      },
+      handler: async (args) => {
+        const current = getDecision(args.id, env);
+        if (current) requireOwnProject({ kind: "decision", id: args.id, project: current.project }, env);
+        const row = updateDecision(
+          args.id,
+          {
+            title: args.title,
+            context: args.context,
+            decision: args.decision,
+            consequences: args.consequences,
+            status: args.status,
+            superseded_by: args.superseded_by,
+          },
+          env,
+        );
+        return { ok: true, decision: decisionView(row) };
+      },
+    },
+    {
+      name: "decision_list",
+      config: {
+        description:
+          "The decisions log of a project in numbering order, optionally filtered by status. Compact rows: the full text of one decision comes from `decision_recall`.",
+        inputSchema: { project: z.string(), status: optionalDecisionStatus },
+      },
+      handler: async (args) => {
+        const project = requireProjectName(args.project, env);
+        return { project, decisions: listDecisions({ project, status: args.status }, env).map(decisionView) };
+      },
+    },
+    {
+      name: "decision_recall",
+      config: {
+        description:
+          "Standing constraints of a project, before proposing architecture. Only accepted decisions come back, with their text untruncated, because this feeds prompts. " +
+          'An item with via "fallback" did not match the query: it is recent context, never an answer.',
+        inputSchema: { project: z.string(), query: optionalText, limit: z.number().int().min(1).max(20).nullable().optional() },
+      },
+      handler: async (args) => {
+        const rows = await recallDecisions(
+          {
+            project: requireProjectName(args.project, env),
+            query: args.query,
+            limit: Number.isInteger(args.limit) ? args.limit : RECALL_LIMIT,
+          },
+          env,
+        );
+        return rows.map(decisionFullView);
+      },
+    },
+    {
+      name: "roadmap_save",
+      config: {
+        description:
+          "Adds one intent to the roadmap of a project, at the end of its horizon (`now`, `next` or `later`). `decision_id` links it to the decision that motivated it.",
+        inputSchema: {
+          project: z.string(),
+          horizon: z.enum(ROADMAP_HORIZONS),
+          title: z.string(),
+          detail: optionalText,
+          decision_id: optionalId,
+        },
+      },
+      handler: async (args) => {
+        const saved = saveRoadmapItem(
+          {
+            project: requireProjectName(args.project, env),
+            horizon: args.horizon,
+            title: args.title,
+            detail: args.detail,
+            decision_id: args.decision_id,
+          },
+          env,
+        );
+        return { ok: true, id: saved.id, position: saved.position };
+      },
+    },
+    {
+      name: "roadmap_update",
+      config: {
+        description:
+          "Changes a roadmap item by its `id`: its text, its horizon, its position inside the horizon, its `decision_id`, or its status. " +
+          "`queued` is not one of the statuses that can be set by hand: an item becomes `queued` only through `queue_add` with `roadmap_item_id`.",
+        inputSchema: {
+          id: z.number().int().min(1),
+          horizon: z.enum(ROADMAP_HORIZONS).nullable().optional(),
+          title: optionalText,
+          detail: optionalText,
+          status: optionalRoadmapStatus,
+          position: optionalId,
+          decision_id: optionalId,
+        },
+      },
+      handler: async (args) => {
+        const current = getRoadmapItem(args.id, env);
+        if (current) requireOwnProject({ kind: "roadmap item", id: args.id, project: current.project }, env);
+        const row = updateRoadmapItem(
+          args.id,
+          {
+            horizon: args.horizon,
+            title: args.title,
+            detail: args.detail,
+            status: args.status,
+            position: args.position,
+            decision_id: args.decision_id,
+          },
+          env,
+        );
+        return { ok: true, item: roadmapItemView(row) };
+      },
+    },
+    {
+      name: "roadmap_get",
+      config: {
+        description:
+          "The whole roadmap of a project: the `now`, `next` and `later` horizons in order, each item with its position, its linked decision and the live status of the job it was queued as.",
+        inputSchema: { project: z.string() },
+      },
+      handler: async (args) => listRoadmap(requireProjectName(args.project, env), env),
+    },
   ];
 }
 
@@ -436,7 +686,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the eleven tools of the plugin contract.
+// Builds the MCP server with the eighteen tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
   for (const tool of toolDefinitions(env)) {

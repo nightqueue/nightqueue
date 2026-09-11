@@ -27,6 +27,47 @@ const LESSON_COLUMNS = [
   "embedding_model",
 ];
 
+const DECISION_COLUMNS = [
+  "id",
+  "project",
+  "number",
+  "title",
+  "context",
+  "decision",
+  "consequences",
+  "status",
+  "superseded_by",
+  "created_at",
+  "updated_at",
+  "embedding",
+  "embedding_model",
+];
+
+const ROADMAP_COLUMNS = [
+  "id",
+  "project",
+  "horizon",
+  "title",
+  "detail",
+  "status",
+  "position",
+  "decision_id",
+  "job_id",
+  "created_at",
+  "updated_at",
+];
+
+// Everything a database written by the previous schema version does NOT have yet.
+const DOWNGRADE_TO_V2 = `
+DROP TRIGGER decisions_fts_ai;
+DROP TRIGGER decisions_fts_ad;
+DROP TRIGGER decisions_fts_au;
+DROP TABLE decisions_fts;
+DROP TABLE decisions;
+DROP TABLE roadmap_items;
+PRAGMA user_version = 2;
+`;
+
 const JOB_COLUMNS = [
   "id",
   "project",
@@ -77,16 +118,81 @@ test("the migration is idempotent and keeps the data across a reopen", (t) => {
   const env = makeHome(t, "db-migrate");
   const first = openDb(env);
   const id = insertLesson(first, { title: "the migration keeps the rows" });
-  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 2);
+  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 3);
   assert.deepEqual(columnsOf(first, "lessons"), LESSON_COLUMNS);
   closeDb(env);
 
   const second = openDb(env);
   assert.notEqual(second, first);
-  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 2);
+  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 3);
   assert.deepEqual(columnsOf(second, "lessons"), LESSON_COLUMNS);
   assert.equal(second.prepare("SELECT title FROM lessons WHERE id = ?").get(id).title, "the migration keeps the rows");
   assert.deepEqual(matchIds(second, "lessons_fts", '"migration"'), [id]);
+});
+
+test("the decisions and roadmap tables are created with their columns, defaults and indexes", (t) => {
+  const env = makeHome(t, "db-decisions");
+  const db = openDb(env);
+  assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
+  assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
+  const decisionIndexes = db.prepare("PRAGMA index_list(decisions)").all();
+  const unique = decisionIndexes.find((index) => index.name === "decisions_number_idx");
+  assert.ok(unique, `number index missing: ${decisionIndexes.map((index) => index.name).join(", ")}`);
+  assert.equal(unique.unique, 1);
+  const roadmapIndexes = db.prepare("PRAGMA index_list(roadmap_items)").all().map((index) => index.name);
+  assert.ok(roadmapIndexes.includes("roadmap_items_order_idx"), `order index missing: ${roadmapIndexes.join(", ")}`);
+  assert.ok(roadmapIndexes.includes("roadmap_items_job_idx"), `job index missing: ${roadmapIndexes.join(", ")}`);
+
+  db.prepare("INSERT INTO decisions (project, number, title, context, decision) VALUES (?, 1, ?, ?, ?)").run(
+    "alpha",
+    "the queue owns the worktree",
+    "two runners raced on one worktree",
+    "one worktree per job",
+  );
+  assert.equal(db.prepare("SELECT status FROM decisions").get().status, "accepted");
+  assert.throws(
+    () => db.prepare("INSERT INTO decisions (project, number, title, context, decision, status) VALUES (?, 2, ?, ?, ?, ?)").run("alpha", "t", "c", "d", "maybe"),
+    /CHECK constraint failed/,
+  );
+
+  db.prepare("INSERT INTO roadmap_items (project, horizon, title, position) VALUES (?, ?, ?, 1)").run(
+    "alpha",
+    "now",
+    "ship the roadmap",
+  );
+  assert.equal(db.prepare("SELECT status FROM roadmap_items").get().status, "open");
+  assert.throws(
+    () => db.prepare("INSERT INTO roadmap_items (project, horizon, title, position) VALUES (?, ?, ?, 1)").run("alpha", "someday", "t"),
+    /CHECK constraint failed/,
+  );
+});
+
+test("the migration from user_version 2 keeps every row and adds the decisions schema", (t) => {
+  const env = makeHome(t, "db-migrate-v2");
+  const first = openDb(env);
+  const lesson = insertLesson(first, { title: "the migration keeps the rows" });
+  first.prepare("INSERT INTO jobs (project, prompt) VALUES (?, ?)").run("alpha", "fix the worker");
+  first.exec(DOWNGRADE_TO_V2);
+  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 2);
+  closeDb(env);
+
+  for (const pass of [1, 2, 3]) {
+    const db = openDb(env);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 3, `pass ${pass}`);
+    assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
+    assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
+    assert.equal(db.prepare("SELECT title FROM lessons WHERE id = ?").get(lesson).title, "the migration keeps the rows");
+    assert.deepEqual(matchIds(db, "lessons_fts", '"migration"'), [lesson]);
+    assert.equal(db.prepare("SELECT prompt FROM jobs").get().prompt, "fix the worker");
+    assert.equal(db.prepare("SELECT COUNT(*) AS total FROM decisions").get().total, 0);
+    closeDb(env);
+  }
+
+  const db = openDb(env);
+  const result = db
+    .prepare("INSERT INTO decisions (project, number, title, context, decision) VALUES (?, 1, ?, ?, ?)")
+    .run("alpha", "zebracrossing after the migration", "the mirror was created empty", "mirror it");
+  assert.deepEqual(matchIds(db, "decisions_fts", '"zebracrossing"'), [Number(result.lastInsertRowid)]);
 });
 
 test("the jobs table of the queue is created with its columns, defaults and claim indexes", (t) => {

@@ -20,7 +20,7 @@ async function importSqlite() {
 
 const { DatabaseSync } = await importSqlite();
 
-export const DB_USER_VERSION = 2;
+export const DB_USER_VERSION = 3;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lessons (
@@ -112,6 +112,34 @@ CREATE TABLE IF NOT EXISTS pipeline_phases (
   note TEXT,
   FOREIGN KEY (run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project TEXT,
+  number INTEGER,
+  title TEXT NOT NULL,
+  context TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  consequences TEXT,
+  status TEXT NOT NULL DEFAULT 'accepted' CHECK(status IN ('proposed','accepted','superseded','rejected')),
+  superseded_by INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  embedding BLOB,
+  embedding_model TEXT
+);
+CREATE TABLE IF NOT EXISTS roadmap_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project TEXT,
+  horizon TEXT NOT NULL CHECK(horizon IN ('now','next','later')),
+  title TEXT NOT NULL,
+  detail TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','queued','done','dropped')),
+  position INTEGER NOT NULL,
+  decision_id INTEGER,
+  job_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 const EVOLVING_COLUMNS = [
@@ -138,6 +166,9 @@ CREATE INDEX IF NOT EXISTS pipeline_runs_project_idx ON pipeline_runs(project, c
 CREATE INDEX IF NOT EXISTS pipeline_phases_run_idx ON pipeline_phases(run_id, seq);
 CREATE INDEX IF NOT EXISTS jobs_claim_idx ON jobs(status, priority, created_at);
 CREATE INDEX IF NOT EXISTS jobs_project_slug_idx ON jobs(project, slug);
+CREATE UNIQUE INDEX IF NOT EXISTS decisions_number_idx ON decisions(project, number);
+CREATE INDEX IF NOT EXISTS roadmap_items_order_idx ON roadmap_items(project, horizon, position);
+CREATE INDEX IF NOT EXISTS roadmap_items_job_idx ON roadmap_items(job_id);
 `;
 
 const FTS = `
@@ -172,6 +203,24 @@ END;
 CREATE TRIGGER IF NOT EXISTS memory_fts_au AFTER UPDATE OF key, value ON memory BEGIN
   INSERT INTO memory_fts(memory_fts, rowid, key, value) VALUES ('delete', old.id, old.key, old.value);
   INSERT INTO memory_fts(rowid, key, value) VALUES (new.id, new.key, new.value);
+END;
+CREATE VIRTUAL TABLE IF NOT EXISTS decisions_fts USING fts5(
+  title, context, decision, consequences,
+  content='decisions', content_rowid='id'
+);
+CREATE TRIGGER IF NOT EXISTS decisions_fts_ai AFTER INSERT ON decisions BEGIN
+  INSERT INTO decisions_fts(rowid, title, context, decision, consequences)
+  VALUES (new.id, new.title, new.context, new.decision, new.consequences);
+END;
+CREATE TRIGGER IF NOT EXISTS decisions_fts_ad AFTER DELETE ON decisions BEGIN
+  INSERT INTO decisions_fts(decisions_fts, rowid, title, context, decision, consequences)
+  VALUES ('delete', old.id, old.title, old.context, old.decision, old.consequences);
+END;
+CREATE TRIGGER IF NOT EXISTS decisions_fts_au AFTER UPDATE OF title, context, decision, consequences ON decisions BEGIN
+  INSERT INTO decisions_fts(decisions_fts, rowid, title, context, decision, consequences)
+  VALUES ('delete', old.id, old.title, old.context, old.decision, old.consequences);
+  INSERT INTO decisions_fts(rowid, title, context, decision, consequences)
+  VALUES (new.id, new.title, new.context, new.decision, new.consequences);
 END;
 `;
 
