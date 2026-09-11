@@ -352,13 +352,13 @@ const COLUMNS = [
 
 // Icon and ANSI color of each status; the icon is always printed, the color only on a real terminal.
 const STATUS_STYLE = {
-  running: { icon: "●", color: "33" },
+  running: { icon: "●", color: "91" },
   done: { icon: "✓", color: "32" },
-  gate: { icon: "⚑", color: "35" },
+  gate: { icon: "⚑", color: "33" },
   failed: { icon: "✗", color: "31" },
   cancelled: { icon: "⊘", color: "2" },
   pending: { icon: "○", color: "2" },
-  merged: { icon: "⇡", color: "2;32" },
+  merged: { icon: "⇡", color: "35" },
 };
 
 // Paints a text with an ANSI code, or leaves it alone when color is off.
