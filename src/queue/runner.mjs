@@ -8,6 +8,7 @@ import { countActiveJobs, countAttempt, countsByStatus, finishJob, peekNextJob, 
 import { markRoadmapItemDone } from "../memory/roadmap.mjs";
 import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isTransientFailure } from "./classify.mjs";
+import { refreshMergedJobs } from "./merged.mjs";
 import { preflight } from "./preflight.mjs";
 import { decideResume, isSafeSegment, readRunState } from "./resume.mjs";
 import { buildPrompt, cliEntrypoint, IDLE_TIMEOUT_S, spawnClaude } from "./spawn.mjs";
@@ -34,6 +35,7 @@ const DEFAULT_DEPS = {
   resolveBinImpl: undefined,
   stopSignalImpl: null,
   idleTimeoutS: IDLE_TIMEOUT_S,
+  refreshMergedImpl: refreshMergedJobs,
 };
 
 // Merges the injected seams over the real implementations; the ownership poll is the configured heartbeat.
@@ -224,6 +226,7 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
   const cap = concurrencyCap(env);
   if (dry) return dryReport({ jobId, cap, env });
   const ctx = { env, deps: withDefaults(deps, env), state: { stopping: false } };
+  ctx.deps.refreshMergedImpl({ env });
   const uninstall = installShutdown(ctx.state);
   const limit = localLimit(max, cap);
   const processed = [];

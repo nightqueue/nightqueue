@@ -29,6 +29,8 @@ const OWN_ENV_KEYS = [
   "NIGHTSHIFT_FAKE_GH_STATE",
   "NIGHTSHIFT_FAKE_GH_TOKEN",
   "NIGHTSHIFT_FAKE_GH_LOGIN",
+  "NIGHTSHIFT_FAKE_GH_PR_STATE",
+  "NIGHTSHIFT_FAKE_GH_PR_SHA",
   "NIGHTSHIFT_NPM_BIN",
   "NIGHTSHIFT_FAKE_NPM_LOG",
   "NIGHTSHIFT_FAKE_NPM_SOURCE",
@@ -36,6 +38,7 @@ const OWN_ENV_KEYS = [
   "NIGHTSHIFT_FAKE_NPM_AUDIT",
   "NIGHTSHIFT_FAKE_NPM_LATEST",
   "NIGHTSHIFT_NO_UPDATE_CHECK",
+  "NIGHTSHIFT_NO_PR_CHECK",
   "CLAUDE_CONFIG_DIR",
 ];
 
@@ -83,7 +86,7 @@ function readCalls(log) {
     .map((line) => JSON.parse(line));
 }
 
-// Environment variables that keep any process away from the real host: isolated config dir, the fake claude and gh CLIs, and the update check off so nothing reaches the registry.
+// Environment variables that keep any process away from the real host: isolated config dir, the fake claude and gh CLIs, and the update and pull request checks off so nothing reaches the network.
 export function isolatedHostVars(dir) {
   const configDir = join(dir, "claude-config");
   const userHome = join(dir, "user-home");
@@ -93,6 +96,7 @@ export function isolatedHostVars(dir) {
     HOME: userHome,
     SHELL: "/bin/zsh",
     NIGHTSHIFT_NO_UPDATE_CHECK: "1",
+    NIGHTSHIFT_NO_PR_CHECK: "1",
     CLAUDE_CONFIG_DIR: configDir,
     NIGHTSHIFT_NPM_BIN: installFakeBin(dir, FAKE_NPM_SOURCE, "npm"),
     NIGHTSHIFT_FAKE_NPM_LOG: join(dir, "npm-calls.log"),

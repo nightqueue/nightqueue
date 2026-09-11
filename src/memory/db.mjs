@@ -20,7 +20,7 @@ async function importSqlite() {
 
 const { DatabaseSync } = await importSqlite();
 
-export const DB_USER_VERSION = 3;
+export const DB_USER_VERSION = 4;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lessons (
@@ -98,7 +98,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   cost_usd REAL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   started_at TEXT,
-  finished_at TEXT
+  finished_at TEXT,
+  merged_at TEXT,
+  merge_sha TEXT,
+  pr_checked_at TEXT
 );
 CREATE TABLE IF NOT EXISTS pipeline_phases (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -155,6 +158,9 @@ const EVOLVING_COLUMNS = [
   ["lessons", "embedding_model", "TEXT"],
   ["memory", "embedding", "BLOB"],
   ["memory", "embedding_model", "TEXT"],
+  ["jobs", "merged_at", "TEXT"],
+  ["jobs", "merge_sha", "TEXT"],
+  ["jobs", "pr_checked_at", "TEXT"],
 ];
 
 const INDEXES = `
@@ -352,6 +358,13 @@ export function closeDb(env = process.env) {
 // Timestamp of SQLite ("YYYY-MM-DD HH:MM:SS", UTC) as ISO 8601.
 export function sqliteToIso(ts) {
   return ts ? `${String(ts).replace(" ", "T")}Z` : null;
+}
+
+// Instant (Date or ISO 8601 text) as the timestamp SQLite stores ("YYYY-MM-DD HH:MM:SS", UTC), or null when it cannot be read.
+export function isoToSqlite(value) {
+  const date = value instanceof Date ? value : new Date(String(value ?? ""));
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 19).replace("T", " ");
 }
 
 // Tells whether every value of a vector is finite, because a single NaN silently kills every cosine.

@@ -18,6 +18,7 @@ const OWN_ENV_KEYS = [
   "NIGHTSHIFT_JOB_HOME",
   "NIGHTSHIFT_JOB_CLAUDE_DIR",
   "NIGHTSHIFT_NO_UPDATE_CHECK",
+  "NIGHTSHIFT_NO_PR_CHECK",
 ];
 
 // Creates a temporary directory removed at the end of the test.
@@ -34,6 +35,7 @@ export function makeHome(t, name, { embed = false } = {}) {
   for (const key of OWN_ENV_KEYS) delete env[key];
   env.NIGHTSHIFT_HOME = home;
   env.NIGHTSHIFT_NO_UPDATE_CHECK = "1";
+  env.NIGHTSHIFT_NO_PR_CHECK = "1";
   if (!embed) env.NIGHTSHIFT_EMBED_DISABLED = "1";
   t.after(() => closeDb(env));
   return env;

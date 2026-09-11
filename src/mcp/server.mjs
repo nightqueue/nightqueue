@@ -47,6 +47,7 @@ import {
 } from "../memory/roadmap.mjs";
 import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
+import { refreshMergedJobs } from "../queue/merged.mjs";
 import { runnerPidfileState, runnerView } from "../queue/pidfile.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { launchDetachedRunner } from "../queue/runner.mjs";
@@ -448,6 +449,7 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
+        refreshMergedJobs({ env });
         if (Number.isInteger(args.job_id)) {
           const job = jobView(getJob(args.job_id, env));
           if (!job) throw new UserError(`unknown job \`${args.job_id}\``);

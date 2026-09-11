@@ -8,6 +8,20 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A terminal `merged` status for the queue: a job that delivered a pull request
+  is checked with `gh pr view` and becomes `⇡ merged` once that pull request is
+  merged, carrying the instant of the merge in `merged_at` and the commit in
+  `merge_sha`, both in `queue status <id>` and in `--json`; a closed or open
+  pull request only updates `pr_checked_at` and the job stays `done`. The check
+  runs at the start of `queue status` (every `--follow` tick included), of every
+  runner cycle and of the MCP `queue_status`, over at most ten jobs and at most
+  once per job every five minutes, never inside an unattended job session and
+  never in a hook. It fails open and in silence - with `gh` missing, logged out
+  or offline nothing is written, nothing is printed and the command still exits
+  `0` - and `NIGHTSHIFT_NO_PR_CHECK=1` switches it off. `queue cancel` and
+  `queue retry` refuse a `merged` job, and `queue retry` still accepts only
+  `failed`, `cancelled` and `gate`.
+
 - Decisions and roadmap, per project and private to the home: a numbered
   decisions log (context, decision, consequences and a status among `proposed`,
   `accepted`, `superseded` and `rejected`) and a `now`/`next`/`later` roadmap,

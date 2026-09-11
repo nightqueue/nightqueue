@@ -1,7 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 import { openDb, sqliteToIso, withWriteRetry } from "./db.mjs";
 
-export const JOB_STATUSES = ["pending", "running", "done", "gate", "failed", "cancelled"];
+export const JOB_STATUSES = ["pending", "running", "done", "gate", "failed", "cancelled", "merged"];
 export const PRIORITY_RANGE = { min: 1, max: 9, fallback: 5 };
 export const MAX_ATTEMPTS_RANGE = { min: 1, max: 10, fallback: 1 };
 export const TIMEOUT_RANGE = { min: 60, max: 86400, fallback: 14400 };
@@ -49,6 +49,7 @@ const JOB_VIEW_COLUMNS = [
   "slug",
   "branch",
   "pr_url",
+  "merge_sha",
   "worker",
   "operator_note",
   "tokens_in",
@@ -57,7 +58,7 @@ const JOB_VIEW_COLUMNS = [
   "cache_creation",
   "cost_usd",
 ];
-const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until"];
+const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "merged_at", "pr_checked_at"];
 const JOB_VIEW_TRUNCATED = ["notice_md", "result"];
 const VIEW_TEXT_LIMIT = 500;
 const LIST_LIMIT_RANGE = { min: 1, max: 50, fallback: 10 };
@@ -437,6 +438,33 @@ export function getJob(id, env = process.env) {
 export function listJobs({ limit } = {}, env = process.env) {
   const clamped = optionalRangedInt("limit", limit, LIST_LIMIT_RANGE);
   return openDb(env).prepare("SELECT * FROM jobs ORDER BY id DESC LIMIT ?").all(clamped);
+}
+
+// Jobs delivered with a pull request never checked or last checked before the cutoff, staler first so every one is reached.
+export function listMergeCandidates({ cutoff, limit } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `SELECT id, pr_url FROM jobs
+      WHERE status = 'done' AND pr_url IS NOT NULL AND (pr_checked_at IS NULL OR pr_checked_at < ?)
+      ORDER BY pr_checked_at IS NOT NULL, pr_checked_at ASC, id DESC LIMIT ?`,
+  );
+  return statement.all(requireText("cutoff", cutoff), optionalRangedInt("limit", limit, LIST_LIMIT_RANGE));
+}
+
+// Turns a delivered job into a merged one, leaving what the run itself wrote untouched; false means the row moved on.
+export function markJobMerged(id, { mergedAt, mergeSha, checkedAt } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs SET status = 'merged', merged_at = ?, merge_sha = ?, pr_checked_at = ?
+      WHERE id = ? AND status = 'done'`,
+  );
+  const values = [requireText("merged_at", mergedAt), optionalText(mergeSha), requireText("pr_checked_at", checkedAt), requireId(id)];
+  return withWriteRetry(() => statement.run(...values)).changes === 1;
+}
+
+// Records that the pull request of a delivered job was checked and is not merged; false means the row moved on.
+export function stampPrChecked(id, { checkedAt } = {}, env = process.env) {
+  const statement = openDb(env).prepare("UPDATE jobs SET pr_checked_at = ? WHERE id = ? AND status = 'done'");
+  const values = [requireText("pr_checked_at", checkedAt), requireId(id)];
+  return withWriteRetry(() => statement.run(...values)).changes === 1;
 }
 
 // Counts the jobs of every status, including the statuses with no row at all.

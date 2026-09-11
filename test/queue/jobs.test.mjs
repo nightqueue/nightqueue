@@ -339,6 +339,11 @@ test("the public view drops the prompt, truncates the free text by code point an
   assert.equal(view.result, "short result");
   assert.match(view.created_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
   assert.equal(view.finished_at, null);
+  assert.deepEqual(
+    { merged_at: view.merged_at, merge_sha: view.merge_sha, pr_checked_at: view.pr_checked_at },
+    { merged_at: null, merge_sha: null, pr_checked_at: null },
+    "the view of a job hides the merge columns",
+  );
   assert.equal(jobView(null), null);
 });
 
@@ -350,5 +355,5 @@ test("the listing is newest first with a clamped limit, and the counts cover eve
   assert.throws(() => listJobs({ limit: 0 }, env), /invalid `limit`/);
   assert.throws(() => listJobs({ limit: 500 }, env), /invalid `limit`/);
   claimJobById(ids[0], { worker: WORKER, cap: CAP }, env);
-  assert.deepEqual(countsByStatus(env), { pending: 2, running: 1, done: 0, gate: 0, failed: 0, cancelled: 0 });
+  assert.deepEqual(countsByStatus(env), { pending: 2, running: 1, done: 0, gate: 0, failed: 0, cancelled: 0, merged: 0 });
 });

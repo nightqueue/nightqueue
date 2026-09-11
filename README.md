@@ -777,7 +777,7 @@ another runner.
 
 **`queue status` is a table, and `--follow` keeps it live.** One row per job with
 the columns of the cockpit: `ID STATUS DURATION TOKENS PROJECT SLUG/LAST PR`.
-`STATUS` carries an icon (`● running`, `✓ done`, `⚑ gate`, `✗ failed`,
+`STATUS` carries an icon (`● running`, `✓ done`, `⇡ merged`, `⚑ gate`, `✗ failed`,
 `⊘ cancelled`, `○ pending`) and a color on a terminal. `DURATION` is how long a
 running job has been up (from its own `started_at`) or how long a finished one
 took; `TOKENS` is what it spent so far (`374k`, `1.2M`). `SLUG/LAST` is the last
@@ -823,9 +823,10 @@ narration - the exit code stays `0` and a stack trace is never printed. `NIGHTSH
 traces every poll on stderr (`follow: t=<iso> size=<n> offset=<n> lines=<n>`),
 which is what to turn on if the output ever stalls again.
 
-**The six states.** A job is `pending` while it waits, `running` while a runner
-owns it under a lease, and then one of four final states: `done` (the run
-delivered a pull request URL), `gate` (the pipeline stopped asking for a human
+**The seven states.** A job is `pending` while it waits, `running` while a runner
+owns it under a lease, and then one of five final states: `done` (the run
+delivered a pull request URL), `merged` (that pull request was merged on
+GitHub), `gate` (the pipeline stopped asking for a human
 decision, or ended with nothing to deliver), `failed` (a non-zero exit, a
 timeout, or an orphan that had already spent its attempts) and `cancelled`
 (cancelled by the operator, or stopped while running). A job in `gate` ALWAYS
@@ -833,9 +834,28 @@ carries the reason it stopped in `notice_md`: without a `## Notice` the reason i
 the whole final text of the orchestrator, and a run that ended saying nothing at
 all is `failed` with a fixed warning instead of a gate nobody can read.
 
+**`done` becomes `merged` by itself.** A job that delivered a pull request is
+asked about with `gh pr view <url> --json state,mergedAt,mergeCommit`: a merged
+one becomes `merged` and keeps the instant of the merge in `merged_at` and the
+commit in `merge_sha` (both in `queue status <id>` and in `--json`), a closed one
+that was never merged stays `done`, and an open one stays `done` too - the last
+check of each job is remembered in `pr_checked_at`. The sweep runs at the start
+of `queue status` (every `--follow` tick included), at the start of every runner
+cycle and at the start of the MCP `queue_status`, over at most ten jobs and at
+most once per job every five minutes. Each pass takes the jobs waiting longest
+for a check first - the ones never checked yet, newest first, and then the ones
+whose last check is oldest - so a long backlog rotates instead of pinning the
+same ten jobs. It never runs inside an unattended job session, and never in a
+hook. It fails open and in silence: with `gh` missing,
+logged out, offline or facing a pull request of a repository it cannot read,
+nothing is written, nothing is printed, and the command exits `0` all the same.
+`NIGHTSHIFT_NO_PR_CHECK=1` switches the whole thing off.
+
 `queue cancel` moves a job out of a final state into `cancelled` (from `pending`,
 `gate` or an orphan), and `queue retry` moves it back to `pending` (from `gate`,
-`failed` or `cancelled`). A gated job only moves with `--note`, and that note is
+`failed` or `cancelled`). A `merged` job is terminal for both: `queue cancel`
+refuses it as already finished, and `queue retry` still takes `failed`,
+`cancelled` and `gate` and nothing else. A gated job only moves with `--note`, and that note is
 the only thing that ever reaches the prompt of the run, in a block labelled
 `OPERATOR ANSWER TO THE GATE:` - a retry without `--note` clears whatever was in
 `operator_note`, so the label never lies about where the text came from. Each

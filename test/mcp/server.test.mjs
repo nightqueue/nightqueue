@@ -448,6 +448,46 @@ test("queue_status never returns the prompt and truncates the free text at five 
   assert.match(textOf(unknown), /unknown job `99`/);
 });
 
+const MERGE_SHA = "d3605a5a4d7aaec342d649135cdbd128a042e29d";
+
+// Marks a job as delivered with the pull request URL the sweep of queue_status will ask gh about.
+function deliver(env, id) {
+  openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run(`https://github.com/acme/api/pull/${id}`, id);
+  return id;
+}
+
+// The `gh pr view` calls the fake gh of a home recorded so far.
+function prViewCalls(env) {
+  const log = env.NIGHTSHIFT_FAKE_GH_LOG;
+  if (!existsSync(log)) return [];
+  return readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((call) => call[0] === "pr");
+}
+
+test("queue_status reports a merged pull request as `merged`, and never sweeps from inside an unattended job", async (t) => {
+  const base = makeQueueHome(t, "mcp-queue-merged");
+  deliver(base, addJob({ project: "alpha", prompt: "fix the worker" }, base).id);
+  const env = { ...base, ...isolatedHostVars(makeDir(t, "mcp-queue-merged-host")), NIGHTSHIFT_FAKE_GH_PR_STATE: "MERGED", NIGHTSHIFT_FAKE_GH_PR_SHA: MERGE_SHA };
+  delete env.NIGHTSHIFT_NO_PR_CHECK;
+
+  const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "7" });
+  const untouched = payloadOf(await inJob.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(untouched.jobs[0].status, "done", "the sweep ran inside an unattended job session");
+  assert.deepEqual(prViewCalls(env), [], "a job session reached gh");
+
+  const client = await connect(t, env);
+  const listed = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(listed.jobs[0].status, "merged");
+  assert.equal(listed.jobs[0].merge_sha, MERGE_SHA);
+  assert.match(listed.jobs[0].merged_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  assert.equal(listed.counts.merged, 1);
+  assert.equal(listed.counts.done, 0);
+  assert.equal(prViewCalls(env).length, 1);
+
+  const detail = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: 1 } }));
+  assert.equal(detail.job.status, "merged");
+  assert.equal(prViewCalls(env).length, 1, "a second call inside the five minute window asked gh again");
+});
+
 test("queue_status answers with the nudge that matches the state of the queue, and never on the detail of a job", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-hint");
   const client = await connect(t, env);

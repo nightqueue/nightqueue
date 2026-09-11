@@ -94,7 +94,18 @@ const JOB_COLUMNS = [
   "created_at",
   "started_at",
   "finished_at",
+  "merged_at",
+  "merge_sha",
+  "pr_checked_at",
 ];
+
+// Everything a database written by the schema version before the merge sweep does NOT have yet.
+const DOWNGRADE_TO_V3 = `
+ALTER TABLE jobs DROP COLUMN merged_at;
+ALTER TABLE jobs DROP COLUMN merge_sha;
+ALTER TABLE jobs DROP COLUMN pr_checked_at;
+PRAGMA user_version = 3;
+`;
 
 // Inserts a lesson through raw SQL, so the test exercises the triggers and nothing else.
 function insertLesson(db, { title, root_cause = "root", solution = "solution", prevention = "prevention" }) {
@@ -118,13 +129,13 @@ test("the migration is idempotent and keeps the data across a reopen", (t) => {
   const env = makeHome(t, "db-migrate");
   const first = openDb(env);
   const id = insertLesson(first, { title: "the migration keeps the rows" });
-  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 3);
+  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 4);
   assert.deepEqual(columnsOf(first, "lessons"), LESSON_COLUMNS);
   closeDb(env);
 
   const second = openDb(env);
   assert.notEqual(second, first);
-  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 3);
+  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 4);
   assert.deepEqual(columnsOf(second, "lessons"), LESSON_COLUMNS);
   assert.equal(second.prepare("SELECT title FROM lessons WHERE id = ?").get(id).title, "the migration keeps the rows");
   assert.deepEqual(matchIds(second, "lessons_fts", '"migration"'), [id]);
@@ -178,7 +189,7 @@ test("the migration from user_version 2 keeps every row and adds the decisions s
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 3, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 4, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
     assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
     assert.equal(db.prepare("SELECT title FROM lessons WHERE id = ?").get(lesson).title, "the migration keeps the rows");
@@ -193,6 +204,31 @@ test("the migration from user_version 2 keeps every row and adds the decisions s
     .prepare("INSERT INTO decisions (project, number, title, context, decision) VALUES (?, 1, ?, ?, ?)")
     .run("alpha", "zebracrossing after the migration", "the mirror was created empty", "mirror it");
   assert.deepEqual(matchIds(db, "decisions_fts", '"zebracrossing"'), [Number(result.lastInsertRowid)]);
+});
+
+test("the migration from user_version 3 adds the merge columns once and keeps every job row", (t) => {
+  const env = makeHome(t, "db-migrate-v3");
+  const first = openDb(env);
+  first.prepare("INSERT INTO jobs (project, prompt, status, pr_url) VALUES (?, ?, 'done', ?)").run(
+    "alpha",
+    "fix the worker",
+    "https://github.com/acme/api/pull/42",
+  );
+  first.exec(DOWNGRADE_TO_V3);
+  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 3);
+  assert.equal(columnsOf(first, "jobs").includes("merged_at"), false, "the downgrade kept the merge columns");
+  closeDb(env);
+
+  for (const pass of [1, 2, 3]) {
+    const db = openDb(env);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 4, `pass ${pass}`);
+    assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
+    const row = db.prepare("SELECT * FROM jobs").get();
+    assert.equal(row.prompt, "fix the worker");
+    assert.equal(row.pr_url, "https://github.com/acme/api/pull/42");
+    assert.deepEqual({ merged_at: row.merged_at, merge_sha: row.merge_sha, pr_checked_at: row.pr_checked_at }, { merged_at: null, merge_sha: null, pr_checked_at: null });
+    closeDb(env);
+  }
 });
 
 test("the jobs table of the queue is created with its columns, defaults and claim indexes", (t) => {

@@ -37,12 +37,23 @@ function authStatus() {
   process.stdout.write(`github.com\n  Logged in to github.com account ${login} (keyring)\n`);
 }
 
+// Answers `gh pr view --json` with the state the test asked for; without one the fake refuses to invent it.
+function prView() {
+  const state = process.env.NIGHTSHIFT_FAKE_GH_PR_STATE;
+  if (!state) fail("fake gh: NIGHTSHIFT_FAKE_GH_PR_STATE is not set; refusing to invent a pull request state", 2);
+  const sha = process.env.NIGHTSHIFT_FAKE_GH_PR_SHA || null;
+  const merged = state === "MERGED";
+  const payload = { state, mergedAt: merged ? "2026-09-11T15:54:01Z" : null, mergeCommit: merged && sha ? { oid: sha } : null };
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
 // Applies the call, emulating only the subcommands the import uses.
 function main() {
   logCall();
   const [command, sub] = args;
   if (command === "auth" && sub === "status") return authStatus();
   if (command === "auth" && sub === "token") return process.stdout.write(`${token()}\n`);
+  if (command === "pr" && sub === "view") return prView();
   return fail(`fake gh: unknown command \`${args.join(" ")}\``);
 }
 

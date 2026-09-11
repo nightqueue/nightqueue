@@ -19,6 +19,7 @@ import {
 import { PROMPT_SOURCE_CONFLICT, queueRoadmapItem } from "../memory/roadmap.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
 import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
+import { prViewer, refreshMergedJobs } from "../queue/merged.mjs";
 import {
   createNarrator,
   formatDuration,
@@ -337,6 +338,7 @@ const STATUS_STYLE = {
   failed: { icon: "✗", color: "31" },
   cancelled: { icon: "⊘", color: "2" },
   pending: { icon: "○", color: "2" },
+  merged: { icon: "⇡", color: "2;32" },
 };
 
 // Paints a text with an ANSI code, or leaves it alone when color is off.
@@ -491,8 +493,14 @@ function normalizeFollowArgv(argv) {
   );
 }
 
+// Brings the jobs whose pull request was merged up to date before a view reads the rows; it is silent and never fails the command.
+function sweepMerged(ctx) {
+  refreshMergedJobs({ env: ctx.env, ghImpl: prViewer(ctx.env, ctx.spawnSyncImpl) });
+}
+
 // Lines of the queue view: runner, table, counts and the backlog hint, in that order.
 function queueViewLines(values, ctx) {
+  sweepMerged(ctx);
   const jobs = listJobs({ limit: requireInt("--limit", values.limit) }, ctx.env).map(jobView);
   const counts = countsByStatus(ctx.env);
   const runner = runnerView(runnerPidfileState(ctx.env, ctx.killImpl));
@@ -545,6 +553,7 @@ async function printStatus(argv, ctx) {
   if (intervalS !== null && positionals.length) throw new UserError(`\`--follow\` shows the whole queue, not one job; usage: ${USAGE.status}`);
   if (positionals.length === 1) {
     const id = requireInt("id", positionals[0]);
+    sweepMerged(ctx);
     const job = jobView(getJob(id, ctx.env));
     if (!job) throw new UserError(`unknown job \`${id}\``);
     if (values.json) ctx.out(JSON.stringify({ job }));
@@ -552,6 +561,7 @@ async function printStatus(argv, ctx) {
     return values.json === true;
   }
   if (values.json) {
+    sweepMerged(ctx);
     const jobs = listJobs({ limit: requireInt("--limit", values.limit) }, ctx.env).map(jobView);
     ctx.out(JSON.stringify({ runner: runnerView(runnerPidfileState(ctx.env, ctx.killImpl)), jobs, counts: countsByStatus(ctx.env) }));
     return true;
