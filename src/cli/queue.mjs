@@ -606,7 +606,7 @@ async function printStatus(argv, ctx) {
   if (positionals.length === 1) {
     const id = requireInt("id", positionals[0]);
     sweepMerged(ctx);
-    const job = jobView(getJob(id, ctx.env));
+    const job = jobView(getJob(id, ctx.env), { full: true });
     if (!job) throw new UserError(`unknown job \`${id}\``);
     if (values.json) ctx.out(JSON.stringify({ job }));
     else for (const line of formatDetail(job)) ctx.out(line);

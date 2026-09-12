@@ -477,11 +477,12 @@ test("queue_status never returns the prompt and truncates the free text at five 
 
   const one = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: id } }));
   assert.equal("prompt" in one.job, false, "queue_status leaked the prompt");
-  assert.equal(one.job.notice_md, `${"n".repeat(500)}...`);
-  assert.equal(one.job.result, `${"r".repeat(500)}...`);
+  assert.equal(one.job.notice_md, "n".repeat(600), "the detail of one job cut the notice, which is where a gate is answered from");
+  assert.equal(one.job.result, "r".repeat(600));
 
   const listed = payloadOf(await client.callTool({ name: "queue_status", arguments: { limit: null, job_id: null } }));
   assert.deepEqual(listed.jobs.map((job) => job.id), [2, 1]);
+  assert.equal(listed.jobs.find((job) => job.id === id).notice_md, `${"n".repeat(500)}...`, "the listing stopped truncating the free text");
   assert.equal(listed.counts.pending, 2);
   for (const job of listed.jobs) assert.equal("prompt" in job, false, "the listing leaked a prompt");
   assert.deepEqual(listed.runner, {

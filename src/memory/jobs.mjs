@@ -167,12 +167,14 @@ function inTransaction(db, steps) {
 }
 
 // Public projection of a job row: allowlisted columns, ISO timestamps, truncated free text, never the prompt.
-export function jobView(row) {
+// The public view of a job: the prompt never, timestamps as ISO, and the free text cut for listings unless `full` asks for
+// the whole thing - the detail of one job (`queue status <id>`) needs the entire notice, because that is where a gate is answered from.
+export function jobView(row, { full = false } = {}) {
   if (!row) return null;
   const view = {};
   for (const column of JOB_VIEW_COLUMNS) view[column] = row[column] ?? null;
   for (const column of JOB_VIEW_TIMESTAMPS) view[column] = sqliteToIso(row[column]);
-  for (const column of JOB_VIEW_TRUNCATED) view[column] = truncateByCodePoint(row[column] ?? null, VIEW_TEXT_LIMIT);
+  for (const column of JOB_VIEW_TRUNCATED) view[column] = full ? (row[column] ?? null) : truncateByCodePoint(row[column] ?? null, VIEW_TEXT_LIMIT);
   return view;
 }
 

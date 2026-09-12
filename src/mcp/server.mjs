@@ -514,7 +514,7 @@ function toolDefinitions(env) {
         refreshMergedJobs({ env });
         const warning = repairWarningLine(env);
         if (Number.isInteger(args.job_id)) {
-          const job = jobView(getJob(args.job_id, env));
+          const job = jobView(getJob(args.job_id, env), { full: true });
           if (!job) throw new UserError(`unknown job \`${args.job_id}\``);
           return { job, ...warningAnswer(warning) };
         }
