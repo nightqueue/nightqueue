@@ -1,10 +1,12 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import {
   SHIM_NAME,
   binDir,
   configPath,
   dbPath,
+  dbShmPath,
   embeddingDir,
+  homeDir,
   queuePausedPath,
   secretsPath,
   shimNames,
@@ -14,6 +16,7 @@ import { loadConfig } from "../config/store.mjs";
 import { claudeBin } from "../host/claude.mjs";
 import { DESKTOP_LABEL, desktopState } from "../host/desktop.mjs";
 import { MCP_SERVER_NAME, readRegisteredServer, serverIsCurrent } from "../host/mcp.mjs";
+import { RISKY_FS_TYPES, isRiskyFsType, mountOfPath } from "../host/mounts.mjs";
 import { npmBin, npmView } from "../host/npm.mjs";
 import { marketplaceIsCurrent, pluginRef, readInstalledPlugin, readKnownMarketplace } from "../host/plugin.mjs";
 import { legacyShimState, packageVersion, registrySpec, runtimeVersion, shimState } from "../host/runtime.mjs";
@@ -273,6 +276,74 @@ function checkDatabase(ctx) {
   }
 }
 
+const ORPHAN_PREFIXES = [".fuse_hidden", ".nfs"];
+const SHM_HINT =
+  "the shared-memory index of the WAL was replaced while a connection was still attached to it, which loses writes; stop the runner, run `nightshift doctor` again, and move NIGHTSHIFT_HOME to local disk";
+const MOUNT_LIMITATION = "only the mount in effect right now";
+const MOUNT_HINT = `NIGHTSHIFT_HOME must be on local disk: ${RISKY_FS_TYPES.join(", ")} and any fuse filesystem are known to drop the POSIX advisory locks SQLite's WAL depends on`;
+
+// Names of the hidden orphans a filesystem leaves in the home when it renames a file another process still holds instead of unlinking it.
+function orphanArtifacts(env) {
+  try {
+    const names = readdirSync(homeDir(env)).filter((name) => ORPHAN_PREFIXES.some((prefix) => name.startsWith(prefix)));
+    return { names, error: null };
+  } catch (err) {
+    return { names: [], error: err?.message ?? String(err) };
+  }
+}
+
+// Identity of the shared-memory file on disk, as the decimal strings the runner registered, or null when it is not there.
+function shmIdentity(path) {
+  try {
+    const stats = statSync(path, { bigint: true, throwIfNoEntry: false });
+    return stats ? { ino: String(stats.ino), dev: String(stats.dev) } : null;
+  } catch {
+    return null;
+  }
+}
+
+// Compares the shared-memory file a live runner is attached to with the one on disk; without a live runner, or without a witness, the answer is an unknown and never a pass.
+function checkShmWitness(ctx, name) {
+  const state = runnerPidfileState(ctx.env, ctx.killImpl);
+  if (state.status !== "alive") return check(name, "ok", "no live runner to compare with");
+  const witness = state.info?.dbShm;
+  if (!witness?.ino) return check(name, "ok", `unknown: the live runner (pid ${state.info.pid}) registered no shared-memory witness`);
+  const path = dbShmPath(ctx.env);
+  const found = shmIdentity(path);
+  if (!found) return check(name, "warn", `the shared-memory file the runner (pid ${state.info.pid}) is attached to is gone (${path})`, SHM_HINT);
+  if (found.ino === String(witness.ino) && found.dev === String(witness.dev)) return check(name, "ok", `the live runner is attached to the file on disk (inode ${found.ino})`);
+  return check(name, "warn", `the runner (pid ${state.info.pid}) holds inode ${witness.dev}:${witness.ino}, disk has ${found.dev}:${found.ino}`, SHM_HINT);
+}
+
+// Checks the shared-memory file of the database: the hidden orphans a filesystem left beside it, and whether a live runner is still attached to the one on disk.
+function checkDbShm(ctx) {
+  const name = "db shm";
+  if (!existsSync(dbPath(ctx.env))) return check(name, "ok", "no database yet");
+  const orphans = orphanArtifacts(ctx.env);
+  if (orphans.error) return check(name, "warn", `unknown: ${homeDir(ctx.env)} cannot be listed (${orphans.error})`, `read the permissions of ${homeDir(ctx.env)}`);
+  if (orphans.names.length) {
+    const detail = `${orphans.names.length} hidden orphan file(s) beside the database (${orphans.names.slice(0, 3).join(", ")})`;
+    return check(name, "warn", detail, SHM_HINT);
+  }
+  return checkShmWitness(ctx, name);
+}
+
+// Runs `mount` for the home-mount check, falling back to the bare name when the absolute path is not on this host.
+function runMountCommand(ctx) {
+  const absolute = runCommand(ctx, "/sbin/mount", []);
+  return absolute.missing ? runCommand(ctx, "mount", []) : absolute;
+}
+
+// Checks the filesystem NIGHTSHIFT_HOME sits on, because SQLite's WAL is only correct where the operating system really enforces POSIX advisory locks.
+function checkHomeMount(ctx) {
+  const name = "home mount";
+  const path = homeDir(ctx.env);
+  const mount = mountOfPath(path, { runMount: () => runMountCommand(ctx) });
+  if (mount.unknown) return check(name, "ok", `unknown: ${mount.unknown} (${MOUNT_LIMITATION})`);
+  const detail = `${mount.type} at ${mount.point} (${MOUNT_LIMITATION})`;
+  return isRiskyFsType(mount.type) ? check(name, "warn", detail, MOUNT_HINT) : check(name, "ok", detail);
+}
+
 // Checks whether the operator left the queue paused, which is a sentinel file and not a config key.
 function checkQueuePause(ctx) {
   return existsSync(queuePausedPath(ctx.env))
@@ -398,6 +469,8 @@ function collect(ctx, values) {
     checkModel(ctx),
     ...checkEmbeddingPrefix(ctx),
     checkDatabase(ctx),
+    checkDbShm(ctx),
+    checkHomeMount(ctx),
     ...checkQueue(ctx),
     ...checkProjects(ctx),
     ...checkUpdates(ctx, values),

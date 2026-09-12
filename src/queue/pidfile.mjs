@@ -1,7 +1,8 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, statSync } from "node:fs";
 import { uptime } from "node:os";
 import { UserError } from "../config/errors.mjs";
-import { runnerPidPath } from "../config/paths.mjs";
+import { withLock } from "../config/lock.mjs";
+import { dbShmPath, runnerPidPath } from "../config/paths.mjs";
 import { ensureHome, writeFileAtomic } from "../config/store.mjs";
 
 // How long `queue run --stop` waits for the runner to go away, and how often it looks.
@@ -78,6 +79,32 @@ export function writeRunnerPidfile(info, env = process.env) {
   const stamped = { ...info, uptimeS: Math.round(Number(uptime())) };
   writeFileAtomic(runnerPidPath(env), `${JSON.stringify(stamped, null, 2)}\n`);
   return stamped;
+}
+
+// Identity of the shared-memory file of the database right now, as decimal strings because an inode does not always fit a JSON number.
+function dbShmWitness(env) {
+  const stats = statSync(dbShmPath(env), { bigint: true, throwIfNoEntry: false });
+  return stats ? { ino: String(stats.ino), dev: String(stats.dev), at: new Date().toISOString() } : null;
+}
+
+// Adds the witness to the registration while it still names this process, the same identity rule every other writer of this file follows.
+function stampOwnRunnerPidfile(dbShm, env) {
+  const info = JSON.parse(readFileSync(runnerPidPath(env), "utf8"));
+  if (info?.pid !== process.pid) return null;
+  const stamped = { ...info, dbShm };
+  writeFileAtomic(runnerPidPath(env), `${JSON.stringify(stamped, null, 2)}\n`);
+  return stamped;
+}
+
+// Records in the registration of THIS runner which shared-memory file its connection is attached to, so `doctor` can tell a split apart from a healthy home; a witness that cannot be written is an unknown and never a failure.
+export async function stampRunnerDbWitness(env = process.env) {
+  try {
+    const dbShm = dbShmWitness(env);
+    if (!dbShm) return null;
+    return await withLock(env, () => stampOwnRunnerPidfile(dbShm, env));
+  } catch {
+    return null;
+  }
 }
 
 // Removes the pidfile of the runner, whoever wrote it.

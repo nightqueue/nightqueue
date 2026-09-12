@@ -24,6 +24,11 @@ export function dbPath(env = process.env) {
   return join(homeDir(env), "nightshift.db");
 }
 
+// Path of the shared-memory index of the WAL, the file every open connection of the database maps.
+export function dbShmPath(env = process.env) {
+  return `${dbPath(env)}-shm`;
+}
+
 // Path of the cache of the update check: the newest published version and when it was asked for.
 export function updateCheckPath(env = process.env) {
   return join(homeDir(env), "update-check.json");

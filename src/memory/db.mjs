@@ -349,7 +349,7 @@ export function openDbReadOnly(env = process.env) {
   return new DatabaseSync(dbPath(env), { readOnly: true });
 }
 
-// Closes the cached connection of a home, so a test can reopen it from scratch.
+// Closes the cached connection of a home so a TEST can reopen it from scratch; production must never call it, because a close SQLite believes is the last one deletes `-shm`/`-wal`, and a filesystem that does not enforce the POSIX advisory lock of a live connection lets that happen under a runner still attached to them (`test/memory/close-guard.test.mjs` keeps it confined here).
 export function closeDb(env = process.env) {
   const path = dbPath(env);
   const db = connections.get(path);

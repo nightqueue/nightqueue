@@ -1,6 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
-import { closeDb, openDbReadOnly } from "../memory/db.mjs";
+import { openDb, openDbReadOnly } from "../memory/db.mjs";
 import { withLock } from "../config/lock.mjs";
 import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
 import { projectByName, registrationOffer, resolveProject } from "../config/projects.mjs";
@@ -32,6 +32,7 @@ import {
   removeOwnRunnerPidfile,
   runnerPidfileState,
   runnerView,
+  stampRunnerDbWitness,
   stopRunner,
   STOP_TIMEOUT_MS,
 } from "../queue/pidfile.mjs";
@@ -185,11 +186,13 @@ async function startDetached({ jobId = null, max = null, watchIntervalS = null }
   return 0;
 }
 
-// Runs the queue in THIS process as the registered runner, unless another one already owns it; the registration never outlives the run.
+// Runs the queue in THIS process as the registered runner, unless another one already owns it; the connection is opened here so the registration can witness which shared-memory file this runner is attached to, and it never outlives the run.
 async function runGuardedHere({ jobId = null, watchIntervalS = null, ctx, run }) {
   const guard = await registerForegroundRunner({ jobId, watchIntervalS, env: ctx.env, killImpl: ctx.killImpl });
   if (!guard.ok) return reportBusy(guard, { jobId, watchIntervalS }, ctx);
   try {
+    openDb(ctx.env);
+    await stampRunnerDbWitness(ctx.env);
     return await run();
   } finally {
     removeOwnRunnerPidfile(ctx.env);
@@ -559,6 +562,9 @@ function queueViewLines(values, ctx) {
 }
 
 // Keeps redrawing the queue view until Ctrl-C, or until the queue goes idle when asked; on a pipe it only prints what changed.
+// The cached connection is kept for the whole session on purpose: every read here autocommits, so it already sees what
+// another process committed, and closing it would be a last close that deletes `-shm`/`-wal` under the runner wherever
+// the filesystem does not enforce the POSIX advisory lock that tells a connection it is not the last one.
 async function followStatus(values, intervalS, ctx) {
   const wait = ctx.sleep ?? sleep;
   const tty = ctx.stdout?.isTTY === true;
@@ -570,7 +576,6 @@ async function followStatus(values, intervalS, ctx) {
   process.once("SIGINT", onSignal);
   try {
     while (!stop) {
-      closeDb(ctx.env);
       repairFromWitness(ctx);
       const view = queueViewLines(values, ctx);
       const text = view.lines.join("\n");

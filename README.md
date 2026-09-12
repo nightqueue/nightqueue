@@ -408,6 +408,18 @@ $NIGHTSHIFT_HOME/          # 0700
   runner.pid               # registration of the runner that owns the queue, while one is up
 ```
 
+`NIGHTSHIFT_HOME` must sit on local disk. The memory database is SQLite in WAL
+mode, and WAL correctness depends on the operating system really enforcing POSIX
+advisory locks - in particular the connection-lifetime "dead man's switch" lock
+that tells a connection being closed whether it is the last one still attached to
+the database. Network and FUSE mounts (`nfs`, `nfs3`, `nfs4`, `smbfs`, `cifs`,
+`afpfs`, `webdav`, `9p`, and anything carrying `fuse`) are known to drop those
+locks or to emulate them incorrectly. When that happens the shared-memory index of
+the WAL (`nightshift.db-shm`) is unlinked and recreated while another process is
+still attached to the old one: that process keeps reading and writing an index the
+rest of the system has already abandoned, which loses finish commits and reverts
+leases. `nightshift doctor` reports both halves of this - see `## Doctor`.
+
 Secrets are kept in a `0600` file rather than in the operating system
 credential store, because the runtime is meant to run unattended, with nobody
 there to unlock anything.
@@ -1026,6 +1038,22 @@ whose pid belongs to another user; the diagnosis never removes either), the jobs
 runner died and every registered
 project. It exits `1` when any check fails, `0` otherwise - a `warn` never fails
 the run.
+
+Two of the checks are about the storage under the home (see `## Configuration`):
+
+- `db shm` warns when the shared-memory index of the WAL was replaced under a
+  connection still attached to it: hidden orphans left beside the database
+  (`.fuse_hidden*`, `.nfs*`, which survive a restart and are the only trace a
+  past split leaves), or a live runner whose registered `nightshift.db-shm` is
+  gone or is no longer the file on disk. A runner registered by an older version
+  carries no witness, and the check then says so instead of passing.
+- `home mount` names the filesystem the home sits on - read from
+  `/proc/mounts` (or `/proc/self/mountinfo`) on Linux and from `mount` on macOS -
+  and warns for `nfs`, `nfs3`, `nfs4`, `smbfs`, `cifs`, `afpfs`, `webdav`, `9p`
+  and any type containing `fuse`. It only sees the mount in effect at the moment
+  it runs, so it says nothing about a mount that has since been unmounted: `db
+  shm` is the check that survives a restart. Where neither source answers, the
+  line states an unknown rather than a pass.
 
 The diagnosis is offline: without `--check-updates` it opens no network
 connection at all. With the flag it adds one last check, `registry`, which asks
