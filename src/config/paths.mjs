@@ -152,7 +152,17 @@ export function queuePausedPath(env = process.env) {
   return join(homeDir(env), "queue.paused");
 }
 
-// Path of the file that registers the watch runner of the queue, the one `queue run --stop` ends.
-export function runnerPidPath(env = process.env) {
+// Directory of the runner registry: one file per live runner, the way any number of them coexist.
+export function runnersDir(env = process.env) {
+  return join(homeDir(env), "runners");
+}
+
+// Path of the registration of one runner, named after the pid it belongs to.
+export function runnerRegistryPath(pid, env = process.env) {
+  return join(runnersDir(env), `${pid}.json`);
+}
+
+// Path of the single pidfile an installation before the registry wrote; it is read until it is stopped or pruned, and never written again.
+export function legacyRunnerPidPath(env = process.env) {
   return join(homeDir(env), "runner.pid");
 }

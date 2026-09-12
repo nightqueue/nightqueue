@@ -49,10 +49,11 @@ import {
 import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { refreshMergedJobs } from "../queue/merged.mjs";
-import { runnerPidfileState, runnerView } from "../queue/pidfile.mjs";
+import { blockerLines } from "../queue/claim.mjs";
+import { liveRunners, pruneDeadRunners, STOPPED_RUNNER } from "../queue/registry.mjs";
 import { repairWarningLine } from "../queue/reconcile.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
-import { runnerBusyLine, startQueueRunner } from "../queue/start.mjs";
+import { startQueueRunner } from "../queue/start.mjs";
 import {
   logPipelineRun,
   PIPELINE_GATE_STOPS,
@@ -264,21 +265,30 @@ function guard(name, handler) {
 }
 
 // The one-line nudge queue_status answers with, or null when the queue has nothing to suggest.
-function queueHint({ activeJobs, counts, runner }) {
-  if (!isQueueIdle({ activeJobs, runner })) return `runner active — ${counts.pending} pending after this one`;
+function queueHint({ activeJobs, counts, runners }) {
+  if (!isQueueIdle({ activeJobs, runners })) return `runner active — ${counts.pending} pending after this one`;
   if (counts.pending === 0) return null;
   return `${pendingJobs(counts.pending)} waiting — start the batch with queue_run.`;
 }
 
-// What a tool that was asked to start a runner answers: the runner that started, or the live one that already owns the queue.
-function runnerAnswer(started) {
+// What a tool that was asked to start a runner answers: the runner that started, or why the job it was asked for would claim nothing.
+function runnerAnswer(started, env) {
   return {
     started: started.started,
     pid: started.pid,
     logPath: started.logPath,
     runner: { pid: started.pid, mode: started.mode, logPath: started.logPath },
-    message: started.started ? null : runnerBusyLine(started.pid, started.mode),
+    waiting: started.waiting ?? null,
+    message: started.waiting ? blockerLines(started.waiting, env).join("; ") : null,
   };
+}
+
+// The live runners of the home, with the registrations no process answers for dropped on the way; a prune that fails never fails the answer, and a registry that could not be listed is an error and never an empty list.
+function readRunners(env) {
+  try {
+    pruneDeadRunners(env);
+  } catch {}
+  return liveRunners(env);
 }
 
 // What a status answer says about a repair the database refused: the same line the CLI warns with, and nothing at all when every repair went through.
@@ -503,7 +513,7 @@ function toolDefinitions(env) {
       name: "queue_status",
       config: {
         description:
-          "State of the queue: one job by id, or the most recent ones plus the counts per status and the state of the runner. Never returns the prompt. " +
+          "State of the queue: one job by id, or the most recent ones plus the counts per status and every live runner in `runners` (`runner` is the first of them, kept for one release). Never returns the prompt. " +
           "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`.",
         inputSchema: {
           job_id: z.number().int().min(1).nullable().optional(),
@@ -518,13 +528,14 @@ function toolDefinitions(env) {
           if (!job) throw new UserError(`unknown job \`${args.job_id}\``);
           return { job, ...warningAnswer(warning) };
         }
-        const runner = runnerView(runnerPidfileState(env));
+        const runners = readRunners(env);
         const counts = countsByStatus(env);
         return {
-          runner,
+          runner: runners[0] ?? STOPPED_RUNNER,
+          runners,
           jobs: listJobs({ limit: jobLimit(args.limit) }, env).map(jobView),
           counts,
-          hint: queueHint({ activeJobs: countActiveJobs(env), counts, runner }),
+          hint: queueHint({ activeJobs: countActiveJobs(env), counts, runners }),
           ...warningAnswer(warning),
         };
       },
@@ -534,13 +545,14 @@ function toolDefinitions(env) {
       config: {
         description:
           "starts a detached runner that drains the queue: every pending job, in priority order, until nothing is pending - the runner registers itself, so queue_status shows it. Pass job_id only to start a single job. " +
-          "The batch runs DETACHED, with its output going to a log file, and this tool returns immediately with that path. " +
-          "The runner exits by itself once the queue is empty; `nightshift queue run --stop` ends it earlier, and also ends a watcher started from the CLI.",
+          "The batch runs DETACHED, with its output going to a log file, and this tool returns immediately with that path. Any number of runners may be live at once: a start is never refused because another one is. " +
+          "A single job that cannot be claimed right now answers `started: false` with `waiting` and starts nothing. " +
+          "The runner exits by itself once the queue is empty; `nightshift queue run --stop` ends every runner, `--stop <pid>` ends one.",
         inputSchema: { job_id: z.number().int().min(1).nullable().optional() },
       },
       handler: async (args) => {
         const started = await startQueueRunner({ jobId: Number.isInteger(args.job_id) ? args.job_id : null, env });
-        return { ok: true, ...runnerAnswer(started) };
+        return { ok: true, ...runnerAnswer(started, env) };
       },
     },
     {
@@ -559,7 +571,7 @@ function toolDefinitions(env) {
         description:
           "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate. " +
           "Without `fresh` the run resumes from the last phase, keeping slug, branch, session and run directory; with `fresh` it starts from phase 0 and the run directory is dropped. " +
-          "`run` starts a DETACHED runner, the same one `queue_run` starts - and the same one the `--run` of the CLI starts, unless it is asked for `--foreground`. " +
+          "`run` starts a DETACHED runner, the same one `queue_run` starts - and the same one the `--run` of the CLI starts, unless it is asked for `--foreground`; a job that cannot be claimed right now answers `waiting` and starts nothing. " +
           "Inside an unattended run this tool only accepts the id of the job it is running: retrying another job is refused, because the note is delivered as a human answer in that job's next prompt.",
         inputSchema: {
           job_id: z.number().int().min(1),
@@ -571,7 +583,7 @@ function toolDefinitions(env) {
       handler: async (args) => {
         const { job, runDir } = applyRetry({ id: args.job_id, note: args.note, fresh: args.fresh === true, env });
         const started = args.run === true ? await startQueueRunner({ jobId: job.id, env }) : null;
-        return { ok: true, job, runDir, ...(started ? runnerAnswer(started) : { runner: null }) };
+        return { ok: true, job, runDir, ...(started ? runnerAnswer(started, env) : { runner: null }) };
       },
     },
     {

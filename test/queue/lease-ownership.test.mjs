@@ -140,7 +140,7 @@ test("a lease that expires while its owner is ALIVE never gives a second real ru
 
   assert.equal(result2.code, 0, `the second runner failed: ${result2.stderr}`);
   assert.equal(existsSync(marker2), false, `a SECOND real child started for job #${jobId} while the first one was alive`);
-  assert.match(result2.stdout, /^runner already active \(pid \d+, once\) - it will pick the job up$/m, `the second runner did not refuse: ${result2.stdout}`);
+  assert.match(result2.stdout, /^job #\d+ is running, not pending - it will not be picked up$/m, `the second runner did not refuse: ${result2.stdout}`);
   assert.deepEqual(
     acquire({ jobId, cap: CAP, env }),
     { job: null, reason: "not-pending" },
@@ -199,7 +199,7 @@ test("a live owner past the hard ceiling is recycled anyway: reclaiming never de
   assert.equal(getJob(id, env).status, "pending");
 });
 
-test("a lease inside the grace window is left alone and keeps its project and its slot busy", (t) => {
+test("a lease inside the grace window is left alone and keeps its slot busy", (t) => {
   const env = makeHome(t, "lease-grace");
   makeProject(t, env, "alpha");
   const id = addJob({ project: "alpha", prompt: "fix the worker", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
@@ -210,7 +210,8 @@ test("a lease inside the grace window is left alone and keeps its project and it
   assert.deepEqual(sweepOrphans(env, { liveWorkerImpl: liveLocalWorker }), { failed: 0, requeued: 0 });
   assert.equal(getJob(id, env).status, "running");
   assert.equal(countActiveJobs(env), 1, "a job inside the grace window stopped counting for the ceiling");
-  assert.equal(claimJobById(second, { worker: "host:1", cap: CAP }, env), null, "the project stopped being busy inside the grace");
+  assert.equal(claimJobById(second, { worker: "host:1", cap: 1 }, env), null, "a job inside the grace window stopped holding its slot against the ceiling");
+  assert.equal(claimJobById(second, { worker: "host:1", cap: CAP }, env).id, second, "the second job of the project was refused even with a free slot");
 });
 
 test("an expired lease of a LIVE owner is protected, and a malformed worker never breaks the sweep", (t) => {

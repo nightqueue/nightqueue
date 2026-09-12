@@ -5,8 +5,8 @@ import { addJob, claimJobById, countActiveJobs, countsByStatus, LEASE_GRACE_S } 
 import { isQueueIdle, pendingJobs } from "../../src/queue/hints.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const STOPPED = { running: false };
-const WATCHING = { running: true };
+const NONE = [];
+const WATCHING = [{ running: true, pid: 4242, mode: "watch" }];
 
 // Expires a job's lease well past the grace window, the state a dead worker leaves behind.
 function orphanLease(env, id) {
@@ -15,11 +15,11 @@ function orphanLease(env, id) {
     .run(id);
 }
 
-test("the queue is idle only when no job holds a live lease and no watcher is registered", () => {
-  assert.equal(isQueueIdle({ activeJobs: 0, runner: STOPPED }), true);
-  assert.equal(isQueueIdle({ activeJobs: 1, runner: STOPPED }), false, "a job under a live lease left the queue idle");
-  assert.equal(isQueueIdle({ activeJobs: 0, runner: WATCHING }), false, "a live watcher left the queue idle");
-  assert.equal(isQueueIdle({ activeJobs: 2, runner: WATCHING }), false);
+test("the queue is idle only when no job holds a live lease and no runner is registered", () => {
+  assert.equal(isQueueIdle({ activeJobs: 0, runners: NONE }), true);
+  assert.equal(isQueueIdle({ activeJobs: 1, runners: NONE }), false, "a job under a live lease left the queue idle");
+  assert.equal(isQueueIdle({ activeJobs: 0, runners: WATCHING }), false, "a live watcher left the queue idle");
+  assert.equal(isQueueIdle({ activeJobs: 2, runners: WATCHING }), false);
 });
 
 test("a running job whose lease died leaves the queue idle, so the backlog still gets its nudge", (t) => {
@@ -29,13 +29,13 @@ test("a running job whose lease died leaves the queue idle, so the backlog still
   claimJobById(orphaned, { worker: "host:4242", cap: 4 }, env);
   addJob({ project: "alpha", prompt: "fix the parser" }, env);
 
-  assert.equal(isQueueIdle({ activeJobs: countActiveJobs(env), runner: STOPPED }), false, "a live lease read as idle");
+  assert.equal(isQueueIdle({ activeJobs: countActiveJobs(env), runners: NONE }), false, "a live lease read as idle");
 
   orphanLease(env, orphaned);
   assert.equal(countsByStatus(env).running, 1, "the fixture did not land the orphaned job in `running`");
   assert.equal(countActiveJobs(env), 0, "a dead lease still counted as an active job");
-  assert.equal(isQueueIdle({ activeJobs: countActiveJobs(env), runner: STOPPED }), true);
-  assert.equal(isQueueIdle({ activeJobs: countActiveJobs(env), runner: WATCHING }), false, "a watcher is still work");
+  assert.equal(isQueueIdle({ activeJobs: countActiveJobs(env), runners: NONE }), true);
+  assert.equal(isQueueIdle({ activeJobs: countActiveJobs(env), runners: WATCHING }), false, "a watcher is still work");
 });
 
 test("the number of pending jobs is written in the singular for a single job", () => {

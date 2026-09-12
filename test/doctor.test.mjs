@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
-import { dbPath, queuePausedPath, resolvedRuntimeDir, runnerPidPath, secretsPath } from "../src/config/paths.mjs";
+import { dbPath, queuePausedPath, resolvedRuntimeDir, runnerRegistryPath, secretsPath } from "../src/config/paths.mjs";
 import { ensureHome } from "../src/config/store.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
 import { addJob, claimJobById } from "../src/memory/jobs.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
-import { writeRunnerPidfile } from "../src/queue/pidfile.mjs";
+import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { makeHostEnv, writeLegacyShim } from "../test-support/host.mjs";
 import { makeDir, makeProject } from "../test-support/memory.mjs";
 
@@ -246,9 +246,10 @@ function checkOf(report, name) {
   return report.checks.find((entry) => entry.name === name);
 }
 
-test("the runner pidfile check reads the five states it can find, and removes nothing", async (t) => {
+test("the runner registry check reads the four states it can find, one row per runner, and removes nothing", async (t) => {
   const host = makeHostEnv(t, "doctor-runner");
   const pid = 4242;
+  const row = `runner ${pid}`;
   const gone = () => {
     throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
   };
@@ -257,42 +258,51 @@ test("the runner pidfile check reads the five states it can find, and removes no
   };
 
   const { report: none } = await diagnose(host.env, { killImpl: gone });
-  assert.equal(statusOf(none, "runner pidfile"), "ok");
-  assert.equal(checkOf(none, "runner pidfile").detail, "no runner registered");
+  assert.equal(statusOf(none, "runner registry"), "ok");
+  assert.equal(checkOf(none, "runner registry").detail, "no runner registered");
 
-  writeRunnerPidfile({ pid, startedAt: "2026-09-08T21:04:11.000Z", mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, host.env);
+  writeRunnerRecord({ pid, startedAt: "2026-09-08T21:04:11.000Z", mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, host.env);
   const { report: alive } = await diagnose(host.env, { killImpl: () => true });
-  assert.equal(statusOf(alive, "runner pidfile"), "ok");
-  assert.equal(checkOf(alive, "runner pidfile").detail, `running (pid ${pid}, watch every 30 s)`);
+  assert.equal(statusOf(alive, row), "ok");
+  assert.equal(checkOf(alive, row).detail, `running (pid ${pid}, watch every 30 s)`);
 
   const { report: stale } = await diagnose(host.env, { killImpl: gone });
-  assert.equal(statusOf(stale, "runner pidfile"), "warn");
-  assert.equal(checkOf(stale, "runner pidfile").detail, `stale (pid ${pid} is gone)`);
-  assert.match(checkOf(stale, "runner pidfile").hint, /nightshift queue run --stop/);
-  assert.equal(existsSync(runnerPidPath(host.env)), true, "the diagnosis removed the pidfile it only had to read");
+  assert.equal(statusOf(stale, row), "warn");
+  assert.equal(checkOf(stale, row).detail, `stale (pid ${pid} is gone)`);
+  assert.match(checkOf(stale, row).hint, /nightshift queue run --stop/);
+  assert.equal(existsSync(runnerRegistryPath(pid, host.env)), true, "the diagnosis removed the registration it only had to read");
 
   const { report: foreign } = await diagnose(host.env, { killImpl: anotherUser });
-  assert.equal(statusOf(foreign, "runner pidfile"), "warn");
-  assert.match(checkOf(foreign, "runner pidfile").detail, /another user/);
-  assert.match(checkOf(foreign, "runner pidfile").hint, /^remove /);
-  assert.equal(existsSync(runnerPidPath(host.env)), true, "the diagnosis removed the pidfile of another user");
+  assert.equal(statusOf(foreign, row), "warn");
+  assert.match(checkOf(foreign, row).detail, /another user/);
+  assert.match(checkOf(foreign, row).hint, /^remove /);
+  assert.equal(existsSync(runnerRegistryPath(pid, host.env)), true, "the diagnosis removed the registration of another user");
 
   const runtimeDir = makeDir(t, "doctor-runner-runtime");
-  writeRunnerPidfile({ pid, startedAt: "2026-09-08T21:04:11.000Z", mode: "drain", intervalS: null, logPath: null, runtimeDir }, host.env);
+  writeRunnerRecord({ pid, startedAt: "2026-09-08T21:04:11.000Z", mode: "drain", intervalS: null, logPath: null, runtimeDir }, host.env);
   const { report: withRuntime } = await diagnose(host.env, { killImpl: () => true });
-  assert.equal(statusOf(withRuntime, "runner pidfile"), "ok");
-  assert.equal(checkOf(withRuntime, "runner pidfile").detail, `running (pid ${pid}, runtime ${runtimeDir})`);
+  assert.equal(statusOf(withRuntime, row), "ok");
+  assert.equal(checkOf(withRuntime, row).detail, `running (pid ${pid}, runtime ${runtimeDir})`);
+
+  const second = 5252;
+  const secondRuntime = makeDir(t, "doctor-runner-runtime-second");
+  writeRunnerRecord({ pid: second, startedAt: "2026-09-08T21:05:00.000Z", mode: "watch", intervalS: 5, logPath: null, runtimeDir: secondRuntime }, host.env);
+  const { report: both } = await diagnose(host.env, { killImpl: () => true });
+  assert.equal(checkOf(both, row).detail, `running (pid ${pid}, runtime ${runtimeDir})`);
+  assert.equal(checkOf(both, `runner ${second}`).detail, `running (pid ${second}, watch every 5 s, runtime ${secondRuntime})`, "the second runner is missing its own row");
+  rmSync(runnerRegistryPath(second, host.env), { force: true });
 
   rmSync(runtimeDir, { recursive: true, force: true });
   const { report: runtimeGone } = await diagnose(host.env, { killImpl: () => true });
-  assert.equal(statusOf(runtimeGone, "runner pidfile"), "warn");
-  assert.match(checkOf(runtimeGone, "runner pidfile").detail, /the runtime directory of this runner is gone \(/);
+  assert.equal(statusOf(runtimeGone, row), "warn");
+  assert.match(checkOf(runtimeGone, row).detail, /the runtime directory of this runner is gone \(/);
 
-  writeFileSync(runnerPidPath(host.env), "{not json");
+  writeFileSync(runnerRegistryPath(pid, host.env), "{not json");
   const { report: unreadable } = await diagnose(host.env, { killImpl: gone });
-  assert.equal(statusOf(unreadable, "runner pidfile"), "warn");
-  assert.match(checkOf(unreadable, "runner pidfile").detail, /^unreadable: /);
-  assert.match(checkOf(unreadable, "runner pidfile").hint, /^remove /);
+  assert.equal(statusOf(unreadable, "runner registry"), "warn");
+  assert.match(checkOf(unreadable, "runner registry").detail, /^unreadable: /);
+  assert.match(checkOf(unreadable, "runner registry").hint, /^remove /);
+  assert.equal(existsSync(runnerRegistryPath(pid, host.env)), true, "the diagnosis removed the registration it could not read");
 });
 
 test("the queue jobs check counts the jobs whose runner died, and only once the database exists", async (t) => {

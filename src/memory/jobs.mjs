@@ -25,12 +25,6 @@ function activeFor(alias) {
       AND datetime(${alias}.lease_until) > datetime('now', '-${LEASE_GRACE_S} seconds')`;
 }
 
-// Predicate of a project with no active job, correlated with the row of the given alias.
-function projectFree(alias) {
-  return `NOT EXISTS (SELECT 1 FROM jobs AS busy
-             WHERE busy.project = ${alias}.project AND busy.id <> ${alias}.id AND ${activeFor("busy")})`;
-}
-
 // A job is active while it is running under a lease inside the grace window: the ceiling counts these.
 export const ACTIVE_JOB_PREDICATE = activeFor("slot");
 
@@ -208,33 +202,31 @@ const CLAIM_ASSIGNMENT = `SET status = 'running',
             started_at = datetime('now'),
             lease_until = ${LEASE_EXPRESSION}`;
 const CANDIDATE_QUERY = `SELECT candidate.id FROM jobs AS candidate
-              WHERE candidate.status = 'pending' AND ${projectFree("candidate")}
+              WHERE candidate.status = 'pending'
               ORDER BY candidate.priority ASC, candidate.created_at ASC, candidate.id ASC
               LIMIT 1`;
 const CAP_CONDITION = `(SELECT COUNT(*) FROM jobs AS slot WHERE ${ACTIVE_JOB_PREDICATE}) < ?`;
 
-// Claims the highest priority pending job of a free project: the whole decision lives in the WHERE.
+// Claims the highest priority pending job: the whole decision lives in the WHERE, bounded only by the ceiling.
 export function claimNextJob({ worker, cap } = {}, env = process.env) {
   const statement = openDb(env).prepare(
     `UPDATE jobs
         ${CLAIM_ASSIGNMENT}
       WHERE id = (${CANDIDATE_QUERY})
         AND status = 'pending'
-        AND ${projectFree("jobs")}
         AND ${CAP_CONDITION}
       RETURNING *`,
   );
   return withWriteRetry(() => statement.get(requireText("worker", worker), requireCap(cap))) ?? null;
 }
 
-// Claims one specific job, refusing in the same WHERE when it is not pending, its project is busy or the ceiling is full.
+// Claims one specific job, refusing in the same WHERE when it is not pending or the ceiling is full.
 export function claimJobById(id, { worker, cap } = {}, env = process.env) {
   const statement = openDb(env).prepare(
     `UPDATE jobs
         ${CLAIM_ASSIGNMENT}
       WHERE id = ?
         AND status = 'pending'
-        AND ${projectFree("jobs")}
         AND ${CAP_CONDITION}
       RETURNING *`,
   );
@@ -628,15 +620,7 @@ export function repairJobFromWitness(id, terminal, env = process.env) {
   return withWriteRetry(() => statement.run(...values)).changes === 1;
 }
 
-// Tells whether a project already has an active job, which is what makes a second job of the same repository wait.
-export function isProjectBusy(project, env = process.env) {
-  const row = openDb(env)
-    .prepare(`SELECT COUNT(*) AS total FROM jobs AS busy WHERE busy.project = ? AND ${activeFor("busy")}`)
-    .get(optionalText(project) ?? "");
-  return row.total > 0;
-}
-
-// Tells whether some pending job could be claimed right now, that is, whether any of them has a free project.
+// Tells whether some pending job is waiting to be claimed, which is what tells an empty queue from a full ceiling.
 export function hasClaimablePending(env = process.env) {
   return Boolean(openDb(env).prepare(`${CANDIDATE_QUERY}`).get());
 }
@@ -647,7 +631,7 @@ export function peekNextJob(env = process.env) {
     openDb(env)
       .prepare(
         `SELECT candidate.* FROM jobs AS candidate
-          WHERE candidate.status = 'pending' AND ${projectFree("candidate")}
+          WHERE candidate.status = 'pending'
           ORDER BY candidate.priority ASC, candidate.created_at ASC, candidate.id ASC
           LIMIT 1`,
       )

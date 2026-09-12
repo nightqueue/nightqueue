@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { uptime } from "node:os";
 import { test } from "node:test";
-import { runnerPidPath } from "../../src/config/paths.mjs";
+import { runnerRegistryPath, runnersDir } from "../../src/config/paths.mjs";
 import { ensureHome } from "../../src/config/store.mjs";
-import { stopRunner } from "../../src/queue/pidfile.mjs";
+import { stopRunner } from "../../src/queue/registry.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 
-// Writes the pidfile of the test by hand, the shape a runner of another process would have left.
-function writePidfile(env, content) {
+// Writes one registration by hand, the shape a runner of another process would have left.
+function writeRecord(env, content) {
   ensureHome(env);
-  writeFileSync(runnerPidPath(env), typeof content === "string" ? content : `${JSON.stringify(content)}\n`);
+  mkdirSync(runnersDir(env), { recursive: true });
+  writeFileSync(runnerRegistryPath(content.pid, env), `${JSON.stringify(content)}\n`);
 }
 
 test("stopRunner sends a real SIGTERM to a pid whose registration comes from an earlier boot session", async (t) => {
@@ -18,7 +19,7 @@ test("stopRunner sends a real SIGTERM to a pid whose registration comes from an 
   const REUSED_PID = 55555;
   // `uptimeS` here is above the current uptime, so the registration can only come from an earlier
   // boot session: whatever answers under that pid now is another process, never the runner.
-  writePidfile(env, { pid: REUSED_PID, startedAt: "2026-09-08T21:04:11.000Z", mode: "watch", intervalS: 30, logPath: "/tmp/runner.log", uptimeS: Math.round(uptime()) + 3600 });
+  writeRecord(env, { pid: REUSED_PID, startedAt: "2026-09-08T21:04:11.000Z", mode: "watch", intervalS: 30, logPath: "/tmp/runner.log", uptimeS: Math.round(uptime()) + 3600 });
 
   const alive = new Set([REUSED_PID]);
   const signals = [];
@@ -29,7 +30,7 @@ test("stopRunner sends a real SIGTERM to a pid whose registration comes from an 
     return true;
   };
 
-  await stopRunner({ env, killImpl, sleepImpl: async () => {} });
+  await stopRunner({ pid: REUSED_PID, env, killImpl, sleepImpl: async () => {} });
 
   const sentRealSignal = signals.some(([, signal]) => signal === "SIGTERM");
   assert.equal(
@@ -42,7 +43,7 @@ test("stopRunner sends a real SIGTERM to a pid whose registration comes from an 
 test("stopRunner still attempts SIGTERM against a pid it can only probe via EPERM (another user's process)", async (t) => {
   const env = makeHome(t, "stop-identity-eperm");
   const OTHER_USER_PID = 424242;
-  writePidfile(env, { pid: OTHER_USER_PID, startedAt: "2026-09-08T00:00:00.000Z", mode: "watch", intervalS: 30, logPath: "/tmp/runner.log" });
+  writeRecord(env, { pid: OTHER_USER_PID, startedAt: "2026-09-08T00:00:00.000Z", mode: "watch", intervalS: 30, logPath: "/tmp/runner.log" });
 
   const signals = [];
   // A process of another user answers every signal probe with EPERM, never ESRCH:
@@ -52,7 +53,7 @@ test("stopRunner still attempts SIGTERM against a pid it can only probe via EPER
     throw Object.assign(new Error(`kill EPERM ${pid}`), { code: "EPERM" });
   };
 
-  await assert.rejects(() => stopRunner({ env, killImpl, sleepImpl: async () => {} }));
+  await assert.rejects(() => stopRunner({ pid: OTHER_USER_PID, env, killImpl, sleepImpl: async () => {} }));
 
   const sentRealSignal = signals.some(([, signal]) => signal === "SIGTERM");
   assert.equal(

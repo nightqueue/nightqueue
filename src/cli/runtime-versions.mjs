@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
 import { resolvedRuntimeDir, runtimeCurrentLink, runtimeDir, runtimeVersionsDir } from "../config/paths.mjs";
-import { runnerPidfileState } from "../queue/pidfile.mjs";
+import { liveRunnersReport } from "../queue/registry.mjs";
 
 const STAGING_PREFIX = ".staging-";
 const KEEP_VERSIONS = 2;
@@ -55,15 +55,17 @@ function realOrNull(path) {
   }
 }
 
-// Runtime directory a live runner recorded it loaded from, or null when no runner is registered.
-function liveRunnerRuntimeDir(env) {
+// Every runtime directory a live runner recorded it loaded from, or `unknown` when the registry could not be read at all: an install may delete none of them.
+function liveRunnerRuntimeDirs(env) {
   try {
-    const state = runnerPidfileState(env);
-    if (state.status !== "alive") return null;
-    const dir = state.info?.runtimeDir;
-    return typeof dir === "string" && dir ? realOrNull(dir) : null;
-  } catch {
-    return null;
+    const { runners, error } = liveRunnersReport(env);
+    if (error !== null) return { dirs: new Set(), unknown: error };
+    const dirs = runners
+      .map((runner) => (typeof runner.runtimeDir === "string" && runner.runtimeDir ? realOrNull(runner.runtimeDir) : null))
+      .filter(Boolean);
+    return { dirs: new Set(dirs), unknown: null };
+  } catch (err) {
+    return { dirs: new Set(), unknown: err?.message ?? String(err) };
   }
 }
 
@@ -78,9 +80,12 @@ function versionDirs(env) {
     .map((entry) => entry.dir);
 }
 
-// Deletes the version directories nobody needs any more, never the one `current` names nor the one a live runner runs from.
+// Deletes the version directories nobody needs any more, never the one `current` names nor any one a live runner runs from;
+// a registry that could not be read proves nothing unprotected, so it deletes nothing at all.
 export function pruneVersions(env, { keep = KEEP_VERSIONS } = {}) {
-  const protectedDirs = new Set([resolvedRuntimeDir(env), liveRunnerRuntimeDir(env)].filter(Boolean));
+  const live = liveRunnerRuntimeDirs(env);
+  if (live.unknown !== null) return [];
+  const protectedDirs = new Set([resolvedRuntimeDir(env), ...live.dirs].filter(Boolean));
   const removed = [];
   let kept = 0;
   for (const dir of versionDirs(env)) {

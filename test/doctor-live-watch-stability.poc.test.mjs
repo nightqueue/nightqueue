@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { runnerPidPath } from "../src/config/paths.mjs";
+import { runnerRegistryPath } from "../src/config/paths.mjs";
 import { makeHome } from "../test-support/memory.mjs";
 
 // This is the architect's own R1 recipe (real `queue run --watch --foreground` + repeated real `doctor --json` +
@@ -16,9 +16,9 @@ const DB_MODULE_URL = pathToFileURL(fileURLToPath(new URL("../src/memory/db.mjs"
 const WITNESS_TIMEOUT_MS = 15000;
 
 // The registration as it is on disk right now, or null while there is none.
-function readPidfile(env) {
+function readRecord(env, pid) {
   try {
-    return JSON.parse(readFileSync(runnerPidPath(env), "utf8"));
+    return JSON.parse(readFileSync(runnerRegistryPath(pid, env), "utf8"));
   } catch {
     return null;
   }
@@ -28,12 +28,12 @@ function readPidfile(env) {
 async function waitForWitness(env, child) {
   const deadline = Date.now() + WITNESS_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const info = readPidfile(env);
+    const info = readRecord(env, child.pid);
     if (info?.dbShm?.ino) return info;
     if (child.exitCode !== null) throw new Error(`the runner exited (code ${child.exitCode}) before it registered a witness`);
     await delay(50);
   }
-  throw new Error(`no witness in ${runnerPidPath(env)} after ${WITNESS_TIMEOUT_MS} ms: ${JSON.stringify(readPidfile(env))}`);
+  throw new Error(`no witness in ${runnerRegistryPath(child.pid, env)} after ${WITNESS_TIMEOUT_MS} ms: ${JSON.stringify(readRecord(env, child.pid))}`);
 }
 
 // Runs a real `nightshift doctor --json` as its own process against the given home, and returns the `db shm` check.

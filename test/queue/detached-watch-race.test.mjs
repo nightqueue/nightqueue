@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { run } from "../../src/cli/index.mjs";
 import { lockPath } from "../../src/config/lock.mjs";
-import { runnerPidPath } from "../../src/config/paths.mjs";
+import { runnerRegistryPath } from "../../src/config/paths.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 
 // A spawn double that reports whether the cross-process lock was held while the guard-then-register section ran.
@@ -14,7 +14,7 @@ function spawnCheckingLock(env, observations) {
   };
 }
 
-test("queue run --watch holds the cross-process lock across the single-watcher guard and the pidfile registration", async (t) => {
+test("queue run --watch holds the cross-process lock across the prune and the registration", async (t) => {
   const env = makeHome(t, "detached-watch-lock");
   const observations = [];
   const ctx = {
@@ -35,8 +35,8 @@ test("queue run --watch holds the cross-process lock across the single-watcher g
   assert.equal(
     observations[0],
     true,
-    "two `queue run --watch` processes racing to read the pidfile and register the winner must be serialized by the cross-process lock; today `queue` is listed in SELF_LOCKING_COMMANDS (src/cli/index.mjs) so `main` never calls `withLock` around it, and `startDetached` runs the guard-read and the pidfile-write with no lock held at all",
+    "two `queue run --watch` processes racing to prune the registry and register themselves must be serialized by the cross-process lock; today `queue` is listed in SELF_LOCKING_COMMANDS (src/cli/index.mjs) so `main` never calls `withLock` around it, and `startDetached` would otherwise run the prune and the registration with no lock held at all",
   );
-  assert.equal(existsSync(runnerPidPath(env)), true, "the winning watcher registered itself");
-  assert.equal(JSON.parse(readFileSync(runnerPidPath(env), "utf8")).pid, 4242);
+  assert.equal(existsSync(runnerRegistryPath(4242, env)), true, "the watcher registered itself");
+  assert.equal(JSON.parse(readFileSync(runnerRegistryPath(4242, env), "utf8")).pid, 4242);
 });

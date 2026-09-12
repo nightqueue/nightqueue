@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { hostname } from "node:os";
+import { UserError } from "../config/errors.mjs";
 import { queuePausedPath } from "../config/paths.mjs";
 import { LEASE_HEARTBEAT_DEFAULT_S } from "../config/schema.mjs";
 import { loadConfig } from "../config/store.mjs";
@@ -7,14 +8,13 @@ import {
   claimJobById,
   claimNextJob,
   countActiveJobs,
-  countsByStatus,
   getJob,
   hasClaimablePending,
-  isProjectBusy,
   releaseJob,
   renewLease,
   sweepOrphans,
 } from "../memory/jobs.mjs";
+import { liveRunnersReport } from "./registry.mjs";
 
 // Identity of this runner process, the value the ownership predicate of every write compares against.
 export function workerId() {
@@ -63,14 +63,10 @@ export function liveLocalWorker(worker) {
 // Explains why nothing was claimed; it reads the database only to phrase the reason, never to decide.
 function refusalReason({ jobId, cap, env }) {
   if (countActiveJobs(env) >= cap) return "cap-reached";
-  if (jobId === null) {
-    if (countsByStatus(env).pending === 0) return "empty-queue";
-    return hasClaimablePending(env) ? "cap-reached" : "project-busy";
-  }
+  if (jobId === null) return hasClaimablePending(env) ? "cap-reached" : "empty-queue";
   const job = getJob(jobId, env);
   if (!job) return "unknown-job";
-  if (job.status !== "pending") return "not-pending";
-  return isProjectBusy(job.project, env) ? "project-busy" : "cap-reached";
+  return job.status === "pending" ? "cap-reached" : "not-pending";
 }
 
 // Takes ownership of one job: sweeps the orphans first, then claims atomically inside the database.
@@ -96,4 +92,67 @@ export function renew(job, env = process.env) {
 // Ownership check of the running job, which is the same write that keeps its lease alive.
 export function stillOwned(job, env = process.env) {
   return renew(job, env);
+}
+
+// What each start shape must refuse to spawn for: a single job buys nothing when it cannot be claimed, a drain dies at once on a paused queue, and a watcher waits for the condition to clear on purpose.
+const START_BLOCKERS = {
+  once: new Set(["unknown-job", "not-pending", "cap-reached"]),
+  drain: new Set(["paused"]),
+  watch: new Set(),
+};
+
+// The ceiling standing in the way of a start right now, or null while there is a free slot.
+function capBlocker({ jobId, env }) {
+  const cap = concurrencyCap(env);
+  const active = countActiveJobs(env);
+  return active >= cap ? { reason: "cap-reached", jobId, active, cap } : null;
+}
+
+// The reason a start of this shape would claim nothing, with the facts its message needs.
+// The orphans are swept first, exactly as `acquire` does: a job whose dead owner is about to be reclaimed is claimable, not `not-pending`.
+function previewRefusal({ jobId, env }) {
+  if (jobId === null) return isPaused(env) ? { reason: "paused", jobId } : capBlocker({ jobId, env });
+  sweepOrphans(env, { liveWorkerImpl: liveLocalWorker });
+  const job = getJob(jobId, env);
+  if (!job) return { reason: "unknown-job", jobId };
+  if (job.status !== "pending") return { reason: "not-pending", jobId, status: job.status };
+  return capBlocker({ jobId, env });
+}
+
+// The blocker this start shape cares about, or null when a read of the queue itself failed: a broken read must never stop a start.
+function safePreview({ jobId, mode, env }) {
+  const wanted = START_BLOCKERS[mode] ?? START_BLOCKERS.watch;
+  if (!wanted.size) return null;
+  try {
+    const blocker = previewRefusal({ jobId, env });
+    return blocker && wanted.has(blocker.reason) ? blocker : null;
+  } catch {
+    return null;
+  }
+}
+
+// The honest preview of `acquire` every start renders instead of reporting a runner that would claim nothing.
+export function claimBlocker({ jobId = null, mode = "drain", env = process.env } = {}) {
+  const blocker = safePreview({ jobId, mode, env });
+  if (blocker?.reason === "unknown-job") throw new UserError(`unknown job \`${blocker.jobId}\``);
+  return blocker;
+}
+
+// The live runner that will pick the waiting job up, when one is registered to do it; a registry nobody could list answers that instead of promising nobody is there.
+function pickupLine(env) {
+  const { runners, error } = liveRunnersReport(env);
+  if (error !== null) return [`the runner registry cannot be listed (${error}), so whether a runner will pick it up is unknown`];
+  const runner = runners.find((entry) => entry.mode === "drain" || entry.mode === "watch");
+  return runner ? [`a live runner (pid ${runner.pid}, ${runner.mode}) will pick it up`] : [];
+}
+
+// What the operator reads instead of a start that never happened: the blocker, and what clears it.
+export function blockerLines(blocker, env = process.env) {
+  if (blocker.reason === "paused") return ["the queue is paused - nothing will be claimed; resume with: nightshift queue resume"];
+  if (blocker.reason === "not-pending") return [`job #${blocker.jobId} is ${blocker.status}, not pending - it will not be picked up`];
+  return [
+    `job #${blocker.jobId} waiting: concurrency cap reached`,
+    `${blocker.active} of ${blocker.cap} jobs already running`,
+    ...pickupLine(env),
+  ];
 }

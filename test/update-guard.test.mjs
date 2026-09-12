@@ -6,7 +6,7 @@ import { defaultContext, run } from "../src/cli/index.mjs";
 import { dbPath } from "../src/config/paths.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
 import { addJob, claimJobById } from "../src/memory/jobs.mjs";
-import { writeRunnerPidfile } from "../src/queue/pidfile.mjs";
+import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { assertIsolatedEnv, makeHostEnv } from "../test-support/host.mjs";
 import { makeProject } from "../test-support/memory.mjs";
 
@@ -48,7 +48,7 @@ function makeQueueHost(t, name) {
 
 // Registers a watcher whose pid the test keeps alive.
 function registerWatcher(env) {
-  writeRunnerPidfile(
+  writeRunnerRecord(
     { pid: WATCHER_PID, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/a.log" },
     env,
   );

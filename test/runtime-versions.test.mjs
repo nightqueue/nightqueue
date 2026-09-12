@@ -7,6 +7,7 @@ import {
   readdirSync,
   readlinkSync,
   realpathSync,
+  rmSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -14,14 +15,16 @@ import { basename, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { defaultContext, run } from "../src/cli/index.mjs";
+import { pruneVersions } from "../src/cli/runtime-versions.mjs";
 import {
   LEGACY_RUNTIME_PACKAGE_TRAIL,
   resolvedRuntimeDir,
+  runnersDir,
   runtimePackageDir,
 } from "../src/config/paths.mjs";
 import { hostManifestPath } from "../src/host/paths.mjs";
 import { legacyShimState, runtimeReady, runtimeVersion, shimContent } from "../src/host/runtime.mjs";
-import { writeRunnerPidfile } from "../src/queue/pidfile.mjs";
+import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { assertIsolatedEnv, makeHostEnv, readSettingsFile } from "../test-support/host.mjs";
 
 const SETUP = ["setup", "--no-path", "--no-embedding"];
@@ -132,12 +135,59 @@ test("the version a live runner recorded survives the prune, whatever its age", 
   assert.equal(await run(SETUP, makeCtx(host.env).ctx), 0);
   const stale = writeOldVersion(host, "0.0.1-20200101T000000Z");
   const live = writeOldVersion(host, "0.0.2-20200102T000000Z");
-  writeRunnerPidfile({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", runtimeDir: live }, host.env);
+  writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", runtimeDir: live }, host.env);
 
   const { ctx, err } = makeCtx(host.env);
   assert.equal(await run(["update", "--force"], ctx), 0, err.join("\n"));
   assert.equal(existsSync(live), true, `the directory the live runner runs from was pruned: ${versionNames(host).join(", ")}`);
   assert.equal(existsSync(stale), false);
+});
+
+test("the version directory of EVERY live runner survives the prune, even when two of them disagree", async (t) => {
+  const host = makeHostEnv(t, "runtime-versions-prune-live-many");
+  assert.equal(await run(SETUP, makeCtx(host.env).ctx), 0);
+  const stale = writeOldVersion(host, "0.0.1-20200101T000000Z");
+  const first = writeOldVersion(host, "0.0.2-20200102T000000Z");
+  const second = writeOldVersion(host, "0.0.3-20200103T000000Z");
+  writeRunnerRecord({ pid: process.pid, startedAt: "2026-09-08T21:00:00.000Z", mode: "drain", runtimeDir: first }, host.env);
+  writeRunnerRecord({ pid: process.ppid, startedAt: "2026-09-08T21:01:00.000Z", mode: "watch", intervalS: 5, runtimeDir: second }, host.env);
+
+  const { ctx, err } = makeCtx(host.env);
+  assert.equal(await run(["update", "--force"], ctx), 0, err.join("\n"));
+
+  assert.equal(existsSync(first), true, `the tree of the first live runner was pruned: ${versionNames(host).join(", ")}`);
+  assert.equal(existsSync(second), true, `the tree of the second live runner was pruned: ${versionNames(host).join(", ")}`);
+  assert.equal(existsSync(stale), false, "a version no live runner names survived the prune");
+});
+
+// Replaces the registry directory with a plain file, so listing it fails the way a permission or a mount failure does.
+function breakRegistryDir(host) {
+  rmSync(runnersDir(host.env), { recursive: true, force: true });
+  writeFileSync(runnersDir(host.env), "not a directory");
+}
+
+test("a prune that could not read the registry deletes nothing, because it can prove no version unused", async (t) => {
+  const host = makeHostEnv(t, "runtime-versions-prune-registry-unreadable");
+  assert.equal(await run(SETUP, makeCtx(host.env).ctx), 0);
+  const stale = writeOldVersion(host, "0.0.1-20200101T000000Z");
+  const live = writeOldVersion(host, "0.0.2-20200102T000000Z");
+  writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", runtimeDir: live }, host.env);
+  breakRegistryDir(host);
+
+  assert.deepEqual(pruneVersions(host.env, { keep: 0 }), [], "a prune that could not read the registry deleted a version anyway");
+  assert.equal(existsSync(live), true, `the tree the live runner runs from was pruned: ${versionNames(host).join(", ")}`);
+  assert.equal(existsSync(stale), true, "a prune that knows of no live runner still deleted a version");
+});
+
+test("with the registry readable, the same prune keeps the tree of the live runner and drops the rest", async (t) => {
+  const host = makeHostEnv(t, "runtime-versions-prune-keep-none");
+  assert.equal(await run(SETUP, makeCtx(host.env).ctx), 0);
+  const stale = writeOldVersion(host, "0.0.1-20200101T000000Z");
+  const live = writeOldVersion(host, "0.0.2-20200102T000000Z");
+  writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", runtimeDir: live }, host.env);
+
+  assert.deepEqual(pruneVersions(host.env, { keep: 0 }), [stale]);
+  assert.equal(existsSync(live), true, `the tree the live runner runs from was pruned: ${versionNames(host).join(", ")}`);
 });
 
 test("an install npm could not finish leaves `current` where it was and no staging directory behind", async (t) => {

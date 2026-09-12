@@ -3,10 +3,10 @@ import { chmodSync, readFileSync, rmSync, statSync, writeFileSync } from "node:f
 import { join } from "node:path";
 import { test } from "node:test";
 import { defaultContext, run } from "../src/cli/index.mjs";
-import { dbShmPath, homeDir, runnerPidPath } from "../src/config/paths.mjs";
+import { dbShmPath, homeDir, runnerRegistryPath } from "../src/config/paths.mjs";
 import { ensureHome } from "../src/config/store.mjs";
 import { openDb } from "../src/memory/db.mjs";
-import { stampRunnerDbWitness, writeRunnerPidfile } from "../src/queue/pidfile.mjs";
+import { stampRunnerDbWitness, writeRunnerRecord } from "../src/queue/registry.mjs";
 import { makeHostEnv } from "../test-support/host.mjs";
 
 // Runs the diagnosis in process, with a host that answers nothing so only the checks of the home matter.
@@ -36,12 +36,12 @@ function dbShmLine(checks) {
 
 // Registers a runner that is this process, so the diagnosis has a live record to compare with.
 function registerRunner(env) {
-  writeRunnerPidfile({ pid: process.pid, mode: "watch", jobId: null, intervalS: 5, startedAt: new Date().toISOString(), logPath: null, runtimeDir: null }, env);
+  writeRunnerRecord({ pid: process.pid, mode: "watch", jobId: null, intervalS: 5, startedAt: new Date().toISOString(), logPath: null, runtimeDir: null }, env);
 }
 
 // Replaces the witness of the registration, the state a home is left in once its shared-memory file was split.
 function rewriteWitness(env, dbShm) {
-  const path = runnerPidPath(env);
+  const path = runnerRegistryPath(process.pid, env);
   const info = JSON.parse(readFileSync(path, "utf8"));
   writeFileSync(path, `${JSON.stringify({ ...info, dbShm }, null, 2)}\n`);
 }

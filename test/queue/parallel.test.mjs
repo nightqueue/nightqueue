@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -21,34 +22,37 @@ function makeRealGitProject(t, env, name) {
   return path;
 }
 
-// Writes a stand-in for the child pipeline: it runs a REAL `git worktree add` in the canonical checkout it
+// Writes a stand-in for the child pipeline: it runs a REAL `git worktree add` outside the canonical checkout it
 // was spawned into, records its start/end window, removes the worktree as the real pipeline does and reports a run.
 function writeRealGitClaude(t) {
-  const dir = makeDir(t, "serialization-bin");
+  const dir = makeDir(t, "parallel-bin");
   const bin = join(dir, "real-git-claude.mjs");
   const logPath = join(dir, "calls.jsonl");
+  const worktreeRoot = makeDir(t, "parallel-worktrees");
   const source = [
     "#!/usr/bin/env node",
     'import { execFileSync } from "node:child_process";',
     'import { appendFileSync } from "node:fs";',
+    'import { join } from "node:path";',
     "",
     "function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }",
     "",
     "async function main() {",
     '  const jobId = process.env.NIGHTSHIFT_JOB_ID ?? "unknown";',
     `  const logPath = ${JSON.stringify(logPath)};`,
+    `  const worktreeRoot = ${JSON.stringify(worktreeRoot)};`,
     "  const branch = `nightshift/job-${jobId}`;",
-    "  const dir = `worktree-${jobId}`;",
+    "  const dir = join(worktreeRoot, `worktree-${jobId}`);",
     "  const start = Date.now();",
     "  let result;",
     "  try {",
     '    execFileSync("git", ["worktree", "add", "-b", branch, dir], { stdio: ["ignore", "pipe", "pipe"] });',
+    "    await sleep(300);",
     '    execFileSync("git", ["worktree", "remove", dir], { stdio: ["ignore", "pipe", "pipe"] });',
     "    result = { jobId, ok: true, dir, branch };",
     "  } catch (err) {",
     "    result = { jobId, ok: false, message: String(err?.stderr ?? err?.message ?? err) };",
     "  }",
-    "  await sleep(300);",
     "  result.start = start;",
     "  result.end = Date.now();",
     "  appendFileSync(logPath, `${JSON.stringify(result)}\\n`);",
@@ -77,8 +81,8 @@ function readCalls(logPath) {
     .map((line) => JSON.parse(line));
 }
 
-test("a busy project is SKIPPED by the claim instead of blocking the whole queue behind it", (t) => {
-  const env = makeHome(t, "serialization-claim");
+test("two jobs of the same project are claimed together, bounded only by the concurrency cap", (t) => {
+  const env = makeHome(t, "parallel-claim");
   makeProject(t, env, "alpha");
   makeProject(t, env, "beta");
   const first = addJob({ project: "alpha", prompt: "fix the worker", priority: 1 }, env).id;
@@ -86,20 +90,23 @@ test("a busy project is SKIPPED by the claim instead of blocking the whole queue
   const other = addJob({ project: "beta", prompt: "fix the linter", priority: 3 }, env).id;
 
   assert.equal(claimNextJob({ worker: WORKER, cap: CAP }, env).id, first);
-  assert.equal(peekNextJob(env).id, other, "the dry report announced a job the next claim would refuse");
-  assert.equal(claimNextJob({ worker: OTHER_WORKER, cap: CAP }, env).id, other, "a busy project blocked the jobs behind it");
-  assert.equal(claimJobById(second, { worker: OTHER_WORKER, cap: CAP }, env), null, "two jobs of the same project ran at once");
-  assert.equal(getJob(second, env).attempts, 0, "the refused claim spent an attempt");
-  assert.deepEqual(acquire({ jobId: second, cap: CAP, env }), { job: null, reason: "project-busy" });
-  assert.deepEqual(acquire({ cap: CAP, env }), { job: null, reason: "project-busy" });
+  assert.equal(peekNextJob(env).id, second, "the dry report skipped the next pending job of a project already running one");
+  assert.equal(claimJobById(second, { worker: OTHER_WORKER, cap: CAP }, env).id, second, "a second job of the same project was refused");
+  assert.equal(getJob(second, env).attempts, 1);
+  assert.equal(acquire({ cap: CAP, env }).job.id, other);
+
+  assert.deepEqual(acquire({ cap: CAP, env }), { job: null, reason: "empty-queue" });
+  const fourth = addJob({ project: "alpha", prompt: "fix the docs", priority: 4 }, env).id;
+  assert.deepEqual(acquire({ cap: 3, env }), { job: null, reason: "cap-reached" }, "the ceiling is the only limit left");
+  assert.deepEqual(acquire({ jobId: fourth, cap: 3, env }), { job: null, reason: "cap-reached" });
 
   assert.equal(finishJob(first, { worker: WORKER, status: "done" }, env), true);
-  assert.equal(claimNextJob({ worker: WORKER, cap: CAP }, env).id, second, "the project stayed busy after its job finished");
+  assert.equal(claimNextJob({ worker: WORKER, cap: 3 }, env).id, fourth, "the freed slot was not spent on the next pending job");
 });
 
-test("two jobs of the SAME project never overlap: their real children run one strictly after the other", async (t) => {
-  const env = makeHome(t, "serialization-same-project");
-  const project = makeRealGitProject(t, env, "alpha");
+test("two jobs of the SAME project run at the same time: their real children OVERLAP", async (t) => {
+  const env = makeHome(t, "parallel-same-project");
+  makeRealGitProject(t, env, "alpha");
   const { bin, logPath } = writeRealGitClaude(t);
   env.NIGHTSHIFT_CLAUDE_BIN = bin;
 
@@ -111,29 +118,25 @@ test("two jobs of the SAME project never overlap: their real children run one st
   assert.deepEqual(
     cycle.processed.map((job) => job.id).sort((a, b) => a - b),
     [job1, job2],
-    `both same-project jobs should have run, in series: ${JSON.stringify(cycle.processed)}`,
+    `both same-project jobs should have run: ${JSON.stringify(cycle.processed)}`,
   );
   const calls = readCalls(logPath);
   assert.equal(calls.length, 2, `both children should have run their own real git worktree add: ${JSON.stringify(calls)}`);
   for (const call of calls) assert.equal(call.ok, true, `a real git worktree add failed: ${JSON.stringify(call)}`);
   const [first, second] = calls;
   assert.ok(
-    first.end <= second.start,
-    `two children of the same project overlapped in the same checkout: ${JSON.stringify(calls)}`,
+    first.start < second.end && second.start < first.end,
+    `two children of the same project ran one strictly after the other: ${JSON.stringify(calls)}`,
   );
-  assert.equal(existsSync(join(project, `worktree-${job1}`)), false, "the first child left its worktree in the checkout");
-
-  const job3 = addJob({ project: "alpha", prompt: "fix the linter", timeoutS: 120 }, env).id;
-  const third = await runCycle({ jobId: job3, env });
-  assert.notEqual(third.processed[0]?.code, "dirty-checkout", `job 3 was blocked by what the other jobs left behind: ${JSON.stringify(third.processed)}`);
 });
 
-test("a job of ANOTHER project runs beside the busy one while maxConcurrent allows it", async (t) => {
-  const env = makeHome(t, "serialization-other-project");
+test("a job of ANOTHER project runs beside them while maxConcurrent allows it", async (t) => {
+  const env = makeHome(t, "parallel-other-project");
   makeRealGitProject(t, env, "alpha");
   makeRealGitProject(t, env, "beta");
   const { bin, logPath } = writeRealGitClaude(t);
   env.NIGHTSHIFT_CLAUDE_BIN = bin;
+  saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent: 3 } }, env);
 
   const alphaFirst = addJob({ project: "alpha", prompt: "fix the worker", priority: 1, timeoutS: 120 }, env).id;
   const alphaSecond = addJob({ project: "alpha", prompt: "fix the parser", priority: 2, timeoutS: 120 }, env).id;
@@ -155,7 +158,26 @@ test("a job of ANOTHER project runs beside the busy one while maxConcurrent allo
     `the job of the other project waited instead of running beside the first one: ${JSON.stringify([alphaOne, beta])}`,
   );
   assert.ok(
-    alphaOne.end <= alphaTwo.start,
-    `the two jobs of \`alpha\` overlapped: ${JSON.stringify([alphaOne, alphaTwo])}`,
+    alphaOne.start < alphaTwo.end && alphaTwo.start < alphaOne.end,
+    `the two jobs of \`alpha\` did not overlap: ${JSON.stringify([alphaOne, alphaTwo])}`,
   );
+});
+
+test("a same-project job whose canonical checkout another job dirtied is blocked, keeps its attempt and stays pending", async (t) => {
+  const env = makeHome(t, "parallel-dirty-checkout");
+  const project = makeRealGitProject(t, env, "alpha");
+  const { bin } = writeRealGitClaude(t);
+  env.NIGHTSHIFT_CLAUDE_BIN = bin;
+  // What a project that does NOT ignore the pipeline's worktree directory looks like while a first job runs:
+  // the worktree of that job sits inside the canonical checkout the next job would branch from.
+  execFileSync("git", ["-C", project, "worktree", "add", "-b", "nightshift/job-in-flight", join(project, "worktree-in-flight")], { stdio: "ignore" });
+  const id = addJob({ project: "alpha", prompt: "fix the parser", timeoutS: 120 }, env).id;
+
+  const cycle = await runCycle({ jobId: id, env });
+
+  assert.deepEqual(cycle.processed, [{ id, status: "blocked", code: "dirty-checkout" }]);
+  const row = getJob(id, env);
+  assert.equal(row.status, "pending", "a job blocked by the preflight was lost instead of staying in the queue");
+  assert.equal(row.attempts, 0, "the blocked job spent an attempt it never used");
+  assert.match(String(row.result), /dirty-checkout/);
 });

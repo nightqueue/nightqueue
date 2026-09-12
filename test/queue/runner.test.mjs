@@ -433,8 +433,9 @@ test("the drain runs the job it can claim and stops by itself once the queue is 
   assert.equal(DRAIN_INTERVAL_S, 15);
 });
 
-test("a drain held back by a busy project waits and tries again instead of exiting", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-drain-busy", []);
+test("a drain held back by the concurrency cap waits and tries again instead of exiting", async (t) => {
+  const { env } = makeRunnerHome(t, "runner-drain-cap", []);
+  saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent: 1 } }, env);
   const first = enqueue(env);
   claimJobById(first, { worker: "other-host:1", cap: 4 }, env);
   enqueue(env);
@@ -444,7 +445,7 @@ test("a drain held back by a busy project waits and tries again instead of exiti
   const passes = await runDrain({ env, cycles: 2, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
 
   assert.equal(passes.length, 2);
-  assert.deepEqual(seen, ["project-busy", "project-busy"]);
+  assert.deepEqual(seen, ["cap-reached", "cap-reached"], "a drain that hit the ceiling broke out of its loop instead of waiting");
   assert.deepEqual(slept, [DRAIN_INTERVAL_S * 1000]);
 });
 

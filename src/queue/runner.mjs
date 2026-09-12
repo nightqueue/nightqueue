@@ -20,7 +20,7 @@ import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, re
 import { backoffMs, classifyJobResult, isTransientFailure } from "./classify.mjs";
 import { refreshMergedJobs } from "./merged.mjs";
 import { preflight } from "./preflight.mjs";
-import { runnerPidfileState } from "./pidfile.mjs";
+import { ownRunnerRecord } from "./registry.mjs";
 import { repairWarningLine } from "./reconcile.mjs";
 import { decideResume, isSafeSegment, readRunState, writeRunTerminal } from "./resume.mjs";
 import { buildPrompt, cliEntrypoint, IDLE_TIMEOUT_S, spawnClaude } from "./spawn.mjs";
@@ -277,8 +277,7 @@ async function runJob(job, ctx) {
 // Directory this runner loaded its code from: the one it registered when it started, or the tree this process is running.
 function ownRuntimeDir(env) {
   try {
-    const state = runnerPidfileState(env);
-    const dir = state.status === "alive" && state.info.pid === process.pid ? state.info.runtimeDir : null;
+    const dir = ownRunnerRecord(env)?.runtimeDir ?? null;
     return typeof dir === "string" && dir ? dir : packageRoot();
   } catch {
     return packageRoot();
@@ -346,10 +345,6 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
       const claimed = acquire({ jobId, cap, env });
       if (!claimed.job) {
         reason = claimed.reason;
-        if (reason === "project-busy" && pool.size) {
-          await Promise.race(pool);
-          continue;
-        }
         break;
       }
       if (seen.has(claimed.job.id)) {
@@ -420,9 +415,9 @@ export const DRAIN_INTERVAL_S = 15;
 // Reasons of a cycle after which a drain has nothing left to do: the queue is empty, paused, the cycle was told to stop, or the tree it runs from is gone.
 const DRAIN_DONE_REASONS = new Set(["empty-queue", "paused", "already-tried", "runtime-gone"]);
 // Reasons the drain keeps waiting on: the pending job is held back by something the operator or another runner will clear.
-const DRAIN_WAIT_REASONS = new Set(["project-busy", "blocked", "concurrency-cap"]);
+const DRAIN_WAIT_REASONS = new Set(["blocked", "cap-reached"]);
 
-// Runs cycles until the queue has nothing pending, waiting between passes while the pending jobs are held back by a busy project or the concurrency cap - what "run the queue" means to an operator.
+// Runs cycles until the queue has nothing pending, waiting between passes while the pending jobs are held back by a preflight block or the concurrency cap - what "run the queue" means to an operator.
 export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {
   const options = withDefaults(deps, env);
   const state = { stopping: false };

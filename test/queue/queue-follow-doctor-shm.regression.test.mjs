@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../../src/cli/index.mjs";
-import { dbShmPath, runnerPidPath } from "../../src/config/paths.mjs";
+import { dbShmPath, runnerRegistryPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { stampRunnerDbWitness, writeRunnerPidfile } from "../../src/queue/pidfile.mjs";
+import { stampRunnerDbWitness, writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
@@ -71,7 +71,7 @@ async function diagnose(env) {
 
 // Replaces the witness of the registration, the state a home is left in once its shared-memory file was split and the process never restarted to re-stamp it.
 function rewriteWitness(env, dbShm) {
-  const path = runnerPidPath(env);
+  const path = runnerRegistryPath(process.pid, env);
   const info = JSON.parse(readFileSync(path, "utf8"));
   writeFileSync(path, `${JSON.stringify({ ...info, dbShm }, null, 2)}\n`);
 }
@@ -94,7 +94,7 @@ test("a follow session never loses a live holder's shared-memory file, and docto
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
 
   openDb(env);
-  writeRunnerPidfile(
+  writeRunnerRecord(
     { pid: process.pid, mode: "watch", jobId: null, intervalS: 5, startedAt: new Date().toISOString(), logPath: null, runtimeDir: null },
     env,
   );
@@ -127,6 +127,14 @@ test("a follow session never loses a live holder's shared-memory file, and docto
   assert.equal(shmIdentity(env), before, "the shared-memory file moved by the end of the follow session");
   assert.match(result.out.join("\n"), /cancelled/, "the follow session never rendered the row the third process wrote");
   assert.equal(holder.child.exitCode, null, "the holder died during the follow session");
+  // The follow answers every liveness probe with ESRCH, so `queue status` reads its own registration as stale and
+  // prunes it - which is what the brief asks of it. The runner is registered and stamped again for the checks below.
+  assert.equal(existsSync(runnerRegistryPath(process.pid, env)), false, "the follow kept a registration no process answered for");
+  writeRunnerRecord(
+    { pid: process.pid, mode: "watch", jobId: null, intervalS: 5, startedAt: new Date().toISOString(), logPath: null, runtimeDir: null },
+    env,
+  );
+  await stampRunnerDbWitness(env);
 
   const okAfter = await diagnose(env);
   assert.equal(okAfter.status, "ok", okAfter.detail);

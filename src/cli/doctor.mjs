@@ -25,7 +25,7 @@ import { PATH_MARK, binDirInPath, rcFilePath } from "../host/shell.mjs";
 import { DB_USER_VERSION, openDbReadOnly } from "../memory/db.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
 import { ORPHAN_PREDICATE } from "../memory/jobs.mjs";
-import { runnerPidfileState } from "../queue/pidfile.mjs";
+import { isRegistryFailure, listRunnerRecords, registryReadError } from "../queue/registry.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { firstLine } from "./report.mjs";
 import { runtimeLabel, runtimeLocation } from "./runtime-versions.mjs";
@@ -302,17 +302,30 @@ function shmIdentity(path) {
   }
 }
 
-// Compares the shared-memory file a live runner is attached to with the one on disk; without a live runner, or without a witness, the answer is an unknown and never a pass.
-function checkShmWitness(ctx, name) {
-  const state = runnerPidfileState(ctx.env, ctx.killImpl);
-  if (state.status !== "alive") return check(name, "ok", "no live runner to compare with");
-  const witness = state.info?.dbShm;
-  if (!witness?.ino) return check(name, "ok", `unknown: the live runner (pid ${state.info.pid}) registered no shared-memory witness`);
+// Compares the shared-memory file ONE live runner is attached to with the one on disk.
+function shmWitnessCheck(ctx, name, info) {
+  const witness = info.dbShm;
   const path = dbShmPath(ctx.env);
   const found = shmIdentity(path);
-  if (!found) return check(name, "warn", `the shared-memory file the runner (pid ${state.info.pid}) is attached to is gone (${path})`, SHM_HINT);
+  if (!found) return check(name, "warn", `the shared-memory file the runner (pid ${info.pid}) is attached to is gone (${path})`, SHM_HINT);
   if (found.ino === String(witness.ino) && found.dev === String(witness.dev)) return check(name, "ok", `the live runner is attached to the file on disk (inode ${found.ino})`);
-  return check(name, "warn", `the runner (pid ${state.info.pid}) holds inode ${witness.dev}:${witness.ino}, disk has ${found.dev}:${found.ino}`, SHM_HINT);
+  return check(name, "warn", `the runner (pid ${info.pid}) holds inode ${witness.dev}:${witness.ino}, disk has ${found.dev}:${found.ino}`, SHM_HINT);
+}
+
+// Compares the shared-memory file the live runners are attached to with the one on disk; without a live runner, or without a witness, the answer is an unknown and never a pass.
+function checkShmWitness(ctx, name) {
+  const records = listRunnerRecords(ctx.env, ctx.killImpl);
+  const registryError = registryReadError(records);
+  if (registryError !== null) return check(name, "ok", `unknown: the runner registry cannot be listed (${registryError})`);
+  const live = records.filter((record) => record.status === "alive");
+  if (!live.length) return check(name, "ok", "no live runner to compare with");
+  const witnessed = live.filter((record) => record.info.dbShm?.ino);
+  if (!witnessed.length) {
+    const pids = live.map((record) => `pid ${record.info.pid}`).join(", ");
+    return check(name, "ok", `unknown: the live runner (${pids}) registered no shared-memory witness`);
+  }
+  const checks = witnessed.map((record) => shmWitnessCheck(ctx, name, record.info));
+  return checks.find((entry) => entry.status !== "ok") ?? checks[0];
 }
 
 // Checks the shared-memory file of the database: the hidden orphans a filesystem left beside it, and whether a live runner is still attached to the one on disk.
@@ -368,7 +381,7 @@ function checkQueueJobs(ctx) {
   }
 }
 
-// How a live runner is described in the report, with its cadence and the tree it loaded from only when the pidfile carries them.
+// How a live runner is described in the report, with its cadence and the tree it loaded from only when its registration carries them.
 function liveRunnerDetail(info, env) {
   const cadence = Number.isInteger(info.intervalS) ? `, ${info.mode} every ${info.intervalS} s` : "";
   const label = runtimeLabel(info.runtimeDir, env);
@@ -384,24 +397,37 @@ function liveRunnerCheck(name, info, env) {
   return check(name, "ok", detail);
 }
 
-// Checks the pidfile of the runner, which the diagnosis only ever reads.
-function checkRunner(ctx) {
-  const name = "runner pidfile";
-  const state = runnerPidfileState(ctx.env, ctx.killImpl);
-  if (state.status === "missing") return check(name, "ok", "no runner registered");
-  if (state.status === "alive") return liveRunnerCheck(name, state.info, ctx.env);
-  if (state.status === "stale") {
-    return check(name, "warn", `stale (pid ${state.info.pid} is gone)`, "run `nightshift queue run --stop` to clear it");
-  }
-  if (state.status === "foreign") {
-    return check(name, "warn", `pid ${state.info.pid} belongs to another user, so it is not the runner`, `remove ${state.path}`);
-  }
-  return check(name, "warn", `unreadable: ${state.error}`, `remove ${state.path}`);
+// How one registration is named in the report: after the pid it belongs to, or after the registry when no pid can be read.
+function runnerRowName(record) {
+  return Number.isInteger(record.info?.pid) ? `runner ${record.info.pid}` : "runner registry";
 }
 
-// Checks the queue: the pause sentinel and the runner always, the orphaned jobs only once the database exists.
+// Checks one registration of the registry, which the diagnosis only ever reads.
+function checkRunnerRecord(record, env) {
+  const name = runnerRowName(record);
+  if (isRegistryFailure(record)) {
+    return check(name, "warn", `unknown: ${record.path} cannot be listed (${record.error}), so a live runner may be invisible`, `read the permissions of ${record.path}`);
+  }
+  if (record.status === "alive") return liveRunnerCheck(name, record.info, env);
+  if (record.status === "stale") {
+    return check(name, "warn", `stale (pid ${record.info.pid} is gone)`, "run `nightshift queue run --stop` to clear it");
+  }
+  if (record.status === "foreign") {
+    return check(name, "warn", `pid ${record.info.pid} belongs to another user, so it is not the runner`, `remove ${record.path}`);
+  }
+  return check(name, "warn", `unreadable: ${record.error}`, `remove ${record.path}`);
+}
+
+// Checks every registered runner, one row each, or reports that the registry holds none.
+function checkRunners(ctx) {
+  const records = listRunnerRecords(ctx.env, ctx.killImpl);
+  if (!records.length) return [check("runner registry", "ok", "no runner registered")];
+  return records.map((record) => checkRunnerRecord(record, ctx.env));
+}
+
+// Checks the queue: the pause sentinel and the runners always, the orphaned jobs only once the database exists.
 function checkQueue(ctx) {
-  const checks = [checkQueuePause(ctx), checkRunner(ctx)];
+  const checks = [checkQueuePause(ctx), ...checkRunners(ctx)];
   if (existsSync(dbPath(ctx.env))) checks.push(checkQueueJobs(ctx));
   return checks;
 }

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { dbPath } from "../config/paths.mjs";
 import { firstActiveJobId } from "../memory/jobs.mjs";
-import { runnerPidfileState } from "../queue/pidfile.mjs";
+import { liveRunnersReport } from "../queue/registry.mjs";
 
 const REFUSAL_TAIL =
   "the runtime cannot be replaced while it runs; stop it with nightshift queue run --stop or wait for the queue to drain";
@@ -17,29 +17,37 @@ function activeJobId(env) {
   }
 }
 
-// How the live runner is named, with whichever of the two facts is known: its pid, the job it holds, or both.
-function activeLabel({ pid, jobId }) {
-  const parts = [];
-  if (pid !== null) parts.push(`pid ${pid}`);
+// How the live runners are named, with whichever facts are known: every registered pid, the job one of them holds, or both.
+function activeLabel({ runners, jobId }) {
+  const parts = runners.map((runner) => `pid ${runner.pid}`);
   if (jobId !== null) parts.push(`job #${jobId}`);
   return parts.join(" / ");
 }
 
-// The tree the live runner registered it loaded from, named next to it so `--force` says exactly which one it is about to replace.
-function withRuntimeDir(label, state) {
-  const dir = state.status === "alive" ? state.info.runtimeDir : null;
-  return typeof dir === "string" && dir ? `${label}, runtime ${dir}` : label;
+// The trees the live runners registered they loaded from, named next to them so `--force` says exactly which ones it is about to replace.
+function withRuntimeDirs(label, runners) {
+  const dirs = [...new Set(runners.map((runner) => runner.runtimeDir).filter((dir) => typeof dir === "string" && dir))];
+  return dirs.length ? `${label}, ${dirs.map((dir) => `runtime ${dir}`).join(", ")}` : label;
 }
 
-// Refuses to replace the runtime under a live runner: a registered runner or a job holding a live lease both mean a process is executing the tree this install would swap.
+// The live runners, or a refusal when the registry could not even be listed: an install never treats a registry it cannot read as an idle host, and `--force` stays the only way through.
+function liveRunnersOrRefuse(ctx, force) {
+  const { runners, error } = liveRunnersReport(ctx.env, ctx.killImpl);
+  if (error === null) return runners;
+  const detail = `the runner registry cannot be listed (${error}), so a live runner may be invisible`;
+  if (force !== true) throw new UserError(`${detail} - ${REFUSAL_TAIL}`);
+  ctx.err(`warning: --force is replacing the runtime although ${detail}; the job it is running may fail`);
+  return runners;
+}
+
+// Refuses to replace the runtime under a live runner: any registered runner or a job holding a live lease means a process is executing the tree this install would swap.
 export function guardIdleRuntime(ctx, { force } = {}) {
-  const state = runnerPidfileState(ctx.env, ctx.killImpl);
-  const pid = state.status === "alive" ? state.info.pid : null;
+  const runners = liveRunnersOrRefuse(ctx, force);
   const jobId = activeJobId(ctx.env);
-  if (pid === null && jobId === null) return;
-  const label = activeLabel({ pid, jobId });
+  if (!runners.length && jobId === null) return;
+  const label = activeLabel({ runners, jobId });
   if (force === true) {
-    ctx.err(`warning: --force is replacing the runtime while a runner is active (${withRuntimeDir(label, state)}); the job it is running may fail`);
+    ctx.err(`warning: --force is replacing the runtime while a runner is active (${withRuntimeDirs(label, runners)}); the job it is running may fail`);
     return;
   }
   throw new UserError(`a runner is active (${label}) - ${REFUSAL_TAIL}`);

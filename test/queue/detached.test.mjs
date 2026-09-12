@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
-import { homeDir, runnerPidPath } from "../../src/config/paths.mjs";
+import { homeDir, runnerRegistryPath, runnersDir } from "../../src/config/paths.mjs";
 import { ensureHome } from "../../src/config/store.mjs";
-import { addJob, getJob } from "../../src/memory/jobs.mjs";
-import { writeRunnerPidfile } from "../../src/queue/pidfile.mjs";
+import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
+import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const CHILD_PID = 4242;
+const LIVE_PID = 5151;
 
 // A spawn double: it records every call and answers with a child that has a pid and can be unreferenced.
 function fakeSpawn(calls, { pid = CHILD_PID, fail = null } = {}) {
@@ -86,8 +87,8 @@ test("a run with no single job drains the queue detached, and `--max` reaches th
   assert.match(ran.stdout, /^runner started \(pid 4242\) - draining the queue until nothing is pending; follow with: nightshift queue status --follow/);
   assert.equal(ran.stdout.includes(join(homeDir(env), "logs")), true, `the runner logs outside the home: ${ran.stdout}`);
   assert.deepEqual(calls[0].args.slice(1), ["queue", "run", "--foreground", "--max", "2", "--drain"]);
-  assert.equal(existsSync(runnerPidPath(env)), true, "the parent left the registration of the drain to a child that has not booted yet");
-  const info = JSON.parse(readFileSync(runnerPidPath(env), "utf8"));
+  assert.equal(existsSync(runnerRegistryPath(CHILD_PID, env)), true, "the parent left the registration of the drain to a child that has not booted yet");
+  const info = JSON.parse(readFileSync(runnerRegistryPath(CHILD_PID, env), "utf8"));
   assert.deepEqual(
     { pid: info.pid, mode: info.mode, jobId: info.jobId },
     { pid: CHILD_PID, mode: "drain", jobId: null },
@@ -140,7 +141,7 @@ test("a child that comes back without a pid is a refusal, not a runner nobody ca
   assert.match(ran.stderr, /did not report a pid/);
 });
 
-test("queue run --watch registers the watcher in the pidfile and says how to stop it", async (t) => {
+test("queue run --watch registers the watcher in the registry and says how to stop it", async (t) => {
   const env = makeQueueHome(t, "detached-watch");
   const calls = [];
 
@@ -149,7 +150,7 @@ test("queue run --watch registers the watcher in the pidfile and says how to sto
   assert.equal(ran.code, 0, ran.stderr);
   assert.equal(ran.stdout, "runner started (pid 4242, every 30 s) - stop with: nightshift queue run --stop");
   assert.deepEqual(calls[0].args.slice(1), ["queue", "run", "--foreground", "--watch", "30"]);
-  const info = JSON.parse(readFileSync(runnerPidPath(env), "utf8"));
+  const info = JSON.parse(readFileSync(runnerRegistryPath(CHILD_PID, env), "utf8"));
   assert.deepEqual(
     { pid: info.pid, mode: info.mode, intervalS: info.intervalS },
     { pid: CHILD_PID, mode: "watch", intervalS: 30 },
@@ -158,54 +159,75 @@ test("queue run --watch registers the watcher in the pidfile and says how to sto
   assert.equal(info.logPath.startsWith(join(homeDir(env), "logs")), true);
 });
 
-test("a second watcher is refused while the first is alive, and a stale pidfile never blocks a start", async (t) => {
-  const env = makeQueueHome(t, "detached-watch-guard");
+test("a second watcher starts beside the first, and a stale registration never blocks a start", async (t) => {
+  const env = makeQueueHome(t, "detached-watch-second");
   ensureHome(env);
-  writeRunnerPidfile({ pid: CHILD_PID, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, env);
+  writeRunnerRecord({ pid: LIVE_PID, startedAt: "2026-09-08T21:00:00.000Z", mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, env);
   const calls = [];
 
-  const refused = await runCli(env, ["queue", "run", "--watch", "10"], { calls, alive: new Set([CHILD_PID]) });
-  assert.equal(refused.code, 0, refused.stderr);
-  assert.equal(refused.stdout, "runner already active (pid 4242, watch) - it will pick the job up");
-  assert.deepEqual(calls, [], "the guard let a second watcher be spawned");
+  const second = await runCli(env, ["queue", "run", "--watch", "10"], { calls, alive: new Set([LIVE_PID]) });
+  assert.equal(second.code, 0, second.stderr);
+  assert.equal(second.stdout, "runner started (pid 4242, every 10 s) - stop with: nightshift queue run --stop");
+  assert.equal(calls.length > 0, true, "the second watcher was never spawned");
+  assert.equal(existsSync(runnerRegistryPath(LIVE_PID, env)), true, "the start cleared the registration of the live runner");
+  assert.equal(JSON.parse(readFileSync(runnerRegistryPath(CHILD_PID, env), "utf8")).intervalS, 10);
 
-  const started = await runCli(env, ["queue", "run", "--watch", "10"], { calls });
-  assert.equal(started.code, 0, started.stderr);
-  assert.equal(started.stdout, "runner started (pid 4242, every 10 s) - stop with: nightshift queue run --stop");
-  assert.equal(JSON.parse(readFileSync(runnerPidPath(env), "utf8")).intervalS, 10);
+  const listed = await runCli(env, ["queue", "status"], { alive: new Set([LIVE_PID, CHILD_PID]) });
+  assert.deepEqual(
+    listed.out.slice(0, 2).map((line) => line.split(",")[0]),
+    [`runner: running (pid ${LIVE_PID}`, `runner: running (pid ${CHILD_PID}`],
+    listed.stdout,
+  );
+
+  const third = await runCli(env, ["queue", "run", "--watch", "10"], { calls });
+  assert.equal(third.code, 0, third.stderr);
+  assert.equal(existsSync(runnerRegistryPath(LIVE_PID, env)), false, "the start left a registration no process answers for");
 });
 
-test("queue run --stop covers a live runner, a stale pidfile and no runner at all", async (t) => {
+test("queue run --stop ends every registered runner, `--stop <pid>` ends one, and an unknown pid is refused", async (t) => {
   const env = makeQueueHome(t, "detached-stop");
 
   const absent = await runCli(env, ["queue", "run", "--stop"]);
   assert.equal(absent.code, 0, absent.stderr);
   assert.equal(absent.stdout, "runner is not running");
 
-  writeRunnerPidfile({ pid: CHILD_PID, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, env);
+  writeRunnerRecord({ pid: CHILD_PID, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, env);
   const stale = await runCli(env, ["queue", "run", "--stop"]);
   assert.equal(stale.code, 0, stale.stderr);
-  assert.equal(stale.stdout, "runner was not running (stale pidfile removed)");
-  assert.equal(existsSync(runnerPidPath(env)), false);
+  assert.equal(stale.stdout, "runner was not running (stale registration removed)");
+  assert.equal(existsSync(runnerRegistryPath(CHILD_PID, env)), false);
 
-  writeRunnerPidfile({ pid: CHILD_PID, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, env);
-  const alive = new Set([CHILD_PID]);
-  const stopped = await runCli(env, ["queue", "run", "--stop"], { alive });
-  assert.equal(stopped.code, 0, stopped.stderr);
-  assert.equal(stopped.stdout, `runner stopped (pid ${CHILD_PID})`);
-  assert.equal(existsSync(runnerPidPath(env)), false);
+  writeRunnerRecord({ pid: CHILD_PID, startedAt: "2026-09-08T21:00:00.000Z", mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, env);
+  writeRunnerRecord({ pid: LIVE_PID, startedAt: "2026-09-08T21:01:00.000Z", mode: "drain", intervalS: null, logPath: null }, env);
+  const alive = new Set([CHILD_PID, LIVE_PID]);
+  const one = await runCli(env, ["queue", "run", "--stop", String(CHILD_PID)], { alive });
+  assert.equal(one.code, 0, one.stderr);
+  assert.equal(one.stdout, `runner stopped (pid ${CHILD_PID})`);
+  assert.equal(existsSync(runnerRegistryPath(CHILD_PID, env)), false);
+  assert.equal(existsSync(runnerRegistryPath(LIVE_PID, env)), true, "stopping one runner ended the other one too");
+
+  const unknown = await runCli(env, ["queue", "run", "--stop", "999999"], { alive });
+  assert.equal(unknown.code, 1);
+  assert.match(unknown.stderr, /no runner is registered with pid 999999/);
+
+  const all = await runCli(env, ["queue", "run", "--stop"], { alive });
+  assert.equal(all.code, 0, all.stderr);
+  assert.equal(all.stdout, `runner stopped (pid ${LIVE_PID})`);
+  assert.equal(existsSync(runnerRegistryPath(LIVE_PID, env)), false);
 });
 
-test("queue status opens with the state of the runner, in the table and in the json", async (t) => {
+test("queue status opens with one line per live runner, in the table and in the json", async (t) => {
   const env = makeQueueHome(t, "detached-status");
   addJob({ project: "alpha", prompt: "fix the worker" }, env);
 
   const stopped = await runCli(env, ["queue", "status"]);
   assert.equal(stopped.out[0], "runner: stopped", stopped.stderr);
-  assert.equal(JSON.parse((await runCli(env, ["queue", "status", "--json"])).stdout).runner.running, false);
+  const none = JSON.parse((await runCli(env, ["queue", "status", "--json"])).stdout);
+  assert.equal(none.runner.running, false);
+  assert.deepEqual(none.runners, []);
 
   const startedAt = "2026-09-08T21:04:11.000Z";
-  writeRunnerPidfile({ pid: CHILD_PID, startedAt, mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, env);
+  writeRunnerRecord({ pid: CHILD_PID, startedAt, mode: "watch", intervalS: 30, logPath: "/tmp/a.log", detached: true }, env);
   const alive = new Set([CHILD_PID]);
 
   const table = await runCli(env, ["queue", "status"], { alive });
@@ -222,12 +244,67 @@ test("queue status opens with the state of the runner, in the table and in the j
     startedAt,
     logPath: "/tmp/a.log",
     runtimeDir: null,
+    detached: true,
   });
+  assert.deepEqual(payload.runners, [payload.runner], "the deprecated `runner` key is not the first entry of `runners`");
   assert.equal(payload.jobs.length, 1);
   assert.equal(payload.counts.pending, 1);
 
+  writeRunnerRecord({ pid: LIVE_PID, startedAt: "2026-09-08T21:05:00.000Z", mode: "drain", intervalS: null, logPath: null, detached: false }, env);
+  const two = JSON.parse((await runCli(env, ["queue", "status", "--json"], { alive: new Set([CHILD_PID, LIVE_PID]) })).stdout);
+  assert.deepEqual(two.runners.map((runner) => runner.pid), [CHILD_PID, LIVE_PID]);
+  assert.deepEqual(two.runner, two.runners[0], "the alias stopped naming the first registered runner");
+
+  const foreground = await runCli(env, ["queue", "status"], { alive: new Set([LIVE_PID]) });
+  assert.match(foreground.out[0], new RegExp(`^runner: running \\(pid ${LIVE_PID}, drain, foreground, since `), foreground.stdout);
+
   const empty = await runCli(makeQueueHome(t, "detached-status-empty"), ["queue", "status"]);
   assert.deepEqual(empty.out, ["runner: stopped", "no jobs in the queue"]);
+});
+
+test("queue status never answers `stopped` for a registry it could not read, and `--json` and `--stop` refuse outright", async (t) => {
+  const env = makeQueueHome(t, "detached-status-unreadable");
+  addJob({ project: "alpha", prompt: "fix the worker" }, env);
+  ensureHome(env);
+  writeFileSync(runnersDir(env), "not a directory");
+
+  const text = await runCli(env, ["queue", "status"]);
+  assert.equal(text.code, 0, text.stderr);
+  assert.match(text.out[0], /^runner: unknown - the runner registry cannot be listed \(ENOTDIR/, text.stdout);
+
+  const json = await runCli(env, ["queue", "status", "--json"]);
+  assert.equal(json.code, 1);
+  assert.match(json.stderr, /the runner registry cannot be listed/);
+  assert.equal(json.stdout, "", "`--json` answered for a registry it could not read");
+
+  const stop = await runCli(env, ["queue", "run", "--stop"]);
+  assert.equal(stop.code, 1);
+  assert.match(stop.stderr, /the runner registry cannot be listed/);
+});
+
+test("a single-job start that would claim nothing reports what it waits for, spawns nothing and leaves the job pending", async (t) => {
+  const env = makeQueueHome(t, "detached-waiting");
+  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  for (const prompt of ["hold the first slot", "hold the second slot"]) {
+    claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: 4 }, env);
+  }
+  const calls = [];
+
+  const waiting = await runCli(env, ["queue", "run", "--job", String(id)], { calls });
+
+  assert.equal(waiting.code, 0, waiting.stderr);
+  assert.deepEqual(waiting.out, [`job #${id} waiting: concurrency cap reached`, "2 of 2 jobs already running"]);
+  assert.deepEqual(calls, [], "a start that claims nothing spawned a runner anyway");
+  assert.equal(existsSync(runnersDir(env)), false, "a start that spawned nothing still registered a runner");
+  assert.equal(getJob(id, env).status, "pending");
+
+  const unknown = await runCli(env, ["queue", "run", "--job", "999"], { calls });
+  assert.equal(unknown.code, 1);
+  assert.match(unknown.stderr, /unknown job `999`/);
+
+  const watching = await runCli(env, ["queue", "run", "--watch", "5"], { calls });
+  assert.equal(watching.code, 0, watching.stderr);
+  assert.match(watching.stdout, /^runner started/, "a watcher refused to start under a full ceiling, which is exactly what it is there to wait out");
 });
 
 test("`--foreground` never spawns anything, and `--dry` keeps reporting without a runner", async (t) => {

@@ -3,7 +3,7 @@ import { rmSync } from "node:fs";
 import { test } from "node:test";
 import { ensureHome } from "../../src/config/store.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
-import { writeRunnerPidfile } from "../../src/queue/pidfile.mjs";
+import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { runCycle, runDrain } from "../../src/queue/runner.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
@@ -43,7 +43,7 @@ function makeRunnerHome(t, name, { projects = ["alpha"] } = {}) {
   useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout: doneStream(), exitCode: 0 }]);
   const runtimeDir = makeDir(t, `${name}-runtime`);
   ensureHome(env);
-  writeRunnerPidfile({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", intervalS: null, logPath: null, runtimeDir }, env);
+  writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", intervalS: null, logPath: null, runtimeDir }, env);
   return { env, runtimeDir };
 }
 

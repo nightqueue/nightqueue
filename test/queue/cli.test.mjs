@@ -9,7 +9,7 @@ import { addProject } from "../../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
-import { writeRunnerPidfile } from "../../src/queue/pidfile.mjs";
+import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
@@ -131,11 +131,14 @@ test("queue add --run --foreground exits 1 on any outcome other than done, and w
   assert.match(gated.stdout, /job #1 gate/);
   assert.equal(getJob(1, env).status, "gate");
 
-  claimJobById(addJob({ project: "alpha", prompt: "hold the only slot" }, env).id, { worker: "host:4242", cap: 4 }, env);
-  const busy = runCli(env, ["queue", "add", "alpha", "fix the parser", "--run", "--foreground"]);
-  assert.equal(busy.status, 1, busy.stdout);
-  assert.match(busy.stdout, /job #3 did not start \(project-busy\); it stays in the queue/);
-  assert.equal(getJob(3, env).status, "pending");
+  for (const prompt of ["hold the first slot", "hold the second slot"]) {
+    claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: 4 }, env);
+  }
+  const capped = runCli(env, ["queue", "add", "alpha", "fix the parser", "--run", "--foreground"]);
+  assert.equal(capped.status, 1, capped.stdout);
+  assert.match(capped.stdout, /job #4 waiting: concurrency cap reached/);
+  assert.match(capped.stdout, /2 of 2 jobs already running/);
+  assert.equal(getJob(4, env).status, "pending");
 });
 
 test("queue status --json answers with the jobs and the counts, and never with the prompt", (t) => {
@@ -300,7 +303,7 @@ test("queue status closes with the backlog nudge only when pending jobs sit with
 
   const watched = makeCliHome(t, "cli-status-backlog-watched");
   enqueue(watched, "fix the worker");
-  writeRunnerPidfile({ pid: process.pid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, watched);
+  writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, watched);
   const alive = runCli(watched, ["queue", "status"]);
   assert.equal(alive.stdout.includes("start the batch"), false, "the nudge showed up while a watcher was alive");
 
@@ -431,7 +434,7 @@ test("queue run --dry only reports, and pause stops the claiming until resume", 
 
   assert.equal(runCli(env, ["queue", "pause"]).status, 0);
   assert.equal(existsSync(queuePausedPath(env)), true);
-  assert.match(runCli(env, ["queue", "run", "--foreground"]).stdout, /nothing to run \(paused\)/);
+  assert.match(runCli(env, ["queue", "run", "--foreground"]).stdout, /the queue is paused - nothing will be claimed; resume with: nightshift queue resume/);
   assert.equal(getJob(id, env).status, "pending");
 
   assert.equal(runCli(env, ["queue", "resume"]).status, 0);

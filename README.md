@@ -337,11 +337,11 @@ reinstalls). It refuses while the queue is working:
 nightshift: a job is running - update after it finishes, or stop the runner first (nightshift queue run --stop)
 ```
 
-The refusal exits `1` and has two causes: a job holding a live lease, or a
-watcher registered in `$NIGHTSHIFT_HOME/runner.pid`. A job left behind by a crash
+The refusal exits `1` and has two causes: a job holding a live lease, or any runner
+registered under `$NIGHTSHIFT_HOME/runners/`. A job left behind by a crash
 does not count - its lease is dead, so it never blocks the command that repairs
 the installation. `nightshift update --force` overrides both, for when you know
-the state of the machine better than the pidfile does.
+the state of the machine better than the registry does.
 
 `NIGHTSHIFT_NO_UPDATE_CHECK=1` turns the check off entirely: no cache read, no
 request, no line, on every surface.
@@ -405,7 +405,7 @@ $NIGHTSHIFT_HOME/          # 0700
   runs/<project>/<slug>/   # run artifacts, written by the runtime
   logs/                    # one log per queue job plus one per runner
   queue.paused             # sentinel file, present only while the queue is paused
-  runner.pid               # registration of the runner that owns the queue, while one is up
+  runners/<pid>.json       # one registration per live runner, any number of them
 ```
 
 `NIGHTSHIFT_HOME` must sit on local disk. The memory database is SQLite in WAL
@@ -691,7 +691,7 @@ nightshift queue status --follow [2] [--until-idle]            # the same table,
 nightshift queue status 7 [--json]                             # one job, never with its prompt
 nightshift queue run [--job 7] [--max 2] [--dry]               # start the runner detached; --dry only reports
 nightshift queue run --watch [30]                              # start a watcher, one pass every N seconds
-nightshift queue run --stop                                    # end the watcher registered in the home
+nightshift queue run --stop [4242]                             # end every registered runner, or only the one with that pid
 nightshift queue run --foreground [--job 7]                    # run it in this process instead, for a script or CI
 nightshift queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
 nightshift queue cancel 7 --reason "not needed"                # cancel a pending, gated or orphaned job
@@ -768,9 +768,9 @@ never falls back to running the job in the foreground behind your back.
 
 **`nightshift queue run` with no other option drains the queue**: the child runs
 cycle after cycle until nothing is pending, waiting 15 s between passes while the
-pending jobs are held back by a busy project or the concurrency cap, and exits by
+pending jobs are held back by a preflight block or the concurrency cap, and exits by
 itself when the queue is empty. The command that starts it registers it in
-`$NIGHTSHIFT_HOME/runner.pid` with `mode: "drain"` for as long as it lives, so
+`$NIGHTSHIFT_HOME/runners/<pid>.json` with `mode: "drain"` for as long as it lives, so
 `queue status` shows `runner: running (pid <pid>, drain, runtime <version>, since <iso>)`
 the instant the start returns, and `--stop` ends it. Its output
 goes to `$NIGHTSHIFT_HOME/logs/runner-<stamp>.log`; the start prints
@@ -789,40 +789,49 @@ that depends on the outcome (`0` only for `done` on `--run`). `--dry` never deta
 either: it is a read-only report of what a cycle would do.
 
 **`--watch [seconds]` is the daemon**, one pass every `N` seconds (30 by default).
-It is registered in `$NIGHTSHIFT_HOME/runner.pid` with `pid`, `startedAt`, `mode`,
-`jobId`, `intervalS`, `logPath` and `runtimeDir`, and prints
+It is registered in `$NIGHTSHIFT_HOME/runners/<pid>.json` with `pid`, `startedAt`, `mode`,
+`jobId`, `intervalS`, `detached`, `logPath` and `runtimeDir`, and prints
 `runner started (pid <pid>, every <n> s) - stop with: nightshift queue run --stop`.
 `--job` and `--watch` are refused together: running one job and watching the whole
 queue are opposite intents.
 
-**One runner at a time, whatever started it.** A watcher, a drain and a single-job
-runner are all registered the same way, and every start path - `queue run`, `--watch`,
-`--job`, `queue add --run`, `queue retry --run`, their `--foreground` forms and the
-`queue_run` and `queue_retry` MCP tools - passes the same guard, under the home lock and
-in the same critical section as the registration, so two starts a few milliseconds apart
-can never both win. While one is live the others answer
-`runner already active (pid <pid>, <mode>) - it will pick the job up` and exit `0`,
-spawning nothing and leaving the job `pending` for the live runner to take; when the live
-runner is a single-job one, a refused drain adds `the live runner runs one job only -
-start the batch again once it exits: nightshift queue run`, because that runner will not
-pick the backlog up. A registration whose process is gone is cleared on the way and the
-start goes on.
+**Any number of runners, whatever started them.** A watcher, a drain and a single-job
+runner are all registered the same way, one file per pid, and every start path - `queue run`,
+`--watch`, `--job`, `queue add --run`, `queue retry --run`, their `--foreground` forms and the
+`queue_run` and `queue_retry` MCP tools - registers its runner under the home lock, in the
+same critical section as the prune of the dead registrations. **No start is ever refused
+because another runner is live**: the claim is one atomic `UPDATE` inside SQLite and
+`queue.maxConcurrent` is a ceiling over the whole home, so a second runner costs nothing and
+takes nothing away. What a start does refuse is spawning a child that would claim nothing:
+a single-job start against a full ceiling prints `job #<id> waiting: concurrency cap reached`,
+then `<active> of <cap> jobs already running` and, when a live drain or watcher is registered,
+`a live runner (pid <pid>, <mode>) will pick it up`; it spawns nothing, leaves the row
+`pending` and exits `0`. A job that is not pending answers `job #<id> is <status>, not pending -
+it will not be picked up`, an unknown id exits `1`, and a drain start on a paused queue says so
+instead of starting a child that would exit on its first cycle. A watcher always starts:
+waiting for the condition to clear is what a watcher is for. A registration whose process is
+gone is pruned on the way and the start goes on.
 
-**`nightshift queue run --stop` ends the registered runner**: it sends a `SIGTERM` and waits up
-to ten seconds for the process to go. It answers `runner stopped (pid <pid>)`,
-`runner was not running (stale pidfile removed)` or `runner is not running`, and exits
-`0` in the three cases; it exits `1` only when the process is still there after those
-ten seconds, saying that the runner finishes the job it is running and exits by
-itself. `--stop` takes no other option. Known limitation: if the watcher died and the
-system handed its pid number to another process inside the same boot session, `--stop`
-trusts the registration and signals that pid; confirming the real identity of a process
-would need `ps`//proc/ and is out of the scope of this command.
+**`nightshift queue run --stop [pid]` ends the registered runners**: without a pid it ends
+every one of them, signalling all of them first and then polling once, so N runners cost one
+ten-second timeout and not N; with a pid it ends exactly that one and leaves the others
+registered. It prints one line per runner - `runner stopped (pid <pid>)`,
+`runner was not running (stale registration removed)` or `runner is not running` - and exits
+`0` in those cases; it exits `1` when a process is still there after those ten seconds, saying
+that the runner finishes the job it is running and exits by itself. A registration owned by
+another user is reported as `runner (pid <pid>) belongs to another user; nightshift will not
+signal it` and never takes the stop of the healthy runners down with it, while `--stop <pid>`
+aimed AT that registration refuses, because there the refusal is the answer. An unknown pid
+fails with `no runner is registered with pid <pid>`. `--stop` takes no other option. Known
+limitation: if a runner died and the system handed its pid number to another process inside
+the same boot session, `--stop` trusts the registration and signals that pid; confirming the
+real identity of a process would need `ps`//proc/ and is out of the scope of this command.
 
 **A watcher stopped in the middle of a job never corrupts it.** The signal makes the
 runner stop claiming and end the child of the job it was running; that job is released
 back to `pending`, with its lease dropped and its attempt given back, so the next
 runner picks it up as if it had never started. The watcher then removes its own
-registration - and only its own, matched by pid, so it never clears the pidfile of
+registration - and only its own, matched by pid, so it never clears the registration of
 another runner.
 
 **`queue status` is a table, and `--follow` keeps it live.** One row per job with
@@ -842,11 +851,13 @@ is no color and no cursor movement. `nightshift queue status --follow [seconds]`
 (default 2) redraws the table in place until Ctrl-C - the terminal equivalent of
 a queue panel - and `--until-idle` makes it exit by itself once nothing is
 running or pending. `--follow` refuses `--json` and a single job id. `--json`
-answers with the same fields as before. The listing opens with the state of the
-runner - `runner: running (pid <pid>, watch every <n> s, runtime <version>, since <iso>)`
-or `runner: stopped` - and `--json` carries the same thing under `runner`. Reading the
-registration never changes it: one whose process is gone reads as stopped, and only
-`--stop` or the start of a new runner removes the file. The one thing `queue status`
+answers with the same fields as before. The listing opens with ONE line per live runner -
+`runner: running (pid <pid>, watch every <n> s[, foreground][, runtime <version>], since <iso>)`
+or `runner: stopped` when none is registered - and `--json` carries the whole list under
+`runners`, plus the singular `runner`: it is `runners[0]` (or the same all-null object as
+before when the list is empty), kept for one release and removed in the next minor - read
+`runners`. `queue status` prunes the registrations no process answers for; a registration
+owned by another user is left alone. The one thing `queue status`
 does write is the repair: before it prints anything it restores any job whose row says
 `running` or `pending` while the `terminal` witness of its run directory already says how
 it ended, and a repair it could not write is a warning on stderr, never a failed listing.
@@ -928,19 +939,22 @@ and session and drops the run directory - and only a plain directory of this hom
 never a symlink, never a path outside `<home>/runs/`; anything else is kept, with
 the reason printed, and the retry goes on.
 
-**One job per project at a time.** Two jobs of the same project never run
-together: the pipeline of each job creates its own git worktree from the
-canonical checkout, and two of them in the same checkout collide (a shared
-branch, a worktree left inside the working tree). A project with an active job
-is skipped by the claim, so the jobs behind it never block the rest of the
-queue: the next job of ANOTHER project is claimed instead, and the queue of one
-repository drains strictly in series, in priority order. `queue run` of a busy
-project refuses with `queue: nothing to run (project-busy)`.
+**Two jobs of the same project may run at the same time.** The claim filters by nothing
+but `pending`: the only limits are the atomic claim of one job and `queue.maxConcurrent`.
+Each job runs in its own git worktree, and merge conflicts between the pull requests of two
+jobs of one repository are the operator's to resolve. **The caveat is the preflight, and it
+stays:** a job only starts from a clean canonical checkout. In a project that does NOT ignore
+the directory the pipeline creates its worktree in (this repository ignores
+`.claude/worktrees/`), the worktree of the first job makes the checkout dirty, so the second
+same-project job is blocked with `dirty-checkout`, released with its attempt given back and
+retried by the drain every 15 s until the first job finishes - degraded and visible in
+`queue status`, never lost and never corrupt. Two same-project jobs whose slugs collide on
+one branch name fail the same safe way, one job at a time.
 
 **Ownership and orphans.** A claim is one atomic `UPDATE` inside SQLite, so two
 runners never share a job and `queue.maxConcurrent` (default `2`) is a ceiling
-over the whole home, not over one process - a ceiling across DISTINCT projects,
-since one project runs one job at a time. The claim arms a lease of
+over the whole home, not over one process - and, since the claim no longer filters by
+project, the whole ceiling may be spent on jobs of a single repository. The claim arms a lease of
 `timeout_s + 600` seconds; while the job runs, the runner re-arms it every
 `queue.leaseHeartbeatS` seconds (default `5`, accepted range `1..20`), which is
 the same write that answers whether it still owns the job. A `running` row
@@ -1071,16 +1085,28 @@ What a runtime has to provide, and what it can rely on:
   `${NIGHTSHIFT_HOME}/runtime/current` is the symlink that names the one in use. Every
   path the host is registered against goes through the link, as
   `${NIGHTSHIFT_HOME}/runtime/current/node_modules/@maykonv/nightshift`.
-- `${NIGHTSHIFT_HOME}/runner.pid` registers the runner that owns the queue while one is
-  up - `watch`, `drain` and `once` alike - as `{ "pid", "startedAt", "mode", "jobId",
-  "intervalS", "logPath", "runtimeDir", "uptimeS" }` with `startedAt` in ISO 8601.
-  `uptimeS` is the uptime of the machine at the instant of the registration, which is
-  what tells a registration left by an earlier boot session apart from a live one, and
-  `runtimeDir` is the version directory that runner loaded from. It is written by the
-  process that STARTS the runner, inside the home lock and in the same critical section
-  as the guard that allowed the start; a runner started with `--foreground` registers
-  itself under that same lock. It is removed by the runner itself on a clean exit,
-  matched by pid, or by `nightshift queue run --stop`.
+- `${NIGHTSHIFT_HOME}/runners/<pid>.json` registers ONE live runner - `watch`, `drain` and
+  `once` alike - as `{ "pid", "startedAt", "mode", "jobId", "intervalS", "detached",
+  "logPath", "runtimeDir", "uptimeS" }` with `startedAt` in ISO 8601. `uptimeS` is the
+  uptime of the machine at the instant of the registration, which is what tells a
+  registration left by an earlier boot session apart from a live one; `detached` is `false`
+  only for a runner started with `--foreground`, and `runtimeDir` is the version directory
+  that runner loaded from. The directory holds one file per live runner, mode `0700`, and
+  every reader classifies each entry on its own as `alive`, `stale`, `foreign` or
+  `unreadable`. A directory that is not there is an empty registry; a directory that cannot
+  be LISTED (a permission, a mount failure) is itself an `unreadable` entry, and every
+  reader then assumes a runner MAY be live: the install refuses without `--force`, the prune
+  of the old runtime versions deletes nothing, `doctor` warns, and `queue status --json` and
+  `queue_status` refuse instead of answering that nothing runs.
+  The record is written whole by the process that STARTS the runner, inside
+  the home lock; a runner started with `--foreground` registers itself under that same lock
+  unless its parent already did it for it. **Any later writer reads, MERGES its own keys
+  into and rewrites ONLY the file whose `pid` is its own, under the home lock** - that is
+  how the `dbShm` witness of the shared-memory file reaches the record. It is removed by the
+  runner itself on a clean exit, matched by pid, by `nightshift queue run --stop`, or by the
+  prune of any reader once no process answers for it. A `runner.pid` left by a version
+  before the registry is adopted read-only: listed, counted by the install refusal, stopped
+  by `--stop` and pruned when dead, never written again.
 - The output of a detached runner lives in
   `${NIGHTSHIFT_HOME}/logs/runner-<stamp>.log`, next to the one log per job.
 - Run artifacts live in `${NIGHTSHIFT_HOME}/runs/<project>/<slug>/`, always
@@ -1119,26 +1145,29 @@ without a runtime and a failed install never touches the link. The shims, the MC
 server, the hooks, the Claude Desktop entry and the plugin marketplace all name
 `current`, so they follow the switch without being rewritten. A process that is already
 running keeps the directory it loaded from - the old version stays on disk, and the
-runner records its path in `runner.pid`. After a successful switch the install keeps the
-last two version directories and deletes the rest, never the one `current` names nor the
-one a live runner is running from. An installation made before this layout, directly
+runner records its path in its registration. After a successful switch the install keeps the
+last two version directories and deletes the rest, never the one `current` names nor any one
+a live runner is running from, whichever version each of them loaded. An installation made before this layout, directly
 under `runtime/node_modules/`, keeps working and is never deleted by an install.
 
 **`setup`, `setup --from`, `update` and `init` refuse to replace the runtime while it
-is in use.** When a runner is registered alive or a job holds a live lease, they exit
-`1` with `a runner is active (pid P / job #N) - the runtime cannot be replaced while it
-runs; stop it with nightshift queue run --stop or wait for the queue to drain` and
-install nothing. `--force` installs anyway and says so on stderr. A runner whose version
+is in use.** When ANY registration of the registry is alive or a job holds a live lease,
+they exit `1` with `a runner is active (pid P / pid Q / job #N) - the runtime cannot be
+replaced while it runs; stop it with nightshift queue run --stop or wait for the queue to
+drain`, naming every live pid, and install nothing. `--force` installs anyway and says so on stderr. A runner whose version
 directory disappears anyway - a `--force`, or a hand-deleted tree - stops claiming,
 finishes the job it is running and exits saying so.
 
-**One runner owns the queue.** Every start goes through the same guard, under the home
-lock, in the same critical section as the registration: `queue run`, `queue run --watch`,
-`queue run --job`, `queue add --run`, `queue retry --run`, their `--foreground` forms and
-the `queue_run` and `queue_retry` MCP tools. While a live runner is registered, any of
-them answers `runner already active (pid P, <mode>) - it will pick the job up` and exits
-`0` - the work is queued, so a second runner is never needed and never started. A
-registration whose process is gone is cleared on the way and the start goes on.
+**Any number of runners own the queue together.** Every start registers its runner under
+the home lock, in the same critical section as the prune of the dead registrations:
+`queue run`, `queue run --watch`, `queue run --job`, `queue add --run`, `queue retry --run`,
+their `--foreground` forms and the `queue_run` and `queue_retry` MCP tools. None of them is
+ever refused because another runner is live. A single-job start whose job could not be
+claimed right now answers `waiting` with the reason and starts nothing, because its child
+would run one cycle and exit without claiming; `queue_run` and `queue_retry` answer the same
+thing as `{ "started": false, "waiting": { "reason": "cap-reached" }, "message": ... }`.
+`queue_status` answers `runners` with every live runner, and keeps `runner` as an alias of
+the first for one release.
 
 The eighteen MCP tools, with the parameters `nightshift mcp` actually accepts:
 

@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { homeDir, queuePausedPath } from "../../src/config/paths.mjs";
+import { homeDir, queuePausedPath, runnersDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
-import { writeRunnerPidfile } from "../../src/queue/pidfile.mjs";
+import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
@@ -494,11 +494,13 @@ test("queue_status never returns the prompt and truncates the free text at five 
     startedAt: null,
     logPath: null,
     runtimeDir: null,
+    detached: null,
   });
+  assert.deepEqual(listed.runners, [], "a home with no runner answered with one");
 
   const startedAt = "2026-09-08T21:04:11.000Z";
   const runtimeDir = "/tmp/runtime/versions/1.0.0-20260911T031500Z";
-  writeRunnerPidfile({ pid: process.pid, startedAt, mode: "watch", intervalS: 30, logPath: "/tmp/runner.log", runtimeDir }, env);
+  writeRunnerRecord({ pid: process.pid, startedAt, mode: "watch", intervalS: 30, logPath: "/tmp/runner.log", runtimeDir }, env);
   const watched = payloadOf(await client.callTool({ name: "queue_status", arguments: { limit: null, job_id: null } }));
   assert.deepEqual(watched.runner, {
     running: true,
@@ -509,12 +511,27 @@ test("queue_status never returns the prompt and truncates the free text at five 
     startedAt,
     logPath: "/tmp/runner.log",
     runtimeDir,
+    detached: null,
   });
+  assert.deepEqual(watched.runners, [watched.runner], "the deprecated `runner` key is not the first entry of `runners`");
   assert.equal("runner" in payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: id } })), false, "the detail of a job grew a runner");
 
   const unknown = await client.callTool({ name: "queue_status", arguments: { job_id: 99 } });
   assert.equal(unknown.isError, true);
   assert.match(textOf(unknown), /unknown job `99`/);
+});
+
+test("queue_status refuses instead of answering with no runner for a registry it could not read", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-status-unreadable");
+  addJob({ project: "alpha", prompt: "fix the worker" }, env);
+  rmSync(runnersDir(env), { recursive: true, force: true });
+  writeFileSync(runnersDir(env), "not a directory");
+  const client = await connect(t, env);
+
+  const refused = await client.callTool({ name: "queue_status", arguments: { limit: null, job_id: null } });
+
+  assert.equal(refused.isError, true, textOf(refused));
+  assert.match(textOf(refused), /the runner registry cannot be listed/);
 });
 
 const MERGE_SHA = "d3605a5a4d7aaec342d649135cdbd128a042e29d";
@@ -580,7 +597,7 @@ test("queue_status answers with the nudge that matches the state of the queue, a
 
   const watchedEnv = makeQueueHome(t, "mcp-queue-hint-watch");
   addJob({ project: "alpha", prompt: "fix the worker" }, watchedEnv);
-  writeRunnerPidfile(
+  writeRunnerRecord(
     { pid: process.pid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/runner.log" },
     watchedEnv,
   );
@@ -593,6 +610,15 @@ test("queue_run comes back at once with the log of the detached runner, inside t
   const env = makeQueueHome(t, "mcp-queue-run");
   const client = await connect(t, env);
 
+  const paused = payloadOf(await client.callTool({ name: "queue_run", arguments: { job_id: null } }));
+  assert.deepEqual(
+    { started: paused.started, pid: paused.pid, reason: paused.waiting?.reason },
+    { started: false, pid: null, reason: "paused" },
+    "a drain started on a paused queue, where its child would exit on its first cycle",
+  );
+  assert.match(paused.message, /the queue is paused - nothing will be claimed/);
+
+  rmSync(queuePausedPath(env), { force: true });
   const started = payloadOf(await client.callTool({ name: "queue_run", arguments: { job_id: null } }));
 
   assert.equal(started.ok, true);
@@ -609,25 +635,44 @@ test("queue_run comes back at once with the log of the detached runner, inside t
   assert.ok(tool.description.includes("nightshift queue run --stop"), "the tool does not say how a watcher is stopped");
 });
 
-test("queue_run and queue_retry start nothing while a runner is live, and answer with the runner that owns the queue", async (t) => {
-  const env = makeQueueHome(t, "mcp-queue-run-guard");
+test("queue_run and queue_retry start nothing when the ceiling is full, and say what the job is waiting for", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-run-waiting");
+  rmSync(queuePausedPath(env), { force: true });
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
-  const busy = `runner already active (pid ${process.pid}, drain) - it will pick the job up`;
-  writeRunnerPidfile({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", intervalS: null, logPath: null }, env);
+  for (const prompt of ["hold the first slot", "hold the second slot"]) {
+    claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: 4 }, env);
+  }
+  writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", intervalS: null, logPath: null }, env);
   const client = await connect(t, env);
 
-  const started = payloadOf(await client.callTool({ name: "queue_run", arguments: { job_id: null } }));
+  const started = payloadOf(await client.callTool({ name: "queue_run", arguments: { job_id: id } }));
   assert.deepEqual(
-    { ok: started.ok, started: started.started, message: started.message, pid: started.pid },
-    { ok: true, started: false, message: busy, pid: process.pid },
+    { ok: started.ok, started: started.started, pid: started.pid, reason: started.waiting?.reason },
+    { ok: true, started: false, pid: null, reason: "cap-reached" },
   );
-  assert.deepEqual(started.runner, { pid: process.pid, mode: "drain", logPath: null });
-  assert.equal(existsSync(join(homeDir(env), "logs")), false, "a refused start opened the log of a runner nobody started");
+  assert.match(started.message, /job #1 waiting: concurrency cap reached; 2 of 2 jobs already running/);
+  assert.match(started.message, new RegExp(`a live runner \\(pid ${process.pid}, drain\\) will pick it up`));
+  assert.equal(existsSync(join(homeDir(env), "logs")), false, "a start that claims nothing opened the log of a runner nobody started");
 
   assert.equal(payloadOf(await client.callTool({ name: "queue_cancel", arguments: { job_id: id, reason: "not needed" } })).ok, true);
   const retried = payloadOf(await client.callTool({ name: "queue_retry", arguments: { job_id: id, run: true } }));
-  assert.deepEqual({ started: retried.started, message: retried.message }, { started: false, message: busy });
-  assert.equal(getJob(id, env).status, "pending", "the retried job is not pending, so the live runner will never claim it");
+  assert.deepEqual({ started: retried.started, reason: retried.waiting?.reason }, { started: false, reason: "cap-reached" });
+  assert.equal(getJob(id, env).status, "pending", "the retried job is not pending, so no runner will ever claim it");
+});
+
+test("queue_run starts a runner even while another one is live, and queue_status lists them all", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-run-parallel");
+  rmSync(queuePausedPath(env), { force: true });
+  writeRunnerRecord({ pid: process.pid, startedAt: "2026-09-08T21:00:00.000Z", mode: "drain", intervalS: null, logPath: null }, env);
+  const client = await connect(t, env);
+
+  const started = payloadOf(await client.callTool({ name: "queue_run", arguments: { job_id: null } }));
+
+  assert.equal(started.started, true, `a start was refused while another runner was live: ${JSON.stringify(started)}`);
+  assert.equal(Number.isInteger(started.pid), true);
+  const listed = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(listed.runners.some((runner) => runner.pid === process.pid), true, "the live runner left the listing");
+  assert.equal(listed.runner.pid, listed.runners[0].pid);
 });
 
 test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a live run or a finished one", async (t) => {

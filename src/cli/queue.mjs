@@ -28,18 +28,21 @@ import {
   narrateLog,
   noticeNarration,
 } from "../queue/narrate.mjs";
+import { blockerLines, claimBlocker } from "../queue/claim.mjs";
 import {
-  removeOwnRunnerPidfile,
-  runnerPidfileState,
-  runnerView,
+  liveRunnersReport,
+  pruneDeadRunners,
+  removeOwnRunnerRecord,
   stampRunnerDbWitness,
+  stopAllRunners,
   stopRunner,
+  STOPPED_RUNNER,
   STOP_TIMEOUT_MS,
-} from "../queue/pidfile.mjs";
+} from "../queue/registry.mjs";
 import { repairWarningLine } from "../queue/reconcile.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
-import { registerForegroundRunner, runnerBusyAdvisory, runnerBusyLine, runnerMode, startQueueRunner } from "../queue/start.mjs";
+import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { registerProject } from "./project.mjs";
 import { confirm } from "./prompt.mjs";
@@ -144,23 +147,9 @@ async function resolveTarget(config, positionals, values, ctx) {
   return { project: await offerRegistration(config, values, ctx), words: positionals, fromCwd: false };
 }
 
-// Tells the operator the job of a refused single-job start will not be picked up, because its row is no longer pending.
-function notPendingLine(jobId, env) {
-  if (jobId === null) return null;
-  const job = getJob(jobId, env);
-  if (!job || job.status === "pending") return null;
-  return `job #${jobId} is ${job.status}, not pending - it will not be picked up`;
-}
-
-// Everything a refused start says: the refusal itself, the advisory of a runner that stops after one job, and the row that stays where it is.
-function busyLines({ pid, mode }, { jobId, watchIntervalS }, env) {
-  const advisory = runnerBusyAdvisory(mode, runnerMode({ jobId, watchIntervalS }));
-  return [runnerBusyLine(pid, mode), advisory, notPendingLine(jobId, env)].filter(Boolean);
-}
-
-// Reports the live runner that made this start unnecessary; a start nobody needed is not a failure.
-function reportBusy(guard, options, ctx) {
-  for (const line of busyLines(guard, options, ctx.env)) ctx.out(line);
+// Reports why a start would claim nothing and spawned nothing; a start nobody needed is not a failure.
+function reportWaiting(blocker, ctx) {
+  for (const line of blockerLines(blocker, ctx.env)) ctx.out(line);
   return 0;
 }
 
@@ -171,7 +160,7 @@ function startedLine({ jobId, pid, watchIntervalS, logPath }) {
   return `runner started (pid ${pid}) - draining the queue until nothing is pending; follow with: nightshift queue status --follow (log: ${logPath})`;
 }
 
-// Starts the runner detached, with the guard and the registration inside one hold of the home lock, and says what happened.
+// Starts the runner detached, with the prune and the registration inside one hold of the home lock, and says what happened.
 async function startDetached({ jobId = null, max = null, watchIntervalS = null }, ctx) {
   const started = await startQueueRunner({
     jobId,
@@ -181,22 +170,27 @@ async function startDetached({ jobId = null, max = null, watchIntervalS = null }
     spawnImpl: ctx.spawnImpl,
     killImpl: ctx.killImpl,
   });
-  if (!started.started) return reportBusy(started, { jobId, watchIntervalS }, ctx);
+  if (!started.started) return reportWaiting(started.waiting, ctx);
   ctx.out(startedLine({ jobId, pid: started.pid, watchIntervalS, logPath: started.logPath }));
   return 0;
 }
 
-// Runs the queue in THIS process as the registered runner, unless another one already owns it; the connection is opened here so the registration can witness which shared-memory file this runner is attached to, and it never outlives the run.
+// Runs the queue in THIS process as a registered runner; the connection is opened here so the registration can witness which shared-memory file this runner is attached to, and it never outlives the run.
 async function runGuardedHere({ jobId = null, watchIntervalS = null, ctx, run }) {
-  const guard = await registerForegroundRunner({ jobId, watchIntervalS, env: ctx.env, killImpl: ctx.killImpl });
-  if (!guard.ok) return reportBusy(guard, { jobId, watchIntervalS }, ctx);
+  await registerForegroundRunner({ jobId, watchIntervalS, env: ctx.env, killImpl: ctx.killImpl });
   try {
     openDb(ctx.env);
     await stampRunnerDbWitness(ctx.env);
     return await run();
   } finally {
-    removeOwnRunnerPidfile(ctx.env);
+    removeOwnRunnerRecord(ctx.env);
   }
+}
+
+// Why the cycle of a single job claimed nothing, in the same words a detached start would have used.
+function notStartedLines(job, cycle, ctx) {
+  const blocker = claimBlocker({ jobId: job.id, mode: "once", env: ctx.env });
+  return blocker ? blockerLines(blocker, ctx.env) : [`job #${job.id} did not start (${cycle.reason}); it stays in the queue`];
 }
 
 // Runs one job here and turns its outcome into the exit code: 0 only when it finished as `done`.
@@ -205,7 +199,7 @@ async function runJobHere(job, ctx) {
   const cycle = await runCycle({ jobId: job.id, max: 1, env: ctx.env });
   const processed = cycle.processed.find((entry) => entry.id === job.id);
   if (!processed) {
-    ctx.out(`job #${job.id} did not start (${cycle.reason}); it stays in the queue`);
+    for (const line of notStartedLines(job, cycle, ctx)) ctx.out(line);
     return 1;
   }
   ctx.out(formatProcessed(processed));
@@ -507,22 +501,26 @@ function runnerCadence(runner) {
   return `${runner.mode ?? "runner"}`;
 }
 
-// The `runner:` line of `queue status`, the first thing the operator reads about the queue: the registered runner, or the job that runs without one.
-function formatRunner(runner, activeJobs = 0, env = process.env) {
-  if (runner.running) {
-    const label = runtimeLabel(runner.runtimeDir, env);
-    const runtime = label ? `, runtime ${label}` : "";
-    return `runner: running (pid ${runner.pid}, ${runnerCadence(runner)}${runtime}, since ${runner.startedAt})`;
-  }
-  if (activeJobs > 0) return `runner: ${pendingJobs(activeJobs).replace("pending", "running")} under a one-shot runner - nothing will pick up the pending jobs after it (start a drain with: nightshift queue run)`;
-  return "runner: stopped";
+// The `runner:` line of one registered runner, with the cadence it works the queue at and the tree it loaded from.
+function formatRunner(runner, env = process.env) {
+  const label = runtimeLabel(runner.runtimeDir, env);
+  const runtime = label ? `, runtime ${label}` : "";
+  const foreground = runner.detached === false ? ", foreground" : "";
+  return `runner: running (pid ${runner.pid}, ${runnerCadence(runner)}${foreground}${runtime}, since ${runner.startedAt})`;
+}
+
+// What `queue status` opens with: one line per live runner, or the state of a queue nobody is working.
+function formatRunners(runners, activeJobs = 0, env = process.env) {
+  if (runners.length) return runners.map((runner) => formatRunner(runner, env));
+  if (activeJobs > 0) return [`runner: ${pendingJobs(activeJobs).replace("pending", "running")} under a one-shot runner - nothing will pick up the pending jobs after it (start a drain with: nightshift queue run)`];
+  return ["runner: stopped"];
 }
 
 // The line `queue status` closes with when a backlog is sitting there with nobody working it, or when the runner gave a job back.
-function backlogLine({ activeJobs, counts, runner, jobs = [] }) {
+function backlogLine({ activeJobs, counts, runners, jobs = [] }) {
   const blocked = jobs.map(blockedOf).filter(Boolean);
   if (blocked.length) return `${blocked.length} job${blocked.length === 1 ? "" : "s"} blocked (${[...new Set(blocked.map((entry) => entry.code))].join(", ")}) - fix the cause, the runner retries by itself`;
-  if (!isQueueIdle({ activeJobs, runner }) || counts.pending === 0) return null;
+  if (!isQueueIdle({ activeJobs, runners }) || counts.pending === 0) return null;
   return `${pendingJobs(counts.pending)} waiting - start the batch: nightshift queue run`;
 }
 
@@ -545,20 +543,33 @@ function sweepMerged(ctx) {
   refreshMergedJobs({ env: ctx.env, ghImpl: prViewer(ctx.env, ctx.spawnSyncImpl) });
 }
 
-// Lines of the queue view: runner, table, counts and the backlog hint, in that order.
+// Lists the live runners and the failure to list them apart, dropping the registrations no process answers for; a prune that fails never fails the listing.
+function readRunners(ctx) {
+  try {
+    pruneDeadRunners(ctx.env, ctx.killImpl);
+  } catch {}
+  return liveRunnersReport(ctx.env, ctx.killImpl);
+}
+
+// The `runner:` line of a home whose registry could not be listed: nothing is known about the runners, least of all that none is live.
+function unreadableRegistryLine(error) {
+  return `runner: unknown - the runner registry cannot be listed (${error}), a runner may be live; run \`nightshift doctor\``;
+}
+
+// Lines of the queue view: one line per runner, table, counts and the backlog hint, in that order.
 function queueViewLines(values, ctx) {
   sweepMerged(ctx);
   const jobs = listJobs({ limit: requireInt("--limit", values.limit) }, ctx.env).map(jobView);
   const counts = countsByStatus(ctx.env);
-  const runner = runnerView(runnerPidfileState(ctx.env, ctx.killImpl));
+  const { runners, error } = readRunners(ctx);
   const activeJobs = countActiveJobs(ctx.env);
-  const lines = [formatRunner(runner, activeJobs, ctx.env)];
-  if (!jobs.length) return { lines: [...lines, "no jobs in the queue"], idle: true };
+  const lines = error === null ? formatRunners(runners, activeJobs, ctx.env) : [unreadableRegistryLine(error)];
+  if (!jobs.length) return { lines: [...lines, "no jobs in the queue"], idle: error === null };
   lines.push(...formatTable(jobs, ctx));
   lines.push(Object.entries(counts).map(([status, total]) => `${status}=${total}`).join("  "));
-  const backlog = backlogLine({ activeJobs, counts, runner, jobs });
+  const backlog = error === null ? backlogLine({ activeJobs, counts, runners, jobs }) : null;
   if (backlog) lines.push(backlog);
-  return { lines, idle: isQueueIdle({ activeJobs, runner }) && counts.pending === 0 };
+  return { lines, idle: error === null && isQueueIdle({ activeJobs, runners }) && counts.pending === 0 };
 }
 
 // Keeps redrawing the queue view until Ctrl-C, or until the queue goes idle when asked; on a pipe it only prints what changed.
@@ -620,7 +631,9 @@ async function printStatus(argv, ctx) {
   if (values.json) {
     sweepMerged(ctx);
     const jobs = listJobs({ limit: requireInt("--limit", values.limit) }, ctx.env).map(jobView);
-    ctx.out(JSON.stringify({ runner: runnerView(runnerPidfileState(ctx.env, ctx.killImpl)), jobs, counts: countsByStatus(ctx.env) }));
+    const { runners, error } = readRunners(ctx);
+    if (error !== null) throw new UserError(`the runner registry cannot be listed (${error}); \`--json\` will not answer that no runner is running for a registry it could not read`);
+    ctx.out(JSON.stringify({ runner: runners[0] ?? STOPPED_RUNNER, runners, jobs, counts: countsByStatus(ctx.env) }));
     return true;
   }
   if (intervalS !== null) {
@@ -671,11 +684,16 @@ const RUN_OPTIONS = {
   dry: { type: "boolean" },
   json: { type: "boolean" },
   foreground: { type: "boolean" },
-  stop: { type: "boolean" },
+  stop: { type: "string" },
   drain: { type: "boolean" },
 };
 
-// Refuses `--stop` next to any other option: ending the runner reads nothing else of the command line.
+// Turns a bare `--stop` into `--stop=`, because strict parseArgs has no optional-value option; the empty value means every runner.
+function normalizeStopArgv(argv) {
+  return argv.flatMap((token, index) => (token === "--stop" && !isPositiveIntToken(argv[index + 1]) ? ["--stop="] : [token]));
+}
+
+// Refuses `--stop` next to any other option: ending a runner reads nothing else of the command line.
 function checkStopAlone(values) {
   const others = Object.keys(values).filter((name) => name !== "stop");
   if (others.length) throw new UserError(`\`--stop\` takes no other option; usage: ${USAGE.run}`);
@@ -688,20 +706,30 @@ function checkJobNotWatched(values) {
   }
 }
 
-// What the operator reads after a stop, and the exit code it answers with: only a runner that refuses to die fails.
-function stopReport({ outcome, pid }) {
+// What the operator reads after a stop, and the exit code it answers with: only a runner that stays behind fails.
+function stopReport({ outcome, pid, path }) {
   if (outcome === "absent") return { line: "runner is not running", code: 0 };
-  if (outcome === "stale") return { line: "runner was not running (stale pidfile removed)", code: 0 };
+  if (outcome === "stale") return { line: "runner was not running (stale registration removed)", code: 0 };
   if (outcome === "stopped") return { line: `runner stopped (pid ${pid})`, code: 0 };
+  if (outcome === "foreign") {
+    return { line: `runner (pid ${pid}) belongs to another user; nightshift will not signal it - check that pid and remove ${path} by hand`, code: 1 };
+  }
   const seconds = STOP_TIMEOUT_MS / 1000;
   return { line: `runner (pid ${pid}) did not stop within ${seconds}s; it finishes the job it is running and exits by itself`, code: 1 };
 }
 
-// Runs `queue run --stop`, which ends the watcher registered in the pidfile.
-async function runStop(ctx) {
-  const report = stopReport(await stopRunner({ env: ctx.env, killImpl: ctx.killImpl }));
-  ctx.out(report.line);
-  return report.code;
+// Ends the runners `--stop` names: every registered one, or the single pid the operator wrote.
+async function stoppedRunners(value, ctx) {
+  const stop = { env: ctx.env, killImpl: ctx.killImpl };
+  if (value === "") return await stopAllRunners(stop);
+  return [await stopRunner({ pid: requireInt("--stop", value), ...stop })];
+}
+
+// Runs `queue run --stop [pid]`, which ends every registered runner or the one the operator named.
+async function runStop(value, ctx) {
+  const reports = (await stoppedRunners(value, ctx)).map(stopReport);
+  for (const report of reports) ctx.out(report.line);
+  return reports.some((report) => report.code !== 0) ? 1 : 0;
 }
 
 // Runs the drain loop in this process, as the registered runner of the queue.
@@ -732,11 +760,11 @@ async function runCycleHere({ jobId, max, json }, ctx) {
 
 // Runs `queue run`: it starts the runner detached unless `--foreground`, `--dry` or `--stop` says otherwise.
 async function runRun(argv, ctx) {
-  const { values, positionals } = parseCommand(normalizeWatchArgv(argv), RUN_OPTIONS);
+  const { values, positionals } = parseCommand(normalizeStopArgv(normalizeWatchArgv(argv)), RUN_OPTIONS);
   checkArgs(positionals, { max: 0, usage: USAGE.run });
-  if (values.stop === true) {
+  if (values.stop !== undefined) {
     checkStopAlone(values);
-    return await runStop(ctx);
+    return await runStop(values.stop, ctx);
   }
   checkJobNotWatched(values);
   const jobId = requireInt("--job", values.job) ?? null;
@@ -751,6 +779,8 @@ async function runRun(argv, ctx) {
   if (values.foreground !== true) return await startDetached({ jobId, max, watchIntervalS: intervalS }, ctx);
   if (intervalS !== null) return await runWatchHere({ intervalS, jobId, max }, ctx);
   if (values.drain === true && jobId === null) return await runDrainHere({ max }, ctx);
+  const waiting = claimBlocker({ jobId, mode: runnerMode({ jobId }), env: ctx.env });
+  if (waiting) return reportWaiting(waiting, ctx);
   return await runGuardedHere({ jobId, ctx, run: () => runCycleHere({ jobId, max, json: values.json === true }, ctx) });
 }
 

@@ -110,6 +110,40 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Any number of runners now work the queue together. A runner registers as
+  `~/.nightshift/runners/<pid>.json`, one file per live process, carrying `pid`,
+  `startedAt`, `mode`, `jobId`, `intervalS`, `detached`, `logPath`, `runtimeDir`
+  and `uptimeS`; no start is ever refused because another runner is live.
+  `queue status` prints one `runner:` line per live runner and prunes the
+  registrations no process answers for, `doctor` reports one row per runner with
+  its own runtime, `queue run --stop` ends every registered runner (one report
+  line each, one shared ten-second timeout) and `queue run --stop <pid>` ends
+  exactly one, and `setup`, `setup --from`, `update` and `init` refuse while ANY
+  registration is alive, naming every live pid. A single-job start that could not
+  claim its job now answers `job #N waiting: concurrency cap reached` and spawns
+  nothing, instead of reporting a runner that would claim nothing; a drain start
+  on a paused queue says so; a watcher always starts. A `runner.pid` left by a
+  previous version is adopted read-only until it is stopped or pruned. A
+  registry directory that cannot be LISTED - a permission, a mount failure - is
+  never read as a home without runners: it is its own `unreadable` entry, so the
+  install refuses (`--force` still goes through), the prune of the old runtime
+  versions deletes nothing, `doctor` warns naming the directory, `queue status`
+  opens with `runner: unknown`, and `queue status --json` and the MCP
+  `queue_status` refuse instead of answering that nothing runs. The
+  decision is recorded in
+  `docs/decisions/0004-parallel-runners-registry.md`.
+- Two jobs of the same project may now run at the same time: the claim no longer
+  filters by project, so the only limits are the atomic claim of one job and
+  `queue.maxConcurrent` - which also means the whole ceiling may be spent on one
+  repository, and that merge conflicts between the pull requests of two jobs of
+  one project are the operator's to resolve. The clean-canonical-checkout
+  preflight stays: in a project that does not ignore the directory the pipeline
+  creates its worktree in, the second same-project job is blocked with
+  `dirty-checkout`, keeps its attempt and is retried by the drain until the first
+  one finishes. The `project-busy` claim reason is gone.
+- A drain that meets the concurrency ceiling now waits 15 s and passes again
+  instead of exiting: the set of reasons it waits on named `concurrency-cap`, a
+  string the claim never produces, and now names `cap-reached`.
 - The refusal `nightshift update` already had is now shared by `nightshift
   setup`, `setup --from` and `nightshift init`: while a runner is registered
   alive or a job holds a live lease, all four exit 1 with `a runner is active
@@ -132,6 +166,15 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - `npm run release:check` also refuses a working tree with uncommitted changes,
   before the version and the pack checks, because a publish ships what is on
   disk and not what is committed.
+
+### Deprecated
+
+- The singular `runner` key of `nightshift queue status --json` and of the MCP
+  `queue_status` answer. It is now the first entry of `runners` (and the same
+  all-null object as before when no runner is live), kept for one release and
+  removed in the next minor - read `runners`. `runnerAnswer.runner`, which
+  describes the runner a `queue_run` or `queue_retry` call itself started, is not
+  part of this deprecation and stays.
 
 ## 0.1.0 - 2026-09-09
 
