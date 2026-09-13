@@ -25,6 +25,13 @@ export function orgOf(project) {
   return project?.org ?? null;
 }
 
+// Names of the projects registered under an org, in config order.
+export function projectsOfOrg(config, org) {
+  return Object.entries(config?.projects ?? {})
+    .filter(([, entry]) => entry.org === org)
+    .map(([name]) => name);
+}
+
 // Lists the registered projects, marking whether the path still exists.
 export function listProjects(config) {
   return Object.entries(config.projects).map(([name, entry]) => ({

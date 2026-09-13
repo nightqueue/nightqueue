@@ -1,7 +1,18 @@
 import { UserError } from "../config/errors.mjs";
-import { openDb, resolveProjectName, sqliteToIso, toQueryVector, vectorToBlob, withWriteRetry } from "./db.mjs";
+import { openDb, sqliteToIso, toQueryVector, vectorToBlob, withWriteRetry } from "./db.mjs";
 import { truncateByCodePoint } from "./jobs.mjs";
 import { escapePromptMarkers } from "./prompt-safety.mjs";
+import {
+  OWNER_CLAUSE,
+  orgFirst,
+  ownerDescription,
+  ownerLabel,
+  ownerOf,
+  ownerRef,
+  ownerValues,
+  requireScopeTarget,
+  visibility,
+} from "./scope.mjs";
 import {
   RECALL_COS_CUT,
   embedWithDeadline,
@@ -18,6 +29,7 @@ export const DECISION_RECALL_LIMIT = 8;
 
 const REQUIRED_TEXT_FIELDS = ["title", "context", "decision"];
 const OPTIONAL_TEXT_FIELDS = ["consequences"];
+const ORG_FIRST = "CASE WHEN scope = 'org' THEN 0 ELSE 1 END";
 
 // Requires a non-empty text field, because the column is NOT NULL and a raw SQLite error helps nobody.
 function requireText(field, value) {
@@ -58,24 +70,26 @@ export function getDecision(id, env = process.env) {
   return openDb(env).prepare("SELECT * FROM decisions WHERE id = ?").get(requireId(id)) ?? null;
 }
 
-// Returns the raw row of the decision a project numbered, or null; `db` lets a read-only caller bring its own connection.
-export function getDecisionByNumber({ project, number } = {}, env = process.env, db = null) {
+// Returns the raw row of the decision an owner numbered, or null; `db` lets a read-only caller bring its own connection.
+export function getDecisionByNumber({ project, org, number } = {}, env = process.env, db = null) {
   if (!Number.isInteger(number) || number <= 0) {
     throw new UserError(`expected a positive integer decision number, got \`${String(number)}\``);
   }
+  const target = requireScopeTarget({ project, org }, env);
   return (
     (db ?? openDb(env))
-      .prepare("SELECT * FROM decisions WHERE project IS ? AND number = ?")
-      .get(resolveProjectName(project, env), number) ?? null
+      .prepare(`SELECT * FROM decisions WHERE ${OWNER_CLAUSE} AND number = ?`)
+      .get(...ownerValues(target), number) ?? null
   );
 }
 
-// Inserts a decision numbered `max(number) + 1` for its project, in one statement so no concurrent save collides.
-export function saveDecision({ project, title, context, decision, consequences, status } = {}, env = process.env) {
-  const projectName = resolveProjectName(project, env);
+// Inserts a decision numbered `max(number) + 1` for its owner, in one statement so no concurrent save collides.
+export function saveDecision({ project, org, title, context, decision, consequences, status } = {}, env = process.env) {
+  const target = requireScopeTarget({ project, org }, env);
+  const owner = ownerValues(target);
   const values = [
-    projectName,
-    projectName,
+    ...owner,
+    ...owner,
     requireText("title", title),
     requireText("context", context),
     requireText("decision", decision),
@@ -83,24 +97,23 @@ export function saveDecision({ project, title, context, decision, consequences, 
     status === undefined || status === null ? "accepted" : requireStatus(status),
   ];
   const statement = openDb(env).prepare(
-    `INSERT INTO decisions (project, number, title, context, decision, consequences, status)
-     VALUES (?, (SELECT COALESCE(MAX(number), 0) + 1 FROM decisions WHERE project IS ?), ?, ?, ?, ?, ?)
+    `INSERT INTO decisions (scope, project, org, number, title, context, decision, consequences, status)
+     VALUES (?, ?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM decisions WHERE ${OWNER_CLAUSE}), ?, ?, ?, ?, ?)
      RETURNING id, number`,
   );
   const row = withWriteRetry(() => statement.get(...values));
-  return { id: Number(row.id), number: Number(row.number), project: projectName };
+  const [scope, projectName, orgName] = owner;
+  return { id: Number(row.id), number: Number(row.number), scope, project: projectName, org: orgName };
 }
 
-// Requires `superseded_by` to point at another existing decision of the same project.
+// Requires `superseded_by` to point at another existing decision of the same owner: superseding is authorship, not visibility.
 function requireSupersededBy(row, value, env) {
   const target = requireId(value);
   if (target === row.id) throw new UserError(`decision \`${row.id}\` cannot supersede itself`);
   const other = getDecision(target, env);
   if (!other) throw new UserError(`unknown decision \`${target}\``);
-  if ((other.project ?? null) !== (row.project ?? null)) {
-    throw new UserError(
-      `decision \`${target}\` belongs to project \`${other.project ?? "global"}\`, not \`${row.project ?? "global"}\``,
-    );
+  if (other.scope !== row.scope || ownerOf(other) !== ownerOf(row)) {
+    throw new UserError(`decision \`${target}\` belongs to ${ownerDescription(other)}, not ${ownerDescription(row)}`);
   }
   return target;
 }
@@ -142,16 +155,15 @@ export function updateDecision(id, patch = {}, env = process.env) {
   return withWriteRetry(() => statement.get(...values, row.id));
 }
 
-// Decisions of a project in numbering order, optionally filtered by status; `db` lets a read-only caller bring its own connection.
-export function listDecisions({ project, status } = {}, env = process.env, db = null) {
+// Decisions an owner sees, org rows first and each in numbering order, optionally filtered by status; `db` lets a read-only caller bring its own connection.
+export function listDecisions({ project, org, status } = {}, env = process.env, db = null) {
   const connection = db ?? openDb(env);
-  const projectName = resolveProjectName(project, env);
-  if (status === undefined || status === null) {
-    return connection.prepare("SELECT * FROM decisions WHERE project IS ? ORDER BY number ASC").all(projectName);
-  }
+  const visible = visibility(requireScopeTarget({ project, org }, env));
+  const filter = status === undefined || status === null ? "" : " AND status = ?";
+  const values = status === undefined || status === null ? [] : [requireStatus(status)];
   return connection
-    .prepare("SELECT * FROM decisions WHERE project IS ? AND status = ? ORDER BY number ASC")
-    .all(projectName, requireStatus(status));
+    .prepare(`SELECT * FROM decisions WHERE ${visible.clause}${filter} ORDER BY ${ORG_FIRST}, number ASC`)
+    .all(...visible.values, ...values);
 }
 
 // Stores the embedding vector and the model tag of a decision in a single update.
@@ -180,6 +192,8 @@ export function decisionsMissingEmbedding({ model, limit = 100 } = {}, env = pro
 export function decisionView(row) {
   return {
     id: row.id,
+    scope: row.scope,
+    owner: ownerOf(row),
     number: row.number,
     title: truncateByCodePoint(row.title),
     status: row.status,
@@ -191,7 +205,10 @@ export function decisionView(row) {
 export function decisionFullView(row) {
   return {
     id: row.id,
+    scope: row.scope,
+    owner: ownerOf(row),
     project: row.project ?? null,
+    org: row.org ?? null,
     number: row.number,
     title: row.title,
     context: row.context,
@@ -210,7 +227,7 @@ export function decisionFullView(row) {
 export function renderDecisionText(row) {
   return escapePromptMarkers(
     [
-      `#${row.number} ${row.title} (${row.status})`,
+      `${ownerLabel(row)} ${row.title} (${row.status})`,
       `Context: ${row.context}`,
       `Decision: ${row.decision}`,
       ...(row.consequences ? [`Consequences: ${row.consequences}`] : []),
@@ -218,33 +235,34 @@ export function renderDecisionText(row) {
   );
 }
 
-// Most recently updated accepted decisions of a project plus the globals.
-export function recentDecisions({ project, limit = DECISION_RECALL_LIMIT } = {}, env = process.env) {
-  const projectName = resolveProjectName(project, env);
+// Most recently updated accepted decisions an owner sees.
+export function recentDecisions({ project, org, limit = DECISION_RECALL_LIMIT } = {}, env = process.env) {
+  const visible = visibility(requireScopeTarget({ project, org }, env));
   return openDb(env)
     .prepare(
       `SELECT * FROM decisions
-       WHERE status = 'accepted' AND (project = ? OR project IS NULL)
+       WHERE status = 'accepted' AND ${visible.clause}
        ORDER BY updated_at DESC, id DESC LIMIT ?`,
     )
-    .all(projectName, safeLimit(limit, DECISION_RECALL_LIMIT));
+    .all(...visible.values, safeLimit(limit, DECISION_RECALL_LIMIT));
 }
 
-// Accepted decisions matching a query through BM25, with a boost for the current project.
-export function searchDecisionsLexical({ query, project, limit = DECISION_RECALL_LIMIT } = {}, env = process.env) {
+// Accepted decisions an owner sees matching a query through BM25, with the project's own decisions boosted over its org's.
+export function searchDecisionsLexical({ query, project, org, limit = DECISION_RECALL_LIMIT } = {}, env = process.env) {
   const match = ftsMatch(query);
   if (!match) return [];
-  const projectName = resolveProjectName(project, env);
+  const target = requireScopeTarget({ project, org }, env);
+  const visible = visibility(target, "d");
   return openDb(env)
     .prepare(
       `SELECT d.*, bm25(decisions_fts) AS rank
        FROM decisions_fts JOIN decisions d ON d.id = decisions_fts.rowid
-       WHERE decisions_fts MATCH ? AND d.status = 'accepted' AND (d.project = ? OR d.project IS NULL)
+       WHERE decisions_fts MATCH ? AND d.status = 'accepted' AND ${visible.clause}
        ORDER BY bm25(decisions_fts)
-         + CASE WHEN d.project = ? THEN -1.5 WHEN d.project IS NULL THEN -0.5 ELSE 0 END
+         + CASE WHEN d.project = ? THEN -1.5 WHEN d.scope = 'org' THEN -1.0 WHEN d.project IS NULL THEN -0.5 ELSE 0 END
        LIMIT ?`,
     )
-    .all(match, projectName, projectName, safeLimit(limit, DECISION_RECALL_LIMIT));
+    .all(match, ...visible.values, target.project, safeLimit(limit, DECISION_RECALL_LIMIT));
 }
 
 // Hydrates the rows that won the cosine ranking, preserving their order.
@@ -265,19 +283,20 @@ function hydrateByCosine(db, scored) {
 
 // Semantic side of the decision recall: brute-force cosine over the accepted rows carrying a vector of this model.
 export function searchDecisionsSemantic(
-  { vector, model, project, limit = DECISION_RECALL_LIMIT, cut = RECALL_COS_CUT } = {},
+  { vector, model, project, org, limit = DECISION_RECALL_LIMIT, cut = RECALL_COS_CUT } = {},
   env = process.env,
 ) {
   const query = toQueryVector(vector);
   if (!query || typeof model !== "string" || !model) return [];
+  const visible = visibility(requireScopeTarget({ project, org }, env));
   const db = openDb(env);
   const rows = db
     .prepare(
       `SELECT id, embedding FROM decisions
        WHERE embedding IS NOT NULL AND embedding_model = ? AND length(embedding) = ?
-         AND status = 'accepted' AND (project = ? OR project IS NULL)`,
+         AND status = 'accepted' AND ${visible.clause}`,
     )
-    .all(model, query.length * 4, resolveProjectName(project, env));
+    .all(model, query.length * 4, ...visible.values);
   const ceiling = safeLimit(limit, DECISION_RECALL_LIMIT);
   const scored = rankByCosine(rows, query, Number.isFinite(cut) ? cut : RECALL_COS_CUT, ceiling);
   return hydrateByCosine(db, scored);
@@ -285,20 +304,20 @@ export function searchDecisionsSemantic(
 
 // Single entry of the decision recall: only accepted decisions, BM25 always answers, the semantic path only adds.
 export async function recallDecisions(
-  { query, project, limit = DECISION_RECALL_LIMIT, embedder, deadlineMs } = {},
+  { query, project, org, limit = DECISION_RECALL_LIMIT, embedder, deadlineMs } = {},
   env = process.env,
 ) {
-  const projectName = resolveProjectName(project, env);
+  const owner = ownerRef(requireScopeTarget({ project, org }, env));
   const size = safeLimit(limit, DECISION_RECALL_LIMIT);
-  if (!ftsMatch(query)) return markVia(recentDecisions({ project: projectName, limit: size }, env), "lexical");
-  const lexical = markVia(searchDecisionsLexical({ query, project: projectName, limit: size }, env), "lexical");
+  if (!ftsMatch(query)) return orgFirst(markVia(recentDecisions({ ...owner, limit: size }, env), "lexical"));
+  const lexical = markVia(searchDecisionsLexical({ query, ...owner, limit: size }, env), "lexical");
   const resolved = await resolveEmbedder(embedder, env);
   const vector = resolved ? await embedWithDeadline(resolved, query, deadlineMs) : null;
   let results = lexical;
   if (vector) {
     try {
       const semantic = markVia(
-        searchDecisionsSemantic({ vector, model: resolved.model, project: projectName, limit: size }, env),
+        searchDecisionsSemantic({ vector, model: resolved.model, ...owner, limit: size }, env),
         "semantic",
       );
       results = interleave(lexical, semantic, size);
@@ -306,6 +325,6 @@ export async function recallDecisions(
       results = lexical;
     }
   }
-  if (results.length) return results;
-  return markVia(recentDecisions({ project: projectName, limit: size }, env), "fallback");
+  if (results.length) return orgFirst(results);
+  return orgFirst(markVia(recentDecisions({ ...owner, limit: size }, env), "fallback"));
 }

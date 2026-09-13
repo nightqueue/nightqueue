@@ -87,6 +87,9 @@ agent, print a line in this format first:
    - **The tool answers** — including an EMPTY return or a read error → continue. An empty
      memory is the normal state of a fresh install: an empty recall only makes the phase omit
      the corresponding section.
+   - One call answers both levels: `decision_recall` with `project` returns the
+     project's decisions AND the decisions of its org, the org rows first, each
+     carrying its `scope` and its `owner`. Never call it a second time with `org`.
    - **`decision_recall` failed or is unavailable while `lesson_recall` answered** (an older
      runtime) → continue WITHOUT a `## Standing decisions` section and record it as an open
      item of Phase 8. An empty return is different: it means the project has no accepted
@@ -170,14 +173,20 @@ agent, print a line in this format first:
 
    ## Standing decisions   [omit the whole section when the recall came back empty]
    - #<number> <title> — <the `decision` field in 1 line>
+   - <owner>#<number> <title> — <the `decision` field in 1 line>   [a row whose `scope` is `org`]
    ```
 
    **How `## Standing decisions` is filled in.** After compiling the Brief, call
    `decision_recall` (MCP `nightshift`) with `project` = the current project and `query` =
-   the `**Affected area:**` plus the `**Objective:**` of the Brief. The tool only ever returns
-   accepted decisions, so a `proposed`, a `superseded` or a `rejected` one can never reach
-   this section. Take at most 5; a row marked `via: "fallback"` did not match the query and is
-   dropped. Nothing left after that (or the tool failed, per step 0.1) → omit the section.
+   the `**Affected area:**` plus the `**Objective:**` of the Brief. ONE call answers both
+   levels: the project's own decisions and the decisions of its org, with the org rows
+   FIRST — never call the tool a second time. Name each row the way it comes: a row whose
+   `scope` is `project` is written `#<number>`, a row whose `scope` is `org` is written
+   `<owner>#<number>` (`acme#3`), because two levels may hold the same number. The tool only
+   ever returns accepted decisions, so a `proposed`, a `superseded` or a `rejected` one can
+   never reach this section. Take at most 5, keeping the order the tool returned;
+   a row marked `via: "fallback"` did not match the query and is dropped. Nothing left
+   after that (or the tool failed, per step 0.1) → omit the section.
 
    The **raw input is never passed to Explore**. Only the triager (Phase 1), on
    bugs, may receive the raw error/stack trace block — it is the only agent that
@@ -964,9 +973,11 @@ Project conventions:
 [Include only if the Standing decisions section of the Brief exists:]
 ## Standing decisions
 - #<number> <title> — <decision>
-These are the project's standing constraints, decided before this task. They are binding
-context, never a proposed solution: a design that contradicts one either follows the
-decision or takes the conflict to `## Requires user confirmation` naming its number.
+These are the standing constraints of the project and of its org, decided before this task
+(a number written `<owner>#<number>` belongs to the org and binds every project of it).
+They are binding context, never a proposed solution: a design that contradicts one either
+follows the decision or takes the conflict to `## Requires user confirmation` naming its
+number.
 
 Repository: [CWD PATH]
 ```

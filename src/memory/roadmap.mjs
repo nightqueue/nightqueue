@@ -1,8 +1,23 @@
 import { UserError } from "../config/errors.mjs";
-import { openDb, resolveProjectName, sqliteToIso, withWriteRetry } from "./db.mjs";
+import { projectByName, projectsOfOrg } from "../config/projects.mjs";
+import { loadConfig } from "../config/store.mjs";
+import { openDb, sqliteToIso, withWriteRetry } from "./db.mjs";
 import { getDecision, recallDecisions, renderDecisionText } from "./decisions.mjs";
 import { addJob, cancelJob, truncateByCodePoint } from "./jobs.mjs";
 import { escapePromptMarkers } from "./prompt-safety.mjs";
+import {
+  OWNER_CLAUSE,
+  ownerDescription,
+  ownerOf,
+  ownerRef,
+  ownerValues,
+  requireOwnerTarget,
+  requireScopeTarget,
+  rowOwner,
+  rowTarget,
+  seesRow,
+  visibility,
+} from "./scope.mjs";
 
 export const ROADMAP_HORIZONS = ["now", "next", "later"];
 export const ROADMAP_STATUSES = ["open", "queued", "done", "dropped"];
@@ -70,17 +85,15 @@ function hasValue(patch, field) {
   return patch[field] !== undefined && patch[field] !== null;
 }
 
-// Requires `decision_id` to point at an existing decision of the same project.
-function requireDecisionId(project, value, env) {
-  const target = requireId(value);
-  const decision = getDecision(target, env);
-  if (!decision) throw new UserError(`unknown decision \`${target}\``);
-  if ((decision.project ?? null) !== (project ?? null)) {
-    throw new UserError(
-      `decision \`${target}\` belongs to project \`${decision.project ?? "global"}\`, not \`${project ?? "global"}\``,
-    );
+// Requires `decision_id` to point at a decision the item's owner sees: its own and, for a project item, its org's.
+function requireDecisionId(target, value, env) {
+  const id = requireId(value);
+  const decision = getDecision(id, env);
+  if (!decision) throw new UserError(`unknown decision \`${id}\``);
+  if (!seesRow(target, decision)) {
+    throw new UserError(`decision \`${id}\` belongs to ${ownerDescription(decision)}, not ${ownerDescription(target)}`);
   }
-  return target;
+  return id;
 }
 
 // Undoes a failed transaction without ever masking the error that caused it.
@@ -113,44 +126,46 @@ export function getRoadmapItem(id, env = process.env) {
 }
 
 // Inserts a roadmap item at the end of its horizon group, in one statement so no concurrent save collides.
-export function saveRoadmapItem({ project, horizon, title, detail, decision_id } = {}, env = process.env) {
-  const projectName = resolveProjectName(project, env);
+export function saveRoadmapItem({ project, org, horizon, title, detail, decision_id } = {}, env = process.env) {
+  const target = requireScopeTarget({ project, org }, env);
+  const owner = ownerValues(target);
   const group = requireHorizon(horizon);
   const values = [
-    projectName,
+    ...owner,
     group,
     requireText("title", title),
     optionalText(detail),
-    decision_id === undefined || decision_id === null ? null : requireDecisionId(projectName, decision_id, env),
-    projectName,
+    decision_id === undefined || decision_id === null ? null : requireDecisionId(target, decision_id, env),
+    ...owner,
     group,
   ];
   const statement = openDb(env).prepare(
-    `INSERT INTO roadmap_items (project, horizon, title, detail, decision_id, position)
-     VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM roadmap_items WHERE project IS ? AND horizon = ?))
+    `INSERT INTO roadmap_items (scope, project, org, horizon, title, detail, decision_id, position)
+     VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM roadmap_items WHERE ${OWNER_CLAUSE} AND horizon = ?))
      RETURNING id, position`,
   );
   const row = withWriteRetry(() => statement.get(...values));
-  return { id: Number(row.id), position: Number(row.position), project: projectName };
+  const [scope, projectName, orgName] = owner;
+  return { id: Number(row.id), position: Number(row.position), scope, project: projectName, org: orgName };
 }
 
-// Renumbers a horizon group to contiguous positions 1..N, ordered by the positions it currently holds.
-function renumberGroup(db, project, horizon) {
+// Renumbers a horizon group of one owner to contiguous positions 1..N, ordered by the positions it currently holds.
+function renumberGroup(db, owner, horizon) {
   db.prepare(
     `WITH ordered AS (
        SELECT id, ROW_NUMBER() OVER (ORDER BY position, id) AS rn
-       FROM roadmap_items WHERE project IS ? AND horizon = ?
+       FROM roadmap_items WHERE ${OWNER_CLAUSE} AND horizon = ?
      )
      UPDATE roadmap_items SET position = (SELECT rn FROM ordered WHERE ordered.id = roadmap_items.id)
      WHERE id IN (SELECT id FROM ordered)`,
-  ).run(project ?? null, horizon);
+  ).run(...ownerValues(owner), horizon);
 }
 
-// How many items a horizon group of a project holds.
-function countGroup(db, project, horizon) {
+// How many items a horizon group of one owner holds.
+function countGroup(db, owner, horizon) {
   return db
-    .prepare("SELECT COUNT(*) AS total FROM roadmap_items WHERE project IS ? AND horizon = ?")
-    .get(project ?? null, horizon).total;
+    .prepare(`SELECT COUNT(*) AS total FROM roadmap_items WHERE ${OWNER_CLAUSE} AND horizon = ?`)
+    .get(...ownerValues(owner), horizon).total;
 }
 
 // Position the move aims at: the asked one clamped to the group, or the end of the destination horizon.
@@ -167,13 +182,14 @@ function moveRoadmapItem(row, patch, env) {
   const write = db.prepare(
     "UPDATE roadmap_items SET horizon = ?, position = ?, updated_at = datetime('now') WHERE id = ?",
   );
+  const owner = rowOwner(row);
   inTransaction(db, () => {
     const sameHorizon = horizon === row.horizon;
-    const wanted = targetPosition(row, patch, { sameHorizon, size: countGroup(db, row.project, horizon) });
+    const wanted = targetPosition(row, patch, { sameHorizon, size: countGroup(db, owner, horizon) });
     const tentative = sameHorizon && wanted > row.position ? wanted + 0.5 : wanted - 0.5;
     write.run(horizon, tentative, row.id);
-    renumberGroup(db, row.project, horizon);
-    if (!sameHorizon) renumberGroup(db, row.project, row.horizon);
+    renumberGroup(db, owner, horizon);
+    if (!sameHorizon) renumberGroup(db, owner, row.horizon);
   });
 }
 
@@ -195,7 +211,7 @@ function updateAssignments(patch, row, env) {
   }
   if (hasValue(patch, "decision_id")) {
     columns.push("decision_id = ?");
-    values.push(requireDecisionId(row.project ?? null, patch.decision_id, env));
+    values.push(requireDecisionId(rowTarget(row, env), patch.decision_id, env));
   }
   return { columns, values };
 }
@@ -220,6 +236,8 @@ export function updateRoadmapItem(id, patch = {}, env = process.env) {
 export function roadmapItemView(row) {
   return {
     id: row.id,
+    scope: row.scope,
+    owner: ownerOf(row),
     title: truncateByCodePoint(row.title),
     detail: truncateByCodePoint(row.detail ?? null),
     status: row.status,
@@ -232,33 +250,34 @@ export function roadmapItemView(row) {
   };
 }
 
-// Items of one horizon of a project, in order, each carrying its linked decision number and the live job status.
-function horizonItems(db, project, horizon) {
+// Items of one horizon an owner sees, org items first, each carrying its linked decision number and the live job status.
+function horizonItems(db, target, horizon) {
+  const visible = visibility(target, "r");
   return db
     .prepare(
       `SELECT r.*, d.number AS decision_number, j.status AS job_status
        FROM roadmap_items r
        LEFT JOIN decisions d ON d.id = r.decision_id
        LEFT JOIN jobs j ON j.id = r.job_id
-       WHERE r.project IS ? AND r.horizon = ?
-       ORDER BY r.position ASC, r.id ASC`,
+       WHERE ${visible.clause} AND r.horizon = ?
+       ORDER BY CASE WHEN r.scope = 'org' THEN 0 ELSE 1 END, r.position ASC, r.id ASC`,
     )
-    .all(project ?? null, horizon)
+    .all(...visible.values, horizon)
     .map(roadmapItemView);
 }
 
-// The roadmap of a project with nothing planned: the three horizons, always present and always empty.
-export function emptyRoadmap(project) {
-  return { project: project ?? null, horizons: ROADMAP_HORIZONS.map((horizon) => ({ horizon, items: [] })) };
+// The roadmap of an owner with nothing planned: the three horizons, always present and always empty.
+export function emptyRoadmap(owner = {}) {
+  return { ...owner, horizons: ROADMAP_HORIZONS.map((horizon) => ({ horizon, items: [] })) };
 }
 
-// The whole roadmap of a project: the three horizons, always in the now/next/later order; `db` lets a read-only caller bring its own connection.
-export function listRoadmap(project, env = process.env, db = null) {
+// The whole roadmap an owner sees: the three horizons, always in the now/next/later order; `db` lets a read-only caller bring its own connection.
+export function listRoadmap(owner, env = process.env, db = null) {
   const connection = db ?? openDb(env);
-  const projectName = resolveProjectName(project, env);
+  const target = requireOwnerTarget(owner, env);
   return {
-    project: projectName,
-    horizons: ROADMAP_HORIZONS.map((horizon) => ({ horizon, items: horizonItems(connection, projectName, horizon) })),
+    ...ownerRef(target),
+    horizons: ROADMAP_HORIZONS.map((horizon) => ({ horizon, items: horizonItems(connection, target, horizon) })),
   };
 }
 
@@ -307,7 +326,7 @@ export function markRoadmapItemQueued(id, jobId, env = process.env) {
 async function relatedDecisions(item, linked, embedder, env) {
   try {
     const rows = await recallDecisions(
-      { query: item.title, project: item.project, limit: RELATED_RECALL_LIMIT, embedder },
+      { ...ownerRef(rowOwner(item)), query: item.title, limit: RELATED_RECALL_LIMIT, embedder },
       env,
     );
     return rows
@@ -329,7 +348,7 @@ export async function buildRoadmapPrompt({ item, embedder } = {}, env = process.
   return blocks.join("\n\n");
 }
 
-// Refuses a project that is not the item's own, because the item is what decides where its job goes.
+// Refuses a project that is not the item's own, because a project item is what decides where its job goes.
 function requireItemProject(item, project) {
   if (project === undefined || project === null || project === item.project) return;
   throw new UserError(
@@ -337,16 +356,39 @@ function requireItemProject(item, project) {
   );
 }
 
-// Queues the job a roadmap item builds and links the two, so a job born from the roadmap never survives unlinked.
+// Requires the target project of an org item to be a registered project of that org, because a job is always a project's.
+function requireOrgMember(item, project, env) {
+  const config = loadConfig(env, { warn: () => {} });
+  const named = typeof project === "string" && project.trim() ? projectByName(config, project.trim()) : null;
+  if (named && named.org === item.org) return named.name;
+  const members = projectsOfOrg(config, item.org);
+  throw new UserError(
+    `roadmap item \`${item.id}\` belongs to org \`${item.org}\`: name the project its job goes to with \`--project <name>\` ` +
+      `(\`project\` in queue_add); projects of \`${item.org}\`: ${members.length ? members.join(", ") : "(none)"}`,
+  );
+}
+
+// Queues the job an org item builds for one project of its org, leaving the item open: one item fathers a job per project.
+async function queueOrgItem(item, { project, priority, maxAttempts, timeoutS, tier, embedder }, env) {
+  const targetProject = requireOrgMember(item, project, env);
+  const prompt = await buildRoadmapPrompt({ item, embedder }, env);
+  const job = addJob({ project: targetProject, prompt, priority, maxAttempts, timeoutS, tier }, env);
+  return { job, item, targetProject };
+}
+
+// Queues the job a roadmap item builds; a project item is linked to that job, an org item names the project it goes to.
 export async function queueRoadmapItem(
   { id, project, priority, maxAttempts, timeoutS, tier, embedder } = {},
   env = process.env,
 ) {
   const item = queueableRoadmapItem(id, env);
+  if (item.scope === "org") {
+    return await queueOrgItem(item, { project, priority, maxAttempts, timeoutS, tier, embedder }, env);
+  }
   requireItemProject(item, project);
   const prompt = await buildRoadmapPrompt({ item, embedder }, env);
   const job = addJob({ project: item.project, prompt, priority, maxAttempts, timeoutS, tier }, env);
-  if (markRoadmapItemQueued(item.id, job.id, env)) return { job, item };
+  if (markRoadmapItemQueued(item.id, job.id, env)) return { job, item, targetProject: item.project };
   cancelJob(job.id, { reason: "roadmap item was queued by another caller" }, env);
   throw new UserError(
     `roadmap item \`${item.id}\` was queued by another caller; job \`${job.id}\` was cancelled and nothing else changed`,

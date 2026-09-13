@@ -19,6 +19,7 @@ import {
   updateDecision,
 } from "../memory/decisions.mjs";
 import { saveLessonDeduped } from "../memory/dedup.mjs";
+import { SCOPE_CONFLICT, SCOPE_MISSING, ownerDescription } from "../memory/scope.mjs";
 import { recallProjectIndex, saveProjectIndex } from "../memory/index.mjs";
 import {
   addJob,
@@ -75,6 +76,7 @@ const SERVER_INSTRUCTIONS = [
   "Call `queue_status` to see what is pending before suggesting a batch.",
   "decisions are the project's standing constraints - recall them before proposing architecture and save one when the user settles a design question",
   'the roadmap is where "what next" lives - read it before suggesting work, and queue from it with `roadmap_item_id`',
+  "a constraint the conversation states for two or more repos of the same org is saved ONCE with `org`, never once per repo: a project reads its own decisions and its org's",
 ].join("\n");
 const RECALL_LIMIT = 8;
 const INDEX_LIMIT = 40;
@@ -119,14 +121,14 @@ function callerProject(own, env) {
   return getJob(own, env)?.project ?? null;
 }
 
-// Refuses a row of ANOTHER project from inside an unattended run: a job may only rewrite the decisions and the roadmap of its own project.
-function requireOwnProject({ kind, id, project }, env) {
+// Refuses a row of ANOTHER owner from inside an unattended run: a job may only rewrite the decisions and the roadmap of its own project, never its org's.
+function requireOwnProject({ kind, id, row }, env) {
   const own = callerJobId(env);
   if (own === null) return;
   const mine = callerProject(own, env);
-  if (mine !== null && mine === (project ?? null)) return;
+  if (mine !== null && row?.scope !== "org" && mine === (row?.project ?? null)) return;
   throw new UserError(
-    `refusing to update ${kind} \`${id}\` from inside job \`${own}\`: it belongs to project \`${project ?? "global"}\`, ` +
+    `refusing to update ${kind} \`${id}\` from inside job \`${own}\`: it belongs to ${ownerDescription(row)}, ` +
       `not \`${mine ?? "unknown"}\`; an unattended run may only update its own project, ` +
       "so ask the operator to do it outside the queue",
   );
@@ -147,6 +149,16 @@ function requireCwd(cwd) {
 function namedProject(project, env) {
   if (typeof project !== "string" || project.trim() === "") return null;
   return requireProjectName(project, env);
+}
+
+// Owner a decisions or roadmap tool names: `project` (the registered NAME) XOR `org`, refusing both and neither.
+function ownerArgs(args, env) {
+  const project = typeof args.project === "string" && args.project.trim() !== "" ? args.project.trim() : null;
+  const org = typeof args.org === "string" && args.org.trim() !== "" ? args.org.trim() : null;
+  if (project && org) throw new UserError(SCOPE_CONFLICT);
+  if (org) return { org };
+  if (!project) throw new UserError(SCOPE_MISSING);
+  return { project: requireProjectName(project, env) };
 }
 
 // Project the job goes to, or the offer to register the directory of the caller when nothing is registered for it.
@@ -197,7 +209,7 @@ function wantsRoadmapItem(args) {
 }
 
 // The answer of `queue_add`: the job it recorded, and the roadmap item behind it when there is one.
-function queuedAnswer({ job, registered = null, roadmapItemId = null }, env) {
+function queuedAnswer({ job, registered = null, roadmapItemId = null, note = "" }, env) {
   const pending = countsByStatus(env).pending;
   const done = registered ? `registered project \`${registered.name}\` (${registered.path}). ` : "";
   return {
@@ -208,8 +220,14 @@ function queuedAnswer({ job, registered = null, roadmapItemId = null }, env) {
     timeoutS: job.timeoutS,
     ...(roadmapItemId === null ? {} : { roadmapItemId }),
     ...(job.tier ? { tier: job.tier } : {}),
-    hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending). Start the batch with queue_run when you are ready.`,
+    hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending).${note} Start the batch with queue_run when you are ready.`,
   };
+}
+
+// What the answer of a roadmap-built job adds: an org item fathers one job per project and is closed by the operator.
+function roadmapNote(item) {
+  if (item.scope !== "org") return "";
+  return ` Roadmap item #${item.id} belongs to org \`${item.org}\`: it stays \`open\` and unlinked, so queue it for the other projects of the org too and mark it done yourself.`;
 }
 
 // Clamps the size of a job listing into the accepted window.
@@ -446,7 +464,8 @@ function toolDefinitions(env) {
           "Enqueues an unattended /nightshift:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
           "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. " +
           "With `project` omitted, `cwd` (the absolute working directory of the caller) resolves the project. When no project is registered for it, the answer is `needs_registration`: ask the user to confirm, then call again with the same `cwd` and `register: true`. Registration never happens without `register: true`. " +
-          "With `roadmap_item_id` and no `prompt`, the job prompt is built from that roadmap item, its linked decision and the accepted decisions related to it; the item is marked `queued` and flips to `done` when the job finishes.",
+          "With `roadmap_item_id` and no `prompt`, the job prompt is built from that roadmap item, its linked decision and the accepted decisions related to it; a project item is marked `queued` and flips to `done` when the job finishes. " +
+          "An ORG roadmap item needs an explicit `project` of that org, because a job is always one project's: it stays `open` and unlinked, so the same item may be queued for every project of the org and only the operator closes it.",
         inputSchema: {
           project: z.string().nullable().optional(),
           cwd: z
@@ -490,7 +509,7 @@ function toolDefinitions(env) {
             },
             env,
           );
-          return queuedAnswer({ job: queued.job, roadmapItemId: queued.item.id }, env);
+          return queuedAnswer({ job: queued.job, roadmapItemId: queued.item.id, note: roadmapNote(queued.item) }, env);
         }
         const target = resolveQueueTarget(args, env);
         if (target.offer && args.register !== true) return needsRegistration(target);
@@ -590,10 +609,12 @@ function toolDefinitions(env) {
       name: "decision_save",
       config: {
         description:
-          "Records one architecture decision of a project: the context that forced it, what was decided and what it costs. " +
-          "Numbered per project and `accepted` unless another status is given. `project` is the registered NAME, never a path.",
+          "Records one architecture decision: the context that forced it, what was decided and what it costs. " +
+          "Owned by `project` (the registered NAME, never a path) or by `org`, never both — an org decision binds every project of that org and is the right shape when the constraint holds for more than one repo of the same product. " +
+          "Numbered inside its owner (`#1`, `#2` per project; `acme#1`, `acme#2` per org) and `accepted` unless another status is given.",
         inputSchema: {
-          project: z.string(),
+          project: optionalText,
+          org: optionalText,
           title: z.string(),
           context: z.string(),
           decision: z.string(),
@@ -604,7 +625,7 @@ function toolDefinitions(env) {
       handler: async (args) => {
         const saved = saveDecision(
           {
-            project: requireProjectName(args.project, env),
+            ...ownerArgs(args, env),
             title: args.title,
             context: args.context,
             decision: args.decision,
@@ -613,7 +634,7 @@ function toolDefinitions(env) {
           },
           env,
         );
-        return { ok: true, id: saved.id, number: saved.number };
+        return { ok: true, id: saved.id, number: saved.number, scope: saved.scope, owner: saved.org ?? saved.project };
       },
     },
     {
@@ -634,7 +655,7 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const current = getDecision(args.id, env);
-        if (current) requireOwnProject({ kind: "decision", id: args.id, project: current.project }, env);
+        if (current) requireOwnProject({ kind: "decision", id: args.id, row: current }, env);
         const row = updateDecision(
           args.id,
           {
@@ -654,26 +675,33 @@ function toolDefinitions(env) {
       name: "decision_list",
       config: {
         description:
-          "The decisions log of a project in numbering order, optionally filtered by status. Compact rows: the full text of one decision comes from `decision_recall`.",
-        inputSchema: { project: z.string(), status: optionalDecisionStatus },
+          "The decisions log in numbering order, optionally filtered by status. With `project`, the project's own rows plus the rows of its org, org rows first, each carrying its `scope` and its `owner`; with `org`, only that org's rows. " +
+          "Compact rows: the full text of one decision comes from `decision_recall`.",
+        inputSchema: { project: optionalText, org: optionalText, status: optionalDecisionStatus },
       },
       handler: async (args) => {
-        const project = requireProjectName(args.project, env);
-        return { project, decisions: listDecisions({ project, status: args.status }, env).map(decisionView) };
+        const owner = ownerArgs(args, env);
+        return { ...owner, decisions: listDecisions({ ...owner, status: args.status }, env).map(decisionView) };
       },
     },
     {
       name: "decision_recall",
       config: {
         description:
-          "Standing constraints of a project, before proposing architecture. Only accepted decisions come back, with their text untruncated, because this feeds prompts. " +
+          "Standing constraints, before proposing architecture. With `project`, the project's decisions and its org's, org rows first, each carrying its `scope` and its `owner`; with `org`, only that org's. " +
+          "Only accepted decisions come back, with their text untruncated, because this feeds prompts. " +
           'An item with via "fallback" did not match the query: it is recent context, never an answer.',
-        inputSchema: { project: z.string(), query: optionalText, limit: z.number().int().min(1).max(20).nullable().optional() },
+        inputSchema: {
+          project: optionalText,
+          org: optionalText,
+          query: optionalText,
+          limit: z.number().int().min(1).max(20).nullable().optional(),
+        },
       },
       handler: async (args) => {
         const rows = await recallDecisions(
           {
-            project: requireProjectName(args.project, env),
+            ...ownerArgs(args, env),
             query: args.query,
             limit: Number.isInteger(args.limit) ? args.limit : RECALL_LIMIT,
           },
@@ -686,9 +714,11 @@ function toolDefinitions(env) {
       name: "roadmap_save",
       config: {
         description:
-          "Adds one intent to the roadmap of a project, at the end of its horizon (`now`, `next` or `later`). `decision_id` links it to the decision that motivated it.",
+          "Adds one intent to a roadmap, at the end of its horizon (`now`, `next` or `later`). Owned by `project` or by `org`, never both: an org item is work every project of the org has to do, and names the project its job goes to at queue time. " +
+          "`decision_id` links it to the decision that motivated it.",
         inputSchema: {
-          project: z.string(),
+          project: optionalText,
+          org: optionalText,
           horizon: z.enum(ROADMAP_HORIZONS),
           title: z.string(),
           detail: optionalText,
@@ -698,7 +728,7 @@ function toolDefinitions(env) {
       handler: async (args) => {
         const saved = saveRoadmapItem(
           {
-            project: requireProjectName(args.project, env),
+            ...ownerArgs(args, env),
             horizon: args.horizon,
             title: args.title,
             detail: args.detail,
@@ -727,7 +757,7 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const current = getRoadmapItem(args.id, env);
-        if (current) requireOwnProject({ kind: "roadmap item", id: args.id, project: current.project }, env);
+        if (current) requireOwnProject({ kind: "roadmap item", id: args.id, row: current }, env);
         const row = updateRoadmapItem(
           args.id,
           {
@@ -747,10 +777,11 @@ function toolDefinitions(env) {
       name: "roadmap_get",
       config: {
         description:
-          "The whole roadmap of a project: the `now`, `next` and `later` horizons in order, each item with its position, its linked decision and the live status of the job it was queued as.",
-        inputSchema: { project: z.string() },
+          "The whole roadmap of an owner: the `now`, `next` and `later` horizons in order, each item with its position, its linked decision and the live status of the job it was queued as. " +
+          "With `project`, the project's items plus its org's, org items first, each carrying its `scope` and its `owner`; with `org`, only that org's items.",
+        inputSchema: { project: optionalText, org: optionalText },
       },
-      handler: async (args) => listRoadmap(requireProjectName(args.project, env), env),
+      handler: async (args) => listRoadmap(ownerArgs(args, env), env),
     },
   ];
 }

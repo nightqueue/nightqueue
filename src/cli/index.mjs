@@ -89,9 +89,9 @@ commands:
   embed download                            download the embedding weights into the home (the only network path)
   embed backfill                            compute the embeddings of the lessons and decisions that still have none
   memory stats [--json]                     count lessons, memories, index entries and runs per project
-  decision list [--project] [--status]      list the architecture decisions of a project
-  decision show <number> [--project]        print one decision in full
-  roadmap [--project]                       print the now/next/later roadmap of a project
+  decision list [--project|--org] [--status]  list the architecture decisions of a project and of its org
+  decision show <number> [--project|--org]  print one decision in full
+  roadmap [--project|--org]                 print the now/next/later roadmap of a project and of its org
   queue add [project] <prompt...> [--run]   enqueue an unattended /nightshift:resolve run; --run starts it detached
   queue status [id] [--limit] [--json]      show one job or the table of the queue plus the counts per status
   queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)

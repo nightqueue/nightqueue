@@ -44,7 +44,7 @@ function writeRun() {
 function writeDecision(seq) {
   saveDecision(
     {
-      project: null,
+      project: "alpha",
       title: `concurrent ${label} #${seq}`,
       context: "concurrency context",
       decision: "concurrency decision",

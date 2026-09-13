@@ -12,24 +12,24 @@ const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
 
 const SCHEMAS = {
   decision_save: {
-    properties: ["consequences", "context", "decision", "project", "status", "title"],
-    required: ["context", "decision", "project", "title"],
+    properties: ["consequences", "context", "decision", "org", "project", "status", "title"],
+    required: ["context", "decision", "title"],
   },
   decision_update: {
     properties: ["consequences", "context", "decision", "id", "status", "superseded_by", "title"],
     required: ["id"],
   },
-  decision_list: { properties: ["project", "status"], required: ["project"] },
-  decision_recall: { properties: ["limit", "project", "query"], required: ["project"] },
+  decision_list: { properties: ["org", "project", "status"], required: [] },
+  decision_recall: { properties: ["limit", "org", "project", "query"], required: [] },
   roadmap_save: {
-    properties: ["decision_id", "detail", "horizon", "project", "title"],
-    required: ["horizon", "project", "title"],
+    properties: ["decision_id", "detail", "horizon", "org", "project", "title"],
+    required: ["horizon", "title"],
   },
   roadmap_update: {
     properties: ["decision_id", "detail", "horizon", "id", "position", "status", "title"],
     required: ["id"],
   },
-  roadmap_get: { properties: ["project"], required: ["project"] },
+  roadmap_get: { properties: ["org", "project"], required: [] },
 };
 
 const DECISION = {
@@ -98,7 +98,7 @@ test("a decision saved through the server is numbered, listed, updated and recal
   const client = await connect(t, env);
 
   const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: DECISION }));
-  assert.deepEqual(saved, { ok: true, id: 1, number: 1 });
+  assert.deepEqual(saved, { ok: true, id: 1, number: 1, scope: "project", owner: "alpha" });
   const second = payloadOf(
     await client.callTool({
       name: "decision_save",
@@ -158,7 +158,7 @@ test("decision_recall never returns a proposed decision and never truncates, whe
 
   const updated = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: 1, status: "superseded" } }));
   assert.equal(updated.decision.title, `${title.slice(0, 500)}...`, "decision_update is not one of the untruncated surfaces");
-  assert.deepEqual(Object.keys(updated.decision).sort(), ["id", "number", "status", "title", "updated_at"]);
+  assert.deepEqual(Object.keys(updated.decision).sort(), ["id", "number", "owner", "scope", "status", "title", "updated_at"]);
 });
 
 test("the roadmap tools order a project by horizon and refuse a status only the queue may set", async (t) => {

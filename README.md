@@ -547,9 +547,9 @@ nightshift reflect --transcript <path>   # reflect on a transcript now, in the f
 nightshift embed download          # download the embedding weights (the only network path)
 nightshift embed backfill          # embed the lessons and the decisions that still have no vector
 nightshift memory stats [--json]   # counts per project
-nightshift decision list [--project <name>] [--status <status>]   # the decisions log of a project
-nightshift decision show <number> [--project <name>]              # one decision, in full
-nightshift roadmap [--project <name>]                             # the now/next/later roadmap
+nightshift decision list [--project <name> | --org <name>] [--status <status>]   # the decisions log
+nightshift decision show <number> [--project <name> | --org <name>]              # one decision, in full
+nightshift roadmap [--project <name> | --org <name>]                             # the now/next/later roadmap
 ```
 
 **Environment variables.**
@@ -588,14 +588,21 @@ test suite still passes.
 
 ### Decisions and roadmap
 
-Two more things the runtime remembers per project, next to the lessons and the
-memories.
+Two more things the runtime remembers, next to the lessons and the memories.
 
-A **decision** is one architecture decision of a project, numbered inside it
-(`#1`, `#2`, ... , and the numbering of one project never touches another's): a
-title, the `context` that forced the choice, the `decision` itself, the
-`consequences` it costs, and a status among `proposed`, `accepted`, `superseded`
-and `rejected`. A decision that was replaced points at the one that replaced it
+Both belong to exactly one **owner**, and an owner is a project or an org: a
+decision several repos of the same product share is saved ONCE at org scope
+instead of once per repo, and every project of that org reads it. A write names
+`project` or `org`, never both; a read by `project` answers the project's rows
+PLUS its org's, org rows first, each carrying its `scope` and its `owner`, while
+a read by `org` answers that org's rows alone. A project never sees the rows of
+another org.
+
+A **decision** is one architecture decision of its owner, numbered inside that
+owner (`#1`, `#2`, ... per project; `acme#1`, `acme#2` per org, and the numbering
+of one owner never touches another's): a title, the `context` that forced the
+choice, the `decision` itself, the `consequences` it costs, and a status among
+`proposed`, `accepted`, `superseded` and `rejected`. A decision that was replaced points at the one that replaced it
 through `superseded_by`. Only `accepted` decisions are ever recalled as standing
 constraints; the other three statuses are read with `decision_list`,
 `nightshift decision list` and `nightshift decision show`, and never reach a
@@ -614,7 +621,8 @@ nothing is published, nothing travels in a pull request: no `docs/adr/` tree, no
 read them from a terminal are the three read-only commands
 (`nightshift decision list`, `nightshift decision show <number>` and
 `nightshift roadmap`), which resolve the project from the current directory when
-`--project` is omitted, never write, and never register a project. Read-only
+`--project` is omitted, read one org alone with `--org <name>` instead, never
+write, and never register a project. Read-only
 means the database too: the three open it read-only, so they never create it and
 never migrate it, and a home where nothing was ever saved reads as an empty one
 (`no decisions for <project>`, every horizon empty) instead of a SQLite error.
@@ -623,33 +631,45 @@ never migrate it, and a home where nothing was ever saved reads as an empty one
 
 | tool | what it does |
 |---|---|
-| `decision_save` | records one decision: `project`, `title`, `context`, `decision`, `consequences?`, `status?` (default `accepted`); answers the `id` and the `number` it got |
+| `decision_save` | records one decision: `project` or `org`, `title`, `context`, `decision`, `consequences?`, `status?` (default `accepted`); answers the `id`, the `number` and the owner it got |
 | `decision_update` | changes a decision by `id`: any of `title`, `context`, `decision`, `consequences`, `status`, `superseded_by` — this is how a `proposed` one is accepted or rejected; the row it answers is a compact one, truncated like `decision_list` |
-| `decision_list` | the log of a project in numbering order: `project`, `status?`; compact rows |
-| `decision_recall` | the standing constraints: `project`, `query?`, `limit?`; only `accepted` decisions, hybrid BM25 plus semantic, and the text comes back untruncated because it feeds prompts |
-| `roadmap_save` | adds an intent at the end of a horizon: `project`, `horizon`, `title`, `detail?`, `decision_id?` |
+| `decision_list` | the log in numbering order: `project` or `org`, `status?`; compact rows, org rows first |
+| `decision_recall` | the standing constraints: `project` or `org`, `query?`, `limit?`; only `accepted` decisions, hybrid BM25 plus semantic, org rows first, and the text comes back untruncated because it feeds prompts |
+| `roadmap_save` | adds an intent at the end of a horizon: `project` or `org`, `horizon`, `title`, `detail?`, `decision_id?` |
 | `roadmap_update` | changes an item by `id`: `horizon`, `title`, `detail`, `status`, `position`, `decision_id`; `queued` is not a status that can be set by hand |
-| `roadmap_get` | the whole roadmap of a project: `project`; the three horizons in order, each item with its position, its linked decision and the live status of its job |
+| `roadmap_get` | the whole roadmap of an owner: `project` or `org`; the three horizons in order, each item with its position, its linked decision and the live status of its job |
 
 As everywhere else in the server, an explicit `null` is treated exactly like an
 absent parameter, and `project` is the registered NAME, never a path.
-`decision_update` and `roadmap_update` take an `id` and no project, so inside an
+`decision_update` and `roadmap_update` take an `id` and no owner, so inside an
 unattended run they are restricted to the project of the job that is running:
 an `id` belonging to another project is refused, naming both projects, the same
-way `queue_retry` only retries its own job. Outside a job the restriction does
-not exist, and the operator updates any project from anywhere.
+way `queue_retry` only retries its own job. An org row is refused there too,
+naming its org — a job reads its org's decisions and never rewrites one. Outside
+a job the restriction does not exist, and the operator updates any project from
+anywhere.
+
+Renaming an org carries its rows with it (`nightshift org rename` rewrites the
+`org` of every decision and roadmap item), and an org that still owns rows
+cannot be removed: the removal is refused naming how many.
 
 **Queueing from the roadmap.** `queue_add` with `roadmap_item_id` and no
 `prompt` (or `nightshift queue add --roadmap <id>`) builds the prompt from the
 item instead of asking for it again: `## Task` with the title and the detail,
 `## Linked decision` when the item links one, and `## Related decisions` with at
 most three accepted decisions the title recalled - each heading disappears when
-it has nothing under it. The item's own project decides where the job goes, so
-nothing is resolved from the current directory. The item is then marked `queued`
-with the job id, and flips to `done` when that job finishes `done`. Passing both
+it has nothing under it. A **project** item decides where the job goes by itself,
+so nothing is resolved from the current directory, and it is then marked `queued`
+with the job id and flips to `done` when that job finishes `done`. An **org**
+item cannot: a job is always one project's, so it takes the project from
+`--project <name>` (`project` in `queue_add`), or from the current directory when
+neither is given, and it must be a project of that org. That item is never linked
+to a job — it stays `open` so it can be queued for every project of the org, and
+only the operator marks it `done`. Passing both
 `prompt` and `roadmap_item_id` is refused, because a silent precedence would let
-the caller believe the item drove the job when it did not. Re-queueing an item
-whose job is still alive is refused too, naming that job. The text the operator
+the caller believe the item drove the job when it did not. Re-queueing a project
+item whose job is still alive is refused too, naming that job; an org item, which
+carries no job, is never refused for that reason. The text the operator
 wrote - the title, the detail and the text of the decisions quoted under them -
 is escaped on its way into that prompt: a line that would read as a heading
 (`# ...` to `###### ...`) or as a `QUEUE_SLUG:` line is prefixed with a
@@ -659,7 +679,9 @@ headings above nor a literal of `## Runtime contract`.
 **How `/resolve` uses them.** Phase 0 pings `decision_recall` next to
 `lesson_recall` in its preflight, and calls it again once the Brief is compiled,
 with the affected area and the objective as the query: at most five accepted
-decisions become the `## Standing decisions` section of the Brief. That section
+decisions - the project's and its org's, in one call, org rows first and written
+`acme#3` when they belong to the org - become the `## Standing decisions` section
+of the Brief. That section
 is passed to the architect as binding context - a design that contradicts a
 standing decision either follows it or takes the conflict to
 `## Requires user confirmation` naming its number. When a plan takes a

@@ -39,7 +39,7 @@ test("the architect prompt receives standing decisions as binding constraints, n
   assert.ok(SKILL.includes("[Include only if the Standing decisions section of the Brief exists:]\n## Standing decisions\n- #<number> <title> — <decision>"), SKILL);
   assert.ok(
     SKILL.includes(
-      "These are the project's standing constraints, decided before this task. They are binding\ncontext, never a proposed solution: a design that contradicts one either follows the\ndecision or takes the conflict to `## Requires user confirmation` naming its number.",
+      "These are the standing constraints of the project and of its org, decided before this task\n(a number written `<owner>#<number>` belongs to the org and binds every project of it).\nThey are binding context, never a proposed solution: a design that contradicts one either\nfollows the decision or takes the conflict to `## Requires user confirmation` naming its\nnumber.",
     ),
     SKILL,
   );

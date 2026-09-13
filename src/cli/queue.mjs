@@ -16,7 +16,7 @@ import {
   listJobs,
   truncateByCodePoint,
 } from "../memory/jobs.mjs";
-import { PROMPT_SOURCE_CONFLICT, queueRoadmapItem } from "../memory/roadmap.mjs";
+import { PROMPT_SOURCE_CONFLICT, getRoadmapItem, queueRoadmapItem } from "../memory/roadmap.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
 import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
 import { prViewer, refreshMergedJobs } from "../queue/merged.mjs";
@@ -49,7 +49,7 @@ import { confirm } from "./prompt.mjs";
 import { runtimeLabel } from "./runtime-versions.mjs";
 
 const USAGE = {
-  add: "nightshift queue add [project] <prompt...> [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id>]",
+  add: "nightshift queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id>]",
   status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle]",
   run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <n>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
@@ -60,6 +60,8 @@ const USAGE = {
 };
 
 const ADD_HELP_FLAGS = new Set(["--help", "-h"]);
+
+const PROJECT_NAMED_TWICE = "name the project once: the positional `[project]` or `--project <name>`, never both";
 
 const ADD_HELP = `usage: ${USAGE.add}
 
@@ -138,8 +140,19 @@ async function offerRegistration(config, values, ctx) {
   return await registerFromCwd(offer, ctx);
 }
 
-// Chooses the project of the job: the first positional when it is a registered NAME, otherwise the project of the current directory.
+// Project `--project <name>` names, refusing an unknown one and the double spelling with the positional.
+function flaggedProject(config, positionals, values) {
+  if (values.project === undefined) return null;
+  if (projectByName(config, positionals[0])) throw new UserError(PROJECT_NAMED_TWICE);
+  const named = projectByName(config, values.project);
+  if (named) return named;
+  throw new UserError(`unknown project \`${values.project}\`; run \`nightshift project list\``);
+}
+
+// Chooses the project of the job: `--project`, the first positional when it is a registered NAME, otherwise the project of the current directory.
 async function resolveTarget(config, positionals, values, ctx) {
+  const flagged = flaggedProject(config, positionals, values);
+  if (flagged) return { project: flagged, words: positionals, fromCwd: false };
   const named = projectByName(config, positionals[0]);
   if (named) return { project: named, words: positionals.slice(1), fromCwd: false };
   const resolved = resolveProject(config, { cwd: ctx.cwd ?? process.cwd() });
@@ -249,11 +262,28 @@ async function addFromPrompt(positionals, values, ctx) {
   return addJob({ project: target.project.name, prompt, ...addLimits(values) }, ctx.env);
 }
 
-// Queues the job a roadmap item builds; the item owns the project, so nothing is resolved from the current directory.
+// Project the job of a roadmap item goes to: a project item owns it, an org item takes `--project` or the current directory.
+function roadmapTarget(item, values, ctx) {
+  if (values.project !== undefined) return { name: values.project, fromCwd: false };
+  if (item?.scope !== "org") return { name: undefined, fromCwd: false };
+  const resolved = resolveProject(loadConfig(ctx.env, { warn: ctx.err }), { cwd: ctx.cwd ?? process.cwd() });
+  return { name: resolved?.name, fromCwd: Boolean(resolved) };
+}
+
+// The line the roadmap path answers with: a project item is now `queued`, an org item stays open and names where its job went.
+function roadmapQueuedLine({ item, targetProject }) {
+  if (item.scope !== "org") return `roadmap item #${item.id} of \`${item.project}\` is now \`queued\``;
+  return `roadmap item #${item.id} of org \`${item.org}\` queued for \`${targetProject}\`; it stays \`open\` until you mark it done`;
+}
+
+// Queues the job a roadmap item builds; a project item owns its project, an org item names the project of the job.
 async function addFromRoadmap(positionals, values, ctx) {
   if (positionals.length) throw new UserError(PROMPT_SOURCE_CONFLICT);
-  const queued = await queueRoadmapItem({ id: requireInt("--roadmap", values.roadmap), ...addLimits(values) }, ctx.env);
-  ctx.out(`roadmap item #${queued.item.id} of \`${queued.item.project}\` is now \`queued\``);
+  const id = requireInt("--roadmap", values.roadmap);
+  const target = roadmapTarget(getRoadmapItem(id, ctx.env), values, ctx);
+  const queued = await queueRoadmapItem({ id, project: target.name, ...addLimits(values) }, ctx.env);
+  if (target.fromCwd) ctx.out(`project \`${target.name}\` resolved from the current directory`);
+  ctx.out(roadmapQueuedLine(queued));
   return queued.job;
 }
 
@@ -281,6 +311,7 @@ const ADD_OPTIONS = {
   foreground: { type: "boolean" },
   yes: { type: "boolean" },
   roadmap: { type: "string" },
+  project: { type: "string" },
   tier: { type: "string" },
 };
 

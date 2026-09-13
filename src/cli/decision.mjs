@@ -1,43 +1,61 @@
 import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
+import { requireOrg } from "../config/orgs.mjs";
 import { dbPath } from "../config/paths.mjs";
 import { projectByName, resolveProject } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
-import { openDbReadOnly, sqliteToIso } from "../memory/db.mjs";
+import { migrateIfOutdated, openDbReadOnly, sqliteToIso } from "../memory/db.mjs";
 import { DECISION_STATUSES, decisionView, getDecisionByNumber, listDecisions, renderDecisionText } from "../memory/decisions.mjs";
+import { SCOPE_CONFLICT, ownerLabel, ownerOf, ownerRef } from "../memory/scope.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
 const USAGE = {
-  list: "nightshift decision list [--project <name>] [--status <status>] [--json]",
-  show: "nightshift decision show <number> [--project <name>]",
+  list: "nightshift decision list [--project <name> | --org <name>] [--status <status>] [--json]",
+  show: "nightshift decision show <number> [--project <name> | --org <name>]",
 };
 
-const READ_OPTIONS = { project: { type: "string" }, status: { type: "string" }, json: { type: "boolean" } };
+const READ_OPTIONS = {
+  project: { type: "string" },
+  org: { type: "string" },
+  status: { type: "string" },
+  json: { type: "boolean" },
+};
 
-const NUMBER_WIDTH = 8;
+const NUMBER_WIDTH = 16;
 const STATUS_WIDTH = 12;
 const DATE_WIDTH = 12;
 
-// Project a read-only command runs against: the `--project` NAME, or the project of the current directory.
-export function resolveReadProject(values, ctx) {
+// Owner triple of a registered project, with the label every message of these commands names it by.
+function projectTarget(project) {
+  return { scope: "project", project: project.name, org: project.org ?? null, label: `\`${project.name}\`` };
+}
+
+// Owner a read-only command runs against: `--org`, the `--project` NAME, or the project of the current directory.
+export function resolveReadTarget(values, ctx) {
   const config = loadConfig(ctx.env, { warn: ctx.err });
+  if (values.project !== undefined && values.org !== undefined) throw new UserError(SCOPE_CONFLICT);
+  if (values.org !== undefined) {
+    requireOrg(config, values.org);
+    return { scope: "org", project: null, org: values.org, label: `org \`${values.org}\`` };
+  }
   if (values.project !== undefined) {
     const named = projectByName(config, values.project);
-    if (named) return named.name;
+    if (named) return projectTarget(named);
     throw new UserError(`unknown project \`${values.project}\`; run \`nightshift project list\``);
   }
   const cwd = ctx.cwd ?? process.cwd();
   const resolved = resolveProject(config, { cwd });
-  if (resolved) return resolved.name;
+  if (resolved) return projectTarget(resolved);
   throw new UserError(`no project registered for ${cwd}; run \`nightshift init\` here, or pass --project <name>`);
 }
 
-// Reads the database on a connection that can never create nor migrate it; a home with no database yet reads as an empty one.
+// Reads the database on a connection that can never write a decision nor a roadmap item; a home with no database yet reads as an empty one, and one written by an older build is brought to this schema first.
 export function readOnlyQuery(ctx, query, empty) {
   const path = dbPath(ctx.env);
   if (!existsSync(path)) return empty;
   let db = null;
   try {
+    migrateIfOutdated(ctx.env);
     db = openDbReadOnly(ctx.env);
     return query(db);
   } catch (err) {
@@ -68,17 +86,22 @@ function shortDate(iso) {
   return typeof iso === "string" ? iso.slice(0, 10) : "-";
 }
 
+// One cell of the table: padded to its width, and never glued to the next one when the value is wider.
+function cell(text, width) {
+  return text.length < width ? text.padEnd(width) : `${text} `;
+}
+
 // Header of the table of `decision list`.
 function header() {
-  return ["NUMBER".padEnd(NUMBER_WIDTH), "STATUS".padEnd(STATUS_WIDTH), "UPDATED".padEnd(DATE_WIDTH), "TITLE"].join("");
+  return [cell("NUMBER", NUMBER_WIDTH), cell("STATUS", STATUS_WIDTH), cell("UPDATED", DATE_WIDTH), "TITLE"].join("");
 }
 
 // One line of the table of `decision list`.
 function formatRow(row) {
   return [
-    `#${row.number}`.padEnd(NUMBER_WIDTH),
-    row.status.padEnd(STATUS_WIDTH),
-    shortDate(row.updated_at).padEnd(DATE_WIDTH),
+    cell(ownerLabel(row), NUMBER_WIDTH),
+    cell(row.status, STATUS_WIDTH),
+    cell(shortDate(row.updated_at), DATE_WIDTH),
     String(row.title ?? "").replace(/\s+/g, " ").trim(),
   ].join("");
 }
@@ -87,16 +110,17 @@ function formatRow(row) {
 async function runList(argv, ctx) {
   const { values, positionals } = parseCommand(argv, READ_OPTIONS);
   checkArgs(positionals, { max: 0, usage: USAGE.list });
-  const project = resolveReadProject(values, ctx);
+  const target = resolveReadTarget(values, ctx);
+  const owner = ownerRef(target);
   const status = requireStatusOption(values.status);
-  const rows = readOnlyQuery(ctx, (db) => listDecisions({ project, status }, ctx.env, db), []);
+  const rows = readOnlyQuery(ctx, (db) => listDecisions({ ...owner, status }, ctx.env, db), []);
   const decisions = rows.map(decisionView);
   if (values.json) {
-    ctx.out(JSON.stringify({ project, decisions }));
+    ctx.out(JSON.stringify({ ...owner, decisions }));
     return;
   }
   if (!decisions.length) {
-    ctx.out(`no decisions for \`${project}\``);
+    ctx.out(`no decisions for ${target.label}`);
     return;
   }
   ctx.out(header());
@@ -105,14 +129,14 @@ async function runList(argv, ctx) {
 
 // Runs `nightshift decision show <number>`, printing the decision in full and untruncated.
 async function runShow(argv, ctx) {
-  const { values, positionals } = parseCommand(argv, { project: { type: "string" } });
+  const { values, positionals } = parseCommand(argv, { project: { type: "string" }, org: { type: "string" } });
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.show });
-  const project = resolveReadProject(values, ctx);
+  const target = resolveReadTarget(values, ctx);
   const number = requireNumber(positionals[0]);
-  const row = readOnlyQuery(ctx, (db) => getDecisionByNumber({ project, number }, ctx.env, db), null);
-  if (!row) throw new UserError(`unknown decision #${number} for \`${project}\``);
+  const row = readOnlyQuery(ctx, (db) => getDecisionByNumber({ ...ownerRef(target), number }, ctx.env, db), null);
+  if (!row) throw new UserError(`unknown decision #${number} for ${target.label}`);
   ctx.out(renderDecisionText(row));
-  ctx.out(`project: ${project} · updated: ${sqliteToIso(row.updated_at)}`);
+  ctx.out(`${target.scope}: ${ownerOf(target)} · updated: ${sqliteToIso(row.updated_at)}`);
 }
 
 const SUBCOMMANDS = new Map([

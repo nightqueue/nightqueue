@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { addOrg, getOrg } from "../src/config/orgs.mjs";
 import { addProject } from "../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { closeDb } from "../src/memory/db.mjs";
@@ -21,10 +22,21 @@ const OWN_ENV_KEYS = [
   "NIGHTSHIFT_NO_PR_CHECK",
 ];
 
-// Creates a temporary directory removed at the end of the test.
+const finishedDirs = new Set();
+
+// Removes the temporary directories of the tests that already finished.
+function flushFinishedDirs() {
+  for (const dir of finishedDirs) rmSync(dir, { recursive: true, force: true });
+  finishedDirs.clear();
+}
+
+process.on("exit", flushFinishedDirs);
+
+// Creates a temporary directory removed once the test ended, so a cleanup hook the test registers later still finds its files.
 export function makeDir(t, name) {
+  flushFinishedDirs();
   const dir = mkdtempSync(join(tmpdir(), `nightshift-${name}-`));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => finishedDirs.add(dir));
   return dir;
 }
 
@@ -41,13 +53,33 @@ export function makeHome(t, name, { embed = false } = {}) {
   return env;
 }
 
-// Registers a temporary directory that looks like a git repository as a project of the home.
-export function makeProject(t, env, name) {
+// Creates an org of the home, the owner an org decision or an org roadmap item is saved under.
+export function makeOrg(env, name) {
+  const config = loadConfig(env, { warn: () => {} });
+  if (getOrg(config, name)) return name;
+  saveConfig(addOrg(config, name), env);
+  return name;
+}
+
+// Registers a temporary directory that looks like a git repository as a project of the home, in the org the test asks for.
+export function makeProject(t, env, name, { org } = {}) {
   const path = makeDir(t, `repo-${name}`);
   mkdirSync(join(path, ".git"), { recursive: true });
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path, name }).config, env);
+  if (org) makeOrg(env, org);
+  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path, name, org }).config, env);
   return path;
 }
+
+// Everything the owner scope added to the schema, undone: what a test execs to turn an open database back into the v5 shape a previous build wrote.
+export const DOWNGRADE_TO_V5 = `
+DROP INDEX decisions_org_number_idx;
+DROP INDEX roadmap_items_org_order_idx;
+ALTER TABLE decisions DROP COLUMN scope;
+ALTER TABLE decisions DROP COLUMN org;
+ALTER TABLE roadmap_items DROP COLUMN scope;
+ALTER TABLE roadmap_items DROP COLUMN org;
+PRAGMA user_version = 5;
+`;
 
 // Embedder double with a fixed vector, so the hybrid recall never depends on the real model.
 export function fakeEmbedder(vector, { model = "fake-embedder@v1" } = {}) {

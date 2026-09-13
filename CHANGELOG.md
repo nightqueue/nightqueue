@@ -8,6 +8,22 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Org-scoped decisions and roadmap: a decision or a roadmap item now belongs to
+  exactly one owner - a project or an org - and is numbered inside it (`#7` per
+  project, `acme#3` per org, enforced by the database). A write names `project` or
+  `org`, never both; a read by `project` answers the project's rows PLUS its
+  org's, org rows first and each carrying its `scope` and its `owner`, while a
+  read by `org` answers that org's rows alone and no other org's. Phase 0 of
+  `/resolve` injects both levels in the same single `decision_recall`,
+  `nightshift decision list --org <name>`, `nightshift decision show <number>
+  --org <name>` and `nightshift roadmap --org <name>` read an org from the
+  terminal, and `nightshift org rename` carries the rows of the org with it while
+  `org remove` refuses an org that still owns any. An org roadmap item becomes a
+  job with an explicit `--project <name>` (`project` in `queue_add`) of that org,
+  or the project of the current directory: it stays `open` and unlinked, so the
+  same item is queued for every project of the org and only the operator closes
+  it. The schema migrates by itself to v6 - every existing row reads as
+  `scope='project'` and keeps its number, with no manual step.
 - Versioned runtime: an install writes a new
   `~/.nightshift/runtime/versions/<version>-<stamp>/` and publishes it by
   renaming a symlink onto `~/.nightshift/runtime/current`, in one step, so no

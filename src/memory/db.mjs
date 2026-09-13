@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { dbPath } from "../config/paths.mjs";
 import { projectByName, resolveProject } from "../config/projects.mjs";
@@ -20,7 +21,7 @@ async function importSqlite() {
 
 const { DatabaseSync } = await importSqlite();
 
-export const DB_USER_VERSION = 5;
+export const DB_USER_VERSION = 6;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lessons (
@@ -164,6 +165,10 @@ const EVOLVING_COLUMNS = [
   ["jobs", "tier", "TEXT"],
   ["pipeline_runs", "tier_operator", "TEXT"],
   ["pipeline_runs", "tier_raise_reason", "TEXT"],
+  ["decisions", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],
+  ["decisions", "org", "TEXT"],
+  ["roadmap_items", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],
+  ["roadmap_items", "org", "TEXT"],
 ];
 
 const INDEXES = `
@@ -178,6 +183,8 @@ CREATE INDEX IF NOT EXISTS jobs_project_slug_idx ON jobs(project, slug);
 CREATE UNIQUE INDEX IF NOT EXISTS decisions_number_idx ON decisions(project, number);
 CREATE INDEX IF NOT EXISTS roadmap_items_order_idx ON roadmap_items(project, horizon, position);
 CREATE INDEX IF NOT EXISTS roadmap_items_job_idx ON roadmap_items(job_id);
+CREATE UNIQUE INDEX IF NOT EXISTS decisions_org_number_idx ON decisions(org, number) WHERE scope = 'org';
+CREATE INDEX IF NOT EXISTS roadmap_items_org_order_idx ON roadmap_items(org, horizon, position) WHERE scope = 'org';
 `;
 
 const FTS = `
@@ -347,6 +354,32 @@ export function openDb(env = process.env) {
 // Opens the database read-only and outside the connection cache, for a caller that must never create or migrate it.
 export function openDbReadOnly(env = process.env) {
   return new DatabaseSync(dbPath(env), { readOnly: true });
+}
+
+// Schema version of the database already on disk, read without creating nor migrating it.
+function schemaVersion(env) {
+  const db = openDbReadOnly(env);
+  try {
+    return db.prepare("PRAGMA user_version").get()?.user_version ?? 0;
+  } finally {
+    db.close();
+  }
+}
+
+// Brings a database written by an older build up to this build's schema, so a read-only caller never selects a column the pending migration has not added yet.
+export function migrateIfOutdated(env = process.env) {
+  const path = dbPath(env);
+  if (!existsSync(path)) return;
+  const version = schemaVersion(env);
+  if (version >= DB_USER_VERSION) return;
+  try {
+    openDb(env);
+  } catch (err) {
+    const detail = err instanceof UserError ? err.message : (err?.message ?? String(err));
+    throw new UserError(
+      `the memory database at ${path} is at schema v${version} and this build needs v${DB_USER_VERSION}, but it could not be migrated: ${detail}; make the database writable and run \`nightshift doctor\``,
+    );
+  }
 }
 
 // Closes the cached connection of a home so a TEST can reopen it from scratch; production must never call it, because a close SQLite believes is the last one deletes `-shm`/`-wal`, and a filesystem that does not enforce the POSIX advisory lock of a live connection lets that happen under a runner still attached to them (`test/memory/close-guard.test.mjs` keeps it confined here).

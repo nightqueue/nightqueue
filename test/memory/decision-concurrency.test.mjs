@@ -16,7 +16,7 @@ function buildWriterSource(moduleUrl) {
   return [
     `import { saveDecision } from ${JSON.stringify(moduleUrl)};`,
     "",
-    "const [, , project, label, durationRaw] = process.argv;",
+    "const [, , scope, owner, label, durationRaw] = process.argv;",
     "const deadline = Date.now() + Number(durationRaw);",
     "let written = 0;",
     "const numbers = [];",
@@ -24,7 +24,7 @@ function buildWriterSource(moduleUrl) {
     "while (Date.now() < deadline) {",
     "  try {",
     "    const row = saveDecision(",
-    "      { project, title: `${label}-${written}`, context: `context ${written}`, decision: `decision ${written}` },",
+    "      { [scope]: owner, title: `${label}-${written}`, context: `context ${written}`, decision: `decision ${written}` },",
     "      process.env,",
     "    );",
     "    numbers.push(row.number);",
@@ -44,10 +44,10 @@ function writeChildScript(dir) {
   return scriptPath;
 }
 
-// Spawns one real OS process hammering saveDecision into the same project.
-function runWriter(scriptPath, env, project, label, durationMs) {
+// Spawns one real OS process hammering saveDecision into the same owner.
+function runWriter(scriptPath, env, { scope, owner }, label, durationMs) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, project, label, String(durationMs)], {
+    const child = spawn(process.execPath, [scriptPath, scope, owner, label, String(durationMs)], {
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -74,7 +74,7 @@ test(
 
     const labels = Array.from({ length: WRITERS }, (_, index) => `W${index}`);
     const results = await Promise.all(
-      labels.map((label) => runWriter(scriptPath, env, "alpha", label, DURATION_MS)),
+      labels.map((label) => runWriter(scriptPath, env, { scope: "project", owner: "alpha" }, label, DURATION_MS)),
     );
 
     results.forEach((result, index) => {
@@ -117,5 +117,39 @@ test(
       Array.from({ length: totalWritten }, (_, index) => index + 1),
       "decision numbers are not the contiguous permutation 1..N expected of a correctly serialized append",
     );
+  },
+);
+
+test(
+  `${WRITERS} real OS processes racing saveDecision into the same ORG never hand out a duplicate org number: ` +
+    "the partial unique index is what has to catch it",
+  async (t) => {
+    const env = makeHome(t, "decision-race-org");
+    makeProject(t, env, "alpha", { org: "acme" });
+    const scriptPath = writeChildScript(makeDir(t, "decision-race-org-script"));
+
+    const labels = Array.from({ length: WRITERS }, (_, index) => `O${index}`);
+    const results = await Promise.all(
+      labels.map((label) => runWriter(scriptPath, env, { scope: "org", owner: "acme" }, label, DURATION_MS)),
+    );
+
+    results.forEach((result, index) => {
+      assert.equal(result.code, 0, `writer ${labels[index]} exited ${result.code} (stderr: ${result.stderr})`);
+    });
+    const parsed = results.map((result) => JSON.parse(result.stdout.trim().split("\n").pop()));
+    for (const [index, data] of parsed.entries()) {
+      const raw = data.errors.filter((message) => RAW_CONSTRAINT_PATTERN.test(message));
+      assert.deepEqual(raw, [], `writer ${labels[index]} received a raw SQLite constraint error: ${raw.join("; ")}`);
+    }
+
+    const numbers = parsed.flatMap((data) => data.numbers);
+    assert.ok(numbers.length >= WRITERS * 10, `writers produced too few org rows (${numbers.length})`);
+    assert.equal(new Set(numbers).size, numbers.length, "two concurrent writers received the SAME org decision number");
+    const stored = openDb(env)
+      .prepare("SELECT number FROM decisions WHERE scope = 'org' AND org IS ? ORDER BY number")
+      .all("acme")
+      .map((row) => row.number);
+    assert.deepEqual(stored, Array.from({ length: numbers.length }, (_, index) => index + 1));
+    assert.equal(openDb(env).prepare("SELECT COUNT(*) AS total FROM decisions WHERE scope = 'project'").get().total, 0);
   },
 );

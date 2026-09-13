@@ -35,6 +35,7 @@ You turn what the user just asked for into ONE job in the nightshift backlog.
 - No project matches: the job goes to the current directory and step 4's single
   question asks for the registration in the same line, with `<name>` the basename
   of the repository root. Never queue the job against another project.
+- Two or more repos of the same `org` named here: propose saving the constraint or the intent ONCE at org scope (`org: <name>` instead of `project` in `decision_save`/`roadmap_save`, never both); the job itself stays one project's.
 
 ## 3. Write the prompt
 
