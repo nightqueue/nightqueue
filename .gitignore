@@ -7,3 +7,5 @@ node_modules/
 .claude/settings.local.json
 .claude/worktrees/
 .nightshift/
+docs/decisions/
+.DS_Store

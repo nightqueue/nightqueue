@@ -1294,9 +1294,7 @@ Publishing itself is a pushed tag, never a local `npm publish`:
 `docs/RELEASING.md` has the four-step flow and the one-time npmjs.com setup that
 the release workflow depends on.
 
-The decisions that shape the project live in `docs/decisions/`, one record per
-decision, and neither that directory nor `scripts/` is part of the published
-tarball.
+`scripts/` is not part of the published tarball.
 
 ## License
 
