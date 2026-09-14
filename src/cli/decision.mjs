@@ -4,9 +4,10 @@ import { requireOrg } from "../config/orgs.mjs";
 import { dbPath } from "../config/paths.mjs";
 import { projectByName, resolveProject } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
-import { migrateIfOutdated, openDbReadOnly, sqliteToIso } from "../memory/db.mjs";
-import { DECISION_STATUSES, decisionView, getDecisionByNumber, listDecisions, renderDecisionText } from "../memory/decisions.mjs";
+import { DECISION_STATUSES, decisionView, renderDecisionText } from "../memory/decisions.mjs";
+import { sqliteToIso } from "../memory/schema.mjs";
 import { SCOPE_CONFLICT, ownerLabel, ownerOf, ownerRef } from "../memory/scope.mjs";
+import { openStoreReadOnly } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
 const USAGE = {
@@ -50,19 +51,19 @@ export function resolveReadTarget(values, ctx) {
 }
 
 // Reads the database on a connection that can never write a decision nor a roadmap item; a home with no database yet reads as an empty one, and one written by an older build is brought to this schema first.
-export function readOnlyQuery(ctx, query, empty) {
+export async function readOnlyQuery(ctx, query, empty) {
   const path = dbPath(ctx.env);
   if (!existsSync(path)) return empty;
-  let db = null;
+  let store = null;
   try {
-    migrateIfOutdated(ctx.env);
-    db = openDbReadOnly(ctx.env);
-    return query(db);
+    store = openStoreReadOnly(ctx.env);
+    await store.migrateIfOutdated();
+    return await query(store);
   } catch (err) {
     if (err instanceof UserError) throw err;
     throw new UserError(`cannot read the memory database at ${path}: ${err?.message ?? String(err)}`);
   } finally {
-    db?.close();
+    await store?.close();
   }
 }
 
@@ -113,7 +114,7 @@ async function runList(argv, ctx) {
   const target = resolveReadTarget(values, ctx);
   const owner = ownerRef(target);
   const status = requireStatusOption(values.status);
-  const rows = readOnlyQuery(ctx, (db) => listDecisions({ ...owner, status }, ctx.env, db), []);
+  const rows = await readOnlyQuery(ctx, (store) => store.decisions.listDecisions({ ...owner, status }), []);
   const decisions = rows.map(decisionView);
   if (values.json) {
     ctx.out(JSON.stringify({ ...owner, decisions }));
@@ -133,7 +134,7 @@ async function runShow(argv, ctx) {
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.show });
   const target = resolveReadTarget(values, ctx);
   const number = requireNumber(positionals[0]);
-  const row = readOnlyQuery(ctx, (db) => getDecisionByNumber({ ...ownerRef(target), number }, ctx.env, db), null);
+  const row = await readOnlyQuery(ctx, (store) => store.decisions.getDecisionByNumber({ ...ownerRef(target), number }), null);
   if (!row) throw new UserError(`unknown decision #${number} for ${target.label}`);
   ctx.out(renderDecisionText(row));
   ctx.out(`${target.scope}: ${ownerOf(target)} · updated: ${sqliteToIso(row.updated_at)}`);

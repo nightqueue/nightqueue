@@ -26,7 +26,7 @@ export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { from: { type: "string" }, force: { type: "boolean" } });
   checkArgs(positionals, { max: 1, usage: USAGE });
   const version = wantedVersion(positionals, values.from);
-  guardIdleRuntime(ctx, { force: values.force });
+  await guardIdleRuntime(ctx, { force: values.force });
   const report = makeReport(ctx);
   ensureHome(ctx.env);
   const ready = setupRuntime(ctx, report, { from: values.from, force: true, version });

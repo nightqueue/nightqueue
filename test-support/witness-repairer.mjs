@@ -7,15 +7,15 @@ function terminalRows(env) {
 }
 
 // Repairs the queue of the home in the environment and reports the rows, together with the timezone offset this process runs under.
-function main() {
+async function main() {
   const env = process.env;
-  const outcome = reconcileFromWitness(env);
+  const outcome = await reconcileFromWitness(env);
   const report = { offsetMinutes: new Date().getTimezoneOffset(), ...outcome, rows: terminalRows(env) };
   process.stdout.write(`${JSON.stringify(report)}\n`);
 }
 
 try {
-  main();
+  await main();
 } catch (err) {
   process.stderr.write(`REPAIRER_ERROR: ${err?.message ?? String(err)}\n`);
   process.exitCode = 1;

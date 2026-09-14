@@ -1,5 +1,5 @@
 import { UserError } from "../config/errors.mjs";
-import { memoryStats } from "../memory/lessons.mjs";
+import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
 const COLUMNS = ["lessons", "memory", "index", "libs", "runs"];
@@ -27,7 +27,7 @@ function formatRow(row, width) {
 async function runStats(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
   checkArgs(positionals, { max: 0, usage: "nightshift memory stats [--json]" });
-  const projects = memoryStats(ctx.env);
+  const projects = await openStore(ctx.env).lessons.memoryStats();
   if (values.json) {
     ctx.out(JSON.stringify({ projects }));
     return;

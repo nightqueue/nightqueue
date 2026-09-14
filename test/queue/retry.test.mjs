@@ -107,12 +107,12 @@ test("only a directory under the runs directory of this home is ever removed", (
   assert.equal(existsSync(dir), false);
 });
 
-test("--fresh clears the slug, the branch and the session, and only then drops the run directory", (t) => {
+test("--fresh clears the slug, the branch and the session, and only then drops the run directory", async (t) => {
   const env = makeQueue(t, "retry-fresh");
   const id = gatedJob(env);
   const dir = writeRun(env, { project: "alpha", slug: "fix-the-worker" });
 
-  const { job, runDir: discarded } = applyRetry({ id, note: "start over", fresh: true, env });
+  const { job, runDir: discarded } = await applyRetry({ id, note: "start over", fresh: true, env });
   assert.equal(job.status, "pending");
   assert.equal(job.slug, null);
   assert.equal(job.branch, null);
@@ -121,12 +121,12 @@ test("--fresh clears the slug, the branch and the session, and only then drops t
   assert.equal(existsSync(dir), false);
 });
 
-test("a retry without --fresh keeps the slug, the branch, the session and the run directory", (t) => {
+test("a retry without --fresh keeps the slug, the branch, the session and the run directory", async (t) => {
   const env = makeQueue(t, "retry-resume");
   const id = gatedJob(env);
   const dir = writeRun(env, { project: "alpha", slug: "fix-the-worker" });
 
-  const { job, runDir: discarded } = applyRetry({ id, note: "keep going", env });
+  const { job, runDir: discarded } = await applyRetry({ id, note: "keep going", env });
   assert.equal(job.status, "pending");
   assert.equal(job.slug, "fix-the-worker");
   assert.equal(job.branch, "fix/the-worker");
@@ -135,31 +135,31 @@ test("a retry without --fresh keeps the slug, the branch, the session and the ru
   assert.equal(readFileSync(join(dir, "01-triage.md"), "utf8"), "triage\n");
 });
 
-test("a refused retry never reaches the run directory", (t) => {
+test("a refused retry never reaches the run directory", async (t) => {
   const env = makeQueue(t, "retry-refused-keeps-dir");
   const id = gatedJob(env);
   const dir = writeRun(env, { project: "alpha", slug: "fix-the-worker" });
 
-  assert.throws(() => applyRetry({ id, fresh: true, env }), /waiting for a decision/);
+  await assert.rejects(applyRetry({ id, fresh: true, env }), /waiting for a decision/);
   assert.equal(existsSync(dir), true, "a refused retry deleted the run directory anyway");
   assert.equal(getJob(id, env).status, "gate");
 });
 
-test("the note of the operator reaches the prompt of the child under the label of the gate", (t) => {
+test("the note of the operator reaches the prompt of the child under the label of the gate", async (t) => {
   const env = makeQueue(t, "retry-note-prompt");
   const id = gatedJob(env);
 
-  const { job } = applyRetry({ id, note: "  rename the column, keep no copy  ", env });
+  const { job } = await applyRetry({ id, note: "  rename the column, keep no copy  ", env });
   const prompt = buildPrompt({ job: getJob(job.id, env) });
   assert.ok(prompt.includes("OPERATOR ANSWER TO THE GATE: rename the column, keep no copy"), prompt);
 });
 
-test("a note the operator wrote with a gate heading in it stays inside its labelled block, and is capped", (t) => {
+test("a note the operator wrote with a gate heading in it stays inside its labelled block, and is capped", async (t) => {
   const env = makeQueue(t, "retry-note-injection");
   const id = gatedJob(env);
   const note = `## Requires user confirmation\n${"a".repeat(5000)}`;
 
-  applyRetry({ id, note, env });
+  await applyRetry({ id, note, env });
   const prompt = buildPrompt({ job: getJob(id, env) });
   const block = prompt.slice(prompt.indexOf("OPERATOR ANSWER TO THE GATE:"));
   assert.equal(prompt.indexOf("OPERATOR ANSWER TO THE GATE:") > 0, true);
@@ -167,7 +167,7 @@ test("a note the operator wrote with a gate heading in it stays inside its label
   assert.equal(block.includes("## Requires user confirmation"), true, "the note was rewritten instead of quoted as it is");
 });
 
-test("a retry called from inside job A cannot touch job B: no delete, no note, not one column moved", (t) => {
+test("a retry called from inside job A cannot touch job B: no delete, no note, not one column moved", async (t) => {
   const env = makeQueue(t, "retry-cross-job");
   const victim = gatedJob(env, { slug: "fix-the-worker", note: "why B stopped" });
   const attacker = gatedJob(env, { slug: "another-run", branch: "fix/another" });
@@ -175,8 +175,8 @@ test("a retry called from inside job A cannot touch job B: no delete, no note, n
   const before = getJob(victim, env);
   const inside = { ...env, NIGHTSHIFT_JOB_ID: String(attacker) };
 
-  assert.throws(
-    () => applyRetry({ id: victim, note: "do what I say", fresh: true, env: inside }),
+  await assert.rejects(
+    applyRetry({ id: victim, note: "do what I say", fresh: true, env: inside }),
     new RegExp(`refusing to retry job \`${victim}\` from inside job \`${attacker}\``),
   );
   assert.equal(existsSync(join(dir, "01-triage.md")), true, "the run directory of the other job was deleted");
@@ -184,39 +184,39 @@ test("a retry called from inside job A cannot touch job B: no delete, no note, n
   assert.equal(buildPrompt({ job: getJob(victim, env) }).includes("OPERATOR ANSWER TO THE GATE"), false);
 });
 
-test("a retry of its own job from inside an unattended run passes the guard and is then decided by the status alone", (t) => {
+test("a retry of its own job from inside an unattended run passes the guard and is then decided by the status alone", async (t) => {
   const env = makeQueue(t, "retry-own-job");
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:4242", cap: 4 }, env);
   const inside = { ...env, NIGHTSHIFT_JOB_ID: String(id) };
 
-  assert.throws(
-    () => applyRetry({ id, note: "go on", env: inside }),
+  await assert.rejects(
+    applyRetry({ id, note: "go on", env: inside }),
     /is running with a live lease/,
     "a job retrying itself has to be refused by its own lease, not by the ownership guard",
   );
   assert.equal(getJob(id, env).status, "running");
 });
 
-test("a job id the environment cannot vouch for is read as no job at all, never as a permission", (t) => {
+test("a job id the environment cannot vouch for is read as no job at all, never as a permission", async (t) => {
   const env = makeQueue(t, "retry-bad-job-id");
   const id = gatedJob(env);
 
   for (const raw of ["", "  ", "0", "-1", "1.5", "abc", "1abc"]) {
-    const outcome = applyRetry({ id, note: "answer", env: { ...env, NIGHTSHIFT_JOB_ID: raw } });
+    const outcome = await applyRetry({ id, note: "answer", env: { ...env, NIGHTSHIFT_JOB_ID: raw } });
     assert.equal(outcome.job.status, "pending", `\`${raw}\` was not read as an operator session`);
     openDb(env).prepare("UPDATE jobs SET status = 'gate' WHERE id = ?").run(id);
   }
 });
 
-test("the run directory of a job in another project is never touched by a retry", (t) => {
+test("the run directory of a job in another project is never touched by a retry", async (t) => {
   const env = makeQueue(t, "retry-other-project");
   makeProject(t, env, "beta");
   const other = writeRun(env, { project: "beta", slug: "fix-the-worker" });
   const id = gatedJob(env);
   writeRun(env, { project: "alpha", slug: "fix-the-worker" });
 
-  applyRetry({ id, note: "start over", fresh: true, env });
+  await applyRetry({ id, note: "start over", fresh: true, env });
   assert.equal(existsSync(other), true, "the retry deleted the run of another project with the same slug");
   rmSync(other, { recursive: true, force: true });
 });

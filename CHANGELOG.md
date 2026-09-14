@@ -4,6 +4,16 @@ Every notable change of this project is recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- Every SQLite access now goes through an async store obtained from
+  `openStore(env)` / `openStoreReadOnly(env)`: `src/store/` is the only path from
+  the rest of the code to the database, and `src/memory/` became its private,
+  synchronous implementation. Internal only - no command, output, hook or MCP
+  tool changed.
+
 ## 0.2.0 - 2026-09-14
 
 ### Fixed

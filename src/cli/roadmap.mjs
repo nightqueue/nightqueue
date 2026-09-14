@@ -1,4 +1,4 @@
-import { emptyRoadmap, listRoadmap } from "../memory/roadmap.mjs";
+import { emptyRoadmap } from "../memory/roadmap.mjs";
 import { ownerPrefix, ownerRef } from "../memory/scope.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { readOnlyQuery, resolveReadTarget } from "./decision.mjs";
@@ -33,7 +33,7 @@ export async function run(argv, ctx) {
   });
   checkArgs(positionals, { max: 0, usage: USAGE });
   const owner = ownerRef(resolveReadTarget(values, ctx));
-  const roadmap = readOnlyQuery(ctx, (db) => listRoadmap(owner, ctx.env, db), emptyRoadmap(owner));
+  const roadmap = await readOnlyQuery(ctx, (store) => store.roadmap.listRoadmap(owner), emptyRoadmap(owner));
   if (values.json) {
     ctx.out(JSON.stringify(roadmap));
     return;

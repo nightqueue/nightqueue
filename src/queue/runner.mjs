@@ -5,17 +5,8 @@ import { UserError } from "../config/errors.mjs";
 import { jobLogPath, logsDir } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { packageRoot } from "../host/paths.mjs";
-import { checkpointWal, sqliteToIso } from "../memory/db.mjs";
-import {
-  countActiveJobs,
-  countAttempt,
-  countsByStatus,
-  finishJob,
-  getJob,
-  peekNextJob,
-  persistRunFacts,
-} from "../memory/jobs.mjs";
-import { markRoadmapItemDone } from "../memory/roadmap.mjs";
+import { sqliteToIso } from "../memory/schema.mjs";
+import { openStore } from "../store/open.mjs";
 import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isTransientFailure } from "./classify.mjs";
 import { refreshMergedJobs } from "./merged.mjs";
@@ -48,7 +39,7 @@ const DEFAULT_DEPS = {
   stopSignalImpl: null,
   idleTimeoutS: IDLE_TIMEOUT_S,
   refreshMergedImpl: refreshMergedJobs,
-  finishJobImpl: finishJob,
+  finishJobImpl: null,
 };
 
 // Merges the injected seams over the real implementations; the ownership poll is the configured heartbeat.
@@ -78,28 +69,33 @@ function installShutdown(state) {
 async function shouldStop(job, ctx, ownership) {
   if (ctx.state.stopping) return true;
   if (typeof ctx.deps.stopSignalImpl === "function") return Boolean(await ctx.deps.stopSignalImpl(job));
-  if (stillOwned(job, ctx.env)) return false;
+  if (await stillOwned(job, ctx.env)) return false;
   ownership.lost = true;
   return true;
 }
 
 // Records the slug of the run: the LAST declaration of the orchestrator wins, and only a safe path segment counts.
-function captureSlug(job, facts, line, env) {
+async function captureSlug(job, facts, line, { store, env }) {
   const slug = extractSlugFromEventLine(line);
   if (!slug || slug === facts.slug || !isSafeSegment(slug)) return;
   facts.slug = slug;
   const branch = readRunState({ project: job.project, slug, env })?.branch ?? null;
-  persistRunFacts(job.id, { worker: job.worker, slug, branch }, env);
+  await store.jobs.persistRunFacts(job.id, { worker: job.worker, slug, branch });
 }
 
 // Records the run facts that appear in the stream, writing one fact per line of the stream at most.
-function captureFacts(job, facts, line, env) {
-  captureSlug(job, facts, line, env);
+async function captureFacts(job, facts, line, ctx) {
+  await captureSlug(job, facts, line, ctx);
   if (facts.sessionId) return;
   const sessionId = extractSessionIdFromEventLine(line);
   if (!sessionId) return;
   facts.sessionId = sessionId;
-  persistRunFacts(job.id, { worker: job.worker, sessionId }, env);
+  await ctx.store.jobs.persistRunFacts(job.id, { worker: job.worker, sessionId });
+}
+
+// Delivers one line of the stream to the fact capture, which is never allowed to bring the run down - the same guarantee the spawn gives a synchronous consumer.
+function captureLine(job, facts, line, ctx) {
+  captureFacts(job, facts, line, ctx).catch(() => {});
 }
 
 // Records in the job log that this runner lost the job; it is the ONLY write allowed once ownership is gone.
@@ -125,7 +121,7 @@ async function runAttempts(job, ctx) {
   const usages = [];
   let attempt = job.attempts;
   while (true) {
-    if (!renew(job, env)) return { lost: true, facts, attempt, usage: sumUsage(usages), outcome: null, result: null };
+    if (!(await renew(job, env))) return { lost: true, facts, attempt, usage: sumUsage(usages), outcome: null, result: null };
     const result = await spawnClaude({
       prompt: ctx.prompt,
       cwd: ctx.cwd,
@@ -136,7 +132,7 @@ async function runAttempts(job, ctx) {
       attempt,
       jobId: job.id,
       spawnImpl: deps.spawnImpl,
-      onLine: (line) => captureFacts(job, facts, line, env),
+      onLine: (line) => captureLine(job, facts, line, ctx),
       stopSignalImpl: () => shouldStop(job, ctx, ownership),
       stopPollMs: deps.stopPollMs,
       resumeSessionId: resumeSessionEnabled(env) ? facts.sessionId : null,
@@ -149,7 +145,7 @@ async function runAttempts(job, ctx) {
       return { lost: false, facts, attempt, usage: sumUsage(usages), outcome, result };
     }
     await deps.sleepImpl(backoffMs(attempt));
-    if (!countAttempt(job.id, { worker: job.worker }, env)) {
+    if (!(await ctx.store.jobs.countAttempt(job.id, { worker: job.worker }))) {
       return { lost: true, facts, attempt, usage: sumUsage(usages), outcome, result };
     }
     attempt += 1;
@@ -157,9 +153,9 @@ async function runAttempts(job, ctx) {
 }
 
 // Closes the roadmap item this job came from; bookkeeping never costs the outcome that was just written.
-function closeRoadmapItem(jobId, env) {
+async function closeRoadmapItem(jobId, store) {
   try {
-    markRoadmapItemDone(jobId, env);
+    await store.roadmap.markRoadmapItemDone(jobId);
   } catch {
     return;
   }
@@ -177,9 +173,9 @@ function noteWitnessFailure(jobId, reason, env) {
 // Writes the witness of the outcome next to the run: the durable record the database is verified against.
 // The witness comes from the outcome the runner holds in memory, never from the row: when the finish itself
 // failed to commit, the row still says `running`, and the witness is exactly what the reconciliation needs then.
-function writeWitness(job, outcome, env) {
+async function writeWitness(job, outcome, { store, env }) {
   try {
-    const row = getJob(job.id, env);
+    const row = await store.jobs.getJob(job.id);
     const slug = row?.slug ?? job.slug;
     if (!slug) return;
     const written = writeRunTerminal({
@@ -201,9 +197,9 @@ function writeWitness(job, outcome, env) {
 }
 
 // Runs the finish, turning a database that refused the commit into a reported failure instead of a crash of the runner.
-function tryFinish(job, outcome, env) {
+async function tryFinish(job, outcome, env) {
   try {
-    return { written: outcome.write(), error: null };
+    return { written: await outcome.write(), error: null };
   } catch (err) {
     const message = err?.message ?? String(err);
     try {
@@ -215,10 +211,12 @@ function tryFinish(job, outcome, env) {
 }
 
 // Writes the outcome of a finished job, together with the branch the pipeline registered in its state.
-function finalize(job, run, env, finishJobImpl = finishJob) {
+async function finalize(job, run, ctx) {
+  const { env, store } = ctx;
+  const finishJobImpl = ctx.deps.finishJobImpl ?? ((id, outcome) => store.jobs.finishJob(id, outcome));
   const state = readRunState({ project: job.project, slug: run.facts.slug, env });
-  if (state?.branch) persistRunFacts(job.id, { worker: job.worker, branch: state.branch }, env);
-  const finish = tryFinish(job, {
+  if (state?.branch) await store.jobs.persistRunFacts(job.id, { worker: job.worker, branch: state.branch });
+  const finish = await tryFinish(job, {
     write: () =>
       finishJobImpl(
         job.id,
@@ -244,9 +242,9 @@ function finalize(job, run, env, finishJobImpl = finishJob) {
   // The witness is written when the row took the finish AND when the database refused the commit - the second case is exactly
   // what the reconciliation repairs from. A finish that returned false means the row is no longer ours (another worker owns
   // it): no witness then, or the reconciliation would close a job someone else is still running.
-  if (finish.written || finish.error) writeWitness(job, run.outcome, env);
-  if (finish.written) checkpointWal(env);
-  if (finish.written && run.outcome.status === "done") closeRoadmapItem(job.id, env);
+  if (finish.written || finish.error) await writeWitness(job, run.outcome, ctx);
+  if (finish.written) await store.checkpoint();
+  if (finish.written && run.outcome.status === "done") await closeRoadmapItem(job.id, store);
   const status = finish.written ? run.outcome.status : finish.error ? "unrecorded" : "lost";
   const report = { id: job.id, status, prUrl: run.outcome.prUrl, attempts: run.attempt };
   return finish.error ? { ...report, error: finish.error } : report;
@@ -257,7 +255,7 @@ async function runJob(job, ctx) {
   const { env, deps } = ctx;
   const check = preflight({ job, env, gitImpl: deps.gitImpl, existsImpl: deps.existsImpl, resolveBinImpl: deps.resolveBinImpl });
   if (!check.ok) {
-    release(job, { blocked: { code: check.code, message: check.message } }, env);
+    await release(job, { blocked: { code: check.code, message: check.message } }, env);
     return { id: job.id, status: "blocked", code: check.code };
   }
   const resume = decideResume({ state: readRunState({ project: job.project, slug: job.slug, env }) });
@@ -268,10 +266,10 @@ async function runJob(job, ctx) {
     return { id: job.id, status: "lost", attempts: run.attempt };
   }
   if (ctx.state.stopping) {
-    release(job, { interrupted: true }, env);
+    await release(job, { interrupted: true }, env);
     return { id: job.id, status: "interrupted", attempts: run.attempt };
   }
-  return finalize(job, run, env, deps.finishJobImpl);
+  return await finalize(job, run, ctx);
 }
 
 // Directory this runner loaded its code from: the one it registered when it started, or the tree this process is running.
@@ -285,8 +283,8 @@ function ownRuntimeDir(env) {
 }
 
 // Repairs the jobs whose run directory already says how they ended, and writes a repair the database refused into the log of this runner.
-function warnRepairRefused(env) {
-  const warning = repairWarningLine(env);
+async function warnRepairRefused(env) {
+  const warning = await repairWarningLine(env);
   if (warning) process.stderr.write(`warning: ${warning}\n`);
 }
 
@@ -298,15 +296,16 @@ function warnRuntimeGone(dir) {
 }
 
 // Read-only report of what the cycle would do, the answer of `queue run --dry`.
-function dryReport({ jobId, cap, env }) {
+async function dryReport({ jobId, cap, env }) {
+  const store = openStore(env);
   return {
     dry: true,
     paused: isPaused(env),
     cap,
     heartbeatS: leaseHeartbeatMs(env) / 1000,
-    active: countActiveJobs(env),
-    counts: countsByStatus(env),
-    next: jobId === null ? (peekNextJob(env)?.id ?? null) : jobId,
+    active: await store.jobs.countActiveJobs(),
+    counts: await store.jobs.countsByStatus(),
+    next: jobId === null ? ((await store.jobs.peekNextJob())?.id ?? null) : jobId,
   };
 }
 
@@ -319,10 +318,10 @@ function localLimit(max, cap) {
 // Claims and runs jobs until the queue refuses another one, respecting the ceiling inside and across processes.
 export async function runCycle({ jobId = null, max = null, dry = false, env = process.env, deps = {} } = {}) {
   const cap = concurrencyCap(env);
-  if (dry) return dryReport({ jobId, cap, env });
-  warnRepairRefused(env);
-  const ctx = { env, deps: withDefaults(deps, env), state: { stopping: false } };
-  ctx.deps.refreshMergedImpl({ env });
+  if (dry) return await dryReport({ jobId, cap, env });
+  await warnRepairRefused(env);
+  const ctx = { env, store: openStore(env), deps: withDefaults(deps, env), state: { stopping: false } };
+  await ctx.deps.refreshMergedImpl({ env });
   const uninstall = installShutdown(ctx.state);
   const limit = localLimit(max, cap);
   const runtime = ownRuntimeDir(env);
@@ -342,13 +341,13 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
         await Promise.race(pool);
         continue;
       }
-      const claimed = acquire({ jobId, cap, env });
+      const claimed = await acquire({ jobId, cap, env });
       if (!claimed.job) {
         reason = claimed.reason;
         break;
       }
       if (seen.has(claimed.job.id)) {
-        release(claimed.job, null, env);
+        await release(claimed.job, null, env);
         await Promise.allSettled([...pool]);
         // A job released by a preflight block (dirty checkout, missing binary) stays pending on purpose: the operator fixes the
         // cause and the drain must be there to pick it up, so this pass ends as `blocked`, which the drain waits on.

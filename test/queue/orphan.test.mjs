@@ -82,12 +82,12 @@ test("a job that keeps re-arming its lease is never swept while its retry loop r
   assert.equal(getJob(id, env).worker, DEAD_WORKER);
 });
 
-test("a claim sweeps first, so the job of a dead runner is taken by the next one", (t) => {
+test("a claim sweeps first, so the job of a dead runner is taken by the next one", async (t) => {
   const env = makeQueue(t, "orphan-acquire");
   const id = claimedJob(env, { maxAttempts: 3 });
   expireLease(env, id);
 
-  const claimed = acquire({ cap: CAP, env });
+  const claimed = await acquire({ cap: CAP, env });
   assert.equal(claimed.job?.id, id);
   assert.equal(claimed.reason, "claimed");
   assert.notEqual(claimed.job.worker, DEAD_WORKER, "the dead runner still owns the job");

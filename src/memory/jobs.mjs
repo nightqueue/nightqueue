@@ -539,6 +539,30 @@ export function listJobs({ limit } = {}, env = process.env) {
   return openDb(env).prepare("SELECT * FROM jobs ORDER BY id DESC LIMIT ?").all(clamped);
 }
 
+// Unfinished jobs that already have a run directory; a job with no slug never ran, so no witness can speak for it.
+export function listJobsWithSlug(env = process.env) {
+  return openDb(env)
+    .prepare("SELECT id, project, slug FROM jobs WHERE status IN ('running', 'pending') AND slug IS NOT NULL")
+    .all();
+}
+
+// Reads the status of a job for the follow loop; a job whose row is gone has no status at all.
+// Each read opens its own read-only connection and closes it: a follow lives for hours, and a cached connection
+// can sit on a WAL read snapshot and keep answering `running` long after the runner wrote `done`.
+export function jobStatus(id, env = process.env) {
+  const db = openDbReadOnly(env);
+  try {
+    return db.prepare("SELECT status FROM jobs WHERE id = ?").get(id)?.status ?? null;
+  } finally {
+    db.close();
+  }
+}
+
+// Counts the jobs left `running` by a runner that died, on the connection the caller already holds: a diagnosis never creates nor migrates the database it inspects.
+export function countOrphanJobs(db) {
+  return db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE ${ORPHAN_PREDICATE}`).get().n;
+}
+
 // Jobs delivered with a pull request never checked or last checked before the cutoff, staler first so every one is reached.
 export function listMergeCandidates({ cutoff, limit } = {}, env = process.env) {
   const statement = openDb(env).prepare(

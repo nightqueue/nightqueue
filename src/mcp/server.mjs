@@ -8,27 +8,10 @@ import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { projectByName, registrationOffer, resolveProject } from "../config/projects.mjs";
 import { loadConfig, saveConfig } from "../config/store.mjs";
-import {
-  DECISION_STATUSES,
-  decisionFullView,
-  decisionView,
-  getDecision,
-  listDecisions,
-  recallDecisions,
-  saveDecision,
-  updateDecision,
-} from "../memory/decisions.mjs";
-import { saveLessonDeduped } from "../memory/dedup.mjs";
+import { DECISION_STATUSES, decisionFullView, decisionView } from "../memory/decisions.mjs";
 import { SCOPE_CONFLICT, SCOPE_MISSING, ownerDescription } from "../memory/scope.mjs";
-import { recallProjectIndex, saveProjectIndex } from "../memory/index.mjs";
 import {
-  addJob,
-  cancelJob,
-  countActiveJobs,
-  countsByStatus,
-  getJob,
   jobView,
-  listJobs,
   MAX_ATTEMPTS_RANGE,
   PRIORITY_RANGE,
   TIMEOUT_RANGE,
@@ -36,16 +19,11 @@ import {
 import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
 import {
-  getRoadmapItem,
-  listRoadmap,
   PROMPT_SOURCE_CONFLICT,
   PROMPT_SOURCE_MISSING,
-  queueRoadmapItem,
   ROADMAP_HORIZONS,
   ROADMAP_STATUSES,
   roadmapItemView,
-  saveRoadmapItem,
-  updateRoadmapItem,
 } from "../memory/roadmap.mjs";
 import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
@@ -56,14 +34,13 @@ import { repairWarningLine } from "../queue/reconcile.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { startQueueRunner } from "../queue/start.mjs";
 import {
-  logPipelineRun,
   PIPELINE_GATE_STOPS,
   PIPELINE_OUTCOMES,
   PIPELINE_PHASE_STATUSES,
   PIPELINE_TASK_TYPES,
   PIPELINE_TIERS,
 } from "../memory/runs.mjs";
-import { recallLessons, recallMemories } from "../memory/search.mjs";
+import { openStore } from "../store/open.mjs";
 
 const SERVER_NAME = "nightshift";
 const SERVER_VERSION = "0.1.0";
@@ -117,15 +94,15 @@ function refuseRegistrationInsideJob(cwd, env) {
 }
 
 // Project of the run this process belongs to; null outside a job, and null too when the job id names no job.
-function callerProject(own, env) {
-  return getJob(own, env)?.project ?? null;
+async function callerProject(own, env) {
+  return (await openStore(env).jobs.getJob(own))?.project ?? null;
 }
 
 // Refuses a row of ANOTHER owner from inside an unattended run: a job may only rewrite the decisions and the roadmap of its own project, never its org's.
-function requireOwnProject({ kind, id, row }, env) {
+async function requireOwnProject({ kind, id, row }, env) {
   const own = callerJobId(env);
   if (own === null) return;
-  const mine = callerProject(own, env);
+  const mine = await callerProject(own, env);
   if (mine !== null && row?.scope !== "org" && mine === (row?.project ?? null)) return;
   throw new UserError(
     `refusing to update ${kind} \`${id}\` from inside job \`${own}\`: it belongs to ${ownerDescription(row)}, ` +
@@ -209,8 +186,8 @@ function wantsRoadmapItem(args) {
 }
 
 // The answer of `queue_add`: the job it recorded, and the roadmap item behind it when there is one.
-function queuedAnswer({ job, registered = null, roadmapItemId = null, note = "" }, env) {
-  const pending = countsByStatus(env).pending;
+async function queuedAnswer({ job, registered = null, roadmapItemId = null, note = "" }, env) {
+  const pending = (await openStore(env).jobs.countsByStatus()).pending;
   const done = registered ? `registered project \`${registered.name}\` (${registered.path}). ` : "";
   return {
     ok: true,
@@ -331,16 +308,13 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        const rows = await recallLessons(
-          {
-            query: args.query,
-            project: args.project,
-            target: args.target,
-            excludeIds: args.exclude_ids,
-            limit: RECALL_LIMIT,
-          },
-          env,
-        );
+        const rows = await openStore(env).lessons.recallLessons({
+          query: args.query,
+          project: args.project,
+          target: args.target,
+          excludeIds: args.exclude_ids,
+          limit: RECALL_LIMIT,
+        });
         return rows.map(lessonView);
       },
     },
@@ -359,18 +333,15 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        const saved = await saveLessonDeduped(
-          {
-            project: args.project,
-            title: args.title,
-            root_cause: args.root_cause,
-            solution: args.solution,
-            prevention: args.prevention,
-            attempts: args.attempts,
-            target: args.target,
-          },
-          env,
-        );
+        const saved = await openStore(env).lessons.saveLessonDeduped({
+          project: args.project,
+          title: args.title,
+          root_cause: args.root_cause,
+          solution: args.solution,
+          prevention: args.prevention,
+          attempts: args.attempts,
+          target: args.target,
+        });
         return { ok: true, id: saved.id, project: saved.project, deduped: saved.deduped, attempts: saved.attempts };
       },
     },
@@ -381,7 +352,11 @@ function toolDefinitions(env) {
         inputSchema: { query: optionalText, project: optionalText },
       },
       handler: async (args) => {
-        const rows = await recallMemories({ query: args.query, project: args.project, limit: RECALL_LIMIT }, env);
+        const rows = await openStore(env).memory.recallMemories({
+          query: args.query,
+          project: args.project,
+          limit: RECALL_LIMIT,
+        });
         return rows.map(memoryView);
       },
     },
@@ -398,10 +373,12 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        const saved = saveProjectIndex(
-          { project: args.project, repoRoot: args.repo_root, files: args.files, libs: args.libs ?? [] },
-          env,
-        );
+        const saved = await openStore(env).index.saveProjectIndex({
+          project: args.project,
+          repoRoot: args.repo_root,
+          files: args.files,
+          libs: args.libs ?? [],
+        });
         return { ok: true, files: saved.files, libs: saved.libs };
       },
     },
@@ -413,10 +390,12 @@ function toolDefinitions(env) {
         inputSchema: { project: z.string(), repo_root: optionalText, query: optionalText },
       },
       handler: async (args) =>
-        recallProjectIndex(
-          { project: args.project, repoRoot: args.repo_root, query: args.query, limit: INDEX_LIMIT },
-          env,
-        ),
+        openStore(env).index.recallProjectIndex({
+          project: args.project,
+          repoRoot: args.repo_root,
+          query: args.query,
+          limit: INDEX_LIMIT,
+        }),
     },
     {
       name: "pipeline_log",
@@ -438,21 +417,18 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        const logged = logPipelineRun(
-          {
-            project: args.project,
-            slug: args.slug,
-            tier: args.tier,
-            tierOperator: args.tier_operator,
-            tierRaiseReason: args.tier_raise_reason,
-            taskType: args.task_type,
-            outcome: args.outcome,
-            gateStop: args.gate_stop,
-            durationS: args.duration_s,
-            phases: args.phases ?? [],
-          },
-          env,
-        );
+        const logged = await openStore(env).runs.logPipelineRun({
+          project: args.project,
+          slug: args.slug,
+          tier: args.tier,
+          tierOperator: args.tier_operator,
+          tierRaiseReason: args.tier_raise_reason,
+          taskType: args.task_type,
+          outcome: args.outcome,
+          gateStop: args.gate_stop,
+          durationS: args.duration_s,
+          phases: args.phases ?? [],
+        });
         return { ok: true, runId: logged.runId, project: logged.project, phases: logged.phases };
       },
     },
@@ -498,34 +474,28 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         if (wantsRoadmapItem(args)) {
-          const queued = await queueRoadmapItem(
-            {
-              id: args.roadmap_item_id,
-              project: namedProject(args.project, env),
-              priority: args.priority,
-              maxAttempts: args.max_attempts,
-              timeoutS: args.timeout_s,
-              tier: args.tier,
-            },
-            env,
-          );
-          return queuedAnswer({ job: queued.job, roadmapItemId: queued.item.id, note: roadmapNote(queued.item) }, env);
-        }
-        const target = resolveQueueTarget(args, env);
-        if (target.offer && args.register !== true) return needsRegistration(target);
-        const registered = target.offer ? await registerOffer(target.offer, env) : null;
-        const job = addJob(
-          {
-            project: registered?.name ?? target.project,
-            prompt: args.prompt,
+          const queued = await openStore(env).roadmap.queueRoadmapItem({
+            id: args.roadmap_item_id,
+            project: namedProject(args.project, env),
             priority: args.priority,
             maxAttempts: args.max_attempts,
             timeoutS: args.timeout_s,
             tier: args.tier,
-          },
-          env,
-        );
-        return queuedAnswer({ job, registered }, env);
+          });
+          return await queuedAnswer({ job: queued.job, roadmapItemId: queued.item.id, note: roadmapNote(queued.item) }, env);
+        }
+        const target = resolveQueueTarget(args, env);
+        if (target.offer && args.register !== true) return needsRegistration(target);
+        const registered = target.offer ? await registerOffer(target.offer, env) : null;
+        const job = await openStore(env).jobs.addJob({
+          project: registered?.name ?? target.project,
+          prompt: args.prompt,
+          priority: args.priority,
+          maxAttempts: args.max_attempts,
+          timeoutS: args.timeout_s,
+          tier: args.tier,
+        });
+        return await queuedAnswer({ job, registered }, env);
       },
     },
     {
@@ -540,21 +510,22 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        refreshMergedJobs({ env });
-        const warning = repairWarningLine(env);
+        await refreshMergedJobs({ env });
+        const warning = await repairWarningLine(env);
+        const store = openStore(env);
         if (Number.isInteger(args.job_id)) {
-          const job = jobView(getJob(args.job_id, env), { full: true });
+          const job = jobView(await store.jobs.getJob(args.job_id), { full: true });
           if (!job) throw new UserError(`unknown job \`${args.job_id}\``);
           return { job, ...warningAnswer(warning) };
         }
         const runners = readRunners(env);
-        const counts = countsByStatus(env);
+        const counts = await store.jobs.countsByStatus();
         return {
           runner: runners[0] ?? STOPPED_RUNNER,
           runners,
-          jobs: listJobs({ limit: jobLimit(args.limit) }, env).map(jobView),
+          jobs: (await store.jobs.listJobs({ limit: jobLimit(args.limit) })).map(jobView),
           counts,
-          hint: queueHint({ activeJobs: countActiveJobs(env), counts, runners }),
+          hint: queueHint({ activeJobs: await store.jobs.countActiveJobs(), counts, runners }),
           ...warningAnswer(warning),
         };
       },
@@ -582,7 +553,7 @@ function toolDefinitions(env) {
           "Cancels a pending, gated or orphaned job. A job running under a live lease is refused, with the exact reason and no write.",
         inputSchema: { job_id: z.number().int().min(1), reason: optionalText },
       },
-      handler: async (args) => ({ ok: true, job: cancelJob(args.job_id, { reason: args.reason }, env) }),
+      handler: async (args) => ({ ok: true, job: await openStore(env).jobs.cancelJob(args.job_id, { reason: args.reason }) }),
     },
     {
       name: "queue_retry",
@@ -600,7 +571,7 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        const { job, runDir } = applyRetry({ id: args.job_id, note: args.note, fresh: args.fresh === true, env });
+        const { job, runDir } = await applyRetry({ id: args.job_id, note: args.note, fresh: args.fresh === true, env });
         const started = args.run === true ? await startQueueRunner({ jobId: job.id, env }) : null;
         return { ok: true, job, runDir, ...(started ? runnerAnswer(started, env) : { runner: null }) };
       },
@@ -623,17 +594,14 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        const saved = saveDecision(
-          {
-            ...ownerArgs(args, env),
-            title: args.title,
-            context: args.context,
-            decision: args.decision,
-            consequences: args.consequences,
-            status: args.status,
-          },
-          env,
-        );
+        const saved = await openStore(env).decisions.saveDecision({
+          ...ownerArgs(args, env),
+          title: args.title,
+          context: args.context,
+          decision: args.decision,
+          consequences: args.consequences,
+          status: args.status,
+        });
         return { ok: true, id: saved.id, number: saved.number, scope: saved.scope, owner: saved.org ?? saved.project };
       },
     },
@@ -654,20 +622,17 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        const current = getDecision(args.id, env);
-        if (current) requireOwnProject({ kind: "decision", id: args.id, row: current }, env);
-        const row = updateDecision(
-          args.id,
-          {
-            title: args.title,
-            context: args.context,
-            decision: args.decision,
-            consequences: args.consequences,
-            status: args.status,
-            superseded_by: args.superseded_by,
-          },
-          env,
-        );
+        const store = openStore(env);
+        const current = await store.decisions.getDecision(args.id);
+        if (current) await requireOwnProject({ kind: "decision", id: args.id, row: current }, env);
+        const row = await store.decisions.updateDecision(args.id, {
+          title: args.title,
+          context: args.context,
+          decision: args.decision,
+          consequences: args.consequences,
+          status: args.status,
+          superseded_by: args.superseded_by,
+        });
         return { ok: true, decision: decisionView(row) };
       },
     },
@@ -681,7 +646,8 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const owner = ownerArgs(args, env);
-        return { ...owner, decisions: listDecisions({ ...owner, status: args.status }, env).map(decisionView) };
+        const rows = await openStore(env).decisions.listDecisions({ ...owner, status: args.status });
+        return { ...owner, decisions: rows.map(decisionView) };
       },
     },
     {
@@ -699,14 +665,11 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        const rows = await recallDecisions(
-          {
-            ...ownerArgs(args, env),
-            query: args.query,
-            limit: Number.isInteger(args.limit) ? args.limit : RECALL_LIMIT,
-          },
-          env,
-        );
+        const rows = await openStore(env).decisions.recallDecisions({
+          ...ownerArgs(args, env),
+          query: args.query,
+          limit: Number.isInteger(args.limit) ? args.limit : RECALL_LIMIT,
+        });
         return rows.map(decisionFullView);
       },
     },
@@ -726,16 +689,13 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        const saved = saveRoadmapItem(
-          {
-            ...ownerArgs(args, env),
-            horizon: args.horizon,
-            title: args.title,
-            detail: args.detail,
-            decision_id: args.decision_id,
-          },
-          env,
-        );
+        const saved = await openStore(env).roadmap.saveRoadmapItem({
+          ...ownerArgs(args, env),
+          horizon: args.horizon,
+          title: args.title,
+          detail: args.detail,
+          decision_id: args.decision_id,
+        });
         return { ok: true, id: saved.id, position: saved.position };
       },
     },
@@ -756,20 +716,17 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        const current = getRoadmapItem(args.id, env);
-        if (current) requireOwnProject({ kind: "roadmap item", id: args.id, row: current }, env);
-        const row = updateRoadmapItem(
-          args.id,
-          {
-            horizon: args.horizon,
-            title: args.title,
-            detail: args.detail,
-            status: args.status,
-            position: args.position,
-            decision_id: args.decision_id,
-          },
-          env,
-        );
+        const store = openStore(env);
+        const current = await store.roadmap.getRoadmapItem(args.id);
+        if (current) await requireOwnProject({ kind: "roadmap item", id: args.id, row: current }, env);
+        const row = await store.roadmap.updateRoadmapItem(args.id, {
+          horizon: args.horizon,
+          title: args.title,
+          detail: args.detail,
+          status: args.status,
+          position: args.position,
+          decision_id: args.decision_id,
+        });
         return { ok: true, item: roadmapItemView(row) };
       },
     },
@@ -781,7 +738,7 @@ function toolDefinitions(env) {
           "With `project`, the project's items plus its org's, org items first, each carrying its `scope` and its `owner`; with `org`, only that org's items.",
         inputSchema: { project: optionalText, org: optionalText },
       },
-      handler: async (args) => listRoadmap(ownerArgs(args, env), env),
+      handler: async (args) => openStore(env).roadmap.listRoadmap(ownerArgs(args, env)),
     },
   ];
 }

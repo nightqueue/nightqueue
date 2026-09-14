@@ -4,16 +4,7 @@ import { UserError } from "../config/errors.mjs";
 import { queuePausedPath } from "../config/paths.mjs";
 import { LEASE_HEARTBEAT_DEFAULT_S } from "../config/schema.mjs";
 import { loadConfig } from "../config/store.mjs";
-import {
-  claimJobById,
-  claimNextJob,
-  countActiveJobs,
-  getJob,
-  hasClaimablePending,
-  releaseJob,
-  renewLease,
-  sweepOrphans,
-} from "../memory/jobs.mjs";
+import { openStore } from "../store/open.mjs";
 import { liveRunnersReport } from "./registry.mjs";
 
 // Identity of this runner process, the value the ownership predicate of every write compares against.
@@ -61,37 +52,39 @@ export function liveLocalWorker(worker) {
 }
 
 // Explains why nothing was claimed; it reads the database only to phrase the reason, never to decide.
-function refusalReason({ jobId, cap, env }) {
-  if (countActiveJobs(env) >= cap) return "cap-reached";
-  if (jobId === null) return hasClaimablePending(env) ? "cap-reached" : "empty-queue";
-  const job = getJob(jobId, env);
+async function refusalReason({ jobId, cap, env }) {
+  const store = openStore(env);
+  if ((await store.jobs.countActiveJobs()) >= cap) return "cap-reached";
+  if (jobId === null) return (await store.jobs.hasClaimablePending()) ? "cap-reached" : "empty-queue";
+  const job = await store.jobs.getJob(jobId);
   if (!job) return "unknown-job";
   return job.status === "pending" ? "cap-reached" : "not-pending";
 }
 
 // Takes ownership of one job: sweeps the orphans first, then claims atomically inside the database.
-export function acquire({ jobId = null, cap, env = process.env } = {}) {
-  sweepOrphans(env, { liveWorkerImpl: liveLocalWorker });
+export async function acquire({ jobId = null, cap, env = process.env } = {}) {
+  const store = openStore(env);
+  await store.jobs.sweepOrphans({ liveWorkerImpl: liveLocalWorker });
   if (jobId === null && isPaused(env)) return { job: null, reason: "paused" };
   const worker = workerId();
-  const job = jobId === null ? claimNextJob({ worker, cap }, env) : claimJobById(jobId, { worker, cap }, env);
+  const job = jobId === null ? await store.jobs.claimNextJob({ worker, cap }) : await store.jobs.claimJobById(jobId, { worker, cap });
   if (job) return { job, reason: "claimed" };
-  return { job: null, reason: refusalReason({ jobId, cap, env }) };
+  return { job: null, reason: await refusalReason({ jobId, cap, env }) };
 }
 
 // Gives a claimed job back to the queue without spending the attempt, recording why it came back.
-export function release(job, result, env = process.env) {
-  return releaseJob(job.id, { worker: job.worker, result }, env);
+export async function release(job, result, env = process.env) {
+  return await openStore(env).jobs.releaseJob(job.id, { worker: job.worker, result });
 }
 
 // Re-arms the lease of a job; false means this runner no longer owns it and must stop working on it.
-export function renew(job, env = process.env) {
-  return renewLease(job.id, { worker: job.worker }, env);
+export async function renew(job, env = process.env) {
+  return await openStore(env).jobs.renewLease(job.id, { worker: job.worker });
 }
 
 // Ownership check of the running job, which is the same write that keeps its lease alive.
-export function stillOwned(job, env = process.env) {
-  return renew(job, env);
+export async function stillOwned(job, env = process.env) {
+  return await renew(job, env);
 }
 
 // What each start shape must refuse to spawn for: a single job buys nothing when it cannot be claimed, a drain dies at once on a paused queue, and a watcher waits for the condition to clear on purpose.
@@ -102,29 +95,30 @@ const START_BLOCKERS = {
 };
 
 // The ceiling standing in the way of a start right now, or null while there is a free slot.
-function capBlocker({ jobId, env }) {
+async function capBlocker({ jobId, env }) {
   const cap = concurrencyCap(env);
-  const active = countActiveJobs(env);
+  const active = await openStore(env).jobs.countActiveJobs();
   return active >= cap ? { reason: "cap-reached", jobId, active, cap } : null;
 }
 
 // The reason a start of this shape would claim nothing, with the facts its message needs.
 // The orphans are swept first, exactly as `acquire` does: a job whose dead owner is about to be reclaimed is claimable, not `not-pending`.
-function previewRefusal({ jobId, env }) {
-  if (jobId === null) return isPaused(env) ? { reason: "paused", jobId } : capBlocker({ jobId, env });
-  sweepOrphans(env, { liveWorkerImpl: liveLocalWorker });
-  const job = getJob(jobId, env);
+async function previewRefusal({ jobId, env }) {
+  if (jobId === null) return isPaused(env) ? { reason: "paused", jobId } : await capBlocker({ jobId, env });
+  const store = openStore(env);
+  await store.jobs.sweepOrphans({ liveWorkerImpl: liveLocalWorker });
+  const job = await store.jobs.getJob(jobId);
   if (!job) return { reason: "unknown-job", jobId };
   if (job.status !== "pending") return { reason: "not-pending", jobId, status: job.status };
-  return capBlocker({ jobId, env });
+  return await capBlocker({ jobId, env });
 }
 
 // The blocker this start shape cares about, or null when a read of the queue itself failed: a broken read must never stop a start.
-function safePreview({ jobId, mode, env }) {
+async function safePreview({ jobId, mode, env }) {
   const wanted = START_BLOCKERS[mode] ?? START_BLOCKERS.watch;
   if (!wanted.size) return null;
   try {
-    const blocker = previewRefusal({ jobId, env });
+    const blocker = await previewRefusal({ jobId, env });
     return blocker && wanted.has(blocker.reason) ? blocker : null;
   } catch {
     return null;
@@ -132,8 +126,8 @@ function safePreview({ jobId, mode, env }) {
 }
 
 // The honest preview of `acquire` every start renders instead of reporting a runner that would claim nothing.
-export function claimBlocker({ jobId = null, mode = "drain", env = process.env } = {}) {
-  const blocker = safePreview({ jobId, mode, env });
+export async function claimBlocker({ jobId = null, mode = "drain", env = process.env } = {}) {
+  const blocker = await safePreview({ jobId, mode, env });
   if (blocker?.reason === "unknown-job") throw new UserError(`unknown job \`${blocker.jobId}\``);
   return blocker;
 }

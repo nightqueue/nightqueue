@@ -1,8 +1,6 @@
 import { updateNoticeLine } from "../host/update-notice.mjs";
-import { projectFromCwd } from "../memory/db.mjs";
-import { markInjected } from "../memory/lessons.mjs";
-import { recentMemories } from "../memory/memory.mjs";
-import { recallLessons } from "../memory/search.mjs";
+import { projectFromCwd } from "../memory/project-name.mjs";
+import { openStore } from "../store/open.mjs";
 import { section } from "./block.mjs";
 import { recordInjected } from "./state.mjs";
 
@@ -23,23 +21,23 @@ function memoryLine(memory) {
 }
 
 // Marks the lessons as injected in the corpus, tolerating a write failure that must not cost the block.
-function markInjectedQuietly(ids, env) {
+async function markInjectedQuietly(store, ids) {
   try {
-    return markInjected(ids, env).injected;
+    return (await store.lessons.markInjected(ids)).injected;
   } catch {
     return 0;
   }
 }
 
 // Registers what was injected, both in the session state and in the corpus.
-function stampInjection(sessionId, lessons, env) {
+async function stampInjection(store, sessionId, lessons, env) {
   const ids = lessons.map((lesson) => lesson.id).filter((id) => Number.isInteger(id));
   recordInjected(
     sessionId,
     ids.map((id) => `l${id}`),
     env,
   );
-  return markInjectedQuietly(ids, env);
+  return markInjectedQuietly(store, ids);
 }
 
 // Builds the context block injected at the start of a session: top lessons plus the project memories.
@@ -49,14 +47,15 @@ export async function runSessionStart({ input, env = process.env, fetchImpl = nu
   const sessionId = typeof input?.session_id === "string" ? input.session_id : "unknown";
   const project = projectFromCwd(cwd, env);
   if (!project) return "";
-  const lessons = await recallLessons({ project: project?.name, limit: LESSON_LIMIT }, env);
-  const memories = recentMemories({ project: project?.name, limit: MEMORY_LIMIT }, env);
+  const store = openStore(env);
+  const lessons = await store.lessons.recallLessons({ project: project?.name, limit: LESSON_LIMIT });
+  const memories = await store.memory.recentMemories({ project: project?.name, limit: MEMORY_LIMIT });
   const sections = [
     section("Lessons learned (do not repeat these mistakes)", lessons, lessonLine),
     section(`Project memory (${project?.name ?? "global"})`, memories, memoryLine),
   ].filter(Boolean);
   if (!sections.length) return "";
-  stampInjection(sessionId, lessons, env);
+  await stampInjection(store, sessionId, lessons, env);
   const notice = await updateNoticeLine({ env, fetchImpl });
   const block = `# Nightshift context\n\n${sections.join("\n\n")}\n\n${FOOTER}`;
   return (notice ? `${block}\n\n${notice}` : block).slice(0, MAX_OUTPUT);

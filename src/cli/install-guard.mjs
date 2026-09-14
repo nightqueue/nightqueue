@@ -1,17 +1,17 @@
 import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { dbPath } from "../config/paths.mjs";
-import { firstActiveJobId } from "../memory/jobs.mjs";
 import { liveRunnersReport } from "../queue/registry.mjs";
+import { openStore } from "../store/open.mjs";
 
 const REFUSAL_TAIL =
   "the runtime cannot be replaced while it runs; stop it with nightshift queue run --stop or wait for the queue to drain";
 
 // Job holding a live lease, or null when there is no queue database or it could not be read: an install is the repair path, so a database it cannot open never blocks it, and a home without one is never created by a check.
-function activeJobId(env) {
+async function activeJobId(env) {
   if (!existsSync(dbPath(env))) return null;
   try {
-    return firstActiveJobId(env);
+    return await openStore(env).jobs.firstActiveJobId();
   } catch {
     return null;
   }
@@ -41,9 +41,9 @@ function liveRunnersOrRefuse(ctx, force) {
 }
 
 // Refuses to replace the runtime under a live runner: any registered runner or a job holding a live lease means a process is executing the tree this install would swap.
-export function guardIdleRuntime(ctx, { force } = {}) {
+export async function guardIdleRuntime(ctx, { force } = {}) {
   const runners = liveRunnersOrRefuse(ctx, force);
-  const jobId = activeJobId(ctx.env);
+  const jobId = await activeJobId(ctx.env);
   if (!runners.length && jobId === null) return;
   const label = activeLabel({ runners, jobId });
   if (force === true) {

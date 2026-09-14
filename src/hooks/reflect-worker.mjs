@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { stateDir } from "../config/paths.mjs";
 import { writeFileAtomic } from "../config/store.mjs";
-import { projectFromCwd } from "../memory/db.mjs";
-import { persistLessons } from "../memory/dedup.mjs";
-import { getLesson, LESSON_TARGETS } from "../memory/lessons.mjs";
+import { LESSON_TARGETS } from "../memory/lessons.mjs";
+import { projectFromCwd } from "../memory/project-name.mjs";
+import { openStore } from "../store/open.mjs";
 import { lessonIdsFromRefs, readSessionState } from "./state.mjs";
 
 const THROTTLE_MS = 60000;
@@ -181,11 +181,11 @@ function itemsOf(parsed) {
 }
 
 // Lessons already injected in this session, so the model can point a repetition at the lesson that was broken.
-function injectedLessons(sessionId, env) {
+async function injectedLessons(store, sessionId, env) {
   const refs = readSessionState(sessionId, env).injected.map((entry) => entry.ref);
   const rows = [];
   for (const id of lessonIdsFromRefs(refs).slice(-MAX_INJECTED)) {
-    const lesson = getLesson(id, env);
+    const lesson = await store.lessons.getLesson(id);
     if (lesson) rows.push({ id: lesson.id, prevention: lesson.prevention });
   }
   return rows;
@@ -330,20 +330,17 @@ async function reflect({ transcriptPath, cwd, sessionId }, { env, runClaude, jud
   const project = projectFromCwd(cwd || process.cwd(), env);
   if (!project) return skipped("project not registered");
   const model = env?.NIGHTSHIFT_REFLECT_MODEL || DEFAULT_MODEL;
-  const injected = injectedLessons(id, env);
+  const store = openStore(env);
+  const injected = await injectedLessons(store, id, env);
   const items = await extractItems({ digest, model, injected, runClaude, log });
   const persisted = items.length
-    ? await persistLessons(
-        items,
-        {
-          project: project.name,
-          model: `reflect/${model}`,
-          injectedIds: injected.map((lesson) => lesson.id),
-          judge: judge ?? makeJudge(runClaude, model),
-          log,
-        },
-        env,
-      )
+    ? await store.lessons.persistLessons(items, {
+        project: project.name,
+        model: `reflect/${model}`,
+        injectedIds: injected.map((lesson) => lesson.id),
+        judge: judge ?? makeJudge(runClaude, model),
+        log,
+      })
     : { saved: 0, merged: 0, violations: 0, memories: 0 };
   entry.offset = size;
   sessions.set(id, entry);

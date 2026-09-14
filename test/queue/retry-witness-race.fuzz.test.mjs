@@ -50,12 +50,12 @@ function lostFinish(env, options = {}) {
   return id;
 }
 
-test("a reconciliation landing between retryJob and clearRunTerminal must not revert a fresh retry to its previous outcome", (t) => {
+test("a reconciliation landing between retryJob and clearRunTerminal must not revert a fresh retry to its previous outcome", async (t) => {
   const env = makeQueue(t, "retry-witness-race");
   const id = lostFinish(env, { status: "failed", prUrl: null });
 
   // Establish the real starting point of a retry: the lost finish is legitimately reconciled to `failed` first, exactly as an operator running `queue status` before retrying would observe.
-  assert.deepEqual(reconcileFromWitness(env).repaired, [id], "setup: the lost finish was not reconciled to failed first");
+  assert.deepEqual((await reconcileFromWitness(env)).repaired, [id], "setup: the lost finish was not reconciled to failed first");
   assert.equal(getJob(id, env).status, "failed");
 
   // `applyRetry` (src/queue/retry.mjs) calls exactly this sequence: `retryJob(id, {...}, env)` first, `clearRunTerminal(run)` only after.
@@ -72,7 +72,7 @@ test("a reconciliation landing between retryJob and clearRunTerminal must not re
   );
 
   // A concurrent process's reconciliation lands here, in the gap, before `clearRunTerminal` ever runs.
-  reconcileFromWitness(env);
+  await reconcileFromWitness(env);
 
   assert.equal(
     getJob(id, env).status,

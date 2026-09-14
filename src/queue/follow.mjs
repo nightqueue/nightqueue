@@ -89,9 +89,9 @@ function createReader({ path, offset, statFn, readChunk }) {
 }
 
 // Reads the status of the job as a tri-state: a status, no job at all, or a read that failed.
-function readStatusSafely(readStatus) {
+async function readStatusSafely(readStatus) {
   try {
-    const status = typeof readStatus === "function" ? readStatus() : null;
+    const status = typeof readStatus === "function" ? await readStatus() : null;
     return { ok: true, status: typeof status === "string" && status ? status : null };
   } catch (err) {
     return { ok: false, message: err?.message ?? String(err) };
@@ -161,7 +161,7 @@ export async function followLog({ path, offset = 0, readStatus, onLine, onNotice
   let outcome = null;
   while (!outcome) {
     state.polls += 1;
-    const snapshot = readStatusSafely(readStatus);
+    const snapshot = await readStatusSafely(readStatus);
     const batch = reader.read();
     trackLogRead(batch, state, notify);
     if (batch.truncated) notify({ kind: "truncated" });

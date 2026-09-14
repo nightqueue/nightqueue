@@ -97,26 +97,26 @@ test("the ceiling holds ACROSS processes: with maxConcurrent 1 the second runner
   assert.equal(countActiveJobs(env), 1);
 });
 
-test("acquire explains every refusal instead of just returning nothing", (t) => {
+test("acquire explains every refusal instead of just returning nothing", async (t) => {
   const env = makeQueue(t, "claim-reasons");
-  assert.deepEqual(acquire({ cap: 1, env }), { job: null, reason: "empty-queue" });
-  assert.deepEqual(acquire({ jobId: 9999, cap: 1, env }), { job: null, reason: "unknown-job" });
+  assert.deepEqual(await acquire({ cap: 1, env }), { job: null, reason: "empty-queue" });
+  assert.deepEqual(await acquire({ jobId: 9999, cap: 1, env }), { job: null, reason: "unknown-job" });
 
   const id = enqueue(env);
-  assert.equal(acquire({ cap: 1, env }).job.id, id);
-  assert.deepEqual(acquire({ cap: 1, env }), { job: null, reason: "cap-reached" });
-  assert.deepEqual(acquire({ jobId: id, cap: 4, env }), { job: null, reason: "not-pending" });
+  assert.equal((await acquire({ cap: 1, env })).job.id, id);
+  assert.deepEqual(await acquire({ cap: 1, env }), { job: null, reason: "cap-reached" });
+  assert.deepEqual(await acquire({ jobId: id, cap: 4, env }), { job: null, reason: "not-pending" });
 });
 
-test("the pause sentinel stops the queue, but never an explicit `--job`", (t) => {
+test("the pause sentinel stops the queue, but never an explicit `--job`", async (t) => {
   const env = makeQueue(t, "claim-paused");
   const id = enqueue(env);
   assert.equal(isPaused(env), false);
   writeFileSync(queuePausedPath(env), `${new Date().toISOString()}\n`);
   assert.equal(isPaused(env), true);
 
-  assert.deepEqual(acquire({ cap: 2, env }), { job: null, reason: "paused" });
-  assert.equal(acquire({ jobId: id, cap: 2, env }).job.id, id, "an explicit job id was blocked by the pause");
+  assert.deepEqual(await acquire({ cap: 2, env }), { job: null, reason: "paused" });
+  assert.equal((await acquire({ jobId: id, cap: 2, env })).job.id, id, "an explicit job id was blocked by the pause");
   rmSync(queuePausedPath(env), { force: true });
   assert.equal(isPaused(env), false);
 });

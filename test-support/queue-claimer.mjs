@@ -21,7 +21,7 @@ async function main() {
   if (!Number.isInteger(cap) || cap <= 0) throw new Error(`invalid cap: ${String(capRaw)}`);
   const jobId = jobRaw === undefined || jobRaw === "" || jobRaw === "any" ? null : Number(jobRaw);
   await waitForBarrier();
-  const claimed = acquire({ jobId, cap, env: process.env });
+  const claimed = await acquire({ jobId, cap, env: process.env });
   process.stdout.write(`${JSON.stringify({ id: claimed.job?.id ?? null, reason: claimed.reason, worker: claimed.job?.worker ?? null })}\n`);
 }
 

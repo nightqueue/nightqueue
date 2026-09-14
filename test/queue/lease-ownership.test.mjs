@@ -142,7 +142,7 @@ test("a lease that expires while its owner is ALIVE never gives a second real ru
   assert.equal(existsSync(marker2), false, `a SECOND real child started for job #${jobId} while the first one was alive`);
   assert.match(result2.stdout, /^job #\d+ is running, not pending - it will not be picked up$/m, `the second runner did not refuse: ${result2.stdout}`);
   assert.deepEqual(
-    acquire({ jobId, cap: CAP, env }),
+    await acquire({ jobId, cap: CAP, env }),
     { job: null, reason: "not-pending" },
     "the claim itself stopped protecting the job of a live owner whose lease expired",
   );

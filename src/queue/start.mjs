@@ -45,7 +45,7 @@ function spawnAndRegister({ jobId, max, watchIntervalS, env, spawnImpl, killImpl
 
 // Starts one detached runner, with the prune and the registration inside the same hold of the home lock; a start that would claim nothing reports why instead of spawning a ghost.
 export async function startQueueRunner({ jobId = null, max = null, watchIntervalS = null, env = process.env, spawnImpl, killImpl } = {}) {
-  const waiting = claimBlocker({ jobId, mode: runnerMode({ jobId, watchIntervalS }), env });
+  const waiting = await claimBlocker({ jobId, mode: runnerMode({ jobId, watchIntervalS }), env });
   if (waiting) return { started: false, pid: null, mode: null, logPath: null, waiting };
   return await withLock(env, () => spawnAndRegister({ jobId, max, watchIntervalS, env, spawnImpl, killImpl }));
 }

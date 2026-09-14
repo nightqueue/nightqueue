@@ -120,7 +120,7 @@ test("a finish written by a runtime replaced under it survives a second process 
   assert.ok(decisions > 0, "the other process wrote nothing, so nothing crossed the finish");
 
   revertFinish(env, id);
-  assert.deepEqual(reconcileFromWitness(env), { repaired: [id], error: null });
+  assert.deepEqual(await reconcileFromWitness(env), { repaired: [id], error: null });
   const repaired = getJob(id, env);
   assert.equal(repaired.status, "done");
   assert.equal(repaired.pr_url, report.prUrl);

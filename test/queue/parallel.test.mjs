@@ -81,7 +81,7 @@ function readCalls(logPath) {
     .map((line) => JSON.parse(line));
 }
 
-test("two jobs of the same project are claimed together, bounded only by the concurrency cap", (t) => {
+test("two jobs of the same project are claimed together, bounded only by the concurrency cap", async (t) => {
   const env = makeHome(t, "parallel-claim");
   makeProject(t, env, "alpha");
   makeProject(t, env, "beta");
@@ -93,12 +93,12 @@ test("two jobs of the same project are claimed together, bounded only by the con
   assert.equal(peekNextJob(env).id, second, "the dry report skipped the next pending job of a project already running one");
   assert.equal(claimJobById(second, { worker: OTHER_WORKER, cap: CAP }, env).id, second, "a second job of the same project was refused");
   assert.equal(getJob(second, env).attempts, 1);
-  assert.equal(acquire({ cap: CAP, env }).job.id, other);
+  assert.equal((await acquire({ cap: CAP, env })).job.id, other);
 
-  assert.deepEqual(acquire({ cap: CAP, env }), { job: null, reason: "empty-queue" });
+  assert.deepEqual(await acquire({ cap: CAP, env }), { job: null, reason: "empty-queue" });
   const fourth = addJob({ project: "alpha", prompt: "fix the docs", priority: 4 }, env).id;
-  assert.deepEqual(acquire({ cap: 3, env }), { job: null, reason: "cap-reached" }, "the ceiling is the only limit left");
-  assert.deepEqual(acquire({ jobId: fourth, cap: 3, env }), { job: null, reason: "cap-reached" });
+  assert.deepEqual(await acquire({ cap: 3, env }), { job: null, reason: "cap-reached" }, "the ceiling is the only limit left");
+  assert.deepEqual(await acquire({ jobId: fourth, cap: 3, env }), { job: null, reason: "cap-reached" });
 
   assert.equal(finishJob(first, { worker: WORKER, status: "done" }, env), true);
   assert.equal(claimNextJob({ worker: WORKER, cap: 3 }, env).id, fourth, "the freed slot was not spent on the next pending job");

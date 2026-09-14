@@ -93,22 +93,22 @@ export function interleave(lexical, semantic, limit) {
   return out;
 }
 
-// Recent lessons of a project plus the globals: current project first, violated first, newest first.
-export function recentLessons({ project, target, excludeIds, limit = 12 } = {}, env = process.env) {
-  const db = openDb(env);
+// Recent lessons of a project plus the globals: current project first, violated first, newest first; `db` lets the store bring its own connection.
+export function recentLessons({ project, target, excludeIds, limit = 12 } = {}, env = process.env, db = null) {
+  const connection = db ?? openDb(env);
   const projectName = resolveProjectName(project, env);
   const size = safeLimit(limit, 12);
   const targetPart = targetFilter("target", target);
   const excludePart = excludeFilter("id", normalizeExcludeIds(excludeIds));
   if (!projectName) {
-    return db
+    return connection
       .prepare(
         `SELECT * FROM lessons WHERE archived = 0${targetPart.clause}${excludePart.clause}
          ORDER BY created_at DESC LIMIT ?`,
       )
       .all(...targetPart.binds, ...excludePart.binds, Math.min(size, 10));
   }
-  return db
+  return connection
     .prepare(
       `SELECT * FROM lessons
        WHERE archived = 0 AND (project = ? OR project IS NULL)${targetPart.clause}${excludePart.clause}
@@ -147,17 +147,17 @@ function coverageClause(db, tokens) {
   return { clause: ` AND (${terms}) >= ?`, binds: [...useful, floor] };
 }
 
-// Lessons matching a query through BM25, with an informative-token coverage floor and a boost for the current project.
-export function searchLessonsLexical({ query, project, target, excludeIds, limit = 8 } = {}, env = process.env) {
+// Lessons matching a query through BM25, with an informative-token coverage floor and a boost for the current project; `db` lets the store bring its own connection.
+export function searchLessonsLexical({ query, project, target, excludeIds, limit = 8 } = {}, env = process.env, db = null) {
   const match = ftsMatch(query);
   if (!match) return [];
-  const db = openDb(env);
+  const connection = db ?? openDb(env);
   const projectName = resolveProjectName(project, env);
   const targetPart = targetFilter("l.target", target);
   const excludePart = excludeFilter("l.id", normalizeExcludeIds(excludeIds));
-  const coverage = coverageClause(db, queryTokens(query));
+  const coverage = coverageClause(connection, queryTokens(query));
   if (coverage.empty) return [];
-  return db
+  return connection
     .prepare(
       `SELECT l.*, bm25(lessons_fts) AS rank
        FROM lessons_fts JOIN lessons l ON l.id = lessons_fts.rowid
@@ -213,18 +213,19 @@ function hydrateByCosine(db, scored) {
     });
 }
 
-// Semantic side of the recall: brute-force cosine in JS over the eligible rows of the project plus the globals.
+// Semantic side of the recall: brute-force cosine in JS over the eligible rows of the project plus the globals; `db` lets the store bring its own connection.
 export function searchLessonsSemantic(
   { vector, model, project, target, excludeIds, limit = 8, cut = RECALL_COS_CUT } = {},
   env = process.env,
+  db = null,
 ) {
   const query = toQueryVector(vector);
   if (!query || typeof model !== "string" || !model) return [];
-  const db = openDb(env);
+  const connection = db ?? openDb(env);
   const projectName = resolveProjectName(project, env);
   const targetPart = targetFilter("target", target);
   const excludePart = excludeFilter("id", normalizeExcludeIds(excludeIds));
-  const rows = db
+  const rows = connection
     .prepare(
       `SELECT id, embedding FROM lessons
        WHERE embedding IS NOT NULL AND embedding_model = ? AND length(embedding) = ?
@@ -233,7 +234,7 @@ export function searchLessonsSemantic(
     )
     .all(model, query.length * 4, projectName ? 1 : 0, projectName, ...targetPart.binds, ...excludePart.binds);
   const scored = rankByCosine(rows, query, Number.isFinite(cut) ? cut : RECALL_COS_CUT, safeLimit(limit, 8));
-  return hydrateByCosine(db, scored);
+  return hydrateByCosine(connection, scored);
 }
 
 // Resolves the pair (embedder, model tag): injected in tests, loaded on demand in production.
@@ -273,23 +274,24 @@ export async function embedWithDeadline(embedder, text, deadlineMs) {
   }
 }
 
-// Single entry of the lesson recall: BM25 always answers, the semantic path only adds and never blocks.
+// Single entry of the lesson recall: BM25 always answers, the semantic path only adds and never blocks; `db` lets the store bring its own connection.
 export async function recallLessons(
   { query, project, target, excludeIds, limit = 8, embedder, deadlineMs } = {},
   env = process.env,
+  db = null,
 ) {
   const projectName = resolveProjectName(project, env);
   const ids = normalizeExcludeIds(excludeIds);
   const size = safeLimit(limit, 8);
   if (!ftsMatch(query)) {
     return markVia(
-      softTarget((t) => recentLessons({ project: projectName, target: t, excludeIds: ids, limit: size }, env), target),
+      softTarget((t) => recentLessons({ project: projectName, target: t, excludeIds: ids, limit: size }, env, db), target),
       "lexical",
     );
   }
   const lexical = markVia(
     softTarget(
-      (t) => searchLessonsLexical({ query, project: projectName, target: t, excludeIds: ids, limit: size }, env),
+      (t) => searchLessonsLexical({ query, project: projectName, target: t, excludeIds: ids, limit: size }, env, db),
       target,
     ),
     "lexical",
@@ -305,6 +307,7 @@ export async function recallLessons(
             searchLessonsSemantic(
               { vector, model: resolved.model, project: projectName, target: t, excludeIds: ids, limit: size },
               env,
+              db,
             ),
           target,
         ),
@@ -317,7 +320,7 @@ export async function recallLessons(
   }
   if (results.length || !projectName) return results;
   try {
-    return markVia(recentLessons({ project: projectName, excludeIds: ids, limit: size }, env), "fallback");
+    return markVia(recentLessons({ project: projectName, excludeIds: ids, limit: size }, env, db), "fallback");
   } catch {
     return results;
   }

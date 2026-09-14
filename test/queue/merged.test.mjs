@@ -40,12 +40,12 @@ function mergedAnswer({ mergedAt = MERGED_AT, mergeSha = MERGE_SHA } = {}) {
   return { ok: true, state: "MERGED", mergedAt, mergeSha };
 }
 
-test("a merged pull request turns the delivered job into `merged`, keeping what the run itself wrote", (t) => {
+test("a merged pull request turns the delivered job into `merged`, keeping what the run itself wrote", async (t) => {
   const env = makeSweepHome(t, "merged-sweep-merged");
   const id = deliver(env);
   const gh = fakeGh(mergedAnswer());
 
-  const report = refreshMergedJobs({ env, ghImpl: gh });
+  const report = await refreshMergedJobs({ env, ghImpl: gh });
   assert.deepEqual(report, { skipped: null, checked: 1, merged: 1, undetermined: 0 });
   assert.deepEqual(gh.calls, ["https://github.com/acme/api/pull/42"]);
 
@@ -63,12 +63,12 @@ test("a merged pull request turns the delivered job into `merged`, keeping what 
   assert.equal(view.merge_sha, MERGE_SHA);
 });
 
-test("an open or closed pull request only stamps the check and leaves the job `done`", (t) => {
+test("an open or closed pull request only stamps the check and leaves the job `done`", async (t) => {
   for (const state of ["OPEN", "CLOSED"]) {
     const env = makeSweepHome(t, `merged-sweep-${state.toLowerCase()}`);
     const id = deliver(env);
 
-    const report = refreshMergedJobs({ env, ghImpl: fakeGh({ ok: true, state, mergedAt: null, mergeSha: null }) });
+    const report = await refreshMergedJobs({ env, ghImpl: fakeGh({ ok: true, state, mergedAt: null, mergeSha: null }) });
     assert.deepEqual(report, { skipped: null, checked: 1, merged: 0, undetermined: 0 }, state);
 
     const row = getJob(id, env);
@@ -79,22 +79,22 @@ test("an open or closed pull request only stamps the check and leaves the job `d
   }
 });
 
-test("an answer nobody could determine writes nothing and is asked again on the next sweep", (t) => {
+test("an answer nobody could determine writes nothing and is asked again on the next sweep", async (t) => {
   const env = makeSweepHome(t, "merged-sweep-undetermined");
   const id = deliver(env);
   const gh = fakeGh({ ok: false });
 
-  const first = refreshMergedJobs({ env, ghImpl: gh });
+  const first = await refreshMergedJobs({ env, ghImpl: gh });
   assert.deepEqual(first, { skipped: null, checked: 1, merged: 0, undetermined: 1 });
   assert.equal(getJob(id, env).pr_checked_at, null, "a failed check was stamped as a check");
 
-  const second = refreshMergedJobs({ env, ghImpl: gh });
+  const second = await refreshMergedJobs({ env, ghImpl: gh });
   assert.deepEqual(second, { skipped: null, checked: 1, merged: 0, undetermined: 1 });
   assert.equal(gh.calls.length, 2, "the job that could not be checked was not retried");
   assert.equal(getJob(id, env).status, "done");
 });
 
-test("a gh that throws never ends the sweep of the jobs behind it", (t) => {
+test("a gh that throws never ends the sweep of the jobs behind it", async (t) => {
   const env = makeSweepHome(t, "merged-sweep-throw");
   const broken = deliver(env, { prUrl: "https://github.com/acme/api/pull/1" });
   const good = deliver(env, { prUrl: "https://github.com/acme/api/pull/2" });
@@ -103,67 +103,67 @@ test("a gh that throws never ends the sweep of the jobs behind it", (t) => {
     return mergedAnswer();
   });
 
-  const report = refreshMergedJobs({ env, ghImpl: gh });
+  const report = await refreshMergedJobs({ env, ghImpl: gh });
   assert.deepEqual(report, { skipped: null, checked: 2, merged: 1, undetermined: 1 });
   assert.equal(getJob(broken, env).status, "done");
   assert.equal(getJob(good, env).status, "merged");
 });
 
-test("a job checked inside the window is not asked about again, and one checked before it is", (t) => {
+test("a job checked inside the window is not asked about again, and one checked before it is", async (t) => {
   const env = makeSweepHome(t, "merged-sweep-window");
   deliver(env);
   const gh = fakeGh({ ok: true, state: "OPEN", mergedAt: null, mergeSha: null });
 
   const now = new Date("2026-09-11T12:00:00Z");
-  refreshMergedJobs({ env, ghImpl: gh, now: () => now });
+  await refreshMergedJobs({ env, ghImpl: gh, now: () => now });
   assert.equal(gh.calls.length, 1);
 
-  refreshMergedJobs({ env, ghImpl: gh, now: () => new Date(now.getTime() + PR_CHECK_WINDOW_MS - 1000) });
+  await refreshMergedJobs({ env, ghImpl: gh, now: () => new Date(now.getTime() + PR_CHECK_WINDOW_MS - 1000) });
   assert.equal(gh.calls.length, 1, "the sweep asked gh again inside the five minute window");
 
-  refreshMergedJobs({ env, ghImpl: gh, now: () => new Date(now.getTime() + PR_CHECK_WINDOW_MS + 1000) });
+  await refreshMergedJobs({ env, ghImpl: gh, now: () => new Date(now.getTime() + PR_CHECK_WINDOW_MS + 1000) });
   assert.equal(gh.calls.length, 2, "the sweep never asked gh again after the window");
 });
 
-test("the sweep never calls gh more than its limit, never-checked jobs first and newest among them", (t) => {
+test("the sweep never calls gh more than its limit, never-checked jobs first and newest among them", async (t) => {
   const env = makeSweepHome(t, "merged-sweep-limit");
   const ids = [];
   for (let n = 1; n <= MERGE_SWEEP_LIMIT + 2; n += 1) ids.push(deliver(env, { prUrl: `https://github.com/acme/api/pull/${n}` }));
   const gh = fakeGh({ ok: false });
 
-  const report = refreshMergedJobs({ env, ghImpl: gh });
+  const report = await refreshMergedJobs({ env, ghImpl: gh });
   assert.equal(report.checked, MERGE_SWEEP_LIMIT);
   assert.equal(gh.calls.length, MERGE_SWEEP_LIMIT);
   assert.equal(gh.calls[0], `https://github.com/acme/api/pull/${MERGE_SWEEP_LIMIT + 2}`);
 
   const small = fakeGh({ ok: false });
-  assert.equal(refreshMergedJobs({ env, ghImpl: small, limit: 2 }).checked, 2);
+  assert.equal((await refreshMergedJobs({ env, ghImpl: small, limit: 2 })).checked, 2);
 });
 
-test("a pull request URL gh could resolve against another repository is never handed to it", (t) => {
+test("a pull request URL gh could resolve against another repository is never handed to it", async (t) => {
   const env = makeSweepHome(t, "merged-sweep-url");
   const foreign = deliver(env, { prUrl: "https://gitlab.com/acme/api/merge_requests/42" });
   const flag = deliver(env, { prUrl: "--repo acme/other" });
   const broken = deliver(env, { prUrl: "https://github.com/acme/api/pull/not-a-number" });
   const gh = fakeGh(mergedAnswer());
 
-  assert.deepEqual(refreshMergedJobs({ env, ghImpl: gh }), { skipped: null, checked: 0, merged: 0, undetermined: 0 });
+  assert.deepEqual(await refreshMergedJobs({ env, ghImpl: gh }), { skipped: null, checked: 0, merged: 0, undetermined: 0 });
   assert.deepEqual(gh.calls, []);
   for (const id of [foreign, flag, broken]) assert.equal(getJob(id, env).status, "done");
 });
 
-test("the sweep is a no-op when it is switched off and inside an unattended job session", (t) => {
+test("the sweep is a no-op when it is switched off and inside an unattended job session", async (t) => {
   const env = makeSweepHome(t, "merged-sweep-off");
   const id = deliver(env);
   const gh = fakeGh(mergedAnswer());
 
-  assert.deepEqual(refreshMergedJobs({ env: { ...env, NIGHTSHIFT_NO_PR_CHECK: "1" }, ghImpl: gh }), {
+  assert.deepEqual(await refreshMergedJobs({ env: { ...env, NIGHTSHIFT_NO_PR_CHECK: "1" }, ghImpl: gh }), {
     skipped: "disabled",
     checked: 0,
     merged: 0,
     undetermined: 0,
   });
-  assert.deepEqual(refreshMergedJobs({ env: { ...env, NIGHTSHIFT_JOB_ID: "7" }, ghImpl: gh }), {
+  assert.deepEqual(await refreshMergedJobs({ env: { ...env, NIGHTSHIFT_JOB_ID: "7" }, ghImpl: gh }), {
     skipped: "inside-job",
     checked: 0,
     merged: 0,
@@ -173,7 +173,7 @@ test("the sweep is a no-op when it is switched off and inside an unattended job 
   assert.equal(getJob(id, env).status, "done");
 });
 
-test("a job that left `done` while gh answered is never overwritten with the merge", (t) => {
+test("a job that left `done` while gh answered is never overwritten with the merge", async (t) => {
   const env = makeSweepHome(t, "merged-sweep-race");
   const id = deliver(env);
   const gh = fakeGh(() => {
@@ -181,7 +181,7 @@ test("a job that left `done` while gh answered is never overwritten with the mer
     return mergedAnswer();
   });
 
-  const report = refreshMergedJobs({ env, ghImpl: gh });
+  const report = await refreshMergedJobs({ env, ghImpl: gh });
   assert.deepEqual(report, { skipped: null, checked: 1, merged: 0, undetermined: 0 });
   const row = getJob(id, env);
   assert.equal(row.status, "pending", "the sweep overwrote a job that had already left `done`");
@@ -189,13 +189,13 @@ test("a job that left `done` while gh answered is never overwritten with the mer
   assert.equal(row.merge_sha, null);
 });
 
-test("a job with no pull request, and one that never finished, are never candidates", (t) => {
+test("a job with no pull request, and one that never finished, are never candidates", async (t) => {
   const env = makeSweepHome(t, "merged-sweep-candidates");
   const pending = addJob({ project: "alpha", prompt: "fix the parser" }, env).id;
   const noPr = deliver(env, { prUrl: null });
   const gh = fakeGh(mergedAnswer());
 
-  assert.equal(refreshMergedJobs({ env, ghImpl: gh }).checked, 0);
+  assert.equal((await refreshMergedJobs({ env, ghImpl: gh })).checked, 0);
   assert.equal(getJob(pending, env).status, "pending");
   assert.equal(getJob(noPr, env).status, "done");
 });

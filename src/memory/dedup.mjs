@@ -88,9 +88,9 @@ function logMerge(item, chosen, log) {
 }
 
 // Candidates of an item through both recall paths; a search failure means no candidate, so the item is saved.
-async function candidatesOf(item, { project, log }, env) {
+async function candidatesOf(item, { project, log, db }, env) {
   try {
-    const found = await recallLessons({ query: lessonProbe(item), project, limit: CANDIDATE_LIMIT }, env);
+    const found = await recallLessons({ query: lessonProbe(item), project, limit: CANDIDATE_LIMIT }, env, db);
     return found.filter((row) => row.via !== "fallback");
   } catch (err) {
     log(`candidate search failed for "${oneLine(item.title)}": ${err?.message ?? String(err)}`);
@@ -179,11 +179,11 @@ function markRecurrence(id, log, env) {
   }
 }
 
-// Persists the lessons extracted by the reflector, merging recurrences through a single judge call; never throws.
-export async function persistLessons(items, options = {}, env = process.env) {
+// Persists the lessons extracted by the reflector, merging recurrences through a single judge call; never throws. `db` lets the store bring its own connection.
+export async function persistLessons(items, options = {}, env = process.env, db = null) {
   const write = typeof options?.log === "function" ? options.log : () => {};
   try {
-    return await persistItems(items, options, write, env);
+    return await persistItems(items, options, write, env, db);
   } catch (err) {
     write(`persistLessons failed: ${err?.message ?? String(err)}`);
     return { saved: 0, merged: 0, judged: 0, violations: 0, memories: 0 };
@@ -191,13 +191,14 @@ export async function persistLessons(items, options = {}, env = process.env) {
 }
 
 // Runs the two phases of the persistence: item by item first, one judge call for the stationed ones after.
-async function persistItems(items, { project, model, injectedIds = [], judge, embedder }, write, env) {
+async function persistItems(items, { project, model, injectedIds = [], judge, embedder }, write, env, db) {
   const result = { saved: 0, merged: 0, judged: 0, violations: 0, memories: 0 };
   const injected = new Set(normalizeIds(injectedIds));
   const ctx = {
     project: resolveProjectName(project, env),
     model,
     log: write,
+    db,
     embedder: await resolveEmbedder(embedder, env),
   };
   const stationed = [];

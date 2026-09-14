@@ -1,5 +1,5 @@
 import { UserError } from "../config/errors.mjs";
-import { getJob, retryJob } from "../memory/jobs.mjs";
+import { openStore } from "../store/open.mjs";
 import { clearRunTerminal, discardRunDir } from "./resume.mjs";
 
 // Job this process is running inside, when the queue spawned it; null in a session of the operator.
@@ -19,10 +19,11 @@ function requireOwnJob(id, env) {
 }
 
 // Retries one job and, only with `fresh`, drops the run directory of the previous attempt; the order is fixed, so a refused retry never deletes anything.
-export function applyRetry({ id, note, fresh = false, env = process.env } = {}) {
+export async function applyRetry({ id, note, fresh = false, env = process.env } = {}) {
   requireOwnJob(id, env);
-  const before = getJob(id, env);
-  const job = retryJob(id, { note, fresh }, env);
+  const store = openStore(env);
+  const before = await store.jobs.getJob(id);
+  const job = await store.jobs.retryJob(id, { note, fresh });
   const run = { project: before?.project, slug: before?.slug, env };
   if (fresh !== true) return { job, runDir: null, witness: clearRunTerminal(run) };
   return { job, runDir: discardRunDir(run), witness: { status: "absent", path: null, reason: null } };

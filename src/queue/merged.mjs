@@ -1,6 +1,6 @@
 import { ghPrView } from "../host/gh.mjs";
-import { isoToSqlite } from "../memory/db.mjs";
-import { listMergeCandidates, markJobMerged, stampPrChecked } from "../memory/jobs.mjs";
+import { isoToSqlite } from "../memory/schema.mjs";
+import { openStore } from "../store/open.mjs";
 import { callerJobId } from "./retry.mjs";
 
 // A pull request already checked inside this window is not asked about again.
@@ -27,20 +27,20 @@ function skipReport(reason) {
 }
 
 // Applies one answer of gh to one job and tells what it wrote; an undetermined answer writes nothing at all.
-function applyPrState(job, view, ctx) {
+async function applyPrState(job, view, ctx) {
   if (view?.ok !== true) return "undetermined";
   if (view.state !== "MERGED") {
-    stampPrChecked(job.id, { checkedAt: ctx.checkedAt }, ctx.env);
+    await ctx.store.jobs.stampPrChecked(job.id, { checkedAt: ctx.checkedAt });
     return "checked";
   }
   const mergedAt = isoToSqlite(view.mergedAt) ?? ctx.checkedAt;
-  return markJobMerged(job.id, { mergedAt, mergeSha: view.mergeSha, checkedAt: ctx.checkedAt }, ctx.env) ? "merged" : "checked";
+  return (await ctx.store.jobs.markJobMerged(job.id, { mergedAt, mergeSha: view.mergeSha, checkedAt: ctx.checkedAt })) ? "merged" : "checked";
 }
 
 // Checks one job without ever letting its own failure end the sweep of the ones behind it.
-function checkJob(job, ctx) {
+async function checkJob(job, ctx) {
   try {
-    return applyPrState(job, ctx.viewPr(job.pr_url), ctx);
+    return await applyPrState(job, ctx.viewPr(job.pr_url), ctx);
   } catch {
     return "undetermined";
   }
@@ -53,29 +53,29 @@ function toDate(value) {
 }
 
 // Jobs to ask gh about, or null when the query itself failed; a URL gh could resolve against another repository is dropped.
-function readCandidates({ env, clock, limit }) {
+async function readCandidates({ env, clock, limit }) {
   const cutoff = isoToSqlite(new Date(clock.getTime() - PR_CHECK_WINDOW_MS));
   try {
-    return listMergeCandidates({ cutoff, limit }, env).filter((job) => isGithubPrUrl(job.pr_url));
+    return (await openStore(env).jobs.listMergeCandidates({ cutoff, limit })).filter((job) => isGithubPrUrl(job.pr_url));
   } catch {
     return null;
   }
 }
 
 // Flips the delivered jobs whose pull request is already merged; it is silent, never throws and writes nothing it could not confirm.
-export function refreshMergedJobs({ env = process.env, ghImpl = null, now = () => new Date(), limit = MERGE_SWEEP_LIMIT } = {}) {
+export async function refreshMergedJobs({ env = process.env, ghImpl = null, now = () => new Date(), limit = MERGE_SWEEP_LIMIT } = {}) {
   if (env?.NIGHTSHIFT_NO_PR_CHECK === "1") return skipReport("disabled");
   if (callerJobId(env) !== null) return skipReport("inside-job");
   const clock = toDate(now());
   if (!clock) return skipReport("error");
   const checkedAt = isoToSqlite(clock);
-  const candidates = readCandidates({ env, clock, limit });
+  const candidates = await readCandidates({ env, clock, limit });
   if (!candidates) return skipReport("error");
-  const ctx = { env, checkedAt, viewPr: typeof ghImpl === "function" ? ghImpl : prViewer(env, undefined) };
+  const ctx = { store: openStore(env), checkedAt, viewPr: typeof ghImpl === "function" ? ghImpl : prViewer(env, undefined) };
   const report = { skipped: null, checked: 0, merged: 0, undetermined: 0 };
   for (const job of candidates) {
     report.checked += 1;
-    const outcome = checkJob(job, ctx);
+    const outcome = await checkJob(job, ctx);
     if (outcome === "merged") report.merged += 1;
     if (outcome === "undetermined") report.undetermined += 1;
   }

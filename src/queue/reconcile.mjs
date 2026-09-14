@@ -1,20 +1,13 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { jobLogPath, logsDir } from "../config/paths.mjs";
-import { openDb } from "../memory/db.mjs";
-import { isJobActive, JOB_STATUSES, repairJobFromWitness } from "../memory/jobs.mjs";
+import { JOB_STATUSES } from "../memory/jobs.mjs";
+import { openStore } from "../store/open.mjs";
 import { readRunState } from "./resume.mjs";
 
 export const REPAIR_FAILED_PREFIX = "could not repair a job from state.json";
 
 // Statuses a witness may restore: a job that ended, never one the queue still owes work for.
 const WITNESS_STATUSES = new Set(JOB_STATUSES.filter((status) => status !== "pending" && status !== "running"));
-
-// Unfinished jobs that already have a run directory; a job with no slug never ran, so no witness can speak for it.
-function candidateJobs(env) {
-  return openDb(env)
-    .prepare("SELECT id, project, slug FROM jobs WHERE status IN ('running', 'pending') AND slug IS NOT NULL")
-    .all();
-}
 
 // The terminal section a runner wrote next to the run, or null when there is none worth trusting.
 function readWitness(row, env) {
@@ -35,11 +28,11 @@ function logRepair(id, terminal, env) {
 }
 
 // Restores one job from its witness; a job under a live lease is left alone and a failure of its own is reported, never raised.
-function repairOne(row, env) {
+async function repairOne(row, { store, env }) {
   try {
-    if (isJobActive(row.id, env)) return { repaired: false, error: null };
+    if (await store.jobs.isJobActive(row.id)) return { repaired: false, error: null };
     const terminal = readWitness(row, env);
-    if (!terminal || !repairJobFromWitness(row.id, terminal, env)) return { repaired: false, error: null };
+    if (!terminal || !(await store.jobs.repairJobFromWitness(row.id, terminal))) return { repaired: false, error: null };
     logRepair(row.id, terminal, env);
     return { repaired: true, error: null };
   } catch (err) {
@@ -48,17 +41,19 @@ function repairOne(row, env) {
 }
 
 // Restores every unfinished job whose run directory already says how it ended; the file is the witness and the row never writes back to it.
-export function reconcileFromWitness(env = process.env) {
+export async function reconcileFromWitness(env = process.env) {
+  let store = null;
   let rows = [];
   try {
-    rows = candidateJobs(env);
+    store = openStore(env);
+    rows = await store.jobs.listWithSlug();
   } catch (err) {
     return { repaired: [], error: String(err?.message ?? err).split("\n")[0] };
   }
   const repaired = [];
   let error = null;
   for (const row of rows) {
-    const outcome = repairOne(row, env);
+    const outcome = await repairOne(row, { store, env });
     if (outcome.repaired) repaired.push(row.id);
     if (outcome.error && !error) error = outcome.error;
   }
@@ -66,7 +61,7 @@ export function reconcileFromWitness(env = process.env) {
 }
 
 // Reconciles and phrases the one line every surface says when a repair could not be written, or null when nothing failed.
-export function repairWarningLine(env = process.env) {
-  const outcome = reconcileFromWitness(env);
+export async function repairWarningLine(env = process.env) {
+  const outcome = await reconcileFromWitness(env);
   return outcome.error ? `${REPAIR_FAILED_PREFIX}: ${outcome.error}` : null;
 }

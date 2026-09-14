@@ -129,12 +129,12 @@ test("clearRunTerminal drops the witness and keeps the rest of the state, and cr
   assert.equal(existsSync(join(runDir("alpha", "never-ran", env), "state.json")), false, "the clear created a state.json");
 });
 
-test("a job the database lost is restored from its witness, with repairedFrom in the result and one line in its log", (t) => {
+test("a job the database lost is restored from its witness, with repairedFrom in the result and one line in its log", async (t) => {
   const env = makeQueue(t, "reconcile-repair");
   const id = lostFinish(env);
   const before = readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8");
 
-  assert.deepEqual(reconcileFromWitness(env), { repaired: [id], error: null });
+  assert.deepEqual(await reconcileFromWitness(env), { repaired: [id], error: null });
 
   const row = getJob(id, env);
   assert.equal(row.status, "done");
@@ -155,26 +155,26 @@ test("a job the database lost is restored from its witness, with repairedFrom in
     "the repair was not recorded in the log of the job",
   );
 
-  assert.deepEqual(reconcileFromWitness(env), { repaired: [], error: null }, "a job that already ended was repaired again");
+  assert.deepEqual(await reconcileFromWitness(env), { repaired: [], error: null }, "a job that already ended was repaired again");
 });
 
-test("the reconciliation never touches a job a live runner owns, a row that already ended, or a job that never ran", (t) => {
+test("the reconciliation never touches a job a live runner owns, a row that already ended, or a job that never ran", async (t) => {
   const env = makeQueue(t, "reconcile-skips");
   const live = runningJob(env);
   witness(env);
-  assert.deepEqual(reconcileFromWitness(env).repaired, [], "a job under a live lease was repaired under its runner");
+  assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "a job under a live lease was repaired under its runner");
   assert.equal(getJob(live, env).status, "running");
 
   expireLease(env, live);
-  reconcileFromWitness(env);
+  await reconcileFromWitness(env);
   assert.equal(getJob(live, env).status, "done");
   openDb(env).prepare("UPDATE jobs SET status = 'failed', pr_url = NULL WHERE id = ?").run(live);
-  assert.deepEqual(reconcileFromWitness(env).repaired, [], "a job that already ended was rewritten by the witness");
+  assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "a job that already ended was rewritten by the witness");
   assert.equal(getJob(live, env).status, "failed");
 
   const pending = addJob({ project: "alpha", prompt: "another job" }, env).id;
   witness(env, { slug: "another-run" });
-  assert.deepEqual(reconcileFromWitness(env).repaired, [], "a job with no slug was matched against somebody else's witness");
+  assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "a job with no slug was matched against somebody else's witness");
   assert.equal(getJob(pending, env).status, "pending");
 });
 
@@ -195,21 +195,21 @@ test("a repair the database refuses only warns: `queue status` still prints the 
   );
 });
 
-test("a retried job is never closed again by the witness of its previous attempt", (t) => {
+test("a retried job is never closed again by the witness of its previous attempt", async (t) => {
   const env = makeQueue(t, "reconcile-retry");
   const id = lostFinish(env, { status: "failed", prUrl: null });
-  reconcileFromWitness(env);
+  await reconcileFromWitness(env);
   assert.equal(getJob(id, env).status, "failed");
 
-  applyRetry({ id, note: null, env });
+  await applyRetry({ id, note: null, env });
   assert.equal(getJob(id, env).status, "pending");
   assert.equal(readRunState({ project: "alpha", slug: SLUG, env })?.terminal, undefined, "the retry kept the stale witness");
 
-  assert.deepEqual(reconcileFromWitness(env).repaired, [], "the witness of the previous attempt finished the fresh one");
+  assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "the witness of the previous attempt finished the fresh one");
   assert.equal(getJob(id, env).status, "pending");
 });
 
-test("a pending job the orphan sweep requeued is still repaired from its witness: only a retry voids it", (t) => {
+test("a pending job the orphan sweep requeued is still repaired from its witness: only a retry voids it", async (t) => {
   const env = makeQueue(t, "reconcile-requeued");
   const id = lostFinish(env);
   openDb(env).prepare("UPDATE jobs SET max_attempts = 3 WHERE id = ?").run(id);
@@ -218,7 +218,7 @@ test("a pending job the orphan sweep requeued is still repaired from its witness
   assert.equal(getJob(id, env).status, "pending");
 
   assert.deepEqual(
-    reconcileFromWitness(env).repaired,
+    (await reconcileFromWitness(env)).repaired,
     [id],
     "a job requeued by the sweep after its finish was lost stayed pending and would have run a second time",
   );

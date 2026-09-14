@@ -102,7 +102,7 @@ function printNextSteps(ctx, { registered } = {}) {
 
 // Runs the steps of `nightshift init` in order: every step the runtime cannot work without stops the command, and the PATH is only written once the shim has proven itself.
 async function runInstallSteps(ctx, report, { embedding, path, from, force, shortcuts, desktop } = {}) {
-  guardIdleRuntime(ctx, { force });
+  await guardIdleRuntime(ctx, { force });
   requireStep(createHome(ctx, report), "home");
   requireStep(setupRuntime(ctx, report, { from }), "runtime");
   requireStep(installShims(ctx, report, { shortcuts }), "shim");

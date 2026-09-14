@@ -1,8 +1,11 @@
 import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { dbPath } from "../config/paths.mjs";
-import { projectByName, resolveProject } from "../config/projects.mjs";
-import { ensureHome, loadConfig } from "../config/store.mjs";
+import { ensureHome } from "../config/store.mjs";
+import { DB_USER_VERSION } from "./schema.mjs";
+
+export { DB_USER_VERSION, isoToSqlite, sqliteToIso } from "./schema.mjs";
+export { projectFromCwd, resolveProjectName } from "./project-name.mjs";
 
 // Imports node:sqlite without leaking its experimental warning into the stderr of every hook.
 async function importSqlite() {
@@ -20,8 +23,6 @@ async function importSqlite() {
 }
 
 const { DatabaseSync } = await importSqlite();
-
-export const DB_USER_VERSION = 6;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lessons (
@@ -356,11 +357,16 @@ export function openDbReadOnly(env = process.env) {
   return new DatabaseSync(dbPath(env), { readOnly: true });
 }
 
+// Schema version an already open connection reports, so a read-only caller reads it without creating nor migrating anything.
+export function schemaVersionOn(db) {
+  return db.prepare("PRAGMA user_version").get()?.user_version ?? 0;
+}
+
 // Schema version of the database already on disk, read without creating nor migrating it.
 function schemaVersion(env) {
   const db = openDbReadOnly(env);
   try {
-    return db.prepare("PRAGMA user_version").get()?.user_version ?? 0;
+    return schemaVersionOn(db);
   } finally {
     db.close();
   }
@@ -389,27 +395,6 @@ export function closeDb(env = process.env) {
   if (!db) return;
   connections.delete(path);
   db.close();
-}
-
-// Timestamp of SQLite ("YYYY-MM-DD HH:MM:SS", UTC) as ISO 8601.
-export function sqliteToIso(ts) {
-  return ts ? `${String(ts).replace(" ", "T")}Z` : null;
-}
-
-const ZONELESS_TIMESTAMP = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
-
-// Milliseconds of a timestamp, reading a zone-less one as UTC: every timestamp this database stores is UTC, while `Date.parse` would take it as local time.
-function timestampMs(value) {
-  const text = typeof value === "string" ? value.trim() : "";
-  const zoneless = ZONELESS_TIMESTAMP.exec(text);
-  return Date.parse(zoneless ? `${zoneless[1]}T${zoneless[2]}Z` : text);
-}
-
-// Instant (Date, ISO 8601 text or a zone-less timestamp read as UTC) in the shape SQLite writes it ("YYYY-MM-DD HH:MM:SS", UTC); anything unusable is null.
-export function isoToSqlite(value) {
-  const ms = value instanceof Date ? value.getTime() : timestampMs(value);
-  if (!Number.isFinite(ms)) return null;
-  return new Date(ms).toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
 }
 
 export const FINISH_VERIFICATION_FAILED = "finish verification failed";
@@ -487,21 +472,4 @@ export function dotProduct(a, b) {
   let sum = 0;
   for (let i = 0; i < a.length; i++) sum += a[i] * b[i];
   return sum;
-}
-
-// Resolves a project reference (registered name or a path inside it) to the registered NAME, or null for global.
-export function resolveProjectName(reference, env = process.env) {
-  const raw = typeof reference === "string" ? reference.trim() : "";
-  if (!raw) return null;
-  const config = loadConfig(env, { warn: () => {} });
-  const named = projectByName(config, raw);
-  if (named) return named.name;
-  return resolveProject(config, { cwd: raw })?.name ?? null;
-}
-
-// Resolves the project of a working directory, or null when the directory is not inside a registered project.
-export function projectFromCwd(cwd, env = process.env) {
-  const target = typeof cwd === "string" ? cwd.trim() : "";
-  if (!target) return null;
-  return resolveProject(loadConfig(env, { warn: () => {} }), { cwd: target });
 }

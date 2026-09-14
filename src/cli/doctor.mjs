@@ -22,10 +22,10 @@ import { marketplaceIsCurrent, pluginRef, readInstalledPlugin, readKnownMarketpl
 import { legacyShimState, packageVersion, registrySpec, runtimeVersion, shimState } from "../host/runtime.mjs";
 import { hookStatus, readHostSettings } from "../host/settings.mjs";
 import { PATH_MARK, binDirInPath, rcFilePath } from "../host/shell.mjs";
-import { DB_USER_VERSION, openDbReadOnly } from "../memory/db.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
-import { ORPHAN_PREDICATE } from "../memory/jobs.mjs";
+import { DB_USER_VERSION } from "../memory/schema.mjs";
 import { isRegistryFailure, listRunnerRecords, registryReadError } from "../queue/registry.mjs";
+import { openStoreReadOnly } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { orphanOrgRows, readPendingRename } from "./org.mjs";
 import { firstLine } from "./report.mjs";
@@ -260,36 +260,35 @@ function schemaVersionHint(version) {
 }
 
 // Checks the memory database, opening it read-only so the diagnosis never creates nor migrates it.
-function checkDatabase(ctx) {
+async function checkDatabase(ctx) {
   const path = dbPath(ctx.env);
   if (!existsSync(path)) return check("database", "warn", "no database yet", "it is created on the first memory write");
-  let db = null;
+  const store = openStoreReadOnly(ctx.env);
   try {
-    db = openDbReadOnly(ctx.env);
-    const version = db.prepare("PRAGMA user_version").get().user_version;
-    return version === DB_USER_VERSION
-      ? check("database", "ok", `schema v${version}`)
-      : check("database", "fail", `schema v${version}, expected v${DB_USER_VERSION}`, schemaVersionHint(version));
+    const { schemaVersion, errors } = await store.health();
+    if (errors.schemaVersion !== null) return check("database", "fail", errors.schemaVersion, `inspect ${path}`);
+    return schemaVersion === DB_USER_VERSION
+      ? check("database", "ok", `schema v${schemaVersion}`)
+      : check("database", "fail", `schema v${schemaVersion}, expected v${DB_USER_VERSION}`, schemaVersionHint(schemaVersion));
   } catch (err) {
     return check("database", "fail", err?.message ?? String(err), `inspect ${path}`);
   } finally {
-    db?.close();
+    await store.close();
   }
 }
 
 const ORG_REPAIR_HINT = "run `nightshift org repair`";
 
 // Checks that every org row has its org: no rename left in flight, no row pointing to a name the config does not know.
-function checkOrgRows(ctx) {
+async function checkOrgRows(ctx) {
   const pending = readPendingRename(ctx.env);
   if (pending) {
     const which = pending.from ? `\`${pending.from}\` -> \`${pending.to}\`` : "of unknown names";
     return check("org rows", "fail", `org rename ${which} interrupted`, ORG_REPAIR_HINT);
   }
-  let db = null;
+  const store = openStoreReadOnly(ctx.env);
   try {
-    db = openDbReadOnly(ctx.env);
-    const orphans = orphanOrgRows(ctx.env, loadConfig(ctx.env, { warn: () => {} }), db);
+    const orphans = await orphanOrgRows(ctx.env, loadConfig(ctx.env, { warn: () => {} }), store);
     if (orphans.length) {
       const detail = orphans.map((o) => `${o.total} row(s) point to unknown org \`${o.org}\``).join("; ");
       return check("org rows", "fail", detail, `${ORG_REPAIR_HINT} --to <org>`);
@@ -298,14 +297,14 @@ function checkOrgRows(ctx) {
   } catch (err) {
     return check("org rows", "fail", err?.message ?? String(err), `inspect ${dbPath(ctx.env)}`);
   } finally {
-    db?.close();
+    await store.close();
   }
 }
 
 // The database check plus, only on a database at the current schema, the org rows check that reads its columns.
-function checkDatabaseAndRows(ctx) {
-  const database = checkDatabase(ctx);
-  return database.status === "ok" ? [database, checkOrgRows(ctx)] : [database];
+async function checkDatabaseAndRows(ctx) {
+  const database = await checkDatabase(ctx);
+  return database.status === "ok" ? [database, await checkOrgRows(ctx)] : [database];
 }
 
 const ORPHAN_PREFIXES = [".fuse_hidden", ".nfs"];
@@ -396,20 +395,21 @@ function checkQueuePause(ctx) {
     : check("queue", "ok", "not paused");
 }
 
+const QUEUE_JOBS_MIGRATE_HINT = "run `nightshift memory stats` once to let the runtime migrate the database";
+
 // Counts the jobs left `running` by a runner that died, reading the database read-only.
-function checkQueueJobs(ctx) {
-  let db = null;
+async function checkQueueJobs(ctx) {
+  const store = openStoreReadOnly(ctx.env);
   try {
-    db = openDbReadOnly(ctx.env);
-    const { n } = db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE ${ORPHAN_PREDICATE}`).get();
-    return n > 0
-      ? check("queue jobs", "warn", `${n} orphaned`, "run `nightshift queue run` to recycle them, or `nightshift queue cancel <id>`")
+    const { orphanJobs, errors } = await store.health();
+    if (errors.orphanJobs !== null) return check("queue jobs", "warn", errors.orphanJobs, QUEUE_JOBS_MIGRATE_HINT);
+    return orphanJobs > 0
+      ? check("queue jobs", "warn", `${orphanJobs} orphaned`, "run `nightshift queue run` to recycle them, or `nightshift queue cancel <id>`")
       : check("queue jobs", "ok", "no orphan");
   } catch (err) {
-    const hint = "run `nightshift memory stats` once to let the runtime migrate the database";
-    return check("queue jobs", "warn", err?.message ?? String(err), hint);
+    return check("queue jobs", "warn", err?.message ?? String(err), QUEUE_JOBS_MIGRATE_HINT);
   } finally {
-    db?.close();
+    await store.close();
   }
 }
 
@@ -458,9 +458,9 @@ function checkRunners(ctx) {
 }
 
 // Checks the queue: the pause sentinel and the runners always, the orphaned jobs only once the database exists.
-function checkQueue(ctx) {
+async function checkQueue(ctx) {
   const checks = [checkQueuePause(ctx), ...checkRunners(ctx)];
-  if (existsSync(dbPath(ctx.env))) checks.push(checkQueueJobs(ctx));
+  if (existsSync(dbPath(ctx.env))) checks.push(await checkQueueJobs(ctx));
   return checks;
 }
 
@@ -509,7 +509,7 @@ function checkUpdates(ctx, values) {
 }
 
 // Runs every check, in the order the report prints them.
-function collect(ctx, values) {
+async function collect(ctx, values) {
   return [
     checkNode(),
     checkClaude(ctx),
@@ -526,10 +526,10 @@ function collect(ctx, values) {
     checkPlugin(ctx),
     checkModel(ctx),
     ...checkEmbeddingPrefix(ctx),
-    ...checkDatabaseAndRows(ctx),
+    ...(await checkDatabaseAndRows(ctx)),
     checkDbShm(ctx),
     checkHomeMount(ctx),
-    ...checkQueue(ctx),
+    ...(await checkQueue(ctx)),
     ...checkProjects(ctx),
     ...checkUpdates(ctx, values),
   ];
@@ -551,7 +551,7 @@ export async function run(argv, ctx) {
   const options = { json: { type: "boolean" }, "check-updates": { type: "boolean" } };
   const { values, positionals } = parseCommand(argv, options);
   checkArgs(positionals, { max: 0, usage: "nightshift doctor [--json] [--check-updates]" });
-  const checks = collect(ctx, values);
+  const checks = await collect(ctx, values);
   const ok = !checks.some((entry) => entry.status === "fail");
   if (values.json === true) ctx.out(JSON.stringify({ ok, checks }));
   else {

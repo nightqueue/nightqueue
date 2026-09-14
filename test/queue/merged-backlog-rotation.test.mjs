@@ -31,7 +31,7 @@ function fakeGh(byUrl) {
   return impl;
 }
 
-test("an older merged pull request is never checked while newer open ones keep the window full, forever", (t) => {
+test("an older merged pull request is never checked while newer open ones keep the window full, forever", async (t) => {
   const env = makeSweepHome(t, "merged-backlog-rotation-starve");
   const total = MERGE_SWEEP_LIMIT + 5;
   const ids = [];
@@ -47,7 +47,7 @@ test("an older merged pull request is never checked while newer open ones keep t
   let clock = new Date("2026-09-11T12:00:00Z");
   const sweeps = 20;
   for (let i = 0; i < sweeps; i += 1) {
-    refreshMergedJobs({ env, ghImpl: gh, now: () => clock, limit: MERGE_SWEEP_LIMIT });
+    await refreshMergedJobs({ env, ghImpl: gh, now: () => clock, limit: MERGE_SWEEP_LIMIT });
     // Advance well past the five-minute re-check window so a stamped newer job becomes eligible again.
     clock = new Date(clock.getTime() + PR_CHECK_WINDOW_MS * 3);
   }

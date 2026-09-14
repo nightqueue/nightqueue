@@ -146,7 +146,7 @@ test("a `gate` outcome keeps the item correctly queued behind a retryable job; a
     /already queued as job `\d+` \(`gate`\); cancel that job first/,
     "a gated job is correctly treated as still alive: queue_add refuses it",
   );
-  applyRetry({ id: gateQueued.job.id, note: "go ahead", env: gateEnv });
+  await applyRetry({ id: gateQueued.job.id, note: "go ahead", env: gateEnv });
   const gateRetryCycle = await runCycle({ jobId: gateQueued.job.id, env: gateEnv, deps: { gitImpl: fakeGit() } });
   assert.deepEqual(gateRetryCycle.processed.map((entry) => entry.status), ["done"]);
   assert.equal(getRoadmapItem(gateItem.id, gateEnv).status, "done", "the intended path (queue_retry, not queue_add) resolves the SAME job and closes the SAME item; gate is recoverable by design");

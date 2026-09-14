@@ -291,7 +291,7 @@ export function finish(ctx, report) {
 
 // Installs everything the host needs to run nightshift, one idempotent step at a time; `force` only ever overrides the refusal to install under a live runner.
 export async function install(ctx, { embedding, path, from, force, shortcuts, desktop } = {}) {
-  guardIdleRuntime(ctx, { force });
+  await guardIdleRuntime(ctx, { force });
   const report = makeReport(ctx);
   setupHome(ctx, report);
   const ready = setupRuntime(ctx, report, { from });

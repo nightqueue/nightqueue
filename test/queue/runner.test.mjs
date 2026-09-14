@@ -465,7 +465,7 @@ test("a finish the database refused to commit still leaves the witness, is repor
   assert.deepEqual({ status: state.terminal.status, prUrl: state.terminal.prUrl }, { status: "done", prUrl: PR_URL }, "the witness was not written from the outcome in memory");
 
   openDb(env).prepare("UPDATE jobs SET lease_until = datetime('now', '-1 hour') WHERE id = ?").run(id);
-  reconcileFromWitness(env);
+  await reconcileFromWitness(env);
   const row = getJob(id, env);
   assert.deepEqual({ status: row.status, pr: row.pr_url, worker: row.worker, lease: row.lease_until }, { status: "done", pr: PR_URL, worker: null, lease: null }, "the reconciliation did not restore the row from the witness");
   assert.match(String(row.result), /repairedFrom/);

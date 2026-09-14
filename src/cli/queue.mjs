@@ -1,22 +1,13 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
-import { openDb, openDbReadOnly } from "../memory/db.mjs";
 import { withLock } from "../config/lock.mjs";
 import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
 import { projectByName, registrationOffer, resolveProject } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
-import {
-  addJob,
-  cancelJob,
-  countActiveJobs,
-  countsByStatus,
-  getJob,
-  jobView,
-  listJobs,
-  truncateByCodePoint,
-} from "../memory/jobs.mjs";
+import { jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { PROMPT_SOURCE_CONFLICT, getRoadmapItem, queueRoadmapItem } from "../memory/roadmap.mjs";
+import { openStore } from "../store/open.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
 import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
 import { prViewer, refreshMergedJobs } from "../queue/merged.mjs";
@@ -192,7 +183,7 @@ async function startDetached({ jobId = null, max = null, watchIntervalS = null }
 async function runGuardedHere({ jobId = null, watchIntervalS = null, ctx, run }) {
   await registerForegroundRunner({ jobId, watchIntervalS, env: ctx.env, killImpl: ctx.killImpl });
   try {
-    openDb(ctx.env);
+    await openStore(ctx.env).connect();
     await stampRunnerDbWitness(ctx.env);
     return await run();
   } finally {
@@ -201,8 +192,8 @@ async function runGuardedHere({ jobId = null, watchIntervalS = null, ctx, run })
 }
 
 // Why the cycle of a single job claimed nothing, in the same words a detached start would have used.
-function notStartedLines(job, cycle, ctx) {
-  const blocker = claimBlocker({ jobId: job.id, mode: "once", env: ctx.env });
+async function notStartedLines(job, cycle, ctx) {
+  const blocker = await claimBlocker({ jobId: job.id, mode: "once", env: ctx.env });
   return blocker ? blockerLines(blocker, ctx.env) : [`job #${job.id} did not start (${cycle.reason}); it stays in the queue`];
 }
 
@@ -212,7 +203,7 @@ async function runJobHere(job, ctx) {
   const cycle = await runCycle({ jobId: job.id, max: 1, env: ctx.env });
   const processed = cycle.processed.find((entry) => entry.id === job.id);
   if (!processed) {
-    for (const line of notStartedLines(job, cycle, ctx)) ctx.out(line);
+    for (const line of await notStartedLines(job, cycle, ctx)) ctx.out(line);
     return 1;
   }
   ctx.out(formatProcessed(processed));
@@ -237,9 +228,10 @@ function checkForegroundNeedsRun(values, usage) {
 }
 
 // The line `queue add` answers with: the old confirmation when the job is about to run, the backlog nudge otherwise.
-function addedLine(job, willRun, env) {
+async function addedLine(job, willRun, env) {
   if (willRun) return `queued job #${job.id} for project \`${job.project}\` (priority ${job.priority}, timeout ${job.timeoutS}s)`;
-  return `queued job #${job.id} for \`${job.project}\` (${countsByStatus(env).pending} pending). Start the batch: nightshift queue run`;
+  const counts = await openStore(env).jobs.countsByStatus();
+  return `queued job #${job.id} for \`${job.project}\` (${counts.pending} pending). Start the batch: nightshift queue run`;
 }
 
 // The knobs of a `queue add` that reach the job: priority, attempts, timeout and the operator's tier.
@@ -259,7 +251,7 @@ async function addFromPrompt(positionals, values, ctx) {
   const prompt = target.words.join(" ").trim();
   if (!prompt) throw new UserError(`missing argument; usage: ${USAGE.add}`);
   if (target.fromCwd) ctx.out(`project \`${target.project.name}\` resolved from the current directory`);
-  return addJob({ project: target.project.name, prompt, ...addLimits(values) }, ctx.env);
+  return await openStore(ctx.env).jobs.addJob({ project: target.project.name, prompt, ...addLimits(values) });
 }
 
 // Project the job of a roadmap item goes to: a project item owns it, an org item takes `--project` or the current directory.
@@ -299,7 +291,7 @@ async function runAdd(argv, ctx) {
     values.roadmap === undefined
       ? await addFromPrompt(positionals, values, ctx)
       : await addFromRoadmap(positionals, values, ctx);
-  ctx.out(addedLine(job, values.run === true, ctx.env));
+  ctx.out(await addedLine(job, values.run === true, ctx.env));
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }
 
@@ -570,8 +562,8 @@ function normalizeFollowArgv(argv) {
 }
 
 // Brings the jobs whose pull request was merged up to date before a view reads the rows; it is silent and never fails the command.
-function sweepMerged(ctx) {
-  refreshMergedJobs({ env: ctx.env, ghImpl: prViewer(ctx.env, ctx.spawnSyncImpl) });
+async function sweepMerged(ctx) {
+  await refreshMergedJobs({ env: ctx.env, ghImpl: prViewer(ctx.env, ctx.spawnSyncImpl) });
 }
 
 // Lists the live runners and the failure to list them apart, dropping the registrations no process answers for; a prune that fails never fails the listing.
@@ -588,12 +580,13 @@ function unreadableRegistryLine(error) {
 }
 
 // Lines of the queue view: one line per runner, table, counts and the backlog hint, in that order.
-function queueViewLines(values, ctx) {
-  sweepMerged(ctx);
-  const jobs = listJobs({ limit: requireInt("--limit", values.limit) }, ctx.env).map(jobView);
-  const counts = countsByStatus(ctx.env);
+async function queueViewLines(values, ctx) {
+  await sweepMerged(ctx);
+  const store = openStore(ctx.env);
+  const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit) })).map(jobView);
+  const counts = await store.jobs.countsByStatus();
   const { runners, error } = readRunners(ctx);
-  const activeJobs = countActiveJobs(ctx.env);
+  const activeJobs = await store.jobs.countActiveJobs();
   const lines = error === null ? formatRunners(runners, activeJobs, ctx.env) : [unreadableRegistryLine(error)];
   if (!jobs.length) return { lines: [...lines, "no jobs in the queue"], idle: error === null };
   lines.push(...formatTable(jobs, ctx));
@@ -618,8 +611,8 @@ async function followStatus(values, intervalS, ctx) {
   process.once("SIGINT", onSignal);
   try {
     while (!stop) {
-      repairFromWitness(ctx);
-      const view = queueViewLines(values, ctx);
+      await repairFromWitness(ctx);
+      const view = await queueViewLines(values, ctx);
       const text = view.lines.join("\n");
       if (tty) {
         ctx.stdout.write(`\u001b[2J\u001b[H${text}\n${paint(`every ${intervalS}s - Ctrl-C to stop`, "2", useColor(ctx))}\n`);
@@ -637,8 +630,8 @@ async function followStatus(values, intervalS, ctx) {
 }
 
 // Restores the jobs whose run directory already says how they ended; a repair that cannot be written only warns.
-function repairFromWitness(ctx) {
-  const warning = repairWarningLine(ctx.env);
+async function repairFromWitness(ctx) {
+  const warning = await repairWarningLine(ctx.env);
   if (warning) ctx.err(`warning: ${warning}`);
 }
 
@@ -646,32 +639,33 @@ function repairFromWitness(ctx) {
 async function printStatus(argv, ctx) {
   const { values, positionals } = parseCommand(normalizeFollowArgv(argv), STATUS_OPTIONS);
   checkArgs(positionals, { max: 1, usage: USAGE.status });
-  repairFromWitness(ctx);
+  await repairFromWitness(ctx);
   const intervalS = values.follow === undefined ? null : Math.max(1, requireInt("--follow", values.follow));
   if (intervalS !== null && values.json) throw new UserError(`\`--follow\` cannot be used with \`--json\`; usage: ${USAGE.status}`);
   if (intervalS !== null && positionals.length) throw new UserError(`\`--follow\` shows the whole queue, not one job; usage: ${USAGE.status}`);
   if (positionals.length === 1) {
     const id = requireInt("id", positionals[0]);
-    sweepMerged(ctx);
-    const job = jobView(getJob(id, ctx.env), { full: true });
+    await sweepMerged(ctx);
+    const job = jobView(await openStore(ctx.env).jobs.getJob(id), { full: true });
     if (!job) throw new UserError(`unknown job \`${id}\``);
     if (values.json) ctx.out(JSON.stringify({ job }));
     else for (const line of formatDetail(job)) ctx.out(line);
     return values.json === true;
   }
   if (values.json) {
-    sweepMerged(ctx);
-    const jobs = listJobs({ limit: requireInt("--limit", values.limit) }, ctx.env).map(jobView);
+    await sweepMerged(ctx);
+    const store = openStore(ctx.env);
+    const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit) })).map(jobView);
     const { runners, error } = readRunners(ctx);
     if (error !== null) throw new UserError(`the runner registry cannot be listed (${error}); \`--json\` will not answer that no runner is running for a registry it could not read`);
-    ctx.out(JSON.stringify({ runner: runners[0] ?? STOPPED_RUNNER, runners, jobs, counts: countsByStatus(ctx.env) }));
+    ctx.out(JSON.stringify({ runner: runners[0] ?? STOPPED_RUNNER, runners, jobs, counts: await store.jobs.countsByStatus() }));
     return true;
   }
   if (intervalS !== null) {
     await followStatus(values, intervalS, ctx);
     return true;
   }
-  for (const line of queueViewLines(values, ctx).lines) ctx.out(line);
+  for (const line of (await queueViewLines(values, ctx)).lines) ctx.out(line);
   return false;
 }
 
@@ -810,7 +804,7 @@ async function runRun(argv, ctx) {
   if (values.foreground !== true) return await startDetached({ jobId, max, watchIntervalS: intervalS }, ctx);
   if (intervalS !== null) return await runWatchHere({ intervalS, jobId, max }, ctx);
   if (values.drain === true && jobId === null) return await runDrainHere({ max }, ctx);
-  const waiting = claimBlocker({ jobId, mode: runnerMode({ jobId }), env: ctx.env });
+  const waiting = await claimBlocker({ jobId, mode: runnerMode({ jobId }), env: ctx.env });
   if (waiting) return reportWaiting(waiting, ctx);
   return await runGuardedHere({ jobId, ctx, run: () => runCycleHere({ jobId, max, json: values.json === true }, ctx) });
 }
@@ -819,7 +813,7 @@ async function runRun(argv, ctx) {
 async function runCancel(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { reason: { type: "string" }, json: { type: "boolean" } });
   checkArgs(positionals, { min: 1, usage: USAGE.cancel });
-  const job = cancelJob(requireInt("id", positionals[0]), { reason: values.reason }, ctx.env);
+  const job = await openStore(ctx.env).jobs.cancelJob(requireInt("id", positionals[0]), { reason: values.reason });
   ctx.out(values.json ? JSON.stringify({ job }) : `cancelled job #${job.id}`);
 }
 
@@ -840,7 +834,7 @@ async function runRetry(argv, ctx) {
   });
   checkArgs(positionals, { min: 1, usage: USAGE.retry });
   checkForegroundNeedsRun(values, USAGE.retry);
-  const { job, runDir } = applyRetry({
+  const { job, runDir } = await applyRetry({
     id: requireInt("id", positionals[0]),
     note: values.note,
     fresh: values.fresh === true,
@@ -900,17 +894,8 @@ function useColor(ctx) {
 }
 
 // Reads the status of a job for the follow loop; a job whose row is gone has no status at all.
-// Each poll opens its own read-only connection and closes it: a follow lives for hours, and a cached connection
-// can sit on a WAL read snapshot and keep answering `running` long after the runner wrote `done`.
 function jobStatusReader(id, env) {
-  return () => {
-    const db = openDbReadOnly(env);
-    try {
-      return db.prepare("SELECT status FROM jobs WHERE id = ?").get(id)?.status ?? null;
-    } finally {
-      db.close();
-    }
-  };
+  return async () => await openStore(env).jobs.status(id);
 }
 
 // Watches the output of the process, so a closed pipe ends the follow instead of crashing it.
@@ -966,9 +951,9 @@ function narrateNotice(notice, { narrator, print, trace, warn }) {
 }
 
 // Prints the reason the job is stopped when the stream itself never carried one, so a gate is never narrated in silence.
-function printJobNotice(id, { narrator, print, sawNotice }, ctx) {
+async function printJobNotice(id, { narrator, print, sawNotice }, ctx) {
   if (sawNotice()) return;
-  const notice = jobView(getJob(id, ctx.env))?.notice_md;
+  const notice = jobView(await openStore(ctx.env).jobs.getJob(id))?.notice_md;
   if (!notice) return;
   print(narrator.note("notice", noticeNarration(notice)));
 }
@@ -985,9 +970,9 @@ async function runLogNarrated(path, id, { follow, all }, ctx) {
   const tail = { narrator, print, sawNotice: () => seen };
   if (!follow) {
     const text = readingLog(path, () => readFileSync(path, "utf8"));
-    const running = getJob(id, ctx.env)?.status === "running";
+    const running = (await openStore(ctx.env).jobs.getJob(id))?.status === "running";
     for (const event of narrateLog(text, { all, running })) print(event);
-    printJobNotice(id, tail, ctx);
+    await printJobNotice(id, tail, ctx);
     return;
   }
   const trace = pollTracer(ctx);
@@ -1002,7 +987,7 @@ async function runLogNarrated(path, id, { follow, all }, ctx) {
   });
   for (const event of narrator.finish()) print(event);
   if (result.logError) print(narrator.note("toolError", `${result.logError}; this narration is missing the tail of the log`));
-  printJobNotice(id, tail, ctx);
+  await printJobNotice(id, tail, ctx);
   if (result.status) print(narrator.note("resultEnd", `job #${id} ${result.status}`));
   reportStop(result, ctx);
 }
