@@ -503,10 +503,15 @@ function collect(ctx, values) {
   ];
 }
 
-// One line of the human report.
-function reportLine({ status, name, detail, hint }) {
+// Width of the name column: the longest name of the report plus one space, never below the historical 22.
+export function nameWidth(checks) {
+  return Math.max(22, ...checks.map((check) => check.name.length + 1));
+}
+
+// One line of the human report; `width` comes from `nameWidth` so a long project name never touches its detail.
+export function reportLine({ status, name, detail, hint }, width = 22) {
   const tail = status === "ok" || !hint ? detail : `${detail} - ${hint}`;
-  return `${status.padEnd(6)}${name.padEnd(22)}${tail}`;
+  return `${status.padEnd(6)}${name.padEnd(width)}${tail}`;
 }
 
 // Runs `nightshift doctor`: reads the state of the host and of the home, writes nothing, and exits 1 on any failure.
@@ -517,6 +522,9 @@ export async function run(argv, ctx) {
   const checks = collect(ctx, values);
   const ok = !checks.some((entry) => entry.status === "fail");
   if (values.json === true) ctx.out(JSON.stringify({ ok, checks }));
-  else for (const entry of checks) ctx.out(reportLine(entry));
+  else {
+    const width = nameWidth(checks);
+    for (const entry of checks) ctx.out(reportLine(entry, width));
+  }
   return ok ? 0 : 1;
 }

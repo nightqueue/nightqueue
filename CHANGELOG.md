@@ -126,6 +126,9 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `nightshift doctor` and `nightshift memory stats` size their name column by the
+  longest name of the report, so a long project name no longer runs into the text
+  next to it.
 - Any number of runners now work the queue together. A runner registers as
   `~/.nightshift/runners/<pid>.json`, one file per live process, carrying `pid`,
   `startedAt`, `mode`, `jobId`, `intervalS`, `detached`, `logPath`, `runtimeDir`

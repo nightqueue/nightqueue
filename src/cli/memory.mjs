@@ -3,19 +3,24 @@ import { memoryStats } from "../memory/lessons.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
 const COLUMNS = ["lessons", "memory", "index", "libs", "runs"];
-const NAME_WIDTH = 24;
+const MIN_NAME_WIDTH = 24;
 const COUNT_WIDTH = 9;
 const EMPTY_ROW = { project: null, lessons: 0, memory: 0, index: 0, libs: 0, runs: 0 };
 
+// Width of the project column: the longest name plus one space, never below the historical 24.
+export function nameWidth(rows) {
+  return Math.max(MIN_NAME_WIDTH, ...rows.map((row) => (row.project ?? "(global)").length + 1));
+}
+
 // Header of the table of `memory stats`.
-function header() {
-  return ["project".padEnd(NAME_WIDTH), ...COLUMNS.map((name) => name.padStart(COUNT_WIDTH))].join("");
+function header(width) {
+  return ["project".padEnd(width), ...COLUMNS.map((name) => name.padStart(COUNT_WIDTH))].join("");
 }
 
 // One line of the table of `memory stats`.
-function formatRow(row) {
+function formatRow(row, width) {
   const name = row.project ?? "(global)";
-  return [name.padEnd(NAME_WIDTH), ...COLUMNS.map((key) => String(row[key] ?? 0).padStart(COUNT_WIDTH))].join("");
+  return [name.padEnd(width), ...COLUMNS.map((key) => String(row[key] ?? 0).padStart(COUNT_WIDTH))].join("");
 }
 
 // Runs `nightshift memory stats`, which never fails on an empty or missing database.
@@ -27,8 +32,10 @@ async function runStats(argv, ctx) {
     ctx.out(JSON.stringify({ projects }));
     return;
   }
-  ctx.out(header());
-  for (const row of projects.length ? projects : [EMPTY_ROW]) ctx.out(formatRow(row));
+  const rows = projects.length ? projects : [EMPTY_ROW];
+  const width = nameWidth(rows);
+  ctx.out(header(width));
+  for (const row of rows) ctx.out(formatRow(row, width));
 }
 
 const SUBCOMMANDS = new Map([["stats", runStats]]);
