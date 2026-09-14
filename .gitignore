@@ -9,3 +9,4 @@ node_modules/
 .nightshift/
 docs/decisions/
 .DS_Store
+*.bundle
