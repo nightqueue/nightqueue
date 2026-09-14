@@ -6,6 +6,21 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Fixed
+
+- `nightshift org rename` records its intent before touching either store, so a
+  rename interrupted between the database and the config no longer hides the
+  org's decisions and roadmap items with nothing pointing at them. `nightshift
+  org repair` settles the interrupted rename in the direction the config already
+  committed (forward or back, idempotent), and moves rows that point to an org
+  the config does not know under the org named with `--to`. `nightshift doctor`
+  gains an `org rows` line that fails on either state, and `org rename` and `org
+  remove` refuse to run while a rename is still in flight.
+- `npm run release:check` refuses a changelog that still carries content under
+  `## Unreleased` while the manifest declares the version of the top released
+  entry, because a publish from that state ships changes the released entry does
+  not describe - and npm rejects the duplicate version only after the pack.
+
 ### Added
 
 - Org-scoped decisions and roadmap: a decision or a roadmap item now belongs to

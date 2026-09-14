@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stepLine } from "../src/cli/report.mjs";
 import { npmCommandLine, runNpm } from "../src/host/npm.mjs";
-import { versionMismatches } from "./versions.mjs";
+import { unreleasedContent, versionMismatches } from "./versions.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const PACK_ARGS = ["pack", "--dry-run", "--json", "--ignore-scripts", ROOT];
@@ -61,6 +61,11 @@ function checkVersions() {
     license: readRootFile("LICENSE"),
   });
   if (problems.length) throw new Error(problems.join("\n"));
+  const unreleased = unreleasedContent(readRootFile("CHANGELOG.md"));
+  if (unreleased) {
+    const lines = unreleased.split("\n").length;
+    throw new Error(`CHANGELOG.md still has ${lines} line(s) under \`## Unreleased\` while package.json declares ${manifest}, which is already the top released entry; move them under \`## <new version> - YYYY-MM-DD\` and bump the version`);
+  }
   return manifest;
 }
 

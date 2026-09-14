@@ -27,6 +27,7 @@ import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../me
 import { ORPHAN_PREDICATE } from "../memory/jobs.mjs";
 import { isRegistryFailure, listRunnerRecords, registryReadError } from "../queue/registry.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
+import { orphanOrgRows, readPendingRename } from "./org.mjs";
 import { firstLine } from "./report.mjs";
 import { runtimeLabel, runtimeLocation } from "./runtime-versions.mjs";
 
@@ -276,6 +277,37 @@ function checkDatabase(ctx) {
   }
 }
 
+const ORG_REPAIR_HINT = "run `nightshift org repair`";
+
+// Checks that every org row has its org: no rename left in flight, no row pointing to a name the config does not know.
+function checkOrgRows(ctx) {
+  const pending = readPendingRename(ctx.env);
+  if (pending) {
+    const which = pending.from ? `\`${pending.from}\` -> \`${pending.to}\`` : "of unknown names";
+    return check("org rows", "fail", `org rename ${which} interrupted`, ORG_REPAIR_HINT);
+  }
+  let db = null;
+  try {
+    db = openDbReadOnly(ctx.env);
+    const orphans = orphanOrgRows(ctx.env, loadConfig(ctx.env, { warn: () => {} }), db);
+    if (orphans.length) {
+      const detail = orphans.map((o) => `${o.total} row(s) point to unknown org \`${o.org}\``).join("; ");
+      return check("org rows", "fail", detail, `${ORG_REPAIR_HINT} --to <org>`);
+    }
+    return check("org rows", "ok", "every org row has its org");
+  } catch (err) {
+    return check("org rows", "fail", err?.message ?? String(err), `inspect ${dbPath(ctx.env)}`);
+  } finally {
+    db?.close();
+  }
+}
+
+// The database check plus, only on a database at the current schema, the org rows check that reads its columns.
+function checkDatabaseAndRows(ctx) {
+  const database = checkDatabase(ctx);
+  return database.status === "ok" ? [database, checkOrgRows(ctx)] : [database];
+}
+
 const ORPHAN_PREFIXES = [".fuse_hidden", ".nfs"];
 const SHM_HINT =
   "the shared-memory index of the WAL was replaced while a connection was still attached to it, which loses writes; stop the runner, run `nightshift doctor` again, and move NIGHTSHIFT_HOME to local disk";
@@ -494,7 +526,7 @@ function collect(ctx, values) {
     checkPlugin(ctx),
     checkModel(ctx),
     ...checkEmbeddingPrefix(ctx),
-    checkDatabase(ctx),
+    ...checkDatabaseAndRows(ctx),
     checkDbShm(ctx),
     checkHomeMount(ctx),
     ...checkQueue(ctx),

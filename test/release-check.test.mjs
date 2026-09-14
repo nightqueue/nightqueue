@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { changelogSection, changelogVersion, licenseVersion, versionMismatches } from "../scripts/versions.mjs";
+import { changelogSection, changelogVersion, licenseVersion, unreleasedContent, versionMismatches } from "../scripts/versions.mjs";
 
 const CHANGELOG = ["# Changelog", "", "## 0.1.0 - 2026-09-09", "", "### Added", "- the first release", ""].join("\n");
 const LICENSE = ["Parameters", "", "Licensor:             Maykon Vinicius", "Licensed Work:        nightshift 0.1.0", ""].join("\n");
@@ -77,4 +77,11 @@ test("a version the changelog does not carry has no section at all", () => {
   assert.equal(changelogSection(FULL_CHANGELOG, ""), null);
   assert.equal(changelogSection(FULL_CHANGELOG, undefined), null);
   assert.equal(changelogSection(null, "0.1.0"), null);
+});
+
+test("the unreleased content is what sits under `## Unreleased`, and nothing when that section is absent or empty", () => {
+  assert.equal(unreleasedContent(FULL_CHANGELOG), "- something that has not shipped");
+  assert.equal(unreleasedContent(CHANGELOG), null);
+  assert.equal(unreleasedContent(["# Changelog", "", "## Unreleased", "", "## 0.1.0 - 2026-09-09", "- x", ""].join("\n")), null);
+  assert.equal(unreleasedContent(null), null);
 });

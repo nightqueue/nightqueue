@@ -29,6 +29,13 @@ export function versionMismatches({ manifest, changelog, license }) {
   ].filter((message) => message !== null);
 }
 
+// What the `## Unreleased` section still holds, or null when the changelog has no such section or it is empty: a publish
+// with content there ships changes the released entry does not describe.
+export function unreleasedContent(text) {
+  const section = changelogSection(text, "Unreleased");
+  return section ? section : null;
+}
+
 // Escapes a value so it can sit literally inside a regular expression.
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

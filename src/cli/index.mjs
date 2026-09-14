@@ -73,6 +73,7 @@ commands:
   org list [--json]                         list orgs, their connection slots and project counts
   org rename <old> <new>                    rename an org and every project pointing at it
   org remove <name>                         remove an empty, non-default org
+  org repair [--to <org>]                   settle an interrupted rename; move orphan org rows under --to
   project add <path> [--org] [--name]       register a project (same behaviour as init)
   project list [--json]                     list projects, their org and whether the path still exists
   project remove <name>                     unregister a project

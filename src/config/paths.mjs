@@ -152,6 +152,11 @@ export function queuePausedPath(env = process.env) {
   return join(homeDir(env), "queue.paused");
 }
 
+// Path of the intent record of an org rename in flight: written before the first store changes, removed after the last one did.
+export function orgRenamePendingPath(env = process.env) {
+  return join(homeDir(env), "org-rename.pending.json");
+}
+
 // Directory of the runner registry: one file per live runner, the way any number of them coexist.
 export function runnersDir(env = process.env) {
   return join(homeDir(env), "runners");
