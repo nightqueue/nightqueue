@@ -449,6 +449,7 @@ nightshift org add acme --display-name "Acme"      # create an org
 nightshift org list --json                         # orgs, connection slots, project counts
 nightshift org rename acme acme-inc                # rewrites every project pointing at it
 nightshift org remove acme-inc                     # refused while projects still point at it
+nightshift org repair [--to <org>]                 # settle an interrupted rename; adopt orphan rows
 
 nightshift project list                            # name, path, org, whether the path still exists
 nightshift project move api acme                   # move a project to another org
@@ -651,7 +652,13 @@ anywhere.
 
 Renaming an org carries its rows with it (`nightshift org rename` rewrites the
 `org` of every decision and roadmap item), and an org that still owns rows
-cannot be removed: the removal is refused naming how many.
+cannot be removed: the removal is refused naming how many. The rename records
+its intent in `~/.nightshift/org-rename.pending.json` before it touches either
+store; a rename interrupted halfway shows up as a failed `org rows` line of
+`nightshift doctor`, and `nightshift org repair` settles it in the direction
+the config already committed. Rows pointing to an org the config does not know
+are the other thing that line reports; `nightshift org repair --to <org>` moves
+them under an existing org.
 
 **Queueing from the roadmap.** `queue_add` with `roadmap_item_id` and no
 `prompt` (or `nightshift queue add --roadmap <id>`) builds the prompt from the

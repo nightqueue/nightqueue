@@ -1,5 +1,5 @@
 {
   "name": "nightshift",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Autonomous coding pipeline: triage, exploration, architecture, implementation, adversarial QA and functional verification, run by a team of subagents."
 }

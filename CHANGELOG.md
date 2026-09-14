@@ -4,7 +4,7 @@ Every notable change of this project is recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.2.0 - 2026-09-14
 
 ### Fixed
 
@@ -227,4 +227,5 @@ First public release.
   with the secrets kept in a file only the owner can read.
 - Published to npm as `@maykonv/nightshift`; the command it installs is `nightshift`.
 
+[0.2.0]: https://github.com/maykonVinicius/nightshift/releases/tag/v0.2.0
 [0.1.0]: https://github.com/maykonVinicius/nightshift/releases/tag/v0.1.0

@@ -2,6 +2,17 @@ const CHANGELOG_ENTRY = /^## (\d+\.\d+\.\d+) - \d{4}-\d{2}-\d{2}$/m;
 const LICENSE_PARAMETER = /^Licensed Work:\s+nightshift (\S+)\s*$/m;
 
 export const CHANGELOG_FORMAT = "## <version> - YYYY-MM-DD";
+export const PLUGIN_FORMAT = '"version": "<version>" in plugin/.claude-plugin/plugin.json';
+
+// Version the plugin manifest declares, or null when the file is not the JSON object with a string version it should be.
+export function pluginVersion(text) {
+  try {
+    const version = JSON.parse(String(text ?? ""))?.version;
+    return typeof version === "string" && version ? version : null;
+  } catch {
+    return null;
+  }
+}
 export const LICENSE_FORMAT = "Licensed Work:        nightshift <version>";
 
 // Version of the top entry of the changelog, or null when no heading has the required shape.
@@ -22,10 +33,11 @@ function mismatch({ file, format, version, manifest }) {
 }
 
 // Every source whose version does not match the one of the manifest, one message each, empty when the release is coherent.
-export function versionMismatches({ manifest, changelog, license }) {
+export function versionMismatches({ manifest, changelog, license, plugin }) {
   return [
     mismatch({ file: "CHANGELOG.md", format: CHANGELOG_FORMAT, version: changelogVersion(changelog), manifest }),
     mismatch({ file: "LICENSE", format: LICENSE_FORMAT, version: licenseVersion(license), manifest }),
+    ...(plugin === undefined ? [] : [mismatch({ file: "plugin/.claude-plugin/plugin.json", format: PLUGIN_FORMAT, version: pluginVersion(plugin), manifest })]),
   ].filter((message) => message !== null);
 }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { changelogSection, changelogVersion, licenseVersion, unreleasedContent, versionMismatches } from "../scripts/versions.mjs";
+import { changelogSection, changelogVersion, licenseVersion, pluginVersion, unreleasedContent, versionMismatches } from "../scripts/versions.mjs";
 
 const CHANGELOG = ["# Changelog", "", "## 0.1.0 - 2026-09-09", "", "### Added", "- the first release", ""].join("\n");
 const LICENSE = ["Parameters", "", "Licensor:             Maykon Vinicius", "Licensed Work:        nightshift 0.1.0", ""].join("\n");
@@ -84,4 +84,14 @@ test("the unreleased content is what sits under `## Unreleased`, and nothing whe
   assert.equal(unreleasedContent(CHANGELOG), null);
   assert.equal(unreleasedContent(["# Changelog", "", "## Unreleased", "", "## 0.1.0 - 2026-09-09", "- x", ""].join("\n")), null);
   assert.equal(unreleasedContent(null), null);
+});
+
+test("the plugin manifest is checked in lockstep with the package when it is given", () => {
+  assert.equal(pluginVersion('{"name":"nightshift","version":"0.1.0"}'), "0.1.0");
+  assert.equal(pluginVersion("{not json"), null);
+  assert.equal(pluginVersion('{"name":"nightshift"}'), null);
+  assert.deepEqual(versionMismatches({ manifest: "0.1.0", changelog: CHANGELOG, license: LICENSE, plugin: '{"version":"0.1.0"}' }), []);
+  const problems = versionMismatches({ manifest: "0.1.0", changelog: CHANGELOG, license: LICENSE, plugin: '{"version":"0.0.9"}' });
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /^plugin\/\.claude-plugin\/plugin\.json declares 0\.0\.9, package\.json declares 0\.1\.0$/);
 });

@@ -59,6 +59,7 @@ function checkVersions() {
     manifest,
     changelog: readRootFile("CHANGELOG.md"),
     license: readRootFile("LICENSE"),
+    plugin: readRootFile("plugin/.claude-plugin/plugin.json"),
   });
   if (problems.length) throw new Error(problems.join("\n"));
   const unreleased = unreleasedContent(readRootFile("CHANGELOG.md"));
