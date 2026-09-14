@@ -529,33 +529,25 @@ export function retryJob(id, { note, fresh } = {}, env = process.env) {
 }
 
 // Returns the raw row of a job, or null.
-export function getJob(id, env = process.env) {
-  return openDb(env).prepare("SELECT * FROM jobs WHERE id = ?").get(requireId(id)) ?? null;
+export function getJob(id, env = process.env, db = openDb(env)) {
+  return db.prepare("SELECT * FROM jobs WHERE id = ?").get(requireId(id)) ?? null;
 }
 
 // Returns the most recent jobs, newest first.
-export function listJobs({ limit } = {}, env = process.env) {
+export function listJobs({ limit } = {}, env = process.env, db = openDb(env)) {
   const clamped = optionalRangedInt("limit", limit, LIST_LIMIT_RANGE);
-  return openDb(env).prepare("SELECT * FROM jobs ORDER BY id DESC LIMIT ?").all(clamped);
+  return db.prepare("SELECT * FROM jobs ORDER BY id DESC LIMIT ?").all(clamped);
 }
 
 // Unfinished jobs that already have a run directory; a job with no slug never ran, so no witness can speak for it.
-export function listJobsWithSlug(env = process.env) {
-  return openDb(env)
-    .prepare("SELECT id, project, slug FROM jobs WHERE status IN ('running', 'pending') AND slug IS NOT NULL")
-    .all();
+export function listJobsWithSlug(env = process.env, db = openDb(env)) {
+  return db.prepare("SELECT id, project, slug FROM jobs WHERE status IN ('running', 'pending') AND slug IS NOT NULL").all();
 }
 
-// Reads the status of a job for the follow loop; a job whose row is gone has no status at all.
-// Each read opens its own read-only connection and closes it: a follow lives for hours, and a cached connection
-// can sit on a WAL read snapshot and keep answering `running` long after the runner wrote `done`.
-export function jobStatus(id, env = process.env) {
-  const db = openDbReadOnly(env);
-  try {
-    return db.prepare("SELECT status FROM jobs WHERE id = ?").get(id)?.status ?? null;
-  } finally {
-    db.close();
-  }
+// Reads the status of a job on the connection the caller holds; a job whose row is gone has no status at all.
+// The freshness a follow needs lives in `withReadOnlyStore(env, fn)`, which hands every poll its own connection.
+export function jobStatus(id, env = process.env, db = openDb(env)) {
+  return db.prepare("SELECT status FROM jobs WHERE id = ?").get(id)?.status ?? null;
 }
 
 // Counts the jobs left `running` by a runner that died, on the connection the caller already holds: a diagnosis never creates nor migrates the database it inspects.
@@ -564,8 +556,8 @@ export function countOrphanJobs(db) {
 }
 
 // Jobs delivered with a pull request never checked or last checked before the cutoff, staler first so every one is reached.
-export function listMergeCandidates({ cutoff, limit } = {}, env = process.env) {
-  const statement = openDb(env).prepare(
+export function listMergeCandidates({ cutoff, limit } = {}, env = process.env, db = openDb(env)) {
+  const statement = db.prepare(
     `SELECT id, pr_url FROM jobs
       WHERE status = 'done' AND pr_url IS NOT NULL AND (pr_checked_at IS NULL OR pr_checked_at < ?)
       ORDER BY pr_checked_at IS NOT NULL, pr_checked_at ASC, id DESC LIMIT ?`,
@@ -591,10 +583,10 @@ export function stampPrChecked(id, { checkedAt } = {}, env = process.env) {
 }
 
 // Counts the jobs of every status, including the statuses with no row at all.
-export function countsByStatus(env = process.env) {
+export function countsByStatus(env = process.env, db = openDb(env)) {
   const counts = {};
   for (const status of JOB_STATUSES) counts[status] = 0;
-  for (const row of openDb(env).prepare("SELECT status, COUNT(*) AS total FROM jobs GROUP BY status").all()) {
+  for (const row of db.prepare("SELECT status, COUNT(*) AS total FROM jobs GROUP BY status").all()) {
     if (!JOB_STATUSES.includes(row.status)) continue;
     counts[row.status] = row.total;
   }
@@ -602,8 +594,8 @@ export function countsByStatus(env = process.env) {
 }
 
 // Counts the jobs currently running under a live lease, the number the concurrency ceiling compares against.
-export function countActiveJobs(env = process.env) {
-  return openDb(env).prepare(`SELECT COUNT(*) AS total FROM jobs AS slot WHERE ${ACTIVE_JOB_PREDICATE}`).get().total;
+export function countActiveJobs(env = process.env, db = openDb(env)) {
+  return db.prepare(`SELECT COUNT(*) AS total FROM jobs AS slot WHERE ${ACTIVE_JOB_PREDICATE}`).get().total;
 }
 
 // Id of the lowest numbered job running under a live lease, or null when none is: the job the install guard names.
@@ -613,10 +605,8 @@ export function firstActiveJobId(env = process.env) {
 }
 
 // Tells whether this job is running under a live lease: the liveness predicate the ceiling counts, never the raw status.
-export function isJobActive(id, env = process.env) {
-  const row = openDb(env)
-    .prepare(`SELECT COUNT(*) AS total FROM jobs AS slot WHERE slot.id = ? AND ${ACTIVE_JOB_PREDICATE}`)
-    .get(requireId(id));
+export function isJobActive(id, env = process.env, db = openDb(env)) {
+  const row = db.prepare(`SELECT COUNT(*) AS total FROM jobs AS slot WHERE slot.id = ? AND ${ACTIVE_JOB_PREDICATE}`).get(requireId(id));
   return row.total > 0;
 }
 

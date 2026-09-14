@@ -28,11 +28,11 @@ function logRepair(id, terminal, env) {
 }
 
 // Restores one job from its witness; a job under a live lease is left alone and a failure of its own is reported, never raised.
-async function repairOne(row, { store, env }) {
+async function repairOne(row, { readStore, writeStore, env }) {
   try {
-    if (await store.jobs.isJobActive(row.id)) return { repaired: false, error: null };
+    if (await readStore.jobs.isJobActive(row.id)) return { repaired: false, error: null };
     const terminal = readWitness(row, env);
-    if (!terminal || !(await store.jobs.repairJobFromWitness(row.id, terminal))) return { repaired: false, error: null };
+    if (!terminal || !(await writeStore.jobs.repairJobFromWitness(row.id, terminal))) return { repaired: false, error: null };
     logRepair(row.id, terminal, env);
     return { repaired: true, error: null };
   } catch (err) {
@@ -41,19 +41,19 @@ async function repairOne(row, { store, env }) {
 }
 
 // Restores every unfinished job whose run directory already says how it ended; the file is the witness and the row never writes back to it.
-export async function reconcileFromWitness(env = process.env) {
-  let store = null;
+export async function reconcileFromWitness(env = process.env, { readStore = null, writeStore = null } = {}) {
+  let stores = null;
   let rows = [];
   try {
-    store = openStore(env);
-    rows = await store.jobs.listWithSlug();
+    stores = { readStore: readStore ?? openStore(env), writeStore: writeStore ?? openStore(env), env };
+    rows = await stores.readStore.jobs.listWithSlug();
   } catch (err) {
     return { repaired: [], error: String(err?.message ?? err).split("\n")[0] };
   }
   const repaired = [];
   let error = null;
   for (const row of rows) {
-    const outcome = await repairOne(row, { store, env });
+    const outcome = await repairOne(row, stores);
     if (outcome.repaired) repaired.push(row.id);
     if (outcome.error && !error) error = outcome.error;
   }
@@ -61,7 +61,7 @@ export async function reconcileFromWitness(env = process.env) {
 }
 
 // Reconciles and phrases the one line every surface says when a repair could not be written, or null when nothing failed.
-export async function repairWarningLine(env = process.env) {
-  const outcome = await reconcileFromWitness(env);
+export async function repairWarningLine(env = process.env, stores = {}) {
+  const outcome = await reconcileFromWitness(env, stores);
   return outcome.error ? `${REPAIR_FAILED_PREFIX}: ${outcome.error}` : null;
 }

@@ -55,3 +55,35 @@ test("a queue log --follow session never opens a cached write connection to read
   closeDb(env);
   assert.equal(existsSync(dbShmPath(env)), true, "closeDb(env) removed the shared-memory file right after the follow ended: a long-lived WRITE connection was left cached for the whole session, where the pre-refactor per-poll reader (openDbReadOnly, closed every tick) never held one");
 });
+
+// The same probe, applied to `queue status --follow`: a session with nothing to merge (the job has no pull
+// request) and nothing to repair (there is no state.json) must never open a write connection at all, so
+// `closeDb(env)` right after it ends is a no-op and the `-shm` its read-only polls created stays on disk.
+test("a queue status --follow session with nothing to merge and nothing to repair never opens a cached write connection", async (t) => {
+  const env = makeHome(t, "follow-status-no-write-connection");
+  makeProject(t, env, "alpha");
+  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  claimJobById(id, { worker: "host:1", cap: 4 }, env);
+  finishJob(id, { worker: "host:1", status: "done" }, env);
+
+  closeDb(env);
+  assert.equal(existsSync(dbShmPath(env)), false, "test setup itself left a write connection cached; the probe below would be meaningless");
+
+  const out = [];
+  const err = [];
+  const ctx = {
+    ...defaultContext(),
+    env,
+    out: (line) => out.push(line),
+    err: (line) => err.push(line),
+    stdout: { isTTY: false, columns: 120, write: () => {} },
+    sleep: async () => {},
+  };
+  const code = await run(["queue", "status", "--follow", "--until-idle"], ctx);
+  assert.equal(code, 0, err.join("\n"));
+  assert.ok(out.length, "the follow session never rendered the queue at all; this PoC's own precondition failed");
+
+  assert.equal(existsSync(dbShmPath(env)), true, "the follow session never read the database at all; this PoC's own precondition failed");
+  closeDb(env);
+  assert.equal(existsSync(dbShmPath(env)), true, "closeDb(env) removed the shared-memory file right after the follow ended: the session left a cached WRITE connection behind although it had nothing to merge and nothing to repair");
+});

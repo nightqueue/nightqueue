@@ -40,7 +40,7 @@ import {
   PIPELINE_TASK_TYPES,
   PIPELINE_TIERS,
 } from "../memory/runs.mjs";
-import { openStore } from "../store/open.mjs";
+import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
 
 const SERVER_NAME = "nightshift";
 const SERVER_VERSION = "0.1.0";
@@ -291,6 +291,25 @@ function warningAnswer(warning) {
   return warning ? { warning } : {};
 }
 
+// The answer of `queue_status`, read end to end on the store it is given: one job by id, or the tail of the queue with its counts and its runners.
+async function queueStatusAnswer(args, { store, warning, env }) {
+  if (Number.isInteger(args.job_id)) {
+    const job = jobView(await store.jobs.getJob(args.job_id), { full: true });
+    if (!job) throw new UserError(`unknown job \`${args.job_id}\``);
+    return { job, ...warningAnswer(warning) };
+  }
+  const runners = readRunners(env);
+  const counts = await store.jobs.countsByStatus();
+  return {
+    runner: runners[0] ?? STOPPED_RUNNER,
+    runners,
+    jobs: (await store.jobs.listJobs({ limit: jobLimit(args.limit) })).map(jobView),
+    counts,
+    hint: queueHint({ activeJobs: await store.jobs.countActiveJobs(), counts, runners }),
+    ...warningAnswer(warning),
+  };
+}
+
 // The eighteen tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env) {
   return [
@@ -510,24 +529,12 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        await refreshMergedJobs({ env });
-        const warning = await repairWarningLine(env);
-        const store = openStore(env);
-        if (Number.isInteger(args.job_id)) {
-          const job = jobView(await store.jobs.getJob(args.job_id), { full: true });
-          if (!job) throw new UserError(`unknown job \`${args.job_id}\``);
-          return { job, ...warningAnswer(warning) };
-        }
-        const runners = readRunners(env);
-        const counts = await store.jobs.countsByStatus();
-        return {
-          runner: runners[0] ?? STOPPED_RUNNER,
-          runners,
-          jobs: (await store.jobs.listJobs({ limit: jobLimit(args.limit) })).map(jobView),
-          counts,
-          hint: queueHint({ activeJobs: await store.jobs.countActiveJobs(), counts, runners }),
-          ...warningAnswer(warning),
-        };
+        await ensureStoreExists(env);
+        return await withReadOnlyStore(env, async (store) => {
+          await refreshMergedJobs({ env, readStore: store });
+          const warning = await repairWarningLine(env, { readStore: store });
+          return await queueStatusAnswer(args, { store, warning, env });
+        });
       },
     },
     {

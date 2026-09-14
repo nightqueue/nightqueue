@@ -6,6 +6,15 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Fixed
+
+- `nightshift queue status --follow` and the MCP `queue_status` tool read the
+  queue on a read-only connection opened for that poll alone, instead of the one
+  connection cached for the whole life of the process. A job another process
+  finished, merged or repaired is rendered on the next poll, where a session
+  could keep showing it as `running` for hours; and a follow with nothing to
+  merge and nothing to repair no longer opens a write connection at all.
+
 ### Changed
 
 - Every SQLite access now goes through an async store obtained from

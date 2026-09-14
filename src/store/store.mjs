@@ -5,6 +5,9 @@
  * implementation; today every body is a single delegation with no `await` in it, which is what
  * keeps transactions whole and the concurrency model identical to the synchronous code it wraps.
  *
+ * Every read answers on the store's own connection, so a process that polls for hours - a follow loop, the
+ * MCP server - takes its store from `withReadOnlyStore(env, fn)` and never from `openStore(env)`.
+ *
  * A method's name is the exported name of the `src/memory/` function it delegates to, verbatim.
  * The only exceptions are the names the contract fixes: `jobs.listWithSlug`, `jobs.status`,
  * `orgs.rename`, `orgs.usage`, `health` and `close`.
@@ -37,7 +40,7 @@
  * @property {() => Promise<boolean>} hasClaimablePending
  * @property {() => Promise<object|null>} peekNextJob
  * @property {() => Promise<object[]>} listWithSlug unfinished jobs that already have a run directory
- * @property {(id: number) => Promise<string|null>} status on its own read-only connection, per call
+ * @property {(id: number) => Promise<string|null>} status the status column of one job, or null when the row is gone
  */
 
 /**
@@ -222,6 +225,13 @@ export const STORE_CONTRACT = Object.freeze({
  */
 export const READ_ONLY_METHODS = Object.freeze([
   "jobs.status",
+  "jobs.getJob",
+  "jobs.listJobs",
+  "jobs.listMergeCandidates",
+  "jobs.listWithSlug",
+  "jobs.isJobActive",
+  "jobs.countsByStatus",
+  "jobs.countActiveJobs",
   "decisions.listDecisions",
   "decisions.getDecisionByNumber",
   "roadmap.listRoadmap",

@@ -7,7 +7,7 @@ import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { PROMPT_SOURCE_CONFLICT, getRoadmapItem, queueRoadmapItem } from "../memory/roadmap.mjs";
-import { openStore } from "../store/open.mjs";
+import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
 import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
 import { prViewer, refreshMergedJobs } from "../queue/merged.mjs";
@@ -562,8 +562,8 @@ function normalizeFollowArgv(argv) {
 }
 
 // Brings the jobs whose pull request was merged up to date before a view reads the rows; it is silent and never fails the command.
-async function sweepMerged(ctx) {
-  await refreshMergedJobs({ env: ctx.env, ghImpl: prViewer(ctx.env, ctx.spawnSyncImpl) });
+async function sweepMerged(ctx, readStore) {
+  await refreshMergedJobs({ env: ctx.env, ghImpl: prViewer(ctx.env, ctx.spawnSyncImpl), readStore });
 }
 
 // Lists the live runners and the failure to list them apart, dropping the registrations no process answers for; a prune that fails never fails the listing.
@@ -580,9 +580,8 @@ function unreadableRegistryLine(error) {
 }
 
 // Lines of the queue view: one line per runner, table, counts and the backlog hint, in that order.
-async function queueViewLines(values, ctx) {
-  await sweepMerged(ctx);
-  const store = openStore(ctx.env);
+async function queueViewLines(values, ctx, store) {
+  await sweepMerged(ctx, store);
   const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit) })).map(jobView);
   const counts = await store.jobs.countsByStatus();
   const { runners, error } = readRunners(ctx);
@@ -597,9 +596,9 @@ async function queueViewLines(values, ctx) {
 }
 
 // Keeps redrawing the queue view until Ctrl-C, or until the queue goes idle when asked; on a pipe it only prints what changed.
-// The cached connection is kept for the whole session on purpose: every read here autocommits, so it already sees what
-// another process committed, and closing it would be a last close that deletes `-shm`/`-wal` under the runner wherever
-// the filesystem does not enforce the POSIX advisory lock that tells a connection it is not the last one.
+// Every poll reads on a read-only connection opened and closed for that poll, because a session lives for hours and a
+// connection held that long can answer from a stale WAL snapshot; the process-wide write connection is never closed here,
+// because a close SQLite believes is the last one deletes `-shm`/`-wal` under a runner still attached to them.
 async function followStatus(values, intervalS, ctx) {
   const wait = ctx.sleep ?? sleep;
   const tty = ctx.stdout?.isTTY === true;
@@ -611,8 +610,8 @@ async function followStatus(values, intervalS, ctx) {
   process.once("SIGINT", onSignal);
   try {
     while (!stop) {
-      await repairFromWitness(ctx);
-      const view = await queueViewLines(values, ctx);
+      await withReadOnlyStore(ctx.env, (store) => repairFromWitness(ctx, store));
+      const view = await withReadOnlyStore(ctx.env, (store) => queueViewLines(values, ctx, store));
       const text = view.lines.join("\n");
       if (tty) {
         ctx.stdout.write(`\u001b[2J\u001b[H${text}\n${paint(`every ${intervalS}s - Ctrl-C to stop`, "2", useColor(ctx))}\n`);
@@ -630,31 +629,39 @@ async function followStatus(values, intervalS, ctx) {
 }
 
 // Restores the jobs whose run directory already says how they ended; a repair that cannot be written only warns.
-async function repairFromWitness(ctx) {
-  const warning = await repairWarningLine(ctx.env);
+async function repairFromWitness(ctx, readStore) {
+  const warning = await repairWarningLine(ctx.env, { readStore });
   if (warning) ctx.err(`warning: ${warning}`);
+}
+
+// The witness repair every `queue status` runs before it prints; a follow reads it on a fresh connection, because its session lives for hours.
+async function eagerRepair(ctx, following) {
+  if (!following) return repairFromWitness(ctx, openStore(ctx.env));
+  await ensureStoreExists(ctx.env);
+  return withReadOnlyStore(ctx.env, (store) => repairFromWitness(ctx, store));
 }
 
 // Prints `queue status`, for one job or for the tail of the queue, and tells whether it answered in json.
 async function printStatus(argv, ctx) {
   const { values, positionals } = parseCommand(normalizeFollowArgv(argv), STATUS_OPTIONS);
   checkArgs(positionals, { max: 1, usage: USAGE.status });
-  await repairFromWitness(ctx);
+  await eagerRepair(ctx, values.follow !== undefined);
   const intervalS = values.follow === undefined ? null : Math.max(1, requireInt("--follow", values.follow));
   if (intervalS !== null && values.json) throw new UserError(`\`--follow\` cannot be used with \`--json\`; usage: ${USAGE.status}`);
   if (intervalS !== null && positionals.length) throw new UserError(`\`--follow\` shows the whole queue, not one job; usage: ${USAGE.status}`);
   if (positionals.length === 1) {
     const id = requireInt("id", positionals[0]);
-    await sweepMerged(ctx);
-    const job = jobView(await openStore(ctx.env).jobs.getJob(id), { full: true });
+    const store = openStore(ctx.env);
+    await sweepMerged(ctx, store);
+    const job = jobView(await store.jobs.getJob(id), { full: true });
     if (!job) throw new UserError(`unknown job \`${id}\``);
     if (values.json) ctx.out(JSON.stringify({ job }));
     else for (const line of formatDetail(job)) ctx.out(line);
     return values.json === true;
   }
   if (values.json) {
-    await sweepMerged(ctx);
     const store = openStore(ctx.env);
+    await sweepMerged(ctx, store);
     const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit) })).map(jobView);
     const { runners, error } = readRunners(ctx);
     if (error !== null) throw new UserError(`the runner registry cannot be listed (${error}); \`--json\` will not answer that no runner is running for a registry it could not read`);
@@ -665,7 +672,7 @@ async function printStatus(argv, ctx) {
     await followStatus(values, intervalS, ctx);
     return true;
   }
-  for (const line of (await queueViewLines(values, ctx)).lines) ctx.out(line);
+  for (const line of (await queueViewLines(values, ctx, openStore(ctx.env))).lines) ctx.out(line);
   return false;
 }
 
@@ -893,9 +900,9 @@ function useColor(ctx) {
   return ctx.stdout?.isTTY === true && !ctx.env?.NO_COLOR;
 }
 
-// Reads the status of a job for the follow loop; a job whose row is gone has no status at all.
+// Reads the status of a job for the follow loop, on a connection opened for that poll alone; a job whose row is gone has no status at all.
 function jobStatusReader(id, env) {
-  return async () => await openStore(env).jobs.status(id);
+  return async () => await withReadOnlyStore(env, (store) => store.jobs.status(id));
 }
 
 // Watches the output of the process, so a closed pipe ends the follow instead of crashing it.

@@ -14,8 +14,8 @@ import { READ_ONLY_METHODS } from "./store.mjs";
 
 const READ_ONLY_ALLOWED = new Set(READ_ONLY_METHODS);
 
-// Every job method; `status` is the one that never reuses the store's connection, because a follow lives for hours and a cached one answers from a stale WAL snapshot.
-function jobsDomain(env) {
+// Every job method; the reads take the store's own connection, which is what lets a follow poll through `withReadOnlyStore` and never answer from a stale WAL snapshot.
+function jobsDomain(env, db) {
   return {
     addJob: async (spec) => jobs.addJob(spec, env),
     claimNextJob: async (spec) => jobs.claimNextJob(spec, env),
@@ -29,20 +29,20 @@ function jobsDomain(env) {
     finishJob: async (id, outcome) => jobs.finishJob(id, outcome, env),
     cancelJob: async (id, options) => jobs.cancelJob(id, options, env),
     retryJob: async (id, options) => jobs.retryJob(id, options, env),
-    getJob: async (id) => jobs.getJob(id, env),
-    listJobs: async (options) => jobs.listJobs(options, env),
-    listMergeCandidates: async (options) => jobs.listMergeCandidates(options, env),
+    getJob: async (id) => jobs.getJob(id, env, db()),
+    listJobs: async (options) => jobs.listJobs(options, env, db()),
+    listMergeCandidates: async (options) => jobs.listMergeCandidates(options, env, db()),
     markJobMerged: async (id, merge) => jobs.markJobMerged(id, merge, env),
     stampPrChecked: async (id, options) => jobs.stampPrChecked(id, options, env),
-    countsByStatus: async () => jobs.countsByStatus(env),
-    countActiveJobs: async () => jobs.countActiveJobs(env),
+    countsByStatus: async () => jobs.countsByStatus(env, db()),
+    countActiveJobs: async () => jobs.countActiveJobs(env, db()),
     firstActiveJobId: async () => jobs.firstActiveJobId(env),
-    isJobActive: async (id) => jobs.isJobActive(id, env),
+    isJobActive: async (id) => jobs.isJobActive(id, env, db()),
     repairJobFromWitness: async (id, terminal) => jobs.repairJobFromWitness(id, terminal, env),
     hasClaimablePending: async () => jobs.hasClaimablePending(env),
     peekNextJob: async () => jobs.peekNextJob(env),
-    listWithSlug: async () => jobs.listJobsWithSlug(env),
-    status: async (id) => jobs.jobStatus(id, env),
+    listWithSlug: async () => jobs.listJobsWithSlug(env, db()),
+    status: async (id) => jobs.jobStatus(id, env, db()),
   };
 }
 
@@ -198,7 +198,7 @@ export function createLocalStore(env = process.env, { readOnly = false, onClose 
   const connection = readOnly ? readOnlyConnection(env) : readWriteConnection(env);
   const db = () => connection.get();
   const store = {
-    jobs: jobsDomain(env),
+    jobs: jobsDomain(env, db),
     runs: runsDomain(env),
     lessons: lessonsDomain(env, db),
     memory: memoryDomain(env),

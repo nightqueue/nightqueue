@@ -53,25 +53,32 @@ function toDate(value) {
 }
 
 // Jobs to ask gh about, or null when the query itself failed; a URL gh could resolve against another repository is dropped.
-async function readCandidates({ env, clock, limit }) {
+async function readCandidates({ env, clock, limit, readStore }) {
   const cutoff = isoToSqlite(new Date(clock.getTime() - PR_CHECK_WINDOW_MS));
   try {
-    return (await openStore(env).jobs.listMergeCandidates({ cutoff, limit })).filter((job) => isGithubPrUrl(job.pr_url));
+    return (await (readStore ?? openStore(env)).jobs.listMergeCandidates({ cutoff, limit })).filter((job) => isGithubPrUrl(job.pr_url));
   } catch {
     return null;
   }
 }
 
 // Flips the delivered jobs whose pull request is already merged; it is silent, never throws and writes nothing it could not confirm.
-export async function refreshMergedJobs({ env = process.env, ghImpl = null, now = () => new Date(), limit = MERGE_SWEEP_LIMIT } = {}) {
+export async function refreshMergedJobs({
+  env = process.env,
+  ghImpl = null,
+  now = () => new Date(),
+  limit = MERGE_SWEEP_LIMIT,
+  readStore = null,
+  writeStore = null,
+} = {}) {
   if (env?.NIGHTSHIFT_NO_PR_CHECK === "1") return skipReport("disabled");
   if (callerJobId(env) !== null) return skipReport("inside-job");
   const clock = toDate(now());
   if (!clock) return skipReport("error");
   const checkedAt = isoToSqlite(clock);
-  const candidates = await readCandidates({ env, clock, limit });
+  const candidates = await readCandidates({ env, clock, limit, readStore });
   if (!candidates) return skipReport("error");
-  const ctx = { store: openStore(env), checkedAt, viewPr: typeof ghImpl === "function" ? ghImpl : prViewer(env, undefined) };
+  const ctx = { store: writeStore ?? openStore(env), checkedAt, viewPr: typeof ghImpl === "function" ? ghImpl : prViewer(env, undefined) };
   const report = { skipped: null, checked: 0, merged: 0, undetermined: 0 };
   for (const job of candidates) {
     report.checked += 1;
