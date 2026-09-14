@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { parsePackOutput } from "../src/host/npm.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -15,12 +16,9 @@ function packedTarball() {
   const args = ["pack", "--dry-run", "--json", "--ignore-scripts"];
   const result = spawnSync("npm", args, { cwd: ROOT, encoding: "utf8", timeout: 120000 });
   if (result.error || result.status !== 0) return null;
-  try {
-    const entry = JSON.parse(result.stdout)[0];
-    return { files: entry.files.map((file) => file.path), unpackedSize: entry.unpackedSize };
-  } catch {
-    return null;
-  }
+  const entry = parsePackOutput(result.stdout);
+  if (!entry || !Array.isArray(entry.files)) return null;
+  return { files: entry.files.map((file) => file.path), unpackedSize: entry.unpackedSize };
 }
 
 // Files git tracks under the directories the package publishes, or null when git does not answer.

@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 import { test } from "node:test";
 import { finishVersion, stageInstall, switchCurrent, versionStamp } from "../src/cli/runtime-versions.mjs";
 import { PACKAGE_NAME, runtimeCurrentLink, runtimePackageDir } from "../src/config/paths.mjs";
+import { parsePackOutput } from "../src/host/npm.mjs";
 import { cliEntryPath } from "../src/host/paths.mjs";
 import { makeDir } from "../test-support/memory.mjs";
 
@@ -44,7 +45,8 @@ test("npm installs this package under the directory the path resolution derives 
     { encoding: "utf8", env, timeout: NPM_TIMEOUT_MS },
   );
   if (packed.error || packed.status !== 0) return t.skip("npm did not answer `pack`");
-  const entry = JSON.parse(packed.stdout)[0];
+  const entry = parsePackOutput(packed.stdout);
+  assert.ok(entry, `npm pack printed an output this build cannot read:\n${packed.stdout}`);
   assert.equal(entry.name, PACKAGE_NAME, "npm packed a name this package does not declare");
 
   const home = { NIGHTSHIFT_HOME: join(base, "home") };

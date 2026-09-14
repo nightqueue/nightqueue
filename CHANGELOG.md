@@ -16,6 +16,11 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the config does not know under the org named with `--to`. `nightshift doctor`
   gains an `org rows` line that fails on either state, and `org rename` and `org
   remove` refuse to run while a rename is still in flight.
+- The output of `npm pack --json` is read in both shapes npm prints: the array
+  of npm 10 and 11 and the object keyed by package name of npm 12. Every reader
+  goes through one `parsePackOutput` - the runtime install of `setup`, `init`
+  and `update`, `release:check` and the package tests - so a host on npm 12 no
+  longer fails to install its own tarball with "printed no tarball name".
 - `npm run release:check` refuses a changelog that still carries content under
   `## Unreleased` while the manifest declares the version of the top released
   entry, because a publish from that state ships changes the released entry does

@@ -76,14 +76,23 @@ export function npmPackArgs(dir, destDir) {
   return ["pack", "--json", "--pack-destination", destDir, "--ignore-scripts", dir];
 }
 
-// Name of the tarball one `npm pack --json` call reported, or null when its output is not the array npm documents.
-function packedFilename(stdout) {
+// The one tarball description an `npm pack --json` call printed, or null when the output is neither shape npm has used:
+// npm 10 and 11 print an array with one entry per packed package, npm 12 prints an object keyed by package name.
+export function parsePackOutput(stdout) {
+  let parsed;
   try {
-    const filename = JSON.parse(stdout)?.[0]?.filename;
-    return typeof filename === "string" && filename ? filename : null;
+    parsed = JSON.parse(String(stdout ?? ""));
   } catch {
     return null;
   }
+  const entries = Array.isArray(parsed) ? parsed : parsed && typeof parsed === "object" ? Object.values(parsed) : [];
+  const entry = entries.find((candidate) => candidate && typeof candidate === "object") ?? null;
+  return entry && typeof entry.filename === "string" && entry.filename ? entry : null;
+}
+
+// Name of the tarball one `npm pack --json` call reported, or null when its output describes none.
+function packedFilename(stdout) {
+  return parsePackOutput(stdout)?.filename ?? null;
 }
 
 // Packs one directory into a tarball, returning its path plus the command line to retry by hand; unreadable output is a declared failure, never a silent fallback.

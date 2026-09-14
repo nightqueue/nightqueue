@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stepLine } from "../src/cli/report.mjs";
-import { npmCommandLine, runNpm } from "../src/host/npm.mjs";
+import { npmCommandLine, parsePackOutput, runNpm } from "../src/host/npm.mjs";
 import { unreleasedContent, versionMismatches } from "./versions.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -33,10 +33,10 @@ function manifestName(text) {
   return name;
 }
 
-// Tarball one `npm pack --dry-run --json` call described, as a declared failure when the output is not the array npm documents.
+// Tarball one `npm pack --dry-run --json` call described, as a declared failure when the output is neither shape npm prints.
 function packedTarball(stdout) {
-  const entry = JSON.parse(stdout)?.[0];
-  if (!entry?.name || !entry?.filename || !Number.isFinite(entry?.unpackedSize)) throw new Error("npm pack printed no tarball description");
+  const entry = parsePackOutput(stdout);
+  if (!entry?.name || !Number.isFinite(entry?.unpackedSize)) throw new Error("npm pack printed no tarball description");
   return entry;
 }
 
