@@ -124,6 +124,27 @@ test("the linked decision must exist and belong to the project of the item", (t)
   assert.throws(() => updateRoadmapItem(item.id, { decision_id: 9999 }, env), /unknown decision `9999`/);
 });
 
+test("updateRoadmapItem answers the linked decision number and live job status the way roadmap_get does", (t) => {
+  const env = makeHome(t, "roadmap-update-view");
+  makeProject(t, env, "alpha");
+  const decision = saveDecision({ project: "alpha", title: "one worktree per job", context: "races", decision: "split" }, env);
+  const other = saveDecision({ project: "alpha", title: "second decision", context: "c", decision: "d" }, env);
+  const item = addItem(env, { title: "ship it", decision_id: decision.id });
+  const job = addJob({ project: "alpha", prompt: "ship it" }, env);
+  markRoadmapItemQueued(item.id, job.id, env);
+
+  const statusOnly = updateRoadmapItem(item.id, { status: "open" }, env);
+  assert.equal(statusOnly.decision_number, decision.number);
+  assert.equal(statusOnly.job_status, "pending");
+  assert.equal(getRoadmapItem(item.id, env).decision_id, decision.id);
+
+  const relinked = updateRoadmapItem(item.id, { decision_id: other.id }, env);
+  assert.equal(relinked.decision_number, other.number);
+  assert.equal(getRoadmapItem(item.id, env).decision_id, other.id);
+  assert.equal(listRoadmap("alpha", env).horizons[0].items[0].decision_number, other.number);
+  assert.equal(listRoadmap("alpha", env).horizons[0].items[0].job_status, "pending");
+});
+
 test("an item is queued once, refused while its job is live, and closed when that job finishes", (t) => {
   const env = makeHome(t, "roadmap-queue-link");
   makeProject(t, env, "alpha");

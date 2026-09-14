@@ -125,6 +125,17 @@ export function getRoadmapItem(id, env = process.env) {
   return openDb(env).prepare("SELECT * FROM roadmap_items WHERE id = ?").get(requireId(id)) ?? null;
 }
 
+// The columns and joins every read that carries a linked decision number and live job status shares.
+const ROADMAP_ITEM_VIEW_QUERY = `SELECT r.*, d.number AS decision_number, j.status AS job_status
+       FROM roadmap_items r
+       LEFT JOIN decisions d ON d.id = r.decision_id
+       LEFT JOIN jobs j ON j.id = r.job_id`;
+
+// Returns the joined row of a roadmap item — its linked decision number and live job status included — or null.
+function getRoadmapItemJoined(id, env = process.env) {
+  return openDb(env).prepare(`${ROADMAP_ITEM_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id)) ?? null;
+}
+
 // Inserts a roadmap item at the end of its horizon group, in one statement so no concurrent save collides.
 export function saveRoadmapItem({ project, org, horizon, title, detail, decision_id } = {}, env = process.env) {
   const target = requireScopeTarget({ project, org }, env);
@@ -229,7 +240,7 @@ export function updateRoadmapItem(id, patch = {}, env = process.env) {
     withWriteRetry(() => statement.run(...values, row.id));
   }
   if (hasValue(changes, "horizon") || hasValue(changes, "position")) moveRoadmapItem(row, changes, env);
-  return getRoadmapItem(row.id, env);
+  return getRoadmapItemJoined(row.id, env);
 }
 
 // Public shape of a roadmap item: free text truncated like the queue views truncate it.
@@ -255,10 +266,7 @@ function horizonItems(db, target, horizon) {
   const visible = visibility(target, "r");
   return db
     .prepare(
-      `SELECT r.*, d.number AS decision_number, j.status AS job_status
-       FROM roadmap_items r
-       LEFT JOIN decisions d ON d.id = r.decision_id
-       LEFT JOIN jobs j ON j.id = r.job_id
+      `${ROADMAP_ITEM_VIEW_QUERY}
        WHERE ${visible.clause} AND r.horizon = ?
        ORDER BY CASE WHEN r.scope = 'org' THEN 0 ELSE 1 END, r.position ASC, r.id ASC`,
     )

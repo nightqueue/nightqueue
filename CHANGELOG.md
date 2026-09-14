@@ -23,6 +23,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   synchronous implementation. Internal only - no command, output, hook or MCP
   tool changed.
 
+### Fixed
+
+- `roadmap_update` now answers with the linked decision number and the status of
+  the job the item was queued as, the way `roadmap_get` already did. Its answer
+  read the item without joining those two tables, so both fields always came back
+  empty - the link itself was never lost.
+
 ## 0.2.0 - 2026-09-14
 
 ### Fixed
