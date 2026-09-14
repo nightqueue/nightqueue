@@ -167,18 +167,6 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   nightshift queue run --stop or wait for the queue to drain` and install
   nothing. `--force` installs anyway and warns on stderr, naming the tree it is
   replacing.
-- One runner owns the queue. Every start path - `queue run`, `--watch`,
-  `--job`, `queue add --run`, `queue retry --run`, their `--foreground` forms
-  and the `queue_run` and `queue_retry` MCP tools - passes the same guard, under
-  the home lock and in the same critical section as the registration, so two
-  starts a few milliseconds apart can never both win. A start refused because a
-  runner is live now answers `runner already active (pid <pid>, <mode>) - it
-  will pick the job up` and exits 0, spawning nothing and leaving the job
-  pending; a second watcher used to exit 1 and every other path used to spawn
-  unconditionally. The process that starts a runner is the one that registers
-  it, so `runner.pid` exists as soon as the command returns, for `watch`,
-  `drain` and `once` alike - which also means `queue status`, `doctor` and
-  `queue run --stop` now see all three.
 - `npm run release:check` also refuses a working tree with uncommitted changes,
   before the version and the pack checks, because a publish ships what is on
   disk and not what is committed.
