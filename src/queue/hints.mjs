@@ -16,6 +16,16 @@ export function pendingJobs(pending) {
   return `${pending} pending job${pending === 1 ? "" : "s"}`;
 }
 
+// The number of live runners, written the way every hint leads with it.
+export function runnersOnline(count) {
+  return `${count} runner${count === 1 ? "" : "s"} online`;
+}
+
+// The sentence every hint closes with when no runner is live: pending jobs wait for a drain.
+export function noRunnerWait() {
+  return `${runnersOnline(0)} - pending jobs will wait until \`nightshift queue run\` starts one`;
+}
+
 // Two digits of a clock component, so `3:7` never reaches a line.
 function pad(value) {
   return String(value).padStart(2, "0");

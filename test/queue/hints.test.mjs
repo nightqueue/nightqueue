@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, countActiveJobs, countsByStatus, LEASE_GRACE_S } from "../../src/memory/jobs.mjs";
-import { isQueueIdle, parkedBacklogLine, parkedJobLabel, pausedRunnerLine, pendingJobs, runnerPauseLabel } from "../../src/queue/hints.mjs";
+import { isQueueIdle, noRunnerWait, parkedBacklogLine, parkedJobLabel, pausedRunnerLine, pendingJobs, runnerPauseLabel, runnersOnline } from "../../src/queue/hints.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const NONE = [];
@@ -42,6 +42,17 @@ test("the number of pending jobs is written in the singular for a single job", (
   assert.equal(pendingJobs(0), "0 pending jobs");
   assert.equal(pendingJobs(1), "1 pending job");
   assert.equal(pendingJobs(2), "2 pending jobs");
+});
+
+test("the number of live runners is written in the singular for a single runner", () => {
+  assert.equal(runnersOnline(0), "0 runners online");
+  assert.equal(runnersOnline(1), "1 runner online");
+  assert.equal(runnersOnline(2), "2 runners online");
+});
+
+test("the zero-runner wait sentence leads with the count and names the way to start one", () => {
+  assert.match(noRunnerWait(), /^0 runners online/);
+  assert.match(noRunnerWait(), /nightshift queue run/);
 });
 
 const NOW = new Date(2026, 8, 14, 1, 24, 0).getTime();

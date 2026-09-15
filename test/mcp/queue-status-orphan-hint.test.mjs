@@ -53,9 +53,9 @@ test("queue_status does not call an orphaned running job (dead lease, no watcher
   const status = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
 
   assert.equal(status.counts.running, 1, "the fixture did not land the orphaned job in `running`");
-  assert.notEqual(
+  assert.equal(
     status.hint,
-    "runner active — 1 pending after this one",
+    "0 runners online - pending jobs will wait until `nightshift queue run` starts one",
     `queue_status claimed a runner is active over a lease dead for ${LEASE_GRACE_S * 2}s: ${status.hint}`,
   );
 });

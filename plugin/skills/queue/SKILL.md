@@ -74,5 +74,5 @@ Three short lines, no more:
 - the job id `queue_add` returned and the `tier` it was queued as;
 - how many jobs are pending;
 - the one-line hint the tool itself returned in `hint`, reused as it came
-  (`queued job #<id> for <project> (<pending> pending). Start the batch with
-  queue_run when you are ready.`) — do not rewrite it.
+  (``queued job #<id> for <project> (<pending> pending). 0 runners online -
+  pending jobs will wait until `nightshift queue run` starts one.``) — do not rewrite it.

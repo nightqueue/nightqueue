@@ -352,12 +352,12 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
     project: "alpha",
     priority: 2,
     timeoutS: 600,
-    hint: "queued job #1 for `alpha` (1 pending). Start the batch with queue_run when you are ready.",
+    hint: "queued job #1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightshift queue run` starts one.",
   });
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
   const second = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the parser" } }));
-  assert.equal(second.hint, "queued job #2 for `alpha` (2 pending). Start the batch with queue_run when you are ready.");
+  assert.equal(second.hint, "queued job #2 for `alpha` (2 pending). 0 runners online - pending jobs will wait until `nightshift queue run` starts one.");
 
   const add = (await client.listTools()).tools.find((tool) => tool.name === "queue_add");
   assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "max_attempts", "priority", "project", "prompt", "register", "roadmap_item_id", "tier", "timeout_s"]);
@@ -591,23 +591,32 @@ test("queue_status reports a merged pull request as `merged`, and never sweeps f
   assert.equal(prViewCalls(env).length, 1, "a second call inside the five minute window asked gh again");
 });
 
-test("queue_status answers with the nudge that matches the state of the queue, and never on the detail of a job", async (t) => {
+test("queue_status answers with the nudge that matches the state of the queue, leading with the live-runner count, and never on the detail of a job", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-hint");
   const client = await connect(t, env);
 
-  assert.equal(payloadOf(await client.callTool({ name: "queue_status", arguments: {} })).hint, null, "an empty queue got a nudge");
+  const empty = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(empty.runnersOnline, 0);
+  assert.equal(
+    empty.hint,
+    "0 runners online - pending jobs will wait until `nightshift queue run` starts one",
+    "an empty queue with no runner stayed silent about it",
+  );
 
   const first = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   const one = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(one.hint, "1 pending job waiting — start the batch with queue_run.");
+  assert.equal(one.hint, "0 runners online - pending jobs will wait until `nightshift queue run` starts one");
 
   addJob({ project: "alpha", prompt: "fix the parser" }, env);
   const two = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(two.hint, "2 pending jobs waiting — start the batch with queue_run.");
+  assert.equal(two.hint, "0 runners online - pending jobs will wait until `nightshift queue run` starts one");
 
   claimJobById(first, { worker: "host:4242", cap: 4 }, env);
   const claimed = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(claimed.hint, "runner active — 1 pending after this one");
+  assert.equal(
+    claimed.hint,
+    "0 runners online - a job is running under a one-shot runner, nothing will pick up the pending jobs after it - start a drain with `nightshift queue run`",
+  );
 
   const detail = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: first } }));
   assert.deepEqual(Object.keys(detail), ["job"], "the detail of a job grew a hint");
@@ -620,7 +629,11 @@ test("queue_status answers with the nudge that matches the state of the queue, a
   );
   const watchedClient = await connect(t, watchedEnv);
   const watched = payloadOf(await watchedClient.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(watched.hint, "runner active — 1 pending after this one", "a live watcher was told to start a second batch");
+  assert.equal(watched.runnersOnline, 1);
+  assert.equal(watched.hint, "1 runner online - 1 pending after this one", "a live watcher was told to start a second batch");
+
+  const added = payloadOf(await watchedClient.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the parser" } }));
+  assert.match(added.hint, /1 runner online - it will be picked up\.$/, "queue_add did not report the live watcher");
 });
 
 // The pause region of a runner of this home, as the runner itself would have merged it into its own registration.
@@ -645,14 +658,14 @@ test("a runner waiting out a rate limit is what queue_status and queue_add say, 
   const pause = `the runner is paused until ${clockLabel(resetsAt.getTime())} (5h limit, resets in 1h00)`;
 
   const empty = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(empty.hint, `nothing is pending — ${pause}.`);
+  assert.equal(empty.hint, `1 runner online - nothing is pending — ${pause}.`);
   assert.equal(empty.runner.pausedUntil, new Date(resetsAt.getTime() + 60_000).toISOString());
 
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker" } }));
-  assert.equal(queued.hint, `queued job #1 for \`alpha\` (1 pending). Nothing to start: ${pause}; it claims again by itself when the limit resets.`);
+  assert.equal(queued.hint, `queued job #1 for \`alpha\` (1 pending). 1 runner online - nothing to start: ${pause}; it claims again by itself when the limit resets.`);
 
   const pending = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(pending.hint, `1 pending job waiting — ${pause}.`);
+  assert.equal(pending.hint, `1 runner online - 1 pending job waiting — ${pause}.`);
 });
 
 test("a backlog parked by a rate limit is what queue_status says, instead of asking for a batch that would claim nothing", async (t) => {
@@ -666,11 +679,11 @@ test("a backlog parked by a rate limit is what queue_status says, instead of ask
   const waiting = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
 
   assert.equal(waiting.runner.running, false, "the fixture left a live runner behind, so the nudge is not the one under test");
-  assert.equal(waiting.hint, `1 pending job waiting — the rate limit resets at ${clockLabel(Date.parse(notBefore))} (in 1h00); a batch started now claims nothing before that.`);
+  assert.equal(waiting.hint, `0 runners online - 1 pending job waiting — the rate limit resets at ${clockLabel(Date.parse(notBefore))} (in 1h00); a batch started now claims nothing before that.`);
 
   addJob({ project: "alpha", prompt: "fix the parser" }, env);
   const mixed = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(mixed.hint, "2 pending jobs waiting — start the batch with queue_run.", "a job that could be claimed right now was held back by the park of another one");
+  assert.equal(mixed.hint, "0 runners online - pending jobs will wait until `nightshift queue run` starts one", "a job that could be claimed right now was held back by the park of another one");
 });
 
 test("queue_run comes back at once with the log of the detached runner, inside this home", async (t) => {

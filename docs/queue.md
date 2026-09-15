@@ -108,9 +108,10 @@ nightshift queue status --follow`. When the start is aimed at a single job the c
 runs that job alone and the line points at its narrated stream instead:
 `job #<id> started (pid <pid>) - follow with: nightshift queue log <id> --follow`; that
 one registers too, as `once, job #<id>`. A job running with no registered runner at all
-(a runner that died without clearing its registration) is still visible: the `runner:`
-line says `1 running job under a one-shot runner - nothing will pick up the pending jobs
-after it` instead of `stopped`.
+(a runner that died without clearing its registration) is still visible: the opening
+line says `0 runners online - 1 running job under a one-shot runner - nothing will pick
+up the pending jobs after it (start a drain with: nightshift queue run)` instead of
+``0 runners online - pending jobs will wait until `nightshift queue run` starts one``.
 
 **`--foreground` is the mode for a script or for CI**: it runs the cycle in the very
 process you started, prints one line per processed job and answers with an exit code
@@ -180,12 +181,15 @@ is no color and no cursor movement. `nightshift queue status --follow [seconds]`
 (default 2) redraws the table in place until Ctrl-C - the terminal equivalent of
 a queue panel - and `--until-idle` makes it exit by itself once nothing is
 running or pending. `--follow` refuses `--json` and a single job id. `--json`
-answers with the same fields as before. The listing opens with ONE line per live runner -
+answers with the same fields as before. The listing opens with the live-runner count -
+`N runner(s) online` - followed by ONE line per live runner -
 `runner: running (pid <pid>, watch every <n> s[, foreground][, runtime <version>], since <iso>)`
-or `runner: stopped` when none is registered - and `--json` carries the whole list under
-`runners`, plus the singular `runner`: it is `runners[0]` (or the same all-null object as
-before when the list is empty), kept for one release and removed in the next minor - read
-`runners`. `queue status` prunes the registrations no process answers for; a registration
+- or, when none is registered, ``0 runners online - pending jobs will wait until
+`nightshift queue run` starts one`` in place of the per-runner lines. `--json` carries
+`runnersOnline` (the count) next to the whole list under `runners`, plus the singular
+`runner`: it is `runners[0]` (or the same all-null object as before when the list is
+empty), kept for one release and removed in the next minor - read `runners`. `queue
+status` prunes the registrations no process answers for; a registration
 owned by another user is left alone. The one thing `queue status`
 does write is the repair: before it prints anything it restores any job whose row says
 `running` or `pending` while the `terminal` witness of its run directory already says how

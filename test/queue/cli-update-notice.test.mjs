@@ -62,7 +62,7 @@ test("queue status closes its text output with the update notice, once per invoc
   assert.equal(calls.length, 1, "the cached check asked the registry a second time");
 
   const empty = await runCli(makeNoticeHome(t, "notice-status-empty"), ["queue", "status"], calls);
-  assert.deepEqual(empty.out, ["runner: stopped", "no jobs in the queue", NOTICE]);
+  assert.deepEqual(empty.out, ["0 runners online - pending jobs will wait until `nightshift queue run` starts one", "no jobs in the queue", NOTICE]);
 });
 
 test("queue status --json never carries the notice, on any of its branches", async (t) => {

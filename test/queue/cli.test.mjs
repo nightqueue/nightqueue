@@ -94,8 +94,21 @@ test("queue add takes the registered NAME and reports the job it queued", (t) =>
   const outside = makeDir(t, "cli-add-outside");
   const queued = runCli(env, ["queue", "add", "alpha", "fix the worker", "--priority", "2", "--timeout", "600"], { cwd: outside });
   assert.equal(queued.status, 0, queued.stderr);
-  assert.match(queued.stdout, /queued job #1 for `alpha` \(1 pending\)\. Start the batch: nightshift queue run/);
+  assert.match(
+    queued.stdout,
+    /queued job #1 for `alpha` \(1 pending\)\. 0 runners online - pending jobs will wait until `nightshift queue run` starts one\./,
+  );
   assert.equal(getJob(1, env).prompt, "fix the worker");
+
+  writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/a.log" }, env);
+  const withOneRunner = runCli(env, ["queue", "add", "alpha", "fix the worker"], { cwd: outside });
+  assert.equal(withOneRunner.status, 0, withOneRunner.stderr);
+  assert.match(withOneRunner.stdout, /1 runner online - it will be picked up\./);
+
+  writeRunnerRecord({ pid: process.ppid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/b.log" }, env);
+  const withTwoRunners = runCli(env, ["queue", "add", "alpha", "fix the worker"], { cwd: outside });
+  assert.equal(withTwoRunners.status, 0, withTwoRunners.stderr);
+  assert.match(withTwoRunners.stdout, /2 runners online - it will be picked up\./);
 
   const byPath = runCli(env, ["queue", "add", "/tmp/alpha", "fix the worker"], { cwd: outside });
   assert.equal(byPath.status, 1);
@@ -112,7 +125,10 @@ test("queue add without a project takes the one of the current directory and joi
   const queued = runCli(env, ["queue", "add", "fix", "the", "flaky", "worker"], { cwd: repo });
   assert.equal(queued.status, 0, queued.stderr);
   assert.match(queued.stdout, /project `alpha` resolved from the current directory/);
-  assert.match(queued.stdout, /queued job #1 for `alpha` \(1 pending\)\. Start the batch: nightshift queue run/);
+  assert.match(
+    queued.stdout,
+    /queued job #1 for `alpha` \(1 pending\)\. 0 runners online - pending jobs will wait until `nightshift queue run` starts one\./,
+  );
   assert.equal(getJob(1, env).prompt, "fix the flaky worker");
 
   const escaped = runCli(env, ["queue", "add", "--", "explain", "--run", "to", "me"], { cwd: repo });
@@ -339,7 +355,7 @@ test("a backlog parked by a rate limit says when it becomes claimable, instead o
   const status = runCli(env, ["queue", "status"]);
 
   assert.equal(status.status, 0, status.stderr);
-  assert.equal(status.stdout.split("\n")[0], "runner: stopped", "the fixture left a live runner behind, so the nudge is not the one under test");
+  assert.equal(status.stdout.split("\n")[0], "0 runners online - pending jobs will wait until `nightshift queue run` starts one", "the fixture left a live runner behind, so the nudge is not the one under test");
   assert.equal(
     lastLine(status.stdout),
     `1 pending job waiting - the rate limit resets at ${clockLabel(Date.parse(notBefore))} (in 1h00); a batch started now claims nothing before that`,
@@ -524,7 +540,8 @@ test("queue status leads with the rate limit a runner is waiting out, and never 
   writeRunnerRecord(record, env);
 
   const running = runCli(env, ["queue", "status"]);
-  assert.equal(running.stdout.split("\n")[0], `runner: running (pid ${process.pid}, watch every 30 s, since ${startedAt})`);
+  assert.equal(running.stdout.split("\n")[0], "1 runner online");
+  assert.equal(running.stdout.split("\n")[1], `runner: running (pid ${process.pid}, watch every 30 s, since ${startedAt})`);
   assert.equal(lastLine(running.stdout).includes("start the batch"), false, "a live runner still got the nudge to start another one");
 
   writeRunnerRecord({ ...record, rateLimit: pauseRegion(resetsAt) }, env);
@@ -532,7 +549,8 @@ test("queue status leads with the rate limit a runner is waiting out, and never 
   const clock = clockLabel(resetsAt.getTime());
 
   assert.equal(paused.status, 0, paused.stderr);
-  assert.equal(paused.stdout.split("\n")[0], `runner: paused until ${clock} (5h limit, resets in 1h00) (pid ${process.pid}, watch every 30 s, since ${startedAt})`);
+  assert.equal(paused.stdout.split("\n")[0], "1 runner online", "the count line no longer opens the listing when the runner is paused");
+  assert.equal(paused.stdout.split("\n")[1], `runner: paused until ${clock} (5h limit, resets in 1h00) (pid ${process.pid}, watch every 30 s, since ${startedAt})`);
   assert.equal(lastLine(paused.stdout), `1 pending job waiting - the runner is paused until ${clock} (5h limit, resets in 1h00)`);
 
   const json = JSON.parse(runCli(env, ["queue", "status", "--json"]).stdout);

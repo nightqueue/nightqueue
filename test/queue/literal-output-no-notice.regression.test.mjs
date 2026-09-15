@@ -63,7 +63,7 @@ test("check off: queue status keeps its exact pre-existing text on every branch,
   const calls = [];
 
   const empty = await runCli(env, ["queue", "status"], fakeFetch(calls));
-  assert.deepEqual(empty.out, ["runner: stopped", "no jobs in the queue"]);
+  assert.deepEqual(empty.out, ["0 runners online - pending jobs will wait until `nightshift queue run` starts one", "no jobs in the queue"]);
 
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   const table = await runCli(env, ["queue", "status"], fakeFetch(calls));
@@ -98,7 +98,7 @@ test("check on: the notice is appended exactly once, as the last line, byte for 
   const calls = [];
 
   const empty = await runCli(env, ["queue", "status"], fakeFetch(calls));
-  assert.deepEqual(empty.out, ["runner: stopped", "no jobs in the queue", NOTICE]);
+  assert.deepEqual(empty.out, ["0 runners online - pending jobs will wait until `nightshift queue run` starts one", "no jobs in the queue", NOTICE]);
 
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   const table = await runCli(env, ["queue", "status"], fakeFetch(calls));

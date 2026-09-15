@@ -9,7 +9,7 @@ import { jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { PROMPT_SOURCE_CONFLICT, getRoadmapItem, queueRoadmapItem } from "../memory/roadmap.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
-import { isQueueIdle, parkedBacklogLine, parkedJobLabel, pausedRunnerLine, pendingJobs, runnerPauseLabel } from "../queue/hints.mjs";
+import { isQueueIdle, noRunnerWait, parkedBacklogLine, parkedJobLabel, pausedRunnerLine, pendingJobs, runnerPauseLabel, runnersOnline } from "../queue/hints.mjs";
 import { prViewer, refreshMergedJobs } from "../queue/merged.mjs";
 import {
   createNarrator,
@@ -229,11 +229,19 @@ function checkForegroundNeedsRun(values, usage) {
   }
 }
 
+// The closing sentence of `queue add` when the job is not about to run: what happens to it given who is online right now.
+function queuedRunnerLine(ctx) {
+  const { runners, error } = liveRunnersReport(ctx.env, ctx.killImpl);
+  if (error !== null) return "Start the batch: nightshift queue run";
+  if (runners.length === 0) return `${noRunnerWait()}.`;
+  return `${runnersOnline(runners.length)} - it will be picked up.`;
+}
+
 // The line `queue add` answers with: the old confirmation when the job is about to run, the backlog nudge otherwise.
-async function addedLine(job, willRun, env) {
+async function addedLine(job, willRun, ctx) {
   if (willRun) return `queued job #${job.id} for project \`${job.project}\` (priority ${job.priority}, timeout ${job.timeoutS}s)`;
-  const counts = await openStore(env).jobs.countsByStatus();
-  return `queued job #${job.id} for \`${job.project}\` (${counts.pending} pending). Start the batch: nightshift queue run`;
+  const counts = await openStore(ctx.env).jobs.countsByStatus();
+  return `queued job #${job.id} for \`${job.project}\` (${counts.pending} pending). ${queuedRunnerLine(ctx)}`;
 }
 
 // The knobs of a `queue add` that reach the job: priority, attempts, timeout and the operator's tier.
@@ -293,7 +301,7 @@ async function runAdd(argv, ctx) {
     values.roadmap === undefined
       ? await addFromPrompt(positionals, values, ctx)
       : await addFromRoadmap(positionals, values, ctx);
-  ctx.out(await addedLine(job, values.run === true, ctx.env));
+  ctx.out(await addedLine(job, values.run === true, ctx));
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }
 
@@ -537,11 +545,13 @@ function formatRunner(runner, env = process.env) {
   return `runner: ${state} (pid ${runner.pid}, ${runnerCadence(runner)}${foreground}${runtime}, since ${runner.startedAt})`;
 }
 
-// What `queue status` opens with: one line per live runner, or the state of a queue nobody is working.
+// What `queue status` opens with: the live-runner count first, then one line per live runner, or the state of a queue nobody is working.
 function formatRunners(runners, activeJobs = 0, env = process.env) {
-  if (runners.length) return runners.map((runner) => formatRunner(runner, env));
-  if (activeJobs > 0) return [`runner: ${pendingJobs(activeJobs).replace("pending", "running")} under a one-shot runner - nothing will pick up the pending jobs after it (start a drain with: nightshift queue run)`];
-  return ["runner: stopped"];
+  if (runners.length) return [runnersOnline(runners.length), ...runners.map((runner) => formatRunner(runner, env))];
+  if (activeJobs > 0) {
+    return [`${runnersOnline(0)} - ${pendingJobs(activeJobs).replace("pending", "running")} under a one-shot runner - nothing will pick up the pending jobs after it (start a drain with: nightshift queue run)`];
+  }
+  return [noRunnerWait()];
 }
 
 // The line `queue status` closes with when a backlog is sitting there with nobody working it, when the runner gave a job
@@ -677,7 +687,7 @@ async function printStatus(argv, ctx) {
     const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit) })).map(jobView);
     const { runners, error } = readRunners(ctx);
     if (error !== null) throw new UserError(`the runner registry cannot be listed (${error}); \`--json\` will not answer that no runner is running for a registry it could not read`);
-    ctx.out(JSON.stringify({ runner: runners[0] ?? STOPPED_RUNNER, runners, jobs, counts: await store.jobs.countsByStatus() }));
+    ctx.out(JSON.stringify({ runner: runners[0] ?? STOPPED_RUNNER, runners, runnersOnline: runners.length, jobs, counts: await store.jobs.countsByStatus() }));
     return true;
   }
   if (intervalS !== null) {

@@ -25,11 +25,11 @@ import {
   ROADMAP_STATUSES,
   roadmapItemView,
 } from "../memory/roadmap.mjs";
-import { isQueueIdle, parkedBacklogLine, pausedRunnerLine, pendingJobs } from "../queue/hints.mjs";
+import { noRunnerWait, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { refreshMergedJobs } from "../queue/merged.mjs";
 import { blockerLines } from "../queue/claim.mjs";
-import { liveRunners, pruneDeadRunners, STOPPED_RUNNER } from "../queue/registry.mjs";
+import { liveRunners, liveRunnersReport, pruneDeadRunners, STOPPED_RUNNER } from "../queue/registry.mjs";
 import { repairWarningLine } from "../queue/reconcile.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { startQueueRunner } from "../queue/start.mjs";
@@ -186,19 +186,15 @@ function wantsRoadmapItem(args) {
   return hasItem;
 }
 
-// The live runners of this home as a hint reads them; a registry nobody could list says nothing instead of failing the answer it only decorates.
-function hintRunners(env) {
-  try {
-    return liveRunners(env);
-  } catch {
-    return [];
-  }
-}
-
-// What the answer of a queued job says about when it will run: start the batch, or the rate limit the runner is already waiting out.
-function startHint(env) {
-  const paused = pausedRunnerLine(hintRunners(env));
-  return paused ? ` Nothing to start: ${paused}; it claims again by itself when the limit resets.` : " Start the batch with queue_run when you are ready.";
+// The closing sentence of the `queue_add` hint: what happens to the job given who is online right now - and, when the
+// live runner is waiting out a rate limit, that wait instead of a promise it will be picked up before the reset.
+function queuedRunnerLine(env) {
+  const { runners, error } = liveRunnersReport(env);
+  if (error !== null) return "Start the batch with queue_run when you are ready.";
+  if (runners.length === 0) return `${noRunnerWait()}.`;
+  const paused = pausedRunnerLine(runners);
+  if (paused) return `${runnersOnline(runners.length)} - nothing to start: ${paused}; it claims again by itself when the limit resets.`;
+  return `${runnersOnline(runners.length)} - it will be picked up.`;
 }
 
 // The answer of `queue_add`: the job it recorded, and the roadmap item behind it when there is one.
@@ -213,7 +209,7 @@ async function queuedAnswer({ job, registered = null, roadmapItemId = null, note
     timeoutS: job.timeoutS,
     ...(roadmapItemId === null ? {} : { roadmapItemId }),
     ...(job.tier ? { tier: job.tier } : {}),
-    hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending).${note}${startHint(env)}`,
+    hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending).${note} ${queuedRunnerLine(env)}`,
   };
 }
 
@@ -286,17 +282,22 @@ function guard(name, handler) {
   };
 }
 
-// The one-line nudge queue_status answers with, or null when the queue has nothing to suggest; a rate limit is what the
-// agent hears first - the one a live runner waits out, or the one a backlog was parked by after its runner exited - so it
-// never starts a batch that would only sleep.
+// The one-line nudge queue_status answers with, leading with the live-runner count; a rate limit is what the agent hears
+// next - the one a live runner waits out, or the one a backlog was parked by after its runner exited - so it never starts
+// a batch that would only sleep.
 function queueHint({ activeJobs, counts, runners, jobs = [] }) {
   const paused = pausedRunnerLine(runners);
-  if (paused) return counts.pending === 0 ? `nothing is pending — ${paused}.` : `${pendingJobs(counts.pending)} waiting — ${paused}.`;
-  if (!isQueueIdle({ activeJobs, runners })) return `runner active — ${counts.pending} pending after this one`;
-  if (counts.pending === 0) return null;
+  if (paused) {
+    const backlog = counts.pending === 0 ? "nothing is pending" : `${pendingJobs(counts.pending)} waiting`;
+    return `${runnersOnline(runners.length)} - ${backlog} — ${paused}.`;
+  }
+  if (runners.length > 0) return `${runnersOnline(runners.length)} - ${counts.pending} pending after this one`;
+  if (activeJobs > 0) {
+    return `${runnersOnline(0)} - a job is running under a one-shot runner, nothing will pick up the pending jobs after it - start a drain with \`nightshift queue run\``;
+  }
   const parked = parkedBacklogLine({ jobs, pending: counts.pending });
-  if (parked) return `${pendingJobs(counts.pending)} waiting — ${parked}.`;
-  return `${pendingJobs(counts.pending)} waiting — start the batch with queue_run.`;
+  if (parked) return `${runnersOnline(0)} - ${pendingJobs(counts.pending)} waiting — ${parked}.`;
+  return noRunnerWait();
 }
 
 // What a tool that was asked to start a runner answers: the runner that started, or why the job it was asked for would claim nothing.
@@ -337,6 +338,7 @@ async function queueStatusAnswer(args, { store, warning, env }) {
   return {
     runner: runners[0] ?? STOPPED_RUNNER,
     runners,
+    runnersOnline: runners.length,
     jobs,
     counts,
     hint: queueHint({ activeJobs: await store.jobs.countActiveJobs(), counts, runners, jobs }),
@@ -499,7 +501,7 @@ function toolDefinitions(env) {
       config: {
         description:
           "Enqueues an unattended /nightshift:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
-          "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. " +
+          "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. The hint reports how many runners are live right now, and a job queued with none online waits until `nightshift queue run` starts one. " +
           "With `project` omitted, `cwd` (the absolute working directory of the caller) resolves the project. When no project is registered for it, the answer is `needs_registration`: ask the user to confirm, then call again with the same `cwd` and `register: true`. Registration never happens without `register: true`. " +
           "With `roadmap_item_id` and no `prompt`, the job prompt is built from that roadmap item, its linked decision and the accepted decisions related to it; a project item is marked `queued` and flips to `done` when the job finishes. " +
           "An ORG roadmap item needs an explicit `project` of that org, because a job is always one project's: it stays `open` and unlinked, so the same item may be queued for every project of the org and only the operator closes it.",
@@ -563,7 +565,7 @@ function toolDefinitions(env) {
       name: "queue_status",
       config: {
         description:
-          "State of the queue: one job by id, or the most recent ones plus the counts per status and every live runner in `runners` (`runner` is the first of them, kept for one release). Never returns the prompt. " +
+          "State of the queue: one job by id, or the most recent ones plus the counts per status and every live runner in `runners` (`runner` is the first of them, kept for one release; `runnersOnline` is the count of `runners`). The `hint` leads with the live-runner count, and says that a job queued with none online waits until `nightshift queue run` starts one. Never returns the prompt. " +
           "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`.",
         inputSchema: {
           job_id: z.number().int().min(1).nullable().optional(),

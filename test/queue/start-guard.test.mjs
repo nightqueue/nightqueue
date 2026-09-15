@@ -137,8 +137,9 @@ test("a single-job start registers a `once` runner carrying the job and the tree
   );
 
   const status = await runCli(env, ["queue", "status"], { alive: new Set([CHILD_PID]) });
+  assert.equal(status.out[0], "1 runner online");
   assert.equal(
-    status.out[0],
+    status.out[1],
     `runner: running (pid ${CHILD_PID}, once, job #${id}, runtime ${packageRoot()}, since ${info.startedAt})`,
     "`queue status` does not show the single-job runner the way it was registered",
   );
@@ -151,7 +152,8 @@ test("a runner of a version directory of this home is named by that directory al
 
   const status = await runCli(env, ["queue", "status"], { alive: new Set([LIVE_PID]) });
 
-  assert.match(status.out[0], new RegExp(`^runner: running \\(pid ${LIVE_PID}, drain, runtime ${version}, since `));
+  assert.equal(status.out[0], "1 runner online");
+  assert.match(status.out[1], new RegExp(`^runner: running \\(pid ${LIVE_PID}, drain, runtime ${version}, since `));
 });
 
 test("the child of a start never registers itself again, and never takes the lock its parent may still hold", async (t) => {
