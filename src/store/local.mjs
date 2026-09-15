@@ -21,6 +21,7 @@ function jobsDomain(env, db) {
     claimNextJob: async (spec) => jobs.claimNextJob(spec, env),
     claimJobById: async (id, spec) => jobs.claimJobById(id, spec, env),
     releaseJob: async (id, spec) => jobs.releaseJob(id, spec, env),
+    parkJob: async (id, spec) => jobs.parkJob(id, spec, env),
     renewLease: async (id, spec) => jobs.renewLease(id, spec, env),
     countAttempt: async (id, spec) => jobs.countAttempt(id, spec, env),
     sweepOrphans: async (options) => jobs.sweepOrphans(env, options),

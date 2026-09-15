@@ -114,6 +114,47 @@ export function extractSessionIdFromEventLine(rawLine) {
   return isSessionIdSafe(event?.session_id) ? event.session_id : null;
 }
 
+// The band an instant the CLI writes in epoch SECONDS falls in: the ten digits every measured event carries, from 2001 to 2286.
+// A value outside it is a magnitude this parser cannot read - milliseconds, a counter, a placeholder - and never an instant.
+const MIN_EPOCH_S = 1_000_000_000;
+const MAX_EPOCH_S = 10_000_000_000;
+
+// Instant of a field the CLI writes in epoch SECONDS (never milliseconds, never ISO), in milliseconds; anything outside that shape is null.
+function epochSecondsToMs(value) {
+  const seconds = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(seconds) || seconds < MIN_EPOCH_S || seconds >= MAX_EPOCH_S) return null;
+  return Math.round(seconds * 1000);
+}
+
+// Share of a budget the CLI reports as a 0..1 fraction; a value outside that band (a percentage, a count) is an unknown share and never a reading.
+function budgetFraction(value) {
+  const fraction = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(fraction) && fraction >= 0 && fraction <= 1 ? fraction : null;
+}
+
+// One window of a rate limit, with its utilization as the 0..1 fraction the CLI reports; a window the event does not carry is null.
+function rateLimitWindow(windows, name) {
+  const window = windows?.[name];
+  if (!window || typeof window !== "object") return null;
+  return { utilization: budgetFraction(window.utilization), resetsAt: epochSecondsToMs(window.resetsAt) };
+}
+
+// The rate limit one raw NDJSON line reports, with every instant already in milliseconds; any other event is null.
+// `status` is the ONLY field that says whether the traffic was stopped: `overageStatus` carries the literal `rejected` on healthy traffic and never decides anything.
+export function extractRateLimitFromEventLine(rawLine) {
+  const event = parseEventLine(rawLine);
+  if (event?.type !== "rate_limit_event") return null;
+  const info = event.rate_limit_info;
+  if (!info || typeof info !== "object" || typeof info.status !== "string" || !info.status) return null;
+  return {
+    status: info.status,
+    type: typeof info.rateLimitType === "string" && info.rateLimitType ? info.rateLimitType : null,
+    resetsAt: epochSecondsToMs(info.resetsAt),
+    fiveHour: rateLimitWindow(info.unifiedWindows, "five_hour"),
+    sevenDay: rateLimitWindow(info.unifiedWindows, "seven_day"),
+  };
+}
+
 // Final text of the run: the last `result` event with a string; "" when a result event carried none, null when there was none.
 export function extractResultText(log) {
   let text = null;

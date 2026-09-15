@@ -212,6 +212,7 @@ export function spawnClaude({
   spawnImpl = spawn,
   onLine,
   stopSignalImpl = null,
+  pauseSignalImpl = null,
   stopPollMs = STOP_POLL_MS,
   resumeSessionId = null,
   resolveBinImpl = resolveClaudeBin,
@@ -230,7 +231,15 @@ export function spawnClaude({
     let killTimer = null;
     let idleTimer = null;
     let stopTimer = null;
-    const totalTimer = setTimeout(() => triggerKill("timeout"), seconds(timeoutS, DEFAULT_TIMEOUT_S) * 1000);
+    let pausedSince = null;
+    let pausedMs = 0;
+    const budgetMs = seconds(timeoutS, DEFAULT_TIMEOUT_S) * 1000;
+    const startedAt = Date.now();
+    let totalTimer = armTotal(budgetMs);
+    // Arms what is left of the total budget of the attempt; a span waited out under a rate limit is given back to it, never spent.
+    function armTotal(remainingMs) {
+      return setTimeout(() => triggerKill("timeout"), Math.max(0, remainingMs));
+    }
     function triggerKill(reason) {
       if (killed) return;
       killed = true;
@@ -247,9 +256,39 @@ export function spawnClaude({
       if (stopTimer) clearInterval(stopTimer);
     }
     function armIdle() {
-      if (killed) return;
+      if (killed || pausedSince !== null) return;
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => triggerKill("idle"), seconds(idleTimeoutS, IDLE_TIMEOUT_S) * 1000);
+    }
+    // Suspends the two timers that would end the child while the provider's limit is waited out; the child itself is never signalled.
+    function enterPause() {
+      pausedSince = Date.now();
+      clearTimeout(totalTimer);
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+    // Records in the log of the job that the limit is over, the marker the narration reads as the end of the wait.
+    function noteResumed() {
+      try {
+        appendFileSync(logPath, `=== rate limit over @ ${new Date().toISOString()} ===\n`);
+      } catch {
+        return;
+      }
+    }
+    // Re-arms the idle timer, gives the whole paused span back to the total budget and says so in the log.
+    function leavePause() {
+      pausedMs += Date.now() - pausedSince;
+      pausedSince = null;
+      totalTimer = armTotal(budgetMs - (Date.now() - startedAt - pausedMs));
+      armIdle();
+      noteResumed();
+    }
+    // Applies what the runner reports about its pause: an instant still in the future suspends the timers, anything else resumes them.
+    function applyPause(until) {
+      const paused = Number.isFinite(until) && until > Date.now();
+      if (paused === (pausedSince !== null)) return;
+      if (paused) enterPause();
+      else leavePause();
     }
     const capture = (chunk) => {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8"));
@@ -260,13 +299,18 @@ export function spawnClaude({
     child.stdout.pipe(stream, { end: false });
     child.stderr.pipe(stream, { end: false });
     const flushLines = attachLineEmitter(child, onLine);
-    if (typeof stopSignalImpl === "function") {
+    // One tick, two polls: the rate limit pause, which only suspends the timers, and the ownership heartbeat, which may end the child.
+    async function poll() {
+      if (typeof pauseSignalImpl === "function") applyPause(await pauseSignalImpl());
+      if (typeof stopSignalImpl === "function" && (await stopSignalImpl())) triggerKill("stop");
+    }
+    if (typeof stopSignalImpl === "function" || typeof pauseSignalImpl === "function") {
       let checking = false;
       stopTimer = setInterval(async () => {
         if (checking || killed) return;
         checking = true;
         try {
-          if (await stopSignalImpl()) triggerKill("stop");
+          await poll();
         } catch {
           return;
         } finally {

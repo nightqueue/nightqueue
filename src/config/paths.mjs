@@ -152,6 +152,11 @@ export function queuePausedPath(env = process.env) {
   return join(homeDir(env), "queue.paused");
 }
 
+// Path of the stamp `queue resume` writes: the instant every runner compares its own rate limit pause against.
+export function queueResumePath(env = process.env) {
+  return join(homeDir(env), "queue.resume");
+}
+
 // Path of the intent record of an org rename in flight: written before the first store changes, removed after the last one did.
 export function orgRenamePendingPath(env = process.env) {
   return join(homeDir(env), "org-rename.pending.json");

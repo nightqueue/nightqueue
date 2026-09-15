@@ -11,11 +11,12 @@ import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, re
 import { backoffMs, classifyJobResult, isTransientFailure } from "./classify.mjs";
 import { refreshMergedJobs } from "./merged.mjs";
 import { preflight } from "./preflight.mjs";
+import { clearOwnPause, inheritablePause, ownPauseUntilMs, PAUSE_POLL_MS, pauseFromEvent, pauseUntilMs, readOwnPause, recordOwnPause, resumeRequestedAt } from "./rate-limit.mjs";
 import { ownRunnerRecord } from "./registry.mjs";
 import { repairWarningLine } from "./reconcile.mjs";
 import { clearRunOutcome, decideResume, isSafeSegment, readRunState, writeRunTerminal } from "./resume.mjs";
 import { buildPrompt, cliEntrypoint, IDLE_TIMEOUT_S, spawnClaude } from "./spawn.mjs";
-import { extractSessionIdFromEventLine, extractSlugFromEventLine, extractUsage, sumUsage } from "./stream.mjs";
+import { extractRateLimitFromEventLine, extractSessionIdFromEventLine, extractSlugFromEventLine, extractUsage, sumUsage } from "./stream.mjs";
 
 // Interval between two cycles of `queue run --watch` when the operator gives no number.
 export const WATCH_INTERVAL_DEFAULT_S = 30;
@@ -37,6 +38,7 @@ const DEFAULT_DEPS = {
   existsImpl: undefined,
   resolveBinImpl: undefined,
   stopSignalImpl: null,
+  pauseSignalImpl: null,
   idleTimeoutS: IDLE_TIMEOUT_S,
   refreshMergedImpl: refreshMergedJobs,
   finishJobImpl: null,
@@ -83,9 +85,41 @@ async function captureSlug(job, facts, line, { store, env }) {
   await store.jobs.persistRunFacts(job.id, { worker: job.worker, slug, branch });
 }
 
+// Appends one line to the accumulated log of a job; a log that refuses the write never costs the run.
+function appendJobLog(jobId, line, env) {
+  try {
+    appendFileSync(jobLogPath(jobId, env), `${line}\n`);
+  } catch {
+    return;
+  }
+}
+
+// Arms the pause of THIS runner, recording it where every reader of the registry sees it and marking the job log the operator narrates.
+// A record that refuses the write is said out loud instead of being dropped: only this run then waits the limit out, and no other reader of the home learns about it.
+async function armPause(job, pause, env) {
+  try {
+    await recordOwnPause(pause, env);
+  } catch (err) {
+    appendJobLog(job.id, `the rate limit pause could not be recorded, so only this run waits it out: ${err?.message ?? String(err)}`, env);
+  }
+  appendJobLog(job.id, `=== rate limit until ${pause.pausedUntil} @ ${new Date().toISOString()} ===`, env);
+}
+
+// Records the rate limit the stream reported and arms a pause when the event calls for one; a further pause always replaces a nearer one.
+async function captureRateLimit(job, facts, line, { env }) {
+  const info = extractRateLimitFromEventLine(line);
+  if (!info) return;
+  facts.rateLimit = info;
+  const pause = pauseFromEvent(info);
+  if (!pause || (facts.pause && facts.pause.pausedUntil >= pause.pausedUntil)) return;
+  facts.pause = pause;
+  await armPause(job, pause, env);
+}
+
 // Records the run facts that appear in the stream, writing one fact per line of the stream at most.
 async function captureFacts(job, facts, line, ctx) {
   await captureSlug(job, facts, line, ctx);
+  await captureRateLimit(job, facts, line, ctx);
   if (facts.sessionId) return;
   const sessionId = extractSessionIdFromEventLine(line);
   if (!sessionId) return;
@@ -113,10 +147,25 @@ function isRetryable(job, attempt, result, outcome) {
   return isTransientFailure(result.log) && attempt < job.max_attempts;
 }
 
+// The instant a job this rate limit ended must not be claimed again before, or null when the attempt did not end on a limit.
+// It is decided from the structured events of the stream alone, and BEFORE the generic transient retry, which would spend an attempt on a limit that is still on.
+function rateLimitExit(result, facts) {
+  if (result.exitCode === 0 || result.timedOut || result.idleTimedOut || result.stopped || result.spawnError) return null;
+  const pause = facts.pause ?? pauseFromEvent(facts.rateLimit);
+  return pause?.resetsAt ?? null;
+}
+
+// Tells whether this job was parked by a rate limit, the one case that resumes the session whatever the operator configured.
+function wasRateLimitParked(job) {
+  return typeof job?.not_before === "string" && job.not_before.trim() !== "";
+}
+
 // Runs the attempts of a job, re-arming the lease before each one and backing off between retries.
 async function runAttempts(job, ctx) {
   const { env, deps } = ctx;
-  const facts = { slug: job.slug ?? null, sessionId: job.session_id ?? null };
+  const facts = { slug: job.slug ?? null, sessionId: job.session_id ?? null, rateLimit: null, pause: null };
+  const pauseSignalImpl = deps.pauseSignalImpl ?? (() => ownPauseUntilMs(env) ?? pauseUntilMs(facts.pause));
+  const resumeForced = resumeSessionEnabled(env) || wasRateLimitParked(job);
   const ownership = { lost: false };
   const usages = [];
   let attempt = job.attempts;
@@ -135,12 +184,15 @@ async function runAttempts(job, ctx) {
       spawnImpl: deps.spawnImpl,
       onLine: (line) => captureLine(job, facts, line, ctx),
       stopSignalImpl: () => shouldStop(job, ctx, ownership),
+      pauseSignalImpl,
       stopPollMs: deps.stopPollMs,
-      resumeSessionId: resumeSessionEnabled(env) ? facts.sessionId : null,
+      resumeSessionId: resumeForced ? facts.sessionId : null,
       resolveBinImpl: deps.resolveBinImpl,
     });
     if (ownership.lost) return { lost: true, facts, attempt, usage: sumUsage(usages), outcome: null, result };
     usages.push(extractUsage(result.log));
+    const notBefore = rateLimitExit(result, facts);
+    if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, usage: sumUsage(usages), outcome: null, result };
     const outcome = classifyJobResult({ ...result, state: readRunState({ project: job.project, slug: facts.slug, env }) });
     if (!isRetryable(job, attempt, result, outcome)) {
       return { lost: false, facts, attempt, usage: sumUsage(usages), outcome, result };
@@ -251,6 +303,19 @@ async function finalize(job, run, ctx) {
   return finish.error ? { ...report, error: finish.error } : report;
 }
 
+// Puts a job whose run ended on a rate limit back in the queue, due at the reset and with its attempt intact; the session it was running is kept, so the next claim resumes it.
+async function parkRun(job, run, ctx) {
+  const { env, store } = ctx;
+  const notBefore = run.parked.notBefore;
+  const parked = await store.jobs.parkJob(job.id, {
+    worker: job.worker,
+    notBefore,
+    result: { rateLimited: true, notBefore, logPath: jobLogPath(job.id, env), exitCode: run.result.exitCode, attempts: run.attempt },
+  });
+  if (!parked) return { id: job.id, status: "lost", attempts: run.attempt };
+  return { id: job.id, status: "rate-limited", attempts: run.attempt, notBefore };
+}
+
 // Runs one claimed job end to end: preflight, attempts and the single write of the outcome.
 async function runJob(job, ctx) {
   const { env, deps } = ctx;
@@ -266,6 +331,7 @@ async function runJob(job, ctx) {
     noteOwnershipLost(job, env);
     return { id: job.id, status: "lost", attempts: run.attempt };
   }
+  if (run.parked) return await parkRun(job, run, ctx);
   if (ctx.state.stopping) {
     await release(job, { interrupted: true }, env);
     return { id: job.id, status: "interrupted", attempts: run.attempt };
@@ -296,18 +362,71 @@ function warnRuntimeGone(dir) {
   );
 }
 
-// Read-only report of what the cycle would do, the answer of `queue run --dry`.
+// The rate limit a claim of this home would wait for right now: the pause a runner of it is waiting out, which a runner
+// starting now adopts at its registration. A home where no live runner carries one has no limit to report.
+function dryRateLimit(env) {
+  const pause = inheritablePause(env);
+  if (pause === null) return { pausedUntil: null, rateLimit: null };
+  return { pausedUntil: pause.pausedUntil ?? null, rateLimit: { type: pause.type ?? null, resetsAt: pause.resetsAt ?? null, utilization: pause.utilization ?? null } };
+}
+
+// Read-only report of what the cycle would do, the answer of `queue run --dry`: both reasons a claim would not happen now,
+// the sentinel the operator wrote by hand and the rate limit a runner of this home is waiting out.
 async function dryReport({ jobId, cap, env }) {
   const store = openStore(env);
   return {
     dry: true,
     paused: isPaused(env),
+    ...dryRateLimit(env),
     cap,
     heartbeatS: leaseHeartbeatMs(env) / 1000,
     active: await store.jobs.countActiveJobs(),
     counts: await store.jobs.countsByStatus(),
     next: jobId === null ? ((await store.jobs.peekNextJob())?.id ?? null) : jobId,
   };
+}
+
+// Tells whether the operator asked the runners of this home to resume after this pause was armed; a pause nobody can date is one this runner does not trust enough to keep waiting on.
+function resumedPast(pause, env) {
+  const requestedAt = resumeRequestedAt(env);
+  if (requestedAt === null) return false;
+  const pausedAt = Date.parse(String(pause?.pausedAt ?? ""));
+  return !Number.isFinite(pausedAt) || requestedAt >= pausedAt;
+}
+
+// Forgets the very pause this decision was taken from; a record that refuses the write costs nothing here, because the pause is over either way.
+async function forgetPause(pause, env) {
+  try {
+    await clearOwnPause(env, pause);
+  } catch {
+    return;
+  }
+}
+
+// The instant this runner must not claim before, or null when it may claim now: a pause that ran out, or one a `queue resume` cleared, is forgotten here and never again read.
+async function pauseGate(env) {
+  const pause = readOwnPause(env);
+  if (pause === null) return null;
+  const until = pauseUntilMs(pause);
+  if (until !== null && !resumedPast(pause, env)) return until;
+  await forgetPause(pause, env);
+  return null;
+}
+
+// Waits out the rate limit of THIS runner before it claims anything, one slice at a time, so a shutdown signal or a
+// `queue resume` is noticed while it waits; a queue the operator paused by hand never waits at all, because `queue pause`
+// means stop now and the cycle must end on it. Returns the reason the cycle ends with, or null when the runner may claim.
+async function waitOutRateLimitPause(jobId, ctx) {
+  const { env, deps, state } = ctx;
+  let waited = false;
+  while (!state.stopping) {
+    if (jobId === null && isPaused(env)) return null;
+    const until = await pauseGate(env);
+    if (until === null) return null;
+    waited = true;
+    await waitNextPass(Math.min(Math.max(1, until - Date.now()), PAUSE_POLL_MS), state, deps.sleepImpl);
+  }
+  return waited ? "rate-limited" : null;
 }
 
 // Ceiling of jobs this process runs at the same time, never above the global ceiling of the home.
@@ -341,6 +460,11 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
       if (pool.size >= limit) {
         await Promise.race(pool);
         continue;
+      }
+      const limited = await waitOutRateLimitPause(jobId, ctx);
+      if (limited !== null) {
+        reason = limited;
+        break;
       }
       const claimed = await acquire({ jobId, cap, env });
       if (!claimed.job) {
@@ -414,8 +538,8 @@ export const DRAIN_INTERVAL_S = 15;
 
 // Reasons of a cycle after which a drain has nothing left to do: the queue is empty, paused, the cycle was told to stop, or the tree it runs from is gone.
 const DRAIN_DONE_REASONS = new Set(["empty-queue", "paused", "already-tried", "runtime-gone"]);
-// Reasons the drain keeps waiting on: the pending job is held back by something the operator or another runner will clear.
-const DRAIN_WAIT_REASONS = new Set(["blocked", "cap-reached"]);
+// Reasons the drain keeps waiting on: the pending job is held back by something the operator, another runner or the provider will clear.
+const DRAIN_WAIT_REASONS = new Set(["blocked", "cap-reached", "rate-limited"]);
 
 // Runs cycles until the queue has nothing pending, waiting between passes while the pending jobs are held back by a preflight block or the concurrency cap - what "run the queue" means to an operator.
 export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {

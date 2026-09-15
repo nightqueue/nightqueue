@@ -19,6 +19,7 @@
  * @property {(spec: object) => Promise<object|null>} claimNextJob
  * @property {(id: number, spec: object) => Promise<object|null>} claimJobById
  * @property {(id: number, spec: object) => Promise<boolean>} releaseJob
+ * @property {(id: number, spec: object) => Promise<boolean>} parkJob back to pending, due only at the instant a rate limit resets
  * @property {(id: number, spec: object) => Promise<boolean>} renewLease
  * @property {(id: number, spec: object) => Promise<boolean>} countAttempt
  * @property {(options?: object) => Promise<{failed: number, requeued: number}>} sweepOrphans
@@ -151,6 +152,7 @@ export const STORE_CONTRACT = Object.freeze({
     "claimNextJob",
     "claimJobById",
     "releaseJob",
+    "parkJob",
     "renewLease",
     "countAttempt",
     "sweepOrphans",

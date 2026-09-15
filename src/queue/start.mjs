@@ -2,6 +2,7 @@ import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { packageRoot } from "../host/paths.mjs";
 import { claimBlocker } from "./claim.mjs";
+import { inheritablePause } from "./rate-limit.mjs";
 import { killProcess, ownRunnerRecord, pruneDeadRunners, writeRunnerRecord } from "./registry.mjs";
 import { launchDetachedRunner } from "./runner.mjs";
 
@@ -12,7 +13,8 @@ export function runnerMode({ jobId = null, watchIntervalS = null } = {}) {
 }
 
 // Registers the runner that is about to work the queue; a runner nobody can find in the registry is worse than no runner at all.
-function registerRunner({ pid, jobId, watchIntervalS, logPath, detached }, env) {
+// A runner born while a live runner of this home waits out a rate limit adopts that wait here, at registration and only here.
+function registerRunner({ pid, jobId, watchIntervalS, logPath, detached, killImpl }, env) {
   try {
     return writeRunnerRecord(
       {
@@ -24,6 +26,7 @@ function registerRunner({ pid, jobId, watchIntervalS, logPath, detached }, env) 
         detached,
         logPath,
         runtimeDir: packageRoot(),
+        rateLimit: inheritablePause(env, killImpl),
       },
       env,
     );
@@ -39,7 +42,7 @@ function spawnAndRegister({ jobId, max, watchIntervalS, env, spawnImpl, killImpl
   pruneDeadRunners(env, killImpl);
   const { pid, logPath } = launchDetachedRunner({ jobId, max, watchIntervalS, env, spawnImpl });
   if (!Number.isInteger(pid) || pid <= 0) throw new UserError("the detached runner did not report a pid; nothing was started");
-  registerRunner({ pid, jobId, watchIntervalS, logPath, detached: true }, env);
+  registerRunner({ pid, jobId, watchIntervalS, logPath, detached: true, killImpl }, env);
   return { started: true, pid, mode: runnerMode({ jobId, watchIntervalS }), logPath, waiting: null };
 }
 
@@ -58,7 +61,7 @@ export async function registerForegroundRunner({ jobId = null, watchIntervalS = 
     const own = ownRunnerRecord(env);
     if (own) return { registered: true, self: false, pid: process.pid, mode: own.mode ?? null };
     pruneDeadRunners(env, killImpl);
-    registerRunner({ pid: process.pid, jobId, watchIntervalS, logPath: null, detached: false }, env);
+    registerRunner({ pid: process.pid, jobId, watchIntervalS, logPath: null, detached: false, killImpl }, env);
     return { registered: true, self: true, pid: process.pid, mode: runnerMode({ jobId, watchIntervalS }) };
   });
 }

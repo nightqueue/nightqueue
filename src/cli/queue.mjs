@@ -1,7 +1,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
-import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
+import { jobLogPath, queuePausedPath, queueResumePath } from "../config/paths.mjs";
 import { projectByName, registrationOffer, resolveProject } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
@@ -9,7 +9,7 @@ import { jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { PROMPT_SOURCE_CONFLICT, getRoadmapItem, queueRoadmapItem } from "../memory/roadmap.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
-import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
+import { isQueueIdle, parkedBacklogLine, parkedJobLabel, pausedRunnerLine, pendingJobs, runnerPauseLabel } from "../queue/hints.mjs";
 import { prViewer, refreshMergedJobs } from "../queue/merged.mjs";
 import {
   createNarrator,
@@ -458,13 +458,14 @@ function blockedOf(job) {
   }
 }
 
-// What SLUG/LAST says about a job: what it is doing while it runs, why it stopped at the gate, why the runner gave it back, its slug otherwise.
+// What SLUG/LAST says about a job: what it is doing while it runs, why it stopped at the gate, why the runner gave it
+// back, which reset it waits for when a rate limit parked it, its slug otherwise.
 function lastCell(job, env) {
   if (job.status === "running") return lastNarration(job.id, env);
   if (job.status === "gate" || job.status === "failed") return firstNoticeLine(job) ?? job.slug ?? "-";
   const blocked = blockedOf(job);
   if (blocked) return `⛔ ${blocked.code}: ${blocked.message}`;
-  return job.slug ?? "-";
+  return parkedJobLabel(job) ?? job.slug ?? "-";
 }
 
 // Cells of one row of the table, before any cut or paint.
@@ -526,12 +527,14 @@ function runnerCadence(runner) {
   return `${runner.mode ?? "runner"}`;
 }
 
-// The `runner:` line of one registered runner, with the cadence it works the queue at and the tree it loaded from.
+// The `runner:` line of one registered runner, with the cadence it works the queue at and the tree it loaded from;
+// a runner waiting out a rate limit leads with the wait, because that is the whole reason nothing is moving.
 function formatRunner(runner, env = process.env) {
   const label = runtimeLabel(runner.runtimeDir, env);
   const runtime = label ? `, runtime ${label}` : "";
   const foreground = runner.detached === false ? ", foreground" : "";
-  return `runner: running (pid ${runner.pid}, ${runnerCadence(runner)}${foreground}${runtime}, since ${runner.startedAt})`;
+  const state = runnerPauseLabel(runner) ?? "running";
+  return `runner: ${state} (pid ${runner.pid}, ${runnerCadence(runner)}${foreground}${runtime}, since ${runner.startedAt})`;
 }
 
 // What `queue status` opens with: one line per live runner, or the state of a queue nobody is working.
@@ -541,11 +544,18 @@ function formatRunners(runners, activeJobs = 0, env = process.env) {
   return ["runner: stopped"];
 }
 
-// The line `queue status` closes with when a backlog is sitting there with nobody working it, or when the runner gave a job back.
+// The line `queue status` closes with when a backlog is sitting there with nobody working it, when the runner gave a job
+// back, or when a rate limit holds the queue - whether a live runner is waiting it out or the backlog was parked by a
+// runner that has since exited, starting another one then would only put it to sleep too.
 function backlogLine({ activeJobs, counts, runners, jobs = [] }) {
   const blocked = jobs.map(blockedOf).filter(Boolean);
   if (blocked.length) return `${blocked.length} job${blocked.length === 1 ? "" : "s"} blocked (${[...new Set(blocked.map((entry) => entry.code))].join(", ")}) - fix the cause, the runner retries by itself`;
-  if (!isQueueIdle({ activeJobs, runners }) || counts.pending === 0) return null;
+  if (counts.pending === 0) return null;
+  const paused = pausedRunnerLine(runners);
+  if (paused) return `${pendingJobs(counts.pending)} waiting - ${paused}`;
+  if (!isQueueIdle({ activeJobs, runners })) return null;
+  const parked = parkedBacklogLine({ jobs, pending: counts.pending });
+  if (parked) return `${pendingJobs(counts.pending)} waiting - ${parked}`;
   return `${pendingJobs(counts.pending)} waiting - start the batch: nightshift queue run`;
 }
 
@@ -685,10 +695,17 @@ async function runStatus(argv, ctx) {
   if (notice) ctx.out(notice);
 }
 
+// The rate limit line of the dry report: the pause a claim would have to wait out, or a dash when nothing holds a claim back.
+function dryRateLimitLine(report) {
+  const label = runnerPauseLabel({ running: true, pausedUntil: report.pausedUntil, rateLimit: report.rateLimit });
+  return `rate limit      ${label ?? "-"}`;
+}
+
 // Report lines of `queue run --dry`, the cycle that only reads.
 function formatDry(report) {
   return [
     `paused          ${report.paused}`,
+    dryRateLimitLine(report),
     `cap             ${report.cap}`,
     `heartbeat       ${report.heartbeatS}s`,
     `active          ${report.active}`,
@@ -878,11 +895,13 @@ async function runPause(argv, ctx) {
   ctx.out("queue paused; running jobs finish normally");
 }
 
-// Runs `queue resume`, which removes the pause sentinel.
+// Runs `queue resume`, which removes the pause sentinel and stamps the instant every runner waiting out a rate limit compares its own pause against.
 async function runResume(argv, ctx) {
   const { positionals } = parseCommand(argv);
   checkArgs(positionals, { max: 0, usage: USAGE.resume });
+  ensureHome(ctx.env);
   rmSync(queuePausedPath(ctx.env), { force: true });
+  writeFileAtomic(queueResumePath(ctx.env), `${new Date().toISOString()}\n`);
   ctx.out("queue resumed");
 }
 

@@ -89,7 +89,11 @@ function normalize(text, substitutions) {
     out = out.split(from).join(to);
     out = out.split(`/private${from}`).join(to);
   }
-  return out;
+  // The schema version is the one thing a tree is EXPECTED to raise over its baseline: every additive
+  // migration bumps it on purpose, and pinning it here would turn each one into a parity failure.
+  // The rate limit fields of `queue run --dry` are the other one: this tree answers WHICH reset a claim
+  // would have to wait for, and a baseline that never read a pause cannot carry the two fields that say it.
+  return out.replace(/schema v\d+/g, "schema v<N>").replace(/"pausedUntil":(?:null|"[^"]*"),"rateLimit":(?:null|\{[^{}]*\}),/g, "");
 }
 
 function assertParity(label, before, after, substitutionsBefore, substitutionsAfter) {

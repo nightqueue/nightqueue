@@ -63,6 +63,8 @@ test("the registration of a live runner reads back with its fields, and is gone 
     logPath: "/tmp/runner.log",
     runtimeDir: null,
     detached: true,
+    pausedUntil: null,
+    rateLimit: null,
   });
 
   assert.deepEqual(pruneDeadRunners(env, fakeKill(new Set())), [runnerRegistryPath(WATCHER.pid, env)]);

@@ -8,7 +8,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { homeDir, queuePausedPath, runnersDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
+import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
+import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
@@ -495,6 +496,8 @@ test("queue_status never returns the prompt and truncates the free text at five 
     logPath: null,
     runtimeDir: null,
     detached: null,
+    pausedUntil: null,
+    rateLimit: null,
   });
   assert.deepEqual(listed.runners, [], "a home with no runner answered with one");
 
@@ -512,6 +515,8 @@ test("queue_status never returns the prompt and truncates the free text at five 
     logPath: "/tmp/runner.log",
     runtimeDir,
     detached: null,
+    pausedUntil: null,
+    rateLimit: null,
   });
   assert.deepEqual(watched.runners, [watched.runner], "the deprecated `runner` key is not the first entry of `runners`");
   assert.equal("runner" in payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: id } })), false, "the detail of a job grew a runner");
@@ -604,6 +609,56 @@ test("queue_status answers with the nudge that matches the state of the queue, a
   const watchedClient = await connect(t, watchedEnv);
   const watched = payloadOf(await watchedClient.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(watched.hint, "runner active — 1 pending after this one", "a live watcher was told to start a second batch");
+});
+
+// The pause region of a runner of this home, as the runner itself would have merged it into its own registration.
+function pauseRegion(resetsAt) {
+  return {
+    pausedAt: new Date().toISOString(),
+    pausedUntil: new Date(resetsAt.getTime() + 60_000).toISOString(),
+    resetsAt: resetsAt.toISOString(),
+    type: "five_hour",
+    utilization: 0.99,
+  };
+}
+
+test("a runner waiting out a rate limit is what queue_status and queue_add say, instead of asking for a batch that would only sleep", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-hint-rate-limit");
+  const resetsAt = new Date(Date.now() + 3600_000);
+  writeRunnerRecord(
+    { pid: process.pid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/runner.log", rateLimit: pauseRegion(resetsAt) },
+    env,
+  );
+  const client = await connect(t, env);
+  const pause = `the runner is paused until ${clockLabel(resetsAt.getTime())} (5h limit, resets in 1h00)`;
+
+  const empty = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(empty.hint, `nothing is pending — ${pause}.`);
+  assert.equal(empty.runner.pausedUntil, new Date(resetsAt.getTime() + 60_000).toISOString());
+
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker" } }));
+  assert.equal(queued.hint, `queued job #1 for \`alpha\` (1 pending). Nothing to start: ${pause}; it claims again by itself when the limit resets.`);
+
+  const pending = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(pending.hint, `1 pending job waiting — ${pause}.`);
+});
+
+test("a backlog parked by a rate limit is what queue_status says, instead of asking for a batch that would claim nothing", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-hint-parked");
+  const parked = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const notBefore = new Date(Date.now() + 3600_000).toISOString();
+  claimJobById(parked, { worker: "host:4242", cap: 4 }, env);
+  assert.equal(parkJob(parked, { worker: "host:4242", notBefore, result: { rateLimited: true, notBefore } }, env), true, "the fixture did not park the job");
+  const client = await connect(t, env);
+
+  const waiting = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+
+  assert.equal(waiting.runner.running, false, "the fixture left a live runner behind, so the nudge is not the one under test");
+  assert.equal(waiting.hint, `1 pending job waiting — the rate limit resets at ${clockLabel(Date.parse(notBefore))} (in 1h00); a batch started now claims nothing before that.`);
+
+  addJob({ project: "alpha", prompt: "fix the parser" }, env);
+  const mixed = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(mixed.hint, "2 pending jobs waiting — start the batch with queue_run.", "a job that could be claimed right now was held back by the park of another one");
 });
 
 test("queue_run comes back at once with the log of the detached runner, inside this home", async (t) => {

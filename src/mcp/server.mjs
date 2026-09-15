@@ -25,7 +25,7 @@ import {
   ROADMAP_STATUSES,
   roadmapItemView,
 } from "../memory/roadmap.mjs";
-import { isQueueIdle, pendingJobs } from "../queue/hints.mjs";
+import { isQueueIdle, parkedBacklogLine, pausedRunnerLine, pendingJobs } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { refreshMergedJobs } from "../queue/merged.mjs";
 import { blockerLines } from "../queue/claim.mjs";
@@ -185,6 +185,21 @@ function wantsRoadmapItem(args) {
   return hasItem;
 }
 
+// The live runners of this home as a hint reads them; a registry nobody could list says nothing instead of failing the answer it only decorates.
+function hintRunners(env) {
+  try {
+    return liveRunners(env);
+  } catch {
+    return [];
+  }
+}
+
+// What the answer of a queued job says about when it will run: start the batch, or the rate limit the runner is already waiting out.
+function startHint(env) {
+  const paused = pausedRunnerLine(hintRunners(env));
+  return paused ? ` Nothing to start: ${paused}; it claims again by itself when the limit resets.` : " Start the batch with queue_run when you are ready.";
+}
+
 // The answer of `queue_add`: the job it recorded, and the roadmap item behind it when there is one.
 async function queuedAnswer({ job, registered = null, roadmapItemId = null, note = "" }, env) {
   const pending = (await openStore(env).jobs.countsByStatus()).pending;
@@ -197,7 +212,7 @@ async function queuedAnswer({ job, registered = null, roadmapItemId = null, note
     timeoutS: job.timeoutS,
     ...(roadmapItemId === null ? {} : { roadmapItemId }),
     ...(job.tier ? { tier: job.tier } : {}),
-    hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending).${note} Start the batch with queue_run when you are ready.`,
+    hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending).${note}${startHint(env)}`,
   };
 }
 
@@ -259,10 +274,16 @@ function guard(name, handler) {
   };
 }
 
-// The one-line nudge queue_status answers with, or null when the queue has nothing to suggest.
-function queueHint({ activeJobs, counts, runners }) {
+// The one-line nudge queue_status answers with, or null when the queue has nothing to suggest; a rate limit is what the
+// agent hears first - the one a live runner waits out, or the one a backlog was parked by after its runner exited - so it
+// never starts a batch that would only sleep.
+function queueHint({ activeJobs, counts, runners, jobs = [] }) {
+  const paused = pausedRunnerLine(runners);
+  if (paused) return counts.pending === 0 ? `nothing is pending — ${paused}.` : `${pendingJobs(counts.pending)} waiting — ${paused}.`;
   if (!isQueueIdle({ activeJobs, runners })) return `runner active — ${counts.pending} pending after this one`;
   if (counts.pending === 0) return null;
+  const parked = parkedBacklogLine({ jobs, pending: counts.pending });
+  if (parked) return `${pendingJobs(counts.pending)} waiting — ${parked}.`;
   return `${pendingJobs(counts.pending)} waiting — start the batch with queue_run.`;
 }
 
@@ -300,12 +321,13 @@ async function queueStatusAnswer(args, { store, warning, env }) {
   }
   const runners = readRunners(env);
   const counts = await store.jobs.countsByStatus();
+  const jobs = (await store.jobs.listJobs({ limit: jobLimit(args.limit) })).map(jobView);
   return {
     runner: runners[0] ?? STOPPED_RUNNER,
     runners,
-    jobs: (await store.jobs.listJobs({ limit: jobLimit(args.limit) })).map(jobView),
+    jobs,
     counts,
-    hint: queueHint({ activeJobs: await store.jobs.countActiveJobs(), counts, runners }),
+    hint: queueHint({ activeJobs: await store.jobs.countActiveJobs(), counts, runners, jobs }),
     ...warningAnswer(warning),
   };
 }

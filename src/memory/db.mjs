@@ -164,6 +164,7 @@ const EVOLVING_COLUMNS = [
   ["jobs", "merge_sha", "TEXT"],
   ["jobs", "pr_checked_at", "TEXT"],
   ["jobs", "tier", "TEXT"],
+  ["jobs", "not_before", "TEXT"],
   ["pipeline_runs", "tier_operator", "TEXT"],
   ["pipeline_runs", "tier_raise_reason", "TEXT"],
   ["decisions", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],

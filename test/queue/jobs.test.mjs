@@ -11,8 +11,10 @@ import {
   countsByStatus,
   finishJob,
   getJob,
+  hasClaimablePending,
   jobView,
   listJobs,
+  parkJob,
   peekNextJob,
   persistRunFacts,
   releaseJob,
@@ -123,6 +125,55 @@ test("release gives the job back without spending the attempt and keeps the prev
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   releaseJob(id, { worker: WORKER, result: null }, env);
   assert.match(getJob(id, env).result, /dirty-checkout/, "a release with no reason erased the previous block");
+});
+
+test("a job parked on a rate limit keeps its attempt and leaves the claimable scope of every runner until the reset", (t) => {
+  const env = makeQueue(t, "jobs-park");
+  const id = enqueue(env);
+  const later = new Date(Date.now() + 3600_000).toISOString();
+  claimJobById(id, { worker: WORKER, cap: CAP }, env);
+
+  assert.throws(() => parkJob(id, { worker: WORKER, notBefore: "whenever" }, env), /notBefore/);
+  assert.equal(parkJob(id, { worker: OTHER_WORKER, notBefore: later }, env), false, "a foreign worker parked the job");
+  assert.equal(parkJob(id, { worker: WORKER, notBefore: later, result: { rateLimited: true } }, env), true);
+
+  const parked = getJob(id, env);
+  assert.deepEqual(
+    { status: parked.status, attempts: parked.attempts, worker: parked.worker, lease: parked.lease_until },
+    { status: "pending", attempts: 0, worker: null, lease: null },
+    "the park spent an attempt or left the job owned",
+  );
+  assert.equal(jobView(parked).not_before, `${later.replace(/\.\d+Z$/, "")}Z`, "the job view says nothing about when the job is due");
+  assert.equal(claimNextJob({ worker: WORKER, cap: CAP }, env), null, "a parked job was claimed before its reset");
+  assert.equal(hasClaimablePending(env), false, "a parked job counted as waiting to be claimed");
+  assert.equal(peekNextJob(env), null, "`queue run --dry` promised a job no claim can take");
+
+  const due = enqueue(env, { project: "beta" });
+  claimJobById(due, { worker: WORKER, cap: CAP }, env);
+  parkJob(due, { worker: WORKER, notBefore: new Date(Date.now() - 1000).toISOString() }, env);
+  assert.equal(peekNextJob(env).id, due);
+  assert.equal(claimNextJob({ worker: WORKER, cap: CAP }, env).id, due, "a job whose reset already passed stayed out of the queue");
+});
+
+test("the rate limit schedule of a job dies with the run it scheduled, on the finish and on the retry alike", (t) => {
+  const env = makeQueue(t, "jobs-park-cleared");
+  const past = new Date(Date.now() - 1000).toISOString();
+
+  const finished = enqueue(env);
+  claimJobById(finished, { worker: WORKER, cap: CAP }, env);
+  parkJob(finished, { worker: WORKER, notBefore: past }, env);
+  claimJobById(finished, { worker: WORKER, cap: CAP }, env);
+  finishJob(finished, { worker: WORKER, status: "done", prUrl: null }, env);
+  assert.equal(getJob(finished, env).not_before, null, "a finished job stayed scheduled by a limit that is long gone");
+
+  const retried = enqueue(env);
+  claimJobById(retried, { worker: WORKER, cap: CAP }, env);
+  parkJob(retried, { worker: WORKER, notBefore: past }, env);
+  claimJobById(retried, { worker: WORKER, cap: CAP }, env);
+  finishJob(retried, { worker: WORKER, status: "failed" }, env);
+  openDb(env).prepare("UPDATE jobs SET not_before = ? WHERE id = ?").run("2099-01-01 00:00:00", retried);
+  retryJob(retried, {}, env);
+  assert.equal(getJob(retried, env).not_before, null, "a retried job kept a schedule of a limit it never hit");
 });
 
 test("the lease renewal is the ownership check: it fails for a worker that no longer owns the row", (t) => {

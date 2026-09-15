@@ -106,6 +106,7 @@ const JOB_COLUMNS = [
   "merge_sha",
   "pr_checked_at",
   "tier",
+  "not_before",
 ];
 
 // Everything a database written by the schema version before the merge sweep does NOT have yet.
@@ -114,6 +115,7 @@ ALTER TABLE jobs DROP COLUMN merged_at;
 ALTER TABLE jobs DROP COLUMN merge_sha;
 ALTER TABLE jobs DROP COLUMN pr_checked_at;
 ALTER TABLE jobs DROP COLUMN tier;
+ALTER TABLE jobs DROP COLUMN not_before;
 ALTER TABLE pipeline_runs DROP COLUMN tier_operator;
 ALTER TABLE pipeline_runs DROP COLUMN tier_raise_reason;
 PRAGMA user_version = 3;
@@ -122,6 +124,7 @@ PRAGMA user_version = 3;
 // Everything a database written by the schema version before the operator tier does NOT have yet.
 const DOWNGRADE_TO_V4 = `
 ALTER TABLE jobs DROP COLUMN tier;
+ALTER TABLE jobs DROP COLUMN not_before;
 ALTER TABLE pipeline_runs DROP COLUMN tier_operator;
 ALTER TABLE pipeline_runs DROP COLUMN tier_raise_reason;
 PRAGMA user_version = 4;
@@ -149,13 +152,13 @@ test("the migration is idempotent and keeps the data across a reopen", (t) => {
   const env = makeHome(t, "db-migrate");
   const first = openDb(env);
   const id = insertLesson(first, { title: "the migration keeps the rows" });
-  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 6);
+  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 7);
   assert.deepEqual(columnsOf(first, "lessons"), LESSON_COLUMNS);
   closeDb(env);
 
   const second = openDb(env);
   assert.notEqual(second, first);
-  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 6);
+  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 7);
   assert.deepEqual(columnsOf(second, "lessons"), LESSON_COLUMNS);
   assert.equal(second.prepare("SELECT title FROM lessons WHERE id = ?").get(id).title, "the migration keeps the rows");
   assert.deepEqual(matchIds(second, "lessons_fts", '"migration"'), [id]);
@@ -209,7 +212,7 @@ test("the migration from user_version 2 keeps every row and adds the decisions s
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 6, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 7, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
     assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
     assert.ok(columnsOf(db, "jobs").includes("tier"), `jobs.tier missing on pass ${pass}`);
@@ -248,7 +251,7 @@ test("the migration from user_version 3 adds the merge columns once and keeps ev
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 6, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 7, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     const row = db.prepare("SELECT * FROM jobs").get();
     assert.equal(row.prompt, "fix the worker");
@@ -269,7 +272,7 @@ test("the migration from user_version 4 adds the tier columns once and keeps eve
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 6, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 7, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     assert.ok(columnsOf(db, "pipeline_runs").includes("tier_operator"), `pipeline_runs.tier_operator missing on pass ${pass}`);
     assert.ok(
@@ -299,7 +302,7 @@ test("the migration from user_version 5 gives every existing row the project sco
   closeDb(env);
 
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 6);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 7);
   assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
   assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
   assert.equal(db.prepare("SELECT COUNT(*) AS total FROM decisions WHERE scope = 'project' AND org IS NULL").get().total, 3);

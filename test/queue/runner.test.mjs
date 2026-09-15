@@ -8,11 +8,13 @@ import { openDb, sqliteToIso } from "../../src/memory/db.mjs";
 import { packageRoot } from "../../src/host/paths.mjs";
 import { addJob, claimJobById, countsByStatus, getJob } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
+import { clearOwnPause, PAUSE_GRACE_S, readOwnPause } from "../../src/queue/rate-limit.mjs";
+import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { DRAIN_INTERVAL_S, runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../../src/queue/runner.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream, failureStream, gateStream, PR_URL, resultEvent, SESSION_ID, SLUG, slugEvent, systemInitEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
+import { doneStream, failureStream, gateStream, PR_URL, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, systemInitEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
 
 const PROMPT = "fix the worker";
 
@@ -150,6 +152,40 @@ test("a transient failure is retried after a backoff that the test injects inste
   assert.deepEqual({ status: row.status, attempts: row.attempts }, { status: "done", attempts: 2 });
   assert.equal(fakeCalls(planPath).length, 2);
   assert.equal(JSON.parse(row.result).attempts, 2);
+});
+
+test("a child that ends on a rate limit parks the job for the reset, keeps its attempt and resumes its session on the next claim", async (t) => {
+  const resetsAtS = Math.floor(Date.now() / 1000) + 3600;
+  const limited = toNdjson([systemInitEvent({}), rateLimitEvent({ status: "rejected", resetsAt: resetsAtS })]);
+  const { env, planPath } = makeRunnerHome(t, "runner-rate-limit", [
+    { stdout: limited, exitCode: 1 },
+    { stdout: doneStream(), exitCode: 0 },
+  ]);
+  writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "once" }, env);
+  const id = enqueue(env, { maxAttempts: 2 });
+  const notBefore = new Date(resetsAtS * 1000).toISOString();
+
+  const parkCycle = await runJobCycle(env, id);
+
+  assert.deepEqual(parkCycle.processed, [{ id, status: "rate-limited", attempts: 1, notBefore }], "the rate limit was taken by the generic transient retry");
+  const parked = getJob(id, env);
+  assert.deepEqual(
+    { status: parked.status, attempts: parked.attempts, notBefore: sqliteToIso(parked.not_before) },
+    { status: "pending", attempts: 0, notBefore: notBefore.replace(".000Z", "Z") },
+    "the parked job did not go back to the queue due at the reset, with its attempt intact",
+  );
+  assert.equal(readOwnPause(env).pausedUntil, new Date((resetsAtS + PAUSE_GRACE_S) * 1000).toISOString(), "this runner did not arm its own pause");
+  assert.match(readFileSync(jobLogPath(id, env), "utf8"), /=== rate limit until \S+ @ \S+ ===/, "the job log says nothing about the wait");
+
+  assert.equal(loadConfig(env).queue?.resumeSession ?? false, false, "the home opted into resuming sessions, so the forced resume proves nothing");
+  openDb(env).prepare("UPDATE jobs SET not_before = datetime('now', '-1 second') WHERE id = ?").run(id);
+  await clearOwnPause(env, readOwnPause(env));
+
+  const resumed = await runJobCycle(env, id);
+
+  assert.equal(resumed.processed[0].status, "done");
+  assert.equal(argValue(fakeCalls(planPath)[1].argv, "--resume"), SESSION_ID, "the claim of a parked job restarted the run instead of resuming it");
+  assert.equal(getJob(id, env).not_before, null, "the schedule of the limit outlived the run it scheduled");
 });
 
 test("a transient failure that exhausts the attempts of its own row stops there", async (t) => {

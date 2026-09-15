@@ -73,7 +73,7 @@ test("the read commands migrate a database written before the owner scope, with 
   assert.equal(roadmap.status, 0, roadmap.stderr);
   assert.ok(roadmap.stdout.includes("  1. legacy roadmap item  [open]"), roadmap.stdout);
 
-  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v6/);
+  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v7/);
 });
 
 test("a v5 database that cannot be migrated answers with the schema, never with a raw missing column", (t) => {
@@ -84,7 +84,7 @@ test("a v5 database that cannot be migrated answers with the schema, never with 
 
   const listed = runCli(env, ["decision", "list", "--project", "alpha"], { cwd });
   assert.equal(listed.status, 1, listed.stdout);
-  assert.match(listed.stderr, /schema v5 and this build needs v6/);
+  assert.match(listed.stderr, /schema v5 and this build needs v7/);
   assert.equal(listed.stderr.includes("no such column"), false, listed.stderr);
 });
 

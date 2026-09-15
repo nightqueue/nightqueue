@@ -194,6 +194,34 @@ test("a rate limit is silent while it allows the traffic, and a line as soon as 
   assert.ok(narrate(events("rejected")).includes("00:00  ℹ rate limit: rejected"), "a rate limit that stopped the run vanished");
 });
 
+test("the two markers of a rate limit are narrated as the wait and its end, and never as a raw marker line", () => {
+  const until = new Date(Date.parse(secondsIntoAttempt(0)) + 3600_000).toISOString();
+  const log = [
+    attemptMarker(1).trimEnd(),
+    JSON.stringify(systemInitEvent({})),
+    `=== rate limit until ${until} @ ${secondsIntoAttempt(30)} ===`,
+    `=== rate limit over @ ${secondsIntoAttempt(90)} ===`,
+    JSON.stringify(resultEvent({ text: "done" })),
+    "",
+  ].join("\n");
+
+  const lines = narrate(log);
+  const paused = lines.find((line) => line.includes("rate limit hit"));
+
+  assert.ok(paused, lines.join("\n"));
+  assert.ok(paused.startsWith("00:30  ⏸ rate limit hit - waiting until "), paused);
+  assert.match(paused.replace("00:30  ⏸ rate limit hit - waiting until ", ""), /^(\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}$/, paused);
+  assert.ok(lines.includes("01:30  ▶ resumed"), lines.join("\n"));
+  assert.equal(lines.some((line) => line.includes("⚠ rate limit")), false, "the pause was narrated as a bare runner marker");
+  assert.equal(lastNarratedLine(log), "▶ resumed", "the bottom of `queue log` says nothing about the wait the job just came out of");
+});
+
+test("a rate limit marker whose instant cannot be read is still narrated, with the text it carried", () => {
+  const log = [attemptMarker(1).trimEnd(), `=== rate limit until never @ ${secondsIntoAttempt(10)} ===`, ""].join("\n");
+
+  assert.deepEqual(narrate(log), ["00:00  ═ attempt 1", "00:10  ⏸ rate limit hit - waiting until never"]);
+});
+
 test("a huge event never produces a huge line", () => {
   const huge = "x".repeat(1_000_000);
   const lines = narrate(

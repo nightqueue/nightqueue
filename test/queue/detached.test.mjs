@@ -245,6 +245,8 @@ test("queue status opens with one line per live runner, in the table and in the 
     logPath: "/tmp/a.log",
     runtimeDir: null,
     detached: true,
+    pausedUntil: null,
+    rateLimit: null,
   });
   assert.deepEqual(payload.runners, [payload.runner], "the deprecated `runner` key is not the first entry of `runners`");
   assert.equal(payload.jobs.length, 1);

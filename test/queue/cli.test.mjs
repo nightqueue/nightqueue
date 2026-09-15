@@ -4,11 +4,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { jobLogPath, queuePausedPath, runDir } from "../../src/config/paths.mjs";
+import { jobLogPath, queuePausedPath, queueResumePath, runDir } from "../../src/config/paths.mjs";
 import { addProject } from "../../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
+import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
+import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
@@ -28,6 +29,17 @@ function makeGitProject(t, env, name) {
   execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q", path]);
   saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path, name }).config, env);
   return path;
+}
+
+// The pause region a runner of this home would have merged into its own registration for a limit resetting at that instant.
+function pauseRegion(resetsAt) {
+  return {
+    pausedAt: new Date().toISOString(),
+    pausedUntil: new Date(resetsAt.getTime() + 60_000).toISOString(),
+    resetsAt: resetsAt.toISOString(),
+    type: "five_hour",
+    utilization: 0.99,
+  };
 }
 
 // A home with a registered git project and the fake `claude` the runner will spawn.
@@ -311,6 +323,38 @@ test("queue status closes with the backlog nudge only when pending jobs sit with
   assert.equal(empty.stdout.includes("start the batch"), false, "an empty queue got a nudge");
 });
 
+// Parks a pending job on the instant a rate limit resets, the way a runner that hit the limit leaves it behind before it exits.
+function parkOnRateLimit(env, id, notBefore) {
+  claimJobById(id, { worker: "host:4242", cap: 4 }, env);
+  const parked = parkJob(id, { worker: "host:4242", notBefore, result: { rateLimited: true, notBefore } }, env);
+  assert.equal(parked, true, `the fixture did not park job #${id}`);
+}
+
+test("a backlog parked by a rate limit says when it becomes claimable, instead of asking for a batch that would claim nothing", (t) => {
+  const env = makeCliHome(t, "cli-status-parked");
+  const parked = enqueue(env, "fix the worker");
+  const notBefore = new Date(Date.now() + 3600_000).toISOString();
+  parkOnRateLimit(env, parked, notBefore);
+
+  const status = runCli(env, ["queue", "status"]);
+
+  assert.equal(status.status, 0, status.stderr);
+  assert.equal(status.stdout.split("\n")[0], "runner: stopped", "the fixture left a live runner behind, so the nudge is not the one under test");
+  assert.equal(
+    lastLine(status.stdout),
+    `1 pending job waiting - the rate limit resets at ${clockLabel(Date.parse(notBefore))} (in 1h00); a batch started now claims nothing before that`,
+  );
+  assert.match(tableLine(status.stdout, parked), /⏸ rate limit until /, "the row of a parked job reads exactly like an ordinary pending one");
+
+  enqueue(env, "fix the parser");
+  const mixed = runCli(env, ["queue", "status"]);
+  assert.equal(
+    lastLine(mixed.stdout),
+    "2 pending jobs waiting - start the batch: nightshift queue run",
+    "a job that could be claimed right now was held back by the park of another one",
+  );
+});
+
 // Writes the log of a job, the file `queue status` reads the last narration from.
 function writeJobLog(env, id, texts) {
   const path = jobLogPath(id, env);
@@ -429,7 +473,10 @@ test("queue run --dry only reports, and pause stops the claiming until resume", 
     { dry: dry.dry, next: dry.next, active: dry.active, paused: dry.paused, heartbeatS: dry.heartbeatS },
     { dry: true, next: id, active: 0, paused: false, heartbeatS: 5 },
   );
-  assert.match(runCli(env, ["queue", "run", "--dry"]).stdout, /heartbeat {7}5s/, "the operator cannot see the heartbeat it can tune");
+  assert.deepEqual({ pausedUntil: dry.pausedUntil, rateLimit: dry.rateLimit }, { pausedUntil: null, rateLimit: null }, "a home where no runner waits out a limit reported one");
+  const report = runCli(env, ["queue", "run", "--dry"]).stdout;
+  assert.match(report, /heartbeat {7}5s/, "the operator cannot see the heartbeat it can tune");
+  assert.match(report, /^rate limit {6}-$/m, "the dry report is silent about the rate limit it read");
   assert.equal(getJob(id, env).status, "pending");
 
   assert.equal(runCli(env, ["queue", "pause"]).status, 0);
@@ -439,7 +486,58 @@ test("queue run --dry only reports, and pause stops the claiming until resume", 
 
   assert.equal(runCli(env, ["queue", "resume"]).status, 0);
   assert.equal(existsSync(queuePausedPath(env)), false);
+  assert.ok(Number.isFinite(Date.parse(readFileSync(queueResumePath(env), "utf8").trim())), "the resume left no instant a runner waiting out a rate limit could compare its pause against");
   assert.match(runCli(env, ["queue", "run", "--foreground"]).stdout, /job #1 done/);
+});
+
+test("queue run --dry tells the operator that a live runner of this home is waiting out a rate limit", (t) => {
+  const env = makeCliHome(t, "cli-dry-rate-limit");
+  const id = enqueue(env);
+  const resetsAt = new Date(Date.now() + 3600_000);
+  writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, rateLimit: pauseRegion(resetsAt) }, env);
+
+  const dry = JSON.parse(runCli(env, ["queue", "run", "--dry", "--json"]).stdout);
+
+  assert.deepEqual(
+    { paused: dry.paused, next: dry.next, pausedUntil: dry.pausedUntil, rateLimit: dry.rateLimit },
+    {
+      paused: false,
+      next: id,
+      pausedUntil: new Date(resetsAt.getTime() + 60_000).toISOString(),
+      rateLimit: { type: "five_hour", resetsAt: resetsAt.toISOString(), utilization: 0.99 },
+    },
+    "`--dry --json` answered that nothing holds a claim back while a runner waits out a limit",
+  );
+  assert.match(
+    runCli(env, ["queue", "run", "--dry"]).stdout,
+    new RegExp(`^rate limit {6}paused until ${clockLabel(resetsAt.getTime())} \\(5h limit, resets in 1h00\\)$`, "m"),
+    "the dry report named the next job without a word about the limit it would wait for",
+  );
+});
+
+test("queue status leads with the rate limit a runner is waiting out, and never tells the operator to start a batch beside it", (t) => {
+  const env = makeCliHome(t, "cli-status-rate-limit");
+  enqueue(env);
+  const startedAt = new Date().toISOString();
+  const resetsAt = new Date(Date.now() + 3600_000);
+  const record = { pid: process.pid, startedAt, mode: "watch", intervalS: 30, logPath: "/tmp/a.log", detached: true };
+  writeRunnerRecord(record, env);
+
+  const running = runCli(env, ["queue", "status"]);
+  assert.equal(running.stdout.split("\n")[0], `runner: running (pid ${process.pid}, watch every 30 s, since ${startedAt})`);
+  assert.equal(lastLine(running.stdout).includes("start the batch"), false, "a live runner still got the nudge to start another one");
+
+  writeRunnerRecord({ ...record, rateLimit: pauseRegion(resetsAt) }, env);
+  const paused = runCli(env, ["queue", "status"]);
+  const clock = clockLabel(resetsAt.getTime());
+
+  assert.equal(paused.status, 0, paused.stderr);
+  assert.equal(paused.stdout.split("\n")[0], `runner: paused until ${clock} (5h limit, resets in 1h00) (pid ${process.pid}, watch every 30 s, since ${startedAt})`);
+  assert.equal(lastLine(paused.stdout), `1 pending job waiting - the runner is paused until ${clock} (5h limit, resets in 1h00)`);
+
+  const json = JSON.parse(runCli(env, ["queue", "status", "--json"]).stdout);
+  assert.deepEqual(json.runner.rateLimit, { type: "five_hour", resetsAt: resetsAt.toISOString(), utilization: 0.99 });
+  assert.equal(json.runner.pausedUntil, new Date(resetsAt.getTime() + 60_000).toISOString());
 });
 
 test("queue cancel takes a pending job and refuses one that is running under a live lease", (t) => {

@@ -26,6 +26,8 @@ export const STOPPED_RUNNER = {
   logPath: null,
   runtimeDir: null,
   detached: null,
+  pausedUntil: null,
+  rateLimit: null,
 };
 
 // Sends a signal to a process, the single seam every liveness check and every stop of this module goes through.
@@ -171,11 +173,18 @@ export function ownRunnerRecord(env = process.env) {
   }
 }
 
+// What the transient rate limit region of a registration reports, without ever deciding whether the record is live: those are two different questions.
+function rateLimitView(rateLimit) {
+  if (!rateLimit || typeof rateLimit !== "object") return { pausedUntil: null, rateLimit: null };
+  const { pausedUntil = null, type = null, resetsAt = null, utilization = null } = rateLimit;
+  return { pausedUntil, rateLimit: { type, resetsAt, utilization } };
+}
+
 // The state of one runner as every reader of it prints it: only a live registration carries fields.
 export function runnerView(record) {
   if (record?.status !== "alive") return { ...STOPPED_RUNNER };
   const { pid, mode = null, jobId = null, intervalS = null, startedAt = null, logPath = null, runtimeDir = null, detached = null } = record.info;
-  return { running: true, pid, mode, jobId, intervalS, startedAt, logPath, runtimeDir, detached };
+  return { running: true, pid, mode, jobId, intervalS, startedAt, logPath, runtimeDir, detached, ...rateLimitView(record.info.rateLimit) };
 }
 
 // Every live runner of this home, in the order the registry lists them, next to the failure to list it: a reader that reports instead of refusing needs both.
@@ -250,14 +259,29 @@ function dbShmWitness(env) {
   return stats ? { ino: String(stats.ino), dev: String(stats.dev), at: new Date().toISOString() } : null;
 }
 
-// Merges the witness into the record of this process while it still names it, the identity rule every later writer of a record follows.
-function stampOwnRunnerRecord(dbShm, env) {
+// Merges into the record of this process, while it still names it, the keys a decision taken from that very record asks for;
+// a decision that asks for nothing leaves the file untouched, which is how a caller compares before it swaps.
+// `uptimeS` is never re-stamped here: it is the boot witness the classification reads, and only the registration itself writes it.
+function mergeOwnRecord(decide, env) {
   const path = runnerRegistryPath(process.pid, env);
   const info = JSON.parse(readFileSync(path, "utf8"));
   if (info?.pid !== process.pid) return null;
-  const stamped = { ...info, dbShm };
-  writeFileAtomic(path, `${JSON.stringify(stamped, null, 2)}\n`);
-  return stamped;
+  const patch = decide(info);
+  if (patch === null) return info;
+  const merged = { ...info, ...patch };
+  writeFileAtomic(path, `${JSON.stringify(merged, null, 2)}\n`);
+  return merged;
+}
+
+// Reads the registration of THIS runner and writes what a decision taken from it asks for, both inside the home lock,
+// so a writer never swaps a region against a value another writer has already replaced.
+export async function updateOwnRunnerRecord(decide, env = process.env) {
+  return await withLock(env, () => mergeOwnRecord(decide, env));
+}
+
+// Merges fixed keys into the registration of THIS runner, under the home lock; a lock nobody could take raises instead of writing unguarded.
+export async function mergeOwnRunnerRecord(patch, env = process.env) {
+  return await updateOwnRunnerRecord(() => patch, env);
 }
 
 // Records in the registration of THIS runner which shared-memory file its connection is attached to, so `doctor` can tell a split apart from a healthy home; a witness that cannot be written is an unknown and never a failure.
@@ -265,7 +289,7 @@ export async function stampRunnerDbWitness(env = process.env) {
   try {
     const dbShm = dbShmWitness(env);
     if (!dbShm) return null;
-    return await withLock(env, () => stampOwnRunnerRecord(dbShm, env));
+    return await mergeOwnRunnerRecord({ dbShm }, env);
   } catch {
     return null;
   }

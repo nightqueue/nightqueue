@@ -143,6 +143,31 @@ test("a run that never ends dies of the total timeout, however talkative it is",
   assert.notEqual(result.exitCode, 0);
 });
 
+test("a rate limit pause suspends the idle timer and gives the whole wait back to the total budget, without signalling the child", async (t) => {
+  const { env } = makeSpawnHome(t, "spawn-rate-limit-pause", [{ stdout: '{"type":"system"}\n', holdMs: 6000, exitCode: 0 }]);
+  const polls = [];
+  const startedAt = Date.now();
+
+  const result = await spawnClaude({
+    prompt: "run it",
+    timeoutS: 0.6,
+    idleTimeoutS: 0.8,
+    logPath: jobLogPath(1, env),
+    env,
+    stopPollMs: 500,
+    pauseSignalImpl: () => {
+      polls.push(Date.now() - startedAt);
+      return polls.length <= 2 ? Date.now() + 60_000 : null;
+    },
+  });
+  const elapsed = Date.now() - startedAt;
+
+  assert.ok(polls.length >= 3, `the pause poll ran ${polls.length} times`);
+  assert.deepEqual({ timedOut: result.timedOut, idleTimedOut: result.idleTimedOut }, { timedOut: true, idleTimedOut: false }, "the child was killed by a timer the pause had to suspend");
+  assert.ok(elapsed > 1400, `the child died after ${elapsed}ms: the paused span was spent from the total budget instead of given back`);
+  assert.match(readFileSync(jobLogPath(1, env), "utf8"), /=== rate limit over @ \S+ ===/, "the log of the job says nothing about the end of the wait");
+});
+
 test("the ownership poll ends the child as soon as the job stops being ours", async (t) => {
   const { env } = makeSpawnHome(t, "spawn-stop", [{ stdout: '{"type":"system"}\n', holdMs: 4000, exitCode: 0 }]);
   let polls = 0;

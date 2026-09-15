@@ -233,9 +233,33 @@ export function hookEvent({ subtype = "hook_started", name = "PreToolUse" } = {}
   return { type: "system", subtype, hook_name: name };
 }
 
-// The rate limit event the CLI emits between turns, worth a line only when it stops allowing the traffic.
-export function rateLimitEvent({ status = "allowed" } = {}) {
-  return { type: "rate_limit_event", rate_limit_info: { status, resets_at: "2026-09-07T21:00:00.000Z" } };
+// The gap the measured event carried between its two windows, in seconds: 1789938000 - 1789429800, almost six days.
+const WINDOW_GAP_S = 508200;
+// The two windows of a real event, in epoch SECONDS: the five-hour one resets in an hour, the seven-day one almost six days later.
+// Both are derived when the fixture loads, never hardcoded, so the pause they arm is always live; a test that needs a fixed instant passes `resetsAt`.
+export const FIVE_HOUR_RESETS_AT_S = Math.floor(Date.now() / 1000) + 3600;
+export const SEVEN_DAY_RESETS_AT_S = FIVE_HOUR_RESETS_AT_S + WINDOW_GAP_S;
+
+// The rate limit event the CLI emits between turns, in the measured shape: `resetsAt` in epoch seconds, one entry per window, and the `overageStatus` decoy a healthy event carries.
+export function rateLimitEvent({ status = "allowed", rateLimitType = "five_hour", fiveHour = 0.06, sevenDay = 0.06, resetsAt = null } = {}) {
+  const windowResetsAt = rateLimitType === "seven_day" ? SEVEN_DAY_RESETS_AT_S : FIVE_HOUR_RESETS_AT_S;
+  return {
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status,
+      resetsAt: resetsAt ?? windowResetsAt,
+      rateLimitType,
+      overageStatus: "rejected",
+      overageDisabledReason: "org_level_disabled",
+      isUsingOverage: false,
+      unifiedWindows: {
+        five_hour: { utilization: fiveHour, resetsAt: FIVE_HOUR_RESETS_AT_S },
+        seven_day: { utilization: sevenDay, resetsAt: SEVEN_DAY_RESETS_AT_S },
+      },
+    },
+    uuid: "7c8431e9-c8b7-43fe-8a4a-72e66d568f89",
+    session_id: SESSION_ID,
+  };
 }
 
 // A whole job log with the noise of a real session: one attempt, one subagent lane, a failed tool and a result.

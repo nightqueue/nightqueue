@@ -64,7 +64,7 @@ const JOB_VIEW_COLUMNS = [
   "cache_creation",
   "cost_usd",
 ];
-const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "merged_at", "pr_checked_at"];
+const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "merged_at", "pr_checked_at", "not_before"];
 const JOB_VIEW_TRUNCATED = ["notice_md", "result"];
 const VIEW_TEXT_LIMIT = 500;
 const LIST_LIMIT_RANGE = { min: 1, max: 50, fallback: 10 };
@@ -201,8 +201,10 @@ const CLAIM_ASSIGNMENT = `SET status = 'running',
             attempts = attempts + 1,
             started_at = datetime('now'),
             lease_until = ${LEASE_EXPRESSION}`;
+// A job parked by a rate limit is pending but not claimable yet: it comes back into scope by itself at the instant the limit resets.
+const DUE_NOW = `(candidate.not_before IS NULL OR datetime(candidate.not_before) <= datetime('now'))`;
 const CANDIDATE_QUERY = `SELECT candidate.id FROM jobs AS candidate
-              WHERE candidate.status = 'pending'
+              WHERE candidate.status = 'pending' AND ${DUE_NOW}
               ORDER BY candidate.priority ASC, candidate.created_at ASC, candidate.id ASC
               LIMIT 1`;
 const CAP_CONDITION = `(SELECT COUNT(*) FROM jobs AS slot WHERE ${ACTIVE_JOB_PREDICATE}) < ?`;
@@ -252,6 +254,25 @@ export function releaseJob(id, { worker, result } = {}, env = process.env) {
       WHERE id = ? AND status = 'running' AND worker = ?`,
   );
   const changed = withWriteRetry(() => statement.run(toJsonText(result), requireId(id), requireText("worker", worker)));
+  return changed.changes === 1;
+}
+
+// Parks a claimed job on the instant a rate limit resets: it goes back to the queue without spending the attempt and is out of every claim until then.
+export function parkJob(id, { worker, notBefore, result } = {}, env = process.env) {
+  const due = isoToSqlite(notBefore);
+  if (due === null) throw new UserError(`invalid \`notBefore\` \`${String(notBefore)}\`; expected an instant the job may be claimed again at`);
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET status = 'pending',
+            worker = NULL,
+            lease_until = NULL,
+            started_at = NULL,
+            attempts = MAX(0, attempts - 1),
+            not_before = ?,
+            result = COALESCE(?, result)
+      WHERE id = ? AND status = 'running' AND worker = ?`,
+  );
+  const changed = withWriteRetry(() => statement.run(due, toJsonText(result), requireId(id), requireText("worker", worker)));
   return changed.changes === 1;
 }
 
@@ -428,6 +449,7 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage }
             finished_at = datetime('now'),
             worker = NULL,
             lease_until = NULL,
+            not_before = NULL,
             result = COALESCE(?, result),
             pr_url = COALESCE(?, pr_url),
             notice_md = COALESCE(?, notice_md),
@@ -516,6 +538,7 @@ export function retryJob(id, { note, fresh } = {}, env = process.env) {
             lease_until = NULL,
             started_at = NULL,
             finished_at = NULL,
+            not_before = NULL,
             max_attempts = min(max_attempts + 1, ${MAX_ATTEMPTS_RANGE.max}),
             operator_note = ?${fresh === true ? RETRY_FRESH_COLUMNS : ""}
       WHERE id = ? AND (status IN ('failed', 'cancelled') OR (status = 'gate' AND ? IS NOT NULL))
@@ -659,7 +682,7 @@ export function peekNextJob(env = process.env) {
     openDb(env)
       .prepare(
         `SELECT candidate.* FROM jobs AS candidate
-          WHERE candidate.status = 'pending'
+          WHERE candidate.status = 'pending' AND ${DUE_NOW}
           ORDER BY candidate.priority ASC, candidate.created_at ASC, candidate.id ASC
           LIMIT 1`,
       )

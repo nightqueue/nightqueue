@@ -1,8 +1,11 @@
 import { basename } from "node:path";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
+import { clockLabel } from "./hints.mjs";
 import { extractNotice, extractPrUrl, hasGateMarker, parseEventLine, parseSlugLine } from "./stream.mjs";
 
 const ATTEMPT_LINE_RE = /^=== attempt (\d+) @ (\S+) ===$/;
+const RATE_PAUSE_LINE_RE = /^=== rate limit until (\S+) @ (\S+) ===$/;
+const RATE_RESUME_LINE_RE = /^=== rate limit over @ (\S+) ===$/;
 const MARKER_LINE_RE = /^=== (.+) @ (\S+) ===$/;
 
 const TEXT_LIMIT = 200;
@@ -24,6 +27,8 @@ const PHASES = new Map([
 ]);
 
 const GLYPHS = {
+  ratePause: "⏸",
+  rateResume: "▶",
   attempt: "═",
   resultEnd: "═",
   text: "»",
@@ -44,6 +49,8 @@ const GLYPHS = {
 };
 
 const COLORS = {
+  ratePause: "33",
+  rateResume: "32",
   laneOpen: "36",
   laneClose: "36",
   gate: "31",
@@ -182,6 +189,22 @@ function logMarker(state, what, iso) {
   const ms = isoMs(iso);
   if (ms !== null) advanceClock(state, ms);
   return [narrationEvent(state, "marker", clip(what, TEXT_LIMIT))];
+}
+
+// The marker the runner wrote when a rate limit put the run on hold, said as the wait it is instead of a raw status.
+function rateLimitPause(state, untilIso, iso) {
+  const ms = isoMs(iso);
+  if (ms !== null) advanceClock(state, ms);
+  const untilMs = isoMs(untilIso);
+  const until = untilMs === null ? clip(untilIso, TEXT_LIMIT) : clockLabel(untilMs, ms ?? Date.now());
+  return [narrationEvent(state, "ratePause", `rate limit hit - waiting until ${until}`)];
+}
+
+// The marker the runner wrote when the limit was over and the same run went on.
+function rateLimitResume(state, iso) {
+  const ms = isoMs(iso);
+  if (ms !== null) advanceClock(state, ms);
+  return [narrationEvent(state, "rateResume", "resumed")];
 }
 
 // A line that is not JSON: a corrupted event when it looks like one, otherwise plain text the runner wrote.
@@ -370,6 +393,10 @@ function narrateLine(state, rawLine) {
   if (!line.trim()) return [];
   const attempt = ATTEMPT_LINE_RE.exec(line);
   if (attempt) return openAttempt(state, attempt[1], attempt[2]);
+  const paused = RATE_PAUSE_LINE_RE.exec(line);
+  if (paused) return rateLimitPause(state, paused[1], paused[2]);
+  const resumed = RATE_RESUME_LINE_RE.exec(line);
+  if (resumed) return rateLimitResume(state, resumed[1]);
   const marker = MARKER_LINE_RE.exec(line);
   if (marker) return logMarker(state, marker[1], marker[2]);
   const event = parseEventLine(line);
@@ -415,7 +442,7 @@ export function lastOrchestratorLine(text) {
 }
 
 // Kinds of narration that say what the job is doing right now; the bookkeeping of the narration (attempt separators, quiet ticks, summaries) never does.
-const LIVE_KINDS = new Set(["text", "tool", "laneOpen", "laneClose", "slug", "gate", "marker", "pr", "notice"]);
+const LIVE_KINDS = new Set(["text", "tool", "laneOpen", "laneClose", "slug", "gate", "marker", "pr", "notice", "ratePause", "rateResume"]);
 
 // Last line of the narration as `queue log` prints it, glyph and lane label included: the same line the operator would read at the bottom of the log.
 export function lastNarratedLine(text) {
