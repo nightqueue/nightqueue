@@ -1,21 +1,44 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SPAWN_TIMEOUT_MS = 15000;
+const DECLARED_DEPENDENCIES = Object.keys(JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")).dependencies ?? {});
 
-// Copies bin/ and src/ into a throwaway directory and links the real node_modules, so the real entry point runs without touching the checkout.
+// Walks up from a starting directory to the nearest node_modules that really carries the declared dependencies, the same lookup a git worktree relies on to reach its repository's install.
+function findDependencyTree(startDir) {
+  let dir = startDir;
+  while (true) {
+    const candidate = join(dir, "node_modules");
+    if (existsSync(candidate) && hasDeclaredDependencies(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+// Checks that a node_modules tree actually contains every dependency declared in package.json.
+function hasDeclaredDependencies(nodeModulesDir) {
+  return DECLARED_DEPENDENCIES.every((name) => existsSync(join(nodeModulesDir, name)));
+}
+
+// Copies bin/ and src/ into a throwaway directory and links a real, verified node_modules tree, so the real entry point runs without touching the checkout.
 function makeSandbox(t) {
   const dir = mkdtempSync(join(tmpdir(), "nightshift-import-failure-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   cpSync(join(REPO_ROOT, "bin"), join(dir, "bin"), { recursive: true });
   cpSync(join(REPO_ROOT, "src"), join(dir, "src"), { recursive: true });
-  symlinkSync(join(REPO_ROOT, "node_modules"), join(dir, "node_modules"));
+  const nodeModules = findDependencyTree(REPO_ROOT);
+  assert.ok(
+    nodeModules,
+    `no node_modules tree with the declared dependencies (${DECLARED_DEPENDENCIES.join(", ")}) was found at or above ${REPO_ROOT}; run npm ci at the repository root`,
+  );
+  symlinkSync(nodeModules, join(dir, "node_modules"));
   return dir;
 }
 
