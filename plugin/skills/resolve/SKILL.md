@@ -327,7 +327,8 @@ agent, print a line in this format first:
    After the user's answer (`PROPOSE-ALTERNATIVE`/`ASK`): update the
    affected fields of the Brief with the decision and proceed from step 3. If the gate avoided
    a wrong execution (the user accepted the alternative or reformulated the request),
-   record it via `lesson_save` — that is the kind of hit that should become a pattern.
+   record it via `lesson_save`, building the payload with every field of the **Lesson payload**
+   block of `Lessons per phase` — that is the kind of hit that should become a pattern.
 
    **In the `simple` tier the critique is ONE line**, not the block above:
    `## Request critique — <EXECUTE | PROPOSE-ALTERNATIVE | ASK>: <the core assumption,
@@ -754,6 +755,25 @@ subagent, because you have its text in your context and the subagent does NOT
 (a subagent receives no hook injection). A recall with `exclude_ids` coming back empty →
 repeat the call without `exclude_ids`.
 
+#### Lesson payload
+
+Every `lesson_save` call, at any of the points below, builds its payload from these fields —
+one per line, in this order:
+
+- `title` — one line, the pattern (what went wrong, as a class).
+- `root_cause` — why it failed the first time.
+- `solution` — what fixed it.
+- `prevention` — the rule that avoids it next time; this is the line that gets injected into
+  future runs.
+- `attempts` — the real count of attempts, an integer; `1` means there is no lesson to save,
+  so do not call the tool at all.
+- `project` — the current project.
+- `target` — the phase the lesson belongs to (`triager` | `architect` | `coder` | `qa` |
+  `verifier`).
+
+`title`, `root_cause`, `solution` and `prevention` are mandatory strings. A rejected call is
+fixed ONCE by rebuilding the payload from this list — never retried as it was sent.
+
 ### Lesson-capture filter (shared rule for the four points below)
 
 Four points in this pipeline relaunch an agent or end the run with no delivery because of a
@@ -852,10 +872,11 @@ invalid or ill-defined task. BEFORE terminating, write into `state.json` (step 5
 `"termination": { "phase": "triage", "reason": "<verdict>" }`, in the same
 atomic write: without it, a retry of this job would offer to resume from the `explore` phase as if
 the triage had been interrupted halfway. Apply the lesson-capture filter above before
-terminating; if both conditions hold, call `lesson_save` with `target: "triager"` — the lesson
-is why the request as it arrived was not executable (not reproducible, or not clear enough) and
-what was missing from it. This same gate_stop rule covers Phase 3's insufficient-brief gate
-below, with `target: "architect"` there instead of `triager`.
+terminating; if both conditions hold, call `lesson_save` with `target: "triager"`, building the
+payload with every field of **Lesson payload** above — the lesson is why the request as it
+arrived was not executable (not reproducible, or not clear enough) and what was missing from
+it. This same gate_stop rule covers Phase 3's insufficient-brief gate below, with
+`target: "architect"` there instead of `triager`.
 
 If the triager's return signals that it emitted `## Intent note` **or** `## Depth
 note`, the architect reads them straight from `01-triage.md` in Phase 3 (do not paste the
@@ -1045,7 +1066,8 @@ later stops at a gate. Save it ONCE per run: an architect relaunched (🔁) over
 does not produce a second `decision_save`. A failed `decision_save` NEVER blocks the run —
 it becomes an open item, exactly like a failed `pipeline_log`. The block is optional and most
 plans do not have one: no block → nothing is saved, nothing is recorded, and the run proceeds
-normally.
+normally. A `decision_save` whose `status` is missing or invalid is stored as `proposed` and
+answers `status_defaulted: true`.
 
 **Coverage gate (bug):** also require `## Symptom coverage`, with at least one
 vector listed, each vector marked `covered` or `not-covered` **with a reason**, and
@@ -1506,8 +1528,9 @@ original plan + the invalidated assumption(s) + the QA's evidence, obtain the
 revised plan and go back to Phase 4 (coder) with it. **At most 1 return to the architect per
 pipeline** — if an assumption falls again in the revised plan, terminate without a commit and
 take it to the user (Phase 8). Apply the lesson-capture filter above before relaunching; if both
-conditions hold, call `lesson_save` with `target: "architect"` — the lesson is the flawed
-assumption or approach the plan was built on, plus what the QA's evidence proved instead.
+conditions hold, call `lesson_save` with `target: "architect"`, building the payload with every
+field of **Lesson payload** above — the lesson is the flawed assumption or approach the plan
+was built on, plus what the QA's evidence proved instead.
 
 ### Phase 6 — Verification (final gate + correction loop)
 
@@ -1569,7 +1592,8 @@ the verifier.
   the QA's `## Proven breaks` still open + the validated brief, then
   relaunch the verifier (the same `model` as Phase 6 for the tier). Apply the
   lesson-capture filter above before relaunching; if both conditions hold, call
-  `lesson_save` with `target: "coder"` — the lesson is the implementation pattern that
+  `lesson_save` with `target: "coder"`, building the payload with every field of
+  **Lesson payload** above — the lesson is the implementation pattern that
   failed verification plus what the verifier confirmed passing.
 - **Maximum of iterations per tier**: trivial = 1, simple/complex = 2.
   If it still fails after the limit, **do not mask it**: skip Phase 7 (no commit),
@@ -1723,9 +1747,9 @@ the bug STILL present, do NOT relaunch the coder automatically. First discrimina
    race, data source)". With the new diagnosis, follow Phase 3 → 4 → 6 → 6.5.
    **At most 1 re-triage per pipeline** — if it persists again, terminate without a commit and
    take the complete history to the user (Phase 8). Apply the lesson-capture filter above
-   before relaunching; if both conditions hold, call `lesson_save` with `target: "triager"` —
-   the lesson is why the confirmed cause was incomplete and which underestimated path the new
-   diagnosis had to cover.
+   before relaunching; if both conditions hold, call `lesson_save` with `target: "triager"`,
+   building the payload with every field of **Lesson payload** above — the lesson is why the
+   confirmed cause was incomplete and which underestimated path the new diagnosis had to cover.
 
 **Gate:** only move on to Phase 7 with the change confirmed at runtime — case (a)
 the 2 proofs, case (b) the screenshot, case (c) the user's verdict, case (d) every item

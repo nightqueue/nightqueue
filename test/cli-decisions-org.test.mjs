@@ -22,9 +22,9 @@ function makeOrgHome(t, name) {
   const env = makeHome(t, name);
   const cwd = makeProject(t, env, "acme-mobile-app", { org: "acme" });
   makeProject(t, env, "orbit-app", { org: "orbit" });
-  saveDecision({ project: "acme-mobile-app", title: "the app owns its cache", context: "c", decision: "d" }, env);
-  saveDecision({ org: "acme", title: "one queue per product", context: "c", decision: "d" }, env);
-  saveDecision({ org: "orbit", title: "orbit decides alone", context: "c", decision: "d" }, env);
+  saveDecision({ project: "acme-mobile-app", title: "the app owns its cache", context: "c", decision: "d", status: "accepted" }, env);
+  saveDecision({ org: "acme", title: "one queue per product", context: "c", decision: "d", status: "accepted" }, env);
+  saveDecision({ org: "orbit", title: "orbit decides alone", context: "c", decision: "d", status: "accepted" }, env);
   saveRoadmapItem({ project: "acme-mobile-app", horizon: "now", title: "ship the app cache" }, env);
   saveRoadmapItem({ org: "acme", horizon: "now", title: "raise the node version" }, env);
   return { env, cwd };
@@ -140,7 +140,7 @@ test("a short org name stays in the NUMBER column and a long one is never glued 
 
   const wide = makeHome(t, "decision-org-width-long");
   const wideCwd = makeProject(t, wide, "alpha", { org: LONG_ORG });
-  saveDecision({ org: LONG_ORG, title: "one queue per product", context: "c", decision: "d" }, wide);
+  saveDecision({ org: LONG_ORG, title: "one queue per product", context: "c", decision: "d", status: "accepted" }, wide);
   const result = runCli(wide, ["decision", "list"], { cwd: wideCwd });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, new RegExp(`^${LONG_ORG}#1 accepted\\s+\\d{4}-\\d{2}-\\d{2}\\s+one queue per product$`, "m"));

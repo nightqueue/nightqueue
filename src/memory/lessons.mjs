@@ -17,6 +17,23 @@ function normalizeTarget(target) {
   return LESSON_TARGETS.includes(target) ? target : null;
 }
 
+// Reduces a raw lesson payload to its storable shape: missing text becomes "", an invalid target becomes null.
+export function sanitizeLesson(item) {
+  return {
+    title: String(item?.title ?? ""),
+    root_cause: String(item?.root_cause ?? ""),
+    solution: String(item?.solution ?? ""),
+    prevention: String(item?.prevention ?? ""),
+    target: normalizeTarget(item?.target),
+  };
+}
+
+// Field names, in the tool's declared order, whose text is still empty after sanitizing.
+export function emptyLessonFields({ root_cause, solution, prevention }) {
+  const sanitized = sanitizeLesson({ root_cause, solution, prevention });
+  return ["root_cause", "solution", "prevention"].filter((field) => !sanitized[field]);
+}
+
 // Requires a non-empty text field, because the column is NOT NULL and a raw SQLite error helps nobody.
 function requireText(field, value) {
   const text = typeof value === "string" ? value.trim() : "";
@@ -33,14 +50,15 @@ function requireId(id) {
 // Inserts a lesson and returns its id.
 export function saveLesson({ project, title, root_cause, solution, prevention, attempts, target, model }, env = process.env) {
   const projectName = resolveProjectName(project, env);
+  const sanitized = sanitizeLesson({ title, root_cause, solution, prevention, target });
   const values = [
     projectName,
-    requireText("title", title),
-    requireText("root_cause", root_cause),
-    requireText("solution", solution),
-    requireText("prevention", prevention),
+    requireText("title", sanitized.title),
+    sanitized.root_cause,
+    sanitized.solution,
+    sanitized.prevention,
     Number.isInteger(attempts) ? attempts : null,
-    normalizeTarget(target),
+    sanitized.target,
     typeof model === "string" && model ? model : null,
   ];
   const statement = openDb(env).prepare(
@@ -54,6 +72,25 @@ export function saveLesson({ project, title, root_cause, solution, prevention, a
 // Returns the lesson with the given id, or null.
 export function getLesson(id, env = process.env) {
   return openDb(env).prepare("SELECT * FROM lessons WHERE id = ?").get(requireId(id)) ?? null;
+}
+
+// Fills only the currently empty text columns of a lesson from a follow-up payload, never overwriting one that already has text.
+export function backfillEmptyLessonFields(id, { root_cause, solution, prevention }, env = process.env) {
+  const row = getLesson(id, env);
+  if (!row) throw new UserError(`unknown lesson \`${id}\``);
+  const candidates = { root_cause, solution, prevention };
+  const columns = [];
+  const values = [];
+  for (const [field, value] of Object.entries(candidates)) {
+    const current = typeof row[field] === "string" ? row[field].trim() : "";
+    const incoming = typeof value === "string" ? value.trim() : "";
+    if (current || !incoming) continue;
+    columns.push(`${field} = ?`);
+    values.push(incoming);
+  }
+  if (!columns.length) return row;
+  const statement = openDb(env).prepare(`UPDATE lessons SET ${columns.join(", ")} WHERE id = ? RETURNING *`);
+  return withWriteRetry(() => statement.get(...values, requireId(id)));
 }
 
 // Increments the recurrence counter of an existing lesson and stamps when it recurred.

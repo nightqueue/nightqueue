@@ -72,7 +72,13 @@ test("queue_add on an org item requires a project of that org and never links th
 test("the prompt of an org item quotes the decisions of its org and nothing of another org", async (t) => {
   const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-prompt");
   const linked = saveDecision(
-    { org: "acme", title: "every repo runs one node version", context: "drift", decision: "pin it in the toolchain" },
+    {
+      org: "acme",
+      title: "every repo runs one node version",
+      context: "drift",
+      decision: "pin it in the toolchain",
+      status: "accepted",
+    },
     env,
   );
   saveDecision({ org: "orbit", title: "orbit pins node too", context: "drift", decision: "pin it" }, env);

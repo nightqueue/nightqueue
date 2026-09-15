@@ -125,6 +125,7 @@ test("a lesson saved through the server comes back in the recall, without its em
   const saved = payloadOf(await client.callTool({ name: "lesson_save", arguments: { ...LESSON, project: "alpha" } }));
   assert.equal(saved.ok, true);
   assert.equal(saved.deduped, false);
+  assert.deepEqual(saved.incomplete, []);
 
   const recalled = payloadOf(
     await client.callTool({
@@ -143,6 +144,17 @@ test("a lesson saved through the server comes back in the recall, without its em
     arguments: { project: "alpha", target: null, exclude_ids: [1, "2", null, {}] },
   });
   assert.notEqual(tolerant.isError, true, textOf(tolerant));
+});
+
+test("lesson_save with attempts: 1 is accepted and stored as null, never rejected", async (t) => {
+  const env = makeHome(t, "mcp-lesson-attempts-one");
+  makeProject(t, env, "alpha");
+  const client = await connect(t, env);
+  const saved = payloadOf(
+    await client.callTool({ name: "lesson_save", arguments: { ...LESSON, attempts: 1, project: "alpha" } }),
+  );
+  assert.equal(saved.ok, true);
+  assert.equal(saved.attempts, null);
 });
 
 test("an explicit null in any optional field of the memory tools is accepted, never an error", async (t) => {
@@ -841,14 +853,28 @@ test("a server pinned to a job refuses queue_retry aimed at any other job, and l
 test("a refused call names every issue, the whole contract of the tool and what was received", async (t) => {
   const env = makeHome(t, "mcp-contract-refusal");
   const client = await connect(t, env);
-  const refused = await client.callTool({ name: "lesson_save", arguments: { title: "x", root_cause: "y", prevention: "z" } }).catch((err) => err);
+  const refused = await client
+    .callTool({ name: "index_save", arguments: { project: "alpha", repo_root: "/tmp/repo" } })
+    .catch((err) => err);
   const text = String(refused?.message ?? textOf(refused));
-  assert.match(text, /Invalid arguments for tool lesson_save/);
-  assert.match(text, /solution/, "the missing field is not named");
-  assert.match(text, /lesson_save contract:\nrequired: .*solution/, "the contract does not list the required fields");
-  assert.match(text, /received: title, root_cause, prevention/, "what was sent is not echoed back");
+  assert.match(text, /Invalid arguments for tool index_save/);
+  assert.match(text, /files/, "the missing field is not named");
+  assert.match(text, /index_save contract:\nrequired: .*files/, "the contract does not list the required fields");
+  assert.match(text, /received: project, repo_root/, "what was sent is not echoed back");
   const enumRefused = await client.callTool({ name: "pipeline_log", arguments: { slug: "s", tier: "simple", outcome: "success", task_type: "bug" } }).catch((err) => err);
   const enumText = String(enumRefused?.message ?? textOf(enumRefused));
   assert.match(enumText, /task_type/);
   assert.match(enumText, /bug\/error \| feature\/refactor/, "the enum values are not listed in the contract");
+});
+
+test("lesson_save with no title answers a one-line error, never the zod dump", async (t) => {
+  const env = makeHome(t, "mcp-lesson-no-title");
+  const client = await connect(t, env);
+  const refused = await client
+    .callTool({ name: "lesson_save", arguments: { root_cause: "y", solution: "z", prevention: "w" } })
+    .catch((err) => err);
+  const text = String(refused?.message ?? textOf(refused));
+  assert.match(text, /missing required field\(s\): title/);
+  assert.equal(text.includes("\n"), false, `the error is not a single line: ${text}`);
+  assert.doesNotMatch(text, /Invalid arguments for tool/, "the zod dump leaked through");
 });

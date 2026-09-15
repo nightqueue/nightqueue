@@ -103,7 +103,7 @@ export function recentLessons({ project, target, excludeIds, limit = 12 } = {}, 
   if (!projectName) {
     return connection
       .prepare(
-        `SELECT * FROM lessons WHERE archived = 0${targetPart.clause}${excludePart.clause}
+        `SELECT * FROM lessons WHERE archived = 0 AND TRIM(prevention) <> ''${targetPart.clause}${excludePart.clause}
          ORDER BY created_at DESC LIMIT ?`,
       )
       .all(...targetPart.binds, ...excludePart.binds, Math.min(size, 10));
@@ -111,7 +111,7 @@ export function recentLessons({ project, target, excludeIds, limit = 12 } = {}, 
   return connection
     .prepare(
       `SELECT * FROM lessons
-       WHERE archived = 0 AND (project = ? OR project IS NULL)${targetPart.clause}${excludePart.clause}
+       WHERE archived = 0 AND TRIM(prevention) <> '' AND (project = ? OR project IS NULL)${targetPart.clause}${excludePart.clause}
        ORDER BY CASE WHEN project = ? THEN 0 ELSE 1 END, (violated > 0) DESC, created_at DESC
        LIMIT ?`,
     )
@@ -161,7 +161,7 @@ export function searchLessonsLexical({ query, project, target, excludeIds, limit
     .prepare(
       `SELECT l.*, bm25(lessons_fts) AS rank
        FROM lessons_fts JOIN lessons l ON l.id = lessons_fts.rowid
-       WHERE lessons_fts MATCH ? AND l.archived = 0
+       WHERE lessons_fts MATCH ? AND l.archived = 0 AND TRIM(l.prevention) <> ''
          AND (? = 0 OR l.project = ? OR l.project IS NULL)${targetPart.clause}${excludePart.clause}${coverage.clause}
        ORDER BY bm25(lessons_fts)
          + CASE WHEN l.project = ? THEN -1.5 WHEN l.project IS NULL THEN -0.5 ELSE 0 END
@@ -229,7 +229,7 @@ export function searchLessonsSemantic(
     .prepare(
       `SELECT id, embedding FROM lessons
        WHERE embedding IS NOT NULL AND embedding_model = ? AND length(embedding) = ?
-         AND archived = 0
+         AND archived = 0 AND TRIM(prevention) <> ''
          AND (? = 0 OR project = ? OR project IS NULL)${targetPart.clause}${excludePart.clause}`,
     )
     .all(model, query.length * 4, projectName ? 1 : 0, projectName, ...targetPart.binds, ...excludePart.binds);

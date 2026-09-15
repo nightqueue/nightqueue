@@ -32,6 +32,7 @@ function seedDecisions(env) {
       context: "the runtime has several writers",
       decision: "open the database in WAL with a busy timeout",
       consequences: "no server to run, one file to back up",
+      status: "accepted",
     },
     env,
   );

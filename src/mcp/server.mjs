@@ -63,6 +63,7 @@ const target = z.enum(LESSON_TARGETS).nullable().optional();
 const optionalText = z.string().nullable().optional();
 const optionalId = z.number().int().min(1).nullable().optional();
 const optionalDecisionStatus = z.enum(DECISION_STATUSES).nullable().optional();
+const looseDecisionStatus = z.string().nullable().optional();
 const optionalRoadmapStatus = z.enum(ROADMAP_STATUSES).nullable().optional();
 
 const phaseSchema = z.object({
@@ -254,8 +255,19 @@ function describeSchema(inputSchema) {
   ].join("\n");
 }
 
+// `lesson_save` alone: a missing/empty `title` answers a one-line error naming it, never the multi-line zod dump.
+function lessonSaveTitleError(args) {
+  const title = typeof args?.title === "string" ? args.title.trim() : "";
+  if (title) return null;
+  return 'lesson_save: missing required field(s): title. Minimal payload: {"title":"...","root_cause":"...","solution":"...","prevention":"..."}';
+}
+
 // Validates the arguments here instead of leaving it to the SDK, so the refusal names every issue, the whole contract and what was received - an agent fixes that on the next call instead of repeating the same payload.
 function validateArgs(name, inputSchema, args) {
+  if (name === "lesson_save") {
+    const oneLine = lessonSaveTitleError(args);
+    if (oneLine) throw new McpError(ErrorCode.InvalidParams, oneLine);
+  }
   const parsed = z.object(inputSchema).safeParse(args ?? {});
   if (parsed.success) return parsed.data;
   const issues = parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ");
@@ -365,25 +377,33 @@ function toolDefinitions(env) {
         description: "Records a lesson after fixing an error that was not caught on the first attempt.",
         inputSchema: {
           title: z.string(),
-          root_cause: z.string(),
-          solution: z.string(),
-          prevention: z.string(),
-          attempts: z.number().int().min(2).nullable().optional(),
+          root_cause: optionalText,
+          solution: optionalText,
+          prevention: optionalText,
+          attempts: z.number().int().nullable().optional(),
           project: optionalText,
           target,
         },
       },
       handler: async (args) => {
+        const attempts = Number.isInteger(args.attempts) && args.attempts >= 2 ? args.attempts : null;
         const saved = await openStore(env).lessons.saveLessonDeduped({
           project: args.project,
           title: args.title,
           root_cause: args.root_cause,
           solution: args.solution,
           prevention: args.prevention,
-          attempts: args.attempts,
+          attempts,
           target: args.target,
         });
-        return { ok: true, id: saved.id, project: saved.project, deduped: saved.deduped, attempts: saved.attempts };
+        return {
+          ok: true,
+          id: saved.id,
+          project: saved.project,
+          deduped: saved.deduped,
+          attempts: saved.attempts,
+          incomplete: saved.incomplete,
+        };
       },
     },
     {
@@ -611,7 +631,7 @@ function toolDefinitions(env) {
         description:
           "Records one architecture decision: the context that forced it, what was decided and what it costs. " +
           "Owned by `project` (the registered NAME, never a path) or by `org`, never both — an org decision binds every project of that org and is the right shape when the constraint holds for more than one repo of the same product. " +
-          "Numbered inside its owner (`#1`, `#2` per project; `acme#1`, `acme#2` per org) and `accepted` unless another status is given.",
+          "Numbered inside its owner (`#1`, `#2` per project; `acme#1`, `acme#2` per org); a missing or invalid `status` falls back to `proposed` (the answer then carries `status_defaulted: true`).",
         inputSchema: {
           project: optionalText,
           org: optionalText,
@@ -619,7 +639,7 @@ function toolDefinitions(env) {
           context: z.string(),
           decision: z.string(),
           consequences: optionalText,
-          status: optionalDecisionStatus,
+          status: looseDecisionStatus,
         },
       },
       handler: async (args) => {
@@ -631,7 +651,14 @@ function toolDefinitions(env) {
           consequences: args.consequences,
           status: args.status,
         });
-        return { ok: true, id: saved.id, number: saved.number, scope: saved.scope, owner: saved.org ?? saved.project };
+        return {
+          ok: true,
+          id: saved.id,
+          number: saved.number,
+          scope: saved.scope,
+          owner: saved.org ?? saved.project,
+          ...(saved.statusDefaulted ? { status_defaulted: true } : {}),
+        };
       },
     },
     {

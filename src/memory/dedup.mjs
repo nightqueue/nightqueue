@@ -1,5 +1,13 @@
 import { resolveProjectName } from "./db.mjs";
-import { bumpAttempts, bumpViolation, findByNormalizedTitle, saveLesson, setLessonEmbedding } from "./lessons.mjs";
+import {
+  backfillEmptyLessonFields,
+  bumpAttempts,
+  bumpViolation,
+  emptyLessonFields,
+  findByNormalizedTitle,
+  saveLesson,
+  setLessonEmbedding,
+} from "./lessons.mjs";
 import { memoryByKey, saveMemory } from "./memory.mjs";
 import { normalizeExcludeIds as normalizeIds, recallLessons, resolveEmbedder } from "./search.mjs";
 
@@ -36,7 +44,14 @@ export async function saveLessonDeduped(
   const existing = findByNormalizedTitle({ project: projectName, title }, env);
   if (existing) {
     const bumped = bumpAttempts(existing.id, env);
-    return { id: existing.id, project: projectName, deduped: true, attempts: bumped.attempts };
+    const filled = backfillEmptyLessonFields(existing.id, { root_cause, solution, prevention }, env);
+    return {
+      id: existing.id,
+      project: projectName,
+      deduped: true,
+      attempts: bumped.attempts,
+      incomplete: emptyLessonFields(filled),
+    };
   }
   const saved = saveLesson({ project: projectName, title, root_cause, solution, prevention, attempts, target }, env);
   const embedder = await resolveEmbedder(undefined, env);
@@ -46,6 +61,7 @@ export async function saveLessonDeduped(
     project: projectName,
     deduped: false,
     attempts: Number.isInteger(attempts) ? attempts : null,
+    incomplete: emptyLessonFields({ root_cause, solution, prevention }),
   };
 }
 
@@ -120,7 +136,7 @@ async function storeLesson(item, { project, model, embedder, log }, env) {
         project,
         title: item.title.trim(),
         root_cause: String(item.root_cause || item.title).trim(),
-        solution: String(item.solution || "").trim() || "-",
+        solution: String(item.solution || "").trim(),
         prevention: item.prevention.trim(),
         target: item.target,
         model,

@@ -26,12 +26,14 @@ const LINKED = {
   context: "two runners renewed the same lease",
   decision: "renew the lease only from the worker that owns it",
   consequences: "a lost lease kills the child",
+  status: "accepted",
 };
 
 const RELATED = {
   title: "heartbeat interval is configuration, never a constant",
   context: "a slow disk timed the lease out",
   decision: "read the heartbeat interval from the configuration",
+  status: "accepted",
 };
 
 const ITEM = { horizon: "now", title: "rewrite runner heartbeat", detail: "the renew path must survive a slow disk" };
@@ -243,12 +245,28 @@ const LEXICAL_ONLY = {
   title: "the runner claims one job at a time",
   context: "two runners took the same job",
   decision: "claim every job under a lease",
+  status: "accepted",
 };
 
 const SEMANTIC_ONLY = [
-  { title: "cold starts pay for the model download", context: "the first call was slow", decision: "cache the model on disk" },
-  { title: "one worktree per task", context: "two tasks wrote the same tree", decision: "never share a checkout" },
-  { title: "the pull request is the only delivery", context: "local commits were lost", decision: "open a pull request at the end" },
+  {
+    title: "cold starts pay for the model download",
+    context: "the first call was slow",
+    decision: "cache the model on disk",
+    status: "accepted",
+  },
+  {
+    title: "one worktree per task",
+    context: "two tasks wrote the same tree",
+    decision: "never share a checkout",
+    status: "accepted",
+  },
+  {
+    title: "the pull request is the only delivery",
+    context: "local commits were lost",
+    decision: "open a pull request at the end",
+    status: "accepted",
+  },
 ];
 
 // How many times a heading stands alone as a line of a prompt.

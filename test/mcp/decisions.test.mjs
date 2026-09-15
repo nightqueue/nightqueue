@@ -97,7 +97,7 @@ test("a decision saved through the server is numbered, listed, updated and recal
   const env = makeDecisionHome(t, "mcp-decisions-round-trip");
   const client = await connect(t, env);
 
-  const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: DECISION }));
+  const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, status: "accepted" } }));
   assert.deepEqual(saved, { ok: true, id: 1, number: 1, scope: "project", owner: "alpha" });
   const second = payloadOf(
     await client.callTool({
@@ -133,12 +133,31 @@ test("a decision saved through the server is numbered, listed, updated and recal
   assert.equal(recalled[0].context, DECISION.context);
 });
 
+test("a missing or invalid status falls back to proposed and flags it; a valid one is untouched", async (t) => {
+  const env = makeDecisionHome(t, "mcp-decisions-status-default");
+  const client = await connect(t, env);
+
+  const noStatus = payloadOf(await client.callTool({ name: "decision_save", arguments: DECISION }));
+  assert.equal(noStatus.status_defaulted, true);
+  assert.equal(getDecision(noStatus.id, env).status, "proposed");
+
+  const badStatus = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, title: "a second one", status: "maybe" } }));
+  assert.equal(badStatus.status_defaulted, true);
+  assert.equal(getDecision(badStatus.id, env).status, "proposed");
+
+  const explicit = payloadOf(
+    await client.callTool({ name: "decision_save", arguments: { ...DECISION, title: "a third one", status: "accepted" } }),
+  );
+  assert.equal("status_defaulted" in explicit, false);
+  assert.equal(getDecision(explicit.id, env).status, "accepted");
+});
+
 test("decision_recall never returns a proposed decision and never truncates, where decision_list truncates", async (t) => {
   const env = makeDecisionHome(t, "mcp-decisions-truncation");
   const client = await connect(t, env);
   const title = `worker ${"x".repeat(600)}`;
 
-  payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, title } }));
+  payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, title, status: "accepted" } }));
   payloadOf(
     await client.callTool({
       name: "decision_save",
@@ -207,8 +226,8 @@ function makeTwoProjectHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   makeProject(t, env, "beta");
-  const own = saveDecision({ ...DECISION, project: "alpha" }, env);
-  const foreign = saveDecision({ ...DECISION, project: "beta", title: "beta keeps its own log" }, env);
+  const own = saveDecision({ ...DECISION, project: "alpha", status: "accepted" }, env);
+  const foreign = saveDecision({ ...DECISION, project: "beta", title: "beta keeps its own log", status: "accepted" }, env);
   const foreignItem = saveRoadmapItem({ project: "beta", horizon: "now", title: "beta ships its dashboard" }, env);
   const job = addJob({ project: "alpha", prompt: "rewrite the runner" }, env);
   return { env, own, foreign, foreignItem, job };

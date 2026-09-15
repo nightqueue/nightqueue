@@ -68,6 +68,44 @@ test("the same title in another project is another lesson", async (t) => {
   assert.equal(lessonCount(env), 2);
 });
 
+test("a partial lesson is still stored, and the answer names exactly the fields left empty", async (t) => {
+  const env = makeHome(t, "dedup-partial");
+  makeProject(t, env, "alpha");
+  const partial = await saveLessonDeduped(
+    { project: "alpha", title: "the worker retries the same broken payload", root_cause: "the payload was never rebuilt" },
+    env,
+  );
+  assert.equal(partial.deduped, false);
+  assert.deepEqual(partial.incomplete, ["solution", "prevention"]);
+  const stored = getLesson(partial.id, env);
+  assert.equal(stored.solution, "");
+  assert.equal(stored.prevention, "");
+
+  const complete = await saveLessonDeduped({ project: "alpha", ...item({ title: "a fully described lesson" }) }, env);
+  assert.deepEqual(complete.incomplete, []);
+});
+
+test("a follow-up call backfills only the fields still empty, never one that already has text", async (t) => {
+  const env = makeHome(t, "dedup-backfill");
+  makeProject(t, env, "alpha");
+  const first = await saveLessonDeduped(
+    { project: "alpha", title: LEAK_TITLE, root_cause: "the early return skipped the close" },
+    env,
+  );
+  assert.deepEqual(first.incomplete, ["solution", "prevention"]);
+
+  const second = await saveLessonDeduped(
+    { project: "alpha", title: LEAK_TITLE, root_cause: "a different root cause", solution: "close it in a finally block", prevention: LEAK_PREVENTION },
+    env,
+  );
+  assert.equal(second.id, first.id);
+  assert.deepEqual(second.incomplete, []);
+  const stored = getLesson(first.id, env);
+  assert.equal(stored.root_cause, "the early return skipped the close", "an already-filled field was overwritten");
+  assert.equal(stored.solution, "close it in a finally block");
+  assert.equal(stored.prevention, LEAK_PREVENTION);
+});
+
 test("a batch deduplicates itself: the first item is stored and the twin is stationed for the judge", async (t) => {
   const env = makeHome(t, "dedup-batch");
   makeProject(t, env, "alpha");

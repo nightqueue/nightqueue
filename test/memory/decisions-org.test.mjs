@@ -13,7 +13,7 @@ import {
 import { makeHome, makeOrg, makeProject } from "../../test-support/memory.mjs";
 
 // Saves a decision of an owner with the fields every test would otherwise repeat.
-function addDecision(env, { project, org, title, context = "the context", decision = "the decision", status }) {
+function addDecision(env, { project, org, title, context = "the context", decision = "the decision", status = "accepted" }) {
   return saveDecision({ project, org, title, context, decision, status }, env);
 }
 

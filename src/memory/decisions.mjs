@@ -83,10 +83,17 @@ export function getDecisionByNumber({ project, org, number } = {}, env = process
   );
 }
 
+// The status to store plus whether the safe default ("proposed") replaced a missing or invalid one.
+function resolveSavedStatus(status) {
+  if (DECISION_STATUSES.includes(status)) return { status, statusDefaulted: false };
+  return { status: "proposed", statusDefaulted: true };
+}
+
 // Inserts a decision numbered `max(number) + 1` for its owner, in one statement so no concurrent save collides.
 export function saveDecision({ project, org, title, context, decision, consequences, status } = {}, env = process.env) {
   const target = requireScopeTarget({ project, org }, env);
   const owner = ownerValues(target);
+  const { status: resolvedStatus, statusDefaulted } = resolveSavedStatus(status);
   const values = [
     ...owner,
     ...owner,
@@ -94,7 +101,7 @@ export function saveDecision({ project, org, title, context, decision, consequen
     requireText("context", context),
     requireText("decision", decision),
     optionalText(consequences),
-    status === undefined || status === null ? "accepted" : requireStatus(status),
+    resolvedStatus,
   ];
   const statement = openDb(env).prepare(
     `INSERT INTO decisions (scope, project, org, number, title, context, decision, consequences, status)
@@ -103,7 +110,7 @@ export function saveDecision({ project, org, title, context, decision, consequen
   );
   const row = withWriteRetry(() => statement.get(...values));
   const [scope, projectName, orgName] = owner;
-  return { id: Number(row.id), number: Number(row.number), scope, project: projectName, org: orgName };
+  return { id: Number(row.id), number: Number(row.number), scope, project: projectName, org: orgName, statusDefaulted };
 }
 
 // Requires `superseded_by` to point at another existing decision of the same owner: superseding is authorship, not visibility.

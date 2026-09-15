@@ -6,7 +6,7 @@ import { stateDir } from "../../src/config/paths.mjs";
 import { buildDigest, defaultRunClaude, extractJson, runReflectWorker } from "../../src/hooks/reflect-worker.mjs";
 import { recordInjected } from "../../src/hooks/state.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { getLesson, saveLesson } from "../../src/memory/lessons.mjs";
+import { getLesson, sanitizeLesson, saveLesson } from "../../src/memory/lessons.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const LEAK_TITLE = "the worker leaks a file descriptor on failure";
@@ -316,6 +316,19 @@ test("the JSON of the answer is scanned, not guessed by a greedy regex", () => {
   assert.equal(extractJson("no json here"), null);
   assert.equal(extractJson('{"broken": '), null);
   assert.equal(buildDigest("not json\n{}\n"), "");
+});
+
+test("reflect-worker sanitizes lesson items through the shared sanitizeLesson, with no second copy of the rule", () => {
+  assert.deepEqual(sanitizeLesson({ title: "t", root_cause: undefined, solution: null, prevention: "p", target: "ghost" }), {
+    title: "t",
+    root_cause: "",
+    solution: "",
+    prevention: "p",
+    target: null,
+  });
+  const source = readFileSync(new URL("../../src/hooks/reflect-worker.mjs", import.meta.url), "utf8");
+  assert.ok(source.includes("sanitizeLesson"), "reflect-worker no longer builds its sanitized item from the shared helper");
+  assert.doesNotMatch(source, /LESSON_TARGETS\.includes/, "a second copy of the target-sanitizing rule survived in reflect-worker");
 });
 
 test("the default runner explains a missing claude binary and costs no lesson", async (t) => {

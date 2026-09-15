@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { stateDir } from "../config/paths.mjs";
 import { writeFileAtomic } from "../config/store.mjs";
-import { LESSON_TARGETS } from "../memory/lessons.mjs";
+import { sanitizeLesson } from "../memory/lessons.mjs";
 import { projectFromCwd } from "../memory/project-name.mjs";
 import { openStore } from "../store/open.mjs";
 import { lessonIdsFromRefs, readSessionState } from "./state.mjs";
@@ -166,11 +166,7 @@ function parseOrNull(candidate) {
 function sanitizeItem(item) {
   return {
     kind: typeof item?.kind === "string" ? item.kind : "",
-    title: String(item?.title ?? ""),
-    root_cause: String(item?.root_cause ?? ""),
-    solution: String(item?.solution ?? ""),
-    prevention: String(item?.prevention ?? ""),
-    target: LESSON_TARGETS.includes(item?.target) ? item.target : null,
+    ...sanitizeLesson(item),
   };
 }
 

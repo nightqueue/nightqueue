@@ -49,7 +49,7 @@ test("decision_save and roadmap_save take project XOR org, and refuse both, neit
   const env = makeOrgHome(t, "mcp-org-target");
   const client = await connect(t, env);
 
-  const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: ORG_DECISION }));
+  const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...ORG_DECISION, status: "accepted" } }));
   assert.deepEqual(saved, { ok: true, id: 1, number: 1, scope: "org", owner: "acme" });
 
   const both = await client.callTool({
@@ -71,11 +71,17 @@ test("decision_save and roadmap_save take project XOR org, and refuse both, neit
 test("decision_list, decision_recall and roadmap_get answer the union for a project and the org alone for an org", async (t) => {
   const env = makeOrgHome(t, "mcp-org-union");
   const client = await connect(t, env);
-  payloadOf(await client.callTool({ name: "decision_save", arguments: ORG_DECISION }));
+  payloadOf(await client.callTool({ name: "decision_save", arguments: { ...ORG_DECISION, status: "accepted" } }));
   payloadOf(
     await client.callTool({
       name: "decision_save",
-      arguments: { project: "acme-mobile-app", title: "the app caches the plan", context: "c", decision: "d" },
+      arguments: {
+        project: "acme-mobile-app",
+        title: "the app caches the plan",
+        context: "c",
+        decision: "d",
+        status: "accepted",
+      },
     }),
   );
   payloadOf(await client.callTool({ name: "roadmap_save", arguments: { org: "acme", horizon: "now", title: "raise node" } }));
@@ -117,9 +123,12 @@ test("decision_list, decision_recall and roadmap_get answer the union for a proj
 
 test("inside a job, an org row is refused by name while the job's own project is still writable", async (t) => {
   const env = makeOrgHome(t, "mcp-org-write-guard");
-  const orgDecision = saveDecision(ORG_DECISION, env);
+  const orgDecision = saveDecision({ ...ORG_DECISION, status: "accepted" }, env);
   const orgItem = saveRoadmapItem({ org: "acme", horizon: "now", title: "raise node" }, env);
-  const own = saveDecision({ project: "acme-mobile-app", title: "the app caches", context: "c", decision: "d" }, env);
+  const own = saveDecision(
+    { project: "acme-mobile-app", title: "the app caches", context: "c", decision: "d", status: "accepted" },
+    env,
+  );
   const job = addJob({ project: "acme-mobile-app", prompt: "rewrite the runner" }, env);
   const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
 

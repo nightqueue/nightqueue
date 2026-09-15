@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
-import { saveLesson, setLessonEmbedding } from "../../src/memory/lessons.mjs";
+import { getLesson, saveLesson, setLessonEmbedding } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
 import { recallLessons, recallMemories, searchLessonsLexical } from "../../src/memory/search.mjs";
 import { fakeEmbedder, makeHome, makeProject } from "../../test-support/memory.mjs";
@@ -198,6 +198,20 @@ test("a query that matches nothing falls back to the recent lessons, marked as f
     rows.map((row) => row.via),
     ["fallback"],
   );
+});
+
+test("a lesson with an empty prevention has nothing to inject: it never comes back from the recall, in any path", async (t) => {
+  const env = makeHome(t, "search-empty-prevention");
+  makeProject(t, env, "alpha");
+  const complete = addLesson(env, { project: "alpha", title: "the worker retries the same broken payload" });
+  const { id: incomplete } = saveLesson(
+    { project: "alpha", title: "the worker retries a different broken payload", root_cause: "y", solution: "z", prevention: "" },
+    env,
+  );
+  assert.equal(getLesson(incomplete, env)?.id, incomplete, "the lesson was never stored");
+
+  assert.deepEqual(idsOf(await recallLessons({ project: "alpha" }, env)), [complete]);
+  assert.deepEqual(idsOf(await recallLessons({ query: "worker retries broken payload", project: "alpha" }, env)), [complete]);
 });
 
 test("the memory recall searches with a query and lists the recent ones without it", async (t) => {

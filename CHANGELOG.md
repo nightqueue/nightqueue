@@ -16,6 +16,18 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `lesson_save` no longer loses a lesson because the payload arrived
+  incomplete: `root_cause`, `solution` and `prevention` are now optional at the
+  MCP boundary, and `attempts` below 2 is stored as `null` instead of refusing
+  the call. A missing `title` still refuses, but with a one-line message
+  naming it instead of the full contract dump. The answer now carries
+  `incomplete`, the fields still empty, so a follow-up call with the same
+  title fills in only what was missing. A lesson stored with an empty
+  `prevention` has nothing to inject and is excluded from `lesson_recall`,
+  though it stays visible in the CLI. `decision_save` mirrors the same
+  tolerance: a missing or invalid `status` is stored as `proposed` instead of
+  refusing the call, and the answer flags it with `status_defaulted: true`.
+
 - A run that opened its pull request and then said one more sentence was
   recorded as `gate` with no pull request URL. Of the three signals the runtime
   read from the session, two already looked back over the whole run and the
@@ -39,6 +51,10 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the rest of the code to the database, and `src/memory/` became its private,
   synchronous implementation. Internal only - no command, output, hook or MCP
   tool changed.
+
+- `decision_save` defaults a missing or invalid `status` to `proposed` instead
+  of `accepted`: a decision recorded without a clear status now injects
+  nothing into a future recall until someone accepts it.
 
 ### Fixed
 

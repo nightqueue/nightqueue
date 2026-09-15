@@ -60,15 +60,19 @@ test("the decisions FTS mirror follows the insert, the update and the delete", (
   openDb(env).exec("INSERT INTO decisions_fts(decisions_fts) VALUES('integrity-check')");
 });
 
-test("a decision is saved accepted, is listed in number order and refuses a status outside the enum", (t) => {
+test("a decision defaults to proposed, is listed in number order and an invalid status falls back to proposed too", (t) => {
   const env = makeHome(t, "decisions-status");
   makeProject(t, env, "alpha");
-  addDecision(env, { title: "first of alpha" });
-  addDecision(env, { title: "a proposal", status: "proposed" });
+  addDecision(env, { title: "first of alpha", status: "accepted" });
+  const noStatus = addDecision(env, { title: "a proposal" });
   assert.equal(getDecision(1, env).status, "accepted");
+  assert.equal(getDecision(noStatus.id, env).status, "proposed");
+  assert.equal(noStatus.statusDefaulted, true);
   assert.deepEqual(listDecisions({ project: "alpha" }, env).map((row) => row.number), [1, 2]);
   assert.deepEqual(listDecisions({ project: "alpha", status: "proposed" }, env).map((row) => row.number), [2]);
-  assert.throws(() => addDecision(env, { title: "bad", status: "maybe" }), /expected one of proposed\|accepted\|superseded\|rejected/);
+  const bad = addDecision(env, { title: "bad", status: "maybe" });
+  assert.equal(bad.statusDefaulted, true);
+  assert.equal(getDecision(bad.id, env).status, "proposed");
   assert.throws(() => addDecision(env, { title: "" }), /decision field `title` is required/);
 });
 
@@ -106,8 +110,9 @@ test("the recall without an embedder answers from BM25 and only ever returns acc
   const hit = addDecision(env, {
     title: "the runner renews the lease of a long job",
     decision: "renew the lease every minute",
+    status: "accepted",
   });
-  addDecision(env, { title: "the queue caches nothing between runs" });
+  addDecision(env, { title: "the queue caches nothing between runs", status: "accepted" });
   const proposed = addDecision(env, { title: "the runner renews the lease twice", status: "proposed" });
   const superseded = addDecision(env, { title: "the runner renews the lease by hand", status: "superseded" });
   const rejected = addDecision(env, { title: "the runner renews the lease never", status: "rejected" });
@@ -127,9 +132,15 @@ test("the recall with an embedder keeps the BM25 top hit and adds the semantic o
   const hit = addDecision(env, {
     title: "the runner renews the lease of a long job",
     decision: "renew the lease every minute",
+    status: "accepted",
   });
-  const near = addDecision(env, { title: "worktree ownership", context: "two processes wrote one tree", decision: "one tree per task" });
-  const far = addDecision(env, { title: "cache policy", context: "cold starts", decision: "cache nothing" });
+  const near = addDecision(env, {
+    title: "worktree ownership",
+    context: "two processes wrote one tree",
+    decision: "one tree per task",
+    status: "accepted",
+  });
+  const far = addDecision(env, { title: "cache policy", context: "cold starts", decision: "cache nothing", status: "accepted" });
   setDecisionEmbedding({ id: near.id, vector: [1, 0, 0, 0], model: FAKE_MODEL }, env);
   setDecisionEmbedding({ id: far.id, vector: [0, 1, 0, 0], model: FAKE_MODEL }, env);
 
@@ -148,7 +159,7 @@ test("the recall with an embedder keeps the BM25 top hit and adds the semantic o
 test("a recall that matches nothing comes back as the recent accepted decisions, marked fallback", async (t) => {
   const env = makeHome(t, "decisions-recall-fallback");
   makeProject(t, env, "alpha");
-  const recent = addDecision(env, { title: "the queue owns the worktree" });
+  const recent = addDecision(env, { title: "the queue owns the worktree", status: "accepted" });
   const rows = await recallDecisions({ query: "zebracrossing monorepo telemetry", project: "alpha" }, env);
   assert.deepEqual(idsOf(rows), [recent.id]);
   assert.equal(rows[0].via, "fallback");
@@ -162,6 +173,7 @@ test("the plain text of a decision carries its number, status and fields, and dr
     context: "two runners raced",
     decision: "one worktree per job",
     consequences: "a job cannot resume another one's tree",
+    status: "accepted",
   });
   assert.equal(
     renderDecisionText(getDecision(id, env)),
