@@ -224,8 +224,8 @@ standing decision either follows it or takes the conflict to
 `## Requires user confirmation` naming its number. When a plan takes a
 structural decision no standing decision covers, the architect emits a
 `## Proposed decision` block, and the orchestrator saves it right after Phase 3 with
-`status: "proposed"`, so it survives a run that later stops at a gate; the pull
-request lists it under `## Open items` for the operator to accept or reject with
-`decision_update`. A `decision_recall` that fails is fail-open: the run
+`status: "proposed"`, so it survives a run that later stops at a gate; the Phase 8
+report lists it among the open items for the operator to accept or reject with
+`decision_update` - it is not part of the pull request body. A `decision_recall` that fails is fail-open: the run
 continues without the section and records it as an open item.
 

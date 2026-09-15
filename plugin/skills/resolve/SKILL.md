@@ -1837,22 +1837,30 @@ inform that the commit/PR was not generated.
      In the PR description, when you need to identify the automation, use the nickname
      `nightshift`; do not use names of agents, models or vendors, and do not add a
      `Co-Authored-By` trailer.
-   - **The PR description must point out the tests run and passed** in its
-     `## Tests run and passed` section, with today's rule kept: list each check that
-     in fact ran and passed (verifier: tsc/lint/build/tests; QA: validated risks;
-     runtime: the real acceptance — a payload, a screenshot of the emulator or a
-     verdict on a device). Never list a test that did not run.
-   - **A decision proposed by this run is an open item of the body.** When Phase 3 saved a
-     `## Proposed decision` block, the `## Open items` section carries one line:
-     `` Proposed decision #<number>: <title> — recorded as `proposed`; accept or reject it with `decision_update`. ``
-     No block saved in Phase 3 → no line, and the section follows its usual rule.
+   - **What was proven goes inside `## QA`** — the PR body has no separate test
+     section. The `Proven:` block lists each behaviour that was in fact exercised and
+     held (QA: the risks that survived the attack and the break that was proven and
+     fixed; verifier: the checks that ran and passed; runtime: the acceptance
+     confirmed with a real payload, a screenshot of the emulator or a verdict on a
+     device), named as behaviour, never as the name of a test file or of a command.
+     Never list a behaviour that was not exercised. The real open items of the run go
+     in the `Not covered:` block of the same section.
+   - **A decision proposed by this run is NOT part of the PR body.** When Phase 3
+     saved a `## Proposed decision` block, it is reported only in Phase 8, where the
+     operator decides whether it deserves a ticket.
+   - **No bare `#<number>` in the title or in the body** — GitHub turns it into a
+     cross-reference to an unrelated issue or PR of the repository and notifies it. A
+     queue job id or a decision number is written without the `#` (`job 24`,
+     `decision 1`); the only `#<number>` allowed is a real issue of this repository in
+     the `Fixes`/`Closes` line.
    - **Check the assembled body BEFORE `gh pr create`** — the check runs over the
      string that goes to the command, never over the model in the template file: the
-     six sections `## Summary`, `## Changes`, `## Tests run and passed`, `## QA`,
-     `## Open items` and `## Run` all present and in that order, no placeholder in
-     double curly braces and no `<...>` example left over from the model. Any failure
-     → fix the body and only then open the PR. A PR outside this standard is never
-     opened.
+     three sections `## Summary`, `## Changes` and `## QA` all present and in that
+     order with no fourth `## `, the lines `Verdict:` and `Proven:` present inside
+     `## QA`, no bare `#<number>` outside the `Fixes`/`Closes` line, no placeholder in
+     double curly braces and no `<...>` example left over from the model, and the size
+     caps of the template respected. Any failure → fix the body and only then open the
+     PR. A PR outside this standard is never opened.
    - **Record the outcome in `state.json` the moment the pull request exists** — the atomic,
      tolerant write of step 5.3, with the top-level field
      `"outcome": { "status": "done", "prUrl": "<the URL `gh pr create` printed>", "updatedAt": "<iso>" }`.
@@ -2118,7 +2126,11 @@ it does not count towards the ~30-line cap of the happy path: when the `05-qa.md
 `## Suggestions` some item with the literal `dedicated ticket: yes`, list each one with
 `file:line` + 1 line of the risk. The ticket is opened by the runtime's closing flow; this pipeline
 never creates issues (Phase 7, step 6). The same paragraph collects the items of `unconfirmed decisions:`
-of the `Usage coverage:` line of the QA and the `NOT MET / to confirm` lines of Phase 6.5 —
+of the `Usage coverage:` line of the QA, the `NOT MET / to confirm` lines of Phase 6.5 and, when
+Phase 3 saved a `## Proposed decision` block, one line
+`` Proposed decision <number>: <title> — recorded as `proposed`; accept or reject it with `decision_update`. ``
+(the number bare, never `#<number>`) — this report is the ONLY place the proposed decision
+surfaces, and it is where the operator decides whether it deserves a ticket —
 all of them become open items, and the `## Notice` section reflects them in "Still open" in user
 language (with no file and no identifier, as the section's spec already requires).
 
