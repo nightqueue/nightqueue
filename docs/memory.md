@@ -72,6 +72,7 @@ persisted, so a failed run reprocesses the same slice instead of losing it.
 
 ```sh
 nightshift mcp                     # start the stdio MCP server with the eighteen tools
+nightshift mcp --http --port 4747 --token <t>   # serve the same tools over Streamable HTTP on 127.0.0.1
 nightshift hook session-start      # run a hook, reading the event JSON from stdin
 nightshift reflect --transcript <path>   # reflect on a transcript now, in the foreground
 nightshift embed download          # download the embedding weights (the only network path)

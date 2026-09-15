@@ -16,7 +16,7 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 // connection is no longer the one the view reads through.
 
 const QUEUE_SRC = fileURLToPath(new URL("../../src/cli/queue.mjs", import.meta.url));
-const MCP_SRC = fileURLToPath(new URL("../../src/mcp/server.mjs", import.meta.url));
+const MCP_SRC = fileURLToPath(new URL("../../src/mcp/tools.mjs", import.meta.url));
 const PR_URL = "https://github.com/acme/api/pull/7";
 
 // Runs `queue status --follow --until-idle` in this process with an injected sleep, exactly the entry point an operator watches.

@@ -84,6 +84,7 @@ commands:
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
   mcp                                       start the stdio MCP server that exposes the eighteen memory and queue tools
+  mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   hook session-start|prompt-context|reflect run a hook, reading the event JSON from stdin
   reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground
   embed install                             install the embedding library into the home and download its weights

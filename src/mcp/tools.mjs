@@ -1,6 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { saveProject } from "../cli/project.mjs";
@@ -820,12 +819,5 @@ export function createServer(env = process.env) {
   }
   // The SDK validates the call before the handler and refuses with one issue; this refusal carries every issue, the whole contract and what was received, which is what lets an agent fix the next call instead of repeating the same payload.
   server.validateToolInput = async (tool, args, toolName) => validateArgs(toolName, schemas.get(toolName) ?? tool.inputSchema, args);
-  return server;
-}
-
-// Starts the server over stdio, the only stream the protocol may use in this process.
-export async function startServer(env = process.env) {
-  const server = createServer(env);
-  await server.connect(new StdioServerTransport());
   return server;
 }

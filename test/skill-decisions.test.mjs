@@ -6,7 +6,7 @@ const read = (relative) => readFileSync(new URL(`../${relative}`, import.meta.ur
 
 const SKILL = read("plugin/skills/resolve/SKILL.md");
 const ARCHITECT = read("plugin/agents/architect.md");
-const SERVER = read("src/mcp/server.mjs");
+const SERVER = read("src/mcp/tools.mjs");
 
 // Reflect files the pipeline must keep away from the decisions and roadmap tables.
 const REFLECT_FILES = ["src/hooks/reflect.mjs", "src/hooks/reflect-worker.mjs", "src/cli/reflect.mjs", "src/memory/dedup.mjs"];
@@ -86,7 +86,7 @@ test("every decisions tool the pipeline markdown names is a tool the server real
   for (const file of [ARCHITECT]) for (const m of file.matchAll(/decision_(?:save|recall|update|list)\b/g)) named.add(m[0]);
   assert.ok(named.size >= 3, `the pipeline markdown names only ${[...named].join(", ")}`);
   for (const tool of named) {
-    assert.ok(SERVER.includes(`name: "${tool}"`), `the markdown names \`${tool}\`, which src/mcp/server.mjs does not register`);
+    assert.ok(SERVER.includes(`name: "${tool}"`), `the markdown names \`${tool}\`, which src/mcp/tools.mjs does not register`);
   }
 });
 
