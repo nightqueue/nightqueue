@@ -13,7 +13,7 @@ import { refreshMergedJobs } from "./merged.mjs";
 import { preflight } from "./preflight.mjs";
 import { ownRunnerRecord } from "./registry.mjs";
 import { repairWarningLine } from "./reconcile.mjs";
-import { decideResume, isSafeSegment, readRunState, writeRunTerminal } from "./resume.mjs";
+import { clearRunOutcome, decideResume, isSafeSegment, readRunState, writeRunTerminal } from "./resume.mjs";
 import { buildPrompt, cliEntrypoint, IDLE_TIMEOUT_S, spawnClaude } from "./spawn.mjs";
 import { extractSessionIdFromEventLine, extractSlugFromEventLine, extractUsage, sumUsage } from "./stream.mjs";
 
@@ -122,6 +122,7 @@ async function runAttempts(job, ctx) {
   let attempt = job.attempts;
   while (true) {
     if (!(await renew(job, env))) return { lost: true, facts, attempt, usage: sumUsage(usages), outcome: null, result: null };
+    if (isSafeSegment(facts.slug)) clearRunOutcome({ project: job.project, slug: facts.slug, env });
     const result = await spawnClaude({
       prompt: ctx.prompt,
       cwd: ctx.cwd,
@@ -140,7 +141,7 @@ async function runAttempts(job, ctx) {
     });
     if (ownership.lost) return { lost: true, facts, attempt, usage: sumUsage(usages), outcome: null, result };
     usages.push(extractUsage(result.log));
-    const outcome = classifyJobResult(result);
+    const outcome = classifyJobResult({ ...result, state: readRunState({ project: job.project, slug: facts.slug, env }) });
     if (!isRetryable(job, attempt, result, outcome)) {
       return { lost: false, facts, attempt, usage: sumUsage(usages), outcome, result };
     }

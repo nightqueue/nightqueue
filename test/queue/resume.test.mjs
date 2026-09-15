@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runDir } from "../../src/config/paths.mjs";
-import { decideResume, isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../../src/queue/resume.mjs";
+import { clearRunOutcome, decideResume, isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../../src/queue/resume.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 
 // A state.json in the shape the plugin writes it, with the canonical ENGLISH keys and phase names.
@@ -115,6 +115,29 @@ test("every broken state has its own reason and none of them ever throws", () =>
   for (const decision of [decideResume({ state: null }), decideResume({ state: "{ not json" })]) {
     assert.deepEqual({ resume: decision.resume, fromPhase: decision.fromPhase, reuseWorktree: decision.reuseWorktree }, { resume: false, fromPhase: null, reuseWorktree: false });
   }
+});
+
+test("clearRunOutcome drops the record of the previous attempt and keeps everything else the run wrote", (t) => {
+  const env = makeHome(t, "resume-clear-outcome");
+  const terminal = { status: "gate", prUrl: null, finishedAt: "2026-09-14T00:00:00Z" };
+  writeState(env, {
+    project: "alpha",
+    slug: "fix-the-worker",
+    content: state({ outcome: { status: "done", prUrl: "https://github.com/acme/api/pull/42" }, terminal }),
+  });
+
+  assert.equal(clearRunOutcome({ project: "alpha", slug: "fix-the-worker", env }).status, "written");
+  const cleared = readRunState({ project: "alpha", slug: "fix-the-worker", env });
+  assert.equal(cleared.outcome, undefined, "the record of the previous attempt survived the clear");
+  assert.deepEqual(cleared.terminal, terminal, "clearing the record threw away the witness");
+  assert.equal(cleared.schemaVersion, 1);
+  assert.equal(cleared.phases.length, 2);
+  assert.equal(decideResume({ state: cleared }).fromPhase, "architecture", "the resume decision changed with the clear");
+
+  assert.equal(clearRunOutcome({ project: "alpha", slug: "fix-the-worker", env }).status, "absent", "a state with no record was rewritten");
+  assert.equal(clearRunOutcome({ project: "alpha", slug: "never-ran", env }).status, "absent");
+  assert.equal(existsSync(join(runDir("alpha", "never-ran", env), "state.json")), false, "the clear created a state.json");
+  assert.equal(clearRunOutcome({ project: "alpha", slug: "../../escape", env }).status, "absent");
 });
 
 test("the state file is read from the run directory, and an unsafe segment never becomes a path", (t) => {

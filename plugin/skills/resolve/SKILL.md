@@ -291,6 +291,13 @@ agent, print a line in this format first:
    structure no longer stops at the gate: the runtime records the job as `failed`, because
    a gate nobody can read is worse than a failure.
 
+   **Before printing the gate block, record the outcome in `state.json`** — the same atomic,
+   tolerant write of step 5.3, with the top-level field
+   `"outcome": { "status": "gate", "notice": "<the body of ## Notice>", "updatedAt": "<iso>" }`.
+   The runtime reads that record before it reads the stream, so a gate survives any paraphrase
+   of the two headings. NEVER bump `schemaVersion` because of it, and never write `prUrl` on a
+   gate that opened no pull request.
+
    **A brief that depends on another job's pull request is not executable here.** When the
    request conditions the work on another job ("after job #N", "once PR #N is merged",
    "depends on job ..."), the verdict is `PROPOSE-ALTERNATIVE` — this case adds no new
@@ -518,6 +525,18 @@ agent, print a line in this format first:
      (existence gate, `gate_stop`, timeout, gate 2.5, Phase 3 with an insufficient brief or
      `## Requires user confirmation`): there the resume re-runs the SAME phase, which is the
      correct behavior — marking it would turn a pause into the death of the run.
+   - **The outcome of the run (the `outcome` field).** Write the top-level field
+     `"outcome": { "status": "done" | "gate", "prUrl": "<the URL of the pull request>",
+     "notice": "<the body of ## Notice>", "updatedAt": "<iso>" }` at exactly TWO points and
+     nowhere else: **Phase 7**, immediately after `gh pr create` opened the pull request
+     (`status` = `done`, with `prUrl`), and the **gate block**, immediately before printing it
+     (`status` = `gate`, with `notice`). The runtime classifies the job from this record before
+     it reads the stream, which is what stops the outcome from depending on how the final text
+     was worded. An **additive** field: NEVER bump `schemaVersion` because of it. `status`
+     accepts ONLY `done` and `gate` — a failure, a cancellation and a timeout are read from how
+     the process ended, never from a file, and any other value makes the runtime ignore the whole
+     record and fall back to the stream. `prUrl` is the complete URL
+     (`https://github.com/<owner>/<repo>/pull/<number>`); anything else is ignored.
    - **Atomic** write (Write to a `state.json.tmp` + rename to `state.json`) and
      **tolerant**: a failure to write the state NEVER aborts the pipeline — it only loses
      the savings of an eventual resume. Continue to the next phase normally.
@@ -1810,6 +1829,12 @@ inform that the commit/PR was not generated.
      double curly braces and no `<...>` example left over from the model. Any failure
      → fix the body and only then open the PR. A PR outside this standard is never
      opened.
+   - **Record the outcome in `state.json` the moment the pull request exists** — the atomic,
+     tolerant write of step 5.3, with the top-level field
+     `"outcome": { "status": "done", "prUrl": "<the URL `gh pr create` printed>", "updatedAt": "<iso>" }`.
+     This is what makes the runtime record the job as `done` with its pull request even when the
+     final text of the run never repeats the link. NEVER bump `schemaVersion` because of it, and
+     never write a `status` other than `done` here. No pull request opened → no `outcome` written.
    - If there is no remote configured or `gh` is unavailable, inform it and leave the
      local commit ready for the user to publish manually.
 

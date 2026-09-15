@@ -4,7 +4,15 @@ import { test } from "node:test";
 import { buildPrompt } from "../src/queue/spawn.mjs";
 
 const SKILL = readFileSync(new URL("../plugin/skills/resolve/SKILL.md", import.meta.url), "utf8");
+const CLASSIFY = readFileSync(new URL("../src/queue/classify.mjs", import.meta.url), "utf8");
 const OPERATOR_TIER_LITERAL = "(set by the operator - the pipeline may only raise it, with evidence, never lower it)";
+
+// The three places the skill tells the pipeline to write the outcome record: its contract and its two write points.
+const OUTCOME_ANCHORS = [
+  "**The outcome of the run (the `outcome` field).**",
+  "**Record the outcome in `state.json` the moment the pull request exists**",
+  "**Before printing the gate block, record the outcome in `state.json`**",
+];
 
 // The cells of a markdown table row, trimmed and without the outer pipes.
 function cellsOf(line) {
@@ -45,6 +53,30 @@ test("the model table drops the architect and the qa-guardian from the simple ti
   assert.equal(modelRow("architect")[simple], "—");
   assert.equal(modelRow("qa-guardian")[simple], "—");
   assert.equal(modelRow("coder")[simple], "sonnet", "the parser read the wrong column");
+});
+
+// The passage of the skill that starts at an anchor, long enough to carry the whole instruction under it.
+function passageAt(anchor) {
+  const start = SKILL.indexOf(anchor);
+  assert.ok(start >= 0, `the skill no longer documents the outcome record at: ${anchor}`);
+  return SKILL.slice(start, start + 900);
+}
+
+test("the outcome record is documented at its three points, with the field names the runtime really reads", () => {
+  for (const anchor of OUTCOME_ANCHORS) {
+    const passage = passageAt(anchor);
+    assert.ok(passage.includes('"outcome": {'), `${anchor} documents no \`outcome\` object`);
+    assert.ok(passage.includes('"status"'), `${anchor} documents no \`status\``);
+    assert.ok(passage.includes("NEVER bump `schemaVersion`"), `${anchor} lost the additive rule`);
+  }
+  assert.ok(passageAt(OUTCOME_ANCHORS[0]).includes('"status": "done" | "gate"'), "the status enum of the record is no longer closed");
+  assert.ok(passageAt(OUTCOME_ANCHORS[1]).includes('"prUrl"'), "the Phase 7 write no longer records the pull request URL");
+  assert.ok(passageAt(OUTCOME_ANCHORS[2]).includes('"notice"'), "the gate write no longer records the notice");
+
+  for (const field of ["state?.outcome", "record.status", "record.prUrl", "record.notice"]) {
+    assert.ok(CLASSIFY.includes(field), `the skill documents a field \`${field}\` that \`classify.mjs\` does not read`);
+  }
+  assert.ok(CLASSIFY.includes('new Set(["done", "gate"])'), "the runtime accepts a status the skill never documents");
 });
 
 test("the telemetry paragraph names the two new parameters, under the names the operator chose", () => {

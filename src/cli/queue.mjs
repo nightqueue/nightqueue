@@ -31,6 +31,7 @@ import {
   STOP_TIMEOUT_MS,
 } from "../queue/registry.mjs";
 import { repairWarningLine } from "../queue/reconcile.mjs";
+import { reclassifyFromLog } from "../queue/repair.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
@@ -45,6 +46,7 @@ const USAGE = {
   run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <n>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
   retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
+  repair: "nightshift queue repair <id> [--json]",
   pause: "nightshift queue pause",
   resume: "nightshift queue resume",
   log: "nightshift queue log <id> [--follow] [--raw] [--all]",
@@ -853,6 +855,20 @@ async function runRetry(argv, ctx) {
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }
 
+// What a re-classification answers the operator: the outcome it corrected, or that there was nothing to correct.
+function repairLine(outcome) {
+  if (!outcome.changed) return `job #${outcome.id} is still \`${outcome.from}\`; there is nothing to correct`;
+  return `job #${outcome.id} re-classified from \`${outcome.from}\` to \`${outcome.to}\`${outcome.prUrl ? ` (${outcome.prUrl})` : ""}`;
+}
+
+// Runs `queue repair`, which re-derives the outcome of a gated or failed job from its own log and state.json.
+async function runRepair(argv, ctx) {
+  const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
+  checkArgs(positionals, { min: 1, usage: USAGE.repair });
+  const outcome = await reclassifyFromLog({ id: requireInt("id", positionals[0]), env: ctx.env });
+  ctx.out(values.json ? JSON.stringify({ repair: outcome }) : repairLine(outcome));
+}
+
 // Runs `queue pause`, which stops new claims without touching any job.
 async function runPause(argv, ctx) {
   const { positionals } = parseCommand(argv);
@@ -1018,6 +1034,7 @@ const SUBCOMMANDS = new Map([
   ["run", runRun],
   ["cancel", runCancel],
   ["retry", runRetry],
+  ["repair", runRepair],
   ["pause", runPause],
   ["resume", runResume],
   ["log", runLog],

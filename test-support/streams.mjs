@@ -90,6 +90,28 @@ export function doneStream({ slug = SLUG, sessionId = SESSION_ID, prUrl = PR_URL
   ]);
 }
 
+// A run that delivered its pull request in an INTERMEDIATE message and whose final `result` is an unrelated
+// sentence: a table cell that merely mentions the URL, the notice, and the delivery as the last line - job #17's shape.
+export function intermediateDeliveryStream({ slug = SLUG, sessionId = SESSION_ID, prUrl = PR_URL, notice = "The pull request is open and the checks are green.", delivered = true } = {}) {
+  const message = [
+    "| Step | Agent | Status | Highlight |",
+    "|------|-------|--------|-----------|",
+    `| 7 Commit/PR | Commit/PR | ok | branch \`ns/fix-the-worker\` + ${prUrl} |`,
+    "",
+    NOTICE_HEADING,
+    "",
+    notice,
+    "",
+    delivered ? `Record: • PR ${prUrl}` : "Record: • PR opened for this run",
+  ].join("\n");
+  return toNdjson([
+    systemInitEvent({ sessionId }),
+    slugEvent(slug, { sessionId }),
+    assistantEvent(message, { sessionId, messageId: "msg_record" }),
+    resultEvent({ text: "Telemetry recorded (run 21). Worktree removed — the branch is on the remote.", sessionId }),
+  ]);
+}
+
 // A run that stops at the human gate: the marker is a standalone heading of the orchestrator.
 export function gateStream({ slug = SLUG, sessionId = SESSION_ID } = {}) {
   return toNdjson([

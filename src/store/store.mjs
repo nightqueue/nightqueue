@@ -37,6 +37,7 @@
  * @property {() => Promise<number|null>} firstActiveJobId
  * @property {(id: number) => Promise<boolean>} isJobActive
  * @property {(id: number, terminal: object) => Promise<boolean>} repairJobFromWitness
+ * @property {(id: number, outcome: object) => Promise<boolean>} reclassifyJob the outcome re-derived from the job's own log
  * @property {() => Promise<boolean>} hasClaimablePending
  * @property {() => Promise<object|null>} peekNextJob
  * @property {() => Promise<object[]>} listWithSlug unfinished jobs that already have a run directory
@@ -168,6 +169,7 @@ export const STORE_CONTRACT = Object.freeze({
     "firstActiveJobId",
     "isJobActive",
     "repairJobFromWitness",
+    "reclassifyJob",
     "hasClaimablePending",
     "peekNextJob",
     "listWithSlug",

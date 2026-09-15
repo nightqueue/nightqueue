@@ -167,6 +167,14 @@ export function clearRunTerminal({ project, slug, env = process.env } = {}) {
   return saveRunState({ project, slug, env, state: rest });
 }
 
+// Drops the outcome the pipeline recorded, so the record of the previous attempt never speaks for the next one.
+export function clearRunOutcome({ project, slug, env = process.env } = {}) {
+  const state = readRunState({ project, slug, env });
+  if (!isStateObject(state) || state.outcome === undefined) return { status: "absent", path: null, reason: null };
+  const { outcome, ...rest } = state;
+  return saveRunState({ project, slug, env, state: rest });
+}
+
 // State of a path WITHOUT following a link, the only reading that tells a run directory from a link into somebody else's tree.
 function lstatOrNull(path) {
   try {

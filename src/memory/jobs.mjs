@@ -634,6 +634,20 @@ export function repairJobFromWitness(id, terminal, env = process.env) {
   return withWriteRetry(() => statement.run(...values)).changes === 1;
 }
 
+// Rewrites the outcome of a job re-derived from its own log; only a gated or failed row moves, and a refusal writes nothing.
+export function reclassifyJob(id, { status, prUrl, noticeMd } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET result = json_set(${RESULT_OBJECT_BASE}, '$.reclassifiedFrom', status),
+            status = ?,
+            pr_url = COALESCE(?, pr_url),
+            notice_md = COALESCE(?, notice_md)
+      WHERE id = ? AND status IN ('gate', 'failed')`,
+  );
+  const values = [requireStatus(status), optionalText(prUrl), optionalText(noticeMd), requireId(id)];
+  return withWriteRetry(() => statement.run(...values)).changes === 1;
+}
+
 // Tells whether some pending job is waiting to be claimed, which is what tells an empty queue from a full ceiling.
 export function hasClaimablePending(env = process.env) {
   return Boolean(openDb(env).prepare(`${CANDIDATE_QUERY}`).get());

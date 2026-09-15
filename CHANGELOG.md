@@ -6,7 +6,24 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- `nightshift queue repair <id>` re-derives the outcome of a job left in `gate`
+  or `failed` from its own log and its own `state.json`, and writes the
+  corrected row and witness. It is the way to settle a job that really opened a
+  pull request but was recorded without it, with no hand-edited database. It
+  never runs by itself: the automatic witness sweep is unchanged.
+
 ### Fixed
+
+- A run that opened its pull request and then said one more sentence was
+  recorded as `gate` with no pull request URL. Of the three signals the runtime
+  read from the session, two already looked back over the whole run and the
+  third read only the last message, so a delivery announced one message earlier
+  was lost. All three now look back the same way. The pipeline also records the
+  outcome of a run in `<RUN_DIR>/state.json`, and the runtime prefers that
+  record over the text it reads from the session: a run that describes its own
+  result in different words is no longer misread. The text stays the fallback.
 
 - `nightshift queue status --follow` and the MCP `queue_status` tool read the
   queue on a read-only connection opened for that poll alone, instead of the one

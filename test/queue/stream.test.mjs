@@ -6,6 +6,7 @@ import {
   extractNotice,
   extractNoticeFromStream,
   extractPrUrl,
+  extractPrUrlFromStream,
   extractResultText,
   extractSessionIdFromEventLine,
   extractSlugFromEventLine,
@@ -14,6 +15,7 @@ import {
   hasGateMarkerInStream,
   isSessionIdSafe,
   isSubagentEvent,
+  lastAttemptStream,
   orchestratorText,
   parseSlugLine,
   sumUsage,
@@ -21,6 +23,7 @@ import {
 } from "../../src/queue/stream.mjs";
 import {
   assistantEvent,
+  attemptMarker,
   doneStream,
   gateStream,
   GATE_MARKER,
@@ -170,6 +173,34 @@ test("only a line that DELIVERS the pull request counts: a citation, an example 
   assert.equal(extractPrUrl(`Failed to open pull request: ${PR_URL}`), null);
   assert.equal(extractPrUrl(["here is the shape of the link:", "```", PR_URL, "```"].join("\n")), null);
   assert.equal(extractPrUrl(`  12\t${PR_URL}`), null, "a quoted file line was read as a delivery");
+});
+
+test("the pull request of the stream is the ORCHESTRATOR's: a subagent never delivers one", () => {
+  const delivered = toNdjson([assistantEvent(`Done. Pull request: ${PR_URL}`, { messageId: "msg_pr" }), resultEvent({ text: "Telemetry recorded." })]);
+  assert.equal(extractPrUrlFromStream(delivered), PR_URL, "the orchestrator's own intermediate delivery was ignored");
+  assert.equal(
+    extractPrUrlFromStream(toNdjson([assistantEvent(`Done. Pull request: ${PR_URL}`, { parentToolUseId: "toolu_1" })])),
+    null,
+    "a subagent delivered the pull request",
+  );
+});
+
+test("only a marker the runtime itself wrote, in sequence and unquoted, closes an attempt of an accumulated log", () => {
+  const first = toNdjson([resultEvent({ text: `Done. Pull request: ${PR_URL}` })]);
+  const second = toNdjson([resultEvent({ text: "Stopped at the gate." })]);
+
+  assert.equal(lastAttemptStream(first), first, "a log with no marker at all stopped being one whole attempt");
+  assert.equal(lastAttemptStream(`${attemptMarker(1)}\n${first}`), first);
+  assert.equal(lastAttemptStream(`${attemptMarker(1)}\n${first}${attemptMarker(2)}\n${second}`), second, "an older attempt spoke for the outcome");
+
+  const decoy = `${first}${attemptMarker(2)}\n`;
+  assert.equal(lastAttemptStream(decoy), decoy, "a marker out of the runtime's own numbering was trusted as a boundary");
+
+  const fenced = [attemptMarker(1), "```", attemptMarker(2), "```", ""].join("\n");
+  assert.equal(lastAttemptStream(fenced), ["```", attemptMarker(2), "```", ""].join("\n"), "a marker quoted inside a code fence closed an attempt");
+
+  const quoted = [attemptMarker(1), `  12\t${attemptMarker(2)}`, ""].join("\n");
+  assert.equal(lastAttemptStream(quoted), [`  12\t${attemptMarker(2)}`, ""].join("\n"), "a marker inside a `cat -n` quotation closed an attempt");
 });
 
 test("usage adds up per message id and the result event of the session has the final word", () => {

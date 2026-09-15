@@ -99,6 +99,7 @@ commands:
   queue run [--job | --watch] [--max]       start the runner detached; --foreground runs it here, --stop ends a watcher
   queue cancel <id> [--reason "..."]        cancel a pending, gated or orphaned job
   queue retry <id> [--note] [--fresh]       send a gated, failed or cancelled job back to the queue; --run starts it detached
+  queue repair <id> [--json]                re-classify a gated or failed job from its own log; corrects a lost PR link
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written
   version                                   print the installed nightshift version

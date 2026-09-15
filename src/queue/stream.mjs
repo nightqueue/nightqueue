@@ -4,8 +4,11 @@ const GATE_HEADING_RE = /^#{1,6}\s+Requires user confirmation\s*$/i;
 const NOTICE_HEADING_RE = /^#{1,6}\s+Notice\s*$/i;
 const SLUG_LINE_RE = /^\s*QUEUE_SLUG:\s*([A-Za-z0-9][A-Za-z0-9._+-]{0,79})\s*$/;
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/;
+// The line `openAttemptLog` writes before each attempt; the runtime numbers them 1, 2, 3… in order, so a line out of that sequence is incidental output shaped like a marker.
+const ATTEMPT_MARKER_RE = /^=== attempt (\d+) @ \S+ ===$/;
 const PR_URL_SOURCE = "https?://github\\.com/[\\w.-]+/[\\w.-]+/pull/\\d+";
 const PR_URL_RE = new RegExp(PR_URL_SOURCE, "g");
+const PR_URL_ONLY_RE = new RegExp(`^${PR_URL_SOURCE}$`);
 const PR_DELIVERY_LINE_RE = new RegExp(`${PR_URL_SOURCE}[)\\]>.,;:'"\`*_ \\t]*$`);
 const PR_DENIAL_RE = /\b(?:fail(?:ed|s|ing|ure)?|could not|cannot|can't|unable|error|refused|denied|not opened?|no pull request|example|would be)\b/i;
 const USAGE_FIELDS = ["tokensIn", "tokensOut", "cacheRead", "cacheCreation"];
@@ -66,6 +69,23 @@ function linesWithFenceState(text) {
 // Tells whether a scanned line can carry a marker: outside a fence and not a `cat -n` style quotation.
 function isMarkerCandidate({ line, inFence }) {
   return !inFence && !QUOTED_LINE_RE.test(line);
+}
+
+// Stream of the LAST attempt of an accumulated log: an older attempt never speaks for the outcome of a job.
+export function lastAttemptStream(log) {
+  const scanned = linesWithFenceState(log);
+  let start = 0;
+  let expected = 1;
+  scanned.forEach((entry, index) => {
+    const marker = isMarkerCandidate(entry) ? ATTEMPT_MARKER_RE.exec(entry.line) : null;
+    if (!marker || Number(marker[1]) !== expected) return;
+    expected += 1;
+    start = index + 1;
+  });
+  return scanned
+    .slice(start)
+    .map((entry) => entry.line)
+    .join("\n");
 }
 
 // Extracts the run slug from a STANDALONE `QUEUE_SLUG: <slug>` line; an inline mention never matches.
@@ -171,6 +191,29 @@ export function extractPrUrl(text) {
     found = matches[matches.length - 1];
   }
   return found;
+}
+
+// Tells whether a value is, on its own, a pull request URL: the shape a structured field has to carry to be believed.
+export function isPrUrl(value) {
+  return typeof value === "string" && PR_URL_ONLY_RE.test(value);
+}
+
+// Last pull request the ORCHESTRATOR delivered in an intermediate event, the only fallback when the final text delivers none.
+function prUrlFromAssistants(log) {
+  const lines = String(log ?? "").split("\n");
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const text = orchestratorTextFromLine(lines[i]);
+    if (!text) continue;
+    const prUrl = extractPrUrl(text);
+    if (prUrl) return prUrl;
+  }
+  return null;
+}
+
+// Pull request of the run: the final `result` event has the authority, and a delivery in an earlier event is the fallback.
+export function extractPrUrlFromStream(log) {
+  const resultText = extractResultText(log);
+  return (resultText ? extractPrUrl(resultText) : null) ?? prUrlFromAssistants(log);
 }
 
 // Turns an external value into a finite number (0 when it is not one).

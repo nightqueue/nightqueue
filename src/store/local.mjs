@@ -39,6 +39,7 @@ function jobsDomain(env, db) {
     firstActiveJobId: async () => jobs.firstActiveJobId(env),
     isJobActive: async (id) => jobs.isJobActive(id, env, db()),
     repairJobFromWitness: async (id, terminal) => jobs.repairJobFromWitness(id, terminal, env),
+    reclassifyJob: async (id, outcome) => jobs.reclassifyJob(id, outcome, env),
     hasClaimablePending: async () => jobs.hasClaimablePending(env),
     peekNextJob: async () => jobs.peekNextJob(env),
     listWithSlug: async () => jobs.listJobsWithSlug(env, db()),

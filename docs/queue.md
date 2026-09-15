@@ -24,6 +24,7 @@ nightshift queue run --foreground [--job 7]                    # run it in this 
 nightshift queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
 nightshift queue cancel 7 --reason "not needed"                # cancel a pending, gated or orphaned job
 nightshift queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue
+nightshift queue repair 7 [--json]                             # re-classify a gated or failed job from its own log
 nightshift queue pause | nightshift queue resume                    # stop claiming new jobs, or claim again
 ```
 
@@ -266,6 +267,18 @@ bug of the retry. `--fresh` asks for that from the start: it clears slug, branch
 and session and drops the run directory - and only a plain directory of this home,
 never a symlink, never a path outside `<home>/runs/`; anything else is kept, with
 the reason printed, and the retry goes on.
+
+`queue repair <id>` re-classifies a job that ended `gate` or `failed` from its
+own persisted log plus the `outcome` its pipeline recorded in `state.json`, and
+is the way a run that really opened a pull request but was recorded without its
+link is corrected without editing sqlite by hand. It runs only when the operator
+asks for it, by id: it never runs on its own, and the automatic repair from the
+`terminal` witness is untouched by it. The row keeps the ending the process had
+(a killed, timed-out or non-zero-exit run is never turned into `done`), the
+witness in `state.json` is rewritten so file and row agree, and a second call
+answers that there is nothing to correct and writes nothing. It refuses, naming
+the reason, an unknown job, a job running under a live lease, a job in any other
+status, a job whose log is gone and a job whose `result` recorded no exit code.
 
 **Two jobs of the same project may run at the same time.** The claim filters by nothing
 but `pending`: the only limits are the atomic claim of one job and `queue.maxConcurrent`.

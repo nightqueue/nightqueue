@@ -1,5 +1,5 @@
 import { truncateByCodePoint } from "../memory/jobs.mjs";
-import { extractNoticeFromStream, extractPrUrl, extractResultText, hasGateMarker, hasGateMarkerInStream } from "./stream.mjs";
+import { extractNoticeFromStream, extractPrUrlFromStream, extractResultText, hasGateMarker, hasGateMarkerInStream, isPrUrl } from "./stream.mjs";
 
 const BACKOFF_BASE_MS = 5000;
 const BACKOFF_FACTOR = 3;
@@ -7,6 +7,9 @@ const BACKOFF_CAP_MS = 60000;
 const NOTICE_FALLBACK_LIMIT = 8000;
 
 export const SILENT_STOP_NOTICE = "Pipeline stopped without a PR and without explanation (exit 0). See the log.";
+
+// The only two outcomes the pipeline may record in `state.json`; how the process ended stays the runtime's call.
+const OUTCOME_STATUSES = new Set(["done", "gate"]);
 
 // Explicit precedence of the outcome: a stop wins over a timeout, a timeout is never a retryable failure, and a job only waits at the gate when it said why.
 function decideStatus({ exitCode, timedOut, idleTimedOut, stopped, prUrl, gate, reason }) {
@@ -30,12 +33,23 @@ function endedCleanly({ exitCode, timedOut, idleTimedOut, stopped }) {
   return exitCode === 0 && !timedOut && !idleTimedOut && !stopped;
 }
 
-// Classifies one attempt of a job from its stream and how the process ended.
-export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false } = {}) {
+// The `outcome` the pipeline recorded in state.json, field by field; anything outside the contract simply does not participate.
+function pipelineOutcome(state) {
+  const record = state?.outcome;
+  if (!record || typeof record !== "object" || Array.isArray(record)) return null;
+  const status = OUTCOME_STATUSES.has(record.status) ? record.status : null;
+  const prUrl = isPrUrl(record.prUrl) ? record.prUrl : null;
+  const notice = typeof record.notice === "string" && record.notice.trim() ? record.notice.trim() : null;
+  return status || prUrl || notice ? { status, prUrl, notice } : null;
+}
+
+// Classifies one attempt of a job from what the pipeline recorded, its stream and how the process ended.
+export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null } = {}) {
   const resultText = extractResultText(log) ?? "";
-  const prUrl = extractPrUrl(resultText);
-  const gate = hasGateMarker(resultText) || hasGateMarkerInStream(log);
-  const reason = gateReason(log, resultText);
+  const record = pipelineOutcome(state);
+  const prUrl = record?.prUrl ?? extractPrUrlFromStream(log);
+  const gate = record?.status ? record.status === "gate" : hasGateMarker(resultText) || hasGateMarkerInStream(log);
+  const reason = record?.notice ?? gateReason(log, resultText);
   const ending = { exitCode, timedOut, idleTimedOut, stopped };
   const status = decideStatus({ ...ending, prUrl, gate, reason });
   const silentStop = status === "failed" && !reason && endedCleanly(ending);
