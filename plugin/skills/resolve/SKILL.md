@@ -58,18 +58,12 @@ agent, print a line in this format first:
 > **`run_in_background: true` is FORBIDDEN in the orchestrator.** It applies to every
 > launch of /resolve — Stage B provers, coders running in parallel by batch,
 > background Bash commands and any other fan-out. **Why:** the pipeline runs under
-> `claude -p`; ending a turn with no pending `tool_use` terminates the process and kills
-> the background tasks still running. The work dies halfway through, with no warning, and
-> the session still exits with code 0.
+> `claude -p`; ending a turn with no pending `tool_use` kills the background tasks still
+> running, silently, with the session still exiting code 0.
 >
-> **Parallelism = N `tool_use` blocks in the SAME content block of ONE single
-> message.** The N run simultaneously, the loop stays blocked waiting for the N
-> `tool_result`, and the turn does not end halfway. The blocking is deliberate: it is what
-> keeps the process alive until the last subagent returns.
->
-> **Forbidden to end the turn announcing a wait** ("waiting for prover X",
-> "I will wait for it to finish", "I will continue when it is done"). There is no clock
-> waiting for the orchestrator: either the `tool_use` is pending, or the work died.
+> **Parallelism = N `tool_use` blocks in the SAME content block of ONE single message.**
+> The N run simultaneously and the turn stays blocked until the last subagent returns —
+> never end a turn announcing a wait: either the `tool_use` is pending, or the work died.
 
 ## Pipeline (execute in this exact order)
 
@@ -80,20 +74,17 @@ agent, print a line in this format first:
    reachable — the return is not used here; the per-phase `context_for_phase` (below) is the
    one that feeds the prompts. There is no memoryless mode.
 
-   - **The tool does not exist in the host** (no MCP server `nightshift` connected, the host
-     answers that there is no such tool) → **STOP the run right here**: print one short line —
-     `nightshift memory unavailable: run nightshift setup and retry` — and do not create the
-     worktree, do not record anything about the run, do not launch any subagent.
+   - **The tool does not exist in the host** → **STOP the run right here**: print one short
+     line — `nightshift memory unavailable: run nightshift setup and retry` — and do not
+     create the worktree, do not record anything, do not launch any subagent.
    - **The tool answers** — including an EMPTY return or a read error → continue. An empty
-     memory is the normal state of a fresh install: an empty recall only makes the phase omit
-     the corresponding section.
+     memory is the normal state of a fresh install.
    - **The standing decisions are already in your context** — the `## Standing decisions`
      section of the `# Nightshift context` block injected at the start of the session carries
      them, org rows first, each already named `#<number>` or `<owner>#<number>`. No preflight
      call fetches them; `decision_recall` stays the way to refine them by query (step 1).
-   - One call answers both levels: `decision_recall` with `project` returns the
-     project's decisions AND the decisions of its org, the org rows first, each
-     carrying its `scope` and its `owner`. Never call it a second time with `org`.
+   - One call answers both levels: `decision_recall` with `project` returns the project's
+     decisions AND its org's, org rows first, each carrying `scope` and `owner`.
    - **`decision_recall` failed or is unavailable while `lesson_recall` answered** (an older
      runtime) → continue WITHOUT a `## Standing decisions` section and record it as an open
      item of Phase 8. An empty return is different: it means the project has no accepted
@@ -113,38 +104,21 @@ agent, print a line in this format first:
    - **`From stage: qa-stage-b`** → Phase 5 re-enters straight at **Stage B (provers)**:
      read `<RUN_DIR>/05a-qa-analyst.md` via Read and move on to the consolidation normally,
      without relaunching the analyst. Any other value → run the whole of Phase 5, from Stage A.
-   - **Read-fail fallback (fail-safe):** if ANY artifact of a phase the block declares
-     completed is missing or unreadable when re-read via Read (file deleted, empty or read
-     error), ignore the block and **start clean** from step 1. Never proceed with a resume
-     without the real content of every phase it declares completed.
-   - Safety invariant: the resume only happens on a retry of a job in a TERMINAL
-     status (gate/failed/budget) — the lease has already been released and no worker holds
-     the worktree, so reusing it does not collide with orphan hygiene. NEVER reuse the
-     worktree of a job that is still running.
-   - No candidate block in the context: proceed normally from step 1 — the default behavior
-     is to start from scratch. No `RUN_DIR:` line in the prompt → derive `RUN_DIR` from
-     `<project>/<slug>` as before and print `QUEUE_SLUG: <slug>` once.
+   - **Read-fail fallback (fail-safe):** an artifact of a phase the block declares completed
+     that is missing or unreadable via Read → ignore the block and **start clean** from step 1.
+   - Safety invariant: the resume only happens on a retry of a job in a TERMINAL status
+     (gate/failed/budget) — NEVER reuse the worktree of a job that is still running.
+   - No candidate block in the context: proceed normally from step 1.
 
 0.6. **Post-merge resume (the operator contradicts what this job already delivered).** Trigger:
-   a resumed session — cockpit terminal or `--resume` — in which the operator describes an
-   expected behavior that contradicts the `## Usage coverage` of `03-plan.md`, or the
-   delivery is already merged when the plan had no such section. Protocol, in this order:
-
-   1. **Measure** the current behavior on the main branch, with evidence (command +
-      output, real request, screen opened) — never from memory, never from what the
-      previous run wrote in the artifact.
-   2. **Show them side by side**, one line per scenario:
-      `<scenario> · today-on-main: <measured + evidence> · expected by the operator: <what
-      he described> · divergence: yes|no`.
-   3. **Ask** where the fix goes, running `gh pr list --head <branch>` first: PR
-      open → commit on the same branch; PR already merged → only a new PR linked to the same
-      ticket fits, with a commit citing the previous one; or a new job, with the scenario
-      already written in the payload.
-   4. **Until the answer arrives:** forbidden to open a PR, create a branch, create a ticket or commit.
-
-   Named escape: *"the operator's assumption was wrong and I proved it" does NOT authorize
-   going ahead alone* — refuting the assumption is the outcome of step 1, never permission
-   for step 3.
+   a resumed session where the operator's expected behavior contradicts `## Usage coverage` of
+   `03-plan.md`, or the delivery is already merged with no such section. Protocol: (1)
+   **measure** the current behavior on main with real evidence; (2) **show side by side**, one
+   line per scenario: `<scenario> · today-on-main: <measured> · expected by the operator:
+   <what he described> · divergence: yes|no`; (3) **ask** where the fix goes (`gh pr list
+   --head <branch>` first: PR open → same branch; merged → a new linked PR or job); (4) until
+   answered, forbidden to open a PR, create a branch/ticket or commit — refuting the operator's
+   assumption is never permission to go ahead alone.
 
 1. **Interpret the input inline** (no subagent — you already have the input in the
    context). Compress the user's request into a compact **brief** (≤ 30 lines). Extract and
@@ -180,39 +154,30 @@ agent, print a line in this format first:
    a row marked `via: "fallback"` did not match the query and is dropped. Nothing left
    after that (or the tool failed, per step 0.1) → omit the section.
 
-   The **raw input is never passed to Explore**. Only the triager (Phase 1), on
-   bugs, may receive the raw error/stack trace block — it is the only agent that
-   needs that detail to reproduce. Keep it for that purpose.
+   The **raw input is never passed to Explore**. Only the triager (Phase 1), on bugs, may
+   receive the raw error/stack trace block, the only agent that needs that detail to
+   reproduce. The `**Type:**` field adjusts the behavior of Phase 1.
 
-   The `**Type:**` field (bug/error vs feature/refactor) adjusts the behavior of Phase 1.
+   **A request to "document":** when it includes documenting something AND there is a tracker
+   issue involved (e.g. Linear, Sentry, GitHub Issues), confirm the destination — a comment on
+   the tracker vs a file in the repository — before creating any `.md`.
 
-   **A request to "document":** when the request includes documenting something AND there
-   is a tracker issue involved (e.g. Linear, Sentry, GitHub Issues), confirm the destination
-   — a comment on the tracker vs a file in the repository — before creating any
-   `.md`. Do not assume a file by default.
+   The `**Expected outcome:**` field is the CANONICAL criterion of the pipeline: the triager
+   (Phase 1) and the architect (Phase 3) **refine** that target, never replace it. A phase that
+   concludes the canonical target is wrong writes an Intent note / `## Requires user
+   confirmation`, never a silent redefinition. Phase 6.5 and Phase 8 validate against it.
 
-   The `**Expected outcome:**` field is the CANONICAL criterion of the pipeline: the
-   acceptance criterion of the triager (Phase 1) and the Success criteria of the architect
-   (Phase 3) **refine** that target — they never replace it with another one. If some phase
-   concludes that the canonical target is wrong, that is an Intent note / `## Requires user
-   confirmation`, not a silent redefinition. The acceptance gate (Phase
-   6.5) and the report (Phase 8) validate against it.
+   The `**Bug account:**` field is critical for a bug about status/access/user data: extract
+   the ticket's identifier — the TARGET of every payload validation (Phases 1 and 6.5).
+   Validating against a generic test account or the emulator's own account may reproduce a
+   different state and invert the diagnosis. With none in the ticket, record "not identified"
+   and flag in triage that the cause depends on getting the real account.
 
-   The `**Bug account:**` field is critical for a bug about status/access/user
-   data: when the ticket points at a specific user (phone, email, screenshot,
-   video), extract that identifier — it is the TARGET of every payload validation
-   (Phases 1 and 6.5). Validating against a generic test account or against the account
-   logged into the emulator (which is usually another one) may fail to reproduce the state of
-   the bug and lead to an inverted diagnosis. With no identifier in the ticket, record
-   "not identified" and flag in triage that the cause depends on getting the real account.
-
-   **A brief with numbered stages.** When the request carries numbered stages
-   ("Stages:", "1) ... 2) ...", an ordered list), each stage is a unit of the run and the
-   order is binding: the Phase 3 plan is written per stage, in order; Phase 4 implements
-   stage by stage with the verifier between stages (a stage that fails is fixed before the
-   next one starts, never skipped); the execution table and the pull request list the
-   stages with their status. Stages are the internal order of ONE job, never a reason to
-   split the delivery: it is still one branch and ONE pull request at the end.
+   **A brief with numbered stages.** Each stage is a unit of the run and the order is binding:
+   the Phase 3 plan is written per stage, Phase 4 implements stage by stage with the verifier
+   between stages (a failing stage is fixed before the next starts), and the execution table
+   and PR list the stages with their status. Stages never split the delivery: still one branch
+   and ONE pull request.
 
 2. **Classify the risk** of the task to choose the execution track — the risk the
    change carries, never the size of the diff.
@@ -344,74 +309,53 @@ agent, print a line in this format first:
 
 4. **Decide whether to create the exclusive worktree**:
 
-   - Confirm you are inside a git repository: `git rev-parse --is-inside-work-tree`.
-     If it is **not** a git repository, skip the worktree, warn the user that
-     isolation will not be applied and follow the pipeline in the current directory.
+   - Confirm you are inside a git repository: `git rev-parse --is-inside-work-tree`. If not,
+     skip the worktree, warn the user and follow the pipeline in the current directory.
    - Detect the current branch: `git branch --show-current`.
-   - If you are on `main`, create a separate worktree and branch for the task:
-     - Update the remote reference of main: `git fetch origin`.
-     - Call `EnterWorktree` with `name: "<type>/<slug>"` (e.g.
-       `feat/login-google`). The worktree is created from `origin/main`
-       (base `fresh`), guaranteeing it starts from an updated main. Every later phase
-       runs inside it — the agents inherit that directory. If `EnterWorktree` is
-       unavailable in the host, create it with `git worktree add <path> -b <type>/<slug>
-       origin/main` and pass the absolute path to every phase.
-   - **Shell rule for every phase from here on (the host enforces it):** the worktree
-     isolation refuses any Bash command it cannot prove stays inside the worktree
-     ("this command is too complex to verify that it stays inside the worktree").
-     One simple command per Bash call; no heredocs (`<<`), no `\` continuations, no
-     `cd … && …`, no `python3 -`/`node -e` fed by stdin. Anything longer is a file:
-     `Write` it under the worktree (`tmp/<name>.mjs|.py|.sh`), run it by path, delete
-     it before the commit. Every agent brief you write repeats this rule in one line.
-   - If you are **not** on `main`, **do not ask** — assume the current branch
-     was chosen on purpose: do not create a worktree and follow the pipeline in the
-     current directory/branch. Warn in 1 line:
-     **"Current branch `<current-branch>` (non-main): proceeding without a worktree."**
-   - **On a valid resume (step 0.5)** with a `worktree` recorded in the state: if the
-     directory still exists on disk, REUSE it (do not call `EnterWorktree`). If the
-     directory is gone, recreate it via `EnterWorktree` from the recorded `branch`
-     (or base `fresh` if the branch no longer exists) — if `EnterWorktree` is unavailable
-     in the host, create it with `git worktree add <path> -b <type>/<slug> origin/main`
-     and pass the absolute path to every phase.
+   - If you are on `main`, create a separate worktree and branch for the task: `git fetch
+     origin`, then call `EnterWorktree` with `name: "<type>/<slug>"` (base `fresh`, created
+     from `origin/main`) — every later phase runs inside it. If `EnterWorktree` is unavailable
+     in the host, create it with `git worktree add <path> -b <type>/<slug> origin/main` and
+     pass the absolute path to every phase.
+   - **Shell rule for every phase from here on (the host enforces it):** the worktree isolation
+     refuses any Bash command it cannot prove stays inside the worktree ("this command is
+     too complex to verify that it stays inside the worktree"). One simple command per Bash
+     call; no heredocs (`<<`), no `\` continuations, no `cd … && …`, no `python3 -`/`node -e`
+     fed by stdin. Anything longer is a file: `Write` it under the worktree
+     (`tmp/<name>.mjs|.py|.sh`), run it by path, delete it before the commit. Every agent
+     brief you write repeats this rule in one line.
+   - If you are **not** on `main`, **do not ask** — do not create a worktree and follow the
+     pipeline in the current directory/branch. Warn in 1 line: **"Current branch
+     `<current-branch>` (non-main): proceeding without a worktree."**
+   - **On a valid resume (step 0.5)** with a `worktree` recorded in the state: if the directory
+     still exists, REUSE it (do not call `EnterWorktree`). If gone, recreate it via
+     `EnterWorktree` from the recorded `branch` (or base `fresh` if it no longer exists) — with
+     no `EnterWorktree` in the host, use the same `git worktree add` fallback as above.
 
-5. **Create the tasks** via TaskCreate, one per pipeline phase relevant to the chosen
-   track. The `subject` of each task MANDATORILY follows the format
-   `<phase>: <short summary>`, with `<phase>` being exactly one of: `triage`,
-   `explore`, `architecture`, `implementation`, `qa`, `verification`, `runtime`,
-   `commit` (lowercase, no accents — the canonical id of the resume phase order).
-   Examples: `qa: Prove the coder's breaks`, `implementation: Apply the drawer
-   plan`. The cockpit links task→phase by that anchored prefix; a task without the
-   prefix does not show up in the log trail. Via TaskUpdate, mark each task as
-   `in_progress` when the phase starts and `completed` when it ends, giving
-   visibility of the progress.
+5. **Create the tasks** via TaskCreate, one per pipeline phase relevant to the chosen track.
+   The `subject` of each task MANDATORILY follows the format `<phase>: <short summary>`, with
+   `<phase>` being exactly one of: `triage`, `explore`, `architecture`, `implementation`, `qa`,
+   `verification`, `runtime`, `commit` — the cockpit links task→phase by that prefix; a task
+   without it does not show up in the log trail. Via TaskUpdate, mark each task `in_progress`
+   when the phase starts and `completed` when it ends.
 
-5.1. **Initialize the execution log** — a table you keep inline
-   (not in a file) with one line per agent launched. Use the agent's icon
-   from the legend in the Agent column and the status icon:
+5.1. **Initialize the execution log** — a table you keep inline (not in a file), one line per
+   agent launched, icon + title in the Agent column:
 
    ```
    | Step | Agent | Status | Summary (<1 line) | Time |
    ```
 
-   Agent column: marker + title (e.g. `🛡️ QA-Guardian`). Status column:
-   ✅ done · ❌ failed · 🔁 re-run · ⏳ in progress.
+   Status: ✅ done · ❌ failed · 🔁 re-run · ⏳ in progress. For each agent launched (any phase,
+   including loop re-entries): Summary is one sentence of what it delivered in that execution;
+   Time stays empty while running — **Never time an agent yourself**, the runtime measures every
+   phase from the session stream and Phase 8 fills this column from `nightshift run log`. If QA
+   (Phase 5) rejects and the coder is relaunched (Phase 6 loop), add a **new "coder" line** —
+   never overwrite the previous one, the history must show every round trip.
 
-   For each agent launched (any phase, including loop re-entries):
-   - Summary: one sentence (<1 line) describing what that agent delivered
-     in that specific execution (e.g. "Plan with 3 files and 2 risks").
-   - Time: leave the cell empty while the run is going on. **Never time an agent
-     yourself** — the runtime measures every phase from the session stream, and
-     Phase 8 fills this column from `nightshift run log`.
-   - If **QA (Phase 5) rejects and the coder is relaunched** (the Phase 6
-     fix loop), add a **new "coder" line** for that re-run —
-     do not overwrite the previous one. The history must show every round trip.
-
-   That table feeds the "full execution table" of Phase 8 — displayed
-   in full only when the run is unhappy (any 🔁, ❌, ⚠️ or gate_stop);
-   on a happy run Phase 8 does not print it. It always feeds, line by line, the
-   telemetry persisted at the end of Phase 8 (`pipeline_log`), regardless of the
-   outcome — capture the data with that in mind. The pre-commit (Phase 7) shows
-   only branch + commit + diff stat.
+   This table feeds the "full execution table" of Phase 8 (shown only when the run is unhappy)
+   and, line by line, the telemetry at the end of Phase 8 regardless of outcome. The pre-commit
+   (Phase 7) shows only branch + commit + diff stat.
 
 5.2. **File handoff (RUN_DIR + artifact gate).** Each subagent
    writes its COMPLETE output to an artifact and returns only a ≤10-line summary; the
@@ -421,18 +365,15 @@ agent, print a line in this format first:
    session started. Use that `RUN_DIR` as it comes (ALWAYS outside the worktree, NEVER
    inside it) and create it with `mkdir -p`; `<project>` is the `Project:` line, the same
    identifier used in `lesson_recall`/`pipeline_log`. The artifacts live OUTSIDE the worktree
-   because Phase 7 (`ExitWorktree` — otherwise `git worktree remove <path>`) deletes the
-   worktree BEFORE Phase 8 reads the artifacts.
+   because Phase 7 (`ExitWorktree`) deletes the worktree BEFORE Phase 8 reads the artifacts.
 
-   **Renaming the run is ONE declaration**, and only when the kebab slug of this Phase 0
-   differs from the one in `RUN_DIR`: print ONCE, alone on a line, exactly
-   `SLUG: <slug> TYPE: <type>` — `<slug>` is the kebab slug, `<type>` is the `**Type:**` of
-   the Brief (step 1), `bug/error` or `feature/refactor`. The runtime renames the run
-   directory, binds the slug to the job and records the type; from there on `RUN_DIR` ends in
-   `/<slug>/`. The FIRST declaration wins: a second one is ignored, and a name another run of
-   the project already took is refused — the run then keeps the slug it came with, and that
-   one stays the truth. No `RUN_DIR:` line in the prompt → derive `RUN_DIR` from
-   `<project>/<slug>` as before and print `QUEUE_SLUG: <slug>` once.
+   **Renaming the run is ONE declaration**, only when the kebab slug of this Phase 0 differs
+   from the one in `RUN_DIR`: print ONCE, alone on a line, exactly `SLUG: <slug> TYPE: <type>`
+   — `<slug>` is the kebab slug, `<type>` is the `**Type:**` of the Brief (step 1), `bug/error`
+   or `feature/refactor`. The runtime renames the run directory, binds the slug to the job and
+   records the type. The FIRST declaration wins: a second one is ignored, and a name another
+   run of the project already took is refused. No `RUN_DIR:` line in the prompt → derive
+   `RUN_DIR` from `<project>/<slug>` as before and print `QUEUE_SLUG: <slug>` once.
 
    Artifact map (author via Write → readers via Read):
 
@@ -461,82 +402,58 @@ agent, print a line in this format first:
 
    **Artifact gate (apply after every phase that expects a Write):** run
    `nightshift run check <NN>` — one Bash call, from inside the job, with the phase number
-   (`01`, `02`, `03`, `04`, `05a`, `05`, `06`). The runtime reads the artifact and answers
-   `OK` (it is there with the sections the next phase reads), `MISSING: <sections>` (it is
-   absent or incomplete) or `GENERATED` (only `04`: the file list was derived from the
-   worktree's own changes and written for you). The judgment stays yours: `MISSING` →
-   relaunch the subagent 1×; still `MISSING` → terminate the pipeline, record an ⚠️ open item
-   / `gate_stop` and report it in Phase 8. Never check an artifact with `ls`, and never
-   re-read it just to confirm that its sections are there — the command is the gate. It also
-   covers the orchestrator's own artifacts (the consolidation of `05`), where it confirms
-   that the Write itself succeeded.
+   (`01`, `02`, `03`, `04`, `05a`, `05`, `06`). It answers `OK` (the artifact is there with the
+   sections the next phase reads), `MISSING: <sections>` (absent or incomplete) or `GENERATED`
+   (only `04`: the file list was derived from the worktree's own changes and written for you).
+   `MISSING` → relaunch the subagent 1×; still `MISSING` → terminate the pipeline, record an
+   ⚠️ open item / `gate_stop` and report it in Phase 8. Never check an artifact with `ls`, and
+   never re-read it just to confirm that its sections are there — the command is the gate. It
+   also covers the orchestrator's own artifacts (the consolidation of `05`).
 
-   **Gate prohibitions (no exceptions):** the ≤10-line summary the subagent returns
-   NEVER replaces the artifact. If the gate answers `MISSING`, the content pasted in the
-   subagent's response is IGNORED — never reused inline as a fallback nor
-   treated as "good enough for the next phase". It is FORBIDDEN to rationalize the absence
-   ("it had no impact", "the summary is enough", "the next phase will manage")
-   and move on: an artifact missing after the 1× relaunch terminates the pipeline with
-   `gate_stop` and an ⚠️ open item, period. Single explicit exception: the `GENERATED`
-   answer of `nightshift run check 04`, which derives the file list from git itself — no
-   other artifact has a fallback.
+   **Gate prohibitions (no exceptions):** the ≤10-line summary the subagent returns NEVER
+   replaces the artifact — on `MISSING` the pasted content is IGNORED, never reused inline. The
+   only exception to a `MISSING` artifact is `04`'s `GENERATED` answer above.
 
    **Do not re-read what is already in the context.** The orchestrator does NOT re-read (via
-   Read) a file/artifact it has already read in full in this same session and whose content is
-   STILL in the current context — reuse what you already have. This does NOT contradict Phase 8,
-   which REQUIRES re-reading the artifacts: there the full content has already LEFT the context
-   after the file handoff, so re-reading is the only way to recover it. The distinction that
-   decides: re-read when the content is no longer in the context; never when it still is. To
-   merely confirm that an artifact is there and complete, use `nightshift run check <NN>`,
-   not `Read`.
+   Read) a file/artifact already read this session and still in context — except Phase 8, where
+   the handoff already dropped the content. To merely confirm an artifact is there and complete,
+   use `nightshift run check <NN>`, not `Read`.
 
 5.3. **Record the run (enables the resume — step 0.5).** `<RUN_DIR>/state.json` belongs to the
-   runtime: it stamps every time, validates every value and keeps the record append-only.
-   **Never write that file — not with Write, not with a temp file plus a rename, never.** The
-   record is made with the `run_*` tools (MCP `nightshift`), and inside a job none of them takes
-   `project`/`slug`: the run is resolved from the job's own row, and sending the pair is refused.
+   runtime. **Never write that file — not with Write, not with a temp file plus a rename,
+   never.** The record is made with the `run_*` tools (MCP `nightshift`); inside a job none of
+   them takes `project`/`slug` — the run is resolved from the job's own row.
 
    - **A phase completed.** When EACH phase completes SUCCESSFULLY (artifact written +
      artifact gate passed), call `run_phase_done` with `phase`, `artifact` = `<NN-phase>.md`
-     and `verdict` = the verdict of the phase (`note` = anything else worth keeping).
-     The `phase` is one of the 8 canonical names — `triage`, `explore`, `architecture`,
-     `implementation`, `qa`, `verification`, `runtime`, `commit` — and the tool refuses any
-     other value.
-   - **NEVER** record a phase that ended in `gate_stop`: a recorded phase means a phase that
-     completed and is resumable.
+     and `verdict` = the verdict of the phase (`note` = anything else worth keeping). The
+     `phase` is one of the 8 canonical names — `triage`, `explore`, `architecture`,
+     `implementation`, `qa`, `verification`, `runtime`, `commit`. **NEVER** record a phase that
+     ended in `gate_stop`.
    - **The fields of the run itself.** Call `run_set` ONCE for each field the moment it becomes
-     known: `type` (`bug/error` | `feature/refactor` — the same one from the Brief of step 1; it
-     is the canonical source of the Type on any resume), `tier`, and `branch` + `worktree`
-     (step 4). Only the fields sent are touched.
+     known: `type` (`bug/error` | `feature/refactor`, the same one from the Brief of step 1),
+     `tier`, and `branch` + `worktree` (step 4). Only the fields sent are touched.
    - **Termination on purpose.** When the pipeline terminates by the VERDICT of a phase that
      **was completed and recorded**, call `run_terminate` with that `phase` and the summarized
-     verdict as `reason`. It is what makes the runtime's resume decision return
-     `terminated-by-verdict` instead of offering the next phase. Today the only point that calls
-     it is **Phase 1** with `NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION`. **NEVER** call it when the
-     phase stopped halfway and was never recorded (artifact gate, `gate_stop`, timeout, gate
-     2.5, Phase 3 with an insufficient brief or `## Requires user confirmation`): there the
-     resume re-runs the SAME phase, which is the correct behavior — terminating would turn a
-     pause into the death of the run.
+     verdict as `reason` — today only **Phase 1** with `NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION`.
+     **NEVER** call it when the phase stopped halfway and was never recorded (artifact gate,
+     `gate_stop`, timeout, gate 2.5, an insufficient brief or `## Requires user confirmation`).
    - **The outcome of the run.** Call `run_outcome` at exactly TWO points and nowhere else:
      **Phase 7**, once the pull request exists (`status: "done"`), and the **gate block**,
-     immediately before printing it (`status: "gate"`, `notice` = the body of `## Notice`). The
-     runtime classifies the job from this record before it reads the stream, which is what stops
-     the outcome from depending on how the final text was worded. `status` accepts ONLY `done`
-     and `gate` — a failure, a cancellation and a timeout are read from how the process ended,
-     never from a record. The pull request URL is not a parameter: the runtime writes it from
-     what the session really published.
-   - **Tolerant:** a `run_*` call that fails NEVER aborts the pipeline — it only loses the
-     savings of an eventual resume. Record it as an open item of Phase 8 and continue to the
-     next phase normally.
+     immediately before printing it (`status: "gate"`, `notice` = the body of `## Notice`).
+     `status` accepts ONLY `done` and `gate` — a failure, a cancellation and a timeout are read
+     from how the process ended, never from a record. The pull request URL is not a parameter:
+     the runtime writes it from what the session really published.
+   - **Tolerant:** a `run_*` call that fails NEVER aborts the pipeline — record it as an open
+     item of Phase 8 and continue to the next phase normally.
    - A `run_*`/`context_for_phase` tool or a `nightshift run` subcommand that answers `unknown`
      means the runtime is older than this plugin: record it as an open item of Phase 8 and
      continue — never hand-write `state.json` to compensate.
 
-6. **Track routing** — the whole pipeline runs on Claude agents via `Agent`
-   (every call MUST pass `model`). There is no external engine: triager, coder and
-   every other agent are Claude subagents. The three tracks execute the SAME pipeline and
-   differ ONLY in the routing below: this table is rendered once, and every phase of this
-   file reads its tier's column from here instead of restating it.
+6. **Track routing** — the whole pipeline runs on Claude agents via `Agent` (every call MUST
+   pass `model`); there is no external engine. The three tracks execute the SAME pipeline and
+   differ ONLY in the routing below: this table is rendered once, and every phase reads its
+   tier's column from here instead of restating it.
 
    | Routing | trivial | simple | complex |
    | ------------- | ------- | ------- | -------- |
@@ -562,48 +479,22 @@ agent, print a line in this format first:
    keeps the `model` of the task's tier. Each phase below repeats the expected `model`
    in parentheses — in case of divergence, this table is the source of truth.
 
-   The **rationale** behind this table — what each phase demands and which
-   Claude model it requires — is in **Appendix A** (end of the file). Consult it when
-   changing any routing line: the model choice must follow the criterion, not habit.
+   The **rationale** behind this table is in **Appendix A** (end of the file). Consult it when
+   changing any routing line.
 
-7. **Execution autonomy** — the pipeline runs autonomously. Every
-   `Agent` call in this pipeline MUST pass `mode: "bypassPermissions"`, so that the
-   subagents execute any command (`npm`, `yarn`, `grep`, `find`, `tsc`,
-   build, tests, local `git`) without asking for confirmation at each step. The isolation
-   comes from the exclusive worktree of step 4; there is no reason to stop at each command.
+7. **Execution autonomy** — the pipeline runs autonomously. Every `Agent` call MUST pass
+   `mode: "bypassPermissions"`, so subagents execute any command without asking for
+   confirmation at each step — the isolation comes from the exclusive worktree of step 4.
 
-   The pipeline only **stops to ask the user for input** at these points —
-   everything else is auto-accepted, with no execution confirmation:
-   - **Phase 0 (gate 2.5):** verdict `PROPOSE-ALTERNATIVE` or `ASK` in the
-     Request critique → take it to the user and wait before routing.
-   - **Phase 1 (gate):** verdict `NOT-REPRODUCIBLE` or `NEEDS-CLARIFICATION`
-     → call `run_terminate` (step 5.3), take the open items
-     to the user and terminate.
-   - **Phase 3:** the architect flags an insufficient brief → report and terminate.
-   - **Phase 3 (intent/ambiguity):** the architect emits `## Requires user
-     confirmation` (an Intent note holds, a root×symptom trade-off, or 2+ plausible
-     readings of the request) → present the proposal and wait for the decision before the
-     coder.
-   - **Phase 3 (Type divergence):** the plan brings `**Type mismatch:**` with
-     cited evidence and re-reading the `## Validated brief` of `01-triage.md`
-     does **not** confirm `feature/refactor` (the Type divergence valve) → ask
-     ONE objective question ("is this a bug or a feature/refactor?") and follow the
-     answer. If the re-read confirms it, this is NOT a pause point: fix the Type
-     (`run_set` with the corrected `type`) and move on to the coder without asking.
-   - **Phase 6.5 (native/device-gated capability):** the fix touches a
-     native/device-gated capability (health, billing/IAP, camera, permissions, push,
-     Bluetooth) — anything the emulator/CI cannot reproduce — and the emulator does not
-     reproduce the real scenario → ask the user to test on a **physical device** and wait
-     for the verdict before committing. **Careful:** a fix that depends on a backend
-     contract/response or on state/control-flow (case (a) of Phase 6.5) is NOT a pause
-     point — produce the real verdict on your own (token of the logged-in emulator + endpoint
-     via Bash + executable simulation of both branches with a real payload). If the
-     project memory declares logged-in emulators saved, there is no "inaccessible":
-     all that is left for the user is the step gated by live hardware/SMS (e.g. typing the OTP
-     of a new login), never the confirmation of a payload/state.
-   - **Phase 7:** confirmation before the push + opening the PR (external action) — only when
-     `NIGHTSHIFT_JOB_ID` is unset; inside a queued job there is nobody to ask and the pipeline
-     goes ahead.
+   The pipeline only **stops to ask the user for input** at these points (each rule lives in
+   full in its own phase — this is only the index):
+   - **Phase 0 (gate 2.5):** verdict `PROPOSE-ALTERNATIVE` or `ASK`.
+   - **Phase 1 (gate):** verdict `NOT-REPRODUCIBLE` or `NEEDS-CLARIFICATION`.
+   - **Phase 3:** an insufficient brief, `## Requires user confirmation`, or the Type divergence
+     valve with no confirmed `feature/refactor`.
+   - **Phase 6.5 (native/device-gated capability):** the emulator/CI cannot reproduce it — not a
+     pause point for case (a) (backend contract/response or state/control-flow).
+   - **Phase 7:** confirmation before the push + PR — only when `NIGHTSHIFT_JOB_ID` is unset.
 
    Outside those points, never stop to confirm the execution of a command.
 
@@ -614,8 +505,8 @@ agent, print a line in this format first:
 > One block for the two fast tracks: every value that changes with the tier — the `model`
 > of each agent, the verifier's scope, the fix iterations, `<CWD>/CLAUDE.md`,
 > `index_recall`, the time target — is read from **your tier's column in the Track routing
-> table (step 6)**, and nothing outside that table changes with the tier. The phases the
-> row does not list are skipped; once done, go straight to Phase 7.
+> table (step 6)**. The phases the row does not list are skipped; once done, go straight to
+> Phase 7.
 
 1. **Locate the affected files** from the `**Affected area:**` field of the brief —
    `index_recall` (MCP `nightshift`) locates them faster in the tier whose row allows it.
@@ -623,9 +514,8 @@ agent, print a line in this format first:
 
 2. **Triager — only when `Type = bug/error` and the row gives the triager a `model`** (a
    feature/refactor, and the whole `trivial` tier, goes straight to step 3): run **Phase 1**
-   exactly as written (artifact `01-triage.md`, artifact gate and PROCEED gate included).
-   The bug is reproduced before a line is changed;
-   `NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION` terminates the run there, as Phase 1 defines.
+   exactly as written. The bug is reproduced before a line is changed;
+   `NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION` terminates the run there.
 
 3. **Launch 1 coder agent** (subagent_type="nightshift:coder", the `model` of the row):
 
@@ -691,18 +581,17 @@ order never changes.
 Before launching each subagent (Phases 1–6), call `context_for_phase` (MCP `nightshift`)
 ONCE with `target` = the target phase (`triager` | `explore` | `architect` | `coder` | `qa`
 | `verifier`) and `query` = 2–4 keywords from the brief. For `target: "explore"`, also pass
-`repo_root` = the pipeline's CWD — it is what marks the files the checkout moved under.
+`repo_root` = the pipeline's CWD.
 
 The call answers a `block` already formatted: `## Applicable lessons` (up to 4 preventions,
 1 line each, starting with the real `[L<id>]`), `## Project memory` (up to 4 `[M<id>]
 <key>: <value>` pairs) and, for the explore, `## Structural index`. Paste `block` into the
-subagent's prompt exactly as it came, at the placeholder each phase's prompt already carries
-— never rewrite a line of it: those ids are what close the consulted→injected→applied funnel
-in the cockpit drawer. An empty `block` means there is genuinely nothing to inject, so the
-placeholder simply disappears from the prompt.
+subagent's prompt exactly as it came, at the placeholder each phase's prompt already carries —
+never rewrite a line of it. An empty `block` means there is nothing to inject, so the
+placeholder simply disappears.
 
-Nothing else is computed by hand. Inside a job the server reads the run from the caller's
-own job row: it takes the project from there and excludes by itself the lessons already
+Nothing else is computed by hand: inside a job the server reads the run from the caller's own
+job row: it takes the project from there and excludes by itself the lessons already
 injected in earlier phases of this session, so the same lesson is not handed to two phases —
 unless it is all this run has to give, in which case it comes back anyway. `project` and
 `exclude_ids` are optional and exist for a call made outside a job.
@@ -758,23 +647,20 @@ blocks the run: record it as an open item in Phase 8 and continue, the same way 
 > means this phase does not run, and in the fast tracks it is the block above that launches
 > it, on the same artifact and the same gates.
 
-It always runs, both for bug/error and for feature/refactor. It validates before
-spending exploration, architecture and implementation.
+It always runs, both for bug/error and for feature/refactor, validating before exploration,
+architecture and implementation are spent.
 
-The triage methodology (≥2 hypotheses, ban on hedging, REAL payload vs TS
-type, bug account + discrimination gate, executable simulation, native SDK/crash reporter
-(e.g. Sentry), symptom proof) lives in `triager.md` and is applied automatically. The skill's
-prompt only injects the data and demands the output format.
+The triage methodology (≥2 hypotheses, ban on hedging, REAL payload vs TS type, bug account +
+discrimination gate, executable simulation, native SDK/crash reporter, symptom proof) lives in
+`triager.md`. The skill's prompt only injects the data and demands the output format.
 
 Prompt:
 
 ```
-## File handoff (contract — read first)
 ARTIFACT_PATH: <RUN_DIR>/01-triage.md
 Read before acting (via Read): none.
-Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
-Return to the orchestrator AT MOST 10 lines: verdict + artifact path + whether it emitted
-## Intent note / ## Depth note + open items. Do NOT paste the complete sections.
+Return summary (≤10 lines, per the handoff contract of step 5.2): verdict + artifact path +
+whether it emitted ## Intent note / ## Depth note + open items.
 
 Follow your triage methodology. On a bug, validate the cause with the REAL data of the bug
 account (not by reading/guessing/TS type) and prove the symptom before PROCEED.
@@ -804,36 +690,25 @@ is simple, `sonnet` if the tier is complex) — read mode, it does not edit file
 output to `01-triage.md`; run `nightshift run check 01` (the artifact gate, step 5.2)
 before evaluating the verdict.
 
-**Bug originating in a crash reporter:** when the bug comes from a crash reporter and an
-MCP for it is available (e.g. Sentry), before launching the triager the orchestrator pulls
-the full stack + breadcrumbs + tags (`in_foreground`, device, os, release) of **≥3 events**
-and includes them in the `Raw evidence`. Never pass only the ticket's title/culprit — that is
-how a diagnosis of `writeBarrierSlow` (a real ticket) mistook a GC symptom for the cause.
+**Bug from a crash reporter:** when an MCP for it is available, pull ≥3 events (stack +
+breadcrumbs + tags) before launching the triager and include them in the `Raw evidence` —
+never only the ticket's title/culprit.
 
-**Gate:** only advance to Phase 2 if the verdict is `PROCEED` **and** the `## Symptom
-proof` shows the path that produces the reported symptom — without contradicting it, without
-hedging ("it is plausible", "if the backend returns") and with no assumed payload. A PROCEED
-that concludes the system behaves correctly, or that rests the cause on a guess
-about data the logged-in emulator would allow confirming, is invalid: reject it and
-send it back to the triager (or confirm it yourself with the real data). A verdict of
-NOT-REPRODUCIBLE or NEEDS-CLARIFICATION → **terminate the pipeline** and take the
-`## Open items` to the user — do not spend explore, architect and coder on an
-invalid or ill-defined task. BEFORE terminating, record it (step 5.3): `run_phase_done` with
-`phase: "triage"` **and** `run_terminate` with `phase: "triage"` and the verdict as `reason`.
-Without them, a retry of this job would offer to resume from the `explore` phase as if
-the triage had been interrupted halfway. Apply the lesson-capture filter above before
-terminating; if both conditions hold, call `lesson_save` with `target: "triager"`, building the
-payload with every field of **Lesson payload** above — the lesson is why the request as it
-arrived was not executable (not reproducible, or not clear enough) and what was missing from
-it. This same gate_stop rule covers Phase 3's insufficient-brief gate below, with
-`target: "architect"` there instead of `triager`.
+**Gate:** only advance to Phase 2 if the verdict is `PROCEED` **and** the `## Symptom proof`
+shows the path that produces the reported symptom — without hedging and with no assumed
+payload. A PROCEED that concludes the system behaves correctly, or that rests the cause on a
+guess about data the logged-in emulator would allow confirming, is invalid: reject it and send
+it back to the triager (or confirm it yourself with the real data). NOT-REPRODUCIBLE or NEEDS-CLARIFICATION → **terminate the pipeline**
+and take `## Open items` to the user. BEFORE terminating, record it (step 5.3):
+`run_phase_done` with `phase: "triage"` **and** `run_terminate` with `phase: "triage"` and the
+verdict as `reason`. Apply the lesson-capture filter above before terminating; if both
+conditions hold, call `lesson_save` with `target: "triager"`, building the payload with every
+field of **Lesson payload** above. This same gate_stop rule covers Phase 3's
+insufficient-brief gate below, with `target: "architect"` there instead of `triager`.
 
-If the triager's return signals that it emitted `## Intent note` **or** `## Depth
-note`, the architect reads them straight from `01-triage.md` in Phase 3 (do not paste the
-content back in). Neither of them blocks the advance — the intent one signals that the reading
-of the ticket may not be the real intent; the depth one signals that the confirmed
-cause is a leaf of a family (the architect decides the fix level in their own Step
-1.5). The architect is the one who decides to pause.
+If the triager's return signals that it emitted `## Intent note` or `## Depth note`, the
+architect reads them straight from `01-triage.md` in Phase 3 — neither blocks the advance; the
+architect decides whether to pause in their own Step 1.5.
 
 ### Phase 2 — Exploration
 
@@ -847,17 +722,13 @@ project with real per-file freshness: `stale`/`missing` = revalidate; the rest a
 fresh. An empty index → proceed exactly as before (graceful degradation).
 
 **complex** — launch **1 explore agent** (subagent_type="nightshift:explore",
-`model: "sonnet"`) — NEVER generic/general-purpose: it is the only way to guarantee
-the handoff contract the runtime persists the index from.
+`model: "sonnet"`) — NEVER generic/general-purpose.
 
 ```
-## File handoff (contract — read first)
 ARTIFACT_PATH: <RUN_DIR>/02-explore.md
 Read before acting (via Read): none.
-Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
-Return to the orchestrator AT MOST 10 lines: status + artifact path +
-"index saved: N files" (or the reason for not having saved it) + open items. Do NOT paste
-the complete sections.
+Return summary (≤10 lines, per the handoff contract of step 5.2): status + artifact path +
+"index saved: N files" (or the reason for not having saved it) + open items.
 
 Find the files related to: [AFFECTED AREA]
 Task objective: [OBJECTIVE]
@@ -894,12 +765,11 @@ Then persist the structural index from the artifact — the Explore no longer sa
 nightshift run index-save <RUN_DIR>/02-explore.md --project <PROJECT> --repo-root <CWD>
 ```
 
-It prints `index saved: N files, M libs`. A failure here NEVER blocks the run: record it as
-an open item of Phase 8 and move on, the same as an empty index.
+It prints `index saved: N files, M libs`. A failure here NEVER blocks the run: record it as an
+open item of Phase 8, the same as an empty index.
 
-**Before Phase 3 (complex only):** read `<CWD>/CLAUDE.md` inline
-with the Read tool (if it exists) and keep the content to pass to the architect.
-If it does not exist, record "No CLAUDE.md found." It avoids an agent just for conventions.
+**Before Phase 3 (complex only):** read `<CWD>/CLAUDE.md` via Read (if it exists) and keep the
+content to pass to the architect; if it does not exist, record "No CLAUDE.md found."
 
 ### Phase 3 — Architecture
 
@@ -910,40 +780,28 @@ Launch **1 architect agent** (subagent_type="nightshift:architect", `model: "opu
 complex only:
 
 **What you may NOT inject into the architect's prompt (a prohibition without exception):** the
-DESIGN is theirs. You inject context and a DELIVERY constraint — never a solution. It is
-FORBIDDEN to add to the prompt, in any wording:
-- pre-qualification of the fix level ("prefer to mitigate", "additive fix", "do not touch
-  the root", "fix only path X");
-- the name of a mechanism, file, function, line or anchoring point where the solution must
-  go in ("reconcile it in the listener that already exists, L162-170");
-- pre-disqualification of an approach by diff size, risk or regression
-  surface ("prefer the SMALLEST diff", "nothing that touches N files").
-The ONLY constraint you may pass is one of **delivery** — what the result needs to
-respect in order to be deliverable (e.g. it must ship over-the-air; it must not touch
-native/build/migration code) — and it goes on the `Delivery constraints:` line of the prompt,
-named as such. A delivery constraint describes the LIMIT of what may be delivered,
-never the HOW: "it must not touch native" is delivery; "additive fix in the existing listener"
-is design in disguise and remains forbidden. If you think the fix should be
-shallower or cheaper, that does not become an instruction: the architect decides the level in their
-own Step 1.5 and takes the trade-off to the user via `## Requires user confirmation` when the
-risk deserves it. A prompt that embeds design turns Step 1.5 into a rubber stamp — that is how
-a plan covered half a bug and went through 4 phases without anyone noticing.
+DESIGN is theirs. You inject context and a DELIVERY constraint — never a solution. FORBIDDEN in
+any wording: pre-qualifying the fix level ("prefer to mitigate", "additive fix", "fix only path
+X"); naming the mechanism/file/function/line where the solution must go ("reconcile it in the
+listener that already exists, L162-170"); pre-disqualifying an approach by diff size or
+regression surface ("prefer the SMALLEST diff"). The ONLY constraint you may pass is
+**delivery** — the LIMIT of what may be delivered, never the HOW ("it must not touch native" is
+delivery; "additive fix in the existing listener" is design in disguise) — on the `Delivery
+constraints:` line. The architect decides the fix level in their own Step 1.5 and takes the
+trade-off to the user via `## Requires user confirmation` when the risk deserves it.
 The `## Standing decisions` section of the prompt below is NOT an exception to this
-prohibition: a standing decision was already settled by the operator before this task, it is
-in the same family as `Delivery constraints:`, and it never names the mechanism, file or line
-where THIS task's solution goes.
+prohibition: it is binding context, in the same family as `Delivery constraints:`, and it
+never names the mechanism, file or line where THIS task's solution goes.
 
 ```
-## File handoff (contract — read first)
 ARTIFACT_PATH: <RUN_DIR>/03-plan.md
 Read before acting (via Read):
 - `<RUN_DIR>/01-triage.md` — ## Validated brief; on a bug, ## Diagnosis (the plan MUST
   attack this cause; the symptom proof is the baseline that Phase 6.5 re-runs
   without-fix vs with-fix); ## Intent note and ## Depth note when they exist.
 - In the complex tier: `<RUN_DIR>/02-explore.md` — the Explore's findings.
-Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
-Return to the orchestrator AT MOST 10 lines: status + artifact path + whether it emitted
-## Requires user confirmation + open items. Do NOT paste the complete sections.
+Return summary (≤10 lines, per the handoff contract of step 5.2): status + artifact path +
+whether it emitted ## Requires user confirmation + open items.
 
 Type: [bug/error | feature/refactor]
 
@@ -984,105 +842,81 @@ only here. Walk this order and stop at the first one that resolves it:
    `## Diagnosis` absent or empty **and** `## Validated brief` with no symptom/wrong
    behavior reported → `feature/refactor`. The triager only emits that section on a bug
    (`agents/triager.md:246`);
-4. real doubt after 1-3 → write `bug/error`. The fail-safe **requires** the coverage
-   section, it never waives it — and the gate below has the **divergence valve** for the
-   case where the fail-safe got it wrong. A fail-safe that blocks a legitimate run is not a fail-safe.
-It is that same value that decides the coverage gate below.
+4. real doubt after 1-3 → write `bug/error`. The fail-safe **requires** the coverage section,
+   it never waives it — the gate below has the **divergence valve** for when it got it wrong.
+This same value decides the coverage gate below.
 
-The architect produces `## Implementation plan` + `## Assumptions` +
-`## Pre-mortem` + `## Identified risks` (mandatory in any type) and, when
-`Type = bug/error`, also `## Symptom coverage` and, when the conditions of their Step 5
-match (a bug touching 2+ scenarios of the `## Access map`, or `**Always-gate class:** yes`),
-`## Usage coverage` (the format and the textual-refactor rule
-are in `architect.md`). The risks section feeds the QA; the assumptions one feeds the QA and
-the final verdict (an assumption invalidated during QA = back to the architect, do not patch in the
-coder); the pre-mortem feeds the QA (validation of the declared mitigations and attack on
-the "accepted because" justifications); the coverage one enumerates ALL the paths that produce
-the ticket's symptom, marks each one covered/not-covered and prevents the plan from covering half
-the symptom in silence.
+The architect produces `## Implementation plan` + `## Assumptions` + `## Pre-mortem` +
+`## Identified risks` (mandatory in any type) and, when `Type = bug/error`, also `## Symptom
+coverage` and, when the conditions of their Step 5 match (a bug touching 2+ scenarios of the
+`## Access map`, or `**Always-gate class:** yes`), `## Usage coverage` (format and rules in
+`architect.md`). Risks and assumptions feed the QA; the coverage sections enumerate every path
+that produces the symptom.
 
 **Gate:** run `nightshift run check 03` (the artifact gate, step 5.2 — it requires
-`## Implementation plan`, `## Assumptions`, `## Pre-mortem` and `## Identified risks`). If it
-answers `MISSING` after the 1× relaunch, or if the architect flags an insufficient
-brief, inform the user and terminate — do not proceed with an invented plan nor without
-assumptions, pre-mortem and explicit risks. On the insufficient-brief branch, apply the same
-gate_stop lesson-capture rule described at Phase 1's terminal gate, with `target: "architect"`.
-With the gate closed, read `03-plan.md` via Read: the steps below work off its content.
+`## Implementation plan`, `## Assumptions`, `## Pre-mortem` and `## Identified risks`).
+`MISSING` after the 1× relaunch, or an insufficient brief, → inform the user and terminate; on
+the insufficient-brief branch, apply the same gate_stop lesson-capture rule as Phase 1's
+terminal gate, with `target: "architect"`. With the gate closed, read `03-plan.md` via Read.
 
 **Proposed decision (right after that gate, before any other gate and before Phase 4):** if
 `03-plan.md` contains a `## Proposed decision` block, call `decision_save` (MCP `nightshift`)
 with `project` = the current project, the block's **Title**, **Context**, **Decision** and
 **Consequences** fields and `status: "proposed"`; keep the returned `number` and carry it to
-Phase 7. Saving it here, and not at Phase 8, is what makes the decision survive a run that
-later stops at a gate. Save it ONCE per run: an architect relaunched (🔁) over the same plan
-does not produce a second `decision_save`. A failed `decision_save` NEVER blocks the run —
-it becomes an open item, exactly like a failed `pipeline_log`. The block is optional and most
-plans do not have one: no block → nothing is saved, nothing is recorded, and the run proceeds
-normally. A `decision_save` whose `status` is missing or invalid is stored as `proposed` and
-answers `status_defaulted: true`.
+Phase 7 — saving it here (not at Phase 8) is what survives a run that later stops at a gate.
+Save it ONCE per run: a relaunched architect (🔁) over the same plan does not produce a second
+`decision_save`. A failed `decision_save` NEVER blocks the run — it becomes an open item; the
+block is optional and most plans do not have one:
+no block → nothing is saved, nothing is recorded, and the run proceeds normally. A
+`decision_save` whose `status` is missing or invalid is stored as `proposed` and answers
+`status_defaulted: true`.
 
-**Coverage gate (bug):** also require `## Symptom coverage`, with at least one
-vector listed, each vector marked `covered` or `not-covered` **with a reason**, and
-`**How I enumerated:**` filled in with a **re-runnable** command or criterion (it is the baseline
-that the QA is going to re-run in Phase 5 — a generic sentence of the "I analyzed the code" kind, with
-no command nor criterion, fails just like a missing section). Waive
-that requirement ONLY if you positively confirm that the `Type` (the same one you injected
-into the prompt above) is `feature/refactor`; in any other case — including doubt about the
-Type — require it. A section that is missing, has no vector at all, or is filled in with "not
-applicable"/"n/a" on a bug → relaunch the architect (🔁) once with that requirement explicit; if it
-persists, inform the user and terminate. A vector marked `not-covered` **without** `## Requires
-user confirmation` in the same plan is a broken contract: relaunch the architect (🔁) — never
-move on to the coder covering half the symptom. When the section exists and brings `## Requires
-user confirmation`, the flow is the **Confirmation pause** below (the user decides before the coder).
+**Coverage gate (bug):** also require `## Symptom coverage`, each vector marked `covered` or
+`not-covered` **with a reason**, and `**How I enumerated:**` filled in with a **re-runnable**
+command or criterion — a generic sentence with no command nor criterion fails just like a
+missing section. Waive it ONLY when the `Type` is confirmed `feature/refactor`; doubt about the
+Type still requires it. Missing, empty or "not applicable"/"n/a" on a bug → relaunch the
+architect (🔁) once; if it persists, inform the user and terminate. A `not-covered` vector
+**without** `## Requires user confirmation` is a broken contract: relaunch the architect (🔁).
+With `## Requires user confirmation`, the flow is the **Confirmation pause** below.
 
-**Type divergence valve (closes the fail-safe's false positive):** if the plan
-brings, in place of the table, the line `**Type mismatch:** <cited evidence>` — the
-architect read the brief/triage and holds that there is no symptom to cover —, **do not relaunch in
-a loop and do not terminate**. Re-read the `## Validated brief` of `01-triage.md` and decide: it confirmed
-`feature/refactor` → record the correction of the Type (`run_set` with the corrected `type`) and move on
-to the coder without the section; it did not confirm → ask the user ONE objective question ("is this a
-bug or a feature/refactor?") and follow the answer. Terminating the pipeline over a Type
-divergence is FORBIDDEN: getting the Type wrong cannot cost a legitimate run. That valve holds only for
-the `**Type mismatch:**` line with cited evidence — `not applicable`/`n/a` still
-fails.
+**Type divergence valve:** if the plan brings, in place of the table, the line `**Type
+mismatch:** <cited evidence>`, **do not relaunch in a loop and do not terminate**. Re-read the
+`## Validated brief` of `01-triage.md` and decide: it confirmed `feature/refactor` → record the
+correction of the Type (`run_set` with the corrected `type`) and move on to the coder without
+the section; it did not confirm → ask the user ONE objective question ("is this a bug or a
+feature/refactor?") and follow the answer. Terminating the pipeline over a Type divergence is
+FORBIDDEN. That valve holds only for the `**Type mismatch:**` line with cited evidence — `not
+applicable`/`n/a` still fails.
 
-**Usage coverage gate (mechanical — holds in any Type):** with `03-plan.md` already read,
-run the **literal** check below (a text search, not a judgment). Conditions 1 and 2 are
-**anchored** (like 4): cut before matching — only what is inside the section
-`## Usage coverage` of `03-plan.md` counts (from the heading to the next `## `), outside a code
-block (ignore everything between triple-backtick lines) and on the line indicated in each condition.
-A loose search over the whole file matches a citation in prose, a template and an example — that is a false
-positive, not a trigger. It fires if ANY of them is true:
-1. inside that cut, a **scenario line** (starting with `- `) contains the string
-   `changed=yes · source=pipeline`;
-2. inside that cut, a line **starting with** `**Always-gate class:**` has the value
-   `yes` (the line matches `**Always-gate class:** yes`);
-3. some `unimplemented intent: <param> · governs <axis>` line of `02-explore.md` has
-   `<axis>` **equal** to the value of `**Diff axis:**` declared in the plan (one is enough; it is by
-   axis, never by count);
-4. the **request** of the run contains a scenario with the value `to confirm` — look in: the Brief of
-   Phase 0, the `## Usage scenarios` of the spec when the run was born from a slice, and `01-triage.md`.
-   It matches only on a **scenario line** (a line starting with `- ` that contains ` · `) whose value
-   is exactly `to confirm`; a mention in prose does not count.
+**Usage coverage gate (mechanical — holds in any Type):** with `03-plan.md` already read, run
+the **literal** check below (a text search, not a judgment). Conditions 1 and 2 are
+**anchored** (like 4): only what is inside the section `## Usage coverage` of `03-plan.md`
+counts (from the heading to the next `## `), outside a code block, on the line indicated in
+each condition. It fires if ANY of them is true:
+1. a **scenario line** (starting with `- `) contains `changed=yes · source=pipeline`;
+2. a line **starting with** `**Always-gate class:**` matches `**Always-gate class:** yes`;
+3. an `unimplemented intent: <param> · governs <axis>` line of `02-explore.md` has `<axis>`
+   **equal** to the plan's `**Diff axis:**` (one is enough, by axis, never by count);
+4. the **request** (Brief of Phase 0, `## Usage scenarios` of the spec, or `01-triage.md`)
+   contains a **scenario line** (starting with `- `, containing ` · `) whose value is exactly
+   `to confirm`; a mention in prose does not count.
 
-It fired and the plan does **not** contain `## Requires user confirmation` → relaunch the architect
-(🔁) **once**, citing the exact line that fired and demanding the section. If it persists, it is
-FORBIDDEN to move on to the coder and it is FORBIDDEN to terminate: **you build the gate yourself** — the
-text you present to the user **starts with the line `## Requires user confirmation`** (the runtime's
-queue matches this exact line to mark the job as gated; without it the queued job shows up as
-completed), followed by the `## Usage coverage` of the plan (only the lines
-`changed=yes` and the `to confirm` scenarios; a `changed=no` line is a record, not a question) and by
-which condition fired. Pause by the same mechanism as the **Confirmation pause** below. There is
-no second pause mechanism.
+It fired and the plan does **not** contain `## Requires user confirmation` → relaunch the
+architect (🔁) **once**, citing the exact line that fired and demanding the section. If it
+persists, it is FORBIDDEN to move on to the coder and FORBIDDEN to terminate: **you build the
+gate yourself** — the text you present to the user **starts with the line `## Requires user
+confirmation`** (the exact line the runtime's queue matches to mark the job as gated),
+followed by the `## Usage coverage` of the plan (only the `changed=yes` and `to confirm`
+lines) and by which condition fired. Pause by the same mechanism as the **Confirmation pause**
+below — there is no second pause mechanism.
 
-**Confirmation pause (intent/ambiguity):** if `03-plan.md` contains
-`## Requires user confirmation` (the architect's ≤10-line return also
-signals it), **do not advance to the coder**. Present to the user, in
-full, the fields of that section (what the ticket expected · why it is a problem ·
-proposed solution · expected result · question) and wait for the decision. According to the answer:
-they approved the proposal → move on to Phase 4 with the architect's plan; they asked for adjustments →
-relaunch the architect (🔁) with the user's decision and only then move on; they preferred the
-literal reading of the ticket → relaunch the architect (🔁) instructing the literal plan.
+**Confirmation pause (intent/ambiguity):** if `03-plan.md` contains `## Requires user
+confirmation`, **do not advance to the coder**. Present to the user, in full, the fields of
+that section (what the ticket expected · why it is a problem · proposed solution · expected
+result · question) and wait for the decision: approved → move on to Phase 4 with the
+architect's plan; asked for adjustments → relaunch the architect (🔁) with the decision;
+preferred the literal reading → relaunch the architect (🔁) instructing the literal plan.
 Never write code before that confirmation.
 
 ### Phase 4 — Implementation
@@ -1096,14 +930,12 @@ The `coder.md` already requires the `## Modified files` section
 and the completeness rule on a textual refactor — the prompt only injects the data:
 
 ```
-## File handoff (contract — read first)
 ARTIFACT_PATH: <RUN_DIR>/04-implementation.md
 Read before acting (via Read):
 - `<RUN_DIR>/01-triage.md` — ## Validated brief.
 - `<RUN_DIR>/03-plan.md` — the complete implementation plan (attack on the cause/criterion).
-Write `## Modified files` (+ notes of deviation from the plan) to ARTIFACT_PATH via Write.
-Return to the orchestrator AT MOST 10 lines: status + artifact path + files
-touched + open items. Do NOT paste the complete section.
+Return summary (≤10 lines, per the handoff contract of step 5.2): status + artifact path +
+files touched + open items.
 
 Apply the plan following the project's standards (CLAUDE.md). The simplest possible
 solution. Write ## Modified files (absolute paths) to ARTIFACT_PATH.
@@ -1116,18 +948,15 @@ Project: [PROJECT — the same identifier used in RUN_DIR]
 ```
 
 Run `nightshift run check 04` (the artifact gate, step 5.2). `GENERATED` means the coder left
-no file list and the runtime derived one from the changes of the run's own worktree — accept
-it and move on, there is nothing for you to write. The answer
-`MISSING: ## Modified files (no changed files)` means the worktree changed nothing:
-inform the user that the implementation did not complete successfully and terminate.
+no file list and the runtime derived one from the worktree's own changes — accept and move on.
+`MISSING: ## Modified files (no changed files)` means the worktree changed nothing: inform the
+user that the implementation did not complete successfully and terminate.
 
-**Parallel coders (batches):** if the implementation is split into concurrent
-batches, each batch runs in an isolated worktree (`isolation: worktree`) — NEVER
-multiple coders in the same working tree. With any batch active, `git stash`/`checkout`/`reset`
-or any command that changes the git state is forbidden:
-a concurrent stash/checkout reverts files another batch is editing. The N
-coders go **in a single message** (N `tool_use` in the same content block),
-never with `run_in_background` — see ⛔ Hard rule for launching a subagent.
+**Parallel coders (batches):** if the implementation is split into concurrent batches, each
+batch runs in an isolated worktree (`isolation: worktree`) — NEVER multiple coders in the same
+working tree, and `git stash`/`checkout`/`reset` is forbidden with any batch active. The N
+coders go **in a single message** (N `tool_use` in the same content block), never with
+`run_in_background` — see ⛔ Hard rule.
 
 ### Phase 5 — Adversarial QA (attack)
 
@@ -1140,9 +969,8 @@ happen in the Phase 6 loop, not here.
 
 The QA reads the file list of `04-implementation.md` (## Modified files) and the
 risks/assumptions/pre-mortem sections (and, on a bug, the symptom coverage one too)
-of `03-plan.md` — via Read, as per the
-contract. The `## Identified risks` section of the plan is **mandatory**; if it is
-missing from `03-plan.md`, terminate and inform the user.
+of `03-plan.md` via Read. The `## Identified risks` section of the plan is **mandatory**; if
+it is missing from `03-plan.md`, terminate and inform the user.
 
 The methodology (fronts as attack vectors, coercion/truthiness, regression in
 callers, Robustness test, an executable PoC per vector, the fallback-zero criterion on
@@ -1153,80 +981,83 @@ creates PoC/test files).
 **Before launching any qa-guardian, resolve the plugin root once:** `Glob` for
 `**/skills/qa-guardian/SKILL.md` and take the directory that CONTAINS `skills/` as
 `[PLUGIN_ROOT]`, then substitute it into the `QA_SKILL:` / `RISK_MATRIX:` / `FUZZ_TEMPLATE:`
-lines of the three prompts below. **If it does not resolve, omit those three lines
-entirely** — the agent keeps its own `Glob` fallback for exactly that case, and a line
-carrying an unresolved placeholder is worse than no line.
+lines of the three prompts below. If it does not resolve, omit those three lines
+entirely — the agent keeps its own `Glob` fallback for that case.
 
-**complex → two stages (analyst → parallel provers):** the analysis stays
-in a single head — it is the one that groups breaks by root (4 symptoms with the same cause
-= 1 fix, not 4), crosses callers and interactions between files. The proof — the
-write→run→iterate loop of each PoC, which is the serial bottleneck of the phase — is distributed
-across parallel provers. Stages A and B below replace the single launch.
+**complex → two stages (analyst → parallel provers):** the analysis stays in a single
+head — it groups breaks by root (4 symptoms with the same cause = 1 fix, not 4) and crosses
+callers and interactions between files. The proof — the write→run→iterate loop of each PoC,
+the serial bottleneck of the phase — is distributed across parallel provers. Stages A and B
+below replace the single launch.
+
+#### QA attack brief (shared by LITE and ANALYST)
+
+The orchestrator pastes this brief into each prompt below, at the line that points here.
+
+[Include only if 03-plan.md has ## Usage coverage:] Step 0 — BEFORE reading 03-plan.md: read
+`<RUN_DIR>/04-implementation.md` (## Modified files) and the target code and write YOUR
+## Access map (QA), in the format and vocabulary of agents/explore.md — a Map written after the
+plan is a rubber stamp, not an enumeration.
+
+What `03-plan.md` (once open) demands: ## Identified risks (MANDATORY to attack each one),
+## Assumptions (attack each one with real evidence), ## Pre-mortem (validate each declared
+mitigation AND attack each "accepted because" justification).
+
+Pre-mortem mitigations — two attacks, both mandatory, on every item. (1) "mitigation:
+adjustment already made in the plan": confirm it ACTUALLY exists in the diff — a mitigation
+declared and not implemented is a break in ## Proven breaks. (2) "mitigation: accepted because <reason>":
+attack the JUSTIFICATION with real evidence — it is the most fragile hypothesis of the plan
+and today nobody checks it; "Accepted" never waives the attack. A false justification is a
+live and unmitigated risk: what you prove goes to ## Proven breaks (or ## Break hypotheses in
+ANALYST mode, when it depends on runtime); if you knock the justification down without proving
+the failure, report it in ## Invalidated assumptions (back to the architect, not the coder).
+
+[Include only if Type = bug/error:] ## Symptom coverage — TWO attacks, both
+mandatory. (1) Is each vector marked `covered` ACTUALLY covered in the diff? Covered in the
+plan and absent from the diff = a break. (2) Is the list COMPLETE? Do NOT trust it: re-run
+the command declared in `**How I enumerated:**` and widen it on your own (writers of the
+state, entry points, handlers/listeners, jobs, error paths). A path that
+produces the ticket's symptom and is NOT in the table is an **omitted vector** = a break in
+## Proven breaks, with the command used and `file:line`. Record it as the FIRST line of
+## Validated risks:
+`Symptom coverage: <N vectors of the plan's table> · <command/criterion of your
+re-enumeration> · omitted: <file:line | none>` — the orchestrator audits that line.
+`N vectors of the plan's table` = the total of lines of the ## Symptom coverage table of the
+plan (`covered` + `not-covered`), NOT the number of vectors you confirmed in the diff:
+a `not-covered` vector counts towards N even without being in the diff (by definition it is
+not), and an omitted vector that YOU discovered does NOT enter N — it goes only in the
+`omitted:` field.
+
+[Include only if 03-plan.md has ## Usage coverage:] ## Usage coverage — with YOUR
+## Access map (QA) of step 0 already written, only then read 02-explore.md and that section
+of the plan and diff the two against it. Every prohibition of ## What to avoid and every
+`source=pipeline` line is a hypothesis to attack: a named consumer (file:line + entry point) →
+a proven break; without one → the label `the decision remains unconfirmed by the operator`,
+and `HELD` is FORBIDDEN on those items. ## Access map (QA) is mandatory whenever this front
+applies. Record it in ## Validated risks, right after the `Symptom coverage: ...` line when it
+exists (otherwise as the first line):
+`Usage coverage: <N lines of the plan> · <M own scenarios> · divergences: <file:line, ...|none> · unconfirmed decisions: <item, ...|none>`
+`N lines of the plan` = the total of scenario lines (the ones starting with `- `) inside the
+cut of the `## Usage coverage` section of `03-plan.md` — from the heading to the next `## `,
+outside a code block; the `**Diff axis:**`, `**Always-gate class:**` and `**Scenarios
+consulted:**` lines do NOT count. `M own scenarios` = the total of entry-point lines of the
+`## Access map (QA)` of the QA report; the `partial:` line and the `unimplemented intent:`
+lines do NOT count. The orchestrator audits that line with these same definitions.
 
 Prompt of the LITE mode (the single-flow mode of `qa-guardian.md`; no tier routes here
 today — `complex` always runs the two stages below):
 
 ```
-## File handoff (contract — read first)
 ARTIFACT_PATH: <RUN_DIR>/05-qa.md
-[Include only if 03-plan.md has ## Usage coverage:] Step 0 — BEFORE the reading list
-below: read `<RUN_DIR>/04-implementation.md` (## Modified files) and the target code and
-write YOUR ## Access map (QA), in the format and vocabulary of agents/explore.md. Opening
-03-plan.md whole to read Risks/Assumptions/Pre-mortem already crosses the ## Usage coverage —
-that is why the Map (QA) is written BEFORE any Read of 03-plan.md/02-explore.md; only
-04-implementation.md and the target code are read before it. A Map written after the plan is a
-rubber stamp, not an enumeration. Re-running the architect's greps confirms his method, it does not
-produce an independent enumeration.
 Read before acting (via Read):
 - `<RUN_DIR>/04-implementation.md` — ## Modified files (the files to attack).
 - `<RUN_DIR>/03-plan.md` (open it only AFTER step 0 of the Access map (QA), when it
-  applies) — ## Identified risks (MANDATORY to attack each one),
-  ## Assumptions (attack each one with real evidence), ## Pre-mortem (validate
-  each declared mitigation AND attack each "accepted because" justification).
-  [Include only if Type = bug/error:] ## Symptom coverage — TWO attacks, both
-  mandatory. (1) Is each vector marked `covered` ACTUALLY covered in the diff? Covered in the
-  plan and absent from the diff = a break. (2) Is the list COMPLETE? Do NOT trust it: re-run
-  the command declared in `**How I enumerated:**` and widen it on your own (writers of the
-  state, entry points, handlers/listeners, jobs, error paths). A path that
-  produces the ticket's symptom and is NOT in the table is an **omitted vector** = a break in
-  ## Proven breaks, with the command used and `file:line`. An omitted vector is the failure
-  mode this section exists to catch: an incomplete and plausible list goes through all the
-  other gates. Record it as the FIRST line of ## Validated risks:
-  `Symptom coverage: <N vectors of the plan's table> · <command/criterion of your
-  re-enumeration> · omitted: <file:line | none>` — the orchestrator audits that line.
-  `N vectors of the plan's table` = the total of lines of the ## Symptom coverage table of the
-  plan (`covered` + `not-covered`), NOT the number of vectors you confirmed in the diff:
-  a `not-covered` vector counts towards N even without being in the diff (by definition it is not), and
-  an omitted vector that YOU discovered does NOT enter N — it goes only in the `omitted:` field.
-  [Include only if 03-plan.md has ## Usage coverage:] ## Usage coverage — with YOUR
-  ## Access map (QA) of step 0 already written, only then read 02-explore.md and that section of the
-  plan and diff the two against it. Every prohibition of ## What to avoid and every `source=pipeline` line is a hypothesis
-  to attack ("which known or plausible consumer does this behavior break?"):
-  a named consumer (file:line + entry point) → a proven break; without a nameable consumer →
-  the label `the decision remains unconfirmed by the operator`, and `HELD` is FORBIDDEN on those
-  items. ## Access map (QA) is a mandatory section of the report whenever this front
-  applies. Record it in ## Validated risks, right after the `Symptom coverage: ...` line
-  when it exists (otherwise as the first line):
-  `Usage coverage: <N lines of the plan> · <M own scenarios> · divergences: <file:line, ...|none> · unconfirmed decisions: <item, ...|none>`
-  `N lines of the plan` = the total of scenario lines (the ones starting with `- `) inside the cut of the `## Usage coverage` section of `03-plan.md` — from the heading to the next `## `, outside a code block; the `**Diff axis:**`, `**Always-gate class:**` and `**Scenarios consulted:**` lines do NOT count.
-  `M own scenarios` = the total of entry-point lines of the `## Access map (QA)` of the QA report; the `partial:` line and the `unimplemented intent:` lines do NOT count.
-  The orchestrator audits that line with these same definitions.
-Write the COMPLETE report (all your mandatory sections) to ARTIFACT_PATH via Write.
-Return to the orchestrator AT MOST 10 lines: verdict + artifact path + open items.
-Do NOT paste the complete report.
+  applies) — see the QA attack brief above, pasted here by the orchestrator.
 
 Mode: LITE
 
-For each pre-mortem item with "mitigation: adjustment already made in the plan", confirm
-that the mitigation ACTUALLY exists in the diff — a mitigation declared and not implemented
-is a break (report it in ## Proven breaks).
-
-For each pre-mortem item with "mitigation: accepted because <reason>", attack the
-JUSTIFICATION of the acceptance with real evidence — it is the most fragile hypothesis of the plan and
-today nobody checks it. A false justification = a live and unmitigated risk: prove the consequence and
-report it in ## Proven breaks; if you knock the justification down without managing to exercise the
-failure, report it in ## Invalidated assumptions (it goes back to the architect, not to the coder).
-"Accepted" never waives the attack.
+Attack every pre-mortem mitigation per the QA attack brief above; prove the consequence with an
+executable PoC and report it in ## Proven breaks.
 
 Try to break each risk (execute the architect's steps or derive equivalents;
 HELD/BROKE) and apply your adversarial methodology. Attack each
@@ -1262,66 +1093,16 @@ FUZZ_TEMPLATE: [PLUGIN_ROOT]/skills/qa-guardian/references/fuzz-template.md
 `🛡️ QA-GUARDIAN · complex · ANALYST · ...`:
 
 ```
-## File handoff (contract — read first)
 ARTIFACT_PATH: <RUN_DIR>/05a-qa-analyst.md
-[Include only if 03-plan.md has ## Usage coverage:] Step 0 — BEFORE the reading list
-below: read `<RUN_DIR>/04-implementation.md` (## Modified files) and the target code and
-write YOUR ## Access map (QA), in the format and vocabulary of agents/explore.md. Opening
-03-plan.md whole to read Risks/Assumptions/Pre-mortem already crosses the ## Usage coverage —
-that is why the Map (QA) is written BEFORE any Read of 03-plan.md/02-explore.md; only
-04-implementation.md and the target code are read before it. A Map written after the plan is a
-rubber stamp, not an enumeration. Re-running the architect's greps confirms his method, it does not
-produce an independent enumeration.
 Read before acting (via Read):
 - `<RUN_DIR>/04-implementation.md` — ## Modified files (the files to attack).
 - `<RUN_DIR>/03-plan.md` (open it only AFTER step 0 of the Access map (QA), when it
-  applies) — ## Identified risks (MANDATORY to attack each one),
-  ## Assumptions (attack each one with real evidence), ## Pre-mortem (validate
-  each declared mitigation AND attack each "accepted because" justification).
-  [Include only if Type = bug/error:] ## Symptom coverage — TWO attacks, both
-  mandatory. (1) Is each vector marked `covered` ACTUALLY covered in the diff? Covered in the
-  plan and absent from the diff = a break. (2) Is the list COMPLETE? Do NOT trust it: re-run
-  the command declared in `**How I enumerated:**` and widen it on your own (writers of the
-  state, entry points, handlers/listeners, jobs, error paths). A path that
-  produces the ticket's symptom and is NOT in the table is an **omitted vector** = a break in
-  ## Proven breaks, with the command used and `file:line`. An omitted vector is the failure
-  mode this section exists to catch: an incomplete and plausible list goes through all the
-  other gates. Record it as the FIRST line of ## Validated risks:
-  `Symptom coverage: <N vectors of the plan's table> · <command/criterion of your
-  re-enumeration> · omitted: <file:line | none>` — the orchestrator audits that line.
-  `N vectors of the plan's table` = the total of lines of the ## Symptom coverage table of the
-  plan (`covered` + `not-covered`), NOT the number of vectors you confirmed in the diff:
-  a `not-covered` vector counts towards N even without being in the diff (by definition it is not), and
-  an omitted vector that YOU discovered does NOT enter N — it goes only in the `omitted:` field.
-  [Include only if 03-plan.md has ## Usage coverage:] ## Usage coverage — with YOUR
-  ## Access map (QA) of step 0 already written, only then read 02-explore.md and that section of the
-  plan and diff the two against it. Every prohibition of ## What to avoid and every `source=pipeline` line is a hypothesis
-  to attack ("which known or plausible consumer does this behavior break?"):
-  a named consumer (file:line + entry point) → a proven break; without a nameable consumer →
-  the label `the decision remains unconfirmed by the operator`, and `HELD` is FORBIDDEN on those
-  items. ## Access map (QA) is a mandatory section of the report whenever this front
-  applies. Record it in ## Validated risks, right after the `Symptom coverage: ...` line
-  when it exists (otherwise as the first line):
-  `Usage coverage: <N lines of the plan> · <M own scenarios> · divergences: <file:line, ...|none> · unconfirmed decisions: <item, ...|none>`
-  `N lines of the plan` = the total of scenario lines (the ones starting with `- `) inside the cut of the `## Usage coverage` section of `03-plan.md` — from the heading to the next `## `, outside a code block; the `**Diff axis:**`, `**Always-gate class:**` and `**Scenarios consulted:**` lines do NOT count.
-  `M own scenarios` = the total of entry-point lines of the `## Access map (QA)` of the QA report; the `partial:` line and the `unimplemented intent:` lines do NOT count.
-  The orchestrator audits that line with these same definitions.
-Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
-Return to the orchestrator AT MOST 10 lines: status + artifact path + open items.
-Do NOT paste the complete report.
+  applies) — see the QA attack brief above, pasted here by the orchestrator.
 
 Mode: ANALYST
 
-For each pre-mortem item with "mitigation: adjustment already made in the plan", confirm
-that the mitigation ACTUALLY exists in the diff — a mitigation declared and not implemented
-is a break (report it in ## Proven breaks, proof by reading).
-
-For each pre-mortem item with "mitigation: accepted because <reason>", attack the
-JUSTIFICATION of the acceptance — it is the most fragile hypothesis of the plan and today nobody checks it.
-A false justification = a live and unmitigated risk: whatever can be proven by reading goes
-in ## Proven breaks; whatever depends on runtime becomes an item in ## Break hypotheses;
-if you knock the justification down without managing to prove the failure, report it in ## Invalidated
-assumptions (it goes back to the architect, not to the coder). "Accepted" never waives the attack.
+Attack every pre-mortem mitigation per the QA attack brief above: static proof (by reading)
+goes to ## Proven breaks, runtime-dependent proof becomes a ## Break hypotheses item.
 
 Apply the COMPLETE analytical attack (fronts, risks, assumptions, callers,
 robustness), but follow the rules of the ANALYST Mode: do NOT write or run a runtime
@@ -1354,34 +1135,29 @@ FUZZ_TEMPLATE: [PLUGIN_ROOT]/skills/qa-guardian/references/fuzz-template.md
 ```
 
 **Stage A gate:** run `nightshift run check 05a` (the artifact gate, step 5.2) over
-`05a-qa-analyst.md`, which must carry `## Break hypotheses` and
-`## Test recipe` — on `MISSING`, relaunch the analyst (🔁) once; if it persists,
-terminate and inform the user. If there are **zero** runtime hypotheses, skip
-stage B and go straight to the consolidation.
+`05a-qa-analyst.md`, which must carry `## Break hypotheses` and `## Test recipe` — on
+`MISSING`, relaunch the analyst (🔁) once; if it persists, terminate and inform the user. Zero
+runtime hypotheses → skip stage B and go straight to the consolidation.
 
-As soon as that gate closes, call `run_set` with `qa_stage_a` = `{ "artifact": "05a-qa-analyst.md",
-"verdict": "<the analyst's verdict>" }` — BEFORE launching stage B, and never by writing the file:
-it is that record that makes a resume skip the ~12 min of analyst already paid for when the provers
-die halfway.
+As soon as that gate closes, call `run_set` with `qa_stage_a` = `{ "artifact":
+"05a-qa-analyst.md", "verdict": "<the analyst's verdict>" }` — BEFORE launching stage B,
+never by writing the file: this is what makes a resume skip the analyst if the provers die
+halfway.
 
-**Stage B — Provers (complex):** launch **N qa-guardian in parallel, all
-in a single message** (subagent_type="nightshift:qa-guardian", `model: "sonnet"`,
-`mode: "bypassPermissions"`) — **one per root group** of the hypotheses (never one
-per symptom). The N are N `tool_use` in the same content block;
-`run_in_background: true` is forbidden (⛔ Hard rule). The `description` of the Agent
-of each prover MUST start with `H<N> (group: <group>): ` (e.g.
-`H1 (group: guard/cost): PoC of the state cap`) — the cockpit identifies each
-prover lane and its verdict by that prefix. Single header of the phase:
-`🛡️ QA-GUARDIAN · complex · PROVERS ×N · ...`. On a resume whose block says
-`From stage: qa-stage-b`, `05a-qa-analyst.md` is already on disk: read it via Read and start
-from here, without rebuilding stage A. Prompt of each one:
+**Stage B — Provers (complex):** launch **N qa-guardian in parallel, all in a single message**
+(subagent_type="nightshift:qa-guardian", `model: "sonnet"`, `mode: "bypassPermissions"`) — one
+per root group of the hypotheses (never one per symptom). `run_in_background: true` is
+forbidden (⛔ Hard rule). The `description` of each prover's Agent call MUST start with
+`H<N> (group: <group>): ` — the cockpit identifies each prover lane and its verdict by that
+prefix. Single header of the phase: `🛡️ QA-GUARDIAN · complex · PROVERS ×N · ...`. On a resume
+whose block says `From stage: qa-stage-b`, `05a-qa-analyst.md` is already on disk: read it and
+start from here, without rebuilding stage A. Prompt of each one:
 
 ```
-## File handoff (contract — read first)
 Read before acting (via Read): `<RUN_DIR>/05a-qa-analyst.md` — stick to YOUR group
 of hypotheses (## Break hypotheses: <IDs/label of the assigned group>) and to the ## Test
 recipe. Write ONLY the assigned PoC files — with no .md artifact of your own.
-Return to the orchestrator AT MOST 10 lines: verdict per hypothesis + open items.
+Return summary (≤10 lines): verdict per hypothesis + open items.
 
 Mode: PROVER
 
@@ -1405,77 +1181,54 @@ RISK_MATRIX: [PLUGIN_ROOT]/skills/qa-guardian/references/risk-matrix.md
 FUZZ_TEMPLATE: [PLUGIN_ROOT]/skills/qa-guardian/references/fuzz-template.md
 ```
 
-**Consolidation (inline, by yourself — no subagent):** assemble the single report
-in the contract that Phase 6 consumes:
-- `## Proven breaks` = the analyst's static ones + the `PROVEN` hypotheses of the
-  provers, keeping the analyst's grouping by root (same root = 1 item
-  with its PoCs).
-- `## Validated risks` = the analyst's, resolving each "→ hypothesis H<n>" to
-  HELD (REFUTED) or BROKE (PROVEN).
-- `## Generated PoCs` = the files created by the provers + a note that the without-fix
-  proof via stash was delegated to the verifier.
+**Consolidation (inline, by yourself — no subagent):** assemble the single report in the
+contract that Phase 6 consumes:
+- `## Proven breaks` = the analyst's static ones + the `PROVEN` hypotheses of the provers,
+  keeping the analyst's grouping by root (same root = 1 item with its PoCs).
+- `## Validated risks` = the analyst's, resolving each "→ hypothesis H<n>" to HELD (REFUTED)
+  or BROKE (PROVEN).
+- `## Generated PoCs` = the provers' files + a note that the without-fix proof via stash was
+  delegated to the verifier.
 - `## Invalidated assumptions` = the analyst's.
-- `INCONCLUSIVE` **never becomes HELD**: try to complete the proof yourself
-  inline; if it remains inconclusive, record an ⚠️ open item (it shows up in Phase 8).
-- Aggregate verdict: any proven break → `NEEDS FIX`; nothing proven and
-  no open item → `APPROVED`.
-- Record 5.1: one line per agent — `🛡️ QA-Guardian (analyst)`,
-  `🛡️ QA-Guardian (prover <group>)`.
+- `INCONCLUSIVE` **never becomes HELD**: try to complete the proof yourself inline; if it
+  remains inconclusive, record an ⚠️ open item.
+- Aggregate verdict: any proven break → `NEEDS FIX`; nothing proven and no open item →
+  `APPROVED`.
+- Record 5.1: one line per agent — `🛡️ QA-Guardian (analyst)`, `🛡️ QA-Guardian (prover
+  <group>)`.
 
 Write the consolidated report to `05-qa.md` via Write and run `nightshift run check 05`
-(the artifact gate, step 5.2). It is that artifact that Phase 6 (verifier/coder-loop) and Phase
-8 re-read via Read.
+(the artifact gate, step 5.2) — the artifact Phase 6 and Phase 8 re-read via Read.
 
-**Validation of the coverage (only when `Type = bug/error` — LITE and complex):** the QA's
-report must open `## Validated risks` with the line `Symptom coverage: ...`. Read
-`05-qa.md` via Read (on complex you have already read `05a-qa-analyst.md` to consolidate, and the
-line reaches `05-qa.md` together with `## Validated risks`) and confront it with the table of
-`## Symptom coverage` of `03-plan.md`, which you already read at the Phase 3 gate: (i) the
-`N vectors of the plan's table` reported by the QA has to match the TOTAL number of
-lines of the table — `covered` + `not-covered`, which is exactly the quantity that the QA's
-prompt asks for: a `not-covered` vector counts towards N even without confirmation in the diff, and an
-omitted vector found by the QA does NOT enter N (it shows up only in `omitted:`); (ii) the
-re-enumeration has to cite a concrete command or criterion — "I reviewed the plan", "I analyzed the
-code" and equivalents do NOT count; (iii) `omitted:` has to be filled in (with
-`file:line` or `none`). A missing line, an N that does not match or a re-enumeration with no method →
-the QA skipped the coverage attack: fail the phase and relaunch the QA (🔁). This is the anti-skip
-invariant of the QA: it is audited here, over the artifact, where a summary line cannot fake it.
+**Validation of the coverage (only when `Type = bug/error` — LITE and complex):** confront
+`05-qa.md`'s `Symptom coverage: ...` line (opening `## Validated risks`) with the `## Symptom
+coverage` table of `03-plan.md`, using the QA attack brief's `N vectors of the plan's table` and
+`omitted:` definitions above — N matches the table's total, the re-enumeration cites a concrete
+method (not "I reviewed the plan"), `omitted:` is filled in. Any mismatch or missing line → the
+QA skipped the attack: fail the phase and relaunch the QA (🔁).
 
 **Validation of the usage coverage (when `03-plan.md` has `## Usage coverage` — LITE and
-complex):** its own condition, and not the `Type = bug/error` of the paragraph above, because the section
-is also mandatory on a feature/refactor with `**Always-gate class:** yes`. The QA's
-report must bring the section `## Access map (QA)` and, in `## Validated risks`, the line
-`Usage coverage: ...`. Read `05-qa.md` via Read and confront it with the `## Usage coverage` of
-`03-plan.md`: (i) the `N` reported matches the count of the same anchored cut that Phase
-3 already uses; (ii) the `M` matches the count of entry-point lines of the `## Access map (QA)` of the
-report itself; (iii) `divergences:` filled in (`file:line` or `none`); (iv)
-`unconfirmed decisions:` filled in (an item or `none`); (v) no line of
-`## Validated risks` whose subject is an item of `## What to avoid` or a `source=pipeline` line
-of the plan shows up as `HELD`. The two quantities are exactly these, with the SAME
-definition that the QA's prompt carries:
-`N lines of the plan` = the total of scenario lines (the ones starting with `- `) inside the cut of the `## Usage coverage` section of `03-plan.md` — from the heading to the next `## `, outside a code block; the `**Diff axis:**`, `**Always-gate class:**` and `**Scenarios consulted:**` lines do NOT count.
-`M own scenarios` = the total of entry-point lines of the `## Access map (QA)` of the QA report; the `partial:` line and the `unimplemented intent:` lines do NOT count.
-A missing line, a missing `## Access map (QA)` section, an `N`/`M` that do not match, an empty field or
-a forbidden `HELD` → fail the phase and relaunch the QA (🔁), exactly as with the coverage. An item of
-`unconfirmed decisions:` different from `none` does **not** change the QA's verdict (it is not a
-break, it is a pending product decision): it becomes a mandatory open item of Phase 8.
+complex, also mandatory with `**Always-gate class:** yes`):** confront `05-qa.md`'s `##
+Access map (QA)` and its `Usage coverage: ...` line with `## Usage coverage` of `03-plan.md`,
+using the brief's `N` and `M` definitions above — `N` and `M` match, `divergences:` and
+`unconfirmed decisions:` are filled in, and no `## What to avoid`/`source=pipeline` item shows
+up as `HELD`. Any mismatch or missing piece → fail the phase and relaunch the QA (🔁), exactly
+as with the coverage. `unconfirmed decisions:` different from `none` does **not** change the
+verdict — it becomes a mandatory open item of Phase 8.
 
-**Gate:** if the QA's verdict is `APPROVED` (it held against everything — in the complex tier,
-the verdict is the aggregate of the consolidation), go straight to
-Phase 6 with the PoCs as a regression net. If it is `NEEDS FIX`, capture
-`## Proven breaks` + `## Generated PoCs` — they enter the Phase 6 loop: the
-breaks go to the coder and the PoCs go to the verifier to confirm the fix.
+**Gate:** if the QA's verdict is `APPROVED` (in the complex tier, the aggregate of the
+consolidation), go straight to Phase 6 with the PoCs as a regression net. If `NEEDS FIX`,
+capture `## Proven breaks` + `## Generated PoCs` — they enter the Phase 6 loop: breaks to the
+coder, PoCs to the verifier to confirm the fix.
 
 **Invalidated assumption (back to the architect, not to the coder):** if `## Invalidated
-assumptions` is not "None", the plan was designed on a false base — patching
-in the coder is masking. Relaunch the **architect** (🔁, the same model as Phase 3) with the
-original plan + the invalidated assumption(s) + the QA's evidence, obtain the
-revised plan and go back to Phase 4 (coder) with it. **At most 1 return to the architect per
-pipeline** — if an assumption falls again in the revised plan, terminate without a commit and
-take it to the user (Phase 8). Apply the lesson-capture filter above before relaunching; if both
-conditions hold, call `lesson_save` with `target: "architect"`, building the payload with every
-field of **Lesson payload** above — the lesson is the flawed assumption or approach the plan
-was built on, plus what the QA's evidence proved instead.
+assumptions` is not "None", the plan was designed on a false base — patching in the coder is
+masking. Relaunch the **architect** (🔁, the same model as Phase 3) with the original plan +
+the invalidated assumption(s) + the QA's evidence, obtain the revised plan and go back to
+Phase 4 with it. **At most 1 return to the architect per pipeline** — if an assumption falls
+again, terminate without a commit and take it to the user (Phase 8). Apply the lesson-capture
+filter above before relaunching; if both conditions hold, call `lesson_save` with
+`target: "architect"`, building the payload with every field of **Lesson payload** above.
 
 ### Phase 6 — Verification (final gate + correction loop)
 
@@ -1514,9 +1267,8 @@ Project: [PROJECT — the same identifier used in RUN_DIR]
 
 The verifier runs **after** the QA and is the independent executor: it **reproduces** the
 breaks proven by the QA (it runs the PoCs, it checks the static ones by grep). A PoC that
-still fails = the break remains. That is how the QA (which only attacks and proves) and the coder
-(which only fixes) close on each other: neither of the two validates its own work — the one who confirms is
-the verifier.
+still fails = the break remains — neither the QA nor the coder validates its own work; the
+verifier is the one who confirms.
 
 **Fix loop:**
 - If the verdict is `## Verification: PASSED` → go on to Phase 7.
@@ -1712,33 +1464,19 @@ The two commands below own the mechanics — staging, the commit, the branch nam
 `gh pr create`. What stays yours is the judgment: which files, which message, which body.
 
 1. **Decide what goes into the commit and write its message.**
-   - The list is the `## Modified files` section of `<RUN_DIR>/04-implementation.md`, plus the
-     QA's PoCs/tests that passed (including the `*.regression.test.*` of the bug's scenario —
-     the regression net is committed together with the fix), each of those added with one
-     `--extra <pathspec>`. Leave out the screenshots/artifacts of Phase 6.5 and anything Step
-     2.7 of the verifier would flag; `.claude/`, `tmp/` and lockfiles the command refuses on
-     its own. Check `git status --short` first: an unexpected file in the status
-     → investigate before committing, do not include it in the dark. A file IN the scope that
-     mixes pre-existing unrequested hunks (the user's work in progress in the same file) →
-     ask the user BEFORE committing — a commit/merge is hard to revert; never report it as a
-     fait accompli afterwards.
-   - The message is yours: follow the convention the repository declares — the command prints
-     it as `CONVENTION: <what it found>` before committing — and, when none is declared, use
-     **Conventional Commits** with the `<type>` defined in Phase 0:
-     `<type>(optional scope): short description in the imperative`. Include a short body
-     describing what changed when the task is not trivial.
-   - **Point out in the commit body the tests run and passed** — a line
-     `Tests:` summarizing the checks that in fact passed (verifier: tsc/lint/
-     build/tests; QA: validated risks; runtime: real validation when there was one,
-     e.g. a production payload, a screenshot of the emulator, a verdict on a device). List only
-     what was executed and approved; never invent a result.
-   - **Tracker IDs in the commit body:** if the task came from an issue, include the
-     IDs that close the loop in the canonical form of that tracker (e.g.
-     `Fixes PROJ-123`) — always the canonical ID, never its abbreviation. Without them the
-     issue tracker / crash reporter (e.g. Sentry, Linear, GitHub Issues) does not close the issue
-     and the hooks do not link.
-   - Do not include a `Co-Authored-By` trailer, an agent signature, a model or a
-     vendor in the commit message.
+   - The list is `## Modified files` of `<RUN_DIR>/04-implementation.md` plus the QA's
+     PoCs/tests that passed (including the bug's `*.regression.test.*`), each added with one
+     `--extra <pathspec>`. Leave out Phase 6.5's screenshots/artifacts and anything Step 2.7 of
+     the verifier flags; `.claude/`, `tmp/` and lockfiles the command refuses on its own. Check
+     `git status --short` first: an unexpected file → investigate before committing, never
+     include it in the dark; a file IN the scope that mixes pre-existing unrequested hunks → ask
+     the user BEFORE committing.
+   - The message is yours: follow the convention the repository declares (the command prints
+     `CONVENTION: <what it found>`) or, with none declared, **Conventional Commits** with the
+     `<type>` of Phase 0. Include a body when the task is not trivial, with a `Tests:` line
+     listing only the checks that actually passed and the tracker's canonical ID (e.g. `Fixes
+     PROJ-123`) when the task came from one. No `Co-Authored-By` trailer, agent, model or
+     vendor name.
    - Write the message with Write to `<RUN_DIR>/commit-message.txt`, which lives outside the
      worktree and is therefore never committed.
 
@@ -1757,55 +1495,42 @@ The two commands below own the mechanics — staging, the commit, the branch nam
    set) there is no operator to answer: go straight to step 4.
 
 4. **Open the pull request:**
-   - Assemble the title and the body EXCLUSIVELY from `references/pr-template.md`,
-     filling every section with this run's artifacts (`01-triage.md`, `03-plan.md`,
-     `04-implementation.md`, `05-qa.md`, `06-verification.md` and the
-     execution log of step 5.1). Invent nothing: a mandatory section with no real data
-     reads `None`, and only the lines the template marks as optional may be omitted.
-     In the PR description, when you need to identify the automation, use the nickname
-     `nightshift`; do not use names of agents, models or vendors, and do not add a
-     `Co-Authored-By` trailer.
-   - **What was proven goes inside `## QA`** — the PR body has no separate test
-     section. The `Proven:` block lists each behaviour that was in fact exercised and
-     held (QA: the risks that survived the attack and the break that was proven and
-     fixed; verifier: the checks that ran and passed; runtime: the acceptance
-     confirmed with a real payload, a screenshot of the emulator or a verdict on a
-     device), named as behaviour, never as the name of a test file or of a command.
-     Never list a behaviour that was not exercised. The real open items of the run go
-     in the `Not covered:` block of the same section.
+   - Assemble the title and the body EXCLUSIVELY from `references/pr-template.md`, filling
+     every section with this run's artifacts (`01-triage.md`, `03-plan.md`,
+     `04-implementation.md`, `05-qa.md`, `06-verification.md` and the execution log of step
+     5.1). Invent nothing: a mandatory section with no real data reads `None`. In the PR
+     description, identify the automation, when needed, by the nickname `nightshift` — never
+     an agent, model or vendor name, and no `Co-Authored-By` trailer.
+   - **What was proven goes inside `## QA`** — the PR body has no separate test section. The
+     `Proven:` block lists each behaviour actually exercised and held (QA: risks that survived
+     the attack and the break fixed; verifier: checks that passed; runtime: acceptance
+     confirmed with a real payload, a screenshot or a device verdict), named as behaviour,
+     never a test file or command. The real open items go in `Not covered:` of the same section.
    - **A decision proposed by this run is NOT part of the PR body.** When Phase 3
      saved a `## Proposed decision` block, it is reported only in Phase 8, where the
      operator decides whether it deserves a ticket.
-   - **No bare `#<number>` in the title or in the body** — GitHub turns it into a
-     cross-reference to an unrelated issue or PR of the repository and notifies it. A
-     queue job id or a decision number is written without the `#` (`job 24`,
-     `decision 1`); the only `#<number>` allowed is a real issue of this repository in
-     the `Fixes`/`Closes` line.
+   - **No bare `#<number>` in the title or body** — GitHub cross-references an unrelated
+     issue/PR and notifies it. Write a queue job id or decision number without the `#`
+     (`job 24`, `decision 1`); the only `#<number>` allowed is a real issue of this
+     repository in the `Fixes`/`Closes` line.
    - Write the body with Write to `<RUN_DIR>/pr-body.md` and run
      `nightshift run pr --body-file <RUN_DIR>/pr-body.md`. The command checks the body,
      renames the branch to its final name (the worktree creates it with the `worktree-` prefix
      and `+` in place of `/`), pushes it and opens the pull request, answering `BRANCH:`,
      `PR: <url>` and `WORKTREE: <path>`. You never run `git branch -m`, `git push` or
      `gh pr create` by hand.
-   - `REJECTED: <reason>` means the body did not pass the check the template fixes — the
-     three sections `## Summary`, `## Changes` and `## QA` all present and in that order
-     with no fourth `## `, the lines `Verdict:` and `Proven:` present inside `## QA`, no
-     bare `#<number>` outside the `Fixes`/`Closes` line, no placeholder in double curly
-     braces and no `<...>` example left over from the model — and that nothing was pushed
-     and no pull request was opened. The size caps of the template are yours to respect
-     before calling it. Fix the body and call the command again. A PR outside this
-     standard is never opened.
-   - **The delivery is recorded by the command itself** — `nightshift run pr` records the
-     outcome with `status: "done"` the moment the pull request exists, so do NOT call
-     `run_outcome` for it: the pull request URL is not a parameter, the runtime writes it from
-     what the session really published. No pull request opened → no outcome recorded.
+   - `REJECTED: <reason>` means the body failed the template's check (section order/count,
+     `Verdict:`/`Proven:` inside `## QA`, a bare `#<number>`, a placeholder or a leftover
+     `<...>` example) and nothing was pushed. Fix the body and call the command again.
+   - **The delivery is recorded by the command itself** — `nightshift run pr` records
+     `status: "done"` the moment the pull request exists; do NOT call `run_outcome` for it.
+     The pull request URL is not a parameter. No pull request opened → no outcome recorded.
    - If `gh` is not installed or could not open the pull request, the command says so with the
      branch already pushed: inform it and leave the pull request to be opened by hand.
 
 5. **Close the worktree immediately after the PR is created** (or after confirming
-   that the commit stayed local): call `ExitWorktree` with `action: "delete"` —
-   otherwise `git worktree remove <path>`; the worktree and the local files are removed; the
-   branch is already on the remote via push and the PR is open. The session goes back to the original directory.
+   that the commit stayed local): call `ExitWorktree` with `action: "delete"`. The branch is
+   already on the remote via push and the PR is open.
    - Inform the user of the PR link and warn: **"Worktree removed. The branch
      `<type>/<slug>` is on the remote — use `git checkout <type>/<slug>` or
      open a new worktree for new edits."**
@@ -2024,23 +1749,18 @@ loop re-entries (🔁), with Time:
 **Total:** ⏱️ the `total` line of `nightshift run log`
 ```
 
-**The Time column is read, never computed.** Run `nightshift run log` (Bash, inside the job):
-it prints one tab-separated `<phase>  <model>  <status>  <duration>` line per phase the runtime
-recorded, then a `total  <duration>` line. Paste the duration of each phase into the row of the
-agent that ran it, and the `total` into the Total. A phase the runtime measured no lane for
-prints `-` — leave the cell at `-` instead of estimating it. `nightshift run log --json` answers
-the same rows with the `at` instant the runtime stamped on each phase, when the report needs the
-order rather than the durations. Never compute a duration and never write a timestamp: the times
-belong to the runtime.
+**The Time column is read, never computed.** Run `nightshift run log` (Bash, inside the job): it
+prints one tab-separated `<phase>  <model>  <status>  <duration>` line per phase plus a final
+`total  <duration>` line — paste each into its row and the total into the Total, leaving `-`
+where the runtime measured no lane. `nightshift run log --json` answers the same rows with each
+phase's `at` stamp, when the report needs order instead of durations.
+Never compute a duration and never write a timestamp: the times belong to the runtime.
 
-**Re-read the artifacts via Read when assembling the detail** (re-reading here is legitimate precisely
-because the content left the context — see "Do not re-read what is already in the context" in
-step 5.2) — with the file handoff the
-orchestrator NO LONGER has the complete content of the phases in context: `01-triage.md`
-(## Diagnosis), `05-qa.md` (breaks/risks/PoCs), `06-verification.md`
-(checks/iterations) and `03-plan.md` when necessary. A missing artifact (a pipeline
-ended at a gate before generating it) → record the ⚠️ open item on the corresponding line,
-without trying to reconstruct the content nor failing the report.
+**Re-read the artifacts via Read when assembling the detail** — legitimate here because the
+handoff already dropped their content from context: `01-triage.md` (## Diagnosis), `05-qa.md`
+(breaks/risks/PoCs), `06-verification.md` (checks/iterations) and `03-plan.md` when necessary.
+A missing artifact (a pipeline ended at a gate before generating it) → record the ⚠️ open item
+on the corresponding line, without trying to reconstruct the content nor failing the report.
 
 After the tables, detail only what needs more than one line:
 
@@ -2062,18 +1782,15 @@ If the pipeline ended without a commit (a gate rejected or verification ❌ afte
 limit of iterations), leave the corresponding line with ❌/⚠️ and explain the
 block right below the table.
 
-**A finding out of scope (a dedicated ticket to open) — mandatory on BOTH paths**, and
-it does not count towards the ~30-line cap of the happy path: when the `05-qa.md` has in
-`## Suggestions` some item with the literal `dedicated ticket: yes`, list each one with
-`file:line` + 1 line of the risk. The ticket is opened by the runtime's closing flow; this pipeline
-never creates issues (Phase 7, step 6). The same paragraph collects the items of `unconfirmed decisions:`
-of the `Usage coverage:` line of the QA, the `NOT MET / to confirm` lines of Phase 6.5 and, when
-Phase 3 saved a `## Proposed decision` block, one line
+**A finding out of scope (a dedicated ticket to open) — mandatory on BOTH paths**, and it does
+not count towards the ~30-line cap of the happy path: when `05-qa.md`'s `## Suggestions` has an
+item with the literal `dedicated ticket: yes`, list it with `file:line` + 1 line of the risk —
+the runtime's closing flow opens the ticket, never this pipeline (Phase 7, step 6). The same
+paragraph collects `unconfirmed decisions:` of the QA's `Usage coverage:` line, the `NOT MET /
+to confirm` lines of Phase 6.5 and, when Phase 3 saved a `## Proposed decision` block, one line
 `` Proposed decision <number>: <title> — recorded as `proposed`; accept or reject it with `decision_update`. ``
-(the number bare, never `#<number>`) — this report is the ONLY place the proposed decision
-surfaces, and it is where the operator decides whether it deserves a ticket —
-all of them become open items, and the `## Notice` section reflects them in "Still open" in user
-language (with no file and no identifier, as the section's spec already requires).
+(bare number, never `#<number>`) — this report is the ONLY place it surfaces. All of them become
+open items, reflected in `## Notice`'s "Still open" in user language (no file, no identifier).
 
 On both paths, proceed to the Telemetry below.
 
@@ -2088,18 +1805,13 @@ the 🔁 re-runs, note ≤ 1 line).
 
 The rest of the record is the runtime's, not yours:
 - `project` and `slug` come from the job's own row and are ignored here; send them only on a run
-  started outside the queue, where nothing else can say which run this is.
+  started outside the queue.
 - `tier` and `tier_raise_reason` are left out: the tier was recorded with `run_set` and the
-  raise was read from the Brief's `Tier raised: <from> -> <to>: <evidence>` line. A run whose
-  `tier_operator` differs from the tier it recorded is a run whose tier was raised — the raise is
-  never a field of its own.
-- **No duration and no model is sent.** The total of the run, the duration of each phase and the
-  model each phase ran on are measured from the session stream and fill the record afterwards;
-  a `duration_s` assembled here would only be overwritten.
+  raise was read from the Brief's `Tier raised: <from> -> <to>: <evidence>` line.
+- **No duration and no model is sent.** They are measured from the session stream and fill the
+  record afterwards; a `duration_s` assembled here would only be overwritten.
 
-Terminations by gate are recorded too — they are the most
-valuable data of the runtime's report. A failure in `pipeline_log` does not block the report:
-record the ⚠️ open item and continue.
+A failure in `pipeline_log` does not block the report: record the ⚠️ open item and continue.
 
 ---
 
