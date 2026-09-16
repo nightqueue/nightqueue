@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, logsDir } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
+import { ghPrList } from "../host/gh.mjs";
 import { packageRoot } from "../host/paths.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore } from "../store/open.mjs";
@@ -41,8 +42,13 @@ const DEFAULT_DEPS = {
   pauseSignalImpl: null,
   idleTimeoutS: IDLE_TIMEOUT_S,
   refreshMergedImpl: refreshMergedJobs,
+  prListImpl: ghPrList,
   finishJobImpl: null,
 };
+
+// Bounds of the key the pre-spawn pull request check searches for.
+const PR_SEARCH_WORDS = 6;
+const PR_SEARCH_MAX_CHARS = 80;
 
 // Merges the injected seams over the real implementations; the ownership poll is the configured heartbeat.
 function withDefaults(deps, env) {
@@ -316,6 +322,32 @@ async function parkRun(job, run, ctx) {
   return { id: job.id, status: "rate-limited", attempts: run.attempt, notBefore };
 }
 
+// Search key of a job: its slug once it has one, and otherwise the first significant words of its prompt, with no punctuation gh could read as syntax.
+export function prSearchKey(job) {
+  const slug = typeof job?.slug === "string" ? job.slug.trim() : "";
+  if (slug) return slug.slice(0, PR_SEARCH_MAX_CHARS);
+  const words = String(job?.prompt ?? "")
+    .toLowerCase()
+    .match(/[a-z0-9]+/g);
+  return (words ?? []).slice(0, PR_SEARCH_WORDS).join(" ").slice(0, PR_SEARCH_MAX_CHARS);
+}
+
+// Open pull requests to attach to the prompt of this job: disabled by NIGHTSHIFT_NO_PR_CHECK with no subprocess at all, and
+// undetermined whenever gh could not answer. The lookup is awaited, never run synchronously: it is the only network call of a
+// run, and a blocking one here would stall the dispatch loop and the I/O of every job already in flight.
+export async function openPrsForJob(job, { env = process.env, deps = {} } = {}) {
+  if (env?.NIGHTSHIFT_NO_PR_CHECK === "1") return undefined;
+  const key = prSearchKey(job);
+  if (!key) return undefined;
+  const lookup = typeof deps.prListImpl === "function" ? deps.prListImpl : ghPrList;
+  try {
+    const found = await lookup(key, { env });
+    return Array.isArray(found) ? found : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Runs one claimed job end to end: preflight, attempts and the single write of the outcome.
 async function runJob(job, ctx) {
   const { env, deps } = ctx;
@@ -325,7 +357,8 @@ async function runJob(job, ctx) {
     return { id: job.id, status: "blocked", code: check.code };
   }
   const resume = decideResume({ state: readRunState({ project: job.project, slug: job.slug, env }) });
-  const prompt = buildPrompt({ job, resume });
+  const openPrs = await openPrsForJob(job, { env, deps });
+  const prompt = buildPrompt({ job, resume, openPrs });
   const run = await runAttempts(job, { ...ctx, cwd: check.cwd, prompt });
   if (run.lost) {
     noteOwnershipLost(job, env);

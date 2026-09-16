@@ -5,11 +5,12 @@ their secrets), and it drives the memory runtime.
 
 - `nightshift --help` lists every command: `setup`, `doctor`, `init`, `org`,
   `project`, `update`, `connection`, `mcp`, `hook`, `reflect`, `embed`,
-  `memory`, `queue` and `version`.
+  `memory`, `queue`, `verify`, `libs`, `run` and `version`.
 - `nightshift --version` (same as `nightshift version`) prints the installed version
   and exits `0`.
 - Exit codes: `0` ok, `1` user error (a single line on stderr), `2` unexpected
-  error (a stack on stderr). `nightshift doctor` also exits `1` when a check fails.
+  error (a stack on stderr). `nightshift doctor` and `nightshift verify` also
+  exit `1` when a check fails.
 - Every `list` accepts `--json`; on `--json`, stdout is either valid JSON or
   empty, because warnings and errors always go to stderr.
 
@@ -150,4 +151,190 @@ the registry for the newest published version and compares it with the installed
 runtime. That check is never a `fail`: a registry that does not answer is a
 `warn` carrying the message of npm, because a registry being down says nothing
 about this host and must not turn a local diagnosis into a failing exit code.
+
+## Verify
+
+```sh
+nightshift verify                                  # every detected check, one line each, exit 1 on any failure
+nightshift verify --scope touched --files a.ts,b.ts  # narrow the checks that accept a file list to those paths
+nightshift verify --scope +poc                     # the same block plus the PoC check
+```
+
+`nightshift verify` runs the checks the repository under the current directory
+declares, always in the same order - `typecheck`, `lint`, `build`, `test`, `poc`,
+`diff-hygiene` - and prints one line per check:
+
+```
+PASSED|FAILED|SKIPPED <check> <duration_s>s
+```
+
+Under a `FAILED` line come at most twenty indented lines of that check's own
+output. It exits `1` when any line is `FAILED` and `0` otherwise: a `SKIPPED`
+never fails the run, the same rule `nightshift doctor` follows for a `warn`.
+
+The checks are detected, never guessed. The package manager comes from the
+lockfile alone (`bun.lockb`/`bun.lock` → bun, `pnpm-lock.yaml` → pnpm,
+`yarn.lock` → yarn, `package-lock.json` → npm, none → npm) and every script is
+invoked as `<pm> run <script>`, never through `npx`/`bunx`, so a check always
+runs at the version the repository installed. When there is no `package.json`,
+the ladder falls through to `Makefile`, `pyproject.toml`, `go.mod` and
+`Cargo.toml`. A check the project does not declare is `SKIPPED`: a repository
+with no test script reports every check `SKIPPED` and exits `0` - and says so on
+stderr, because "nothing was verified" is not the same event as "everything
+passed".
+
+A workspace root is read as the workspace it is. A script the root manifest does
+not declare is looked for in the members its `workspaces` array (or yarn's
+`workspaces.packages`, or pnpm's `pnpm-workspace.yaml`) names, `*` expanding one
+level and `**` every level down to the bounded depth of the walk, with `!`
+patterns excluded. Each member that declares the script contributes one run of
+`<pm> run <script>` **in its own directory**; the check passes when every run
+passes and stops at the first failure, whose snippet opens with `in <member>`. A
+script the root declares wins over the members, because the root script is the
+project's own entry point. When the root declares workspaces and no member
+carries a `package.json`, the run says so on stderr instead of reporting an empty
+workspace as a project with no checks.
+
+`--scope` takes exactly three values. `full` (the default) runs every detected
+check over the whole project; `touched` passes the file list to the only checks
+that can honestly take one (a package-manager `lint` script, after a `--`
+separator) and runs the rest whole, because a typecheck or a build cannot be
+narrowed without lying; `+poc` is `full` plus the `poc` check, which prefers a
+`test:poc`/`test:fuzz` script and otherwise runs the project's test script over
+the `*.poc.test.*`, `*.fuzz.test.*` and `*.regression.test.*` files it finds.
+Any other value is refused instead of silently treated as the default. `--files`
+is repeatable and its values are comma-separated; without it, `touched` reads the
+files from `git status --short` plus `git diff --name-only`. Only `touched`
+consumes `--files`: under `full` or `+poc` the flag is ignored and the run says
+so on stderr, naming the scope, so a narrowing that never happened is never
+discarded in silence.
+
+`nightshift verify` **never installs anything** and never opens the network on
+its own account: no `install`, no `ci`, no `--frozen-lockfile`. A missing
+dependency is not guessed from the filesystem either - in a git worktree Node
+resolves the parent checkout's `node_modules`, so an absent directory proves
+nothing. The signal comes from the process's own resolution failure: the spawn
+itself finding no binary (`ENOENT`), or a line the runtime wrote for itself -
+`Error: Cannot find module …`, `ERR_MODULE_NOT_FOUND`, a shell line ending in
+`: command not found`, Windows' `is not recognized as an internal or external
+command`, `executable file not found in $PATH`. Such a check is `FAILED` with
+`dependencies not installed — nightshift verify never installs` as its first
+snippet line. The match is anchored to those lines: a check that legitimately
+fails and happens to quote one of the phrases inside its own message keeps its
+real reason. A declared check that could not
+run is never dressed up as a `SKIPPED`. The repository under test is not written
+to at all: no install, no `git add`, no formatter, no lockfile write. (The
+project's own checks are still the project's own - a `go build` or a test that
+calls a service may reach the network; that is the repository's business, not
+this command's.)
+
+Every check is spawned against a throwaway `NIGHTSHIFT_HOME` and
+`CLAUDE_CONFIG_DIR`, created under the system temp directory and removed when the
+command exits, so a check that itself runs `nightshift` never touches the
+operator's home. That covers the checks `verify` spawns and nothing else: a
+`nightshift` command typed by hand still needs its own throwaway home.
+
+The last check, `diff-hygiene`, needs no script. It reads `git status --short
+--untracked-files=all` and `git diff --stat` in the current directory: the first
+snippet line is the summary of `git diff --stat` (`no tracked file changed` when
+there is none), the scale of the change, and the check is `FAILED` when a path
+under `.claude/`, a lockfile or `tmp/` appears in the working tree, with the
+intruding paths listed under the summary. Outside a git repository the check is
+`SKIPPED`.
+
+## Libs
+
+```sh
+nightshift libs zod express        # the INSTALLED version of each name, one line each
+```
+
+`nightshift libs <name>...` prints one `<lib> <version>` line per argument, in
+the order the arguments were given, read from the lockfiles of the current
+directory. It reports the version that is **installed**, never the range the
+manifest declares. A name no lockfile carries prints `<lib> not-found` rather
+than no line at all, so the caller can always zip its input to the output, and
+the exit code is `0` either way: `libs` is a report, not a check.
+
+The lockfiles are read in this order, the first one carrying the name answering:
+`package-lock.json` (v1, v2 and v3), `pnpm-lock.yaml`, `yarn.lock` (classic and
+berry), `poetry.lock`, `requirements.txt`, `Cargo.lock`, `go.sum` and `go.mod`.
+`bun.lockb` is deliberately **not** read - it is a binary format that would need
+a `bun` subprocess - so a bun-only project reports every name `not-found`.
+Python names are matched the way pip identifies a distribution (case-insensitive,
+`-`, `_` and `.` equivalent); crate names are matched exactly, because
+`serde_json` and `serde-json` are different crates.
+
+The command opens no network connection, spawns no subprocess, reads no database
+and writes nothing; it looks only at the current directory, never at a parent.
+A directory with no lockfile at all still prints a `not-found` line per name on
+stdout and says why on stderr, exiting `0`. A lockfile that exists but cannot be
+read or parsed is a user error (exit `1`) naming the file, instead of a silent
+`not-found`.
+
+## Run
+
+```sh
+nightshift run --help                                      # the steps, one usage line each
+nightshift run index-save <RUN_DIR>/02-explore.md          # persist an explore artifact into the project index
+nightshift run index-save <artifact> --repo-root ~/code/api --project api
+nightshift run secrets-sweep --files src/a.js,src/b.js     # log calls that may print a secret
+```
+
+`nightshift run <step>` holds the mechanical steps the pipeline's agents used to
+perform by hand. It has exactly two steps, and `nightshift run` with no step (or
+`--help`) prints them.
+
+**`index-save <artifact> [--project <name>] [--repo-root <path>]`** reads the
+`## File map` and `## Third-party libraries` sections of an explore artifact
+(`## Libs` is accepted as an alias for the second) and saves them into the
+project index, so the Explore subagent no longer keeps two identical lists in
+sync. It prints `index saved: N files, M libs` and exits `0`. `--repo-root`
+(default: the current directory) is the path the file-map entries are stored
+relative to, and `--project` defaults to that same path - the runtime resolves a
+path inside a registered project to the project's name. The database is reached
+only through the store, the same door the `index_save` MCP tool uses.
+
+The file map is parsed strictly and the libs section leniently: a bullet that is
+not `<path> — <responsibility>` is a user error (exit `1`) naming the line
+number, because a dropped entry writes a silently incomplete index, while a libs
+bullet that is not `<lib>@<version>` is skipped with a note on stderr (a `None`
+bullet is the documented "no libs" marker and is not even reported). A missing
+artifact, an artifact with no `## File map` and a repository that is not
+registered are each exit `1` with a message naming what was missing.
+
+Both paths are resolved through the filesystem, every component of them, before
+anything is read: the artifact must be an existing **regular file** and
+`--repo-root` an existing **directory**, each refused by name otherwise. Neither
+is required to sit under the current directory - the pipeline's run directory
+lives outside the worktree on purpose - and the write side stays bounded by the
+store, which still refuses a repository that is not a registered project.
+
+**`secrets-sweep --files <list>`** prints the log calls whose arguments may carry
+a secret. `--files` is repeatable and comma-separated, the same shape `verify`
+uses. For every file it finds the log calls of the sinks it recognises
+(`console.*`, `logger.*`, `fmt.Print*`, `System.out.print*`, `printf`,
+`println!`, `print`, `var_dump`, `puts` and their neighbours) and flags a call
+whose argument identifiers - or the line where such an identifier is **defined in
+the same file** - name a token, password, secret, key, cookie or credential. That
+second hop is the point: the leak is rarely `console.log(apiToken)`, it is
+`console.log(requestCurl)` where `requestCurl` was built from an
+`Authorization` header. Each candidate is two lines:
+
+```
+<file>:<line>: <source line>
+    def <file>:<line>: <definition line>
+```
+
+and the sweep ends with `secrets-sweep: N candidates in M files`. The match is on
+identifier parts, not substrings, and string literals are blanked before the
+arguments are read, so `console.log(keyboard)` and `console.log("token
+refreshed")` are not candidates. The exit code is **always** `0` for a sweep that
+ran - the command reports, the reviewer judges, and `0 candidates` is not a clean
+bill of health. A file that cannot be read and a binary file are each named on
+stderr and the remaining files are still swept; `--files` absent altogether is a
+user error (exit `1`), which is not the same event as a `--files` list that is
+empty. A file that resolves outside the current directory - by an absolute path,
+by `..`, or through a symlinked component - is a user error (exit `1`) naming the
+path: the sweep reads the files of the worktree it was called in and nothing
+else. Nothing is written, and no database is opened.
 

@@ -8,6 +8,29 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The mechanical work the pipeline's subagents used to describe in prose is now
+  three runtime commands. `nightshift verify [--scope touched|full|+poc]
+  [--files <list>]` detects the project's own checks from its lockfile and
+  manifests and runs them in the fixed order typecheck, lint, build, test, poc,
+  diff-hygiene, printing one `PASSED|FAILED|SKIPPED <check> <duration_s>s` line
+  each and exiting `1` on any failure; a workspace root runs the checks its
+  members declare, each in its own package, and a run that detected nothing says
+  so instead of reading as a clean pass; it never installs anything, never writes
+  the repository under test, and spawns every check against a throwaway
+  `NIGHTSHIFT_HOME` and `CLAUDE_CONFIG_DIR`. `nightshift libs <name>...` prints
+  the version of each lib actually installed, read from the lockfile, never the
+  range. `nightshift run` holds two steps: `index-save <artifact>` persists the
+  `## File map` and `## Third-party libraries` of an explore artifact into the
+  project index, and `secrets-sweep --files <list>` reports the log calls whose
+  arguments - or the lines those arguments are built from - may carry a secret.
+  A job spawned by the queue now also carries an `Open pull requests matching
+  this job:` block, looked up once before the spawn without blocking the dispatch
+  of the other jobs, with a 5 s timeout and skipped entirely under
+  `NIGHTSHIFT_NO_PR_CHECK=1`; the titles and branches it carries are framed as
+  untrusted data and capped, since whoever opened the pull request wrote them. The six agent files stopped
+  doing all of that by hand, so what they do is now testable from `test/`
+  instead of only observable in a run. Documented in `docs/cli.md`.
+
 - `nightshift queue repair <id>` re-derives the outcome of a job left in `gate`
   or `failed` from its own log and its own `state.json`, and writes the
   corrected row and witness. It is the way to settle a job that really opened a

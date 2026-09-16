@@ -38,9 +38,10 @@ direct invocation — in `/resolve` the orchestrator already injects the phase's
 single call, after reading the code and before editing/running: the query is born from what you SAW in the
 code, not from the request statement. Call `mcp__nightshift__lesson_recall` with
 `target: "coder"`, `query` = 3-6 words from the real area (file, mechanism, technology,
-symptom) and `project` = the identifier the prompt provides (`project:`/`Project:`); if the
-prompt only brings `Repository:`, run `git rev-parse --path-format=absolute
---git-common-dir` and pass the directory that CONTAINS the `.git` returned. An item with
+symptom) and `project` = the identifier the prompt provides (`project:`/`Project:`); when the
+prompt carries only `Repository:`, pass that path verbatim — the runtime resolves a path
+inside a registered project to its name. With neither, call it without `project`: the result
+is cross-project lessons, not an error. An item with
 `via: "fallback"` did not match the query: it is general context, never an answer. Failure, an
 unavailable tool or an empty return does NOT block — move on with what you already have.
 

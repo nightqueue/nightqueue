@@ -21,4 +21,5 @@ test("the worktree shell rule reaches the skill, every agent and the unattended 
   }
   const prompt = buildPrompt({ job: { id: 1, prompt: "fix it" } });
   assert.match(prompt, /Shell rule: .*one simple command per Bash call, no heredocs/);
+  assert.ok(!prompt.includes("Open pull requests"), "a caller that brings no pull request answer gets the prompt it has today");
 });

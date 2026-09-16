@@ -187,10 +187,10 @@ plan, not of the coder.
 single call, and never before the reading: the query is born from what you SAW in the code, not from the
 request statement. Call `mcp__nightshift__lesson_recall` with `target: "architect"`, `query` =
 3-6 words from the real area (file, mechanism, technology, symptom) and `project` = the
-identifier the prompt provides (`project:`/`Project:`); if the prompt only brings
-`Repository:`, run `git rev-parse --path-format=absolute --git-common-dir` and pass the
-directory that CONTAINS the `.git` returned (`/Users/x/my-project/.git` →
-`project: /Users/x/my-project`) — without either of the two, call it without `project`. If there is
+identifier the prompt provides (`project:`/`Project:`); when the prompt carries only
+`Repository:`, pass that path verbatim — the runtime resolves a path inside a registered
+project to its name. With neither, call it without `project`: the result is cross-project
+lessons, not an error. If there is
 an `## Applicable lessons` section in the prompt, pass the ids of those lines in `exclude_ids` (integers)
 so the recall brings NEW material. An item with `via: "fallback"` did not match the query: it is
 general context, never an answer. Failure, an unavailable tool or an empty return does NOT block —
@@ -207,9 +207,13 @@ of state — for a problem a native primitive already solves. Real example: Reac
 unmounting it; `useDeferredValue`, `Suspense`, `cache()`, `staleTimes`, parallel
 routes and so on dissolve entire classes of problem without new code.
 
-1. **Read the real versions** — `package.json` + lockfile for the EXACT version of
-   each framework/lib on the path of the solution. Do not reason by the version you
-   remember; the installed one is the truth.
+1. **Read the real versions** — the EXACT version of each framework/lib on the path of
+   the solution. Inside the pipeline, take it from the `## Third-party libraries` section
+   of the Explore artifact (`02-explore.md`), which already resolved it from the lockfile.
+   Outside the pipeline — or when that section is missing, empty or does not name the lib
+   you need — run `nightshift libs <name>...` from the repository root; it prints
+   `<lib> <version>` per name, or `<lib> not-found`. Do not reason by the version you
+   remember, and never by the range in `package.json`; the installed one is the truth.
 2. **Ask, for the problem at hand:** does the installed version already expose a
    primitive/component/hook/config that solves this natively? Cover the range —
    do not stop at the first known API. When in doubt about what the installed version

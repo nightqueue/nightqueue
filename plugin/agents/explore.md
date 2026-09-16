@@ -61,18 +61,24 @@ The run is isolated in a git worktree, and the host refuses any Bash command it 
    external consumer). Also record every parameter, field or flag that the
    target code READS and does not use in any decision. You report the observed fact; you do
    not classify bypass, loophole, dead code or debt. Every new file cited in the map
-   also goes into `## File map` and into the `index_save` of step 4 — the map does not create
-   a parallel list of files. Format and vocabulary in `## Access map`, in the output.
+   also goes into `## File map` — the map does not create a parallel list of files.
+   Format and vocabulary in `## Access map`, in the output.
 3. **Resolve the real versions of libs.** For each third-party lib in the path of the
-   task, read the lockfile (`yarn.lock`, `bun.lockb` via `bun pm ls`,
-   `package-lock.json`, `pnpm-lock.yaml`) — never the range in `package.json`.
-4. **Persist the index (`index_save`), before returning.** When `project`
-   and `repo_root` came in the prompt: call `mcp__nightshift__index_save` with
-   `project`, `repo_root`, `files` = ALL the files from Steps 1-2 (the same
-   list that goes to `## File map` of the artifact — atomic pair, `N` in the
-   return has to match that list) and `libs` = Step 3. Incremental
-   upsert — the next run inherits the map. A failed save does NOT block:
-   record it in the artifact and move on. Without `project`/`repo_root` → skip it and record
+   task, run `nightshift libs <name>...` from the repository root — one call with every
+   name. It reads the INSTALLED version off the lockfile (npm, pnpm, yarn, poetry, pip,
+   Cargo, go), never the range in `package.json`. The answer is one line per name, in the
+   order given: `<lib> <version>`, or `<lib> not-found` when no lockfile carries it —
+   record such a lib without a version instead of guessing one. The command exits 0 either
+   way; it is a report, not a check. Only if it is unavailable, read the lockfile yourself.
+4. **Do not persist the index yourself when the prompt brings `ARTIFACT_PATH`.** In that
+   case the runtime reads the artifact and saves it (`nightshift run index-save
+   <ARTIFACT_PATH>`): write the files in `## File map` and the libs in
+   `## Third-party libraries` and stop there — do NOT call `index_save`, and keep no second
+   list in sync with them. Without `ARTIFACT_PATH` (direct invocation, no artifact exists)
+   and with `project` and `repo_root` in the prompt: call `mcp__nightshift__index_save` with
+   `project`, `repo_root`, `files` = ALL the files of Steps 1-2 and `libs` = Step 3.
+   Incremental upsert — the next run inherits the map. A failed save does NOT block: record
+   it and move on. Neither `ARTIFACT_PATH` nor `project`/`repo_root` → skip it and record
    "index not saved: standalone context".
 
 ### Phase lessons (direct invocation only)
@@ -83,9 +89,10 @@ single call, after reading the code and before closing the output: the query is 
 code, not from the request statement. Call `mcp__nightshift__lesson_recall` **without `target`** (the
 enum has no value for this phase), with `query` = 3-6 words from the real area (file,
 mechanism, technology, symptom) and `project` = the identifier the prompt provides
-(`project:`/`Project:`); if the prompt only brings `Repository:`, run `git rev-parse
---path-format=absolute --git-common-dir` and pass the directory that CONTAINS the `.git`
-returned. An item with `via: "fallback"` did not match the query: it is general context, never an
+(`project:`/`Project:`); when the prompt carries only `Repository:`, pass that path verbatim —
+the runtime resolves a path inside a registered project to its name. With neither, call it
+without `project`: the result is cross-project lessons, not an error.
+An item with `via: "fallback"` did not match the query: it is general context, never an
 answer. Failure, unavailable tool or empty return does NOT block — move on with what you already have.
 
 ---
@@ -139,4 +146,5 @@ does not exist.
 - <lib>@<resolved version> (or "None" if there is none)
 
 ## Structural index
-- Saved: N files (project=<x>, repo_root=<y>) | Skipped: <reason>
+- With ARTIFACT_PATH: Persisted by the runtime from the two sections above of this artifact.
+- Without it, after your own index_save: Saved: N files (project=<x>, repo_root=<y>) | Skipped: <reason>

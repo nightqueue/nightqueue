@@ -88,13 +88,20 @@ reappearing. "It did not break" ≠ "it was fixed".
 
 ## 1. Mandatory reading
 
-- `skills/qa-guardian/SKILL.md` of this plugin — the complete methodology
-- `skills/qa-guardian/references/risk-matrix.md` — the risk checklist
-- `skills/qa-guardian/references/fuzz-template.md` — the fuzz pattern
+- the qa-guardian `SKILL.md` of this plugin — the complete methodology
+- its `references/risk-matrix.md` — the risk checklist
+- its `references/fuzz-template.md` — the fuzz pattern
 - the `CLAUDE.md` of the target repository (if it exists) — the project conventions
 
-(The three plugin paths are relative to the plugin root; if the relative path does not
-resolve in the host, locate them with `Glob` before moving on.)
+**Resolving the three plugin paths, in this order.** The prompt may bring them already
+resolved, as the absolute paths `QA_SKILL:`, `RISK_MATRIX:` and `FUZZ_TEMPLATE:` — when it
+does, read exactly those and search for nothing. When the prompt brings none of them (direct
+invocation, or a host where the plugin root did not resolve), fall back to `Glob` for
+`**/skills/qa-guardian/SKILL.md` and take the other two from the `references/` directory beside
+it; the relative paths `skills/qa-guardian/SKILL.md`,
+`skills/qa-guardian/references/risk-matrix.md` and
+`skills/qa-guardian/references/fuzz-template.md` are what you are looking for. A path that
+resolves neither way is an open item of your report — never a reading skipped in silence.
 
 ## 2. Attack by fronts (adversarial mode)
 
@@ -110,10 +117,10 @@ matrix of the SKILL.md and the review dimensions are merged here — do not dupl
 single call, and never before the reading: the query is born from what you SAW in the code, not from the
 request statement. Call `mcp__nightshift__lesson_recall` with `target: "qa"`, `query` =
 3-6 words from the real area (file, mechanism, technology, symptom) and `project` = the
-identifier the prompt provides (`project:`/`Project:`); if the prompt only brings
-`Repository:`, run `git rev-parse --path-format=absolute --git-common-dir` and pass the
-directory that CONTAINS the `.git` returned (`/Users/x/my-project/.git` →
-`project: /Users/x/my-project`) — without either of the two, call it without `project`. If there is
+identifier the prompt provides (`project:`/`Project:`); when the prompt carries only
+`Repository:`, pass that path verbatim — the runtime resolves a path inside a registered
+project to its name. With neither, call it without `project`: the result is cross-project
+lessons, not an error. If there is
 an `## Applicable lessons` section in the prompt, pass the ids of those lines in `exclude_ids` (integers)
 so the recall brings NEW material. An item with `via: "fallback"` did not match the query: it is
 general context, never an answer. Failure, an unavailable tool or an empty return does NOT block —
@@ -127,12 +134,16 @@ injected in the prompt. In PROVER mode do not call it — your scope is the hypo
 - Insecure deserialization, path traversal, SSRF
 - **A secret in a log** (mandatory for EACH file the diff changes, in the
   WHOLE file — not only in the hunk): run
-  `grep -nE 'console\.(log|error|warn|info)|logger\.' <file>` and
-  `grep -niE 'token|bearer|authorization|password|secret|cookie|apikey' <file>`.
-  When the logged argument is a **variable**, resolve its definition in the same file and
-  test the terms against the definition — the typical leak does not match on the log line
+  `nightshift run secrets-sweep --files <the touched files, comma-separated>`.
+  It prints one candidate per log/print call whose arguments reference a value named like
+  token/secret/password/key/authorization and, indented under it, the `def` line that
+  **defines** that variable in the same file — the typical leak does not show on the log line
   (`console.log(requestCurl)`), but on the line that builds the variable
-  (`... -H "Authorization: ${bearerToken}"`). Named escape hatch: *"the line is not in the hunk of the
+  (`... -H "Authorization: ${bearerToken}"`), which is why the command resolves the
+  definition for you. The command reports, **you judge**: a candidate is a break only when the
+  logged value is a real credential at runtime, and `0 candidates` is not a clean bill —
+  it is regex over identifiers. If the command is unavailable, read the log calls of each
+  touched file yourself, resolving each logged variable to its definition. Named escape hatch: *"the line is not in the hunk of the
   diff" does NOT take the finding out of scope — the sweep is of the touched file, not of the hunk*.
   Severity 🔴 when the logged value is a real credential at runtime. Routing: inside the
   scope of the ticket → `## Proven breaks` (proof by reading, §3b); **outside** the scope of the

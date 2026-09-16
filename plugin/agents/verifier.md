@@ -35,45 +35,55 @@ single call, after reading the code and before editing/running: the query is bor
 code, not from the request statement. Call `mcp__nightshift__lesson_recall` with
 `target: "verifier"`, `query` = 3-6 words from the real area (file, mechanism,
 technology, symptom) and `project` = the identifier the prompt provides
-(`project:`/`Project:`); if the prompt only brings `Repository:`, run `git rev-parse
---path-format=absolute --git-common-dir` and pass the directory that CONTAINS the `.git`
-returned. An item with `via: "fallback"` did not match the query: it is general context, never an
+(`project:`/`Project:`); when the prompt carries only `Repository:`, pass that path verbatim —
+the runtime resolves a path inside a registered project to its name. With neither, call it
+without `project`: the result is cross-project lessons, not an error.
+An item with `via: "fallback"` did not match the query: it is general context, never an
 answer. Failure, unavailable tool or empty return does NOT block — move on with what you already have.
 
-### Step 1 — Detect the project's commands
+### Step 1 — Run `nightshift verify`
 
-Find out which checks the project actually has. Do not invent commands.
+One Bash call, from the repository root. The command detects the project's checks
+itself (the package manager from the lockfile, the `typecheck`/`lint`/`build`/`test`
+scripts of `package.json`, then the `Makefile`, `pyproject.toml`, `go.mod` and
+`Cargo.toml` fallbacks), runs them in the fixed order typecheck → lint → build → test →
+poc → diff-hygiene, and prints one line per check:
 
-- **Node/TS:** read `package.json` and use the existing scripts. Look for
-  `typecheck` / `tsc`, `lint`, `build`, `test`. Use the correct package manager
-  (`pnpm`/`yarn`/`npm`/`bun`) according to the lockfile present. ALWAYS use the
-  project's installed binaries — never `bunx`/`npx` from a global version (e.g.
-  `bunx tsc` validates with another version and lies). In a Bun project: `bun lint`,
-  `bun run build`; with no node_modules, `bun install --frozen-lockfile` first.
-- **Next.js with asset imports** (`.png`/`.svg` that only the bundler resolves):
-  `next build` is the real gate — isolated tsc passes and the build breaks.
-- **Makefile:** if there is one, use the equivalent targets (`make lint`, `make test`).
-- **Other stacks:** infer from the manifest (e.g. `pyproject.toml` → `ruff`/`pytest`,
-  `go.mod` → `go build ./...` / `go test ./...`, `Cargo.toml` → `cargo check` / `cargo test`).
+```
+PASSED|FAILED|SKIPPED <check> <duration_s>s
+```
 
-If you find no check at all, record that explicitly and do not try to guess.
+- `nightshift verify` — every detected check over the whole project (the default).
+- `nightshift verify --scope touched --files <paths>` — narrows the checks that honestly
+  accept a file list; a typecheck or a build is never pretended to be narrowed.
+- `nightshift verify --scope +poc` — the same block plus the PoC check of Step 2.5.
 
-### Step 2 — Run the checks
+Do not detect or re-run the checks by hand. Do not run destructive commands, deploy
+commands, or anything that changes remote state.
 
-Run only the checks that exist, in this order (stop adding steps the
-project does not have):
+### Step 2 — Read the block
 
-1. **Typecheck** — a type failure is the cheapest error to catch.
-2. **Lint** — style and static errors.
-3. **Build** — guarantees it compiles/bundles.
-4. **Tests** — behavior.
-5. **QA PoCs (proven breaks + fuzz)** — see Step 2.5.
+- `SKIPPED` means the project declares no such check. It never fails the verdict, and
+  a check the ladder does not find is never invented. **Every check `SKIPPED` is not a
+  pass**: the command prints a stderr note saying nothing was verified — read stderr too,
+  report the verdict as unverified and name what the repository declares (a workspace whose
+  members carry the scripts is read as the workspace it is, one run per member).
+- `FAILED` carries a snippet of at most 20 lines under its line — that snippet is exactly
+  what the coder needs; quote it instead of re-running the check to get a longer log.
+- A check whose dependencies are not installed is `FAILED` with
+  `dependencies not installed — nightshift verify never installs`. Report it as a failure;
+  never install anything to make it pass.
+- The command never modifies the repository under test, never opens the network on its own
+  account, and runs every check against a throwaway `NIGHTSHIFT_HOME`/`CLAUDE_CONFIG_DIR`
+  of its own.
+- **Next.js with asset imports** (`.png`/`.svg` that only the bundler resolves): the
+  `build` line is the real gate — a `PASSED typecheck` with a `FAILED build` is a break,
+  because an isolated tsc passes where the bundler does not.
 
-Rules:
-- Run each check via Bash, one at a time.
-- Do not run destructive commands, deploy commands, or anything that changes remote state.
-- If a check takes too long or requires an unavailable environment, mark it as
-  `SKIPPED` with the reason — do not invent a result.
+If `nightshift verify` is not installed on this host, fall back to running the project's
+own scripts through the package manager its lockfile names — never `bunx`/`npx` from a
+global version (e.g. `bunx tsc` validates with another version and lies) — and report the
+same block by hand.
 
 ### Step 2.5 — QA PoCs (proven breaks + fuzz)
 
@@ -82,14 +92,12 @@ The qa-guardian is adversarial: it **proves** each break with an executable PoC
 input fuzzing) and **fixes nothing**. Your role is to run those PoCs and report — you are
 the one who confirms, independently and reproducibly, whether the break still exists.
 
-- **Detect** the PoCs: look for `*.poc.test.*` / `*.poc.spec.*` / `*.fuzz.test.*` /
-  `*.fuzz.spec.*` / `*.regression.test.*` (or a `test:poc` / `test:fuzz` script
-  in `package.json`). Cross-check with the `## Generated PoCs` section of the QA report,
-  when available. The `*.regression.test.*` encodes the bug scenario and MUST
+- **Run** them with `nightshift verify --scope +poc`: the `poc` line of the block covers
+  `*.poc.test.*` / `*.poc.spec.*` / `*.fuzz.test.*` / `*.fuzz.spec.*` /
+  `*.regression.test.*`, preferring the `test:poc` / `test:fuzz` script when
+  `package.json` declares one. Cross-check with the `## Generated PoCs` section of the QA
+  report, when available. The `*.regression.test.*` encodes the bug scenario and MUST
   pass — if it fails, the bug still exists → `FAILED`.
-- **Execute**: run the dedicated script if it exists; otherwise run the project's
-  test runner filtering the files (e.g. `vitest run <glob>.poc.test.ts`,
-  `jest <glob>.fuzz.test.ts`). The seed is fixed — the failure is reproducible.
 - **Interpreting the result (careful):**
   - PoC **PASSED** → the break it triggers was fixed by the coder. ✅
   - PoC **FAILED** → the break is **still present** in the code → overall verdict
@@ -132,10 +140,14 @@ Report it in a `## Runtime API Check` section (PASSED or a list of problems).
 
 ### Step 2.7 — Diff hygiene
 
-Run `git status` + `git diff --stat` and confirm that only the files expected
-by the brief changed. A modification in `.claude/` or a lockfile not
-justified by the scope = `FAILED` with the list of intruding files — never
-let it slip through to a blind `git add -A` by the orchestrator.
+The `diff-hygiene` line of the `nightshift verify` block is this check: it is `FAILED`
+when the working tree carries a path under `.claude/`, a lockfile or `tmp/` that the brief
+did not ask for, and its snippet lists the intruding files. Its first snippet line is the
+summary of `git diff --stat` (`no tracked file changed` when there is none), the scale of
+the change: quote it in your report and say whether it matches the brief — a two-line fix
+that reports 40 files changed is a finding even with every other check green. Confirm
+against the brief that the remaining changed files are the expected ones, and report any
+intruder — never let it slip through to a blind `git add -A` by the orchestrator.
 
 ### Step 2.8 — Runtime gate (fix for a crash/error that only triggers at runtime)
 
@@ -162,6 +174,10 @@ distinct fixes have already passed the build and broken in the browser.
   HTTP 400; unit/tsc do not catch a malformed query.
 
 ### Step 2.9 — Manual acceptance never runs against the operator's own home
+
+This step governs a nightshift CLI/MCP command **you type yourself** (`init`, `setup`,
+`update`, an MCP call), which `nightshift verify` never performs: `verify` already
+isolates the checks it spawns, and those are the only ones it covers.
 
 Manual acceptance of a CLI/MCP behavior runs against a throwaway home, never the
 operator's: export `NIGHTSHIFT_HOME=$(mktemp -d)` before the first command and,

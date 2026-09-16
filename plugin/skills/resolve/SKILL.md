@@ -637,6 +637,7 @@ agent, print a line in this format first:
    [FILE LIST]
 
    Repository: [CWD PATH]
+   Project: [PROJECT — the same identifier used in RUN_DIR]
 
    Run tsc and lint, plus the tests of the files that were touched. Do not run the build and do not run the full test suite.
    Produce the verdict ## Verification: PASSED or ## Verification: FAILED.
@@ -700,6 +701,7 @@ agent, print a line in this format first:
    /absolute/path/file.ts
 
    Repository: [CWD PATH]
+   Project: [PROJECT — the same identifier used in RUN_DIR]
    ```
 
 4. **Launch 1 verifier agent** (subagent_type="nightshift:verifier", `model: "haiku"`):
@@ -709,6 +711,7 @@ agent, print a line in this format first:
    [FILE LIST]
 
    Repository: [CWD PATH]
+   Project: [PROJECT — the same identifier used in RUN_DIR]
 
    Tier: simple
 
@@ -846,6 +849,7 @@ Type: [bug/error | feature/refactor]
 - [M<id>] <key>: <value>
 
 Repository: [CWD PATH]
+Project: [PROJECT — the same identifier used in RUN_DIR]
 ```
 
 Launch **1 triager agent** (subagent_type="nightshift:triager", `model`: `haiku` if the tier
@@ -943,6 +947,15 @@ Limit: at most 30 relevant files.
 Wait for the Explore to finish. Apply the existence gate (step 5.2) to
 `02-explore.md` before proceeding. Phase 3 reads the findings from there.
 
+Then persist the structural index from the artifact — the Explore no longer saves it:
+
+```sh
+nightshift run index-save <RUN_DIR>/02-explore.md --project <PROJECT> --repo-root <CWD>
+```
+
+It prints `index saved: N files, M libs`. A failure here NEVER blocks the run: record it as
+an open item of Phase 8 and move on, the same as an empty index.
+
 **Before Phase 3 (complex only):** read `<CWD>/CLAUDE.md` inline
 with the Read tool (if it exists) and keep the content to pass to the architect.
 If it does not exist, record "No CLAUDE.md found." It avoids an agent just for conventions.
@@ -1020,6 +1033,7 @@ follows the decision or takes the conflict to `## Requires user confirmation` na
 number.
 
 Repository: [CWD PATH]
+Project: [PROJECT — the same identifier used in RUN_DIR]
 ```
 
 **How to fill in `Type:`** — it holds whenever a phase needs the Type (3, 5, 6.5), not
@@ -1164,6 +1178,7 @@ solution. Write ## Modified files (absolute paths) to ARTIFACT_PATH.
 - [M<id>] <key>: <value>
 
 Repository: [CWD PATH]
+Project: [PROJECT — the same identifier used in RUN_DIR]
 ```
 
 Apply the existence gate (step 5.2) to `04-implementation.md`. If it is missing or without
@@ -1204,6 +1219,13 @@ callers, Robustness test, an executable PoC per vector, the fallback-zero criter
 a bug) lives in `qa-guardian.md`. The prompt only injects the data and selects the mode
 by the tier. Every qa-guardian runs in **read/PoC mode, it does not edit source** (it only
 creates PoC/test files).
+
+**Before launching any qa-guardian, resolve the plugin root once:** `Glob` for
+`**/skills/qa-guardian/SKILL.md` and take the directory that CONTAINS `skills/` as
+`[PLUGIN_ROOT]`, then substitute it into the `QA_SKILL:` / `RISK_MATRIX:` / `FUZZ_TEMPLATE:`
+lines of the three prompts below. **If it does not resolve, omit those three lines
+entirely** — the agent keeps its own `Glob` fallback for exactly that case, and a line
+carrying an unresolved placeholder is worse than no line.
 
 **trivial / simple → the QA does not run**: those tracks go from the coder straight to the
 verifier.
@@ -1308,6 +1330,11 @@ Finish with ## Proven breaks, ## Validated risks, ## Generated PoCs and
 - [M<id>] <key>: <value>
 
 Repository: [CWD PATH]
+Project: [PROJECT — the same identifier used in RUN_DIR]
+[Include the three lines only if [PLUGIN_ROOT] resolved:]
+QA_SKILL: [PLUGIN_ROOT]/skills/qa-guardian/SKILL.md
+RISK_MATRIX: [PLUGIN_ROOT]/skills/qa-guardian/references/risk-matrix.md
+FUZZ_TEMPLATE: [PLUGIN_ROOT]/skills/qa-guardian/references/fuzz-template.md
 ```
 
 **Stage A — Analyst (complex):** launch 1 qa-guardian
@@ -1406,6 +1433,11 @@ H<n>") and ## Invalidated assumptions (or "None").
 - [M<id>] <key>: <value>
 
 Repository: [CWD PATH]
+Project: [PROJECT — the same identifier used in RUN_DIR]
+[Include the three lines only if [PLUGIN_ROOT] resolved:]
+QA_SKILL: [PLUGIN_ROOT]/skills/qa-guardian/SKILL.md
+RISK_MATRIX: [PLUGIN_ROOT]/skills/qa-guardian/references/risk-matrix.md
+FUZZ_TEMPLATE: [PLUGIN_ROOT]/skills/qa-guardian/references/fuzz-template.md
 ```
 
 **Stage A gate:** apply the existence gate (step 5.2) to
@@ -1452,6 +1484,11 @@ Finish with the verdict per hypothesis: PROVEN (PoC + output of the failure) |
 REFUTED (evidence) | INCONCLUSIVE (what was missing).
 
 Repository: [CWD PATH]
+Project: [PROJECT — the same identifier used in RUN_DIR]
+[Include the three lines only if [PLUGIN_ROOT] resolved:]
+QA_SKILL: [PLUGIN_ROOT]/skills/qa-guardian/SKILL.md
+RISK_MATRIX: [PLUGIN_ROOT]/skills/qa-guardian/references/risk-matrix.md
+FUZZ_TEMPLATE: [PLUGIN_ROOT]/skills/qa-guardian/references/fuzz-template.md
 ```
 
 **Consolidation (inline, by yourself — no subagent):** assemble the single report
@@ -1572,6 +1609,7 @@ Final verdict: ## Verification: PASSED, ## Verification: PASSED-STATIC
 - [M<id>] <key>: <value>
 
 Repository: [CWD PATH]
+Project: [PROJECT — the same identifier used in RUN_DIR]
 ```
 
 The verifier runs **after** the QA and is the independent executor: it **reproduces** the
@@ -1619,6 +1657,7 @@ a regression and keeping the project's standards. Make the PoCs pass by fixing t
 cause — never by altering or deleting the PoC.
 
 Repository: [CWD PATH]
+Project: [PROJECT — the same identifier used in RUN_DIR]
 ```
 
 Relaunch the coder agent with the prompt above. After it returns, apply the existence

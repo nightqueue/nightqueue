@@ -37,6 +37,7 @@ test("the operator-tier line of the prompt is the same literal in the skill and 
   assert.ok(SKILL.includes(OPERATOR_TIER_LITERAL), SKILL);
   const prompt = buildPrompt({ job: { id: 1, prompt: "p", tier: "simple" } });
   assert.ok(prompt.includes(`Tier: simple ${OPERATOR_TIER_LITERAL}`), prompt);
+  assert.ok(!prompt.includes("Open pull requests"), "a caller that brings no pull request answer gets the prompt it has today");
 });
 
 test("both fast tracks are documented with their time targets", () => {

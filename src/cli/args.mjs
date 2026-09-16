@@ -20,6 +20,12 @@ export function flagChoice(values, name, usage) {
   return values[name] === true ? true : undefined;
 }
 
+// Files a `--files` flag named, every value split on commas so `--files a,b` and `--files a --files b` mean the same.
+export function fileList(values) {
+  const raw = Array.isArray(values.files) ? values.files : [];
+  return raw.flatMap((value) => String(value).split(",")).map((value) => value.trim()).filter(Boolean);
+}
+
 // Requires the amount of positional arguments the command accepts.
 export function checkArgs(positionals, { min = 0, max = min, usage }) {
   if (positionals.length < min) throw new UserError(`missing argument; usage: ${usage}`);

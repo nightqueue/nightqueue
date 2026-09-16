@@ -47,6 +47,13 @@ function prView() {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
+// Answers `gh pr list --json` with the pull requests the test asked for; without them the fake refuses to invent a list.
+function prList() {
+  const raw = process.env.NIGHTSHIFT_FAKE_GH_PR_LIST;
+  if (!raw) fail("fake gh: NIGHTSHIFT_FAKE_GH_PR_LIST is not set; refusing to invent a pull request list", 2);
+  process.stdout.write(`${raw}\n`);
+}
+
 // Applies the call, emulating only the subcommands the import uses.
 function main() {
   logCall();
@@ -54,6 +61,7 @@ function main() {
   if (command === "auth" && sub === "status") return authStatus();
   if (command === "auth" && sub === "token") return process.stdout.write(`${token()}\n`);
   if (command === "pr" && sub === "view") return prView();
+  if (command === "pr" && sub === "list") return prList();
   return fail(`fake gh: unknown command \`${args.join(" ")}\``);
 }
 

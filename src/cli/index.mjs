@@ -10,6 +10,7 @@ import * as doctor from "./doctor.mjs";
 import * as embed from "./embed.mjs";
 import * as hook from "./hook.mjs";
 import * as init from "./init.mjs";
+import * as libs from "./libs.mjs";
 import * as mcp from "./mcp.mjs";
 import * as memory from "./memory.mjs";
 import * as org from "./org.mjs";
@@ -17,8 +18,10 @@ import * as project from "./project.mjs";
 import * as queue from "./queue.mjs";
 import * as reflect from "./reflect.mjs";
 import * as roadmap from "./roadmap.mjs";
+import * as runStep from "./run.mjs";
 import * as setup from "./setup.mjs";
 import * as update from "./update.mjs";
+import * as verify from "./verify.mjs";
 import * as version from "./version.mjs";
 
 const COMMANDS = new Map([
@@ -37,6 +40,9 @@ const COMMANDS = new Map([
   ["decision", decision.run],
   ["roadmap", roadmap.run],
   ["queue", queue.run],
+  ["verify", verify.run],
+  ["libs", libs.run],
+  ["run", runStep.run],
   ["version", version.run],
 ]);
 
@@ -44,11 +50,11 @@ const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
 const HELP_OPTIONS = new Set(["--help", "-h"]);
 
-const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "roadmap"]);
+const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "roadmap", "verify", "libs"]);
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
-const SELF_LOCKING_COMMANDS = new Set(["mcp", "hook", "reflect", "embed", "memory", "queue"]);
+const SELF_LOCKING_COMMANDS = new Set(["mcp", "hook", "reflect", "embed", "memory", "queue", "run"]);
 
 const HOME_WRITE_COMMANDS = new Set(["init", "setup", "update"]);
 
@@ -103,6 +109,12 @@ commands:
   queue repair <id> [--json]                re-classify a gated or failed job from its own log; corrects a lost PR link
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written
+  verify [--scope touched|full|+poc]        run the project's own checks in a fixed order, one line per check; exits 1 on any failure
+  verify [--files <list>]                   narrow the checks that accept a file list to those paths (comma-separated, repeatable)
+  libs <name>...                            print the version of each lib INSTALLED here, read from the lockfile, never the range
+  run index-save <artifact> [--project]     save the \`## File map\` and \`## Third-party libraries\` of an explore artifact in the index
+  run index-save [--repo-root <path>]       index the artifact's paths relative to <path>, the repository root (default: .)
+  run secrets-sweep --files <list>          print the log lines whose arguments reference a token/secret/password/key value
   version                                   print the installed nightshift version
 
 options:
