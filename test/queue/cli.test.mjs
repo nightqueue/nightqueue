@@ -685,6 +685,80 @@ test("queue log narrates the reason of a gate even when the stream never printed
   assert.match(log.stdout, /Rename the column or keep both\?/);
 });
 
+// Code points the narration of `queue log` prints of a notice before cutting it.
+const NARRATED_NOTICE_LIMIT = 400;
+
+// A long notice, so every surface that cuts it has something to cut.
+const LONG_NOTICE = "Decide between renaming the column and keeping both. ".repeat(12);
+
+// A gated job whose reason lives only in its row, the shape `printJobNotice` reads.
+function gatedJobWithNotice(env, notice) {
+  const id = enqueue(env);
+  mkdirSync(dirname(jobLogPath(id, env)), { recursive: true });
+  writeFileSync(jobLogPath(id, env), `${JSON.stringify(assistantEvent("working on it"))}\n`);
+  openDb(env).prepare("UPDATE jobs SET status = 'gate', notice_md = ? WHERE id = ?").run(notice, id);
+  return id;
+}
+
+test("queue log says where the whole notice is read when it had to cut it", (t) => {
+  const env = makeCliHome(t, "cli-log-notice-pointer");
+  const id = gatedJobWithNotice(env, LONG_NOTICE);
+
+  const log = runCli(env, ["queue", "log", String(id)]);
+  assert.equal(log.status, 0, log.stderr);
+  assert.match(log.stdout, /ℹ notice/);
+  assert.ok(log.stdout.includes(`    ${Array.from(LONG_NOTICE).slice(0, NARRATED_NOTICE_LIMIT).join("")}...`), log.stdout);
+  assert.match(log.stdout, new RegExp(`^ {4}read the whole notice with: nightshift queue status ${id}$`, "m"));
+});
+
+test("a notice between the two limits is cut once, by the narration, and only then points at the detail", (t) => {
+  const env = makeCliHome(t, "cli-log-notice-once");
+  const notice = "b".repeat(450);
+  const id = gatedJobWithNotice(env, notice);
+
+  const log = runCli(env, ["queue", "log", String(id)]);
+  assert.equal(log.status, 0, log.stderr);
+  assert.ok(log.stdout.includes(`    ${"b".repeat(NARRATED_NOTICE_LIMIT)}...`), log.stdout);
+  assert.equal(log.stdout.includes("b".repeat(NARRATED_NOTICE_LIMIT + 1)), false, "the notice was cut somewhere other than the narration");
+  assert.match(log.stdout, new RegExp(`^ {4}read the whole notice with: nightshift queue status ${id}$`, "m"));
+});
+
+test("a notice short enough to be narrated whole is never followed by a pointer", (t) => {
+  const env = makeCliHome(t, "cli-log-notice-short");
+  const id = gatedJobWithNotice(env, "Rename the column or keep both?");
+
+  const log = runCli(env, ["queue", "log", String(id)]);
+  assert.equal(log.status, 0, log.stderr);
+  assert.match(log.stdout, /^ {4}Rename the column or keep both\?$/m);
+  assert.equal(log.stdout.includes("read the whole notice"), false, log.stdout);
+});
+
+test("queue status of a job prints the whole notice, on the text and on --json", (t) => {
+  const env = makeCliHome(t, "cli-status-notice-whole");
+  const id = gatedJobWithNotice(env, LONG_NOTICE);
+
+  const status = runCli(env, ["queue", "status", String(id)]);
+  assert.equal(status.status, 0, status.stderr);
+  assert.ok(status.stdout.includes(`  ${LONG_NOTICE}`), status.stdout);
+  assert.equal(status.stdout.includes("..."), false, "the detail of a job cut the notice");
+
+  const json = runCli(env, ["queue", "status", String(id), "--json"]);
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).job.notice_md, LONG_NOTICE, "the JSON detail carries a prefix of the notice instead of the whole text");
+});
+
+test("queue retry says where the whole notice is read when the refusal had to cut it", (t) => {
+  const env = makeCliHome(t, "cli-retry-refusal-pointer");
+  const id = gatedJobWithNotice(env, LONG_NOTICE);
+
+  const refused = runCli(env, ["queue", "retry", String(id)]);
+  assert.equal(refused.status, 1);
+  assert.ok(refused.stderr.includes(`${Array.from(LONG_NOTICE).slice(0, 500).join("")}...`), refused.stderr);
+  assert.match(refused.stderr, new RegExp(`^Read the whole notice with: nightshift queue status ${id}\\.$`, "m"));
+  assert.match(refused.stderr, /This job is waiting for a decision\. Re-run with --note "<your answer>"\./);
+  assert.equal(getJob(id, env).status, "gate", "the refused retry moved the job anyway");
+});
+
 test("queue cancel without --reason closes a gated job and keeps the note it already had", (t) => {
   const env = makeCliHome(t, "cli-cancel-note");
   const id = enqueue(env);

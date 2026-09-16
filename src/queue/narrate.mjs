@@ -233,9 +233,16 @@ function noticeBody(notice) {
     .join("\n");
 }
 
-// Text of a `notice` narration line, so a notice read from the row of a job prints exactly like one that came from the stream.
-export function noticeNarration(notice) {
-  return `notice\n${noticeBody(notice)}`;
+// Tells whether the narration had to cut the notice, the only case where the operator has to be sent somewhere else.
+function noticeClipped(notice) {
+  return Array.from(String(notice ?? "").trim()).length > NOTICE_LIMIT;
+}
+
+// Text of a `notice` narration line, so a notice read from the row of a job prints exactly like one that came from the stream; a notice the narration had to cut ends pointing at the command that shows it whole.
+export function noticeNarration(notice, { jobId = null } = {}) {
+  const body = `notice\n${noticeBody(notice)}`;
+  if (jobId === null || !noticeClipped(notice)) return body;
+  return `${body}\n    read the whole notice with: nightshift queue status ${jobId}`;
 }
 
 // Emits a marker only when its VALUE changed, because the slug and the pull request echo in many events.
@@ -254,7 +261,7 @@ function narrateMarkers(state, text) {
   const prUrl = extractPrUrl(text);
   if (prUrl) pushMarker(state, out, "pr", prUrl, `pull request: ${prUrl}`);
   const notice = extractNotice(text);
-  if (notice) pushMarker(state, out, "notice", notice, noticeNarration(notice));
+  if (notice) pushMarker(state, out, "notice", notice, noticeNarration(notice, { jobId: state.jobId }));
   return out;
 }
 
@@ -415,8 +422,8 @@ function finishNarration(state, { running = false } = {}) {
 }
 
 // A narrator of one job log: it takes raw lines, one at a time, and answers with the lines to print.
-export function createNarrator({ all = false } = {}) {
-  const state = { all: all === true, anchorMs: null, clockMs: null, lanes: new Map(), closedLanes: new Map(), tools: new Map(), seen: new Map(), skipped: 0, plain: 0 };
+export function createNarrator({ all = false, jobId = null } = {}) {
+  const state = { all: all === true, jobId: jobId ?? null, anchorMs: null, clockMs: null, lanes: new Map(), closedLanes: new Map(), tools: new Map(), seen: new Map(), skipped: 0, plain: 0 };
   return {
     push: (rawLine) => narrateLine(state, rawLine),
     finish: (options) => finishNarration(state, options),

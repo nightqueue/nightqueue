@@ -39,6 +39,21 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The reason a gated job carries is the `## Notice` the run itself wrote, not
+  the summary the pipeline had recorded in `<RUN_DIR>/state.json`: a gate was
+  stored with a one-paragraph digest where the run had written the whole
+  explanation, and the operator answered it without ever reading what it said.
+  `state.json` keeps ruling the status and the pull request URL, and its summary
+  stays the fallback for a run that printed no `## Notice`, with the whole final
+  text of the orchestrator as the last resort. `nightshift queue repair <id>`
+  now also writes a correction that is only a notice - it compared the status
+  and the pull request URL alone, answered that there was nothing to correct and
+  dropped the text it had just re-derived - and it leaves the witness of the run
+  untouched when nothing but the notice moved. `queue log` and the refusal of
+  `queue retry` say where the whole notice is read (`nightshift queue status
+  <id>`) when they had to cut it, which `queue status <id>` never does: a gate
+  is answerable again from the detail of the job.
+
 - `lesson_save` no longer loses a lesson because the payload arrived
   incomplete: `root_cause`, `solution` and `prevention` are now optional at the
   MCP boundary, and `attempts` below 2 is stored as `null` instead of refusing
@@ -57,8 +72,9 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   third read only the last message, so a delivery announced one message earlier
   was lost. All three now look back the same way. The pipeline also records the
   outcome of a run in `<RUN_DIR>/state.json`, and the runtime prefers that
-  record over the text it reads from the session: a run that describes its own
-  result in different words is no longer misread. The text stays the fallback.
+  record over the text it reads from the session for the status and the pull
+  request URL: a run that describes its own result in different words is no
+  longer misread. The text stays the fallback.
 
 - `nightshift queue status --follow` and the MCP `queue_status` tool read the
   queue on a read-only connection opened for that poll alone, instead of the one

@@ -20,10 +20,11 @@ function decideStatus({ exitCode, timedOut, idleTimedOut, stopped, prUrl, gate, 
   return reason ? "gate" : "failed";
 }
 
-// Why the run stopped: the `## Notice` it wrote, or the whole final text of the orchestrator when it wrote none.
-function gateReason(log, resultText) {
+// Why the run stopped: state.json is the machine record of the outcome and the `## Notice` is the explanation for the operator — the pipeline had been summarizing the second inside the first, so the notice the run wrote wins, the summary the pipeline recorded is the fallback, and the whole final text is the last resort.
+function gateReason(log, resultText, recorded) {
   const notice = extractNoticeFromStream(log);
   if (notice) return notice;
+  if (recorded) return recorded;
   const text = String(resultText ?? "").trim();
   return text ? truncateByCodePoint(text, NOTICE_FALLBACK_LIMIT) : null;
 }
@@ -49,7 +50,7 @@ export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOu
   const record = pipelineOutcome(state);
   const prUrl = record?.prUrl ?? extractPrUrlFromStream(log);
   const gate = record?.status ? record.status === "gate" : hasGateMarker(resultText) || hasGateMarkerInStream(log);
-  const reason = record?.notice ?? gateReason(log, resultText);
+  const reason = gateReason(log, resultText, record?.notice ?? null);
   const ending = { exitCode, timedOut, idleTimedOut, stopped };
   const status = decideStatus({ ...ending, prUrl, gate, reason });
   const silentStop = status === "failed" && !reason && endedCleanly(ending);

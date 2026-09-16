@@ -520,7 +520,8 @@ function retryRefusal(id, row, { note } = {}) {
   if (row.status === "pending") return `job \`${id}\` is already pending; there is nothing to retry`;
   if (row.status === "gate" && !note) {
     const reason = jobView(row).notice_md;
-    return [reason, 'This job is waiting for a decision. Re-run with --note "<your answer>".'].filter(Boolean).join("\n");
+    const whole = reason && reason !== row.notice_md ? `Read the whole notice with: nightshift queue status ${id}.` : null;
+    return [reason, whole, 'This job is waiting for a decision. Re-run with --note "<your answer>".'].filter(Boolean).join("\n");
   }
   return `job \`${id}\` cannot be retried from status \`${row.status}\``;
 }

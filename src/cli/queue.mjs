@@ -885,6 +885,7 @@ async function runRetry(argv, ctx) {
 // What a re-classification answers the operator: the outcome it corrected, or that there was nothing to correct.
 function repairLine(outcome) {
   if (!outcome.changed) return `job #${outcome.id} is still \`${outcome.from}\`; there is nothing to correct`;
+  if (outcome.noticeOnly) return `job #${outcome.id} is still \`${outcome.from}\`; its notice was re-read from the log. Read it with: nightshift queue status ${outcome.id}`;
   return `job #${outcome.id} re-classified from \`${outcome.from}\` to \`${outcome.to}\`${outcome.prUrl ? ` (${outcome.prUrl})` : ""}`;
 }
 
@@ -1005,9 +1006,9 @@ function narrateNotice(notice, { narrator, print, trace, warn }) {
 // Prints the reason the job is stopped when the stream itself never carried one, so a gate is never narrated in silence.
 async function printJobNotice(id, { narrator, print, sawNotice }, ctx) {
   if (sawNotice()) return;
-  const notice = jobView(await openStore(ctx.env).jobs.getJob(id))?.notice_md;
+  const notice = jobView(await openStore(ctx.env).jobs.getJob(id), { full: true })?.notice_md;
   if (!notice) return;
-  print(narrator.note("notice", noticeNarration(notice)));
+  print(narrator.note("notice", noticeNarration(notice, { jobId: id })));
 }
 
 // Runs `queue log` in narrated mode, the default: one line for each relevant event of the stream.
@@ -1018,12 +1019,12 @@ async function runLogNarrated(path, id, { follow, all }, ctx) {
     if (event.kind === "notice") seen = true;
     ctx.out(formatNarration(event, { color }));
   };
-  const narrator = createNarrator({ all });
+  const narrator = createNarrator({ all, jobId: id });
   const tail = { narrator, print, sawNotice: () => seen };
   if (!follow) {
     const text = readingLog(path, () => readFileSync(path, "utf8"));
     const running = (await openStore(ctx.env).jobs.getJob(id))?.status === "running";
-    for (const event of narrateLog(text, { all, running })) print(event);
+    for (const event of narrateLog(text, { all, running, jobId: id })) print(event);
     await printJobNotice(id, tail, ctx);
     return;
   }

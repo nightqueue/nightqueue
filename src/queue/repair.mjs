@@ -48,10 +48,15 @@ function refuseRow(id, row, active) {
   }
 }
 
-// Tells whether the re-derived outcome says anything the row does not already say.
-function differsFromRow(row, outcome) {
+// Tells whether the re-derived outcome says anything the witness next to the run does not already say.
+function differsFromWitness(row, outcome) {
   if (outcome.status !== row.status) return true;
   return Boolean(outcome.prUrl) && outcome.prUrl !== row.pr_url;
+}
+
+// Tells whether the re-derived notice corrects the one the row carries; an outcome with no notice never erases one.
+function noticeDiffers(row, outcome) {
+  return Boolean(outcome.noticeMd) && outcome.noticeMd !== row.notice_md;
 }
 
 // Rewrites the witness next to the run, so the file and the row agree once the repair has written both.
@@ -79,9 +84,11 @@ export async function reclassifyFromLog({ id, env = process.env } = {}) {
   const log = lastAttemptStream(readJobLog(id, env));
   const ending = endingFromRow(id, row);
   const outcome = classifyJobResult({ log, ...ending, state: readRunState({ project: row.project, slug: row.slug, env }) });
-  if (!differsFromRow(row, outcome)) return { id, from: row.status, to: row.status, prUrl: row.pr_url ?? null, changed: false };
+  const witness = differsFromWitness(row, outcome);
+  const notice = noticeDiffers(row, outcome);
+  if (!witness && !notice) return { id, from: row.status, to: row.status, prUrl: row.pr_url ?? null, changed: false, noticeOnly: false };
   const written = await jobs.reclassifyJob(id, { status: outcome.status, prUrl: outcome.prUrl, noticeMd: outcome.noticeMd });
   if (!written) throw new UserError(`job \`${id}\` changed while it was being re-classified; read it again with \`nightshift queue status ${id}\``);
-  mirrorWitness(row, outcome, env);
-  return { id, from: row.status, to: outcome.status, prUrl: outcome.prUrl ?? row.pr_url ?? null, changed: true };
+  if (witness) mirrorWitness(row, outcome, env);
+  return { id, from: row.status, to: outcome.status, prUrl: outcome.prUrl ?? row.pr_url ?? null, changed: true, noticeOnly: !witness };
 }

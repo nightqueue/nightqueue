@@ -231,7 +231,8 @@ decision, or ended with nothing to deliver), `failed` (a non-zero exit, a
 timeout, or an orphan that had already spent its attempts) and `cancelled`
 (cancelled by the operator, or stopped while running). A job in `gate` ALWAYS
 carries the reason it stopped in `notice_md`: without a `## Notice` the reason is
-the whole final text of the orchestrator, and a run that ended saying nothing at
+the summary the pipeline recorded in `state.json`, and the whole final text of
+the orchestrator when there is none, and a run that ended saying nothing at
 all is `failed` with a fixed warning instead of a gate nobody can read.
 
 **`done` becomes `merged` by itself.** A job that delivered a pull request is
@@ -279,10 +280,12 @@ link is corrected without editing sqlite by hand. It runs only when the operator
 asks for it, by id: it never runs on its own, and the automatic repair from the
 `terminal` witness is untouched by it. The row keeps the ending the process had
 (a killed, timed-out or non-zero-exit run is never turned into `done`), the
-witness in `state.json` is rewritten so file and row agree, and a second call
-answers that there is nothing to correct and writes nothing. It refuses, naming
-the reason, an unknown job, a job running under a live lease, a job in any other
-status, a job whose log is gone and a job whose `result` recorded no exit code.
+witness in `state.json` is rewritten so file and row agree - a correction that is
+only the notice re-read from the log writes the row alone and leaves that witness
+untouched - and a second call answers that there is nothing to correct and writes
+nothing. It refuses, naming the reason, an unknown job, a job running under a
+live lease, a job in any other status, a job whose log is gone and a job whose
+`result` recorded no exit code.
 
 **Two jobs of the same project may run at the same time.** The claim filters by nothing
 but `pending`: the only limits are the atomic claim of one job and `queue.maxConcurrent`.

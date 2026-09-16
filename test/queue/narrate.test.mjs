@@ -7,6 +7,7 @@ import {
   attemptMarker,
   LANE_TOOL_USE_ID,
   narrationStream,
+  noticeText,
   PR_URL,
   resultEvent,
   secondsIntoAttempt,
@@ -50,6 +51,34 @@ test("the default narration turns a whole attempt into one line per relevant eve
     `02:14  ✓ pull request: ${PR_URL}`,
     "02:14  ═ result: success",
   ]);
+});
+
+// A notice longer than the 400 code points the narration prints, the only case that has to point somewhere else.
+const LONG_NOTICE = "The migration drops a column and a human has to decide. ".repeat(10);
+
+// The `notice` line of a narration, the only line the pointer is ever attached to.
+function noticeLineOf(log, options = {}) {
+  return narrate(log, options).find((line) => line.includes("ℹ notice")) ?? "";
+}
+
+test("a notice the narration had to cut says where the whole text is read, with the real job id", () => {
+  const line = noticeLineOf(narrationStream({ notice: LONG_NOTICE }), { jobId: 7 });
+  assert.ok(line.includes("..."), line);
+  assert.ok(line.endsWith("\n    read the whole notice with: nightshift queue status 7"), line);
+});
+
+test("a narration with no job id never points at a job nobody named", () => {
+  const line = noticeLineOf(narrationStream({ notice: LONG_NOTICE }));
+  assert.ok(line.includes("..."), line);
+  assert.equal(line.includes("read the whole notice"), false, line);
+
+  const cell = lastNarratedLine(attemptLog([systemInitEvent(), assistantEvent(noticeText(LONG_NOTICE))]));
+  assert.ok(cell.startsWith("ℹ notice"), cell);
+  assert.equal(cell.includes("read the whole notice"), false, "the one-line table cell grew a pointer");
+});
+
+test("a notice that fits is narrated whole, with no pointer to follow", () => {
+  assert.equal(noticeLineOf(narrationStream(), { jobId: 7 }), "02:14  ℹ notice\n    The pull request is open and the checks are green.");
 });
 
 test("`--all` adds the text of the subagents, and nothing else", () => {
