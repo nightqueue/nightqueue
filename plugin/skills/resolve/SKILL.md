@@ -848,7 +848,7 @@ fresh. An empty index → proceed exactly as before (graceful degradation).
 
 **complex** — launch **1 explore agent** (subagent_type="nightshift:explore",
 `model: "sonnet"`) — NEVER generic/general-purpose: it is the only way to guarantee
-the handoff contract and the `index_save` call.
+the handoff contract the runtime persists the index from.
 
 ```
 ## File handoff (contract — read first)
@@ -870,7 +870,7 @@ Do NOT rediscover the fresh files of the map — trust them and complement only 
 is missing for this area. Revalidate ONLY the ones marked REVALIDATE (they changed or
 disappeared since the indexing). Fix the responsibilities that are wrong.
 
-To persist the index at the end (index_save):
+The index is persisted by the runtime from your artifact (`nightshift run index-save`); these two lines only name where it lands:
 project: [PROJECT — the same identifier used in RUN_DIR]
 repo_root: [CWD PATH]
 
