@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { SILENT_STOP_NOTICE, backoffMs, classifyJobResult, isTransientFailure } from "../../src/queue/classify.mjs";
 import {
   assistantEvent,
+  codeChangePublishedEvent,
   doneStream,
   failureStream,
   gateStream,
@@ -146,7 +147,40 @@ test("the whole-stream fallback keeps every rule of a delivery: a citation, a de
   assert.equal(fenced.prUrl, null);
 });
 
-test("the outcome the pipeline recorded in state.json wins over the stream for the status and the pull request URL", () => {
+test("the pull request the HOST published wins over every text: a contradicting final line never moves it", () => {
+  const cited = "https://github.com/acme/api/pull/1";
+  const log = toNdjson([
+    systemInitEvent(),
+    codeChangePublishedEvent(),
+    resultEvent({ text: `I could not open the pull request. For reference, the old one is ${cited}` }),
+  ]);
+
+  const outcome = classifyJobResult({ log, exitCode: 0, state: stateWith({ status: "done", prUrl: cited }) });
+  assert.equal(outcome.prUrl, PR_URL, "the URL the host published lost to what the agent wrote afterwards");
+  assert.equal(outcome.status, "done");
+});
+
+test("a text that denies the delivery, with no published event, delivers no pull request at all", () => {
+  const outcome = classifyResultText(`Failed to open pull request: ${PR_URL} returned 404 Not Found.`);
+  assert.equal(outcome.prUrl, null, "a denial was read as a delivery");
+  assert.equal(outcome.status, "gate");
+});
+
+test("a published event whose url is not a pull request falls through to the next source of the chain", () => {
+  const published = codeChangePublishedEvent({ url: "https://github.com/acme/api/issues/9" });
+  const recorded = classifyJobResult({
+    log: toNdjson([systemInitEvent(), published, resultEvent({ text: "Done, nothing else to say." })]),
+    exitCode: 0,
+    state: stateWith({ status: "done", prUrl: PR_URL }),
+  });
+  assert.equal(recorded.prUrl, PR_URL, "the runtime's own record was skipped for a url it cannot read");
+  assert.equal(recorded.status, "done");
+
+  const fromText = classifyJobResult({ log: toNdjson([systemInitEvent(), published, resultEvent({ text: `Done. Pull request: ${PR_URL}` })]), exitCode: 0 });
+  assert.equal(fromText.prUrl, PR_URL, "the text heuristic, the last source, was skipped");
+});
+
+test("the outcome the pipeline recorded in state.json wins over the stream, field by field", () => {
   const silent = classifyJobResult({
     log: streamOf("Everything is committed.", "Done, nothing else to say."),
     exitCode: 0,

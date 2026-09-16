@@ -274,7 +274,7 @@ never a symlink, never a path outside `<home>/runs/`; anything else is kept, wit
 the reason printed, and the retry goes on.
 
 `queue repair <id>` re-classifies a job that ended `gate` or `failed` from its
-own persisted log plus the `outcome` its pipeline recorded in `state.json`, and
+own persisted log plus the `outcome` recorded in the `state.json` of its run, and
 is the way a run that really opened a pull request but was recorded without its
 link is corrected without editing sqlite by hand. It runs only when the operator
 asks for it, by id: it never runs on its own, and the automatic repair from the
@@ -322,12 +322,38 @@ stream. Neither is a transient failure: a timed out attempt is `failed` and is
 never retried. Only a provider failure (429, overload, connection reset) is
 retried, up to `--max-attempts`, backing off 5s, 15s and 45s.
 
-**Resuming by slug.** The pipeline writes `state.json` in the run directory of
-its slug, and the runner reads it: it stores the `branch`, and on a new run of
-the same job it asks the pipeline to resume from the phase after the last
-completed one instead of starting over. With `queue.resumeSession: true` in
-`config.json` it also passes `--resume <session id>` once the job has a session
-of its own. The default is `false`.
+**Resuming by slug.** The run directory of a job is opened by the runner, not
+derived by the pipeline: the claim gives the job a slug when its row has none
+(built from the first words of the prompt), and the prompt carries `Project:` and
+`RUN_DIR:` from the start. The pipeline renames the run once, by printing
+`SLUG: <slug> TYPE: <type>` on a line of its own, and the runtime moves the
+directory with the artifacts already inside it. Everything the run records lands in
+the `state.json` of that directory, written by the runtime alone (see
+[Runtime contract](runtime-contract.md)).
+
+On a new run of the same job the runner takes the resume decision itself, before
+spawning anything, and hands the result over in the prompt as one block:
+
+```
+RESUME CANDIDATE (slug `fix-the-worker`)
+RUN_DIR: /Users/me/.nightshift/runs/api/fix-the-worker
+Branch: fix/the-worker
+Worktree: /Users/me/code/api/.claude/worktrees/fix-the-worker
+Last completed phase: triage
+Resume from phase: explore
+From stage: none
+Trust this block: skip every phase already listed in the state and read its artifact.
+Run `git status --short` in the worktree first.
+```
+
+`Branch`, `Worktree` and `From stage` read `none` when the run recorded none;
+`From stage: qa-stage-b` is the one sub-phase with a marker of its own, so a run
+that died in the QA does not pay the analyst twice. A run the decision refuses -
+no state, a deliberate termination, a resume budget already spent - gets no block
+at all and starts clean, and the runtime counts the resume in `state.json` itself:
+the pipeline never touches that file. With `queue.resumeSession: true` in
+`config.json` the runner also passes `--resume <session id>` once the job has a
+session of its own. The default is `false`.
 
 **What the runner requires of the checkout.** Before spawning anything it
 checks, in this order: the project is registered by NAME, its checkout exists

@@ -43,7 +43,8 @@ rest. When a query matched nothing, the same recent list comes back marked
 **Hooks.** Three, all reading the event JSON from stdin:
 
 - `nightshift hook session-start` prints the block injected at the start of a
-  session: the top lessons of the project plus its memories, and it records
+  session: the standing decisions of the project (the accepted ones, its own and
+  its org's, one line each), then the top lessons and its memories, and it records
   what it injected in `state/<session>.json` and in the corpus.
 - `nightshift hook prompt-context` prints the lessons and memories relevant to the
   prompt that was just submitted, skipping what this session already saw, and
@@ -71,7 +72,7 @@ persisted, so a failed run reprocesses the same slice instead of losing it.
 **Commands.**
 
 ```sh
-nightshift mcp                     # start the stdio MCP server with the eighteen tools
+nightshift mcp                     # start the stdio MCP server with the twenty-three tools
 nightshift mcp --http --port 4747 --token <t>   # serve the same tools over Streamable HTTP on 127.0.0.1
 nightshift hook session-start      # run a hook, reading the event JSON from stdin
 nightshift reflect --transcript <path>   # reflect on a transcript now, in the foreground
@@ -213,12 +214,14 @@ is escaped on its way into that prompt: a line that would read as a heading
 backslash, so operator text stays readable but can never forge one of the three
 headings above nor a literal of [Runtime contract](runtime-contract.md).
 
-**How `/resolve` uses them.** Phase 0 pings `decision_recall` next to
-`lesson_recall` in its preflight, and calls it again once the Brief is compiled,
-with the affected area and the objective as the query: at most five accepted
-decisions - the project's and its org's, in one call, org rows first and written
-`acme#3` when they belong to the org - become the `## Standing decisions` section
-of the Brief. That section
+**How `/resolve` uses them.** The standing decisions are already in the block the
+`SessionStart` hook injected, so the Phase 0 preflight pings `lesson_recall` alone:
+the Brief copies from that section the rows that touch its affected area, and calls
+`decision_recall` only when the section is absent or its one-line summaries are not
+enough - with the affected area and the objective as the query. Either way at most
+five accepted decisions - the project's and its org's, in one call, org rows first
+and written `acme#3` when they belong to the org - become the `## Standing decisions`
+section of the Brief. That section
 is passed to the architect as binding context - a design that contradicts a
 standing decision either follows it or takes the conflict to
 `## Requires user confirmation` naming its number. When a plan takes a

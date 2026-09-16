@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { UserError } from "../../src/config/errors.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { logPipelineRun } from "../../src/memory/runs.mjs";
+import { logPipelineRun, updateRunTelemetry } from "../../src/memory/runs.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // Rows of the two telemetry tables, in insertion order.
@@ -122,6 +122,84 @@ test("a run without gate stop and without phases is valid", (t) => {
   assert.equal(stored.runs[0].task_type, null);
   assert.equal(stored.runs[0].duration_s, null);
   assert.deepEqual(stored.phases, []);
+});
+
+test("the telemetry the runtime measured wins, and what the agent sent survives only where the runtime measured nothing", (t) => {
+  const env = makeHome(t, "runs-telemetry-update");
+  makeProject(t, env, "alpha");
+  logPipelineRun(
+    run({
+      durationS: 999,
+      phases: [
+        { phase: "triage", model: "haiku", duration_s: 7 },
+        { phase: "implementation", model: null, duration_s: null },
+        { phase: "implementation", model: null, duration_s: null },
+        { phase: "verification", model: "sonnet", duration_s: 213 },
+        { phase: "commit", model: null, duration_s: 11 },
+      ],
+    }),
+    env,
+  );
+
+  const updated = updateRunTelemetry(
+    {
+      project: "alpha",
+      slug: "fix-the-worker",
+      durationS: 3900,
+      phases: [
+        { phase: "triage", model: "sonnet", durationS: 61 },
+        { phase: "implementation", model: "opus", durationS: 420 },
+        { phase: "implementation", model: "opus", durationS: 173 },
+        { phase: "verification", model: null, durationS: null },
+        { phase: "explore", model: "sonnet", durationS: 90 },
+      ],
+    },
+    env,
+  );
+  assert.equal(updated.phases, 4, "the phase the agent never recorded has no row and is not inserted");
+
+  const stored = telemetry(env);
+  assert.equal(stored.runs[0].duration_s, 3900);
+  assert.deepEqual(
+    stored.phases.map((phase) => [phase.phase, phase.model, phase.duration_s]),
+    [
+      ["triage", "sonnet", 61],
+      ["implementation", "opus", 420],
+      ["implementation", "opus", 173],
+      ["verification", "sonnet", 213],
+      ["commit", null, 11],
+    ],
+  );
+});
+
+test("a run the agent never recorded is left alone: the measured telemetry never inserts a row of its own", (t) => {
+  const env = makeHome(t, "runs-telemetry-absent");
+  makeProject(t, env, "alpha");
+
+  const answer = updateRunTelemetry({ project: "alpha", slug: "never-logged", durationS: 120, phases: [{ phase: "triage", durationS: 10 }] }, env);
+
+  assert.deepEqual({ runId: answer.runId, phases: answer.phases, project: answer.project }, { runId: null, phases: 0, project: "alpha" });
+  assert.deepEqual(telemetry(env), { runs: [], phases: [] });
+  assert.throws(() => updateRunTelemetry({ project: "alpha", slug: "  " }, env), /`slug` is required/);
+});
+
+test("the measured telemetry of a retried job lands on the LAST run recorded for that slug", (t) => {
+  const env = makeHome(t, "runs-telemetry-retry");
+  makeProject(t, env, "alpha");
+  logPipelineRun(run({ durationS: 100, phases: [{ phase: "triage" }] }), env);
+  const second = logPipelineRun(run({ durationS: 200, phases: [{ phase: "triage" }] }), env);
+
+  updateRunTelemetry({ project: "alpha", slug: "fix-the-worker", durationS: 3000, phases: [{ phase: "triage", model: "opus", durationS: 30 }] }, env);
+
+  const stored = telemetry(env);
+  assert.deepEqual(stored.runs.map((row) => row.duration_s), [100, 3000]);
+  assert.deepEqual(
+    stored.phases.map((phase) => [phase.run_id === second.runId, phase.model, phase.duration_s]),
+    [
+      [false, null, null],
+      [true, "opus", 30],
+    ],
+  );
 });
 
 test("the model and the session come from the environment of the process, never from a parameter", (t) => {

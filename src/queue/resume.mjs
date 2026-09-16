@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homeDir, runDir } from "../config/paths.mjs";
 import { NAME_RE } from "../config/schema.mjs";
@@ -123,9 +123,36 @@ export function decideResume({ state, maxResumes = DEFAULT_MAX_RESUMES } = {}) {
   };
 }
 
+// A fixed field of the state as the agent may read it back: a non-empty trimmed string, or null.
+function fixedField(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || null;
+}
+
+// Everything the agent needs to resume a run - where it lives, what it kept and which phase comes next - or null when the decision refuses it.
+export function resumeHandoff({ job, resume, state, env = process.env } = {}) {
+  const slug = job?.slug;
+  if (resume?.resume !== true || !isSafeSegment(slug) || !NAME_RE.test(String(job?.project ?? ""))) return null;
+  const parsed = isStateObject(state) ? state : {};
+  return {
+    slug,
+    runDir: runDir(job.project, slug, env),
+    branch: fixedField(parsed.branch),
+    worktree: fixedField(parsed.worktree),
+    lastPhase: fixedField(resume.lastPhase),
+    fromPhase: fixedField(resume.fromPhase),
+    fromStage: fixedField(resume.fromStage),
+  };
+}
+
+// Tells whether a run can be addressed on disk at all: a project that is a name and a slug that is one safe segment.
+export function isRunPath(project, slug) {
+  return NAME_RE.test(String(project ?? "")) && isSafeSegment(slug);
+}
+
 // Reads the state.json of a run; an unsafe segment, a missing file or broken JSON all return null.
 export function readRunState({ project, slug, env = process.env } = {}) {
-  if (!NAME_RE.test(String(project ?? "")) || !isSafeSegment(slug)) return null;
+  if (!isRunPath(project, slug)) return null;
   try {
     return JSON.parse(readFileSync(join(runDir(project, slug, env), "state.json"), "utf8"));
   } catch {
@@ -134,13 +161,13 @@ export function readRunState({ project, slug, env = process.env } = {}) {
 }
 
 // Tells whether a parsed state.json is an object the witness can be merged into.
-function isStateObject(state) {
+export function isStateObject(state) {
   return Boolean(state) && typeof state === "object" && !Array.isArray(state);
 }
 
 // Writes the state.json of a run atomically, creating its directory; an unsafe project or slug writes nothing.
-function saveRunState({ project, slug, env, state }) {
-  if (!NAME_RE.test(String(project ?? "")) || !isSafeSegment(slug)) {
+export function saveRunState({ project, slug, env, state }) {
+  if (!isRunPath(project, slug)) {
     return { status: "kept", path: null, reason: "unsafe project or slug" };
   }
   const path = join(runDir(project, slug, env), "state.json");
@@ -173,6 +200,24 @@ export function clearRunOutcome({ project, slug, env = process.env } = {}) {
   if (!isStateObject(state) || state.outcome === undefined) return { status: "absent", path: null, reason: null };
   const { outcome, ...rest } = state;
   return saveRunState({ project, slug, env, state: rest });
+}
+
+// Moves the run directory of a project onto another slug, which is how the pipeline renames the run the runtime opened for it.
+// A name another run already took is REFUSED instead of merged into: the run that asked keeps the slug it was given.
+export function renameRunDir({ project, from, to, env = process.env } = {}) {
+  if (!NAME_RE.test(String(project ?? "")) || !isSafeSegment(from) || !isSafeSegment(to)) {
+    return { status: "kept", dir: null, reason: "unsafe project or slug" };
+  }
+  const target = runDir(project, to, env);
+  if (existsSync(target)) return { status: "kept", dir: target, reason: `runs/${project}/${to} already exists` };
+  const source = runDir(project, from, env);
+  if (!existsSync(source)) return { status: "absent", dir: target, reason: null };
+  try {
+    renameSync(source, target);
+  } catch (err) {
+    return { status: "kept", dir: target, reason: String(err?.message ?? err).split("\n")[0] };
+  }
+  return { status: "renamed", dir: target, reason: null };
 }
 
 // State of a path WITHOUT following a link, the only reading that tells a run directory from a link into somebody else's tree.

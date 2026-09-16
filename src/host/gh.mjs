@@ -14,10 +14,10 @@ export function ghBin(env = process.env) {
 }
 
 // Runs the GitHub CLI and never throws: a missing binary or a failure is a result the caller decides about.
-function runGh(args, { env = process.env, spawnSyncImpl = spawnSync, timeoutMs = CALL_TIMEOUT_MS } = {}) {
+export function runGh(args, { env = process.env, spawnSyncImpl = spawnSync, timeoutMs = CALL_TIMEOUT_MS, cwd } = {}) {
   let result;
   try {
-    result = spawnSyncImpl(ghBin(env), args, { encoding: "utf8", timeout: timeoutMs, env });
+    result = spawnSyncImpl(ghBin(env), args, { cwd, encoding: "utf8", timeout: timeoutMs, env });
   } catch (err) {
     return { ok: false, stdout: "", stderr: err?.message ?? String(err), missing: err?.code === "ENOENT" };
   }
@@ -81,6 +81,15 @@ function parsePrView(text) {
 export function ghPrView(url, { env = process.env, spawnSyncImpl = spawnSync, timeoutMs = PR_VIEW_TIMEOUT_MS } = {}) {
   const result = runGh(["pr", "view", url, "--json", "state,mergedAt,mergeCommit"], { env, spawnSyncImpl, timeoutMs });
   return result.ok ? parsePrView(result.stdout) : { ok: false };
+}
+
+// Opens a pull request for a branch already on the remote; the URL it answers is information, never the record of the run.
+export function ghPrCreate({ title, bodyFile, head, base, cwd, env = process.env, spawnSyncImpl = spawnSync } = {}) {
+  const args = ["pr", "create", "--title", String(title ?? ""), "--body-file", String(bodyFile ?? ""), "--head", String(head ?? "")];
+  if (base) args.push("--base", String(base));
+  const result = runGh(args, { env, spawnSyncImpl, cwd });
+  const lines = result.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  return { ok: result.ok, url: result.ok ? (lines.at(-1) ?? null) : null, stderr: result.stderr, missing: result.missing };
 }
 
 // Trimmed text of a field of the json, or the placeholder when gh answered without it.

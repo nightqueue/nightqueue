@@ -43,9 +43,9 @@ test("the default narration turns a whole attempt into one line per relevant eve
     "00:05  · Bash git status --short",
     "00:07  · Bash npm test",
     "00:08  ✗ Bash failed: Exit code 1",
-    "00:09  ▶ triager (phase 1) — triage the bug",
+    "00:09  ▶ triager (phase 1, sonnet) — triage the bug",
     "00:13      · Read index.mjs",
-    "00:14  ◀ triager (phase 1) completed (2m05s · 2 tools · 0 edits)",
+    "00:14  ◀ triager (phase 1, sonnet) completed (2m05s · 2 tools · 0 edits)",
     "02:14  » ## Notice",
     "02:14  ℹ notice\n    The pull request is open and the checks are green.",
     `02:14  ✓ pull request: ${PR_URL}`,
@@ -141,24 +141,36 @@ test("a lane reports what was observed, and says `unknown` for what it never saw
       taskNotificationEvent({ toolUses: 1, durationMs: 3000 }),
     ]),
   );
-  assert.ok(closed.includes("00:02  ◀ triager (phase 1) completed (3s · 1 tools · 1 edits)"), closed.join("\n"));
+  assert.ok(closed.includes("00:02  ◀ triager (phase 1, sonnet) completed (3s · 1 tools · 1 edits)"), closed.join("\n"));
 
   const blind = narrate(attemptLog([agentToolUseEvent({ timestamp: secondsIntoAttempt(1) }), taskNotificationEvent({ toolUses: 4, durationMs: 3000 })]));
-  assert.ok(blind.includes("00:01  ◀ triager (phase 1) completed (3s · 4 tools · edits unknown)"), blind.join("\n"));
+  assert.ok(blind.includes("00:01  ◀ triager (phase 1, sonnet) completed (3s · 4 tools · edits unknown)"), blind.join("\n"));
 
   const failed = narrate(attemptLog([agentToolUseEvent({ timestamp: secondsIntoAttempt(1) }), taskNotificationEvent({ status: "failed", toolUses: 0, durationMs: 1000 })]));
-  assert.ok(failed.includes("00:01  ◀ triager (phase 1) failed (1s · 0 tools · 0 edits)"), failed.join("\n"));
+  assert.ok(failed.includes("00:01  ◀ triager (phase 1, sonnet) failed (1s · 0 tools · 0 edits)"), failed.join("\n"));
 });
 
 test("a lane that never reported back is a line of its own, not a silence", () => {
   const lines = narrate(attemptLog([agentToolUseEvent({ timestamp: secondsIntoAttempt(1) }), resultEvent({ text: "The runner died." })]));
-  assert.ok(lines.includes("00:01  ⚠ triager (phase 1) never reported back"), lines.join("\n"));
+  assert.ok(lines.includes("00:01  ⚠ triager (phase 1, sonnet) never reported back"), lines.join("\n"));
 });
 
-test("the lane opens from `task_started` when the tool call that spawned it was lost", () => {
+test("the lane opens from `task_started` when the tool call that spawned it was lost, and says nothing about a model it cannot know", () => {
   const lines = narrate(attemptLog([taskStartedEvent({}), taskNotificationEvent({ toolUses: 0, durationMs: 1000 })]));
   assert.ok(lines.includes("00:00  ▶ triager (phase 1) — triage the bug"), lines.join("\n"));
   assert.equal(lines.filter((line) => line.includes("▶")).length, 1);
+});
+
+test("the lane label carries the model of the `tool_use` that launched it, the only event of the stream that says it", () => {
+  const lines = narrate(
+    attemptLog([
+      agentToolUseEvent({ id: "toolu_o", subagentType: "nightshift:coder", model: "opus", description: "apply the plan", timestamp: secondsIntoAttempt(1) }),
+      taskStartedEvent({ toolUseId: "toolu_o", subagentType: "nightshift:coder" }),
+      taskNotificationEvent({ toolUseId: "toolu_o", toolUses: 3, durationMs: 4000 }),
+    ]),
+  );
+  assert.ok(lines.includes("00:01  ▶ coder (phase 4, opus) — apply the plan"), lines.join("\n"));
+  assert.ok(lines.includes("00:01  ◀ coder (phase 4, opus) completed (4s · 3 tools · edits unknown)"), lines.join("\n"));
 });
 
 test("parallel lanes label every indented line, and a single lane does not", () => {

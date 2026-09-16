@@ -38,6 +38,11 @@ export function slugEvent(slug = SLUG, options = {}) {
   return assistantEvent(`Registered the run.\nQUEUE_SLUG: ${slug}\n`, options);
 }
 
+// The standalone `SLUG:` line with which the pipeline renames, once, the run the runtime opened for it.
+export function slugTypeEvent(slug = SLUG, type = "feature/refactor", options = {}) {
+  return assistantEvent(`Named the run.\nSLUG: ${slug} TYPE: ${type}\n`, options);
+}
+
 // Per model usage block of a result event, in the camelCase shape the CLI writes it.
 export function modelUsageBlock({ tokensIn = 0, tokensOut = 0, cacheRead = 0, cacheCreation = 0 } = {}) {
   return {
@@ -67,6 +72,11 @@ export function resultEvent({
   if (usageShape === "both" || usageShape === "aggregate") event.usage = usageBlock(tokens);
   if (usageShape === "both" || usageShape === "models") event.modelUsage = modelUsageBlock(tokens);
   return event;
+}
+
+// The `system` event the HOST emits when it publishes the change, in the measured shape: every field is top level and there is no timestamp.
+export function codeChangePublishedEvent({ url = PR_URL, provider = "github", repo = "acme/api", identifier = "42", action = "created", sessionId = SESSION_ID } = {}) {
+  return { type: "system", subtype: "code_change_published", provider, url, repo, identifier, action, uuid: `uuid_${identifier}`, session_id: sessionId };
 }
 
 // A `## Notice` section, the executive summary the runner stores in notice_md.
@@ -166,9 +176,10 @@ export function toolUseEvent({ name = "Bash", id = "toolu_1", input = {}, sessio
   return event;
 }
 
-// The `tool_use` that opens a subagent lane: the tool is named `Agent`, and only `subagent_type` identifies it.
-export function agentToolUseEvent({ id = LANE_TOOL_USE_ID, subagentType = SUBAGENT_TYPE, description = "triage the bug", prompt = "the whole prompt of the subagent", ...rest } = {}) {
-  return toolUseEvent({ ...rest, id, name: "Agent", input: { description, subagent_type: subagentType, prompt, run_in_background: false } });
+// The `tool_use` that opens a subagent lane: the tool is named `Agent`, only `subagent_type` identifies it, and `model` — measured next to it in every real block — is the only place the stream says which model the lane ran.
+export function agentToolUseEvent({ id = LANE_TOOL_USE_ID, subagentType = SUBAGENT_TYPE, description = "triage the bug", prompt = "the whole prompt of the subagent", model = "sonnet", ...rest } = {}) {
+  const input = { description, subagent_type: subagentType, prompt, run_in_background: false };
+  return toolUseEvent({ ...rest, id, name: "Agent", input: model ? { ...input, model } : input });
 }
 
 // A `user` event carrying the result of a tool call; only a result flagged as an error is ever narrated.

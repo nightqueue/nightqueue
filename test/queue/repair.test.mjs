@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { jobLogPath, logsDir, runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob, getJob, listMergeCandidates } from "../../src/memory/jobs.mjs";
+import { getRoadmapItem, markRoadmapItemQueued, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { isoToSqlite } from "../../src/memory/schema.mjs";
 import { MERGE_SWEEP_LIMIT } from "../../src/queue/merged.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
@@ -70,6 +71,34 @@ function finishedJob(env, { status = "gate", result = CLEAN_ENDING, log = interm
   if (log !== null) writeJobLog(env, id, log);
   return id;
 }
+
+// Records a roadmap item as queued under a job, the link the repair has to close.
+function linkedItem(env, id, title) {
+  const item = saveRoadmapItem({ project: "alpha", horizon: "now", title }, env);
+  assert.equal(markRoadmapItemQueued(item.id, id, env), true, "setup: the item was not linked to its job");
+  return item.id;
+}
+
+test("`queue repair` closes the roadmap item of a job it turns into done, and leaves the item of one that stays failed open", async (t) => {
+  const env = makeQueue(t, "repair-roadmap");
+  const delivered = finishedJob(env);
+  const deliveredItem = linkedItem(env, delivered, "ship the delivery");
+  writeRunState(env);
+
+  const repaired = runCli(env, ["queue", "repair", String(delivered)]);
+  assert.equal(repaired.status, 0, repaired.stderr);
+  assert.equal(getJob(delivered, env).status, "done");
+  assert.equal(getRoadmapItem(deliveredItem, env).status, "done", "`queue repair` left the item of a delivered job queued forever");
+
+  const failedSlug = "still-failing";
+  const failed = finishedJob(env, { status: "failed", result: { ...CLEAN_ENDING, status: "failed", exitCode: 1 }, slug: failedSlug });
+  const failedItem = linkedItem(env, failed, "the one that failed");
+  writeRunState(env, { slug: failedSlug, terminal: { status: "failed", prUrl: null, finishedAt: "2026-09-14T21:00:00Z" } });
+
+  const outcome = await reclassifyFromLog({ id: failed, env });
+  assert.deepEqual({ to: outcome.to, changed: outcome.changed }, { to: "failed", changed: true }, "setup: the row was not rewritten at all");
+  assert.equal(getRoadmapItem(failedItem, env).status, "queued", "a re-classification that only added a link closed the item of a failed job");
+});
 
 test("`queue repair` turns a job that really opened a pull request into done, and rewrites the witness to match", (t) => {
   const env = makeQueue(t, "repair-cli");

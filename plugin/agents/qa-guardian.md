@@ -311,8 +311,7 @@ NEVER write the fix of the source. Only PoC/test.
 The destination depends on the mode. **If ARTIFACT_PATH was provided in the prompt:**
 - **LITE / ANALYST:** write the complete report (all the sections below) to
   ARTIFACT_PATH via Write. Return to the orchestrator ≤10 lines: verdict + the artifact
-  path + 1 echo line per section read from `03-plan.md` (Risks, Assumptions,
-  Pre-mortem) + open items. Do NOT paste the complete report in the answer.
+  path + open items. Do NOT paste the complete report in the answer.
 - **PROVER:** write only the assigned PoC files (as today) and return the
   verdict per hypothesis (PROVEN/REFUTED/INCONCLUSIVE) — with no .md artifact of its own.
 

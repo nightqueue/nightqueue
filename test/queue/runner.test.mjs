@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { jobLogPath, runDir } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
@@ -11,10 +11,11 @@ import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { clearOwnPause, PAUSE_GRACE_S, readOwnPause } from "../../src/queue/rate-limit.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { DRAIN_INTERVAL_S, runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../../src/queue/runner.mjs";
+import { provisionalSlug } from "../../src/queue/spawn.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream, failureStream, gateStream, PR_URL, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, systemInitEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
+import { agentToolUseEvent, assistantEvent, codeChangePublishedEvent, doneStream, failureStream, gateStream, noticeText, PR_URL, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, slugTypeEvent, systemInitEvent, taskNotificationEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
 
 const PROMPT = "fix the worker";
 
@@ -107,6 +108,77 @@ test("the runner leaves the witness of the outcome next to the run, with its fiv
     { status: "done", prUrl: PR_URL, writtenBy: packageRoot(), pid: process.pid },
   );
   assert.equal(state.terminal.finishedAt, sqliteToIso(getJob(id, env).finished_at));
+});
+
+test("the runtime records in the state of the run the pull request the host published, which the agent never wrote", async (t) => {
+  const published = toNdjson([
+    systemInitEvent(),
+    slugEvent(SLUG),
+    codeChangePublishedEvent(),
+    resultEvent({ text: "Telemetry recorded. I did not manage to print the link." }),
+  ]);
+  const { env } = makeRunnerHome(t, "runner-published-pr", [{ stdout: published, exitCode: 0 }]);
+  const id = enqueue(env);
+
+  const cycle = await runJobCycle(env, id);
+
+  assert.deepEqual(cycle.processed, [{ id, status: "done", prUrl: PR_URL, attempts: 1 }]);
+  assert.equal(getJob(id, env).pr_url, PR_URL);
+  const state = JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"));
+  assert.equal(state.outcome.prUrl, PR_URL, "the pull request of the host never reached the record of the run");
+  assert.equal(state.schemaVersion, 1);
+  assert.equal(state.terminal.prUrl, PR_URL, "the witness lost the pull request the same write recorded");
+});
+
+test("the durations and the models of the telemetry come from the stream, and the agent's survive only where the runtime measured none", async (t) => {
+  const at = (seconds) => new Date(Date.now() + seconds * 1000).toISOString();
+  const stream = toNdjson([
+    systemInitEvent(),
+    assistantEvent("## Brief\nTier: simple\nTier raised: simple -> complex: a stack trace in the claim path", { timestamp: at(1) }),
+    slugEvent(SLUG),
+    agentToolUseEvent({ id: "toolu_t", subagentType: "nightshift:triager", model: "haiku", timestamp: at(2) }),
+    taskNotificationEvent({ toolUseId: "toolu_t", durationMs: 61000 }),
+    agentToolUseEvent({ id: "toolu_c", subagentType: "nightshift:coder", model: "opus", timestamp: at(63) }),
+    taskNotificationEvent({ toolUseId: "toolu_c", durationMs: 420000 }),
+    assistantEvent(noticeText(), { timestamp: at(65) }),
+    resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
+  ]);
+  const { env } = makeRunnerHome(t, "runner-telemetry", [{ stdout: stream, exitCode: 0 }]);
+  const id = enqueue(env);
+  const logged = logPipelineRun(
+    {
+      project: "alpha",
+      slug: SLUG,
+      tier: "simple",
+      outcome: "pr_opened",
+      durationS: 999,
+      phases: [
+        { phase: "triage", model: null, duration_s: null },
+        { phase: "implementation", model: null, duration_s: null },
+        { phase: "commit", model: null, duration_s: 12 },
+      ],
+    },
+    env,
+  );
+
+  const cycle = await runJobCycle(env, id);
+  assert.equal(cycle.processed[0].status, "done");
+
+  const db = openDb(env);
+  const measured = db.prepare("SELECT duration_s FROM pipeline_runs WHERE id = ?").get(logged.runId).duration_s;
+  assert.notEqual(measured, 999, "the duration the agent sent survived a run the runtime measured itself");
+  assert.ok(measured >= 60 && measured <= 80, `the measured duration of the attempt was ${measured}s`);
+  assert.deepEqual(
+    db.prepare("SELECT phase, model, duration_s FROM pipeline_phases WHERE run_id = ? ORDER BY seq").all(logged.runId).map((row) => [row.phase, row.model, row.duration_s]),
+    [
+      ["triage", "haiku", 61],
+      ["implementation", "opus", 420],
+      ["commit", null, 12],
+    ],
+  );
+
+  const state = JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"));
+  assert.deepEqual({ tier: state.tier, reason: state.tierRaiseReason }, { tier: "complex", reason: "a stack trace in the claim path" });
 });
 
 test("a run that stops at the gate ends as gate and keeps the notice for the operator", async (t) => {
@@ -273,6 +345,38 @@ test("the branch of the run comes from the state file the pipeline wrote", async
   assert.equal(getJob(id, env).branch, "fix/the-worker");
 });
 
+test("a retried job resumes on its own slug and run directory, and the runtime counts the resume in the state", async (t) => {
+  const { env, planPath } = makeRunnerHome(t, "runner-resume-handoff", [{ stdout: "", exitCode: 0 }]);
+  const id = enqueue(env);
+  mkdirSync(runDir("alpha", SLUG, env), { recursive: true });
+  writeFileSync(
+    join(runDir("alpha", SLUG, env), "state.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      slug: SLUG,
+      project: "alpha",
+      branch: "fix/the-worker",
+      worktree: "/tmp/worktrees/fix-the-worker",
+      resumeCount: 0,
+      phases: [{ phase: "triage", artifact: "01-triage.md", verdict: "ok" }],
+    }),
+  );
+  openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
+
+  await runJobCycle(env, id);
+
+  const prompt = argValue(fakeCalls(planPath)[0].argv, "-p");
+  assert.ok(prompt.includes(`RESUME CANDIDATE (slug \`${SLUG}\`)`), prompt);
+  assert.ok(prompt.includes(`RUN_DIR: ${runDir("alpha", SLUG, env)}`), prompt);
+  assert.ok(prompt.includes("Branch: fix/the-worker"), prompt);
+  assert.ok(prompt.includes("Resume from phase: explore"), prompt);
+  assert.equal(getJob(id, env).slug, SLUG, "the retry lost the slug of the run it was resuming");
+  assert.deepEqual(readdirSync(dirname(runDir("alpha", SLUG, env))), [SLUG], "the retry opened a second run directory");
+  const state = JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"));
+  assert.equal(state.resumeCount, 1, "the resume was not counted in the state of the run");
+  assert.equal(state.phases.length, 1, "counting the resume rewrote the run instead of merging into it");
+});
+
 test("a job that stops belonging to this runner is killed and closed as cancelled", async (t) => {
   const { env } = makeRunnerHome(t, "runner-cancel", [{ stdout: toNdjson([systemInitEvent()]), holdMs: 5000, exitCode: 0 }]);
   const id = enqueue(env);
@@ -436,7 +540,56 @@ test("a slug that is not a safe path segment is never persisted, because it beco
 
   await runJobCycle(env, id);
 
-  assert.equal(getJob(id, env).slug, null, "an unsafe slug reached the run directory of the job");
+  assert.equal(getJob(id, env).slug, SLUG, "an unsafe slug reached the run directory of the job, over the provisional one the runtime assigned");
+});
+
+test("the run is opened before the spawn, and the ONE declaration of the pipeline renames it while a later one is ignored", async (t) => {
+  const stdout = toNdjson([
+    systemInitEvent(),
+    slugTypeEvent("the-real-name", "bug/error"),
+    slugTypeEvent("a-later-name"),
+    resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
+  ]);
+  const { env, planPath } = makeRunnerHome(t, "runner-slug-override", [{ stdout, exitCode: 0 }]);
+  const id = enqueue(env);
+  const provisional = runDir("alpha", SLUG, env);
+  mkdirSync(provisional, { recursive: true });
+  writeFileSync(join(provisional, "01-triage.md"), "the artifact of the provisional run\n");
+
+  await runJobCycle(env, id);
+
+  const prompt = argValue(fakeCalls(planPath)[0].argv, "-p");
+  assert.equal(prompt.includes(`RUN_DIR: ${provisional}`), true, "the prompt did not hand over the run the runtime opened");
+  assert.match(prompt, /\nProject: alpha\n/);
+
+  assert.equal(getJob(id, env).slug, "the-real-name", "the row kept a slug the pipeline had renamed");
+  assert.equal(existsSync(provisional), false, "the provisional run directory was left behind");
+  const renamed = runDir("alpha", "the-real-name", env);
+  assert.equal(readFileSync(join(renamed, "01-triage.md"), "utf8"), "the artifact of the provisional run\n");
+  assert.equal(JSON.parse(readFileSync(join(renamed, "state.json"), "utf8")).type, "bug/error");
+  assert.equal(existsSync(runDir("alpha", "a-later-name", env)), false, "a second `SLUG:` line renamed the run again");
+});
+
+test("a slug another run of the project already took is refused, and the job keeps the one the runtime gave it", async (t) => {
+  const taken = "fix-the-worker-of-the-queue";
+  assert.equal(
+    provisionalSlug({ id: 1, prompt: "fix the worker of the queue right now" }),
+    provisionalSlug({ id: 2, prompt: "fix the worker of the queue tomorrow instead" }),
+    "two prompts sharing their first six words should produce the same provisional slug",
+  );
+  const stdout = toNdjson([systemInitEvent(), slugTypeEvent(taken, "bug/error"), resultEvent({ text: `Done. Pull request: ${PR_URL}` })]);
+  const { env } = makeRunnerHome(t, "runner-slug-collision", [{ stdout, exitCode: 0 }]);
+  const id = enqueue(env);
+  const other = `{"schemaVersion":1,"slug":"${taken}","phases":[]}\n`;
+  mkdirSync(runDir("alpha", taken, env), { recursive: true });
+  writeFileSync(join(runDir("alpha", taken, env), "state.json"), other);
+
+  await runJobCycle(env, id);
+
+  assert.equal(getJob(id, env).slug, SLUG, "the job took over the run directory of another run");
+  assert.equal(readFileSync(join(runDir("alpha", taken, env), "state.json"), "utf8"), other, "the run of the other job was written into");
+  assert.equal(JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8")).type, "bug/error");
+  assert.match(readFileSync(jobLogPath(id, env), "utf8"), /the run keeps the slug `fix-the-worker`: it could not be renamed to `fix-the-worker-of-the-queue`/);
 });
 
 test("the watch loop repeats the cycle and hands each pass to the caller", async (t) => {

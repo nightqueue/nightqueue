@@ -3,10 +3,13 @@ import { accessSync, appendFileSync, constants, createWriteStream, existsSync, m
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { homeDir } from "../config/paths.mjs";
+import { homeDir, runDir } from "../config/paths.mjs";
+import { NAME_RE } from "../config/schema.mjs";
 import { claudeConfigDir, packageRoot } from "../host/paths.mjs";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
+import { escapePromptMarkers } from "../memory/prompt-safety.mjs";
 import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "./home-guard.mjs";
+import { isSafeSegment } from "./resume.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 
 // Silence of the stream that means a dead process: no event at all for this long ends the attempt.
@@ -105,20 +108,58 @@ export function resolveClaudeBin(env = process.env) {
 // Extra block appended to the prompt when the operator answered the gate of this job, the only thing that ever writes `operator_note` into a run.
 function operatorBlock(operatorNote) {
   const note = typeof operatorNote === "string" ? operatorNote.trim() : "";
-  return note ? `\n\nOPERATOR ANSWER TO THE GATE: ${truncateByCodePoint(note, OPERATOR_NOTE_LIMIT)}` : "";
+  if (!note) return "";
+  return `\n\nOPERATOR ANSWER TO THE GATE: ${escapePromptMarkers(truncateByCodePoint(note, OPERATOR_NOTE_LIMIT))}`;
 }
 
-// Extra block appended to the prompt when the previous run of this job can be resumed.
-function resumeBlock(resume) {
-  if (resume?.resume !== true) return "";
+// Extra block appended to the prompt when the previous run of this job can be resumed: the runtime hands over where the run lives and which phase comes next.
+function resumeBlock(handoff) {
+  if (!handoff || !isSafeSegment(handoff.slug)) return "";
   return [
     "",
     "",
-    `RESUME: a previous run of this job stopped after the \`${resume.lastPhase}\` phase.`,
-    `Resume from the \`${resume.fromPhase}\` phase, reuse the registered worktree and read the existing`,
-    "artifacts in the run directory instead of redoing them.",
+    `RESUME CANDIDATE (slug \`${handoff.slug}\`)`,
+    `RUN_DIR: ${handoff.runDir}`,
+    `Branch: ${handoff.branch ?? "none"}`,
+    `Worktree: ${handoff.worktree ?? "none"}`,
+    `Last completed phase: ${handoff.lastPhase}`,
+    `Resume from phase: ${handoff.fromPhase}`,
+    `From stage: ${handoff.fromStage ?? "none"}`,
+    "Trust this block: skip every phase already listed in the state and read its artifact.",
     "Run `git status --short` in the worktree first.",
   ].join("\n");
+}
+
+// How many words of the prompt a provisional slug is built from, enough to tell two jobs apart while staying one readable path segment.
+const PROVISIONAL_SLUG_WORDS = 6;
+
+// A run slug derived from the prompt of a job, so the run directory exists from the first attempt even if the pipeline never names itself.
+export function provisionalSlug(job) {
+  const words = String(job?.prompt ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, PROVISIONAL_SLUG_WORDS);
+  const derived = words.join("-");
+  if (isSafeSegment(derived)) return derived;
+  const fallback = `job-${job?.id}`;
+  return isSafeSegment(fallback) ? fallback : "job";
+}
+
+// Where the run of this job lives, handed over instead of derived: the project, the run directory, and the ONE line that renames them.
+// A job whose row carries no run yet keeps the older protocol, which is the only way such a pipeline can bind its slug.
+function runLines(job, env) {
+  const project = String(job?.project ?? "");
+  if (!NAME_RE.test(project) || !isSafeSegment(job?.slug)) {
+    return ["Print `QUEUE_SLUG: <slug>` alone on a line as soon as the slug exists."];
+  }
+  return [
+    `Project: ${project}`,
+    `RUN_DIR: ${runDir(project, job.slug, env)}`,
+    "Use that RUN_DIR as it comes; to rename the run, print `SLUG: <slug> TYPE: <type>` alone on a line ONCE, before writing any artifact into it.",
+  ];
 }
 
 // Whether one character is a control character, which external text has no reason to carry into a prompt.
@@ -160,18 +201,18 @@ function tierLine(tier) {
 }
 
 // Builds the prompt of the unattended run; every marker is quoted inline, so the echo never looks like one.
-export function buildPrompt({ job, resume, openPrs } = {}) {
+export function buildPrompt({ job, handoff, openPrs, env = process.env } = {}) {
   const base = [
     `/nightshift:resolve ${String(job?.prompt ?? "").trim()}`,
     "",
     `Unattended run, job #${job?.id}, no operator available.`,
     ...tierLine(job?.tier),
-    "Print `QUEUE_SLUG: <slug>` alone on a line as soon as the slug exists.",
+    ...runLines(job, env),
     "Open the pull request at the end.",
     "If you need a human decision, stop at the gate and print `## Requires user confirmation`.",
     "Shell rule: the worktree isolation refuses commands it cannot verify - one simple command per Bash call, no heredocs, no `\\` continuations, no `cd … && …`; longer snippets are files written with Write and run by path.",
   ].join("\n");
-  return `${base}${operatorBlock(job?.operator_note)}${resumeBlock(resume)}${openPrsBlock(openPrs)}`;
+  return `${base}${operatorBlock(job?.operator_note)}${resumeBlock(handoff)}${openPrsBlock(openPrs)}`;
 }
 
 // Builds the argv of the child: an array, never a shell, with --resume only behind the session id gate.

@@ -14,6 +14,9 @@
  */
 
 /**
+ * The three writers that can land a job row on `done` - `finishJob`, `repairJobFromWitness` and
+ * `reclassifyJob` - close the job's roadmap item through `roadmap.closeForJob` when, and only when,
+ * they report the row really reached `done`: a refused or no-op write closes nothing.
  * @typedef {object} JobsDomain
  * @property {(spec: object) => Promise<object>} addJob
  * @property {(spec: object) => Promise<object|null>} claimNextJob
@@ -48,6 +51,7 @@
 /**
  * @typedef {object} RunsDomain
  * @property {(run: object) => Promise<object>} logPipelineRun
+ * @property {(telemetry: object) => Promise<object>} updateRunTelemetry fills the durations and the models the RUNTIME measured in the stream over the row the agent recorded: the measured value wins, the agent's survives only where there is none, and a run the agent never recorded is never inserted
  */
 
 /**
@@ -105,6 +109,7 @@
  * @property {(id: number) => Promise<object>} queueableRoadmapItem
  * @property {(id: number, jobId: number) => Promise<boolean>} markRoadmapItemQueued
  * @property {(jobId: number) => Promise<boolean>} markRoadmapItemDone
+ * @property {(jobId: number) => Promise<boolean>} closeForJob the tolerant close every path that lands a row on `done` goes through; a failure of its own is never raised, so it can never cost the outcome that was just written
  * @property {(spec?: object) => Promise<string>} buildRoadmapPrompt
  * @property {(spec?: object) => Promise<object>} queueRoadmapItem
  */
@@ -177,7 +182,7 @@ export const STORE_CONTRACT = Object.freeze({
     "listWithSlug",
     "status",
   ],
-  runs: ["logPipelineRun"],
+  runs: ["logPipelineRun", "updateRunTelemetry"],
   lessons: [
     "saveLesson",
     "getLesson",
@@ -215,6 +220,7 @@ export const STORE_CONTRACT = Object.freeze({
     "queueableRoadmapItem",
     "markRoadmapItemQueued",
     "markRoadmapItemDone",
+    "closeForJob",
     "buildRoadmapPrompt",
     "queueRoadmapItem",
   ],

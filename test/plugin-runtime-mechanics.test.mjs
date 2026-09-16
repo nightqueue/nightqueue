@@ -61,7 +61,9 @@ test("the verifier reads the diff-hygiene line instead of running git itself", (
 test("each Repository template of the skill carries a Project line", () => {
   const lines = readFileSync(SKILL, "utf8").split("\n");
   const projectLines = lines.filter((line) => line.trim() === PROJECT_LINE);
-  assert.equal(projectLines.length, 11, "the skill does not carry 11 Project lines");
+  const repositoryLines = lines.filter((line) => line.trim() === REPOSITORY_LINE);
+  assert.ok(repositoryLines.length >= 8, "the skill lost its Repository templates");
+  assert.equal(projectLines.length, repositoryLines.length, "the skill does not carry one Project line per Repository template");
   for (const [index, line] of lines.entries()) {
     if (line.trim() !== REPOSITORY_LINE) continue;
     assert.equal(

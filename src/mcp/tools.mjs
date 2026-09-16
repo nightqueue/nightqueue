@@ -30,7 +30,15 @@ import { refreshMergedJobs } from "../queue/merged.mjs";
 import { blockerLines } from "../queue/claim.mjs";
 import { liveRunners, liveRunnersReport, pruneDeadRunners, STOPPED_RUNNER } from "../queue/registry.mjs";
 import { repairWarningLine } from "../queue/reconcile.mjs";
+import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
+import {
+  recordOutcome,
+  recordPhaseDone,
+  recordRunFields,
+  recordTermination,
+  RUN_OUTCOME_STATUSES,
+} from "../queue/run-state.mjs";
 import { startQueueRunner } from "../queue/start.mjs";
 import {
   PIPELINE_GATE_STOPS,
@@ -40,6 +48,7 @@ import {
   PIPELINE_TIERS,
 } from "../memory/runs.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
+import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons } from "./phase-context.mjs";
 
 const SERVER_NAME = "nightshift";
 const SERVER_VERSION = "0.1.0";
@@ -109,6 +118,116 @@ async function requireOwnProject({ kind, id, row }, env) {
       `not \`${mine ?? "unknown"}\`; an unattended run may only update its own project, ` +
       "so ask the operator to do it outside the queue",
   );
+}
+
+// Refuses to write a run named from the outside while inside a job: the state.json of a run belongs to the job that owns it.
+function refuseNamedRun(named, own) {
+  const what = named.map(([name, value]) => `${name} \`${value}\``).join(" and ");
+  throw new UserError(
+    `refusing to act on ${what} from inside job \`${own}\`: the run of a job is resolved from its own row, ` +
+      "so drop them and call again",
+  );
+}
+
+// Refuses to guess a run directory: a job whose row carries no slug yet has nothing to write into.
+function refuseMissingRunSlug(own) {
+  throw new UserError(
+    `job \`${own}\` has no run slug on its row yet: print \`SLUG: <slug>\` (\`QUEUE_SLUG: <slug>\` on an older plugin) ` +
+      "once, so the runtime binds the run directory, then call this tool again",
+  );
+}
+
+// The run of the job this process belongs to, read from its own row.
+async function jobRun(own, args, env) {
+  const named = [
+    ["project", args.project],
+    ["slug", args.slug],
+  ].filter(([, value]) => typeof value === "string" && value.trim() !== "");
+  if (named.length > 0) refuseNamedRun(named.map(([name, value]) => [name, value.trim()]), own);
+  const row = await openStore(env).jobs.getJob(own);
+  if (!isSafeSegment(row?.slug)) refuseMissingRunSlug(own);
+  return { project: row.project, slug: row.slug };
+}
+
+// The run an operator names from outside a job, where nothing else can tell which one it is.
+function operatorRun(args, env) {
+  const project = typeof args.project === "string" ? args.project.trim() : "";
+  const slug = typeof args.slug === "string" ? args.slug.trim() : "";
+  if (!project || !slug) {
+    throw new UserError(
+      "outside a job, `project` (the registered NAME) and `slug` (the `<slug>` of runs/<project>/<slug>) are both required",
+    );
+  }
+  if (!isSafeSegment(slug)) {
+    throw new UserError(`invalid slug \`${slug}\`: a run slug is one path segment of letters, digits and \`. _ + -\``);
+  }
+  return { project: requireProjectName(project, env), slug };
+}
+
+// The run every `run_*` tool writes into: the caller's own job run, or the one an operator named.
+async function callerRun(args, env) {
+  const own = callerJobId(env);
+  return own === null ? operatorRun(args, env) : await jobRun(own, args, env);
+}
+
+// The run a `pipeline_log` call records: inside a job the job's own row names it, whatever the call sent, and outside one only the call can say which run it is.
+async function pipelineLogRun(args, env) {
+  const own = callerJobId(env);
+  const row = own === null ? null : await openStore(env).jobs.getJob(own);
+  if (isSafeSegment(row?.slug)) return { project: row.project, slug: row.slug };
+  const slug = typeof args.slug === "string" ? args.slug.trim() : "";
+  if (!slug) {
+    throw new UserError(
+      "this run cannot be identified: send `project` (the registered NAME) and `slug` (the `<slug>` of runs/<project>/<slug>); " +
+        "only a call from inside a job, whose row already carries them, may omit the pair",
+    );
+  }
+  return { project: args.project, slug };
+}
+
+// What the RUN already recorded about itself, the source of every field a `pipeline_log` call may now omit.
+function runFacts({ project, slug }, env) {
+  const state = readRunState({ project, slug, env });
+  return { tier: state?.tier ?? null, taskType: state?.type ?? null, tierRaiseReason: state?.tierRaiseReason ?? null };
+}
+
+// Requires a field neither the call nor the run resolved, saying which tool would have recorded it during the run.
+function requireLogged(field, value) {
+  if (value !== null && value !== undefined && value !== "") return value;
+  throw new UserError(
+    `\`${field}\` is required: send it, or record it during the run with \`run_set\` so this call can leave it out`,
+  );
+}
+
+// Closes the roadmap item of the job this process belongs to, once its run recorded a delivery; outside a job there is no item to close.
+async function closeCallerRoadmapItem(env) {
+  const own = callerJobId(env);
+  if (own === null) return;
+  await openStore(env).roadmap.closeForJob(own);
+}
+
+// The answer of a `run_*` tool; a refused write comes back as an error, because a silent `kept` would let the run believe it was recorded.
+function runAnswer(result, { project, slug }) {
+  if (result.status !== "written") {
+    throw new UserError(`nothing was recorded in the state.json of \`${project}/${slug}\`: ${result.reason}`);
+  }
+  return { ok: true, project, slug, path: result.path };
+}
+
+// The fields of state.json `run_set` writes, in the argument names the plugin sends.
+const RUN_SET_FIELDS = {
+  type: "type",
+  tier: "tier",
+  tier_raise_reason: "tierRaiseReason",
+  branch: "branch",
+  worktree: "worktree",
+};
+
+// The fields `run_set` was asked to change, under the names state.json uses; an absent or empty one is not a change.
+function runSetFields(args) {
+  const asked = Object.entries(RUN_SET_FIELDS).filter(([arg]) => typeof args[arg] === "string" && args[arg].trim() !== "");
+  const fields = Object.fromEntries(asked.map(([arg, field]) => [field, args[arg].trim()]));
+  return args.qa_stage_a ? { ...fields, qaStageA: args.qa_stage_a } : fields;
 }
 
 // Requires the absolute working directory of the caller, because the directory of this server is never the user's.
@@ -345,7 +464,7 @@ async function queueStatusAnswer(args, { store, warning, env }) {
   };
 }
 
-// The eighteen tools of the plugin contract, with the parameter names the plugin actually sends.
+// The twenty-three tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env) {
   return [
     {
@@ -353,6 +472,7 @@ function toolDefinitions(env) {
       config: {
         description:
           "Recall of the lessons already learned, before acting. Filters by project and/or query. " +
+          "Inside a job, the lessons this run was already given are excluded on their own - no `exclude_ids` bookkeeping is needed - and a query only they would answer is asked again without the exclusion. " +
           'An item with via "fallback" did not match the query: it is recent context, never an answer.',
         inputSchema: {
           query: optionalText,
@@ -362,15 +482,47 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        const rows = await openStore(env).lessons.recallLessons({
-          query: args.query,
-          project: args.project,
-          target: args.target,
-          excludeIds: args.exclude_ids,
-          limit: RECALL_LIMIT,
-        });
+        const { sessionId } = await callerContext(env);
+        const rows = await recallFreshLessons(
+          {
+            query: args.query,
+            project: args.project,
+            target: args.target,
+            excludeIds: args.exclude_ids,
+            sessionId,
+            limit: RECALL_LIMIT,
+          },
+          env,
+        );
         return rows.map(lessonView);
       },
+    },
+    {
+      name: "context_for_phase",
+      config: {
+        description:
+          "The context block of one pipeline phase, already formatted: `## Applicable lessons` ([L<id>]), `## Project memory` ([M<id>]) and, for `target: \"explore\"`, `## Structural index`. " +
+          "Paste `block` into the subagent's prompt as it comes; an empty `block` means there is genuinely nothing to inject, so the sections are omitted. " +
+          "Inside a job the project and the already-injected lessons come from the job's own run: the same lesson is not handed to two phases, unless it is all this run has to give.",
+        inputSchema: {
+          target: z.enum(PHASE_TARGETS),
+          query: optionalText,
+          project: optionalText,
+          repo_root: optionalText,
+          exclude_ids: z.array(z.unknown()).nullable().optional(),
+        },
+      },
+      handler: async (args) =>
+        phaseContextBlock(
+          {
+            target: args.target,
+            query: args.query,
+            project: args.project,
+            repoRoot: args.repo_root,
+            excludeIds: args.exclude_ids,
+          },
+          env,
+        ),
     },
     {
       name: "lesson_save",
@@ -464,11 +616,13 @@ function toolDefinitions(env) {
       config: {
         description:
           "Records the telemetry of one /resolve run, gate terminations included. One call per run. " +
-          "`tier` is the FINAL tier the run executed, `tier_operator` is the tier the operator declared (omit it when there was none) and `tier_raise_reason` carries the evidence of a raise — send it when, and only when, the tier was raised.",
+          "Inside a job, `project` and `slug` come from the job's own row and are ignored here; outside one, both name the run. " +
+          "`tier` is the FINAL tier the run executed, `tier_operator` is the tier the operator declared (omit it when there was none) and `tier_raise_reason` carries the evidence of a raise. " +
+          "`tier`, `task_type` and `tier_raise_reason` may be left out when the run already recorded them with `run_set`; the durations and the models the runtime measured in the stream are filled in afterwards and always win over the ones sent here.",
         inputSchema: {
           project: optionalText,
-          slug: z.string(),
-          tier: z.enum(PIPELINE_TIERS),
+          slug: optionalText,
+          tier: z.enum(PIPELINE_TIERS).nullable().optional(),
           tier_operator: z.enum(PIPELINE_TIERS).nullable().optional(),
           tier_raise_reason: z.string().nullable().optional(),
           task_type: z.enum(PIPELINE_TASK_TYPES).nullable().optional(),
@@ -479,13 +633,15 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
+        const run = await pipelineLogRun(args, env);
+        const recorded = runFacts(run, env);
         const logged = await openStore(env).runs.logPipelineRun({
-          project: args.project,
-          slug: args.slug,
-          tier: args.tier,
+          project: run.project,
+          slug: run.slug,
+          tier: requireLogged("tier", args.tier ?? recorded.tier),
           tierOperator: args.tier_operator,
-          tierRaiseReason: args.tier_raise_reason,
-          taskType: args.task_type,
+          tierRaiseReason: args.tier_raise_reason ?? recorded.tierRaiseReason,
+          taskType: args.task_type ?? recorded.taskType,
           outcome: args.outcome,
           gateStop: args.gate_stop,
           durationS: args.duration_s,
@@ -797,6 +953,78 @@ function toolDefinitions(env) {
       },
       handler: async (args) => openStore(env).roadmap.listRoadmap(ownerArgs(args, env)),
     },
+    {
+      name: "run_phase_done",
+      config: {
+        description:
+          "Records one completed phase of the run in `state.json`, so a retry resumes from the next one. The runtime stamps the time and owns the file: never hand-write `state.json`. " +
+          "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
+        inputSchema: {
+          phase: z.enum(RESUME_PHASE_ORDER),
+          artifact: optionalText,
+          verdict: optionalText,
+          note: optionalText,
+          project: optionalText,
+          slug: optionalText,
+        },
+      },
+      handler: async (args) => {
+        const run = await callerRun(args, env);
+        return runAnswer(recordPhaseDone({ ...run, phase: args.phase, artifact: args.artifact, verdict: args.verdict, note: args.note, env }), run);
+      },
+    },
+    {
+      name: "run_terminate",
+      config: {
+        description:
+          "Records that the run stopped on purpose at a phase, with the reason; a run terminated this way is never resumed by a retry. " +
+          "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
+        inputSchema: { phase: z.enum(RESUME_PHASE_ORDER), reason: z.string(), project: optionalText, slug: optionalText },
+      },
+      handler: async (args) => {
+        const run = await callerRun(args, env);
+        return runAnswer(recordTermination({ ...run, phase: args.phase, reason: args.reason, env }), run);
+      },
+    },
+    {
+      name: "run_outcome",
+      config: {
+        description:
+          "Records how the run ended: `done` when the pull request exists, `gate` with the `notice` the operator has to answer. " +
+          "The pull request URL is NOT a parameter: the runtime writes it from what the session really published. " +
+          "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
+        inputSchema: { status: z.enum(RUN_OUTCOME_STATUSES), notice: optionalText, project: optionalText, slug: optionalText },
+      },
+      handler: async (args) => {
+        const run = await callerRun(args, env);
+        const answer = runAnswer(recordOutcome({ ...run, status: args.status, notice: args.notice, env }), run);
+        if (args.status === "done") await closeCallerRoadmapItem(env);
+        return answer;
+      },
+    },
+    {
+      name: "run_set",
+      config: {
+        description:
+          "Records the fields of the run itself in `state.json` as the pipeline discovers them: its `type`, its `tier`, the evidence of a tier raise, and the branch and worktree the code lives in. Only the fields sent are touched. " +
+          "`qa_stage_a` records the one sub-phase with a marker of its own — sent when the QA stage A gate closes, it is what makes a resume re-enter the QA phase straight at stage B instead of paying the analyst again. " +
+          "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
+        inputSchema: {
+          type: z.enum(PIPELINE_TASK_TYPES).nullable().optional(),
+          tier: z.enum(PIPELINE_TIERS).nullable().optional(),
+          tier_raise_reason: optionalText,
+          branch: optionalText,
+          worktree: optionalText,
+          qa_stage_a: z.object({ artifact: z.string(), verdict: optionalText }).optional(),
+          project: optionalText,
+          slug: optionalText,
+        },
+      },
+      handler: async (args) => {
+        const run = await callerRun(args, env);
+        return runAnswer(recordRunFields({ ...run, fields: runSetFields(args), env }), run);
+      },
+    },
   ];
 }
 
@@ -809,7 +1037,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the eighteen tools of the plugin contract.
+// Builds the MCP server with the twenty-three tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
   const schemas = new Map();

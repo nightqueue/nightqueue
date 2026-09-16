@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, logsDir } from "../config/paths.mjs";
@@ -15,9 +15,20 @@ import { preflight } from "./preflight.mjs";
 import { clearOwnPause, inheritablePause, ownPauseUntilMs, PAUSE_POLL_MS, pauseFromEvent, pauseUntilMs, readOwnPause, recordOwnPause, resumeRequestedAt } from "./rate-limit.mjs";
 import { ownRunnerRecord } from "./registry.mjs";
 import { repairWarningLine } from "./reconcile.mjs";
-import { clearRunOutcome, decideResume, isSafeSegment, readRunState, writeRunTerminal } from "./resume.mjs";
-import { buildPrompt, cliEntrypoint, IDLE_TIMEOUT_S, spawnClaude } from "./spawn.mjs";
-import { extractRateLimitFromEventLine, extractSessionIdFromEventLine, extractSlugFromEventLine, extractUsage, sumUsage } from "./stream.mjs";
+import { clearRunOutcome, decideResume, isSafeSegment, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
+import { recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
+import { buildPrompt, cliEntrypoint, IDLE_TIMEOUT_S, provisionalSlug, spawnClaude } from "./spawn.mjs";
+import {
+  extractRateLimitFromEventLine,
+  extractSessionIdFromEventLine,
+  extractSlugFromEventLine,
+  extractSlugTypeFromEventLine,
+  extractTierRaiseFromEventLine,
+  extractUsage,
+  isPrUrl,
+  sumUsage,
+} from "./stream.mjs";
+import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
 
 // Interval between two cycles of `queue run --watch` when the operator gives no number.
 export const WATCH_INTERVAL_DEFAULT_S = 30;
@@ -91,6 +102,59 @@ async function captureSlug(job, facts, line, { store, env }) {
   await store.jobs.persistRunFacts(job.id, { worker: job.worker, slug, branch });
 }
 
+// Moves the run of this job onto the slug the pipeline declared; a name another run already took is refused, and the job keeps the slug the runtime gave it.
+async function adoptSlug(job, facts, slug, { store, env }) {
+  if (slug === facts.slug) return;
+  const renamed = renameRunDir({ project: job.project, from: facts.slug, to: slug, env });
+  if (renamed.status === "kept") {
+    appendJobLog(job.id, `the run keeps the slug \`${facts.slug}\`: it could not be renamed to \`${slug}\` (${renamed.reason})`, env);
+    return;
+  }
+  facts.slug = slug;
+  const branch = readRunState({ project: job.project, slug, env })?.branch ?? null;
+  await store.jobs.persistRunFacts(job.id, { worker: job.worker, slug, branch });
+}
+
+// Records the task type the pipeline declared with its slug; a state that refuses the write is said out loud and never costs the run.
+function persistRunType(job, type, slug, env) {
+  const written = recordRunFields({ project: job.project, slug, fields: { type }, env });
+  if (written.status !== "written") appendJobLog(job.id, `the task type could not be recorded in the state of the run: ${written.reason}`, env);
+}
+
+// Applies the ONE `SLUG: <slug> TYPE: <type>` declaration the pipeline is allowed to make: the first one renames the run, every later one is ignored.
+async function captureSlugOverride(job, facts, line, ctx) {
+  if (facts.slugDeclared) return;
+  const declared = extractSlugTypeFromEventLine(line);
+  if (!declared || !isSafeSegment(declared.slug) || !isSafeSegment(facts.slug)) return;
+  facts.slugDeclared = true;
+  await adoptSlug(job, facts, declared.slug, ctx);
+  if (declared.type) persistRunType(job, declared.type, facts.slug, ctx.env);
+}
+
+// Records the tier a raise announced in the Brief moved the run to, with the evidence that justified it; a state that refuses the write is said out loud and never costs the run.
+function persistTierRaise(job, raise, slug, env) {
+  const written = recordRunFields({ project: job.project, slug, fields: { tier: raise.to, tierRaiseReason: raise.reason }, env });
+  if (written.status !== "written") appendJobLog(job.id, `the tier raise could not be recorded in the state of the run: ${written.reason}`, env);
+}
+
+// Records the tier raise the orchestrator announced; the Brief is written before the run has a slug, so a raise waits in the facts until there is a state.json to record it into.
+function captureTierRaise(job, facts, line, { env }) {
+  facts.tierRaise = extractTierRaiseFromEventLine(line) ?? facts.tierRaise;
+  if (!facts.tierRaise || !isSafeSegment(facts.slug)) return;
+  const raise = facts.tierRaise;
+  facts.tierRaise = null;
+  persistTierRaise(job, raise, facts.slug, env);
+}
+
+// The accumulated log of a job as it is on disk: the only reading that carries the attempt markers the telemetry is measured from; a log that cannot be read measures nothing.
+function readJobLog(jobId, env) {
+  try {
+    return readFileSync(jobLogPath(jobId, env), "utf8");
+  } catch {
+    return "";
+  }
+}
+
 // Appends one line to the accumulated log of a job; a log that refuses the write never costs the run.
 function appendJobLog(jobId, line, env) {
   try {
@@ -125,6 +189,8 @@ async function captureRateLimit(job, facts, line, { env }) {
 // Records the run facts that appear in the stream, writing one fact per line of the stream at most.
 async function captureFacts(job, facts, line, ctx) {
   await captureSlug(job, facts, line, ctx);
+  await captureSlugOverride(job, facts, line, ctx);
+  captureTierRaise(job, facts, line, ctx);
   await captureRateLimit(job, facts, line, ctx);
   if (facts.sessionId) return;
   const sessionId = extractSessionIdFromEventLine(line);
@@ -169,7 +235,7 @@ function wasRateLimitParked(job) {
 // Runs the attempts of a job, re-arming the lease before each one and backing off between retries.
 async function runAttempts(job, ctx) {
   const { env, deps } = ctx;
-  const facts = { slug: job.slug ?? null, sessionId: job.session_id ?? null, rateLimit: null, pause: null };
+  const facts = { slug: job.slug ?? null, slugDeclared: false, sessionId: job.session_id ?? null, rateLimit: null, pause: null, tierRaise: null };
   const pauseSignalImpl = deps.pauseSignalImpl ?? (() => ownPauseUntilMs(env) ?? pauseUntilMs(facts.pause));
   const resumeForced = resumeSessionEnabled(env) || wasRateLimitParked(job);
   const ownership = { lost: false };
@@ -208,15 +274,6 @@ async function runAttempts(job, ctx) {
       return { lost: true, facts, attempt, usage: sumUsage(usages), outcome, result };
     }
     attempt += 1;
-  }
-}
-
-// Closes the roadmap item this job came from; bookkeeping never costs the outcome that was just written.
-async function closeRoadmapItem(jobId, store) {
-  try {
-    await store.roadmap.markRoadmapItemDone(jobId);
-  } catch {
-    return;
   }
 }
 
@@ -269,11 +326,33 @@ async function tryFinish(job, outcome, env) {
   }
 }
 
+// Records in the state of the run the pull request the runtime read from the run; the record is the runtime's, and a state that already carries one is left alone.
+function persistPrUrl(job, run, state, env) {
+  const prUrl = run.outcome?.prUrl ?? null;
+  if (!prUrl || isPrUrl(state?.outcome?.prUrl) || !isSafeSegment(run.facts.slug)) return;
+  const written = recordPrUrl({ project: job.project, slug: run.facts.slug, prUrl, env });
+  if (written.status !== "written") appendJobLog(job.id, `the pull request could not be recorded in the state of the run: ${written.reason}`, env);
+}
+
+// Fills the telemetry row the agent recorded with what the runtime MEASURED in the stream: the measured durations and models win,
+// the agent's survive only where the runtime observed none, and a run with no row of its own is left alone instead of being invented.
+async function persistTelemetry(job, run, { store, env }) {
+  if (!isSafeSegment(run.facts.slug)) return;
+  const log = readJobLog(job.id, env);
+  try {
+    await store.runs.updateRunTelemetry({ project: job.project, slug: run.facts.slug, durationS: runDurationS(log), phases: phaseTelemetry(log) });
+  } catch (err) {
+    appendJobLog(job.id, `the telemetry of the run could not be updated: ${err?.message ?? String(err)}`, env);
+  }
+}
+
 // Writes the outcome of a finished job, together with the branch the pipeline registered in its state.
 async function finalize(job, run, ctx) {
   const { env, store } = ctx;
   const finishJobImpl = ctx.deps.finishJobImpl ?? ((id, outcome) => store.jobs.finishJob(id, outcome));
   const state = readRunState({ project: job.project, slug: run.facts.slug, env });
+  persistPrUrl(job, run, state, env);
+  await persistTelemetry(job, run, ctx);
   if (state?.branch) await store.jobs.persistRunFacts(job.id, { worker: job.worker, branch: state.branch });
   const finish = await tryFinish(job, {
     write: () =>
@@ -303,7 +382,6 @@ async function finalize(job, run, ctx) {
   // it): no witness then, or the reconciliation would close a job someone else is still running.
   if (finish.written || finish.error) await writeWitness(job, run.outcome, ctx);
   if (finish.written) await store.checkpoint();
-  if (finish.written && run.outcome.status === "done") await closeRoadmapItem(job.id, store);
   const status = finish.written ? run.outcome.status : finish.error ? "unrecorded" : "lost";
   const report = { id: job.id, status, prUrl: run.outcome.prUrl, attempts: run.attempt };
   return finish.error ? { ...report, error: finish.error } : report;
@@ -320,6 +398,23 @@ async function parkRun(job, run, ctx) {
   });
   if (!parked) return { id: job.id, status: "lost", attempts: run.attempt };
   return { id: job.id, status: "rate-limited", attempts: run.attempt, notBefore };
+}
+
+// Counts this resume in the state of the run, so the cap bites on the next retry; a state that refuses the write is said out loud and never costs the run.
+function persistResume(job, resumeCount, env) {
+  const written = recordResume({ project: job.project, slug: job.slug, resumeCount, env });
+  if (written.status !== "written") appendJobLog(job.id, `the resume could not be counted in the state of the run: ${written.reason}`, env);
+}
+
+// The job with the run it writes into already named: the slug of its row, or a provisional one derived from its prompt and
+// persisted before the spawn, so the run directory exists from the first attempt and a retry finds it again.
+async function withRunSlug(job, { store, env }) {
+  if (isSafeSegment(job.slug)) return job;
+  const slug = provisionalSlug(job);
+  if (!(await store.jobs.persistRunFacts(job.id, { worker: job.worker, slug }))) {
+    appendJobLog(job.id, `the provisional slug \`${slug}\` could not be persisted on the row of the job`, env);
+  }
+  return { ...job, slug };
 }
 
 // Search key of a job: its slug once it has one, and otherwise the first significant words of its prompt, with no punctuation gh could read as syntax.
@@ -349,16 +444,20 @@ export async function openPrsForJob(job, { env = process.env, deps = {} } = {}) 
 }
 
 // Runs one claimed job end to end: preflight, attempts and the single write of the outcome.
-async function runJob(job, ctx) {
+async function runJob(claimed, ctx) {
   const { env, deps } = ctx;
-  const check = preflight({ job, env, gitImpl: deps.gitImpl, existsImpl: deps.existsImpl, resolveBinImpl: deps.resolveBinImpl });
+  const check = preflight({ job: claimed, env, gitImpl: deps.gitImpl, existsImpl: deps.existsImpl, resolveBinImpl: deps.resolveBinImpl });
   if (!check.ok) {
-    await release(job, { blocked: { code: check.code, message: check.message } }, env);
-    return { id: job.id, status: "blocked", code: check.code };
+    await release(claimed, { blocked: { code: check.code, message: check.message } }, env);
+    return { id: claimed.id, status: "blocked", code: check.code };
   }
-  const resume = decideResume({ state: readRunState({ project: job.project, slug: job.slug, env }) });
-  const openPrs = await openPrsForJob(job, { env, deps });
-  const prompt = buildPrompt({ job, resume, openPrs });
+  const openPrs = await openPrsForJob(claimed, { env, deps });
+  const job = await withRunSlug(claimed, ctx);
+  const state = readRunState({ project: job.project, slug: job.slug, env });
+  const resume = decideResume({ state });
+  const handoff = resumeHandoff({ job, resume, state, env });
+  if (handoff) persistResume(job, resume.resumeCount, env);
+  const prompt = buildPrompt({ job, handoff, openPrs, env });
   const run = await runAttempts(job, { ...ctx, cwd: check.cwd, prompt });
   if (run.lost) {
     noteOwnershipLost(job, env);

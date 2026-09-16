@@ -14,6 +14,22 @@ import { READ_ONLY_METHODS } from "./store.mjs";
 
 const READ_ONLY_ALLOWED = new Set(READ_ONLY_METHODS);
 
+// Closes the roadmap item a job came from; the bookkeeping never costs the outcome that was just written.
+async function closeRoadmapItemOf(jobId, env) {
+  try {
+    return roadmap.markRoadmapItemDone(jobId, env) > 0;
+  } catch {
+    return false;
+  }
+}
+
+// Runs a writer that can land a job row on `done` and closes the job's roadmap item when the writer reports the row really got there; a refusal or a no-op closes nothing.
+async function writeJobStatus({ id, status, write, env }) {
+  const written = write();
+  if (written === true && status === "done") await closeRoadmapItemOf(id, env);
+  return written;
+}
+
 // Every job method; the reads take the store's own connection, which is what lets a follow poll through `withReadOnlyStore` and never answer from a stale WAL snapshot.
 function jobsDomain(env, db) {
   return {
@@ -27,7 +43,7 @@ function jobsDomain(env, db) {
     sweepOrphans: async (options) => jobs.sweepOrphans(env, options),
     persistRunFacts: async (id, facts) => jobs.persistRunFacts(id, facts, env),
     linkPipelineRun: async (jobId, ref) => jobs.linkPipelineRun(jobId, ref, env),
-    finishJob: async (id, outcome) => jobs.finishJob(id, outcome, env),
+    finishJob: async (id, outcome) => writeJobStatus({ id, status: outcome?.status, write: () => jobs.finishJob(id, outcome, env), env }),
     cancelJob: async (id, options) => jobs.cancelJob(id, options, env),
     retryJob: async (id, options) => jobs.retryJob(id, options, env),
     getJob: async (id) => jobs.getJob(id, env, db()),
@@ -39,8 +55,9 @@ function jobsDomain(env, db) {
     countActiveJobs: async () => jobs.countActiveJobs(env, db()),
     firstActiveJobId: async () => jobs.firstActiveJobId(env),
     isJobActive: async (id) => jobs.isJobActive(id, env, db()),
-    repairJobFromWitness: async (id, terminal) => jobs.repairJobFromWitness(id, terminal, env),
-    reclassifyJob: async (id, outcome) => jobs.reclassifyJob(id, outcome, env),
+    repairJobFromWitness: async (id, terminal) =>
+      writeJobStatus({ id, status: terminal?.status, write: () => jobs.repairJobFromWitness(id, terminal, env), env }),
+    reclassifyJob: async (id, outcome) => writeJobStatus({ id, status: outcome?.status, write: () => jobs.reclassifyJob(id, outcome, env), env }),
     hasClaimablePending: async () => jobs.hasClaimablePending(env),
     peekNextJob: async () => jobs.peekNextJob(env),
     listWithSlug: async () => jobs.listJobsWithSlug(env, db()),
@@ -52,6 +69,7 @@ function jobsDomain(env, db) {
 function runsDomain(env) {
   return {
     logPipelineRun: async (run) => runs.logPipelineRun(run, env),
+    updateRunTelemetry: async (telemetry) => runs.updateRunTelemetry(telemetry, env),
   };
 }
 
@@ -119,6 +137,7 @@ function roadmapDomain(env, db) {
     queueableRoadmapItem: async (id) => roadmap.queueableRoadmapItem(id, env),
     markRoadmapItemQueued: async (id, jobId) => roadmap.markRoadmapItemQueued(id, jobId, env),
     markRoadmapItemDone: async (jobId) => roadmap.markRoadmapItemDone(jobId, env),
+    closeForJob: async (jobId) => closeRoadmapItemOf(jobId, env),
     buildRoadmapPrompt: async (spec) => roadmap.buildRoadmapPrompt(spec, env),
     queueRoadmapItem: async (spec) => roadmap.queueRoadmapItem(spec, env),
   };

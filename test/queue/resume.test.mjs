@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runDir } from "../../src/config/paths.mjs";
-import { clearRunOutcome, decideResume, isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../../src/queue/resume.mjs";
+import { clearRunOutcome, decideResume, isSafeSegment, readRunState, RESUME_PHASE_ORDER, resumeHandoff } from "../../src/queue/resume.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 
 // A state.json in the shape the plugin writes it, with the canonical ENGLISH keys and phase names.
@@ -138,6 +138,42 @@ test("clearRunOutcome drops the record of the previous attempt and keeps everyth
   assert.equal(clearRunOutcome({ project: "alpha", slug: "never-ran", env }).status, "absent");
   assert.equal(existsSync(join(runDir("alpha", "never-ran", env), "state.json")), false, "the clear created a state.json");
   assert.equal(clearRunOutcome({ project: "alpha", slug: "../../escape", env }).status, "absent");
+});
+
+test("the handoff tells the agent where the run lives, what it kept and which phase comes next", (t) => {
+  const env = makeHome(t, "resume-handoff");
+  const job = { id: 7, project: "alpha", slug: "fix-the-worker" };
+  const written = state({ phases: ["triage", "explore", "architecture", "implementation"], qaStageA: { artifact: "05a-qa-analyst.md" } });
+  writeState(env, { project: "alpha", slug: job.slug, content: written });
+  const stored = readRunState({ project: "alpha", slug: job.slug, env });
+
+  assert.deepEqual(resumeHandoff({ job, resume: decideResume({ state: stored }), state: stored, env }), {
+    slug: "fix-the-worker",
+    runDir: runDir("alpha", "fix-the-worker", env),
+    branch: "fix/the-worker",
+    worktree: "/tmp/worktrees/fix-the-worker",
+    lastPhase: "implementation",
+    fromPhase: "qa",
+    fromStage: "qa-stage-b",
+  });
+
+  const bare = state({ branch: "  ", worktree: undefined });
+  const plain = resumeHandoff({ job, resume: decideResume({ state: bare }), state: bare, env });
+  assert.deepEqual({ branch: plain.branch, worktree: plain.worktree, fromStage: plain.fromStage }, { branch: null, worktree: null, fromStage: null });
+});
+
+test("there is no handoff when the decision refuses, when the job has no safe slug or when the project is not a name", (t) => {
+  const env = makeHome(t, "resume-handoff-refused");
+  const job = { id: 7, project: "alpha", slug: "fix-the-worker" };
+  const resume = decideResume({ state: state() });
+
+  assert.equal(resumeHandoff({ job, resume: decideResume({ state: null }), state: null, env }), null);
+  assert.equal(resumeHandoff({ job, resume: decideResume({ state: state({ resumeCount: 1 }) }), state: state(), env }), null);
+  assert.equal(resumeHandoff({ job: { ...job, slug: "../../escape" }, resume, state: state(), env }), null);
+  assert.equal(resumeHandoff({ job: { ...job, slug: null }, resume, state: state(), env }), null);
+  assert.equal(resumeHandoff({ job: { ...job, project: "../../etc" }, resume, state: state(), env }), null);
+  assert.equal(resumeHandoff({}), null);
+  assert.equal(resumeHandoff({ job, resume, state: "not an object", env }).branch, null, "a broken state stopped the handoff instead of degrading it");
 });
 
 test("the state file is read from the run directory, and an unsafe segment never becomes a path", (t) => {

@@ -39,7 +39,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node --test --disable-warning=ExperimentalWarning",
+    "test": "node --test --disable-warning=ExperimentalWarning \"test/**/*.test.mjs\"",
     "release:check": "npm test && node scripts/release-check.mjs"
   },
   "engines": {

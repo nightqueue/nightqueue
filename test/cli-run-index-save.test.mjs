@@ -233,7 +233,7 @@ test("a repository that is not a registered project is refused with the init mes
   assert.match(result.stderr, /is not registered; run `nightshift init` in the repository first/);
 });
 
-test("`nightshift run` lists its steps and refuses an unknown one", (t) => {
+test("`nightshift run` lists its subcommands and refuses an unknown one", (t) => {
   const env = makeHome(t, "index-save-steps");
   const cwd = makeDir(t, "index-save-steps-cwd");
 
@@ -241,7 +241,7 @@ test("`nightshift run` lists its steps and refuses an unknown one", (t) => {
   const unknown = spawnSync(process.execPath, [CLI, "run", "secrets-swep"], { cwd, env, encoding: "utf8" });
 
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /steps:\n {2}nightshift run index-save <artifact>/);
+  assert.match(help.stdout, /subcommands:\n(?:.*\n)*? {2}nightshift run index-save <artifact>/);
   assert.equal(unknown.status, 1);
-  assert.match(unknown.stderr, /unknown run step `secrets-swep`; use: index-save/);
+  assert.match(unknown.stderr, /unknown run subcommand `secrets-swep`; use: check, commit, log, pr, index-save/);
 });

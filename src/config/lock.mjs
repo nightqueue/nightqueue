@@ -7,6 +7,9 @@ const ACQUIRE_TIMEOUT_MS = 5000;
 const RETRY_INTERVAL_MS = 50;
 const STALE_AFTER_MS = 300000;
 
+// A synchronous holder keeps the lock for a single read and write, so it is asked for again almost immediately.
+const SYNC_RETRY_INTERVAL_MS = 1;
+
 // Path of the directory that acts as the write lock of NIGHTSHIFT_HOME.
 export function lockPath(env = process.env) {
   return `${homeDir(env)}.lock`;
@@ -37,16 +40,20 @@ function dropStale(path, staleAfterMs) {
   return true;
 }
 
+// One attempt at the lock: taken, or held by somebody else - a lock old enough to have been abandoned by a dead process is dropped once, then tried again.
+function takeOnce(path, staleAfterMs, state) {
+  if (tryCreate(path)) return true;
+  if (state.staleDropped || !dropStale(path, staleAfterMs)) return false;
+  state.staleDropped = true;
+  return tryCreate(path);
+}
+
 // Acquires the lock, failing with a usage error when another nightshift holds it past the timeout.
 async function acquire(path, { timeoutMs, staleAfterMs }) {
   const deadline = Date.now() + timeoutMs;
-  let staleDropped = false;
+  const state = { staleDropped: false };
   for (;;) {
-    if (tryCreate(path)) return;
-    if (!staleDropped && dropStale(path, staleAfterMs)) {
-      staleDropped = true;
-      continue;
-    }
+    if (takeOnce(path, staleAfterMs, state)) return;
     if (Date.now() >= deadline) {
       throw new UserError(
         `another nightshift command is writing to the configuration home; try again in a moment, or remove \`${path}\` if no other nightshift is running`,
@@ -56,12 +63,40 @@ async function acquire(path, { timeoutMs, staleAfterMs }) {
   }
 }
 
+// Waits without yielding the thread, the only pause a synchronous holder can take between two attempts.
+function delaySync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Acquires the lock without yielding, telling whether it was taken before the timeout instead of throwing.
+function acquireSync(path, { timeoutMs, staleAfterMs }) {
+  const deadline = Date.now() + timeoutMs;
+  const state = { staleDropped: false };
+  for (;;) {
+    if (takeOnce(path, staleAfterMs, state)) return true;
+    if (Date.now() >= deadline) return false;
+    delaySync(SYNC_RETRY_INTERVAL_MS);
+  }
+}
+
 // Runs the action with exclusion between processes over the same NIGHTSHIFT_HOME.
 export async function withLock(env, action, { timeoutMs = ACQUIRE_TIMEOUT_MS, staleAfterMs = STALE_AFTER_MS } = {}) {
   const path = lockPath(env);
   await acquire(path, { timeoutMs, staleAfterMs });
   try {
     return await action();
+  } finally {
+    rmSync(path, { recursive: true, force: true });
+  }
+}
+
+// Runs a SYNCHRONOUS action with exclusion between processes over one lock path, for a read-modify-write that cannot be awaited.
+export function withLockSync(path, action, { timeoutMs = ACQUIRE_TIMEOUT_MS, staleAfterMs = STALE_AFTER_MS } = {}) {
+  if (!acquireSync(path, { timeoutMs, staleAfterMs })) {
+    throw new UserError(`another nightshift process is holding \`${path}\`; try again in a moment, or remove it if no other nightshift is running`);
+  }
+  try {
+    return action();
   } finally {
     rmSync(path, { recursive: true, force: true });
   }

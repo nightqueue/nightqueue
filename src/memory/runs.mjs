@@ -151,6 +151,55 @@ function ensureRunDurable(inserted, write, env) {
   return again;
 }
 
+// The run a measured telemetry belongs to: the LAST one recorded for that project and slug, since a retried job records a run of its own.
+function lastRunId(db, project, slug) {
+  const row = db.prepare("SELECT id FROM pipeline_runs WHERE project = ? AND slug = ? ORDER BY id DESC LIMIT 1").get(project, slug);
+  return row ? Number(row.id) : null;
+}
+
+// Pairs each phase the runtime observed with the row the agent recorded under the same name, in `seq` order, so a phase that ran twice takes its two rows in order.
+// A phase the runtime did not observe keeps what it holds, and a phase the agent never recorded has no row to write into and is dropped.
+function matchPhases(stored, observed) {
+  const pending = new Map();
+  for (const row of stored) pending.set(row.phase, [...(pending.get(row.phase) ?? []), Number(row.id)]);
+  const matched = [];
+  for (const phase of observed) {
+    const id = pending.get(String(phase?.phase ?? ""))?.shift();
+    if (id === undefined) continue;
+    matched.push({ id, durationS: optionalSeconds(phase.durationS), model: optionalText(phase.model) });
+  }
+  return matched;
+}
+
+// Writes the measured telemetry over the row the agent recorded: the runtime's value wins and the agent's survives only where the runtime measured none.
+function updateTelemetry(db, { runId, durationS, phases }) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("UPDATE pipeline_runs SET duration_s = COALESCE(?, duration_s) WHERE id = ?").run(durationS, runId);
+    const statement = db.prepare("UPDATE pipeline_phases SET duration_s = COALESCE(?, duration_s), model = COALESCE(?, model) WHERE id = ?");
+    for (const phase of phases) statement.run(phase.durationS, phase.model, phase.id);
+    db.exec("COMMIT");
+    return { runId, phases: phases.length };
+  } catch (err) {
+    rollbackQuietly(db);
+    throw err;
+  }
+}
+
+// Fills the telemetry of a run with what the runtime measured in the stream; a run the agent never recorded is left alone and never inserted.
+export function updateRunTelemetry({ project, slug, durationS, phases = [] }, env = process.env) {
+  const cleanSlug = optionalText(slug);
+  if (!cleanSlug) throw new UserError("`slug` is required and cannot be empty");
+  const projectName = resolveProjectName(project, env);
+  const db = openDb(env);
+  const runId = lastRunId(db, projectName, cleanSlug);
+  if (runId === null) return { runId: null, project: projectName, phases: 0 };
+  const stored = db.prepare("SELECT id, phase FROM pipeline_phases WHERE run_id = ? ORDER BY seq").all(runId);
+  const matched = matchPhases(stored, Array.isArray(phases) ? phases : []);
+  const written = withFullSync(db, () => withWriteRetry(() => updateTelemetry(db, { runId, durationS: optionalSeconds(durationS), phases: matched })));
+  return { ...written, project: projectName };
+}
+
 // Persists the telemetry of one pipeline run: the run and its phases in a single transaction.
 export function logPipelineRun(
   { project, slug, tier, tierOperator, tierRaiseReason, taskType, outcome, gateStop, durationS, phases = [] },

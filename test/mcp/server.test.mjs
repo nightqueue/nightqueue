@@ -21,6 +21,7 @@ const HOME_REFUSAL =
   "refused: this command would change the operator's nightshift home from inside job #9; verify against a temporary home (NIGHTSHIFT_HOME=$(mktemp -d)) instead";
 
 const CONTRACT_TOOLS = [
+  "context_for_phase",
   "decision_list",
   "decision_recall",
   "decision_save",
@@ -39,6 +40,10 @@ const CONTRACT_TOOLS = [
   "roadmap_get",
   "roadmap_save",
   "roadmap_update",
+  "run_outcome",
+  "run_phase_done",
+  "run_set",
+  "run_terminate",
 ];
 
 const LESSON = {
@@ -69,11 +74,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the eighteen tools of the contract", async (t) => {
+test("the server exposes exactly the twenty-three tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
+  assert.equal(names.length, 23, "the contract list and the server disagree on how many tools there are");
 });
 
 test("the handshake carries the instructions that teach the backlog model", async (t) => {
@@ -303,6 +309,28 @@ test("memory_recall answers empty and pipeline_log holds the contract of its enu
   });
   assert.equal(badTier.isError, true);
   assert.doesNotMatch(textOf(badTier), /\.mjs:\d+/);
+});
+
+test("outside a job, a `pipeline_log` that names no run is refused by both fields and records nothing", async (t) => {
+  const env = makeHome(t, "mcp-runs-orphan");
+  makeProject(t, env, "alpha");
+  const client = await connect(t, env);
+
+  const orphan = await client.callTool({ name: "pipeline_log", arguments: { tier: "simple", outcome: "pr_opened" } });
+  assert.equal(orphan.isError, true);
+  assert.match(textOf(orphan), /`project`/);
+  assert.match(textOf(orphan), /`slug`/);
+  assert.doesNotMatch(textOf(orphan), /\.mjs:\d+/);
+
+  const noTier = await client.callTool({ name: "pipeline_log", arguments: { project: "alpha", slug: "no-tier-anywhere", outcome: "pr_opened" } });
+  assert.equal(noTier.isError, true);
+  assert.match(textOf(noTier), /`tier` is required/);
+  assert.match(textOf(noTier), /run_set/);
+
+  assert.deepEqual(openDb(env).prepare("SELECT id FROM pipeline_runs").all(), [], "a refused call left an orphan row behind");
+
+  const named = payloadOf(await client.callTool({ name: "pipeline_log", arguments: { slug: "no-project-at-all", tier: "simple", outcome: "no_commit" } }));
+  assert.ok(Number.isInteger(named.runId), "a call naming only the slug still records its run");
 });
 
 test("the running server does not hold the configuration lock of the home", async (t) => {

@@ -13,6 +13,7 @@ const CHECKOUT_ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 export const FAKE_GH_TOKEN = "gh-fake-token-do-not-print";
 export const FAKE_GH_LOGIN = "octocat";
+export const FAKE_GH_PR_URL = "https://github.com/octocat/hello-world/pull/7";
 
 const OWN_ENV_KEYS = [
   "NIGHTSHIFT_HOME",
@@ -31,6 +32,7 @@ const OWN_ENV_KEYS = [
   "NIGHTSHIFT_FAKE_GH_LOGIN",
   "NIGHTSHIFT_FAKE_GH_PR_STATE",
   "NIGHTSHIFT_FAKE_GH_PR_SHA",
+  "NIGHTSHIFT_FAKE_GH_PR_URL",
   "NIGHTSHIFT_FAKE_GH_PR_LIST",
   "NIGHTSHIFT_NPM_BIN",
   "NIGHTSHIFT_FAKE_NPM_LOG",
@@ -109,6 +111,7 @@ export function isolatedHostVars(dir) {
     NIGHTSHIFT_FAKE_GH_STATE: "logged-out",
     NIGHTSHIFT_FAKE_GH_TOKEN: FAKE_GH_TOKEN,
     NIGHTSHIFT_FAKE_GH_LOGIN: FAKE_GH_LOGIN,
+    NIGHTSHIFT_FAKE_GH_PR_URL: FAKE_GH_PR_URL,
   };
 }
 

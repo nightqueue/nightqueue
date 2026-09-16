@@ -18,6 +18,74 @@ The queue lives in `nightshift queue` (see [Queue](queue.md)); the scheduler tha
 start it by itself lands in a future version, published as the npm package
 `nightshift`, of which this plugin is the pipeline half.
 
+## The run of a job (`nightshift run`)
+
+`nightshift run` is the family the pipeline calls from *inside* a job: each
+subcommand acts on the run of the job it is called from, which it resolves from
+`NIGHTSHIFT_JOB_ID` and that job's own row. It is not `nightshift queue run`,
+which starts the runner over the whole queue. Naming another run from inside a
+job is refused; outside one, `--project <name> --slug <slug>` is required.
+
+```sh
+nightshift run check 03       # is the plan there, with the sections the pipeline reads?
+nightshift run log            # one line per phase of this run, plus the total
+nightshift run log --json     # the same table as the only thing on stdout
+nightshift run commit --message-file msg.txt   # stage what the implementation listed, and commit it
+nightshift run pr --body-file body.md          # check the body, push and open the pull request
+```
+
+`run check <NN>` is the artifact gate of a phase: it reads
+`<RUN_DIR>/<NN-phase>.md` and prints `OK` or `MISSING: <sections>` - the
+sections required are `## Verdict` (`01`), the four sections of the plan (`03`),
+`## Modified files` (`04`), `## Break hypotheses` + `## Test recipe` (`05a`),
+`## Validated risks` (`05`) and `## Verification` (`06`); `02` is checked for
+existence alone. `04` is the only artifact with a fallback: with no file list,
+the command derives one from the changes of the run's worktree (`git diff
+--name-only HEAD` plus `git ls-files --others --exclude-standard`), writes the
+artifact and prints `GENERATED` - and a worktree with no change at all prints
+`MISSING: ## Modified files (no changed files)` without writing anything. The
+three answers exit `0`: they are findings the agent judges (relaunch the phase
+or terminate), not failures of the command; only an unknown `<NN>` or a run that
+cannot be resolved exits `1`.
+
+`run log` prints one tab-separated line per phase recorded in `state.json` -
+`<phase>  <model>  <status>  <duration>` - and closes with `total  <duration>`.
+The model and the durations are the ones the runtime measured on the stream of
+the job (see [Runtime contract](runtime-contract.md)), so the agent pastes the
+Time column of its report instead of timing the phases itself; a phase the
+runtime measured no lane for prints `-`.
+
+`run commit` stages exactly the paths `04-implementation.md` listed under `##
+Modified files` (`--files-from <path>` reads the list somewhere else) plus every
+file a `--extra <pathspec>` really matches, and commits them with `git commit -F
+<the --message-file>` - the message stays the agent's, and an empty or missing
+one is refused before anything is staged. It prints `COMMITTED: <sha> (<n>
+files)`. Anything under
+`.claude/` or `tmp/`, any dependency lockfile and any path outside the run's
+worktree is refused: the command prints `REFUSED: <path> (<reason>)`, stages
+nothing and exits `1`. `--extra` adds files to the list, it never overrides that
+refusal. Before committing it prints `CONVENTION: <...>` - the file that
+declares the repository's commit convention (a commitlint config, `.husky/`,
+`.gitmessage`, `CONTRIBUTING*` or a `commitlint` block in `package.json`) and
+what the last 30 subjects really read like - so the message is written to the
+shape the repository uses.
+
+`run pr` checks the body BEFORE anything leaves the machine, with the rules of
+`references/pr-template.md`: the three sections `## Summary`, `## Changes` and
+`## QA` present and in that order with no fourth `## `, the lines `Verdict:` and
+`Proven:` inside `## QA`, no bare `#<number>` outside a `Fixes`/`Closes` line,
+and no `{{placeholder}}` or `<...>` example left over from the template. A body that fails prints `REJECTED:
+<reason>` and exits `1` with nothing pushed. Otherwise it renames the branch
+when it still carries the `worktree-` prefix (`worktree-feat+login-google` →
+`feat/login-google`, falling back to `<type>/<slug>` from `state.json` when the
+name carries no `+`), pushes it with `git push -u origin <branch>`, opens the
+pull request with `gh pr create` and records the outcome `done` in `state.json`.
+The `PR: <url>` line it prints is information only - the pull request of the run
+is the one the host published in its own `code_change_published` event (see
+[Runtime contract](runtime-contract.md)). It closes with `WORKTREE: <path>` and
+removes the worktree only when asked with `--remove-worktree`, because the
+session that called it still lives in that directory.
+
 ## Configuration
 
 `NIGHTSHIFT_HOME` (default `~/.nightshift`) is a single directory that holds

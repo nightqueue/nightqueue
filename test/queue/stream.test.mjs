@@ -7,9 +7,12 @@ import {
   extractNoticeFromStream,
   extractPrUrl,
   extractPrUrlFromStream,
+  extractPublishedPrUrl,
   extractResultText,
   extractSessionIdFromEventLine,
   extractSlugFromEventLine,
+  extractSlugTypeFromEventLine,
+  extractTierRaiseFromEventLine,
   extractUsage,
   hasGateMarker,
   hasGateMarkerInStream,
@@ -18,12 +21,15 @@ import {
   lastAttemptStream,
   orchestratorText,
   parseSlugLine,
+  parseSlugTypeLine,
+  parseTierRaiseLine,
   sumUsage,
   tokensFromEventLine,
 } from "../../src/queue/stream.mjs";
 import {
   assistantEvent,
   attemptMarker,
+  codeChangePublishedEvent,
   doneStream,
   gateStream,
   GATE_MARKER,
@@ -64,6 +70,51 @@ test("the slug is read from a STANDALONE line, never from a mention or from the 
   assert.equal(
     extractSlugFromEventLine(line(assistantEvent("QUEUE_SLUG: first-guess\nQUEUE_SLUG: final-slug"))),
     "final-slug",
+    "the last standalone line of the event should win",
+  );
+});
+
+test("the run is renamed by a STANDALONE `SLUG:` line, with its optional type, and the FIRST declaration of the event wins", () => {
+  assert.deepEqual(parseSlugTypeLine("SLUG: fix-the-worker TYPE: bug/error"), { slug: "fix-the-worker", type: "bug/error" });
+  assert.deepEqual(parseSlugTypeLine("  SLUG:   fix-the-worker  "), { slug: "fix-the-worker", type: null });
+  assert.equal(parseSlugTypeLine("QUEUE_SLUG: fix-the-worker"), null, "the older protocol was read as a rename");
+  assert.equal(parseSlugTypeLine("print `SLUG: <slug> TYPE: <type>` alone on a line"), null);
+  assert.equal(parseSlugTypeLine("SLUG: <slug> TYPE: <type>"), null);
+  assert.equal(parseSlugTypeLine("SLUG: ../escape TYPE: bug/error"), null);
+  assert.equal(parseSlugTypeLine("SLUG: fix the worker"), null);
+  assert.deepEqual(
+    extractSlugTypeFromEventLine(line(assistantEvent("SLUG: first-name TYPE: feature/refactor\nSLUG: second-name"))),
+    { slug: "first-name", type: "feature/refactor" },
+    "the first standalone line of the event should win: a run is renamed once",
+  );
+  assert.equal(extractSlugTypeFromEventLine(line(assistantEvent("SLUG: from-subagent", { parentToolUseId: "toolu_1" }))), null);
+  assert.equal(extractSlugTypeFromEventLine(line(slugEvent(SLUG))), null);
+  assert.equal(extractSlugTypeFromEventLine("not json at all"), null);
+});
+
+test("a tier raise is read from the STANDALONE line of the Brief, and only from the orchestrator", () => {
+  assert.deepEqual(parseTierRaiseLine("Tier raised: simple -> complex: a native SDK is involved"), {
+    from: "simple",
+    to: "complex",
+    reason: "a native SDK is involved",
+  });
+  assert.deepEqual(parseTierRaiseLine("   Tier raised:  trivial  ->  simple :  the brief is ambiguous  "), {
+    from: "trivial",
+    to: "simple",
+    reason: "the brief is ambiguous",
+  });
+  assert.equal(parseTierRaiseLine("A raise is written as `Tier raised: <from> -> <to>: <evidence>`"), null);
+  assert.equal(parseTierRaiseLine("Tier raised: simple -> complex"), null);
+  assert.equal(parseTierRaiseLine("Tier raised: simple -> urgent: a stack trace"), null);
+  assert.equal(parseTierRaiseLine(null), null);
+
+  const brief = assistantEvent("## Brief\nTier: simple\nTier raised: simple -> complex: a stack trace\nType: bug/error");
+  assert.deepEqual(extractTierRaiseFromEventLine(line(brief)), { from: "simple", to: "complex", reason: "a stack trace" });
+  assert.equal(extractTierRaiseFromEventLine(line(assistantEvent("Tier raised: simple -> complex: x", { parentToolUseId: "toolu_1" }))), null);
+  assert.equal(extractTierRaiseFromEventLine("not json at all"), null);
+  assert.deepEqual(
+    extractTierRaiseFromEventLine(line(assistantEvent("Tier raised: trivial -> simple: a guess\nTier raised: simple -> complex: the evidence"))),
+    { from: "simple", to: "complex", reason: "the evidence" },
     "the last standalone line of the event should win",
   );
 });
@@ -183,6 +234,47 @@ test("the pull request of the stream is the ORCHESTRATOR's: a subagent never del
     null,
     "a subagent delivered the pull request",
   );
+});
+
+test("the pull request the HOST published is read from its own event, and only the run's own repository speaks", () => {
+  const other = "https://github.com/other-org/other-repo/pull/7";
+  const foreign = codeChangePublishedEvent({ url: other, repo: "other-org/other-repo", identifier: "7" });
+  const reopened = codeChangePublishedEvent({ url: "https://github.com/acme/api/pull/44", identifier: "44" });
+  assert.equal(extractPublishedPrUrl(toNdjson([systemInitEvent(), codeChangePublishedEvent(), resultEvent({ text: "Telemetry recorded." })])), PR_URL);
+  assert.equal(
+    extractPublishedPrUrl(toNdjson([foreign, codeChangePublishedEvent()]), { repo: "acme/api" }),
+    PR_URL,
+    "a pull request opened earlier for another repository spoke for this run",
+  );
+  assert.equal(
+    extractPublishedPrUrl(toNdjson([codeChangePublishedEvent(), foreign])),
+    PR_URL,
+    "a pull request opened later for another repository spoke for this run",
+  );
+  assert.equal(
+    extractPublishedPrUrl(toNdjson([codeChangePublishedEvent(), reopened])),
+    reopened.url,
+    "two pull requests of the run's OWN repository: the last published one is the delivery",
+  );
+  assert.equal(
+    extractPublishedPrUrl(toNdjson([codeChangePublishedEvent(), { ...reopened, action: "closed" }])),
+    PR_URL,
+    "an event that is not the opening of a pull request was read as a delivery",
+  );
+  assert.equal(
+    extractPublishedPrUrl(toNdjson([foreign]), { repo: "acme/api" }),
+    other,
+    "a repository the caller vouches for but nothing published silenced what the host really published",
+  );
+  assert.equal(
+    extractPublishedPrUrl(toNdjson([codeChangePublishedEvent(), codeChangePublishedEvent({ url: "https://github.com/acme/api/issues/9" })])),
+    PR_URL,
+    "a published url that is not a pull request was believed",
+  );
+  assert.equal(extractPublishedPrUrl(toNdjson([codeChangePublishedEvent({ url: 42 })])), null);
+  assert.equal(extractPublishedPrUrl(doneStream()), null, "a stream with no published event invented one");
+  assert.equal(extractPublishedPrUrl(toNdjson([{ ...codeChangePublishedEvent(), type: "assistant" }])), null, "another type of event published a pull request");
+  assert.equal(extractPublishedPrUrl(null), null);
 });
 
 test("only a marker the runtime itself wrote, in sequence and unquoted, closes an attempt of an accumulated log", () => {

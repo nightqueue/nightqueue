@@ -1,11 +1,14 @@
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { projectFromCwd } from "../memory/project-name.mjs";
+import { ownerLabel } from "../memory/scope.mjs";
 import { openStore } from "../store/open.mjs";
-import { section } from "./block.mjs";
+import { clip, section } from "./block.mjs";
 import { recordInjected } from "./state.mjs";
 
 const LESSON_LIMIT = 12;
 const MEMORY_LIMIT = 10;
+const DECISION_LIMIT = 8;
+const DECISION_MAX = 200;
 const MAX_OUTPUT = 9000;
 const FOOTER = "Call `lesson_save` as soon as an error costs a second attempt, and `lesson_recall` before acting.";
 
@@ -18,6 +21,11 @@ function lessonLine(lesson) {
 // One memory line of the session block.
 function memoryLine(memory) {
   return `- ${memory.key}: ${memory.value}`;
+}
+
+// One standing decision of the session block, short on purpose: the full text comes from `decision_recall`.
+function decisionLine(decision) {
+  return `- ${ownerLabel(decision)} ${clip(`${decision.title}: ${decision.decision}`, DECISION_MAX)}`;
 }
 
 // Marks the lessons as injected in the corpus, tolerating a write failure that must not cost the block.
@@ -50,7 +58,9 @@ export async function runSessionStart({ input, env = process.env, fetchImpl = nu
   const store = openStore(env);
   const lessons = await store.lessons.recallLessons({ project: project?.name, limit: LESSON_LIMIT });
   const memories = await store.memory.recentMemories({ project: project?.name, limit: MEMORY_LIMIT });
+  const decisions = await store.decisions.recallDecisions({ project: project?.name, limit: DECISION_LIMIT });
   const sections = [
+    section("Standing decisions", decisions, decisionLine),
     section("Lessons learned (do not repeat these mistakes)", lessons, lessonLine),
     section(`Project memory (${project?.name ?? "global"})`, memories, memoryLine),
   ].filter(Boolean);

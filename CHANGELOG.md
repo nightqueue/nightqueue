@@ -8,6 +8,30 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `nightshift run` is the family the pipeline calls from inside a job, each
+  subcommand acting on the run of the job it was called from: `run check <NN>`
+  is the artifact gate of a phase (`OK`, `MISSING: <sections>`, or `GENERATED`
+  when it derives `## Modified files` from the changes of the worktree),
+  `run log` prints the phases of the run with the model and the duration the
+  runtime measured, `run commit` stages exactly what the implementation listed
+  and refuses `.claude/`, `tmp/`, any lockfile and any path outside the
+  worktree, and `run pr` checks the body, renames the branch the worktree
+  mangled, pushes it, opens the pull request and records the outcome. Naming
+  another run from inside a job is refused; outside one, `--project` and
+  `--slug` are required.
+
+- Five MCP tools, twenty-three in all. `run_phase_done`, `run_terminate`,
+  `run_outcome` and `run_set` record the run in `state.json` - the phase
+  completed, a deliberate stop, how the run ended and the fields of the run
+  itself - and `run_outcome` with `status: "done"` also closes the roadmap item
+  the job came from. `context_for_phase` returns the whole context block of one
+  pipeline phase, already formatted, so a subagent prompt is one call instead of
+  two plus the bookkeeping of what the run had already been given.
+
+- The block the `SessionStart` hook injects opens with `## Standing decisions`:
+  the accepted decisions of the project and of its org, one line each, before
+  the lessons and the memories it already carried.
+
 - The mechanical work the pipeline's subagents used to describe in prose is now
   three runtime commands. `nightshift verify [--scope touched|full|+poc]
   [--files <list>]` detects the project's own checks from its lockfile and
@@ -19,7 +43,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the repository under test, and spawns every check against a throwaway
   `NIGHTSHIFT_HOME` and `CLAUDE_CONFIG_DIR`. `nightshift libs <name>...` prints
   the version of each lib actually installed, read from the lockfile, never the
-  range. `nightshift run` holds two steps: `index-save <artifact>` persists the
+  range. `nightshift run` also holds two steps the subagents call: `index-save <artifact>` persists the
   `## File map` and `## Third-party libraries` of an explore artifact into the
   project index, and `secrets-sweep --files <list>` reports the log calls whose
   arguments - or the lines those arguments are built from - may carry a secret.
@@ -39,11 +63,42 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A retried job no longer degrades into a clean run. The job keeps the slug and
+  the run directory of the attempt it is resuming, the resume is counted in
+  `state.json` by the runtime, and the pipeline reads the phase to resume from
+  out of the prompt instead of re-deriving a decision it could get wrong.
+
+- The roadmap item of a job is closed by every path that lands its row on
+  `done`, not only by the live finalize: `nightshift queue repair`, the
+  reconciliation from the witness and `run_outcome` all go through the same
+  closure in the store, so a job that really delivered never leaves its item
+  queued.
+
+- The pull request of a run is read from the `code_change_published` event the
+  host emits when it publishes the change, ahead of the record in `state.json`
+  and of the text of the session: a run whose final message contradicts what it
+  really published is no longer recorded without its link. Only an event with
+  `action: "created"` for the run's own repository counts, so a pull request the
+  session opened for another repository - or an event about a pull request it
+  closed - is never delivered as the run's own, whichever arrives last.
+
+- `state.json` is written under a lock of its own run. The pipeline's record is
+  now written from two processes - the MCP tools of the agent and the queue
+  runner - and each read and its write are one critical section, so a phase the
+  agent recorded is no longer erased by a fact the runner recorded at the same
+  moment.
+
+- `nightshift run commit` refuses `.claude/`, `tmp/` and the lockfiles whatever
+  the case of the path: on a filesystem that resolves `.Claude/hook.js` to
+  `.claude/hook.js`, the refusal used to be walked past by spelling the
+  directory differently, in the list of the implementation and in `--extra`.
+
 - The reason a gated job carries is the `## Notice` the run itself wrote, not
   the summary the pipeline had recorded in `<RUN_DIR>/state.json`: a gate was
   stored with a one-paragraph digest where the run had written the whole
   explanation, and the operator answered it without ever reading what it said.
-  `state.json` keeps ruling the status and the pull request URL, and its summary
+  `state.json` keeps ruling the status (the pull request URL now comes first from the
+  `code_change_published` event, see below), and its summary
   stays the fallback for a run that printed no `## Notice`, with the whole final
   text of the orchestrator as the last resort. `nightshift queue repair <id>`
   now also writes a correction that is only a notice - it compared the status
@@ -84,6 +139,29 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   merge and nothing to repair no longer opens a write connection at all.
 
 ### Changed
+
+- `state.json` is written by the runtime alone. Every key of the run - the
+  phases, the termination, the outcome, the type, the tier and its raise, the
+  branch, the worktree, the QA stage A marker and the resume count - goes
+  through one writer, called by the `run_*` tools, by `nightshift run pr` and by
+  the runner itself; the pipeline no longer writes the file, no longer stamps a
+  time and no longer counts its own resumes. An `updatedAt` an older plugin
+  hand-writes is overwritten by the runtime's clock instead of being trusted.
+
+- The run comes named in the prompt. The runner opens the run directory before
+  spawning anything and hands `Project:` and `RUN_DIR:` over, plus a
+  `RESUME CANDIDATE` block carrying the branch, the worktree, the last completed
+  phase and the phase to resume from, so the decision is taken once, by the
+  runtime. A run renames itself with one `SLUG: <slug> TYPE: <type>` line, which
+  moves the directory with its artifacts inside it; `QUEUE_SLUG:` is deprecated
+  in favour of it and still read, for a plugin older than this runtime.
+
+- `pipeline_log` records what the runtime measured. The total duration, the
+  per-phase durations and the model of each phase are read from the stream of
+  the job and overwrite what the call sent; `project`, `slug`, `tier`,
+  `task_type` and `tier_raise_reason` are resolved from the job's own row and
+  from `state.json` when the call leaves them out. The pipeline sends judgment
+  only, and never times a phase itself.
 
 - Every SQLite access now goes through an async store obtained from
   `openStore(env)` / `openStoreReadOnly(env)`: `src/store/` is the only path from

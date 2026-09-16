@@ -2,10 +2,21 @@ const FENCE_LINE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 const QUOTED_LINE_RE = /^\s*\d+\t/;
 const GATE_HEADING_RE = /^#{1,6}\s+Requires user confirmation\s*$/i;
 const NOTICE_HEADING_RE = /^#{1,6}\s+Notice\s*$/i;
-const SLUG_LINE_RE = /^\s*QUEUE_SLUG:\s*([A-Za-z0-9][A-Za-z0-9._+-]{0,79})\s*$/;
+// The shape of a run slug, which is one path segment: the same rule `isSafeSegment` enforces, written once for both slug lines.
+const SLUG_SOURCE = "[A-Za-z0-9][A-Za-z0-9._+-]{0,79}";
+const SLUG_LINE_RE = new RegExp(`^\\s*QUEUE_SLUG:\\s*(${SLUG_SOURCE})\\s*$`);
+const SLUG_TYPE_LINE_RE = new RegExp(`^\\s*SLUG:\\s*(${SLUG_SOURCE})(?:\\s+TYPE:\\s*([A-Za-z][A-Za-z0-9/._+-]{0,39}))?\\s*$`);
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/;
 // The line `openAttemptLog` writes before each attempt; the runtime numbers them 1, 2, 3… in order, so a line out of that sequence is incidental output shaped like a marker.
-const ATTEMPT_MARKER_RE = /^=== attempt (\d+) @ \S+ ===$/;
+const ATTEMPT_MARKER_RE = /^=== attempt (\d+) @ (\S+) ===$/;
+const TIER_RAISE_LINE_RE = /^\s*Tier raised:\s*(trivial|simple|complex)\s*->\s*(trivial|simple|complex)\s*:\s*(.+?)\s*$/;
+// Every standalone line the runtime reads as a control literal of its contract: the parsers below and the prompt escaper share this list, so neither can gain a literal the other ignores.
+export const CONTROL_LINE_PATTERNS = Object.freeze([
+  SLUG_LINE_RE,
+  SLUG_TYPE_LINE_RE,
+  ATTEMPT_MARKER_RE,
+  TIER_RAISE_LINE_RE,
+]);
 const PR_URL_SOURCE = "https?://github\\.com/[\\w.-]+/[\\w.-]+/pull/\\d+";
 const PR_URL_RE = new RegExp(PR_URL_SOURCE, "g");
 const PR_URL_ONLY_RE = new RegExp(`^${PR_URL_SOURCE}$`);
@@ -88,6 +99,17 @@ export function lastAttemptStream(log) {
     .join("\n");
 }
 
+// Reads the `=== attempt N @ <iso> ===` line the runner writes before each attempt as its number and its instant; any other line is null.
+export function parseAttemptMarker(line) {
+  const match = ATTEMPT_MARKER_RE.exec(String(line ?? ""));
+  return match ? { attempt: Number(match[1]), at: match[2] } : null;
+}
+
+// Base name of a subagent type, which the plugin qualifies as `nightshift:<name>`.
+export function laneName(subagentType) {
+  return String(subagentType ?? "").split(":").pop().trim() || "subagent";
+}
+
 // Extracts the run slug from a STANDALONE `QUEUE_SLUG: <slug>` line; an inline mention never matches.
 export function parseSlugLine(line) {
   const match = SLUG_LINE_RE.exec(String(line ?? ""));
@@ -101,6 +123,44 @@ export function extractSlugFromEventLine(rawLine) {
   let found = null;
   for (const line of text.split("\n")) found = parseSlugLine(line) ?? found;
   return found;
+}
+
+// Reads a STANDALONE `SLUG: <slug> TYPE: <type>` line, the ONE declaration that renames the run the runtime opened; the type is optional and an inline mention never matches.
+export function parseSlugTypeLine(line) {
+  const match = SLUG_TYPE_LINE_RE.exec(String(line ?? ""));
+  return match ? { slug: match[1], type: match[2] ?? null } : null;
+}
+
+// Extracts the slug declaration from a raw NDJSON line: only orchestrator text, FIRST valid match, because a run is renamed once.
+export function extractSlugTypeFromEventLine(rawLine) {
+  const text = orchestratorTextFromLine(rawLine);
+  if (!text) return null;
+  for (const line of text.split("\n")) {
+    const declared = parseSlugTypeLine(line);
+    if (declared) return declared;
+  }
+  return null;
+}
+
+// Reads a STANDALONE `Tier raised: <from> -> <to>: <evidence>` line, the shape the Brief records a raise in; an inline mention never matches.
+export function parseTierRaiseLine(line) {
+  const match = TIER_RAISE_LINE_RE.exec(String(line ?? ""));
+  return match ? { from: match[1], to: match[2], reason: match[3] } : null;
+}
+
+// Extracts the tier raise from a raw NDJSON line: only orchestrator text, last valid match of the event.
+export function extractTierRaiseFromEventLine(rawLine) {
+  const text = orchestratorTextFromLine(rawLine);
+  if (!text) return null;
+  let found = null;
+  for (const line of text.split("\n")) found = parseTierRaiseLine(line) ?? found;
+  return found;
+}
+
+// Tells whether a line would be read as a control literal of the runtime contract, which is what the prompt escaper has to neutralize.
+export function isControlLine(line) {
+  const text = String(line ?? "");
+  return CONTROL_LINE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 // Tells whether a session id is safe to become argv of `claude --resume`: no dot, no slash, never a flag.
@@ -237,6 +297,43 @@ export function extractPrUrl(text) {
 // Tells whether a value is, on its own, a pull request URL: the shape a structured field has to carry to be believed.
 export function isPrUrl(value) {
   return typeof value === "string" && PR_URL_ONLY_RE.test(value);
+}
+
+// Repository a pull request URL belongs to, as `owner/name` and folded, which is how a publication is told from another repository's.
+export function prUrlRepo(url) {
+  if (!isPrUrl(url)) return null;
+  const [owner, name] = String(url).split("/").slice(3, 5);
+  return `${owner}/${name}`.toLowerCase();
+}
+
+// Tells whether an event is the host announcing a pull request it has just OPENED, carrying a `url` that really is one.
+function isPublishedPr(event) {
+  return event?.type === "system" && event.subtype === "code_change_published" && event.action === "created" && isPrUrl(event.url);
+}
+
+// Repository a publication happened in: the `repo` the host named, or the one its own URL carries when it named none.
+function publishedRepo(event) {
+  const named = typeof event.repo === "string" ? event.repo.trim().toLowerCase() : "";
+  return named || prUrlRepo(event.url);
+}
+
+// The repository of the run among what the attempt published: the one the caller vouches for when a publication confirms it, the FIRST publication's otherwise.
+function ownRepo(published, repo) {
+  const wanted = typeof repo === "string" ? repo.trim().toLowerCase() : "";
+  if (wanted && published.some((event) => publishedRepo(event) === wanted)) return wanted;
+  return publishedRepo(published[0]);
+}
+
+// Pull request the HOST itself published (`system`/`code_change_published` with `action: "created"`): a fact of the platform, which no text of the agent contradicts.
+// A session may publish into more than one repository, so only the run's own speaks - the LAST publication of that repository is the delivery, and a `url` that is not a pull request URL is ignored.
+export function extractPublishedPrUrl(log, { repo = null } = {}) {
+  const published = String(log ?? "")
+    .split("\n")
+    .map(parseEventLine)
+    .filter(isPublishedPr);
+  if (published.length === 0) return null;
+  const own = ownRepo(published, repo);
+  return published.filter((event) => publishedRepo(event) === own).at(-1).url;
 }
 
 // Last pull request the ORCHESTRATOR delivered in an intermediate event, the only fallback when the final text delivers none.

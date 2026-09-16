@@ -1,5 +1,15 @@
 import { truncateByCodePoint } from "../memory/jobs.mjs";
-import { extractNoticeFromStream, extractPrUrlFromStream, extractResultText, hasGateMarker, hasGateMarkerInStream, isPrUrl } from "./stream.mjs";
+import { RUN_OUTCOME_STATUSES } from "./run-state.mjs";
+import {
+  extractNoticeFromStream,
+  extractPrUrlFromStream,
+  extractPublishedPrUrl,
+  extractResultText,
+  hasGateMarker,
+  hasGateMarkerInStream,
+  isPrUrl,
+  prUrlRepo,
+} from "./stream.mjs";
 
 const BACKOFF_BASE_MS = 5000;
 const BACKOFF_FACTOR = 3;
@@ -7,9 +17,6 @@ const BACKOFF_CAP_MS = 60000;
 const NOTICE_FALLBACK_LIMIT = 8000;
 
 export const SILENT_STOP_NOTICE = "Pipeline stopped without a PR and without explanation (exit 0). See the log.";
-
-// The only two outcomes the pipeline may record in `state.json`; how the process ended stays the runtime's call.
-const OUTCOME_STATUSES = new Set(["done", "gate"]);
 
 // Explicit precedence of the outcome: a stop wins over a timeout, a timeout is never a retryable failure, and a job only waits at the gate when it said why.
 function decideStatus({ exitCode, timedOut, idleTimedOut, stopped, prUrl, gate, reason }) {
@@ -38,7 +45,7 @@ function endedCleanly({ exitCode, timedOut, idleTimedOut, stopped }) {
 function pipelineOutcome(state) {
   const record = state?.outcome;
   if (!record || typeof record !== "object" || Array.isArray(record)) return null;
-  const status = OUTCOME_STATUSES.has(record.status) ? record.status : null;
+  const status = RUN_OUTCOME_STATUSES.includes(record.status) ? record.status : null;
   const prUrl = isPrUrl(record.prUrl) ? record.prUrl : null;
   const notice = typeof record.notice === "string" && record.notice.trim() ? record.notice.trim() : null;
   return status || prUrl || notice ? { status, prUrl, notice } : null;
@@ -48,7 +55,8 @@ function pipelineOutcome(state) {
 export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null } = {}) {
   const resultText = extractResultText(log) ?? "";
   const record = pipelineOutcome(state);
-  const prUrl = record?.prUrl ?? extractPrUrlFromStream(log);
+  const reported = record?.prUrl ?? extractPrUrlFromStream(log);
+  const prUrl = extractPublishedPrUrl(log, { repo: prUrlRepo(reported) }) ?? reported;
   const gate = record?.status ? record.status === "gate" : hasGateMarker(resultText) || hasGateMarkerInStream(log);
   const reason = gateReason(log, resultText, record?.notice ?? null);
   const ending = { exitCode, timedOut, idleTimedOut, stopped };

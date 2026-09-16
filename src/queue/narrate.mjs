@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { clockLabel } from "./hints.mjs";
-import { extractNotice, extractPrUrl, hasGateMarker, parseEventLine, parseSlugLine } from "./stream.mjs";
+import { extractNotice, extractPrUrl, hasGateMarker, laneName, parseEventLine, parseSlugLine } from "./stream.mjs";
 
 const ATTEMPT_LINE_RE = /^=== attempt (\d+) @ (\S+) ===$/;
 const RATE_PAUSE_LINE_RE = /^=== rate limit until (\S+) @ (\S+) ===$/;
@@ -12,6 +12,7 @@ const TEXT_LIMIT = 200;
 const NOTICE_LIMIT = 400;
 const TARGET_LIMIT = 40;
 const DESCRIPTION_LIMIT = 80;
+const MODEL_LIMIT = 20;
 const MAX_PLAIN_LINES = 20;
 
 const FILE_TOOLS = new Set(["Read", "Edit", "Write", "NotebookEdit"]);
@@ -122,16 +123,13 @@ function shortTarget(name, input) {
   return "";
 }
 
-// Base name of a subagent type, which the plugin qualifies as `nightshift:<name>`.
-function laneName(subagentType) {
-  return String(subagentType ?? "").split(":").pop().trim() || "subagent";
-}
-
-// Label of a lane: its name plus the phase of the pipeline, because the stream never carries the model.
-function laneLabel(subagentType) {
+// Label of a lane: its name, the phase of the pipeline and the model the orchestrator picked for it, each part only when it is known.
+// The model comes from the `tool_use` block that launched the subagent, the only event of the stream that carries it: a lane opened from `task_started` has none.
+function laneLabel(subagentType, model) {
   const name = laneName(subagentType);
   const phase = PHASES.get(name);
-  return phase ? `${name} (phase ${phase})` : name;
+  const detail = [phase ? `phase ${phase}` : null, clip(model, MODEL_LIMIT) || null].filter(Boolean);
+  return detail.length ? `${name} (${detail.join(", ")})` : name;
 }
 
 // Distance between two clock readings, null when either of them is unknown.
@@ -275,8 +273,8 @@ function narrateText(state, raw, lane) {
 }
 
 // Opens a lane for a subagent, the only event that indents everything reported under it.
-function openLane(state, toolUseId, subagentType, description) {
-  const lane = { name: laneName(subagentType), label: laneLabel(subagentType), openMs: state.clockMs, tools: 0, edits: 0 };
+function openLane(state, { toolUseId, subagentType, description, model = null }) {
+  const lane = { name: laneName(subagentType), label: laneLabel(subagentType, model), openMs: state.clockMs, tools: 0, edits: 0 };
   if (toolUseId) state.lanes.set(toolUseId, lane);
   const detail = clip(description, DESCRIPTION_LIMIT);
   return narrationEvent(state, "laneOpen", detail ? `${lane.label} — ${detail}` : lane.label);
@@ -288,7 +286,9 @@ function narrateToolUse(state, block, lane) {
   const id = typeof block.id === "string" && block.id ? block.id : null;
   if (id) state.tools.set(id, toolLabel(name));
   const subagentType = block.input?.subagent_type;
-  if (typeof subagentType === "string" && subagentType.trim()) return [openLane(state, id, subagentType, block.input?.description)];
+  if (typeof subagentType === "string" && subagentType.trim()) {
+    return [openLane(state, { toolUseId: id, subagentType, description: block.input?.description, model: block.input?.model })];
+  }
   if (lane) {
     lane.tools += 1;
     if (EDIT_TOOLS.has(name)) lane.edits += 1;
@@ -363,7 +363,7 @@ function narrateSystem(state, event) {
   if (event.subtype === "task_started") {
     const id = typeof event.tool_use_id === "string" ? event.tool_use_id : "";
     if (!id || state.lanes.has(id)) return [];
-    return [openLane(state, id, event.subagent_type, event.description)];
+    return [openLane(state, { toolUseId: id, subagentType: event.subagent_type, description: event.description })];
   }
   if (event.subtype === "task_notification") return closeLane(state, event);
   return [];

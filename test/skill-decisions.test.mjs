@@ -11,9 +11,14 @@ const SERVER = read("src/mcp/tools.mjs");
 // Reflect files the pipeline must keep away from the decisions and roadmap tables.
 const REFLECT_FILES = ["src/hooks/reflect.mjs", "src/hooks/reflect-worker.mjs", "src/cli/reflect.mjs", "src/memory/dedup.mjs"];
 
-test("the Phase 0 preflight pings decision_recall next to lesson_recall, and only lesson_recall can stop the run", () => {
-  assert.ok(SKILL.includes("Call `lesson_recall` **and**\n   `decision_recall` (MCP `nightshift`) ONCE, with `project` = the current project"), SKILL);
+test("the Phase 0 preflight pings only lesson_recall and takes the decisions from the session block", () => {
+  assert.ok(SKILL.includes("Call `lesson_recall` (MCP\n   `nightshift`) ONCE, with `project` = the current project"), SKILL);
   assert.ok(SKILL.includes("`nightshift memory unavailable: run nightshift setup and retry`"), SKILL);
+  assert.ok(
+    SKILL.includes("the `## Standing decisions`\n     section of the `# Nightshift context` block injected at the start of the session carries\n     them"),
+    "step 0.1 does not say where the standing decisions already are",
+  );
+  assert.ok(SKILL.includes("No preflight\n     call fetches them; `decision_recall` stays the way to refine them by query (step 1)."), SKILL);
   assert.ok(
     SKILL.includes("**`decision_recall` failed or is unavailable while `lesson_recall` answered**"),
     "the fail-open bullet of decision_recall is missing from step 0.1",
@@ -25,7 +30,11 @@ test("the Phase 0 preflight pings decision_recall next to lesson_recall, and onl
 test("the Brief carries an optional Standing decisions section fed by an accepted-only recall", () => {
   assert.ok(SKILL.includes("## Standing decisions   [omit the whole section when the recall came back empty]"), SKILL);
   assert.ok(SKILL.includes("- #<number> <title> — <the `decision` field in 1 line>"), SKILL);
-  assert.ok(SKILL.includes("`query` =\n   the `**Affected area:**` plus the `**Objective:**` of the Brief"), SKILL);
+  assert.ok(
+    SKILL.includes("The source is the `## Standing decisions`\n   section of the `# Nightshift context` block you already received"),
+    "the Brief paragraph does not name the session block as the source",
+  );
+  assert.ok(SKILL.includes("`query` = the `**Affected area:**` plus the `**Objective:**` of the Brief."), SKILL);
   for (const status of ["proposed", "superseded", "rejected"]) {
     assert.ok(
       SKILL.includes(`a \`${status}\``),
@@ -55,8 +64,12 @@ test("a proposed decision is saved right after the Phase 3 gate, fail-open, and 
     "the Phase 3 post-gate does not say that a plan without the block is the normal case",
   );
   assert.ok(
-    SKILL.includes("`` Proposed decision #<number>: <title> — recorded as `proposed`; accept or reject it with `decision_update`. ``"),
-    "the Phase 7 PR body does not carry the proposed-decision open item",
+    SKILL.includes("`` Proposed decision <number>: <title> — recorded as `proposed`; accept or reject it with `decision_update`. ``"),
+    "the Phase 8 report does not carry the proposed-decision line",
+  );
+  assert.ok(
+    SKILL.includes("**A decision proposed by this run is NOT part of the PR body.**"),
+    "Phase 7 does not keep the proposed decision out of the pull request body",
   );
 });
 

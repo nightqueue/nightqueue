@@ -18,7 +18,7 @@ import * as project from "./project.mjs";
 import * as queue from "./queue.mjs";
 import * as reflect from "./reflect.mjs";
 import * as roadmap from "./roadmap.mjs";
-import * as runStep from "./run.mjs";
+import * as runCommand from "./run.mjs";
 import * as setup from "./setup.mjs";
 import * as update from "./update.mjs";
 import * as verify from "./verify.mjs";
@@ -42,7 +42,7 @@ const COMMANDS = new Map([
   ["queue", queue.run],
   ["verify", verify.run],
   ["libs", libs.run],
-  ["run", runStep.run],
+  ["run", runCommand.run],
   ["version", version.run],
 ]);
 
@@ -89,7 +89,7 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the eighteen memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the twenty-three memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   hook session-start|prompt-context|reflect run a hook, reading the event JSON from stdin
   reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground
@@ -116,6 +116,12 @@ commands:
   run index-save [--repo-root <path>]       index the artifact's paths relative to <path>, the repository root (default: .)
   run secrets-sweep --files <list>          print the log lines whose arguments reference a token/secret/password/key value
   version                                   print the installed nightshift version
+
+inside a job — each acts on the run of the job it is called from, never on the queue:
+  run check <NN>                            check the artifact of a phase of THIS run: OK, MISSING or GENERATED
+  run log [--json]                          one line per phase of THIS run: model, status and duration
+  run commit --message-file <path>          stage what 04-implementation.md listed and commit it; --extra adds a pathspec
+  run pr --body-file <path>                 check the body, push THIS run's branch under its final name and open the PR
 
 options:
   -h, --help                                show this help

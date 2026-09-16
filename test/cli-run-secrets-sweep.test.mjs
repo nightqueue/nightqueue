@@ -184,7 +184,7 @@ test("`nightshift run` lists exactly the two steps it dispatches", (t) => {
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /nightshift run index-save <artifact>/);
   assert.match(help.stdout, /nightshift run secrets-sweep --files <list>/);
-  assert.equal(help.stdout.split("\n").filter((line) => line.startsWith("  nightshift run ")).length, 2);
+  assert.equal(help.stdout.split("\n").filter((line) => line.startsWith("  nightshift run ")).length, 6);
   assert.equal(unknown.status, 1);
-  assert.match(unknown.stderr, /unknown run step `nope`; use: index-save, secrets-sweep/);
+  assert.match(unknown.stderr, /unknown run subcommand `nope`; use: check, commit, log, pr, index-save, secrets-sweep/);
 });

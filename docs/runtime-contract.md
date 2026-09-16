@@ -37,24 +37,73 @@ What a runtime has to provide, and what it can rely on:
 - Artifact names, in order: `01-triage.md`, `02-explore.md`, `03-plan.md`,
   `04-implementation.md`, `05a-qa-analyst.md`, `05-qa.md`,
   `06-verification.md`.
-- `state.json` in the same directory carries the resumable state:
-  `schemaVersion`, `slug`, `project`, `type`, `tier`, `branch`, `worktree`,
-  `resumeCount`, `updatedAt`, `termination`, `qaStageA` and
-  `phases[{phase, artifact, verdict}]`. Once a runner has closed the job it merges one
-  more key into that same file, `terminal{status, prUrl, finishedAt, writtenBy, pid}`:
-  the witness of the outcome, written only by the runner and read only by the
-  reconciliation. Nothing else of the file is touched, and the direction is never
-  reversed - the row is rebuilt from the file, the file is never rebuilt from the row.
-- Literals a runtime parses from the pipeline's stdout: `QUEUE_SLUG:`,
-  `## Requires user confirmation` (the run is waiting on a human gate) and
-  `## Notice` (the executive summary to deliver).
-- Authority of each literal: the LAST standalone `QUEUE_SLUG:` line of the
-  orchestrator wins, and the `## Notice` and the pull request URL of the run are
-  read from the FINAL `result` event - an intermediate message that echoes an
-  earlier one never wins. A pull request URL only counts as delivered when it
-  closes a line outside any code fence and that line does not report a failure;
-  a URL cited inside a sentence, an example or an error message is a reference,
-  and a run that delivers none ends as `gate`, never as `done`.
+- `state.json` in the same directory carries the resumable state, and **the runtime
+  is its only writer**: every key goes through `src/queue/run-state.mjs`, which the
+  MCP tools `run_phase_done`, `run_terminate`, `run_outcome` and `run_set`, the
+  command `nightshift run pr` and the runner itself call. The pipeline never writes
+  the file, and an `updatedAt` an older plugin hand-wrote is overwritten by the
+  runtime's clock and never read. Every key, and who writes it:
+  - `schemaVersion` (always `1`), `project` and `slug`: every write, as fixed fields.
+  - `updatedAt` and the `at` of every record: the runtime's UTC clock, one stamp per
+    write.
+  - `phases[{phase, at, artifact?, verdict?, note?}]`: `run_phase_done`, append-only,
+    so a phase recorded twice never erases the first record.
+  - `termination{phase, reason, at}`: `run_terminate`; a run terminated this way is
+    never resumed by a retry.
+  - `outcome{status, at, notice?, prUrl?}`: `run_outcome` (`status`, `notice`),
+    `nightshift run pr` (`status: "done"`) and the runner, which writes `prUrl` at
+    finalize from what the session really published - it is never a parameter.
+  - `type`, `tier`, `tierRaiseReason`, `branch`, `worktree` and
+    `qaStageA{artifact, verdict?, at}`: `run_set`; the runner also records
+    `tier`/`tierRaiseReason` from the `Tier raised:` line and `type` from the `TYPE:`
+    half of the slug declaration.
+  - `resumeCount`: the runner alone, when it hands a resume over to the pipeline.
+  - `terminal{status, prUrl, finishedAt, writtenBy, pid}`: the runner, once it has
+    closed the job - the witness of the outcome, read only by the reconciliation.
+
+  Nothing else of the file is touched, and the direction is never reversed - the row
+  is rebuilt from the file, the file is never rebuilt from the row.
+- Literals a runtime parses from the pipeline's stdout: `SLUG: <slug> TYPE: <type>`
+  (the run renames itself), `Tier raised: <from> -> <to>: <evidence>` (the Brief
+  raised the tier), `## Requires user confirmation` (the run is waiting on a human
+  gate), `## Notice` (the executive summary to deliver) and `QUEUE_SLUG:`, which
+  **is deprecated in favour of `SLUG:`** and still read.
+- Authority of each literal:
+  - `SLUG:` - a standalone line, orchestrator text only. The FIRST valid declaration
+    of the run wins and every later one is ignored, because a run is renamed once:
+    the runtime renames the run directory it had already opened and re-points the
+    row. A slug that is not a safe path segment, or one another run of the project
+    already holds, is refused - the job keeps the slug the runtime gave it and the
+    reason goes to the job log. `TYPE:` is optional and is recorded as the run's
+    `type`.
+  - `QUEUE_SLUG:` - the LAST standalone line wins. It is kept for a plugin older
+    than the named prompt, which has no other way to bind its slug, and the runtime
+    still asks for it in the prompt of a job whose row carries no run yet.
+  - `Tier raised:` - a standalone line, the LAST of an event wins. `<to>` becomes the
+    run's `tier` and `<evidence>` its `tierRaiseReason`; the Brief prints it before
+    the run has a slug, so the raise waits in memory until there is a `state.json` to
+    record it into.
+  - `## Notice` - read from the FINAL `result` event; an intermediate message that
+    echoes an earlier one never wins.
+- The prompt is the other direction of the same contract: the runtime names the run
+  before the first phase with `Project: <name>` and `RUN_DIR: <absolute path>`, and a
+  run that can be resumed also carries the block ``RESUME CANDIDATE (slug `<slug>`)``
+  with `RUN_DIR:`, `Branch:`, `Worktree:`, `Last completed phase:`, `Resume from
+  phase:` and `From stage:` - the decision is already taken when the prompt is built,
+  and the pipeline reads it instead of re-deriving it (see [Queue](queue.md)).
+- The pull request of the run has three sources, in this order: the
+  `{"type":"system","subtype":"code_change_published","url":…}` event the HOST emits
+  when it publishes the change, then the `outcome.prUrl` the runtime itself recorded
+  in `state.json`, then the text of the stream. Only an event with
+  `"action":"created"` publishes a delivery, and one session may publish for more than
+  one repository: the run's own repository is the one the rest of the classification
+  reports, or the one of its FIRST publication, and the LAST publication of THAT
+  repository is the delivery. A publication for another repository, an event with any
+  other `action` and a `url` of another shape are all ignored. In the text - the last source, which serves
+  another provider and a runtime older than the event - a URL only counts as delivered
+  when it closes a line outside any code fence and that line does not report a failure;
+  a URL cited inside a sentence, an example or an error message is a reference, and a
+  run that delivers none ends as `gate`, never as `done`.
 
 These names are a machine contract, not prose: the pipeline files are the
 source of truth for them, and any runtime that reads them must match them
@@ -91,16 +140,17 @@ thing as `{ "started": false, "waiting": { "reason": "cap-reached" }, "message":
 `queue_status` answers `runners` with every live runner, and keeps `runner` as an alias of
 the first for one release.
 
-The eighteen MCP tools, with the parameters `nightshift mcp` actually accepts:
+The twenty-three MCP tools, with the parameters `nightshift mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
 | `lesson_recall` | `query?`, `project?`, `target?`, `exclude_ids?` |
+| `context_for_phase` | `target` (`triager`, `architect`, `coder`, `qa`, `verifier`, `explore`), `query?`, `project?`, `repo_root?`, `exclude_ids?` |
 | `lesson_save` | `title`, `root_cause`, `solution`, `prevention`, `attempts?`, `project?`, `target?` |
 | `memory_recall` | `query?`, `project?` |
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |
-| `pipeline_log` | `slug`, `tier`, `outcome`, `project?`, `tier_operator?`, `tier_raise_reason?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?}]` |
+| `pipeline_log` | `outcome`, `project?`, `slug?`, `tier?`, `tier_operator?`, `tier_raise_reason?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?}]` |
 | `queue_add` | `project?`, `prompt?`, `roadmap_item_id?`, `cwd?`, `register?`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`) |
 | `queue_status` | `job_id?`, `limit?` (1-50) |
 | `queue_run` | `job_id?` |
@@ -113,12 +163,40 @@ The eighteen MCP tools, with the parameters `nightshift mcp` actually accepts:
 | `roadmap_save` | `project`, `horizon` (`now`, `next`, `later`), `title`, `detail?`, `decision_id?` |
 | `roadmap_update` | `id`, `horizon?`, `title?`, `detail?`, `status?` (`open`, `done`, `dropped`; `queued` is refused), `position?`, `decision_id?` |
 | `roadmap_get` | `project` |
+| `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `project?`, `slug?` |
+| `run_terminate` | `phase`, `reason`, `project?`, `slug?` |
+| `run_outcome` | `status` (`done`, `gate`), `notice?`, `project?`, `slug?` |
+| `run_set` | `type?`, `tier?`, `tier_raise_reason?`, `branch?`, `worktree?`, `qa_stage_a?{artifact, verdict?}`, `project?`, `slug?` |
+
+The four `run_*` tools are the only way the pipeline records its run (see the
+`state.json` list above). Inside a job each of them resolves the run from the job's
+own row, and a `project` or a `slug` sent there is REFUSED instead of silently
+overridden - naming another job's run from inside one is never an accident worth
+guessing at; outside a job both are required. A row that carries no slug yet is
+answered with the `SLUG:` line to print, never with a guessed run directory.
+`run_outcome` with `status: "done"` also closes the roadmap item the job was queued
+from, which is the same closure `queue repair` and the witness reconciliation go
+through. `context_for_phase` returns `{project, block}`: the block is
+`## Applicable lessons` + `## Project memory` (+ `## Structural index` for
+`target: "explore"`), already formatted, and is empty when there is genuinely
+nothing to inject. Inside a job it excludes the lessons this run was already given
+and asks again without the exclusion when that would leave the phase with nothing -
+`lesson_recall` does the same, so no caller keeps that bookkeeping by hand.
 
 In `pipeline_log`, `tier` is the FINAL tier the run executed, `tier_operator` is the
 tier the operator declared on the job (absent when there was none), and a run whose
 `tier_operator` differs from its `tier` is a run whose tier was raised, with the
 evidence of that raise in `tier_raise_reason`. There is no "raised" flag: it is derived
-from those two values.
+from those two values. Inside a job, `project` and `slug` come from the job's own row
+and whatever the call sent for them is overridden (not refused: an older plugin still
+sends them); `tier`, `task_type` and `tier_raise_reason` may be left out when the run
+already recorded them with `run_set`, and a `tier` neither the call nor the run
+resolves is refused naming `run_set`, before any row is written. The durations and the
+models are measured by the runtime on the stream of the job - the total from the
+attempt marker to the last message, and one lane per subagent, matched to its phase in
+the order the phases were launched - and they overwrite what the call sent. A phase the
+runtime measured no lane for keeps the value the call carried, and a phase the call
+never recorded is not inserted.
 
 The five queue tools are the same subsystem as `nightshift queue` (see [Queue](queue.md)):
 `queue_add` takes the registered project NAME and never a path - or, with
@@ -147,7 +225,11 @@ restrictions apply.
 Every optional parameter accepts an explicit `null` and treats it exactly like
 an absent one, so a caller that fills its whole argument object never gets an
 error for a field it had nothing to put in. The closed
-vocabularies are `target` (`triager`, `architect`, `coder`, `qa`, `verifier`),
+vocabularies are `target` (`triager`, `architect`, `coder`, `qa`, `verifier`, plus
+`explore` for the `target` of `context_for_phase`), the run `phase` (`triage`,
+`explore`, `architecture`, `implementation`, `qa`, `verification`, `runtime`,
+`commit`), the run `status` of `run_outcome` (`done`, `gate` - how the process
+ended stays the runtime's call),
 `tier` (`trivial`, `simple`, `complex`), `task_type` (`bug/error`,
 `feature/refactor`), `outcome` (`pr_opened`, `local_commit`, `no_commit`),
 `gate_stop` (`critique`, `triage`, `architect`, `qa`, `verification`, `runtime`,
