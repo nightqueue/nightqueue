@@ -55,6 +55,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   doing all of that by hand, so what they do is now testable from `test/`
   instead of only observable in a run. Documented in `docs/cli.md`.
 
+- `nightshift sandbox <command> [args...]` runs one command, its arguments
+  forwarded verbatim, against a throwaway `NIGHTSHIFT_HOME` and
+  `CLAUDE_CONFIG_DIR` created before the spawn and removed once it exits,
+  whatever the exit code - the same isolation `verify` gives its own checks,
+  now available for a `nightshift` command typed by hand. Stdin, stdout,
+  stderr, the rest of the environment and the current directory are inherited
+  unchanged, and the exit code is the child's own.
+
 - `nightshift queue repair <id>` re-derives the outcome of a job left in `gate`
   or `failed` from its own log and its own `state.json`, and writes the
   corrected row and witness. It is the way to settle a job that really opened a

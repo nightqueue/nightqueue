@@ -5,7 +5,7 @@ their secrets), and it drives the memory runtime.
 
 - `nightshift --help` lists every command: `setup`, `doctor`, `init`, `org`,
   `project`, `update`, `connection`, `mcp`, `hook`, `reflect`, `embed`,
-  `memory`, `queue`, `verify`, `libs`, `run` and `version`.
+  `memory`, `queue`, `verify`, `sandbox`, `libs`, `run` and `version`.
 - `nightshift --version` (same as `nightshift version`) prints the installed version
   and exits `0`.
 - Exit codes: `0` ok, `1` user error (a single line on stderr), `2` unexpected
@@ -300,7 +300,8 @@ Every check is spawned against a throwaway `NIGHTSHIFT_HOME` and
 `CLAUDE_CONFIG_DIR`, created under the system temp directory and removed when the
 command exits, so a check that itself runs `nightshift` never touches the
 operator's home. That covers the checks `verify` spawns and nothing else: a
-`nightshift` command typed by hand still needs its own throwaway home.
+`nightshift` command typed by hand still needs its own throwaway home, which
+`nightshift sandbox` provides.
 
 The last check, `diff-hygiene`, needs no script. It reads `git status --short
 --untracked-files=all` and `git diff --stat` in the current directory: the first
@@ -309,6 +310,25 @@ there is none), the scale of the change, and the check is `FAILED` when a path
 under `.claude/`, a lockfile or `tmp/` appears in the working tree, with the
 intruding paths listed under the summary. Outside a git repository the check is
 `SKIPPED`.
+
+## Sandbox
+
+```sh
+nightshift sandbox node --version   # runs `node --version` against a throwaway home
+```
+
+`nightshift sandbox <command> [args...]` runs exactly one command with a
+throwaway `NIGHTSHIFT_HOME` and `CLAUDE_CONFIG_DIR`, both created before the
+command starts and removed once it exits, whatever the exit code — the same
+isolation `verify` gives its own checks, offered for a `nightshift` command
+typed by hand. The rest of the environment and the current directory are
+inherited unchanged, and the command's own arguments are never parsed by
+`nightshift`: everything after `sandbox` is forwarded verbatim, so a flag like
+`--version` reaches the wrapped command instead of the CLI. Stdin, stdout and
+stderr are inherited, and the exit code is the child's own — 128 plus the
+signal number when the child was killed by one, or `127` with a message on
+stderr when the command itself could not be spawned (for example, an unknown
+binary).
 
 ## Libs
 

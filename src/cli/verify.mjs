@@ -1,9 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { checkArgs, fileList, parseCommand } from "./args.mjs";
 import { CHECK_ORDER, detectChecks } from "./detect.mjs";
+import { makeThrowawayHome } from "./throwaway-home.mjs";
 
 const USAGE = "nightshift verify [--scope touched|full|+poc] [--files <list>]";
 const SCOPES = new Set(["touched", "full", "+poc"]);
@@ -148,15 +146,6 @@ function chosenScope(values) {
   return scope;
 }
 
-// Creates the throwaway home every check runs against, so no check ever reaches the operator's own.
-function makeThrowawayHome() {
-  const root = mkdtempSync(join(tmpdir(), "nightshift-verify-"));
-  const env = { NIGHTSHIFT_HOME: join(root, "home"), CLAUDE_CONFIG_DIR: join(root, "claude") };
-  mkdirSync(env.NIGHTSHIFT_HOME, { recursive: true });
-  mkdirSync(env.CLAUDE_CONFIG_DIR, { recursive: true });
-  return { env, remove: () => rmSync(root, { recursive: true, force: true }) };
-}
-
 // Result of every check of the block, in the fixed order; the PoC check only runs when the caller asked for it.
 function runChecks(ctx, { checks, scope, files, env }) {
   return CHECK_ORDER.map((name) => {
@@ -194,7 +183,7 @@ export function run(argv, ctx) {
   checkArgs(positionals, { max: 0, usage: USAGE });
   const scope = chosenScope(values);
   const checks = detectChecks(ctx.cwd, { warn: (message) => ctx.err(`nightshift verify: ${message}`) });
-  const home = makeThrowawayHome();
+  const home = makeThrowawayHome("nightshift-verify-");
   try {
     const env = { ...ctx.env, ...home.env };
     const named = fileList(values);

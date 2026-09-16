@@ -179,11 +179,10 @@ This step governs a nightshift CLI/MCP command **you type yourself** (`init`, `s
 `update`, an MCP call), which `nightshift verify` never performs: `verify` already
 isolates the checks it spawns, and those are the only ones it covers.
 
-Manual acceptance of a CLI/MCP behavior runs against a throwaway home, never the
-operator's: export `NIGHTSHIFT_HOME=$(mktemp -d)` before the first command and,
-whenever the command registers the host (`init`, `setup`, `update`), export
-`CLAUDE_CONFIG_DIR=$(mktemp -d)` as well — a temporary home alone still repoints the
-operator's live Claude settings at a directory about to be deleted.
+Any manual run of a CLI/MCP command in this phase goes through `nightshift sandbox <cmd>`;
+never export a home yourself. A temporary home alone would still repoint the operator's
+live Claude settings at a directory about to be deleted — the operator's live Claude
+settings must never be repointed.
 
 - The operator's home, database, queue and Claude settings are never a test fixture:
   no job, org, project, connection or config entry is created, cancelled or deleted

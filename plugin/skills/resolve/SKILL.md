@@ -1565,11 +1565,10 @@ Relaunch the coder agent with the prompt above. After it returns, run
 `nightshift run check 04` (the artifact gate, step 5.2) before relaunching the verifier.
 
 **Manual acceptance never runs against the operator's own home.** Any manual run of a
-CLI/MCP command in this phase (and in Phase 6.5) uses a throwaway home:
-`NIGHTSHIFT_HOME=$(mktemp -d)` before the first command and, whenever the command
-registers the host (`init`, `setup`, `update`), `CLAUDE_CONFIG_DIR=$(mktemp -d)` as well —
-a temporary home alone still repoints the operator's live Claude settings at a directory
-about to be deleted. The operator's home, database, queue and Claude settings are never a
+CLI/MCP command in this phase (and in Phase 6.5) goes through `nightshift sandbox <cmd>`;
+never export a home yourself. A temporary home alone would still repoint the operator's
+live Claude settings at a directory about to be deleted — the operator's live Claude
+settings must never be repointed. The operator's home, database, queue and Claude settings are never a
 test fixture: nothing is created, cancelled or deleted there to prove that a command
 works. A verification that can only run against the real home is reported as
 `not verifiable here`, never performed.
@@ -1584,8 +1583,7 @@ works. A verification that can only run against the real home is reported as
 Runs when the change (fix OR feature) is **observable at runtime**
 (UI/screen/flow/integration). Passing tsc/lint does NOT prove that the bug is gone nor that the
 feature delivers what was asked — only executing proves it. A manual CLI/MCP run here obeys
-the isolation rule of Phase 6: throwaway `NIGHTSHIFT_HOME`, plus a throwaway
-`CLAUDE_CONFIG_DIR` when the command registers the host. Decide the path by the change:
+the isolation rule of Phase 6: it goes through `nightshift sandbox <cmd>`. Decide the path by the change:
 
 **a) A fix that depends on a backend contract/response** (field/shape/value of the API).
 MANDATORY validation: confirm the **REAL payload of the bug account** (the

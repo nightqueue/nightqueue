@@ -19,6 +19,7 @@ import * as queue from "./queue.mjs";
 import * as reflect from "./reflect.mjs";
 import * as roadmap from "./roadmap.mjs";
 import * as runCommand from "./run.mjs";
+import * as sandbox from "./sandbox.mjs";
 import * as setup from "./setup.mjs";
 import * as update from "./update.mjs";
 import * as verify from "./verify.mjs";
@@ -41,6 +42,7 @@ const COMMANDS = new Map([
   ["roadmap", roadmap.run],
   ["queue", queue.run],
   ["verify", verify.run],
+  ["sandbox", sandbox.run],
   ["libs", libs.run],
   ["run", runCommand.run],
   ["version", version.run],
@@ -50,7 +52,7 @@ const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
 const HELP_OPTIONS = new Set(["--help", "-h"]);
 
-const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "roadmap", "verify", "libs"]);
+const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "roadmap", "verify", "sandbox", "libs"]);
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
@@ -111,6 +113,7 @@ commands:
   queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written
   verify [--scope touched|full|+poc]        run the project's own checks in a fixed order, one line per check; exits 1 on any failure
   verify [--files <list>]                   narrow the checks that accept a file list to those paths (comma-separated, repeatable)
+  sandbox <command> [args...]               run one command against a throwaway NIGHTSHIFT_HOME and CLAUDE_CONFIG_DIR
   libs <name>...                            print the version of each lib INSTALLED here, read from the lockfile, never the range
   run index-save <artifact> [--project]     save the \`## File map\` and \`## Third-party libraries\` of an explore artifact in the index
   run index-save [--repo-root <path>]       index the artifact's paths relative to <path>, the repository root (default: .)
