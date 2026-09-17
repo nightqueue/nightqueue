@@ -133,12 +133,15 @@ finishes the job it is running and exits saying so.
 the home lock, in the same critical section as the prune of the dead registrations:
 `queue run`, `queue run --watch`, `queue run --job`, `queue add --run`, `queue retry --run`,
 their `--foreground` forms and the `queue_run` and `queue_retry` MCP tools. None of them is
-ever refused because another runner is live. A single-job start whose job could not be
+ever refused because another runner is live. Each runner works one job at a time; parallel
+jobs come from several runners. A single-job start whose job could not be
 claimed right now answers `waiting` with the reason and starts nothing, because its child
 would run one cycle and exit without claiming; `queue_run` and `queue_retry` answer the same
-thing as `{ "started": false, "waiting": { "reason": "cap-reached" }, "message": ... }`.
-`queue_status` answers `runners` with every live runner, and keeps `runner` as an alias of
-the first for one release.
+thing as `{ "started": false, "waiting": { "reason": "cap-reached" }, "message": ... }`, a
+reason that only happens when `queue.maxConcurrent` is set, since there is no ceiling by
+default. `queue_status` answers `runners` with every live runner, and keeps `runner` as an
+alias of the first for one release. `queue_status`, `queue_run` and `queue_retry` also answer
+`advisories`, the advisory lines described in [Queue](queue.md); they never block a start.
 
 The twenty-three MCP tools, with the parameters `nightshift mcp` actually accepts:
 

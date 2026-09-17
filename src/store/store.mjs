@@ -38,6 +38,7 @@
  * @property {(id: number, options: object) => Promise<boolean>} stampPrChecked
  * @property {() => Promise<Record<string, number>>} countsByStatus
  * @property {() => Promise<number>} countActiveJobs
+ * @property {() => Promise<{project: string, count: number}[]>} countActiveJobsByProject
  * @property {() => Promise<number|null>} firstActiveJobId
  * @property {(id: number) => Promise<boolean>} isJobActive
  * @property {(id: number, terminal: object) => Promise<boolean>} repairJobFromWitness
@@ -173,6 +174,7 @@ export const STORE_CONTRACT = Object.freeze({
     "stampPrChecked",
     "countsByStatus",
     "countActiveJobs",
+    "countActiveJobsByProject",
     "firstActiveJobId",
     "isJobActive",
     "repairJobFromWitness",
@@ -242,6 +244,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.isJobActive",
   "jobs.countsByStatus",
   "jobs.countActiveJobs",
+  "jobs.countActiveJobsByProject",
   "decisions.listDecisions",
   "decisions.getDecisionByNumber",
   "roadmap.listRoadmap",

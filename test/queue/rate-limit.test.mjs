@@ -6,12 +6,16 @@ import { ensureHome } from "../../src/config/store.mjs";
 import {
   clearOwnPause,
   clearOwnPauseIfOver,
+  fiveHourReading,
+  freshFiveHourUtilization,
   inheritablePause,
+  liveFiveHourUtilization,
   ownPauseUntilMs,
   PAUSE_GRACE_S,
   pauseFromEvent,
   pauseUntilMs,
   readOwnPause,
+  recordOwnFiveHour,
   recordOwnPause,
   resumeRequestedAt,
   WARNING_UTILIZATION,
@@ -221,6 +225,63 @@ test("a runner starting now inherits the furthest-future pause of the live runne
 
   alive.delete(second);
   assert.equal(inheritablePause(env, killImpl).pausedUntil, new Date(near).toISOString(), "a runner that is gone still handed its pause down");
+});
+
+// A five-hour reading written by hand, the shape a runner leaves in its registration.
+function fiveHourRegion(utilization, resetsAtMs) {
+  return { utilization, resetsAt: new Date(resetsAtMs).toISOString(), observedAt: new Date(resetsAtMs - 3600_000).toISOString() };
+}
+
+test("the five-hour reading of an event needs both a utilization and a reset, and dates itself in ISO", () => {
+  const now = Date.parse("2026-09-17T10:00:00.000Z");
+  assert.equal(fiveHourReading(null, now), null);
+  assert.equal(fiveHourReading({ fiveHour: { utilization: 0.86, resetsAt: null } }, now), null, "a reading with no reset was kept");
+  assert.equal(fiveHourReading({ fiveHour: { utilization: null, resetsAt: now + 3600_000 } }, now), null, "a reading with no utilization was kept");
+
+  const reading = fiveHourReading(extractRateLimitFromEventLine(line(rateLimitEvent({ fiveHour: 0.86 }))), now);
+  assert.deepEqual(reading, { utilization: 0.86, resetsAt: new Date(FIVE_HOUR_RESETS_AT_S * 1000).toISOString(), observedAt: "2026-09-17T10:00:00.000Z" });
+});
+
+test("the known five-hour utilization is the highest reading whose window has not reset, whatever else the list carries", () => {
+  const now = Date.now();
+  const readings = [fiveHourRegion(0.97, now - 1000), fiveHourRegion(0.82, now + 3600_000), fiveHourRegion(0.9, now + 60_000), { utilization: "0.99", resetsAt: new Date(now + 60_000).toISOString() }, null, "0.99"];
+  assert.equal(freshFiveHourUtilization(readings, now), 0.9);
+  assert.equal(freshFiveHourUtilization([fiveHourRegion(0.97, now - 1000), { utilization: 0.9, resetsAt: "never" }], now), null, "an expired or undated reading was known");
+  assert.equal(freshFiveHourUtilization(undefined, now), null);
+});
+
+test("the five-hour reading is a region of its own: the pause stays unarmed and the runner view never shows it", async (t) => {
+  const env = makeHome(t, "rate-limit-five-hour-region");
+  registerSelf(env);
+  await mergeOwnRunnerRecord({ dbShm: { ino: "1", dev: "2", at: "2026-09-14T00:00:00.000Z" } }, env);
+  const reading = fiveHourRegion(0.86, Date.now() + 3600_000);
+
+  const merged = await recordOwnFiveHour(reading, env);
+
+  assert.deepEqual(merged.fiveHour, reading);
+  assert.equal(merged.rateLimit, undefined, "the reading was written into the pause region");
+  assert.equal(merged.dbShm.ino, "1", "the reading dropped the witness another writer had left");
+  assert.equal(readOwnPause(env), null, "a five-hour reading read back as a pause");
+  assert.equal(Object.hasOwn(runnerView(listRunnerRecords(env)[0]), "fiveHour"), false, "the runner view exposed the reading");
+});
+
+test("the live five-hour utilization reads only runners that are still alive", (t) => {
+  const env = makeHome(t, "rate-limit-five-hour-live");
+  const alive = new Set([process.pid]);
+  const killImpl = (pid) => {
+    if (alive.has(pid)) return true;
+    throw Object.assign(new Error(`kill ESRCH ${pid}`), { code: "ESRCH" });
+  };
+  const resetsAt = Date.now() + 3600_000;
+
+  assert.equal(liveFiveHourUtilization(env, killImpl), null, "an empty registry knew a utilization");
+
+  writeRunnerRecord({ pid: process.pid, startedAt: "2026-09-14T00:00:00.000Z", mode: "drain", fiveHour: fiveHourRegion(0.81, resetsAt) }, env);
+  writeRunnerRecord({ pid: process.pid + 1, startedAt: "2026-09-14T00:01:00.000Z", mode: "drain", fiveHour: fiveHourRegion(0.97, resetsAt) }, env);
+  assert.equal(liveFiveHourUtilization(env, killImpl), 0.81, "the reading of a stale record counted");
+
+  alive.add(process.pid + 1);
+  assert.equal(liveFiveHourUtilization(env, killImpl), 0.97);
 });
 
 test("the resume stamp is an instant every runner compares its own pause against, and nothing else", (t) => {

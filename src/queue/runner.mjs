@@ -12,7 +12,19 @@ import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, re
 import { backoffMs, classifyJobResult, isTransientFailure } from "./classify.mjs";
 import { refreshMergedJobs } from "./merged.mjs";
 import { preflight } from "./preflight.mjs";
-import { clearOwnPause, inheritablePause, ownPauseUntilMs, PAUSE_POLL_MS, pauseFromEvent, pauseUntilMs, readOwnPause, recordOwnPause, resumeRequestedAt } from "./rate-limit.mjs";
+import {
+  clearOwnPause,
+  fiveHourReading,
+  inheritablePause,
+  ownPauseUntilMs,
+  PAUSE_POLL_MS,
+  pauseFromEvent,
+  pauseUntilMs,
+  readOwnPause,
+  recordOwnFiveHour,
+  recordOwnPause,
+  resumeRequestedAt,
+} from "./rate-limit.mjs";
 import { ownRunnerRecord } from "./registry.mjs";
 import { repairWarningLine } from "./reconcile.mjs";
 import { clearRunOutcome, decideResume, isSafeSegment, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
@@ -175,11 +187,24 @@ async function armPause(job, pause, env) {
   appendJobLog(job.id, `=== rate limit until ${pause.pausedUntil} @ ${new Date().toISOString()} ===`, env);
 }
 
+// Records in the registration of THIS runner the five-hour reading the stream reported, once per new value; a record that refuses the write never costs the run.
+async function noteFiveHour(facts, info, env) {
+  const reading = fiveHourReading(info);
+  if (!reading || (facts.fiveHour?.utilization === reading.utilization && facts.fiveHour?.resetsAt === reading.resetsAt)) return;
+  facts.fiveHour = reading;
+  try {
+    await recordOwnFiveHour(reading, env);
+  } catch {
+    return;
+  }
+}
+
 // Records the rate limit the stream reported and arms a pause when the event calls for one; a further pause always replaces a nearer one.
 async function captureRateLimit(job, facts, line, { env }) {
   const info = extractRateLimitFromEventLine(line);
   if (!info) return;
   facts.rateLimit = info;
+  await noteFiveHour(facts, info, env);
   const pause = pauseFromEvent(info);
   if (!pause || (facts.pause && facts.pause.pausedUntil >= pause.pausedUntil)) return;
   facts.pause = pause;
@@ -235,7 +260,7 @@ function wasRateLimitParked(job) {
 // Runs the attempts of a job, re-arming the lease before each one and backing off between retries.
 async function runAttempts(job, ctx) {
   const { env, deps } = ctx;
-  const facts = { slug: job.slug ?? null, slugDeclared: false, sessionId: job.session_id ?? null, rateLimit: null, pause: null, tierRaise: null };
+  const facts = { slug: job.slug ?? null, slugDeclared: false, sessionId: job.session_id ?? null, rateLimit: null, fiveHour: null, pause: null, tierRaise: null };
   const pauseSignalImpl = deps.pauseSignalImpl ?? (() => ownPauseUntilMs(env) ?? pauseUntilMs(facts.pause));
   const resumeForced = resumeSessionEnabled(env) || wasRateLimitParked(job);
   const ownership = { lost: false };
@@ -504,13 +529,14 @@ function dryRateLimit(env) {
 
 // Read-only report of what the cycle would do, the answer of `queue run --dry`: both reasons a claim would not happen now,
 // the sentinel the operator wrote by hand and the rate limit a runner of this home is waiting out.
-async function dryReport({ jobId, cap, env }) {
+async function dryReport({ jobId, cap, max, env }) {
   const store = openStore(env);
   return {
     dry: true,
     paused: isPaused(env),
     ...dryRateLimit(env),
     cap,
+    max,
     heartbeatS: leaseHeartbeatMs(env) / 1000,
     active: await store.jobs.countActiveJobs(),
     counts: await store.jobs.countsByStatus(),
@@ -561,21 +587,33 @@ async function waitOutRateLimitPause(jobId, ctx) {
   return waited ? "rate-limited" : null;
 }
 
-// Ceiling of jobs this process runs at the same time, never above the global ceiling of the home.
-function localLimit(max, cap) {
-  const requested = Number.isInteger(max) && max > 0 ? max : cap;
-  return Math.max(1, Math.min(requested, cap));
+// A runner works one job at a time; simultaneity comes from starting several runners, never from one.
+const RUNNER_POOL_SIZE = 1;
+
+// Counts the results that reached the agent; a job the preflight released refunded its attempt and spends no budget.
+export function agentRuns(results) {
+  return results.filter((result) => result.status !== "blocked").length;
 }
 
-// Claims and runs jobs until the queue refuses another one, respecting the ceiling inside and across processes.
+// Tells whether this run already ran every job its --max budget allows; a run with no budget never spends it.
+function budgetSpent(max, results) {
+  return Number.isInteger(max) && max > 0 && agentRuns(results) >= max;
+}
+
+// What is left of the --max budget of this run after the passes already made, or null when the run has no budget.
+function remainingBudget(max, passes) {
+  if (!Number.isInteger(max) || max <= 0) return null;
+  return max - passes.reduce((total, pass) => total + agentRuns(pass.processed), 0);
+}
+
+// Claims and runs jobs one after the other until the queue refuses another one or the --max budget is spent, respecting the ceiling across processes.
 export async function runCycle({ jobId = null, max = null, dry = false, env = process.env, deps = {} } = {}) {
   const cap = concurrencyCap(env);
-  if (dry) return await dryReport({ jobId, cap, env });
+  if (dry) return await dryReport({ jobId, cap, max, env });
   await warnRepairRefused(env);
   const ctx = { env, store: openStore(env), deps: withDefaults(deps, env), state: { stopping: false } };
   await ctx.deps.refreshMergedImpl({ env });
   const uninstall = installShutdown(ctx.state);
-  const limit = localLimit(max, cap);
   const runtime = ownRuntimeDir(env);
   const processed = [];
   const pool = new Set();
@@ -589,9 +627,13 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
         warnRuntimeGone(runtime);
         break;
       }
-      if (pool.size >= limit) {
+      if (pool.size >= RUNNER_POOL_SIZE) {
         await Promise.race(pool);
         continue;
+      }
+      if (budgetSpent(max, processed)) {
+        reason = "max-reached";
+        break;
       }
       const limited = await waitOutRateLimitPause(jobId, ctx);
       if (limited !== null) {
@@ -646,7 +688,7 @@ function waitNextPass(ms, state, sleepImpl) {
   });
 }
 
-// Repeats the cycle while the runner lives, sleeping between two passes over the queue.
+// Repeats the cycle while the runner lives, sleeping between two passes over the queue, until its --max budget is spent.
 export async function runWatch({ intervalS = WATCH_INTERVAL_DEFAULT_S, jobId = null, max = null, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {
   const options = withDefaults(deps, env);
   const state = { stopping: false };
@@ -654,10 +696,12 @@ export async function runWatch({ intervalS = WATCH_INTERVAL_DEFAULT_S, jobId = n
   const passes = [];
   try {
     while (!state.stopping && (cycles === null || passes.length < cycles)) {
-      const pass = await runCycle({ jobId, max, env, deps: options });
+      const budget = remainingBudget(max, passes);
+      if (budget !== null && budget <= 0) break;
+      const pass = await runCycle({ jobId, max: budget, env, deps: options });
       passes.push(pass);
       onCycle(pass);
-      if (state.stopping || pass.reason === "runtime-gone" || (cycles !== null && passes.length >= cycles)) break;
+      if (state.stopping || pass.reason === "runtime-gone" || pass.reason === "max-reached" || (cycles !== null && passes.length >= cycles)) break;
       await waitNextPass(Math.max(1, Number(intervalS) || WATCH_INTERVAL_DEFAULT_S) * 1000, state, options.sleepImpl);
     }
   } finally {
@@ -668,12 +712,12 @@ export async function runWatch({ intervalS = WATCH_INTERVAL_DEFAULT_S, jobId = n
 
 export const DRAIN_INTERVAL_S = 15;
 
-// Reasons of a cycle after which a drain has nothing left to do: the queue is empty, paused, the cycle was told to stop, or the tree it runs from is gone.
-const DRAIN_DONE_REASONS = new Set(["empty-queue", "paused", "already-tried", "runtime-gone"]);
+// Reasons of a cycle after which a drain has nothing left to do: the queue is empty, paused, the cycle was told to stop, the --max budget is spent, or the tree it runs from is gone.
+const DRAIN_DONE_REASONS = new Set(["empty-queue", "paused", "already-tried", "runtime-gone", "max-reached"]);
 // Reasons the drain keeps waiting on: the pending job is held back by something the operator, another runner or the provider will clear.
 const DRAIN_WAIT_REASONS = new Set(["blocked", "cap-reached", "rate-limited"]);
 
-// Runs cycles until the queue has nothing pending, waiting between passes while the pending jobs are held back by a preflight block or the concurrency cap - what "run the queue" means to an operator.
+// Runs cycles until the queue has nothing pending or the --max budget is spent (a job the preflight releases spends none), waiting between passes while the pending jobs are held back by a preflight block or the concurrency cap - what "run the queue" means to an operator.
 export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {
   const options = withDefaults(deps, env);
   const state = { stopping: false };
@@ -681,7 +725,9 @@ export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env =
   const passes = [];
   try {
     while (!state.stopping && (cycles === null || passes.length < cycles)) {
-      const pass = await runCycle({ max, env, deps: options });
+      const budget = remainingBudget(max, passes);
+      if (budget !== null && budget <= 0) break;
+      const pass = await runCycle({ max: budget, env, deps: options });
       passes.push(pass);
       onCycle(pass);
       if (pass.stopped || DRAIN_DONE_REASONS.has(pass.reason)) break;

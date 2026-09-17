@@ -1,4 +1,4 @@
-import { pauseUntilMs } from "./rate-limit.mjs";
+import { CROWDED_WINDOW_UTILIZATION, pauseUntilMs } from "./rate-limit.mjs";
 
 // How each window of the provider reads in a line the operator sees; a limit the event did not name is simply a rate limit.
 const WINDOW_LABELS = new Map([
@@ -24,6 +24,30 @@ export function runnersOnline(count) {
 // The sentence every hint closes with when no runner is live: pending jobs wait for a drain.
 export function noRunnerWait() {
   return `${runnersOnline(0)} - pending jobs will wait until \`nightshift queue run\` starts one`;
+}
+
+// The warning for a five-hour window close to its limit while runners are live, or null when it does not apply.
+function crowdedWindowLine(fiveHourUtilization, runnerCount) {
+  if (!Number.isFinite(fiveHourUtilization) || fiveHourUtilization < CROWDED_WINDOW_UTILIZATION || runnerCount < 1) return null;
+  const runners = `${runnerCount} runner${runnerCount === 1 ? "" : "s"} active`;
+  return `5h window at ${Math.round(fiveHourUtilization * 100)}% · ${runners} — another runner will likely hit the limit before finishing`;
+}
+
+// The warning for every repository two or more runners are working at once, in the order given.
+function crowdedProjectLines(activeByProject) {
+  return (Array.isArray(activeByProject) ? activeByProject : [])
+    .filter((entry) => Number.isInteger(entry?.count) && entry.count >= 2)
+    .map(
+      ({ project, count }) =>
+        `${count} runners on \`${project}\` — parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output`,
+    );
+}
+
+// The advisory lines of the queue right now: a five-hour window close to its limit while runners are live, and every repository two or more runners are working at once.
+export function advisoryLines({ runners, fiveHourUtilization = null, activeByProject = [] } = {}) {
+  const runnerCount = Array.isArray(runners) ? runners.length : 0;
+  const windowLine = crowdedWindowLine(fiveHourUtilization, runnerCount);
+  return [...(windowLine === null ? [] : [windowLine]), ...crowdedProjectLines(activeByProject)];
 }
 
 // Two digits of a clock component, so `3:7` never reaches a line.

@@ -5,8 +5,9 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { queuePausedPath } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
-import { addJob, countActiveJobs, getJob } from "../../src/memory/jobs.mjs";
+import { addJob, claimJobById, countActiveJobs, getJob, releaseJob } from "../../src/memory/jobs.mjs";
 import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, resumeSessionEnabled, workerId } from "../../src/queue/claim.mjs";
+import { openStore } from "../../src/store/open.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const CLAIMER = fileURLToPath(new URL("../../test-support/queue-claimer.mjs", import.meta.url));
@@ -43,13 +44,10 @@ function claimerAsync(env, { cap, jobId = "any", startAt }) {
   });
 }
 
-// Races two claimer processes over the same queue and returns what each one got.
-async function raceClaimers(env, { cap, jobId = "any" }) {
+// Races `count` claimer processes over the same queue and returns what each one got.
+async function raceClaimers(env, { cap, jobId = "any", count = 2 }) {
   const startAt = Date.now() + BARRIER_MS;
-  const results = await Promise.all([
-    claimerAsync(env, { cap, jobId, startAt }),
-    claimerAsync(env, { cap, jobId, startAt }),
-  ]);
+  const results = await Promise.all(Array.from({ length: count }, () => claimerAsync(env, { cap, jobId, startAt })));
   return results.map((result) => {
     assert.equal(result.code, 0, `claimer exited ${result.code}: ${result.stderr}`);
     return JSON.parse(result.stdout.trim());
@@ -97,6 +95,23 @@ test("the ceiling holds ACROSS processes: with maxConcurrent 1 the second runner
   assert.equal(countActiveJobs(env), 1);
 });
 
+test("with no ceiling configured, N runner processes over N claimable jobs of distinct projects all claim", async (t) => {
+  const env = makeQueue(t, "claim-no-ceiling");
+  makeProject(t, env, "gamma");
+  const ids = [enqueue(env, "fix the worker"), enqueue(env, "fix the parser", "beta"), enqueue(env, "fix the linter", "gamma")];
+  assert.equal(concurrencyCap(env), null, "the test home should carry no ceiling");
+  const claims = await raceClaimers(env, { cap: "config", count: 3 });
+
+  assert.deepEqual(
+    claims.map((claim) => claim.id).sort((a, b) => a - b),
+    ids,
+    `every runner process should have taken one job: ${JSON.stringify(claims)}`,
+  );
+  assert.equal(new Set(claims.map((claim) => claim.worker)).size, 3, `two jobs were claimed by the same worker id: ${JSON.stringify(claims)}`);
+  assert.equal(claims.some((claim) => claim.reason === "cap-reached"), false, `a claim without a ceiling was refused as cap-reached: ${JSON.stringify(claims)}`);
+  assert.equal(countActiveJobs(env), 3);
+});
+
 test("acquire explains every refusal instead of just returning nothing", async (t) => {
   const env = makeQueue(t, "claim-reasons");
   assert.deepEqual(await acquire({ cap: 1, env }), { job: null, reason: "empty-queue" });
@@ -106,6 +121,35 @@ test("acquire explains every refusal instead of just returning nothing", async (
   assert.equal((await acquire({ cap: 1, env })).job.id, id);
   assert.deepEqual(await acquire({ cap: 1, env }), { job: null, reason: "cap-reached" });
   assert.deepEqual(await acquire({ jobId: id, cap: 4, env }), { job: null, reason: "not-pending" });
+});
+
+test("without a ceiling a claim that gets nothing is never explained as cap-reached", async (t) => {
+  const env = makeQueue(t, "claim-no-ceiling");
+  assert.deepEqual(await acquire({ cap: null, env }), { job: null, reason: "empty-queue" });
+  const first = enqueue(env);
+  const second = enqueue(env);
+  assert.equal((await acquire({ cap: null, env })).job.id, first);
+  assert.equal((await acquire({ cap: null, env })).job.id, second, "a claim with no ceiling stopped at the active job");
+  assert.deepEqual(await acquire({ cap: null, env }), { job: null, reason: "empty-queue" });
+  assert.deepEqual(await acquire({ jobId: first, cap: null, env }), { job: null, reason: "not-pending" });
+});
+
+test("without a ceiling a job that another runner held and gave back before the reread is explained as claim-raced", async (t) => {
+  const env = makeQueue(t, "claim-no-ceiling-raced");
+  const id = enqueue(env);
+  assert.equal(claimJobById(id, { worker: "ghost-worker", cap: null }, env).id, id);
+  const store = openStore(env);
+  const realGetJob = store.jobs.getJob;
+  store.jobs.getJob = async (jobId) => {
+    releaseJob(id, { worker: "ghost-worker", result: null }, env);
+    return realGetJob(jobId);
+  };
+  t.after(() => {
+    store.jobs.getJob = realGetJob;
+  });
+
+  assert.deepEqual(await acquire({ jobId: id, cap: null, env }), { job: null, reason: "claim-raced" });
+  assert.equal(getJob(id, env).status, "pending");
 });
 
 test("the pause sentinel stops the queue, but never an explicit `--job`", async (t) => {
@@ -121,9 +165,9 @@ test("the pause sentinel stops the queue, but never an explicit `--job`", async 
   assert.equal(isPaused(env), false);
 });
 
-test("the ceiling and the resume switch come from the configuration, fail-closed on anything else", (t) => {
+test("the ceiling and the resume switch come from the configuration; anything but a positive ceiling means no ceiling", (t) => {
   const env = makeQueue(t, "claim-config");
-  assert.equal(concurrencyCap(env), 2);
+  assert.equal(concurrencyCap(env), null);
   assert.equal(resumeSessionEnabled(env), false);
 
   const config = loadConfig(env, { warn: () => {} });
@@ -132,7 +176,7 @@ test("the ceiling and the resume switch come from the configuration, fail-closed
   assert.equal(resumeSessionEnabled(env), true);
 
   saveConfig({ ...config, queue: { maxConcurrent: 0, resumeSession: "true" } }, env);
-  assert.equal(concurrencyCap(env), 2, "a broken ceiling did not fall back to the normalized default");
+  assert.equal(concurrencyCap(env), null, "a broken ceiling became a ceiling");
   assert.equal(resumeSessionEnabled(env), false);
 });
 

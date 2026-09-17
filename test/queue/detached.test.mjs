@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { homeDir, runnerRegistryPath, runnersDir } from "../../src/config/paths.mjs";
-import { ensureHome } from "../../src/config/store.mjs";
+import { ensureHome, loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
@@ -36,13 +36,16 @@ function fakeKill(alive) {
 }
 
 // Runs the CLI in this process, with the spawn and the kill of the test injected.
-async function runCli(env, argv, { calls = [], alive = new Set(), spawnImpl = null } = {}) {
+async function runCli(env, argv, { calls = [], alive = new Set(), spawnImpl = null, onOut = () => {} } = {}) {
   const out = [];
   const err = [];
   const ctx = {
     ...defaultContext(),
     env,
-    out: (line) => out.push(line),
+    out: (line) => {
+      out.push(line);
+      onOut(line);
+    },
     err: (line) => err.push(line),
     spawnImpl: spawnImpl ?? fakeSpawn(calls),
     killImpl: fakeKill(alive),
@@ -292,6 +295,7 @@ test("queue status never answers `stopped` for a registry it could not read, and
 
 test("a single-job start that would claim nothing reports what it waits for, spawns nothing and leaves the job pending", async (t) => {
   const env = makeQueueHome(t, "detached-waiting");
+  saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent: 2 } }, env);
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   for (const prompt of ["hold the first slot", "hold the second slot"]) {
     claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: 4 }, env);
@@ -301,7 +305,11 @@ test("a single-job start that would claim nothing reports what it waits for, spa
   const waiting = await runCli(env, ["queue", "run", "--job", String(id)], { calls });
 
   assert.equal(waiting.code, 0, waiting.stderr);
-  assert.deepEqual(waiting.out, [`job #${id} waiting: concurrency cap reached`, "2 of 2 jobs already running"]);
+  assert.deepEqual(waiting.out, [
+    `job #${id} waiting: concurrency cap reached`,
+    "2 of 2 jobs already running",
+    "2 runners on `alpha` — parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output",
+  ]);
   assert.deepEqual(calls, [], "a start that claims nothing spawned a runner anyway");
   assert.equal(existsSync(runnersDir(env)), false, "a start that spawned nothing still registered a runner");
   assert.equal(getJob(id, env).status, "pending");
@@ -313,6 +321,107 @@ test("a single-job start that would claim nothing reports what it waits for, spa
   const watching = await runCli(env, ["queue", "run", "--watch", "5"], { calls });
   assert.equal(watching.code, 0, watching.stderr);
   assert.match(watching.stdout, /^runner started/, "a watcher refused to start under a full ceiling, which is exactly what it is there to wait out");
+  assert.deepEqual(watching.out.slice(1), [ALPHA_ADVISORY], "the start did not echo the advisory once, after its own line");
+});
+
+const ALPHA_ADVISORY =
+  "2 runners on `alpha` — parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output";
+
+test("queue status prints the advisory lines right after the runner lines, and `--json` carries them", async (t) => {
+  const env = makeQueueHome(t, "detached-status-advisories");
+  const resetsAt = new Date(Date.now() + 3600_000).toISOString();
+  writeRunnerRecord({ pid: process.pid, startedAt: "2026-09-08T21:04:11.000Z", mode: "drain", fiveHour: { utilization: 0.86, resetsAt, observedAt: new Date().toISOString() } }, env);
+  const alive = new Set([process.pid]);
+  addJob({ project: "alpha", prompt: "fix the worker" }, env);
+
+  const window = await runCli(env, ["queue", "status"], { alive });
+  assert.equal(window.code, 0, window.stderr);
+  assert.equal(window.out[0], "1 runner online");
+  assert.match(window.out[1], /^runner: running/);
+  assert.equal(window.out[2], "5h window at 86% · 1 runner active — another runner will likely hit the limit before finishing");
+  assert.equal(window.out.filter((line) => line.startsWith("5h window")).length, 1, "the advisory line was printed more than once");
+  assert.match(window.stdout, /#1\s+○ pending\s+-\s+-\s+alpha/, "the table went missing after the advisory line");
+
+  for (const prompt of ["hold the first slot", "hold the second slot"]) {
+    claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: null }, env);
+  }
+  const both = await runCli(env, ["queue", "status"], { alive });
+  assert.deepEqual(both.out.slice(2, 4), ["5h window at 86% · 1 runner active — another runner will likely hit the limit before finishing", ALPHA_ADVISORY]);
+
+  const payload = JSON.parse((await runCli(env, ["queue", "status", "--json"], { alive })).stdout);
+  assert.deepEqual(payload.advisories, ["5h window at 86% · 1 runner active — another runner will likely hit the limit before finishing", ALPHA_ADVISORY]);
+  assert.equal(Object.hasOwn(payload.runners[0], "fiveHour"), false, "the runner view exposed the five-hour reading");
+
+  const quiet = JSON.parse((await runCli(makeQueueHome(t, "detached-status-no-advisories"), ["queue", "status", "--json"])).stdout);
+  assert.deepEqual(quiet.advisories, []);
+});
+
+test("a foreground start echoes the advice once, on stderr under `--json`, so stdout still parses", async (t) => {
+  const env = makeQueueHome(t, "detached-foreground-json-advisories");
+  for (const prompt of ["hold the first slot", "hold the second slot"]) {
+    claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: null }, env);
+  }
+
+  const json = await runCli(env, ["queue", "run", "--foreground", "--json"]);
+  assert.equal(json.code, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).reason, "empty-queue", "stdout of `--json` stopped being one json document");
+  assert.deepEqual(json.err, [ALPHA_ADVISORY]);
+
+  const text = await runCli(env, ["queue", "run", "--foreground"]);
+  assert.equal(text.code, 0, text.stderr);
+  assert.equal(text.out[0], ALPHA_ADVISORY, "the text start did not echo the advice before its report");
+  assert.equal(text.out.filter((line) => line === ALPHA_ADVISORY).length, 1, "the advice was echoed more than once");
+});
+
+// Holds two live leases on `alpha`, the crowd that makes every start echo the per-project advice.
+function holdTwoAlphaLeases(env) {
+  for (const prompt of ["hold the first slot", "hold the second slot"]) {
+    claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: null }, env);
+  }
+}
+
+// Asserts the advice of a `--json` run went to stderr exactly once and never to stdout.
+function assertAdviceOnStderrOnly(ran) {
+  assert.equal(ran.code, 0, ran.stderr);
+  assert.equal(ran.out.includes(ALPHA_ADVISORY), false, `the advice landed on the stdout of a --json run: ${ran.stdout}`);
+  assert.equal(ran.err.filter((line) => line === ALPHA_ADVISORY).length, 1, `the advice was not echoed once on stderr: ${ran.stderr}`);
+}
+
+test("a foreground `--drain --json` run echoes the advice on stderr, never on stdout", async (t) => {
+  const env = makeQueueHome(t, "detached-foreground-drain-json-advisories");
+  holdTwoAlphaLeases(env);
+
+  const ran = await runCli(env, ["queue", "run", "--foreground", "--drain", "--json"]);
+
+  assertAdviceOnStderrOnly(ran);
+  assert.deepEqual(ran.out, ["queue: nothing to run (empty-queue)"]);
+});
+
+test("a foreground `--watch --json` run echoes the advice on stderr, never on stdout", async (t) => {
+  const env = makeQueueHome(t, "detached-foreground-watch-json-advisories");
+  holdTwoAlphaLeases(env);
+  const stopAfterFirstPass = (line) => (line.startsWith("queue: nothing to run") ? process.emit("SIGTERM") : undefined);
+
+  const ran = await runCli(env, ["queue", "run", "--foreground", "--watch", "5", "--json"], { onOut: stopAfterFirstPass });
+
+  assertAdviceOnStderrOnly(ran);
+  assert.deepEqual(ran.out, ["queue: nothing to run (empty-queue)"]);
+});
+
+test("a `queue retry --run --foreground --json` echoes the advice on stderr, and stdout opens with the job json", async (t) => {
+  const env = makeQueueHome(t, "detached-retry-foreground-json-advisories");
+  saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent: 2 } }, env);
+  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  holdTwoAlphaLeases(env);
+  const cancelled = await runCli(env, ["queue", "cancel", String(id), "--reason", "not needed"]);
+  assert.equal(cancelled.code, 0, cancelled.stderr);
+
+  const ran = await runCli(env, ["queue", "retry", String(id), "--run", "--foreground", "--json"]);
+
+  assert.equal(ran.out.includes(ALPHA_ADVISORY), false, `the advice landed on the stdout of a --json run: ${ran.stdout}`);
+  assert.deepEqual(ran.err, [ALPHA_ADVISORY]);
+  assert.equal(JSON.parse(ran.out[0]).job.id, id, "stdout of the retry no longer opens with its json");
+  assert.equal(getJob(id, env).status, "pending", "the held ceiling let the retried job run");
 });
 
 test("`--foreground` never spawns anything, and `--dry` keeps reporting without a runner", async (t) => {

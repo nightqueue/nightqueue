@@ -159,6 +159,7 @@ test("queue add --run --foreground exits 1 on any outcome other than done, and w
   assert.match(gated.stdout, /job #1 gate/);
   assert.equal(getJob(1, env).status, "gate");
 
+  saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent: 2 } }, env);
   for (const prompt of ["hold the first slot", "hold the second slot"]) {
     claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: 4 }, env);
   }

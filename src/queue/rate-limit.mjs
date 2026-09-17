@@ -4,6 +4,8 @@ import { listRunnerRecords, mergeOwnRunnerRecord, ownRunnerRecord, updateOwnRunn
 
 // Utilization of the FIVE-HOUR window from which a warning is already worth waiting out; the seven-day one is reported and never acted on.
 export const WARNING_UTILIZATION = 0.95;
+// Utilization of the five-hour window from which another runner is advised against; a warning, never a gate.
+export const CROWDED_WINDOW_UTILIZATION = 0.8;
 // Slack added to the reset the provider announced, so a runner never wakes a second too early.
 export const PAUSE_GRACE_S = 60;
 // Longest slice of a pause a runner sleeps in one go, so a shutdown signal or a resume is noticed while it waits.
@@ -70,6 +72,39 @@ export function ownPauseUntilMs(env = process.env, now = Date.now()) {
 // Writes the pause into the registration of THIS runner, the only file a runner ever writes its own transient state into.
 export async function recordOwnPause(pause, env = process.env) {
   return await mergeOwnRunnerRecord({ rateLimit: pause }, env);
+}
+
+// The five-hour reading one rate limit event carries, or null when it names no utilization or no reset to date it by.
+export function fiveHourReading(info, now = Date.now()) {
+  const window = info?.fiveHour;
+  if (!Number.isFinite(window?.utilization) || !Number.isFinite(window?.resetsAt)) return null;
+  return { utilization: window.utilization, resetsAt: new Date(window.resetsAt).toISOString(), observedAt: new Date(now).toISOString() };
+}
+
+// Writes the latest five-hour reading into the registration of THIS runner, a region of its own that no pause decision reads.
+export async function recordOwnFiveHour(reading, env = process.env) {
+  return await mergeOwnRunnerRecord({ fiveHour: reading }, env);
+}
+
+// Tells whether a five-hour reading is well formed and its window has not reset yet.
+function isFreshReading(reading, now) {
+  if (!reading || typeof reading !== "object" || !Number.isFinite(reading.utilization)) return false;
+  const resetsAt = Date.parse(String(reading.resetsAt ?? ""));
+  return Number.isFinite(resetsAt) && resetsAt > now;
+}
+
+// The highest five-hour utilization among readings whose window has not reset yet, or null when none is known.
+export function freshFiveHourUtilization(readings, now = Date.now()) {
+  const fresh = (Array.isArray(readings) ? readings : []).filter((reading) => isFreshReading(reading, now));
+  return fresh.length ? Math.max(...fresh.map((reading) => reading.utilization)) : null;
+}
+
+// The five-hour utilization of this home right now: the highest fresh reading among its live runners, or null when none carries one.
+export function liveFiveHourUtilization(env = process.env, killImpl = undefined) {
+  const readings = listRunnerRecords(env, killImpl)
+    .filter((record) => record.status === "alive")
+    .map((record) => record.info?.fiveHour);
+  return freshFiveHourUtilization(readings);
 }
 
 // Tells whether two records of a pause are the same one: the instant it was armed at and the instant it runs until.

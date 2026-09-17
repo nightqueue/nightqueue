@@ -44,8 +44,15 @@ test("normalizeConfig fills defaults over a partial, hand-edited file", () => {
   assert.equal(config.orgs.acme.displayName, "acme");
   assert.deepEqual({ ...config.orgs.acme.connections }, { github: null });
   assert.deepEqual(config.projects.api, { path: "/tmp/api", org: "acme" });
-  assert.deepEqual(config.queue, { maxConcurrent: 2, resumeSession: false, leaseHeartbeatS: 5 });
-  assert.deepEqual(emptyConfig().queue, { maxConcurrent: 2, resumeSession: false, leaseHeartbeatS: 5 });
+  assert.deepEqual(config.queue, { maxConcurrent: null, resumeSession: false, leaseHeartbeatS: 5 });
+  assert.deepEqual(emptyConfig().queue, { maxConcurrent: null, resumeSession: false, leaseHeartbeatS: 5 });
+});
+
+test("queue.maxConcurrent is an opt-in ceiling: only a positive integer sets one", () => {
+  assert.equal(normalizeConfig({ queue: { maxConcurrent: 3 } }).queue.maxConcurrent, 3);
+  for (const raw of [0, -1, "2", 1.5, null, undefined]) {
+    assert.equal(normalizeConfig({ queue: { maxConcurrent: raw } }).queue.maxConcurrent, null, `\`${String(raw)}\` became a ceiling`);
+  }
 });
 
 test("the answer to the semantic recall is remembered only as a decline, and an old file simply has none", () => {

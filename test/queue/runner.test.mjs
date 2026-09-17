@@ -10,7 +10,7 @@ import { addJob, claimJobById, countsByStatus, getJob } from "../../src/memory/j
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { clearOwnPause, PAUSE_GRACE_S, readOwnPause } from "../../src/queue/rate-limit.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
-import { DRAIN_INTERVAL_S, runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../../src/queue/runner.mjs";
+import { agentRuns, DRAIN_INTERVAL_S, runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../../src/queue/runner.mjs";
 import { provisionalSlug } from "../../src/queue/spawn.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
@@ -35,6 +35,19 @@ function countingGit(env, sink) {
   const git = fakeGit();
   return (call) => {
     if (call.args[0] === "status") sink.push(openDb(env).prepare("SELECT COUNT(*) AS n FROM jobs WHERE status = 'running'").get().n);
+    return git(call);
+  };
+}
+
+// A git double whose checkout is dirty at the first preflight only, as if the operator cleaned it while the drain waited.
+function dirtyOnceGit() {
+  const dirty = fakeGit({ status: " M src/a.mjs" });
+  const clean = fakeGit();
+  let first = true;
+  return (call) => {
+    if (call.args[0] !== "status") return clean(call);
+    const git = first ? dirty : clean;
+    first = false;
     return git(call);
   };
 }
@@ -431,19 +444,23 @@ test("a shutdown signal stops the claiming and gives the running job back to the
   assert.deepEqual(JSON.parse(row.result), { interrupted: true });
 });
 
-test("one cycle runs two jobs of DIFFERENT projects at the same time while the ceiling allows it", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-parallel", [{ stdout: doneStream(), holdMs: 600, exitCode: 0 }], {
-    projects: ["alpha", "beta"],
-  });
-  enqueue(env, { prompt: "fix the worker" });
-  enqueue(env, { project: "beta", prompt: "fix the parser" });
-  const active = [];
+test("one cycle runs two jobs of DIFFERENT projects strictly one after the other, whatever the ceiling", async (t) => {
+  for (const maxConcurrent of [null, 3]) {
+    const name = `runner-one-job-${maxConcurrent ?? "default"}`;
+    const { env } = makeRunnerHome(t, name, [{ stdout: doneStream(), holdMs: 600, exitCode: 0 }], {
+      projects: ["alpha", "beta"],
+    });
+    if (maxConcurrent !== null) saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent } }, env);
+    enqueue(env, { prompt: "fix the worker" });
+    enqueue(env, { project: "beta", prompt: "fix the parser" });
+    const active = [];
 
-  const cycle = await runCycle({ env, deps: { gitImpl: countingGit(env, active) } });
+    const cycle = await runCycle({ env, deps: { gitImpl: countingGit(env, active) } });
 
-  assert.deepEqual(cycle.processed.map((job) => job.status), ["done", "done"]);
-  assert.deepEqual(active, [1, 2], "the second job waited for the first one instead of running beside it");
-  assert.equal(countsByStatus(env).done, 2);
+    assert.deepEqual(cycle.processed.map((job) => job.status), ["done", "done"]);
+    assert.deepEqual(active, [1, 1], "the second job started before the first one finished");
+    assert.equal(countsByStatus(env).done, 2);
+  }
 });
 
 test("one cycle sweeps the merged pull requests exactly once, and `--dry` never sweeps at all", async (t) => {
@@ -504,7 +521,10 @@ test("a cycle that has nothing to claim reports why, and a dry cycle never write
 
   const id = enqueue(env);
   const report = await runCycle({ dry: true, env });
-  assert.deepEqual({ dry: report.dry, paused: report.paused, cap: report.cap, active: report.active, next: report.next }, { dry: true, paused: false, cap: 2, active: 0, next: id });
+  assert.deepEqual(
+    { dry: report.dry, paused: report.paused, cap: report.cap, max: report.max, active: report.active, next: report.next },
+    { dry: true, paused: false, cap: null, max: null, active: 0, next: id },
+  );
   assert.equal(getJob(id, env).status, "pending", "the dry cycle claimed a job");
   assert.equal(fakeCalls(planPath).length, 0);
 
@@ -673,4 +693,69 @@ test("a drain waits on a job the preflight gave back instead of exiting, so the 
   assert.deepEqual(slept, [DRAIN_INTERVAL_S * 1000]);
   assert.equal(getJob(id, env).status, "pending");
   assert.match(String(getJob(id, env).result), /dirty-checkout/);
+});
+
+test("`--max` is a budget for the run: the drain stops after n jobs and leaves the rest pending", async (t) => {
+  const attempts = [1, 2, 3].map(() => ({ stdout: doneStream(), exitCode: 0 }));
+  const { env } = makeRunnerHome(t, "runner-max-drain", attempts);
+  const ids = [1, 2, 3].map((n) => enqueue(env, { prompt: `fix the worker ${n}` }));
+  const seen = [];
+  const slept = [];
+
+  await runDrain({ max: 2, env, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
+
+  assert.deepEqual(ids.map((id) => getJob(id, env).status), ["done", "done", "pending"]);
+  assert.equal(seen.at(-1), "max-reached", seen.join(","));
+  assert.deepEqual(slept, [], "a drain that spent its budget still went to sleep");
+
+  const home = makeRunnerHome(t, "runner-max-cycle", attempts);
+  enqueue(home.env, { prompt: "fix the worker" });
+  enqueue(home.env, { prompt: "fix the parser" });
+  const cycle = await runCycle({ max: 1, env: home.env, deps: { gitImpl: fakeGit() } });
+  assert.equal(cycle.processed.length, 1);
+  assert.equal(cycle.reason, "max-reached");
+});
+
+test("a job the preflight releases spends no --max budget: the drain waits on it and still runs n jobs that reach the agent", async (t) => {
+  const attempts = [1, 2, 3].map(() => ({ stdout: doneStream(), exitCode: 0 }));
+  const { env } = makeRunnerHome(t, "runner-max-released", attempts);
+  const [a, b, c] = ["a", "b", "c"].map((name) => enqueue(env, { prompt: `fix the worker ${name}` }));
+  const seen = [];
+  const slept = [];
+
+  const passes = await runDrain({ max: 2, cycles: 3, env, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: dirtyOnceGit(), sleepImpl: async (ms) => slept.push(ms) } });
+
+  assert.deepEqual(seen, ["blocked", "max-reached"]);
+  assert.deepEqual(passes[0].processed.map((result) => result.status), ["blocked"]);
+  assert.deepEqual(passes[1].processed.map((result) => result.status), ["done", "done"]);
+  assert.deepEqual(slept, [DRAIN_INTERVAL_S * 1000]);
+  assert.deepEqual([a, b, c].map((id) => getJob(id, env).status), ["done", "done", "pending"]);
+  assert.equal(getJob(a, env).attempts, 1, "a released job kept the attempt the preflight should have refunded");
+
+  const dirty = makeRunnerHome(t, "runner-max-dirty", attempts);
+  const id = enqueue(dirty.env);
+  const dirtySeen = [];
+  await runDrain({ max: 2, cycles: 2, env: dirty.env, onCycle: (pass) => dirtySeen.push(pass.reason), deps: { gitImpl: fakeGit({ status: " M src/a.mjs" }), sleepImpl: async () => {} } });
+  assert.deepEqual(dirtySeen, ["blocked", "blocked"], "a dirty checkout spent the --max budget");
+  assert.equal(getJob(id, dirty.env).status, "pending");
+});
+
+test("a watcher with --max exits once its budget is spent", async (t) => {
+  const attempts = [1, 2].map(() => ({ stdout: doneStream(), exitCode: 0 }));
+  const { env } = makeRunnerHome(t, "runner-max-watch", attempts);
+  enqueue(env, { prompt: "fix the worker" });
+  enqueue(env, { prompt: "fix the parser" });
+
+  const passes = await runWatch({ max: 1, intervalS: 7, env, cycles: 5, deps: { gitImpl: fakeGit(), sleepImpl: async () => {} } });
+
+  assert.equal(passes.at(-1).reason, "max-reached");
+  assert.equal(countsByStatus(env).done, 1);
+  assert.equal(countsByStatus(env).pending, 1);
+  assert.ok(passes.length < 5, `the watcher kept going for ${passes.length} passes`);
+});
+
+test("only a job the preflight released stays out of the --max budget", () => {
+  const results = ["done", "failed", "gate", "interrupted", "rate-limited", "lost", "error", "unrecorded", "blocked"].map((status, id) => ({ id, status }));
+
+  assert.equal(agentRuns(results), 8);
 });

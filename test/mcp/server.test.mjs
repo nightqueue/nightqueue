@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { homeDir, queuePausedPath, runnersDir } from "../../src/config/paths.mjs";
+import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
@@ -733,6 +734,7 @@ test("queue_run comes back at once with the log of the detached runner, inside t
   assert.equal(Number.isInteger(started.pid), true, `no pid: ${JSON.stringify(started)}`);
   assert.equal(started.logPath.startsWith(join(homeDir(env), "logs")), true, `the runner logs outside the home: ${started.logPath}`);
   assert.match(started.logPath, /runner-\d{8}T\d{6}Z\.log$/);
+  assert.deepEqual(started.advisories, [], "a start with nothing to warn about answered advice anyway");
 
   const tool = (await client.listTools()).tools.find((entry) => entry.name === "queue_run");
   assert.ok(
@@ -741,11 +743,17 @@ test("queue_run comes back at once with the log of the detached runner, inside t
   );
   assert.ok(tool.description.includes("DETACHED"), "the tool does not say the runner is detached");
   assert.ok(tool.description.includes("nightshift queue run --stop"), "the tool does not say how a watcher is stopped");
+  assert.ok(tool.description.includes("Each runner works one job at a time"), "the tool does not say a runner works one job at a time");
+  assert.ok(tool.description.includes("`advisories`"), "the tool does not name the advisories it answers");
 });
+
+const ALPHA_ADVISORY =
+  "2 runners on `alpha` — parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output";
 
 test("queue_run and queue_retry start nothing when the ceiling is full, and say what the job is waiting for", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-run-waiting");
   rmSync(queuePausedPath(env), { force: true });
+  saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent: 2 } }, env);
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   for (const prompt of ["hold the first slot", "hold the second slot"]) {
     claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: 4 }, env);
@@ -761,10 +769,16 @@ test("queue_run and queue_retry start nothing when the ceiling is full, and say 
   assert.match(started.message, /job #1 waiting: concurrency cap reached; 2 of 2 jobs already running/);
   assert.match(started.message, new RegExp(`a live runner \\(pid ${process.pid}, drain\\) will pick it up`));
   assert.equal(existsSync(join(homeDir(env), "logs")), false, "a start that claims nothing opened the log of a runner nobody started");
+  assert.deepEqual(started.advisories, [ALPHA_ADVISORY], "a waiting start did not answer the advice of the two live alpha leases");
+
+  const status = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.deepEqual(status.advisories, [ALPHA_ADVISORY]);
+  assert.ok(status.hint.endsWith(` ${ALPHA_ADVISORY}`), `the hint does not end with the advisory line: ${status.hint}`);
 
   assert.equal(payloadOf(await client.callTool({ name: "queue_cancel", arguments: { job_id: id, reason: "not needed" } })).ok, true);
   const retried = payloadOf(await client.callTool({ name: "queue_retry", arguments: { job_id: id, run: true } }));
   assert.deepEqual({ started: retried.started, reason: retried.waiting?.reason }, { started: false, reason: "cap-reached" });
+  assert.deepEqual(retried.advisories, [ALPHA_ADVISORY]);
   assert.equal(getJob(id, env).status, "pending", "the retried job is not pending, so no runner will ever claim it");
 });
 
