@@ -53,6 +53,7 @@ function jobsDomain(env, db) {
     stampPrChecked: async (id, options) => jobs.stampPrChecked(id, options, env),
     countsByStatus: async () => jobs.countsByStatus(env, db()),
     countActiveJobs: async () => jobs.countActiveJobs(env, db()),
+    countActiveJobsByProject: async () => jobs.countActiveJobsByProject(env, db()),
     firstActiveJobId: async () => jobs.firstActiveJobId(env),
     isJobActive: async (id) => jobs.isJobActive(id, env, db()),
     repairJobFromWitness: async (id, terminal) =>

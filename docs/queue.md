@@ -17,7 +17,7 @@ nightshift queue add "fix the flaky worker" --tier simple      # declare the ris
 nightshift queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightshift queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
 nightshift queue status 7 [--json]                             # one job, never with its prompt
-nightshift queue run [--job 7] [--max 2] [--dry]               # start the runner detached; --dry only reports
+nightshift queue run [--job 7] [--max 2] [--dry]               # start the runner detached; --max 2 exits after two jobs; --dry only reports
 nightshift queue run --watch [30]                              # start a watcher, one pass every N seconds
 nightshift queue run --stop [4242]                             # end every registered runner, or only the one with that pid
 nightshift queue run --foreground [--job 7]                    # run it in this process instead, for a script or CI
@@ -97,8 +97,13 @@ never falls back to running the job in the foreground behind your back.
 
 **`nightshift queue run` with no other option drains the queue**: the child runs
 cycle after cycle until nothing is pending, waiting 15 s between passes while the
-pending jobs are held back by a preflight block or the concurrency cap, and exits by
-itself when the queue is empty. The command that starts it registers it in
+pending jobs are held back by a preflight block or the ceiling the operator set in
+`queue.maxConcurrent`, and exits by itself when the queue is empty. `--max <n>` is a budget
+for the run: the runner processes at most n jobs that reach the agent and exits, printing
+`queue: stopped - the --max budget of this run is spent`. A job the preflight releases (a
+dirty checkout, a missing `claude` binary) spends none of it, so the drain keeps waiting on
+that job with its budget intact. The budget applies to `--watch` and to a single foreground
+cycle too; without it the drain runs until nothing is pending. The command that starts it registers it in
 `$NIGHTSHIFT_HOME/runners/<pid>.json` with `mode: "drain"` for as long as it lives, so
 `queue status` shows `runner: running (pid <pid>, drain, runtime <version>, since <iso>)`
 the instant the start returns, and `--stop` ends it. Its output
@@ -116,7 +121,8 @@ up the pending jobs after it (start a drain with: nightshift queue run)` instead
 **`--foreground` is the mode for a script or for CI**: it runs the cycle in the very
 process you started, prints one line per processed job and answers with an exit code
 that depends on the outcome (`0` only for `done` on `--run`). `--dry` never detaches
-either: it is a read-only report of what a cycle would do.
+either: it is a read-only report of what a cycle would do, including `cap` (`none` without a
+ceiling) and `max` (`none` without a budget).
 
 **`--watch [seconds]` is the daemon**, one pass every `N` seconds (30 by default).
 It is registered in `$NIGHTSHIFT_HOME/runners/<pid>.json` with `pid`, `startedAt`, `mode`,
@@ -125,22 +131,57 @@ It is registered in `$NIGHTSHIFT_HOME/runners/<pid>.json` with `pid`, `startedAt
 `--job` and `--watch` are refused together: running one job and watching the whole
 queue are opposite intents.
 
+**One job per runner.** A runner claims a job, runs it to the end and only then claims the
+next one, in queue order (priority, then age). Jobs run at the same time only because several
+runners are live - start another with `nightshift queue run`; a single runner never runs two.
+
 **Any number of runners, whatever started them.** A watcher, a drain and a single-job
 runner are all registered the same way, one file per pid, and every start path - `queue run`,
 `--watch`, `--job`, `queue add --run`, `queue retry --run`, their `--foreground` forms and the
 `queue_run` and `queue_retry` MCP tools - registers its runner under the home lock, in the
-same critical section as the prune of the dead registrations. **No start is ever refused
-because another runner is live**: the claim is one atomic `UPDATE` inside SQLite and
-`queue.maxConcurrent` is a ceiling over the whole home, so a second runner costs nothing and
-takes nothing away. What a start does refuse is spawning a child that would claim nothing:
-a single-job start against a full ceiling prints `job #<id> waiting: concurrency cap reached`,
-then `<active> of <cap> jobs already running` and, when a live drain or watcher is registered,
+same critical section as the prune of the dead registrations.
+**No start is ever refused because another runner is live**: the claim is one atomic `UPDATE`
+inside SQLite, so a second runner costs nothing and takes nothing away. `queue.maxConcurrent` is an opt-in ceiling over
+the whole home, with no default: there is no ceiling until the operator sets a positive
+integer, and anything else means none. With one set, it counts the jobs under a live lease,
+which is exactly the runners holding a job. What a start does refuse is spawning a child that
+would claim nothing: with a ceiling set, a single-job start against a full ceiling prints
+`job #<id> waiting: concurrency cap reached`, then `<active> of <cap> jobs already running`
+and, when a live drain or watcher is registered,
 `a live runner (pid <pid>, <mode>) will pick it up`; it spawns nothing, leaves the row
 `pending` and exits `0`. A job that is not pending answers `job #<id> is <status>, not pending -
 it will not be picked up`, an unknown id exits `1`, and a drain start on a paused queue says so
 instead of starting a child that would exit on its first cycle. A watcher always starts:
 waiting for the condition to clear is what a watcher is for. A registration whose process is
 gone is pruned on the way and the start goes on.
+
+**Advisory lines.** Two warnings tell the operator when another runner is likely to cost more
+than it delivers; they never block a start. The first appears when the five-hour window of the
+provider is at 80% or more while at least one runner is live:
+
+```
+5h window at NN% · K runners active — another runner will likely hit the limit before finishing
+```
+
+with `1 runner active` in the singular. The utilization is the latest reading a live runner saw
+in the rate limit events of the provider's stream, kept in its own registration and valid until
+that window resets; the highest fresh reading among the live runners wins, and with no reading
+the line never appears. The second appears once per repository that two or more jobs under a
+live lease are working at the same time, in project name order:
+
+```
+N runners on `<project>` — parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output
+```
+
+When both apply, the window line comes first. `queue status` prints them right
+after the runner lines (every `--follow` tick included) and carries them as `advisories` in
+`--json`. Every start echoes them once, after its own report: `queue run`, `--watch`, `--job`,
+`queue add --run` and `queue retry --run`, a start that reports it is waiting included. A
+foreground run echoes them once as soon as its runner is registered, before the first job, and
+writes them to stderr under `--json` so stdout stays valid JSON; the detached child never echoes
+them again into the runner log. Over MCP, `queue_status` ends its `hint` with them and lists them
+under `advisories`, and `queue_run` and a `queue_retry` with `run: true` answer `advisories` too. A read that fails
+answers no advice.
 
 **`nightshift queue run --stop [pid]` ends the registered runners**: without a pid it ends
 every one of them, signalling all of them first and then polling once, so N runners cost one
@@ -185,8 +226,9 @@ answers with the same fields as before. The listing opens with the live-runner c
 `N runner(s) online` - followed by ONE line per live runner -
 `runner: running (pid <pid>, watch every <n> s[, foreground][, runtime <version>], since <iso>)`
 - or, when none is registered, ``0 runners online - pending jobs will wait until
-`nightshift queue run` starts one`` in place of the per-runner lines. `--json` carries
-`runnersOnline` (the count) next to the whole list under `runners`, plus the singular
+`nightshift queue run` starts one`` in place of the per-runner lines. The advisory lines, when
+they apply, follow the runner lines. `--json` carries
+`runnersOnline` (the count) next to the whole list under `runners`, `advisories`, plus the singular
 `runner`: it is `runners[0]` (or the same all-null object as before when the list is
 empty), kept for one release and removed in the next minor - read `runners`. `queue
 status` prunes the registrations no process answers for; a registration
@@ -287,8 +329,9 @@ nothing. It refuses, naming the reason, an unknown job, a job running under a
 live lease, a job in any other status, a job whose log is gone and a job whose
 `result` recorded no exit code.
 
-**Two jobs of the same project may run at the same time.** The claim filters by nothing
-but `pending`: the only limits are the atomic claim of one job and `queue.maxConcurrent`.
+**Two jobs of the same project may run at the same time - on two runners.** The claim filters
+by nothing but `pending`: the only limits are the atomic claim of one job and, when set,
+`queue.maxConcurrent`.
 Each job runs in its own git worktree, and merge conflicts between the pull requests of two
 jobs of one repository are the operator's to resolve. **The caveat is the preflight, and it
 stays:** a job only starts from a clean canonical checkout. In a project that does NOT ignore
@@ -297,12 +340,13 @@ the directory the pipeline creates its worktree in (this repository ignores
 same-project job is blocked with `dirty-checkout`, released with its attempt given back and
 retried by the drain every 15 s until the first job finishes - degraded and visible in
 `queue status`, never lost and never corrupt. Two same-project jobs whose slugs collide on
-one branch name fail the same safe way, one job at a time.
+one branch name fail the same safe way, one job at a time. The ``2 runners on `<project>` ``
+advisory line is what warns about it while it happens.
 
 **Ownership and orphans.** A claim is one atomic `UPDATE` inside SQLite, so two
-runners never share a job and `queue.maxConcurrent` (default `2`) is a ceiling
-over the whole home, not over one process - and, since the claim no longer filters by
-project, the whole ceiling may be spent on jobs of a single repository. The claim arms a lease of
+runners never share a job and `queue.maxConcurrent` (no default: no ceiling) is, when set,
+a ceiling over the whole home, not over one process - and, since the claim does not filter by
+project, it may be spent on jobs of a single repository. The claim arms a lease of
 `timeout_s + 600` seconds; while the job runs, the runner re-arms it every
 `queue.leaseHeartbeatS` seconds (default `5`, accepted range `1..20`), which is
 the same write that answers whether it still owns the job. A `running` row

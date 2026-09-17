@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { addProject } from "../../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { addJob, claimJobById, claimNextJob, finishJob, getJob, peekNextJob } from "../../src/memory/jobs.mjs";
@@ -14,6 +15,9 @@ import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 const WORKER = "host:1000";
 const OTHER_WORKER = "host:2000";
 const CAP = 4;
+const CYCLE = fileURLToPath(new URL("../../test-support/queue-cycle.mjs", import.meta.url));
+const CYCLE_BARRIER_MS = 1500;
+const CROSS_PROCESS_HOLD_MS = 1500;
 
 // Registers a REAL git repository (not the `.git` directory double of makeProject) as a project.
 function makeRealGitProject(t, env, name) {
@@ -23,8 +27,8 @@ function makeRealGitProject(t, env, name) {
 }
 
 // Writes a stand-in for the child pipeline: it runs a REAL `git worktree add` outside the canonical checkout it
-// was spawned into, records its start/end window, removes the worktree as the real pipeline does and reports a run.
-function writeRealGitClaude(t) {
+// was spawned into, records its start/end window and runner pid, removes the worktree as the real pipeline does and reports a run.
+function writeRealGitClaude(t, { holdMs = 300 } = {}) {
   const dir = makeDir(t, "parallel-bin");
   const bin = join(dir, "real-git-claude.mjs");
   const logPath = join(dir, "calls.jsonl");
@@ -47,12 +51,13 @@ function writeRealGitClaude(t) {
     "  let result;",
     "  try {",
     '    execFileSync("git", ["worktree", "add", "-b", branch, dir], { stdio: ["ignore", "pipe", "pipe"] });',
-    "    await sleep(300);",
+    `    await sleep(${JSON.stringify(holdMs)});`,
     '    execFileSync("git", ["worktree", "remove", dir], { stdio: ["ignore", "pipe", "pipe"] });',
     "    result = { jobId, ok: true, dir, branch };",
     "  } catch (err) {",
     "    result = { jobId, ok: false, message: String(err?.stderr ?? err?.message ?? err) };",
     "  }",
+    "  result.runnerPid = process.ppid;",
     "  result.start = start;",
     "  result.end = Date.now();",
     "  appendFileSync(logPath, `${JSON.stringify(result)}\\n`);",
@@ -81,6 +86,75 @@ function readCalls(logPath) {
     .map((line) => JSON.parse(line));
 }
 
+// Runs one runner cycle as a real child process that starts at the shared barrier instant.
+function cycleInProcess(env, startAt) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CYCLE, String(startAt)], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("exit", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+// Starts `count` runner processes over one home at the same instant and returns the cycle each one reported.
+async function runCyclesInProcesses(env, count) {
+  const startAt = Date.now() + CYCLE_BARRIER_MS;
+  const results = await Promise.all(Array.from({ length: count }, () => cycleInProcess(env, startAt)));
+  return results.map((result) => {
+    assert.equal(result.code, 0, `runner process exited ${result.code}: ${result.stderr}`);
+    return JSON.parse(result.stdout.trim().split("\n").at(-1));
+  });
+}
+
+// The recorded calls of the given jobs, in job order, failing when a job has no call or more than one.
+function callsOf(logPath, ids) {
+  const calls = readCalls(logPath);
+  return ids.map((id) => {
+    const own = calls.filter((call) => Number(call.jobId) === id);
+    assert.equal(own.length, 1, `job ${id} should have run exactly once: ${JSON.stringify(calls)}`);
+    assert.equal(own[0].ok, true, `a real git worktree add failed: ${JSON.stringify(own[0])}`);
+    return own[0];
+  });
+}
+
+// Tells whether two recorded call windows overlap in time.
+function overlaps(a, b) {
+  return a.start < b.end && b.start < a.end;
+}
+
+// Asserts that ONE runner cycle ran the given jobs strictly one after the other, in that order.
+async function assertOneRunnerSerializes(env, logPath, ids) {
+  const cycle = await runCycle({ env });
+  assert.deepEqual(
+    cycle.processed.map((job) => job.id),
+    ids,
+    `one runner should have run every job in queue order: ${JSON.stringify(cycle.processed)}`,
+  );
+  const calls = callsOf(logPath, ids);
+  for (let index = 1; index < calls.length; index += 1) {
+    assert.ok(calls[index - 1].end <= calls[index].start, `one runner ran two jobs at the same time: ${JSON.stringify(calls)}`);
+  }
+}
+
+// Asserts that two runner processes each took one of the two jobs and ran them at the same time.
+async function assertTwoRunnersOverlap(env, logPath, ids) {
+  const cycles = await runCyclesInProcesses(env, 2);
+  const processed = cycles.flatMap((cycle) => cycle.processed.map((job) => job.id));
+  assert.deepEqual(
+    [...processed].sort((a, b) => a - b),
+    ids,
+    `across both runner processes each job should have run exactly once: ${JSON.stringify(cycles)}`,
+  );
+  const [first, second] = callsOf(logPath, ids);
+  assert.ok(overlaps(first, second), `two runner processes ran their jobs one strictly after the other: ${JSON.stringify([first, second])}`);
+  assert.notEqual(first.runnerPid, second.runnerPid, `both jobs were run by the same runner process: ${JSON.stringify([first, second])}`);
+}
+
 test("two jobs of the same project are claimed together, bounded only by the concurrency cap", async (t) => {
   const env = makeHome(t, "parallel-claim");
   makeProject(t, env, "alpha");
@@ -104,63 +178,51 @@ test("two jobs of the same project are claimed together, bounded only by the con
   assert.equal(claimNextJob({ worker: WORKER, cap: 3 }, env).id, fourth, "the freed slot was not spent on the next pending job");
 });
 
-test("two jobs of the SAME project run at the same time: their real children OVERLAP", async (t) => {
-  const env = makeHome(t, "parallel-same-project");
-  makeRealGitProject(t, env, "alpha");
-  const { bin, logPath } = writeRealGitClaude(t);
-  env.NIGHTSHIFT_CLAUDE_BIN = bin;
+test("two jobs of the SAME project never overlap inside ONE runner, and do across TWO runner processes", async (t) => {
+  const serialEnv = makeHome(t, "parallel-same-project-one-runner");
+  makeRealGitProject(t, serialEnv, "alpha");
+  const serial = writeRealGitClaude(t);
+  serialEnv.NIGHTSHIFT_CLAUDE_BIN = serial.bin;
+  const serialIds = [
+    addJob({ project: "alpha", prompt: "fix the worker", priority: 1, timeoutS: 120 }, serialEnv).id,
+    addJob({ project: "alpha", prompt: "fix the parser", priority: 2, timeoutS: 120 }, serialEnv).id,
+  ];
+  await assertOneRunnerSerializes(serialEnv, serial.logPath, serialIds);
 
-  const job1 = addJob({ project: "alpha", prompt: "fix the worker", timeoutS: 120 }, env).id;
-  const job2 = addJob({ project: "alpha", prompt: "fix the parser", timeoutS: 120 }, env).id;
-
-  const cycle = await runCycle({ env });
-
-  assert.deepEqual(
-    cycle.processed.map((job) => job.id).sort((a, b) => a - b),
-    [job1, job2],
-    `both same-project jobs should have run: ${JSON.stringify(cycle.processed)}`,
-  );
-  const calls = readCalls(logPath);
-  assert.equal(calls.length, 2, `both children should have run their own real git worktree add: ${JSON.stringify(calls)}`);
-  for (const call of calls) assert.equal(call.ok, true, `a real git worktree add failed: ${JSON.stringify(call)}`);
-  const [first, second] = calls;
-  assert.ok(
-    first.start < second.end && second.start < first.end,
-    `two children of the same project ran one strictly after the other: ${JSON.stringify(calls)}`,
-  );
+  const parallelEnv = makeHome(t, "parallel-same-project-two-runners");
+  makeRealGitProject(t, parallelEnv, "alpha");
+  const parallel = writeRealGitClaude(t, { holdMs: CROSS_PROCESS_HOLD_MS });
+  parallelEnv.NIGHTSHIFT_CLAUDE_BIN = parallel.bin;
+  const parallelIds = [
+    addJob({ project: "alpha", prompt: "fix the worker", timeoutS: 120 }, parallelEnv).id,
+    addJob({ project: "alpha", prompt: "fix the parser", timeoutS: 120 }, parallelEnv).id,
+  ];
+  await assertTwoRunnersOverlap(parallelEnv, parallel.logPath, parallelIds);
 });
 
-test("a job of ANOTHER project runs beside them while maxConcurrent allows it", async (t) => {
-  const env = makeHome(t, "parallel-other-project");
-  makeRealGitProject(t, env, "alpha");
-  makeRealGitProject(t, env, "beta");
-  const { bin, logPath } = writeRealGitClaude(t);
-  env.NIGHTSHIFT_CLAUDE_BIN = bin;
-  saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent: 3 } }, env);
+test("a job of ANOTHER project never runs beside another inside ONE runner, and does across TWO runner processes", async (t) => {
+  const serialEnv = makeHome(t, "parallel-other-project-one-runner");
+  makeRealGitProject(t, serialEnv, "alpha");
+  makeRealGitProject(t, serialEnv, "beta");
+  const serial = writeRealGitClaude(t);
+  serialEnv.NIGHTSHIFT_CLAUDE_BIN = serial.bin;
+  saveConfig({ ...loadConfig(serialEnv, { warn: () => {} }), queue: { maxConcurrent: 3 } }, serialEnv);
+  const serialIds = [
+    addJob({ project: "alpha", prompt: "fix the worker", priority: 1, timeoutS: 120 }, serialEnv).id,
+    addJob({ project: "beta", prompt: "fix the linter", priority: 2, timeoutS: 120 }, serialEnv).id,
+  ];
+  await assertOneRunnerSerializes(serialEnv, serial.logPath, serialIds);
 
-  const alphaFirst = addJob({ project: "alpha", prompt: "fix the worker", priority: 1, timeoutS: 120 }, env).id;
-  const alphaSecond = addJob({ project: "alpha", prompt: "fix the parser", priority: 2, timeoutS: 120 }, env).id;
-  const betaJob = addJob({ project: "beta", prompt: "fix the linter", priority: 3, timeoutS: 120 }, env).id;
-
-  const cycle = await runCycle({ env });
-
-  assert.deepEqual(
-    cycle.processed.map((job) => job.id).sort((a, b) => a - b),
-    [alphaFirst, alphaSecond, betaJob],
-    `every job should have run: ${JSON.stringify(cycle.processed)}`,
-  );
-  const byJob = new Map(readCalls(logPath).map((call) => [Number(call.jobId), call]));
-  const alphaOne = byJob.get(alphaFirst);
-  const alphaTwo = byJob.get(alphaSecond);
-  const beta = byJob.get(betaJob);
-  assert.ok(
-    alphaOne.start < beta.end && beta.start < alphaOne.end,
-    `the job of the other project waited instead of running beside the first one: ${JSON.stringify([alphaOne, beta])}`,
-  );
-  assert.ok(
-    alphaOne.start < alphaTwo.end && alphaTwo.start < alphaOne.end,
-    `the two jobs of \`alpha\` did not overlap: ${JSON.stringify([alphaOne, alphaTwo])}`,
-  );
+  const parallelEnv = makeHome(t, "parallel-other-project-two-runners");
+  makeRealGitProject(t, parallelEnv, "alpha");
+  makeRealGitProject(t, parallelEnv, "beta");
+  const parallel = writeRealGitClaude(t, { holdMs: CROSS_PROCESS_HOLD_MS });
+  parallelEnv.NIGHTSHIFT_CLAUDE_BIN = parallel.bin;
+  const parallelIds = [
+    addJob({ project: "alpha", prompt: "fix the worker", timeoutS: 120 }, parallelEnv).id,
+    addJob({ project: "beta", prompt: "fix the linter", timeoutS: 120 }, parallelEnv).id,
+  ];
+  await assertTwoRunnersOverlap(parallelEnv, parallel.logPath, parallelIds);
 });
 
 test("a same-project job whose canonical checkout another job dirtied is blocked, keeps its attempt and stays pending", async (t) => {

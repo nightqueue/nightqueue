@@ -8,6 +8,7 @@ import { updateNoticeLine } from "../host/update-notice.mjs";
 import { jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { PROMPT_SOURCE_CONFLICT, getRoadmapItem, queueRoadmapItem } from "../memory/roadmap.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
+import { advisoryLinesFor, startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
 import { isQueueIdle, noRunnerWait, parkedBacklogLine, parkedJobLabel, pausedRunnerLine, pendingJobs, runnerPauseLabel, runnersOnline } from "../queue/hints.mjs";
 import { prViewer, refreshMergedJobs } from "../queue/merged.mjs";
@@ -43,7 +44,7 @@ import { runtimeLabel } from "./runtime-versions.mjs";
 const USAGE = {
   add: "nightshift queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id>]",
   status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle]",
-  run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <n>] [--stop] [--foreground] [--dry] [--json]",
+  run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
   retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
   repair: "nightshift queue repair <id> [--json]",
@@ -153,9 +154,16 @@ async function resolveTarget(config, positionals, values, ctx) {
   return { project: await offerRegistration(config, values, ctx), words: positionals, fromCwd: false };
 }
 
+// Echoes once the advisory lines of this home at the moment of a start, on stderr when stdout carries json.
+async function echoAdvisories(ctx, { json = false } = {}) {
+  const write = json ? ctx.err : ctx.out;
+  for (const line of await startAdvisoryLines({ env: ctx.env, killImpl: ctx.killImpl })) write(line);
+}
+
 // Reports why a start would claim nothing and spawned nothing; a start nobody needed is not a failure.
-function reportWaiting(blocker, ctx) {
+async function reportWaiting(blocker, ctx) {
   for (const line of blockerLines(blocker, ctx.env)) ctx.out(line);
+  await echoAdvisories(ctx);
   return 0;
 }
 
@@ -176,17 +184,20 @@ async function startDetached({ jobId = null, max = null, watchIntervalS = null }
     spawnImpl: ctx.spawnImpl,
     killImpl: ctx.killImpl,
   });
-  if (!started.started) return reportWaiting(started.waiting, ctx);
+  if (!started.started) return await reportWaiting(started.waiting, ctx);
   ctx.out(startedLine({ jobId, pid: started.pid, watchIntervalS, logPath: started.logPath }));
+  await echoAdvisories(ctx);
   return 0;
 }
 
 // Runs the queue in THIS process as a registered runner; the connection is opened here so the registration can witness which shared-memory file this runner is attached to, and it never outlives the run.
-async function runGuardedHere({ jobId = null, watchIntervalS = null, ctx, run }) {
-  await registerForegroundRunner({ jobId, watchIntervalS, env: ctx.env, killImpl: ctx.killImpl });
+async function runGuardedHere({ jobId = null, watchIntervalS = null, json, ctx, run }) {
+  if (typeof json !== "boolean") throw new TypeError("runGuardedHere needs `json` (true or false) so the advisory echo never lands on the stdout of a --json run");
+  const registered = await registerForegroundRunner({ jobId, watchIntervalS, env: ctx.env, killImpl: ctx.killImpl });
   try {
     await openStore(ctx.env).connect();
     await stampRunnerDbWitness(ctx.env);
+    if (registered.self === true) await echoAdvisories(ctx, { json });
     return await run();
   } finally {
     removeOwnRunnerRecord(ctx.env);
@@ -213,13 +224,14 @@ async function runJobHere(job, ctx) {
 }
 
 // Takes the job through a runner in this process, unless a live runner already owns the queue.
-async function runInForeground(job, ctx) {
-  return await runGuardedHere({ jobId: job.id, ctx, run: () => runJobHere(job, ctx) });
+async function runInForeground(job, { json }, ctx) {
+  return await runGuardedHere({ jobId: job.id, json, ctx, run: () => runJobHere(job, ctx) });
 }
 
 // Takes the job the command just queued through the runner: in this process with `--foreground`, detached otherwise.
 async function runNow(job, values, ctx) {
-  return values.foreground === true ? await runInForeground(job, ctx) : await startDetached({ jobId: job.id }, ctx);
+  if (values.foreground !== true) return await startDetached({ jobId: job.id }, ctx);
+  return await runInForeground(job, { json: values.json === true }, ctx);
 }
 
 // Refuses `--foreground` on a command that was never asked to run the job.
@@ -601,7 +613,7 @@ function unreadableRegistryLine(error) {
   return `runner: unknown - the runner registry cannot be listed (${error}), a runner may be live; run \`nightshift doctor\``;
 }
 
-// Lines of the queue view: one line per runner, table, counts and the backlog hint, in that order.
+// Lines of the queue view: one line per runner, the advisory lines, table, counts and the backlog hint, in that order.
 async function queueViewLines(values, ctx, store) {
   await sweepMerged(ctx, store);
   const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit) })).map(jobView);
@@ -609,6 +621,7 @@ async function queueViewLines(values, ctx, store) {
   const { runners, error } = readRunners(ctx);
   const activeJobs = await store.jobs.countActiveJobs();
   const lines = error === null ? formatRunners(runners, activeJobs, ctx.env) : [unreadableRegistryLine(error)];
+  if (error === null) lines.push(...(await advisoryLinesFor({ store, runners, env: ctx.env, killImpl: ctx.killImpl })));
   if (!jobs.length) return { lines: [...lines, "no jobs in the queue"], idle: error === null };
   lines.push(...formatTable(jobs, ctx));
   lines.push(Object.entries(counts).map(([status, total]) => `${status}=${total}`).join("  "));
@@ -687,7 +700,8 @@ async function printStatus(argv, ctx) {
     const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit) })).map(jobView);
     const { runners, error } = readRunners(ctx);
     if (error !== null) throw new UserError(`the runner registry cannot be listed (${error}); \`--json\` will not answer that no runner is running for a registry it could not read`);
-    ctx.out(JSON.stringify({ runner: runners[0] ?? STOPPED_RUNNER, runners, runnersOnline: runners.length, jobs, counts: await store.jobs.countsByStatus() }));
+    const advisories = await advisoryLinesFor({ store, runners, env: ctx.env, killImpl: ctx.killImpl });
+    ctx.out(JSON.stringify({ runner: runners[0] ?? STOPPED_RUNNER, runners, runnersOnline: runners.length, advisories, jobs, counts: await store.jobs.countsByStatus() }));
     return true;
   }
   if (intervalS !== null) {
@@ -716,7 +730,8 @@ function formatDry(report) {
   return [
     `paused          ${report.paused}`,
     dryRateLimitLine(report),
-    `cap             ${report.cap}`,
+    `cap             ${report.cap ?? "none"}`,
+    `max             ${report.max ?? "none"}`,
     `heartbeat       ${report.heartbeatS}s`,
     `active          ${report.active}`,
     `next            ${report.next ?? "-"}`,
@@ -736,6 +751,7 @@ function formatProcessed(job) {
 function printCycle(cycle, ctx) {
   for (const job of cycle.processed) ctx.out(formatProcessed(job));
   if (!cycle.processed.length) ctx.out(`queue: nothing to run (${cycle.reason})`);
+  if (cycle.reason === "max-reached") ctx.out("queue: stopped - the --max budget of this run is spent");
 }
 
 const RUN_OPTIONS = {
@@ -794,18 +810,20 @@ async function runStop(value, ctx) {
 }
 
 // Runs the drain loop in this process, as the registered runner of the queue.
-async function runDrainHere({ max }, ctx) {
+async function runDrainHere({ max, json }, ctx) {
   return await runGuardedHere({
+    json,
     ctx,
     run: () => runDrain({ max, env: ctx.env, onCycle: (cycle) => printCycle(cycle, ctx) }).then(() => 0),
   });
 }
 
 // Runs the watch loop in this process, as the registered runner of the queue.
-async function runWatchHere({ intervalS, jobId, max }, ctx) {
+async function runWatchHere({ intervalS, jobId, max, json }, ctx) {
   return await runGuardedHere({
     jobId,
     watchIntervalS: intervalS,
+    json,
     ctx,
     run: () => runWatch({ intervalS, jobId, max, env: ctx.env, onCycle: (cycle) => printCycle(cycle, ctx) }).then(() => 0),
   });
@@ -838,11 +856,12 @@ async function runRun(argv, ctx) {
   }
   const intervalS = values.watch === undefined ? null : requireInt("--watch", values.watch);
   if (values.foreground !== true) return await startDetached({ jobId, max, watchIntervalS: intervalS }, ctx);
-  if (intervalS !== null) return await runWatchHere({ intervalS, jobId, max }, ctx);
-  if (values.drain === true && jobId === null) return await runDrainHere({ max }, ctx);
+  const json = values.json === true;
+  if (intervalS !== null) return await runWatchHere({ intervalS, jobId, max, json }, ctx);
+  if (values.drain === true && jobId === null) return await runDrainHere({ max, json }, ctx);
   const waiting = await claimBlocker({ jobId, mode: runnerMode({ jobId }), env: ctx.env });
-  if (waiting) return reportWaiting(waiting, ctx);
-  return await runGuardedHere({ jobId, ctx, run: () => runCycleHere({ jobId, max, json: values.json === true }, ctx) });
+  if (waiting) return await reportWaiting(waiting, ctx);
+  return await runGuardedHere({ jobId, json, ctx, run: () => runCycleHere({ jobId, max, json }, ctx) });
 }
 
 // Runs `queue cancel`, which refuses without writing when the job is running under a live lease.

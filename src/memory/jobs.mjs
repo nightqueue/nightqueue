@@ -209,35 +209,45 @@ const CANDIDATE_QUERY = `SELECT candidate.id FROM jobs AS candidate
               LIMIT 1`;
 const CAP_CONDITION = `(SELECT COUNT(*) FROM jobs AS slot WHERE ${ACTIVE_JOB_PREDICATE}) < ?`;
 
-// Claims the highest priority pending job: the whole decision lives in the WHERE, bounded only by the ceiling.
+// Claims the highest priority pending job: the whole decision lives in the WHERE, bounded only by the ceiling when one is set.
 export function claimNextJob({ worker, cap } = {}, env = process.env) {
+  const ceiling = capClause(cap);
   const statement = openDb(env).prepare(
     `UPDATE jobs
         ${CLAIM_ASSIGNMENT}
       WHERE id = (${CANDIDATE_QUERY})
         AND status = 'pending'
-        AND ${CAP_CONDITION}
+        ${ceiling.sql}
       RETURNING *`,
   );
-  return withWriteRetry(() => statement.get(requireText("worker", worker), requireCap(cap))) ?? null;
+  return withWriteRetry(() => statement.get(requireText("worker", worker), ...ceiling.values)) ?? null;
 }
 
 // Claims one specific job, refusing in the same WHERE when it is not pending or the ceiling is full.
 export function claimJobById(id, { worker, cap } = {}, env = process.env) {
+  const ceiling = capClause(cap);
   const statement = openDb(env).prepare(
     `UPDATE jobs
         ${CLAIM_ASSIGNMENT}
       WHERE id = ?
         AND status = 'pending'
-        AND ${CAP_CONDITION}
+        ${ceiling.sql}
       RETURNING *`,
   );
-  return withWriteRetry(() => statement.get(requireText("worker", worker), requireId(id), requireCap(cap))) ?? null;
+  return withWriteRetry(() => statement.get(requireText("worker", worker), requireId(id), ...ceiling.values)) ?? null;
 }
 
-// Requires a positive concurrency ceiling, because a missing one would silently claim everything.
+// The ceiling clause of a claim and the value it binds; a claim with no ceiling carries no clause and binds nothing.
+function capClause(cap) {
+  if (cap === null) return { sql: "", values: [] };
+  return { sql: `AND ${CAP_CONDITION}`, values: [requireCap(cap)] };
+}
+
+// Requires a positive concurrency ceiling, because only an explicit null may lift it.
 function requireCap(cap) {
-  if (!Number.isInteger(cap) || cap <= 0) throw new UserError(`invalid concurrency cap \`${String(cap)}\`; expected a positive integer`);
+  if (!Number.isInteger(cap) || cap <= 0) {
+    throw new UserError(`invalid concurrency cap \`${String(cap)}\`; expected a positive integer, or null for no ceiling`);
+  }
   return cap;
 }
 
@@ -620,6 +630,14 @@ export function countsByStatus(env = process.env, db = openDb(env)) {
 // Counts the jobs currently running under a live lease, the number the concurrency ceiling compares against.
 export function countActiveJobs(env = process.env, db = openDb(env)) {
   return db.prepare(`SELECT COUNT(*) AS total FROM jobs AS slot WHERE ${ACTIVE_JOB_PREDICATE}`).get().total;
+}
+
+// Jobs running under a live lease, counted per project: with one job per runner, the runners working each repository right now.
+export function countActiveJobsByProject(env = process.env, db = openDb(env)) {
+  return db
+    .prepare(`SELECT slot.project AS project, COUNT(*) AS count FROM jobs AS slot WHERE ${ACTIVE_JOB_PREDICATE} GROUP BY slot.project ORDER BY slot.project ASC`)
+    .all()
+    .map((row) => ({ project: row.project, count: Number(row.count) }));
 }
 
 // Id of the lowest numbered job running under a live lease, or null when none is: the job the install guard names.

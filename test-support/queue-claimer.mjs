@@ -1,4 +1,4 @@
-import { acquire } from "../src/queue/claim.mjs";
+import { acquire, concurrencyCap } from "../src/queue/claim.mjs";
 
 const [, , capRaw, jobRaw, startAtRaw] = process.argv;
 
@@ -15,10 +15,17 @@ async function waitForBarrier() {
   if (remaining > 0) await sleep(remaining);
 }
 
+// Reads the cap token: `config` is the ceiling the home configured (possibly none), anything else a positive integer.
+function parseCap(raw) {
+  if (raw === "config") return concurrencyCap(process.env);
+  const cap = Number(raw);
+  if (!Number.isInteger(cap) || cap <= 0) throw new Error(`invalid cap: ${String(raw)}`);
+  return cap;
+}
+
 // Tries exactly ONE claim and prints the job it took, or the reason the queue refused it.
 async function main() {
-  const cap = Number(capRaw);
-  if (!Number.isInteger(cap) || cap <= 0) throw new Error(`invalid cap: ${String(capRaw)}`);
+  const cap = parseCap(capRaw);
   const jobId = jobRaw === undefined || jobRaw === "" || jobRaw === "any" ? null : Number(jobRaw);
   await waitForBarrier();
   const claimed = await acquire({ jobId, cap, env: process.env });

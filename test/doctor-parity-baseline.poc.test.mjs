@@ -93,7 +93,11 @@ function normalize(text, substitutions) {
   // migration bumps it on purpose, and pinning it here would turn each one into a parity failure.
   // The rate limit fields of `queue run --dry` are the other one: this tree answers WHICH reset a claim
   // would have to wait for, and a baseline that never read a pause cannot carry the two fields that say it.
-  return out.replace(/schema v\d+/g, "schema v<N>").replace(/"pausedUntil":(?:null|"[^"]*"),"rateLimit":(?:null|\{[^{}]*\}),/g, "");
+  // So are its `cap` (no default ceiling since one job per runner) and `max` (the budget a baseline never reported).
+  return out
+    .replace(/schema v\d+/g, "schema v<N>")
+    .replace(/"pausedUntil":(?:null|"[^"]*"),"rateLimit":(?:null|\{[^{}]*\}),/g, "")
+    .replace(/"cap":(?:null|\d+),(?:"max":(?:null|\d+),)?/g, "");
 }
 
 function assertParity(label, before, after, substitutionsBefore, substitutionsAfter) {

@@ -24,6 +24,7 @@ import {
   ROADMAP_STATUSES,
   roadmapItemView,
 } from "../memory/roadmap.mjs";
+import { advisoryLinesFor, startAdvisoryLines } from "../queue/advisory.mjs";
 import { noRunnerWait, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { refreshMergedJobs } from "../queue/merged.mjs";
@@ -419,7 +420,7 @@ function queueHint({ activeJobs, counts, runners, jobs = [] }) {
 }
 
 // What a tool that was asked to start a runner answers: the runner that started, or why the job it was asked for would claim nothing.
-function runnerAnswer(started, env) {
+function runnerAnswer(started, env, advisories) {
   return {
     started: started.started,
     pid: started.pid,
@@ -427,6 +428,7 @@ function runnerAnswer(started, env) {
     runner: { pid: started.pid, mode: started.mode, logPath: started.logPath },
     waiting: started.waiting ?? null,
     message: started.waiting ? blockerLines(started.waiting, env).join("; ") : null,
+    advisories,
   };
 }
 
@@ -453,13 +455,15 @@ async function queueStatusAnswer(args, { store, warning, env }) {
   const runners = readRunners(env);
   const counts = await store.jobs.countsByStatus();
   const jobs = (await store.jobs.listJobs({ limit: jobLimit(args.limit) })).map(jobView);
+  const advisories = await advisoryLinesFor({ store, runners, env });
   return {
     runner: runners[0] ?? STOPPED_RUNNER,
     runners,
     runnersOnline: runners.length,
+    advisories,
     jobs,
     counts,
-    hint: queueHint({ activeJobs: await store.jobs.countActiveJobs(), counts, runners, jobs }),
+    hint: [queueHint({ activeJobs: await store.jobs.countActiveJobs(), counts, runners, jobs }), ...advisories].join(" "),
     ...warningAnswer(warning),
   };
 }
@@ -720,7 +724,8 @@ function toolDefinitions(env) {
       name: "queue_status",
       config: {
         description:
-          "State of the queue: one job by id, or the most recent ones plus the counts per status and every live runner in `runners` (`runner` is the first of them, kept for one release; `runnersOnline` is the count of `runners`). The `hint` leads with the live-runner count, and says that a job queued with none online waits until `nightshift queue run` starts one. Never returns the prompt. " +
+          "State of the queue: one job by id, or the most recent ones plus the counts per status and every live runner in `runners` (`runner` is the first of them, kept for one release; `runnersOnline` is the count of `runners`). The `hint` leads with the live-runner count, and says that a job queued with none online waits until `nightshift queue run` starts one. " +
+          "The `hint` ends with the advisory lines when they apply - a five-hour window close to its limit while runners are live, or two or more runners on one repository - also listed under `advisories`; they never block anything. Never returns the prompt. " +
           "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`.",
         inputSchema: {
           job_id: z.number().int().min(1).nullable().optional(),
@@ -743,12 +748,13 @@ function toolDefinitions(env) {
           "starts a detached runner that drains the queue: every pending job, in priority order, until nothing is pending - the runner registers itself, so queue_status shows it. Pass job_id only to start a single job. " +
           "The batch runs DETACHED, with its output going to a log file, and this tool returns immediately with that path. Any number of runners may be live at once: a start is never refused because another one is. " +
           "A single job that cannot be claimed right now answers `started: false` with `waiting` and starts nothing. " +
-          "The runner exits by itself once the queue is empty; `nightshift queue run --stop` ends every runner, `--stop <pid>` ends one.",
+          "The runner exits by itself once the queue is empty; `nightshift queue run --stop` ends every runner, `--stop <pid>` ends one. " +
+          "Each runner works one job at a time; parallel jobs come from starting more runners. `advisories` warns, from the provider's real five-hour utilization and the live leases, when another runner would likely hit the rate limit or fight over one repository - it never blocks a start.",
         inputSchema: { job_id: z.number().int().min(1).nullable().optional() },
       },
       handler: async (args) => {
         const started = await startQueueRunner({ jobId: Number.isInteger(args.job_id) ? args.job_id : null, env });
-        return { ok: true, ...runnerAnswer(started, env) };
+        return { ok: true, ...runnerAnswer(started, env, await startAdvisoryLines({ env })) };
       },
     },
     {
@@ -779,7 +785,7 @@ function toolDefinitions(env) {
       handler: async (args) => {
         const { job, runDir } = await applyRetry({ id: args.job_id, note: args.note, fresh: args.fresh === true, env });
         const started = args.run === true ? await startQueueRunner({ jobId: job.id, env }) : null;
-        return { ok: true, job, runDir, ...(started ? runnerAnswer(started, env) : { runner: null }) };
+        return { ok: true, job, runDir, ...(started ? runnerAnswer(started, env, await startAdvisoryLines({ env })) : { runner: null }) };
       },
     },
     {

@@ -148,6 +148,31 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A runner now works one job at a time, in queue order; parallel jobs come only
+  from starting more runners, and no start is refused because another runner is
+  live.
+
+- `queue.maxConcurrent` defaults to no ceiling. A positive integer still sets a
+  hard ceiling across every runner of the home, and anything else means none.
+  **Upgrade note:** a home whose `config.json` was written by an earlier version
+  already carries `"maxConcurrent": 2` from the old default and keeps that
+  ceiling; delete the key, or set it to `null`, to run without one.
+
+- `queue run --max <n>` is now a budget for the run instead of a concurrency
+  limit: the runner exits after n jobs that reached the agent, printing
+  `queue: stopped - the --max budget of this run is spent`, for a drain, a
+  `--watch` and a single foreground cycle alike. A job the preflight releases
+  does not count. `--dry` reports it as `max`, next to `cap`, both `none` when
+  unset.
+
+- Advisory lines warn, without ever blocking a start, when the five-hour window
+  of the provider is at 80% or more while runners are live
+  (`5h window at NN% · K runners active — ...`) and when two or more runners
+  work one repository (``N runners on `<project>` — ...``). They follow the
+  runner lines of `queue status`, are echoed once by every start (on stderr
+  by a foreground run under `--json`), and are answered as `advisories` by `queue status --json`,
+  `queue_status` (also appended to its `hint`), `queue_run` and `queue_retry`.
+
 - `state.json` is written by the runtime alone. Every key of the run - the
   phases, the termination, the outcome, the type, the tier and its raise, the
   branch, the worktree, the QA stage A marker and the resume count - goes

@@ -35,7 +35,7 @@ export function emptyConfig() {
     defaultOrg: DEFAULT_ORG,
     orgs,
     projects: emptyMap(),
-    queue: { maxConcurrent: 2, resumeSession: false, leaseHeartbeatS: LEASE_HEARTBEAT_DEFAULT_S },
+    queue: { maxConcurrent: null, resumeSession: false, leaseHeartbeatS: LEASE_HEARTBEAT_DEFAULT_S },
     embedding: null,
   };
 }
@@ -152,7 +152,7 @@ export function normalizeConfig(raw, { warn = () => {} } = {}) {
     orgs,
     projects,
     queue: {
-      maxConcurrent: Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : 2,
+      maxConcurrent: Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : null,
       resumeSession: raw.queue?.resumeSession === true,
       leaseHeartbeatS: normalizeHeartbeat(raw.queue?.leaseHeartbeatS),
     },

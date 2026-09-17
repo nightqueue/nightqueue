@@ -8,6 +8,7 @@ import {
   claimNextJob,
   countAttempt,
   countActiveJobs,
+  countActiveJobsByProject,
   countsByStatus,
   finishJob,
   getJob,
@@ -109,6 +110,42 @@ test("the concurrency ceiling lives in the WHERE of the claim, so a full queue r
   assert.equal(claimJobById(second, { worker: OTHER_WORKER, cap: 2 }, env).id, second);
   assert.equal(claimJobById(first, { worker: OTHER_WORKER, cap: 9 }, env), null, "a running job was claimed twice");
   assert.throws(() => claimNextJob({ worker: WORKER, cap: 0 }, env), /concurrency cap/);
+});
+
+test("a claim with an explicit null ceiling carries no ceiling, and only null lifts it", (t) => {
+  const env = makeQueue(t, "jobs-claim-no-cap");
+  const active = [enqueue(env), enqueue(env), enqueue(env, { project: "beta" })];
+  for (const id of active) assert.equal(claimNextJob({ worker: WORKER, cap: null }, env).id, id);
+  assert.equal(countActiveJobs(env), 3);
+  const next = enqueue(env);
+  const byId = enqueue(env, { project: "beta" });
+  assert.equal(claimJobById(byId, { worker: OTHER_WORKER, cap: null }, env).id, byId, "a claim by id with no ceiling was refused");
+  assert.equal(claimNextJob({ worker: OTHER_WORKER, cap: null }, env).id, next, "a claim with no ceiling was refused");
+  assert.equal(countActiveJobs(env), 5);
+  assert.equal(claimNextJob({ worker: WORKER, cap: null }, env), null);
+  const pending = enqueue(env);
+  assert.throws(() => claimNextJob({ worker: WORKER }, env), /concurrency cap/);
+  assert.throws(() => claimJobById(pending, { worker: WORKER, cap: 0 }, env), /concurrency cap/);
+  assert.equal(getJob(pending, env).status, "pending", "a refused ceiling still claimed the job");
+});
+
+test("the active jobs per project count only live leases, grouped by project in name order", (t) => {
+  const env = makeQueue(t, "jobs-active-by-project");
+  assert.deepEqual(countActiveJobsByProject(env), [], "an empty queue counted a project");
+  const beta = enqueue(env, { project: "beta" });
+  const alpha = [enqueue(env), enqueue(env)];
+  enqueue(env);
+  for (const id of [beta, ...alpha]) claimJobById(id, { worker: WORKER, cap: null }, env);
+
+  assert.deepEqual(countActiveJobsByProject(env), [
+    { project: "alpha", count: 2 },
+    { project: "beta", count: 1 },
+  ]);
+
+  expireLease(env, alpha[0]);
+  expireLease(env, beta);
+  assert.equal(countsByStatus(env).running, 3, "the fixture did not leave the orphaned jobs in `running`");
+  assert.deepEqual(countActiveJobsByProject(env), [{ project: "alpha", count: 1 }], "an orphaned lease still counted as a runner on its project");
 });
 
 test("release gives the job back without spending the attempt and keeps the previous reason", (t) => {

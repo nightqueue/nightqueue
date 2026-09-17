@@ -17,10 +17,10 @@ export function isPaused(env = process.env) {
   return existsSync(queuePausedPath(env));
 }
 
-// Global ceiling of jobs running at the same time, shared by every runner process of this home.
+// Ceiling of jobs running at the same time across every runner of this home, or null when the operator set none.
 export function concurrencyCap(env = process.env) {
   const configured = loadConfig(env, { warn: () => {} }).queue?.maxConcurrent;
-  return Number.isInteger(configured) && configured > 0 ? configured : 1;
+  return Number.isInteger(configured) && configured > 0 ? configured : null;
 }
 
 // Tells whether the operator turned session resuming on; anything but a literal true stays off.
@@ -54,11 +54,12 @@ export function liveLocalWorker(worker) {
 // Explains why nothing was claimed; it reads the database only to phrase the reason, never to decide.
 async function refusalReason({ jobId, cap, env }) {
   const store = openStore(env);
-  if ((await store.jobs.countActiveJobs()) >= cap) return "cap-reached";
-  if (jobId === null) return (await store.jobs.hasClaimablePending()) ? "cap-reached" : "empty-queue";
+  if (cap !== null && (await store.jobs.countActiveJobs()) >= cap) return "cap-reached";
+  if (jobId === null) return cap !== null && (await store.jobs.hasClaimablePending()) ? "cap-reached" : "empty-queue";
   const job = await store.jobs.getJob(jobId);
   if (!job) return "unknown-job";
-  return job.status === "pending" ? "cap-reached" : "not-pending";
+  if (job.status !== "pending") return "not-pending";
+  return cap !== null ? "cap-reached" : "claim-raced";
 }
 
 // Takes ownership of one job: sweeps the orphans first, then claims atomically inside the database.
@@ -97,6 +98,7 @@ const START_BLOCKERS = {
 // The ceiling standing in the way of a start right now, or null while there is a free slot.
 async function capBlocker({ jobId, env }) {
   const cap = concurrencyCap(env);
+  if (cap === null) return null;
   const active = await openStore(env).jobs.countActiveJobs();
   return active >= cap ? { reason: "cap-reached", jobId, active, cap } : null;
 }
