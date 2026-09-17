@@ -125,12 +125,13 @@ function shortTarget(name, input) {
 
 // What a tool call says in one line: the intent the model wrote for it first, because that is what a human reads the log for,
 // then the tool and its target, which is what stays machine readable. A call without an intent keeps the tool-first shape it always had.
+// The call is returned apart from the whole line, because it is the part a terminal prints dimmed: the intent carries the reading, the call stays as evidence.
 function toolNarration(name, input) {
   const label = toolLabel(name);
   const target = shortTarget(name, input);
   const call = target ? `${label} ${target}` : label;
   const intent = clip(firstLine(input?.description), DESCRIPTION_LIMIT);
-  return intent ? `${intent} — ${call}` : call;
+  return intent ? { text: `${intent} — ${call}`, dim: `— ${call}` } : { text: call, dim: "" };
 }
 
 // Label of a lane: its name, the phase of the pipeline and the model the orchestrator picked for it, each part only when it is known.
@@ -154,14 +155,14 @@ function elapsedOf(state) {
 }
 
 // One narration line, already carrying its relative time and the lane it belongs to.
-function narrationEvent(state, kind, text, { indent = false, lane = null } = {}) {
-  return { kind, text, indent, lane, elapsedMs: elapsedOf(state) };
+function narrationEvent(state, kind, text, { indent = false, lane = null, dim = "" } = {}) {
+  return { kind, text, indent, lane, dim, elapsedMs: elapsedOf(state) };
 }
 
 // One narration line of a lane child, labelled only when more than one lane is open at that moment.
-function laneLine(state, kind, text, lane) {
-  if (!lane) return narrationEvent(state, kind, text);
-  return narrationEvent(state, kind, text, { indent: true, lane: state.lanes.size > 1 ? lane.name : null });
+function laneLine(state, kind, text, lane, { dim = "" } = {}) {
+  if (!lane) return narrationEvent(state, kind, text, { dim });
+  return narrationEvent(state, kind, text, { indent: true, lane: state.lanes.size > 1 ? lane.name : null, dim });
 }
 
 // Moves the clock forward, anchoring the first timestamp when no attempt marker anchored it first.
@@ -303,7 +304,8 @@ function narrateToolUse(state, block, lane) {
     lane.tools += 1;
     if (EDIT_TOOLS.has(name)) lane.edits += 1;
   }
-  return [laneLine(state, "tool", toolNarration(name, block.input), lane)];
+  const narration = toolNarration(name, block.input);
+  return [laneLine(state, "tool", narration.text, lane, { dim: narration.dim })];
 }
 
 // First readable text of a tool result, which the CLI writes either as a string or as blocks.
@@ -479,11 +481,19 @@ function paint(text, code) {
   return code ? `\u001b[${code}m${text}\u001b[0m` : text;
 }
 
+// Splits the text of an event into what it says and the tail a terminal prints dimmed; a tail the text does not end with is not a tail.
+function splitDim(text, dim) {
+  if (!dim || !text.endsWith(dim)) return [text, ""];
+  return [text.slice(0, text.length - dim.length), dim];
+}
+
 // One printable line of the narration: relative time, lane indent, glyph and text.
+// With color on, the tail an event marks as dim is printed faint, so the eye lands on the intent and the command stays readable underneath it.
 export function formatNarration(event, { color = false } = {}) {
   const kind = event?.kind;
   const glyph = GLYPHS[kind] ?? GLYPHS.tool;
   const label = event?.lane ? `[${event.lane}] ` : "";
-  const body = paint(`${glyph} ${label}${event?.text ?? ""}`, color ? COLORS[kind] : null);
+  const [said, tail] = splitDim(String(event?.text ?? ""), color ? event?.dim : "");
+  const body = `${paint(`${glyph} ${label}${said}`, color ? COLORS[kind] : null)}${tail ? paint(tail, "2") : ""}`;
   return `${paint(formatElapsed(event?.elapsedMs), color ? "2" : null)}  ${event?.indent ? "    " : ""}${body}`;
 }

@@ -284,6 +284,47 @@ test("a tool call is narrated by the intent the model wrote for it, with the cal
   );
 });
 
+test("on a terminal the command of a tool call is printed dim, so only the intent carries the line", () => {
+  const log = attemptLog([
+    toolUseEvent({
+      id: "toolu_dim",
+      name: "Bash",
+      input: { command: "npm test", description: "Run the suite" },
+      timestamp: secondsIntoAttempt(2),
+    }),
+    toolUseEvent({ id: "toolu_bare", name: "Bash", input: { command: "npm test" }, timestamp: secondsIntoAttempt(3) }),
+  ]);
+  const [, withIntent, withoutIntent] = narrateLog(log);
+
+  assert.equal(formatNarration(withIntent, { color: true }), "\u001b[2m00:02\u001b[0m  · Run the suite \u001b[2m— Bash npm test\u001b[0m");
+  assert.equal(formatNarration(withIntent), "00:02  · Run the suite — Bash npm test");
+  // A call the model gave no intent has nothing to dim: the whole line is the command, and dimming it would dim everything.
+  assert.equal(formatNarration(withoutIntent, { color: true }), "\u001b[2m00:03\u001b[0m  · Bash npm test");
+});
+
+test("a tool call inside a subagent lane is narrated by its intent too, dimmed and indented like any other lane line", () => {
+  const log = attemptLog([
+    agentToolUseEvent({ timestamp: secondsIntoAttempt(1) }),
+    toolUseEvent({
+      id: "toolu_lane_bash",
+      name: "Bash",
+      input: { command: "yarn vitest run tests/unit", description: "Run QA PoCs to confirm states" },
+      parentToolUseId: LANE_TOOL_USE_ID,
+      timestamp: secondsIntoAttempt(4),
+    }),
+    // `Read` carries no `description` at all, so a lane line for it keeps the tool-first shape — the lane is not what drops the intent, the tool is.
+    toolUseEvent({ id: "toolu_lane_read", name: "Read", input: { file_path: "/repo/index.mjs" }, parentToolUseId: LANE_TOOL_USE_ID, timestamp: secondsIntoAttempt(6) }),
+  ]);
+  const [, , laneBash, laneRead] = narrateLog(log);
+
+  assert.equal(formatNarration(laneBash), "00:04      · Run QA PoCs to confirm states — Bash yarn vitest run tests/unit");
+  assert.equal(
+    formatNarration(laneBash, { color: true }),
+    "\u001b[2m00:04\u001b[0m      · Run QA PoCs to confirm states \u001b[2m— Bash yarn vitest run tests/unit\u001b[0m",
+  );
+  assert.equal(formatNarration(laneRead), "00:06      · Read index.mjs");
+});
+
 test("a huge event never produces a huge line", () => {
   const huge = "x".repeat(1_000_000);
   const lines = narrate(

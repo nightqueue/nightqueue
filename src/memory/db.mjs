@@ -244,7 +244,9 @@ END;
 `;
 
 const connections = new Map();
+const walPins = new Map();
 let walWarned = false;
+let exitHookInstalled = false;
 
 const BUSY_TIMEOUT_MS = 5000;
 const BUSY_ATTEMPTS = 24;
@@ -342,6 +344,52 @@ function initConnection(db, path) {
   migrateOrExplain(db);
 }
 
+// Closes the WRITABLE connections of this process while the read-only pins are still open, so the last connection
+// SQLite sees close is a read-only one. It runs on `exit` because the order the driver tears its own handles down in is
+// not ours to choose, and a writable connection that closes last is the one that folds the log and deletes the sidecars.
+function closeWritableConnections() {
+  for (const [path, db] of [...connections]) {
+    connections.delete(path);
+    try {
+      db.close();
+    } catch {
+      continue;
+    }
+  }
+}
+
+// Installs the exit hook once per process.
+function installExitHook() {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.on("exit", closeWritableConnections);
+}
+
+// Keeps one read-only connection open for the life of the process, beside the writable one.
+//
+// SQLite folds the write-ahead log back into the database and DELETES `-wal`/`-shm` when the last connection to close
+// is one that could write. That delete is correct only where the operating system really enforces the POSIX advisory
+// lock of the other connections; where it does not — a FUSE or network mount of the home — it lands under a runner
+// still attached to the shared-memory file, which then keeps writing through an inode nobody else can see while the
+// next process creates a fresh one. Two wal-indexes over one log is how a healthy database starts answering
+// `file is not a database` (`nightshift doctor`, checks `db shm` and `home mount`).
+//
+// A read-only connection can never take that delete, so holding one until the process really exits turns the fold on
+// close into a checkpoint every other process survives. The pin READS once on purpose: a connection that has not run a
+// statement has not mapped the wal-index at all, and one that has not mapped it is not a connection SQLite counts on
+// close. It is taken AFTER the writable connection is initialized, because switching a fresh database into WAL needs no
+// other connection attached, and a pin that cannot be opened costs the guarantee and never the command.
+function pinWal(env, path) {
+  if (walPins.has(path)) return;
+  try {
+    const pin = openDbReadOnly(env);
+    pin.prepare("PRAGMA user_version").get();
+    walPins.set(path, pin);
+  } catch {
+    return;
+  }
+}
+
 // Opens the database of this NIGHTSHIFT_HOME, creating and migrating it on first use.
 export function openDb(env = process.env) {
   const path = dbPath(env);
@@ -351,6 +399,8 @@ export function openDb(env = process.env) {
   const db = new DatabaseSync(path);
   withWriteRetry(() => initConnection(db, path));
   connections.set(path, db);
+  installExitHook();
+  pinWal(env, path);
   return db;
 }
 
@@ -390,13 +440,22 @@ export function migrateIfOutdated(env = process.env) {
   }
 }
 
-// Closes the cached connection of a home so a TEST can reopen it from scratch; production must never call it, because a close SQLite believes is the last one deletes `-shm`/`-wal`, and a filesystem that does not enforce the POSIX advisory lock of a live connection lets that happen under a runner still attached to them (`test/memory/close-guard.test.mjs` keeps it confined here).
+// Tells whether this process holds a cached WRITABLE connection to a home. It exists for the TESTS that assert a
+// read-only caller never opened one: the side effect they used to probe with — `-shm` vanishing on close — is gone now
+// that a read-only pin keeps the sidecars in place, and a direct answer was always the better probe anyway.
+export function hasCachedWriteConnection(env = process.env) {
+  return connections.has(dbPath(env));
+}
+
+// Closes the cached connection of a home so a TEST can reopen it from scratch; production must never call it, because a close SQLite believes is the last one deletes `-shm`/`-wal`, and a filesystem that does not enforce the POSIX advisory lock of a live connection lets that happen under a runner still attached to them (`test/memory/close-guard.test.mjs` keeps it confined here). It releases the read-only pin of the home too, and in that order, so a home reopened in the same process pins the file it actually has.
 export function closeDb(env = process.env) {
   const path = dbPath(env);
   const db = connections.get(path);
-  if (!db) return;
+  const pin = walPins.get(path);
   connections.delete(path);
-  db.close();
+  walPins.delete(path);
+  if (db) db.close();
+  if (pin) pin.close();
 }
 
 export const FINISH_VERIFICATION_FAILED = "finish verification failed";

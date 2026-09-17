@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { defaultContext, run } from "../src/cli/index.mjs";
@@ -141,6 +141,10 @@ test("a queue database that cannot be read lets the update through, printing not
   claimedJob(host.env);
   closeDb(host.env);
   writeFileSync(dbPath(host.env), "not a database");
+  // The write-ahead log outlives the process that wrote it, so a database file replaced under it is rebuilt from the
+  // log on the next open: an unreadable database is only unreadable once its sidecars are gone too.
+  rmSync(`${dbPath(host.env)}-wal`, { force: true });
+  rmSync(`${dbPath(host.env)}-shm`, { force: true });
 
   const { ctx, out, err } = makeCtx(host.env);
   assert.equal(await run(["update"], ctx), 0, err.join("\n"));
