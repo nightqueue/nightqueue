@@ -123,6 +123,16 @@ function shortTarget(name, input) {
   return "";
 }
 
+// What a tool call says in one line: the intent the model wrote for it first, because that is what a human reads the log for,
+// then the tool and its target, which is what stays machine readable. A call without an intent keeps the tool-first shape it always had.
+function toolNarration(name, input) {
+  const label = toolLabel(name);
+  const target = shortTarget(name, input);
+  const call = target ? `${label} ${target}` : label;
+  const intent = clip(firstLine(input?.description), DESCRIPTION_LIMIT);
+  return intent ? `${intent} — ${call}` : call;
+}
+
 // Label of a lane: its name, the phase of the pipeline and the model the orchestrator picked for it, each part only when it is known.
 // The model comes from the `tool_use` block that launched the subagent, the only event of the stream that carries it: a lane opened from `task_started` has none.
 function laneLabel(subagentType, model) {
@@ -293,8 +303,7 @@ function narrateToolUse(state, block, lane) {
     lane.tools += 1;
     if (EDIT_TOOLS.has(name)) lane.edits += 1;
   }
-  const target = shortTarget(name, block.input);
-  return [laneLine(state, "tool", target ? `${toolLabel(name)} ${target}` : toolLabel(name), lane)];
+  return [laneLine(state, "tool", toolNarration(name, block.input), lane)];
 }
 
 // First readable text of a tool result, which the CLI writes either as a string or as blocks.

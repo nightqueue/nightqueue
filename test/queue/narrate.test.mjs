@@ -40,8 +40,8 @@ test("the default narration turns a whole attempt into one line per relevant eve
     "00:02  » Reading the ticket before anything else.",
     "00:03  » Registered the run.",
     `00:03  ⚑ slug: ${SLUG}`,
-    "00:05  · Bash git status --short",
-    "00:07  · Bash npm test",
+    "00:05  · check the tree — Bash git status --short",
+    "00:07  · run the suite — Bash npm test",
     "00:08  ✗ Bash failed: Exit code 1",
     "00:09  ▶ triager (phase 1, sonnet) — triage the bug",
     "00:13      · Read index.mjs",
@@ -261,6 +261,27 @@ test("a rate limit marker whose instant cannot be read is still narrated, with t
   const log = [attemptMarker(1).trimEnd(), `=== rate limit until never @ ${secondsIntoAttempt(10)} ===`, ""].join("\n");
 
   assert.deepEqual(narrate(log), ["00:00  ═ attempt 1", "00:10  ⏸ rate limit hit - waiting until never"]);
+});
+
+test("a tool call is narrated by the intent the model wrote for it, with the call kept as the detail", () => {
+  assert.deepEqual(
+    narrate(
+      attemptLog([
+        toolUseEvent({
+          id: "toolu_intent",
+          name: "Bash",
+          input: { command: 'grep -n "setItem" src/pages/ProfileFound.tsx', description: "Check what ProfileFound persists to localStorage" },
+          timestamp: secondsIntoAttempt(2),
+        }),
+        toolUseEvent({ id: "toolu_bare", name: "Bash", input: { command: "npm test" }, timestamp: secondsIntoAttempt(3) }),
+      ]),
+    ),
+    [
+      "00:00  ═ attempt 1",
+      '00:02  · Check what ProfileFound persists to localStorage — Bash grep -n "setItem" src/pages/ProfileFound...',
+      "00:03  · Bash npm test",
+    ],
+  );
 });
 
 test("a huge event never produces a huge line", () => {
