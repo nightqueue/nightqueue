@@ -17,6 +17,8 @@ export const CONTROL_LINE_PATTERNS = Object.freeze([
   ATTEMPT_MARKER_RE,
   TIER_RAISE_LINE_RE,
 ]);
+// The raw line the CLI prints (never a JSON event of the stream) when it gives up waiting for a background task.
+const RAW_CEILING_LINE_RE = /^Background tasks still running after/;
 const PR_URL_SOURCE = "https?://github\\.com/[\\w.-]+/[\\w.-]+/pull/\\d+";
 const PR_URL_RE = new RegExp(PR_URL_SOURCE, "g");
 const PR_URL_ONLY_RE = new RegExp(`^${PR_URL_SOURCE}$`);
@@ -241,6 +243,38 @@ export function hasGateMarkerInStream(log) {
     if (text && hasGateMarker(text)) return true;
   }
   return false;
+}
+
+// The task the CLI itself killed after its wait ceiling, read from the LAST attempt of the log; null when nothing was killed.
+// A kill shows either as the raw ceiling line (never a JSON event) or as a `task_updated` event whose patch marks the task killed;
+// the description comes from the last `background_tasks_changed` event that still lists that task, falling back to its bare id.
+export function runtimeKillFromStream(log) {
+  const scanned = linesWithFenceState(lastAttemptStream(log));
+  let sawCeilingLine = false;
+  let killedTaskId = null;
+  let lastListedTaskId = null;
+  const descriptions = new Map();
+  for (const entry of scanned) {
+    if (!isMarkerCandidate(entry)) continue;
+    const event = parseEventLine(entry.line);
+    if (event === null) {
+      if (RAW_CEILING_LINE_RE.test(entry.line)) sawCeilingLine = true;
+      continue;
+    }
+    if (event.type === "system" && event.subtype === "background_tasks_changed" && Array.isArray(event.tasks)) {
+      for (const task of event.tasks) {
+        if (typeof task?.task_id !== "string") continue;
+        lastListedTaskId = task.task_id;
+        if (typeof task.description === "string") descriptions.set(task.task_id, task.description);
+      }
+    }
+    if (event.type === "system" && event.subtype === "task_updated" && event.patch?.status === "killed" && typeof event.task_id === "string") {
+      killedTaskId = event.task_id;
+    }
+  }
+  if (!sawCeilingLine && killedTaskId === null) return null;
+  const taskId = killedTaskId ?? lastListedTaskId;
+  return { taskId, description: taskId ? (descriptions.get(taskId) ?? taskId) : "background task" };
 }
 
 // Body of the LAST `## Notice` section of a text, ignoring headings quoted inside a code fence.

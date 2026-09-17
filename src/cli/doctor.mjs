@@ -122,7 +122,7 @@ function checkDesktopMcp(ctx) {
     : check(DESKTOP_LABEL, "warn", "registered from another path", "run `nightshift setup`");
 }
 
-// Checks the three hook entries of this package in the host settings.
+// Checks the four hook entries of this package in the host settings.
 function checkHooks(ctx) {
   let settings;
   try {

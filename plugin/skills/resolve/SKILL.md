@@ -53,17 +53,7 @@ agent, print a line in this format first:
 
 **Severity icons (QA/risks):** 🔴 high · 🟡 medium · 🟢 low.
 
-## ⛔ Hard rule — launching a subagent (applies to EVERY fan-out)
-
-> **`run_in_background: true` is FORBIDDEN in the orchestrator.** It applies to every
-> launch of /resolve — Stage B provers, coders running in parallel by batch,
-> background Bash commands and any other fan-out. **Why:** the pipeline runs under
-> `claude -p`; ending a turn with no pending `tool_use` kills the background tasks still
-> running, silently, with the session still exiting code 0.
->
-> **Parallelism = N `tool_use` blocks in the SAME content block of ONE single message.**
-> The N run simultaneously and the turn stays blocked until the last subagent returns —
-> never end a turn announcing a wait: either the `tool_use` is pending, or the work died.
+The runtime waits for every subagent and background task of an unattended run; launch them in whichever way is cheapest and never end a turn to wait for one on purpose — parallel launches are N tool_use blocks in one message.
 
 ## Pipeline (execute in this exact order)
 
@@ -955,8 +945,7 @@ user that the implementation did not complete successfully and terminate.
 **Parallel coders (batches):** if the implementation is split into concurrent batches, each
 batch runs in an isolated worktree (`isolation: worktree`) — NEVER multiple coders in the same
 working tree, and `git stash`/`checkout`/`reset` is forbidden with any batch active. The N
-coders go **in a single message** (N `tool_use` in the same content block), never with
-`run_in_background` — see ⛔ Hard rule.
+coders go **in a single message** (N `tool_use` in the same content block).
 
 ### Phase 5 — Adversarial QA (attack)
 
@@ -1146,8 +1135,7 @@ halfway.
 
 **Stage B — Provers (complex):** launch **N qa-guardian in parallel, all in a single message**
 (subagent_type="nightshift:qa-guardian", `model: "sonnet"`, `mode: "bypassPermissions"`) — one
-per root group of the hypotheses (never one per symptom). `run_in_background: true` is
-forbidden (⛔ Hard rule). The `description` of each prover's Agent call MUST start with
+per root group of the hypotheses (never one per symptom). The `description` of each prover's Agent call MUST start with
 `H<N> (group: <group>): ` — the cockpit identifies each prover lane and its verdict by that
 prefix. Single header of the phase: `🛡️ QA-GUARDIAN · complex · PROVERS ×N · ...`. On a resume
 whose block says `From stage: qa-stage-b`, `05a-qa-analyst.md` is already on disk: read it and

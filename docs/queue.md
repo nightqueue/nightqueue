@@ -270,14 +270,16 @@ which is what to turn on if the output ever stalls again.
 **The seven states.** A job is `pending` while it waits, `running` while a runner
 owns it under a lease, and then one of five final states: `done` (the run
 delivered a pull request URL), `merged` (that pull request was merged on
-GitHub), `gate` (the pipeline stopped asking for a human
-decision, or ended with nothing to deliver), `failed` (a non-zero exit, a
-timeout, or an orphan that had already spent its attempts) and `cancelled`
-(cancelled by the operator, or stopped while running). A job in `gate` ALWAYS
-carries the reason it stopped in `notice_md`: without a `## Notice` the reason is
-the summary the pipeline recorded in `state.json`, and the whole final text of
-the orchestrator when there is none, and a run that ended saying nothing at
-all is `failed` with a fixed warning instead of a gate nobody can read.
+GitHub), `gate` (the pipeline stopped asking for a human decision - a recorded
+`outcome.status: "gate"` in `state.json`, or the `## Requires user
+confirmation` marker in the stream), `failed` (a non-zero exit, a timeout, an
+orphan that had already spent its attempts, or a clean exit that ended with
+nothing to deliver and never asked for a decision) and `cancelled` (cancelled
+by the operator, or stopped while running). A job in `gate` ALWAYS carries the
+reason it stopped in `notice_md`: without a `## Notice` the reason is the
+summary the pipeline recorded in `state.json`, and the whole final text of the
+orchestrator when there is none, and a run that ended saying nothing at all is
+`failed` with a fixed warning instead of a gate nobody can read.
 
 A `pending` job the preflight refused to start also carries a reason, in its own
 `blocked_code` column - it answers a different question than `status`: not where
@@ -372,6 +374,20 @@ and every attempt also dies after 20 minutes without a single line on the
 stream. Neither is a transient failure: a timed out attempt is `failed` and is
 never retried. Only a provider failure (429, overload, connection reset) is
 retried, up to `--max-attempts`, backing off 5s, 15s and 45s.
+
+**The attempt has no other ceiling, and a deterministic rule never lives only in
+the prompt.** The runner starts the agent with
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`, so the CLI waits for every subagent and
+background task the run still has open instead of killing one after ten minutes
+and exiting `0`; the two timeouts above already bound the attempt and they are
+the only ones. A run the CLI kills anyway comes back as `failed`, saying the
+runtime killed that background task after its wait ceiling, never as a gate, and
+it is not retried. And a `PreToolUse` hook rewrites every `Agent`/`Task` launch
+of an unattended run to `run_in_background: false` - it normalises the call, it
+never blocks it. That is the shape of the rule: what has to happen on every run
+lives in the runtime or in a hook with a test behind it, never only in the prompt
+of the pipeline, because a sentence in a prompt covers only the wording it
+happens to forbid and is lost the moment the platform underneath changes.
 
 **Resuming by slug.** The run directory of a job is opened by the runner, not
 derived by the pipeline: the claim gives the job a slug when its row has none

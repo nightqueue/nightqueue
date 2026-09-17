@@ -146,8 +146,8 @@ echo "$GITHUB_TOKEN" | nightshift connection add gh --type github
    (`claude_desktop_config.json`), when that app is installed - an app that is
    not installed is a `skipped` step and never a directory this CLI creates.
    `--no-desktop` skips it.
-6. the three hooks in `<claude config>/settings.json`: `SessionStart`,
-   `UserPromptSubmit` and `SessionEnd`, pointing at that same entry.
+6. the four hooks in `<claude config>/settings.json`: `SessionStart`,
+   `UserPromptSubmit`, `SessionEnd` and `PreToolUse`, pointing at that same entry.
 7. the runtime as a local marketplace, plus the plugin installed from it.
 8. the semantic recall: the embedding library in `$NIGHTSHIFT_HOME/embedding`
    and its weights - the only step that opens the network, and the only one
@@ -158,7 +158,7 @@ runtime that is not there would break every session of the host.
 
 `--remove` undoes steps 3 to 7 - the shims, the marked PATH block, the MCP server,
 its entry in the Claude Desktop configuration,
-the three hook entries, the plugin and the marketplace - and asks before
+the four hook entries, the plugin and the marketplace - and asks before
 deleting `runtime/` and `embedding/`. It never touches `config.json`,
 `secrets.json` or the database; only `--remove --purge` deletes
 `$NIGHTSHIFT_HOME` whole.

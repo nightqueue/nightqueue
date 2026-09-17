@@ -23,6 +23,7 @@ import {
   parseSlugLine,
   parseSlugTypeLine,
   parseTierRaiseLine,
+  runtimeKillFromStream,
   sumUsage,
   tokensFromEventLine,
 } from "../../src/queue/stream.mjs";
@@ -293,6 +294,44 @@ test("only a marker the runtime itself wrote, in sequence and unquoted, closes a
 
   const quoted = [attemptMarker(1), `  12\t${attemptMarker(2)}`, ""].join("\n");
   assert.equal(lastAttemptStream(quoted), [`  12\t${attemptMarker(2)}`, ""].join("\n"), "a marker inside a `cat -n` quotation closed an attempt");
+});
+
+// The raw (non-JSON) line the CLI prints when it gives up waiting for a background task.
+const CEILING_LINE = "Background tasks still running after 600s; terminating. Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.";
+
+test("a runtime kill is read from the raw ceiling line plus the `task_updated` killed event, named from the last `background_tasks_changed` that lists it", () => {
+  const backgroundTasksChanged = { type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "task_1", task_type: "local_agent", description: "Verify checks and QA PoCs" }] };
+  const killed = { type: "system", subtype: "task_updated", task_id: "task_1", patch: { status: "killed" } };
+  const log = [line(systemInitEvent()), line(backgroundTasksChanged), CEILING_LINE, line(killed)].join("\n");
+
+  assert.deepEqual(runtimeKillFromStream(log), { taskId: "task_1", description: "Verify checks and QA PoCs" });
+});
+
+test("a killed task with no `background_tasks_changed` listing it falls back to its own task_id as the description", () => {
+  const killed = { type: "system", subtype: "task_updated", task_id: "task_9", patch: { status: "killed" } };
+  const log = toNdjson([systemInitEvent(), killed]);
+
+  assert.deepEqual(runtimeKillFromStream(log), { taskId: "task_9", description: "task_9" });
+});
+
+test("a kill detected only by the raw ceiling line, with no `task_updated` at all, falls back to the last background task listed", () => {
+  const backgroundTasksChanged = { type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "task_2", description: "Run the migration" }] };
+  const log = [line(systemInitEvent()), line(backgroundTasksChanged), CEILING_LINE].join("\n");
+
+  assert.deepEqual(runtimeKillFromStream(log), { taskId: "task_2", description: "Run the migration" });
+});
+
+test("a clean stream with neither the ceiling line nor a killed task is never a runtime kill", () => {
+  assert.equal(runtimeKillFromStream(doneStream()), null);
+  assert.equal(runtimeKillFromStream(""), null);
+});
+
+test("a forged mention of the ceiling line never counts as a kill: quoted inside an assistant message or inside a fenced block", () => {
+  const quoted = toNdjson([systemInitEvent(), assistantEvent(`The CLI printed:\n${CEILING_LINE}`)]);
+  assert.equal(runtimeKillFromStream(quoted), null, "the line quoted inside a JSON event was read as a raw kill line");
+
+  const fenced = [line(systemInitEvent()), "```", CEILING_LINE, "```"].join("\n");
+  assert.equal(runtimeKillFromStream(fenced), null, "a fenced quotation of the ceiling line was read as a real kill");
 });
 
 test("usage adds up per message id and the result event of the session has the final word", () => {

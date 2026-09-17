@@ -94,10 +94,13 @@ function normalize(text, substitutions) {
   // The rate limit fields of `queue run --dry` are the other one: this tree answers WHICH reset a claim
   // would have to wait for, and a baseline that never read a pause cannot carry the two fields that say it.
   // So are its `cap` (no default ceiling since one job per runner) and `max` (the budget a baseline never reported).
+  // The `hook PreToolUse` doctor check is the same kind of additive difference: a baseline exported before
+  // the subagent-foreground hook landed never registers it, so it never reports the check either.
   return out
     .replace(/schema v\d+/g, "schema v<N>")
     .replace(/"pausedUntil":(?:null|"[^"]*"),"rateLimit":(?:null|\{[^{}]*\}),/g, "")
-    .replace(/"cap":(?:null|\d+),(?:"max":(?:null|\d+),)?/g, "");
+    .replace(/"cap":(?:null|\d+),(?:"max":(?:null|\d+),)?/g, "")
+    .replace(/\{"name":"hook PreToolUse"[^{}]*\},?/g, "");
 }
 
 function assertParity(label, before, after, substitutionsBefore, substitutionsAfter) {

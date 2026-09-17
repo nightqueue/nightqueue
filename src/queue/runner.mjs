@@ -38,6 +38,7 @@ import {
   extractTierRaiseFromEventLine,
   extractUsage,
   isPrUrl,
+  runtimeKillFromStream,
   sumUsage,
 } from "./stream.mjs";
 import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
@@ -238,9 +239,10 @@ function noteOwnershipLost(job, env) {
   }
 }
 
-// Tells whether a failed attempt deserves another one: only a transient failure, never a timeout.
+// Tells whether a failed attempt deserves another one: only a transient failure, never a timeout nor a run the CLI itself killed after its wait ceiling.
 function isRetryable(job, attempt, result, outcome) {
   if (outcome.status !== "failed" || result.timedOut || result.idleTimedOut) return false;
+  if (runtimeKillFromStream(result.log)) return false;
   return isTransientFailure(result.log) && attempt < job.max_attempts;
 }
 

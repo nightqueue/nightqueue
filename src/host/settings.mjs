@@ -9,6 +9,7 @@ const HOOK_EVENTS = [
   { event: "SessionStart", hook: "session-start", timeout: 10 },
   { event: "UserPromptSubmit", hook: "prompt-context", timeout: 10 },
   { event: "SessionEnd", hook: "reflect", timeout: 15 },
+  { event: "PreToolUse", hook: "agent-foreground", timeout: 5, matcher: "Agent|Task" },
 ];
 
 // Command line registered in the host for one hook of this package.
@@ -22,9 +23,14 @@ export function spacedRootWarning(root) {
   return `nightshift: warning: the package path contains a space (${root}); the host may fail to run the hook command`;
 }
 
-// The three hook entries this package wants in the host settings, each with the timeout its work needs.
+// The four hook entries this package wants in the host settings, each with the timeout its work needs and, when it applies, the matcher restricting it.
 export function desiredHooks(env = process.env) {
-  return HOOK_EVENTS.map(({ event, hook, timeout }) => ({ event, command: hookCommand(hook, env), timeout }));
+  return HOOK_EVENTS.map(({ event, hook, timeout, matcher }) => ({
+    event,
+    command: hookCommand(hook, env),
+    timeout,
+    ...(matcher ? { matcher } : {}),
+  }));
 }
 
 // Reads the host settings file, treating absence as an empty object and broken content as a user error.
@@ -53,6 +59,12 @@ function isOwnCommand(command) {
   return typeof command === "string" && OWN_COMMAND_MARKS.some((mark) => command.includes(mark));
 }
 
+// Tells whether every entry of a group belongs to this package, which is the only case its matcher can be touched.
+function groupIsExclusive(group) {
+  const entries = Array.isArray(group?.hooks) ? group.hooks : [];
+  return entries.length > 0 && entries.every((entry) => isOwnCommand(entry?.command));
+}
+
 // Entries of one event that belong to this package, each with the group holding it.
 function ownEntries(groups) {
   const found = [];
@@ -72,21 +84,29 @@ function dropEntry(data, event, groups, { group, entry }) {
   if (!groups.length && data.hooks) delete data.hooks[event];
 }
 
-// Adds or repairs the entry of one event, leaving every third-party entry exactly as it was.
-function mergeEvent(data, { event, command, timeout }) {
+// Adds or repairs the entry of one event, leaving every third-party entry - and the matcher of any group holding one - exactly as it was.
+function mergeEvent(data, { event, command, timeout, matcher }) {
   const groups = ensureEventGroups(data, event);
   const own = ownEntries(groups);
   if (!own.length) {
-    groups.push({ hooks: [{ type: "command", command, timeout }] });
+    const group = matcher ? { matcher, hooks: [] } : { hooks: [] };
+    group.hooks.push({ type: "command", command, timeout });
+    groups.push(group);
     return "created";
   }
   const [first, ...extra] = own;
-  const wasCurrent = first.entry.type === "command" && first.entry.command === command && first.entry.timeout === timeout;
+  const entryCurrent = first.entry.type === "command" && first.entry.command === command && first.entry.timeout === timeout;
+  const exclusive = groupIsExclusive(first.group);
+  const matcherCurrent = !exclusive || first.group.matcher === matcher;
   first.entry.type = "command";
   first.entry.command = command;
   first.entry.timeout = timeout;
+  if (exclusive) {
+    if (matcher) first.group.matcher = matcher;
+    else delete first.group.matcher;
+  }
   for (const duplicate of extra) dropEntry(data, event, groups, duplicate);
-  return wasCurrent && !extra.length ? "already present" : "updated";
+  return entryCurrent && matcherCurrent && !extra.length ? "already present" : "updated";
 }
 
 // Removes every entry of one event that belongs to this package.
@@ -98,12 +118,12 @@ function removeEvent(data, event) {
   return "removed";
 }
 
-// Brings the three hook entries of this package into the settings object, in place.
+// Brings the four hook entries of this package into the settings object, in place.
 export function mergeHooks(data, env = process.env) {
   return desiredHooks(env).map((hook) => ({ event: hook.event, status: mergeEvent(data, hook) }));
 }
 
-// Takes the three hook entries of this package out of the settings object, in place.
+// Takes the four hook entries of this package out of the settings object, in place.
 export function removeHooks(data, env = process.env) {
   return desiredHooks(env).map((hook) => ({ event: hook.event, status: removeEvent(data, hook.event) }));
 }

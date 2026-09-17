@@ -28,5 +28,6 @@ test("the table row ending in `|` never supplies the URL by itself: only the `Re
 
   const outcome = classifyJobResult({ log, exitCode: 0 });
   assert.equal(outcome.prUrl, null, "a table cell ending in a pipe must never count as a delivery");
-  assert.equal(outcome.status, "gate");
+  // No PR, no gate marker and no recorded gate status: the run never asked for a decision, so it is a failure, not a gate.
+  assert.equal(outcome.status, "failed");
 });

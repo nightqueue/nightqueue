@@ -1,4 +1,5 @@
 import { UserError } from "../config/errors.mjs";
+import { runAgentForeground } from "../hooks/agent-foreground.mjs";
 import { runPromptContext } from "../hooks/prompt-context.mjs";
 import { runReflect } from "../hooks/reflect.mjs";
 import { runSessionStart } from "../hooks/session-start.mjs";
@@ -10,6 +11,7 @@ const HOOKS = new Map([
   ["session-start", { handler: runSessionStart, fallback: "" }],
   ["prompt-context", { handler: runPromptContext, fallback: "" }],
   ["reflect", { handler: runReflect, fallback: "{}" }],
+  ["agent-foreground", { handler: runAgentForeground, fallback: "" }],
 ]);
 
 // Consumes the whole stdin, giving up on the wait when the host keeps the stream open.

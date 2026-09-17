@@ -187,7 +187,7 @@ CLIs, `config.json`, the mode of `secrets.json`, each of the three shims (a
 missing shortcut only warns), a shim left over from the `shift` command, the
 MCP registration, the registration in the Claude Desktop app (`claude desktop
 mcp`, which is a `warn` when the app is installed and does not know the server
-and an `ok` when the app is not installed at all), each of the three hooks, the
+and an `ok` when the app is not installed at all), each of the four hooks, the
 plugin, the embedding weights,
 the optional embedding
 library, the schema version of the database, the pause sentinel of the queue, the

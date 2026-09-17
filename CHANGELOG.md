@@ -8,6 +8,17 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A subagent of an unattended run is never killed for taking too long to answer.
+  The runner starts the agent with `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`, so
+  the CLI waits for every background task the run still has open instead of
+  killing one after ten minutes and exiting `0`; the job timeout and the idle
+  timeout already bound the attempt. A new `PreToolUse` hook,
+  `nightshift hook agent-foreground`, closes the other half: inside a job it
+  rewrites every `Agent`/`Task` launch to `run_in_background: false`, whether the
+  call asked for the background or simply left the field out. It normalises the
+  call and never blocks it, and `setup` and `doctor` now register and check four
+  hooks instead of three.
+
 - A pending job a preflight block is holding back is now visible instead of
   looking like it is only waiting for a runner: `jobs.blocked_code` is an
   orthogonal column, the same shape `notice_md` already carries beside a
@@ -81,6 +92,19 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   never runs by itself: the automatic witness sweep is unchanged.
 
 ### Fixed
+
+- A run the CLI killed at its background-wait ceiling is no longer recorded as a
+  job waiting for a decision. A stream carrying the ceiling line, or a task the
+  CLI marked `killed`, is a failure whatever the final text says, whatever
+  `state.json` recorded and even with a pull request in it, and the reason names
+  the background task that was killed. The same pass tightened the gate itself: a
+  clean exit with no pull request only waits for a human when the run actually
+  asked for one - by recording the gate in `state.json` or by printing
+  `## Requires user confirmation` - and is `failed` otherwise, keeping its final
+  text as the reason. A last line like "Verifier running. Waiting for its
+  verdict" used to be enough to buy a gate; it now reads as what it is, a run
+  that stopped without delivering. Neither is a transient failure, so no attempt
+  is spent re-running one, and `queue retry` takes both without `--note`.
 
 - A retried job no longer degrades into a clean run. The job keeps the slug and
   the run directory of the attempt it is resuming, the resume is counted in

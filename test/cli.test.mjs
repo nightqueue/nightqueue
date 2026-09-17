@@ -367,5 +367,5 @@ test("an unknown hook names the valid ones", (t) => {
   const home = makeDir(t, "hook-unknown");
   const result = runCli(home, ["hook", "nope"]);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /unknown hook `nope`; use: session-start, prompt-context, reflect/);
+  assert.match(result.stderr, /unknown hook `nope`; use: session-start, prompt-context, reflect, agent-foreground/);
 });

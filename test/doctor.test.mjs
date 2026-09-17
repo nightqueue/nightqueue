@@ -71,6 +71,7 @@ test("a host that went through setup has no failing check", async (t) => {
   assert.equal(statusOf(report, "hook SessionStart"), "ok");
   assert.equal(statusOf(report, "hook UserPromptSubmit"), "ok");
   assert.equal(statusOf(report, "hook SessionEnd"), "ok");
+  assert.equal(statusOf(report, "hook PreToolUse"), "ok");
   assert.equal(statusOf(report, "plugin"), "ok");
   assert.equal(statusOf(report, "model"), "warn");
   assert.equal(statusOf(report, "projects"), "warn");
@@ -160,6 +161,7 @@ test("a home that never went through setup fails and exits 1", async (t) => {
   assert.equal(statusOf(report, "hook SessionStart"), "fail");
   assert.equal(statusOf(report, "hook UserPromptSubmit"), "fail");
   assert.equal(statusOf(report, "hook SessionEnd"), "fail");
+  assert.equal(statusOf(report, "hook PreToolUse"), "fail");
   assert.equal(statusOf(report, "plugin"), "fail");
   assert.equal(statusOf(report, "gh"), "warn");
   for (const name of ["nshift", "nsft"]) {

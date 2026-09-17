@@ -14,6 +14,8 @@ import { isSessionIdSafe } from "./stream.mjs";
 
 // Silence of the stream that means a dead process: no event at all for this long ends the attempt.
 export const IDLE_TIMEOUT_S = 1200;
+// The CLI's own wait for a background subagent task gets no ceiling here: `timeout_s` and the idle timeout above already bound the attempt, so a ceiling of its own would only kill a subagent the run is still waiting for.
+const BG_WAIT_CEILING_ENV = { CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0" };
 // Interval of the ownership poll inside the spawn: one lease renewal per tick, never per line.
 export const STOP_POLL_MS = 5000;
 export const SPAWN_STDIO = ["ignore", "pipe", "pipe"];
@@ -297,7 +299,7 @@ export function spawnClaude({
     const stream = openAttemptLog(logPath, attempt);
     const resolved = resolveBinImpl(env);
     const args = buildArgs({ prompt, resumeSessionId, env, jobId });
-    const childEnv = jobId === null ? { ...env } : { ...env, ...jobIdentity(env, jobId) };
+    const childEnv = jobId === null ? { ...env, ...BG_WAIT_CEILING_ENV } : { ...env, ...jobIdentity(env, jobId), ...BG_WAIT_CEILING_ENV };
     const child = spawnImpl(resolved?.bin ?? "claude", args, { cwd, env: childEnv, stdio: SPAWN_STDIO });
     const chunks = [];
     let timedOut = false;

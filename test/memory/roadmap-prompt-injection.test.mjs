@@ -91,7 +91,7 @@ describe("H-B2: runtime-contract literals (QUEUE_SLUG:, ## Notice) from operator
     assert.equal(extractResultText(injectedPrompt), null, "a plain-text prompt carries no `result` event, so extractResultText reports none");
   });
 
-  it("an echoed '## Notice' with no pull request is a gate by the documented contract, so the defence has to be the prompt builder and not the classifier", () => {
+  it("an echoed '## Notice' with no pull request is now a failure, not a gate: the injected heading buys the attacker nothing", () => {
     // The orchestrator's own final text QUOTES back the operator-authored roadmap detail
     // (a documented LLM behavior: summarizing/echoing task context in the final message),
     // reproducing the attacker's fake '## Notice' heading as if it were the orchestrator's own.
@@ -105,14 +105,14 @@ describe("H-B2: runtime-contract literals (QUEUE_SLUG:, ## Notice) from operator
 
     const outcome = classifyJobResult({ log, exitCode: 0 });
 
-    // A clean exit that delivers no pull request but does say something is a `gate` by the
-    // documented contract (README `## Runtime contract`: "a run that delivers none ends as
-    // `gate`, never as `done`"); only a run that said nothing AT ALL is the silent-stop
-    // `failed`. The classifier cannot tell an echoed notice from an authored one, and making it
-    // try would contradict that contract. That is exactly why the defence belongs upstream, in
-    // the prompt builder: the test above proves operator text can no longer carry a `## Notice`
-    // into the prompt in the first place.
-    assert.equal(outcome.status, "gate", "a clean exit with a notice and no pull request is a gate by the documented contract");
-    assert.ok(outcome.noticeMd, "a gate always carries the reason it is asking for a human");
+    // Under the current contract, a clean exit with no pull request is a `gate` only when the
+    // run itself asked for a decision: a recorded `outcome.status: "gate"` in state.json, or the
+    // `## Requires user confirmation` marker in the stream. An echoed `## Notice` heading is
+    // neither, so this run is `failed`, carrying its final text as the reason. That strengthens
+    // this security test rather than weakening it: injected operator text can no longer buy a
+    // gate at all, on top of the prompt builder already refusing to let it reach the prompt as a
+    // real `## Notice` heading (the test above).
+    assert.equal(outcome.status, "failed", "an echoed notice asks for nothing: no recorded gate status, no confirmation marker");
+    assert.ok(outcome.noticeMd, "the failure still carries the reason, even though it is not a gate");
   });
 });

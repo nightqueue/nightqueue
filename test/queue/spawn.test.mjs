@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { jobLogPath, homeDir, runDir } from "../../src/config/paths.mjs";
 import { isSafeSegment } from "../../src/queue/resume.mjs";
@@ -299,4 +301,47 @@ test("the environment override wins over the PATH, and a relative override is ig
   env.NIGHTSHIFT_CLAUDE_BIN = FAKE_CLAUDE;
   assert.deepEqual(resolveClaudeBin(env), { bin: FAKE_CLAUDE, via: "env" });
   assert.notEqual(resolveClaudeBin({ ...env, NIGHTSHIFT_CLAUDE_BIN: "./claude" }).via, "env");
+});
+
+// A minimal EventEmitter shaped like a spawned child, closing itself on the next tick with exit code 0.
+function fakeChild() {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = () => {};
+  process.nextTick(() => {
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 0);
+  });
+  return child;
+}
+
+test("the child env carries no wait ceiling of its own, whether or not the job carries an identity", async (t) => {
+  const env = makeHome(t, "spawn-ceiling");
+  const capturedEnvs = [];
+  const spawnImpl = (bin, args, opts) => {
+    capturedEnvs.push(opts.env);
+    return fakeChild();
+  };
+
+  await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(101, env), env, spawnImpl });
+  await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(102, env), env, jobId: 9, spawnImpl });
+
+  assert.equal(capturedEnvs[0].CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS, "0", "the operator env carried a wait ceiling of its own");
+  assert.equal(capturedEnvs[1].CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS, "0", "the job env carried a wait ceiling of its own");
+});
+
+test("a wait ceiling inherited from the parent environment is always overridden to zero", async (t) => {
+  const env = makeHome(t, "spawn-ceiling-override");
+  env.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = "600000";
+  let capturedEnv = null;
+  const spawnImpl = (bin, args, opts) => {
+    capturedEnv = opts.env;
+    return fakeChild();
+  };
+
+  await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(103, env), env, spawnImpl });
+
+  assert.equal(capturedEnv.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS, "0", "an inherited wait ceiling leaked into the child");
 });

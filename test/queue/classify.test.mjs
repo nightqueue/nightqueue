@@ -6,6 +6,7 @@ import {
   codeChangePublishedEvent,
   doneStream,
   failureStream,
+  GATE_MARKER,
   gateStream,
   intermediateDeliveryStream,
   PR_URL,
@@ -28,6 +29,16 @@ function stateWith(outcome) {
 // A stream whose final text and whose intermediate messages carry the given texts, in that order.
 function streamOf(intermediate, resultText) {
   return toNdjson([systemInitEvent(), assistantEvent(intermediate), resultEvent({ text: resultText })]);
+}
+
+// A log whose last attempt was killed by the CLI's own 600s wait ceiling: the raw ceiling line plus the `task_updated` killed event.
+function killedStream({ resultText = "" } = {}) {
+  return [
+    JSON.stringify(systemInitEvent()),
+    "Background tasks still running after 600s; terminating. Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.",
+    JSON.stringify({ type: "system", subtype: "task_updated", task_id: "task_kill", patch: { status: "killed" } }),
+    JSON.stringify(resultEvent({ text: resultText })),
+  ].join("\n");
 }
 
 test("a run that opened a pull request is done, with the URL and the notice extracted", () => {
@@ -62,11 +73,11 @@ test("a timeout is a failure that no retry may pick up, and a stop is a cancella
   );
 });
 
-test("a clean exit with nothing to deliver asks for a human, and says why it is asking", () => {
+test("a clean exit that delivered nothing and never asked for a decision is a failure that still says why", () => {
   const outcome = classifyJobResult({ log: doneStream().replace(PR_URL, "no link here"), exitCode: 0 });
-  assert.equal(outcome.status, "gate");
+  assert.equal(outcome.status, "failed");
   assert.equal(outcome.prUrl, null);
-  assert.ok(outcome.noticeMd, "a gate without a reason is exactly the bug this classification exists to prevent");
+  assert.ok(outcome.noticeMd, "a failure without a reason is exactly the bug this classification exists to prevent");
 });
 
 test("a clean exit that said nothing at all is a failure with the fixed warning, never a silent gate", () => {
@@ -77,11 +88,11 @@ test("a clean exit that said nothing at all is a failure with the fixed warning,
 
 test("a run without a `## Notice` falls back to the whole final text of the orchestrator, capped at eight thousand code points", () => {
   const outcome = classifyResultText("  I need you to decide between renaming the column or keeping both.  ");
-  assert.equal(outcome.status, "gate");
+  assert.equal(outcome.status, "failed", "no gate marker and no recorded gate status: the run never asked for a decision");
   assert.equal(outcome.noticeMd, "I need you to decide between renaming the column or keeping both.");
 
   const long = classifyResultText("a".repeat(9000));
-  assert.equal(long.status, "gate");
+  assert.equal(long.status, "failed");
   assert.equal(Array.from(long.noticeMd).length, 8003, "the fallback notice was not capped");
   assert.equal(long.noticeMd.endsWith("..."), true);
 });
@@ -99,19 +110,22 @@ test("a pull request URL cited only as a reference, with no PR actually opened, 
     "I could not finish the migration in the time I had. For reference, a similar fix was done in " +
       "https://github.com/acme/api/pull/1 on another repo, but I did not open a pull request here.",
   );
-  assert.equal(outcome.status, "gate", "no PR was opened, so a human must look at this run instead of it reporting done");
+  assert.equal(outcome.status, "failed", "no PR was opened and nothing asked for a decision, so the run is a failure");
+  assert.equal(outcome.prUrl, null);
 });
 
 test("a pull request URL quoted inside a fenced code example is never treated as an opened PR", () => {
   const outcome = classifyResultText(
     ["Here is the shape of the link you will get once the checks pass:", "```", "https://github.com/acme/api/pull/1", "```", "I have not opened it yet."].join("\n"),
   );
-  assert.equal(outcome.status, "gate", "the URL is a fenced example, not a real pull request that was opened");
+  assert.equal(outcome.status, "failed", "the URL is a fenced example, not a real pull request that was opened");
+  assert.equal(outcome.prUrl, null);
 });
 
 test("a pull request URL appearing inside a failure message is never treated as an opened PR", () => {
   const outcome = classifyResultText("Failed to open pull request: https://github.com/acme/api/pull/12 returned 404 Not Found.");
-  assert.equal(outcome.status, "gate", "the URL comes from an error message, not from a pull request that exists");
+  assert.equal(outcome.status, "failed", "the URL comes from an error message, not from a pull request that exists");
+  assert.equal(outcome.prUrl, null);
 });
 
 test("a foreign pull request URL cited by number, belonging to someone else's repo, is never treated as ours", () => {
@@ -119,7 +133,8 @@ test("a foreign pull request URL cited by number, belonging to someone else's re
     "This looks related to an already merged community fix, see https://github.com/other-org/other-repo/pull/999 " +
       "for context. I have not made any change in this repository.",
   );
-  assert.equal(outcome.status, "gate", "citing someone else's pull request is not the same as opening one in this run");
+  assert.equal(outcome.status, "failed", "citing someone else's pull request is not the same as opening one in this run");
+  assert.equal(outcome.prUrl, null);
 });
 
 test("a pull request delivered in an intermediate message is the outcome, even when the final text mentions neither", () => {
@@ -132,7 +147,7 @@ test("a pull request delivered in an intermediate message is the outcome, even w
 test("a URL mentioned only inside a markdown table cell is never a delivery, wherever the cell is", () => {
   const outcome = classifyJobResult({ log: intermediateDeliveryStream({ delivered: false }), exitCode: 0 });
   assert.equal(outcome.prUrl, null, "a table cell ends with a pipe: it mentions the URL, it does not deliver it");
-  assert.equal(outcome.status, "gate");
+  assert.equal(outcome.status, "failed", "no PR delivered and nothing asked for a decision, so the run is a failure");
 });
 
 test("the whole-stream fallback keeps every rule of a delivery: a citation, a denial and a fence are still refused", () => {
@@ -163,7 +178,7 @@ test("the pull request the HOST published wins over every text: a contradicting 
 test("a text that denies the delivery, with no published event, delivers no pull request at all", () => {
   const outcome = classifyResultText(`Failed to open pull request: ${PR_URL} returned 404 Not Found.`);
   assert.equal(outcome.prUrl, null, "a denial was read as a delivery");
-  assert.equal(outcome.status, "gate");
+  assert.equal(outcome.status, "failed", "no PR delivered and nothing asked for a decision, so the run is a failure");
 });
 
 test("a published event whose url is not a pull request falls through to the next source of the chain", () => {
@@ -279,6 +294,44 @@ test("a recorded gate with no reason anywhere is still a failure with the fixed 
   const outcome = classifyJobResult({ log: "", exitCode: 0, state: stateWith({ status: "gate" }) });
   assert.equal(outcome.status, "failed");
   assert.equal(outcome.noticeMd, SILENT_STOP_NOTICE);
+});
+
+test("a runtime kill is always a failure, whatever the notice, the recorded outcome or a pull request say", () => {
+  const plain = classifyJobResult({ log: killedStream({ resultText: "Verifier running. Waiting for its verdict." }), exitCode: 0 });
+  assert.equal(plain.status, "failed");
+  assert.equal(plain.noticeMd, 'runtime: the CLI killed the background task "task_kill" after its wait ceiling; the run did not finish');
+
+  const gated = classifyJobResult({
+    log: killedStream({ resultText: "Verifier running." }),
+    exitCode: 0,
+    state: stateWith({ status: "gate", notice: "Decide between A and B." }),
+  });
+  assert.equal(gated.status, "failed", "a recorded gate must not survive a runtime kill");
+  assert.equal(gated.noticeMd, 'runtime: the CLI killed the background task "task_kill" after its wait ceiling; the run did not finish');
+
+  const withPr = classifyJobResult({ log: killedStream({ resultText: `Done. Pull request: ${PR_URL}` }), exitCode: 0 });
+  assert.equal(withPr.status, "failed", "a delivered pull request must not turn a killed run into done");
+  assert.equal(withPr.prUrl, PR_URL, "the pull request is still reported even though the run is marked failed");
+});
+
+test("the tightened decideStatus: a clean exit with a final text but no gate marker and no recorded gate status is a failure, never a silent gate", () => {
+  const outcome = classifyResultText("Verifier running. Waiting for its verdict before the next phase.");
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.noticeMd, "Verifier running. Waiting for its verdict before the next phase.");
+});
+
+test("the same final text with the `## Requires user confirmation` marker still stops at the gate", () => {
+  const outcome = classifyResultText(`${GATE_MARKER}\n\nVerifier running. Waiting for its verdict before the next phase.`);
+  assert.equal(outcome.status, "gate");
+});
+
+test("the same final text with a recorded gate status in state.json still stops at the gate", () => {
+  const outcome = classifyJobResult({
+    log: toNdjson([systemInitEvent(), resultEvent({ text: "Verifier running. Waiting for its verdict before the next phase." })]),
+    exitCode: 0,
+    state: stateWith({ status: "gate" }),
+  });
+  assert.equal(outcome.status, "gate");
 });
 
 test("only a transient provider failure is worth another attempt", () => {

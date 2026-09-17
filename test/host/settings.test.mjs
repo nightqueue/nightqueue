@@ -14,7 +14,7 @@ import {
 } from "../../src/host/settings.mjs";
 
 const ENV = { NIGHTSHIFT_HOME: join(tmpdir(), "nightshift-settings-fixture") };
-const [SESSION_START, PROMPT, SESSION_END] = desiredHooks(ENV);
+const [SESSION_START, PROMPT, SESSION_END, AGENT_FOREGROUND] = desiredHooks(ENV);
 const LEGACY_SESSION_START = `node ${join(hostPackageRoot(ENV), "bin", "shift.mjs")} hook session-start`;
 
 // Settings fixture with one third-party hook per event.
@@ -34,6 +34,7 @@ test("each event carries its own timeout, and the reflection gets the longest on
     { event: "SessionStart", command: hookCommand("session-start", ENV), timeout: 10 },
     { event: "UserPromptSubmit", command: hookCommand("prompt-context", ENV), timeout: 10 },
     { event: "SessionEnd", command: hookCommand("reflect", ENV), timeout: 15 },
+    { event: "PreToolUse", command: hookCommand("agent-foreground", ENV), timeout: 5, matcher: "Agent|Task" },
   ]);
 });
 
@@ -43,12 +44,19 @@ test("the merge appends one group per event and says so", () => {
     { event: "SessionStart", status: "created" },
     { event: "UserPromptSubmit", status: "created" },
     { event: "SessionEnd", status: "created" },
+    { event: "PreToolUse", status: "created" },
   ]);
   assert.deepEqual(data.hooks.SessionStart, [
     { hooks: [{ type: "command", command: SESSION_START.command, timeout: SESSION_START.timeout }] },
   ]);
   assert.deepEqual(data.hooks.SessionEnd, [
     { hooks: [{ type: "command", command: SESSION_END.command, timeout: 15 }] },
+  ]);
+  assert.deepEqual(data.hooks.PreToolUse, [
+    {
+      matcher: "Agent|Task",
+      hooks: [{ type: "command", command: AGENT_FOREGROUND.command, timeout: AGENT_FOREGROUND.timeout }],
+    },
   ]);
 });
 
@@ -60,6 +68,7 @@ test("a second merge changes nothing and reports every event as already present"
     { event: "SessionStart", status: "already present" },
     { event: "UserPromptSubmit", status: "already present" },
     { event: "SessionEnd", status: "already present" },
+    { event: "PreToolUse", status: "already present" },
   ]);
   assert.deepEqual(data, snapshot);
 });
@@ -101,8 +110,10 @@ test("the removal drops the event key only when nothing else is left in it", () 
     { event: "SessionStart", status: "removed" },
     { event: "UserPromptSubmit", status: "removed" },
     { event: "SessionEnd", status: "removed" },
+    { event: "PreToolUse", status: "removed" },
   ]);
   assert.deepEqual(data, thirdPartySettings());
+  assert.equal(data.hooks.PreToolUse, undefined, "the group PreToolUse held nothing but our own entry");
 
   removeHooks(clean, ENV);
   assert.deepEqual(clean, { hooks: {} });
@@ -110,6 +121,7 @@ test("the removal drops the event key only when nothing else is left in it", () 
     { event: "SessionStart", status: "not present" },
     { event: "UserPromptSubmit", status: "not present" },
     { event: "SessionEnd", status: "not present" },
+    { event: "PreToolUse", status: "not present" },
   ]);
 });
 
@@ -123,8 +135,10 @@ test("the status of the hooks compares the registered command with the wanted on
     expected: SESSION_END.command,
     current: "node /old/bin/nightshift.mjs hook reflect",
   });
+  assert.deepEqual(status[3], { event: "PreToolUse", expected: AGENT_FOREGROUND.command, current: null });
   mergeHooks(data, ENV);
   assert.equal(hookStatus(data, ENV)[2].current, SESSION_END.command);
+  assert.equal(hookStatus(data, ENV)[3].current, AGENT_FOREGROUND.command);
 });
 
 test("a package path with a space is reported, because the hook command is not quoted", () => {
@@ -185,4 +199,52 @@ test("the removal also takes out an entry left by the previous command name", ()
   };
   assert.deepEqual(removeHooks(data, ENV)[0], { event: "SessionStart", status: "removed" });
   assert.equal(data.hooks.SessionStart, undefined);
+});
+
+test("the matcher of PreToolUse is written on a fresh merge", () => {
+  const data = {};
+  const [status] = mergeHooks(data, ENV).filter((entry) => entry.event === "PreToolUse");
+  assert.equal(status.status, "created");
+  assert.equal(data.hooks.PreToolUse[0].matcher, "Agent|Task");
+});
+
+test("a wrong or missing matcher on our own group is repaired, and the repair counts as updated", () => {
+  const wrong = { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: AGENT_FOREGROUND.command, timeout: AGENT_FOREGROUND.timeout }] }] } };
+  const [wrongStatus] = mergeHooks(wrong, ENV).filter((entry) => entry.event === "PreToolUse");
+  assert.equal(wrongStatus.status, "updated");
+  assert.equal(wrong.hooks.PreToolUse[0].matcher, "Agent|Task");
+
+  const missing = { hooks: { PreToolUse: [{ hooks: [{ type: "command", command: AGENT_FOREGROUND.command, timeout: AGENT_FOREGROUND.timeout }] }] } };
+  const [missingStatus] = mergeHooks(missing, ENV).filter((entry) => entry.event === "PreToolUse");
+  assert.equal(missingStatus.status, "updated");
+  assert.equal(missing.hooks.PreToolUse[0].matcher, "Agent|Task");
+});
+
+test("the matcher of a group shared with a third-party entry is left alone", () => {
+  const data = {
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: "Bash",
+          hooks: [
+            { type: "command", command: "other-tool guard" },
+            { type: "command", command: AGENT_FOREGROUND.command, timeout: AGENT_FOREGROUND.timeout },
+          ],
+        },
+      ],
+    },
+  };
+  const [status] = mergeHooks(data, ENV).filter((entry) => entry.event === "PreToolUse");
+  assert.equal(status.status, "already present");
+  assert.equal(data.hooks.PreToolUse[0].matcher, "Bash", "a matcher shared with a third-party entry is never rewritten");
+  assert.deepEqual(data.hooks.PreToolUse[0].hooks[0], { type: "command", command: "other-tool guard" });
+});
+
+test("the removal takes the PreToolUse entry out, event key included", () => {
+  const data = {};
+  mergeHooks(data, ENV);
+  assert.ok(Array.isArray(data.hooks.PreToolUse));
+  const [status] = removeHooks(data, ENV).filter((entry) => entry.event === "PreToolUse");
+  assert.equal(status.status, "removed");
+  assert.equal(data.hooks.PreToolUse, undefined);
 });

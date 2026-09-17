@@ -84,8 +84,8 @@ test("the exit-0 matrix: every combination of PR, gate marker and notice lands o
   const cases = [
     { text: composeText({ pr: true, gate: true }), expectedStatus: "gate", expectedPr: PR_URL },
     { text: composeText({ pr: true }), expectedStatus: "done", expectedPr: PR_URL },
-    { text: composeText({ notice: "please pick a column name" }), expectedStatus: "gate", expectedPr: null, expectedNotice: "please pick a column name" },
-    { text: composeText({ body: "I need a human to decide something." }), expectedStatus: "gate", expectedPr: null, expectedNotice: "I need a human to decide something." },
+    { text: composeText({ notice: "please pick a column name" }), expectedStatus: "failed", expectedPr: null, expectedNotice: "please pick a column name" },
+    { text: composeText({ body: "I need a human to decide something." }), expectedStatus: "failed", expectedPr: null, expectedNotice: "I need a human to decide something." },
     { text: "", expectedStatus: "failed", expectedPr: null, expectedNotice: SILENT_STOP_NOTICE },
     { text: "   \n\t  ", expectedStatus: "failed", expectedPr: null, expectedNotice: SILENT_STOP_NOTICE },
   ];
@@ -139,7 +139,7 @@ test("the 8000 code-point cap on the fallback notice never splits a surrogate pa
   const emoji = "\u{1F600}"; // a single code point, two UTF-16 units
   const text = `${"a".repeat(7999)}${emoji}${"a".repeat(200)}`;
   const outcome = classifyJobResult({ log: logWithResultText(text), exitCode: 0 });
-  assert.equal(outcome.status, "gate");
+  assert.equal(outcome.status, "failed", "no gate marker and no recorded gate status: a clean exit with nothing to deliver is a failure");
 
   const naiveUtf16Cut = `${text.slice(0, 8000)}...`;
   assert.ok(LONE_HIGH_SURROGATE_RE.test(naiveUtf16Cut) || LONE_LOW_SURROGATE_RE.test(naiveUtf16Cut), "the naive UTF-16-unit cut must actually break the pair, or this test proves nothing");

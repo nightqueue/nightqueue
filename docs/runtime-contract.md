@@ -103,7 +103,10 @@ What a runtime has to provide, and what it can rely on:
   another provider and a runtime older than the event - a URL only counts as delivered
   when it closes a line outside any code fence and that line does not report a failure;
   a URL cited inside a sentence, an example or an error message is a reference, and a
-  run that delivers none ends as `gate`, never as `done`.
+  run that delivers none is never `done`; it is a `gate` only when the run itself asked
+  for a decision - a recorded `outcome.status: "gate"` in `state.json`, or the
+  `## Requires user confirmation` marker in the stream - and `failed` otherwise, keeping
+  its final text as the reason.
 
 These names are a machine contract, not prose: the pipeline files are the
 source of truth for them, and any runtime that reads them must match them
