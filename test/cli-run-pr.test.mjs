@@ -139,7 +139,10 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
   assert.deepEqual(ghCalls(env), [
     ["pr", "create", "--title", "feat(auth): log in with google", "--body-file", body, "--head", "feat/login-google"],
   ]);
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).outcome.status, "done");
+  assert.deepEqual(
+    { status: readRunState({ project: "alpha", slug: SLUG, env }).outcome.status, prUrl: readRunState({ project: "alpha", slug: SLUG, env }).outcome.prUrl },
+    { status: "done", prUrl: FAKE_GH_PR_URL },
+  );
   assert.equal(existsSync(worktree), true);
 });
 

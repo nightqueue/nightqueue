@@ -10,7 +10,7 @@ import { formatDuration } from "../queue/narrate.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
-import { recordOutcome } from "../queue/run-state.mjs";
+import { recordOutcome, recordPrUrl } from "../queue/run-state.mjs";
 import { phaseTelemetry, runDurationS } from "../queue/telemetry.mjs";
 import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -535,14 +535,18 @@ function renameBranch({ cwd, current, final, env }) {
   return final;
 }
 
-// Publishes the branch and opens the pull request; the URL it answers is information, never the record of the run.
+// Publishes the branch and opens the pull request, then records the run as done with the URL gh answered: the record is written
+// here, at the point of publication, so a run driven outside the queue runner (a resumed session, another program) ends up
+// with the same state.json as one the runner watched. A URL gh answered in a shape the record refuses is reported, never fatal.
 function publishBranch({ run, cwd, branch, title, bodyFile, env }) {
   const pushed = runGit({ args: ["push", "-u", "origin", branch], cwd, env });
   if (!pushed.ok) throw new UserError(`git could not push \`${branch}\`: ${failureLine(pushed)}`);
   const created = ghPrCreate({ title, bodyFile, head: branch, cwd, env });
   if (created.missing) throw new UserError(`\`${branch}\` is pushed, but the GitHub CLI is not installed: open the pull request by hand`);
   if (!created.ok) throw new UserError(`\`${branch}\` is pushed, but gh could not open the pull request: ${failureLine(created)}`);
-  return { url: created.url, recorded: recordOutcome({ project: run.project, slug: run.slug, status: "done", env }) };
+  const recorded = recordOutcome({ project: run.project, slug: run.slug, status: "done", env });
+  const prRecorded = recordPrUrl({ project: run.project, slug: run.slug, prUrl: created.url, env });
+  return { url: created.url, recorded, prRecorded };
 }
 
 // Removes the worktree of the run from the checkout that owns it; the pull request is already open, so a refusal is reported, never fatal.
@@ -570,10 +574,11 @@ async function runPr(argv, ctx) {
   const state = readRunState({ project: run.project, slug: run.slug, env: ctx.env });
   const current = currentBranch(cwd, ctx.env);
   const branch = renameBranch({ cwd, current, final: finalBranch(current, { type: state?.type, slug: run.slug }), env: ctx.env });
-  const { url, recorded } = publishBranch({ run, cwd, branch, title: prTitle(values.title, body), bodyFile, env: ctx.env });
+  const { url, recorded, prRecorded } = publishBranch({ run, cwd, branch, title: prTitle(values.title, body), bodyFile, env: ctx.env });
   ctx.out(`BRANCH: ${branch}${branch === current ? "" : ` (renamed from ${current})`}`);
   ctx.out(`PR: ${url ?? "opened"}`);
   if (recorded.status !== "written") ctx.err(`nightshift: the run was not recorded as done: ${recorded.reason}`);
+  if (prRecorded.status !== "written") ctx.err(`nightshift: the pull request was not recorded on the run: ${prRecorded.reason}`);
   ctx.out(`WORKTREE: ${cwd}`);
   if (values["remove-worktree"] === true) ctx.out(worktreeRemoval(run, cwd, ctx.env));
   return 0;
