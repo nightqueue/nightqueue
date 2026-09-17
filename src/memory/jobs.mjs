@@ -58,6 +58,7 @@ const JOB_VIEW_COLUMNS = [
   "merge_sha",
   "worker",
   "operator_note",
+  "blocked_code",
   "tokens_in",
   "tokens_out",
   "cache_read",
@@ -200,7 +201,8 @@ const CLAIM_ASSIGNMENT = `SET status = 'running',
             worker = ?,
             attempts = attempts + 1,
             started_at = datetime('now'),
-            lease_until = ${LEASE_EXPRESSION}`;
+            lease_until = ${LEASE_EXPRESSION},
+            blocked_code = NULL`;
 // A job parked by a rate limit is pending but not claimable yet: it comes back into scope by itself at the instant the limit resets.
 const DUE_NOW = `(candidate.not_before IS NULL OR datetime(candidate.not_before) <= datetime('now'))`;
 const CANDIDATE_QUERY = `SELECT candidate.id FROM jobs AS candidate
@@ -251,8 +253,9 @@ function requireCap(cap) {
   return cap;
 }
 
-// Puts a claimed job back in the queue without spending the attempt, recording why it came back.
-export function releaseJob(id, { worker, result } = {}, env = process.env) {
+// Puts a claimed job back in the queue without spending the attempt, recording why it came back; `blockedCode` is written
+// as given, never merged with what was there, so a release with no code of its own always clears a stale one from a prior attempt.
+export function releaseJob(id, { worker, result, blockedCode } = {}, env = process.env) {
   const statement = openDb(env).prepare(
     `UPDATE jobs
         SET status = 'pending',
@@ -260,10 +263,13 @@ export function releaseJob(id, { worker, result } = {}, env = process.env) {
             lease_until = NULL,
             started_at = NULL,
             attempts = MAX(0, attempts - 1),
-            result = COALESCE(?, result)
+            result = COALESCE(?, result),
+            blocked_code = ?
       WHERE id = ? AND status = 'running' AND worker = ?`,
   );
-  const changed = withWriteRetry(() => statement.run(toJsonText(result), requireId(id), requireText("worker", worker)));
+  const changed = withWriteRetry(() =>
+    statement.run(toJsonText(result), optionalText(blockedCode), requireId(id), requireText("worker", worker)),
+  );
   return changed.changes === 1;
 }
 
@@ -567,10 +573,13 @@ export function getJob(id, env = process.env, db = openDb(env)) {
   return db.prepare("SELECT * FROM jobs WHERE id = ?").get(requireId(id)) ?? null;
 }
 
-// Returns the most recent jobs, newest first.
-export function listJobs({ limit } = {}, env = process.env, db = openDb(env)) {
+const BLOCKED_PENDING_PREDICATE = "status = 'pending' AND blocked_code IS NOT NULL";
+
+// Returns the most recent jobs, newest first, or only the pending ones a preflight block is holding back with `blockedOnly`.
+export function listJobs({ limit, blockedOnly } = {}, env = process.env, db = openDb(env)) {
   const clamped = optionalRangedInt("limit", limit, LIST_LIMIT_RANGE);
-  return db.prepare("SELECT * FROM jobs ORDER BY id DESC LIMIT ?").all(clamped);
+  const where = blockedOnly === true ? `WHERE ${BLOCKED_PENDING_PREDICATE} ` : "";
+  return db.prepare(`SELECT * FROM jobs ${where}ORDER BY id DESC LIMIT ?`).all(clamped);
 }
 
 // Unfinished jobs that already have a run directory; a job with no slug never ran, so no witness can speak for it.
@@ -587,6 +596,11 @@ export function jobStatus(id, env = process.env, db = openDb(env)) {
 // Counts the jobs left `running` by a runner that died, on the connection the caller already holds: a diagnosis never creates nor migrates the database it inspects.
 export function countOrphanJobs(db) {
   return db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE ${ORPHAN_PREDICATE}`).get().n;
+}
+
+// Counts the pending jobs a preflight block is holding back, the number the queue view shows next to `pending`.
+export function countPendingBlocked(env = process.env, db = openDb(env)) {
+  return db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE ${BLOCKED_PENDING_PREDICATE}`).get().n;
 }
 
 // Jobs delivered with a pull request never checked or last checked before the cutoff, staler first so every one is reached.

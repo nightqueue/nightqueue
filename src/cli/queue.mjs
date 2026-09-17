@@ -43,7 +43,7 @@ import { runtimeLabel } from "./runtime-versions.mjs";
 
 const USAGE = {
   add: "nightshift queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id>]",
-  status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle]",
+  status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
   retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
@@ -466,16 +466,23 @@ function firstNoticeLine(job) {
   return line ? line.trim() : null;
 }
 
-// The preflight block a pending job carries in its result, or null: the reason the runner gave it back.
-function blockedOf(job) {
-  if (job.status !== "pending") return null;
+// The human message of a block, read from the JSON result only while it still names the same code the column carries;
+// a truncated or stale result never breaks the render, it just leaves the message out.
+function blockedMessage(job, code) {
   try {
     const parsed = typeof job.result === "string" ? JSON.parse(job.result) : job.result;
     const blocked = parsed?.blocked;
-    return blocked?.code ? { code: String(blocked.code), message: String(blocked.message ?? "") } : null;
+    return blocked?.code === code ? String(blocked.message ?? "") : "";
   } catch {
-    return null;
+    return "";
   }
+}
+
+// The preflight block a pending job carries in its `blocked_code` column, or null: the reason the runner gave it back.
+function blockedOf(job) {
+  if (job.status !== "pending" || !job.blocked_code) return null;
+  const code = String(job.blocked_code);
+  return { code, message: blockedMessage(job, code) };
 }
 
 // What SLUG/LAST says about a job: what it is doing while it runs, why it stopped at the gate, why the runner gave it
@@ -484,7 +491,7 @@ function lastCell(job, env) {
   if (job.status === "running") return lastNarration(job.id, env);
   if (job.status === "gate" || job.status === "failed") return firstNoticeLine(job) ?? job.slug ?? "-";
   const blocked = blockedOf(job);
-  if (blocked) return `⛔ ${blocked.code}: ${blocked.message}`;
+  if (blocked) return blocked.message ? `⛔ ${blocked.code}: ${blocked.message}` : `⛔ ${blocked.code}`;
   return parkedJobLabel(job) ?? job.slug ?? "-";
 }
 
@@ -530,14 +537,22 @@ function formatNotice(job) {
   return ["notice", ...body, ...answer];
 }
 
+// The block a pending job is stuck on, readable: the code alone, or with its message when one is still on the result.
+function formatBlocked(job) {
+  const blocked = blockedOf(job);
+  if (!blocked) return [];
+  const label = blocked.message ? `${blocked.code}: ${blocked.message}` : blocked.code;
+  return [`${"blocked".padEnd(16)}${label}`];
+}
+
 // Detail block of a single job, one field per line, with the reason it stopped spelled out instead of dumped on one line.
 function formatDetail(job) {
   const fields = Object.entries(job)
     .filter(([key, value]) => key !== "notice_md" && value !== null && value !== undefined)
     .map(([key, value]) => `${key.padEnd(16)}${value}`);
   const at = fields.findIndex((line) => line.startsWith("status".padEnd(16)));
-  const notice = formatNotice(job);
-  return at < 0 ? [...fields, ...notice] : [...fields.slice(0, at + 1), ...notice, ...fields.slice(at + 1)];
+  const extra = [...formatBlocked(job), ...formatNotice(job)];
+  return at < 0 ? [...fields, ...extra] : [...fields.slice(0, at + 1), ...extra, ...fields.slice(at + 1)];
 }
 
 // What the registered runner does: how often it looks at the queue, or the single job it was started for.
@@ -586,6 +601,7 @@ const STATUS_OPTIONS = {
   limit: { type: "string" },
   follow: { type: "string" },
   "until-idle": { type: "boolean" },
+  blocked: { type: "boolean" },
 };
 
 // Gives `--follow` its default interval when the operator wrote it without one, the same way `run --watch` does.
@@ -613,18 +629,33 @@ function unreadableRegistryLine(error) {
   return `runner: unknown - the runner registry cannot be listed (${error}), a runner may be live; run \`nightshift doctor\``;
 }
 
+// The counts-by-status line, breaking out how many of the pending jobs a preflight block is holding back.
+function countsLine(counts, blockedPending) {
+  return Object.entries(counts)
+    .map(([status, total]) => (status === "pending" && blockedPending > 0 ? `pending=${total} (${blockedPending} blocked)` : `${status}=${total}`))
+    .join("  ");
+}
+
+// The line printed in place of the table when the listing is empty; `--blocked` filters the queue, so an empty result
+// under it never means the queue itself is empty.
+function emptyQueueLine(blockedOnly) {
+  return blockedOnly ? "no blocked job in the queue" : "no jobs in the queue";
+}
+
 // Lines of the queue view: one line per runner, the advisory lines, table, counts and the backlog hint, in that order.
 async function queueViewLines(values, ctx, store) {
   await sweepMerged(ctx, store);
-  const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit) })).map(jobView);
+  const blockedOnly = values.blocked === true;
+  const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit), blockedOnly })).map(jobView);
   const counts = await store.jobs.countsByStatus();
+  const blockedPending = await store.jobs.countPendingBlocked();
   const { runners, error } = readRunners(ctx);
   const activeJobs = await store.jobs.countActiveJobs();
   const lines = error === null ? formatRunners(runners, activeJobs, ctx.env) : [unreadableRegistryLine(error)];
   if (error === null) lines.push(...(await advisoryLinesFor({ store, runners, env: ctx.env, killImpl: ctx.killImpl })));
-  if (!jobs.length) return { lines: [...lines, "no jobs in the queue"], idle: error === null };
+  if (!jobs.length) return { lines: [...lines, emptyQueueLine(blockedOnly)], idle: error === null };
   lines.push(...formatTable(jobs, ctx));
-  lines.push(Object.entries(counts).map(([status, total]) => `${status}=${total}`).join("  "));
+  lines.push(countsLine(counts, blockedPending));
   const backlog = error === null ? backlogLine({ activeJobs, counts, runners, jobs }) : null;
   if (backlog) lines.push(backlog);
   return { lines, idle: error === null && isQueueIdle({ activeJobs, runners }) && counts.pending === 0 };
@@ -697,7 +728,7 @@ async function printStatus(argv, ctx) {
   if (values.json) {
     const store = openStore(ctx.env);
     await sweepMerged(ctx, store);
-    const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit) })).map(jobView);
+    const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit), blockedOnly: values.blocked === true })).map(jobView);
     const { runners, error } = readRunners(ctx);
     if (error !== null) throw new UserError(`the runner registry cannot be listed (${error}); \`--json\` will not answer that no runner is running for a registry it could not read`);
     const advisories = await advisoryLinesFor({ store, runners, env: ctx.env, killImpl: ctx.killImpl });

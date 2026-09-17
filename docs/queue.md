@@ -16,6 +16,7 @@ nightshift queue add "fix the flaky worker" --yes              # register the re
 nightshift queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
 nightshift queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightshift queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
+nightshift queue status --blocked                              # only the pending jobs a preflight block is holding back
 nightshift queue status 7 [--json]                             # one job, never with its prompt
 nightshift queue run [--job 7] [--max 2] [--dry]               # start the runner detached; --max 2 exits after two jobs; --dry only reports
 nightshift queue run --watch [30]                              # start a watcher, one pass every N seconds
@@ -212,7 +213,8 @@ the columns of the cockpit: `ID STATUS DURATION TOKENS PROJECT SLUG/LAST PR`.
 running job has been up (from its own `started_at`) or how long a finished one
 took; `TOKENS` is what it spent so far (`374k`, `1.2M`). `SLUG/LAST` is the last
 thing the orchestrator said in its log while the job runs (`» ...`), the first
-line of the notice of a `gate` or `failed` job, and the slug otherwise; `PR` is
+line of the notice of a `gate` or `failed` job, `⛔ <code>: <message>` for a
+`pending` job a preflight block is holding back, and the slug otherwise; `PR` is
 the URL of the pull request, bare, so the terminal makes it clickable on its own. Only running jobs are read from disk, and only the tail of their log, so
 listing a job whose stream is already hundreds of kilobytes costs nothing; a job
 with no log yet and a log that cannot be read both show `-`, the table is always
@@ -276,6 +278,11 @@ carries the reason it stopped in `notice_md`: without a `## Notice` the reason i
 the summary the pipeline recorded in `state.json`, and the whole final text of
 the orchestrator when there is none, and a run that ended saying nothing at
 all is `failed` with a fixed warning instead of a gate nobody can read.
+
+A `pending` job the preflight refused to start also carries a reason, in its own
+`blocked_code` column - it answers a different question than `status`: not where
+the job is, but why it is not moving right now. See **What the runner requires
+of the checkout** below for what sets and clears it.
 
 **`done` becomes `merged` by itself.** A job that delivered a pull request is
 asked about with `gh pr view <url> --json state,mergedAt,mergeCommit`: a merged
@@ -406,7 +413,17 @@ and has a `.git`, the `claude` CLI resolves (`NIGHTSHIFT_CLAUDE_BIN`, then
 the default branch. A block is not a failure: the job goes back to `pending`
 without spending an attempt and the reason is stored in `result` (the operator
 note is never touched), so a later run picks it up once the checkout is in
-shape.
+shape. The block code also lands in its own `blocked_code` column - orthogonal
+to `status`, the same way `notice_md` sits beside a `gate` - which is what makes
+a blocked job visible: `queue status` breaks it out of the pending count
+(`pending=3 (1 blocked)`), shows `⛔ <code>: <message>` in `SLUG/LAST` and the
+detail view, and `--blocked` lists only the pending jobs a preflight block is
+holding back. **`gate` and `blocked` are not the same wait.** A gate needs the
+operator to answer it with `queue_retry`; a block needs the operator to fix the
+cause (clean the checkout, register the project, put `claude` back on the
+`PATH`) and the job goes back to `running` by itself on the drain's next pass -
+no retry, no operator call. The claim clears `blocked_code` the instant it
+picks the job back up.
 
 **What it does NOT do in v1.** It never merges anything, never closes the cycle
 after the pull request, keeps no token budget, ships no launchd (or any other)

@@ -300,7 +300,10 @@ test("every preflight block returns the job to the queue without spending an att
 
     assert.deepEqual(cycle.processed, [{ id, status: "blocked", code }]);
     const row = getJob(id, env);
-    assert.deepEqual({ status: row.status, attempts: row.attempts, worker: row.worker, note: row.operator_note }, { status: "pending", attempts: 0, worker: null, note: null });
+    assert.deepEqual(
+      { status: row.status, attempts: row.attempts, worker: row.worker, note: row.operator_note, blockedCode: row.blocked_code },
+      { status: "pending", attempts: 0, worker: null, note: null, blockedCode: code },
+    );
     assert.equal(JSON.parse(row.result).blocked.code, code);
     assert.equal(fakeCalls(planPath).length, 0, `${code} still spawned the CLI`);
   }

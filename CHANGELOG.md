@@ -8,6 +8,17 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A pending job a preflight block is holding back is now visible instead of
+  looking like it is only waiting for a runner: `jobs.blocked_code` is an
+  orthogonal column, the same shape `notice_md` already carries beside a
+  `gate` - `status` answers where the job is, `blocked_code` answers why it
+  is not moving right now. `queue status` breaks it out of the pending count
+  (`pending=3 (1 blocked)`), shows `⛔ <code>: <message>` in the table and the
+  detail view, and a new `--blocked` filter lists only those jobs; the field
+  is exposed the same way on `queue_status` (MCP). `blocked` is not `gate`:
+  a gate needs `queue_retry`, a block clears itself the moment the drain
+  claims the job again, once the operator fixes the cause.
+
 - `nightshift run` is the family the pipeline calls from inside a job, each
   subcommand acting on the run of the job it was called from: `run check <NN>`
   is the artifact gate of a phase (`OK`, `MISSING: <sections>`, or `GENERATED`

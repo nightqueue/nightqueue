@@ -473,7 +473,7 @@ async function runJob(claimed, ctx) {
   const { env, deps } = ctx;
   const check = preflight({ job: claimed, env, gitImpl: deps.gitImpl, existsImpl: deps.existsImpl, resolveBinImpl: deps.resolveBinImpl });
   if (!check.ok) {
-    await release(claimed, { blocked: { code: check.code, message: check.message } }, env);
+    await release(claimed, { blocked: { code: check.code, message: check.message } }, env, check.code);
     return { id: claimed.id, status: "blocked", code: check.code };
   }
   const openPrs = await openPrsForJob(claimed, { env, deps });

@@ -52,6 +52,7 @@ function jobsDomain(env, db) {
     markJobMerged: async (id, merge) => jobs.markJobMerged(id, merge, env),
     stampPrChecked: async (id, options) => jobs.stampPrChecked(id, options, env),
     countsByStatus: async () => jobs.countsByStatus(env, db()),
+    countPendingBlocked: async () => jobs.countPendingBlocked(env, db()),
     countActiveJobs: async () => jobs.countActiveJobs(env, db()),
     countActiveJobsByProject: async () => jobs.countActiveJobsByProject(env, db()),
     firstActiveJobId: async () => jobs.firstActiveJobId(env),

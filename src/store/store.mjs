@@ -37,6 +37,7 @@
  * @property {(id: number, merge: object) => Promise<boolean>} markJobMerged
  * @property {(id: number, options: object) => Promise<boolean>} stampPrChecked
  * @property {() => Promise<Record<string, number>>} countsByStatus
+ * @property {() => Promise<number>} countPendingBlocked pending jobs a preflight block is holding back
  * @property {() => Promise<number>} countActiveJobs
  * @property {() => Promise<{project: string, count: number}[]>} countActiveJobsByProject
  * @property {() => Promise<number|null>} firstActiveJobId
@@ -173,6 +174,7 @@ export const STORE_CONTRACT = Object.freeze({
     "markJobMerged",
     "stampPrChecked",
     "countsByStatus",
+    "countPendingBlocked",
     "countActiveJobs",
     "countActiveJobsByProject",
     "firstActiveJobId",
@@ -243,6 +245,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.listWithSlug",
   "jobs.isJobActive",
   "jobs.countsByStatus",
+  "jobs.countPendingBlocked",
   "jobs.countActiveJobs",
   "jobs.countActiveJobsByProject",
   "decisions.listDecisions",

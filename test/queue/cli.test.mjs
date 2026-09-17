@@ -807,9 +807,29 @@ test("an unrecognized token is always an error, and never falls through to runni
 test("queue status names a job the runner gave back, with the preflight code, and says the runner retries by itself", (t) => {
   const env = makeCliHome(t, "cli-status-blocked");
   const id = enqueue(env, "fix the worker");
-  openDb(env).prepare("UPDATE jobs SET result = ? WHERE id = ?").run(JSON.stringify({ blocked: { code: "dirty-checkout", message: "/repo has uncommitted changes" } }), id);
+  const other = enqueue(env, "fix the parser");
+  openDb(env)
+    .prepare("UPDATE jobs SET result = ?, blocked_code = ? WHERE id = ?")
+    .run(JSON.stringify({ blocked: { code: "dirty-checkout", message: "/repo has uncommitted changes" } }), "dirty-checkout", id);
   const table = runCli(env, ["queue", "status"]);
   assert.equal(table.status, 0, table.stderr);
   assert.match(tableLine(table.stdout, id), /○ pending\s+-\s+-\s+alpha\s+⛔ dirty-checkout: \/repo has uncommitted changes/);
+  assert.match(table.stdout, /pending=2 \(1 blocked\)/, "the counts line did not break the blocked pending out of the total");
   assert.match(table.stdout, /1 job blocked \(dirty-checkout\) - fix the cause, the runner retries by itself/);
+
+  const blockedOnly = runCli(env, ["queue", "status", "--blocked"]);
+  assert.equal(blockedOnly.status, 0, blockedOnly.stderr);
+  assert.ok(tableLine(blockedOnly.stdout, id), "`--blocked` dropped the blocked job");
+  assert.equal(tableLine(blockedOnly.stdout, other), "", "`--blocked` still listed a job that is not blocked");
+});
+
+test("`--blocked` with no blocked job says so instead of claiming the queue itself is empty", (t) => {
+  const env = makeCliHome(t, "cli-status-blocked-empty");
+  enqueue(env, "fix the worker");
+
+  const result = runCli(env, ["queue", "status", "--blocked"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /no blocked job in the queue/);
+  assert.equal(result.stdout.includes("no jobs in the queue"), false, "a non-empty queue was reported as empty under --blocked");
 });

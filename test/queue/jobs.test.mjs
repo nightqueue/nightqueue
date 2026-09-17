@@ -9,6 +9,7 @@ import {
   countAttempt,
   countActiveJobs,
   countActiveJobsByProject,
+  countPendingBlocked,
   countsByStatus,
   finishJob,
   getJob,
@@ -153,15 +154,21 @@ test("release gives the job back without spending the attempt and keeps the prev
   const id = enqueue(env);
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   assert.equal(releaseJob(id, { worker: OTHER_WORKER, result: null }, env), false, "a foreign worker released the job");
-  assert.equal(releaseJob(id, { worker: WORKER, result: { blocked: { code: "dirty-checkout" } } }, env), true);
+  assert.equal(
+    releaseJob(id, { worker: WORKER, result: { blocked: { code: "dirty-checkout" } }, blockedCode: "dirty-checkout" }, env),
+    true,
+  );
   const released = getJob(id, env);
   assert.deepEqual(
-    { status: released.status, attempts: released.attempts, worker: released.worker, lease: released.lease_until },
-    { status: "pending", attempts: 0, worker: null, lease: null },
+    { status: released.status, attempts: released.attempts, worker: released.worker, lease: released.lease_until, blockedCode: released.blocked_code },
+    { status: "pending", attempts: 0, worker: null, lease: null, blockedCode: "dirty-checkout" },
   );
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
+  assert.equal(getJob(id, env).blocked_code, null, "the claim carried the block code of the previous attempt");
   releaseJob(id, { worker: WORKER, result: null }, env);
-  assert.match(getJob(id, env).result, /dirty-checkout/, "a release with no reason erased the previous block");
+  const rereleased = getJob(id, env);
+  assert.match(rereleased.result, /dirty-checkout/, "a release with no reason erased the previous block");
+  assert.equal(rereleased.blocked_code, null, "a release with no code of its own kept the stale block code");
 });
 
 test("a job parked on a rate limit keeps its attempt and leaves the claimable scope of every runner until the reset", (t) => {
@@ -465,4 +472,20 @@ test("the listing is newest first with a clamped limit, and the counts cover eve
   assert.throws(() => listJobs({ limit: 500 }, env), /invalid `limit`/);
   claimJobById(ids[0], { worker: WORKER, cap: CAP }, env);
   assert.deepEqual(countsByStatus(env), { pending: 2, running: 1, done: 0, gate: 0, failed: 0, cancelled: 0, merged: 0 });
+});
+
+test("the blocked-pending count and listing only ever see a pending job with a block code, never a running or done one", (t) => {
+  const env = makeQueue(t, "jobs-blocked-pending");
+  const [blocked, plain] = [enqueue(env), enqueue(env)];
+  assert.equal(countPendingBlocked(env), 0);
+  claimJobById(blocked, { worker: WORKER, cap: CAP }, env);
+  releaseJob(blocked, { worker: WORKER, result: { blocked: { code: "dirty-checkout" } }, blockedCode: "dirty-checkout" }, env);
+
+  assert.equal(countPendingBlocked(env), 1);
+  assert.deepEqual(listJobs({ blockedOnly: true }, env).map((row) => row.id), [blocked]);
+  assert.deepEqual(listJobs({}, env).map((row) => row.id).sort(), [blocked, plain].sort(), "blockedOnly is opt-in, not the default");
+
+  claimJobById(blocked, { worker: WORKER, cap: CAP }, env);
+  assert.equal(countPendingBlocked(env), 0, "the claim cleared the block code, so the count must drop with it");
+  assert.deepEqual(listJobs({ blockedOnly: true }, env), []);
 });

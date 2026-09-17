@@ -73,9 +73,10 @@ export async function acquire({ jobId = null, cap, env = process.env } = {}) {
   return { job: null, reason: await refusalReason({ jobId, cap, env }) };
 }
 
-// Gives a claimed job back to the queue without spending the attempt, recording why it came back.
-export async function release(job, result, env = process.env) {
-  return await openStore(env).jobs.releaseJob(job.id, { worker: job.worker, result });
+// Gives a claimed job back to the queue without spending the attempt, recording why it came back; `blockedCode` is the
+// preflight block code of a job the runner refused to spawn, and null clears whatever a prior attempt left there.
+export async function release(job, result, env = process.env, blockedCode = null) {
+  return await openStore(env).jobs.releaseJob(job.id, { worker: job.worker, result, blockedCode });
 }
 
 // Re-arms the lease of a job; false means this runner no longer owns it and must stop working on it.
