@@ -734,7 +734,7 @@ function toolDefinitions(env) {
           "The `hint` ends with the advisory lines when they apply - a five-hour window close to its limit while runners are live, or two or more runners on one repository - also listed under `advisories`; they never block anything. Never returns the prompt. " +
           "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`. " +
           "`sections` carries each part of the read with `ok`, `error` and elapsed `ms`, and `pr_state` of each job comes from a cache refreshed outside the answer (`unknown` until gh answered); " +
-          "a `done` job whose pull request is merged is listed in `suggestions`, and closing it is `queue_close`.",
+          "a merged pull request on a terminal job (`done`, `failed`, `gate` or `cancelled`) is listed in `suggestions`, and closing it is `queue_close`.",
         inputSchema: {
           job_id: z.number().int().min(1).nullable().optional(),
           limit: z.number().int().min(JOB_LIST_LIMIT.min).max(JOB_LIST_LIMIT.max).nullable().optional(),
@@ -779,8 +779,8 @@ function toolDefinitions(env) {
       guardsHome: true,
       config: {
         description:
-          "Closes a delivered job (`done` -> `closed`): the operator's act that ends a job's life. Any other status is refused by name and nothing is written. " +
-          "Closing never happens by observing a pull request; `queue_status` only suggests it when the pull request of a `done` job is merged.",
+          "Closes a job from any terminal status (`done`, `failed`, `gate` or `cancelled`) to `closed`: the operator's act that ends a job's life. `pending` and `running` are refused by name and nothing is written. " +
+          "Closing never happens by observing a pull request; `queue_status` only suggests it when the pull request of a terminal job is merged. The CLI also offers `nightshift queue close --merged`, which closes every such job in one call.",
         inputSchema: { job_id: z.number().int().min(1) },
       },
       handler: async (args) => ({ ok: true, job: await openStore(env).jobs.closeJob(args.job_id) }),

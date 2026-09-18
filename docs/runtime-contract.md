@@ -221,8 +221,10 @@ that never repairs nor prunes on call, and reports the last repair warning of th
 maintenance (once at start, then every 60 s, never inside a job) as `warning`. `queue_run`
 starts the runner detached and answers right away with the path of its log,
 `queue_cancel` refuses a job running under a live lease without writing anything,
-`queue_close` takes only a `done` job to `closed` and refuses every other status by
-name without writing anything, and `queue_retry` sends a gated, failed or cancelled job back to the queue - its
+`queue_close` takes a job from any terminal status (`done`, `failed`, `gate` or
+`cancelled`) to `closed`, and refuses `pending` and `running` by name without writing
+anything - the CLI also offers `nightshift queue close --merged`, which closes every
+such job whose pull request is merged in one call, and `queue_retry` sends a gated, failed or cancelled job back to the queue - its
 `run` starts a DETACHED runner, the same one the `--run` of the CLI starts unless
 it is asked for `--foreground`.
 

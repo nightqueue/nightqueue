@@ -20,6 +20,7 @@ import {
   noticeNarration,
 } from "../queue/narrate.mjs";
 import { blockerLines, claimBlocker } from "../queue/claim.mjs";
+import { closeMerged, CLOSE_MERGED_DEADLINE_MS } from "../queue/close-merged.mjs";
 import { runMaintenance } from "../queue/maintenance.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
 import { closeSuggestion, failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
@@ -46,7 +47,7 @@ const USAGE = {
   status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
-  close: "nightshift queue close <id> [--json]",
+  close: "nightshift queue close <id>... [--json], or nightshift queue close --merged [--json]",
   retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
   repair: "nightshift queue repair <id> [--json]",
   pause: "nightshift queue pause",
@@ -554,7 +555,7 @@ function formatDetail(job) {
     .filter(([key, value]) => key !== "notice_md" && value !== null && value !== undefined)
     .map(([key, value]) => `${key.padEnd(16)}${value}`);
   const at = fields.findIndex((line) => line.startsWith("status".padEnd(16)));
-  const suggestion = closeSuggestion(job);
+  const suggestion = closeSuggestion([job]);
   const extra = [...formatBlocked(job), ...(suggestion ? [suggestion] : []), ...formatNotice(job)];
   return at < 0 ? [...fields, ...extra] : [...fields.slice(0, at + 1), ...extra, ...fields.slice(at + 1)];
 }
@@ -951,12 +952,85 @@ async function runCancel(argv, ctx) {
   ctx.out(values.json ? JSON.stringify({ job }) : `cancelled job #${job.id}`);
 }
 
-// Runs `queue close`, which takes a delivered job to `closed` and refuses every other status by name without writing.
+const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" } };
+
+// Closes each id on its own store call, so one refusal never stops the ids that come after it.
+async function closeByIds(ids, ctx) {
+  const store = openStore(ctx.env);
+  const closed = [];
+  const refused = [];
+  for (const id of ids) {
+    try {
+      closed.push(await store.jobs.closeJob(id));
+    } catch (err) {
+      refused.push({ id, reason: err?.message ?? String(err) });
+    }
+  }
+  return { closed, refused };
+}
+
+// Text lines of a multi-id close: one per id, closed or not.
+function closeByIdsLines({ closed, refused }) {
+  return [...closed.map((job) => `closed job #${job.id}`), ...refused.map(({ id, reason }) => `job #${id} not closed: ${reason}`)];
+}
+
+// Runs `queue close <id>...`, which takes every job it can from a terminal status to `closed` and reports the rest by name.
+async function runCloseByIds(positionals, values, ctx) {
+  const ids = positionals.map((token) => requireInt("id", token));
+  const { closed, refused } = await closeByIds(ids, ctx);
+  if (values.json) ctx.out(JSON.stringify({ closed, refused }));
+  else for (const line of closeByIdsLines({ closed, refused })) ctx.out(line);
+  if (closed.length === 0) throw new UserError(refused.map(({ reason }) => reason).join("; "));
+}
+
+// The line `queue close --merged` prints before it asks gh, on stdout in text mode and never on the stdout of `--json`.
+function reportChecking(n, values, ctx) {
+  const line = `checking ${n} pull requests on GitHub...`;
+  if (values.json) ctx.err(line);
+  else ctx.out(line);
+}
+
+// Whether an undetermined candidate was never asked about at all: the ones over the query limit of this call.
+function isUnchecked(entry) {
+  return typeof entry.reason === "string" && entry.reason.startsWith("not checked: over the limit");
+}
+
+// Text lines of `queue close --merged`: one per closed, refused and undetermined job, plus a summary when some were left unchecked.
+function closeMergedLines({ closed, refused, undetermined }) {
+  if (closed.length + refused.length + undetermined.length === 0) return ["nothing to close"];
+  const lines = [
+    ...closed.map((job) => `closed job #${job.id}`),
+    ...refused.map(({ id, reason }) => `job #${id} not closed: ${reason}`),
+    ...undetermined.map(({ id, reason }) => `job #${id} not closed: ${reason}`),
+  ];
+  const unchecked = undetermined.filter(isUnchecked);
+  if (unchecked.length) lines.push(`${unchecked.length} job${unchecked.length === 1 ? "" : "s"} left unchecked; run nightshift queue close --merged again`);
+  return lines;
+}
+
+// Runs `queue close --merged`, which closes every terminal job the cache and, for the gap, gh itself confirm merged; it never fails because one pull request could not be read.
+async function runCloseMerged(values, ctx) {
+  const prStates = ctx.prStates ?? createPrStateCache();
+  try {
+    const store = openStore(ctx.env);
+    const deadlineMs = ctx.closeMergedDeadlineMs ?? CLOSE_MERGED_DEADLINE_MS;
+    const result = await closeMerged({ store, prStates, env: ctx.env, deadlineMs, onChecking: (n) => reportChecking(n, values, ctx) });
+    if (values.json) ctx.out(JSON.stringify(result));
+    else for (const line of closeMergedLines(result)) ctx.out(line);
+  } finally {
+    prStates.dispose();
+  }
+}
+
+// Runs `queue close`: every id it was given, independently, or `--merged` for every terminal job the pull request state confirms merged.
 async function runClose(argv, ctx) {
-  const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
-  checkArgs(positionals, { min: 1, usage: USAGE.close });
-  const job = await openStore(ctx.env).jobs.closeJob(requireInt("id", positionals[0]));
-  ctx.out(values.json ? JSON.stringify({ job }) : `closed job #${job.id}`);
+  const { values, positionals } = parseCommand(argv, CLOSE_OPTIONS);
+  if (values.merged === true) {
+    checkArgs(positionals, { max: 0, usage: USAGE.close });
+    return await runCloseMerged(values, ctx);
+  }
+  checkArgs(positionals, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.close });
+  return await runCloseByIds(positionals, values, ctx);
 }
 
 // Reports what happened to the run directory of a `--fresh` retry: a directory that was kept says why, and never brings the retry down.

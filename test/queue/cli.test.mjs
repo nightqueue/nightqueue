@@ -317,14 +317,44 @@ test("queue close closes a done job, prints it, answers --json, and refuses a pe
 
   const json = runCli(env, ["queue", "close", String(second), "--json"]);
   assert.equal(json.status, 0, json.stderr);
-  const { job } = JSON.parse(json.stdout);
+  const payload = JSON.parse(json.stdout);
+  assert.equal(payload.refused.length, 0);
+  const [job] = payload.closed;
   assert.deepEqual({ id: job.id, status: job.status, pr_url: job.pr_url }, { id: second, status: "closed", pr_url: "https://github.com/acme/api/pull/43" });
 
   const refused = runCli(env, ["queue", "close", String(pending)]);
   assert.equal(refused.status, 1);
-  assert.match(refused.stderr, /cannot be closed from status `pending`; only a `done` job is closed/);
+  assert.match(refused.stderr, /is pending; the queue still owes work for it/);
   assert.equal(getJob(pending, env).status, "pending");
   assert.match(runCli(env, ["queue", "close"]).stderr, /missing argument; usage: nightshift queue close <id>/);
+});
+
+test("queue close takes several ids, closes what it can and reports the rest, in text and in --json", (t) => {
+  const env = makeCliHome(t, "cli-close-many");
+  const first = deliver(env, enqueue(env));
+  const second = deliver(env, enqueue(env, "fix the parser"), "https://github.com/acme/api/pull/43");
+  const pending = enqueue(env, "fix the runner");
+
+  const text = runCli(env, ["queue", "close", String(first), String(second), String(pending), "99"]);
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, new RegExp(`closed job #${first}`));
+  assert.match(text.stdout, new RegExp(`closed job #${second}`));
+  assert.match(text.stdout, new RegExp(`job #${pending} not closed: job \`${pending}\` is pending; the queue still owes work for it`));
+  assert.match(text.stdout, /job #99 not closed: unknown job `99`/);
+  assert.equal(getJob(first, env).status, "closed");
+  assert.equal(getJob(second, env).status, "closed");
+
+  const third = deliver(env, enqueue(env, "fix the runner"), "https://github.com/acme/api/pull/44");
+  const stillPending = enqueue(env, "fix the queue");
+  const json = runCli(env, ["queue", "close", String(third), String(stillPending), "--json"]);
+  assert.equal(json.status, 0, json.stderr);
+  const payload = JSON.parse(json.stdout);
+  assert.deepEqual(payload.closed.map((job) => job.id), [third]);
+  assert.deepEqual(payload.refused, [{ id: stillPending, reason: `job \`${stillPending}\` is pending; the queue still owes work for it` }]);
+
+  const everyRefused = runCli(env, ["queue", "close", String(stillPending)]);
+  assert.equal(everyRefused.status, 1, "closing nothing must still fail like a refused command");
+  assert.match(everyRefused.stderr, /is pending; the queue still owes work for it/);
 });
 
 test("`queue add --tier` records the tier, `queue status` shows it, and an unknown value queues nothing", (t) => {

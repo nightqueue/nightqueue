@@ -63,12 +63,27 @@ test("queueView reads jobs, counts and idleness, and decorates each job with the
 
   const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, 1, { prStates }));
   assert.equal(detail.pr_state, "merged");
-  assert.equal(closeSuggestion(detail), "#1 PR merged - close it with nightshift queue close 1");
+  assert.equal(closeSuggestion([detail]), "#1 PR merged - close it with nightshift queue close 1");
   assert.equal(await withReadOnlyStore(env, (store) => jobDetailView(store, 99, { prStates })), null);
 
   const withoutCache = await withReadOnlyStore(env, (store) => queueView(store, { env, killImpl: deadKill }));
   assert.equal(withoutCache.jobs.find((job) => job.id === 1).pr_state, "unknown", "a view with no cache did not read a miss as unknown");
   assert.deepEqual(withoutCache.suggestions, []);
+});
+
+test("closeSuggestion aggregates every qualifying job into one line, and null answers no jobs, one job or none at all", () => {
+  const terminal = (id, status, pr_state) => ({ id, status, pr_state });
+
+  assert.equal(closeSuggestion([]), null);
+  assert.equal(closeSuggestion([terminal(1, "done", "open")]), null, "an open pull request qualified");
+  assert.equal(closeSuggestion([terminal(1, "running", "merged")]), null, "a running job with a merged pull request qualified");
+  assert.equal(closeSuggestion([terminal(1, "failed", "merged")]), "#1 PR merged - close it with nightshift queue close 1", "a failed job with a merged pull request did not qualify");
+
+  const ten = Array.from({ length: 10 }, (_, index) => terminal(index + 1, "done", "merged")).reverse();
+  assert.equal(
+    closeSuggestion(ten),
+    "10 jobs have a merged PR (#10, #9, #8, #7, #6 and 5 more) - close them with nightshift queue close --merged",
+  );
 });
 
 test("queueView on a read-only store never prunes: a dead runner's registration is still on disk afterwards", async (t) => {

@@ -15,10 +15,27 @@ function withPrState(job, prStates) {
   return { ...job, pr_state: prStateOf(job.pr_url, prStates) };
 }
 
-// The line suggesting to close a delivered job whose pull request is merged, or null when there is nothing to suggest.
-export function closeSuggestion(job) {
-  if (job?.status !== "done" || job?.pr_state !== "merged") return null;
-  return `#${job.id} PR merged - close it with nightshift queue close ${job.id}`;
+const CLOSEABLE_STATUSES = new Set(["done", "failed", "gate", "cancelled"]);
+const SUGGESTION_ID_LIMIT = 5;
+
+// Whether a job qualifies for a close suggestion: a terminal status whose cached pull request state is merged.
+function qualifiesForClose(job) {
+  return CLOSEABLE_STATUSES.has(job?.status) && job?.pr_state === "merged";
+}
+
+// The ids a suggestion line names, at most five, with the rest folded into a count.
+function suggestionIdList(ids) {
+  const shown = ids.slice(0, SUGGESTION_ID_LIMIT).map((id) => `#${id}`).join(", ");
+  const extra = ids.length - SUGGESTION_ID_LIMIT;
+  return extra > 0 ? `${shown} and ${extra} more` : shown;
+}
+
+// One aggregated line suggesting the close of every terminal job whose pull request is merged, or null when none qualifies.
+export function closeSuggestion(jobs) {
+  const ids = (Array.isArray(jobs) ? jobs : []).filter(qualifiesForClose).map((job) => job.id);
+  if (ids.length === 0) return null;
+  if (ids.length === 1) return `#${ids[0]} PR merged - close it with nightshift queue close ${ids[0]}`;
+  return `${ids.length} jobs have a merged PR (${suggestionIdList(ids)}) - close them with nightshift queue close --merged`;
 }
 
 // The pull request URLs of a list of jobs or rows, the keys a refresh of the cache is asked about.
@@ -78,9 +95,9 @@ export async function queueView(readStore, { env = process.env, limit, blockedOn
   const { counts, blockedPending, activeJobs } = countsPart.value ?? { counts: zeroCounts(), blockedPending: 0, activeJobs: 0 };
   const sections = [jobsPart, countsPart, runnersPart, advisoriesPart].map(({ name, ok, ms, error }) => ({ name, ok, ms, error }));
   const advisories = advisoriesPart.value ?? [];
-  const suggestions = jobs.map(closeSuggestion).filter(Boolean);
+  const suggestion = closeSuggestion(jobs);
   const idle = isViewIdle({ jobs, counts, activeJobs, runners, registryError, readable: jobsPart.ok && countsPart.ok });
-  return { jobs, counts, blockedPending, activeJobs, runners, registryError, advisories, suggestions, idle, sections };
+  return { jobs, counts, blockedPending, activeJobs, runners, registryError, advisories, suggestions: suggestion ? [suggestion] : [], idle, sections };
 }
 
 // The first failed section among the ones a listing cannot do without (jobs, counts), or null when both were read.
