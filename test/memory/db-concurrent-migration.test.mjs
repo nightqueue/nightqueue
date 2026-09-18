@@ -11,17 +11,17 @@ const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
 const BARRIER_MS = 300;
 const ITERATIONS = 12;
 const RACERS = 6;
-const MERGE_COLUMNS = ["merged_at", "merge_sha"];
+const DROPPED_COLUMNS = ["merged_at", "merge_sha"];
 
-// An old v3 database: no merge columns yet, and the pr_checked_at column v9 retires, so the racers both add and drop.
-const DOWNGRADE_TO_V3 = `
-ALTER TABLE jobs DROP COLUMN merged_at;
-ALTER TABLE jobs DROP COLUMN merge_sha;
+// An old v9 database: still carries the merge columns v10 drops, and the pr_checked_at column migrate() has always dropped, so the racers all drop columns.
+const SEED_AT_V9_WITH_DROPPED_COLUMNS = `
+ALTER TABLE jobs ADD COLUMN merged_at TEXT;
+ALTER TABLE jobs ADD COLUMN merge_sha TEXT;
 ALTER TABLE jobs ADD COLUMN pr_checked_at TEXT;
-PRAGMA user_version = 3;
+PRAGMA user_version = 9;
 `;
 
-// Source of a racer process: opens the SAME v3 database from a real separate OS process, at a shared instant.
+// Source of a racer process: opens the SAME v9 database from a real separate OS process, at a shared instant.
 function racerSource() {
   return [
     `import { openDb } from ${JSON.stringify(DB_URL)};`,
@@ -69,7 +69,7 @@ function raceOnce(env, workerPath, count) {
   return Promise.all(Array.from({ length: count }, () => spawnRacer(env, workerPath, startAt)));
 }
 
-test(`${RACERS} processes racing to migrate the SAME v3 database converge on the current schema, ${ITERATIONS} times over`, async (t) => {
+test(`${RACERS} processes racing to migrate the SAME v9 database converge on the current schema, ${ITERATIONS} times over`, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "nightshift-db-race-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const workerPath = join(dir, "racer.mjs");
@@ -84,8 +84,8 @@ test(`${RACERS} processes racing to migrate the SAME v3 database converge on the
     seed
       .prepare("INSERT INTO jobs (project, prompt, status, pr_url) VALUES (?, ?, 'merged', ?)")
       .run("alpha", "ship the api", "https://github.com/acme/api/pull/43");
-    seed.exec(DOWNGRADE_TO_V3);
-    assert.equal(seed.prepare("PRAGMA user_version").get().user_version, 3, `pass ${pass}: seed did not reach v3`);
+    seed.exec(SEED_AT_V9_WITH_DROPPED_COLUMNS);
+    assert.equal(seed.prepare("PRAGMA user_version").get().user_version, 9, `pass ${pass}: seed did not reach v9`);
     closeDb(env);
 
     const results = await raceOnce(env, workerPath, RACERS);
@@ -99,11 +99,9 @@ test(`${RACERS} processes racing to migrate the SAME v3 database converge on the
         DB_USER_VERSION,
         `pass ${pass} racer ${idx} ended at user_version ${parsed.version}, not ${DB_USER_VERSION}`,
       );
-      assert.deepEqual(
-        MERGE_COLUMNS.filter((name) => parsed.columns.includes(name)).sort(),
-        [...MERGE_COLUMNS].sort(),
-        `pass ${pass} racer ${idx} is missing a merge column: ${parsed.columns.join(", ")}`,
-      );
+      for (const name of DROPPED_COLUMNS) {
+        assert.equal(parsed.columns.includes(name), false, `pass ${pass} racer ${idx} still sees ${name}`);
+      }
       assert.equal(parsed.columns.includes("pr_checked_at"), false, `pass ${pass} racer ${idx} still sees pr_checked_at`);
       assert.deepEqual(parsed.statuses, ["done", "closed"], `pass ${pass} racer ${idx} read statuses ${parsed.statuses}`);
     }
@@ -111,8 +109,8 @@ test(`${RACERS} processes racing to migrate the SAME v3 database converge on the
     const after = openDb(env);
     assert.equal(after.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION, `pass ${pass}: final user_version`);
     const columns = after.prepare("PRAGMA table_info(jobs)").all().map((c) => c.name);
-    for (const name of MERGE_COLUMNS) {
-      assert.equal(columns.filter((c) => c === name).length, 1, `pass ${pass}: ${name} duplicated: ${columns.join(", ")}`);
+    for (const name of DROPPED_COLUMNS) {
+      assert.equal(columns.includes(name), false, `pass ${pass}: ${name} survived: ${columns.join(", ")}`);
     }
     assert.equal(columns.includes("pr_checked_at"), false, `pass ${pass}: pr_checked_at survived: ${columns.join(", ")}`);
     const rows = after.prepare("SELECT * FROM jobs ORDER BY id").all();

@@ -55,7 +55,6 @@ const JOB_VIEW_COLUMNS = [
   "slug",
   "branch",
   "pr_url",
-  "merge_sha",
   "worker",
   "operator_note",
   "blocked_code",
@@ -65,7 +64,7 @@ const JOB_VIEW_COLUMNS = [
   "cache_creation",
   "cost_usd",
 ];
-const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "merged_at", "not_before"];
+const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "not_before"];
 const JOB_VIEW_TRUNCATED = ["notice_md", "result"];
 const VIEW_TEXT_LIMIT = 500;
 const LIST_LIMIT_RANGE = { min: 1, max: 50, fallback: 10 };

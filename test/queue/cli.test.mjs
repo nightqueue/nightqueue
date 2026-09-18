@@ -232,6 +232,8 @@ test("queue status never writes a delivered job whose pull request is merged: th
   assert.equal(payload.counts.done, 1);
   assert.equal(payload.counts.merged, undefined, "the retired merged status is still counted");
   assert.equal("pr_checked_at" in payload.jobs[0], false);
+  assert.equal("merged_at" in payload.jobs[0], false);
+  assert.equal("merge_sha" in payload.jobs[0], false);
 
   const detail = runCli(env, ["queue", "status", "1"]);
   assert.equal(detail.status, 0, detail.stderr);
@@ -239,7 +241,9 @@ test("queue status never writes a delivered job whose pull request is merged: th
   assert.ok(detail.stdout.split("\n").includes(CLOSE_SUGGESTION), `the detail did not suggest the close:\n${detail.stdout}`);
 
   const row = getJob(1, env);
-  assert.deepEqual({ status: row.status, merged_at: row.merged_at, merge_sha: row.merge_sha }, { status: "done", merged_at: null, merge_sha: null });
+  assert.equal(row.status, "done");
+  assert.equal("merged_at" in row, false, "the jobs row still carries the dropped merged_at column");
+  assert.equal("merge_sha" in row, false, "the jobs row still carries the dropped merge_sha column");
 });
 
 test("a one-shot queue status behind a gh that hangs waits one overall deadline, prints `unknown` and exits", (t) => {

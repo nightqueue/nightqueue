@@ -100,9 +100,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   cost_usd REAL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   started_at TEXT,
-  finished_at TEXT,
-  merged_at TEXT,
-  merge_sha TEXT
+  finished_at TEXT
 );
 CREATE TABLE IF NOT EXISTS pipeline_phases (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -159,8 +157,6 @@ const EVOLVING_COLUMNS = [
   ["lessons", "embedding_model", "TEXT"],
   ["memory", "embedding", "BLOB"],
   ["memory", "embedding_model", "TEXT"],
-  ["jobs", "merged_at", "TEXT"],
-  ["jobs", "merge_sha", "TEXT"],
   ["jobs", "tier", "TEXT"],
   ["jobs", "not_before", "TEXT"],
   ["jobs", "blocked_code", "TEXT"],
@@ -331,6 +327,8 @@ function createSchema(db) {
 function migrate(db) {
   for (const [table, column, definition] of EVOLVING_COLUMNS) addColumnIfMissing(db, table, column, definition);
   dropColumnIfPresent(db, "jobs", "pr_checked_at");
+  dropColumnIfPresent(db, "jobs", "merged_at");
+  dropColumnIfPresent(db, "jobs", "merge_sha");
   retireMergedStatus(db);
   db.exec(INDEXES);
   db.exec(FTS);

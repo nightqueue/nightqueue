@@ -457,11 +457,8 @@ test("the public view drops the prompt, truncates the free text by code point an
   assert.equal(view.result, "short result");
   assert.match(view.created_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
   assert.equal(view.finished_at, null);
-  assert.deepEqual(
-    { merged_at: view.merged_at, merge_sha: view.merge_sha },
-    { merged_at: null, merge_sha: null },
-    "the view of a job hides the merge columns",
-  );
+  assert.equal("merged_at" in view, false, "the view still carries the dropped merged_at column");
+  assert.equal("merge_sha" in view, false, "the view still carries the dropped merge_sha column");
   assert.equal(jobView(null), null);
 });
 
@@ -487,7 +484,8 @@ test("close takes any terminal job to closed, keeps pr_url and finished_at, and 
   assert.equal(closed.status, "closed");
   assert.equal(closed.pr_url, "https://github.com/acme/api/pull/7");
   assert.equal(getJob(delivered, env).finished_at, GATED_FINISHED_AT, "the close rewrote finished_at");
-  assert.deepEqual({ merged_at: closed.merged_at, merge_sha: closed.merge_sha }, { merged_at: null, merge_sha: null });
+  assert.equal("merged_at" in closed, false, "the view still carries the dropped merged_at column");
+  assert.equal("merge_sha" in closed, false, "the view still carries the dropped merge_sha column");
 
   for (const status of ["failed", "gate", "cancelled"]) {
     const id = enqueue(env);

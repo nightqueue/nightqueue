@@ -269,6 +269,11 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   drops `jobs.pr_checked_at`; it runs on every open, read-guarded, so a row an
   older build writes back is healed on the next one. `counts.merged` and
   `jobs[].pr_checked_at` are gone from `--json` and `queue_status`.
+- `jobs.merged_at` and `jobs.merge_sha`. Nothing has written them since the
+  sweep left, so they held values frozen from the old sweep on migrated rows
+  and stayed empty on every job closed afterwards. The v10 migration drops both
+  the same read-guarded, idempotent way, and `merged_at`/`merge_sha` are gone
+  from `queue status --json` and `queue_status`.
 
 ### Fixed
 

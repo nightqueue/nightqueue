@@ -642,15 +642,21 @@ test("queue_status never writes a delivered job whose pull request is merged, an
   assert.equal(listed.counts.done, 1);
   assert.equal(listed.counts.closed, 0);
   assert.equal(listed.counts.merged, undefined, "the retired merged status is still counted");
+  assert.equal("merged_at" in listed.jobs[0], false);
+  assert.equal("merge_sha" in listed.jobs[0], false);
   const detail = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: 1 } }));
   assert.deepEqual({ status: detail.job.status, pr_state: detail.job.pr_state }, { status: "done", pr_state: "merged" });
+  assert.equal("merged_at" in detail.job, false);
+  assert.equal("merge_sha" in detail.job, false);
   assert.equal(prViewCalls(env).length, 1, "a merged pull request was asked about again instead of cached");
 
   const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "7", NIGHTSHIFT_FAKE_GH_LOG: join(makeDir(t, "mcp-queue-merged-job"), "gh.log") });
   assert.equal((await pollPrState(inJob, "merged")).jobs[0].pr_state, "merged", "a job session never asked gh");
 
   const row = getJob(1, env);
-  assert.deepEqual({ status: row.status, merged_at: row.merged_at, merge_sha: row.merge_sha }, { status: "done", merged_at: null, merge_sha: null });
+  assert.equal(row.status, "done");
+  assert.equal("merged_at" in row, false, "the jobs row still carries the dropped merged_at column");
+  assert.equal("merge_sha" in row, false, "the jobs row still carries the dropped merge_sha column");
 });
 
 test("queue_status answers with the nudge that matches the state of the queue, leading with the live-runner count, and never on the detail of a job", async (t) => {

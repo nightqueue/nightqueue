@@ -225,7 +225,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v9/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v10/);
 });
 
 test("the database check fails a v8 home and points at the command that migrates it", async (t) => {
@@ -235,7 +235,7 @@ test("the database check fails a v8 home and points at the command that migrates
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v8, expected v9/);
+  assert.match(database.detail, /schema v8, expected v10/);
   assert.match(database.hint, /run `nightshift queue status` once to migrate it/);
   assert.doesNotMatch(database.hint, /nightshift memory stats/);
 });
