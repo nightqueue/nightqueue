@@ -38,6 +38,18 @@ export function closeSuggestion(jobs) {
   return `${ids.length} jobs have a merged PR (${suggestionIdList(ids)}) - close them with nightshift queue close --merged`;
 }
 
+// One advisory line per distinct status outside the job status enum, naming it and how many rows carry it.
+function unknownStatusAdvisories(jobs) {
+  const counts = new Map();
+  for (const job of jobs) {
+    if (JOB_STATUSES.includes(job.status)) continue;
+    counts.set(job.status, (counts.get(job.status) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(
+    ([status, count]) => `${count} job${count === 1 ? "" : "s"} carr${count === 1 ? "ies" : "y"} the unknown status '${status}'; run nightshift doctor`,
+  );
+}
+
 // The pull request URLs of a list of jobs or rows, the keys a refresh of the cache is asked about.
 export function prUrlsOf(jobs) {
   return (Array.isArray(jobs) ? jobs : []).map((job) => job?.pr_url).filter((url) => typeof url === "string" && url);
@@ -96,8 +108,9 @@ export async function queueView(readStore, { env = process.env, limit, blockedOn
   const sections = [jobsPart, countsPart, runnersPart, advisoriesPart].map(({ name, ok, ms, error }) => ({ name, ok, ms, error }));
   const advisories = advisoriesPart.value ?? [];
   const suggestion = closeSuggestion(jobs);
+  const suggestions = [...(suggestion ? [suggestion] : []), ...unknownStatusAdvisories(jobs)];
   const idle = isViewIdle({ jobs, counts, activeJobs, runners, registryError, readable: jobsPart.ok && countsPart.ok });
-  return { jobs, counts, blockedPending, activeJobs, runners, registryError, advisories, suggestions: suggestion ? [suggestion] : [], idle, sections };
+  return { jobs, counts, blockedPending, activeJobs, runners, registryError, advisories, suggestions, idle, sections };
 }
 
 // The first failed section among the ones a listing cannot do without (jobs, counts), or null when both were read.

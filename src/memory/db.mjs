@@ -452,7 +452,7 @@ export function migrateIfOutdated(env = process.env) {
   } catch (err) {
     const detail = err instanceof UserError ? err.message : (err?.message ?? String(err));
     throw new UserError(
-      `the memory database at ${path} is at schema v${version} and this build needs v${DB_USER_VERSION}, but it could not be migrated: ${detail}; make the database writable and run \`nightshift doctor\``,
+      `the memory database at ${path} is at schema v${version} and this build needs v${DB_USER_VERSION}, but it could not be migrated: ${detail}; make the database writable and run \`nightshift queue status\` again`,
     );
   }
 }

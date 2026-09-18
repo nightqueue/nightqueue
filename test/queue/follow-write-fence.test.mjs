@@ -111,7 +111,7 @@ test("a follow running against a write-fenced store never throws, renders normal
 
 test("the body of followStatus holds no maintenance: no repair, no prune, no write store", () => {
   const source = functionSource(QUEUE_SRC, "async function followStatus");
-  for (const token of ["runMaintenance", "Maintenance", "repair", "prune", "openStore("]) {
+  for (const token of ["runMaintenance", "Maintenance", "repair", "prune", "openStore(", "migrateIfOutdated"]) {
     assert.equal(source.includes(token), false, `followStatus mentions \`${token}\`: the follow writes again`);
   }
 });

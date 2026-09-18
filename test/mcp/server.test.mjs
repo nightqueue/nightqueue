@@ -10,10 +10,11 @@ import { homeDir, queuePausedPath, runnersDir } from "../../src/config/paths.mjs
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
+import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, seedLegacyV8Home } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
@@ -82,6 +83,20 @@ test("the server exposes exactly the twenty-four tools of the contract", async (
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
   assert.equal(names.length, 24, "the contract list and the server disagree on how many tools there are");
+});
+
+test("the server migrates a v8 home to v9 once at boot, before it answers any tool", async (t) => {
+  const env = makeHome(t, "mcp-v9-migration");
+  makeProject(t, env, "alpha");
+  seedLegacyV8Home(env, { rows: 1 });
+  const client = await connect(t, env);
+
+  const status = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(status.jobs[0].status, "closed", "the boot never migrated the v8 home");
+
+  const db = openDb(env);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
+  assert.equal(db.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "pr_checked_at"), false);
 });
 
 test("the handshake carries the instructions that teach the backlog model", async (t) => {

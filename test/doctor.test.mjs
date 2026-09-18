@@ -12,7 +12,7 @@ import { addJob, claimJobById } from "../src/memory/jobs.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { makeHostEnv, writeLegacyShim } from "../test-support/host.mjs";
-import { makeDir, makeProject } from "../test-support/memory.mjs";
+import { makeDir, makeProject, seedLegacyV8Home } from "../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
 const SETUP = ["setup", "--no-path", "--no-embedding"];
@@ -226,6 +226,18 @@ test("the database check reads the schema version of an existing database", asyn
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
   assert.match(report.checks.find((check) => check.name === "database").detail, /schema v9/);
+});
+
+test("the database check fails a v8 home and points at the command that migrates it", async (t) => {
+  const host = makeHostEnv(t, "doctor-db-v8");
+  seedLegacyV8Home(host.env);
+
+  const { report } = await diagnose(host.env);
+  const database = report.checks.find((check) => check.name === "database");
+  assert.equal(database.status, "fail");
+  assert.match(database.detail, /schema v8, expected v9/);
+  assert.match(database.hint, /run `nightshift queue status` once to migrate it/);
+  assert.doesNotMatch(database.hint, /nightshift memory stats/);
 });
 
 test("the queue check reads the pause sentinel of the home, and a paused queue is a warning", async (t) => {

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { blobToVector, closeDb, openDb, resolveProjectName, vectorToBlob } from "../../src/memory/db.mjs";
+import { dbPath } from "../../src/config/paths.mjs";
+import { blobToVector, closeDb, migrateIfOutdated, openDb, resolveProjectName, vectorToBlob } from "../../src/memory/db.mjs";
 import { listDecisions, saveDecision } from "../../src/memory/decisions.mjs";
 import { DOWNGRADE_TO_V5, makeHome, makeProject } from "../../test-support/memory.mjs";
 
@@ -304,6 +305,25 @@ test("the migration to v9 turns a merged row into closed, drops pr_checked_at, a
   const healed = openDb(env);
   assert.deepEqual(jobStatuses(healed), ["closed", "done", "closed"], "a merged row written back by an old build survived the open");
   assert.equal(columnsOf(healed, "jobs").includes("pr_checked_at"), false, "a pr_checked_at re-added by an old build survived the open");
+});
+
+test("migrateIfOutdated names the fix that actually works when the migration itself cannot write", (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("running as root: a chmod fence never blocks a write");
+    return;
+  }
+  const env = makeHome(t, "db-migrate-write-refused");
+  const first = openDb(env);
+  first.exec(DOWNGRADE_TO_V5);
+  closeDb(env);
+  chmodSync(dbPath(env), 0o444);
+  t.after(() => chmodSync(dbPath(env), 0o644));
+
+  assert.throws(() => migrateIfOutdated(env), (err) => {
+    assert.match(err.message, /make the database writable and run `nightshift queue status` again/);
+    assert.doesNotMatch(err.message, /nightshift doctor/);
+    return true;
+  });
 });
 
 test("the migration from user_version 4 adds the tier columns once and keeps every job row", (t) => {

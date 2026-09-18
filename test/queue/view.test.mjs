@@ -86,6 +86,19 @@ test("closeSuggestion aggregates every qualifying job into one line, and null an
   );
 });
 
+test("a status outside the job status enum earns its own advisory in suggestions, singular and plural correct, and never breaks the counts", async (t) => {
+  const env = seedHome(t, "view-unknown-status", [{ status: "merged" }, { status: "merged" }, { status: "done" }]);
+
+  const view = await withReadOnlyStore(env, (store) => queueView(store, { env, killImpl: deadKill }));
+  assert.deepEqual(view.suggestions, ["2 jobs carry the unknown status 'merged'; run nightshift doctor"]);
+  assert.equal("merged" in view.counts, false, "the unknown status leaked into the known counts");
+  assert.equal(view.counts.done, 1);
+
+  const single = seedHome(t, "view-unknown-status-one", [{ status: "weird" }]);
+  const singleView = await withReadOnlyStore(single, (store) => queueView(store, { env: single, killImpl: deadKill }));
+  assert.deepEqual(singleView.suggestions, ["1 job carries the unknown status 'weird'; run nightshift doctor"]);
+});
+
 test("queueView on a read-only store never prunes: a dead runner's registration is still on disk afterwards", async (t) => {
   const env = seedHome(t, "view-no-prune", [{ status: "pending" }]);
   writeRunnerRecord({ pid: DEAD_PID, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/dead.log" }, env);

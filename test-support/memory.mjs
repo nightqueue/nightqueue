@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { addOrg, getOrg } from "../src/config/orgs.mjs";
 import { addProject } from "../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
-import { closeDb } from "../src/memory/db.mjs";
+import { closeDb, openDb } from "../src/memory/db.mjs";
 
 const OWN_ENV_KEYS = [
   "NIGHTSHIFT_HOME",
@@ -80,6 +80,20 @@ ALTER TABLE roadmap_items DROP COLUMN scope;
 ALTER TABLE roadmap_items DROP COLUMN org;
 PRAGMA user_version = 5;
 `;
+
+// Re-creates what a v8 build leaves behind - the `pr_checked_at` column and rows still on the retired `merged` status -
+// so a test can drive the runtime that is supposed to migrate it and check the home landed on v9.
+export function seedLegacyV8Home(env, { rows = 1, project = "alpha" } = {}) {
+  const db = openDb(env);
+  if (!db.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "pr_checked_at")) {
+    db.exec("ALTER TABLE jobs ADD COLUMN pr_checked_at TEXT");
+  }
+  const insert = db.prepare("INSERT INTO jobs (project, prompt, status) VALUES (?, ?, 'merged')");
+  const ids = Array.from({ length: rows }, (_, index) => Number(insert.run(project, `legacy job ${index + 1}`).lastInsertRowid));
+  db.exec("PRAGMA user_version = 8");
+  closeDb(env);
+  return ids;
+}
 
 // Embedder double with a fixed vector, so the hybrid recall never depends on the real model.
 export function fakeEmbedder(vector, { model = "fake-embedder@v1" } = {}) {

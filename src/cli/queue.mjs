@@ -5,9 +5,9 @@ import { jobLogPath, queuePausedPath, queueResumePath } from "../config/paths.mj
 import { projectByName, registrationOffer, resolveProject } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
-import { jobView, truncateByCodePoint } from "../memory/jobs.mjs";
+import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { PROMPT_SOURCE_CONFLICT, getRoadmapItem, queueRoadmapItem } from "../memory/roadmap.mjs";
-import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
+import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
 import { isQueueIdle, noRunnerWait, parkedBacklogLine, parkedJobLabel, pausedRunnerLine, pendingJobs, runnerPauseLabel, runnersOnline } from "../queue/hints.mjs";
@@ -403,8 +403,16 @@ const STATUS_STYLE = {
   failed: { icon: "✗", color: "31" },
   cancelled: { icon: "⊘", color: "2" },
   pending: { icon: "○", color: "2" },
-  closed: { icon: "■", color: "35" },
+  closed: { icon: "■", color: "38;5;91" },
 };
+
+// Style of a row whose status is not one this build knows: marked loud instead of blending in with the rest.
+const UNKNOWN_STATUS_STYLE = { icon: "!", color: "97;41" };
+
+// The icon and color a status renders with: its own style, or the loud unknown one for a status outside the enum.
+function statusStyleOf(status) {
+  return JOB_STATUSES.includes(status) ? (STATUS_STYLE[status] ?? { icon: "·", color: null }) : UNKNOWN_STATUS_STYLE;
+}
 
 // Paints a text with an ANSI code, or leaves it alone when color is off.
 function paint(text, code, color) {
@@ -503,7 +511,7 @@ function lastCell(job, env) {
 function rowCells(job, nowMs, env) {
   return {
     id: `#${job.id}`,
-    status: `${(STATUS_STYLE[job.status] ?? { icon: "·" }).icon} ${job.status}`,
+    status: `${statusStyleOf(job.status).icon} ${job.status}`,
     duration: formatDurationCell(job, nowMs),
     tokens: formatTokens(job),
     project: String(job.project),
@@ -516,7 +524,7 @@ function formatRow(job, { nowMs, env, width, color }) {
   const cells = rowCells(job, nowMs, env);
   const fixed = COLUMNS.map((column) => {
     const cell = fit(cells[column.key], column.width - 1).padEnd(column.width);
-    return column.key === "status" ? paint(cell, STATUS_STYLE[job.status]?.color, color) : cell;
+    return column.key === "status" ? paint(cell, statusStyleOf(job.status).color, color) : cell;
   });
   const last = fit(cells.last, width - 1).padEnd(width);
   return `${fixed.join("")}${last}${formatPr(job)}`.trimEnd();
@@ -768,6 +776,7 @@ async function printStatus(argv, ctx) {
   const intervalS = values.follow === undefined ? null : Math.max(1, requireInt("--follow", values.follow));
   if (intervalS !== null && values.json) throw new UserError(`\`--follow\` cannot be used with \`--json\`; usage: ${USAGE.status}`);
   if (intervalS !== null && positionals.length) throw new UserError(`\`--follow\` shows the whole queue, not one job; usage: ${USAGE.status}`);
+  await openStoreReadOnly(ctx.env).migrateIfOutdated();
   const prStates = ctx.prStates ?? createPrStateCache();
   if (intervalS !== null) return await followStatus(values, intervalS, ctx, prStates);
   try {

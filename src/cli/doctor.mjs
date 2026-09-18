@@ -255,7 +255,7 @@ function checkEmbeddingPrefix(ctx) {
 // Hint for a database whose schema version is not the one this build knows.
 function schemaVersionHint(version) {
   return version < DB_USER_VERSION
-    ? "run `nightshift memory stats` once to let the runtime migrate it"
+    ? "run `nightshift queue status` once to migrate it"
     : "upgrade nightshift to the version that wrote this schema";
 }
 

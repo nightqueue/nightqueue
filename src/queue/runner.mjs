@@ -7,7 +7,7 @@ import { ensureHome } from "../config/store.mjs";
 import { ghPrList } from "../host/gh.mjs";
 import { packageRoot } from "../host/paths.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
-import { openStore } from "../store/open.mjs";
+import { openStore, openStoreReadOnly } from "../store/open.mjs";
 import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isTransientFailure } from "./classify.mjs";
 import { preflight } from "./preflight.mjs";
@@ -603,6 +603,7 @@ function remainingBudget(max, passes) {
 
 // Claims and runs jobs one after the other until the queue refuses another one or the --max budget is spent, respecting the ceiling across processes.
 export async function runCycle({ jobId = null, max = null, dry = false, env = process.env, deps = {} } = {}) {
+  await openStoreReadOnly(env).migrateIfOutdated();
   const cap = concurrencyCap(env);
   if (dry) return await dryReport({ jobId, cap, max, env });
   const ctx = { env, store: openStore(env), deps: withDefaults(deps, env), state: { stopping: false } };
