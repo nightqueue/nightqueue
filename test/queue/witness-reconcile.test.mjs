@@ -18,6 +18,7 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
 const REPAIRER = fileURLToPath(new URL("../../test-support/witness-repairer.mjs", import.meta.url));
+const MCP_SRC = fileURLToPath(new URL("../../src/mcp/tools.mjs", import.meta.url));
 const FIXED_TZ = "America/Sao_Paulo";
 const WORKER = "host:1000";
 const CAP = 4;
@@ -202,6 +203,15 @@ test("the reconciliation never touches a job a live runner owns, a row that alre
   assert.equal(getJob(pending, env).status, "pending");
 });
 
+test("a witness that says `closed` is never trusted: the row stays as it is", async (t) => {
+  const env = makeQueue(t, "reconcile-closed-witness");
+  const id = lostFinish(env, { status: "closed" });
+  const before = getJob(id, env);
+
+  assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "a witness closed a job, which only the operator does");
+  assert.deepEqual(getJob(id, env), before, "a `closed` witness rewrote the row");
+});
+
 test("a repair the database refuses only warns: `queue status` still prints the queue and exits 0", (t) => {
   const env = makeQueue(t, "reconcile-refused");
   const id = lostFinish(env);
@@ -320,13 +330,39 @@ test("a witness is restored to the instant it names, in both shapes, whatever th
   }
 });
 
-test("MCP queue_status and the start of a runner cycle repair the same way `queue status` does", async (t) => {
+// Asks queue_status until the job reads `status`, within five seconds, and returns the last answer.
+async function pollJobStatus(client, id, status) {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    const answer = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+    if (answer.jobs.find((job) => job.id === id)?.status === status || Date.now() > deadline) return answer;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+}
+
+// The definition of the `queue_status` tool, from its name to the name of the tool declared after it.
+function queueStatusToolSource() {
+  const text = readFileSync(MCP_SRC, "utf8");
+  const start = text.indexOf('name: "queue_status"');
+  const end = text.indexOf('name: "queue_run"', start + 1);
+  assert.ok(start >= 0 && end > start, "the `queue_status` tool moved or was renamed; update this pin");
+  return text.slice(start, end);
+}
+
+test("the MCP server's maintenance and the start of a runner cycle repair the same way `queue status` does", async (t) => {
   const env = makeQueue(t, "reconcile-mcp");
   const id = lostFinish(env);
   const client = await connectMcp(t, env);
 
-  const answer = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(answer.jobs.find((job) => job.id === id).status, "done", "MCP queue_status did not repair the row");
+  const answer = await pollJobStatus(client, id, "done");
+  assert.equal(answer.jobs.find((job) => job.id === id).status, "done", "the maintenance of the MCP server did not repair the row");
+
+  const source = queueStatusToolSource();
+  const beforeRead = source.slice(0, source.indexOf("withReadOnlyStore("));
+  for (const token of ["repairWarningLine", "runMaintenance", "pruneDeadRunners"]) {
+    assert.equal(source.includes(token), false, `the queue_status handler calls \`${token}\`: a read writes again`);
+  }
+  assert.equal(beforeRead.includes("refresh("), false, "the queue_status handler refreshes the pull request states before it reads");
 
   const cycled = makeQueue(t, "reconcile-cycle");
   const cycledId = lostFinish(cycled);

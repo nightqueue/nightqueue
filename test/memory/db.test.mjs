@@ -104,7 +104,6 @@ const JOB_COLUMNS = [
   "finished_at",
   "merged_at",
   "merge_sha",
-  "pr_checked_at",
   "tier",
   "not_before",
   "blocked_code",
@@ -114,7 +113,6 @@ const JOB_COLUMNS = [
 const DOWNGRADE_TO_V3 = `
 ALTER TABLE jobs DROP COLUMN merged_at;
 ALTER TABLE jobs DROP COLUMN merge_sha;
-ALTER TABLE jobs DROP COLUMN pr_checked_at;
 ALTER TABLE jobs DROP COLUMN tier;
 ALTER TABLE jobs DROP COLUMN not_before;
 ALTER TABLE jobs DROP COLUMN blocked_code;
@@ -155,13 +153,13 @@ test("the migration is idempotent and keeps the data across a reopen", (t) => {
   const env = makeHome(t, "db-migrate");
   const first = openDb(env);
   const id = insertLesson(first, { title: "the migration keeps the rows" });
-  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 8);
+  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 9);
   assert.deepEqual(columnsOf(first, "lessons"), LESSON_COLUMNS);
   closeDb(env);
 
   const second = openDb(env);
   assert.notEqual(second, first);
-  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 8);
+  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 9);
   assert.deepEqual(columnsOf(second, "lessons"), LESSON_COLUMNS);
   assert.equal(second.prepare("SELECT title FROM lessons WHERE id = ?").get(id).title, "the migration keeps the rows");
   assert.deepEqual(matchIds(second, "lessons_fts", '"migration"'), [id]);
@@ -215,7 +213,7 @@ test("the migration from user_version 2 keeps every row and adds the decisions s
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 8, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 9, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
     assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
     assert.ok(columnsOf(db, "jobs").includes("tier"), `jobs.tier missing on pass ${pass}`);
@@ -254,14 +252,58 @@ test("the migration from user_version 3 adds the merge columns once and keeps ev
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 8, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 9, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     const row = db.prepare("SELECT * FROM jobs").get();
     assert.equal(row.prompt, "fix the worker");
     assert.equal(row.pr_url, "https://github.com/acme/api/pull/42");
-    assert.deepEqual({ merged_at: row.merged_at, merge_sha: row.merge_sha, pr_checked_at: row.pr_checked_at }, { merged_at: null, merge_sha: null, pr_checked_at: null });
+    assert.deepEqual({ merged_at: row.merged_at, merge_sha: row.merge_sha }, { merged_at: null, merge_sha: null });
+    assert.equal(columnsOf(db, "jobs").includes("pr_checked_at"), false, `pass ${pass}: pr_checked_at is back`);
     closeDb(env);
   }
+});
+
+// Status of every job row, oldest first.
+function jobStatuses(db) {
+  return db.prepare("SELECT status FROM jobs ORDER BY id").all().map((row) => row.status);
+}
+
+// Re-creates what a v8 build leaves behind: the pr_checked_at column and a row with the retired `merged` status.
+function writeLegacyMergedRow(db) {
+  if (!columnsOf(db, "jobs").includes("pr_checked_at")) db.exec("ALTER TABLE jobs ADD COLUMN pr_checked_at TEXT");
+  const insert = db.prepare(
+    "INSERT INTO jobs (project, prompt, status, pr_url, merged_at, merge_sha, pr_checked_at) VALUES ('alpha', 'ship it', 'merged', ?, ?, ?, ?)",
+  );
+  return Number(insert.run("https://github.com/acme/api/pull/7", "2026-01-01 00:00:00", "abc123", "2026-01-01 00:05:00").lastInsertRowid);
+}
+
+test("the migration to v9 turns a merged row into closed, drops pr_checked_at, and is idempotent", (t) => {
+  const env = makeHome(t, "db-migrate-v9");
+  const first = openDb(env);
+  const merged = writeLegacyMergedRow(first);
+  first.prepare("INSERT INTO jobs (project, prompt, status) VALUES ('alpha', 'delivered', 'done')").run();
+  first.exec("PRAGMA user_version = 8");
+  closeDb(env);
+
+  for (const pass of [1, 2]) {
+    const db = openDb(env);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 9, `pass ${pass}`);
+    assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
+    assert.deepEqual(jobStatuses(db), ["closed", "done"], `pass ${pass}`);
+    const row = db.prepare("SELECT pr_url, merged_at, merge_sha FROM jobs WHERE id = ?").get(merged);
+    assert.deepEqual(
+      { ...row },
+      { pr_url: "https://github.com/acme/api/pull/7", merged_at: "2026-01-01 00:00:00", merge_sha: "abc123" },
+      `pass ${pass}`,
+    );
+    closeDb(env);
+  }
+
+  writeLegacyMergedRow(openDb(env));
+  closeDb(env);
+  const healed = openDb(env);
+  assert.deepEqual(jobStatuses(healed), ["closed", "done", "closed"], "a merged row written back by an old build survived the open");
+  assert.equal(columnsOf(healed, "jobs").includes("pr_checked_at"), false, "a pr_checked_at re-added by an old build survived the open");
 });
 
 test("the migration from user_version 4 adds the tier columns once and keeps every job row", (t) => {
@@ -275,7 +317,7 @@ test("the migration from user_version 4 adds the tier columns once and keeps eve
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 8, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 9, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     assert.ok(columnsOf(db, "pipeline_runs").includes("tier_operator"), `pipeline_runs.tier_operator missing on pass ${pass}`);
     assert.ok(
@@ -305,7 +347,7 @@ test("the migration from user_version 5 gives every existing row the project sco
   closeDb(env);
 
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 8);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 9);
   assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
   assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
   assert.equal(db.prepare("SELECT COUNT(*) AS total FROM decisions WHERE scope = 'project' AND org IS NULL").get().total, 3);

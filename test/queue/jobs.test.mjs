@@ -6,6 +6,7 @@ import {
   cancelJob,
   claimJobById,
   claimNextJob,
+  closeJob,
   countAttempt,
   countActiveJobs,
   countActiveJobsByProject,
@@ -456,8 +457,8 @@ test("the public view drops the prompt, truncates the free text by code point an
   assert.match(view.created_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
   assert.equal(view.finished_at, null);
   assert.deepEqual(
-    { merged_at: view.merged_at, merge_sha: view.merge_sha, pr_checked_at: view.pr_checked_at },
-    { merged_at: null, merge_sha: null, pr_checked_at: null },
+    { merged_at: view.merged_at, merge_sha: view.merge_sha },
+    { merged_at: null, merge_sha: null },
     "the view of a job hides the merge columns",
   );
   assert.equal(jobView(null), null);
@@ -471,7 +472,34 @@ test("the listing is newest first with a clamped limit, and the counts cover eve
   assert.throws(() => listJobs({ limit: 0 }, env), /invalid `limit`/);
   assert.throws(() => listJobs({ limit: 500 }, env), /invalid `limit`/);
   claimJobById(ids[0], { worker: WORKER, cap: CAP }, env);
-  assert.deepEqual(countsByStatus(env), { pending: 2, running: 1, done: 0, gate: 0, failed: 0, cancelled: 0, merged: 0 });
+  assert.deepEqual(countsByStatus(env), { pending: 2, running: 1, done: 0, gate: 0, failed: 0, cancelled: 0, closed: 0 });
+  assert.equal("merged" in countsByStatus(env), false, "the retired merged status is still counted");
+});
+
+test("close takes a done job to closed, keeps pr_url and finished_at, and refuses every other status by name without writing", (t) => {
+  const env = makeQueue(t, "jobs-close");
+  const delivered = enqueue(env);
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'done', pr_url = ?, finished_at = ? WHERE id = ?")
+    .run("https://github.com/acme/api/pull/7", GATED_FINISHED_AT, delivered);
+  const closed = closeJob(delivered, env);
+  assert.equal(closed.status, "closed");
+  assert.equal(closed.pr_url, "https://github.com/acme/api/pull/7");
+  assert.equal(getJob(delivered, env).finished_at, GATED_FINISHED_AT, "the close rewrote finished_at");
+  assert.deepEqual({ merged_at: closed.merged_at, merge_sha: closed.merge_sha }, { merged_at: null, merge_sha: null });
+
+  for (const status of ["pending", "running", "gate", "failed", "cancelled"]) {
+    const id = enqueue(env);
+    openDb(env).prepare("UPDATE jobs SET status = ? WHERE id = ?").run(status, id);
+    const before = getJob(id, env);
+    assert.throws(() => closeJob(id, env), new RegExp(`cannot be closed from status \`${status}\`; only a \`done\` job is closed`));
+    assert.deepEqual(getJob(id, env), before, `the refused close wrote to a ${status} job`);
+  }
+  const before = getJob(delivered, env);
+  assert.throws(() => closeJob(delivered, env), /job `\d+` is already closed/);
+  assert.deepEqual(getJob(delivered, env), before, "the refused close wrote to a closed job");
+  assert.throws(() => closeJob(9999, env), /unknown job `9999`/);
+  assert.throws(() => closeJob(0, env), /positive integer job id/);
 });
 
 test("the blocked-pending count and listing only ever see a pending job with a block code, never a running or done one", (t) => {

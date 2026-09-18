@@ -208,7 +208,7 @@ another runner.
 
 **`queue status` is a table, and `--follow` keeps it live.** One row per job with
 the columns of the cockpit: `ID STATUS DURATION TOKENS PROJECT SLUG/LAST PR`.
-`STATUS` carries an icon (`● running`, `✓ done`, `⇡ merged`, `⚑ gate`, `✗ failed`,
+`STATUS` carries an icon (`● running`, `✓ done`, `■ closed`, `⚑ gate`, `✗ failed`,
 `⊘ cancelled`, `○ pending`) and a color on a terminal. `DURATION` is how long a
 running job has been up (from its own `started_at`) or how long a finished one
 took; `TOKENS` is what it spent so far (`374k`, `1.2M`). `SLUG/LAST` is the last
@@ -223,8 +223,19 @@ the terminal and `SLUG/LAST` is cut with an ellipsis, never wrapped; on a pipe t
 is no color and no cursor movement. `nightshift queue status --follow [seconds]`
 (default 2) redraws the table in place until Ctrl-C - the terminal equivalent of
 a queue panel - and `--until-idle` makes it exit by itself once nothing is
-running or pending. `--follow` refuses `--json` and a single job id. `--json`
-answers with the same fields as before. The listing opens with the live-runner count -
+running or pending. `--follow` refuses `--json` and a single job id. Each frame starts on
+the interval: the follow times its own read and sleeps only what is left of it
+(`max(0, interval - read)`), so a slow read never stretches the cadence on top of itself.
+On a terminal the footer says what was achieved and what the read cost -
+`achieved every 2.0s (asked 2s) · read 3ms: jobs 1ms, counts 0ms, runners 1ms, advisories 1ms · Ctrl-C to stop`
+(`-` on the first frame, and `runners error (<reason>)` for a part that failed); a pipe
+never gets the footer, so it still prints only what changed. A part of the read that
+fails never ends the follow: `jobs: cannot be read (<reason>)` or `counts: cannot be read (<reason>)`
+takes its place on the frame and the next poll tries again, while a one-shot `queue status`
+exits 1 with `the queue cannot be read: <reason>`. `--json`
+answers with the same fields as before plus `suggestions` and `sections` - one
+`{ name, ok, ms, error }` per part of the read (`jobs`, `counts`, `runners`,
+`advisories`), which the MCP `queue_status` carries too. The listing opens with the live-runner count -
 `N runner(s) online` - followed by ONE line per live runner -
 `runner: running (pid <pid>, watch every <n> s[, foreground][, runtime <version>], since <iso>)`
 - or, when none is registered, ``0 runners online - pending jobs will wait until
@@ -232,13 +243,21 @@ answers with the same fields as before. The listing opens with the live-runner c
 they apply, follow the runner lines. `--json` carries
 `runnersOnline` (the count) next to the whole list under `runners`, `advisories`, plus the singular
 `runner`: it is `runners[0]` (or the same all-null object as before when the list is
-empty), kept for one release and removed in the next minor - read `runners`. `queue
-status` prunes the registrations no process answers for; a registration
-owned by another user is left alone. The one thing `queue status`
-does write is the repair: before it prints anything it restores any job whose row says
-`running` or `pending` while the `terminal` witness of its run directory already says how
-it ended, and a repair it could not write is a warning on stderr, never a failed listing.
-A job under a live lease is never touched, and neither is one an operator has just
+empty), kept for one release and removed in the next minor - read `runners`.
+
+**Maintenance is not a read.** Pruning the registrations no process answers for (a
+registration owned by another user is left alone) and repairing a job from its witness
+belong to the runner, which does both at the start of every cycle, to the MCP server,
+which does both once when it starts and then every 60 s, and to the one-shot `queue
+status` (plain, `--json` or `<id>`), which does both once before it prints. The repair
+restores any job whose row says `running` or `pending` while the `terminal` witness of its
+run directory already says how it ended; a repair that could not be written is a warning
+(on stderr for the CLI, as `warning` in `queue_status`, which reports the last pass of the
+server's maintenance), never a failed listing. `--follow` never writes: no repair, no
+prune, no pull request bookkeeping, before the loop or during it - only a home with no
+database at all gets one created. A job orphaned by a dead runner therefore keeps its
+status on a follow's screen until the runner, the MCP server or a one-shot `queue status`
+repairs it. A job under a live lease is never touched, and neither is one an operator has just
 retried: the retry records that it reopened the row in the very write that sends it back
 to the queue, so the witness of the attempt before it can never close it again.
 
@@ -269,8 +288,8 @@ which is what to turn on if the output ever stalls again.
 
 **The seven states.** A job is `pending` while it waits, `running` while a runner
 owns it under a lease, and then one of five final states: `done` (the run
-delivered a pull request URL), `merged` (that pull request was merged on
-GitHub), `gate` (the pipeline stopped asking for a human decision - a recorded
+delivered a pull request URL), `closed` (the operator closed a delivered job
+with `nightshift queue close`), `gate` (the pipeline stopped asking for a human decision - a recorded
 `outcome.status: "gate"` in `state.json`, or the `## Requires user
 confirmation` marker in the stream), `failed` (a non-zero exit, a timeout, an
 orphan that had already spent its attempts, or a clean exit that ended with
@@ -286,26 +305,29 @@ A `pending` job the preflight refused to start also carries a reason, in its own
 the job is, but why it is not moving right now. See **What the runner requires
 of the checkout** below for what sets and clears it.
 
-**`done` becomes `merged` by itself.** A job that delivered a pull request is
-asked about with `gh pr view <url> --json state,mergedAt,mergeCommit`: a merged
-one becomes `merged` and keeps the instant of the merge in `merged_at` and the
-commit in `merge_sha` (both in `queue status <id>` and in `--json`), a closed one
-that was never merged stays `done`, and an open one stays `done` too - the last
-check of each job is remembered in `pr_checked_at`. The sweep runs at the start
-of `queue status` (every `--follow` tick included), at the start of every runner
-cycle and at the start of the MCP `queue_status`, over at most ten jobs and at
-most once per job every five minutes. Each pass takes the jobs waiting longest
-for a check first - the ones never checked yet, newest first, and then the ones
-whose last check is oldest - so a long backlog rotates instead of pinning the
-same ten jobs. It never runs inside an unattended job session, and never in a
-hook. It fails open and in silence: with `gh` missing,
-logged out, offline or facing a pull request of a repository it cannot read,
-nothing is written, nothing is printed, and the command exits `0` all the same.
-`NIGHTSHIFT_NO_PR_CHECK=1` switches the whole thing off.
+**The pull request state is derived, never stored.** Every job with a GitHub pull
+request carries `pr_state`, read from `gh pr view <url> --json
+state,mergedAt,mergeCommit,mergeable,isDraft` and flattened by precedence: `merged`
+> `closed` > `conflicted` > `draft` > `unknown` > `open`. `mergeable: UNKNOWN` (GitHub
+has not computed it yet) reads `unknown`, never "no conflict". The answers live in a
+cache of the process that asked - never in the database: a merged or closed pull
+request is never asked about again, an open, conflicted or draft one after 60 s, an
+`unknown` one after 8 s, and a read gh could not answer is held back for 30 s and keeps
+the last state it had. A pull request nobody asked about yet reads `unknown`. The `PR`
+cell shows it next to the URL (`https://github.com/acme/api/pull/42 (merged)`), and
+`--json` carries `jobs[].pr_state` plus `suggestions`. A `done` job whose pull request
+is merged is never changed by a read: the listing adds the line
+`#12 PR merged - close it with nightshift queue close 12`, and closing it is the
+operator's act. gh is never asked about more than four pull requests at once. A one-shot
+`queue status` asks it before it prints and waits one overall 5 s deadline at most -
+what has not answered by then prints `unknown`, and the gh still running is stopped; `--follow` never waits for gh - it asks after drawing a
+frame and picks the answer up on a later one - and the MCP `queue_status` answers from
+its cache and asks gh after answering. `NIGHTSHIFT_NO_PR_CHECK=1` switches every gh call
+of this off.
 
 `queue cancel` moves a job out of a final state into `cancelled` (from `pending`,
 `gate` or an orphan), and `queue retry` moves it back to `pending` (from `gate`,
-`failed` or `cancelled`). A `merged` job is terminal for both: `queue cancel`
+`failed` or `cancelled`). A `closed` job is terminal for both: `queue cancel`
 refuses it as already finished, and `queue retry` still takes `failed`,
 `cancelled` and `gate` and nothing else. A gated job only moves with `--note`, and that note is
 the only thing that ever reaches the prompt of the run, in a block labelled

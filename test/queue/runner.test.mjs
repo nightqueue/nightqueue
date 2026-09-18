@@ -466,22 +466,22 @@ test("one cycle runs two jobs of DIFFERENT projects strictly one after the other
   }
 });
 
-test("one cycle sweeps the merged pull requests exactly once, and `--dry` never sweeps at all", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-merge-sweep", [{ stdout: doneStream(), exitCode: 0 }], {
+test("one cycle runs maintenance exactly once, and `--dry` never runs it", async (t) => {
+  const { env } = makeRunnerHome(t, "runner-maintenance", [{ stdout: doneStream(), exitCode: 0 }], {
     projects: ["alpha", "beta"],
   });
   enqueue(env, { prompt: "fix the worker" });
   enqueue(env, { project: "beta", prompt: "fix the parser" });
-  const sweeps = [];
+  const upkeeps = [];
 
-  const cycle = await runCycle({ env, deps: { gitImpl: fakeGit(), refreshMergedImpl: (args) => sweeps.push(args) } });
+  const cycle = await runCycle({ env, deps: { gitImpl: fakeGit(), maintenanceImpl: async (args) => upkeeps.push(args) } });
   assert.deepEqual(cycle.processed.map((job) => job.status), ["done", "done"]);
-  assert.equal(sweeps.length, 1, "the sweep ran once per claimed job instead of once per cycle");
-  assert.equal(sweeps[0].env, env);
+  assert.equal(upkeeps.length, 1, "maintenance ran once per claimed job instead of once per cycle");
+  assert.equal(upkeeps[0].env, env);
 
-  const dry = await runCycle({ env, dry: true, deps: { refreshMergedImpl: () => sweeps.push("dry") } });
+  const dry = await runCycle({ env, dry: true, deps: { maintenanceImpl: async () => upkeeps.push("dry") } });
   assert.equal(dry.dry, true);
-  assert.equal(sweeps.length, 1, "`queue run --dry` wrote through the sweep");
+  assert.equal(upkeeps.length, 1, "`queue run --dry` ran maintenance");
 });
 
 test("with a ceiling of one the same cycle runs the two jobs strictly one after the other", async (t) => {

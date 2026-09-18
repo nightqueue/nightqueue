@@ -35,6 +35,7 @@ const CONTRACT_TOOLS = [
   "pipeline_log",
   "queue_add",
   "queue_cancel",
+  "queue_close",
   "queue_retry",
   "queue_run",
   "queue_status",
@@ -75,12 +76,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the twenty-three tools of the contract", async (t) => {
+test("the server exposes exactly the twenty-four tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 23, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 24, "the contract list and the server disagree on how many tools there are");
 });
 
 test("the handshake carries the instructions that teach the backlog model", async (t) => {
@@ -582,7 +583,7 @@ test("queue_status refuses instead of answering with no runner for a registry it
 
 const MERGE_SHA = "d3605a5a4d7aaec342d649135cdbd128a042e29d";
 
-// Marks a job as delivered with the pull request URL the sweep of queue_status will ask gh about.
+// Marks a job as delivered with the URL of its pull request.
 function deliver(env, id) {
   openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run(`https://github.com/acme/api/pull/${id}`, id);
   return id;
@@ -595,29 +596,46 @@ function prViewCalls(env) {
   return readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((call) => call[0] === "pr");
 }
 
-test("queue_status reports a merged pull request as `merged`, and never sweeps from inside an unattended job", async (t) => {
+// Asks queue_status until the pull request of its first job reads `state`, within five seconds, and returns that answer.
+async function pollPrState(client, state) {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    const answer = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+    if (answer.jobs[0]?.pr_state === state || Date.now() > deadline) return answer;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+}
+
+test("queue_status never writes a delivered job whose pull request is merged, and asks gh from inside a job too without writing", async (t) => {
   const base = makeQueueHome(t, "mcp-queue-merged");
   deliver(base, addJob({ project: "alpha", prompt: "fix the worker" }, base).id);
   const env = { ...base, ...isolatedHostVars(makeDir(t, "mcp-queue-merged-host")), NIGHTSHIFT_FAKE_GH_PR_STATE: "MERGED", NIGHTSHIFT_FAKE_GH_PR_SHA: MERGE_SHA };
   delete env.NIGHTSHIFT_NO_PR_CHECK;
 
-  const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "7" });
-  const untouched = payloadOf(await inJob.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(untouched.jobs[0].status, "done", "the sweep ran inside an unattended job session");
-  assert.deepEqual(prViewCalls(env), [], "a job session reached gh");
-
   const client = await connect(t, env);
-  const listed = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(listed.jobs[0].status, "merged");
-  assert.equal(listed.jobs[0].merge_sha, MERGE_SHA);
-  assert.match(listed.jobs[0].merged_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
-  assert.equal(listed.counts.merged, 1);
-  assert.equal(listed.counts.done, 0);
-  assert.equal(prViewCalls(env).length, 1);
+  const first = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(first.jobs[0].pr_state, "unknown", "the first answer waited for gh instead of answering from the cache");
+  assert.deepEqual(first.suggestions, []);
+  assert.deepEqual(first.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories"]);
+  assert.ok(first.sections.every((section) => section.ok && Number.isInteger(section.ms)), JSON.stringify(first.sections));
 
+  const listed = await pollPrState(client, "merged");
+  assert.equal(listed.jobs[0].pr_state, "merged", "the refresh fired after the answer never landed in the cache");
+  assert.deepEqual(listed.suggestions, ["#1 PR merged - close it with nightshift queue close 1"]);
+  assert.ok(listed.hint.endsWith("#1 PR merged - close it with nightshift queue close 1"), listed.hint);
+  assert.equal(listed.jobs[0].status, "done");
+  assert.equal(listed.counts.done, 1);
+  assert.equal(listed.counts.closed, 0);
+  assert.equal(listed.counts.merged, undefined, "the retired merged status is still counted");
   const detail = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: 1 } }));
-  assert.equal(detail.job.status, "merged");
-  assert.equal(prViewCalls(env).length, 1, "a second call inside the five minute window asked gh again");
+  assert.deepEqual({ status: detail.job.status, pr_state: detail.job.pr_state }, { status: "done", pr_state: "merged" });
+  assert.equal(prViewCalls(env).length, 1, "a merged pull request was asked about again instead of cached");
+
+  const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "7", NIGHTSHIFT_FAKE_GH_LOG: join(makeDir(t, "mcp-queue-merged-job"), "gh.log") });
+  assert.equal((await pollPrState(inJob, "merged")).jobs[0].pr_state, "merged", "a job session never asked gh");
+
+  const row = getJob(1, env);
+  assert.deepEqual({ status: row.status, merged_at: row.merged_at, merge_sha: row.merge_sha }, { status: "done", merged_at: null, merge_sha: null });
 });
 
 test("queue_status answers with the nudge that matches the state of the queue, leading with the live-runner count, and never on the detail of a job", async (t) => {
@@ -833,6 +851,38 @@ test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a
   const gatedRow = getJob(gated, env);
   assert.equal(gatedRow.finished_at, GATED_FINISHED_AT, "the cancel overwrote the finish of the gated run");
   assert.deepEqual(JSON.parse(gatedRow.result), { status: "gate", prUrl: null, cancelledFrom: "gate" });
+});
+
+test("queue_close closes a done job and refuses a gated one by name", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-close");
+  const done = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/42", done);
+  const gated = addJob({ project: "alpha", prompt: "wait for a human" }, env).id;
+  openDb(env).prepare("UPDATE jobs SET status = 'gate', finished_at = ? WHERE id = ?").run(GATED_FINISHED_AT, gated);
+  const client = await connect(t, env);
+
+  const closed = payloadOf(await client.callTool({ name: "queue_close", arguments: { job_id: done } }));
+  assert.equal(closed.ok, true);
+  assert.deepEqual({ status: closed.job.status, pr_url: closed.job.pr_url }, { status: "closed", pr_url: "https://github.com/acme/api/pull/42" });
+  assert.equal(getJob(done, env).status, "closed");
+
+  const before = getJob(gated, env);
+  const refused = await client.callTool({ name: "queue_close", arguments: { job_id: gated } });
+  assert.equal(refused.isError, true);
+  assert.match(textOf(refused), /cannot be closed from status `gate`; only a `done` job is closed/);
+  assert.deepEqual(getJob(gated, env), before, "the refused close wrote to the row");
+});
+
+test("queue_close refuses the home of the runner from inside a job, like queue_cancel", async (t) => {
+  const env = makeQueueHome(t, "mcp-close-home-guard");
+  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(id);
+  const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "9", NIGHTSHIFT_JOB_HOME: homeDir(env) });
+
+  const refused = await inJob.callTool({ name: "queue_close", arguments: { job_id: id } });
+  assert.equal(refused.isError, true, textOf(refused));
+  assert.ok(textOf(refused).includes(HOME_REFUSAL), textOf(refused));
+  assert.equal(getJob(id, env).status, "done", "a refused close still moved the job of the operator");
 });
 
 test("queue_retry answers a gate, refuses one without a note and only starts a runner when asked", async (t) => {

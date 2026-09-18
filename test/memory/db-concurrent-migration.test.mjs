@@ -4,20 +4,20 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { closeDb, openDb } from "../../src/memory/db.mjs";
+import { closeDb, DB_USER_VERSION, openDb } from "../../src/memory/db.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
 const BARRIER_MS = 300;
 const ITERATIONS = 12;
 const RACERS = 6;
-const MERGE_COLUMNS = ["merged_at", "merge_sha", "pr_checked_at"];
+const MERGE_COLUMNS = ["merged_at", "merge_sha"];
 
-// Everything a database written before the merge sweep does NOT have yet (mirrors db.test.mjs's DOWNGRADE_TO_V3).
+// An old v3 database: no merge columns yet, and the pr_checked_at column v9 retires, so the racers both add and drop.
 const DOWNGRADE_TO_V3 = `
 ALTER TABLE jobs DROP COLUMN merged_at;
 ALTER TABLE jobs DROP COLUMN merge_sha;
-ALTER TABLE jobs DROP COLUMN pr_checked_at;
+ALTER TABLE jobs ADD COLUMN pr_checked_at TEXT;
 PRAGMA user_version = 3;
 `;
 
@@ -34,11 +34,12 @@ function racerSource() {
     "  const db = openDb(process.env);",
     '  const version = db.prepare("PRAGMA user_version").get().user_version;',
     '  const columns = db.prepare("PRAGMA table_info(jobs)").all().map((c) => c.name);',
-    '  process.stdout.write(JSON.stringify({ error: null, version, columns }) + "\\n");',
+    '  const statuses = db.prepare("SELECT status FROM jobs ORDER BY id").all().map((row) => row.status);',
+    '  process.stdout.write(JSON.stringify({ error: null, version, columns, statuses }) + "\\n");',
     "}",
     "",
     "main().catch((err) => {",
-    '  process.stdout.write(JSON.stringify({ error: err?.message ?? String(err), version: null, columns: null }) + "\\n");',
+    '  process.stdout.write(JSON.stringify({ error: err?.message ?? String(err), version: null, columns: null, statuses: null }) + "\\n");',
     "});",
     "",
   ].join("\n");
@@ -68,7 +69,7 @@ function raceOnce(env, workerPath, count) {
   return Promise.all(Array.from({ length: count }, () => spawnRacer(env, workerPath, startAt)));
 }
 
-test(`${RACERS} processes racing to migrate the SAME v3 database converge on v4, ${ITERATIONS} times over`, async (t) => {
+test(`${RACERS} processes racing to migrate the SAME v3 database converge on the current schema, ${ITERATIONS} times over`, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "nightshift-db-race-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const workerPath = join(dir, "racer.mjs");
@@ -80,6 +81,9 @@ test(`${RACERS} processes racing to migrate the SAME v3 database converge on v4,
     seed
       .prepare("INSERT INTO jobs (project, prompt, status, pr_url) VALUES (?, ?, 'done', ?)")
       .run("alpha", "fix the worker", "https://github.com/acme/api/pull/42");
+    seed
+      .prepare("INSERT INTO jobs (project, prompt, status, pr_url) VALUES (?, ?, 'merged', ?)")
+      .run("alpha", "ship the api", "https://github.com/acme/api/pull/43");
     seed.exec(DOWNGRADE_TO_V3);
     assert.equal(seed.prepare("PRAGMA user_version").get().user_version, 3, `pass ${pass}: seed did not reach v3`);
     closeDb(env);
@@ -90,23 +94,32 @@ test(`${RACERS} processes racing to migrate the SAME v3 database converge on v4,
       assert.equal(result.code, 0, `pass ${pass} racer ${idx} exited ${result.code}: ${result.stderr}`);
       const parsed = JSON.parse(result.stdout);
       assert.equal(parsed.error, null, `pass ${pass} racer ${idx} threw an unhandled error: ${parsed.error}`);
-      assert.equal(parsed.version, 8, `pass ${pass} racer ${idx} ended at user_version ${parsed.version}, not 8`);
+      assert.equal(
+        parsed.version,
+        DB_USER_VERSION,
+        `pass ${pass} racer ${idx} ended at user_version ${parsed.version}, not ${DB_USER_VERSION}`,
+      );
       assert.deepEqual(
         MERGE_COLUMNS.filter((name) => parsed.columns.includes(name)).sort(),
         [...MERGE_COLUMNS].sort(),
         `pass ${pass} racer ${idx} is missing a merge column: ${parsed.columns.join(", ")}`,
       );
+      assert.equal(parsed.columns.includes("pr_checked_at"), false, `pass ${pass} racer ${idx} still sees pr_checked_at`);
+      assert.deepEqual(parsed.statuses, ["done", "closed"], `pass ${pass} racer ${idx} read statuses ${parsed.statuses}`);
     }
 
     const after = openDb(env);
-    assert.equal(after.prepare("PRAGMA user_version").get().user_version, 8, `pass ${pass}: final user_version`);
+    assert.equal(after.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION, `pass ${pass}: final user_version`);
     const columns = after.prepare("PRAGMA table_info(jobs)").all().map((c) => c.name);
     for (const name of MERGE_COLUMNS) {
       assert.equal(columns.filter((c) => c === name).length, 1, `pass ${pass}: ${name} duplicated: ${columns.join(", ")}`);
     }
-    const row = after.prepare("SELECT * FROM jobs").get();
-    assert.equal(row.pr_url, "https://github.com/acme/api/pull/42", `pass ${pass}: pre-existing row lost or altered`);
-    assert.equal(row.status, "done", `pass ${pass}: pre-existing row status lost or altered`);
+    assert.equal(columns.includes("pr_checked_at"), false, `pass ${pass}: pr_checked_at survived: ${columns.join(", ")}`);
+    const rows = after.prepare("SELECT * FROM jobs ORDER BY id").all();
+    assert.equal(rows[0].pr_url, "https://github.com/acme/api/pull/42", `pass ${pass}: pre-existing row lost or altered`);
+    assert.equal(rows[0].status, "done", `pass ${pass}: pre-existing row status lost or altered`);
+    assert.equal(rows[1].pr_url, "https://github.com/acme/api/pull/43", `pass ${pass}: merged row lost its pull request`);
+    assert.equal(rows[1].status, "closed", `pass ${pass}: merged row was not closed`);
     closeDb(env);
   }
 });

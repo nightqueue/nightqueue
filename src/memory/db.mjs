@@ -102,8 +102,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   started_at TEXT,
   finished_at TEXT,
   merged_at TEXT,
-  merge_sha TEXT,
-  pr_checked_at TEXT
+  merge_sha TEXT
 );
 CREATE TABLE IF NOT EXISTS pipeline_phases (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,7 +161,6 @@ const EVOLVING_COLUMNS = [
   ["memory", "embedding_model", "TEXT"],
   ["jobs", "merged_at", "TEXT"],
   ["jobs", "merge_sha", "TEXT"],
-  ["jobs", "pr_checked_at", "TEXT"],
   ["jobs", "tier", "TEXT"],
   ["jobs", "not_before", "TEXT"],
   ["jobs", "blocked_code", "TEXT"],
@@ -307,6 +305,23 @@ function addColumnIfMissing(db, table, column, definition) {
   }
 }
 
+// Drops a column when it is present, tolerating a concurrent process that dropped it first.
+function dropColumnIfPresent(db, table, column) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some((c) => c.name === column)) return;
+  try {
+    db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+  } catch (err) {
+    if (!/no such column/i.test(String(err?.message ?? ""))) throw err;
+  }
+}
+
+// Turns every row still carrying the retired `merged` status into `closed`, writing only when such a row exists.
+function retireMergedStatus(db) {
+  if (!db.prepare("SELECT 1 FROM jobs WHERE status = 'merged' LIMIT 1").get()) return;
+  db.exec("UPDATE jobs SET status = 'closed' WHERE status = 'merged'");
+}
+
 // Creates the base tables of the memory runtime.
 function createSchema(db) {
   db.exec(SCHEMA);
@@ -315,6 +330,8 @@ function createSchema(db) {
 // Brings an existing database to the current schema: evolving columns, indexes and the FTS mirrors.
 function migrate(db) {
   for (const [table, column, definition] of EVOLVING_COLUMNS) addColumnIfMissing(db, table, column, definition);
+  dropColumnIfPresent(db, "jobs", "pr_checked_at");
+  retireMergedStatus(db);
   db.exec(INDEXES);
   db.exec(FTS);
   const version = db.prepare("PRAGMA user_version").get().user_version;

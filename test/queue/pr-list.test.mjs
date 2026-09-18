@@ -225,7 +225,6 @@ test("a job spawned with the check enabled carries the block the runtime looked 
     env,
     deps: {
       gitImpl: fakeGit(),
-      refreshMergedImpl: async () => ({ skipped: "disabled", checked: 0, merged: 0, undetermined: 0 }),
       prListImpl: (key) => {
         searched.push(key);
         return PRS;

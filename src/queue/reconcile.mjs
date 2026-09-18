@@ -1,13 +1,12 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { jobLogPath, logsDir } from "../config/paths.mjs";
-import { JOB_STATUSES } from "../memory/jobs.mjs";
 import { openStore } from "../store/open.mjs";
 import { readRunState } from "./resume.mjs";
 
 export const REPAIR_FAILED_PREFIX = "could not repair a job from state.json";
 
-// Statuses a witness may restore: a job that ended, never one the queue still owes work for.
-const WITNESS_STATUSES = new Set(JOB_STATUSES.filter((status) => status !== "pending" && status !== "running"));
+// Statuses a witness may restore: a job a run ended, never one the queue still owes work for nor one only the operator closes.
+const WITNESS_STATUSES = new Set(["done", "gate", "failed", "cancelled"]);
 
 // The terminal section a runner wrote next to the run, or null when there is none worth trusting.
 function readWitness(row, env) {

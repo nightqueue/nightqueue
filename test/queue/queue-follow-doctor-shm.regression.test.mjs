@@ -127,9 +127,9 @@ test("a follow session never loses a live holder's shared-memory file, and docto
   assert.equal(shmIdentity(env), before, "the shared-memory file moved by the end of the follow session");
   assert.match(result.out.join("\n"), /cancelled/, "the follow session never rendered the row the third process wrote");
   assert.equal(holder.child.exitCode, null, "the holder died during the follow session");
-  // The follow answers every liveness probe with ESRCH, so `queue status` reads its own registration as stale and
-  // prunes it - which is what the brief asks of it. The runner is registered and stamped again for the checks below.
-  assert.equal(existsSync(runnerRegistryPath(process.pid, env)), false, "the follow kept a registration no process answered for");
+  // The follow answers every liveness probe with ESRCH, so it reads its own registration as stale - and still never
+  // prunes it: a follow writes nothing (decision #24). The runner is registered and stamped again for the checks below.
+  assert.equal(existsSync(runnerRegistryPath(process.pid, env)), true, "the follow pruned a registration: a read wrote to the file system");
   writeRunnerRecord(
     { pid: process.pid, mode: "watch", jobId: null, intervalS: 5, startedAt: new Date().toISOString(), logPath: null, runtimeDir: null },
     env,

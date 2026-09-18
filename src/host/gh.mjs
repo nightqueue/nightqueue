@@ -32,7 +32,7 @@ export function runGh(args, { env = process.env, spawnSyncImpl = spawnSync, time
 
 // Runs the GitHub CLI without ever blocking the event loop and without ever rejecting: a missing binary, a failure and a
 // timeout are results the caller decides about, exactly as the synchronous wrapper reports them.
-function runGhAsync(args, { env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS } = {}) {
+function runGhAsync(args, { env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
   return new Promise((done) => {
     const answer = (err, stdout, stderr) =>
       done({
@@ -42,7 +42,7 @@ function runGhAsync(args, { env = process.env, execFileImpl = execFile, timeoutM
         missing: err?.code === "ENOENT",
       });
     try {
-      execFileImpl(ghBin(env), args, { encoding: "utf8", timeout: timeoutMs, env }, answer);
+      execFileImpl(ghBin(env), args, { encoding: "utf8", timeout: timeoutMs, env, signal }, answer);
     } catch (err) {
       answer(err, "", "");
     }
@@ -65,7 +65,7 @@ export function ghAuthStatus({ env = process.env, spawnSyncImpl = spawnSync } = 
   };
 }
 
-// Parses the json of `gh pr view`, keeping only the three fields asked for; anything unexpected is undetermined.
+// Parses the json of `gh pr view`, keeping only the fields asked for; anything unexpected is undetermined.
 function parsePrView(text) {
   let payload;
   try {
@@ -74,12 +74,20 @@ function parsePrView(text) {
     return { ok: false };
   }
   if (!PR_STATES.includes(payload?.state)) return { ok: false };
-  return { ok: true, state: payload.state, mergedAt: payload.mergedAt ?? null, mergeSha: payload.mergeCommit?.oid ?? null };
+  return {
+    ok: true,
+    state: payload.state,
+    mergedAt: payload.mergedAt ?? null,
+    mergeSha: payload.mergeCommit?.oid ?? null,
+    mergeable: typeof payload.mergeable === "string" ? payload.mergeable : null,
+    isDraft: payload.isDraft === true,
+  };
 }
 
-// Merge state of one pull request, as a tri-state: `ok: false` means nobody could tell, never "not merged".
-export function ghPrView(url, { env = process.env, spawnSyncImpl = spawnSync, timeoutMs = PR_VIEW_TIMEOUT_MS } = {}) {
-  const result = runGh(["pr", "view", url, "--json", "state,mergedAt,mergeCommit"], { env, spawnSyncImpl, timeoutMs });
+// State of one pull request, read without blocking the event loop and never rejecting: `ok: false` means nobody could tell.
+export async function ghPrViewAsync(url, { env = process.env, execFileImpl = execFile, timeoutMs = PR_VIEW_TIMEOUT_MS, signal } = {}) {
+  const args = ["pr", "view", String(url ?? ""), "--json", "state,mergedAt,mergeCommit,mergeable,isDraft"];
+  const result = await runGhAsync(args, { env, execFileImpl, timeoutMs, signal });
   return result.ok ? parsePrView(result.stdout) : { ok: false };
 }
 

@@ -92,6 +92,7 @@ nightshift queue status [<id>] [--follow] [--json]
 nightshift queue log <id> [--follow]
 nightshift queue retry <id> --note "<answer>"
 nightshift queue cancel <id> --reason "<why>"
+nightshift queue close <id>
 nightshift queue pause | resume
 
 # memory

@@ -146,7 +146,7 @@ default. `queue_status` answers `runners` with every live runner, and keeps `run
 alias of the first for one release. `queue_status`, `queue_run` and `queue_retry` also answer
 `advisories`, the advisory lines described in [Queue](queue.md); they never block a start.
 
-The twenty-three MCP tools, with the parameters `nightshift mcp` actually accepts:
+The twenty-four MCP tools, with the parameters `nightshift mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -161,6 +161,7 @@ The twenty-three MCP tools, with the parameters `nightshift mcp` actually accept
 | `queue_status` | `job_id?`, `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_cancel` | `job_id`, `reason?` |
+| `queue_close` | `job_id` |
 | `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` |
 | `decision_save` | `project`, `title`, `context`, `decision`, `consequences?`, `status?` (`proposed`, `accepted`, `superseded`, `rejected`; default `accepted`) |
 | `decision_update` | `id`, `title?`, `context?`, `decision?`, `consequences?`, `status?`, `superseded_by?` |
@@ -204,7 +205,7 @@ the order the phases were launched - and they overwrite what the call sent. A ph
 runtime measured no lane for keeps the value the call carried, and a phase the call
 never recorded is not inserted.
 
-The five queue tools are the same subsystem as `nightshift queue` (see [Queue](queue.md)):
+The six queue tools are the same subsystem as `nightshift queue` (see [Queue](queue.md)):
 `queue_add` takes the registered project NAME and never a path - or, with
 `project` omitted, the absolute `cwd` of the caller, which resolves the project
 that contains it; a `cwd` inside a git repository that is registered nowhere
@@ -215,10 +216,13 @@ never registers anything: inside a job the call is refused. `prompt` is required
 unless `roadmap_item_id` names a roadmap item, which builds the prompt and owns
 the project (see [Decisions and roadmap](memory.md#decisions-and-roadmap)); passing both is refused.
 `queue_status` never returns the prompt of a job and truncates `notice_md` and `result` at 500
-characters and answers with the state of the runner next to the jobs, `queue_run`
+characters and answers with the state of the runner next to the jobs; it is a pure read
+that never repairs nor prunes on call, and reports the last repair warning of the server's
+maintenance (once at start, then every 60 s, never inside a job) as `warning`. `queue_run`
 starts the runner detached and answers right away with the path of its log,
 `queue_cancel` refuses a job running under a live lease without writing anything,
-and `queue_retry` sends a gated, failed or cancelled job back to the queue - its
+`queue_close` takes only a `done` job to `closed` and refuses every other status by
+name without writing anything, and `queue_retry` sends a gated, failed or cancelled job back to the queue - its
 `run` starts a DETACHED runner, the same one the `--run` of the CLI starts unless
 it is asked for `--foreground`.
 

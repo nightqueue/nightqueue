@@ -180,7 +180,11 @@ test("queue status --json answers with the jobs and the counts, and never with t
   const payload = JSON.parse(listed.stdout);
   assert.deepEqual(payload.jobs.map((job) => job.id), [second, first]);
   assert.equal("prompt" in payload.jobs[0], false, "the CLI printed the prompt of a job");
-  assert.deepEqual(payload.counts, { pending: 2, running: 0, done: 0, gate: 0, failed: 0, cancelled: 0, merged: 0 });
+  assert.deepEqual(payload.counts, { pending: 2, running: 0, done: 0, gate: 0, failed: 0, cancelled: 0, closed: 0 });
+  assert.equal(payload.jobs[0].pr_state, null, "a job without a pull request carries a pull request state");
+  assert.equal(payload.counts.merged, undefined, "the retired merged status is still counted");
+  assert.deepEqual(payload.suggestions, []);
+  assert.deepEqual(payload.sections.map((section) => [section.name, section.ok]), [["jobs", true], ["counts", true], ["runners", true], ["advisories", true]]);
 
   const one = JSON.parse(runCli(env, ["queue", "status", String(first), "--json"]).stdout);
   assert.deepEqual({ id: one.job.id, status: one.job.status, project: one.job.project }, { id: first, status: "pending", project: "alpha" });
@@ -194,56 +198,78 @@ test("queue status --json answers with the jobs and the counts, and never with t
 
 const MERGE_SHA = "d3605a5a4d7aaec342d649135cdbd128a042e29d";
 
-// Marks a job as delivered with the pull request URL the sweep will ask gh about.
+// Marks a job as delivered with the URL of its pull request.
 function deliver(env, id, prUrl = "https://github.com/acme/api/pull/42") {
   openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ?, finished_at = ? WHERE id = ?").run(prUrl, "2026-09-10 10:00:00", id);
   return id;
 }
 
-// The same home with the fake `gh` in place of the real one and the merge sweep switched back on.
-function withFakeGh(t, env, { state = "MERGED", sha = MERGE_SHA } = {}) {
-  const swept = { ...env, ...isolatedHostVars(makeDir(t, "cli-gh")), NIGHTSHIFT_FAKE_GH_PR_STATE: state, NIGHTSHIFT_FAKE_GH_PR_SHA: sha };
-  delete swept.NIGHTSHIFT_NO_PR_CHECK;
-  return swept;
+// The same home with the fake `gh` in place of the real one and the pull request checks switched back on.
+function withFakeGh(t, env, { state = "MERGED", sha = MERGE_SHA, mergeable } = {}) {
+  const checked = { ...env, ...isolatedHostVars(makeDir(t, "cli-gh")), NIGHTSHIFT_FAKE_GH_PR_STATE: state, NIGHTSHIFT_FAKE_GH_PR_SHA: sha };
+  if (mergeable) checked.NIGHTSHIFT_FAKE_GH_PR_MERGEABLE = mergeable;
+  delete checked.NIGHTSHIFT_NO_PR_CHECK;
+  return checked;
 }
 
-// The `gh pr view` calls the fake gh of a home recorded so far.
-function prViewCalls(env) {
-  const log = env.NIGHTSHIFT_FAKE_GH_LOG;
-  if (!existsSync(log)) return [];
-  return readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((call) => call[0] === "pr");
-}
+const CLOSE_SUGGESTION = "#1 PR merged - close it with nightshift queue close 1";
 
-test("queue status flips a delivered job whose pull request was merged, once per job every five minutes", (t) => {
+test("queue status never writes a delivered job whose pull request is merged: the row stays `done`, and it suggests the close", (t) => {
   const base = makeCliHome(t, "cli-status-merged");
   deliver(base, enqueue(base));
   const env = withFakeGh(t, base);
 
   const table = runCli(env, ["queue", "status"]);
   assert.equal(table.status, 0, table.stderr);
-  assert.match(tableLine(table.stdout, 1), /^#1\s+⇡ merged\s+/);
-  assert.match(table.stdout, /merged=1/);
-  assert.match(table.stdout, /done=0/);
-  assert.equal(prViewCalls(env).length, 1, "the sweep did not ask gh about the pull request");
-  assert.deepEqual(prViewCalls(env)[0], ["pr", "view", "https://github.com/acme/api/pull/42", "--json", "state,mergedAt,mergeCommit"]);
-
-  const again = runCli(env, ["queue", "status"]);
-  assert.equal(again.status, 0, again.stderr);
-  assert.equal(prViewCalls(env).length, 1, "a second status inside the window asked gh again");
+  assert.match(tableLine(table.stdout, 1), /^#1\s+✓ done\s+.*pull\/42 \(merged\)$/);
+  assert.match(table.stdout, /done=1/);
+  assert.match(table.stdout, /closed=0/);
+  assert.ok(table.stdout.split("\n").includes(CLOSE_SUGGESTION), `the table did not suggest the close:\n${table.stdout}`);
 
   const payload = JSON.parse(runCli(env, ["queue", "status", "--json"]).stdout);
-  assert.equal(payload.counts.merged, 1);
-  assert.equal(payload.jobs[0].merge_sha, MERGE_SHA);
-  assert.match(payload.jobs[0].merged_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
-  assert.match(payload.jobs[0].pr_checked_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  assert.equal(payload.jobs[0].pr_state, "merged");
+  assert.deepEqual(payload.suggestions, [CLOSE_SUGGESTION]);
+  assert.equal(payload.counts.done, 1);
+  assert.equal(payload.counts.merged, undefined, "the retired merged status is still counted");
+  assert.equal("pr_checked_at" in payload.jobs[0], false);
 
   const detail = runCli(env, ["queue", "status", "1"]);
-  assert.match(detail.stdout, /status\s+merged/);
-  assert.match(detail.stdout, new RegExp(`merge_sha\\s+${MERGE_SHA}`));
-  assert.match(detail.stdout, /merged_at\s+\d{4}-\d{2}-\d{2}T/);
+  assert.equal(detail.status, 0, detail.stderr);
+  assert.match(detail.stdout, /pr_state\s+merged/);
+  assert.ok(detail.stdout.split("\n").includes(CLOSE_SUGGESTION), `the detail did not suggest the close:\n${detail.stdout}`);
+
+  const row = getJob(1, env);
+  assert.deepEqual({ status: row.status, merged_at: row.merged_at, merge_sha: row.merge_sha }, { status: "done", merged_at: null, merge_sha: null });
 });
 
-test("a gh that cannot answer leaves the job delivered, prints nothing about it and still exits 0", (t) => {
+test("a one-shot queue status behind a gh that hangs waits one overall deadline, prints `unknown` and exits", (t) => {
+  const base = makeCliHome(t, "cli-status-gh-hangs");
+  for (let n = 1; n <= 6; n += 1) deliver(base, enqueue(base, `job ${n}`), `https://github.com/acme/api/pull/${n}`);
+  const env = { ...withFakeGh(t, base, { state: "OPEN" }), NIGHTSHIFT_FAKE_GH_SLEEP_MS: "8000" };
+
+  const startedAt = Date.now();
+  const table = runCli(env, ["queue", "status"]);
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.equal(table.status, 0, table.stderr);
+  assert.ok(elapsedMs < 5000 + 2500, `the one-shot waited ${elapsedMs}ms for a gh that hangs`);
+  for (let id = 1; id <= 6; id += 1) {
+    assert.match(tableLine(table.stdout, id), /pull\/\d+ \(unknown\)$/, `job #${id} did not print as unknown`);
+  }
+});
+
+test("an open pull request gh cannot tell is mergeable reads `unknown`, and a conflicting one reads `conflicted`", (t) => {
+  const base = makeCliHome(t, "cli-status-pr-state");
+  deliver(base, enqueue(base));
+  for (const [mergeable, expected] of [["UNKNOWN", "unknown"], ["CONFLICTING", "conflicted"]]) {
+    const env = withFakeGh(t, base, { state: "OPEN", mergeable });
+    const payload = JSON.parse(runCli(env, ["queue", "status", "--json"]).stdout);
+    assert.equal(payload.jobs[0].pr_state, expected, mergeable);
+    assert.deepEqual(payload.suggestions, [], `${mergeable} suggested a close`);
+  }
+});
+
+test("a gh that cannot answer leaves the job delivered and still exits 0", (t) => {
   const base = makeCliHome(t, "cli-status-merged-fail-open");
   deliver(base, enqueue(base));
   const env = withFakeGh(t, base, { state: "" });
@@ -253,28 +279,52 @@ test("a gh that cannot answer leaves the job delivered, prints nothing about it 
   assert.equal(table.status, 0, table.stderr);
   assert.match(tableLine(table.stdout, 1), /^#1\s+✓ done\s+/);
   assert.match(table.stdout, /done=1/);
-  assert.equal(table.stderr, "", `the sweep printed on stderr: ${table.stderr}`);
-  assert.equal(getJob(1, env).pr_checked_at, null, "a check nobody could make was stamped anyway");
+  assert.equal(table.stderr, "", `queue status printed on stderr: ${table.stderr}`);
+  assert.equal(getJob(1, env).status, "done");
 });
 
-test("a merged job is terminal for cancel and for retry, and retry still takes a failed one", (t) => {
-  const env = makeCliHome(t, "cli-merged-terminal");
-  const merged = deliver(env, enqueue(env));
-  openDb(env).prepare("UPDATE jobs SET status = 'merged', merged_at = ?, merge_sha = ? WHERE id = ?").run("2026-09-11 15:54:01", MERGE_SHA, merged);
+test("a closed job is terminal for cancel and for retry, and retry still takes a failed one", (t) => {
+  const env = makeCliHome(t, "cli-closed-terminal");
+  const closed = deliver(env, enqueue(env));
+  assert.equal(runCli(env, ["queue", "close", String(closed)]).status, 0);
 
-  const cancelled = runCli(env, ["queue", "cancel", String(merged)]);
+  const cancelled = runCli(env, ["queue", "cancel", String(closed)]);
   assert.equal(cancelled.status, 1);
-  assert.match(cancelled.stderr, /already finished with status `merged`/);
+  assert.match(cancelled.stderr, /already finished with status `closed`/);
 
-  const retried = runCli(env, ["queue", "retry", String(merged)]);
+  const retried = runCli(env, ["queue", "retry", String(closed)]);
   assert.equal(retried.status, 1);
-  assert.match(retried.stderr, /cannot be retried from status `merged`/);
-  assert.equal(getJob(merged, env).status, "merged");
+  assert.match(retried.stderr, /cannot be retried from status `closed`/);
+  assert.equal(getJob(closed, env).status, "closed");
 
   const failed = enqueue(env, "fix the parser");
   openDb(env).prepare("UPDATE jobs SET status = 'failed' WHERE id = ?").run(failed);
   assert.equal(runCli(env, ["queue", "retry", String(failed)]).status, 0);
   assert.equal(getJob(failed, env).status, "pending");
+});
+
+test("queue close closes a done job, prints it, answers --json, and refuses a pending one naming its status (exit 1)", (t) => {
+  const env = makeCliHome(t, "cli-close");
+  const first = deliver(env, enqueue(env));
+  const second = deliver(env, enqueue(env, "fix the parser"), "https://github.com/acme/api/pull/43");
+  const pending = enqueue(env, "fix the runner");
+
+  const closed = runCli(env, ["queue", "close", String(first)]);
+  assert.equal(closed.status, 0, closed.stderr);
+  assert.match(closed.stdout, new RegExp(`closed job #${first}`));
+  assert.equal(getJob(first, env).status, "closed");
+  assert.equal(getJob(first, env).pr_url, "https://github.com/acme/api/pull/42");
+
+  const json = runCli(env, ["queue", "close", String(second), "--json"]);
+  assert.equal(json.status, 0, json.stderr);
+  const { job } = JSON.parse(json.stdout);
+  assert.deepEqual({ id: job.id, status: job.status, pr_url: job.pr_url }, { id: second, status: "closed", pr_url: "https://github.com/acme/api/pull/43" });
+
+  const refused = runCli(env, ["queue", "close", String(pending)]);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /cannot be closed from status `pending`; only a `done` job is closed/);
+  assert.equal(getJob(pending, env).status, "pending");
+  assert.match(runCli(env, ["queue", "close"]).stderr, /missing argument; usage: nightshift queue close <id>/);
 });
 
 test("`queue add --tier` records the tier, `queue status` shows it, and an unknown value queues nothing", (t) => {
@@ -423,7 +473,7 @@ test("queue status keeps the shape of its json when a job is running with a log"
   const payload = JSON.parse(runCli(env, ["queue", "status", "--json"]).stdout);
   assert.equal(payload.jobs[0].status, "running");
   assert.equal("prompt" in payload.jobs[0], false, "the CLI printed the prompt of a job");
-  assert.deepEqual(payload.counts, { pending: 0, running: 1, done: 0, gate: 0, failed: 0, cancelled: 0, merged: 0 });
+  assert.deepEqual(payload.counts, { pending: 0, running: 1, done: 0, gate: 0, failed: 0, cancelled: 0, closed: 0 });
 });
 
 test("a log that cannot be read leaves the row of a running job without a narration, never without a table", (t) => {

@@ -43,7 +43,13 @@ function prView() {
   if (!state) fail("fake gh: NIGHTSHIFT_FAKE_GH_PR_STATE is not set; refusing to invent a pull request state", 2);
   const sha = process.env.NIGHTSHIFT_FAKE_GH_PR_SHA || null;
   const merged = state === "MERGED";
-  const payload = { state, mergedAt: merged ? "2026-09-11T15:54:01Z" : null, mergeCommit: merged && sha ? { oid: sha } : null };
+  const payload = {
+    state,
+    mergedAt: merged ? "2026-09-11T15:54:01Z" : null,
+    mergeCommit: merged && sha ? { oid: sha } : null,
+    mergeable: process.env.NIGHTSHIFT_FAKE_GH_PR_MERGEABLE || "MERGEABLE",
+    isDraft: process.env.NIGHTSHIFT_FAKE_GH_PR_DRAFT === "1",
+  };
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
@@ -61,9 +67,17 @@ function prList() {
   process.stdout.write(`${raw}\n`);
 }
 
+// Holds the process for as long as the test asked, the way a slow network makes the real CLI hang.
+function sleepIfAsked() {
+  const ms = Number(process.env.NIGHTSHIFT_FAKE_GH_SLEEP_MS);
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 // Applies the call, emulating only the subcommands the import uses.
 function main() {
   logCall();
+  sleepIfAsked();
   const [command, sub] = args;
   if (command === "auth" && sub === "status") return authStatus();
   if (command === "auth" && sub === "token") return process.stdout.write(`${token()}\n`);

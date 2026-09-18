@@ -93,8 +93,8 @@ test("a job finished by another connection between two polls renders done, with 
   assert.ok(last.includes(PR_URL), `the later snapshot carries no pull request URL: ${last}`);
 });
 
-test("a job marked merged by another connection during a running follow renders merged in a later snapshot", async (t) => {
-  const env = makeHome(t, "follow-fresh-read-merged");
+test("a job closed by another connection during a running follow renders closed in a later snapshot", async (t) => {
+  const env = makeHome(t, "follow-fresh-read-closed");
   makeProject(t, env, "alpha");
   const delivered = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   claimJobById(delivered, { worker: "host:1", cap: 4 }, env);
@@ -106,7 +106,7 @@ test("a job marked merged by another connection during a running follow renders 
     ticks += 1;
     if (ticks !== 1) return;
     writeThroughOwnConnection(env, [
-      ["UPDATE jobs SET status = 'merged', merged_at = ?, pr_checked_at = ? WHERE id = ?", "2026-01-01 00:00:00", "2026-01-01 00:00:00", delivered],
+      ["UPDATE jobs SET status = 'closed' WHERE id = ?", delivered],
       ["UPDATE jobs SET status = 'cancelled', finished_at = ? WHERE id = ?", "2026-01-01 00:00:00", waiting],
     ]);
   });
@@ -114,9 +114,9 @@ test("a job marked merged by another connection during a running follow renders 
   assert.equal(result.code, 0, result.err.join("\n"));
   const views = snapshots(result.out);
   assert.ok(views.length >= 2, `the follow redrew only ${views.length} time(s); it never polled after the other connection's write`);
-  assert.match(views[0], /merged=0/, "the first poll already counted a merged job; the transition this test asserts never happened inside the session");
-  assert.match(views.at(-1), /merged=1/, "the follow never rendered the merge another connection wrote mid-session");
-  assert.match(views.at(-1), new RegExp(`#${delivered}\\s+\\S+ merged`), `the row of job #${delivered} is not rendered as merged: ${views.at(-1)}`);
+  assert.match(views[0], /closed=0/, "the first poll already counted a closed job; the transition this test asserts never happened inside the session");
+  assert.match(views.at(-1), /closed=1/, "the follow never rendered the close another connection wrote mid-session");
+  assert.match(views.at(-1), new RegExp(`#${delivered}\\s+\\S+ closed`), `the row of job #${delivered} is not rendered as closed: ${views.at(-1)}`);
 });
 
 test("no poll of a follow session prepares the queue view's statements on the process-wide cached connection", async (t) => {

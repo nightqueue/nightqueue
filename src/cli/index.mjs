@@ -65,7 +65,7 @@ const HOME_WRITE_SUBCOMMANDS = new Map([
   ["project", new Set(["add", "remove", "move"])],
   ["connection", new Set(["add", "bind", "remove"])],
   ["embed", new Set(["install", "download", "backfill"])],
-  ["queue", new Set(["add", "cancel", "pause", "resume"])],
+  ["queue", new Set(["add", "cancel", "close", "pause", "resume"])],
 ]);
 
 const USAGE = `nightshift — configuration CLI
@@ -91,7 +91,7 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the twenty-three memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the twenty-four memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   hook session-start|prompt-context|reflect run a hook, reading the event JSON from stdin
   reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground
@@ -107,6 +107,7 @@ commands:
   queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)
   queue run [--job | --watch] [--max]       start the runner detached, one job at a time; --max <n> exits after n jobs, --foreground runs it here, --stop ends a watcher
   queue cancel <id> [--reason "..."]        cancel a pending, gated or orphaned job
+  queue close <id>                          close a delivered job (done -> closed)
   queue retry <id> [--note] [--fresh]       send a gated, failed or cancelled job back to the queue; --run starts it detached
   queue repair <id> [--json]                re-classify a gated or failed job from its own log; corrects a lost PR link
   queue pause | resume                      stop claiming new jobs, or claim again

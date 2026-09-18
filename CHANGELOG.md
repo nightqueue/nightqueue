@@ -8,6 +8,11 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `nightshift queue close <id>` and the MCP tool `queue_close` (twenty-four tools
+  now): the operator's act that takes a delivered job from `done` to `closed`.
+  Any other status is refused by name and nothing is written; `pr_url` is kept.
+  A runner's witness can never close a job.
+
 - A subagent of an unattended run is never killed for taking too long to answer.
   The runner starts the agent with `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`, so
   the CLI waits for every background task the run still has open instead of
@@ -183,6 +188,21 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Every read of the queue is a pure read. `queue status`, `queue status --follow`
+  and the MCP `queue_status` render one view built from SELECTs and file reads
+  alone: no network, no database write, no file write. The pull request of a job
+  is shown as a derived `pr_state` (`merged` > `closed` > `conflicted` > `draft`
+  > `unknown` > `open`) from a process-local cache that gh refreshes outside the
+  frame, never stored; a merged pull request on a `done` job adds the suggestion
+  `#<id> PR merged - close it with nightshift queue close <id>` instead of
+  rewriting the row. Repair and prune are maintenance, owned by the runner cycle,
+  the one-shot `queue status` and a 60 s timer of the MCP server; `--follow`
+  never writes. The follow sleeps what is left of its interval and its footer
+  states the cadence it achieved and what each part of the read cost; `--json`
+  and `queue_status` carry `pr_state`, `suggestions` and `sections`. A follow
+  behind a gh that takes 2 s to fail now redraws as often as one with the checks
+  off (11 against 11 frames in 22 s, from 3 against 11).
+
 - A runner now works one job at a time, in queue order; parallel jobs come only
   from starting more runners, and no start is refused because another runner is
   live.
@@ -240,6 +260,15 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - `decision_save` defaults a missing or invalid `status` to `proposed` instead
   of `accepted`: a decision recorded without a clear status now injects
   nothing into a future recall until someone accepts it.
+
+### Removed
+
+- The `merged` job status and the `done -> merged` sweep that `queue status`, the
+  runner and `queue_status` ran on every read. The v9 migration turns every
+  `merged` row into `closed` (keeping `pr_url`, `merged_at` and `merge_sha`) and
+  drops `jobs.pr_checked_at`; it runs on every open, read-guarded, so a row an
+  older build writes back is healed on the next one. `counts.merged` and
+  `jobs[].pr_checked_at` are gone from `--json` and `queue_status`.
 
 ### Fixed
 

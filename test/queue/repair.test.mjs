@@ -6,10 +6,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { jobLogPath, logsDir, runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { addJob, claimJobById, finishJob, getJob, listMergeCandidates } from "../../src/memory/jobs.mjs";
+import { addJob, claimJobById, finishJob, getJob } from "../../src/memory/jobs.mjs";
 import { getRoadmapItem, markRoadmapItemQueued, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
-import { isoToSqlite } from "../../src/memory/schema.mjs";
-import { MERGE_SWEEP_LIMIT } from "../../src/queue/merged.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { reclassifyFromLog } from "../../src/queue/repair.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
@@ -170,18 +168,13 @@ test("only the LAST attempt of an accumulated log decides: an older delivery nev
   assert.equal(getJob(id, env).status, "gate");
 });
 
-test("a repaired row joins the merged sweep like any delivery, and `queue status` reads it without a single call to gh", async (t) => {
-  const env = makeQueue(t, "repair-merge-candidates");
+test("a repaired row reads like any delivery, and `queue status` reads it without a single call to gh", async (t) => {
+  const env = makeQueue(t, "repair-delivery-status");
   const id = finishedJob(env);
   writeRunState(env);
 
   assert.equal((await reclassifyFromLog({ id, env })).to, "done");
-  const candidates = listMergeCandidates({ cutoff: isoToSqlite(new Date()), limit: MERGE_SWEEP_LIMIT }, env);
-  assert.deepEqual(
-    candidates.map((job) => ({ id: job.id, prUrl: job.pr_url })),
-    [{ id, prUrl: PR_URL }],
-    "the repaired delivery never reached the merged sweep",
-  );
+  assert.equal(getJob(id, env).pr_url, PR_URL, "the repaired delivery lost its pull request");
 
   const status = runCli(env, ["queue", "status"]);
   assert.equal(status.status, 0, status.stderr);

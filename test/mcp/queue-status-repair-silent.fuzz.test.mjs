@@ -73,6 +73,16 @@ function surfacesRepairFailure(answer) {
   return JSON.stringify(answer).toLowerCase().includes("repair");
 }
 
+// Asks queue_status until its answer mentions the repair, within five seconds: the server's maintenance timer runs the repair, not the call.
+async function pollUntilRepairSurfaces(client) {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    const answer = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+    if (surfacesRepairFailure(answer) || Date.now() > deadline) return answer;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+}
+
 test("H3: MCP queue_status stays silent about a repair the database refused, unlike `queue status`", async (t) => {
   const env = makeQueue(t, "mcp-reconcile-refused");
   const id = lostFinish(env);
@@ -82,7 +92,7 @@ test("H3: MCP queue_status stays silent about a repair the database refused, unl
   );
 
   const client = await connectMcp(t, env);
-  const answer = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  const answer = await pollUntilRepairSurfaces(client);
 
   assert.equal(getJob(id, env).status, "running", "the repair should have been refused, not silently applied");
   assert.ok(

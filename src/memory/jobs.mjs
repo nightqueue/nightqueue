@@ -12,7 +12,7 @@ import {
 } from "./db.mjs";
 import { PIPELINE_TIERS } from "./runs.mjs";
 
-export const JOB_STATUSES = ["pending", "running", "done", "gate", "failed", "cancelled", "merged"];
+export const JOB_STATUSES = ["pending", "running", "done", "gate", "failed", "cancelled", "closed"];
 export const PRIORITY_RANGE = { min: 1, max: 9, fallback: 5 };
 export const MAX_ATTEMPTS_RANGE = { min: 1, max: 10, fallback: 1 };
 export const TIMEOUT_RANGE = { min: 60, max: 86400, fallback: 14400 };
@@ -65,7 +65,7 @@ const JOB_VIEW_COLUMNS = [
   "cache_creation",
   "cost_usd",
 ];
-const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "merged_at", "pr_checked_at", "not_before"];
+const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "merged_at", "not_before"];
 const JOB_VIEW_TRUNCATED = ["notice_md", "result"];
 const VIEW_TEXT_LIMIT = 500;
 const LIST_LIMIT_RANGE = { min: 1, max: 50, fallback: 10 };
@@ -529,6 +529,22 @@ export function cancelJob(id, { reason } = {}, env = process.env) {
   throw new UserError(cancelRefusal(jobId, getJob(jobId, env)));
 }
 
+// Explains, from the current row, why a close was refused; it never decides anything, only phrases it.
+function closeRefusal(id, row) {
+  if (!row) return `unknown job \`${id}\``;
+  if (row.status === "closed") return `job \`${id}\` is already closed`;
+  return `job \`${id}\` cannot be closed from status \`${row.status}\`; only a \`done\` job is closed`;
+}
+
+// Closes a delivered job, the operator's act that ends its life; the decision is in the WHERE and a refusal writes nothing.
+export function closeJob(id, env = process.env) {
+  const statement = openDb(env).prepare("UPDATE jobs SET status = 'closed' WHERE id = ? AND status = 'done' RETURNING *");
+  const jobId = requireId(id);
+  const row = withWriteRetry(() => statement.get(jobId));
+  if (row) return jobView(row);
+  throw new UserError(closeRefusal(jobId, getJob(jobId, env)));
+}
+
 // Explains, from the current row, why a retry was refused; it never decides anything, only phrases it.
 function retryRefusal(id, row, { note } = {}) {
   if (!row) return `unknown job \`${id}\``;
@@ -601,33 +617,6 @@ export function countOrphanJobs(db) {
 // Counts the pending jobs a preflight block is holding back, the number the queue view shows next to `pending`.
 export function countPendingBlocked(env = process.env, db = openDb(env)) {
   return db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE ${BLOCKED_PENDING_PREDICATE}`).get().n;
-}
-
-// Jobs delivered with a pull request never checked or last checked before the cutoff, staler first so every one is reached.
-export function listMergeCandidates({ cutoff, limit } = {}, env = process.env, db = openDb(env)) {
-  const statement = db.prepare(
-    `SELECT id, pr_url FROM jobs
-      WHERE status = 'done' AND pr_url IS NOT NULL AND (pr_checked_at IS NULL OR pr_checked_at < ?)
-      ORDER BY pr_checked_at IS NOT NULL, pr_checked_at ASC, id DESC LIMIT ?`,
-  );
-  return statement.all(requireText("cutoff", cutoff), optionalRangedInt("limit", limit, LIST_LIMIT_RANGE));
-}
-
-// Turns a delivered job into a merged one, leaving what the run itself wrote untouched; false means the row moved on.
-export function markJobMerged(id, { mergedAt, mergeSha, checkedAt } = {}, env = process.env) {
-  const statement = openDb(env).prepare(
-    `UPDATE jobs SET status = 'merged', merged_at = ?, merge_sha = ?, pr_checked_at = ?
-      WHERE id = ? AND status = 'done'`,
-  );
-  const values = [requireText("merged_at", mergedAt), optionalText(mergeSha), requireText("pr_checked_at", checkedAt), requireId(id)];
-  return withWriteRetry(() => statement.run(...values)).changes === 1;
-}
-
-// Records that the pull request of a delivered job was checked and is not merged; false means the row moved on.
-export function stampPrChecked(id, { checkedAt } = {}, env = process.env) {
-  const statement = openDb(env).prepare("UPDATE jobs SET pr_checked_at = ? WHERE id = ? AND status = 'done'");
-  const values = [requireText("pr_checked_at", checkedAt), requireId(id)];
-  return withWriteRetry(() => statement.run(...values)).changes === 1;
 }
 
 // Counts the jobs of every status, including the statuses with no row at all.

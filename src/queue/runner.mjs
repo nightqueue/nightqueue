@@ -10,7 +10,6 @@ import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore } from "../store/open.mjs";
 import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isTransientFailure } from "./classify.mjs";
-import { refreshMergedJobs } from "./merged.mjs";
 import { preflight } from "./preflight.mjs";
 import {
   clearOwnPause,
@@ -26,7 +25,7 @@ import {
   resumeRequestedAt,
 } from "./rate-limit.mjs";
 import { ownRunnerRecord } from "./registry.mjs";
-import { repairWarningLine } from "./reconcile.mjs";
+import { runMaintenance } from "./maintenance.mjs";
 import { clearRunOutcome, decideResume, isSafeSegment, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
 import { recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
 import { buildPrompt, cliEntrypoint, IDLE_TIMEOUT_S, provisionalSlug, spawnClaude } from "./spawn.mjs";
@@ -65,7 +64,7 @@ const DEFAULT_DEPS = {
   stopSignalImpl: null,
   pauseSignalImpl: null,
   idleTimeoutS: IDLE_TIMEOUT_S,
-  refreshMergedImpl: refreshMergedJobs,
+  maintenanceImpl: runMaintenance,
   prListImpl: ghPrList,
   finishJobImpl: null,
 };
@@ -508,12 +507,6 @@ function ownRuntimeDir(env) {
   }
 }
 
-// Repairs the jobs whose run directory already says how they ended, and writes a repair the database refused into the log of this runner.
-async function warnRepairRefused(env) {
-  const warning = await repairWarningLine(env);
-  if (warning) process.stderr.write(`warning: ${warning}\n`);
-}
-
 // Warns, once, that the tree this runner runs from is gone; the detached runner writes its stderr straight into its own log.
 function warnRuntimeGone(dir) {
   process.stderr.write(
@@ -612,9 +605,9 @@ function remainingBudget(max, passes) {
 export async function runCycle({ jobId = null, max = null, dry = false, env = process.env, deps = {} } = {}) {
   const cap = concurrencyCap(env);
   if (dry) return await dryReport({ jobId, cap, max, env });
-  await warnRepairRefused(env);
   const ctx = { env, store: openStore(env), deps: withDefaults(deps, env), state: { stopping: false } };
-  await ctx.deps.refreshMergedImpl({ env });
+  const upkeep = await ctx.deps.maintenanceImpl({ env });
+  if (upkeep?.warning) process.stderr.write(`warning: ${upkeep.warning}\n`);
   const uninstall = installShutdown(ctx.state);
   const runtime = ownRuntimeDir(env);
   const processed = [];

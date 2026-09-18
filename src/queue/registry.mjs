@@ -154,7 +154,7 @@ export function registryReadError(records) {
 }
 
 // The refusal every reader raises instead of answering for a registry it could not even list.
-function unreadableRegistry(error, env) {
+export function unreadableRegistry(error, env) {
   return new UserError(`the runner registry cannot be listed (${runnersDir(env)}): ${error}`);
 }
 

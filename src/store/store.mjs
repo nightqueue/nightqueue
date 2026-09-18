@@ -30,12 +30,10 @@
  * @property {(jobId: number, ref: object) => Promise<number>} linkPipelineRun
  * @property {(id: number, outcome: object) => Promise<boolean>} finishJob
  * @property {(id: number, options?: object) => Promise<object>} cancelJob
+ * @property {(id: number) => Promise<object>} closeJob takes a `done` job to `closed` and refuses every other status by name
  * @property {(id: number, options?: object) => Promise<object>} retryJob
  * @property {(id: number) => Promise<object|null>} getJob
  * @property {(options?: object) => Promise<object[]>} listJobs
- * @property {(options: object) => Promise<object[]>} listMergeCandidates
- * @property {(id: number, merge: object) => Promise<boolean>} markJobMerged
- * @property {(id: number, options: object) => Promise<boolean>} stampPrChecked
  * @property {() => Promise<Record<string, number>>} countsByStatus
  * @property {() => Promise<number>} countPendingBlocked pending jobs a preflight block is holding back
  * @property {() => Promise<number>} countActiveJobs
@@ -167,12 +165,10 @@ export const STORE_CONTRACT = Object.freeze({
     "linkPipelineRun",
     "finishJob",
     "cancelJob",
+    "closeJob",
     "retryJob",
     "getJob",
     "listJobs",
-    "listMergeCandidates",
-    "markJobMerged",
-    "stampPrChecked",
     "countsByStatus",
     "countPendingBlocked",
     "countActiveJobs",
@@ -241,7 +237,6 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.status",
   "jobs.getJob",
   "jobs.listJobs",
-  "jobs.listMergeCandidates",
   "jobs.listWithSlug",
   "jobs.isJobActive",
   "jobs.countsByStatus",

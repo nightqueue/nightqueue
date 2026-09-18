@@ -38,6 +38,11 @@ function killingOnly(pids) {
   };
 }
 
+// A cycle upkeep that prunes nothing, because the sibling of these fixtures is a pid only the injected probe says is alive.
+async function keepRegistry() {
+  return { warning: null, pruned: [], ms: 0 };
+}
+
 // Enqueues one job of the test project.
 function enqueue(env) {
   return addJob({ project: "alpha", prompt: PROMPT }, env).id;
@@ -101,7 +106,7 @@ test("a runner waiting out its own limit never stops another runner of the same 
   const id = enqueue(env);
   const slept = [];
 
-  const cycle = await runCycle({ env, deps: { gitImpl: fakeGit(), sleepImpl: slicedSleep(slept) } });
+  const cycle = await runCycle({ env, deps: { gitImpl: fakeGit(), sleepImpl: slicedSleep(slept), maintenanceImpl: keepRegistry } });
 
   assert.ok(inheritablePause(env, killImpl), "the fixture left no live pause on the other runner, so the test proves nothing");
   assert.equal(readOwnPause(env), null, "the pause of another runner was adopted by a runner that was already claiming");

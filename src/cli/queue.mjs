@@ -8,10 +8,9 @@ import { updateNoticeLine } from "../host/update-notice.mjs";
 import { jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { PROMPT_SOURCE_CONFLICT, getRoadmapItem, queueRoadmapItem } from "../memory/roadmap.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
-import { advisoryLinesFor, startAdvisoryLines } from "../queue/advisory.mjs";
+import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
 import { isQueueIdle, noRunnerWait, parkedBacklogLine, parkedJobLabel, pausedRunnerLine, pendingJobs, runnerPauseLabel, runnersOnline } from "../queue/hints.mjs";
-import { prViewer, refreshMergedJobs } from "../queue/merged.mjs";
 import {
   createNarrator,
   formatDuration,
@@ -21,9 +20,11 @@ import {
   noticeNarration,
 } from "../queue/narrate.mjs";
 import { blockerLines, claimBlocker } from "../queue/claim.mjs";
+import { runMaintenance } from "../queue/maintenance.mjs";
+import { createPrStateCache } from "../queue/pr-state.mjs";
+import { closeSuggestion, failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
 import {
   liveRunnersReport,
-  pruneDeadRunners,
   removeOwnRunnerRecord,
   stampRunnerDbWitness,
   stopAllRunners,
@@ -31,7 +32,6 @@ import {
   STOPPED_RUNNER,
   STOP_TIMEOUT_MS,
 } from "../queue/registry.mjs";
-import { repairWarningLine } from "../queue/reconcile.mjs";
 import { reclassifyFromLog } from "../queue/repair.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
@@ -46,6 +46,7 @@ const USAGE = {
   status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
+  close: "nightshift queue close <id> [--json]",
   retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
   repair: "nightshift queue repair <id> [--json]",
   pause: "nightshift queue pause",
@@ -380,6 +381,7 @@ function parseAdd(argv) {
 }
 
 const FOLLOW_INTERVAL_DEFAULT_S = 2;
+const PR_PRIME_DEADLINE_MS = 5000;
 const DEFAULT_WIDTH = 120;
 const MIN_LAST_WIDTH = 20;
 
@@ -400,7 +402,7 @@ const STATUS_STYLE = {
   failed: { icon: "✗", color: "31" },
   cancelled: { icon: "⊘", color: "2" },
   pending: { icon: "○", color: "2" },
-  merged: { icon: "⇡", color: "35" },
+  closed: { icon: "■", color: "35" },
 };
 
 // Paints a text with an ANSI code, or leaves it alone when color is off.
@@ -444,9 +446,10 @@ function formatTokens(job) {
   return `${(total / 1_000_000).toFixed(1)}M`;
 }
 
-// The pull request of a job as its plain URL: terminals turn a bare URL into a link on their own, which an escape sequence cannot count on.
+// The pull request of a job as its plain URL plus its derived state: terminals turn a bare URL into a link on their own, which an escape sequence cannot count on.
 function formatPr(job) {
-  return job.pr_url ? String(job.pr_url) : "-";
+  if (!job.pr_url) return "-";
+  return job.pr_state ? `${job.pr_url} (${job.pr_state})` : String(job.pr_url);
 }
 
 // Width of the PR column for this listing: the longest URL present, never less than the header.
@@ -551,7 +554,8 @@ function formatDetail(job) {
     .filter(([key, value]) => key !== "notice_md" && value !== null && value !== undefined)
     .map(([key, value]) => `${key.padEnd(16)}${value}`);
   const at = fields.findIndex((line) => line.startsWith("status".padEnd(16)));
-  const extra = [...formatBlocked(job), ...formatNotice(job)];
+  const suggestion = closeSuggestion(job);
+  const extra = [...formatBlocked(job), ...(suggestion ? [suggestion] : []), ...formatNotice(job)];
   return at < 0 ? [...fields, ...extra] : [...fields.slice(0, at + 1), ...extra, ...fields.slice(at + 1)];
 }
 
@@ -611,19 +615,6 @@ function normalizeFollowArgv(argv) {
   );
 }
 
-// Brings the jobs whose pull request was merged up to date before a view reads the rows; it is silent and never fails the command.
-async function sweepMerged(ctx, readStore) {
-  await refreshMergedJobs({ env: ctx.env, ghImpl: prViewer(ctx.env, ctx.spawnSyncImpl), readStore });
-}
-
-// Lists the live runners and the failure to list them apart, dropping the registrations no process answers for; a prune that fails never fails the listing.
-function readRunners(ctx) {
-  try {
-    pruneDeadRunners(ctx.env, ctx.killImpl);
-  } catch {}
-  return liveRunnersReport(ctx.env, ctx.killImpl);
-}
-
 // The `runner:` line of a home whose registry could not be listed: nothing is known about the runners, least of all that none is live.
 function unreadableRegistryLine(error) {
   return `runner: unknown - the runner registry cannot be listed (${error}), a runner may be live; run \`nightshift doctor\``;
@@ -642,105 +633,162 @@ function emptyQueueLine(blockedOnly) {
   return blockedOnly ? "no blocked job in the queue" : "no jobs in the queue";
 }
 
-// Lines of the queue view: one line per runner, the advisory lines, table, counts and the backlog hint, in that order.
-async function queueViewLines(values, ctx, store) {
-  await sweepMerged(ctx, store);
-  const blockedOnly = values.blocked === true;
-  const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit), blockedOnly })).map(jobView);
-  const counts = await store.jobs.countsByStatus();
-  const blockedPending = await store.jobs.countPendingBlocked();
-  const { runners, error } = readRunners(ctx);
-  const activeJobs = await store.jobs.countActiveJobs();
-  const lines = error === null ? formatRunners(runners, activeJobs, ctx.env) : [unreadableRegistryLine(error)];
-  if (error === null) lines.push(...(await advisoryLinesFor({ store, runners, env: ctx.env, killImpl: ctx.killImpl })));
-  if (!jobs.length) return { lines: [...lines, emptyQueueLine(blockedOnly)], idle: error === null };
-  lines.push(...formatTable(jobs, ctx));
-  lines.push(countsLine(counts, blockedPending));
-  const backlog = error === null ? backlogLine({ activeJobs, counts, runners, jobs }) : null;
+// Lines of a queue view, pure formatting: the runner lines, the advisory lines, table, counts, the suggestions and the backlog hint, in that order.
+function renderQueueView(view, ctx, { blockedOnly = false } = {}) {
+  const readable = view.registryError === null;
+  const lines = readable ? formatRunners(view.runners, view.activeJobs, ctx.env) : [unreadableRegistryLine(view.registryError)];
+  lines.push(...view.advisories, ...unreadSectionLines(view));
+  if (!sectionOk(view, "jobs")) return lines;
+  if (!view.jobs.length) return [...lines, emptyQueueLine(blockedOnly)];
+  lines.push(...formatTable(view.jobs, ctx));
+  if (!sectionOk(view, "counts")) return [...lines, ...view.suggestions];
+  lines.push(countsLine(view.counts, view.blockedPending), ...view.suggestions);
+  const backlog = readable ? backlogLine({ activeJobs: view.activeJobs, counts: view.counts, runners: view.runners, jobs: view.jobs }) : null;
   if (backlog) lines.push(backlog);
-  return { lines, idle: error === null && isQueueIdle({ activeJobs, runners }) && counts.pending === 0 };
+  return lines;
+}
+
+// Whether one section of a view was read.
+function sectionOk(view, name) {
+  return view.sections?.find((section) => section.name === name)?.ok !== false;
+}
+
+// One stable line per core section the view could not read, so a pipe still only prints what changed.
+function unreadSectionLines(view) {
+  return (view.sections ?? [])
+    .filter((section) => (section.name === "jobs" || section.name === "counts") && !section.ok)
+    .map((section) => `${section.name}: cannot be read (${section.error})`);
+}
+
+// How long apart two frames really started, as the footer writes it, or `-` for the first one.
+function formatAchieved(ms) {
+  return Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)}s` : "-";
+}
+
+// The footer of a follow frame: the cadence it achieved against the one asked, and what each section of the read cost.
+function cadenceFooter({ achievedMs, intervalS, readMs, sections }) {
+  const parts = sections.map((section) => (section.ok ? `${section.name} ${section.ms}ms` : `${section.name} error (${section.error})`));
+  return `achieved every ${formatAchieved(achievedMs)} (asked ${intervalS}s) · read ${Math.round(readMs)}ms: ${parts.join(", ")} · Ctrl-C to stop`;
+}
+
+// What a listing reads: the `--limit` and `--blocked` of the command line.
+function listingOptions(values) {
+  return { limit: requireInt("--limit", values.limit), blockedOnly: values.blocked === true };
+}
+
+// Writes one frame of the follow: the whole screen on a terminal, only what changed on a pipe; it returns the text it drew.
+function writeFrame(lines, { ctx, footer, previous }) {
+  const text = lines.join("\n");
+  if (ctx.stdout?.isTTY === true) {
+    ctx.stdout.write(`[2J[H${text}\n${paint(footer, "2", useColor(ctx))}\n`);
+  } else if (text !== previous) {
+    for (const line of lines) ctx.out(line);
+    ctx.out("");
+  }
+  return text;
 }
 
 // Keeps redrawing the queue view until Ctrl-C, or until the queue goes idle when asked; on a pipe it only prints what changed.
 // Every poll reads on a read-only connection opened and closed for that poll, because a session lives for hours and a
 // connection held that long can answer from a stale WAL snapshot; the process-wide write connection is never closed here,
 // because a close SQLite believes is the last one deletes `-shm`/`-wal` under a runner still attached to them.
-async function followStatus(values, intervalS, ctx) {
+async function followStatus(values, intervalS, ctx, prStates) {
   const wait = ctx.sleep ?? sleep;
-  const tty = ctx.stdout?.isTTY === true;
+  const now = ctx.now ?? (() => performance.now());
+  const options = listingOptions(values);
   let previous = null;
+  let previousStart = null;
   let stop = false;
   const onSignal = () => {
     stop = true;
   };
+  await ensureStoreExists(ctx.env);
   process.once("SIGINT", onSignal);
   try {
     while (!stop) {
-      await withReadOnlyStore(ctx.env, (store) => repairFromWitness(ctx, store));
-      const view = await withReadOnlyStore(ctx.env, (store) => queueViewLines(values, ctx, store));
-      const text = view.lines.join("\n");
-      if (tty) {
-        ctx.stdout.write(`\u001b[2J\u001b[H${text}\n${paint(`every ${intervalS}s - Ctrl-C to stop`, "2", useColor(ctx))}\n`);
-      } else if (text !== previous) {
-        for (const line of view.lines) ctx.out(line);
-        ctx.out("");
-      }
-      previous = text;
-      if (values["until-idle"] === true && view.idle) return;
-      await wait(intervalS * 1000);
+      const startedAt = now();
+      const view = await withReadOnlyStore(ctx.env, (store) => queueView(store, { ...options, env: ctx.env, prStates, killImpl: ctx.killImpl, now }));
+      const achievedMs = previousStart === null ? null : startedAt - previousStart;
+      const footer = cadenceFooter({ achievedMs, intervalS, readMs: now() - startedAt, sections: view.sections });
+      previous = writeFrame(renderQueueView(view, ctx, options), { ctx, footer, previous });
+      previousStart = startedAt;
+      void prStates.refresh(prUrlsOf(view.jobs), ctx.env);
+      if (values["until-idle"] === true && view.idle) return true;
+      await wait(Math.max(0, intervalS * 1000 - (now() - startedAt)));
     }
+    return true;
   } finally {
     process.removeListener("SIGINT", onSignal);
+    prStates.dispose();
   }
 }
 
-// Restores the jobs whose run directory already says how they ended; a repair that cannot be written only warns.
-async function repairFromWitness(ctx, readStore) {
-  const warning = await repairWarningLine(ctx.env, { readStore });
+// The upkeep a one-shot `queue status` runs before it reads: prune and repair once; a repair that cannot be written only warns.
+async function oneShotMaintenance(ctx) {
+  const { warning } = await runMaintenance({ env: ctx.env, killImpl: ctx.killImpl });
   if (warning) ctx.err(`warning: ${warning}`);
 }
 
-// The witness repair every `queue status` runs before it prints; a follow reads it on a fresh connection, because its session lives for hours.
-async function eagerRepair(ctx, following) {
-  if (!following) return repairFromWitness(ctx, openStore(ctx.env));
-  await ensureStoreExists(ctx.env);
-  return withReadOnlyStore(ctx.env, (store) => repairFromWitness(ctx, store));
+// Prints one job in full with the state of its pull request, asked for once and awaited, and the close it suggests.
+async function printJobDetail(id, values, ctx, prStates) {
+  const store = openStore(ctx.env);
+  await primePrStates(prStates, prUrlsOf([await store.jobs.getJob(id)]), ctx.env);
+  const job = await jobDetailView(store, id, { prStates });
+  if (!job) throw new UserError(`unknown job \`${id}\``);
+  if (values.json) ctx.out(JSON.stringify({ job }));
+  else for (const line of formatDetail(job)) ctx.out(line);
+  return values.json === true;
+}
+
+// Prints the tail of the queue, as a table or as json, after asking gh once about the pull requests it lists.
+async function printQueueView(values, ctx, prStates) {
+  const store = openStore(ctx.env);
+  const options = listingOptions(values);
+  await primePrStates(prStates, prUrlsOf(await store.jobs.listJobs(options).catch(() => [])), ctx.env);
+  const view = await queueView(store, { ...options, env: ctx.env, prStates, killImpl: ctx.killImpl });
+  const unread = failedCoreSection(view);
+  if (unread) throw new UserError(`the queue cannot be read: ${unread.error}`);
+  if (!values.json) {
+    for (const line of renderQueueView(view, ctx, options)) ctx.out(line);
+    return false;
+  }
+  if (view.registryError !== null) {
+    throw new UserError(`the runner registry cannot be listed (${view.registryError}); \`--json\` will not answer that no runner is running for a registry it could not read`);
+  }
+  const { runners, advisories, jobs, counts, suggestions, sections } = view;
+  ctx.out(JSON.stringify({ runner: runners[0] ?? STOPPED_RUNNER, runners, runnersOnline: runners.length, advisories, jobs, counts, suggestions, sections }));
+  return true;
 }
 
 // Prints `queue status`, for one job or for the tail of the queue, and tells whether it answered in json.
 async function printStatus(argv, ctx) {
   const { values, positionals } = parseCommand(normalizeFollowArgv(argv), STATUS_OPTIONS);
   checkArgs(positionals, { max: 1, usage: USAGE.status });
-  await eagerRepair(ctx, values.follow !== undefined);
   const intervalS = values.follow === undefined ? null : Math.max(1, requireInt("--follow", values.follow));
   if (intervalS !== null && values.json) throw new UserError(`\`--follow\` cannot be used with \`--json\`; usage: ${USAGE.status}`);
   if (intervalS !== null && positionals.length) throw new UserError(`\`--follow\` shows the whole queue, not one job; usage: ${USAGE.status}`);
-  if (positionals.length === 1) {
-    const id = requireInt("id", positionals[0]);
-    const store = openStore(ctx.env);
-    await sweepMerged(ctx, store);
-    const job = jobView(await store.jobs.getJob(id), { full: true });
-    if (!job) throw new UserError(`unknown job \`${id}\``);
-    if (values.json) ctx.out(JSON.stringify({ job }));
-    else for (const line of formatDetail(job)) ctx.out(line);
-    return values.json === true;
+  const prStates = ctx.prStates ?? createPrStateCache();
+  if (intervalS !== null) return await followStatus(values, intervalS, ctx, prStates);
+  try {
+    await oneShotMaintenance(ctx);
+    if (positionals.length === 1) return await printJobDetail(requireInt("id", positionals[0]), values, ctx, prStates);
+    return await printQueueView(values, ctx, prStates);
+  } finally {
+    prStates.dispose();
   }
-  if (values.json) {
-    const store = openStore(ctx.env);
-    await sweepMerged(ctx, store);
-    const jobs = (await store.jobs.listJobs({ limit: requireInt("--limit", values.limit), blockedOnly: values.blocked === true })).map(jobView);
-    const { runners, error } = readRunners(ctx);
-    if (error !== null) throw new UserError(`the runner registry cannot be listed (${error}); \`--json\` will not answer that no runner is running for a registry it could not read`);
-    const advisories = await advisoryLinesFor({ store, runners, env: ctx.env, killImpl: ctx.killImpl });
-    ctx.out(JSON.stringify({ runner: runners[0] ?? STOPPED_RUNNER, runners, runnersOnline: runners.length, advisories, jobs, counts: await store.jobs.countsByStatus() }));
-    return true;
+}
+
+// Asks gh about the pull requests a one-shot is about to print, waiting at most one overall deadline; what did not answer by then prints as it is cached.
+async function primePrStates(prStates, urls, env) {
+  let timer = null;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(resolve, PR_PRIME_DEADLINE_MS);
+  });
+  try {
+    await Promise.race([prStates.refresh(urls, env), deadline]);
+  } finally {
+    clearTimeout(timer);
   }
-  if (intervalS !== null) {
-    await followStatus(values, intervalS, ctx);
-    return true;
-  }
-  for (const line of (await queueViewLines(values, ctx, openStore(ctx.env))).lines) ctx.out(line);
-  return false;
 }
 
 // Runs `queue status` and closes the text output with the update notice, which the json output and the follow never carry.
@@ -901,6 +949,14 @@ async function runCancel(argv, ctx) {
   checkArgs(positionals, { min: 1, usage: USAGE.cancel });
   const job = await openStore(ctx.env).jobs.cancelJob(requireInt("id", positionals[0]), { reason: values.reason });
   ctx.out(values.json ? JSON.stringify({ job }) : `cancelled job #${job.id}`);
+}
+
+// Runs `queue close`, which takes a delivered job to `closed` and refuses every other status by name without writing.
+async function runClose(argv, ctx) {
+  const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
+  checkArgs(positionals, { min: 1, usage: USAGE.close });
+  const job = await openStore(ctx.env).jobs.closeJob(requireInt("id", positionals[0]));
+  ctx.out(values.json ? JSON.stringify({ job }) : `closed job #${job.id}`);
 }
 
 // Reports what happened to the run directory of a `--fresh` retry: a directory that was kept says why, and never brings the retry down.
@@ -1113,6 +1169,7 @@ const SUBCOMMANDS = new Map([
   ["status", runStatus],
   ["run", runRun],
   ["cancel", runCancel],
+  ["close", runClose],
   ["retry", runRetry],
   ["repair", runRepair],
   ["pause", runPause],

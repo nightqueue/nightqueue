@@ -10,7 +10,6 @@ import { loadConfig, saveConfig } from "../config/store.mjs";
 import { DECISION_STATUSES, decisionFullView, decisionView } from "../memory/decisions.mjs";
 import { SCOPE_CONFLICT, SCOPE_MISSING, ownerDescription } from "../memory/scope.mjs";
 import {
-  jobView,
   MAX_ATTEMPTS_RANGE,
   PRIORITY_RANGE,
   TIMEOUT_RANGE,
@@ -24,13 +23,14 @@ import {
   ROADMAP_STATUSES,
   roadmapItemView,
 } from "../memory/roadmap.mjs";
-import { advisoryLinesFor, startAdvisoryLines } from "../queue/advisory.mjs";
+import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { noRunnerWait, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
-import { refreshMergedJobs } from "../queue/merged.mjs";
 import { blockerLines } from "../queue/claim.mjs";
-import { liveRunners, liveRunnersReport, pruneDeadRunners, STOPPED_RUNNER } from "../queue/registry.mjs";
-import { repairWarningLine } from "../queue/reconcile.mjs";
+import { lastMaintenance } from "../queue/maintenance.mjs";
+import { createPrStateCache } from "../queue/pr-state.mjs";
+import { liveRunnersReport, STOPPED_RUNNER, unreadableRegistry } from "../queue/registry.mjs";
+import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
 import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import {
@@ -67,6 +67,9 @@ const SERVER_INSTRUCTIONS = [
 const RECALL_LIMIT = 8;
 const INDEX_LIMIT = 40;
 const JOB_LIST_LIMIT = { min: 1, max: 50, fallback: 10 };
+
+// One cache of pull request states per server process, shared by every session and request it serves; it never touches the database.
+const serverPrStates = createPrStateCache();
 
 const target = z.enum(LESSON_TARGETS).nullable().optional();
 const optionalText = z.string().nullable().optional();
@@ -432,30 +435,26 @@ function runnerAnswer(started, env, advisories) {
   };
 }
 
-// The live runners of the home, with the registrations no process answers for dropped on the way; a prune that fails never fails the answer, and a registry that could not be listed is an error and never an empty list.
-function readRunners(env) {
-  try {
-    pruneDeadRunners(env);
-  } catch {}
-  return liveRunners(env);
-}
-
 // What a status answer says about a repair the database refused: the same line the CLI warns with, and nothing at all when every repair went through.
 function warningAnswer(warning) {
   return warning ? { warning } : {};
 }
 
-// The answer of `queue_status`, read end to end on the store it is given: one job by id, or the tail of the queue with its counts and its runners.
+// The answer of `queue_status` for one job: the job in full with the state of its pull request.
+async function jobStatusAnswer(id, { store, warning }) {
+  const job = await jobDetailView(store, id, { prStates: serverPrStates });
+  if (!job) throw new UserError(`unknown job \`${id}\``);
+  return { job, ...warningAnswer(warning) };
+}
+
+// The answer of `queue_status` for the tail of the queue, mapped from the one queue view every surface renders.
 async function queueStatusAnswer(args, { store, warning, env }) {
-  if (Number.isInteger(args.job_id)) {
-    const job = jobView(await store.jobs.getJob(args.job_id), { full: true });
-    if (!job) throw new UserError(`unknown job \`${args.job_id}\``);
-    return { job, ...warningAnswer(warning) };
-  }
-  const runners = readRunners(env);
-  const counts = await store.jobs.countsByStatus();
-  const jobs = (await store.jobs.listJobs({ limit: jobLimit(args.limit) })).map(jobView);
-  const advisories = await advisoryLinesFor({ store, runners, env });
+  if (Number.isInteger(args.job_id)) return await jobStatusAnswer(args.job_id, { store, warning });
+  const view = await queueView(store, { env, limit: jobLimit(args.limit), prStates: serverPrStates });
+  const unread = failedCoreSection(view);
+  if (unread) throw new UserError(`the queue cannot be read: ${unread.error}`);
+  if (view.registryError !== null) throw unreadableRegistry(view.registryError, env);
+  const { runners, advisories, jobs, counts, suggestions, activeJobs, sections } = view;
   return {
     runner: runners[0] ?? STOPPED_RUNNER,
     runners,
@@ -463,12 +462,19 @@ async function queueStatusAnswer(args, { store, warning, env }) {
     advisories,
     jobs,
     counts,
-    hint: [queueHint({ activeJobs: await store.jobs.countActiveJobs(), counts, runners, jobs }), ...advisories].join(" "),
+    suggestions,
+    sections,
+    hint: [queueHint({ activeJobs, counts, runners, jobs }), ...advisories, ...suggestions].join(" "),
     ...warningAnswer(warning),
   };
 }
 
-// The twenty-three tools of the plugin contract, with the parameter names the plugin actually sends.
+// The pull request URLs an answer of `queue_status` shows, the ones its cache is refreshed about after the answer left.
+function answeredPrUrls(answer) {
+  return prUrlsOf(answer.job ? [answer.job] : answer.jobs);
+}
+
+// The twenty-four tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env) {
   return [
     {
@@ -726,7 +732,9 @@ function toolDefinitions(env) {
         description:
           "State of the queue: one job by id, or the most recent ones plus the counts per status and every live runner in `runners` (`runner` is the first of them, kept for one release; `runnersOnline` is the count of `runners`). The `hint` leads with the live-runner count, and says that a job queued with none online waits until `nightshift queue run` starts one. " +
           "The `hint` ends with the advisory lines when they apply - a five-hour window close to its limit while runners are live, or two or more runners on one repository - also listed under `advisories`; they never block anything. Never returns the prompt. " +
-          "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`.",
+          "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`. " +
+          "`sections` carries each part of the read with `ok`, `error` and elapsed `ms`, and `pr_state` of each job comes from a cache refreshed outside the answer (`unknown` until gh answered); " +
+          "a `done` job whose pull request is merged is listed in `suggestions`, and closing it is `queue_close`.",
         inputSchema: {
           job_id: z.number().int().min(1).nullable().optional(),
           limit: z.number().int().min(JOB_LIST_LIMIT.min).max(JOB_LIST_LIMIT.max).nullable().optional(),
@@ -734,11 +742,10 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         await ensureStoreExists(env);
-        return await withReadOnlyStore(env, async (store) => {
-          await refreshMergedJobs({ env, readStore: store });
-          const warning = await repairWarningLine(env, { readStore: store });
-          return await queueStatusAnswer(args, { store, warning, env });
-        });
+        const warning = lastMaintenance(env)?.warning ?? null;
+        const answer = await withReadOnlyStore(env, (store) => queueStatusAnswer(args, { store, warning, env }));
+        void serverPrStates.refresh(answeredPrUrls(answer), env);
+        return answer;
       },
     },
     {
@@ -766,6 +773,17 @@ function toolDefinitions(env) {
         inputSchema: { job_id: z.number().int().min(1), reason: optionalText },
       },
       handler: async (args) => ({ ok: true, job: await openStore(env).jobs.cancelJob(args.job_id, { reason: args.reason }) }),
+    },
+    {
+      name: "queue_close",
+      guardsHome: true,
+      config: {
+        description:
+          "Closes a delivered job (`done` -> `closed`): the operator's act that ends a job's life. Any other status is refused by name and nothing is written. " +
+          "Closing never happens by observing a pull request; `queue_status` only suggests it when the pull request of a `done` job is merged.",
+        inputSchema: { job_id: z.number().int().min(1) },
+      },
+      handler: async (args) => ({ ok: true, job: await openStore(env).jobs.closeJob(args.job_id) }),
     },
     {
       name: "queue_retry",
@@ -1043,7 +1061,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the twenty-three tools of the plugin contract.
+// Builds the MCP server with the twenty-four tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
   const schemas = new Map();
