@@ -84,7 +84,10 @@ The `PR: <url>` line it prints is information only - the pull request of the run
 is the one the host published in its own `code_change_published` event (see
 [Runtime contract](runtime-contract.md)). It closes with `WORKTREE: <path>` and
 removes the worktree only when asked with `--remove-worktree`, because the
-session that called it still lives in that directory.
+session that called it still lives in that directory. That default is unchanged:
+in a queue job the runner itself removes a clean, pushed worktree once the run ends
+`done`, and `nightshift queue close` removes it for a job that stopped anywhere else
+(see [Queue](queue.md)).
 
 ## Configuration
 
@@ -212,6 +215,21 @@ Two of the checks are about the storage under the home (see [Configuration](cli.
   it runs, so it says nothing about a mount that has since been unmounted: `db
   shm` is the check that survives a restart. Where neither source answers, the
   line states an unknown rather than a pass.
+
+For every registered project that has a `.claude/worktrees/` directory, one `warn` row
+`worktree <project>/<dir>` names each directory there that no job still open (any status but
+`closed`) records as its worktree, with the command that cleans it - the diagnosis never runs
+it, and deletes nothing:
+
+- registered in git, not locked: `git -C '<checkout>' worktree remove '<dir>'`;
+- registered and locked by a pid that is gone, or with no pid: `git -C '<checkout>' worktree
+  unlock '<dir>' && git -C '<checkout>' worktree remove '<dir>'`;
+- not registered in git (orphaned): `rm -rf '<dir>'`.
+
+A directory a live session holds locked, and the worktree of an open job (its cleanup is
+`nightshift queue close`), are not reported. When the queue cannot be read, one `worktrees`
+row says the owner is unknown and nothing is listed; when git cannot list the worktrees of a
+checkout, one `worktrees <project>` row says so. The owners are read through a read-only store.
 
 The diagnosis is offline: without `--check-updates` it opens no network
 connection at all. With the flag it adds one last check, `registry`, which asks

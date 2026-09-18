@@ -27,6 +27,7 @@ import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { noRunnerWait, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { blockerLines } from "../queue/claim.mjs";
+import { closeJobAndWorktree } from "../queue/close.mjs";
 import { lastMaintenance } from "../queue/maintenance.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
 import { liveRunnersReport, STOPPED_RUNNER, unreadableRegistry } from "../queue/registry.mjs";
@@ -733,6 +734,7 @@ function toolDefinitions(env) {
           "State of the queue: one job by id, or the most recent ones plus the counts per status and every live runner in `runners` (`runner` is the first of them, kept for one release; `runnersOnline` is the count of `runners`). The `hint` leads with the live-runner count, and says that a job queued with none online waits until `nightshift queue run` starts one. " +
           "The `hint` ends with the advisory lines when they apply - a five-hour window close to its limit while runners are live, or two or more runners on one repository - also listed under `advisories`; they never block anything. Never returns the prompt. " +
           "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`. " +
+          "The listing cuts `notice_md` and `result` at 500 characters and marks a cut row with `notice_truncated: true` or `result_truncated: true` (the key is absent when the text fits); call again with that `job_id` for the whole text. " +
           "`sections` carries each part of the read with `ok`, `error` and elapsed `ms`, and `pr_state` of each job comes from a cache refreshed outside the answer (`unknown` until gh answered); " +
           "a merged pull request on a terminal job (`done`, `failed`, `gate` or `cancelled`) is listed in `suggestions`, and closing it is `queue_close`.",
         inputSchema: {
@@ -780,10 +782,11 @@ function toolDefinitions(env) {
       config: {
         description:
           "Closes a job from any terminal status (`done`, `failed`, `gate` or `cancelled`) to `closed`: the operator's act that ends a job's life. `pending` and `running` are refused by name and nothing is written. " +
-          "Closing never happens by observing a pull request; `queue_status` only suggests it when the pull request of a terminal job is merged. The CLI also offers `nightshift queue close --merged`, which closes every such job in one call.",
+          "Closing never happens by observing a pull request; `queue_status` only suggests it when the pull request of a terminal job is merged. The CLI also offers `nightshift queue close --merged`, which closes every such job in one call. " +
+          "Closing also removes the job's worktree when it is clean and its branch is pushed or a pull request is recorded: `worktree.status` is then `removed`; otherwise it is `kept` with the `reason`, and the close still succeeds. `worktree` is null when the job has none.",
         inputSchema: { job_id: z.number().int().min(1) },
       },
-      handler: async (args) => ({ ok: true, job: await openStore(env).jobs.closeJob(args.job_id) }),
+      handler: async (args) => ({ ok: true, ...(await closeJobAndWorktree({ store: openStore(env), id: args.job_id, env })) }),
     },
     {
       name: "queue_retry",

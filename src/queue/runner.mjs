@@ -24,7 +24,7 @@ import {
   recordOwnPause,
   resumeRequestedAt,
 } from "./rate-limit.mjs";
-import { ownRunnerRecord } from "./registry.mjs";
+import { killProcess, ownRunnerRecord } from "./registry.mjs";
 import { runMaintenance } from "./maintenance.mjs";
 import { clearRunOutcome, decideResume, isSafeSegment, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
 import { recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
@@ -41,6 +41,7 @@ import {
   sumUsage,
 } from "./stream.mjs";
 import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
+import { finishNotice, inspectRunWorktree, keptWorktreeLine, removeRunWorktree } from "./worktree.mjs";
 
 // Interval between two cycles of `queue run --watch` when the operator gives no number.
 export const WATCH_INTERVAL_DEFAULT_S = 30;
@@ -67,6 +68,7 @@ const DEFAULT_DEPS = {
   maintenanceImpl: runMaintenance,
   prListImpl: ghPrList,
   finishJobImpl: null,
+  killImpl: null,
 };
 
 // Bounds of the key the pre-spawn pull request check searches for.
@@ -372,6 +374,35 @@ async function persistTelemetry(job, run, { store, env }) {
   }
 }
 
+// Inspects the worktree the run recorded, read-only, before the finish, so a kept one can be named in the single notice write.
+async function inspectJobWorktree(run, state, ctx) {
+  return await inspectRunWorktree({
+    checkout: ctx.checkout,
+    path: state?.worktree,
+    prRecorded: isPrUrl(run.outcome.prUrl) || isPrUrl(state?.outcome?.prUrl),
+    env: ctx.env,
+    killImpl: ctx.deps.killImpl ?? killProcess,
+  });
+}
+
+// The outcome the finish writes: the run's own, with the kept-worktree line appended to whatever notice exists; the line also goes to the job log.
+function outcomeWithWorktree(job, run, worktree, env) {
+  if (worktree && !worktree.removable) appendJobLog(job.id, keptWorktreeLine(worktree), env);
+  return { ...run.outcome, noticeMd: finishNotice({ runNotice: run.outcome.noticeMd, rowNotice: job.notice_md, worktree }) };
+}
+
+// Removes the worktree of a job that ended `done`; a refusal is written to the job log and stderr, and never costs the job.
+async function dropRunWorktree(job, worktree, { env, checkout }) {
+  const removed = await removeRunWorktree({ checkout, path: worktree.path, staleLock: worktree.staleLock, env });
+  if (removed.ok) {
+    appendJobLog(job.id, `worktree removed: ${worktree.path}`, env);
+    return;
+  }
+  const line = `the worktree ${worktree.path} was kept: ${removed.reason}`;
+  appendJobLog(job.id, line, env);
+  process.stderr.write(`job #${job.id}: ${line}\n`);
+}
+
 // Writes the outcome of a finished job, together with the branch the pipeline registered in its state.
 async function finalize(job, run, ctx) {
   const { env, store } = ctx;
@@ -380,6 +411,8 @@ async function finalize(job, run, ctx) {
   persistPrUrl(job, run, state, env);
   await persistTelemetry(job, run, ctx);
   if (state?.branch) await store.jobs.persistRunFacts(job.id, { worker: job.worker, branch: state.branch });
+  const worktree = await inspectJobWorktree(run, state, ctx);
+  const outcome = outcomeWithWorktree(job, run, worktree, env);
   const finish = await tryFinish(job, {
     write: () =>
       finishJobImpl(
@@ -397,7 +430,7 @@ async function finalize(job, run, ctx) {
             attempts: run.attempt,
           },
           prUrl: run.outcome.prUrl,
-          noticeMd: run.outcome.noticeMd,
+          noticeMd: outcome.noticeMd,
           usage: run.usage,
         },
         env,
@@ -406,8 +439,9 @@ async function finalize(job, run, ctx) {
   // The witness is written when the row took the finish AND when the database refused the commit - the second case is exactly
   // what the reconciliation repairs from. A finish that returned false means the row is no longer ours (another worker owns
   // it): no witness then, or the reconciliation would close a job someone else is still running.
-  if (finish.written || finish.error) await writeWitness(job, run.outcome, ctx);
+  if (finish.written || finish.error) await writeWitness(job, outcome, ctx);
   if (finish.written) await store.checkpoint();
+  if (finish.written && run.outcome.status === "done" && worktree?.removable) await dropRunWorktree(job, worktree, ctx);
   const status = finish.written ? run.outcome.status : finish.error ? "unrecorded" : "lost";
   const report = { id: job.id, status, prUrl: run.outcome.prUrl, attempts: run.attempt };
   return finish.error ? { ...report, error: finish.error } : report;
@@ -494,7 +528,7 @@ async function runJob(claimed, ctx) {
     await release(job, { interrupted: true }, env);
     return { id: job.id, status: "interrupted", attempts: run.attempt };
   }
-  return await finalize(job, run, ctx);
+  return await finalize(job, run, { ...ctx, checkout: check.cwd });
 }
 
 // Directory this runner loaded its code from: the one it registered when it started, or the tree this process is running.

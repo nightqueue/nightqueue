@@ -541,6 +541,14 @@ test("queue_status never returns the prompt and truncates the free text at five 
   const listed = payloadOf(await client.callTool({ name: "queue_status", arguments: { limit: null, job_id: null } }));
   assert.deepEqual(listed.jobs.map((job) => job.id), [2, 1]);
   assert.equal(listed.jobs.find((job) => job.id === id).notice_md, `${"n".repeat(500)}...`, "the listing stopped truncating the free text");
+  const cutRow = listed.jobs.find((job) => job.id === id);
+  assert.deepEqual({ notice: cutRow.notice_truncated, result: cutRow.result_truncated }, { notice: true, result: true }, "a cut row carries no flag");
+  const fitRow = listed.jobs.find((job) => job.id !== id);
+  assert.equal("notice_truncated" in fitRow || "result_truncated" in fitRow, false, "a row whose text fits carries a truncated key");
+  const pointer = `#${id} text cut at 500 characters - read it whole with nightshift queue status ${id}`;
+  assert.deepEqual(listed.suggestions, [pointer]);
+  assert.ok(listed.hint.endsWith(pointer), listed.hint);
+  assert.equal("notice_truncated" in one.job, false, "the detail of one job was flagged as cut");
   assert.equal(listed.counts.pending, 2);
   for (const job of listed.jobs) assert.equal("prompt" in job, false, "the listing leaked a prompt");
   assert.deepEqual(listed.runner, {

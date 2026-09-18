@@ -1,4 +1,4 @@
-import { JOB_STATUSES, jobView } from "../memory/jobs.mjs";
+import { JOB_STATUSES, VIEW_TEXT_LIMIT, jobView } from "../memory/jobs.mjs";
 import { advisoryLinesFor } from "./advisory.mjs";
 import { isQueueIdle } from "./hints.mjs";
 import { prStateKey } from "./pr-state.mjs";
@@ -36,6 +36,19 @@ export function closeSuggestion(jobs) {
   if (ids.length === 0) return null;
   if (ids.length === 1) return `#${ids[0]} PR merged - close it with nightshift queue close ${ids[0]}`;
   return `${ids.length} jobs have a merged PR (${suggestionIdList(ids)}) - close them with nightshift queue close --merged`;
+}
+
+// Whether the listing cut the notice or the result of a job.
+function wasTruncated(job) {
+  return job?.notice_truncated === true || job?.result_truncated === true;
+}
+
+// One aggregated line pointing at the whole text of every listed job whose free text was cut, or null when none was.
+export function truncationSuggestion(jobs) {
+  const ids = (Array.isArray(jobs) ? jobs : []).filter(wasTruncated).map((job) => job.id);
+  if (ids.length === 0) return null;
+  if (ids.length === 1) return `#${ids[0]} text cut at ${VIEW_TEXT_LIMIT} characters - read it whole with nightshift queue status ${ids[0]}`;
+  return `${ids.length} jobs have text cut at ${VIEW_TEXT_LIMIT} characters (${suggestionIdList(ids)}) - read each whole with nightshift queue status <id>`;
 }
 
 // One advisory line per distinct status outside the job status enum, naming it and how many rows carry it.
@@ -107,8 +120,7 @@ export async function queueView(readStore, { env = process.env, limit, blockedOn
   const { counts, blockedPending, activeJobs } = countsPart.value ?? { counts: zeroCounts(), blockedPending: 0, activeJobs: 0 };
   const sections = [jobsPart, countsPart, runnersPart, advisoriesPart].map(({ name, ok, ms, error }) => ({ name, ok, ms, error }));
   const advisories = advisoriesPart.value ?? [];
-  const suggestion = closeSuggestion(jobs);
-  const suggestions = [...(suggestion ? [suggestion] : []), ...unknownStatusAdvisories(jobs)];
+  const suggestions = [closeSuggestion(jobs), truncationSuggestion(jobs), ...unknownStatusAdvisories(jobs)].filter(Boolean);
   const idle = isViewIdle({ jobs, counts, activeJobs, runners, registryError, readable: jobsPart.ok && countsPart.ok });
   return { jobs, counts, blockedPending, activeJobs, runners, registryError, advisories, suggestions, idle, sections };
 }

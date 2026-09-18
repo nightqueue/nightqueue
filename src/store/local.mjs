@@ -62,6 +62,7 @@ function jobsDomain(env, db) {
     hasClaimablePending: async () => jobs.hasClaimablePending(env),
     peekNextJob: async () => jobs.peekNextJob(env),
     listWithSlug: async () => jobs.listJobsWithSlug(env, db()),
+    listOpenJobs: async () => jobs.listOpenJobs(env, db()),
     status: async (id) => jobs.jobStatus(id, env, db()),
   };
 }

@@ -41,7 +41,7 @@ function sleep(ms) {
 }
 
 // Probes a pid without touching it: `alive` when it answers, `foreign` when the system refuses to signal it (another owner), `gone` otherwise.
-function probePid(pid, killImpl) {
+export function probePid(pid, killImpl) {
   try {
     killImpl(pid, 0);
     return "alive";

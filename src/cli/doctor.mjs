@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
+import { basename, join } from "node:path";
 import {
   SHIM_NAME,
   binDir,
@@ -24,7 +25,9 @@ import { hookStatus, readHostSettings } from "../host/settings.mjs";
 import { PATH_MARK, binDirInPath, rcFilePath } from "../host/shell.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
 import { DB_USER_VERSION } from "../memory/schema.mjs";
-import { isRegistryFailure, listRunnerRecords, registryReadError } from "../queue/registry.mjs";
+import { isRegistryFailure, killProcess, listRunnerRecords, registryReadError } from "../queue/registry.mjs";
+import { readRunState } from "../queue/resume.mjs";
+import { canonicalPath, lockState, parseWorktreeList } from "../queue/worktree.mjs";
 import { openStoreReadOnly } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { orphanOrgRows, readPendingRename } from "./org.mjs";
@@ -487,6 +490,85 @@ function checkProjects(ctx) {
   return projects.map((project) => checkProject(ctx, project));
 }
 
+// Quotes a path for a POSIX shell, so a hint can be pasted as is whatever the path holds.
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+// Registered projects that have a `.claude/worktrees` directory, the only place the pipeline creates its worktrees.
+function projectsWithWorktrees(ctx) {
+  try {
+    return listProjects(loadConfig(ctx.env, { warn: () => {} }))
+      .filter((project) => project.exists)
+      .map((project) => ({ ...project, dir: join(project.path, ".claude", "worktrees") }))
+      .filter((project) => statSync(project.dir, { throwIfNoEntry: false })?.isDirectory() === true);
+  } catch {
+    return [];
+  }
+}
+
+// The worktrees a job that is not closed still names in the state of its run, canonical; read through a read-only store only.
+async function ownedWorktrees(ctx) {
+  if (!existsSync(dbPath(ctx.env))) return { paths: new Set(), error: null };
+  const store = openStoreReadOnly(ctx.env);
+  try {
+    const jobs = await store.jobs.listOpenJobs();
+    const recorded = jobs.map((job) => readRunState({ project: job.project, slug: job.slug, env: ctx.env })?.worktree);
+    return { paths: new Set(recorded.filter((path) => typeof path === "string" && path.trim()).map((path) => canonicalPath(path.trim()))), error: null };
+  } catch (err) {
+    return { paths: null, error: err?.message ?? String(err) };
+  } finally {
+    await store.close();
+  }
+}
+
+// The report of one directory under `.claude/worktrees` no open job owns, or null when it is owned or a live session holds it.
+function leftoverCheck(ctx, { project, dir, entries, owned }) {
+  const canonical = canonicalPath(dir);
+  if (owned.has(canonical)) return null;
+  const name = `worktree ${project.name}/${basename(dir)}`;
+  const entry = entries.find((candidate) => canonicalPath(candidate.path) === canonical);
+  if (!entry) return check(name, "warn", "left over: not registered in git (orphaned), no open job owns it", `rm -rf ${shellQuote(dir)}`);
+  const lock = lockState(entry, ctx.killImpl ?? killProcess);
+  if (lock === "live") return null;
+  const remove = `git -C ${shellQuote(project.path)} worktree remove ${shellQuote(dir)}`;
+  if (lock === "none") return check(name, "warn", "left over: registered in git, no open job owns it", remove);
+  const unlock = `git -C ${shellQuote(project.path)} worktree unlock ${shellQuote(dir)}`;
+  return check(name, "warn", `left over: registered in git and locked (${entry.locked || "no reason"}), no open job owns it`, `${unlock} && ${remove}`);
+}
+
+// Directories directly under a `.claude/worktrees`, symlinks left out.
+function worktreeDirs(dir) {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((dirent) => dirent.isDirectory())
+    .map((dirent) => join(dir, dirent.name));
+}
+
+// Reports every leftover under the `.claude/worktrees` of one project, or one warning when git or the directory cannot be read.
+function projectLeftovers(ctx, project, owned) {
+  const listed = runCommand(ctx, "git", ["worktree", "list", "--porcelain", "-z"], { cwd: project.path });
+  if (!listed.ok) return [check(`worktrees ${project.name}`, "warn", "git could not list the worktrees of the checkout", `inspect ${project.path}`)];
+  const entries = parseWorktreeList(listed.stdout);
+  try {
+    return worktreeDirs(project.dir)
+      .map((dir) => leftoverCheck(ctx, { project, dir, entries, owned }))
+      .filter(Boolean);
+  } catch (err) {
+    return [check(`worktrees ${project.name}`, "warn", `${project.dir} cannot be listed (${err?.message ?? String(err)})`, `read the permissions of ${project.dir}`)];
+  }
+}
+
+// Reports the directories under `.claude/worktrees` of each project that no open job owns, with the command that cleans each; it never cleans anything itself.
+async function checkWorktreeLeftovers(ctx) {
+  const projects = projectsWithWorktrees(ctx);
+  if (!projects.length) return [];
+  const owned = await ownedWorktrees(ctx);
+  if (owned.error !== null) {
+    return [check("worktrees", "warn", `the queue cannot be read (${owned.error}), so the owner of a worktree is unknown`, `inspect ${dbPath(ctx.env)}`)];
+  }
+  return projects.flatMap((project) => projectLeftovers(ctx, project, owned.paths));
+}
+
 // Reason the registry could not answer, short enough for a report line.
 function registryFailure(result) {
   if (result.missing) return "npm not found";
@@ -531,6 +613,7 @@ async function collect(ctx, values) {
     checkHomeMount(ctx),
     ...(await checkQueue(ctx)),
     ...checkProjects(ctx),
+    ...(await checkWorktreeLeftovers(ctx)),
     ...checkUpdates(ctx, values),
   ];
 }

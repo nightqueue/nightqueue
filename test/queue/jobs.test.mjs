@@ -462,6 +462,28 @@ test("the public view drops the prompt, truncates the free text by code point an
   assert.equal(jobView(null), null);
 });
 
+test("a cut field carries its truncated flag, a field that fits has no key, and the full view flags nothing", (t) => {
+  const env = makeQueue(t, "jobs-view-truncated-flags");
+  const id = enqueue(env);
+  const exact = "e".repeat(500);
+  openDb(env).prepare("UPDATE jobs SET notice_md = ?, result = ? WHERE id = ?").run("n".repeat(501), exact, id);
+
+  const listed = jobView(getJob(id, env));
+  assert.equal(listed.notice_truncated, true, "a cut notice was not flagged");
+  assert.equal("result_truncated" in listed, false, "a result of exactly 500 code points was flagged as cut");
+  assert.equal(listed.result, exact);
+
+  const full = jobView(getJob(id, env), { full: true });
+  assert.equal(full.notice_md, "n".repeat(501));
+  assert.equal("notice_truncated" in full, false, "the full view flagged a text it never cut");
+  assert.equal("result_truncated" in full, false);
+
+  openDb(env).prepare("UPDATE jobs SET notice_md = NULL, result = ? WHERE id = ?").run("r".repeat(600), id);
+  const resultCut = jobView(getJob(id, env));
+  assert.equal(resultCut.result_truncated, true);
+  assert.equal("notice_truncated" in resultCut, false, "a null notice was flagged as cut");
+});
+
 test("the listing is newest first with a clamped limit, and the counts cover every status", (t) => {
   const env = makeQueue(t, "jobs-list");
   const ids = [enqueue(env), enqueue(env), enqueue(env)];

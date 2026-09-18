@@ -6,7 +6,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { createPrStateCache } from "../../src/queue/pr-state.mjs";
 import { pruneDeadRunners, writeRunnerRecord } from "../../src/queue/registry.mjs";
-import { closeSuggestion, failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../../src/queue/view.mjs";
+import { closeSuggestion, failedCoreSection, jobDetailView, prUrlsOf, queueView, truncationSuggestion } from "../../src/queue/view.mjs";
 import { withReadOnlyStore } from "../../src/store/open.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
@@ -84,6 +84,46 @@ test("closeSuggestion aggregates every qualifying job into one line, and null an
     closeSuggestion(ten),
     "10 jobs have a merged PR (#10, #9, #8, #7, #6 and 5 more) - close them with nightshift queue close --merged",
   );
+});
+
+test("truncationSuggestion answers null for no cut job, names the one cut job, and folds several into one line", () => {
+  const cut = (id, flag = "notice_truncated") => ({ id, status: "gate", [flag]: true });
+
+  assert.equal(truncationSuggestion([]), null);
+  assert.equal(truncationSuggestion(undefined), null);
+  assert.equal(truncationSuggestion([{ id: 1, status: "gate", notice_md: "short" }]), null, "a job whose text fits earned a pointer");
+  assert.equal(truncationSuggestion([cut(4)]), "#4 text cut at 500 characters - read it whole with nightshift queue status 4");
+  assert.equal(truncationSuggestion([cut(4, "result_truncated")]), "#4 text cut at 500 characters - read it whole with nightshift queue status 4", "a cut result earned no pointer");
+  assert.equal(
+    truncationSuggestion([cut(9), { id: 8, status: "done" }, cut(7, "result_truncated")]),
+    "2 jobs have text cut at 500 characters (#9, #7) - read each whole with nightshift queue status <id>",
+  );
+
+  const seven = Array.from({ length: 7 }, (_, index) => cut(index + 1)).reverse();
+  assert.equal(
+    truncationSuggestion(seven),
+    "7 jobs have text cut at 500 characters (#7, #6, #5, #4, #3 and 2 more) - read each whole with nightshift queue status <id>",
+  );
+});
+
+test("queueView lists the truncation pointer after the close suggestion only when a listed text was cut", async (t) => {
+  const merged = "https://github.com/acme/api/pull/1";
+  const env = seedHome(t, "view-truncation", [{ status: "done", prUrl: merged }, { status: "gate" }, { status: "gate" }]);
+  openDb(env).prepare("UPDATE jobs SET notice_md = ? WHERE id = 2").run("x".repeat(1500));
+  openDb(env).prepare("UPDATE jobs SET notice_md = ? WHERE id = 3").run("fits");
+  const prStates = await seededCache({ [merged]: { ok: true, state: "MERGED" } }, env);
+
+  const view = await withReadOnlyStore(env, (store) => queueView(store, { env, prStates, killImpl: deadKill }));
+  assert.deepEqual(view.suggestions, [
+    "#1 PR merged - close it with nightshift queue close 1",
+    "#2 text cut at 500 characters - read it whole with nightshift queue status 2",
+  ]);
+  assert.equal(view.jobs.find((job) => job.id === 2).notice_truncated, true);
+  assert.equal("notice_truncated" in view.jobs.find((job) => job.id === 3), false, "a notice that fits carries the flag key");
+
+  const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, 2, { prStates }));
+  assert.equal(detail.notice_md, "x".repeat(1500), "the detail of one job was cut");
+  assert.equal("notice_truncated" in detail, false);
 });
 
 test("a status outside the job status enum earns its own advisory in suggestions, singular and plural correct, and never breaks the counts", async (t) => {

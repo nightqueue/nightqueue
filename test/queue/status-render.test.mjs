@@ -55,6 +55,37 @@ test("a row whose status is outside the job status enum renders marked, with one
   );
 });
 
+// A gate job whose notice is the given text.
+function seedGateWithNotice(env, notice) {
+  const id = seedJob(env, "gate");
+  openDb(env).prepare("UPDATE jobs SET notice_md = ? WHERE id = ?").run(notice, id);
+  return id;
+}
+
+test("a notice cut by the listing prints one pointer line naming queue status <id>, and a notice that fits prints none", async (t) => {
+  const env = makeHome(t, "status-render-truncated");
+  makeProject(t, env, "alpha");
+  const id = seedGateWithNotice(env, "x".repeat(1500));
+
+  const cut = await statusLines(env, { color: false });
+  assert.equal(cut.code, 0, cut.out.join("\n"));
+  assert.deepEqual(
+    cut.out.filter((line) => line.includes("text cut at")),
+    [`#${id} text cut at 500 characters - read it whole with nightshift queue status ${id}`],
+  );
+
+  const fitsEnv = makeHome(t, "status-render-fits");
+  makeProject(t, fitsEnv, "alpha");
+  seedGateWithNotice(fitsEnv, "needs a decision");
+  const fits = await statusLines(fitsEnv, { color: false });
+  assert.equal(fits.code, 0, fits.out.join("\n"));
+  assert.equal(fits.out.some((line) => line.includes("text cut at")), false, "a notice that fits printed a pointer");
+  const countsLine = "pending=0  running=0  done=0  gate=1  failed=0  cancelled=0  closed=0";
+  assert.equal(fits.out.at(-1), countsLine, "a listing where every text fits grew a line after the counts");
+  assert.deepEqual(cut.out.slice(-2), [countsLine, cut.out.at(-1)], "the pointer is not the one line after the counts");
+  assert.equal(cut.out.length, fits.out.length + 1, "the cut listing differs by more than the pointer line");
+});
+
 test("a single job with an unknown status is worded in the singular", async (t) => {
   const env = makeHome(t, "status-render-unknown-singular");
   makeProject(t, env, "alpha");

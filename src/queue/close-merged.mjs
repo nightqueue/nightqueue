@@ -1,3 +1,4 @@
+import { closeJobAndWorktree, worktreeEntry } from "./close.mjs";
 import { prStateKey } from "./pr-state.mjs";
 
 // At most this many pull requests are asked about in one invocation, whatever the size of the backlog.
@@ -62,16 +63,17 @@ function queriedOutcome(job, prStates) {
   return state === "merged" ? { merged: true, job } : { merged: false, id: job.id, reason: undeterminedReason(state) };
 }
 
-// Closes one candidate, turning a race with another close into a refusal instead of a thrown error.
-async function attemptClose(job, store) {
+// Closes one candidate and releases its worktree, turning a race with another close into a refusal instead of a thrown error.
+async function attemptClose(job, store, env) {
   try {
-    return { ok: true, job: await store.jobs.closeJob(job.id) };
+    const closed = await closeJobAndWorktree({ store, id: job.id, env });
+    return { ok: true, job: closed.job, worktree: worktreeEntry(closed.job, closed.worktree) };
   } catch (err) {
     return { ok: false, id: job.id, reason: err?.message ?? String(err) };
   }
 }
 
-// Closes every terminal job whose pull request the cache confirms merged, querying gh only for the gap and never past the bound; only a confirmed merge closes anything.
+// Closes every terminal job whose pull request the cache confirms merged, and releases its worktree, querying gh only for the gap and never past the bound; only a confirmed merge closes anything.
 export async function closeMerged({ store, prStates, env, limit = CLOSE_MERGED_QUERY_LIMIT, deadlineMs = CLOSE_MERGED_DEADLINE_MS, onChecking } = {}) {
   const candidates = await store.jobs.listCloseCandidates();
   const { confirmed, toQuery, undetermined } = triageCandidates(candidates, prStates, limit);
@@ -85,10 +87,12 @@ export async function closeMerged({ store, prStates, env, limit = CLOSE_MERGED_Q
 
   const closed = [];
   const refused = [];
+  const worktrees = [];
   for (const job of toClose) {
-    const result = await attemptClose(job, store);
+    const result = await attemptClose(job, store, env);
     if (result.ok) closed.push(result.job);
     else refused.push({ id: result.id, reason: result.reason });
+    if (result.worktree) worktrees.push(result.worktree);
   }
-  return { closed, refused, undetermined: stillUndetermined };
+  return { closed, refused, undetermined: stillUndetermined, worktrees };
 }

@@ -20,6 +20,7 @@ import {
   noticeNarration,
 } from "../queue/narrate.mjs";
 import { blockerLines, claimBlocker } from "../queue/claim.mjs";
+import { closeJobAndWorktree, worktreeEntry, worktreeLine } from "../queue/close.mjs";
 import { closeMerged, CLOSE_MERGED_DEADLINE_MS } from "../queue/close-merged.mjs";
 import { runMaintenance } from "../queue/maintenance.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
@@ -963,33 +964,44 @@ async function runCancel(argv, ctx) {
 
 const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" } };
 
-// Closes each id on its own store call, so one refusal never stops the ids that come after it.
+// Closes each id on its own store call, so one refusal never stops the ids that come after it; each closed job's worktree is released after its row closed.
 async function closeByIds(ids, ctx) {
   const store = openStore(ctx.env);
   const closed = [];
   const refused = [];
+  const worktrees = [];
   for (const id of ids) {
     try {
-      closed.push(await store.jobs.closeJob(id));
+      const { job, worktree } = await closeJobAndWorktree({ store, id, env: ctx.env });
+      closed.push(job);
+      if (worktree) worktrees.push(worktreeEntry(job, worktree));
     } catch (err) {
       refused.push({ id, reason: err?.message ?? String(err) });
     }
   }
-  return { closed, refused };
+  return { closed, refused, worktrees };
 }
 
-// Text lines of a multi-id close: one per id, closed or not.
-function closeByIdsLines({ closed, refused }) {
-  return [...closed.map((job) => `closed job #${job.id}`), ...refused.map(({ id, reason }) => `job #${id} not closed: ${reason}`)];
+// One `closed job #N` line per closed job, each followed by the line of the worktree it released, when it had one.
+function closedJobLines(closed, worktrees = []) {
+  return closed.flatMap((job) => {
+    const entry = worktrees.find((candidate) => candidate.id === job.id);
+    return entry ? [`closed job #${job.id}`, worktreeLine(entry)] : [`closed job #${job.id}`];
+  });
+}
+
+// Text lines of a multi-id close: one per id, closed or not, plus the worktree of each closed one.
+function closeByIdsLines({ closed, refused, worktrees }) {
+  return [...closedJobLines(closed, worktrees), ...refused.map(({ id, reason }) => `job #${id} not closed: ${reason}`)];
 }
 
 // Runs `queue close <id>...`, which takes every job it can from a terminal status to `closed` and reports the rest by name.
 async function runCloseByIds(positionals, values, ctx) {
   const ids = positionals.map((token) => requireInt("id", token));
-  const { closed, refused } = await closeByIds(ids, ctx);
-  if (values.json) ctx.out(JSON.stringify({ closed, refused }));
-  else for (const line of closeByIdsLines({ closed, refused })) ctx.out(line);
-  if (closed.length === 0) throw new UserError(refused.map(({ reason }) => reason).join("; "));
+  const result = await closeByIds(ids, ctx);
+  if (values.json) ctx.out(JSON.stringify(result));
+  else for (const line of closeByIdsLines(result)) ctx.out(line);
+  if (result.closed.length === 0) throw new UserError(result.refused.map(({ reason }) => reason).join("; "));
 }
 
 // The line `queue close --merged` prints before it asks gh, on stdout in text mode and never on the stdout of `--json`.
@@ -1004,11 +1016,11 @@ function isUnchecked(entry) {
   return typeof entry.reason === "string" && entry.reason.startsWith("not checked: over the limit");
 }
 
-// Text lines of `queue close --merged`: one per closed, refused and undetermined job, plus a summary when some were left unchecked.
-function closeMergedLines({ closed, refused, undetermined }) {
+// Text lines of `queue close --merged`: one per closed (with its worktree), refused and undetermined job, plus a summary when some were left unchecked.
+function closeMergedLines({ closed, refused, undetermined, worktrees }) {
   if (closed.length + refused.length + undetermined.length === 0) return ["nothing to close"];
   const lines = [
-    ...closed.map((job) => `closed job #${job.id}`),
+    ...closedJobLines(closed, worktrees),
     ...refused.map(({ id, reason }) => `job #${id} not closed: ${reason}`),
     ...undetermined.map(({ id, reason }) => `job #${id} not closed: ${reason}`),
   ];

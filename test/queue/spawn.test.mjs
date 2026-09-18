@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { jobLogPath, homeDir, runDir } from "../../src/config/paths.mjs";
@@ -344,4 +344,45 @@ test("a wait ceiling inherited from the parent environment is always overridden 
   await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(103, env), env, spawnImpl });
 
   assert.equal(capturedEnv.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS, "0", "an inherited wait ceiling leaked into the child");
+});
+
+// A fake child that prints one line, ends its stdout and closes only after the end was seen.
+function talkingChild() {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = () => {};
+  child.stdout.once("end", () => process.nextTick(() => child.emit("close", 0)));
+  process.nextTick(() => {
+    child.stderr.end();
+    child.stdout.end("hello from the child\n");
+  });
+  return child;
+}
+
+test("the attempt settles only once its log is on disk", async (t) => {
+  const env = makeHome(t, "spawn-log-on-disk");
+  const logPath = jobLogPath(104, env);
+
+  await spawnClaude({ prompt: "p", timeoutS: 30, logPath, env, spawnImpl: () => talkingChild() });
+
+  assert.match(readFileSync(logPath, "utf8"), /hello from the child/, "the attempt settled before its log was written");
+});
+
+test("a log directory removed under the attempt is reported, never an uncaught exception", async (t) => {
+  const env = makeHome(t, "spawn-log-removed");
+  const logPath = jobLogPath(105, env);
+  const reports = [];
+  t.mock.method(process.stderr, "write", (text) => reports.push(String(text)));
+
+  const pending = spawnClaude({ prompt: "p", timeoutS: 30, logPath, env, spawnImpl: () => fakeChild() });
+  rmSync(dirname(logPath), { recursive: true, force: true });
+  const result = await pending;
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(
+    reports.filter((line) => line.startsWith("nightshift: the log of the attempt could not be written")).map((line) => line.includes(logPath)),
+    [true],
+    `the lost log was not reported once on stderr: ${JSON.stringify(reports)}`,
+  );
 });

@@ -46,6 +46,7 @@
  * @property {() => Promise<boolean>} hasClaimablePending
  * @property {() => Promise<object|null>} peekNextJob
  * @property {() => Promise<object[]>} listWithSlug unfinished jobs that already have a run directory
+ * @property {() => Promise<object[]>} listOpenJobs every job that is not closed and already named its run, the owners of the worktrees `nightshift doctor` reports
  * @property {(id: number) => Promise<string|null>} status the status column of one job, or null when the row is gone
  */
 
@@ -182,6 +183,7 @@ export const STORE_CONTRACT = Object.freeze({
     "hasClaimablePending",
     "peekNextJob",
     "listWithSlug",
+    "listOpenJobs",
     "status",
   ],
   runs: ["logPipelineRun", "updateRunTelemetry"],
@@ -240,6 +242,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.getJob",
   "jobs.listJobs",
   "jobs.listWithSlug",
+  "jobs.listOpenJobs",
   "jobs.isJobActive",
   "jobs.countsByStatus",
   "jobs.countPendingBlocked",

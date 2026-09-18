@@ -66,7 +66,8 @@ const JOB_VIEW_COLUMNS = [
 ];
 const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "not_before"];
 const JOB_VIEW_TRUNCATED = ["notice_md", "result"];
-const VIEW_TEXT_LIMIT = 500;
+const TRUNCATION_FLAGS = { notice_md: "notice_truncated", result: "result_truncated" };
+export const VIEW_TEXT_LIMIT = 500;
 const LIST_LIMIT_RANGE = { min: 1, max: 50, fallback: 10 };
 
 // Requires a non-empty text field, because the column is NOT NULL and a raw SQLite error helps nobody.
@@ -160,15 +161,17 @@ function inTransaction(db, steps) {
   });
 }
 
-// Public projection of a job row: allowlisted columns, ISO timestamps, truncated free text, never the prompt.
-// The public view of a job: the prompt never, timestamps as ISO, and the free text cut for listings unless `full` asks for
-// the whole thing - the detail of one job (`queue status <id>`) needs the entire notice, because that is where a gate is answered from.
+// The public view of a job: never the prompt, ISO timestamps, and free text cut for listings unless `full`, a cut field flagged `notice_truncated`/`result_truncated`.
 export function jobView(row, { full = false } = {}) {
   if (!row) return null;
   const view = {};
   for (const column of JOB_VIEW_COLUMNS) view[column] = row[column] ?? null;
   for (const column of JOB_VIEW_TIMESTAMPS) view[column] = sqliteToIso(row[column]);
-  for (const column of JOB_VIEW_TRUNCATED) view[column] = full ? (row[column] ?? null) : truncateByCodePoint(row[column] ?? null, VIEW_TEXT_LIMIT);
+  for (const column of JOB_VIEW_TRUNCATED) {
+    const whole = row[column] ?? null;
+    view[column] = full ? whole : truncateByCodePoint(whole, VIEW_TEXT_LIMIT);
+    if (view[column] !== whole) view[TRUNCATION_FLAGS[column]] = true;
+  }
   return view;
 }
 
@@ -613,6 +616,11 @@ export function listCloseCandidates(env = process.env, db = openDb(env)) {
 // Unfinished jobs that already have a run directory; a job with no slug never ran, so no witness can speak for it.
 export function listJobsWithSlug(env = process.env, db = openDb(env)) {
   return db.prepare("SELECT id, project, slug FROM jobs WHERE status IN ('running', 'pending') AND slug IS NOT NULL").all();
+}
+
+// Every job that is not closed and already named its run, the owners `nightshift doctor` checks a worktree against.
+export function listOpenJobs(env = process.env, db = openDb(env)) {
+  return db.prepare("SELECT id, project, slug, status FROM jobs WHERE status <> 'closed' AND slug IS NOT NULL").all();
 }
 
 // Reads the status of a job on the connection the caller holds; a job whose row is gone has no status at all.

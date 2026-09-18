@@ -216,7 +216,10 @@ never registers anything: inside a job the call is refused. `prompt` is required
 unless `roadmap_item_id` names a roadmap item, which builds the prompt and owns
 the project (see [Decisions and roadmap](memory.md#decisions-and-roadmap)); passing both is refused.
 `queue_status` never returns the prompt of a job and truncates `notice_md` and `result` at 500
-characters and answers with the state of the runner next to the jobs; it is a pure read
+characters in a listing; a row whose text was cut carries `notice_truncated: true` or
+`result_truncated: true` (the key is absent when the text fits, and the detail of one job by
+`job_id` is never cut), and `suggestions` plus the `hint` gain one line naming
+`nightshift queue status <id>`, where the whole text is. It answers with the state of the runner next to the jobs; it is a pure read
 that never repairs nor prunes on call, and reports the last repair warning of the server's
 maintenance (once at start, then every 60 s, never inside a job) as `warning`. `queue_run`
 starts the runner detached and answers right away with the path of its log,

@@ -243,6 +243,11 @@ export function openAttemptLog(logPath, attempt) {
   return createWriteStream(logPath, { flags: "a" });
 }
 
+// Reports on stderr that the log of the attempt could not be written, since that log is what failed.
+function reportLogFailure(logPath, err) {
+  process.stderr.write(`nightshift: the log of the attempt could not be written (${logPath}): ${err?.message ?? String(err)}\n`);
+}
+
 // Delivers one line to the consumer, which is never allowed to bring the spawn down.
 function safeEmit(onLine, line) {
   try {
@@ -297,6 +302,8 @@ export function spawnClaude({
 } = {}) {
   return new Promise((settle) => {
     const stream = openAttemptLog(logPath, attempt);
+    const logClosed = new Promise((done) => stream.once("close", done));
+    stream.on("error", (err) => reportLogFailure(logPath, err));
     const resolved = resolveBinImpl(env);
     const args = buildArgs({ prompt, resumeSessionId, env, jobId });
     const childEnv = jobId === null ? { ...env, ...BG_WAIT_CEILING_ENV } : { ...env, ...jobIdentity(env, jobId), ...BG_WAIT_CEILING_ENV };
@@ -403,7 +410,7 @@ export function spawnClaude({
       killed = true;
       flushLines();
       stream.end();
-      settle(payload);
+      logClosed.then(() => settle(payload));
     };
     child.on("close", (code) => {
       finish({

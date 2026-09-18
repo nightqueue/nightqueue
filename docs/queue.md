@@ -245,6 +245,18 @@ they apply, follow the runner lines. `--json` carries
 `runner`: it is `runners[0]` (or the same all-null object as before when the list is
 empty), kept for one release and removed in the next minor - read `runners`.
 
+**A cut text says so, and says where the rest is.** A listing (the table, `--follow`,
+`--json`, the MCP `queue_status` without `job_id`, and the job each of `queue_cancel`,
+`queue_close` and `queue_retry` answers with) cuts `notice_md` and `result` at 500
+characters. A row whose text was cut carries `notice_truncated: true` or
+`result_truncated: true`; the key is absent when the text fits, so a listing where
+everything fits is the same as before. The listing then adds one line to `suggestions` -
+`#12 text cut at 500 characters - read it whole with nightshift queue status 12` for
+exactly one job, `3 jobs have text cut at 500 characters (#12, #9, #7) - read each whole
+with nightshift queue status <id>` for several - which the table prints under the counts
+and the MCP `hint` ends with. `nightshift queue status <id>` (and `queue_status` with
+`job_id`) is never cut.
+
 **Maintenance is not a read.** Pruning the registrations no process answers for (a
 registration owned by another user is left alone) and repairing a job from its witness
 belong to the runner, which does both at the start of every cycle, to the MCP server,
@@ -325,7 +337,12 @@ close 12` for exactly one, `3 jobs have a merged PR (#12, #9, #7) - close them w
 nightshift queue close --merged` for several - and closing it is the operator's act,
 either by id or in one call with `nightshift queue close --merged`, which queries gh
 only for what its own cache cannot already confirm, bounded to 10 pull requests and
-one 20 s deadline per call. gh is never asked about more than four pull requests at once. A one-shot
+one 20 s deadline per call. Closing a job, by id, with `--merged` or through the MCP
+`queue_close`, also releases its worktree once the row is closed (see *Worktrees* below): the
+text output adds `worktree removed: <path>` or `worktree kept: <path> - <reason>` right after
+`closed job #N`, `--json` carries `worktrees` (`[{ id, path, status, reason? }]`, one entry per
+closed job that had a worktree, `status` `removed` or `kept`), and `queue_close` answers
+`worktree` (`{ path, status, reason? }`, or `null`). A kept worktree never fails the close. gh is never asked about more than four pull requests at once. A one-shot
 `queue status` asks it before it prints and waits one overall 5 s deadline at most -
 what has not answered by then prints `unknown`, and the gh still running is stopped; `--follow` never waits for gh - it asks after drawing a
 frame and picks the answer up on a later one - and the MCP `queue_status` answers from
@@ -380,6 +397,24 @@ retried by the drain every 15 s until the first job finishes - degraded and visi
 `queue status`, never lost and never corrupt. Two same-project jobs whose slugs collide on
 one branch name fail the same safe way, one job at a time. The ``2 runners on `<project>` ``
 advisory line is what warns about it while it happens.
+
+**Worktrees.** A job's worktree lives as long as the job does. When a run ends `done`, the
+runner removes the worktree its run recorded (`state.json` `worktree`) with a plain
+`git worktree remove` from the project checkout - but only when it is clean (`git status
+--porcelain` is empty) and its branch is published (it has an upstream and `@{u}..HEAD` is
+empty) or a pull request is recorded. A lock left by a session whose pid is gone is lifted
+first; a lock held by a live pid, or one with no pid, keeps the worktree. A run that ends
+`gate` or `failed` keeps its worktree for the resume and for the session that attaches to it;
+`nightshift queue close` removes it later under the same rule. A worktree nightshift would refuse
+to remove - dirty, never pushed, ahead of its upstream, locked or unreadable - is named whatever
+the ending: the line `Worktree kept: <path> - <reason>.` is appended after a blank line to the
+notice that exists (the run's own, its fallback, or the notice the row already held when the
+run produced none), never replacing it, and a resumed run replaces its own earlier line instead
+of stacking it. A clean, published worktree kept only because the run stopped at `gate` or
+`failed` is not named. Nothing is ever forced, no branch is deleted and nothing on the remote is
+touched; ignored files inside a removed worktree (a local `.env`, build output) go with it.
+`nightshift doctor` lists what is left under `.claude/worktrees/` with the command that cleans it
+(see [Doctor](cli.md#doctor)).
 
 **Ownership and orphans.** A claim is one atomic `UPDATE` inside SQLite, so two
 runners never share a job and `queue.maxConcurrent` (no default: no ceiling) is, when set,

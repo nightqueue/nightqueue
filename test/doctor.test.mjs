@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -11,8 +11,12 @@ import { closeDb, openDb } from "../src/memory/db.mjs";
 import { addJob, claimJobById } from "../src/memory/jobs.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
+import { recordRunFields } from "../src/queue/run-state.mjs";
+import { addProject } from "../src/config/projects.mjs";
+import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { makeHostEnv, writeLegacyShim } from "../test-support/host.mjs";
 import { makeDir, makeProject, seedLegacyV8Home } from "../test-support/memory.mjs";
+import { addWorktree, deadPid, lockWorktree, publishedCheckout } from "../test-support/worktrees.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
 const SETUP = ["setup", "--no-path", "--no-embedding"];
@@ -365,3 +369,80 @@ test("--json is the only thing on stdout of the real process, and the exit code 
   assert.match(text.stdout, /^fail {2}config {16}config\.json not found/m);
   assert.equal(existsSync(join(configDir, "settings.json")), false);
 });
+
+// Registers a real published checkout as project `alpha` of the home, returning the resolved path the config records.
+function registerRealCheckout(t, env, name) {
+  const checkout = realpathSync(publishedCheckout(t, name).checkout);
+  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  return checkout;
+}
+
+test("doctor names each leftover under .claude/worktrees with its cleanup command, skips what an open job or a live session holds, and deletes nothing", async (t) => {
+  const host = makeHostEnv(t, "doctor-worktrees");
+  const checkout = registerRealCheckout(t, host.env, "doctor-worktrees");
+  const orphan = join(checkout, ".claude", "worktrees", "orphan");
+  mkdirSync(orphan, { recursive: true });
+  const ownerless = addWorktree(checkout, "ownerless");
+  const staleLocked = addWorktree(checkout, "stale-locked");
+  const stalePid = deadPid();
+  lockWorktree(checkout, staleLocked.path, stalePid);
+  const liveLocked = addWorktree(checkout, "live-locked");
+  lockWorktree(checkout, liveLocked.path, process.pid);
+  const gated = addWorktree(checkout, "gated");
+  const closed = addWorktree(checkout, "closed");
+  for (const [slug, status, path] of [["gated-run", "gate", gated.path], ["closed-run", "closed", closed.path]]) {
+    const { id } = addJob({ project: "alpha", prompt: `work of ${slug}` }, host.env);
+    openDb(host.env).prepare("UPDATE jobs SET status = ?, slug = ? WHERE id = ?").run(status, slug, id);
+    recordRunFields({ project: "alpha", slug, fields: { worktree: path }, env: host.env });
+  }
+  closeDb(host.env);
+
+  const { report } = await diagnose(host.env);
+
+  const rows = report.checks.filter((entry) => entry.name.startsWith("worktree"));
+  const quoted = (path) => `'${path}'`;
+  const remove = (path) => `git -C ${quoted(checkout)} worktree remove ${quoted(path)}`;
+  assert.deepEqual(
+    rows.sort((a, b) => a.name.localeCompare(b.name)),
+    [
+      check("worktree alpha/closed", "warn", "left over: registered in git, no open job owns it", remove(closed.path)),
+      check("worktree alpha/orphan", "warn", "left over: not registered in git (orphaned), no open job owns it", `rm -rf ${quoted(orphan)}`),
+      check("worktree alpha/ownerless", "warn", "left over: registered in git, no open job owns it", remove(ownerless.path)),
+      check(
+        "worktree alpha/stale-locked",
+        "warn",
+        `left over: registered in git and locked (claude agent agent-1 (pid ${stalePid})), no open job owns it`,
+        `git -C ${quoted(checkout)} worktree unlock ${quoted(staleLocked.path)} && ${remove(staleLocked.path)}`,
+      ),
+    ],
+  );
+  assert.equal(report.checks.some((entry) => entry.name.startsWith("worktree") && entry.status === "fail"), false, "a leftover failed the diagnosis");
+  for (const path of [orphan, ownerless.path, staleLocked.path, liveLocked.path, gated.path, closed.path]) {
+    assert.equal(existsSync(path), true, `the diagnosis deleted ${path}`);
+  }
+});
+
+test("doctor says so when the owner of a worktree cannot be known, or git cannot list the worktrees of a checkout", async (t) => {
+  const unreadable = makeHostEnv(t, "doctor-worktrees-unreadable");
+  const checkout = registerRealCheckout(t, unreadable.env, "doctor-worktrees-unreadable");
+  addWorktree(checkout, "some-run");
+  ensureHome(unreadable.env);
+  writeFileSync(dbPath(unreadable.env), "this is not a database");
+  const { report } = await diagnose(unreadable.env);
+  const row = checkOf(report, "worktrees");
+  assert.equal(row.status, "warn");
+  assert.match(row.detail, /^the queue cannot be read \(.+\), so the owner of a worktree is unknown$/);
+  assert.equal(report.checks.some((entry) => entry.name.startsWith("worktree ")), false, "a worktree was reported with an unknown owner");
+
+  const noGit = makeHostEnv(t, "doctor-worktrees-no-git");
+  const fake = realpathSync(makeProject(t, noGit.env, "alpha"));
+  mkdirSync(join(fake, ".claude", "worktrees", "some-run"), { recursive: true });
+  const { report: gitless } = await diagnose(noGit.env);
+  assert.deepEqual(checkOf(gitless, "worktrees alpha"), check("worktrees alpha", "warn", "git could not list the worktrees of the checkout", `inspect ${fake}`));
+  assert.equal(existsSync(join(fake, ".claude", "worktrees", "some-run")), true);
+});
+
+// One report row, in the shape the diagnosis prints.
+function check(name, status, detail, hint) {
+  return { name, status, detail, hint };
+}
