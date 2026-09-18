@@ -271,7 +271,9 @@ an event is printed: no prompt, no task summary, no output of a tool that
 worked; an MCP tool shows only a field that names its target (a project, a path,
 a pattern, a query), never the rest of its input. A line the narration cannot read is counted and reported at the end
 instead of vanishing. `--raw` prints the stream exactly as it was written,
-`--all` adds the text of the subagents, and the two together are a usage error.
+the first line of what each subagent says is printed in its lane (its own words are the
+readable intent of the tool calls under it), `--all` is kept for compatibility and changes
+nothing, and `--raw --all` together are a usage error.
 
 **`--follow` ends by itself.** It keeps reading the file by offset (no `watch`,
 no missed append), and stops as soon as the job leaves `running`, closing with

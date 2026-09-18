@@ -44,6 +44,7 @@ test("the default narration turns a whole attempt into one line per relevant eve
     "00:07  · run the suite — Bash npm test",
     "00:08  ✗ Bash failed: Exit code 1",
     "00:09  ▶ triager (phase 1, sonnet) — triage the bug",
+    "00:12      » Looking at the runner first.",
     "00:13      · Read index.mjs",
     "00:14  ◀ triager (phase 1, sonnet) completed (2m05s · 2 tools · 0 edits)",
     "02:14  » ## Notice",
@@ -81,14 +82,10 @@ test("a notice that fits is narrated whole, with no pointer to follow", () => {
   assert.equal(noticeLineOf(narrationStream(), { jobId: 7 }), "02:14  ℹ notice\n    The pull request is open and the checks are green.");
 });
 
-test("`--all` adds the text of the subagents, and nothing else", () => {
+test("the text of a subagent is narrated by default, indented in its lane, and `--all` changes nothing", () => {
   const lines = narrate(narrationStream());
-  const withAll = narrate(narrationStream(), { all: true });
-  assert.deepEqual(
-    withAll.filter((line) => !lines.includes(line)),
-    ["00:12      » Looking at the runner first."],
-  );
-  assert.equal(lines.some((line) => line.includes("Looking at the runner first")), false);
+  assert.ok(lines.includes("00:12      » Looking at the runner first."), lines.join("\n"));
+  assert.deepEqual(narrate(narrationStream(), { all: true }), lines);
 });
 
 test("a block that arrives after the lane closed is still a subagent block, not the orchestrator", () => {
@@ -102,15 +99,9 @@ test("a block that arrives after the lane closed is still a subagent block, not 
   ]);
 
   const lines = narrate(log);
-  assert.equal(lines.some((line) => line.includes("Subagent reasoning about the follow loop")), false, lines.join("\n"));
+  assert.ok(lines.includes("00:25      » Subagent reasoning about the follow loop."), lines.join("\n"));
   assert.ok(lines.includes("00:26      · Read late.mjs"), lines.join("\n"));
   assert.ok(lines.includes("00:27      ✗ Read failed: Exit code 1"), lines.join("\n"));
-
-  const withAll = narrate(log, { all: true });
-  assert.deepEqual(
-    withAll.filter((line) => !lines.includes(line)),
-    ["00:25      » Subagent reasoning about the follow loop."],
-  );
 });
 
 test("nothing sensitive of an event ever reaches a narrated line, with or without --all", () => {

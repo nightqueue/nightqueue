@@ -274,12 +274,14 @@ function narrateMarkers(state, text) {
   return out;
 }
 
-// What the orchestrator said, plus the markers of that same text; a subagent only speaks under `--all`.
+// What the orchestrator said, plus the markers of that same text. A subagent speaks too, indented in its lane: its own words
+// ("Now update the store") are the only readable intent its tool calls ever carry, since Edit/Read/Write have no description
+// and a model often leaves the one of Bash empty. Markers stay the orchestrator's alone.
 function narrateText(state, raw, lane) {
   const text = String(raw ?? "");
   if (!text.trim()) return [];
   const line = clip(firstLine(text), TEXT_LIMIT);
-  if (lane) return state.all ? [laneLine(state, "text", line, lane)] : [];
+  if (lane) return [laneLine(state, "text", line, lane)];
   return [narrationEvent(state, "text", line), ...narrateMarkers(state, text)];
 }
 
