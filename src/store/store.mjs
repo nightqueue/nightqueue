@@ -30,7 +30,8 @@
  * @property {(jobId: number, ref: object) => Promise<number>} linkPipelineRun
  * @property {(id: number, outcome: object) => Promise<boolean>} finishJob
  * @property {(id: number, options?: object) => Promise<object>} cancelJob
- * @property {(id: number) => Promise<object>} closeJob takes a `done` job to `closed` and refuses every other status by name
+ * @property {(id: number) => Promise<object>} closeJob takes a job from any terminal status (done, failed, gate, cancelled) to `closed`, and refuses `pending` and `running` by name
+ * @property {() => Promise<object[]>} listCloseCandidates terminal jobs that still carry a pull request url, the candidates `queue close --merged` may confirm and close
  * @property {(id: number, options?: object) => Promise<object>} retryJob
  * @property {(id: number) => Promise<object|null>} getJob
  * @property {(options?: object) => Promise<object[]>} listJobs
@@ -166,6 +167,7 @@ export const STORE_CONTRACT = Object.freeze({
     "finishJob",
     "cancelJob",
     "closeJob",
+    "listCloseCandidates",
     "retryJob",
     "getJob",
     "listJobs",

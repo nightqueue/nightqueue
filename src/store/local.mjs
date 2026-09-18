@@ -46,6 +46,7 @@ function jobsDomain(env, db) {
     finishJob: async (id, outcome) => writeJobStatus({ id, status: outcome?.status, write: () => jobs.finishJob(id, outcome, env), env }),
     cancelJob: async (id, options) => jobs.cancelJob(id, options, env),
     closeJob: async (id) => jobs.closeJob(id, env),
+    listCloseCandidates: async () => jobs.listCloseCandidates(env, db()),
     retryJob: async (id, options) => jobs.retryJob(id, options, env),
     getJob: async (id) => jobs.getJob(id, env, db()),
     listJobs: async (options) => jobs.listJobs(options, env, db()),

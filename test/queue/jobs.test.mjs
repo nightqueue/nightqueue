@@ -16,6 +16,7 @@ import {
   getJob,
   hasClaimablePending,
   jobView,
+  listCloseCandidates,
   listJobs,
   parkJob,
   peekNextJob,
@@ -476,7 +477,7 @@ test("the listing is newest first with a clamped limit, and the counts cover eve
   assert.equal("merged" in countsByStatus(env), false, "the retired merged status is still counted");
 });
 
-test("close takes a done job to closed, keeps pr_url and finished_at, and refuses every other status by name without writing", (t) => {
+test("close takes any terminal job to closed, keeps pr_url and finished_at, and refuses pending and running by name without writing", (t) => {
   const env = makeQueue(t, "jobs-close");
   const delivered = enqueue(env);
   openDb(env)
@@ -488,18 +489,43 @@ test("close takes a done job to closed, keeps pr_url and finished_at, and refuse
   assert.equal(getJob(delivered, env).finished_at, GATED_FINISHED_AT, "the close rewrote finished_at");
   assert.deepEqual({ merged_at: closed.merged_at, merge_sha: closed.merge_sha }, { merged_at: null, merge_sha: null });
 
-  for (const status of ["pending", "running", "gate", "failed", "cancelled"]) {
+  for (const status of ["failed", "gate", "cancelled"]) {
     const id = enqueue(env);
     openDb(env).prepare("UPDATE jobs SET status = ? WHERE id = ?").run(status, id);
-    const before = getJob(id, env);
-    assert.throws(() => closeJob(id, env), new RegExp(`cannot be closed from status \`${status}\`; only a \`done\` job is closed`));
-    assert.deepEqual(getJob(id, env), before, `the refused close wrote to a ${status} job`);
+    assert.equal(closeJob(id, env).status, "closed", `close refused a ${status} job`);
   }
-  const before = getJob(delivered, env);
+
+  const pending = enqueue(env);
+  assert.throws(() => closeJob(pending, env), /job `\d+` is pending; the queue still owes work for it/);
+  assert.equal(getJob(pending, env).status, "pending", "the refused close wrote to a pending job");
+
+  const running = enqueue(env);
+  claimJobById(running, { worker: WORKER, cap: CAP }, env);
+  const before = getJob(running, env);
+  assert.throws(() => closeJob(running, env), /is running with a live lease on worker/);
+  assert.deepEqual(getJob(running, env), before, "the refused close wrote to a running job");
+
+  const beforeClosed = getJob(delivered, env);
   assert.throws(() => closeJob(delivered, env), /job `\d+` is already closed/);
-  assert.deepEqual(getJob(delivered, env), before, "the refused close wrote to a closed job");
+  assert.deepEqual(getJob(delivered, env), beforeClosed, "the refused close wrote to a closed job");
   assert.throws(() => closeJob(9999, env), /unknown job `9999`/);
   assert.throws(() => closeJob(0, env), /positive integer job id/);
+});
+
+test("listCloseCandidates lists every terminal job with a pull request url, newest first, and never a running or pending one", (t) => {
+  const env = makeQueue(t, "jobs-close-candidates");
+  const done = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/1", done);
+  const failed = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'failed', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/2", failed);
+  const doneNoPr = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(doneNoPr);
+  const pending = enqueue(env);
+  const running = enqueue(env);
+  claimJobById(running, { worker: WORKER, cap: CAP }, env);
+
+  assert.deepEqual(listCloseCandidates(env).map((row) => row.id), [failed, done]);
+  assert.equal(listCloseCandidates(env).some((row) => [doneNoPr, pending, running].includes(row.id)), false);
 });
 
 test("the blocked-pending count and listing only ever see a pending job with a block code, never a running or done one", (t) => {

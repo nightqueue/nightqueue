@@ -290,8 +290,9 @@ which is what to turn on if the output ever stalls again.
 
 **The seven states.** A job is `pending` while it waits, `running` while a runner
 owns it under a lease, and then one of five final states: `done` (the run
-delivered a pull request URL), `closed` (the operator closed a delivered job
-with `nightshift queue close`), `gate` (the pipeline stopped asking for a human decision - a recorded
+delivered a pull request URL), `closed` (the operator closed a job out of any
+terminal status - `done`, `failed`, `gate` or `cancelled` - with `nightshift
+queue close <id>...` or `--merged`), `gate` (the pipeline stopped asking for a human decision - a recorded
 `outcome.status: "gate"` in `state.json`, or the `## Requires user
 confirmation` marker in the stream), `failed` (a non-zero exit, a timeout, an
 orphan that had already spent its attempts, or a clean exit that ended with
@@ -317,10 +318,14 @@ request is never asked about again, an open, conflicted or draft one after 60 s,
 `unknown` one after 8 s, and a read gh could not answer is held back for 30 s and keeps
 the last state it had. A pull request nobody asked about yet reads `unknown`. The `PR`
 cell shows it next to the URL (`https://github.com/acme/api/pull/42 (merged)`), and
-`--json` carries `jobs[].pr_state` plus `suggestions`. A `done` job whose pull request
-is merged is never changed by a read: the listing adds the line
-`#12 PR merged - close it with nightshift queue close 12`, and closing it is the
-operator's act. gh is never asked about more than four pull requests at once. A one-shot
+`--json` carries `jobs[].pr_state` plus `suggestions`. A terminal job (`done`, `failed`,
+`gate` or `cancelled`) whose pull request is merged is never changed by a read: the
+listing adds one aggregated line - `#12 PR merged - close it with nightshift queue
+close 12` for exactly one, `3 jobs have a merged PR (#12, #9, #7) - close them with
+nightshift queue close --merged` for several - and closing it is the operator's act,
+either by id or in one call with `nightshift queue close --merged`, which queries gh
+only for what its own cache cannot already confirm, bounded to 10 pull requests and
+one 20 s deadline per call. gh is never asked about more than four pull requests at once. A one-shot
 `queue status` asks it before it prints and waits one overall 5 s deadline at most -
 what has not answered by then prints `unknown`, and the gh still running is stopped; `--follow` never waits for gh - it asks after drawing a
 frame and picks the answer up on a later one - and the MCP `queue_status` answers from

@@ -853,12 +853,15 @@ test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a
   assert.deepEqual(JSON.parse(gatedRow.result), { status: "gate", prUrl: null, cancelledFrom: "gate" });
 });
 
-test("queue_close closes a done job and refuses a gated one by name", async (t) => {
+test("queue_close closes a failed job and refuses a pending and a running one by name", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-close");
   const done = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/42", done);
-  const gated = addJob({ project: "alpha", prompt: "wait for a human" }, env).id;
-  openDb(env).prepare("UPDATE jobs SET status = 'gate', finished_at = ? WHERE id = ?").run(GATED_FINISHED_AT, gated);
+  const failed = addJob({ project: "alpha", prompt: "fix the parser" }, env).id;
+  openDb(env).prepare("UPDATE jobs SET status = 'failed', finished_at = ? WHERE id = ?").run(GATED_FINISHED_AT, failed);
+  const pending = addJob({ project: "alpha", prompt: "wait for a human" }, env).id;
+  const running = addJob({ project: "alpha", prompt: "keep running" }, env).id;
+  claimJobById(running, { worker: "host:1", cap: 4 }, env);
   const client = await connect(t, env);
 
   const closed = payloadOf(await client.callTool({ name: "queue_close", arguments: { job_id: done } }));
@@ -866,11 +869,20 @@ test("queue_close closes a done job and refuses a gated one by name", async (t) 
   assert.deepEqual({ status: closed.job.status, pr_url: closed.job.pr_url }, { status: "closed", pr_url: "https://github.com/acme/api/pull/42" });
   assert.equal(getJob(done, env).status, "closed");
 
-  const before = getJob(gated, env);
-  const refused = await client.callTool({ name: "queue_close", arguments: { job_id: gated } });
-  assert.equal(refused.isError, true);
-  assert.match(textOf(refused), /cannot be closed from status `gate`; only a `done` job is closed/);
-  assert.deepEqual(getJob(gated, env), before, "the refused close wrote to the row");
+  const closedFailed = payloadOf(await client.callTool({ name: "queue_close", arguments: { job_id: failed } }));
+  assert.equal(closedFailed.job.status, "closed", "a failed job was refused");
+
+  const beforePending = getJob(pending, env);
+  const refusedPending = await client.callTool({ name: "queue_close", arguments: { job_id: pending } });
+  assert.equal(refusedPending.isError, true);
+  assert.match(textOf(refusedPending), /is pending; the queue still owes work for it/);
+  assert.deepEqual(getJob(pending, env), beforePending, "the refused close wrote to the pending row");
+
+  const beforeRunning = getJob(running, env);
+  const refusedRunning = await client.callTool({ name: "queue_close", arguments: { job_id: running } });
+  assert.equal(refusedRunning.isError, true);
+  assert.match(textOf(refusedRunning), /is running with a live lease on worker/);
+  assert.deepEqual(getJob(running, env), beforeRunning, "the refused close wrote to the running row");
 });
 
 test("queue_close refuses the home of the runner from inside a job, like queue_cancel", async (t) => {

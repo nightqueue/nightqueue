@@ -529,18 +529,24 @@ export function cancelJob(id, { reason } = {}, env = process.env) {
   throw new UserError(cancelRefusal(jobId, getJob(jobId, env)));
 }
 
+// The terminal statuses a close may leave from; the same list the WHERE of the close and the candidates of `--merged` both filter by.
+const CLOSABLE_STATUSES = ["done", "failed", "gate", "cancelled"];
+const CLOSABLE_PLACEHOLDERS = CLOSABLE_STATUSES.map(() => "?").join(", ");
+
 // Explains, from the current row, why a close was refused; it never decides anything, only phrases it.
 function closeRefusal(id, row) {
   if (!row) return `unknown job \`${id}\``;
   if (row.status === "closed") return `job \`${id}\` is already closed`;
-  return `job \`${id}\` cannot be closed from status \`${row.status}\`; only a \`done\` job is closed`;
+  if (row.status === "running") return `job \`${id}\` is running with a live lease on worker \`${row.worker}\`; stop that runner first`;
+  if (row.status === "pending") return `job \`${id}\` is pending; the queue still owes work for it`;
+  return `job \`${id}\` cannot be closed from status \`${row.status}\``;
 }
 
-// Closes a delivered job, the operator's act that ends its life; the decision is in the WHERE and a refusal writes nothing.
+// Closes a job from any terminal status (done, failed, gate, cancelled), the operator's act that ends its life; the decision is in the WHERE and a refusal writes nothing.
 export function closeJob(id, env = process.env) {
-  const statement = openDb(env).prepare("UPDATE jobs SET status = 'closed' WHERE id = ? AND status = 'done' RETURNING *");
+  const statement = openDb(env).prepare(`UPDATE jobs SET status = 'closed' WHERE id = ? AND status IN (${CLOSABLE_PLACEHOLDERS}) RETURNING *`);
   const jobId = requireId(id);
-  const row = withWriteRetry(() => statement.get(jobId));
+  const row = withWriteRetry(() => statement.get(jobId, ...CLOSABLE_STATUSES));
   if (row) return jobView(row);
   throw new UserError(closeRefusal(jobId, getJob(jobId, env)));
 }
@@ -596,6 +602,13 @@ export function listJobs({ limit, blockedOnly } = {}, env = process.env, db = op
   const clamped = optionalRangedInt("limit", limit, LIST_LIMIT_RANGE);
   const where = blockedOnly === true ? `WHERE ${BLOCKED_PENDING_PREDICATE} ` : "";
   return db.prepare(`SELECT * FROM jobs ${where}ORDER BY id DESC LIMIT ?`).all(clamped);
+}
+
+// Terminal jobs that still carry a pull request url, the candidates `queue close --merged` may confirm and close.
+export function listCloseCandidates(env = process.env, db = openDb(env)) {
+  return db
+    .prepare(`SELECT * FROM jobs WHERE status IN (${CLOSABLE_PLACEHOLDERS}) AND pr_url IS NOT NULL ORDER BY id DESC`)
+    .all(...CLOSABLE_STATUSES);
 }
 
 // Unfinished jobs that already have a run directory; a job with no slug never ran, so no witness can speak for it.

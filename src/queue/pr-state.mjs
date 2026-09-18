@@ -101,6 +101,12 @@ export function createPrStateCache({ viewImpl = ghPrViewAsync, now = Date.now } 
     return entries.get(key)?.state ?? "unknown";
   }
 
+  // Whether the cache already holds an unexpired answer for this pull request, without asking gh: what a caller counts before it queries.
+  function freshFor(url) {
+    const key = prStateKey(url);
+    return key !== null && isFresh(key);
+  }
+
   async function refresh(urls, env) {
     if (env?.NIGHTSHIFT_NO_PR_CHECK === "1" || disposed) return;
     const touched = new Map();
@@ -118,5 +124,5 @@ export function createPrStateCache({ viewImpl = ghPrViewAsync, now = Date.now } 
     controller.abort();
   }
 
-  return { stateOf, refresh, dispose };
+  return { stateOf, isFresh: freshFor, refresh, dispose };
 }
