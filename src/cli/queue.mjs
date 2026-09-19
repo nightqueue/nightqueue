@@ -33,7 +33,7 @@ import {
 import { closeMerged, CLOSE_MERGED_DEADLINE_MS } from "../queue/close-merged.mjs";
 import { runMaintenance } from "../queue/maintenance.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
-import { closeSuggestion, failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
+import { closeSuggestion, failedCoreSection, jobDetailView, prUrlsOf, queueView, truncationSuggestion } from "../queue/view.mjs";
 import {
   liveRunnersReport,
   removeOwnRunnerRecord,
@@ -655,7 +655,7 @@ function emptyQueueLine(blockedOnly) {
   return blockedOnly ? "no blocked job in the queue" : "no jobs in the queue";
 }
 
-// Lines of a queue view, pure formatting: the runner lines, the advisory lines, table, counts, the suggestions and the backlog hint, in that order.
+// Lines of a queue view, pure formatting: the runner lines, the advisory lines, table, counts, the suggestions (minus the text-cut one, since the table clips by width) and the backlog hint, in that order.
 function renderQueueView(view, ctx, { blockedOnly = false } = {}) {
   const readable = view.registryError === null;
   const lines = readable ? formatRunners(view.runners, view.activeJobs, ctx.env) : [unreadableRegistryLine(view.registryError)];
@@ -663,8 +663,10 @@ function renderQueueView(view, ctx, { blockedOnly = false } = {}) {
   if (!sectionOk(view, "jobs")) return lines;
   if (!view.jobs.length) return [...lines, emptyQueueLine(blockedOnly)];
   lines.push(...formatTable(view.jobs, ctx));
-  if (!sectionOk(view, "counts")) return [...lines, ...view.suggestions];
-  lines.push(countsLine(view.counts, view.blockedPending), ...view.suggestions);
+  const truncation = truncationSuggestion(view.jobs);
+  const suggestions = view.suggestions.filter((line) => line !== truncation);
+  if (!sectionOk(view, "counts")) return [...lines, ...suggestions];
+  lines.push(countsLine(view.counts, view.blockedPending), ...suggestions);
   const backlog = readable ? backlogLine({ activeJobs: view.activeJobs, counts: view.counts, runners: view.runners, jobs: view.jobs }) : null;
   if (backlog) lines.push(backlog);
   return lines;

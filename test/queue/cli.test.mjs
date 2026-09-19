@@ -860,7 +860,14 @@ test("a gate notice near three kilobytes is returned whole by `queue status <id>
 
   const listed = runCli(env, ["queue", "status"]);
   assert.equal(listed.status, 0, listed.stderr);
-  assert.match(listed.stdout, new RegExp(`#${id} text cut at 500 characters - read it whole with nightshift queue status ${id}`));
+  assert.equal(listed.stdout.includes("text cut at"), false, "the human table printed the truncation pointer");
+
+  const listedJson = runCli(env, ["queue", "status", "--json"]);
+  assert.equal(listedJson.status, 0, listedJson.stderr);
+  assert.deepEqual(
+    JSON.parse(listedJson.stdout).suggestions,
+    [`#${id} text cut at 500 characters - read it whole with nightshift queue status ${id}`],
+  );
 });
 
 test("queue retry says where the whole notice is read when the refusal had to cut it", (t) => {

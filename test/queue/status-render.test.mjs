@@ -62,28 +62,41 @@ function seedGateWithNotice(env, notice) {
   return id;
 }
 
-test("a notice cut by the listing prints one pointer line naming queue status <id>, and a notice that fits prints none", async (t) => {
+test("a notice cut by the listing prints no pointer line in the human table, since the table itself never shows the 500-char cut", async (t) => {
   const env = makeHome(t, "status-render-truncated");
   makeProject(t, env, "alpha");
-  const id = seedGateWithNotice(env, "x".repeat(1500));
+  seedGateWithNotice(env, "x".repeat(1500));
 
   const cut = await statusLines(env, { color: false });
   assert.equal(cut.code, 0, cut.out.join("\n"));
-  assert.deepEqual(
-    cut.out.filter((line) => line.includes("text cut at")),
-    [`#${id} text cut at 500 characters - read it whole with nightshift queue status ${id}`],
-  );
+  assert.equal(cut.out.some((line) => line.includes("text cut at")), false, "the human table printed the truncation pointer");
 
   const fitsEnv = makeHome(t, "status-render-fits");
   makeProject(t, fitsEnv, "alpha");
   seedGateWithNotice(fitsEnv, "needs a decision");
   const fits = await statusLines(fitsEnv, { color: false });
   assert.equal(fits.code, 0, fits.out.join("\n"));
-  assert.equal(fits.out.some((line) => line.includes("text cut at")), false, "a notice that fits printed a pointer");
   const countsLine = "pending=0  running=0  done=0  gate=1  failed=0  cancelled=0  closed=0";
   assert.equal(fits.out.at(-1), countsLine, "a listing where every text fits grew a line after the counts");
-  assert.deepEqual(cut.out.slice(-2), [countsLine, cut.out.at(-1)], "the pointer is not the one line after the counts");
-  assert.equal(cut.out.length, fits.out.length + 1, "the cut listing differs by more than the pointer line");
+  assert.equal(cut.out.at(-1), countsLine, "the cut listing grew a line after the counts, though the pointer is dropped");
+  assert.equal(cut.out.length, fits.out.length, "the cut and the fitting listing now differ in line count");
+});
+
+test("nine cut notices print no text-cut line in the table, while --json keeps the suggestion", async (t) => {
+  const env = makeHome(t, "status-render-nine-cut");
+  makeProject(t, env, "alpha");
+  for (let i = 0; i < 9; i += 1) seedGateWithNotice(env, "x".repeat(1500));
+
+  const table = await statusLines(env, { color: false });
+  assert.equal(table.code, 0, table.out.join("\n"));
+  assert.equal(table.out.some((line) => line.includes("text cut at")), false, "the human table printed the truncation pointer");
+
+  const out = [];
+  const ctx = { ...defaultContext(), env, out: (line) => out.push(line), err: () => {} };
+  assert.equal(await run(["queue", "status", "--json"], ctx), 0);
+  const view = JSON.parse(out.join("\n"));
+  assert.equal(view.jobs.filter((job) => job.notice_truncated === true).length, 9);
+  assert.equal(view.suggestions.filter((line) => line.startsWith("9 jobs have text cut at 500 characters")).length, 1, view.suggestions.join("\n"));
 });
 
 test("a single job with an unknown status is worded in the singular", async (t) => {
