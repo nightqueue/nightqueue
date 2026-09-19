@@ -3,7 +3,15 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { dbPath } from "../../src/config/paths.mjs";
-import { blobToVector, closeDb, migrateIfOutdated, openDb, resolveProjectName, vectorToBlob } from "../../src/memory/db.mjs";
+import {
+  DB_USER_VERSION,
+  blobToVector,
+  closeDb,
+  migrateIfOutdated,
+  openDb,
+  resolveProjectName,
+  vectorToBlob,
+} from "../../src/memory/db.mjs";
 import { listDecisions, saveDecision } from "../../src/memory/decisions.mjs";
 import { DOWNGRADE_TO_V5, makeHome, makeProject } from "../../test-support/memory.mjs";
 
@@ -45,6 +53,7 @@ const DECISION_COLUMNS = [
   "embedding_model",
   "scope",
   "org",
+  "job_id",
 ];
 
 const ROADMAP_COLUMNS = [
@@ -150,13 +159,13 @@ test("the migration is idempotent and keeps the data across a reopen", (t) => {
   const env = makeHome(t, "db-migrate");
   const first = openDb(env);
   const id = insertLesson(first, { title: "the migration keeps the rows" });
-  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 10);
+  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 11);
   assert.deepEqual(columnsOf(first, "lessons"), LESSON_COLUMNS);
   closeDb(env);
 
   const second = openDb(env);
   assert.notEqual(second, first);
-  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 10);
+  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 11);
   assert.deepEqual(columnsOf(second, "lessons"), LESSON_COLUMNS);
   assert.equal(second.prepare("SELECT title FROM lessons WHERE id = ?").get(id).title, "the migration keeps the rows");
   assert.deepEqual(matchIds(second, "lessons_fts", '"migration"'), [id]);
@@ -210,7 +219,7 @@ test("the migration from user_version 2 keeps every row and adds the decisions s
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 10, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 11, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
     assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
     assert.ok(columnsOf(db, "jobs").includes("tier"), `jobs.tier missing on pass ${pass}`);
@@ -249,7 +258,7 @@ test("the migration from user_version 3 adds the tier columns once and keeps eve
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 10, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 11, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     const row = db.prepare("SELECT * FROM jobs").get();
     assert.equal(row.prompt, "fix the worker");
@@ -261,7 +270,7 @@ test("the migration from user_version 3 adds the tier columns once and keeps eve
   }
 });
 
-test("a home seeded at v9 with merged_at and merge_sha populated opens at v10 without them, and a second open is a no-op", (t) => {
+test("a home seeded at v9 with merged_at and merge_sha populated opens at v11 without them, and a second open is a no-op", (t) => {
   const env = makeHome(t, "db-migrate-v9-drop-merge");
   const first = openDb(env);
   first.exec("ALTER TABLE jobs ADD COLUMN merged_at TEXT");
@@ -273,7 +282,7 @@ test("a home seeded at v9 with merged_at and merge_sha populated opens at v10 wi
   closeDb(env);
 
   const opened = openDb(env);
-  assert.equal(opened.prepare("PRAGMA user_version").get().user_version, 10);
+  assert.equal(opened.prepare("PRAGMA user_version").get().user_version, 11);
   assert.equal(columnsOf(opened, "jobs").includes("merged_at"), false);
   assert.equal(columnsOf(opened, "jobs").includes("merge_sha"), false);
   const row = opened.prepare("SELECT project, prompt, status FROM jobs WHERE id = ?").get(Number(inserted.lastInsertRowid));
@@ -281,7 +290,7 @@ test("a home seeded at v9 with merged_at and merge_sha populated opens at v10 wi
   closeDb(env);
 
   const reopened = openDb(env);
-  assert.equal(reopened.prepare("PRAGMA user_version").get().user_version, 10);
+  assert.equal(reopened.prepare("PRAGMA user_version").get().user_version, 11);
   assert.equal(columnsOf(reopened, "jobs").includes("merged_at"), false);
   assert.equal(columnsOf(reopened, "jobs").includes("merge_sha"), false);
 });
@@ -312,7 +321,7 @@ test("the migration to v10 turns a merged row into closed, drops pr_checked_at/m
 
   for (const pass of [1, 2]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 10, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 11, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     assert.deepEqual(jobStatuses(db), ["closed", "done"], `pass ${pass}`);
     const row = db.prepare("SELECT pr_url FROM jobs WHERE id = ?").get(merged);
@@ -359,7 +368,7 @@ test("the migration from user_version 4 adds the tier columns once and keeps eve
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 10, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 11, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     assert.ok(columnsOf(db, "pipeline_runs").includes("tier_operator"), `pipeline_runs.tier_operator missing on pass ${pass}`);
     assert.ok(
@@ -389,7 +398,7 @@ test("the migration from user_version 5 gives every existing row the project sco
   closeDb(env);
 
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 10);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 11);
   assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
   assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
   assert.equal(db.prepare("SELECT COUNT(*) AS total FROM decisions WHERE scope = 'project' AND org IS NULL").get().total, 3);
@@ -514,4 +523,24 @@ test("a project reference resolves by name, by path inside it, and never guesses
   assert.equal(resolveProjectName("nightshift-unknown-project", env), null);
   assert.equal(resolveProjectName("", env), null);
   assert.equal(resolveProjectName(undefined, env), null);
+});
+
+test("a v10 database gains decisions.job_id and its index, keeping every decision with no job", (t) => {
+  const env = makeHome(t, "db-migrate-v10-job-id");
+  makeProject(t, env, "alpha");
+  const first = openDb(env);
+  const saved = saveDecision({ project: "alpha", title: "t", context: "c", decision: "d" }, env);
+  first.exec("DROP INDEX decisions_job_idx; ALTER TABLE decisions DROP COLUMN job_id; PRAGMA user_version = 10;");
+  closeDb(env);
+
+  assert.equal(DB_USER_VERSION, 11);
+  for (const pass of [1, 2]) {
+    const db = openDb(env);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 11, `pass ${pass}`);
+    assert.ok(columnsOf(db, "decisions").includes("job_id"), `decisions.job_id missing on pass ${pass}`);
+    const indexes = db.prepare("PRAGMA index_list(decisions)").all().map((index) => index.name);
+    assert.ok(indexes.includes("decisions_job_idx"), `job index missing on pass ${pass}: ${indexes.join(", ")}`);
+    assert.equal(db.prepare("SELECT job_id FROM decisions WHERE id = ?").get(saved.id).job_id, null);
+    closeDb(env);
+  }
 });

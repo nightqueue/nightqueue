@@ -3,7 +3,13 @@ import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
 import { getLesson, saveLesson, setLessonEmbedding } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
-import { recallLessons, recallMemories, searchLessonsLexical } from "../../src/memory/search.mjs";
+import {
+  coverageFloor,
+  informativeCap,
+  recallLessons,
+  recallMemories,
+  searchLessonsLexical,
+} from "../../src/memory/search.mjs";
 import { fakeEmbedder, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const FAKE_MODEL = "fake-embedder@v1";
@@ -229,4 +235,18 @@ test("the memory recall searches with a query and lists the recent ones without 
   );
   const recent = await recallMemories({ project: "alpha" }, env);
   assert.deepEqual(recent.map((row) => row.key).sort(), ["cache", "database", "deploy"]);
+});
+
+test("the coverage helpers keep the lesson recall formula: a cap of at least 8 and a floor of up to 3 tokens", () => {
+  assert.equal(informativeCap(0), 8);
+  assert.equal(informativeCap(24), 8);
+  assert.equal(informativeCap(40), 10);
+  assert.equal(informativeCap(101), 25);
+  assert.equal(coverageFloor(0, 1), 1);
+  assert.equal(coverageFloor(1, 1), 1);
+  assert.equal(coverageFloor(1, 3), 2);
+  assert.equal(coverageFloor(2, 2), 2);
+  assert.equal(coverageFloor(3, 5), 2);
+  assert.equal(coverageFloor(4, 5), 3);
+  assert.equal(coverageFloor(12, 16), 3);
 });

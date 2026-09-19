@@ -118,6 +118,17 @@ export function recentLessons({ project, target, excludeIds, limit = 12 } = {}, 
     .all(projectName, ...targetPart.binds, ...excludePart.binds, projectName, size);
 }
 
+// Highest document frequency a token may have in a corpus of `total` rows and still count as informative.
+export function informativeCap(total) {
+  return Math.max(8, Math.floor(total * RECALL_TOKEN_DF_MAX));
+}
+
+// How many informative tokens a row has to match, given how many are informative and how many the query had.
+export function coverageFloor(usefulCount, tokenCount) {
+  const base = usefulCount <= 2 ? usefulCount : Math.min(RECALL_MIN_TOKEN_MATCHES, usefulCount - 1);
+  return Math.max(base, tokenCount >= 3 ? 2 : 1);
+}
+
 // Tokens that carry information: they exist in the corpus (df>0) and are not corpus stopwords (df<=cap).
 function informativeTokens(db, tokens) {
   const columns = tokens
@@ -128,7 +139,7 @@ function informativeTokens(db, tokens) {
     )
     .join(", ");
   const row = db.prepare(`SELECT (SELECT COUNT(*) FROM lessons WHERE archived = 0) AS total, ${columns}`).get(...tokens);
-  const cap = Math.max(8, Math.floor(row.total * RECALL_TOKEN_DF_MAX));
+  const cap = informativeCap(row.total);
   const existing = tokens.filter((_, i) => row[`df${i}`] > 0);
   const useful = tokens.filter((_, i) => row[`df${i}`] > 0 && row[`df${i}`] <= cap);
   return useful.length ? useful : existing;
@@ -139,8 +150,7 @@ function coverageClause(db, tokens) {
   const quoted = tokens.map(quoteToken);
   if (!quoted.length) return { clause: "", binds: [] };
   const useful = informativeTokens(db, quoted);
-  const base = useful.length <= 2 ? useful.length : Math.min(RECALL_MIN_TOKEN_MATCHES, useful.length - 1);
-  const floor = Math.max(base, quoted.length >= 3 ? 2 : 1);
+  const floor = coverageFloor(useful.length, quoted.length);
   if (floor > useful.length) return { empty: true, clause: "", binds: [] };
   if (floor <= 1) return { clause: "", binds: [] };
   const terms = useful.map(() => "(l.id IN (SELECT rowid FROM lessons_fts WHERE lessons_fts MATCH ?))").join(" + ");

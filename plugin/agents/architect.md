@@ -304,8 +304,12 @@ If the brief is still not enough to design with confidence, flag it and do not i
 the project's architecture decisions, already settled before this task — they are constraints,
 not suggestions. A design that contradicts one either follows the decision or takes the
 conflict to `## Requires user confirmation` naming the decision's number; it never overrides it
-in silence. The section only ever brings `accepted` decisions, so a `proposed`, a `superseded`
-or a `rejected` one never binds you. No section in the prompt (an empty log, or the recall was
+in silence. The section lists EVERY accepted title plus the 8 closest to the task in full;
+`decision_recall` gives the full text of any title you need. The section only ever brings
+`accepted` decisions, so a `proposed`, a `superseded`
+or a `rejected` one never binds you. A `## Proposed (not binding)` section lists, by title
+only, decisions proposed and not accepted yet: they bind nothing, and your design may go
+against them without a confirmation. No section in the prompt (an empty log, or the recall was
 unavailable) → design normally. `decision_recall` is available to you read-only when you want
 more of the log than the prompt brought; writing a decision is the orchestrator's job, never
 yours.
@@ -514,9 +518,12 @@ If there is no risk, write `- None`. Never omit the section.
 - **Context:** [what forced the choice]
 - **Decision:** [what was decided, imperative]
 - **Consequences:** [what this costs and what it closes off]
+- **Unrelated to:** [#n — why this decision leaves it untouched, one line each; omit when no standing decision touches the subject]
 
 Omit the whole section when every structural choice of this plan is already covered by a
-standing decision.
+standing decision. A decision that CHANGES a standing one is not proposed from a run: write
+the number it would supersede as an open item instead, because superseding is the operator's
+call.
 
 An **optional** section, the only one that is: a plan without it is complete and valid, and
 that is the normal case. Emit it at most once, for the decision that outlives this task (a

@@ -7,6 +7,7 @@ import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { PROMPT_SOURCE_CONFLICT, getRoadmapItem, queueRoadmapItem } from "../memory/roadmap.mjs";
+import { ownerLabel } from "../memory/scope.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
@@ -20,7 +21,14 @@ import {
   noticeNarration,
 } from "../queue/narrate.mjs";
 import { blockerLines, claimBlocker } from "../queue/claim.mjs";
-import { closeJobAndWorktree, worktreeEntry, worktreeLine } from "../queue/close.mjs";
+import {
+  PROPOSAL_CHOICES,
+  closeJobAndWorktree,
+  requireProposalChoice,
+  settleJobProposals,
+  worktreeEntry,
+  worktreeLine,
+} from "../queue/close.mjs";
 import { closeMerged, CLOSE_MERGED_DEADLINE_MS } from "../queue/close-merged.mjs";
 import { runMaintenance } from "../queue/maintenance.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
@@ -40,7 +48,7 @@ import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { registerProject } from "./project.mjs";
-import { confirm } from "./prompt.mjs";
+import { choose, confirm } from "./prompt.mjs";
 import { runtimeLabel } from "./runtime-versions.mjs";
 
 const USAGE = {
@@ -48,7 +56,7 @@ const USAGE = {
   status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
-  close: "nightshift queue close <id>... [--json], or nightshift queue close --merged [--json]",
+  close: "nightshift queue close <id>... [--decisions accept|reject|keep] [--json], or nightshift queue close --merged [--decisions accept|reject|keep] [--json]",
   retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
   repair: "nightshift queue repair <id> [--json]",
   pause: "nightshift queue pause",
@@ -962,11 +970,46 @@ async function runCancel(argv, ctx) {
   ctx.out(values.json ? JSON.stringify({ job }) : `cancelled job #${job.id}`);
 }
 
-const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" } };
+const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" }, decisions: { type: "string" } };
+
+// The question a terminal is asked for one open proposal of a job it just closed.
+function proposalQuestion(row) {
+  return `decision ${ownerLabel(row)} "${row.title}" of job #${row.job_id}: accept / reject / keep? [keep] `;
+}
+
+// How each proposal of a closed job is settled: the `--decisions` choice, the terminal outside `--json`, or kept.
+function chooserFor(values, ctx) {
+  if (values.decisions !== undefined) {
+    const choice = requireProposalChoice(values.decisions);
+    return async () => choice;
+  }
+  if (ctx.stdin?.isTTY === true && values.json !== true) {
+    return (row) => choose({ stdin: ctx.stdin, stdout: ctx.stdout, question: proposalQuestion(row), choices: PROPOSAL_CHOICES, fallback: "keep" });
+  }
+  return async () => "keep";
+}
+
+// Settles the proposals of every closed job in turn; a failure is reported on stderr and never undoes a close.
+async function settleClosedJobs({ store, closed, choose: chooser, ctx }) {
+  const decisions = [];
+  for (const job of closed) {
+    try {
+      decisions.push(...(await settleJobProposals({ store, jobId: job.id, choose: chooser })));
+    } catch (err) {
+      ctx.err(`decisions of job #${job.id} not settled: ${err?.message ?? String(err)}`);
+    }
+  }
+  return decisions;
+}
+
+// The text line a close prints for one proposal it settled or kept.
+function proposalLine(entry) {
+  const outcome = entry.action === "kept" ? "kept (proposed)" : entry.action;
+  return `decision ${entry.label} ${entry.title}: ${outcome}`;
+}
 
 // Closes each id on its own store call, so one refusal never stops the ids that come after it; each closed job's worktree is released after its row closed.
-async function closeByIds(ids, ctx) {
-  const store = openStore(ctx.env);
+async function closeByIds(ids, store, ctx) {
   const closed = [];
   const refused = [];
   const worktrees = [];
@@ -990,15 +1033,22 @@ function closedJobLines(closed, worktrees = []) {
   });
 }
 
-// Text lines of a multi-id close: one per id, closed or not, plus the worktree of each closed one.
-function closeByIdsLines({ closed, refused, worktrees }) {
-  return [...closedJobLines(closed, worktrees), ...refused.map(({ id, reason }) => `job #${id} not closed: ${reason}`)];
+// Text lines of a multi-id close: one per id, closed or not, plus the worktree of each closed one and one per proposal it settled.
+function closeByIdsLines({ closed, refused, worktrees, decisions }) {
+  return [
+    ...closedJobLines(closed, worktrees),
+    ...refused.map(({ id, reason }) => `job #${id} not closed: ${reason}`),
+    ...decisions.map(proposalLine),
+  ];
 }
 
-// Runs `queue close <id>...`, which takes every job it can from a terminal status to `closed` and reports the rest by name.
-async function runCloseByIds(positionals, values, ctx) {
+// Runs `queue close <id>...`, which takes every job it can from a terminal status to `closed`, settles their proposals and reports the rest by name.
+async function runCloseByIds(positionals, values, ctx, chooser) {
   const ids = positionals.map((token) => requireInt("id", token));
-  const result = await closeByIds(ids, ctx);
+  const store = openStore(ctx.env);
+  const closedResult = await closeByIds(ids, store, ctx);
+  const decisions = await settleClosedJobs({ store, closed: closedResult.closed, choose: chooser, ctx });
+  const result = { ...closedResult, decisions };
   if (values.json) ctx.out(JSON.stringify(result));
   else for (const line of closeByIdsLines(result)) ctx.out(line);
   if (result.closed.length === 0) throw new UserError(result.refused.map(({ reason }) => reason).join("; "));
@@ -1016,26 +1066,29 @@ function isUnchecked(entry) {
   return typeof entry.reason === "string" && entry.reason.startsWith("not checked: over the limit");
 }
 
-// Text lines of `queue close --merged`: one per closed (with its worktree), refused and undetermined job, plus a summary when some were left unchecked.
-function closeMergedLines({ closed, refused, undetermined, worktrees }) {
+// Text lines of `queue close --merged`: one per closed (with its worktree), refused and undetermined job, one per settled proposal, plus a summary when some were left unchecked.
+function closeMergedLines({ closed, refused, undetermined, worktrees, decisions }) {
   if (closed.length + refused.length + undetermined.length === 0) return ["nothing to close"];
   const lines = [
     ...closedJobLines(closed, worktrees),
     ...refused.map(({ id, reason }) => `job #${id} not closed: ${reason}`),
     ...undetermined.map(({ id, reason }) => `job #${id} not closed: ${reason}`),
+    ...decisions.map(proposalLine),
   ];
   const unchecked = undetermined.filter(isUnchecked);
   if (unchecked.length) lines.push(`${unchecked.length} job${unchecked.length === 1 ? "" : "s"} left unchecked; run nightshift queue close --merged again`);
   return lines;
 }
 
-// Runs `queue close --merged`, which closes every terminal job the cache and, for the gap, gh itself confirm merged; it never fails because one pull request could not be read.
-async function runCloseMerged(values, ctx) {
+// Runs `queue close --merged`, which closes every terminal job the cache and, for the gap, gh itself confirm merged, then settles their proposals; it never fails because one pull request could not be read.
+async function runCloseMerged(values, ctx, chooser) {
   const prStates = ctx.prStates ?? createPrStateCache();
   try {
     const store = openStore(ctx.env);
     const deadlineMs = ctx.closeMergedDeadlineMs ?? CLOSE_MERGED_DEADLINE_MS;
-    const result = await closeMerged({ store, prStates, env: ctx.env, deadlineMs, onChecking: (n) => reportChecking(n, values, ctx) });
+    const merged = await closeMerged({ store, prStates, env: ctx.env, deadlineMs, onChecking: (n) => reportChecking(n, values, ctx) });
+    const decisions = await settleClosedJobs({ store, closed: merged.closed, choose: chooser, ctx });
+    const result = { ...merged, decisions };
     if (values.json) ctx.out(JSON.stringify(result));
     else for (const line of closeMergedLines(result)) ctx.out(line);
   } finally {
@@ -1046,12 +1099,13 @@ async function runCloseMerged(values, ctx) {
 // Runs `queue close`: every id it was given, independently, or `--merged` for every terminal job the pull request state confirms merged.
 async function runClose(argv, ctx) {
   const { values, positionals } = parseCommand(argv, CLOSE_OPTIONS);
+  const chooser = chooserFor(values, ctx);
   if (values.merged === true) {
     checkArgs(positionals, { max: 0, usage: USAGE.close });
-    return await runCloseMerged(values, ctx);
+    return await runCloseMerged(values, ctx, chooser);
   }
   checkArgs(positionals, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.close });
-  return await runCloseByIds(positionals, values, ctx);
+  return await runCloseByIds(positionals, values, ctx, chooser);
 }
 
 // Reports what happened to the run directory of a `--fresh` retry: a directory that was kept says why, and never brings the retry down.

@@ -164,6 +164,7 @@ const EVOLVING_COLUMNS = [
   ["pipeline_runs", "tier_raise_reason", "TEXT"],
   ["decisions", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],
   ["decisions", "org", "TEXT"],
+  ["decisions", "job_id", "INTEGER"],
   ["roadmap_items", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],
   ["roadmap_items", "org", "TEXT"],
 ];
@@ -182,6 +183,7 @@ CREATE INDEX IF NOT EXISTS roadmap_items_order_idx ON roadmap_items(project, hor
 CREATE INDEX IF NOT EXISTS roadmap_items_job_idx ON roadmap_items(job_id);
 CREATE UNIQUE INDEX IF NOT EXISTS decisions_org_number_idx ON decisions(org, number) WHERE scope = 'org';
 CREATE INDEX IF NOT EXISTS roadmap_items_org_order_idx ON roadmap_items(org, horizon, position) WHERE scope = 'org';
+CREATE INDEX IF NOT EXISTS decisions_job_idx ON decisions(job_id) WHERE job_id IS NOT NULL;
 `;
 
 const FTS = `
@@ -279,6 +281,30 @@ export function withWriteRetry(action) {
   throw new UserError(
     `the nightshift database is still locked by another process after ${BUSY_ATTEMPTS} attempts; run the command again in a moment`,
   );
+}
+
+// Undoes a failed transaction without ever masking the error that caused it.
+function rollbackQuietly(db) {
+  try {
+    db.exec("ROLLBACK");
+  } catch {
+    return;
+  }
+}
+
+// Runs the given steps inside one immediate transaction, so no reader is ever promoted to writer.
+export function inTransaction(db, steps) {
+  return withWriteRetry(() => {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const value = steps();
+      db.exec("COMMIT");
+      return value;
+    } catch (err) {
+      rollbackQuietly(db);
+      throw err;
+    }
+  });
 }
 
 // Turns WAL on and warns once on stderr when the filesystem refused it.

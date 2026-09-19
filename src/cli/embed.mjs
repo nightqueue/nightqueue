@@ -1,5 +1,6 @@
 import { UserError } from "../config/errors.mjs";
 import { modelsDir } from "../config/paths.mjs";
+import { decisionProbe } from "../memory/decisions.mjs";
 import { EMBEDDING_MODEL_TAG, embedTexts, isModelCached, warmupModel } from "../memory/embedding.mjs";
 import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -18,11 +19,6 @@ async function runInstall(argv, ctx) {
 // Text a lesson is embedded by: title plus prevention.
 function lessonProbe(lesson) {
   return [lesson.title, lesson.prevention].filter(Boolean).join(" ");
-}
-
-// Text a decision is embedded by: title plus the decision itself.
-function decisionProbe(decision) {
-  return [decision.title, decision.decision].filter(Boolean).join(" ");
 }
 
 const CORPORA = [

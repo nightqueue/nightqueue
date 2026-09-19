@@ -49,6 +49,10 @@ Context: two runners renewed the same lease
 Decision: renew the lease only from the worker that owns it
 Consequences: a lost lease kills the child
 
+## Standing decisions
+- #1 the heartbeat is renewed by the owner only
+- #2 heartbeat interval is configuration, never a constant
+
 ## Related decisions
 #2 heartbeat interval is configuration, never a constant (accepted)
 Context: a slow disk timed the lease out
@@ -238,6 +242,8 @@ test("a job built from a roadmap item carries the operator's tier, through the t
 });
 
 const RELATED_HEADING = "## Related decisions";
+const STANDING_HEADING = "## Standing decisions";
+const RECALLED_NON_LINKED = 5;
 const FAKE_MODEL = "fake-embedder@v1";
 const FAKE_VECTOR = [1, 0, 0, 0];
 
@@ -299,17 +305,36 @@ function makeEmbeddedHome(t, name) {
   return { env, item };
 }
 
-test("with an embedder enabled the prompt still carries one `## Related decisions` heading and three decisions under it", async (t) => {
+test("with an embedder enabled the prompt carries one `## Related decisions` heading and every recalled non-linked decision, up to eight", async (t) => {
   const { env, item } = makeEmbeddedHome(t, "roadmap-queue-embedder");
   const embedder = fakeEmbedder(FAKE_VECTOR, { model: FAKE_MODEL });
 
   const prompt = await buildRoadmapPrompt({ item: getRoadmapItem(item.id, env), embedder }, env);
   assert.ok(embedder.calls.length > 0, "the semantic path never ran, so this test would prove nothing");
   assert.equal(headingOccurrences(prompt, RELATED_HEADING), 1, prompt);
-  assert.equal(relatedCount(prompt), 3, `the related block must hold three decisions, whichever they are:\n${prompt}`);
+  assert.equal(headingOccurrences(prompt, STANDING_HEADING), 1, prompt);
+  assert.ok(prompt.indexOf(STANDING_HEADING) < prompt.indexOf(RELATED_HEADING), prompt);
+  assert.equal(relatedCount(prompt), RECALLED_NON_LINKED, `the related block must hold every recalled non-linked decision:\n${prompt}`);
 
   const { job } = await queueRoadmapItem({ id: item.id, embedder }, env);
   const queued = getJob(job.id, env).prompt;
   assert.equal(headingOccurrences(queued, RELATED_HEADING), 1, queued);
-  assert.equal(relatedCount(queued), 3, queued);
+  assert.equal(relatedCount(queued), RECALLED_NON_LINKED, queued);
+});
+
+test("a proposed decision is listed by title under `## Proposed (not binding)`, after the standing titles and before the related ones", async (t) => {
+  const { env, item } = makeRoadmapHome(t, "roadmap-queue-proposed");
+  const proposed = saveDecision(
+    { project: "alpha", title: "heartbeats move to a side table", context: "still open", decision: "nothing settled yet", status: "proposed" },
+    env,
+  );
+
+  const prompt = await buildRoadmapPrompt({ item: getRoadmapItem(item.id, env) }, env);
+
+  const heading = "## Proposed (not binding)";
+  assert.ok(prompt.includes(`${heading}\n- #${proposed.number} heartbeats move to a side table\n\n${RELATED_HEADING}`), prompt);
+  assert.ok(prompt.indexOf(STANDING_HEADING) < prompt.indexOf(heading), prompt);
+  assert.equal(prompt.includes("nothing settled yet"), false, "a proposal is listed by title only");
+  const standing = prompt.slice(prompt.indexOf(STANDING_HEADING), prompt.indexOf(heading));
+  assert.equal(standing.includes("heartbeats move to a side table"), false, "a proposal was listed as standing");
 });

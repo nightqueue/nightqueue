@@ -92,12 +92,14 @@ nightshift queue status [<id>] [--follow] [--json]
 nightshift queue log <id> [--follow]
 nightshift queue retry <id> --note "<answer>"
 nightshift queue cancel <id> --reason "<why>"
-nightshift queue close <id>... | --merged
+nightshift queue close <id>... | --merged [--decisions accept|reject|keep]
 nightshift queue pause | resume
 
 # memory
 nightshift memory stats
 nightshift decision list | show <number>     [--project <name> | --org <name>]
+nightshift decision export <number> [--dir <path>] [--force]
+nightshift decision import <file.md> [--status <s>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]
 nightshift roadmap                            [--project <name> | --org <name>]
 
 # home

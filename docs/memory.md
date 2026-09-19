@@ -81,6 +81,8 @@ nightshift embed backfill          # embed the lessons and the decisions that st
 nightshift memory stats [--json]   # counts per project
 nightshift decision list [--project <name> | --org <name>] [--status <status>]   # the decisions log
 nightshift decision show <number> [--project <name> | --org <name>]              # one decision, in full
+nightshift decision export <number> [--dir <path>] [--force]                     # one decision as a markdown file
+nightshift decision import <file.md> [--status <s>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]   # save a markdown decision file
 nightshift roadmap [--project <name> | --org <name>]                             # the now/next/later roadmap
 ```
 
@@ -136,7 +138,13 @@ of one owner never touches another's): a title, the `context` that forced the
 choice, the `decision` itself, the `consequences` it costs, and a status among
 `proposed`, `accepted`, `superseded` and `rejected`. A decision that was replaced points at the one that replaced it
 through `superseded_by`. Only `accepted` decisions are ever recalled as standing
-constraints; the other three statuses are read with `decision_list`,
+constraints, and every one of them reaches a prompt: the block the `SessionStart`
+hook injects lists the title of EVERY accepted decision of the project and of its
+org under `## Standing decisions`, org rows first, followed by
+`## Standing decisions in detail` with the text of the 8 most recently updated.
+A `proposed` decision reaches a prompt by its title only, under a separate
+`## Proposed (not binding)` section, because nobody accepted it yet and it binds
+nothing. The other two statuses are read with `decision_list`,
 `nightshift decision list` and `nightshift decision show`, and never reach a
 prompt.
 
@@ -147,9 +155,11 @@ among `open`, `queued`, `done` and `dropped`, may link to the decision that
 motivated it, and, once queued, to the job built from it.
 
 **Private by design.** Both live only in `$NIGHTSHIFT_HOME/nightshift.db`, the
-same file as the rest of the memory. Nothing is written into the repository,
-nothing is published, nothing travels in a pull request: no `docs/adr/` tree, no
-`ROADMAP.md`. The only ways in are the MCP tools below, and the only ways to
+same file as the rest of the memory. The runtime writes nothing into the
+repository, publishes nothing, and puts nothing in a pull request: no
+`docs/adr/` tree, no `ROADMAP.md`; only an explicit `nightshift decision export`
+writes a file. The only ways in are the MCP tools below and the one deliberate
+terminal write, `nightshift decision import` (see below), and the only ways to
 read them from a terminal are the three read-only commands
 (`nightshift decision list`, `nightshift decision show <number>` and
 `nightshift roadmap`), which resolve the project from the current directory when
@@ -159,12 +169,30 @@ means the database too: the three open it read-only, so they never create it and
 never migrate it, and a home where nothing was ever saved reads as an empty one
 (`no decisions for <project>`, every horizon empty) instead of a SQLite error.
 
+**One source, moved on purpose.** `nightshift decision export <number>` writes
+one decision as a markdown file, `<dir>/<nnnn>-<slug>.md` (default
+`docs/decisions/` of the current directory; `--force` replaces an existing
+file). It reads the database read-only like `show`, so it never creates nor
+writes it; publishing that file stays a deliberate pull request of the operator.
+`nightshift decision import <file.md>` is the one deliberate decision write from
+a terminal: it reads an exported file or a hand-written ADR of the same shape
+(`# <title>`, a `Status:` line with its date, `## Context`, `## Decision`,
+`## Consequences`; any other `##` section stays inside the field it follows),
+takes the status from the file unless `--status` overrides it
+(`--superseded-by <n>` imports it `superseded`, pointing at `#n`), and saves it
+through the same review as `decision_save`: an overlap refuses with the
+candidates until each is named in `--supersedes` or `--unrelated`. On success it
+prints `imported as #n` and stamps `Decision #n in the <owner> store.` into the
+file's header; a file whose header already names an existing row of the owner is
+refused, so a re-run imports nothing twice. The runtime itself never reads
+`docs/decisions/`.
+
 **The seven MCP tools** (parameters marked `?` are optional):
 
 | tool | what it does |
 |---|---|
-| `decision_save` | records one decision: `project` or `org`, `title`, `context`, `decision`, `consequences?`, `status?` (default `accepted`); answers the `id`, the `number` and the owner it got |
-| `decision_update` | changes a decision by `id`: any of `title`, `context`, `decision`, `consequences`, `status`, `superseded_by` — this is how a `proposed` one is accepted or rejected; the row it answers is a compact one, truncated like `decision_list` |
+| `decision_save` | records one decision: `project` or `org`, `title`, `context`, `decision`, `consequences?`, `status?` (default `accepted`), `supersedes?`, `unrelated?`; answers the `id`, the `number` and the owner it got. When the title overlaps an accepted or proposed title of the same owner, or the title plus decision is close in meaning to one, nothing is saved and it answers `status: "needs_review"` with the `candidates`; saving again names every candidate by `number`, in `supersedes` (they become `superseded` and point at the new row, in the same transaction) or in `unrelated`. Inside a queue job it stamps `job_id`, refuses `supersedes`, and refuses a second proposal while the first is still `proposed` |
+| `decision_update` | changes a decision by `id`: any of `title`, `context`, `decision`, `consequences`, `status`, `superseded_by` — this is how a `proposed` one is accepted or rejected; `status: "superseded"` requires `superseded_by`, unless the row already names its successor; the row it answers is a compact one, truncated like `decision_list` |
 | `decision_list` | the log in numbering order: `project` or `org`, `status?`; compact rows, org rows first |
 | `decision_recall` | the standing constraints: `project` or `org`, `query?`, `limit?`; only `accepted` decisions, hybrid BM25 plus semantic, org rows first, and the text comes back untruncated because it feeds prompts |
 | `roadmap_save` | adds an intent at the end of a horizon: `project` or `org`, `horizon`, `title`, `detail?`, `decision_id?` |
@@ -194,9 +222,11 @@ them under an existing org.
 **Queueing from the roadmap.** `queue_add` with `roadmap_item_id` and no
 `prompt` (or `nightshift queue add --roadmap <id>`) builds the prompt from the
 item instead of asking for it again: `## Task` with the title and the detail,
-`## Linked decision` when the item links one, and `## Related decisions` with at
-most three accepted decisions the title recalled - each heading disappears when
-it has nothing under it. A **project** item decides where the job goes by itself,
+`## Linked decision` when the item links one, `## Standing decisions` with the
+title of every accepted decision of the item's owner, `## Proposed (not binding)`
+with the title of every proposed one, and `## Related decisions`
+with at most eight accepted decisions the title recalled, in full - each heading
+disappears when it has nothing under it. A **project** item decides where the job goes by itself,
 so nothing is resolved from the current directory, and it is then marked `queued`
 with the job id and flips to `done` when that job finishes `done`. An **org**
 item cannot: a job is always one project's, so it takes the project from
@@ -216,12 +246,12 @@ headings above nor a literal of [Runtime contract](runtime-contract.md).
 
 **How `/resolve` uses them.** The standing decisions are already in the block the
 `SessionStart` hook injected, so the Phase 0 preflight pings `lesson_recall` alone:
-the Brief copies from that section the rows that touch its affected area, and calls
-`decision_recall` only when the section is absent or its one-line summaries are not
-enough - with the affected area and the objective as the query. Either way at most
-five accepted decisions - the project's and its org's, in one call, org rows first
-and written `acme#3` when they belong to the org - become the `## Standing decisions`
-section of the Brief. That section
+the Brief copies EVERY accepted title from that section (or from one
+`decision_list` with `status: "accepted"` when the section is absent), and adds
+in full the 8 closest to the task, from one `decision_recall` with the affected
+area and the objective as the query - the project's and its org's, in one call,
+org rows first and written `acme#3` when they belong to the org. Both parts become
+the `## Standing decisions` section of the Brief. That section
 is passed to the architect as binding context - a design that contradicts a
 standing decision either follows it or takes the conflict to
 `## Requires user confirmation` naming its number. When a plan takes a
@@ -231,4 +261,16 @@ structural decision no standing decision covers, the architect emits a
 report lists it among the open items for the operator to accept or reject with
 `decision_update` - it is not part of the pull request body. A `decision_recall` that fails is fail-open: the run
 continues without the section and records it as an open item.
+
+**A proposal ends when its job is closed.** The proposal a job saved carries
+that job's id. `nightshift queue close <id>` and `nightshift queue close --merged`
+list the open proposals of every job they closed and, on a terminal, ask
+`accept / reject / keep` for each; `--decisions accept|reject|keep` answers for
+all of them without asking, and without the flag and without a terminal (or
+under `--json`) every proposal is kept, so scripts do not change. Each one
+prints a `decision #n <title>: accepted|rejected|kept (proposed)` line, and
+`--json` carries them in `decisions`. The MCP `queue_close` closes the job and
+leaves its proposals alone. A proposal still open on a closed job is a warning
+of the `decision proposals` line of `nightshift doctor`, which names each by
+number and job.
 

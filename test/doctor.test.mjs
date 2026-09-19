@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
@@ -9,6 +10,7 @@ import { dbPath, queuePausedPath, resolvedRuntimeDir, runnerRegistryPath, secret
 import { ensureHome } from "../src/config/store.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
 import { addJob, claimJobById } from "../src/memory/jobs.mjs";
+import { saveDecision } from "../src/memory/decisions.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
@@ -229,7 +231,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v10/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v11/);
 });
 
 test("the database check warns about a v8 home and points at the command that migrates it", async (t) => {
@@ -239,7 +241,7 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, expected v10/);
+  assert.match(database.detail, /schema v8, expected v11/);
   assert.match(database.hint, /run `nightshift queue status` once to migrate it/);
   assert.doesNotMatch(database.hint, /nightshift memory stats/);
 });
@@ -252,7 +254,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, expected v10/);
+  assert.match(database.detail, /schema v99, expected v11/);
   assert.match(database.hint, /upgrade nightshift/);
 });
 
@@ -354,6 +356,67 @@ test("the queue jobs check counts the jobs whose runner died, and only once the 
   assert.equal(statusOf(orphaned, "queue jobs"), "warn");
   assert.equal(orphaned.checks.find((entry) => entry.name === "queue jobs").detail, "1 orphaned");
   assert.deepEqual(orphaned.checks.filter((entry) => entry.name.startsWith("queue") && entry.status === "fail"), []);
+});
+
+// A decision proposed by the given job, stamped straight in the database.
+function proposedByJob(env, { title, jobId }) {
+  const saved = saveDecision({ project: "alpha", title, context: "why", decision: "what", status: "proposed" }, env);
+  openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(jobId, saved.id);
+  return saved;
+}
+
+// The report row of the decision proposals check.
+function proposalsCheck(report) {
+  return report.checks.find((entry) => entry.name === "decision proposals");
+}
+
+test("the decision proposals check warns on a proposal of a closed job, never on one of an open job, and only once the database exists", async (t) => {
+  const host = makeHostEnv(t, "doctor-proposals");
+  const { report: noDatabase } = await diagnose(host.env);
+  assert.equal(proposalsCheck(noDatabase), undefined, "the check ran without a database");
+
+  makeProject(t, host.env, "alpha");
+  const open = addJob({ project: "alpha", prompt: "still open" }, host.env).id;
+  proposedByJob(host.env, { title: "the open job proposes this", jobId: open });
+  closeDb(host.env);
+  const { report: none } = await diagnose(host.env);
+  assert.deepEqual(
+    { status: proposalsCheck(none).status, detail: proposalsCheck(none).detail },
+    { status: "ok", detail: "no proposal left open on a closed job" },
+  );
+
+  const closed = addJob({ project: "alpha", prompt: "closed one" }, host.env).id;
+  openDb(host.env).prepare("UPDATE jobs SET status = 'closed' WHERE id = ?").run(closed);
+  const first = proposedByJob(host.env, { title: "the closed job proposes this", jobId: closed });
+  closeDb(host.env);
+  const { report: one } = await diagnose(host.env);
+  assert.equal(proposalsCheck(one).status, "warn");
+  assert.equal(proposalsCheck(one).detail, `1 proposed decision of closed jobs: #${first.number} (job ${closed})`);
+  assert.match(proposalsCheck(one).hint, /nightshift queue close <id> --decisions accept\|reject/);
+
+  const second = proposedByJob(host.env, { title: "and a second one from it", jobId: closed });
+  closeDb(host.env);
+  const { report: two } = await diagnose(host.env);
+  assert.equal(
+    proposalsCheck(two).detail,
+    `2 proposed decisions of closed jobs: #${first.number} (job ${closed}), #${second.number} (job ${closed})`,
+  );
+});
+
+test("the decision proposals check warns with the migrate hint on a database without decisions.job_id, and leaves it as it was", async (t) => {
+  const host = makeHostEnv(t, "doctor-proposals-v10");
+  makeProject(t, host.env, "alpha");
+  openDb(host.env).exec("DROP INDEX decisions_job_idx; ALTER TABLE decisions DROP COLUMN job_id; PRAGMA user_version = 10;");
+  closeDb(host.env);
+
+  const { report } = await diagnose(host.env);
+
+  assert.equal(proposalsCheck(report).status, "warn");
+  assert.match(proposalsCheck(report).hint, /nightshift memory stats/);
+  const raw = new DatabaseSync(dbPath(host.env), { readOnly: true });
+  t.after(() => raw.close());
+  const columns = raw.prepare("SELECT name FROM pragma_table_info('decisions')").all().map((row) => row.name);
+  assert.equal(columns.includes("job_id"), false, "the diagnosis migrated the database");
 });
 
 test("--json is the only thing on stdout of the real process, and the exit code follows the report", (t) => {

@@ -1,8 +1,16 @@
 import { UserError } from "../config/errors.mjs";
 import { projectByName, projectsOfOrg } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
-import { openDb, sqliteToIso, withWriteRetry } from "./db.mjs";
-import { getDecision, recallDecisions, renderDecisionText } from "./decisions.mjs";
+import { inTransaction, openDb, sqliteToIso, withWriteRetry } from "./db.mjs";
+import {
+  PROPOSED_HEADING,
+  STANDING_HEADING,
+  decisionTitleLine,
+  decisionTitles,
+  getDecision,
+  recallDecisions,
+  renderDecisionText,
+} from "./decisions.mjs";
 import { addJob, cancelJob, truncateByCodePoint } from "./jobs.mjs";
 import { escapePromptMarkers } from "./prompt-safety.mjs";
 import {
@@ -25,8 +33,8 @@ export const PROMPT_SOURCE_CONFLICT =
   "pass either `prompt` or `roadmap_item_id`, never both: the roadmap item is what builds the prompt";
 export const PROMPT_SOURCE_MISSING = "queue_add needs `prompt`, or `roadmap_item_id` to build it from a roadmap item";
 
-const RELATED_RECALL_LIMIT = 4;
-const RELATED_PROMPT_LIMIT = 3;
+const RELATED_RECALL_LIMIT = 9;
+const RELATED_PROMPT_LIMIT = 8;
 const LIVE_JOB_STATUSES = ["pending", "running", "gate"];
 const MANUAL_STATUSES = ROADMAP_STATUSES.filter((status) => status !== "queued");
 
@@ -94,30 +102,6 @@ function requireDecisionId(target, value, env) {
     throw new UserError(`decision \`${id}\` belongs to ${ownerDescription(decision)}, not ${ownerDescription(target)}`);
   }
   return id;
-}
-
-// Undoes a failed transaction without ever masking the error that caused it.
-function rollbackQuietly(db) {
-  try {
-    db.exec("ROLLBACK");
-  } catch {
-    return;
-  }
-}
-
-// Runs the given steps inside one immediate transaction, so no reader is ever promoted to writer.
-function inTransaction(db, steps) {
-  return withWriteRetry(() => {
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      const value = steps();
-      db.exec("COMMIT");
-      return value;
-    } catch (err) {
-      rollbackQuietly(db);
-      throw err;
-    }
-  });
 }
 
 // Returns the raw row of a roadmap item, or null.
@@ -345,13 +329,31 @@ async function relatedDecisions(item, linked, embedder, env) {
   }
 }
 
+// Every title of one status the item's owner sees; a failure of the decisions store costs the block, never the prompt.
+function titlesOfStatus(item, status, env) {
+  try {
+    return decisionTitles({ ...ownerRef(rowOwner(item)), status }, env);
+  } catch {
+    return [];
+  }
+}
+
+// One titles-only block of the prompt, or null when there is no title to list.
+function titlesBlock(heading, rows) {
+  return rows.length ? `## ${heading}\n${rows.map(decisionTitleLine).join("\n")}` : null;
+}
+
 // Prompt a roadmap item is queued with: the task, the decision it is linked to and the accepted decisions around it.
 export async function buildRoadmapPrompt({ item, embedder } = {}, env = process.env) {
   const linked = item.decision_id ? getDecision(item.decision_id, env) : null;
+  const standing = titlesBlock(STANDING_HEADING, titlesOfStatus(item, "accepted", env));
+  const proposed = titlesBlock(PROPOSED_HEADING, titlesOfStatus(item, "proposed", env));
   const related = await relatedDecisions(item, linked, embedder, env);
   const blocks = [`## Task\n${escapePromptMarkers(item.title)}`];
   if (item.detail) blocks.push(escapePromptMarkers(item.detail));
   if (linked) blocks.push(`## Linked decision\n${renderDecisionText(linked)}`);
+  if (standing) blocks.push(standing);
+  if (proposed) blocks.push(proposed);
   if (related.length) blocks.push(`## Related decisions\n${related.map(renderDecisionText).join("\n\n")}`);
   return blocks.join("\n\n");
 }

@@ -78,3 +78,16 @@ export async function confirm({ stdin = process.stdin, stdout = process.stdout, 
     stdin.pause?.();
   }
 }
+
+// Asks for one of a fixed set of answers with echo: an empty or unknown answer, or the end of the input, means the fallback.
+export async function choose({ stdin = process.stdin, stdout = process.stdout, question, choices, fallback }) {
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    const answer = await askLine(rl, question);
+    const normalized = typeof answer === "string" ? answer.trim().toLowerCase() : "";
+    return choices.includes(normalized) ? normalized : fallback;
+  } finally {
+    rl.close();
+    stdin.pause?.();
+  }
+}

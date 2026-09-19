@@ -74,6 +74,8 @@ export function makeProject(t, env, name, { org } = {}) {
 export const DOWNGRADE_TO_V5 = `
 DROP INDEX decisions_org_number_idx;
 DROP INDEX roadmap_items_org_order_idx;
+DROP INDEX decisions_job_idx;
+ALTER TABLE decisions DROP COLUMN job_id;
 ALTER TABLE decisions DROP COLUMN scope;
 ALTER TABLE decisions DROP COLUMN org;
 ALTER TABLE roadmap_items DROP COLUMN scope;

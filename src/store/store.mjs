@@ -92,8 +92,12 @@
  * @property {(id: number) => Promise<object|null>} getDecision
  * @property {(spec?: object) => Promise<object|null>} getDecisionByNumber
  * @property {(decision: object) => Promise<object>} saveDecision
+ * @property {(spec: object) => Promise<object>} saveReviewedDecision
  * @property {(id: number, patch?: object) => Promise<object>} updateDecision
  * @property {(spec?: object) => Promise<object[]>} listDecisions
+ * @property {(spec?: object) => Promise<object[]>} decisionTitles
+ * @property {(jobId: number) => Promise<object[]>} proposalsOfJob
+ * @property {() => Promise<object[]>} staleProposals
  * @property {(spec: object) => Promise<boolean>} setDecisionEmbedding
  * @property {(spec?: object) => Promise<object[]>} decisionsMissingEmbedding
  * @property {(spec?: object) => Promise<object[]>} recentDecisions
@@ -207,8 +211,12 @@ export const STORE_CONTRACT = Object.freeze({
     "getDecision",
     "getDecisionByNumber",
     "saveDecision",
+    "saveReviewedDecision",
     "updateDecision",
     "listDecisions",
+    "decisionTitles",
+    "proposalsOfJob",
+    "staleProposals",
     "setDecisionEmbedding",
     "decisionsMissingEmbedding",
     "recentDecisions",
@@ -249,6 +257,9 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.countActiveJobs",
   "jobs.countActiveJobsByProject",
   "decisions.listDecisions",
+  "decisions.decisionTitles",
+  "decisions.proposalsOfJob",
+  "decisions.staleProposals",
   "decisions.getDecisionByNumber",
   "roadmap.listRoadmap",
   "orgs.rowCountsByOrg",

@@ -71,8 +71,13 @@ The runtime waits for every subagent and background task of an unattended run; l
      memory is the normal state of a fresh install.
    - **The standing decisions are already in your context** — the `## Standing decisions`
      section of the `# Nightshift context` block injected at the start of the session carries
-     them, org rows first, each already named `#<number>` or `<owner>#<number>`. No preflight
+     them: EVERY accepted title of the project and of its org, org rows first, each already
+     named `#<number>` or `<owner>#<number>`, followed by `## Standing decisions in detail`
+     with the text of the 8 most recently updated. No preflight
      call fetches them; `decision_recall` stays the way to refine them by query (step 1).
+     When the block is absent, ONE `decision_list` with `status: "accepted"` gives the titles.
+     A `## Proposed (not binding)` section of the same block lists, by title only, the
+     decisions still `proposed`: they bind nothing.
    - One call answers both levels: `decision_recall` with `project` returns the project's
      decisions AND its org's, org rows first, each carrying `scope` and `owner`.
    - **`decision_recall` failed or is unavailable while `lesson_recall` answered** (an older
@@ -124,25 +129,36 @@ The runtime waits for every subagent and background task of an unattended run; l
    **Bug account:** [phone/email/user ID from the ticket that reproduces the bug — or "not identified"]
    **Key evidence:** [max 5 lines of the stack trace — omit if feature]
 
-   ## Standing decisions   [omit the whole section when the recall came back empty]
+   ## Standing decisions   [omit the whole section when the log has no accepted decision]
+   - #<number> <title>                       [every accepted title, copied from the session block]
+   - <owner>#<number> <title>                [a row whose `scope` is `org`]
+   ### In full (the 8 closest to this Brief)
    - #<number> <title> — <the `decision` field in 1 line>
-   - <owner>#<number> <title> — <the `decision` field in 1 line>   [a row whose `scope` is `org`]
+
+   ## Proposed (not binding)   [omit when the session block has no such section]
+   - #<number> <title>                       [titles only, copied from the session block]
    ```
+
+   **How `## Proposed (not binding)` is filled in.** Copy the titles of the section of the
+   same name of the session block, in the order they came; nothing else feeds it. These
+   decisions were proposed and nobody accepted them yet: they bind nothing, and a plan may
+   go against them.
 
    **How `## Standing decisions` is filled in.** The source is the `## Standing decisions`
    section of the `# Nightshift context` block you already received at the start of the
-   session: copy from it the rows that touch the Brief's `**Affected area:**`, in the order
-   they came. When that section is absent, or its one-line summaries are not enough for the
-   area, call `decision_recall` (MCP `nightshift`) with `project` = the current project and
+   session: copy EVERY title from it, in the order it came. When that section is absent,
+   take the titles from ONE `decision_list` (MCP `nightshift`) with `project` = the current
+   project and `status: "accepted"`. The `### In full` part comes from ONE `decision_recall`
+   (MCP `nightshift`) with `project` = the current project, `limit: 8` and
    `query` = the `**Affected area:**` plus the `**Objective:**` of the Brief. ONE call
    answers both levels: the project's own decisions and the decisions of its org, with the
    org rows FIRST — never call the tool a second time. Name each row the way it comes: a
    row whose `scope` is `project` is written `#<number>`, a row whose `scope` is `org` is
    written `<owner>#<number>` (`acme#3`), because two levels may hold the same number. Both
    sources only ever carry accepted decisions, so a `proposed`, a `superseded` or
-   a `rejected` one can never reach this section. Take at most 5, keeping the order received;
-   a row marked `via: "fallback"` did not match the query and is dropped. Nothing left
-   after that (or the tool failed, per step 0.1) → omit the section.
+   a `rejected` one can never reach this section. Keep the order received in both parts;
+   a row marked `via: "fallback"` did not match the query and is dropped from the full part.
+   No accepted title at all (or the tools failed, per step 0.1) → omit the section.
 
    The **raw input is never passed to Explore**. Only the triager (Phase 1), on bugs, may
    receive the raw error/stack trace block, the only agent that needs that detail to
@@ -810,12 +826,20 @@ Project conventions:
 
 [Include only if the Standing decisions section of the Brief exists:]
 ## Standing decisions
+- #<number> <title>
+### In full (the 8 closest to this Brief)
 - #<number> <title> — <decision>
 These are the standing constraints of the project and of its org, decided before this task
 (a number written `<owner>#<number>` belongs to the org and binds every project of it).
 They are binding context, never a proposed solution: a design that contradicts one either
 follows the decision or takes the conflict to `## Requires user confirmation` naming its
 number.
+
+[Include only if the Proposed (not binding) section of the Brief exists:]
+## Proposed (not binding)
+- #<number> <title>
+These decisions were proposed and nobody accepted them yet: they bind nothing, and a design
+may go against them without a confirmation.
 
 Repository: [CWD PATH]
 Project: [PROJECT — the same identifier used in RUN_DIR]
@@ -854,12 +878,21 @@ terminal gate, with `target: "architect"`. With the gate closed, read `03-plan.m
 with `project` = the current project, the block's **Title**, **Context**, **Decision** and
 **Consequences** fields and `status: "proposed"`; keep the returned `number` and carry it to
 Phase 7 — saving it here (not at Phase 8) is what survives a run that later stops at a gate.
-Save it ONCE per run: a relaunched architect (🔁) over the same plan does not produce a second
-`decision_save`. A failed `decision_save` NEVER blocks the run — it becomes an open item; the
+The runtime refuses a second proposal from the same job while the first is still `proposed`;
+that refusal is not an error of the run, which keeps the number of the first save.
+A failed `decision_save` NEVER blocks the run — it becomes an open item; the
 block is optional and most plans do not have one:
 no block → nothing is saved, nothing is recorded, and the run proceeds normally. A
 `decision_save` whose `status` is missing or invalid is stored as `proposed` and answers
 `status_defaulted: true`.
+
+**A `needs_review` answer:** `decision_save` answers `status: "needs_review"` with `candidates`
+when the proposal overlaps a standing or proposed decision, and nothing is saved. If the
+block has an `**Unrelated to:**` line whose numbers cover EVERY candidate number, call
+`decision_save` again ONCE with `unrelated` = those numbers. Otherwise do NOT save: record the
+open item `Proposed decision not saved: it touches #a, #b (needs_review); the operator decides
+it with decision_save outside the queue` for Phase 8, and the run proceeds. Never pass
+`supersedes` from a run: superseding a decision is the operator's call.
 
 **Coverage gate (bug):** also require `## Symptom coverage`, each vector marked `covered` or
 `not-covered` **with a reason**, and `**How I enumerated:**` filled in with a **re-runnable**

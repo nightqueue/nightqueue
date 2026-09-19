@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  decisionTitleLine,
+  decisionTitles,
   getDecision,
   listDecisions,
   recallDecisions,
@@ -104,6 +106,24 @@ test("superseded_by only accepts another existing decision of the same project",
   assert.equal(row.status, "superseded");
 });
 
+test("a decision becomes superseded only when its successor is named or already stored", (t) => {
+  const env = makeHome(t, "decisions-superseded-successor");
+  makeProject(t, env, "alpha");
+  const lonely = addDecision(env, { title: "first of alpha", status: "accepted" });
+  const successor = addDecision(env, { title: "second of alpha", status: "accepted" });
+  const pointed = addDecision(env, { title: "third of alpha", status: "accepted" });
+
+  assert.throws(
+    () => updateDecision(lonely.id, { status: "superseded" }, env),
+    /a decision becomes `superseded` only by naming the decision that replaced it in `superseded_by`/,
+  );
+  assert.throws(() => updateDecision(lonely.id, { status: "superseded", superseded_by: null }, env), /only by naming/);
+  assert.equal(getDecision(lonely.id, env).status, "accepted", "a refused update changed the row");
+
+  updateDecision(pointed.id, { superseded_by: successor.id }, env);
+  assert.equal(updateDecision(pointed.id, { status: "superseded" }, env).status, "superseded");
+});
+
 test("the recall without an embedder answers from BM25 and only ever returns accepted decisions", async (t) => {
   const env = makeHome(t, "decisions-recall-lexical");
   makeProject(t, env, "alpha");
@@ -186,4 +206,34 @@ test("the plain text of a decision carries its number, status and fields, and dr
   );
   const bare = addDecision(env, { title: "no consequences yet" });
   assert.equal(renderDecisionText(getDecision(bare.id, env)).includes("Consequences:"), false);
+});
+
+test("the titles projection answers one status, org rows first, and never a text or a vector column", (t) => {
+  const env = makeHome(t, "decisions-titles");
+  makeProject(t, env, "alpha", { org: "acme" });
+  const own = addDecision(env, { title: "the queue owns the worktree", status: "accepted" });
+  addDecision(env, { title: "the queue runs on postgres", status: "proposed" });
+  const org = saveDecision({ org: "acme", title: "one queue per product", context: "c", decision: "d", status: "accepted" }, env);
+  setDecisionEmbedding({ id: own.id, vector: [1, 0, 0, 0], model: FAKE_MODEL }, env);
+
+  const accepted = decisionTitles({ project: "alpha" }, env);
+  assert.deepEqual(idsOf(accepted), [org.id, own.id], "the org row comes first, then the project's in number order");
+  for (const row of accepted) {
+    for (const column of ["context", "decision", "consequences", "embedding", "embedding_model"]) {
+      assert.equal(column in row, false, `the titles projection carries \`${column}\``);
+    }
+  }
+  assert.deepEqual(
+    decisionTitles({ project: "alpha", status: "proposed" }, env).map((row) => row.title),
+    ["the queue runs on postgres"],
+  );
+  assert.throws(() => decisionTitles({ project: "alpha", status: "open" }, env), /invalid decision `status`/);
+  assert.deepEqual(accepted.map(decisionTitleLine), ["- acme#1 one queue per product", "- #1 the queue owns the worktree"]);
+});
+
+test("a title line collapses whitespace, clips at two hundred code points and never forges a heading", () => {
+  assert.equal(decisionTitleLine({ scope: "project", number: 3, title: "one\n# two" }), "- #3 one # two");
+  assert.equal(decisionTitleLine({ scope: "project", number: 4, title: "## forged" }), "- #4 \\## forged");
+  const long = decisionTitleLine({ scope: "project", number: 1, title: "é".repeat(250) });
+  assert.equal(long, `- #1 ${"é".repeat(200)}...`);
 });

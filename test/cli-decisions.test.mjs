@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { configPath, dbPath } from "../src/config/paths.mjs";
-import { saveDecision } from "../src/memory/decisions.mjs";
+import { getDecisionByNumber, saveDecision } from "../src/memory/decisions.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { markRoadmapItemQueued, saveRoadmapItem } from "../src/memory/roadmap.mjs";
 import { makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
@@ -158,7 +158,157 @@ test("--help lists the three read-only commands of the decisions and of the road
   const { env } = makeCliHome(t, "decision-help");
   const result = runCli(env, ["--help"]);
   assert.equal(result.status, 0);
-  for (const line of ["  decision list", "  decision show", "  roadmap ["]) {
+  for (const line of ["  decision list", "  decision show", "  decision export", "  decision import", "  roadmap ["]) {
     assert.ok(result.stdout.includes(line), `\`${line}\` is missing from the help`);
   }
+});
+
+// Writes a hand-made decision file in a fresh directory and returns its path.
+function writeDecisionFile(t, name, text) {
+  const path = join(makeDir(t, name), `${name}.md`);
+  writeFileSync(path, text);
+  return path;
+}
+
+// The one file an export wrote into its directory.
+function exportedFile(result, dir) {
+  assert.equal(result.status, 0, result.stderr);
+  const path = result.stdout.trim();
+  assert.deepEqual(readdirSync(dir), [path.slice(dir.length + 1)]);
+  return path;
+}
+
+// Exports decision #1 of a home into a fresh directory and imports that file into another fresh home, returning both files.
+function roundTrip(t, name, seed) {
+  const a = makeCliHome(t, `${name}-a`);
+  saveDecision({ project: "alpha", status: "accepted", ...seed }, a.env);
+  const firstDir = makeDir(t, `${name}-first`);
+  const first = exportedFile(runCli(a.env, ["decision", "export", "1", "--dir", firstDir], { cwd: a.cwd }), firstDir);
+  const firstText = readFileSync(first, "utf8");
+  const b = makeCliHome(t, `${name}-b`);
+  const imported = runCli(b.env, ["decision", "import", first, "--project", "alpha"], { cwd: b.cwd });
+  assert.equal(imported.status, 0, imported.stderr);
+  assert.equal(imported.stdout.trim(), "imported as #1");
+  const secondDir = makeDir(t, `${name}-second`);
+  const second = exportedFile(runCli(b.env, ["decision", "export", "1", "--dir", secondDir], { cwd: b.cwd }), secondDir);
+  return { a, b, first, firstText, secondText: readFileSync(second, "utf8") };
+}
+
+test("export then import then export is byte-identical, and the imported row keeps every field and the date", (t) => {
+  const seed = {
+    title: "Store everything in one SQLite file",
+    context: "the runtime has several writers\n\nand no server",
+    decision: "open the database in WAL with a busy timeout",
+    consequences: "no server to run, one file to back up",
+  };
+  const { a, b, first, firstText, secondText } = roundTrip(t, "round-trip", seed);
+  assert.equal(secondText, firstText);
+  assert.equal(readFileSync(first, "utf8"), firstText, "stamping the same pointer changed the file");
+  const original = getDecisionByNumber({ project: "alpha", number: 1 }, a.env);
+  const copy = getDecisionByNumber({ project: "alpha", number: 1 }, b.env);
+  for (const field of ["title", "status", "context", "decision", "consequences"]) assert.equal(copy[field], original[field], field);
+  assert.equal(copy.created_at.slice(0, 10), original.created_at.slice(0, 10));
+  assert.ok(first.endsWith("0001-store-everything-in-one-sqlite-file.md"), first);
+});
+
+test("a round trip without consequences stays byte-identical and imports no consequences", (t) => {
+  const seed = { title: "Ship without a daemon", context: "polling is enough", decision: "poll every minute" };
+  const { b, firstText, secondText } = roundTrip(t, "round-trip-bare", seed);
+  assert.equal(secondText, firstText);
+  assert.ok(!firstText.includes("## Consequences"));
+  assert.equal(getDecisionByNumber({ project: "alpha", number: 1 }, b.env).consequences, null);
+});
+
+test("importing the same file again is refused as already imported, and nothing is saved", (t) => {
+  const seed = { title: "Store everything in one SQLite file", context: "c", decision: "d" };
+  const { b, first } = roundTrip(t, "reimport", seed);
+  const again = runCli(b.env, ["decision", "import", first, "--project", "alpha"], { cwd: b.cwd });
+  assert.equal(again.status, 1);
+  assert.match(again.stderr, /already imported as #1 \(Store everything in one SQLite file\); nothing imported/);
+  assert.equal(getDecisionByNumber({ project: "alpha", number: 2 }, b.env), null);
+});
+
+test("--superseded-by imports a superseded row pointing at the successor, and stamps the file", (t) => {
+  const { env, cwd } = makeCliHome(t, "import-superseded");
+  const successor = seedDecisions(env);
+  const file = writeDecisionFile(
+    t,
+    "0003-old-rule",
+    "# 0003 - Widgets live on one shelf\n\nStatus: Accepted (2026-01-05), later narrowed\nwhen shelves became configurable.\n\n## Context\n\nShelves hold widgets.\n\n## Decision\n\nOne shelf per widget.\n",
+  );
+  const result = runCli(env, ["decision", "import", file, "--superseded-by", "1"], { cwd });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "imported as #3");
+  const row = getDecisionByNumber({ project: "alpha", number: 3 }, env);
+  assert.equal(row.status, "superseded");
+  assert.equal(row.superseded_by, successor.id);
+  assert.equal(row.superseded_by_number, 1);
+  assert.equal(row.created_at, "2026-01-05 00:00:00");
+  assert.ok(readFileSync(file, "utf8").startsWith("# 0003 - Widgets live on one shelf\n\nDecision #3 in the alpha store.\n\nStatus: Accepted"));
+  const conflict = runCli(env, ["decision", "import", file, "--superseded-by", "1", "--status", "accepted"], { cwd });
+  assert.equal(conflict.status, 1);
+  assert.match(conflict.stderr, /conflicts with `--status accepted`/);
+});
+
+test("--status overrides the file's Status:, and a file without one needs it", (t) => {
+  const { env, cwd } = makeCliHome(t, "import-status");
+  const file = writeDecisionFile(t, "0006-studio", "# 0006 - A studio for gizmos\n\nStatus: Proposed (2026-03-01).\n\n## Context\n\nGizmos are edited by hand.\n\n## Decision\n\nBuild a studio.\n\n## Pros\n\nFaster edits.\n");
+  const result = runCli(env, ["decision", "import", file, "--status", "accepted"], { cwd });
+  assert.equal(result.status, 0, result.stderr);
+  const row = getDecisionByNumber({ project: "alpha", number: 1 }, env);
+  assert.equal(row.status, "accepted");
+  assert.equal(row.decision, "Build a studio.\n\n## Pros\n\nFaster edits.");
+  const bare = writeDecisionFile(t, "no-status", "# Paint gadgets blue\n\n## Context\n\nc\n\n## Decision\n\nd\n");
+  const refused = runCli(env, ["decision", "import", bare], { cwd });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /no `Status:` line .*pass --status <status>/);
+});
+
+test("an import that overlaps a decision lists the candidates, and --unrelated imports it", (t) => {
+  const { env, cwd } = makeCliHome(t, "import-overlap");
+  seedDecisions(env);
+  const file = writeDecisionFile(t, "overlap", "# Store everything in one SQLite database\n\nStatus: Accepted (2026-02-02).\n\n## Context\n\nc\n\n## Decision\n\nd\n");
+  const refused = runCli(env, ["decision", "import", file], { cwd });
+  assert.equal(refused.status, 1);
+  assert.ok(refused.stderr.includes("  #1 Store everything in one SQLite file (accepted)"), refused.stderr);
+  assert.match(refused.stderr, /--supersedes <n,\.\.\.>.*--unrelated <n,\.\.\.>/);
+  assert.equal(getDecisionByNumber({ project: "alpha", number: 3 }, env), null);
+  assert.ok(!readFileSync(file, "utf8").includes("Decision #"), "a refused import stamped the file");
+  const malformed = runCli(env, ["decision", "import", file, "--unrelated", "1,x"], { cwd });
+  assert.equal(malformed.status, 1);
+  assert.match(malformed.stderr, /`--unrelated` expects a positive integer decision number, got `x`/);
+  const accepted = runCli(env, ["decision", "import", file, "--unrelated", "1"], { cwd });
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(accepted.stdout.trim(), "imported as #3");
+});
+
+test("export refuses an existing file unless --force, and defaults to docs/decisions of the current directory", (t) => {
+  const { env, cwd } = makeCliHome(t, "export-force");
+  seedDecisions(env);
+  const first = runCli(env, ["decision", "export", "1"], { cwd });
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(first.stdout.trim(), join(realpathSync(cwd), "docs", "decisions", "0001-store-everything-in-one-sqlite-file.md"));
+  const again = runCli(env, ["decision", "export", "1"], { cwd });
+  assert.equal(again.status, 1);
+  assert.match(again.stderr, /already exists; pass --force to overwrite it/);
+  assert.equal(runCli(env, ["decision", "export", "1", "--force"], { cwd }).status, 0);
+});
+
+test("export never creates the database nor a file when the home has none", (t) => {
+  const { env, cwd } = makeCliHome(t, "export-no-database");
+  const dir = makeDir(t, "export-no-database-dir");
+  const result = runCli(env, ["decision", "export", "1", "--dir", dir], { cwd });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /unknown decision #1 for `alpha`/);
+  assert.equal(existsSync(dbPath(env)), false, "export created the database");
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+test("export never writes the database", (t) => {
+  const { env, cwd } = makeCliHome(t, "export-read-only");
+  seedDecisions(env);
+  const before = readFileSync(dbPath(env));
+  const result = runCli(env, ["decision", "export", "1", "--dir", makeDir(t, "export-read-only-dir")], { cwd });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readFileSync(dbPath(env)), before, "export wrote to the database");
 });

@@ -75,6 +75,7 @@ const serverPrStates = createPrStateCache();
 const target = z.enum(LESSON_TARGETS).nullable().optional();
 const optionalText = z.string().nullable().optional();
 const optionalId = z.number().int().min(1).nullable().optional();
+const optionalNumbers = z.array(z.number().int().min(1)).nullable().optional();
 const optionalDecisionStatus = z.enum(DECISION_STATUSES).nullable().optional();
 const looseDecisionStatus = z.string().nullable().optional();
 const optionalRoadmapStatus = z.enum(ROADMAP_STATUSES).nullable().optional();
@@ -250,6 +251,30 @@ function requireCwd(cwd) {
 function namedProject(project, env) {
   if (typeof project !== "string" || project.trim() === "") return null;
   return requireProjectName(project, env);
+}
+
+// Answer of a decision save the gate held back: nothing was written, and every candidate must be named.
+function needsReviewAnswer(candidates) {
+  return {
+    ok: false,
+    status: "needs_review",
+    candidates,
+    hint: "nothing was saved: save again naming every candidate by its `number`, in `supersedes` (replaced whole) or in `unrelated` (left untouched)",
+  };
+}
+
+// Answer of a saved decision, with the rows it superseded and the job that proposed it.
+function savedDecisionAnswer(saved) {
+  return {
+    ok: true,
+    id: saved.id,
+    number: saved.number,
+    scope: saved.scope,
+    owner: saved.org ?? saved.project,
+    ...(saved.superseded.length ? { superseded: saved.superseded } : {}),
+    ...(saved.jobId !== null ? { job_id: saved.jobId } : {}),
+    ...(saved.statusDefaulted ? { status_defaulted: true } : {}),
+  };
 }
 
 // Owner a decisions or roadmap tool names: `project` (the registered NAME) XOR `org`, refusing both and neither.
@@ -815,7 +840,11 @@ function toolDefinitions(env) {
         description:
           "Records one architecture decision: the context that forced it, what was decided and what it costs. " +
           "Owned by `project` (the registered NAME, never a path) or by `org`, never both — an org decision binds every project of that org and is the right shape when the constraint holds for more than one repo of the same product. " +
-          "Numbered inside its owner (`#1`, `#2` per project; `acme#1`, `acme#2` per org); a missing or invalid `status` falls back to `proposed` (the answer then carries `status_defaulted: true`).",
+          "Numbered inside its owner (`#1`, `#2` per project; `acme#1`, `acme#2` per org); a missing or invalid `status` falls back to `proposed` (the answer then carries `status_defaulted: true`). " +
+          "Before saving, the title is searched against the owner's accepted and proposed decision titles, and the title plus decision text against their meaning. " +
+          'When it overlaps any, nothing is saved and the answer is `status: "needs_review"` with `candidates` (id, number, title, status, via). ' +
+          "Save again naming EVERY candidate by its `number`: in `supersedes` the ones this decision replaces WHOLE (they become `superseded` and point at the new row, so restate in the new text what still holds), in `unrelated` the ones it leaves untouched. " +
+          "Any candidate left unnamed refuses again. Inside a queue job `supersedes` is refused, and a job proposes at most one decision.",
         inputSchema: {
           project: optionalText,
           org: optionalText,
@@ -824,25 +853,23 @@ function toolDefinitions(env) {
           decision: z.string(),
           consequences: optionalText,
           status: looseDecisionStatus,
+          supersedes: optionalNumbers,
+          unrelated: optionalNumbers,
         },
       },
       handler: async (args) => {
-        const saved = await openStore(env).decisions.saveDecision({
+        const saved = await openStore(env).decisions.saveReviewedDecision({
           ...ownerArgs(args, env),
           title: args.title,
           context: args.context,
           decision: args.decision,
           consequences: args.consequences,
           status: args.status,
+          supersedes: args.supersedes,
+          unrelated: args.unrelated,
+          jobId: callerJobId(env),
         });
-        return {
-          ok: true,
-          id: saved.id,
-          number: saved.number,
-          scope: saved.scope,
-          owner: saved.org ?? saved.project,
-          ...(saved.statusDefaulted ? { status_defaulted: true } : {}),
-        };
+        return saved.needsReview ? needsReviewAnswer(saved.candidates) : savedDecisionAnswer(saved);
       },
     },
     {
@@ -850,7 +877,8 @@ function toolDefinitions(env) {
       config: {
         description:
           "Changes a decision by its `id`: accept or reject a proposed one, correct its text, or point `superseded_by` at the decision that replaced it. " +
-          "Only the fields present are touched; an explicit `null` is treated exactly like an absent one.",
+          "Only the fields present are touched; an explicit `null` is treated exactly like an absent one. " +
+          '`status: "superseded"` requires `superseded_by`, unless the decision already names its successor.',
         inputSchema: {
           id: z.number().int().min(1),
           title: optionalText,

@@ -12,7 +12,7 @@ const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
 
 const SCHEMAS = {
   decision_save: {
-    properties: ["consequences", "context", "decision", "org", "project", "status", "title"],
+    properties: ["consequences", "context", "decision", "org", "project", "status", "supersedes", "title", "unrelated"],
     required: ["context", "decision", "title"],
   },
   decision_update: {
@@ -141,12 +141,12 @@ test("a missing or invalid status falls back to proposed and flags it; a valid o
   assert.equal(noStatus.status_defaulted, true);
   assert.equal(getDecision(noStatus.id, env).status, "proposed");
 
-  const badStatus = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, title: "a second one", status: "maybe" } }));
+  const badStatus = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, title: "a second one", status: "maybe", unrelated: [1] } }));
   assert.equal(badStatus.status_defaulted, true);
   assert.equal(getDecision(badStatus.id, env).status, "proposed");
 
   const explicit = payloadOf(
-    await client.callTool({ name: "decision_save", arguments: { ...DECISION, title: "a third one", status: "accepted" } }),
+    await client.callTool({ name: "decision_save", arguments: { ...DECISION, title: "a third one", status: "accepted", unrelated: [1, 2] } }),
   );
   assert.equal("status_defaulted" in explicit, false);
   assert.equal(getDecision(explicit.id, env).status, "accepted");
@@ -161,7 +161,7 @@ test("decision_recall never returns a proposed decision and never truncates, whe
   payloadOf(
     await client.callTool({
       name: "decision_save",
-      arguments: { ...DECISION, title: "worker pools are never shared", status: "proposed" },
+      arguments: { ...DECISION, title: "worker pools are never shared", status: "proposed", unrelated: [1] },
     }),
   );
 
@@ -175,7 +175,7 @@ test("decision_recall never returns a proposed decision and never truncates, whe
   );
   assert.equal(recalled[0].title, title);
 
-  const updated = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: 1, status: "superseded" } }));
+  const updated = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: 1, status: "superseded", superseded_by: 2 } }));
   assert.equal(updated.decision.title, `${title.slice(0, 500)}...`, "decision_update is not one of the untruncated surfaces");
   assert.deepEqual(Object.keys(updated.decision).sort(), ["id", "number", "owner", "scope", "status", "title", "updated_at"]);
 });
@@ -261,4 +261,51 @@ test("outside a job the ownership guard restricts nothing: the operator updates 
   assert.equal(decision.decision.status, "rejected");
   const item = payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: foreignItem.id, status: "dropped" } }));
   assert.equal(item.item.status, "dropped");
+});
+
+test("an overlapping decision_save answers needs_review, writes nothing, and saves once every candidate is named", async (t) => {
+  const env = makeDecisionHome(t, "mcp-decisions-needs-review");
+  const client = await connect(t, env);
+  payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, status: "accepted" } }));
+
+  const overlapping = { ...DECISION, title: "the queue keeps one job per runner", status: "accepted" };
+  const refused = payloadOf(await client.callTool({ name: "decision_save", arguments: overlapping }));
+  assert.equal(refused.ok, false);
+  assert.equal(refused.status, "needs_review");
+  assert.deepEqual(
+    refused.candidates.map((row) => [row.number, row.status, row.via]),
+    [[1, "accepted", "lexical"]],
+  );
+  assert.match(refused.hint, /nothing was saved/);
+  assert.equal(getDecision(2, env), null, "a refused save wrote a row");
+
+  const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...overlapping, supersedes: [1] } }));
+  assert.deepEqual(saved, { ok: true, id: 2, number: 2, scope: "project", owner: "alpha", superseded: [1] });
+  assert.equal(getDecision(1, env).status, "superseded");
+  assert.equal(getDecision(1, env).superseded_by, 2);
+});
+
+test("inside a job decision_save stamps job_id, refuses supersedes, and refuses a second proposal", async (t) => {
+  const env = makeDecisionHome(t, "mcp-decisions-job-proposal");
+  const job = addJob({ project: "alpha", prompt: "rewrite the runner" }, env);
+  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+
+  const first = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, status: "proposed" } }));
+  assert.equal(first.job_id, job.id);
+  assert.equal(getDecision(first.id, env).job_id, job.id);
+
+  const second = await client.callTool({
+    name: "decision_save",
+    arguments: { ...DECISION, title: "embeddings stay optional", status: "proposed" },
+  });
+  assert.equal(second.isError, true);
+  assert.match(textOf(second), new RegExp(`job ${job.id} already proposed decision #1; a job proposes at most one decision`));
+
+  const superseding = await client.callTool({
+    name: "decision_save",
+    arguments: { ...DECISION, title: "embeddings stay optional", status: "accepted", supersedes: [1] },
+  });
+  assert.equal(superseding.isError, true);
+  assert.ok(textOf(superseding).includes(`inside job ${job.id} \`supersedes\` is refused`), textOf(superseding));
+  assert.equal(getDecision(first.id, env).status, "proposed");
 });

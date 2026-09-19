@@ -95,14 +95,15 @@ function normalize(text, substitutions) {
   // would have to wait for, and a baseline that never read a pause cannot carry the two fields that say it.
   // So are its `cap` (no default ceiling since one job per runner) and `max` (the budget a baseline never reported).
   // The `hook PreToolUse` doctor check is the same kind of additive difference: a baseline exported before
-  // the subagent-foreground hook landed never registers it, so it never reports the check either.
+  // the subagent-foreground hook landed never registers it, so it never reports the check either; so is `decision proposals`.
   // The last count key is `closed` since the `merged` status was retired, a rename a baseline before it cannot carry.
   return out
     .replace(/schema v\d+/g, "schema v<N>")
     .replace(/"cancelled":(\d+),"merged":/g, '"cancelled":$1,"closed":')
     .replace(/"pausedUntil":(?:null|"[^"]*"),"rateLimit":(?:null|\{[^{}]*\}),/g, "")
     .replace(/"cap":(?:null|\d+),(?:"max":(?:null|\d+),)?/g, "")
-    .replace(/\{"name":"hook PreToolUse"[^{}]*\},?/g, "");
+    .replace(/\{"name":"hook PreToolUse"[^{}]*\},?/g, "")
+    .replace(/\{"name":"decision proposals"[^{}]*\},?/g, "");
 }
 
 function assertParity(label, before, after, substitutionsBefore, substitutionsAfter) {

@@ -19,6 +19,15 @@ function addDecision(env, { project = "alpha", title, decision }) {
   return saveDecision({ project, title, context: `${title} had to be settled`, decision, status: "accepted" }, env);
 }
 
+// Lines of one section of the block, from its heading to the next blank line.
+function sectionLines(block, heading) {
+  const lines = block.split("\n");
+  const start = lines.indexOf(`## ${heading}`);
+  if (start < 0) return [];
+  const end = lines.indexOf("", start);
+  return lines.slice(start + 1, end < 0 ? lines.length : end);
+}
+
 // Parsed session state file of a session.
 function readState(sessionId, env) {
   return JSON.parse(readFileSync(sessionStatePath(sessionId, env), "utf8"));
@@ -80,7 +89,7 @@ test("the session block opens with the standing decisions of the project", async
   const repo = makeProject(t, env, "alpha");
   addLesson(env, { title: "the worker leaks a file descriptor on failure" });
   const accepted = addDecision(env, { title: "state.json is written by the runtime", decision: "only run-state.mjs writes it" });
-  saveDecision(
+  const proposed = saveDecision(
     { project: "alpha", title: "the queue runs on postgres", context: "still open", decision: "nothing settled yet" },
     env,
   );
@@ -88,7 +97,18 @@ test("the session block opens with the standing decisions of the project", async
   const block = await runSessionStart({ input: { session_id: "s1", cwd: repo }, env });
   assert.match(block, /## Standing decisions/);
   assert.match(block, new RegExp(`- #${accepted.number} state.json is written by the runtime: only run-state.mjs writes it`));
-  assert.equal(block.includes("the queue runs on postgres"), false, "a decision that is only proposed is not a standing constraint");
+  const binding = [...sectionLines(block, "Standing decisions"), ...sectionLines(block, "Standing decisions in detail")];
+  assert.equal(
+    binding.some((line) => line.includes("the queue runs on postgres")),
+    false,
+    "a decision that is only proposed is not a standing constraint",
+  );
+  assert.deepEqual(sectionLines(block, "Proposed (not binding)"), [`- #${proposed.number} the queue runs on postgres`]);
+  assert.equal(block.includes("nothing settled yet"), false, "a proposal is listed by title only");
+  assert.ok(
+    block.indexOf("## Standing decisions in detail") < block.indexOf("## Proposed (not binding)"),
+    "the proposals come after the standing decisions",
+  );
   assert.ok(
     block.indexOf("## Standing decisions") < block.indexOf("## Lessons learned"),
     "the standing constraints come before the lessons",
@@ -110,8 +130,50 @@ test("a large corpus keeps the standing decisions and the lessons inside the bud
 
   const block = await runSessionStart({ input: { session_id: "s1", cwd: repo }, env });
   assert.ok(block.length <= 9000, `the block is ${block.length} characters long`);
-  assert.match(block, /## Standing decisions/);
-  assert.match(block, /\[L\d+\]/, "the decisions section pushed every lesson out of the budget");
+  assert.match(block, /## Standing decisions\n/);
+  assert.match(block, /## Standing decisions in detail/);
+  assert.match(
+    block,
+    /\[L\d+\]/,
+    "the `## Standing decisions` titles and the `## Standing decisions in detail` section pushed every lesson out of the budget",
+  );
+});
+
+test("thirty accepted decisions inject thirty title lines and eight detail lines", async (t) => {
+  const env = makeHome(t, "hook-start-all-titles");
+  const repo = makeProject(t, env, "alpha");
+  for (let i = 0; i < 30; i += 1) {
+    addDecision(env, { title: `rule ${i}`, decision: `keep rule ${i}` });
+  }
+
+  const block = await runSessionStart({ input: { session_id: "s1", cwd: repo }, env });
+  const titles = sectionLines(block, "Standing decisions");
+  const detail = sectionLines(block, "Standing decisions in detail");
+  assert.equal(titles.filter((line) => /^- #\d+ /.test(line)).length, 30, block);
+  assert.equal(titles.length, 30, block);
+  assert.equal(detail.filter((line) => /^- #\d+ /.test(line)).length, 8, block);
+  assert.equal(detail.length, 8, block);
+  assert.equal(titles[0], "- #1 rule 0", "the titles come in numbering order");
+  assert.equal(block.includes("## Proposed (not binding)"), false, "an empty proposed section was printed");
+});
+
+test("titles beyond their budget end with how many were left out, and the lessons stay", async (t) => {
+  const env = makeHome(t, "hook-start-title-overflow");
+  const repo = makeProject(t, env, "alpha");
+  for (let i = 0; i < 60; i += 1) {
+    addDecision(env, { title: `rule ${i} ${"about the queue runner lease ".repeat(6)}`, decision: `keep rule ${i}` });
+  }
+  addLesson(env, { title: "the worker leaks a file descriptor on failure" });
+
+  const block = await runSessionStart({ input: { session_id: "s1", cwd: repo }, env });
+  const titles = sectionLines(block, "Standing decisions");
+  const listed = titles.filter((line) => /^- #\d+ /.test(line)).length;
+  const leftOut = 60 - listed;
+  assert.ok(leftOut > 0 && listed > 0, block);
+  assert.equal(titles.at(-1), `- ${leftOut} more title(s) left out; \`decision_list\` has them all.`);
+  assert.equal(titles.length, listed + 1);
+  assert.match(block, /\[L\d+\] the worker leaks a file descriptor on failure/);
+  assert.ok(block.length <= 9000, `the block is ${block.length} characters long`);
 });
 
 test("a working directory outside every registered project leaks nothing into the session", async (t) => {
