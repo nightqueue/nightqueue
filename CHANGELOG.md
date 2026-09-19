@@ -180,6 +180,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `nightshift queue status --follow` redraws the table over itself on a
+  terminal instead of clearing the screen every tick, which piled one copy of
+  the table per tick in the scrollback of iTerm2 and Terminal.app. The frame
+  is cut to the width and the height of the terminal (`… +N more lines` when
+  the queue is taller), the cursor is hidden while it runs and given back on
+  the way out, and a resize redraws from the top. A pipe still only prints
+  what changed.
+
 - A run the CLI killed at its background-wait ceiling is no longer recorded as a
   job waiting for a decision. A stream carrying the ceiling line, or a task the
   CLI marked `killed`, is a failure whatever the final text says, whatever

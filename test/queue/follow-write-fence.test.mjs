@@ -13,7 +13,7 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 // ACCEPTANCE of decision #24: `queue status --follow` writes nothing, on a read-only home where a repair and a prune WOULD write.
 
 const QUEUE_SRC = fileURLToPath(new URL("../../src/cli/queue.mjs", import.meta.url));
-const REDRAW = "[2J[H";
+const REDRAW = "\u001b[0J";
 const HEADER = /ID\s+STATUS\s+DURATION/;
 const TICKS = 3;
 const DEAD_PID = 999_998;

@@ -6,7 +6,7 @@ import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { makeHome, makeProject, seedLegacyV8Home } from "../../test-support/memory.mjs";
 
-const REDRAW = "\u001b[2J\u001b[H";
+const REDRAW = "\u001b[0J";
 
 // The schema version and the shape of `jobs` on disk right now, read on a fresh connection.
 function schemaState(env) {

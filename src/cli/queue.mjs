@@ -700,11 +700,68 @@ function listingOptions(values) {
   return { limit: requireInt("--limit", values.limit), blockedOnly: values.blocked === true };
 }
 
-// Writes one frame of the follow: the whole screen on a terminal, only what changed on a pipe; it returns the text it drew.
-function writeFrame(lines, { ctx, footer, previous }) {
+const HIDE_CURSOR = "\u001b[?25l";
+const SHOW_CURSOR = "\u001b[?25h";
+const CLEAR_BELOW = "\u001b[0J";
+const ANSI_SEQUENCE = /\u001b\[[0-9;?]*[A-Za-z]/y;
+
+// Cuts a painted line to a number of visible columns, letting the ANSI codes through, so a line never wraps and the row count of a frame stays exact.
+function clipAnsi(line, width) {
+  if ([...stripAnsi(line)].length <= width) return line;
+  let visible = 0;
+  let result = "";
+  let index = 0;
+  while (visible < width - 1) {
+    ANSI_SEQUENCE.lastIndex = index;
+    const sequence = ANSI_SEQUENCE.exec(line);
+    const piece = sequence ? sequence[0] : String.fromCodePoint(line.codePointAt(index));
+    if (!sequence) visible += 1;
+    result += piece;
+    index += piece.length;
+  }
+  return `${result}…\u001b[0m`;
+}
+
+// A text without its ANSI codes.
+function stripAnsi(text) {
+  return text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
+}
+
+// The rows of a frame as the terminal can hold them: every row cut to the width, and the body cut to the height with a line saying how much was left out.
+function fitFrame(lines, footer, stdout) {
+  const columns = Number.isInteger(stdout.columns) && stdout.columns > 0 ? stdout.columns : null;
+  const rows = Number.isInteger(stdout.rows) && stdout.rows > 3 ? stdout.rows : null;
+  const room = rows === null ? lines.length : rows - 2;
+  const body = lines.length <= room ? lines : [...lines.slice(0, room - 1), `… +${lines.length - room + 1} more lines - narrow it with --limit`];
+  const all = [...body, footer];
+  return columns === null ? all : all.map((line) => clipAnsi(line, columns));
+}
+
+// The terminal side of a follow: it redraws the frame over the previous one instead of clearing the screen, so the scrollback
+// keeps one table and not one per tick. A resize redraws from the top, because the rows already drawn rewrapped under it.
+function createFrameScreen(stdout) {
+  let drawn = 0;
+  let size = null;
+  return {
+    draw(lines, footer) {
+      const rows = fitFrame(lines, footer, stdout);
+      const nextSize = `${stdout.columns}x${stdout.rows}`;
+      const back = drawn === 0 ? `${HIDE_CURSOR}\r` : size === nextSize ? `\u001b[${drawn}A\r` : "\u001b[H";
+      stdout.write(`${back}${CLEAR_BELOW}${rows.join("\n")}\n`);
+      drawn = rows.length;
+      size = nextSize;
+    },
+    release() {
+      if (drawn > 0) stdout.write(SHOW_CURSOR);
+    },
+  };
+}
+
+// Writes one frame of the follow: redrawn in place on a terminal, only what changed on a pipe; it returns the text it drew.
+function writeFrame(lines, { ctx, footer, previous, screen }) {
   const text = lines.join("\n");
-  if (ctx.stdout?.isTTY === true) {
-    ctx.stdout.write(`[2J[H${text}\n${paint(footer, "2", useColor(ctx))}\n`);
+  if (screen) {
+    screen.draw(lines, paint(footer, "2", useColor(ctx)));
   } else if (text !== previous) {
     for (const line of lines) ctx.out(line);
     ctx.out("");
@@ -726,15 +783,18 @@ async function followStatus(values, intervalS, ctx, prStates) {
   const onSignal = () => {
     stop = true;
   };
+  const screen = ctx.stdout?.isTTY === true ? createFrameScreen(ctx.stdout) : null;
+  const onExit = () => screen?.release();
   await ensureStoreExists(ctx.env);
   process.once("SIGINT", onSignal);
+  process.once("exit", onExit);
   try {
     while (!stop) {
       const startedAt = now();
       const view = await withReadOnlyStore(ctx.env, (store) => queueView(store, { ...options, env: ctx.env, prStates, killImpl: ctx.killImpl, now }));
       const achievedMs = previousStart === null ? null : startedAt - previousStart;
       const footer = cadenceFooter({ achievedMs, intervalS, readMs: now() - startedAt, sections: view.sections });
-      previous = writeFrame(renderQueueView(view, ctx, options), { ctx, footer, previous });
+      previous = writeFrame(renderQueueView(view, ctx, options), { ctx, footer, previous, screen });
       previousStart = startedAt;
       void prStates.refresh(prUrlsOf(view.jobs), ctx.env);
       if (values["until-idle"] === true && view.idle) return true;
@@ -743,6 +803,8 @@ async function followStatus(values, intervalS, ctx, prStates) {
     return true;
   } finally {
     process.removeListener("SIGINT", onSignal);
+    process.removeListener("exit", onExit);
+    screen?.release();
     prStates.dispose();
   }
 }

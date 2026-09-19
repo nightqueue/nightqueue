@@ -12,7 +12,7 @@ import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 // ACCEPTANCE of decisions #24/#25: a follow behind a gh that takes 2s to fail redraws as often as one with the checks off.
 
 const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
-const REDRAW = "[2J[H";
+const REDRAW = "\u001b[0J";
 const RUN_MS = 22_000;
 const SLOW_GH_MS = 2_000;
 const PR_FIELDS = "state,mergedAt,mergeCommit,mergeable,isDraft";
