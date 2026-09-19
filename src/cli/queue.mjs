@@ -703,6 +703,9 @@ function listingOptions(values) {
 const HIDE_CURSOR = "\u001b[?25l";
 const SHOW_CURSOR = "\u001b[?25h";
 const CLEAR_BELOW = "\u001b[0J";
+// Autowrap goes off while a frame is written: a double-width character (⛔, ⏸, CJK in a slug) then never wraps a row, which would make the next climb fall short.
+const WRAP_OFF = "\u001b[?7l";
+const WRAP_ON = "\u001b[?7h";
 const ANSI_SEQUENCE = /\u001b\[[0-9;?]*[A-Za-z]/y;
 
 // Cuts a painted line to a number of visible columns, letting the ANSI codes through, so a line never wraps and the row count of a frame stays exact.
@@ -747,7 +750,7 @@ function createFrameScreen(stdout) {
       const rows = fitFrame(lines, footer, stdout);
       const nextSize = `${stdout.columns}x${stdout.rows}`;
       const back = drawn === 0 ? `${HIDE_CURSOR}\r` : size === nextSize ? `\u001b[${drawn}A\r` : "\u001b[H";
-      stdout.write(`${back}${CLEAR_BELOW}${rows.join("\n")}\n`);
+      stdout.write(`${back}${CLEAR_BELOW}${WRAP_OFF}${rows.join("\n")}\n${WRAP_ON}`);
       drawn = rows.length;
       size = nextSize;
     },
