@@ -270,9 +270,9 @@ async function checkDatabase(ctx) {
   try {
     const { schemaVersion, errors } = await store.health();
     if (errors.schemaVersion !== null) return check("database", "fail", errors.schemaVersion, `inspect ${path}`);
-    return schemaVersion === DB_USER_VERSION
-      ? check("database", "ok", `schema v${schemaVersion}`)
-      : check("database", "fail", `schema v${schemaVersion}, expected v${DB_USER_VERSION}`, schemaVersionHint(schemaVersion));
+    if (schemaVersion === DB_USER_VERSION) return check("database", "ok", `schema v${schemaVersion}`);
+    const status = schemaVersion < DB_USER_VERSION ? "warn" : "fail";
+    return check("database", status, `schema v${schemaVersion}, expected v${DB_USER_VERSION}`, schemaVersionHint(schemaVersion));
   } catch (err) {
     return check("database", "fail", err?.message ?? String(err), `inspect ${path}`);
   } finally {
@@ -546,7 +546,7 @@ function worktreeDirs(dir) {
 
 // Reports every leftover under the `.claude/worktrees` of one project, or one warning when git or the directory cannot be read.
 function projectLeftovers(ctx, project, owned) {
-  const listed = runCommand(ctx, "git", ["worktree", "list", "--porcelain", "-z"], { cwd: project.path });
+  const listed = runCommand(ctx, "git", ["worktree", "list", "--porcelain"], { cwd: project.path });
   if (!listed.ok) return [check(`worktrees ${project.name}`, "warn", "git could not list the worktrees of the checkout", `inspect ${project.path}`)];
   const entries = parseWorktreeList(listed.stdout);
   try {

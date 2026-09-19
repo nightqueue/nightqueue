@@ -110,7 +110,7 @@ async function judgeRegistered({ entry, path, prRecorded, env, killImpl }) {
 
 // The entry of `path` among the linked worktrees of the checkout, or null when git does not register it there; the main worktree never counts.
 async function linkedEntry(checkout, path, env) {
-  const listed = await gitRead(["worktree", "list", "--porcelain", "-z"], checkout, env);
+  const listed = await gitRead(["worktree", "list", "--porcelain"], checkout, env);
   if (!listed.ok) return { error: firstLine(listed.stderr) || "git worktree list failed" };
   const [, ...linked] = parseWorktreeList(listed.stdout);
   return { entry: linked.find((candidate) => sameDir(candidate.path, path)) ?? null };
