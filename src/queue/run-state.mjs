@@ -10,6 +10,9 @@ const RUN_LOCK = { timeoutMs: 5000, staleAfterMs: 15000 };
 // The only two outcomes the pipeline may record in `state.json`; how the process ended stays the runtime's call.
 export const RUN_OUTCOME_STATUSES = ["done", "gate"];
 
+// Where the pull request template of a run came from: the repository's own, or nightshift's fallback.
+const PR_TEMPLATE_SOURCES = ["repo", "nightshift"];
+
 // The only sub-phase of the pipeline with a record of its own: a top-level marker, never an entry of `phases`.
 const QA_STAGE_A = "qaStageA";
 
@@ -118,6 +121,25 @@ export function recordPrUrl({ project, slug, prUrl, env = process.env } = {}) {
     env,
     change: (state, at) => ({ outcome: { ...(isStateObject(state.outcome) ? state.outcome : {}), prUrl, at } }),
   });
+}
+
+// Refusal of a pull request template the record cannot trust, or null when its shape is the one state.json keeps.
+function invalidPrTemplate(template) {
+  if (!isStateObject(template) || !PR_TEMPLATE_SOURCES.includes(template.source)) {
+    return refuseEnum("template source", template?.source, PR_TEMPLATE_SOURCES);
+  }
+  if (!Array.isArray(template.headings) || !template.headings.every((heading) => typeof heading === "string")) {
+    return kept("the template `headings` must be an array of heading lines");
+  }
+  return template.source === "repo" && trimmedText(template.path) === null ? kept("a repository template needs its `path`") : null;
+}
+
+// Records the pull request template the runtime found for the run, the one Phase 7 writes the body for; the latest call wins.
+export function recordPrTemplate({ project, slug, template, env = process.env } = {}) {
+  const refused = invalidPrTemplate(template);
+  if (refused) return refused;
+  const { source, headings, path } = template;
+  return record({ project, slug, env, change: (_state, at) => ({ prTemplate: withText({ source, headings, at }, { path }) }) });
 }
 
 // Refusal of a QA stage A marker without the artifact the resume decision reads to re-enter the QA phase at stage B.

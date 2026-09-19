@@ -1,14 +1,45 @@
 # Pull request template
 
-Fixed standard for the pull request that `/nightshift:resolve` opens at the end of
-Phase 7. The title and the body come from here and from nowhere else, filled with the
-artifacts of the run that is closing. Nothing is invented: a mandatory section with no
-real data reads `None`, and only the blocks marked optional below may disappear.
+Standard for the pull request that `/nightshift:resolve` opens at the end of Phase 7.
+The title and the body are filled with the artifacts of the run that is closing.
+Nothing is invented.
 
-The pull request answers three questions and no more: what changed, where it changed,
-and what proves it works. The execution record of the run — phases, models, durations,
-lesson count, tier, proposed decisions — is NOT part of it: that data lives in the
-telemetry and in the report of Phase 8.
+The execution record of the run — phases, models, durations, lesson count, tier,
+proposed decisions — is NOT part of the pull request: that data lives in the telemetry
+and in the report of Phase 8.
+
+## Which template applies
+
+The repository's own template comes first; nightshift's is only the fallback. The
+runtime looks for it at the root of the run's checkout, in this order, and the first
+match wins:
+
+1. `.github/PULL_REQUEST_TEMPLATE.md` — the whole file.
+2. `.github/pull_request_template.md` — the whole file.
+3. `docs/PR_TEMPLATE.md` — the whole file.
+4. A pull request section of `CONTRIBUTING.md`.
+5. A pull request section of `CLAUDE.md`.
+
+A whole-file template is every heading of that file, in its order, outside code fences
+and HTML comments. A pull request section is a heading whose text carries the words
+`pull request` or `PR` (whole words, any case); its template is, in document order, the
+first fenced block of that section whose info string is empty, `markdown` or `md` and
+that carries at least one heading — its headings are the template. A section with no such
+block is no template, and the search moves to the next candidate. No candidate matched:
+the nightshift template below applies.
+
+Run `nightshift run pr --template` first; the `TEMPLATE:`/`HEADINGS:` lines it prints
+(also recorded as `prTemplate` in `state.json`) decide which template you write. Never
+decide it yourself.
+
+## A repository template in effect
+
+- Write every heading of it, in its order, each filled with this run's facts.
+- Never add `## Report`, `## Cause`, `## QA` (or `## Changes`) unless that heading is
+  the repository's own: `nightshift run pr` rejects a nightshift heading the repository
+  template does not have.
+- The repository template's own test section is written in its own format; no evidence
+  check applies to it.
 
 ## Title
 
@@ -17,76 +48,65 @@ One line, the subject of the commit created in Phase 7:
 name of an agent, a model or a vendor. The scope is optional and follows the commit
 convention detected in step 1 of Phase 7.
 
-## Body
+## The nightshift template (fallback)
 
-The three sections below are mandatory and go in this order. The fence delimits the
-MODEL in this document; the real body is emitted without a fence.
+Four sections, mandatory, in this order:
+
+- `## Report` — what was reported as happening, symptom from the reporter's point of view (user, Sentry, QA, issue), no root cause.
+- `## Cause` — what was producing the behavior, specific file/function/condition; if a hypothesis was discarded, one line saying which and why.
+- `## Changes` — what changed and where; known side effects / what was deliberately left untouched.
+- `## QA` — how it was validated, only what actually ran for this PR, as a markdown table with columns `Method | Executed | Result` and one row per method actually executed among: Automated (tsc / lint / test) with command and PASSED/FAILED/SKIPPED (reason); API with request, endpoint, status, relevant payload; Browser with URL, flow walked through, what was observed; Android / iOS emulator or device with build or OTA installed, flow walked through, what was observed. Rows that did not run are removed, never marked N/A. After the table a mandatory line `Not tested: <what was left out and the risk>`.
+
+The fence delimits the MODEL in this document; the real body is emitted without a fence.
 
 ```
-## Summary
-
-<2 to 4 lines: what changed and why, for whoever reads the pull request>
-
+## Report
+<...>
+## Cause
+<...>
 ## Changes
-
-- <area or file> — <what changed there>
-
+- <...>
 ## QA
-
-Verdict: <the verdict of the adversarial QA and, in one sentence, what it proved>
-
-Proven:
-- <one behaviour that was in fact exercised and held>
-
-Not covered:
-- <one line per real open item — omit the whole block when there is none>
+| Method | Executed | Result |
+| --- | --- | --- |
+| Automated | `<command>` | PASSED |
+Not tested: <what was left out and the risk>
 
 Opened by nightshift · run <slug>
 ```
+
+The `## QA` table starts with exactly the header `| Method | Executed | Result |` and
+its `| --- |` separator, carries at least one row, and is followed by the `Not tested:`
+line. The method cell starts with the method name: `Automated`, `API`, `Browser`,
+`Android / iOS emulator or device` (`Android`, `iOS`, `Emulator` or `Device`).
+
+## Evidence
+
+Every row of the `## QA` table is backed by a non-empty file under
+`<RUN_DIR>/evidence/`, named `<method>-<name>.<ext>`:
+
+| Row | `<method>` | What the file holds |
+| --- | --- | --- |
+| Automated | `automated` | the verifier's real output: a copy of `06-verification.md` (`automated-verification.md`), plus the PoC excerpt of `05-qa.md` when the tier produced one |
+| API | `api` | the HTTP log or the recorded request and response of Phase 6.5 |
+| Browser | `browser` | the screenshot or the page log of Phase 6.5 |
+| Android / iOS emulator or device | `emulator` | the screenshot or the log of the build or OTA exercised in Phase 6.5 |
+
+Extensions: `.log`, `.md`, `.txt`, `.png`, `.jpg`. A method with no evidence file has no
+row — never a row without a file. `nightshift run pr` answers
+`MISSING: evidence for QA row <method>` for a row whose file is absent or empty.
 
 ## Where each section comes from
 
 | Section | Real source | Rule |
 | --- | --- | --- |
-| `## Summary` | `01-triage.md` (`## Validated brief`, the Expected outcome field, `## Diagnosis` when it is a bug) plus the delivered result; in the trivial tier, the `## Brief` of Phase 0 | The same source the `## Notice` of Phase 8 uses — not the notice text, which is only written after this pull request is open. The Fast Lite Track does not run Phase 1: in the trivial tier there is no `01-triage.md`, and the summary comes from the `**Affected area:**`, `**Objective:**` and `**Expected outcome:**` fields of the Phase 0 brief, which exist in every tier — never `None`. At most 4 lines: what changed and why, not how. |
+| `## Report` | `01-triage.md` (`## Validated brief`); in the trivial tier, the `## Brief` of Phase 0 (`**Affected area:**`, `**Objective:**`, `**Expected outcome:**`) | The symptom as the reporter saw it, never the cause. For a feature: what was asked and by whom. |
+| `## Cause` | `01-triage.md` `## Diagnosis`, `03-plan.md` | For a feature, write what motivated the change — no invented root cause. |
 | `## Changes` | `## Modified files` of `04-implementation.md`, described by the matching line of `**Files to create/modify:**` of `03-plan.md` | One bullet per file or per coherent area, at most 10 bullets, one line each. A path with no matching plan line (a deviation from the plan, or the trivial tier, which has no plan) carries the path alone or the coder's deviation note — never an invented description. More than 10 paths: group by directory or area, one bullet per area with the number of files. Every path of `## Modified files` appears in EXACTLY one bullet — alone or inside a group, never in both and never dropped. |
-| `## QA` | `05-qa.md` (verdict, breaks proven and fixed, validated risks), `06-verification.md` (only the checks that in fact ran and passed) and the acceptance gate of Phase 6.5 (the real validation) | This section absorbs the tests: there is no separate test section. Rules right below. |
+| `## QA` | the files under `<RUN_DIR>/evidence/` | One row per file-backed method that really ran; `Not tested:` names what was left out (a `NOT MET` line of Phase 6.5, a `## Suggestions` item with `dedicated ticket: yes`, a part that depends on another system) and its risk. **Never drop a real open item to make the pull request look clean.** |
 
-## The `## QA` section
-
-Three blocks, in this order. `Verdict:` and `Proven:` are mandatory; `Not covered:`
-only exists when there is a real open item.
-
-- **`Verdict:`** — one line: the verdict the qa-guardian returned and, in one sentence,
-  what the adversarial QA proved (the break it found and that was fixed, or the fact
-  that the attacked risks held). The Fast Lite Track does not run Phase 5: in the
-  trivial tier write exactly `Verdict: Skipped (trivial tier)` and fill `Proven:` from
-  Phase 6 and Phase 6.5 alone.
-
-- **`Proven:`** — the list of what this change was in fact put through and survived,
-  each bullet naming the **behaviour** that was exercised, in the language of whoever
-  uses the product, never the name of a test file, of a case or of a command.
-  `- rejects a diet PDF over the size limit` is a bullet; `- 12/12 green in
-  diet-toast.test.ts` is not. Sources, merged into one list: the risks of `05-qa.md`
-  that held under attack, the break that was proven and fixed, the checks of
-  `06-verification.md` that ran and passed, and the criteria the acceptance gate of
-  Phase 6.5 confirmed at runtime. One bullet per behaviour, at most 10 — when there
-  are more, keep the ones a reviewer would want to see fail. Suite-level results are
-  not a behaviour: fold them into ONE closing bullet,
-  `- full suite green (<N> tests, <runner>)`, and only when it in fact ran. A check
-  the project does not have is not listed. Nothing ran and nothing was proven:
-  `Proven: None`.
-
-- **`Not covered:`** — the real open items of the run, one line each, at most 5: a
-  `## Suggestions` item of `05-qa.md` with the literal `dedicated ticket: yes`, a
-  `NOT MET` line (with or without `/ to confirm`) of the acceptance gate of Phase 6.5,
-  a `not-covered` vector of `## Symptom coverage` of `03-plan.md`, a part of the
-  request that depends on another system or another repository. Say in one line what
-  is open and that it is handled separately. **Never drop a real open item to make the
-  pull request look clean.** No open item: omit the block, heading included.
-
-A decision proposed by this run is NOT an open item of this body: it goes only to the
-Phase 8 report, where the operator decides whether it deserves a ticket.
+A decision proposed by this run is NOT part of this body: it goes only to the Phase 8
+report, where the operator decides whether it deserves a ticket.
 
 ## The closing line
 
@@ -98,10 +118,9 @@ variable the suffix does not exist.
 
 ## Optional lines
 
-- An issue reference (`Fixes <ID>`, `Closes #<n>`) as the last line of `## Summary`,
+- An issue reference (`Fixes <ID>`, `Closes #<n>`) as the last line of `## Report`,
   only when the brief came with a real tracker ID, in the canonical form of that
-  tracker. The v1 runtime has no issue tracker: with no ID in the brief the line does
-  not exist.
+  tracker. With no ID in the brief the line does not exist.
 
 ## Forbidden in the title and in the body
 
@@ -111,7 +130,9 @@ variable the suffix does not exist.
   is written without the `#` (`job 24`, `decision 1`) or inside a code span
   (`` `#24` ``). The only `#<number>` allowed is a real reference to an issue of this
   repository in the `Fixes`/`Closes` line.
-- A fourth `## ` section. The three above are the whole body.
+- In the nightshift template, a fifth `## ` section: the four above are the whole body.
+  A repository template has no such limit.
+- A QA row marked `N/A`: a method that did not run has no row.
 - The execution record of the run: phases, models, statuses, durations, `Lessons
   saved`, `Tier`, `Slug` as a field. It belongs to the telemetry of Phase 8, not here.
 - The name of an agent, a model or a vendor. To identify the automation, use the
@@ -124,24 +145,25 @@ variable the suffix does not exist.
 
 ## Size
 
-The body fits on one screen — past that it stops being read. Summary at most 4 lines,
-`## Changes` at most 10 bullets of one line, `Proven:` at most 10 bullets,
-`Not covered:` at most 5. Write it already fitting; do not write long expecting
-someone to cut it.
+The body fits on one screen — past that it stops being read. `## Changes` at most 10
+bullets of one line; the `## QA` table one row per method. Write it already fitting; do
+not write long expecting someone to cut it.
 
-## Before `gh pr create`
+## Before `nightshift run pr`
 
-Read the assembled body — the string that goes to the command, not this file — and
-confirm, item by item:
+Read the assembled body — the file the command reads, not this document — and confirm,
+item by item:
 
-1. The three headings `## Summary`, `## Changes` and `## QA` present, in this order,
-   and no fourth `## ` in the body.
-2. Inside `## QA`, the lines `Verdict:` and `Proven:` present; `Not covered:` present
-   if and only if the run has a real open item.
-3. No bare `#<number>` outside the `Fixes`/`Closes` line.
-4. No placeholder in double curly braces and no `<...>` example left over.
-5. The caps of the section above respected.
+1. The template is the one `nightshift run pr --template` printed.
+2. Repository template: every heading of it present, in its order, and no nightshift
+   heading it does not have.
+3. Nightshift template: `## Report`, `## Cause`, `## Changes`, `## QA` present, in this
+   order, and no fifth `## `; the `## QA` table with the exact header, at least one row,
+   no `N/A` row, and the `Not tested:` line after it; every row backed by its file under
+   `<RUN_DIR>/evidence/`.
+4. No bare `#<number>` outside the `Fixes`/`Closes` line.
+5. No placeholder in double curly braces and no `<...>` example left over.
 6. The title within 72 characters and with no final period.
 
-Any failure: fix the body and only then open the pull request. A pull request outside
-this standard is never opened.
+Any failure: fix the body and only then call the command. `REJECTED:` or `MISSING:`
+lines mean nothing was pushed.

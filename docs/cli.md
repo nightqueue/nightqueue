@@ -31,6 +31,7 @@ nightshift run check 03       # is the plan there, with the sections the pipelin
 nightshift run log            # one line per phase of this run, plus the total
 nightshift run log --json     # the same table as the only thing on stdout
 nightshift run commit --message-file msg.txt   # stage what the implementation listed, and commit it
+nightshift run pr --template                   # print and record the PR template in effect
 nightshift run pr --body-file body.md          # check the body, push and open the pull request
 ```
 
@@ -70,12 +71,26 @@ declares the repository's commit convention (a commitlint config, `.husky/`,
 what the last 30 subjects really read like - so the message is written to the
 shape the repository uses.
 
-`run pr` checks the body BEFORE anything leaves the machine, with the rules of
-`references/pr-template.md`: the three sections `## Summary`, `## Changes` and
-`## QA` present and in that order with no fourth `## `, the lines `Verdict:` and
-`Proven:` inside `## QA`, no bare `#<number>` outside a `Fixes`/`Closes` line,
-and no `{{placeholder}}` or `<...>` example left over from the template. A body that fails prints `REJECTED:
-<reason>` and exits `1` with nothing pushed. Otherwise it renames the branch
+`run pr` first resolves the run's checkout and finds the pull request template
+in effect there, first match wins: `.github/PULL_REQUEST_TEMPLATE.md`,
+`.github/pull_request_template.md`, `docs/PR_TEMPLATE.md`, then a pull request
+section of `CONTRIBUTING.md` or of `CLAUDE.md` (the first fenced markdown block of
+that section carrying headings). It prints `TEMPLATE: repo (<path>)` or
+`TEMPLATE: nightshift (fallback)` and `HEADINGS: <headings>`, and records them as
+`prTemplate` in `state.json`; `--template` stops there, reads no body and pushes
+nothing. Then it checks the body BEFORE anything leaves the machine, with the
+rules of `references/pr-template.md`. Against a repository template: every heading
+of it present and in its order, and no nightshift heading (`## Report`,
+`## Cause`, `## Changes`, `## QA`) the template does not have. Against the
+nightshift fallback: `## Report`, `## Cause`, `## Changes` and `## QA` in that
+order with no fifth `## `, a `## QA` table with the header
+`| Method | Executed | Result |` and at least one row (none marked `N/A`), a
+`Not tested:` line after it, and a non-empty file under
+`<RUN_DIR>/evidence/<method>-*` (`automated`, `api`, `browser`, `emulator`) for
+every row. Both: no bare `#<number>` outside a `Fixes`/`Closes` line, and no
+`{{placeholder}}` or `<...>` example left over from the template. A body that
+fails prints one `REJECTED: <reason>` or `MISSING: <what>` line per violation
+and exits `1` with nothing pushed. Otherwise it renames the branch
 when it still carries the `worktree-` prefix (`worktree-feat+login-google` →
 `feat/login-google`, falling back to `<type>/<slug>` from `state.json` when the
 name carries no `+`), pushes it with `git push -u origin <branch>`, opens the

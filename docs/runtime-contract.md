@@ -53,6 +53,9 @@ What a runtime has to provide, and what it can rely on:
   - `outcome{status, at, notice?, prUrl?}`: `run_outcome` (`status`, `notice`),
     `nightshift run pr` (`status: "done"`) and the runner, which writes `prUrl` at
     finalize from what the session really published - it is never a parameter.
+  - `prTemplate{source, path?, headings, at}`: `nightshift run pr` (both the
+    `--template` query and the publishing call), the template the body is checked
+    against - `repo` with its path, or `nightshift`.
   - `type`, `tier`, `tierRaiseReason`, `branch`, `worktree` and
     `qaStageA{artifact, verdict?, at}`: `run_set`; the runner also records
     `tier`/`tierRaiseReason` from the `Tier raised:` line and `type` from the `TYPE:`

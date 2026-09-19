@@ -10,19 +10,21 @@ import { formatDuration } from "../queue/narrate.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
-import { recordOutcome, recordPrUrl } from "../queue/run-state.mjs";
+import { recordOutcome, recordPrTemplate, recordPrUrl } from "../queue/run-state.mjs";
 import { phaseTelemetry, runDurationS } from "../queue/telemetry.mjs";
 import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { parseExploreArtifact } from "./explore-artifact.mjs";
 import { realPath } from "./paths.mjs";
+import { bodyProblems } from "./pr-body.mjs";
+import { findPrTemplate } from "./pr-template.mjs";
 import { SECRETS_SWEEP_USAGE, runSecretsSweep } from "./secrets-sweep.mjs";
 
 const USAGE = {
   check: "nightshift run check <NN> [--project <name> --slug <slug>]",
   commit: "nightshift run commit --message-file <path> [--files-from <path>] [--extra <pathspec>]",
   log: "nightshift run log [--json] [--project <name> --slug <slug>]",
-  pr: "nightshift run pr --body-file <path> [--title <text>] [--remove-worktree]",
+  pr: "nightshift run pr --body-file <path> [--title <text>] [--remove-worktree] | --template",
   "index-save": "nightshift run index-save <artifact> [--project <name>] [--repo-root <path>]",
   "secrets-sweep": SECRETS_SWEEP_USAGE,
 };
@@ -454,47 +456,12 @@ async function runCommit(argv, ctx) {
   return 0;
 }
 
-// The six sections a pull request body of this pipeline always carries, in the order the template fixes them.
-const PR_SECTIONS = ["## Summary", "## Changes", "## QA"];
-
-// The two lines `## QA` must carry, in the order the template fixes them.
-const QA_LINES = ["Verdict:", "Proven:"];
-
-// What a placeholder left over from the template looks like: the double curly braces and the `<...>` examples.
-const PLACEHOLDERS = [/\{\{[^}\n]*\}\}/, /<[A-Za-z][A-Za-z0-9 _./'-]*>/];
-
-// A bare `#<number>`, which GitHub turns into a cross-reference to an unrelated thread of the repository; a code span hides it.
-const BARE_REFERENCE = /(^|[^`\w&])#\d+\b/;
-
-// The one line where a `#<number>` is a real reference to an issue of the repository.
-const REFERENCE_LINE = /^(Fixes|Closes)\b/;
-
 // The branch name a worktree mangles the `<type>/<slug>` of a run into.
 const WORKTREE_BRANCH_PREFIX = "worktree-";
 
-// Which line of the body carries a heading, or -1 when the body does not carry it at all.
-function headingLine(body, heading) {
-  return body.split("\n").findIndex((line) => line.trim() === heading || line.trim().startsWith(`${heading} `));
-}
-
-// Why the body cannot be published — a missing section, a section out of order, a fourth section, a `## QA` without its lines,
-// a bare `#<number>`, a placeholder — or null when it can. The rules are the template's own (`references/pr-template.md`).
-function bodyProblem(body) {
-  const lines = body.split("\n");
-  const found = PR_SECTIONS.map((heading) => ({ heading, at: headingLine(body, heading) }));
-  const missing = found.filter((section) => section.at < 0).map((section) => section.heading);
-  if (missing.length > 0) return `the body is missing ${missing.join(", ")}`;
-  const broken = found.findIndex((section, index) => index > 0 && section.at < found[index - 1].at);
-  if (broken > 0) return `\`${found[broken].heading}\` comes before \`${found[broken - 1].heading}\`; the order is ${PR_SECTIONS.join(", ")}`;
-  const extra = lines.map((line) => line.trim()).filter((line) => line.startsWith("## ") && !PR_SECTIONS.some((heading) => line === heading || line.startsWith(`${heading} `)));
-  if (extra.length > 0) return `the body carries a fourth section \`${extra[0]}\`; the three sections are the whole body`;
-  const qa = lines.slice(found[2].at + 1).map((line) => line.trim());
-  const absent = QA_LINES.filter((prefix) => !qa.some((line) => line.startsWith(prefix)));
-  if (absent.length > 0) return `\`## QA\` is missing its ${absent.map((prefix) => `\`${prefix}\``).join(" and ")} line`;
-  const bare = lines.find((line) => !REFERENCE_LINE.test(line.trim()) && !line.trim().startsWith("```") && BARE_REFERENCE.test(line));
-  if (bare) return `the body carries a bare \`${BARE_REFERENCE.exec(bare)[0].trim().replace(/^[^#]/, "")}\` outside a Fixes/Closes line: write the number bare (job 24) or inside a code span`;
-  const placeholder = PLACEHOLDERS.map((pattern) => pattern.exec(body)).find(Boolean);
-  return placeholder ? `the body still carries the placeholder \`${placeholder[0]}\`: fill every section with this run's own facts` : null;
+// One violation of the body as the command prints it, the rules being the template's own (`references/pr-template.md`).
+function problemLine(problem) {
+  return problem.missing === undefined ? `REJECTED: ${problem.rejected}` : `MISSING: ${problem.missing}`;
 }
 
 // The title of the pull request: the one the caller passed, or the `# <title>` the body opens with.
@@ -555,22 +522,44 @@ function worktreeRemoval(run, path, env) {
   return removed.ok ? `WORKTREE REMOVED: ${path}` : `WORKTREE KEPT: ${failureLine(removed)}`;
 }
 
-// Runs `run pr`, which checks the body, publishes the branch under its final name and records the run as done.
+// Refuses a `run pr` call that asks for nothing, or for both the template query and a publication at once.
+function checkPrMode(values) {
+  if (values.template === true && values["body-file"]) {
+    throw new UserError("`--template` only prints the template in effect; call it without `--body-file`");
+  }
+  if (values.template !== true && !values["body-file"]) {
+    throw new UserError(`\`--body-file <path>\` is required to publish, or \`--template\` to print the template in effect; usage: ${USAGE.pr}`);
+  }
+}
+
+// Prints the pull request template in effect for the run and records it in state.json, so Phase 7 reads it instead of deciding.
+function announceTemplate(run, cwd, ctx) {
+  const template = findPrTemplate(cwd);
+  ctx.out(template.source === "repo" ? `TEMPLATE: repo (${template.label})` : "TEMPLATE: nightshift (fallback)");
+  ctx.out(`HEADINGS: ${template.headings.length > 0 ? template.headings.join(" · ") : "none"}`);
+  const recorded = recordPrTemplate({ project: run.project, slug: run.slug, template, env: ctx.env });
+  if (recorded.status !== "written") ctx.err(`nightshift: the pull request template was not recorded on the run: ${recorded.reason}`);
+  return template;
+}
+
+// Runs `run pr`, which finds the template in effect, checks the body against it, publishes the branch under its final name and records the run as done.
 async function runPr(argv, ctx) {
-  const options = { "body-file": { type: "string" }, title: { type: "string" }, "remove-worktree": { type: "boolean" } };
+  const options = { "body-file": { type: "string" }, title: { type: "string" }, "remove-worktree": { type: "boolean" }, template: { type: "boolean" } };
   const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, ...options });
   checkArgs(positionals, { max: 0, usage: USAGE.pr });
-  if (!values["body-file"]) throw new UserError(`\`--body-file <path>\` is required; usage: ${USAGE.pr}`);
+  checkPrMode(values);
+  const run = await resolveRun(values, ctx);
+  const cwd = worktreeOf(run, ctx.env);
+  const template = announceTemplate(run, cwd, ctx);
+  if (values.template === true) return 0;
   const bodyFile = resolve(values["body-file"]);
   const body = readRequiredFile(bodyFile, "--body-file");
-  const problem = bodyProblem(body);
-  if (problem) {
-    ctx.out(`REJECTED: ${problem}`);
+  const problems = bodyProblems({ body, template, evidenceDir: join(run.runDir, "evidence") });
+  if (problems.length > 0) {
+    for (const problem of problems) ctx.out(problemLine(problem));
     ctx.out("nothing was pushed and no pull request was opened: fix the body and call `nightshift run pr` again");
     return 1;
   }
-  const run = await resolveRun(values, ctx);
-  const cwd = worktreeOf(run, ctx.env);
   const state = readRunState({ project: run.project, slug: run.slug, env: ctx.env });
   const current = currentBranch(cwd, ctx.env);
   const branch = renameBranch({ cwd, current, final: finalBranch(current, { type: state?.type, slug: run.slug }), env: ctx.env });

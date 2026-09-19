@@ -7,6 +7,7 @@ import { decideResume } from "../../src/queue/resume.mjs";
 import {
   recordOutcome,
   recordPhaseDone,
+  recordPrTemplate,
   recordPrUrl,
   recordResume,
   recordRunFields,
@@ -108,6 +109,29 @@ test("the pull request the runtime read is recorded into the outcome, and anythi
     { status: "gate", notice: "the checks are still red", prUrl, schemaVersion: 1 },
   );
   assert.match(state.outcome.at, UTC_ISO);
+});
+
+test("the pull request template is a top-level record the latest call overwrites, refused when its shape is wrong or an agent sends it", (t) => {
+  const env = makeHome(t, "run-state-pr-template");
+  const headings = ["## Summary", "## Changes"];
+
+  for (const template of [null, { source: "other", headings }, { source: "nightshift", headings: "## QA" }, { source: "repo", headings }, { source: "repo", path: " ", headings }]) {
+    assert.equal(recordPrTemplate({ ...RUN, template, env }).status, "kept", JSON.stringify(template));
+  }
+  assert.equal(existsSync(join(runDir(RUN.project, RUN.slug, env), "state.json")), false, "a refused template created the file");
+
+  assert.equal(recordPrTemplate({ ...RUN, template: { source: "repo", path: "CLAUDE.md", headings }, env }).status, "written");
+  const { at, ...repo } = readState(env).prTemplate;
+  assert.deepEqual(repo, { source: "repo", path: "CLAUDE.md", headings });
+  assert.match(at, UTC_ISO);
+
+  assert.equal(recordPrTemplate({ ...RUN, template: { source: "nightshift", path: null, headings: ["## QA"] }, env }).status, "written");
+  assert.deepEqual(Object.keys(readState(env).prTemplate).sort(), ["at", "headings", "source"]);
+  assert.equal(readState(env).outcome, undefined, "the template was recorded as an outcome of a run that has not ended");
+
+  const viaAgent = recordRunFields({ ...RUN, fields: { prTemplate: "repo" }, env });
+  assert.equal(viaAgent.status, "kept");
+  assert.match(viaAgent.reason, /unknown field `prTemplate`/);
 });
 
 test("a termination without a reason is refused, and one with it closes the run for the resume decision", (t) => {

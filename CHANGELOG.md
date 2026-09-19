@@ -8,6 +8,17 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `nightshift run pr` checks the body against the target repository's own pull
+  request template first. It resolves the run's checkout, then takes the first
+  of `.github/PULL_REQUEST_TEMPLATE.md`, `.github/pull_request_template.md`,
+  `docs/PR_TEMPLATE.md`, or a pull request section of `CONTRIBUTING.md` or
+  `CLAUDE.md` (the first fenced markdown block of that section carrying
+  headings); it prints `TEMPLATE:` and `HEADINGS:` and records them as a
+  top-level `prTemplate` in `state.json`. A body must carry every heading of that
+  template in its order, and no nightshift heading the template does not have.
+  `nightshift run pr --template` prints and records the template alone, reads no
+  body and pushes nothing, so Phase 7 reads it instead of deciding.
+
 - `nightshift queue close <id>` and the MCP tool `queue_close` (twenty-four tools
   now): the operator's act that takes a delivered job from `done` to `closed`.
   Any other status is refused by name and nothing is written; `pr_url` is kept.
@@ -187,6 +198,19 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   merge and nothing to repair no longer opens a write connection at all.
 
 ### Changed
+
+- The nightshift pull request template is now only the fallback, and its shape
+  changed: `## Report`, `## Cause`, `## Changes`, `## QA`, where `## QA` is a
+  `| Method | Executed | Result |` table with one row per method that really ran
+  (Automated, API, Browser, Android / iOS emulator or device, never `N/A`)
+  followed by a `Not tested:` line, and every row needs a non-empty
+  `<RUN_DIR>/evidence/<method>-*` file. Each violation prints its own
+  `MISSING: <what>` or `REJECTED: <reason>` line, the evidence one reading
+  `MISSING: evidence for QA row <method>`, and nothing is pushed. It replaces the
+  `## Summary`/`## Changes`/`## QA` + `Verdict:`/`Proven:` shape: a body written
+  by a plugin older than this runtime is now `MISSING`. The Track routing table
+  gains a `QA methods of the PR` row mapping an API change to automated + api and
+  a UI change to automated + emulator (Expo) or browser (web).
 
 - Every read of the queue is a pure read. `queue status`, `queue status --follow`
   and the MCP `queue_status` render one view built from SELECTs and file reads

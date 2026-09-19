@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { run } from "../src/cli/index.mjs";
+import { runDir } from "../src/config/paths.mjs";
 import { addProject } from "../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { ghBin } from "../src/host/gh.mjs";
@@ -18,10 +19,18 @@ import { makeDir, makeHome } from "../test-support/memory.mjs";
 const SLUG = "login-google";
 const BRANCH = "worktree-feat+login-google";
 
+const REPORT = "logging in with google failed for every user.";
+
+const AUTOMATED_ROW = "| Automated | `npm test` | PASSED |";
+
 const BODY = [
-  "## Summary",
+  "## Report",
   "",
-  "the run did the thing.",
+  REPORT,
+  "",
+  "## Cause",
+  "",
+  "the callback dropped the state parameter.",
   "",
   "## Changes",
   "",
@@ -29,14 +38,37 @@ const BODY = [
   "",
   "## QA",
   "",
-  "Verdict: APPROVED — the attacked risks held.",
+  "| Method | Executed | Result |",
+  "| --- | --- | --- |",
+  AUTOMATED_ROW,
   "",
-  "Proven:",
-  "- the run did the thing",
+  "Not tested: the real google consent screen; low risk, the callback is covered by the suite.",
   "",
   "Opened by nightshift · run login-google · job 1",
   "",
 ].join("\n");
+
+// Lines 228-301 of the real acme-mobile-app CLAUDE.md, copied verbatim: the repository template of the tests.
+const ACME_CLAUDE_MD = readFileSync(new URL("./fixtures/acme-mobile-app-claude-md.md", import.meta.url), "utf8");
+
+// A body that follows the acme-mobile-app template, filled.
+const ACME_BODY = [
+  "## Summary",
+  "- login with google works again",
+  "",
+  "## Changes",
+  "- src/auth.ts: keeps the state parameter",
+  "",
+  "## Test plan",
+  "- [x] iOS físico — login com google",
+  "",
+  "## OTA-able?",
+  "- [x] Sim (só JS/TS, sem mudança nativa) — pode entrar num OTA",
+  "",
+].join("\n");
+
+// The body an older plugin wrote, before the nightshift template had four sections.
+const OLD_BODY = "## Summary\n\nthe run did the thing.\n\n## Changes\n\n- one file\n\n## QA\n\nVerdict: APPROVED\n\nProven:\n- the run did the thing\n";
 
 // A git environment that depends on nothing of the machine: no global or system configuration, and an identity of its own.
 function gitVars() {
@@ -85,8 +117,11 @@ function makeRun(t, name, { branch = BRANCH, type = "feature/refactor" } = {}) {
   const id = addJob({ project: "alpha", prompt: "log in with google" }, env).id;
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
   recordRunFields({ project: "alpha", slug: SLUG, fields: { worktree: repo.worktree, type }, env });
+  const evidence = join(runDir("alpha", SLUG, env), "evidence");
+  mkdirSync(evidence, { recursive: true });
+  writeFileSync(join(evidence, "automated-verification.md"), "## Verification: PASSED\n\nnpm test: 12 passed\n");
   assertFakeGh(env);
-  return { ...repo, env, id };
+  return { ...repo, env, id, evidence };
 }
 
 // Runs the CLI in this process, as the job the run belongs to.
@@ -109,6 +144,14 @@ function writeBody(t, name, body) {
   return path;
 }
 
+// The violation lines a rejected body printed, between the template lines and the closing `nothing was pushed` line.
+async function rejectedProblems(t, { env, id, name, body }) {
+  const result = await runCli(env, ["run", "pr", "--body-file", writeBody(t, name, body), "--title", "t"], { jobId: id });
+  assert.equal(result.code, 1, result.text);
+  assert.match(result.out.at(-1), /nothing was pushed and no pull request was opened/);
+  return result.out.slice(2, -1);
+}
+
 // The calls the fake gh received, one array of arguments per call.
 function ghCalls(env) {
   const log = env.NIGHTSHIFT_FAKE_GH_LOG;
@@ -123,13 +166,15 @@ function remoteBranches(remote) {
 
 test("`run pr` renames the branch the worktree mangled, pushes it, opens the pull request and records the run as done", async (t) => {
   const { env, id, remote, worktree } = makeRun(t, "run-pr-happy");
-  const body = writeBody(t, "run-pr-happy-body", BODY.replace("the run did the thing.", "the run did the thing.\nFixes #7"));
+  const body = writeBody(t, "run-pr-happy-body", BODY.replace(REPORT, `${REPORT}\nFixes #7`));
 
   const { code, out, err } = await runCli(env, ["run", "pr", "--body-file", body, "--title", "feat(auth): log in with google"], { jobId: id });
 
   assert.equal(code, 0);
   assert.deepEqual(err, []);
   assert.deepEqual(out, [
+    "TEMPLATE: nightshift (fallback)",
+    "HEADINGS: ## Report · ## Cause · ## Changes · ## QA",
     `BRANCH: feat/login-google (renamed from ${BRANCH})`,
     `PR: ${FAKE_GH_PR_URL}`,
     `WORKTREE: ${worktree}`,
@@ -143,7 +188,60 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
     { status: readRunState({ project: "alpha", slug: SLUG, env }).outcome.status, prUrl: readRunState({ project: "alpha", slug: SLUG, env }).outcome.prUrl },
     { status: "done", prUrl: FAKE_GH_PR_URL },
   );
+  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).prTemplate.source, "nightshift");
   assert.equal(existsSync(worktree), true);
+});
+
+test("a repository template in the worktree is the one the body follows: its headings in its order, and no nightshift heading it lacks", async (t) => {
+  const { env, id, remote, worktree } = makeRun(t, "run-pr-repo-template");
+  writeFileSync(join(worktree, "CLAUDE.md"), ACME_CLAUDE_MD);
+  const problems = (name, body) => rejectedProblems(t, { env, id, name, body });
+
+  const nightshiftShaped = await problems("run-pr-repo-nightshift", BODY);
+  assert.ok(nightshiftShaped.includes("REJECTED: the body is missing `## Summary` of the repository template (CLAUDE.md § Git & PR workflow)"), nightshiftShaped.join("\n"));
+  assert.ok(
+    nightshiftShaped.includes("REJECTED: the body carries the nightshift heading `## Report`, which the repository template (CLAUDE.md § Git & PR workflow) does not have"),
+    nightshiftShaped.join("\n"),
+  );
+  assert.equal(nightshiftShaped.some((line) => line.includes("`## Changes`")), false, "`## Changes` is the repository template's own heading");
+
+  const swapped = ACME_BODY.replace("## Changes", "## Swap").replace("## Test plan", "## Changes").replace("## Swap", "## Test plan");
+  assert.deepEqual(await problems("run-pr-repo-swapped", swapped), [
+    "REJECTED: `## Test plan` comes before `## Changes`; the repository template (CLAUDE.md § Git & PR workflow) orders them ## Summary, ## Changes, ## Test plan, ## OTA-able?",
+  ]);
+  assert.deepEqual(remoteBranches(remote), ["main"]);
+
+  const { code, out } = await runCli(env, ["run", "pr", "--body-file", writeBody(t, "run-pr-repo-body", ACME_BODY), "--title", "fix(auth): google login"], { jobId: id });
+  assert.equal(code, 0, out.join("\n"));
+  assert.deepEqual(out.slice(0, 2), ["TEMPLATE: repo (CLAUDE.md § Git & PR workflow)", "HEADINGS: ## Summary · ## Changes · ## Test plan · ## OTA-able?"]);
+  assert.equal(ghCalls(env).length, 1);
+  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).outcome.status, "done");
+});
+
+test("`run pr --template` prints and records the template in effect, reads no body and pushes nothing", async (t) => {
+  const repo = makeRun(t, "run-pr-template-repo");
+  writeFileSync(join(repo.worktree, "CLAUDE.md"), ACME_CLAUDE_MD);
+  const asked = await runCli(repo.env, ["run", "pr", "--template"], { jobId: repo.id });
+  assert.equal(asked.code, 0);
+  assert.deepEqual(asked.out, ["TEMPLATE: repo (CLAUDE.md § Git & PR workflow)", "HEADINGS: ## Summary · ## Changes · ## Test plan · ## OTA-able?"]);
+  assert.deepEqual(asked.err, []);
+  const { at, ...recorded } = readRunState({ project: "alpha", slug: SLUG, env: repo.env }).prTemplate;
+  assert.deepEqual(recorded, { source: "repo", path: "CLAUDE.md", headings: ["## Summary", "## Changes", "## Test plan", "## OTA-able?"] });
+  assert.equal(typeof at, "string");
+  assert.deepEqual(ghCalls(repo.env), []);
+  assert.deepEqual(remoteBranches(repo.remote), ["main"]);
+  assert.equal(readRunState({ project: "alpha", slug: SLUG, env: repo.env }).outcome, undefined);
+
+  const fallback = makeRun(t, "run-pr-template-fallback");
+  const plain = await runCli(fallback.env, ["run", "pr", "--template"], { jobId: fallback.id });
+  assert.deepEqual(plain.out, ["TEMPLATE: nightshift (fallback)", "HEADINGS: ## Report · ## Cause · ## Changes · ## QA"]);
+  const state = readRunState({ project: "alpha", slug: SLUG, env: fallback.env }).prTemplate;
+  assert.equal(state.source, "nightshift");
+  assert.equal("path" in state, false);
+
+  const both = await runCli(fallback.env, ["run", "pr", "--template", "--body-file", writeBody(t, "run-pr-template-both", BODY)], { jobId: fallback.id });
+  assert.equal(both.code, 1);
+  assert.match(both.errText, /`--template` only prints the template in effect; call it without `--body-file`/);
 });
 
 test("`run pr --remove-worktree` removes the worktree from the checkout that owns it, after the outcome is recorded", async (t) => {
@@ -160,41 +258,62 @@ test("`run pr --remove-worktree` removes the worktree from the checkout that own
 
 test("`run pr` rejects a placeholder, a missing section and a section out of order, and nothing is pushed", async (t) => {
   const { env, id, remote, worktree } = makeRun(t, "run-pr-rejected");
+  const problems = (name, body) => rejectedProblems(t, { env, id, name, body });
 
-  const placeholder = writeBody(t, "run-pr-placeholder", BODY.replace("the run did the thing.", "{{summary}}"));
+  const placeholder = writeBody(t, "run-pr-placeholder", BODY.replace(REPORT, "{{summary}}"));
   const withPlaceholder = await runCli(env, ["run", "pr", "--body-file", placeholder, "--title", "t"], { jobId: id });
   assert.equal(withPlaceholder.code, 1);
-  assert.equal(withPlaceholder.out[0], "REJECTED: the body still carries the placeholder `{{summary}}`: fill every section with this run's own facts");
-  assert.match(withPlaceholder.out[1], /nothing was pushed and no pull request was opened/);
+  assert.equal(withPlaceholder.out[2], "REJECTED: the body still carries the placeholder `{{summary}}`: fill every section with this run's own facts");
+  assert.match(withPlaceholder.out[3], /nothing was pushed and no pull request was opened/);
 
-  const example = writeBody(t, "run-pr-example", BODY.replace("job 1", "job <number>"));
-  const withExample = await runCli(env, ["run", "pr", "--body-file", example, "--title", "t"], { jobId: id });
-  assert.match(withExample.out[0], /^REJECTED: the body still carries the placeholder `<number>`/);
+  assert.match((await problems("run-pr-example", BODY.replace("job 1", "job <number>")))[0], /^REJECTED: the body still carries the placeholder `<number>`/);
+  assert.deepEqual(await problems("run-pr-no-qa", BODY.replace("## QA", "### QA")), ["MISSING: ## QA"]);
 
-  const noQa = writeBody(t, "run-pr-no-qa", BODY.replace("## QA", "### QA"));
-  const missing = await runCli(env, ["run", "pr", "--body-file", noQa, "--title", "t"], { jobId: id });
-  assert.equal(missing.code, 1);
-  assert.equal(missing.out[0], "REJECTED: the body is missing ## QA");
-
-  const swapped = writeBody(t, "run-pr-swapped", [BODY.split("## Summary")[1], "## Summary", "late"].join("\n"));
-  const outOfOrder = await runCli(env, ["run", "pr", "--body-file", swapped, "--title", "t"], { jobId: id });
-  assert.match(outOfOrder.out[0], /^REJECTED: `## Changes` comes before `## Summary`; the order is ## Summary, ## Changes, /);
-
-  const fourth = writeBody(t, "run-pr-fourth", `${BODY}\n## Run\n\njob 1\n`);
-  const withFourth = await runCli(env, ["run", "pr", "--body-file", fourth, "--title", "t"], { jobId: id });
-  assert.equal(withFourth.out[0], "REJECTED: the body carries a fourth section `## Run`; the three sections are the whole body");
-
-  const noProven = writeBody(t, "run-pr-no-proven", BODY.replace("Proven:", "Tested:"));
-  const withoutProven = await runCli(env, ["run", "pr", "--body-file", noProven, "--title", "t"], { jobId: id });
-  assert.equal(withoutProven.out[0], "REJECTED: `## QA` is missing its `Proven:` line");
-
-  const bare = writeBody(t, "run-pr-bare", BODY.replace("job 1", "job #1"));
-  const withBare = await runCli(env, ["run", "pr", "--body-file", bare, "--title", "t"], { jobId: id });
-  assert.match(withBare.out[0], /^REJECTED: the body carries a bare `#1` outside a Fixes\/Closes line/);
-
+  const swapped = BODY.replace("## Report", "## Swap").replace("## Cause", "## Report").replace("## Swap", "## Cause");
+  assert.deepEqual(await problems("run-pr-swapped", swapped), [
+    "MISSING: ## Report in its place: the order is ## Report, ## Cause, ## Changes, ## QA",
+  ]);
+  assert.deepEqual(await problems("run-pr-fifth", `${BODY}\n## Run\n\njob 1\n`), [
+    "REJECTED: the body carries a fifth section `## Run`; the four sections are the whole body",
+  ]);
+  assert.deepEqual(await problems("run-pr-no-not-tested", BODY.replace("Not tested:", "Untested:")), ["MISSING: Not tested: line after the QA table"]);
+  assert.deepEqual(await problems("run-pr-header", BODY.replace("| Method | Executed | Result |", "| Method | Result |")), [
+    "MISSING: QA table header | Method | Executed | Result |",
+  ]);
+  assert.deepEqual(await problems("run-pr-no-row", BODY.replace(`${AUTOMATED_ROW}\n`, "")), ["MISSING: a QA table row for a method that ran"]);
+  const notApplicable = await problems("run-pr-na", BODY.replace(AUTOMATED_ROW, `${AUTOMATED_ROW}\n| Browser | N/A | N/A |`));
+  assert.ok(notApplicable.includes("REJECTED: QA row Browser is marked N/A: a method that did not run has no row"), notApplicable.join("\n"));
+  assert.deepEqual(await problems("run-pr-unknown", BODY.replace(AUTOMATED_ROW, `${AUTOMATED_ROW}\n| Unit tests | \`npm test\` | PASSED |`)), [
+    "MISSING: a known method in QA row Unit tests (Automated, API, Browser, Android / iOS emulator or device)",
+  ]);
+  assert.deepEqual(await problems("run-pr-old-shape", OLD_BODY), [
+    "MISSING: ## Report",
+    "MISSING: ## Cause",
+    "REJECTED: the body carries a fifth section `## Summary`; the four sections are the whole body",
+    "MISSING: QA table header | Method | Executed | Result |",
+    "MISSING: Not tested: line after the QA table",
+  ]);
+  assert.match((await problems("run-pr-bare", BODY.replace("job 1", "job #1")))[0], /^REJECTED: the body carries a bare `#1` outside a Fixes\/Closes line/);
 
   assert.deepEqual(remoteBranches(remote), ["main"]);
   assert.equal(git(["-C", worktree, "rev-parse", "--abbrev-ref", "HEAD"]).trim(), BRANCH);
+  assert.deepEqual(ghCalls(env), []);
+  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).outcome, undefined);
+});
+
+test("a QA row whose method left no non-empty `<method>-*` file under the run's evidence is MISSING, and nothing is pushed", async (t) => {
+  const { env, id, remote, evidence } = makeRun(t, "run-pr-evidence");
+  const problems = (name, body) => rejectedProblems(t, { env, id, name, body });
+  const apiRow = "| API | `POST /auth/google/callback` | 200, session cookie set |";
+
+  assert.deepEqual(await problems("run-pr-api", BODY.replace(AUTOMATED_ROW, `${AUTOMATED_ROW}\n${apiRow}`)), ["MISSING: evidence for QA row API"]);
+
+  rmSync(join(evidence, "automated-verification.md"));
+  writeFileSync(join(evidence, "automated-empty.log"), "");
+  mkdirSync(join(evidence, "automated-dir"));
+  assert.deepEqual(await problems("run-pr-no-evidence", BODY), ["MISSING: evidence for QA row Automated"]);
+
+  assert.deepEqual(remoteBranches(remote), ["main"]);
   assert.deepEqual(ghCalls(env), []);
   assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).outcome, undefined);
 });
@@ -206,7 +325,7 @@ test("a worktree branch with no `<type>` to restore is published as the `<type>/
   const { code, out } = await runCli(env, ["run", "pr", "--body-file", body], { jobId: id });
 
   assert.equal(code, 0);
-  assert.equal(out[0], "BRANCH: fix/login-google (renamed from worktree-login)");
+  assert.equal(out[2], "BRANCH: fix/login-google (renamed from worktree-login)");
   assert.deepEqual(remoteBranches(remote), ["fix/login-google", "main"]);
   assert.deepEqual(ghCalls(env)[0].slice(0, 3), ["pr", "create", "--title"]);
   assert.equal(ghCalls(env)[0][3], "fix(auth): the google login");

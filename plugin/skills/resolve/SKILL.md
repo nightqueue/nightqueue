@@ -479,6 +479,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    | 🛡️ qa-guardian   | —       | —       | sonnet   |
    | ✅ verifier      | haiku   | haiku   | sonnet   |
    | Verifier scope | tsc + lint + the tests of the files that were touched (no build, no full suite) | tsc + lint + the project's FULL test suite (no QA PoCs in this tier) | the project's real checks (typecheck, lint, build, tests) + the QA's PoCs |
+   | QA methods of the PR | automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo | automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo | automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo |
    | Max fix iterations | 1 | 2 | 2 |
    | Request critique (step 2.5) | skipped | mandatory | mandatory |
    | `<CWD>/CLAUDE.md` | not named to the coder | named to the coder when it exists | named to the coder (Phase 4) |
@@ -491,6 +492,10 @@ The runtime waits for every subagent and background task of an unattended run; l
    triager runs only when the request is a bug. In the fix loops, the relaunched coder
    keeps the `model` of the task's tier. Each phase below repeats the expected `model`
    in parentheses — in case of divergence, this table is the source of truth.
+   `QA methods of the PR` is guidance for which methods to run, not a runtime check: each
+   one becomes a `## QA` row only with its file under `<RUN_DIR>/evidence/` (Phase 7
+   step 4), and the trivial tier runs no Phase 6.5, so there its non-automated methods
+   apply only when that evidence exists.
 
    The **rationale** behind this table is in **Appendix A** (end of the file). Consult it when
    changing any routing line.
@@ -1527,17 +1532,25 @@ The two commands below own the mechanics — staging, the commit, the branch nam
    set) there is no operator to answer: go straight to step 4.
 
 4. **Open the pull request:**
-   - Assemble the title and the body EXCLUSIVELY from `references/pr-template.md`, filling
-     every section with this run's artifacts (`01-triage.md`, `03-plan.md`,
-     `04-implementation.md`, `05-qa.md`, `06-verification.md` and the execution log of step
-     5.1). Invent nothing: a mandatory section with no real data reads `None`. In the PR
+   - Run `nightshift run pr --template` first. It answers `TEMPLATE: repo (<path>)` or
+     `TEMPLATE: nightshift (fallback)` and `HEADINGS: <the headings in order>`, and records
+     them as `prTemplate` in `state.json`: that is the template of the body — never decide it
+     yourself. Assemble the title and the body per `references/pr-template.md` for THAT
+     template, filling every section with this run's artifacts (`01-triage.md`, `03-plan.md`,
+     `04-implementation.md`, `05-qa.md`, `06-verification.md`). Invent nothing. In the PR
      description, identify the automation, when needed, by the nickname `nightshift` — never
      an agent, model or vendor name, and no `Co-Authored-By` trailer.
-   - **What was proven goes inside `## QA`** — the PR body has no separate test section. The
-     `Proven:` block lists each behaviour actually exercised and held (QA: risks that survived
-     the attack and the break fixed; verifier: checks that passed; runtime: acceptance
-     confirmed with a real payload, a screenshot or a device verdict), named as behaviour,
-     never a test file or command. The real open items go in `Not covered:` of the same section.
+   - **How it was validated goes inside the template's own test section.** Nightshift template:
+     the `## QA` table, one row per method that really ran, each backed by a non-empty file
+     under `<RUN_DIR>/evidence/<method>-<name>.<ext>` (`<method>` ∈ `automated`, `api`,
+     `browser`, `emulator`), then the `Not tested:` line. Before the `run pr` call, copy the
+     evidence with Write or `cp`: `automated-verification.md` ← `06-verification.md` (when
+     it does not exist, the verifier's returned answer verbatim; when the tier produced
+     `05-qa.md`, `automated-qa.md` may add its PoC excerpt); `api-*.log` ← the request and
+     response of Phase 6.5 case (a); `browser-*.png|.log` ← the screenshot or page log of
+     case (b); `emulator-*.png|.log` ← the device or emulator screenshot or log. A method with
+     no evidence file has no row. Repository template: its own test section, in its own
+     format.
    - **A decision proposed by this run is NOT part of the PR body.** When Phase 3
      saved a `## Proposed decision` block, it is reported only in Phase 8, where the
      operator decides whether it deserves a ticket.
@@ -1551,9 +1564,12 @@ The two commands below own the mechanics — staging, the commit, the branch nam
      and `+` in place of `/`), pushes it and opens the pull request, answering `BRANCH:`,
      `PR: <url>` and `WORKTREE: <path>`. You never run `git branch -m`, `git push` or
      `gh pr create` by hand.
-   - `REJECTED: <reason>` means the body failed the template's check (section order/count,
-     `Verdict:`/`Proven:` inside `## QA`, a bare `#<number>`, a placeholder or a leftover
-     `<...>` example) and nothing was pushed. Fix the body and call the command again.
+   - `REJECTED: <reason>` and `MISSING: <what>` (one line per violation; the evidence one
+     reads `MISSING: evidence for QA row <method>`) mean the body failed the check of the
+     template in effect (a heading missing or out of order, a nightshift heading against a
+     repository template, the `## QA` table or the `Not tested:` line, a bare `#<number>`, a
+     placeholder or a leftover `<...>` example) and nothing was pushed. Fix the body or the
+     evidence and call the command again.
    - **The delivery is recorded by the command itself** — `nightshift run pr` records
      `status: "done"` the moment the pull request exists; do NOT call `run_outcome` for it.
      The pull request URL is not a parameter. No pull request opened → no outcome recorded.

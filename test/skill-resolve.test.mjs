@@ -96,6 +96,9 @@ test("the three tracks are one routing table, one value per tier", () => {
   assert.deepEqual(routingRow("Request critique (step 2.5)").slice(1), ["skipped", "mandatory", "mandatory"]);
   assert.deepEqual(routingRow("`index_recall`").slice(1), ["no", "yes, to locate the affected files", "yes, in Phase 2 before the Explore"]);
   assert.deepEqual(routingRow("`context_for_phase` for the coder").slice(1), ["no", "yes", "yes"]);
+  const [, ...qaMethods] = routingRow("QA methods of the PR");
+  assert.equal(new Set(qaMethods).size, 1, "the tiers no longer share one QA method mapping");
+  for (const method of ["automated", "api", "emulator", "browser"]) assert.match(qaMethods[0], new RegExp(`\\b${method}\\b`));
 });
 
 test("every tier keeps the verifier scope, the CLAUDE.md rule and the time target of its old block", () => {
@@ -315,7 +318,10 @@ test("Phase 7 is the two `nightshift run` calls the CLI really ships, and no git
   for (const flag of ["--extra <pathspec>", "--message-file", "--body-file"]) {
     assert.ok(CLI_RUN.includes(flag), `Phase 7 passes \`${flag}\`, which the CLI does not accept`);
   }
-  for (const answer of ["CONVENTION:", "COMMITTED:", "REFUSED:", "REJECTED:", "BRANCH:", "WORKTREE:"]) {
+  assert.ok(phase.includes("`nightshift run pr --template`"), "Phase 7 no longer asks the runtime which template the body follows");
+  assert.ok(CLI_RUN.includes("| --template"), "the CLI no longer ships the template query Phase 7 calls");
+  assert.ok(phase.includes("`MISSING: evidence for QA row <method>`"), "Phase 7 no longer reads the evidence refusal");
+  for (const answer of ["CONVENTION:", "COMMITTED:", "REFUSED:", "REJECTED:", "MISSING:", "TEMPLATE:", "BRANCH:", "WORKTREE:"]) {
     assert.ok(phase.includes(answer), `Phase 7 never reads the \`${answer}\` line the command prints`);
     assert.ok(CLI_RUN.includes(answer), `Phase 7 reads \`${answer}\`, which the CLI never prints`);
   }
