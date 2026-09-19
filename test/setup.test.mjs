@@ -81,7 +81,7 @@ test("setup creates the four hook entries when settings.json does not exist", as
     { hooks: [{ type: "command", command: hookCommandOf(host, "reflect"), timeout: 15 }] },
   ]);
   assert.deepEqual(settings.hooks.PreToolUse, [
-    { matcher: "Agent|Task", hooks: [{ type: "command", command: hookCommandOf(host, "agent-foreground"), timeout: 5 }] },
+    { matcher: "Agent|Task|Bash", hooks: [{ type: "command", command: hookCommandOf(host, "agent-foreground"), timeout: 5 }] },
   ]);
   for (const event of ["SessionStart", "UserPromptSubmit", "SessionEnd", "PreToolUse"]) {
     assert.ok(out.includes(`hook ${event}: created`), out.join("\n"));

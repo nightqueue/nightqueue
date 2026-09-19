@@ -9,7 +9,7 @@ const HOOK_EVENTS = [
   { event: "SessionStart", hook: "session-start", timeout: 10 },
   { event: "UserPromptSubmit", hook: "prompt-context", timeout: 10 },
   { event: "SessionEnd", hook: "reflect", timeout: 15 },
-  { event: "PreToolUse", hook: "agent-foreground", timeout: 5, matcher: "Agent|Task" },
+  { event: "PreToolUse", hook: "agent-foreground", timeout: 5, matcher: "Agent|Task|Bash" },
 ];
 
 // Command line registered in the host for one hook of this package.

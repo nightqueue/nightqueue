@@ -20,6 +20,7 @@ The run is isolated in a git worktree, and the host refuses any Bash command it 
 - A script or a multi-line snippet is a FILE: `Write` it under the worktree (e.g. `tmp/<name>.mjs`, `.py`, `.sh`), run it with `node tmp/<name>.mjs` / `python3 tmp/<name>.py` / `sh tmp/<name>.sh`, delete it before the commit.
 - Multi-step work is several Bash calls, each with a relative path from the worktree root; never an absolute path to another checkout.
 - A refused command is never retried as is: rewrite it by the rules above.
+- A search for a file or a pattern stays inside the worktree or the project checkout — never from `/` or the home (the job refuses them) — and a plugin file lives under `plugin/` of the checkout, never elsewhere on disk.
 
 ## Operating mode
 

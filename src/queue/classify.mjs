@@ -19,6 +19,9 @@ const BACKOFF_FACTOR = 3;
 const BACKOFF_CAP_MS = 60000;
 const NOTICE_FALLBACK_LIMIT = 8000;
 const GATE_NOTICE_MARGIN_CP = 200;
+const KILLED_BASH_COMMAND_LIMIT = 120;
+const KILLED_BASH_HINT =
+  "background Bash is kept in the foreground from this version; if you see this, the hook did not run";
 
 export const SILENT_STOP_NOTICE = "Pipeline stopped without a PR and without explanation (exit 0). See the log.";
 
@@ -79,6 +82,14 @@ function pipelineOutcome(state) {
   return status || prUrl || notice ? { status, prUrl, notice } : null;
 }
 
+// Notice of a task the CLI killed after its wait ceiling: a Bash command is quoted truncated, with a hint the hook should have prevented it.
+function runtimeKillNotice(kill) {
+  const isBash = kill.taskType === "local_bash";
+  const quoted = isBash ? truncateByCodePoint(kill.description, KILLED_BASH_COMMAND_LIMIT) : kill.description;
+  const hint = isBash ? `; ${KILLED_BASH_HINT}` : "";
+  return `runtime: the CLI killed the background task "${quoted}" after its wait ceiling; the run did not finish${hint}`;
+}
+
 // Classifies one attempt of a job from what the pipeline recorded, its stream, how the process ended and the run's plan.
 export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null, planPath = null } = {}) {
   const resultText = extractResultText(log) ?? "";
@@ -87,12 +98,7 @@ export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOu
   const prUrl = extractPublishedPrUrl(log, { repo: prUrlRepo(reported) }) ?? reported;
   const kill = runtimeKillFromStream(log);
   if (kill) {
-    return {
-      status: "failed",
-      prUrl,
-      noticeMd: `runtime: the CLI killed the background task "${kill.description}" after its wait ceiling; the run did not finish`,
-      resultText,
-    };
+    return { status: "failed", prUrl, noticeMd: runtimeKillNotice(kill), resultText };
   }
   const gate = record?.status ? record.status === "gate" : hasGateMarker(resultText) || hasGateMarkerInStream(log);
   const reason = gateReason(log, resultText, record?.notice ?? null);

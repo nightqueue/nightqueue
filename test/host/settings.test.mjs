@@ -34,7 +34,7 @@ test("each event carries its own timeout, and the reflection gets the longest on
     { event: "SessionStart", command: hookCommand("session-start", ENV), timeout: 10 },
     { event: "UserPromptSubmit", command: hookCommand("prompt-context", ENV), timeout: 10 },
     { event: "SessionEnd", command: hookCommand("reflect", ENV), timeout: 15 },
-    { event: "PreToolUse", command: hookCommand("agent-foreground", ENV), timeout: 5, matcher: "Agent|Task" },
+    { event: "PreToolUse", command: hookCommand("agent-foreground", ENV), timeout: 5, matcher: "Agent|Task|Bash" },
   ]);
 });
 
@@ -54,7 +54,7 @@ test("the merge appends one group per event and says so", () => {
   ]);
   assert.deepEqual(data.hooks.PreToolUse, [
     {
-      matcher: "Agent|Task",
+      matcher: "Agent|Task|Bash",
       hooks: [{ type: "command", command: AGENT_FOREGROUND.command, timeout: AGENT_FOREGROUND.timeout }],
     },
   ]);
@@ -205,19 +205,19 @@ test("the matcher of PreToolUse is written on a fresh merge", () => {
   const data = {};
   const [status] = mergeHooks(data, ENV).filter((entry) => entry.event === "PreToolUse");
   assert.equal(status.status, "created");
-  assert.equal(data.hooks.PreToolUse[0].matcher, "Agent|Task");
+  assert.equal(data.hooks.PreToolUse[0].matcher, "Agent|Task|Bash");
 });
 
 test("a wrong or missing matcher on our own group is repaired, and the repair counts as updated", () => {
   const wrong = { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: AGENT_FOREGROUND.command, timeout: AGENT_FOREGROUND.timeout }] }] } };
   const [wrongStatus] = mergeHooks(wrong, ENV).filter((entry) => entry.event === "PreToolUse");
   assert.equal(wrongStatus.status, "updated");
-  assert.equal(wrong.hooks.PreToolUse[0].matcher, "Agent|Task");
+  assert.equal(wrong.hooks.PreToolUse[0].matcher, "Agent|Task|Bash");
 
   const missing = { hooks: { PreToolUse: [{ hooks: [{ type: "command", command: AGENT_FOREGROUND.command, timeout: AGENT_FOREGROUND.timeout }] }] } };
   const [missingStatus] = mergeHooks(missing, ENV).filter((entry) => entry.event === "PreToolUse");
   assert.equal(missingStatus.status, "updated");
-  assert.equal(missing.hooks.PreToolUse[0].matcher, "Agent|Task");
+  assert.equal(missing.hooks.PreToolUse[0].matcher, "Agent|Task|Bash");
 });
 
 test("the matcher of a group shared with a third-party entry is left alone", () => {
