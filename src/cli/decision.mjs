@@ -13,12 +13,14 @@ import { callerJobId } from "../queue/retry.mjs";
 import { openStore, openStoreReadOnly } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
-const USAGE = {
+export const USAGE = {
   list: "nightshift decision list [--project <name> | --org <name>] [--status <status>] [--json]",
   show: "nightshift decision show <number> [--project <name> | --org <name>]",
   export: "nightshift decision export <number> [--project <name> | --org <name>] [--dir <path>] [--force]",
   import:
     "nightshift decision import <file.md> [--project <name> | --org <name>] [--status <status>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]",
+  update:
+    "nightshift decision update <number> --status accepted|rejected|superseded [--superseded-by <n>] [--project <name> | --org <name>]",
 };
 
 const OWNER_OPTIONS = {
@@ -39,6 +41,14 @@ const IMPORT_OPTIONS = {
   supersedes: { type: "string" },
   unrelated: { type: "string" },
 };
+
+const UPDATE_OPTIONS = {
+  ...OWNER_OPTIONS,
+  status: { type: "string" },
+  "superseded-by": { type: "string" },
+};
+
+const UPDATABLE_STATUSES = ["accepted", "rejected", "superseded"];
 
 const READ_OPTIONS = {
   project: { type: "string" },
@@ -168,6 +178,12 @@ async function runList(argv, ctx) {
   for (const row of decisions) ctx.out(formatRow(row));
 }
 
+// Prints a decision row in full, the way `show` and `update` both answer it.
+function printDecision(ctx, target, row) {
+  ctx.out(renderDecisionText(row));
+  ctx.out(`${target.scope}: ${ownerOf(target)} · updated: ${sqliteToIso(row.updated_at)}`);
+}
+
 // Runs `nightshift decision show <number>`, printing the decision in full and untruncated.
 async function runShow(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { project: { type: "string" }, org: { type: "string" } });
@@ -176,8 +192,7 @@ async function runShow(argv, ctx) {
   const number = requireNumber(positionals[0]);
   const row = await readOnlyQuery(ctx, (store) => store.decisions.getDecisionByNumber({ ...ownerRef(target), number }), null);
   if (!row) throw new UserError(`unknown decision #${number} for ${target.label}`);
-  ctx.out(renderDecisionText(row));
-  ctx.out(`${target.scope}: ${ownerOf(target)} · updated: ${sqliteToIso(row.updated_at)}`);
+  printDecision(ctx, target, row);
 }
 
 // Label of the decision that replaced a row, or null when nothing did.
@@ -305,11 +320,51 @@ async function runImport(argv, ctx) {
   stampImportedFile(ctx, path, saved);
 }
 
+// Requires `--status`/`--superseded-by` to agree: `superseded` needs a successor, no other status names one.
+function requireUpdateTransition(values) {
+  const status = values.status;
+  if (status === undefined || !UPDATABLE_STATUSES.includes(status)) {
+    throw new UserError(`invalid \`--status\`: \`${status}\`; expected one of ${UPDATABLE_STATUSES.join("|")}`);
+  }
+  const successorFlag = values["superseded-by"];
+  if (status !== "superseded" && successorFlag !== undefined) {
+    throw new UserError(`\`--superseded-by\` makes the decision \`superseded\`; it conflicts with \`--status ${status}\``);
+  }
+  if (status === "superseded" && successorFlag === undefined) {
+    throw new UserError("a `superseded` decision needs the decision that replaced it: pass --superseded-by <number>");
+  }
+  return { status, successorNumber: successorFlag === undefined ? null : requireNumberFlag("superseded-by", successorFlag) };
+}
+
+// The id of the successor row `--superseded-by` names, of the same owner as the decision being updated.
+async function resolveSuccessorId(store, target, successorNumber) {
+  if (successorNumber === null) return null;
+  const successor = await store.decisions.getDecisionByNumber({ ...ownerRef(target), number: successorNumber });
+  if (!successor) throw new UserError(`unknown decision #${successorNumber} for ${target.label}`);
+  return successor.id;
+}
+
+// Runs `nightshift decision update <number>`, the terminal's way to accept, reject or supersede a decision, same as `decision_update`.
+async function runUpdate(argv, ctx) {
+  const { values, positionals } = parseCommand(argv, UPDATE_OPTIONS);
+  checkArgs(positionals, { min: 1, max: 1, usage: USAGE.update });
+  const target = resolveReadTarget(values, ctx);
+  const number = requireNumber(positionals[0], USAGE.update);
+  const { status, successorNumber } = requireUpdateTransition(values);
+  const store = openStore(ctx.env);
+  const row = await store.decisions.getDecisionByNumber({ ...ownerRef(target), number });
+  if (!row) throw new UserError(`unknown decision #${number} for ${target.label}`);
+  const superseded_by = await resolveSuccessorId(store, target, successorNumber);
+  const updated = await store.decisions.updateDecision(row.id, { status, superseded_by });
+  printDecision(ctx, target, updated);
+}
+
 const SUBCOMMANDS = new Map([
   ["list", runList],
   ["show", runShow],
   ["export", runExport],
   ["import", runImport],
+  ["update", runUpdate],
 ]);
 
 // Dispatches the subcommands of `nightshift decision`.

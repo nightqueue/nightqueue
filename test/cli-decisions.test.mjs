@@ -304,6 +304,59 @@ test("export never creates the database nor a file when the home has none", (t) 
   assert.deepEqual(readdirSync(dir), []);
 });
 
+test("decision update accepts or rejects a proposed decision, printing it like show", (t) => {
+  const { env, cwd } = makeCliHome(t, "decision-update");
+  saveDecision({ project: "alpha", title: "Store everything in one SQLite file", context: "c", decision: "d", status: "proposed" }, env);
+  saveDecision({ project: "alpha", title: "Ship a daemon", context: "c", decision: "d", status: "proposed" }, env);
+
+  const accepted = runCli(env, ["decision", "update", "1", "--status", "accepted"], { cwd });
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.ok(accepted.stdout.includes("#1 Store everything in one SQLite file (accepted)"));
+  assert.ok(accepted.stdout.includes("project: alpha"));
+  assert.equal(getDecisionByNumber({ project: "alpha", number: 1 }, env).status, "accepted");
+
+  const rejected = runCli(env, ["decision", "update", "2", "--status", "rejected"], { cwd });
+  assert.equal(rejected.status, 0, rejected.stderr);
+  assert.ok(rejected.stdout.includes("#2 Ship a daemon (rejected)"));
+  assert.equal(getDecisionByNumber({ project: "alpha", number: 2 }, env).status, "rejected");
+});
+
+test("decision update --status superseded requires --superseded-by, and never touches the row without it", (t) => {
+  const { env, cwd } = makeCliHome(t, "decision-update-superseded");
+  saveDecision({ project: "alpha", title: "Store everything in one SQLite file", context: "c", decision: "d", status: "proposed" }, env);
+  saveDecision({ project: "alpha", title: "Split into two databases", context: "c", decision: "d", status: "accepted" }, env);
+
+  const refused = runCli(env, ["decision", "update", "1", "--status", "superseded"], { cwd });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /a `superseded` decision needs the decision that replaced it: pass --superseded-by <number>/);
+  assert.equal(getDecisionByNumber({ project: "alpha", number: 1 }, env).status, "proposed");
+
+  const conflict = runCli(env, ["decision", "update", "1", "--status", "accepted", "--superseded-by", "2"], { cwd });
+  assert.equal(conflict.status, 1);
+  assert.match(conflict.stderr, /conflicts with `--status accepted`/);
+
+  const settled = runCli(env, ["decision", "update", "1", "--status", "superseded", "--superseded-by", "2"], { cwd });
+  assert.equal(settled.status, 0, settled.stderr);
+  assert.ok(settled.stdout.includes("#1 Store everything in one SQLite file (superseded)"));
+  const row = getDecisionByNumber({ project: "alpha", number: 1 }, env);
+  assert.equal(row.status, "superseded");
+  assert.equal(row.superseded_by_number, 2);
+});
+
+test("decision update refuses an unknown decision number and an unknown successor, naming the owner", (t) => {
+  const { env, cwd } = makeCliHome(t, "decision-update-unknown");
+  saveDecision({ project: "alpha", title: "Store everything in one SQLite file", context: "c", decision: "d", status: "proposed" }, env);
+
+  const unknownRow = runCli(env, ["decision", "update", "9", "--status", "accepted"], { cwd });
+  assert.equal(unknownRow.status, 1);
+  assert.match(unknownRow.stderr, /unknown decision #9 for `alpha`/);
+
+  const unknownSuccessor = runCli(env, ["decision", "update", "1", "--status", "superseded", "--superseded-by", "9"], { cwd });
+  assert.equal(unknownSuccessor.status, 1);
+  assert.match(unknownSuccessor.stderr, /unknown decision #9 for `alpha`/);
+  assert.equal(getDecisionByNumber({ project: "alpha", number: 1 }, env).status, "proposed");
+});
+
 test("export never writes the database", (t) => {
   const { env, cwd } = makeCliHome(t, "export-read-only");
   seedDecisions(env);

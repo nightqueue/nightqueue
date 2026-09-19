@@ -189,6 +189,92 @@ never printed back - not by `list`, not by `--json`, not by an error message.
 A path that starts with `-` has to come after `--` (`nightshift init -- -weird-dir`),
 otherwise it is parsed as an unknown option and rejected.
 
+## Queue
+
+The full reference of `nightshift queue` is [Queue](queue.md); these two subcommands are
+recent enough that this is their first mention here.
+
+```sh
+nightshift queue session 42                          # resume the session of a job's last attempt
+nightshift queue session 42 --print                   # print the resume command instead of running it
+nightshift queue session 42 --json                    # session, attempt and cwd, as the only thing on stdout
+
+nightshift queue close 42 43 --decisions keep          # take terminal jobs to `closed`, keeping their open proposals
+nightshift queue close --merged --decisions accept     # close every terminal job gh confirms merged, accepting each proposal
+```
+
+`queue session <id>` opens the `claude` session of a job's LAST attempt - `last_session_id`
+when the job carries one, else its first `session_id` - by resuming it with `claude --resume
+<session>` in the cwd the run itself used: the run's worktree when it is still on disk, or the
+project's checkout with a warning line (`(worktree released, using the checkout)`) once the
+worktree was already released. A `pending` or a `running` job is refused by name - a live
+runner owns a running job's session, a pending one has none yet - and so is a job that never
+reached the agent at all. `--print` stops there and prints the equivalent `cd <cwd> && claude
+--resume <session>` line instead of running it, and `--json` prints `{ jobId, attempt, session,
+cwd, worktreeReleased, command }` as the only thing on stdout; without either flag the exit
+code is the resumed session's own. The MCP tool `queue_session` resolves the same session but
+only ever reads it - it answers `job_id`, `attempt`, `session`, `cwd` and `worktree_released`,
+and never resumes or executes anything itself.
+
+`queue close <id>...` is the operator's act that takes one or more jobs from any terminal
+status (`done`, `failed`, `gate` or `cancelled`) to `closed`; each id is closed on its own store
+call, so one refusal never stops the ids that come after it, and closing releases the job's
+worktree once its branch is pushed or a pull request is recorded - printing `worktree removed:
+<path>` or `worktree kept: <path> - <reason>` under each `closed job #<id>` line. `queue close
+--merged` instead closes every terminal job whose pull request `gh` itself confirms merged, and
+reports `<n> jobs left unchecked; run nightshift queue close --merged again` when some could not
+be checked within the call's own deadline.
+
+Either form then settles the decisions the closed jobs proposed and never settled: on a TTY,
+without `--decisions`, it asks `decision <owner> "<title>" of job #<id>: accept / reject / keep?
+[keep]` for each open proposal in turn; `--decisions accept|reject|keep` answers every one of
+them without asking, and no terminal (or `--json`) leaves every proposal `kept (proposed)`, so a
+script's behaviour never changes underneath it. Each settled proposal prints `decision <label>
+<title>: accepted|rejected|kept (proposed)`, and `--json` carries them under `decisions`.
+
+## Decisions
+
+```sh
+nightshift decision list                                                 # the log of the current project, plus its org's
+nightshift decision list --org acme --status accepted                    # one org's accepted decisions only
+nightshift decision show 7                                               # one decision, in full
+nightshift decision export 7 --dir docs/decisions                        # write it as a markdown file
+nightshift decision import docs/decisions/0007-foo.md                    # save a markdown decision file
+nightshift decision import docs/decisions/0007-foo.md --supersedes 3,4   # ...replacing #3 and #4 whole
+nightshift decision update 7 --status accepted                           # accept a proposed decision
+nightshift decision update 7 --status superseded --superseded-by 9       # supersede #7 with #9
+```
+
+`decision list`, `show <number>`, `export <number>` and `import <file.md>` each resolve the
+owner from `--project <name>` (the registered NAME, never a path), `--org <name>`, or the
+project of the current directory when neither is given - naming both is refused. `list` and
+`show` open the database read-only, so they never create it and never migrate it: a home where
+nothing was ever saved reads as an empty one instead of a SQLite error.
+
+`decision update <number> --status accepted|rejected|superseded [--superseded-by <n>]`
+is the terminal's way to settle a proposal a closed job left behind, or to change a
+decision's status by hand - the same write `decision_update` does. `superseded` requires
+`--superseded-by <n>`, the number of the decision that replaced it (of the same owner);
+any other status refuses that flag. It prints the updated decision the same way `show`
+does.
+
+`decision export <number>` writes the decision as `<dir>/<nnnn>-<slug>.md` (default
+`docs/decisions/` of the current directory), refusing to replace an existing file unless
+`--force`. `decision import <file.md>` reads that same shape back - `# <title>`, a `Status:`
+line, `## Context`, `## Decision`, `## Consequences` - and saves it through the same gate
+`decision_save` uses (below); `--status` overrides the file's own `Status:` line, and
+`--superseded-by <n>` implies `superseded` and conflicts with any other `--status`. On success
+it prints `imported as <label>` and stamps the pointer line into the file's header, so a re-run
+of the same file is refused as already imported instead of saved twice.
+
+A `decision_save` call and `decision import` are gated the same way. Before saving, the title
+(and, for the MCP tool, the title plus the decision text) is checked against every accepted and
+proposed decision of the same owner. An overlap saves nothing and answers `needs_review` with
+the candidates it found; the caller names EVERY one of them before anything is written -
+`supersedes <n,...>` for the ones the new decision replaces WHOLE (they become `superseded` and
+point at the new row, so the new text has to restate whatever of theirs still holds),
+`unrelated <n,...>` for the ones it leaves untouched. A candidate left unnamed refuses the save
+again, naming it once more.
 
 ## Doctor
 
@@ -231,6 +317,11 @@ Two of the checks are about the storage under the home (see [Configuration](cli.
   shm` is the check that survives a restart. Where neither source answers, the
   line states an unknown rather than a pass.
 
+The `database` check compares the schema version on disk with the one this build expects: a
+database one version behind is a `warn` (`run nightshift queue status once to let it migrate`),
+and a database written by a NEWER version is a `fail` (upgrade nightshift to the version that
+wrote it).
+
 For every registered project that has a `.claude/worktrees/` directory, one `warn` row
 `worktree <project>/<dir>` names each directory there that no job still open (any status but
 `closed`) records as its worktree, with the command that cleans it - the diagnosis never runs
@@ -245,6 +336,12 @@ A directory a live session holds locked, and the worktree of an open job (its cl
 `nightshift queue close`), are not reported. When the queue cannot be read, one `worktrees`
 row says the owner is unknown and nothing is listed; when git cannot list the worktrees of a
 checkout, one `worktrees <project>` row says so. The owners are read through a read-only store.
+
+One more `warn` row, `decision proposals`, names every decision a queue job proposed and nobody
+settled before its job was closed, by number and job - settle it with `decision_update`
+(`status: accepted|rejected`) or `nightshift decision update <number> --status
+accepted|rejected`, or, next time, settle it in the same call with `nightshift queue
+close <id> --decisions accept|reject`.
 
 The diagnosis is offline: without `--check-updates` it opens no network
 connection at all. With the flag it adds one last check, `registry`, which asks

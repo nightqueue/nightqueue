@@ -8,6 +8,77 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `nightshift decision update <number> --status accepted|rejected|superseded
+  [--superseded-by <n>]` settles a proposal a closed job left behind, or
+  changes a decision's status by hand, from the terminal - the same write the
+  MCP tool `decision_update` does. `superseded` requires `--superseded-by
+  <n>`, the number of the decision that replaced it (of the same owner); any
+  other status refuses that flag. It prints the updated decision the way
+  `decision show` does.
+
+- `nightshift queue session <id>` and the MCP tool `queue_session` open the
+  `claude` session of a job's LAST attempt - `last_session_id` when the job
+  recorded one, else its first `session_id` - and resume it with `claude
+  --resume <session>` in the cwd the run itself used: the run's worktree while
+  it is still on disk, or the project's checkout once it was released, flagged
+  `worktree_released: true` (`(worktree released, using the checkout)` on the
+  CLI). A `pending` or a `running` job is refused by name, and so is a job that
+  never reached the agent. `--print` prints the equivalent `cd <cwd> && claude
+  --resume <session>` line instead of running it, and `--json` prints
+  `{ jobId, attempt, session, cwd, worktreeReleased, command }`; the MCP tool
+  only ever reads and never resumes or executes anything itself.
+
+- `nightshift decision export <number> [--dir <path>] [--force]` writes one
+  decision as `<dir>/<nnnn>-<slug>.md` (default `docs/decisions/`), reading
+  the database read-only like `show`. `nightshift decision import <file.md>
+  [--status <status>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated
+  <n,...>]` reads that shape - or a hand-written ADR of the same one - back
+  through the same review `decision_save` uses, prints `imported as <label>`
+  and stamps the pointer line into the file's header so a re-run of the same
+  file is refused as already imported. The runtime itself never reads
+  `docs/decisions/`; publishing an exported file stays a deliberate pull
+  request of the operator.
+
+- `decision_save` (and `decision import`) is gated against the owner's own
+  log: before saving, the title, and for the MCP tool the title plus the
+  decision text, is checked against every accepted and proposed decision of
+  the same owner, lexical and semantic. An overlap saves nothing and answers
+  `needs_review` with the candidates it found; the caller names every one of
+  them on a second call - `supersedes <n,...>` for the ones the new decision
+  replaces WHOLE (they become `superseded`, pointing at the new row, in the
+  same transaction), `unrelated <n,...>` for the ones it leaves untouched.
+  Inside a queue job `supersedes` is refused outright, a second proposal while
+  the first is still `proposed` is refused too, and the saved row is stamped
+  with the job's `job_id`.
+
+- `nightshift queue close <id>...` and `nightshift queue close --merged` now
+  settle the decisions the jobs they close proposed and never settled: on a
+  TTY, without `--decisions`, each open proposal is asked `accept / reject /
+  keep` (default `keep`); `--decisions accept|reject|keep` answers every one
+  without asking, and no terminal or `--json` keeps them all `proposed`. Each
+  settled proposal prints a `decision <label> <title>: accepted|rejected|kept
+  (proposed)` line, and `--json` carries them under `decisions`. The MCP
+  `queue_close` still only closes the job and leaves its proposals alone.
+
+- `nightshift doctor` gains two more `warn` checks. `worktree <project>/<dir>
+  left over` names, for every registered project with a `.claude/worktrees/`
+  directory, each directory there that no open job still owns, with the exact
+  command that cleans it (`git worktree remove`, `git worktree unlock && ...
+  remove`, or `rm -rf` for one orphaned from git) - it never runs that command
+  itself. `decision proposals` names every decision a queue job proposed and
+  nobody settled before its job was closed, by number and job, with the hint
+  to settle it with `decision_update` or, next time, with `nightshift queue
+  close <id> --decisions accept|reject`.
+
+- The block the `SessionStart` hook injects now carries the title of EVERY
+  accepted decision of the project and of its org under `## Standing
+  decisions`, not only the closest few, followed by `## Standing decisions in
+  detail` with the text of the 8 most recently updated, and a `## Proposed
+  (not binding)` section listing the title of every decision still `proposed`
+  - nobody accepted it yet, so it binds nothing. Each section keeps to its own
+  budget so the lessons always keep a floor, giving way to an omission line
+  first.
+
 - `nightshift run pr` checks the body against the target repository's own pull
   request template first. It resolves the run's checkout, then takes the first
   of `.github/PULL_REQUEST_TEMPLATE.md`, `.github/pull_request_template.md`,
@@ -198,6 +269,39 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   merge and nothing to repair no longer opens a write connection at all.
 
 ### Changed
+
+- Inside a queued job, the `PreToolUse` hook now also sees `Bash`: a call with
+  `run_in_background: true` is rewritten to the foreground with the same
+  reason a subagent launch already got, and a command that scans from the
+  filesystem root or the home (`find`, `grep -r`, `rg`, `ls -R` against `/`,
+  `~` or `$HOME`) is denied, naming the worktree or the project checkout
+  instead. The hook matcher is now `Agent|Task|Bash`, and a runtime kill of a
+  Bash task quotes the command's first 120 characters and says the hook
+  should have kept it in the foreground.
+
+- Schema v11: `decisions.job_id` stamps the job that proposed a decision, read
+  by the new `decision proposals` check of `nightshift doctor` and by the
+  settlement `nightshift queue close` runs on every job it closes.
+
+- A gate's notice is now the `## Requires user confirmation` block of the
+  plan, verbatim, plus the answer line - no length cap, no summary. A notice
+  missing that heading, or shorter than the plan's own confirmation section by
+  more than 200 code points, is recorded `failed` with a fixed notice pointing
+  at the plan instead of `gate`.
+
+- `git worktree list --porcelain` is now read without `-z`, which git older
+  than 2.36 refuses (`unknown switch 'z'`): the doctor's leftover-worktree
+  check and the worktree lock lookup used to see every worktree as unreadable
+  on a host like Ubuntu 22.04 (git 2.34), and now both parse the plain
+  porcelain output they already supported.
+
+- A job's worktree now lives as long as the job. `finalize` removes it once a
+  `done` run is clean and its branch is pushed (or a pull request is
+  recorded); `nightshift queue close`, `queue close --merged` and the MCP
+  `queue_close` apply the same rule to every job they close. A dirty,
+  unpushed or locked worktree is kept instead, and a `Worktree kept: <path> -
+  <reason>` line is appended to the job's existing notice rather than
+  replacing it.
 
 - The nightshift pull request template is now only the fallback, and its shape
   changed: `## Report`, `## Cause`, `## Changes`, `## QA`, where `## QA` is a

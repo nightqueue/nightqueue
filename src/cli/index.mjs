@@ -103,6 +103,7 @@ commands:
   decision show <number> [--project|--org]  print one decision in full
   decision export <number> [--dir] [--force]  write one decision as a markdown file (default: docs, folder decisions, of the current directory); never writes the database
   decision import <file.md> [--status] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]  save a markdown decision file, reviewed like decision_save, and stamp its row number into it
+  decision update <number> --status accepted|rejected|superseded [--superseded-by <n>]  accept, reject or supersede a decision, same as decision_update
   roadmap [--project|--org]                 print the now/next/later roadmap of a project and of its org
   queue add [project] <prompt...> [--run]   enqueue an unattended /nightshift:resolve run; --run starts it detached
   queue status [id] [--limit] [--json]      show one job or the table of the queue plus the counts per status

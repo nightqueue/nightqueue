@@ -54,7 +54,7 @@ import { registerProject } from "./project.mjs";
 import { choose, confirm } from "./prompt.mjs";
 import { runtimeLabel } from "./runtime-versions.mjs";
 
-const USAGE = {
+export const USAGE = {
   add: "nightshift queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id>]",
   status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",

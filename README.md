@@ -101,6 +101,7 @@ nightshift memory stats
 nightshift decision list | show <number>     [--project <name> | --org <name>]
 nightshift decision export <number> [--dir <path>] [--force]
 nightshift decision import <file.md> [--status <s>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]
+nightshift decision update <number> --status accepted|rejected|superseded [--superseded-by <n>]
 nightshift roadmap                            [--project <name> | --org <name>]
 
 # home
