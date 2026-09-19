@@ -50,7 +50,7 @@ test("a run that opened a pull request is done, with the URL and the notice extr
 
 test("the gate marker beats the pull request URL: a run waiting on a human is never done", () => {
   assert.equal(classifyJobResult({ log: gateStream(), exitCode: 0 }).status, "gate");
-  const both = doneStream().replace("Opening the pull request now.", "## Requires user confirmation");
+  const both = doneStream({ notice: `${GATE_MARKER}\n\nThe pull request is open and the checks are green.` });
   const outcome = classifyJobResult({ log: both, exitCode: 0 });
   assert.equal(outcome.status, "gate");
   assert.equal(outcome.prUrl, PR_URL, "the URL is still recorded on a gate");
@@ -205,41 +205,45 @@ test("the outcome the pipeline recorded in state.json wins over the stream, fiel
   assert.equal(silent.prUrl, PR_URL);
 
   const gated = classifyJobResult({
-    log: doneStream(),
+    log: doneStream({ notice: `${GATE_MARKER}\n\nChoose between renaming the column or keeping both.` }),
     exitCode: 0,
     state: stateWith({ status: "gate", notice: "Choose between renaming the column or keeping both." }),
   });
   assert.equal(gated.status, "gate", "a recorded gate is not undone by a URL in the stream");
-  assert.equal(gated.noticeMd, "The pull request is open and the checks are green.", "the `## Notice` of the run now outranks the summary the record carries");
+  assert.equal(
+    gated.noticeMd,
+    `${GATE_MARKER}\n\nChoose between renaming the column or keeping both.`,
+    "the `## Notice` of the run now outranks the summary the record carries",
+  );
   assert.equal(gated.prUrl, PR_URL, "the URL is still recorded on a gate");
 });
 
 test("the `## Notice` the run wrote beats the summary the pipeline recorded in state.json", () => {
   const outcome = classifyJobResult({
-    log: doneStream({ notice: "The stream explains the whole thing." }),
+    log: doneStream({ notice: `${GATE_MARKER}\n\nThe stream explains the whole thing.` }),
     exitCode: 0,
     state: stateWith({ status: "gate", notice: "Short summary the pipeline wrote." }),
   });
-  assert.equal(outcome.noticeMd, "The stream explains the whole thing.");
+  assert.equal(outcome.noticeMd, `${GATE_MARKER}\n\nThe stream explains the whole thing.`);
 });
 
 test("a run that printed no `## Notice` keeps the summary recorded in state.json, never the whole final text", () => {
   const outcome = classifyJobResult({
     log: streamOf("Working on it.", "Stopped without a heading."),
     exitCode: 0,
-    state: stateWith({ status: "gate", notice: "Decide between A and B." }),
+    state: stateWith({ status: "gate", notice: `${GATE_MARKER}\n\nDecide between A and B.` }),
   });
-  assert.equal(outcome.noticeMd, "Decide between A and B.");
+  assert.equal(outcome.noticeMd, `${GATE_MARKER}\n\nDecide between A and B.`);
   assert.notEqual(outcome.noticeMd, "Stopped without a heading.", "the whole final text is the last resort, never above the record");
 });
 
 test("a run whose `## Notice` is the only explanation anywhere is the notice itself", () => {
   const outcome = classifyJobResult({
-    log: doneStream({ notice: "Only the stream said why." }),
+    log: doneStream({ notice: `${GATE_MARKER}\n\nOnly the stream said why.` }),
     exitCode: 0,
     state: stateWith({ status: "gate" }),
   });
-  assert.equal(outcome.noticeMd, "Only the stream said why.");
+  assert.equal(outcome.noticeMd, `${GATE_MARKER}\n\nOnly the stream said why.`);
 });
 
 test("a clean stop with no explanation in the stream nor in state.json is still the fixed warning", () => {
@@ -255,13 +259,13 @@ test("a clean stop with no explanation in the stream nor in state.json is still 
 test("the notice changing source moves neither the status nor the pull request URL, which state.json still rules", () => {
   const RECORDED_PR_URL = "https://github.com/acme/api/pull/7";
   const outcome = classifyJobResult({
-    log: doneStream({ notice: "The stream explains it whole." }),
+    log: doneStream({ notice: `${GATE_MARKER}\n\nThe stream explains it whole.` }),
     exitCode: 0,
     state: stateWith({ status: "gate", prUrl: RECORDED_PR_URL, notice: "Short summary." }),
   });
   assert.equal(outcome.status, "gate");
   assert.equal(outcome.prUrl, RECORDED_PR_URL, "the recorded URL still outranks the one the stream printed");
-  assert.equal(outcome.noticeMd, "The stream explains it whole.");
+  assert.equal(outcome.noticeMd, `${GATE_MARKER}\n\nThe stream explains it whole.`);
 });
 
 test("a record the runtime cannot believe changes nothing: the stream decides exactly as it does today", () => {
@@ -329,7 +333,7 @@ test("the same final text with a recorded gate status in state.json still stops 
   const outcome = classifyJobResult({
     log: toNdjson([systemInitEvent(), resultEvent({ text: "Verifier running. Waiting for its verdict before the next phase." })]),
     exitCode: 0,
-    state: stateWith({ status: "gate" }),
+    state: stateWith({ status: "gate", notice: `${GATE_MARKER}\n\nRename the column or keep both.` }),
   });
   assert.equal(outcome.status, "gate");
 });

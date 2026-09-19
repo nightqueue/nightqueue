@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
-import { jobLogPath } from "../config/paths.mjs";
+import { jobLogPath, runDir } from "../config/paths.mjs";
 import { packageRoot } from "../host/paths.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore } from "../store/open.mjs";
 import { classifyJobResult } from "./classify.mjs";
-import { readRunState, writeRunTerminal } from "./resume.mjs";
+import { isSafeSegment, readRunState, writeRunTerminal } from "./resume.mjs";
 import { lastAttemptStream } from "./stream.mjs";
 
 // Statuses a re-classification may correct: a row that ended badly, never one the queue still owes work for.
@@ -83,7 +84,8 @@ export async function reclassifyFromLog({ id, env = process.env } = {}) {
   refuseRow(id, row, await jobs.isJobActive(id));
   const log = lastAttemptStream(readJobLog(id, env));
   const ending = endingFromRow(id, row);
-  const outcome = classifyJobResult({ log, ...ending, state: readRunState({ project: row.project, slug: row.slug, env }) });
+  const planPath = isSafeSegment(row.slug) ? join(runDir(row.project, row.slug, env), "03-plan.md") : null;
+  const outcome = classifyJobResult({ log, ...ending, state: readRunState({ project: row.project, slug: row.slug, env }), planPath });
   const witness = differsFromWitness(row, outcome);
   const notice = noticeDiffers(row, outcome);
   if (!witness && !notice) return { id, from: row.status, to: row.status, prUrl: row.pr_url ?? null, changed: false, noticeOnly: false };

@@ -592,6 +592,28 @@ test("queue_status never returns the prompt and truncates the free text at five 
   assert.match(textOf(unknown), /unknown job `99`/);
 });
 
+test("queue_status returns a gate notice near three kilobytes whole, and clips it with a pointer in the listing", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-status-big-gate-notice");
+  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const points = Array.from(
+    { length: 8 },
+    (_, i) => `- **C${i + 1}:** ${"the plan departs from the brief on a point that needs a human call before it ships. ".repeat(5)}`,
+  );
+  const notice = ["## Requires user confirmation", "", ...points, "", `Answer with: nightshift queue retry ${id} --note "<your answer>"`].join("\n");
+  assert.ok(Array.from(notice).length > 2900, "setup: the notice must be close to three kilobytes");
+  openDb(env).prepare("UPDATE jobs SET status = 'gate', notice_md = ? WHERE id = ?").run(notice, id);
+  const client = await connect(t, env);
+
+  const one = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: id } }));
+  assert.equal(one.job.notice_md, notice, "the detail of one job cut a gate notice that has no length cap");
+
+  const listed = payloadOf(await client.callTool({ name: "queue_status", arguments: { limit: null, job_id: null } }));
+  const row = listed.jobs.find((job) => job.id === id);
+  assert.equal(row.notice_md, `${Array.from(notice).slice(0, 500).join("")}...`, "the listing did not clip the gate notice");
+  assert.equal(row.notice_truncated, true);
+  assert.ok(listed.suggestions.includes(`#${id} text cut at 500 characters - read it whole with nightshift queue status ${id}`), listed.suggestions.join("\n"));
+});
+
 test("queue_status refuses instead of answering with no runner for a registry it could not read", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-status-unreadable");
   addJob({ project: "alpha", prompt: "fix the worker" }, env);

@@ -15,6 +15,7 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 import {
   attemptMarker,
   GATE_MARKER,
+  GATE_NOTICE,
   gateStream,
   intermediateDeliveryStream,
   noticeText,
@@ -159,7 +160,7 @@ test("only the LAST attempt of an accumulated log decides: an older delivery nev
   const outcome = await reclassifyFromLog({ id, env });
   assert.equal(outcome.noticeOnly, true, "the delivery of attempt 1 was read as the outcome of attempt 2");
   assert.equal(outcome.prUrl, null);
-  assert.equal(getJob(id, env).notice_md, "Stopped at the gate.");
+  assert.equal(getJob(id, env).notice_md, GATE_NOTICE);
 
   const answered = runCli(env, ["queue", "repair", String(id)]);
   assert.equal(answered.status, 0, answered.stderr);
@@ -205,9 +206,9 @@ test("each refusal of `queue repair` names what is missing, and none of them wri
   assert.equal(getJob(noEnding, env).status, "gate");
 });
 
-// A run that stopped at the gate after writing a long `## Notice` in its final message.
+// A run that stopped at the gate after writing a long `## Notice` in its final message, the heading itself inside its body.
 function gateWithNotice(body) {
-  return toNdjson([systemInitEvent(), slugEvent(SLUG), resultEvent({ text: `${GATE_MARKER}\n\n${noticeText(body)}` })]);
+  return toNdjson([systemInitEvent(), slugEvent(SLUG), resultEvent({ text: noticeText(`${GATE_MARKER}\n\n${body}`) })]);
 }
 
 // Writes the state.json of a run whose pipeline recorded a summary of its own notice, the shape the whole fix is about.
@@ -232,7 +233,7 @@ test("a repair whose only stale field is the notice writes it and leaves the wit
     { changed: outcome.changed, noticeOnly: outcome.noticeOnly, to: outcome.to, prUrl: outcome.prUrl },
     { changed: true, noticeOnly: true, to: "gate", prUrl: null },
   );
-  assert.equal(getJob(id, env).notice_md, REREAD_NOTICE, "the notice re-read from the log was dropped");
+  assert.equal(getJob(id, env).notice_md, `${GATE_MARKER}\n\n${REREAD_NOTICE}`, "the notice re-read from the log was dropped");
   assert.equal(getJob(id, env).status, "gate");
   assert.equal(readFileSync(statePath, "utf8"), before, "a notice-only repair rewrote the witness of the run");
 });

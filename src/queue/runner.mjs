@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
-import { jobLogPath, logsDir } from "../config/paths.mjs";
+import { jobLogPath, logsDir, runDir } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { ghPrList } from "../host/gh.mjs";
 import { packageRoot } from "../host/paths.mjs";
@@ -315,7 +315,8 @@ async function runAttempts(job, ctx) {
     usages.push(extractUsage(result.log));
     const notBefore = rateLimitExit(result, facts);
     if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, usage: sumUsage(usages), outcome: null, result };
-    const outcome = classifyJobResult({ ...result, state: readRunState({ project: job.project, slug: facts.slug, env }) });
+    const planPath = isSafeSegment(facts.slug) ? join(runDir(job.project, facts.slug, env), "03-plan.md") : null;
+    const outcome = classifyJobResult({ ...result, state: readRunState({ project: job.project, slug: facts.slug, env }), planPath });
     if (!isRetryable(job, attempt, result, outcome)) {
       return { lost: false, facts, attempt, usage: sumUsage(usages), outcome, result };
     }

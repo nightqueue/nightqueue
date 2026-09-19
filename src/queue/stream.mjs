@@ -293,6 +293,28 @@ export function extractNotice(text) {
   return body || null;
 }
 
+// A level-2 heading other than the confirmation one, which ends its section.
+const NEXT_SECTION_RE = /^##\s+\S/;
+
+// The `## Requires user confirmation` section of a plan's text, heading included, up to the next level-2 heading outside a fence.
+export function confirmationSection(text) {
+  const scanned = linesWithFenceState(text);
+  let start = -1;
+  let end = scanned.length;
+  scanned.forEach((entry, index) => {
+    if (!isMarkerCandidate(entry)) return;
+    if (start < 0 && GATE_HEADING_RE.test(entry.line)) start = index;
+    else if (start >= 0 && end === scanned.length && NEXT_SECTION_RE.test(entry.line)) end = index;
+  });
+  if (start < 0) return null;
+  const body = scanned
+    .slice(start, end)
+    .map((entry) => entry.line)
+    .join("\n")
+    .trim();
+  return body || null;
+}
+
 // Last `## Notice` the ORCHESTRATOR said in an intermediate event, the only fallback when the result has none.
 function noticeFromAssistants(log) {
   const lines = String(log ?? "").split("\n");

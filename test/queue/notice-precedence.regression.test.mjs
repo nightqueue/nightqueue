@@ -27,8 +27,11 @@ const STILL_OPEN_LINES = [
   "Still open: whether the `customer_ref_migration` feature flag should default to on for internal accounts before the public rollout, given the staging soak test only covered the read paths so far and never exercised a single write under real production load.",
 ];
 
-// The full body of the `## Notice` the run wrote, ~1.5k code points long, three `Still open:` decisions the pipeline never summarized right.
+// The full body of the `## Notice` the run wrote, ~1.5k code points long, three `Still open:` decisions the pipeline never summarized right;
+// the heading itself is part of that body, the shape the runtime now requires of a valid gate notice.
 const LONG_NOTICE = [
+  GATE_MARKER,
+  "",
   "The migration for the customer identity rewrite is ready, but three decisions need a human call before this can merge safely, and none of them are obvious from the diff alone or from the passing test suite:",
   "",
   ...STILL_OPEN_LINES,
@@ -54,7 +57,7 @@ function writeJobLog(env, id) {
   const log = toNdjson([
     systemInitEvent(),
     slugEvent(SLUG),
-    resultEvent({ text: `${GATE_MARKER}\n\n${noticeText(LONG_NOTICE)}` }),
+    resultEvent({ text: noticeText(LONG_NOTICE) }),
   ]);
   writeFileSync(jobLogPath(id, env), log);
 }

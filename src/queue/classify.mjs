@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { RUN_OUTCOME_STATUSES } from "./run-state.mjs";
 import {
+  confirmationSection,
   extractNoticeFromStream,
   extractPrUrlFromStream,
   extractPublishedPrUrl,
@@ -16,6 +18,7 @@ const BACKOFF_BASE_MS = 5000;
 const BACKOFF_FACTOR = 3;
 const BACKOFF_CAP_MS = 60000;
 const NOTICE_FALLBACK_LIMIT = 8000;
+const GATE_NOTICE_MARGIN_CP = 200;
 
 export const SILENT_STOP_NOTICE = "Pipeline stopped without a PR and without explanation (exit 0). See the log.";
 
@@ -43,6 +46,29 @@ function endedCleanly({ exitCode, timedOut, idleTimedOut, stopped }) {
   return exitCode === 0 && !timedOut && !idleTimedOut && !stopped;
 }
 
+// The fixed notice of a gate whose own notice does not carry the question it is supposed to ask.
+function brokenGateNotice(planPath) {
+  return `the run stopped at a gate but its notice does not carry the question - see ${planPath ?? "an unknown plan path"}`;
+}
+
+// The plan's own `## Requires user confirmation` section, or null when the plan is missing or unreadable.
+function readPlanConfirmation(planPath) {
+  if (!planPath) return null;
+  try {
+    return confirmationSection(readFileSync(planPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// Tells whether a gate's notice fails to carry its question: no confirmation heading, or far shorter than the plan's own section (a margin of reflow, never of dropped points).
+function isBrokenGateNotice(reason, planPath) {
+  if (!hasGateMarker(String(reason ?? ""))) return true;
+  const planSection = readPlanConfirmation(planPath);
+  if (!planSection) return false;
+  return Array.from(String(reason)).length < Array.from(planSection).length - GATE_NOTICE_MARGIN_CP;
+}
+
 // The `outcome` the pipeline recorded in state.json, field by field; anything outside the contract simply does not participate.
 function pipelineOutcome(state) {
   const record = state?.outcome;
@@ -53,8 +79,8 @@ function pipelineOutcome(state) {
   return status || prUrl || notice ? { status, prUrl, notice } : null;
 }
 
-// Classifies one attempt of a job from what the pipeline recorded, its stream and how the process ended.
-export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null } = {}) {
+// Classifies one attempt of a job from what the pipeline recorded, its stream, how the process ended and the run's plan.
+export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null, planPath = null } = {}) {
   const resultText = extractResultText(log) ?? "";
   const record = pipelineOutcome(state);
   const reported = record?.prUrl ?? extractPrUrlFromStream(log);
@@ -72,6 +98,9 @@ export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOu
   const reason = gateReason(log, resultText, record?.notice ?? null);
   const ending = { exitCode, timedOut, idleTimedOut, stopped };
   const status = decideStatus({ ...ending, prUrl, gate, reason });
+  if (status === "gate" && isBrokenGateNotice(reason, planPath)) {
+    return { status: "failed", prUrl, noticeMd: brokenGateNotice(planPath), resultText };
+  }
   const silentStop = status === "failed" && !reason && endedCleanly(ending);
   return { status, prUrl, noticeMd: silentStop ? SILENT_STOP_NOTICE : reason, resultText };
 }

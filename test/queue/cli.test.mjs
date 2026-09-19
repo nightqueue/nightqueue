@@ -14,7 +14,7 @@ import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { assistantEvent, doneStream, gateStream, PR_URL, SLUG } from "../../test-support/streams.mjs";
+import { assistantEvent, doneStream, GATE_MARKER, GATE_NOTICE, gateStream, PR_URL, SLUG } from "../../test-support/streams.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
 
@@ -693,13 +693,13 @@ test("queue status of a gated job spells the reason out and says how to answer i
   assert.equal(status.status, 0, status.stderr);
   assert.match(status.stdout, /status\s+gate/);
   assert.match(status.stdout, /^notice$/m);
-  assert.match(status.stdout, /^ {2}Stopped at the gate\./m);
+  assert.match(status.stdout, /^ {2}## Requires user confirmation$/m);
   assert.match(status.stdout, /retry it with: nightshift queue retry 1 --note "<your answer>"/);
   assert.equal(status.stdout.includes("notice_md       "), false, "the notice was dumped as a field of the generic block");
 
   const json = runCli(env, ["queue", "status", "1", "--json"]);
   assert.equal(json.status, 0, json.stderr);
-  assert.match(JSON.parse(json.stdout).job.notice_md, /Stopped at the gate\./);
+  assert.equal(JSON.parse(json.stdout).job.notice_md, GATE_NOTICE);
 });
 
 test("queue retry refuses a gated job without --note, printing why the job is waiting", (t) => {
@@ -708,7 +708,7 @@ test("queue retry refuses a gated job without --note, printing why the job is wa
 
   const refused = runCli(env, ["queue", "retry", "1"]);
   assert.equal(refused.status, 1);
-  assert.match(refused.stderr, /Stopped at the gate\./);
+  assert.match(refused.stderr, /## Requires user confirmation/);
   assert.match(refused.stderr, /This job is waiting for a decision\. Re-run with --note "<your answer>"\./);
   assert.equal(getJob(1, env).status, "gate", "the refused retry moved the job anyway");
 });
@@ -830,6 +830,37 @@ test("queue status of a job prints the whole notice, on the text and on --json",
   const json = runCli(env, ["queue", "status", String(id), "--json"]);
   assert.equal(json.status, 0, json.stderr);
   assert.equal(JSON.parse(json.stdout).job.notice_md, LONG_NOTICE, "the JSON detail carries a prefix of the notice instead of the whole text");
+});
+
+// A gate notice near the size of a real multi-point confirmation block: the heading, eight bullet points and the answer line.
+function bigGateNotice(id) {
+  const points = Array.from(
+    { length: 8 },
+    (_, i) => `- **C${i + 1}:** ${"the plan departs from the brief on a point that needs a human call before it ships. ".repeat(5)}`,
+  );
+  return [GATE_MARKER, "", ...points, "", `Answer with: nightshift queue retry ${id} --note "<your answer>"`].join("\n");
+}
+
+test("a gate notice near three kilobytes is returned whole by `queue status <id>`, and clipped with a pointer in the list", (t) => {
+  const env = makeCliHome(t, "cli-status-big-gate-notice");
+  const id = gatedJobWithNotice(env, "placeholder");
+  const notice = bigGateNotice(id);
+  assert.ok(Array.from(notice).length > 2900, "setup: the notice must be close to three kilobytes");
+  openDb(env).prepare("UPDATE jobs SET notice_md = ? WHERE id = ?").run(notice, id);
+
+  const status = runCli(env, ["queue", "status", String(id)]);
+  assert.equal(status.status, 0, status.stderr);
+  assert.ok(status.stdout.includes(`  ${GATE_MARKER}`), status.stdout);
+  assert.ok(status.stdout.includes(`  Answer with: nightshift queue retry ${id} --note "<your answer>"`), status.stdout);
+  assert.equal(status.stdout.includes("..."), false, "the single-job detail cut a gate notice that has no length cap");
+
+  const json = runCli(env, ["queue", "status", String(id), "--json"]);
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).job.notice_md, notice, "the JSON detail cut a gate notice that has no length cap");
+
+  const listed = runCli(env, ["queue", "status"]);
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.match(listed.stdout, new RegExp(`#${id} text cut at 500 characters - read it whole with nightshift queue status ${id}`));
 });
 
 test("queue retry says where the whole notice is read when the refusal had to cut it", (t) => {

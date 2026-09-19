@@ -10,7 +10,7 @@ import { runCycle } from "../../src/queue/runner.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { codeChangePublishedEvent, doneStream, gateStream, PR_URL, resultEvent, SLUG, slugEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { codeChangePublishedEvent, doneStream, GATE_NOTICE, gateStream, PR_URL, resultEvent, SLUG, slugEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 import { addWorktree, gitVars, localBranches, makeDirty, publishedCheckout, registeredWorktrees } from "../../test-support/worktrees.mjs";
 
 // A git double for the preflight: a clean checkout of the default branch; the worktree calls of the runner use the real git.
@@ -73,7 +73,7 @@ test("(c) a gate run with a clean, pushed worktree keeps it for the resume and n
   const row = getJob(run.id, run.env);
   assert.equal(row.status, "gate");
   assert.equal(existsSync(run.path), true, "the worktree of a gate run was removed");
-  assert.equal(row.notice_md, "Stopped at the gate.", "the notice must be the gate reason alone");
+  assert.equal(row.notice_md, GATE_NOTICE, "the notice must be the gate reason alone");
   assert.equal(row.notice_md.includes("Worktree kept:"), false);
 });
 

@@ -236,34 +236,41 @@ The runtime waits for every subagent and background task of an unattended run; l
    runner ignores fenced lines), in exactly this order:
 
    ```
+   ## Notice
+
    ## Requires user confirmation
 
    <the alternative and its trade-off, or the single objective question — ≤ 5 lines>
 
-   ## Notice
-
-   <what is being asked, in one or two lines>
-   <what the operator has to decide>
    Answer with: nightshift queue retry <id> --note "<your answer>"
    ```
 
    `<id>` is the number of this job, in the header of the run ("Unattended run, job #N").
-   The heading `## Requires user confirmation` is the marker that keeps the job in `gate`,
-   and `## Notice` has to be the LAST section of the final text, because the runtime reads
-   the body of the last `## Notice` to the end of the text. A final text without this
-   structure no longer stops at the gate: the runtime records the job as `failed`, because
-   a gate nobody can read is worse than a failure.
+   **The `## Notice` body IS the `## Requires user confirmation` block, VERBATIM** — the
+   heading line itself plus every point of it (what was expected, the problem, the proposed
+   solution, the expected result, the closing question) — followed by the answer line.
+   Summarizing it, or pointing at the plan instead of repeating it ("see 03-plan.md") is
+   FORBIDDEN: the runtime's classifier checks that the notice actually carries the question,
+   and a notice that does not is recorded `failed`, not `gate`, with a fixed message —
+   the whole point of this run then stopping is lost on the operator. `## Notice` has to be
+   the LAST section of the final text, because the runtime reads the body of the last
+   `## Notice` to the end of the text; the `## Requires user confirmation` line stays
+   INSIDE that body on purpose — it is still the standalone heading that marks the job
+   `gate`, wherever it sits in the text. A final text without this structure no longer stops
+   at the gate: the runtime records the job as `failed`, because a gate nobody can read is
+   worse than a failure. Unlike a done/failed notice (Phase 8), **a gate notice has no
+   length cap.**
 
    **Before printing the gate block, record the outcome** — call `run_outcome` (MCP
-   `nightshift`, step 5.3) with `status: "gate"` and `notice` = the body of `## Notice`.
-   The runtime reads that record before it reads the stream, so a gate survives any paraphrase
-   of the two headings.
+   `nightshift`, step 5.3) with `status: "gate"` and `notice` = the whole body of `## Notice`
+   (the block verbatim + the answer line). The runtime reads that record before it reads the
+   stream, so a gate survives any paraphrase of the two headings.
 
    **A brief that depends on another job's pull request is not executable here.** When the
    request conditions the work on another job ("after job #N", "once PR #N is merged",
    "depends on job ..."), the verdict is `PROPOSE-ALTERNATIVE` — this case adds no new
    verdict — and the alternative is fixed. Print the gate block above with exactly this
-   body under `## Requires user confirmation`:
+   body under `## Requires user confirmation`, inside the `## Notice` section:
 
    ```
    This brief depends on another job's pull request. A job must be self-contained: fold this work into that job (as a stage) or make it independent. Nothing was changed.
@@ -928,19 +935,23 @@ each condition. It fires if ANY of them is true:
 It fired and the plan does **not** contain `## Requires user confirmation` → relaunch the
 architect (🔁) **once**, citing the exact line that fired and demanding the section. If it
 persists, it is FORBIDDEN to move on to the coder and FORBIDDEN to terminate: **you build the
-gate yourself** — the text you present to the user **starts with the line `## Requires user
-confirmation`** (the exact line the runtime's queue matches to mark the job as gated),
-followed by the `## Usage coverage` of the plan (only the `changed=yes` and `to confirm`
-lines) and by which condition fired. Pause by the same mechanism as the **Confirmation pause**
-below — there is no second pause mechanism.
+gate yourself** — print the gate block of step 2.5, with, under `## Requires user
+confirmation` inside the `## Notice` body, the `## Usage coverage` of the plan (only the
+`changed=yes` and `to confirm` lines) and by which condition fired, VERBATIM — never a
+summary, never "see the plan" — followed by the answer line. Record the outcome
+(`run_outcome`, `status: "gate"`, `notice` = that whole `## Notice` body) before printing it,
+same as step 2.5. Pause by the same mechanism as the **Confirmation pause** below — there is
+no second pause mechanism.
 
 **Confirmation pause (intent/ambiguity):** if `03-plan.md` contains `## Requires user
-confirmation`, **do not advance to the coder**. Present to the user, in full, the fields of
-that section (what the ticket expected · why it is a problem · proposed solution · expected
-result · question) and wait for the decision: approved → move on to Phase 4 with the
-architect's plan; asked for adjustments → relaunch the architect (🔁) with the decision;
-preferred the literal reading → relaunch the architect (🔁) instructing the literal plan.
-Never write code before that confirmation.
+confirmation`, **do not advance to the coder**. Stop the run with the gate block of step 2.5:
+its `## Notice` body is the plan's `## Requires user confirmation` section VERBATIM — the
+heading line itself plus every field (what the ticket expected · why it is a problem ·
+proposed solution · expected result · question) — never summarized, never "see the plan" —
+followed by the answer line, and record the outcome the same way. The user's answer arrives as
+a retry: approved → move on to Phase 4 with the architect's plan; asked for adjustments →
+relaunch the architect (🔁) with the decision; preferred the literal reading → relaunch the
+architect (🔁) instructing the literal plan. Never write code before that confirmation.
 
 ### Phase 4 — Implementation
 
@@ -1624,7 +1635,11 @@ of them already makes the run **not happy**:
 the operator reviews in the cockpit before closing the job; without it the job ends without a
 notice and the closing gets stuck. The header is exactly `## Notice`, with no emoji and no
 suffix, as a level-2 section of the report, and it does **not** count towards the cap of
-~30 lines of the happy path.
+~30 lines of the happy path. **Everything below — the character cap, the "no line may start
+with `# `/`## `" rule and the writing/shape checks — governs a `done`/`failed` notice of THIS
+phase only.** A gate notice (step 2.5, the Confirmation pause and the usage-coverage gate of
+Phase 3) is never written here: it follows its own rule above — the `## Requires user
+confirmation` block verbatim, followed by the answer line, with NO length cap.
 
 - The body goes as direct text under the header. **Never** inside a code
   block (` ``` `): this text is read by machine.

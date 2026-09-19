@@ -105,8 +105,15 @@ What a runtime has to provide, and what it can rely on:
   a URL cited inside a sentence, an example or an error message is a reference, and a
   run that delivers none is never `done`; it is a `gate` only when the run itself asked
   for a decision - a recorded `outcome.status: "gate"` in `state.json`, or the
-  `## Requires user confirmation` marker in the stream - and `failed` otherwise, keeping
-  its final text as the reason.
+  `## Requires user confirmation` marker in the stream - AND its resolved notice itself
+  carries that heading (`hasGateMarker`, reused from the stream); when the run's
+  `03-plan.md` is readable and has its own `## Requires user confirmation` section (heading
+  to the next level-2 heading, outside fences), a notice shorter than that section by more
+  than `GATE_NOTICE_MARGIN_CP` (200 code points, `src/queue/classify.mjs`) is read the same
+  way - a gate whose notice does not carry the question is `failed`, with the
+  fixed notice `the run stopped at a gate but its notice does not carry the question - see
+  <plan path>` (`<plan path>` unknown when the classifier was given none); a clean run
+  reaching neither reading is `failed` otherwise, keeping its final text as the reason.
 
 These names are a machine contract, not prose: the pipeline files are the
 source of truth for them, and any runtime that reads them must match them

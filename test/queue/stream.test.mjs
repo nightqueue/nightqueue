@@ -170,20 +170,19 @@ test("the notice is the LAST `## Notice` section, and a fenced heading never ope
 
 test("the gate block the skill prescribes opens a gate and carries the way to answer it", () => {
   const block = [
+    "## Notice",
+    "",
     GATE_MARKER,
     "",
     "Renaming the column drops the old one; keeping both costs a migration. I need a decision.",
     "",
-    "## Notice",
-    "",
-    "The migration can rename `total` or keep both columns.",
-    "Decide which one before the pipeline touches the schema.",
     'Answer with: nightshift queue retry 7 --note "<your answer>"',
   ].join("\n");
   const log = toNdjson([systemInitEvent(), resultEvent({ text: block })]);
 
   assert.equal(hasGateMarker(block), true, "the block did not keep the job at the gate");
   const notice = extractNoticeFromStream(log);
+  assert.equal(hasGateMarker(notice), true, "the `## Notice` body must itself carry the confirmation heading");
   assert.ok(notice.includes("nightshift queue retry"), notice);
   assert.equal(notice.endsWith('--note "<your answer>"'), true, notice);
   assert.equal(classifyJobResult({ log, exitCode: 0 }).status, "gate");

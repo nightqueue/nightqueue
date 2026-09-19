@@ -122,12 +122,20 @@ export function intermediateDeliveryStream({ slug = SLUG, sessionId = SESSION_ID
   ]);
 }
 
-// A run that stops at the human gate: the marker is a standalone heading of the orchestrator.
-export function gateStream({ slug = SLUG, sessionId = SESSION_ID } = {}) {
+// The reason a `gateStream()` gives by default for stopping at the human gate.
+export const GATE_REASON = "The migration drops a column and needs a human decision.";
+
+// The `## Notice` body a `gateStream()` carries by default: the confirmation heading itself plus
+// the reason, the shape the runtime now requires of a valid gate notice.
+export const GATE_NOTICE = `${GATE_MARKER}\n\n${GATE_REASON}`;
+
+// A run that stops at the human gate: the marker is a standalone heading of the orchestrator, and
+// its `## Notice` carries that same heading in its body, so the notice itself asks the question.
+export function gateStream({ slug = SLUG, sessionId = SESSION_ID, reason = GATE_REASON } = {}) {
   return toNdjson([
     systemInitEvent({ sessionId }),
     slugEvent(slug, { sessionId }),
-    assistantEvent(`${GATE_MARKER}\n\nThe migration drops a column and needs a human decision.`, { sessionId, messageId: "msg_gate" }),
+    assistantEvent(noticeText(`${GATE_MARKER}\n\n${reason}`), { sessionId, messageId: "msg_gate" }),
     resultEvent({ text: "Stopped at the gate.", sessionId }),
   ]);
 }
