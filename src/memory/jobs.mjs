@@ -358,15 +358,28 @@ export function sweepOrphans(env = process.env, { liveWorkerImpl = neverLive } =
   });
 }
 
-// Records a fact discovered while the job runs (slug, session or branch), each one written only once.
-export function persistRunFacts(id, { worker, slug, sessionId, branch } = {}, env = process.env) {
+// Records a fact discovered while the job runs (slug, first session or branch, each written only once) or the session and
+// attempt of the run's latest attempt (`lastSessionId`/`lastSessionAttempt`), overwritten every time a new one opens.
+export function persistRunFacts(id, { worker, slug, sessionId, branch, lastSessionId, lastSessionAttempt } = {}, env = process.env) {
   const statement = openDb(env).prepare(
     `UPDATE jobs
-        SET slug = COALESCE(?, slug), session_id = COALESCE(?, session_id), branch = COALESCE(?, branch)
+        SET slug = COALESCE(?, slug),
+            session_id = COALESCE(?, session_id),
+            branch = COALESCE(?, branch),
+            last_session_id = COALESCE(?, last_session_id),
+            last_session_attempt = COALESCE(?, last_session_attempt)
       WHERE id = ? AND worker = ?`,
   );
   const changed = withWriteRetry(() =>
-    statement.run(optionalText(slug), optionalText(sessionId), optionalText(branch), requireId(id), requireText("worker", worker)),
+    statement.run(
+      optionalText(slug),
+      optionalText(sessionId),
+      optionalText(branch),
+      optionalText(lastSessionId),
+      optionalNumber(lastSessionAttempt),
+      requireId(id),
+      requireText("worker", worker),
+    ),
   );
   return changed.changes === 1;
 }
@@ -567,7 +580,7 @@ function retryRefusal(id, row, { note } = {}) {
 }
 
 // Columns a `--fresh` retry gives up, so the next run starts from phase 0 with a worktree of its own.
-const RETRY_FRESH_COLUMNS = ", slug = NULL, branch = NULL, session_id = NULL";
+const RETRY_FRESH_COLUMNS = ", slug = NULL, branch = NULL, session_id = NULL, last_session_id = NULL, last_session_attempt = NULL";
 
 // Sends a gated, failed or cancelled job back to the queue; the decision is in the WHERE and a refusal writes nothing.
 export function retryJob(id, { note, fresh } = {}, env = process.env) {

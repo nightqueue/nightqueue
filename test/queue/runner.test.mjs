@@ -285,6 +285,27 @@ test("a transient failure that exhausts the attempts of its own row stops there"
   assert.equal(fakeCalls(planPath).length, 1);
 });
 
+test("the runner records the session of every attempt, so the last one wins across retries", async (t) => {
+  const { env, planPath } = makeRunnerHome(t, "runner-last-session", [
+    { stdout: transientFailureStream({ sessionId: "sess-attempt-1" }), exitCode: 1 },
+    { stdout: transientFailureStream({ sessionId: "sess-attempt-2" }), exitCode: 1 },
+    { stdout: doneStream({ sessionId: "sess-attempt-3" }), exitCode: 0 },
+  ]);
+  const id = enqueue(env, { maxAttempts: 3 });
+  const slept = [];
+
+  const cycle = await runJobCycle(env, id, { sleepImpl: async (ms) => slept.push(ms) });
+
+  assert.equal(cycle.processed[0].status, "done");
+  assert.equal(fakeCalls(planPath).length, 3);
+  const row = getJob(id, env);
+  assert.deepEqual(
+    { sessionId: row.session_id, lastSessionId: row.last_session_id, lastSessionAttempt: row.last_session_attempt },
+    { sessionId: "sess-attempt-1", lastSessionId: "sess-attempt-3", lastSessionAttempt: 3 },
+    "the first session stayed on `session_id` and the third attempt's session won `last_session_id`",
+  );
+});
+
 test("every preflight block returns the job to the queue without spending an attempt", async (t) => {
   const cases = [
     ["dirty-checkout", { gitImpl: fakeGit({ status: " M src/queue/runner.mjs" }) }],

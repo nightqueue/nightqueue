@@ -34,6 +34,7 @@ import { liveRunnersReport, STOPPED_RUNNER, unreadableRegistry } from "../queue/
 import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
 import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
+import { resolveJobSession } from "../queue/session.mjs";
 import {
   recordOutcome,
   recordPhaseDone,
@@ -500,7 +501,7 @@ function answeredPrUrls(answer) {
   return prUrlsOf(answer.job ? [answer.job] : answer.jobs);
 }
 
-// The twenty-four tools of the plugin contract, with the parameter names the plugin actually sends.
+// The twenty-five tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env) {
   return [
     {
@@ -789,6 +790,22 @@ function toolDefinitions(env) {
       handler: async (args) => {
         const started = await startQueueRunner({ jobId: Number.isInteger(args.job_id) ? args.job_id : null, env });
         return { ok: true, ...runnerAnswer(started, env, await startAdvisoryLines({ env })) };
+      },
+    },
+    {
+      name: "queue_session",
+      config: {
+        description:
+          "The claude session of a job's last attempt: its attempt number, session id and the cwd it ran in (the run's worktree, or the project's checkout when that worktree was already released, with `worktree_released: true`). " +
+          "Never resumes it - this tool only reads; resume it yourself with `claude --resume <session>` in `cwd`, or run `nightshift queue session <job_id>` in a terminal. " +
+          "`pending` and `running` are refused by name: a live runner owns a running job, and a pending one has not run yet. A job that never reached the agent has no session to answer with, and is refused too.",
+        inputSchema: { job_id: z.number().int().min(1) },
+      },
+      handler: async (args) => {
+        const job = await openStore(env).jobs.getJob(args.job_id);
+        if (!job) throw new UserError(`unknown job \`${args.job_id}\``);
+        const resolved = resolveJobSession(job, env);
+        return { job_id: resolved.jobId, attempt: resolved.attempt, session: resolved.session, cwd: resolved.cwd, worktree_released: resolved.worktreeReleased };
       },
     },
     {
@@ -1092,7 +1109,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the twenty-four tools of the plugin contract.
+// Builds the MCP server with the twenty-five tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
   const schemas = new Map();

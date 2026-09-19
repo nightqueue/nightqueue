@@ -1,4 +1,5 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from "node:fs";
+import { constants } from "node:os";
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { jobLogPath, queuePausedPath, queueResumePath } from "../config/paths.mjs";
@@ -45,6 +46,8 @@ import {
 import { reclassifyFromLog } from "../queue/repair.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
+import { resolveJobSession } from "../queue/session.mjs";
+import { CLAUDE_MISSING_MESSAGE, resolveClaudeBin } from "../queue/spawn.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { registerProject } from "./project.mjs";
@@ -62,6 +65,7 @@ const USAGE = {
   pause: "nightshift queue pause",
   resume: "nightshift queue resume",
   log: "nightshift queue log <id> [--follow] [--raw] [--all]",
+  session: "nightshift queue session <id> [--print] [--json]",
 };
 
 const ADD_HELP_FLAGS = new Set(["--help", "-h"]);
@@ -1313,6 +1317,49 @@ async function runLog(argv, ctx) {
   return await runLogNarrated(path, id, { follow, all: values.all === true }, ctx);
 }
 
+const SESSION_OPTIONS = { print: { type: "boolean" }, json: { type: "boolean" } };
+
+// Exit code of the spawned `claude`: its own status, or 128 plus the signal number that killed it.
+function sessionExitCode(result) {
+  if (typeof result.signal === "string") return 128 + (constants.signals[result.signal] ?? 0);
+  return typeof result.status === "number" ? result.status : 0;
+}
+
+// The one line printed before a session resumes: the job, attempt, session id and cwd, with a note when the worktree behind it is gone.
+function sessionLine(resolved) {
+  const base = `job ${resolved.jobId} · attempt ${resolved.attempt} · session ${resolved.session} · cwd ${resolved.cwd}`;
+  return resolved.worktreeReleased ? `${base} (worktree released, using the checkout)` : base;
+}
+
+// The shell command `--print` answers: the resume of the session, run from its cwd.
+function sessionCommand(resolved) {
+  const cwd = `'${resolved.cwd.replaceAll("'", "'\\''")}'`;
+  return `cd ${cwd} && claude --resume ${resolved.session}`;
+}
+
+// Runs `nightshift queue session`, which execs `claude --resume` on the session of a job's last attempt, in the run's worktree or, when that is gone, the project's checkout.
+async function runSession(argv, ctx) {
+  const { values, positionals } = parseCommand(argv, SESSION_OPTIONS);
+  checkArgs(positionals, { min: 1, max: 1, usage: USAGE.session });
+  const id = requireInt("id", positionals[0]);
+  const job = await openStore(ctx.env).jobs.getJob(id);
+  if (!job) throw new UserError(`unknown job \`${id}\``);
+  const resolved = resolveJobSession(job, ctx.env);
+  const command = sessionCommand(resolved);
+  if (values.json) ctx.out(JSON.stringify({ ...resolved, command }));
+  else ctx.out(sessionLine(resolved));
+  if (values.print) {
+    if (!values.json) ctx.out(command);
+    return 0;
+  }
+  const resolveBinImpl = ctx.resolveBinImpl ?? resolveClaudeBin;
+  const bin = resolveBinImpl(ctx.env);
+  if (!bin?.bin) throw new UserError(CLAUDE_MISSING_MESSAGE);
+  const result = ctx.spawnSyncImpl(bin.bin, ["--resume", resolved.session], { stdio: "inherit", cwd: resolved.cwd, env: ctx.env });
+  if (result.error) throw new UserError(`could not run \`${bin.bin} --resume ${resolved.session}\`: ${result.error.message}`);
+  return sessionExitCode(result);
+}
+
 const SUBCOMMANDS = new Map([
   ["add", runAdd],
   ["status", runStatus],
@@ -1324,6 +1371,7 @@ const SUBCOMMANDS = new Map([
   ["pause", runPause],
   ["resume", runResume],
   ["log", runLog],
+  ["session", runSession],
 ]);
 
 // Dispatches the subcommands of `nightshift queue`, returning the exit code the subcommand decided.

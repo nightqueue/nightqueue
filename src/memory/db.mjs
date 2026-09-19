@@ -160,6 +160,8 @@ const EVOLVING_COLUMNS = [
   ["jobs", "tier", "TEXT"],
   ["jobs", "not_before", "TEXT"],
   ["jobs", "blocked_code", "TEXT"],
+  ["jobs", "last_session_id", "TEXT"],
+  ["jobs", "last_session_attempt", "INTEGER"],
   ["pipeline_runs", "tier_operator", "TEXT"],
   ["pipeline_runs", "tier_raise_reason", "TEXT"],
   ["decisions", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],

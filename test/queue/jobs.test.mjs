@@ -248,6 +248,21 @@ test("the run facts are written once each and never by a worker that lost the jo
   assert.deepEqual({ slug: row.slug, sessionId: row.session_id, branch: row.branch }, { slug: "fix-the-worker", sessionId: "sess-abc12345", branch: null });
 });
 
+test("persistRunFacts overwrites the last session and its attempt every time a new one is given, unlike the first session it never changes again", (t) => {
+  const env = makeQueue(t, "jobs-last-session");
+  const id = enqueue(env);
+  claimJobById(id, { worker: WORKER, cap: CAP }, env);
+
+  persistRunFacts(id, { worker: WORKER, sessionId: "sess-1", lastSessionId: "sess-1", lastSessionAttempt: 1 }, env);
+  persistRunFacts(id, { worker: WORKER, lastSessionId: "sess-2", lastSessionAttempt: 2 }, env);
+
+  const row = getJob(id, env);
+  assert.deepEqual(
+    { sessionId: row.session_id, lastSessionId: row.last_session_id, lastSessionAttempt: row.last_session_attempt },
+    { sessionId: "sess-1", lastSessionId: "sess-2", lastSessionAttempt: 2 },
+  );
+});
+
 test("finishing a job closes it and links only the pipeline run of the same project and slug", (t) => {
   const env = makeQueue(t, "jobs-finish");
   const id = enqueue(env);
@@ -417,13 +432,17 @@ test("--fresh gives up the slug, the branch and the session, so the next run sta
   const env = makeQueue(t, "jobs-retry-fresh");
   const id = enqueue(env);
   openDb(env)
-    .prepare("UPDATE jobs SET status = 'failed', slug = ?, branch = ?, session_id = ?, finished_at = datetime('now') WHERE id = ?")
-    .run("fix-it", "fix/it", SESSION_ID, id);
+    .prepare(
+      "UPDATE jobs SET status = 'failed', slug = ?, branch = ?, session_id = ?, last_session_id = ?, last_session_attempt = ?, finished_at = datetime('now') WHERE id = ?",
+    )
+    .run("fix-it", "fix/it", SESSION_ID, SESSION_ID, 2, id);
 
   const job = retryJob(id, { fresh: true }, env);
   assert.equal(job.slug, null);
   assert.equal(job.branch, null);
   assert.equal(job.session_id, null);
+  const row = openDb(env).prepare("SELECT last_session_id, last_session_attempt FROM jobs WHERE id = ?").get(id);
+  assert.deepEqual({ ...row }, { last_session_id: null, last_session_attempt: null }, "--fresh kept the session of a previous attempt");
 });
 
 test("the allowance of attempts grows by one per retry and stops at the ceiling the queue accepts", (t) => {

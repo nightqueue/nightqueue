@@ -115,6 +115,8 @@ const JOB_COLUMNS = [
   "tier",
   "not_before",
   "blocked_code",
+  "last_session_id",
+  "last_session_attempt",
 ];
 
 // Everything a database written by the schema version before the merge sweep does NOT have yet.
@@ -122,6 +124,8 @@ const DOWNGRADE_TO_V3 = `
 ALTER TABLE jobs DROP COLUMN tier;
 ALTER TABLE jobs DROP COLUMN not_before;
 ALTER TABLE jobs DROP COLUMN blocked_code;
+ALTER TABLE jobs DROP COLUMN last_session_id;
+ALTER TABLE jobs DROP COLUMN last_session_attempt;
 ALTER TABLE pipeline_runs DROP COLUMN tier_operator;
 ALTER TABLE pipeline_runs DROP COLUMN tier_raise_reason;
 PRAGMA user_version = 3;
@@ -132,6 +136,8 @@ const DOWNGRADE_TO_V4 = `
 ALTER TABLE jobs DROP COLUMN tier;
 ALTER TABLE jobs DROP COLUMN not_before;
 ALTER TABLE jobs DROP COLUMN blocked_code;
+ALTER TABLE jobs DROP COLUMN last_session_id;
+ALTER TABLE jobs DROP COLUMN last_session_attempt;
 ALTER TABLE pipeline_runs DROP COLUMN tier_operator;
 ALTER TABLE pipeline_runs DROP COLUMN tier_raise_reason;
 PRAGMA user_version = 4;
@@ -336,6 +342,26 @@ test("the migration to v10 turns a merged row into closed, drops pr_checked_at/m
   assert.equal(columnsOf(healed, "jobs").includes("pr_checked_at"), false, "a pr_checked_at re-added by an old build survived the open");
   assert.equal(columnsOf(healed, "jobs").includes("merged_at"), false, "a merged_at re-added by an old build survived the open");
   assert.equal(columnsOf(healed, "jobs").includes("merge_sha"), false, "a merge_sha re-added by an old build survived the open");
+});
+
+test("the migration from user_version 10 adds last_session_id and last_session_attempt once and keeps every job row", (t) => {
+  const env = makeHome(t, "db-migrate-v10");
+  const first = openDb(env);
+  first.prepare("INSERT INTO jobs (project, prompt, session_id) VALUES (?, ?, ?)").run("alpha", "fix the worker", "sess-1");
+  first.exec("ALTER TABLE jobs DROP COLUMN last_session_id");
+  first.exec("ALTER TABLE jobs DROP COLUMN last_session_attempt");
+  first.exec("PRAGMA user_version = 10");
+  assert.equal(columnsOf(first, "jobs").includes("last_session_id"), false, "the downgrade kept last_session_id");
+  closeDb(env);
+
+  for (const pass of [1, 2]) {
+    const db = openDb(env);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 11, `pass ${pass}`);
+    assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
+    const row = db.prepare("SELECT session_id, last_session_id, last_session_attempt FROM jobs").get();
+    assert.deepEqual({ ...row }, { session_id: "sess-1", last_session_id: null, last_session_attempt: null }, `pass ${pass}`);
+    closeDb(env);
+  }
 });
 
 test("migrateIfOutdated names the fix that actually works when the migration itself cannot write", (t) => {

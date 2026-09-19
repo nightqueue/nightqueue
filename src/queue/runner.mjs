@@ -213,22 +213,35 @@ async function captureRateLimit(job, facts, line, { env }) {
   await armPause(job, pause, env);
 }
 
+// Records the first session id of the job (never overwritten) and, whenever the stream reveals a session id different
+// from the last one recorded, the session and attempt of the run's latest attempt: once per attempt, so `queue session`
+// always resumes the one the operator is actually waiting on.
+async function captureSession(job, facts, line, attempt, { store }) {
+  const sessionId = extractSessionIdFromEventLine(line);
+  if (!sessionId || sessionId === facts.lastSessionId) return;
+  const isFirst = !facts.sessionId;
+  if (isFirst) facts.sessionId = sessionId;
+  facts.lastSessionId = sessionId;
+  await store.jobs.persistRunFacts(job.id, {
+    worker: job.worker,
+    sessionId: isFirst ? sessionId : null,
+    lastSessionId: sessionId,
+    lastSessionAttempt: attempt,
+  });
+}
+
 // Records the run facts that appear in the stream, writing one fact per line of the stream at most.
-async function captureFacts(job, facts, line, ctx) {
+async function captureFacts(job, facts, line, attempt, ctx) {
   await captureSlug(job, facts, line, ctx);
   await captureSlugOverride(job, facts, line, ctx);
   captureTierRaise(job, facts, line, ctx);
   await captureRateLimit(job, facts, line, ctx);
-  if (facts.sessionId) return;
-  const sessionId = extractSessionIdFromEventLine(line);
-  if (!sessionId) return;
-  facts.sessionId = sessionId;
-  await ctx.store.jobs.persistRunFacts(job.id, { worker: job.worker, sessionId });
+  await captureSession(job, facts, line, attempt, ctx);
 }
 
 // Delivers one line of the stream to the fact capture, which is never allowed to bring the run down - the same guarantee the spawn gives a synchronous consumer.
-function captureLine(job, facts, line, ctx) {
-  captureFacts(job, facts, line, ctx).catch(() => {});
+function captureLine(job, facts, line, attempt, ctx) {
+  captureFacts(job, facts, line, attempt, ctx).catch(() => {});
 }
 
 // Records in the job log that this runner lost the job; it is the ONLY write allowed once ownership is gone.
@@ -263,7 +276,16 @@ function wasRateLimitParked(job) {
 // Runs the attempts of a job, re-arming the lease before each one and backing off between retries.
 async function runAttempts(job, ctx) {
   const { env, deps } = ctx;
-  const facts = { slug: job.slug ?? null, slugDeclared: false, sessionId: job.session_id ?? null, rateLimit: null, fiveHour: null, pause: null, tierRaise: null };
+  const facts = {
+    slug: job.slug ?? null,
+    slugDeclared: false,
+    sessionId: job.session_id ?? null,
+    lastSessionId: job.last_session_id ?? job.session_id ?? null,
+    rateLimit: null,
+    fiveHour: null,
+    pause: null,
+    tierRaise: null,
+  };
   const pauseSignalImpl = deps.pauseSignalImpl ?? (() => ownPauseUntilMs(env) ?? pauseUntilMs(facts.pause));
   const resumeForced = resumeSessionEnabled(env) || wasRateLimitParked(job);
   const ownership = { lost: false };
@@ -282,7 +304,7 @@ async function runAttempts(job, ctx) {
       attempt,
       jobId: job.id,
       spawnImpl: deps.spawnImpl,
-      onLine: (line) => captureLine(job, facts, line, ctx),
+      onLine: (line) => captureLine(job, facts, line, attempt, ctx),
       stopSignalImpl: () => shouldStop(job, ctx, ownership),
       pauseSignalImpl,
       stopPollMs: deps.stopPollMs,

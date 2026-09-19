@@ -90,6 +90,7 @@ nightshift queue add [project] "<request>" [--tier trivial|simple|complex] [--pr
 nightshift queue run [--watch [s]] [--job <id>] [--stop]
 nightshift queue status [<id>] [--follow] [--json]
 nightshift queue log <id> [--follow]
+nightshift queue session <id> [--print]
 nightshift queue retry <id> --note "<answer>"
 nightshift queue cancel <id> --reason "<why>"
 nightshift queue close <id>... | --merged [--decisions accept|reject|keep]

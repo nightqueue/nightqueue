@@ -23,6 +23,7 @@ nightshift queue run --watch [30]                              # start a watcher
 nightshift queue run --stop [4242]                             # end every registered runner, or only the one with that pid
 nightshift queue run --foreground [--job 7]                    # run it in this process instead, for a script or CI
 nightshift queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
+nightshift queue session 7 [--print]                           # resume the claude session of the job's last attempt
 nightshift queue cancel 7 --reason "not needed"                # cancel a pending, gated or orphaned job
 nightshift queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue
 nightshift queue repair 7 [--json]                             # re-classify a gated or failed job from its own log
