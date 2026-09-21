@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { classifyJobResult } from "../../src/queue/classify.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
 import {
+  extractBaselineCtx,
   extractNotice,
   extractNoticeFromStream,
   extractPrUrl,
@@ -528,4 +529,43 @@ test("host command counts sum across attempts, the same way the usage does", () 
   assert.deepEqual(sumHostCommandCounts([first, null, second]), { bashTimeouts: 3, tasksBackgrounded: 1, tasksKilled: 1 });
   assert.deepEqual(sumHostCommandCounts([]), { bashTimeouts: 0, tasksBackgrounded: 0, tasksKilled: 0 });
   assert.deepEqual(sumHostCommandCounts(null), { bashTimeouts: 0, tasksBackgrounded: 0, tasksKilled: 0 });
+});
+
+// An `assistant` event with an explicit `parent_tool_use_id`, the same shape the real CLI writes: `null` for the orchestrator's own turn, a tool_use id for a subagent's.
+function turnEvent({ parentToolUseId, usage = null }) {
+  return {
+    type: "assistant",
+    session_id: SESSION_ID,
+    parent_tool_use_id: parentToolUseId,
+    message: { id: `msg_${Math.random().toString(36).slice(2, 10)}`, role: "assistant", content: [{ type: "text", text: "working" }], ...(usage ? { usage } : {}) },
+  };
+}
+
+test("extractBaselineCtx reads the FIRST orchestrator turn's own usage, ignoring a subagent's even when it comes first", () => {
+  const log = toNdjson([
+    systemInitEvent(),
+    turnEvent({ parentToolUseId: "toolu_sub", usage: { input_tokens: 999, cache_read_input_tokens: 999, cache_creation_input_tokens: 999 } }),
+    turnEvent({ parentToolUseId: null, usage: { input_tokens: 100, cache_read_input_tokens: 40, cache_creation_input_tokens: 5 } }),
+    turnEvent({ parentToolUseId: null, usage: { input_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }),
+  ]);
+  assert.equal(extractBaselineCtx(log), 145);
+});
+
+test("extractBaselineCtx treats a missing token field as zero and returns null without an orchestrator usage event", () => {
+  const partial = toNdjson([systemInitEvent(), turnEvent({ parentToolUseId: null, usage: { input_tokens: 10 } })]);
+  assert.equal(extractBaselineCtx(partial), 10);
+
+  const subagentOnly = toNdjson([systemInitEvent(), turnEvent({ parentToolUseId: "toolu_sub", usage: { input_tokens: 10 } })]);
+  assert.equal(extractBaselineCtx(subagentOnly), null);
+
+  const noUsage = toNdjson([systemInitEvent(), turnEvent({ parentToolUseId: null })]);
+  assert.equal(extractBaselineCtx(noUsage), null);
+
+  assert.equal(extractBaselineCtx(""), null);
+});
+
+test("a forged orchestrator usage event quoted inside a code fence is never read as one", () => {
+  const forged = turnEvent({ parentToolUseId: null, usage: { input_tokens: 999 } });
+  const log = [line(systemInitEvent()), "```", line(forged), "```"].join("\n");
+  assert.equal(extractBaselineCtx(log), null);
 });

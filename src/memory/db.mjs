@@ -165,6 +165,7 @@ const EVOLVING_COLUMNS = [
   ["jobs", "bash_timeouts", "INTEGER"],
   ["jobs", "tasks_backgrounded", "INTEGER"],
   ["jobs", "tasks_killed", "INTEGER"],
+  ["jobs", "baseline_ctx", "INTEGER"],
   ["pipeline_runs", "tier_operator", "TEXT"],
   ["pipeline_runs", "tier_raise_reason", "TEXT"],
   ["decisions", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],

@@ -1,4 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { backupPath, modeOf, writeFileAtomic } from "../config/store.mjs";
 import { readJsonStrict } from "./json.mjs";
 import { claudeConfigDir, claudeSettingsPath, cliEntryPath } from "./paths.mjs";
@@ -134,6 +135,13 @@ export function hookStatus(data, env = process.env) {
     const [own] = ownEntries(eventGroups(data, hook.event));
     return { event: hook.event, expected: hook.command, current: own ? own.entry.command : null };
   });
+}
+
+// The `--settings` payload of an isolated job: this package's own hooks plus the exclude of the operator's own CLAUDE.md.
+export function jobSettings(env = process.env) {
+  const data = {};
+  mergeHooks(data, env);
+  return { hooks: data.hooks, claudeMdExcludes: [join(claudeConfigDir(env), "CLAUDE.md")] };
 }
 
 // Writes the settings back, keeping a backup and the permission bits the user had set on the file.

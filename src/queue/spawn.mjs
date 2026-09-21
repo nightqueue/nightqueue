@@ -6,6 +6,7 @@ import { StringDecoder } from "node:string_decoder";
 import { homeDir, runDir } from "../config/paths.mjs";
 import { BASH_TIMEOUT_DEFAULT, NAME_RE } from "../config/schema.mjs";
 import { claudeConfigDir, packageRoot } from "../host/paths.mjs";
+import { jobSettings } from "../host/settings.mjs";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { escapePromptMarkers } from "../memory/prompt-safety.mjs";
 import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "./home-guard.mjs";
@@ -226,8 +227,8 @@ export function buildPrompt({ job, handoff, openPrs, env = process.env } = {}) {
   return `${base}${operatorBlock(job?.operator_note)}${resumeBlock(handoff)}${openPrsBlock(openPrs)}`;
 }
 
-// Builds the argv of the child: an array, never a shell, with --resume only behind the session id gate.
-export function buildArgs({ prompt, resumeSessionId = null, env = process.env, jobId = null } = {}) {
+// Builds the argv of the child: an array, never a shell, fenced off from the operator's own environment unless inheritUserEnvironment is true, with --resume only behind the session id gate.
+export function buildArgs({ prompt, resumeSessionId = null, env = process.env, jobId = null, inheritUserEnvironment = false } = {}) {
   const args = [
     "-p",
     String(prompt ?? ""),
@@ -241,6 +242,9 @@ export function buildArgs({ prompt, resumeSessionId = null, env = process.env, j
     "--mcp-config",
     mcpConfigArg(env, jobId),
   ];
+  if (inheritUserEnvironment !== true) {
+    args.push("--strict-mcp-config", "--setting-sources", "project,local", "--settings", JSON.stringify(jobSettings(env)));
+  }
   if (isSessionIdSafe(resumeSessionId)) args.push("--resume", resumeSessionId);
   return args;
 }
@@ -310,13 +314,14 @@ export function spawnClaude({
   resolveBinImpl = resolveClaudeBin,
   holdJobAwakeImpl = holdJobAwake,
   bashTimeoutS = BASH_TIMEOUT_DEFAULT,
+  inheritUserEnvironment = false,
 } = {}) {
   return new Promise((settle) => {
     const stream = openAttemptLog(logPath, attempt);
     const logClosed = new Promise((done) => stream.once("close", done));
     stream.on("error", (err) => reportLogFailure(logPath, err));
     const resolved = resolveBinImpl(env);
-    const args = buildArgs({ prompt, resumeSessionId, env, jobId });
+    const args = buildArgs({ prompt, resumeSessionId, env, jobId, inheritUserEnvironment });
     const runtimeEnv = { ...BG_WAIT_CEILING_ENV, ...noOrphanTaskEnv(bashTimeoutS) };
     const childEnv = jobId === null ? { ...env, ...runtimeEnv } : { ...env, ...jobIdentity(env, jobId), ...runtimeEnv };
     const child = spawnImpl(resolved?.bin ?? "claude", args, { cwd, env: childEnv, stdio: SPAWN_STDIO });

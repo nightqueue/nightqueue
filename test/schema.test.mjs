@@ -50,6 +50,7 @@ test("normalizeConfig fills defaults over a partial, hand-edited file", () => {
     leaseHeartbeatS: 5,
     keepAwake: "auto",
     bashTimeoutS: { default: 900, max: 3600 },
+    inheritUserEnvironment: false,
   });
   assert.deepEqual(emptyConfig().queue, {
     maxConcurrent: null,
@@ -57,7 +58,20 @@ test("normalizeConfig fills defaults over a partial, hand-edited file", () => {
     leaseHeartbeatS: 5,
     keepAwake: "auto",
     bashTimeoutS: { default: 900, max: 3600 },
+    inheritUserEnvironment: false,
   });
+});
+
+test("queue.inheritUserEnvironment only accepts a literal true, so a job stays isolated by accident-proof default", () => {
+  assert.equal(normalizeConfig({ queue: { inheritUserEnvironment: true } }).queue.inheritUserEnvironment, true);
+  for (const raw of ["true", 1, "yes", {}, null, undefined]) {
+    assert.equal(
+      normalizeConfig({ queue: { inheritUserEnvironment: raw } }).queue.inheritUserEnvironment,
+      false,
+      `\`${String(raw)}\` turned it on`,
+    );
+  }
+  assert.equal(normalizeConfig({}).queue.inheritUserEnvironment, false, "a missing key must default to false");
 });
 
 test("queue.maxConcurrent is an opt-in ceiling: only a positive integer sets one", () => {

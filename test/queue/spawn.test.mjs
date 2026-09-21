@@ -6,7 +6,8 @@ import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { jobLogPath, homeDir, runDir } from "../../src/config/paths.mjs";
 import { isSafeSegment } from "../../src/queue/resume.mjs";
-import { packageRoot } from "../../src/host/paths.mjs";
+import { claudeConfigDir, packageRoot } from "../../src/host/paths.mjs";
+import { desiredHooks, mergeHooks } from "../../src/host/settings.mjs";
 import {
   buildArgs,
   buildPrompt,
@@ -41,11 +42,10 @@ function makeSpawnHome(t, name, attempts) {
   return { env, planPath };
 }
 
-test("the command carries the plugin of this package and the nightshift MCP server, and never --strict-mcp-config", (t) => {
+test("the command carries the plugin of this package and the nightshift MCP server", (t) => {
   const env = makeHome(t, "spawn-args");
   const args = buildArgs({ prompt: "do the work", env });
 
-  assert.equal(args.includes("--strict-mcp-config"), false, "the argv fenced the child off from the host configuration");
   assert.deepEqual(args.slice(0, 8), ["-p", "do the work", "--permission-mode", "bypassPermissions", "--output-format", "stream-json", "--verbose", "--plugin-dir"]);
   assert.equal(argValue(args, "--plugin-dir"), pluginDir());
   assert.equal(pluginDir(), join(packageRoot(), "plugin"));
@@ -58,6 +58,79 @@ test("the command carries the plugin of this package and the nightshift MCP serv
   assert.equal(cliEntrypoint(), join(packageRoot(), "bin", "nightshift.mjs"));
   assert.equal(existsSync(cliEntrypoint()), true, "the entrypoint handed to the child does not exist");
   assert.equal(mcp.mcpServers.nightshift.env.NIGHTSHIFT_HOME, homeDir(env));
+});
+
+test("by default the child is fenced off from the operator's own MCP servers, plugins, skills, agents and user hooks", (t) => {
+  const env = makeHome(t, "spawn-isolation");
+  const args = buildArgs({ prompt: "do the work", env });
+
+  assert.equal(args.includes("--strict-mcp-config"), true);
+  assert.equal(argValue(args, "--setting-sources"), "project,local");
+
+  const settings = JSON.parse(argValue(args, "--settings"));
+  const expected = {};
+  mergeHooks(expected, env);
+  assert.deepEqual(settings.hooks, expected.hooks);
+  const settingsText = JSON.stringify(settings.hooks);
+  for (const hook of desiredHooks(env)) {
+    assert.ok(settingsText.includes(JSON.stringify(hook.command)), `\`${hook.command}\` is missing from the --settings payload`);
+  }
+  assert.deepEqual(settings.claudeMdExcludes, [join(claudeConfigDir(env), "CLAUDE.md")]);
+});
+
+test("claudeMdExcludes always follows CLAUDE_CONFIG_DIR, never a literal ~/.claude", (t) => {
+  const env = makeHome(t, "spawn-isolation-config-dir");
+  env.CLAUDE_CONFIG_DIR = join(makeDir(t, "spawn-isolation-config-dir-alt"), "claude-alt");
+
+  const settings = JSON.parse(argValue(buildArgs({ prompt: "p", env }), "--settings"));
+  assert.deepEqual(settings.claudeMdExcludes, [join(env.CLAUDE_CONFIG_DIR, "CLAUDE.md")]);
+  assert.deepEqual(settings.claudeMdExcludes, [join(claudeConfigDir(env), "CLAUDE.md")]);
+});
+
+test("the resume path carries the isolation flags too, with --resume always last", (t) => {
+  const env = makeHome(t, "spawn-isolation-resume");
+  const args = buildArgs({ prompt: "p", env, resumeSessionId: SESSION_ID });
+
+  assert.equal(args.includes("--strict-mcp-config"), true);
+  assert.equal(argValue(args, "--setting-sources"), "project,local");
+  assert.ok(argValue(args, "--settings"), "the resume path dropped the --settings payload");
+  assert.deepEqual(args.slice(-2), ["--resume", SESSION_ID]);
+});
+
+test("inheritUserEnvironment: true reproduces byte-for-byte the argv the child got before the isolation fence existed", (t) => {
+  const env = makeHome(t, "spawn-inherit");
+
+  const args = buildArgs({ prompt: "do the work", env, jobId: 7, inheritUserEnvironment: true });
+  assert.deepEqual(args, [
+    "-p",
+    "do the work",
+    "--permission-mode",
+    "bypassPermissions",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--plugin-dir",
+    pluginDir(),
+    "--mcp-config",
+    mcpConfigArg(env, 7),
+  ]);
+
+  const resumed = buildArgs({ prompt: "do the work", env, resumeSessionId: SESSION_ID, inheritUserEnvironment: true });
+  assert.deepEqual(resumed, [
+    "-p",
+    "do the work",
+    "--permission-mode",
+    "bypassPermissions",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--plugin-dir",
+    pluginDir(),
+    "--mcp-config",
+    mcpConfigArg(env, null),
+    "--resume",
+    SESSION_ID,
+  ]);
 });
 
 test("the MCP server of an unattended child is pinned to the job it runs, and an operator session carries no job at all", (t) => {
@@ -216,7 +289,7 @@ test("a spawned attempt streams every line, appends its own separator to the log
   const [call] = fakeCalls(planPath);
   assert.equal(call.jobId, String(JOB.id), "the child did not get NIGHTSHIFT_JOB_ID");
   assert.equal(argValue(call.argv, "--plugin-dir"), pluginDir());
-  assert.equal(call.argv.includes("--strict-mcp-config"), false);
+  assert.equal(call.argv.includes("--strict-mcp-config"), true, "spawnClaude did not isolate the child by default");
   assert.equal(JSON.parse(argValue(call.argv, "--mcp-config")).mcpServers.nightshift.command, process.execPath);
 });
 

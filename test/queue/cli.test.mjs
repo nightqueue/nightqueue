@@ -931,6 +931,28 @@ test("queue status of a job shows a host-command counter only when it is not zer
   assert.equal(someJson.tasks_killed, 1);
 });
 
+test("queue status of a job shows baseline_ctx the same way it shows bash_timeouts: on the text and on --json, absent when there is none", (t) => {
+  const env = makeCliHome(t, "cli-status-baseline-ctx");
+  const withoutOne = enqueue(env, "never recorded a baseline");
+  const withOne = enqueue(env, "recorded a baseline");
+  openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(withoutOne);
+  openDb(env).prepare("UPDATE jobs SET status = 'done', baseline_ctx = 18500 WHERE id = ?").run(withOne);
+
+  const withoutStatus = runCli(env, ["queue", "status", String(withoutOne)]);
+  assert.equal(withoutStatus.status, 0, withoutStatus.stderr);
+  assert.equal(withoutStatus.stdout.includes("baseline_ctx"), false, withoutStatus.stdout);
+
+  const withStatus = runCli(env, ["queue", "status", String(withOne)]);
+  assert.equal(withStatus.status, 0, withStatus.stderr);
+  assert.match(withStatus.stdout, /^baseline_ctx {4}18500$/m);
+
+  const withoutJson = JSON.parse(runCli(env, ["queue", "status", String(withoutOne), "--json"]).stdout).job;
+  assert.equal(withoutJson.baseline_ctx, null);
+
+  const withJson = JSON.parse(runCli(env, ["queue", "status", String(withOne), "--json"]).stdout).job;
+  assert.equal(withJson.baseline_ctx, 18500);
+});
+
 // A gate notice near the size of a real multi-point confirmation block: the heading, eight bullet points and the answer line.
 function bigGateNotice(id) {
   const points = Array.from(

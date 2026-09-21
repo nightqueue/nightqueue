@@ -8,6 +8,21 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- An unattended job now runs isolated from the operator's own environment by default:
+  `--strict-mcp-config --setting-sources project,local` plus a `--settings` payload
+  carrying only this package's own hooks and a `claudeMdExcludes` entry that keeps the
+  operator's own `CLAUDE.md` out of the ancestor walk. A job sees only this package's
+  MCP server, plugin and hooks, plus the project's own settings - never the operator's
+  own MCP servers, plugins, skills, agents or user hooks (measured on the real spawn
+  path: 39 MCP servers, 95 skills, 20 agents and a ~114k first turn before; 1, 21, 11
+  and ~68k after). `queue.inheritUserEnvironment: true`
+  restores the old, unfenced behaviour; `nightshift doctor` reports which mode is in
+  effect in a new `job environment` row.
+- Each job records `baseline_ctx` (schema v13): the input, cache-read and
+  cache-creation tokens the orchestrator's FIRST turn already carried before the run
+  did anything of its own, from its first attempt that started fresh (a `--resume`
+  attempt records none). Shown by
+  `queue status <id>` (human, `--json`, MCP) the same way `bash_timeouts` is shown.
 - The runtime configures the `claude` it spawns for a job:
   `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` plus `BASH_DEFAULT_TIMEOUT_MS` and
   `BASH_MAX_TIMEOUT_MS` from the new `queue.bashTimeoutS` (default

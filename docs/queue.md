@@ -535,6 +535,30 @@ summed over its attempts. `queue status <id>` (human, `--json` and the MCP
 `queue_status`) shows each only when it is not zero, and `nightshift doctor` sums them
 over the last 20 finished jobs, warning when anything was backgrounded or killed.
 
+**A job's environment is isolated by default.** A job sees only this package's own MCP
+server, plugin and hooks, plus the project's own `.claude/settings.json` and
+`CLAUDE.md` files - never the operator's own MCP servers, plugins, skills, agents or
+user hooks, and never the operator's own `CLAUDE.md` (measured on a real operator
+install: 39 MCP servers, 95 skills and 20 agents before, 1, 21 and 11 after; the
+orchestrator's first turn went from ~114k to ~68k tokens, paid again on every turn). The child gets `--strict-mcp-config
+--setting-sources project,local`, which on its own would still re-import
+`<claude config dir>/CLAUDE.md` through the ancestor walk, plus a `--settings` payload
+carrying this package's own four hooks and a `claudeMdExcludes` entry that removes it.
+`queue.inheritUserEnvironment: true` is the escape hatch back to the old, unfenced
+behaviour, for an operator who wants a job to see everything a foreground session
+sees; there is no per-server allowlist - it is all or nothing. `nightshift doctor`
+reports which mode is in effect: `job environment` is `ok` when isolated, and warns,
+naming the config key, when a job inherits the operator's own environment.
+
+**`baseline_ctx` measures what a run started with.** The first assistant turn of the
+orchestrator (never a subagent's) carries the input, cache-read and cache-creation
+tokens already loaded before the run does anything of its own - the system prompt, the
+tools, the skill, the injected context and the project's `CLAUDE.md`. Each job keeps
+the reading of its first attempt that started fresh; an attempt spawned with
+`--resume` records none, because its first turn carries the resumed history, and `queue status <id>` (human, `--json` and the
+MCP `queue_status`) shows it the same way it shows `bash_timeouts` - present only once
+a run recorded one.
+
 **A new process is born from the current runtime.** A detached runner is launched from
 the installed current runtime (`runtime/current`) whenever one exists - never from the
 tree of the process that asked for it - and its registration names that tree, which is

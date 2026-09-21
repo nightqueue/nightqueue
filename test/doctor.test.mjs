@@ -231,7 +231,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v12/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v13/);
 });
 
 test("the database check warns about a v8 home and points at the command that migrates it", async (t) => {
@@ -241,7 +241,7 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, expected v12/);
+  assert.match(database.detail, /schema v8, expected v13/);
   assert.match(database.hint, /run `nightshift queue status` once to migrate it/);
   assert.doesNotMatch(database.hint, /nightshift memory stats/);
 });
@@ -254,7 +254,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, expected v12/);
+  assert.match(database.detail, /schema v99, expected v13/);
   assert.match(database.hint, /upgrade nightshift/);
 });
 
@@ -296,6 +296,22 @@ test("the keep awake check on macOS: off is fine, found is ok, and a missing caf
   const { report: ok } = await diagnose(host.env, overrides);
   assert.equal(checkOf(ok, "keep awake").status, "ok");
   assert.match(checkOf(ok, "keep awake").detail, new RegExp(found.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("the job environment check is ok by default (isolated) and warns once queue.inheritUserEnvironment is turned on", async (t) => {
+  const host = makeHostEnv(t, "doctor-job-environment");
+  const { report: isolated } = await diagnose(host.env);
+  assert.equal(statusOf(isolated, "job environment"), "ok");
+  assert.match(checkOf(isolated, "job environment").detail, /isolated:.*queue\.inheritUserEnvironment: false/);
+  assert.equal(checkOf(isolated, "job environment").hint, null);
+
+  ensureHome(host.env);
+  const config = loadConfig(host.env, { warn: () => {} });
+  saveConfig({ ...config, queue: { ...config.queue, inheritUserEnvironment: true } }, host.env);
+  const { report: inherited } = await diagnose(host.env);
+  assert.equal(statusOf(inherited, "job environment"), "warn");
+  assert.match(checkOf(inherited, "job environment").detail, /inherited:.*queue\.inheritUserEnvironment: true/);
+  assert.match(checkOf(inherited, "job environment").hint, /queue\.inheritUserEnvironment/);
 });
 
 test("the queue check reads the pause sentinel of the home, and a paused queue is a warning", async (t) => {

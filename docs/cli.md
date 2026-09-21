@@ -247,6 +247,10 @@ the Bash timeouts of the `claude` a job runs: `default` is what a command gets w
 `timeout` parameter, `max` the most it may ask for. Both must be positive integers with
 `max >= default`; any other value falls back to the defaults as a whole. See
 [Queue](queue.md) for why a command that outlives it is killed, never backgrounded.
+`queue.inheritUserEnvironment` (`false` default) isolates a job from the operator's
+own MCP servers, plugins, skills, agents and user hooks; only a literal `true` opts a
+job back into inheriting them. See [Queue](queue.md) for what an isolated job's
+environment is and is not, and for the `job environment` row of `nightshift doctor`.
 
 ## Decisions
 

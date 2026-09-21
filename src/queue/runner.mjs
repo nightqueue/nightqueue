@@ -8,7 +8,7 @@ import { ghPrList } from "../host/gh.mjs";
 import { packageRoot, spawnRoot } from "../host/paths.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore, openStoreReadOnly } from "../store/open.mjs";
-import { acquire, bashTimeoutS, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
+import { acquire, bashTimeoutS, concurrencyCap, inheritUserEnvironment, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isTerminalRuntimeKill, isTransientFailure } from "./classify.mjs";
 import { preflight } from "./preflight.mjs";
 import {
@@ -31,6 +31,7 @@ import { clearRunOutcome, decideResume, isSafeSegment, readRunState, renameRunDi
 import { recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
 import { buildPrompt, IDLE_TIMEOUT_S, provisionalSlug, spawnClaude } from "./spawn.mjs";
 import {
+  extractBaselineCtx,
   extractHostCommandCounts,
   extractRateLimitFromEventLine,
   extractSessionIdFromEventLine,
@@ -84,7 +85,12 @@ const PR_SEARCH_MAX_CHARS = 80;
 
 // Merges the injected seams over the real implementations; the ownership poll is the configured heartbeat.
 function withDefaults(deps, env) {
-  const merged = { ...DEFAULT_DEPS, stopPollMs: leaseHeartbeatMs(env), bashTimeoutS: bashTimeoutS(env) };
+  const merged = {
+    ...DEFAULT_DEPS,
+    stopPollMs: leaseHeartbeatMs(env),
+    bashTimeoutS: bashTimeoutS(env),
+    inheritUserEnvironment: inheritUserEnvironment(env),
+  };
   for (const [key, value] of Object.entries(deps ?? {})) {
     if (value !== undefined) merged[key] = value;
   }
@@ -299,11 +305,13 @@ async function runAttempts(job, ctx) {
   const ownership = { lost: false };
   const usages = [];
   const hostCommandCounts = [];
+  let baselineCtx = null;
   let attempt = job.attempts;
   while (true) {
     if (!(await renew(job, env)))
-      return { lost: true, facts, attempt, usage: sumUsage(usages), hostCommands: sumHostCommandCounts(hostCommandCounts), outcome: null, result: null };
+      return { lost: true, facts, attempt, usage: sumUsage(usages), hostCommands: sumHostCommandCounts(hostCommandCounts), baselineCtx, outcome: null, result: null };
     if (isSafeSegment(facts.slug)) clearRunOutcome({ project: job.project, slug: facts.slug, env });
+    const resumeSessionId = resumeForced ? facts.sessionId : null;
     const result = await spawnClaude({
       prompt: ctx.prompt,
       cwd: ctx.cwd,
@@ -318,27 +326,29 @@ async function runAttempts(job, ctx) {
       stopSignalImpl: () => shouldStop(job, ctx, ownership),
       pauseSignalImpl,
       stopPollMs: deps.stopPollMs,
-      resumeSessionId: resumeForced ? facts.sessionId : null,
+      resumeSessionId,
       resolveBinImpl: deps.resolveBinImpl,
       holdJobAwakeImpl: deps.holdJobAwakeImpl,
       bashTimeoutS: deps.bashTimeoutS,
+      inheritUserEnvironment: deps.inheritUserEnvironment,
     });
     if (ownership.lost)
-      return { lost: true, facts, attempt, usage: sumUsage(usages), hostCommands: sumHostCommandCounts(hostCommandCounts), outcome: null, result };
+      return { lost: true, facts, attempt, usage: sumUsage(usages), hostCommands: sumHostCommandCounts(hostCommandCounts), baselineCtx, outcome: null, result };
     usages.push(extractUsage(result.log));
     hostCommandCounts.push(extractHostCommandCounts(result.log));
+    if (baselineCtx === null && !resumeSessionId) baselineCtx = extractBaselineCtx(result.log);
     const hostCommands = sumHostCommandCounts(hostCommandCounts);
     const notBefore = rateLimitExit(result, facts);
-    if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, usage: sumUsage(usages), hostCommands, outcome: null, result };
+    if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, usage: sumUsage(usages), hostCommands, baselineCtx, outcome: null, result };
     const planPath = isSafeSegment(facts.slug) ? join(runDir(job.project, facts.slug, env), "03-plan.md") : null;
     const state = readRunState({ project: job.project, slug: facts.slug, env });
     const outcome = classifyJobResult({ ...result, state, planPath });
     if (!isRetryable(job, attempt, result, outcome, state)) {
-      return { lost: false, facts, attempt, usage: sumUsage(usages), hostCommands, outcome, result };
+      return { lost: false, facts, attempt, usage: sumUsage(usages), hostCommands, baselineCtx, outcome, result };
     }
     await deps.sleepImpl(backoffMs(attempt));
     if (!(await ctx.store.jobs.countAttempt(job.id, { worker: job.worker }))) {
-      return { lost: true, facts, attempt, usage: sumUsage(usages), hostCommands, outcome, result };
+      return { lost: true, facts, attempt, usage: sumUsage(usages), hostCommands, baselineCtx, outcome, result };
     }
     attempt += 1;
   }
@@ -484,6 +494,7 @@ async function finalize(job, run, ctx) {
           noticeMd: outcome.noticeMd,
           usage: run.usage,
           hostCommands: run.hostCommands,
+          baselineCtx: run.baselineCtx,
         },
         env,
       ),

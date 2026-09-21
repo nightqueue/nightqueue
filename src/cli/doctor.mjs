@@ -421,6 +421,24 @@ function checkKeepAwake(ctx) {
   return check("keep awake", "ok", `queue.keepAwake: ${mode}, ${bin} - ${KEEP_AWAKE_LID_NOTE}`);
 }
 
+// Checks `queue.inheritUserEnvironment`: isolated (the default) is fine, inheriting the operator's own MCP servers, plugins and hooks only warns.
+function checkJobEnvironment(ctx) {
+  const inherits = loadConfig(ctx.env, { warn: () => {} }).queue?.inheritUserEnvironment === true;
+  if (!inherits) {
+    return check(
+      "job environment",
+      "ok",
+      "isolated: jobs do not see the operator's MCP servers, plugins or user hooks (queue.inheritUserEnvironment: false)",
+    );
+  }
+  return check(
+    "job environment",
+    "warn",
+    "inherited: jobs see the operator's MCP servers, plugins and user hooks (queue.inheritUserEnvironment: true)",
+    "set queue.inheritUserEnvironment to false to isolate jobs again",
+  );
+}
+
 const QUEUE_JOBS_MIGRATE_HINT = "run `nightshift memory stats` once to let the runtime migrate the database";
 
 // Counts the jobs left `running` by a runner that died, reading the database read-only.
@@ -542,7 +560,7 @@ async function checkHostCommands(ctx) {
 
 // Checks the queue: the pause sentinel and the runners always, the orphaned jobs and the open proposals of closed jobs only once the database exists.
 async function checkQueue(ctx) {
-  const checks = [checkQueuePause(ctx), checkKeepAwake(ctx), ...checkRunners(ctx)];
+  const checks = [checkQueuePause(ctx), checkKeepAwake(ctx), checkJobEnvironment(ctx), ...checkRunners(ctx)];
   if (existsSync(dbPath(ctx.env))) checks.push(await checkQueueJobs(ctx), await checkDecisionProposals(ctx));
   checks.push(await checkHostCommands(ctx));
   return checks;

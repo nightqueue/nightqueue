@@ -97,6 +97,7 @@ function normalize(text, substitutions) {
   // The `hook PreToolUse` doctor check is the same kind of additive difference: a baseline exported before
   // the subagent-foreground hook landed never registers it, so it never reports the check either; so is `decision proposals`.
   // The `keep awake` doctor check is the same: a baseline exported before `queue.keepAwake` landed never reports it either; so is `host commands`.
+  // The `job environment` doctor check is the same: a baseline exported before `queue.inheritUserEnvironment` landed never reports it either.
   // The last count key is `closed` since the `merged` status was retired, a rename a baseline before it cannot carry.
   return out
     .replace(/schema v\d+/g, "schema v<N>")
@@ -106,7 +107,8 @@ function normalize(text, substitutions) {
     .replace(/\{"name":"hook PreToolUse"[^{}]*\},?/g, "")
     .replace(/\{"name":"decision proposals"[^{}]*\},?/g, "")
     .replace(/\{"name":"keep awake"[^{}]*\},?/g, "")
-    .replace(/\{"name":"host commands"[^{}]*\},?/g, "");
+    .replace(/\{"name":"host commands"[^{}]*\},?/g, "")
+    .replace(/\{"name":"job environment"[^{}]*\},?/g, "");
 }
 
 function assertParity(label, before, after, substitutionsBefore, substitutionsAfter) {

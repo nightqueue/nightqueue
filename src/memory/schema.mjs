@@ -1,4 +1,4 @@
-export const DB_USER_VERSION = 12;
+export const DB_USER_VERSION = 13;
 
 // Timestamp of SQLite ("YYYY-MM-DD HH:MM:SS", UTC) as ISO 8601.
 export function sqliteToIso(ts) {

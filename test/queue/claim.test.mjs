@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { queuePausedPath } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { addJob, claimJobById, countActiveJobs, getJob, releaseJob } from "../../src/memory/jobs.mjs";
-import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, resumeSessionEnabled, workerId } from "../../src/queue/claim.mjs";
+import { acquire, concurrencyCap, inheritUserEnvironment, isPaused, leaseHeartbeatMs, resumeSessionEnabled, workerId } from "../../src/queue/claim.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
@@ -178,6 +178,18 @@ test("the ceiling and the resume switch come from the configuration; anything bu
   saveConfig({ ...config, queue: { maxConcurrent: 0, resumeSession: "true" } }, env);
   assert.equal(concurrencyCap(env), null, "a broken ceiling became a ceiling");
   assert.equal(resumeSessionEnabled(env), false);
+});
+
+test("a job stays isolated from the operator's own environment unless queue.inheritUserEnvironment is a literal true", (t) => {
+  const env = makeQueue(t, "claim-inherit-user-environment");
+  assert.equal(inheritUserEnvironment(env), false);
+
+  const config = loadConfig(env, { warn: () => {} });
+  saveConfig({ ...config, queue: { ...config.queue, inheritUserEnvironment: true } }, env);
+  assert.equal(inheritUserEnvironment(env), true);
+
+  saveConfig({ ...config, queue: { ...config.queue, inheritUserEnvironment: "true" } }, env);
+  assert.equal(inheritUserEnvironment(env), false, "a non-boolean truthy value turned isolation off");
 });
 
 test("the heartbeat of the lease comes from the configuration and never falls below one second", (t) => {

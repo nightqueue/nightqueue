@@ -66,6 +66,7 @@ const JOB_VIEW_COLUMNS = [
   "bash_timeouts",
   "tasks_backgrounded",
   "tasks_killed",
+  "baseline_ctx",
 ];
 const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "not_before"];
 const JOB_VIEW_TRUNCATED = ["notice_md", "result"];
@@ -477,7 +478,7 @@ function ensureFinishDurable(id, written, env) {
 }
 
 // Closes a job with its outcome and links the pipeline run, in one transaction; false means the job was lost.
-export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, hostCommands } = {}, env = process.env) {
+export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, hostCommands, baselineCtx } = {}, env = process.env) {
   const db = openDb(env);
   const tokens = usage ?? {};
   const commands = hostCommands ?? {};
@@ -498,7 +499,8 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
             cost_usd = COALESCE(?, cost_usd),
             bash_timeouts = COALESCE(?, bash_timeouts),
             tasks_backgrounded = COALESCE(?, tasks_backgrounded),
-            tasks_killed = COALESCE(?, tasks_killed)
+            tasks_killed = COALESCE(?, tasks_killed),
+            baseline_ctx = COALESCE(?, baseline_ctx)
       WHERE id = ? AND status = 'running' AND worker = ?
       RETURNING project, slug, status, pr_url, finished_at`,
   );
@@ -515,6 +517,7 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
     optionalNumber(commands.bashTimeouts),
     optionalNumber(commands.tasksBackgrounded),
     optionalNumber(commands.tasksKilled),
+    optionalNumber(baselineCtx),
     requireId(id),
     requireText("worker", worker),
   ];

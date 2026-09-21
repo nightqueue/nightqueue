@@ -666,6 +666,18 @@ export function extractHostCommandCounts(log) {
   return { bashTimeouts, tasksBackgrounded: backgrounded.size, tasksKilled: killed.size };
 }
 
+// Usage of the orchestrator's FIRST assistant turn (parent_tool_use_id null, never a subagent's), or null when there is none.
+export function extractBaselineCtx(log) {
+  for (const entry of linesWithFenceState(log)) {
+    if (!isMarkerCandidate(entry)) continue;
+    const event = parseEventLine(entry.line);
+    if (event?.type !== "assistant" || event.parent_tool_use_id !== null || !event.message?.usage) continue;
+    const usage = event.message.usage;
+    return finite(usage.input_tokens) + finite(usage.cache_read_input_tokens) + finite(usage.cache_creation_input_tokens);
+  }
+  return null;
+}
+
 // Consolidates the host command counts of several attempts into one total, the same way `sumUsage` does for tokens.
 export function sumHostCommandCounts(counts) {
   const list = (Array.isArray(counts) ? counts : []).filter((entry) => entry && typeof entry === "object");

@@ -28,6 +28,11 @@ export function resumeSessionEnabled(env = process.env) {
   return loadConfig(env, { warn: () => {} }).queue?.resumeSession === true;
 }
 
+// Tells whether the operator opted a job back into the operator's own MCP servers, plugins and user hooks; anything but a literal true keeps a job isolated.
+export function inheritUserEnvironment(env = process.env) {
+  return loadConfig(env, { warn: () => {} }).queue?.inheritUserEnvironment === true;
+}
+
 // Interval of the ownership heartbeat that re-arms the lease, the only knob the operator has over the poll.
 export function leaseHeartbeatMs(env = process.env) {
   const configured = loadConfig(env, { warn: () => {} }).queue?.leaseHeartbeatS;

@@ -297,6 +297,39 @@ test("a transient failure is retried after a backoff that the test injects inste
   assert.equal(JSON.parse(row.result).attempts, 2);
 });
 
+// The orchestrator's own turn, the shape the real CLI writes with an explicit `parent_tool_use_id: null`.
+function orchestratorTurn(usage) {
+  return { type: "assistant", session_id: SESSION_ID, parent_tool_use_id: null, message: { id: `msg_${Math.random().toString(36).slice(2, 10)}`, role: "assistant", content: [{ type: "text", text: "working" }], usage } };
+}
+
+test("baseline_ctx is the FIRST attempt's own orchestrator usage, kept across a retry instead of the resumed attempt's", async (t) => {
+  const firstAttempt = toNdjson([
+    systemInitEvent(),
+    orchestratorTurn({ input_tokens: 100, cache_read_input_tokens: 20, cache_creation_input_tokens: 5 }),
+    assistantEvent("API Error: 429 Too Many Requests (overloaded_error)", { messageId: "msg_429" }),
+    resultEvent({ text: "API Error: 429 Too Many Requests", subtype: "error_during_execution" }),
+  ]);
+  const secondAttempt = toNdjson([
+    systemInitEvent(),
+    orchestratorTurn({ input_tokens: 900, cache_read_input_tokens: 300, cache_creation_input_tokens: 0 }),
+    slugEvent(),
+    assistantEvent(noticeText(), { messageId: "msg_notice" }),
+    resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
+  ]);
+  const { env } = makeRunnerHome(t, "runner-baseline-ctx", [
+    { stdout: firstAttempt, exitCode: 1 },
+    { stdout: secondAttempt, exitCode: 0 },
+  ]);
+  const id = enqueue(env, { maxAttempts: 2 });
+
+  const cycle = await runJobCycle(env, id, { sleepImpl: async () => {} });
+
+  assert.equal(cycle.processed[0].status, "done");
+  const row = getJob(id, env);
+  assert.equal(row.attempts, 2);
+  assert.equal(row.baseline_ctx, 125, "the first attempt's own usage (100 + 20 + 5) was not kept");
+});
+
 test("a child that ends on a rate limit parks the job for the reset, keeps its attempt and resumes its session on the next claim", async (t) => {
   const resetsAtS = Math.floor(Date.now() / 1000) + 3600;
   const limited = toNdjson([systemInitEvent({}), rateLimitEvent({ status: "rejected", resetsAt: resetsAtS })]);
@@ -595,6 +628,26 @@ test("--resume is only added when the operator turned it on and the job already 
 
   await runJobCycle(env, second);
   assert.equal(argValue(fakeCalls(planPath)[1].argv, "--resume"), SESSION_ID);
+});
+
+test("an attempt spawned with --resume records no baseline_ctx, since its first turn carries the resumed history", async (t) => {
+  const resumed = toNdjson([
+    systemInitEvent(),
+    orchestratorTurn({ input_tokens: 900, cache_read_input_tokens: 300, cache_creation_input_tokens: 0 }),
+    slugEvent(),
+    assistantEvent(noticeText(), { messageId: "msg_notice" }),
+    resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
+  ]);
+  const { env, planPath } = makeRunnerHome(t, "runner-baseline-resume", [{ stdout: resumed, exitCode: 0 }]);
+  const config = loadConfig(env, { warn: () => {} });
+  saveConfig({ ...config, queue: { maxConcurrent: 2, resumeSession: true } }, env);
+  const id = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET session_id = ? WHERE id = ?").run(SESSION_ID, id);
+
+  await runJobCycle(env, id);
+
+  assert.equal(argValue(fakeCalls(planPath)[0].argv, "--resume"), SESSION_ID);
+  assert.equal(getJob(id, env).baseline_ctx, null, "a resumed attempt's inflated first turn was recorded as the baseline");
 });
 
 test("a cycle that has nothing to claim reports why, and a dry cycle never writes", async (t) => {

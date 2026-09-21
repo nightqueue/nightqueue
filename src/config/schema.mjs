@@ -48,6 +48,7 @@ export function emptyConfig() {
       leaseHeartbeatS: LEASE_HEARTBEAT_DEFAULT_S,
       keepAwake: KEEP_AWAKE_DEFAULT,
       bashTimeoutS: { ...BASH_TIMEOUT_DEFAULT },
+      inheritUserEnvironment: false,
     },
     embedding: null,
   };
@@ -183,6 +184,7 @@ export function normalizeConfig(raw, { warn = () => {} } = {}) {
       leaseHeartbeatS: normalizeHeartbeat(raw.queue?.leaseHeartbeatS),
       keepAwake: normalizeKeepAwake(raw.queue?.keepAwake),
       bashTimeoutS: normalizeBashTimeout(raw.queue?.bashTimeoutS),
+      inheritUserEnvironment: raw.queue?.inheritUserEnvironment === true,
     },
     embedding: normalizeEmbedding(raw.embedding),
   };
