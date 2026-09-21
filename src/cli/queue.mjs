@@ -12,7 +12,19 @@ import { ownerLabel } from "../memory/scope.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
-import { isQueueIdle, noRunnerWait, parkedBacklogLine, parkedJobLabel, pausedRunnerLine, pendingJobs, runnerPauseLabel, runnersOnline } from "../queue/hints.mjs";
+import {
+  isQueueIdle,
+  noRunnerWait,
+  parkedBacklogLine,
+  parkedJobLabel,
+  pausedRunnerLine,
+  pendingJobs,
+  runnerPauseLabel,
+  runnersOnline,
+  windowCadenceLabel,
+  windowClosedLine,
+  windowWaitingLine,
+} from "../queue/hints.mjs";
 import {
   createNarrator,
   formatDuration,
@@ -49,6 +61,7 @@ import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue
 import { resolveJobSession } from "../queue/session.mjs";
 import { CLAUDE_MISSING_MESSAGE, resolveClaudeBin } from "../queue/spawn.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
+import { parseWallClock } from "../queue/window.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { registerProject } from "./project.mjs";
 import { choose, confirm } from "./prompt.mjs";
@@ -57,7 +70,7 @@ import { runtimeLabel } from "./runtime-versions.mjs";
 export const USAGE = {
   add: "nightshift queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id>]",
   status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
-  run: "nightshift queue run [--job <id> | --watch [seconds]] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
+  run: "nightshift queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>]",
   close: "nightshift queue close <id>... [--decisions accept|reject|keep] [--json], or nightshift queue close --merged [--decisions accept|reject|keep] [--json]",
   retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
@@ -190,11 +203,13 @@ function startedLine({ jobId, pid, watchIntervalS, logPath }) {
 }
 
 // Starts the runner detached, with the prune and the registration inside one hold of the home lock, and says what happened.
-async function startDetached({ jobId = null, max = null, watchIntervalS = null }, ctx) {
+async function startDetached({ jobId = null, max = null, watchIntervalS = null, from = null, until = null }, ctx) {
   const started = await startQueueRunner({
     jobId,
     max,
     watchIntervalS,
+    from,
+    until,
     env: ctx.env,
     spawnImpl: ctx.spawnImpl,
     killImpl: ctx.killImpl,
@@ -206,9 +221,9 @@ async function startDetached({ jobId = null, max = null, watchIntervalS = null }
 }
 
 // Runs the queue in THIS process as a registered runner; the connection is opened here so the registration can witness which shared-memory file this runner is attached to, and it never outlives the run.
-async function runGuardedHere({ jobId = null, watchIntervalS = null, json, ctx, run }) {
+async function runGuardedHere({ jobId = null, watchIntervalS = null, from = null, until = null, json, ctx, run }) {
   if (typeof json !== "boolean") throw new TypeError("runGuardedHere needs `json` (true or false) so the advisory echo never lands on the stdout of a --json run");
-  const registered = await registerForegroundRunner({ jobId, watchIntervalS, env: ctx.env, killImpl: ctx.killImpl });
+  const registered = await registerForegroundRunner({ jobId, watchIntervalS, from, until, env: ctx.env, killImpl: ctx.killImpl });
   try {
     await openStore(ctx.env).connect();
     await stampRunnerDbWitness(ctx.env);
@@ -583,7 +598,10 @@ function formatDetail(job) {
 
 // What the registered runner does: how often it looks at the queue, or the single job it was started for.
 function runnerCadence(runner) {
-  if (runner.mode === "watch") return `watch every ${runner.intervalS} s`;
+  if (runner.mode === "watch") {
+    const window = windowCadenceLabel(runner.window);
+    return `watch every ${runner.intervalS} s${window ? ` · ${window}` : ""}`;
+  }
   if (runner.mode === "once") return runner.jobId === null ? "once" : `once, job #${runner.jobId}`;
   return `${runner.mode ?? "runner"}`;
 }
@@ -616,6 +634,8 @@ function backlogLine({ activeJobs, counts, runners, jobs = [] }) {
   if (counts.pending === 0) return null;
   const paused = pausedRunnerLine(runners);
   if (paused) return `${pendingJobs(counts.pending)} waiting - ${paused}`;
+  const waiting = windowWaitingLine(runners);
+  if (waiting) return `${pendingJobs(counts.pending)} waiting - ${waiting}`;
   if (!isQueueIdle({ activeJobs, runners })) return null;
   const parked = parkedBacklogLine({ jobs, pending: counts.pending });
   if (parked) return `${pendingJobs(counts.pending)} waiting - ${parked}`;
@@ -919,6 +939,7 @@ function formatProcessed(job) {
 // One line of report for each job the cycle processed.
 function printCycle(cycle, ctx) {
   for (const job of cycle.processed) ctx.out(formatProcessed(job));
+  if (cycle.reason === "window-closed") return ctx.out(windowClosedLine(cycle));
   if (!cycle.processed.length) ctx.out(`queue: nothing to run (${cycle.reason})`);
   if (cycle.reason === "max-reached") ctx.out("queue: stopped - the --max budget of this run is spent");
 }
@@ -927,6 +948,8 @@ const RUN_OPTIONS = {
   job: { type: "string" },
   max: { type: "string" },
   watch: { type: "string" },
+  from: { type: "string" },
+  until: { type: "string" },
   dry: { type: "boolean" },
   json: { type: "boolean" },
   foreground: { type: "boolean" },
@@ -949,6 +972,23 @@ function checkStopAlone(values) {
 function checkJobNotWatched(values) {
   if (values.job !== undefined && values.watch !== undefined) {
     throw new UserError(`\`--job\` and \`--watch\` cannot be used together; usage: ${USAGE.run}`);
+  }
+}
+
+// Refuses `--from`/`--until` outside of `--watch`, beside `--job`, without one another, equal to one another, or written any way other than `HH:MM`.
+function checkWindowFlags(values) {
+  if (values.from === undefined && values.until === undefined) return;
+  if (values.job !== undefined) throw new UserError(`\`--from\`/\`--until\` cannot be used with \`--job\`; usage: ${USAGE.run}`);
+  if (values.watch === undefined) throw new UserError(`\`--from\`/\`--until\` only have meaning with \`--watch\`; usage: ${USAGE.run}`);
+  if (values.until === undefined) throw new UserError(`\`--from\` requires \`--until\`; usage: ${USAGE.run}`);
+  if (values.from !== undefined && !parseWallClock(values.from)) {
+    throw new UserError(`\`--from\` expects a time written HH:MM (00-23:00-59), got \`${values.from}\`; usage: ${USAGE.run}`);
+  }
+  if (!parseWallClock(values.until)) {
+    throw new UserError(`\`--until\` expects a time written HH:MM (00-23:00-59), got \`${values.until}\`; usage: ${USAGE.run}`);
+  }
+  if (values.from !== undefined && values.from === values.until) {
+    throw new UserError(`\`--from\` and \`--until\` cannot name the same time; usage: ${USAGE.run}`);
   }
 }
 
@@ -988,13 +1028,15 @@ async function runDrainHere({ max, json }, ctx) {
 }
 
 // Runs the watch loop in this process, as the registered runner of the queue.
-async function runWatchHere({ intervalS, jobId, max, json }, ctx) {
+async function runWatchHere({ intervalS, jobId, max, json, from = null, until = null }, ctx) {
   return await runGuardedHere({
     jobId,
     watchIntervalS: intervalS,
+    from,
+    until,
     json,
     ctx,
-    run: () => runWatch({ intervalS, jobId, max, env: ctx.env, onCycle: (cycle) => printCycle(cycle, ctx) }).then(() => 0),
+    run: () => runWatch({ intervalS, jobId, max, from, until, env: ctx.env, onCycle: (cycle) => printCycle(cycle, ctx) }).then(() => 0),
   });
 }
 
@@ -1015,6 +1057,7 @@ async function runRun(argv, ctx) {
     return await runStop(values.stop, ctx);
   }
   checkJobNotWatched(values);
+  checkWindowFlags(values);
   const jobId = requireInt("--job", values.job) ?? null;
   const max = requireInt("--max", values.max) ?? null;
   if (values.dry) {
@@ -1024,9 +1067,11 @@ async function runRun(argv, ctx) {
     return;
   }
   const intervalS = values.watch === undefined ? null : requireInt("--watch", values.watch);
-  if (values.foreground !== true) return await startDetached({ jobId, max, watchIntervalS: intervalS }, ctx);
+  const from = values.from ?? null;
+  const until = values.until ?? null;
+  if (values.foreground !== true) return await startDetached({ jobId, max, watchIntervalS: intervalS, from, until }, ctx);
   const json = values.json === true;
-  if (intervalS !== null) return await runWatchHere({ intervalS, jobId, max, json }, ctx);
+  if (intervalS !== null) return await runWatchHere({ intervalS, jobId, max, json, from, until }, ctx);
   if (values.drain === true && jobId === null) return await runDrainHere({ max, json }, ctx);
   const waiting = await claimBlocker({ jobId, mode: runnerMode({ jobId }), env: ctx.env });
   if (waiting) return await reportWaiting(waiting, ctx);

@@ -201,6 +201,9 @@ nightshift queue session 42 --json                    # session, attempt and cwd
 
 nightshift queue close 42 43 --decisions keep          # take terminal jobs to `closed`, keeping their open proposals
 nightshift queue close --merged --decisions accept     # close every terminal job gh confirms merged, accepting each proposal
+
+nightshift queue run --watch --from 22:00 --until 04:00   # watch only inside that window, local wall clock, then exit
+nightshift queue run --watch --until 04:00                # `--from` defaults to now
 ```
 
 `queue session <id>` opens the `claude` session of a job's LAST attempt - `last_session_id`
@@ -231,6 +234,15 @@ without `--decisions`, it asks `decision <owner> "<title>" of job #<id>: accept 
 them without asking, and no terminal (or `--json`) leaves every proposal `kept (proposed)`, so a
 script's behaviour never changes underneath it. Each settled proposal prints `decision <label>
 <title>: accepted|rejected|kept (proposed)`, and `--json` carries them under `decisions`.
+
+`queue run --watch --from HH:MM --until HH:MM` bounds a watcher to one local
+wall-clock window and exits at its end; see [Queue](queue.md#running-the-queue) for
+the full resolution rule (midnight-crossing windows, the one-shot nature, what the
+runner does at `from` and at `until`). Both flags only have meaning with `--watch`,
+`--from` requires `--until`, and neither is accepted next to `--job`. `queue.keepAwake`
+(`"auto"` default, `"always"`, `"off"`) in `config.json` keeps the machine from
+sleeping while a runner or a job needs it; see the same section for what it does and
+does not cover.
 
 ## Decisions
 
@@ -294,7 +306,9 @@ mcp`, which is a `warn` when the app is installed and does not know the server
 and an `ok` when the app is not installed at all), each of the four hooks, the
 plugin, the embedding weights,
 the optional embedding
-library, the schema version of the database, the pause sentinel of the queue, the
+library, the schema version of the database, the pause sentinel of the queue,
+whether the machine is kept awake for a runner or a job (`queue.keepAwake`, and on
+macOS whether `caffeinate` was found), the
 pidfile of the runner (a registration whose process is gone only warns, and so does one
 whose pid belongs to another user; the diagnosis never removes either), the jobs whose
 runner died and every registered

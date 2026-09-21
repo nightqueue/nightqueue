@@ -26,6 +26,7 @@ import { PATH_MARK, binDirInPath, rcFilePath } from "../host/shell.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
 import { DB_USER_VERSION } from "../memory/schema.mjs";
 import { ownerLabel } from "../memory/scope.mjs";
+import { keepAwakeMode, resolveCaffeinateBin } from "../queue/keep-awake.mjs";
 import { isRegistryFailure, killProcess, listRunnerRecords, registryReadError } from "../queue/registry.mjs";
 import { readRunState } from "../queue/resume.mjs";
 import { canonicalPath, lockState, parseWorktreeList } from "../queue/worktree.mjs";
@@ -399,6 +400,26 @@ function checkQueuePause(ctx) {
     : check("queue", "ok", "not paused");
 }
 
+const KEEP_AWAKE_LID_NOTE = "a closed lid with no external display still sleeps, and nothing here wakes an already-sleeping machine";
+
+// Checks `queue.keepAwake`: a plain no-op outside macOS, and on macOS whether `caffeinate` can be found for the configured mode.
+function checkKeepAwake(ctx) {
+  const mode = keepAwakeMode(ctx.env);
+  const platform = ctx.platform ?? process.platform;
+  if (platform !== "darwin") return check("keep awake", "ok", `queue.keepAwake: ${mode} (does nothing outside macOS)`);
+  if (mode === "off") return check("keep awake", "ok", `queue.keepAwake: off - ${KEEP_AWAKE_LID_NOTE}`);
+  const bin = resolveCaffeinateBin(ctx.env);
+  if (!bin) {
+    return check(
+      "keep awake",
+      "warn",
+      `queue.keepAwake: ${mode}, caffeinate not found - ${KEEP_AWAKE_LID_NOTE}`,
+      "install the Xcode command line tools or set NIGHTSHIFT_CAFFEINATE_BIN to its absolute path",
+    );
+  }
+  return check("keep awake", "ok", `queue.keepAwake: ${mode}, ${bin} - ${KEEP_AWAKE_LID_NOTE}`);
+}
+
 const QUEUE_JOBS_MIGRATE_HINT = "run `nightshift memory stats` once to let the runtime migrate the database";
 
 // Counts the jobs left `running` by a runner that died, reading the database read-only.
@@ -489,7 +510,7 @@ function checkRunners(ctx) {
 
 // Checks the queue: the pause sentinel and the runners always, the orphaned jobs and the open proposals of closed jobs only once the database exists.
 async function checkQueue(ctx) {
-  const checks = [checkQueuePause(ctx), ...checkRunners(ctx)];
+  const checks = [checkQueuePause(ctx), checkKeepAwake(ctx), ...checkRunners(ctx)];
   if (existsSync(dbPath(ctx.env))) checks.push(await checkQueueJobs(ctx), await checkDecisionProposals(ctx));
   return checks;
 }

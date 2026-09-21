@@ -24,6 +24,7 @@ import {
   recordOwnPause,
   resumeRequestedAt,
 } from "./rate-limit.mjs";
+import { holdRunnerAwake } from "./keep-awake.mjs";
 import { killProcess, ownRunnerRecord } from "./registry.mjs";
 import { runMaintenance } from "./maintenance.mjs";
 import { clearRunOutcome, decideResume, isSafeSegment, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
@@ -41,6 +42,7 @@ import {
   sumUsage,
 } from "./stream.mjs";
 import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
+import { resolveWindow, windowPhase } from "./window.mjs";
 import { finishNotice, inspectRunWorktree, keptWorktreeLine, removeRunWorktree } from "./worktree.mjs";
 
 // Interval between two cycles of `queue run --watch` when the operator gives no number.
@@ -59,6 +61,7 @@ function sleep(ms) {
 const DEFAULT_DEPS = {
   spawnImpl: spawn,
   sleepImpl: sleep,
+  nowImpl: Date.now,
   gitImpl: undefined,
   existsImpl: undefined,
   resolveBinImpl: undefined,
@@ -69,6 +72,8 @@ const DEFAULT_DEPS = {
   prListImpl: ghPrList,
   finishJobImpl: null,
   killImpl: null,
+  keepAwakeImpl: holdRunnerAwake,
+  holdJobAwakeImpl: undefined,
 };
 
 // Bounds of the key the pre-spawn pull request check searches for.
@@ -310,6 +315,7 @@ async function runAttempts(job, ctx) {
       stopPollMs: deps.stopPollMs,
       resumeSessionId: resumeForced ? facts.sessionId : null,
       resolveBinImpl: deps.resolveBinImpl,
+      holdJobAwakeImpl: deps.holdJobAwakeImpl,
     });
     if (ownership.lost) return { lost: true, facts, attempt, usage: sumUsage(usages), outcome: null, result };
     usages.push(extractUsage(result.log));
@@ -625,18 +631,45 @@ async function pauseGate(env) {
 
 // Waits out the rate limit of THIS runner before it claims anything, one slice at a time, so a shutdown signal or a
 // `queue resume` is noticed while it waits; a queue the operator paused by hand never waits at all, because `queue pause`
-// means stop now and the cycle must end on it. Returns the reason the cycle ends with, or null when the runner may claim.
-async function waitOutRateLimitPause(jobId, ctx) {
+// means stop now and the cycle must end on it. A window's `until` cuts the wait short: the reset is not worth waiting
+// for once the runner is about to stop claiming anyway. Returns the reason the cycle ends with, or null when the runner may claim.
+async function waitOutRateLimitPause(jobId, ctx, window = null) {
   const { env, deps, state } = ctx;
   let waited = false;
   while (!state.stopping) {
     if (jobId === null && isPaused(env)) return null;
     const until = await pauseGate(env);
     if (until === null) return null;
+    const now = deps.nowImpl();
+    if (window && now >= window.untilMs) return null;
     waited = true;
-    await waitNextPass(Math.min(Math.max(1, until - Date.now()), PAUSE_POLL_MS), state, deps.sleepImpl);
+    const sliceMs = Math.min(Math.max(1, until - now), PAUSE_POLL_MS);
+    await waitNextPass(window ? Math.min(sliceMs, Math.max(1, window.untilMs - now)) : sliceMs, state, deps.sleepImpl);
   }
   return waited ? "rate-limited" : null;
+}
+
+// Waits, in slices, for a window's `from` to arrive before this runner claims anything; a shutdown signal ends the
+// wait early, the same way it ends the rate-limit wait. Returns `outside-window` when the runner stopped before the
+// window opened, or null once it may proceed - which happens at once when the window is already open.
+async function waitOutWindowOpen(window, ctx) {
+  const { deps, state } = ctx;
+  let waited = false;
+  while (!state.stopping) {
+    const now = deps.nowImpl();
+    if (now >= window.fromMs) return null;
+    waited = true;
+    await waitNextPass(Math.min(window.fromMs - now, PAUSE_POLL_MS), state, deps.sleepImpl);
+  }
+  return waited ? "outside-window" : null;
+}
+
+// Tells whether a window's `until` has already arrived; carries the count of jobs still pending, the one `printCycle`
+// turns into the closing line of the runner log.
+async function windowClosedCheck(window, ctx) {
+  if (windowPhase({ fromMs: window.fromMs, untilMs: window.untilMs, nowMs: ctx.deps.nowImpl() }) !== "after") return null;
+  const counts = await ctx.store.jobs.countsByStatus();
+  return { windowClosedAt: window.untilMs, pending: counts.pending ?? 0 };
 }
 
 // A runner works one job at a time; simultaneity comes from starting several runners, never from one.
@@ -659,11 +692,14 @@ function remainingBudget(max, passes) {
 }
 
 // Claims and runs jobs one after the other until the queue refuses another one or the --max budget is spent, respecting the ceiling across processes.
-export async function runCycle({ jobId = null, max = null, dry = false, env = process.env, deps = {} } = {}) {
+// A `window` bounds the claiming to `[fromMs, untilMs)`: nothing is claimed before it opens or after it closes, but a
+// job already running when it closes always finishes - the window never kills or shortens a job's own timeout.
+export async function runCycle({ jobId = null, max = null, dry = false, env = process.env, deps = {}, window = null, keepAwake = true } = {}) {
   await openStoreReadOnly(env).migrateIfOutdated();
   const cap = concurrencyCap(env);
   if (dry) return await dryReport({ jobId, cap, max, env });
   const ctx = { env, store: openStore(env), deps: withDefaults(deps, env), state: { stopping: false } };
+  if (keepAwake) ctx.deps.keepAwakeImpl({ pid: process.pid, env });
   const upkeep = await ctx.deps.maintenanceImpl({ env });
   if (upkeep?.warning) process.stderr.write(`warning: ${upkeep.warning}\n`);
   const uninstall = installShutdown(ctx.state);
@@ -673,6 +709,7 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
   const seen = new Set();
   const blocked = new Set();
   let reason = "empty-queue";
+  let windowClosed = null;
   try {
     while (!ctx.state.stopping) {
       if (!existsSync(runtime)) {
@@ -684,14 +721,33 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
         await Promise.race(pool);
         continue;
       }
+      if (window) {
+        const opened = await waitOutWindowOpen(window, ctx);
+        if (opened !== null) {
+          reason = opened;
+          break;
+        }
+        windowClosed = await windowClosedCheck(window, ctx);
+        if (windowClosed) {
+          reason = "window-closed";
+          break;
+        }
+      }
       if (budgetSpent(max, processed)) {
         reason = "max-reached";
         break;
       }
-      const limited = await waitOutRateLimitPause(jobId, ctx);
+      const limited = await waitOutRateLimitPause(jobId, ctx, window);
       if (limited !== null) {
         reason = limited;
         break;
+      }
+      if (window) {
+        windowClosed = await windowClosedCheck(window, ctx);
+        if (windowClosed) {
+          reason = "window-closed";
+          break;
+        }
       }
       const claimed = await acquire({ jobId, cap, env });
       if (!claimed.job) {
@@ -722,7 +778,7 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
   } finally {
     uninstall();
   }
-  return { processed, reason, cap, stopped: ctx.state.stopping };
+  return { processed, reason, cap, stopped: ctx.state.stopping, ...(windowClosed ?? {}) };
 }
 
 // Waits until the next pass over the queue, or until a shutdown signal wakes the runner up first.
@@ -741,9 +797,23 @@ function waitNextPass(ms, state, sleepImpl) {
   });
 }
 
-// Repeats the cycle while the runner lives, sleeping between two passes over the queue, until its --max budget is spent.
-export async function runWatch({ intervalS = WATCH_INTERVAL_DEFAULT_S, jobId = null, max = null, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {
+// Repeats the cycle while the runner lives, sleeping between two passes over the queue, until its --max budget is spent
+// or, when `until` names a window, until it closes. `from`/`until` are resolved into absolute instants exactly once,
+// at the start of the watch, and that same window is handed to every pass for the rest of its life.
+export async function runWatch({
+  intervalS = WATCH_INTERVAL_DEFAULT_S,
+  jobId = null,
+  max = null,
+  env = process.env,
+  deps = {},
+  cycles = null,
+  onCycle = () => {},
+  from = null,
+  until = null,
+} = {}) {
   const options = withDefaults(deps, env);
+  options.keepAwakeImpl({ pid: process.pid, env });
+  const window = until === null ? null : resolveWindow({ from, until, nowMs: options.nowImpl() });
   const state = { stopping: false };
   const uninstall = installShutdown(state);
   const passes = [];
@@ -751,10 +821,17 @@ export async function runWatch({ intervalS = WATCH_INTERVAL_DEFAULT_S, jobId = n
     while (!state.stopping && (cycles === null || passes.length < cycles)) {
       const budget = remainingBudget(max, passes);
       if (budget !== null && budget <= 0) break;
-      const pass = await runCycle({ jobId, max: budget, env, deps: options });
+      const pass = await runCycle({ jobId, max: budget, env, deps: options, window, keepAwake: false });
       passes.push(pass);
       onCycle(pass);
-      if (state.stopping || pass.reason === "runtime-gone" || pass.reason === "max-reached" || (cycles !== null && passes.length >= cycles)) break;
+      if (
+        state.stopping ||
+        pass.reason === "runtime-gone" ||
+        pass.reason === "max-reached" ||
+        pass.reason === "window-closed" ||
+        (cycles !== null && passes.length >= cycles)
+      )
+        break;
       await waitNextPass(Math.max(1, Number(intervalS) || WATCH_INTERVAL_DEFAULT_S) * 1000, state, options.sleepImpl);
     }
   } finally {
@@ -773,6 +850,7 @@ const DRAIN_WAIT_REASONS = new Set(["blocked", "cap-reached", "rate-limited"]);
 // Runs cycles until the queue has nothing pending or the --max budget is spent (a job the preflight releases spends none), waiting between passes while the pending jobs are held back by a preflight block or the concurrency cap - what "run the queue" means to an operator.
 export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {
   const options = withDefaults(deps, env);
+  options.keepAwakeImpl({ pid: process.pid, env });
   const state = { stopping: false };
   const uninstall = installShutdown(state);
   const passes = [];
@@ -780,7 +858,7 @@ export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env =
     while (!state.stopping && (cycles === null || passes.length < cycles)) {
       const budget = remainingBudget(max, passes);
       if (budget !== null && budget <= 0) break;
-      const pass = await runCycle({ max: budget, env, deps: options });
+      const pass = await runCycle({ max: budget, env, deps: options, keepAwake: false });
       passes.push(pass);
       onCycle(pass);
       if (pass.stopped || DRAIN_DONE_REASONS.has(pass.reason)) break;
@@ -799,8 +877,9 @@ function compactStamp() {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 }
 
-// Arguments of the detached child: `--foreground` is what makes it run the queue instead of detaching again.
-function detachedArgs({ jobId, max, watchIntervalS }) {
+// Arguments of the detached child: `--foreground` is what makes it run the queue instead of detaching again; the
+// child parses `--from`/`--until` itself, so they travel unchanged.
+function detachedArgs({ jobId, max, watchIntervalS, from = null, until = null }) {
   return [
     cliEntrypoint(),
     "queue",
@@ -809,6 +888,8 @@ function detachedArgs({ jobId, max, watchIntervalS }) {
     ...(jobId === null ? [] : ["--job", String(jobId)]),
     ...(max === null ? [] : ["--max", String(max)]),
     ...(watchIntervalS === null ? [] : ["--watch", String(watchIntervalS)]),
+    ...(from === null ? [] : ["--from", from]),
+    ...(until === null ? [] : ["--until", until]),
     ...(jobId === null && watchIntervalS === null ? ["--drain"] : []),
   ];
 }
@@ -829,13 +910,13 @@ function spawnRunner({ args, fd, logPath, env, spawnImpl }) {
 }
 
 // Starts `nightshift queue run` detached, with its output going to a log file, and returns right away.
-export function launchDetachedRunner({ jobId = null, max = null, watchIntervalS = null, env = process.env, spawnImpl = spawn } = {}) {
+export function launchDetachedRunner({ jobId = null, max = null, watchIntervalS = null, from = null, until = null, env = process.env, spawnImpl = spawn } = {}) {
   ensureHome(env);
   const logPath = join(logsDir(env), `runner-${compactStamp()}.log`);
   try {
     mkdirSync(logsDir(env), { recursive: true });
     const fd = openSync(logPath, "a");
-    const args = detachedArgs({ jobId, max, watchIntervalS });
+    const args = detachedArgs({ jobId, max, watchIntervalS, from, until });
     try {
       return spawnRunner({ args, fd, logPath, env, spawnImpl });
     } finally {

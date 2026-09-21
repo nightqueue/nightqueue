@@ -2,7 +2,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, countActiveJobs, countsByStatus, LEASE_GRACE_S } from "../../src/memory/jobs.mjs";
-import { advisoryLines, isQueueIdle, noRunnerWait, parkedBacklogLine, parkedJobLabel, pausedRunnerLine, pendingJobs, runnerPauseLabel, runnersOnline } from "../../src/queue/hints.mjs";
+import {
+  advisoryLines,
+  clockLabel,
+  isQueueIdle,
+  noRunnerWait,
+  parkedBacklogLine,
+  parkedJobLabel,
+  pausedRunnerLine,
+  pendingJobs,
+  runnerPauseLabel,
+  runnersOnline,
+  windowCadenceLabel,
+  windowClosedLine,
+  windowWaitingLine,
+} from "../../src/queue/hints.mjs";
 import { advisoryLinesFor, startAdvisoryLines } from "../../src/queue/advisory.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
@@ -130,6 +144,68 @@ test("a runner that is not waiting out a limit right now has no pause to report,
   assert.equal(runnerPauseLabel(pausedRunner({ running: false }), NOW), null, "a stopped runner reported a pause of its own");
   assert.equal(runnerPauseLabel({ running: true, pid: 1, pausedUntil: "not an instant", rateLimit: null }, NOW), null);
   assert.equal(runnerPauseLabel(null, NOW), null);
+});
+
+test("the closing line of a window names the wall clock it closed at and, only when it left work behind, how much", () => {
+  assert.equal(windowClosedLine({ windowClosedAt: NOW, pending: 0 }, NOW), "window closed at 01:24");
+  assert.equal(windowClosedLine({ windowClosedAt: NOW, pending: 1 }, NOW), "window closed at 01:24 - 1 job still pending");
+  assert.equal(windowClosedLine({ windowClosedAt: NOW, pending: 3 }, NOW), "window closed at 01:24 - 3 jobs still pending");
+});
+
+test("a window that crossed midnight still closes at the time the operator asked for, never at a date", () => {
+  const tomorrow = new Date(NOW);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(4, 0, 0, 0);
+  assert.equal(windowClosedLine({ windowClosedAt: tomorrow.getTime(), pending: 3 }, NOW), "window closed at 04:00 - 3 jobs still pending");
+});
+
+test("a watch runner's window before it opens reads the wall-clock pair and how long until it opens", () => {
+  const fromMs = NOW + (3 * 60 + 12) * 60_000;
+  const untilMs = fromMs + 6 * 3600_000;
+  const window = { from: new Date(fromMs).toISOString(), until: new Date(untilMs).toISOString() };
+  assert.equal(windowCadenceLabel(window, NOW), "window 04:36-10:36 · opens in 3h12");
+});
+
+test("a watch runner's window once it opened reads the same pair and how long until it closes", () => {
+  const fromMs = NOW - 3600_000;
+  const untilMs = NOW + (5 * 60 + 40) * 60_000;
+  const window = { from: new Date(fromMs).toISOString(), until: new Date(untilMs).toISOString() };
+  assert.equal(windowCadenceLabel(window, NOW), "window 00:24-07:04 · closes in 5h40");
+});
+
+test("a window that crosses midnight still reads its wall-clock pair, never a date", () => {
+  const from = new Date(NOW);
+  from.setHours(22, 0, 0, 0);
+  const until = new Date(from);
+  until.setDate(until.getDate() + 1);
+  until.setHours(4, 0, 0, 0);
+  const window = { from: from.toISOString(), until: until.toISOString() };
+  assert.equal(windowCadenceLabel(window, from.getTime() + 3600_000), "window 22:00-04:00 · closes in 5h00");
+});
+
+test("a runner with no window adds nothing to its cadence line", () => {
+  assert.equal(windowCadenceLabel(null, NOW), null);
+  assert.equal(windowCadenceLabel(undefined, NOW), null);
+});
+
+test("a live runner still waiting for its window says so, singular for one and pluralized for more, at the earliest `from`", () => {
+  const later = { running: true, window: { from: new Date(NOW + 3600_000).toISOString(), until: new Date(NOW + 7200_000).toISOString() } };
+  const earlier = { running: true, window: { from: new Date(NOW + 1800_000).toISOString(), until: new Date(NOW + 7200_000).toISOString() } };
+  const inside = { running: true, window: { from: new Date(NOW - 3600_000).toISOString(), until: new Date(NOW + 3600_000).toISOString() } };
+  const noWindow = { running: true, window: null };
+  const stopped = { running: false, window: { from: new Date(NOW + 3600_000).toISOString(), until: new Date(NOW + 7200_000).toISOString() } };
+
+  assert.equal(windowWaitingLine([later], NOW), `1 runner waiting for its window (opens ${clockLabel(NOW + 3600_000, NOW)})`);
+  assert.equal(
+    windowWaitingLine([later, earlier], NOW),
+    `2 runners waiting for their window (opens ${clockLabel(NOW + 1800_000, NOW)})`,
+    "the earliest `from` did not win",
+  );
+  assert.equal(windowWaitingLine([inside], NOW), null, "a runner already inside its window still promises pickup, not a wait");
+  assert.equal(windowWaitingLine([noWindow], NOW), null);
+  assert.equal(windowWaitingLine([stopped], NOW), null, "a runner that is not live reported a wait of its own");
+  assert.equal(windowWaitingLine([], NOW), null);
+  assert.equal(windowWaitingLine(undefined, NOW), null, "a listing that is not a list threw instead of answering");
 });
 
 // A job of the queue as every reader gets it from the job view, parked or not.

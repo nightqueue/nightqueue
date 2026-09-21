@@ -643,6 +643,54 @@ test("queue status leads with the rate limit a runner is waiting out, and never 
   assert.equal(json.runner.pausedUntil, new Date(resetsAt.getTime() + 60_000).toISOString());
 });
 
+test("queue status shows a watch runner's window before it opens, and the backlog names the wait for it", (t) => {
+  const env = makeCliHome(t, "cli-status-window-before");
+  enqueue(env);
+  const startedAt = new Date().toISOString();
+  const fromMs = Date.now() + (3 * 60 + 12) * 60_000;
+  const untilMs = fromMs + 6 * 3600_000;
+  const window = { from: new Date(fromMs).toISOString(), until: new Date(untilMs).toISOString() };
+  writeRunnerRecord({ pid: process.pid, startedAt, mode: "watch", intervalS: 30, window }, env);
+
+  const status = runCli(env, ["queue", "status"]);
+
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout.split("\n")[1], /watch every 30 s · window \d{2}:\d{2}-\d{2}:\d{2} · opens in 3h12/, status.stdout);
+  assert.equal(lastLine(status.stdout), `1 pending job waiting - 1 runner waiting for its window (opens ${clockLabel(fromMs)})`);
+});
+
+test("a runner already inside its window shows a countdown to close, and still promises pickup with no backlog wait", (t) => {
+  const env = makeCliHome(t, "cli-status-window-inside");
+  enqueue(env);
+  const startedAt = new Date().toISOString();
+  const fromMs = Date.now() - 3600_000;
+  const untilMs = Date.now() + (5 * 60 + 40) * 60_000;
+  const window = { from: new Date(fromMs).toISOString(), until: new Date(untilMs).toISOString() };
+  writeRunnerRecord({ pid: process.pid, startedAt, mode: "watch", intervalS: 30, window }, env);
+
+  const status = runCli(env, ["queue", "status"]);
+
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout.split("\n")[1], /watch every 30 s · window \d{2}:\d{2}-\d{2}:\d{2} · closes in 5h40/, status.stdout);
+  assert.equal(lastLine(status.stdout).includes("waiting for its window"), false, "a runner already inside its window still reported a wait for it");
+});
+
+test("a runner both paused and waiting for its window is reported as paused - the nearer, harder fact wins", (t) => {
+  const env = makeCliHome(t, "cli-status-window-and-paused");
+  enqueue(env);
+  const startedAt = new Date().toISOString();
+  const resetsAt = new Date(Date.now() + 3600_000);
+  const fromMs = Date.now() + 7200_000;
+  const window = { from: new Date(fromMs).toISOString(), until: new Date(fromMs + 3600_000).toISOString() };
+  writeRunnerRecord({ pid: process.pid, startedAt, mode: "watch", intervalS: 30, window, rateLimit: pauseRegion(resetsAt) }, env);
+
+  const status = runCli(env, ["queue", "status"]);
+
+  assert.equal(status.status, 0, status.stderr);
+  assert.equal(lastLine(status.stdout), `1 pending job waiting - the runner is paused until ${clockLabel(resetsAt.getTime())} (5h limit, resets in 1h00)`);
+  assert.equal(lastLine(status.stdout).includes("waiting for its window"), false, "the window wait was reported over the nearer rate-limit pause");
+});
+
 test("queue cancel takes a pending job and refuses one that is running under a live lease", (t) => {
   const env = makeCliHome(t, "cli-cancel");
   const pending = enqueue(env, "fix the worker");

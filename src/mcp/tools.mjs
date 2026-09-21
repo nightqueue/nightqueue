@@ -24,7 +24,7 @@ import {
   roadmapItemView,
 } from "../memory/roadmap.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
-import { noRunnerWait, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline } from "../queue/hints.mjs";
+import { noRunnerWait, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline, windowWaitingLine } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { blockerLines } from "../queue/claim.mjs";
 import { closeJobAndWorktree } from "../queue/close.mjs";
@@ -343,6 +343,8 @@ function queuedRunnerLine(env) {
   if (runners.length === 0) return `${noRunnerWait()}.`;
   const paused = pausedRunnerLine(runners);
   if (paused) return `${runnersOnline(runners.length)} - nothing to start: ${paused}; it claims again by itself when the limit resets.`;
+  const waiting = windowWaitingLine(runners);
+  if (waiting) return `${waiting}; it claims once the window opens.`;
   return `${runnersOnline(runners.length)} - it will be picked up.`;
 }
 

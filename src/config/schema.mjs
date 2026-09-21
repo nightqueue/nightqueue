@@ -9,6 +9,10 @@ const DEFAULT_ORG = "default";
 export const LEASE_HEARTBEAT_DEFAULT_S = 5;
 export const LEASE_HEARTBEAT_RANGE = { min: 1, max: 20 };
 
+// Modes of `queue.keepAwake`: whether the machine is held awake while a runner or one of its jobs lives.
+export const KEEP_AWAKE_MODES = ["auto", "always", "off"];
+export const KEEP_AWAKE_DEFAULT = "auto";
+
 // Tells whether the value is a plain object usable as a map.
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -35,7 +39,7 @@ export function emptyConfig() {
     defaultOrg: DEFAULT_ORG,
     orgs,
     projects: emptyMap(),
-    queue: { maxConcurrent: null, resumeSession: false, leaseHeartbeatS: LEASE_HEARTBEAT_DEFAULT_S },
+    queue: { maxConcurrent: null, resumeSession: false, leaseHeartbeatS: LEASE_HEARTBEAT_DEFAULT_S, keepAwake: KEEP_AWAKE_DEFAULT },
     embedding: null,
   };
 }
@@ -137,6 +141,11 @@ function normalizeEmbedding(value) {
   return value === "declined" ? "declined" : null;
 }
 
+// Whether the machine is held awake while a runner or job lives; anything but a documented mode normalizes to `auto`.
+function normalizeKeepAwake(value) {
+  return KEEP_AWAKE_MODES.includes(value) ? value : KEEP_AWAKE_DEFAULT;
+}
+
 // Fills defaults over a config read from disk or edited by hand.
 export function normalizeConfig(raw, { warn = () => {} } = {}) {
   if (!isPlainObject(raw)) return emptyConfig();
@@ -155,6 +164,7 @@ export function normalizeConfig(raw, { warn = () => {} } = {}) {
       maxConcurrent: Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : null,
       resumeSession: raw.queue?.resumeSession === true,
       leaseHeartbeatS: normalizeHeartbeat(raw.queue?.leaseHeartbeatS),
+      keepAwake: normalizeKeepAwake(raw.queue?.keepAwake),
     },
     embedding: normalizeEmbedding(raw.embedding),
   };

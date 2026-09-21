@@ -87,7 +87,7 @@ The full reference is in [docs/cli.md](docs/cli.md); this is the daily set.
 ```sh
 # queue
 nightshift queue add [project] "<request>" [--tier trivial|simple|complex] [--priority 1-9] [--run]
-nightshift queue run [--watch [s]] [--job <id>] [--stop]
+nightshift queue run [--watch [s] [--from HH:MM] --until HH:MM] [--job <id>] [--stop]
 nightshift queue status [<id>] [--follow] [--json]
 nightshift queue log <id> [--follow]
 nightshift queue session <id> [--print]
@@ -116,6 +116,15 @@ nightshift update [<version>]
 reviewed and merged on its own. Large work is ONE job with numbered stages in
 the prompt (`Stages: 1) ... 2) ...`), never several jobs that depend on each
 other. See [Writing a job](docs/queue.md#writing-a-job).
+
+**Running the queue overnight.** `nightshift queue run --watch --from 22:00 --until
+04:00` works the queue only inside that local time window, then exits - a
+midnight-crossing window needs no special syntax. It is one-shot: nothing brings it
+back once it closes, so a nightly schedule is an OS-level job (`launchd`, `systemd`)
+you set up yourself. The machine is kept awake while a runner or a job needs it
+(`queue.keepAwake`), but the display can still sleep - a closed lid with no external
+display still stops the run, so keep it open. See [Running the
+queue](docs/queue.md#running-the-queue).
 
 ## Documentation
 

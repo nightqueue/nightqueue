@@ -28,6 +28,7 @@ export const STOPPED_RUNNER = {
   detached: null,
   pausedUntil: null,
   rateLimit: null,
+  window: null,
 };
 
 // Sends a signal to a process, the single seam every liveness check and every stop of this module goes through.
@@ -183,8 +184,8 @@ function rateLimitView(rateLimit) {
 // The state of one runner as every reader of it prints it: only a live registration carries fields.
 export function runnerView(record) {
   if (record?.status !== "alive") return { ...STOPPED_RUNNER };
-  const { pid, mode = null, jobId = null, intervalS = null, startedAt = null, logPath = null, runtimeDir = null, detached = null } = record.info;
-  return { running: true, pid, mode, jobId, intervalS, startedAt, logPath, runtimeDir, detached, ...rateLimitView(record.info.rateLimit) };
+  const { pid, mode = null, jobId = null, intervalS = null, startedAt = null, logPath = null, runtimeDir = null, detached = null, window = null } = record.info;
+  return { running: true, pid, mode, jobId, intervalS, startedAt, logPath, runtimeDir, detached, window, ...rateLimitView(record.info.rateLimit) };
 }
 
 // Every live runner of this home, in the order the registry lists them, next to the failure to list it: a reader that reports instead of refusing needs both.

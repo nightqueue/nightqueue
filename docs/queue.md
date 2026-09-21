@@ -20,6 +20,7 @@ nightshift queue status --blocked                              # only the pendin
 nightshift queue status 7 [--json]                             # one job, never with its prompt
 nightshift queue run [--job 7] [--max 2] [--dry]               # start the runner detached; --max 2 exits after two jobs; --dry only reports
 nightshift queue run --watch [30]                              # start a watcher, one pass every N seconds
+nightshift queue run --watch --from 22:00 --until 04:00        # watch only inside that window, then exit
 nightshift queue run --stop [4242]                             # end every registered runner, or only the one with that pid
 nightshift queue run --foreground [--job 7]                    # run it in this process instead, for a script or CI
 nightshift queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
@@ -132,6 +133,55 @@ It is registered in `$NIGHTSHIFT_HOME/runners/<pid>.json` with `pid`, `startedAt
 `runner started (pid <pid>, every <n> s) - stop with: nightshift queue run --stop`.
 `--job` and `--watch` are refused together: running one job and watching the whole
 queue are opposite intents.
+
+**`--watch --from HH:MM --until HH:MM` works the queue inside one time window and
+exits at its end.** Both are local wall-clock times, resolved once when the watch
+starts. `--from` defaults to now; otherwise it is the next occurrence of that time,
+unless now already falls inside the window that time's most recent past occurrence
+would open, in which case `from` is now. `--until` is always the first occurrence of
+that time after the resolved `from`, so a window that crosses midnight
+(`--from 22:00 --until 04:00`) needs no special syntax. Before `from` the runner is
+alive, registered and claims nothing; between `from` and `until` it is exactly
+today's watch behaviour; at `until` it stops claiming, **the job it is running
+finishes** - the window never kills or interrupts a job and never shortens a job's
+own timeout - and then the process exits `0` with its registration gone. A rate-limit
+pause inside the window is waited out as today, cut short at `until`. `--max` keeps
+its meaning: whichever ends first. If jobs are still pending when the window closes,
+the last line says so: `window closed at 04:00 - 3 jobs still pending`. Only
+`--watch` takes a window: `--from`/`--until` without `--watch`, `--from` without
+`--until`, the two naming the same time, a malformed time, or either flag next to
+`--job` are all refused by usage, naming the reason. A drain, `--job` and the MCP
+`queue_run` are unchanged.
+
+Started detached (the default: `nightshift queue run --watch --from 22:00 --until
+04:00`) it returns at once, forwarding the flags to the child; `--foreground` holds
+the terminal for the whole window instead. `queue status` shows it on the runner
+line - `watch every 60 s · window 22:00-04:00 · opens in 3h12` before it opens,
+`· closes in 5h40` inside it - and `queue status --json` and the MCP `queue_status`
+carry `window: { from, until }` (ISO instants) on the runner. When the only live
+runner is still waiting for its window, every surface says `1 runner waiting for
+its window (opens 22:00)` instead of promising a pending job gets picked up.
+
+**The window is one-shot.** When it closes the process ends and nothing brings it
+back. Running it every night is an OS-level job (`launchd` on macOS, `systemd` on
+Linux) the operator sets up themselves - nightshift ships no installer for that
+today, and no runner ever starts another runner.
+
+**`queue.keepAwake` keeps the machine from sleeping while a runner or a job needs
+it**: `"auto"` (default), `"always"`, or `"off"`. On macOS every runner, in every
+mode, holds a `caffeinate` process bound to its own pid for its whole life - `-s`
+under `auto` (holds only on AC power, so a runner waiting hours for its window or
+for a rate-limit reset never drains a battery), `-i` under `always`. While a job's
+child runs, an extra `-i` hold is bound to that child's pid, so a job is not put to
+sleep mid-run on battery either. `off` spawns none, and because each hold is bound
+to a pid it dies with what it was protecting - nothing to clean up, and a crashed
+runner leaks nothing. On every other platform it is a silent no-op, and a missing or
+failing `caffeinate` never fails a runner or a job, just one warning line. **The
+limits are real:** the display is allowed to sleep (`-d` is never used), a closed
+lid with no external display still sleeps, and nothing here wakes a machine that is
+already asleep - a windowed night run needs the lid open (or an external display)
+to survive to `until`. `nightshift doctor` reports the mode, whether `caffeinate`
+was found (macOS only) and this same limitation.
 
 **One job per runner.** A runner claims a job, runs it to the end and only then claims the
 next one, in queue order (priority, then age). Jobs run at the same time only because several

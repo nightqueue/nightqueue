@@ -9,6 +9,7 @@ import { claudeConfigDir, packageRoot } from "../host/paths.mjs";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { escapePromptMarkers } from "../memory/prompt-safety.mjs";
 import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "./home-guard.mjs";
+import { holdJobAwake } from "./keep-awake.mjs";
 import { isSafeSegment } from "./resume.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 
@@ -299,6 +300,7 @@ export function spawnClaude({
   stopPollMs = STOP_POLL_MS,
   resumeSessionId = null,
   resolveBinImpl = resolveClaudeBin,
+  holdJobAwakeImpl = holdJobAwake,
 } = {}) {
   return new Promise((settle) => {
     const stream = openAttemptLog(logPath, attempt);
@@ -308,6 +310,7 @@ export function spawnClaude({
     const args = buildArgs({ prompt, resumeSessionId, env, jobId });
     const childEnv = jobId === null ? { ...env, ...BG_WAIT_CEILING_ENV } : { ...env, ...jobIdentity(env, jobId), ...BG_WAIT_CEILING_ENV };
     const child = spawnImpl(resolved?.bin ?? "claude", args, { cwd, env: childEnv, stdio: SPAWN_STDIO });
+    if (Number.isInteger(child?.pid)) holdJobAwakeImpl({ pid: child.pid, env });
     const chunks = [];
     let timedOut = false;
     let idleTimedOut = false;

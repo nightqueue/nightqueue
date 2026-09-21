@@ -126,3 +126,54 @@ export function parkedBacklogLine({ jobs, pending }, nowMs = Date.now()) {
   const furthest = Math.max(...parked);
   return `the rate limit resets at ${clockLabel(furthest, nowMs)} (in ${remainingLabel(furthest - nowMs)}); a batch started now claims nothing before that`;
 }
+
+// The local wall clock of an instant, `HH:MM`, with no date - the pair a stored window's `from`/`until` read as.
+function wallClockLabel(ms) {
+  const at = new Date(ms);
+  return `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
+// The `HH:MM-HH:MM` pair a stored window reads as, the local wall clock of each stored instant - never a date, even
+// when the window crosses midnight.
+function windowRangeLabel(window) {
+  return `${wallClockLabel(Date.parse(window.from))}-${wallClockLabel(Date.parse(window.until))}`;
+}
+
+// What a watch runner's window adds to its cadence line: the wall-clock pair it runs between, and whether it is
+// still waiting to open or already counting down to close - or null when the runner carries no window at all.
+export function windowCadenceLabel(window, nowMs = Date.now()) {
+  if (!window) return null;
+  const fromMs = Date.parse(window.from);
+  const untilMs = Date.parse(window.until);
+  const range = windowRangeLabel(window);
+  if (nowMs < fromMs) return `window ${range} · opens in ${remainingLabel(fromMs - nowMs)}`;
+  return `window ${range} · closes in ${remainingLabel(untilMs - nowMs)}`;
+}
+
+// The window a live runner is still waiting to open right now, or null when it carries none or it already opened.
+function runnerWindowWait(runner, nowMs) {
+  if (runner?.running !== true || !runner.window) return null;
+  const fromMs = Date.parse(String(runner.window.from ?? ""));
+  return Number.isFinite(fromMs) && nowMs < fromMs ? fromMs : null;
+}
+
+// What every surface says instead of promising a pending job gets picked up: the runners of this home still waiting
+// for their window to open, at the earliest of them, or null when none is - a runner already inside its window still
+// promises pickup as today.
+export function windowWaitingLine(runners, nowMs = Date.now()) {
+  const waits = (Array.isArray(runners) ? runners : []).map((runner) => runnerWindowWait(runner, nowMs)).filter((ms) => ms !== null);
+  if (!waits.length) return null;
+  const earliest = Math.min(...waits);
+  if (waits.length === 1) return `1 runner waiting for its window (opens ${clockLabel(earliest, nowMs)})`;
+  return `${waits.length} runners waiting for their window (opens ${clockLabel(earliest, nowMs)})`;
+}
+
+// The last line of a `queue run --watch --until` that closed its window: the wall clock the operator wrote on the
+// command line - never a date, a window that crosses midnight closes at the `04:00` it was asked for - and how many
+// jobs it leaves pending, nothing when it leaves none.
+export function windowClosedLine({ windowClosedAt, pending }) {
+  const closed = new Date(windowClosedAt);
+  const at = `${pad(closed.getHours())}:${pad(closed.getMinutes())}`;
+  if (!pending) return `window closed at ${at}`;
+  return `window closed at ${at} - ${pending} job${pending === 1 ? "" : "s"} still pending`;
+}

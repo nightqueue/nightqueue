@@ -8,6 +8,32 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `nightshift queue run --watch --from HH:MM --until HH:MM` works the queue inside
+  one local wall-clock window and exits at its end. `--from` defaults to now;
+  `--until` is always the next occurrence of that time after `from`, so a window
+  that crosses midnight (`--from 22:00 --until 04:00`) needs no special syntax.
+  Before `from` the runner is alive and registered but claims nothing; at `until`
+  it stops claiming, the job it is running finishes - the window never kills or
+  shortens a job's own timeout - and the process exits `0` with its registration
+  gone, printing `window closed at 04:00 - 3 jobs still pending` when jobs are
+  left. `queue status` shows the window on the runner line
+  (`watch every 60 s · window 22:00-04:00 · opens in 3h12` / `· closes in 5h40`),
+  and `queue status --json` and the MCP `queue_status` carry
+  `window: { from, until }` as ISO instants. The window is one-shot: nightshift
+  starts no scheduler and no runner ever starts another runner, so a recurring
+  overnight run is an OS-level job (`launchd`, `systemd`) the operator sets up.
+
+- `queue.keepAwake` (`"auto"` default, `"always"`, `"off"`) keeps the machine from
+  sleeping while a runner or one of its jobs is alive. On macOS every runner holds
+  a `caffeinate` process bound to its own pid (`-s` on AC power under `auto`, `-i`
+  under `always`), and an extra `-i` hold is bound to a job's child while it runs;
+  each hold dies with what it was protecting. It is a no-op on every other
+  platform, and a missing or failing `caffeinate` only warns once and never fails
+  a runner or a job. The display can still sleep and nothing here wakes an
+  already-sleeping machine, so a windowed night run needs the lid open (or an
+  external display). `nightshift doctor` reports the mode, whether `caffeinate`
+  was found, and this same limitation.
+
 - `nightshift decision update <number> --status accepted|rejected|superseded
   [--superseded-by <n>]` settles a proposal a closed job left behind, or
   changes a decision's status by hand, from the terminal - the same write the

@@ -44,8 +44,8 @@ test("normalizeConfig fills defaults over a partial, hand-edited file", () => {
   assert.equal(config.orgs.acme.displayName, "acme");
   assert.deepEqual({ ...config.orgs.acme.connections }, { github: null });
   assert.deepEqual(config.projects.api, { path: "/tmp/api", org: "acme" });
-  assert.deepEqual(config.queue, { maxConcurrent: null, resumeSession: false, leaseHeartbeatS: 5 });
-  assert.deepEqual(emptyConfig().queue, { maxConcurrent: null, resumeSession: false, leaseHeartbeatS: 5 });
+  assert.deepEqual(config.queue, { maxConcurrent: null, resumeSession: false, leaseHeartbeatS: 5, keepAwake: "auto" });
+  assert.deepEqual(emptyConfig().queue, { maxConcurrent: null, resumeSession: false, leaseHeartbeatS: 5, keepAwake: "auto" });
 });
 
 test("queue.maxConcurrent is an opt-in ceiling: only a positive integer sets one", () => {
@@ -81,6 +81,16 @@ test("queue.leaseHeartbeatS is clamped to the range that keeps a live runner ahe
       `\`${String(invalid)}\` was accepted as a heartbeat`,
     );
   }
+});
+
+test("queue.keepAwake only accepts its three documented modes, anything else falls back to auto", () => {
+  for (const valid of ["auto", "always", "off"]) {
+    assert.equal(normalizeConfig({ queue: { keepAwake: valid } }).queue.keepAwake, valid);
+  }
+  for (const invalid of ["ALWAYS", "sometimes", 1, true, {}, null, undefined]) {
+    assert.equal(normalizeConfig({ queue: { keepAwake: invalid } }).queue.keepAwake, "auto", `\`${String(invalid)}\` was accepted`);
+  }
+  assert.equal(normalizeConfig({}).queue.keepAwake, "auto", "a missing key must default to auto");
 });
 
 test("normalizeConfig recreates the default org and drops broken project entries", () => {

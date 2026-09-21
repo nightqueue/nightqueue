@@ -564,6 +564,7 @@ test("queue_status never returns the prompt and truncates the free text at five 
     detached: null,
     pausedUntil: null,
     rateLimit: null,
+    window: null,
   });
   assert.deepEqual(listed.runners, [], "a home with no runner answered with one");
 
@@ -583,6 +584,7 @@ test("queue_status never returns the prompt and truncates the free text at five 
     detached: null,
     pausedUntil: null,
     rateLimit: null,
+    window: null,
   });
   assert.deepEqual(watched.runners, [watched.runner], "the deprecated `runner` key is not the first entry of `runners`");
   assert.equal("runner" in payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: id } })), false, "the detail of a job grew a runner");
@@ -765,6 +767,30 @@ test("a runner waiting out a rate limit is what queue_status and queue_add say, 
 
   const pending = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(pending.hint, `1 runner online - 1 pending job waiting — ${pause}.`);
+});
+
+test("a runner still waiting for its window is what queue_add says, and a paused one wins over it", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-hint-window");
+  const fromMs = Date.now() + 3600_000;
+  const window = { from: new Date(fromMs).toISOString(), until: new Date(fromMs + 3600_000).toISOString() };
+  writeRunnerRecord(
+    { pid: process.pid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/runner.log", window },
+    env,
+  );
+  const client = await connect(t, env);
+  const waiting = `1 runner waiting for its window (opens ${clockLabel(fromMs)})`;
+
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker" } }));
+  assert.equal(queued.hint, `queued job #1 for \`alpha\` (1 pending). ${waiting}; it claims once the window opens.`);
+
+  const status = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.deepEqual(status.runner.window, window, "queue_status did not carry the window of the live runner");
+
+  const resetsAt = new Date(Date.now() + 1800_000);
+  writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/runner.log", window, rateLimit: pauseRegion(resetsAt) }, env);
+  const pausedAndWaiting = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the parser" } }));
+  assert.match(pausedAndWaiting.hint, /nothing to start: the runner is paused/, "the window wait was reported over the nearer rate-limit pause");
+  assert.equal(pausedAndWaiting.hint.includes("waiting for its window"), false);
 });
 
 test("a backlog parked by a rate limit is what queue_status says, instead of asking for a batch that would claim nothing", async (t) => {

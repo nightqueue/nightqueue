@@ -65,11 +65,23 @@ test("the registration of a live runner reads back with its fields, and is gone 
     detached: true,
     pausedUntil: null,
     rateLimit: null,
+    window: null,
   });
 
   assert.deepEqual(pruneDeadRunners(env, fakeKill(new Set())), [runnerRegistryPath(WATCHER.pid, env)]);
   assert.equal(existsSync(runnerRegistryPath(WATCHER.pid, env)), false);
   assert.deepEqual(listRunnerRecords(env, fakeKill(new Set())), []);
+});
+
+test("a registration's window reads back on the view, and a stopped runner carries none", (t) => {
+  const env = makeHome(t, "registry-window");
+  const window = { from: "2026-09-20T22:00:00.000Z", until: "2026-09-21T04:00:00.000Z" };
+  writeRunnerRecord({ ...WATCHER, window }, env);
+
+  const record = onlyRecord(env, fakeKill(new Set([WATCHER.pid])));
+  assert.deepEqual(runnerView(record).window, window);
+  assert.equal(STOPPED_RUNNER.window, null);
+  assert.equal(runnerView({ status: "stale" }).window, null);
 });
 
 test("any number of runners register, and only the live ones are listed as running", (t) => {

@@ -258,6 +258,46 @@ test("the database check fails a schema newer than this build and asks for an up
   assert.match(database.hint, /upgrade nightshift/);
 });
 
+test("the keep awake check is a plain no-op outside macOS, whatever the configured mode", async (t) => {
+  const host = makeHostEnv(t, "doctor-keep-awake-other-os");
+  const { report } = await diagnose(host.env, { platform: "linux" });
+  const row = checkOf(report, "keep awake");
+  assert.equal(row.status, "ok");
+  assert.match(row.detail, /queue\.keepAwake: auto \(does nothing outside macOS\)/);
+  assert.equal(row.hint, null);
+});
+
+test("the keep awake check on macOS: off is fine, found is ok, and a missing caffeinate warns with a hint", async (t) => {
+  const host = makeHostEnv(t, "doctor-keep-awake-darwin");
+  const overrides = { platform: "darwin" };
+  // The binary is always named through the override: the PATH of the machine running the suite has a caffeinate on macOS and none on Linux.
+  const found = join(host.configDir, "caffeinate");
+  writeFileSync(found, "#!/bin/sh\nexit 1\n");
+  chmodSync(found, 0o755);
+  const missingBin = join(host.configDir, "does-not-exist");
+
+  ensureHome(host.env);
+  const config = loadConfig(host.env, { warn: () => {} });
+  saveConfig({ ...config, queue: { ...config.queue, keepAwake: "off" } }, host.env);
+  host.env.NIGHTSHIFT_CAFFEINATE_BIN = missingBin;
+  const { report: off } = await diagnose(host.env, overrides);
+  assert.equal(checkOf(off, "keep awake").status, "ok");
+  assert.match(checkOf(off, "keep awake").detail, /queue\.keepAwake: off/);
+  assert.match(checkOf(off, "keep awake").detail, /closed lid/);
+  saveConfig({ ...config, queue: { ...config.queue, keepAwake: "auto" } }, host.env);
+
+  const { report: missing } = await diagnose(host.env, overrides);
+  const missingRow = checkOf(missing, "keep awake");
+  assert.equal(missingRow.status, "warn");
+  assert.match(missingRow.detail, /caffeinate not found/);
+  assert.match(missingRow.hint, /NIGHTSHIFT_CAFFEINATE_BIN/);
+
+  host.env.NIGHTSHIFT_CAFFEINATE_BIN = found;
+  const { report: ok } = await diagnose(host.env, overrides);
+  assert.equal(checkOf(ok, "keep awake").status, "ok");
+  assert.match(checkOf(ok, "keep awake").detail, new RegExp(found.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
 test("the queue check reads the pause sentinel of the home, and a paused queue is a warning", async (t) => {
   const host = makeHostEnv(t, "doctor-queue-pause");
   const { report: running } = await diagnose(host.env);
