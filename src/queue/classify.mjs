@@ -20,8 +20,10 @@ const BACKOFF_CAP_MS = 60000;
 const NOTICE_FALLBACK_LIMIT = 8000;
 const GATE_NOTICE_MARGIN_CP = 200;
 const KILLED_BASH_COMMAND_LIMIT = 120;
-const KILLED_BASH_HINT =
+const ABANDONED_COMMAND_LIMIT = 120;
+const RUN_IN_BACKGROUND_HINT =
   "background Bash is kept in the foreground from this version; if you see this, the hook did not run";
+const AUTO_BACKGROUNDED_HINT = "the Bash tool had moved this foreground command to the background after its own timeout";
 
 export const SILENT_STOP_NOTICE = "Pipeline stopped without a PR and without explanation (exit 0). See the log.";
 
@@ -82,12 +84,49 @@ function pipelineOutcome(state) {
   return status || prUrl || notice ? { status, prUrl, notice } : null;
 }
 
-// Notice of a task the CLI killed after its wait ceiling: a Bash command is quoted truncated, with a hint the hook should have prevented it.
+// Notice of a task the CLI killed AND that ended the run: each clause is said only when the stream itself proves it, never a fixed guess.
 function runtimeKillNotice(kill) {
   const isBash = kill.taskType === "local_bash";
   const quoted = isBash ? truncateByCodePoint(kill.description, KILLED_BASH_COMMAND_LIMIT) : kill.description;
-  const hint = isBash ? `; ${KILLED_BASH_HINT}` : "";
-  return `runtime: the CLI killed the background task "${quoted}" after its wait ceiling; the run did not finish${hint}`;
+  const ceiling = kill.ceilingSeen ? " after its wait ceiling" : "";
+  const notFinished = kill.noticeAfterKill ? "" : "; the run did not finish";
+  const hint = !isBash ? "" : kill.runInBackground ? `; ${RUN_IN_BACKGROUND_HINT}` : kill.autoBackgrounded ? `; ${AUTO_BACKGROUNDED_HINT}` : "";
+  return `runtime: the CLI killed the background task "${quoted}"${ceiling}${notFinished}${hint}`;
+}
+
+// A kill only fails the run when it ended it: the CLI's own ceiling line proves that (it literally says "terminating"), or no
+// `result` event carrying a `## Notice` ever followed the kill AND state.json recorded no outcome of its own.
+function isTerminalKill(kill, record) {
+  return kill.ceilingSeen || (!kill.noticeAfterKill && !record?.status);
+}
+
+// Tells whether the stream's own kill, if any, ended the run - the only case a retry must never follow.
+export function isTerminalRuntimeKill(log, state = null) {
+  const kill = runtimeKillFromStream(log);
+  return kill !== null && isTerminalKill(kill, pipelineOutcome(state));
+}
+
+// The line appended to a non-terminal kill's notice, so an abandoned command is never hidden behind a run that otherwise finished.
+function abandonedCommandLine(description) {
+  return `⚠️ a command was abandoned mid-run: ${truncateByCodePoint(description, ABANDONED_COMMAND_LIMIT)}`;
+}
+
+// Appends the abandoned-command line to a notice, never replacing it; an empty notice leaves the line on its own.
+function withAbandonedCommand(noticeMd, description) {
+  const line = abandonedCommandLine(description);
+  return noticeMd ? `${noticeMd}\n\n${line}` : line;
+}
+
+// Classifies the run's own ending, exactly as if a runtime kill never happened: the gate, the pull request and the notice rules.
+function classifyEnding({ record, resultText, log, ending, prUrl, planPath }) {
+  const gate = record?.status ? record.status === "gate" : hasGateMarker(resultText) || hasGateMarkerInStream(log);
+  const reason = gateReason(log, resultText, record?.notice ?? null);
+  const status = decideStatus({ ...ending, prUrl, gate, reason });
+  if (status === "gate" && isBrokenGateNotice(reason, planPath)) {
+    return { status: "failed", noticeMd: brokenGateNotice(planPath) };
+  }
+  const silentStop = status === "failed" && !reason && endedCleanly(ending);
+  return { status, noticeMd: silentStop ? SILENT_STOP_NOTICE : reason };
 }
 
 // Classifies one attempt of a job from what the pipeline recorded, its stream, how the process ended and the run's plan.
@@ -97,18 +136,13 @@ export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOu
   const reported = record?.prUrl ?? extractPrUrlFromStream(log);
   const prUrl = extractPublishedPrUrl(log, { repo: prUrlRepo(reported) }) ?? reported;
   const kill = runtimeKillFromStream(log);
-  if (kill) {
+  if (kill && isTerminalKill(kill, record)) {
     return { status: "failed", prUrl, noticeMd: runtimeKillNotice(kill), resultText };
   }
-  const gate = record?.status ? record.status === "gate" : hasGateMarker(resultText) || hasGateMarkerInStream(log);
-  const reason = gateReason(log, resultText, record?.notice ?? null);
   const ending = { exitCode, timedOut, idleTimedOut, stopped };
-  const status = decideStatus({ ...ending, prUrl, gate, reason });
-  if (status === "gate" && isBrokenGateNotice(reason, planPath)) {
-    return { status: "failed", prUrl, noticeMd: brokenGateNotice(planPath), resultText };
-  }
-  const silentStop = status === "failed" && !reason && endedCleanly(ending);
-  return { status, prUrl, noticeMd: silentStop ? SILENT_STOP_NOTICE : reason, resultText };
+  const base = classifyEnding({ record, resultText, log, ending, prUrl, planPath });
+  const noticeMd = kill ? withAbandonedCommand(base.noticeMd, kill.description) : base.noticeMd;
+  return { ...base, prUrl, noticeMd, resultText };
 }
 
 // Tells whether the failure was a transient network or provider overload, the only kind worth an automatic retry.

@@ -750,6 +750,27 @@ test("queue status of a gated job spells the reason out and says how to answer i
   assert.equal(JSON.parse(json.stdout).job.notice_md, GATE_NOTICE);
 });
 
+test("queue status of one job also shows the run's own notice, whole, whenever it differs from the row's", (t) => {
+  const env = makeCliHome(t, "cli-status-run-notice", [{ stdout: doneStream({ notice: "the run's real notice, kept whole" }), exitCode: 0 }]);
+  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 0);
+  assert.equal(getJob(1, env).status, "done");
+
+  openDb(env).prepare("UPDATE jobs SET notice_md = ? WHERE id = ?").run("a stale summary the row kept", 1);
+
+  const status = runCli(env, ["queue", "status", "1"]);
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /^notice$/m);
+  assert.match(status.stdout, /^ {2}a stale summary the row kept$/m);
+  assert.match(status.stdout, /^run_notice$/m);
+  assert.match(status.stdout, /^ {2}the run's real notice, kept whole$/m);
+  assert.equal(status.stdout.includes("run_notice      "), false, "the run's own notice was dumped as a field of the generic block");
+
+  const json = runCli(env, ["queue", "status", "1", "--json"]);
+  const job = JSON.parse(json.stdout).job;
+  assert.equal(job.notice_md, "a stale summary the row kept");
+  assert.equal(job.run_notice, "the run's real notice, kept whole");
+});
+
 test("queue retry refuses a gated job without --note, printing why the job is waiting", (t) => {
   const env = makeCliHome(t, "cli-retry-refusal", [{ stdout: gateStream(), exitCode: 0 }]);
   assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 1);

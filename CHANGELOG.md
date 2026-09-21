@@ -8,6 +8,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `nightshift queue status <id>` (CLI, human and `--json`, and the MCP tool
+  `queue_status` with `job_id`) now also answers `run_notice` whenever the
+  run's own `## Notice` - read fresh from the log the row's `result.logPath`
+  names - differs from the row's `notice_md`: both are shown, the row's under
+  `notice` and the run's whole own, never truncated, under `run_notice`. A
+  pure read: no write, no network, and a missing or unreadable log simply
+  leaves the field absent.
 - `nightshift queue run --watch --from HH:MM --until HH:MM` works the queue inside
   one local wall-clock window and exits at its end. `--from` defaults to now;
   `--until` is always the next occurrence of that time after `from`, so a window
@@ -205,6 +212,27 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   never runs by itself: the automatic witness sweep is unchanged.
 
 ### Fixed
+
+- A kill now fails the run only when it ended it. Before this fix, ANY
+  `task_updated {status: "killed"}` in the last attempt made the job `failed`
+  with a fixed notice ("...after its wait ceiling; the run did not finish;
+  ...the hook did not run"), even when the run went on for hundreds more
+  lines, opened its pull request and wrote its own `## Notice` - the real
+  notice was then lost (job #49). A kill is now TERMINAL only when the CLI's
+  own wait-ceiling line is in the log (it literally says "terminating"), or no
+  `result` event carrying a `## Notice` ever followed it AND `state.json`
+  recorded no outcome of its own; a terminal kill still fails exactly as
+  before, with a notice that now says only what the stream proves: the
+  ceiling clause only with the raw line, "; the run did not finish" only with
+  no settling notice, and a hint naming what happened to the killed Bash call
+  - launched with `run_in_background: true` (the hook should have caught it)
+  or moved to the background by the Bash tool's own timeout, never both. A
+  non-terminal kill classifies exactly as if it had never happened
+  (`done`/`gate`/`failed` from the run's own record), with one line appended
+  to whatever notice results, never replacing it: `⚠️ a command was
+  abandoned mid-run: <command, truncated to 120 code points>`. `queue repair`
+  and the runner's own retry decision follow the same terminal/non-terminal
+  read.
 
 - `nightshift queue status --follow` redraws the table over itself on a
   terminal instead of clearing the screen every tick, which piled one copy of

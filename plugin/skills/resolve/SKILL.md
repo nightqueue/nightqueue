@@ -336,7 +336,11 @@ The runtime waits for every subagent and background task of an unattended run; l
      call; no heredocs (`<<`), no `\` continuations, no `cd … && …`, no `python3 -`/`node -e`
      fed by stdin. Anything longer is a file: `Write` it under the worktree
      (`tmp/<name>.mjs|.py|.sh`), run it by path, delete it before the commit. Every agent
-     brief you write repeats this rule in one line.
+     brief you write repeats this rule in one line. Every test command a phase runs by hand
+     (`npm test`, `node --test ...`, a framework runner) goes under an explicit
+     `timeout <seconds>` sized to the suite: a hung foreground test is moved to the
+     background by the Bash tool and later killed as an orphan task, so a timeout makes it
+     fail fast instead.
    - If you are **not** on `main`, **do not ask** — do not create a worktree and follow the
      pipeline in the current directory/branch. Warn in 1 line: **"Current branch
      `<current-branch>` (non-main): proceeding without a worktree."**

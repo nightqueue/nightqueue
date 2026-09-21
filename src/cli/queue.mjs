@@ -577,6 +577,13 @@ function formatNotice(job) {
   return ["notice", ...body, ...answer];
 }
 
+// The run's OWN notice, read fresh from its log, printed under its own line whenever it differs from the row's `notice_md`.
+function formatRunNotice(job) {
+  if (!job.run_notice) return [];
+  const body = String(job.run_notice).split("\n").map((line) => `  ${line}`);
+  return ["run_notice", ...body];
+}
+
 // The block a pending job is stuck on, readable: the code alone, or with its message when one is still on the result.
 function formatBlocked(job) {
   const blocked = blockedOf(job);
@@ -588,11 +595,11 @@ function formatBlocked(job) {
 // Detail block of a single job, one field per line, with the reason it stopped spelled out instead of dumped on one line.
 function formatDetail(job) {
   const fields = Object.entries(job)
-    .filter(([key, value]) => key !== "notice_md" && value !== null && value !== undefined)
+    .filter(([key, value]) => key !== "notice_md" && key !== "run_notice" && value !== null && value !== undefined)
     .map(([key, value]) => `${key.padEnd(16)}${value}`);
   const at = fields.findIndex((line) => line.startsWith("status".padEnd(16)));
   const suggestion = closeSuggestion([job]);
-  const extra = [...formatBlocked(job), ...(suggestion ? [suggestion] : []), ...formatNotice(job)];
+  const extra = [...formatBlocked(job), ...(suggestion ? [suggestion] : []), ...formatNotice(job), ...formatRunNotice(job)];
   return at < 0 ? [...fields, ...extra] : [...fields.slice(0, at + 1), ...extra, ...fields.slice(at + 1)];
 }
 

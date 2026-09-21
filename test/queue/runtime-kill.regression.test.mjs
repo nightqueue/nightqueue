@@ -10,7 +10,8 @@ const FIXTURE = fileURLToPath(new URL("./fixtures/job-28-tail.jsonl", import.met
 // task, printed the raw (non-JSON) ceiling line and exited 0 with an unrelated final `result`
 // text ("Verifier running. Waiting for its verdict..."). On `main` this classifies as `gate`
 // because that final text alone satisfies the old `reason ? "gate" : "failed"` rule; this test
-// locks the fix: a runtime kill is always a failure, never a gate.
+// locks the fix: the ceiling line makes a kill TERMINAL (it literally says "terminating"), and a
+// terminal kill is always a failure, never a gate - unlike a kill the run went on past (job #49).
 test("job #28's real tail: a run the CLI killed after its wait ceiling classifies as failed, not gate", () => {
   const log = readFileSync(FIXTURE, "utf8");
 

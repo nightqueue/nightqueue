@@ -9,7 +9,7 @@ import { packageRoot } from "../host/paths.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore, openStoreReadOnly } from "../store/open.mjs";
 import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
-import { backoffMs, classifyJobResult, isTransientFailure } from "./classify.mjs";
+import { backoffMs, classifyJobResult, isTerminalRuntimeKill, isTransientFailure } from "./classify.mjs";
 import { preflight } from "./preflight.mjs";
 import {
   clearOwnPause,
@@ -38,7 +38,6 @@ import {
   extractTierRaiseFromEventLine,
   extractUsage,
   isPrUrl,
-  runtimeKillFromStream,
   sumUsage,
 } from "./stream.mjs";
 import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
@@ -258,10 +257,11 @@ function noteOwnershipLost(job, env) {
   }
 }
 
-// Tells whether a failed attempt deserves another one: only a transient failure, never a timeout nor a run the CLI itself killed after its wait ceiling.
-function isRetryable(job, attempt, result, outcome) {
+// Tells whether a failed attempt deserves another one: only a transient failure, never a timeout nor a kill that ended the run.
+// A kill that did not end the run (the run's own record settled it) never blocks a retry any differently than a run without one.
+function isRetryable(job, attempt, result, outcome, state) {
   if (outcome.status !== "failed" || result.timedOut || result.idleTimedOut) return false;
-  if (runtimeKillFromStream(result.log)) return false;
+  if (isTerminalRuntimeKill(result.log, state)) return false;
   return isTransientFailure(result.log) && attempt < job.max_attempts;
 }
 
@@ -322,8 +322,9 @@ async function runAttempts(job, ctx) {
     const notBefore = rateLimitExit(result, facts);
     if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, usage: sumUsage(usages), outcome: null, result };
     const planPath = isSafeSegment(facts.slug) ? join(runDir(job.project, facts.slug, env), "03-plan.md") : null;
-    const outcome = classifyJobResult({ ...result, state: readRunState({ project: job.project, slug: facts.slug, env }), planPath });
-    if (!isRetryable(job, attempt, result, outcome)) {
+    const state = readRunState({ project: job.project, slug: facts.slug, env });
+    const outcome = classifyJobResult({ ...result, state, planPath });
+    if (!isRetryable(job, attempt, result, outcome, state)) {
       return { lost: false, facts, attempt, usage: sumUsage(usages), outcome, result };
     }
     await deps.sleepImpl(backoffMs(attempt));

@@ -19,6 +19,8 @@ export const CONTROL_LINE_PATTERNS = Object.freeze([
 ]);
 // The raw line the CLI prints (never a JSON event of the stream) when it gives up waiting for a background task.
 const RAW_CEILING_LINE_RE = /^Background tasks still running after/;
+// The tool result the Bash tool itself writes when its own timeout, not the CLI's wait ceiling, moved a foreground command to the background.
+const AUTO_BACKGROUNDED_RE = /did not complete within its .* timeout and was moved to the background \(ID: ([^)]+)\)/;
 const PR_URL_SOURCE = "https?://github\\.com/[\\w.-]+/[\\w.-]+/pull/\\d+";
 const PR_URL_RE = new RegExp(PR_URL_SOURCE, "g");
 const PR_URL_ONLY_RE = new RegExp(`^${PR_URL_SOURCE}$`);
@@ -245,17 +247,43 @@ export function hasGateMarkerInStream(log) {
   return false;
 }
 
-// The task the CLI itself killed after its wait ceiling, read from the LAST attempt of the log; null when nothing was killed.
+// Records a tool_use block's `run_in_background` input against its id, the only place the stream says whether a Bash call chose the background itself.
+function trackToolUseRunInBackground(map, event) {
+  if (event.type !== "assistant" || !Array.isArray(event.message?.content)) return;
+  for (const block of event.message.content) {
+    if (block?.type === "tool_use" && typeof block.id === "string") map.set(block.id, block.input?.run_in_background === true);
+  }
+}
+
+// Records a task id an auto-backgrounding tool result named, the only place the Bash tool's OWN timeout (not the CLI's) shows up.
+function trackAutoBackgroundedFromToolResult(set, event) {
+  if (event.type !== "user" || !Array.isArray(event.message?.content)) return;
+  for (const block of event.message.content) {
+    const text = block?.type === "tool_result" && typeof block.content === "string" ? block.content : "";
+    const match = AUTO_BACKGROUNDED_RE.exec(text);
+    if (match) set.add(match[1]);
+  }
+}
+
+// The task the CLI itself killed, read from the LAST attempt of the log; null when nothing was killed.
 // A kill shows either as the raw ceiling line (never a JSON event) or as a `task_updated` event whose patch marks the task killed;
 // the description comes from the last `background_tasks_changed` event that still lists that task, falling back to its bare id.
 // The task's `taskType` comes from the same event, or from `task_started` when that is the only one that carried it.
+// Everything else on the result carries what a kill notice needs to say only what the stream proves: whether the ceiling line
+// was seen, whether a `result` event with a `## Notice` followed the kill, and whether the killed Bash call was ever
+// foreground - either forced to the background by the Bash tool's own timeout, or launched with `run_in_background: true`.
 export function runtimeKillFromStream(log) {
   const scanned = linesWithFenceState(lastAttemptStream(log));
   let sawCeilingLine = false;
   let killedTaskId = null;
   let lastListedTaskId = null;
+  let killSeen = false;
+  let noticeAfterKill = false;
   const descriptions = new Map();
   const taskTypes = new Map();
+  const taskToolUseIds = new Map();
+  const toolUseRunInBackground = new Map();
+  const autoBackgroundedTaskIds = new Set();
   for (const entry of scanned) {
     if (!isMarkerCandidate(entry)) continue;
     const event = parseEventLine(entry.line);
@@ -263,9 +291,15 @@ export function runtimeKillFromStream(log) {
       if (RAW_CEILING_LINE_RE.test(entry.line)) sawCeilingLine = true;
       continue;
     }
+    trackToolUseRunInBackground(toolUseRunInBackground, event);
+    trackAutoBackgroundedFromToolResult(autoBackgroundedTaskIds, event);
+    if (killSeen && event.type === "result" && extractNotice(typeof event.result === "string" ? event.result : "")) {
+      noticeAfterKill = true;
+    }
     if (event.type !== "system") continue;
-    if (event.subtype === "task_started" && typeof event.task_id === "string" && typeof event.task_type === "string") {
-      taskTypes.set(event.task_id, event.task_type);
+    if (event.subtype === "task_started" && typeof event.task_id === "string") {
+      if (typeof event.task_type === "string") taskTypes.set(event.task_id, event.task_type);
+      if (typeof event.tool_use_id === "string") taskToolUseIds.set(event.task_id, event.tool_use_id);
     }
     if (event.subtype === "background_tasks_changed" && Array.isArray(event.tasks)) {
       for (const task of event.tasks) {
@@ -275,16 +309,25 @@ export function runtimeKillFromStream(log) {
         if (typeof task.task_type === "string") taskTypes.set(task.task_id, task.task_type);
       }
     }
+    if (event.subtype === "task_updated" && event.patch?.is_backgrounded === true && typeof event.task_id === "string") {
+      autoBackgroundedTaskIds.add(event.task_id);
+    }
     if (event.subtype === "task_updated" && event.patch?.status === "killed" && typeof event.task_id === "string") {
       killedTaskId = event.task_id;
+      killSeen = true;
     }
   }
   if (!sawCeilingLine && killedTaskId === null) return null;
   const taskId = killedTaskId ?? lastListedTaskId;
+  const toolUseId = taskId ? (taskToolUseIds.get(taskId) ?? null) : null;
   return {
     taskId,
     description: taskId ? (descriptions.get(taskId) ?? taskId) : "background task",
     taskType: taskId ? (taskTypes.get(taskId) ?? null) : null,
+    ceilingSeen: sawCeilingLine,
+    noticeAfterKill,
+    runInBackground: toolUseId !== null && toolUseRunInBackground.get(toolUseId) === true,
+    autoBackgrounded: taskId !== null && autoBackgroundedTaskIds.has(taskId),
   };
 }
 

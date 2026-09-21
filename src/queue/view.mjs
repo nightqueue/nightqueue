@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
 import { JOB_STATUSES, VIEW_TEXT_LIMIT, jobView } from "../memory/jobs.mjs";
 import { advisoryLinesFor } from "./advisory.mjs";
 import { isQueueIdle } from "./hints.mjs";
 import { prStateKey } from "./pr-state.mjs";
 import { liveRunnersReport } from "./registry.mjs";
+import { extractNoticeFromStream } from "./stream.mjs";
 
 // The state of the pull request of a job as the cache holds it right now: null without a GitHub pull request, `unknown` on a miss.
 function prStateOf(url, prStates) {
@@ -130,8 +132,33 @@ export function failedCoreSection(view) {
   return view.sections.find((section) => (section.name === "jobs" || section.name === "counts") && !section.ok) ?? null;
 }
 
-// One job in full with the state of its pull request, or null when the row is gone.
+// The log path a job's own `result` column names, or null when it is missing, malformed or carries none.
+function resultLogPath(job) {
+  try {
+    const parsed = typeof job.result === "string" ? JSON.parse(job.result) : job.result;
+    return typeof parsed?.logPath === "string" && parsed.logPath ? parsed.logPath : null;
+  } catch {
+    return null;
+  }
+}
+
+// The run's own whole notice, read straight from its log; absent when the log is missing, unreadable or carries none - a pure read, never a write and never an error.
+function runNoticeOf(job) {
+  const logPath = resultLogPath(job);
+  if (!logPath) return null;
+  try {
+    return extractNoticeFromStream(readFileSync(logPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// One job in full with the state of its pull request, or null when the row is gone. When the run's own notice (read fresh
+// from its log) differs from the row's `notice_md`, both are carried: `notice` is the row's, `run_notice` the run's whole own.
 export async function jobDetailView(readStore, id, { prStates = null } = {}) {
   const job = jobView(await readStore.jobs.getJob(id), { full: true });
-  return job ? withPrState(job, prStates) : null;
+  if (!job) return null;
+  const withState = withPrState(job, prStates);
+  const runNotice = runNoticeOf(job);
+  return runNotice && runNotice !== job.notice_md ? { ...withState, run_notice: runNotice } : withState;
 }

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { homeDir, queuePausedPath, runnersDir } from "../../src/config/paths.mjs";
+import { homeDir, jobLogPath, logsDir, queuePausedPath, runnersDir } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
@@ -592,6 +592,39 @@ test("queue_status never returns the prompt and truncates the free text at five 
   const unknown = await client.callTool({ name: "queue_status", arguments: { job_id: 99 } });
   assert.equal(unknown.isError, true);
   assert.match(textOf(unknown), /unknown job `99`/);
+});
+
+test("queue_status carries the run's own notice, whole, whenever it differs from the row's - and only for one job", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-status-run-notice");
+  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  mkdirSync(logsDir(env), { recursive: true });
+  const runNotice = "Delivered - the queue can now be told to work only inside a window.";
+  const resultText = `Done.\n\n## Notice\n\n${runNotice}`;
+  writeFileSync(jobLogPath(id, env), `${JSON.stringify({ type: "result", subtype: "success", result: resultText })}\n`);
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'done', notice_md = ?, result = ? WHERE id = ?")
+    .run("a stale summary the row kept", JSON.stringify({ status: "done", logPath: jobLogPath(id, env) }), id);
+  const client = await connect(t, env);
+
+  const one = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: id } }));
+  assert.equal(one.job.notice_md, "a stale summary the row kept");
+  assert.equal(one.job.run_notice, runNotice);
+
+  const listed = payloadOf(await client.callTool({ name: "queue_status", arguments: { limit: null, job_id: null } }));
+  assert.equal("run_notice" in listed.jobs.find((job) => job.id === id), false, "the listing carried the run's own notice too, not just the single job view");
+});
+
+test("queue_status never fails when the log of a finished job is missing: `run_notice` is simply absent", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-status-run-notice-missing");
+  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'done', notice_md = ?, result = ? WHERE id = ?")
+    .run("the row's own notice", JSON.stringify({ status: "done", logPath: jobLogPath(id, env) }), id);
+  const client = await connect(t, env);
+
+  const one = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: id } }));
+  assert.equal(one.job.notice_md, "the row's own notice");
+  assert.equal("run_notice" in one.job, false, "a missing log turned into an error field instead of simply being absent");
 });
 
 test("queue_status returns a gate notice near three kilobytes whole, and clips it with a pointer in the listing", async (t) => {

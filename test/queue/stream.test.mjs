@@ -303,21 +303,45 @@ test("a runtime kill is read from the raw ceiling line plus the `task_updated` k
   const killed = { type: "system", subtype: "task_updated", task_id: "task_1", patch: { status: "killed" } };
   const log = [line(systemInitEvent()), line(backgroundTasksChanged), CEILING_LINE, line(killed)].join("\n");
 
-  assert.deepEqual(runtimeKillFromStream(log), { taskId: "task_1", description: "Verify checks and QA PoCs", taskType: "local_agent" });
+  assert.deepEqual(runtimeKillFromStream(log), {
+    taskId: "task_1",
+    description: "Verify checks and QA PoCs",
+    taskType: "local_agent",
+    ceilingSeen: true,
+    noticeAfterKill: false,
+    runInBackground: false,
+    autoBackgrounded: false,
+  });
 });
 
 test("a killed task with no `background_tasks_changed` listing it falls back to its own task_id as the description, with no task type", () => {
   const killed = { type: "system", subtype: "task_updated", task_id: "task_9", patch: { status: "killed" } };
   const log = toNdjson([systemInitEvent(), killed]);
 
-  assert.deepEqual(runtimeKillFromStream(log), { taskId: "task_9", description: "task_9", taskType: null });
+  assert.deepEqual(runtimeKillFromStream(log), {
+    taskId: "task_9",
+    description: "task_9",
+    taskType: null,
+    ceilingSeen: false,
+    noticeAfterKill: false,
+    runInBackground: false,
+    autoBackgrounded: false,
+  });
 });
 
 test("a kill detected only by the raw ceiling line, with no `task_updated` at all, falls back to the last background task listed", () => {
   const backgroundTasksChanged = { type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "task_2", description: "Run the migration" }] };
   const log = [line(systemInitEvent()), line(backgroundTasksChanged), CEILING_LINE].join("\n");
 
-  assert.deepEqual(runtimeKillFromStream(log), { taskId: "task_2", description: "Run the migration", taskType: null });
+  assert.deepEqual(runtimeKillFromStream(log), {
+    taskId: "task_2",
+    description: "Run the migration",
+    taskType: null,
+    ceilingSeen: true,
+    noticeAfterKill: false,
+    runInBackground: false,
+    autoBackgrounded: false,
+  });
 });
 
 test("a task's type is read from `task_started` when `background_tasks_changed` never carried one", () => {
@@ -326,7 +350,15 @@ test("a task's type is read from `task_started` when `background_tasks_changed` 
   const killed = { type: "system", subtype: "task_updated", task_id: "task_3", patch: { status: "killed" } };
   const log = [line(systemInitEvent()), line(started), line(backgroundTasksChanged), CEILING_LINE, line(killed)].join("\n");
 
-  assert.deepEqual(runtimeKillFromStream(log), { taskId: "task_3", description: "find /", taskType: "local_bash" });
+  assert.deepEqual(runtimeKillFromStream(log), {
+    taskId: "task_3",
+    description: "find /",
+    taskType: "local_bash",
+    ceilingSeen: true,
+    noticeAfterKill: false,
+    runInBackground: false,
+    autoBackgrounded: false,
+  });
 });
 
 test("a clean stream with neither the ceiling line nor a killed task is never a runtime kill", () => {

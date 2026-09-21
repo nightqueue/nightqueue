@@ -308,6 +308,15 @@ with nightshift queue status <id>` for several - which the table prints under th
 and the MCP `hint` ends with. `nightshift queue status <id>` (and `queue_status` with
 `job_id`) is never cut.
 
+**`queue status <id>` can show two notices.** The single-job view (CLI human, CLI `--json`
+and the MCP `queue_status` with `job_id`) reads the log the row's `result.logPath` names
+and re-extracts the run's own `## Notice` straight from it. When that differs from the
+row's `notice_md` (a repair that never ran, a witness written before a fix, a job like #49
+below), the answer carries both: `notice` (the row's) and `run_notice` (the run's own,
+whole, never truncated). They agree far more often than not, in which case `run_notice`
+is simply absent - a missing or unreadable log leaves it absent too, never an error: this
+is a pure read, no write, no network.
+
 **Maintenance is not a read.** Pruning the registrations no process answers for (a
 registration owned by another user is left alone) and repairing a job from its witness
 belong to the runner, which does both at the start of every cycle, to the MCP server,
@@ -495,14 +504,31 @@ the prompt.** The runner starts the agent with
 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`, so the CLI waits for every subagent and
 background task the run still has open instead of killing one after ten minutes
 and exiting `0`; the two timeouts above already bound the attempt and they are
-the only ones. A run the CLI kills anyway comes back as `failed`, saying the
-runtime killed that background task after its wait ceiling, never as a gate, and
-it is not retried. And a `PreToolUse` hook rewrites every `Agent`/`Task` launch
-of an unattended run to `run_in_background: false` - it normalises the call, it
-never blocks it. That is the shape of the rule: what has to happen on every run
-lives in the runtime or in a hook with a test behind it, never only in the prompt
-of the pipeline, because a sentence in a prompt covers only the wording it
-happens to forbid and is lost the moment the platform underneath changes.
+the only ones. And a `PreToolUse` hook rewrites every `Agent`/`Task` launch of an
+unattended run to `run_in_background: false` - it normalises the call, it never
+blocks it. That is the shape of the rule: what has to happen on every run lives
+in the runtime or in a hook with a test behind it, never only in the prompt of
+the pipeline, because a sentence in a prompt covers only the wording it happens
+to forbid and is lost the moment the platform underneath changes.
+
+**A kill fails the run only when it ended it.** The CLI's own wait ceiling still exists
+(the hook above only keeps a *subagent* launch foreground; a Bash call the CLI itself
+backgrounds, or the Bash tool's OWN 120s timeout moving a foreground command there, can
+still be killed later). A kill is TERMINAL - `failed`, never a gate, never retried -
+when either the raw ceiling line is in the log (it literally says "terminating"), or no
+`result` event carrying a `## Notice` ever followed the kill AND `state.json` recorded no
+outcome of its own. Job #28 is the terminal case: the ceiling line, then an unrelated
+final line - `failed`. A kill that did NOT end the run - the agent noticed, moved on and
+settled its own outcome hundreds of lines later, PR opened, `## Notice` written - is job
+#49's case: it classifies exactly as if the kill had never happened (`done`/`gate`/`failed`
+from the run's own record), with one line appended to whatever notice results, never
+replacing it: `⚠️ a command was abandoned mid-run: <command, truncated to 120 code
+points>`. Either way the notice of a TERMINAL kill says only what the stream proves:
+`after its wait ceiling` only with the raw line, `; the run did not finish` only with no
+settling `## Notice`, and a hint naming what happened to the killed Bash call - launched
+with `run_in_background: true` (the hook should have caught it) or moved to the
+background by the Bash tool's own timeout (a hung test, most often - size test commands
+with `timeout <seconds>`) - never both.
 
 **Resuming by slug.** The run directory of a job is opened by the runner, not
 derived by the pipeline: the claim gives the job a slug when its row has none
