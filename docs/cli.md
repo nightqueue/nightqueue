@@ -39,7 +39,8 @@ nightshift run pr --body-file body.md          # check the body, push and open t
 `<RUN_DIR>/<NN-phase>.md` and prints `OK` or `MISSING: <sections>` - the
 sections required are `## Verdict` (`01`), the four sections of the plan (`03`),
 `## Modified files` (`04`), `## Break hypotheses` + `## Test recipe` (`05a`),
-`## Validated risks` (`05`) and `## Verification` (`06`); `02` is checked for
+`## Validated risks` (`05`), `## Verification` (`06`) and `## Runtime verdict`
+(`06.5`, the runtime lane's `06-runtime.md`); `02` is checked for
 existence alone. `04` is the only artifact with a fallback: with no file list,
 the command derives one from the changes of the run's worktree (`git diff
 --name-only HEAD` plus `git ls-files --others --exclude-standard`), writes the
@@ -321,7 +322,11 @@ pidfile of the runner (a registration whose process is gone only warns, and so d
 whose pid belongs to another user; the diagnosis never removes either), the jobs whose
 runner died, the host commands of the last 20 finished jobs (`host commands: 0
 backgrounded, 0 killed, 3 timed out in the last 20 jobs`, a `warn` when any was
-backgrounded or killed) and every registered
+backgrounded or killed), what the orchestrator of those same jobs did itself
+(`orchestrator: 30 turns, 0 reads outside the run, 10 Bash (0 exploration), last
+context 250000 (avg 125000) in the last 20 jobs (2 measured)`, a `warn` when it read
+outside its run or ran a Bash command outside its closed list - see
+[the queue](queue.md)) and every registered
 project. It exits `1` when any check fails, `0` otherwise - a `warn` never fails
 the run.
 

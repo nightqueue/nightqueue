@@ -175,6 +175,7 @@ const ARTIFACTS = new Map([
   ["05a", { file: "05a-qa-analyst.md", sections: ["## Break hypotheses", "## Test recipe"] }],
   ["05", { file: "05-qa.md", sections: ["## Validated risks"] }],
   ["06", { file: "06-verification.md", sections: ["## Verification"] }],
+  ["06.5", { file: "06-runtime.md", sections: ["## Runtime verdict"] }],
 ]);
 
 // The artifact as it is on disk, and nothing at all when the phase never wrote it.

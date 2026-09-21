@@ -614,6 +614,21 @@ test("queue_status of one job shows a host-command counter only when it is not z
   assert.equal(nonZero.tasks_killed, null);
 });
 
+test("queue_status of one job carries the five orchestrator counters, zero included", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-status-orchestrator");
+  const id = addJob({ project: "alpha", prompt: "measured job" }, env).id;
+  openDb(env)
+    .prepare("UPDATE jobs SET orch_turns = 20, orch_reads = 0, orch_bash = 8, orch_bash_explore = 0, orch_ctx_last = 120000 WHERE id = ?")
+    .run(id);
+  const client = await connect(t, env);
+
+  const job = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: id } })).job;
+  assert.deepEqual(
+    [job.orch_turns, job.orch_reads, job.orch_bash, job.orch_bash_explore, job.orch_ctx_last],
+    [20, 0, 8, 0, 120000],
+  );
+});
+
 test("queue_status carries the run's own notice, whole, whenever it differs from the row's - and only for one job", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-status-run-notice");
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;

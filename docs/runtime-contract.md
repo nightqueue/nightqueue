@@ -33,10 +33,10 @@ What a runtime has to provide, and what it can rely on:
   `${NIGHTSHIFT_HOME}/logs/runner-<stamp>.log`, next to the one log per job.
 - Run artifacts live in `${NIGHTSHIFT_HOME}/runs/<project>/<slug>/`, always
   outside the worktree, because the worktree is removed before the last phase
-  reads them.
-- Artifact names, in order: `01-triage.md`, `02-explore.md`, `03-plan.md`,
-  `04-implementation.md`, `05a-qa-analyst.md`, `05-qa.md`,
-  `06-verification.md`.
+  reads them. The runtime creates the directory before the session starts.
+- Artifact names, in order: `00-main-measure.md` (post-merge resume only),
+  `01-triage.md`, `02-explore.md`, `03-plan.md`, `04-implementation.md`,
+  `05a-qa-analyst.md`, `05-qa.md`, `06-verification.md`, `06-runtime.md`.
 - `state.json` in the same directory carries the resumable state, and **the runtime
   is its only writer**: every key goes through `src/queue/run-state.mjs`, which the
   MCP tools `run_phase_done`, `run_terminate`, `run_outcome` and `run_set`, the

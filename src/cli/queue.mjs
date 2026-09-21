@@ -596,7 +596,7 @@ function formatBlocked(job) {
 function formatDetail(job) {
   const fields = Object.entries(job)
     .filter(([key, value]) => key !== "notice_md" && key !== "run_notice" && value !== null && value !== undefined)
-    .map(([key, value]) => `${key.padEnd(16)}${value}`);
+    .map(([key, value]) => `${key.padEnd(15)} ${value}`);
   const at = fields.findIndex((line) => line.startsWith("status".padEnd(16)));
   const suggestion = closeSuggestion([job]);
   const extra = [...formatBlocked(job), ...(suggestion ? [suggestion] : []), ...formatNotice(job), ...formatRunNotice(job)];

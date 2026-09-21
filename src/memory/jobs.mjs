@@ -67,6 +67,11 @@ const JOB_VIEW_COLUMNS = [
   "tasks_backgrounded",
   "tasks_killed",
   "baseline_ctx",
+  "orch_turns",
+  "orch_reads",
+  "orch_bash",
+  "orch_bash_explore",
+  "orch_ctx_last",
 ];
 const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "not_before"];
 const JOB_VIEW_TRUNCATED = ["notice_md", "result"];
@@ -478,10 +483,11 @@ function ensureFinishDurable(id, written, env) {
 }
 
 // Closes a job with its outcome and links the pipeline run, in one transaction; false means the job was lost.
-export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, hostCommands, baselineCtx } = {}, env = process.env) {
+export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, hostCommands, baselineCtx, orchestrator } = {}, env = process.env) {
   const db = openDb(env);
   const tokens = usage ?? {};
   const commands = hostCommands ?? {};
+  const orch = orchestrator ?? {};
   const statement = db.prepare(
     `UPDATE jobs
         SET status = ?,
@@ -500,7 +506,12 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
             bash_timeouts = COALESCE(?, bash_timeouts),
             tasks_backgrounded = COALESCE(?, tasks_backgrounded),
             tasks_killed = COALESCE(?, tasks_killed),
-            baseline_ctx = COALESCE(?, baseline_ctx)
+            baseline_ctx = COALESCE(?, baseline_ctx),
+            orch_turns = COALESCE(?, orch_turns),
+            orch_reads = COALESCE(?, orch_reads),
+            orch_bash = COALESCE(?, orch_bash),
+            orch_bash_explore = COALESCE(?, orch_bash_explore),
+            orch_ctx_last = COALESCE(?, orch_ctx_last)
       WHERE id = ? AND status = 'running' AND worker = ?
       RETURNING project, slug, status, pr_url, finished_at`,
   );
@@ -518,6 +529,11 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
     optionalNumber(commands.tasksBackgrounded),
     optionalNumber(commands.tasksKilled),
     optionalNumber(baselineCtx),
+    optionalNumber(orch.turns),
+    optionalNumber(orch.reads),
+    optionalNumber(orch.bash),
+    optionalNumber(orch.bashExplore),
+    optionalNumber(orch.ctxLast),
     requireId(id),
     requireText("worker", worker),
   ];
@@ -673,6 +689,17 @@ export function recentHostCommandCounts(env = process.env, db = openDb(env)) {
   return db
     .prepare(
       `SELECT bash_timeouts, tasks_backgrounded, tasks_killed FROM jobs
+        WHERE status IN (${TERMINAL_PLACEHOLDERS})
+        ORDER BY id DESC LIMIT ${HOST_COMMANDS_SAMPLE_SIZE}`,
+    )
+    .all(...TERMINAL_STATUSES);
+}
+
+// The orchestrator counters of the most recently finished jobs, the sample `nightshift doctor` sums; a diagnosis never creates nor migrates the database it inspects.
+export function recentOrchestratorCounts(env = process.env, db = openDb(env)) {
+  return db
+    .prepare(
+      `SELECT orch_turns, orch_reads, orch_bash, orch_bash_explore, orch_ctx_last FROM jobs
         WHERE status IN (${TERMINAL_PLACEHOLDERS})
         ORDER BY id DESC LIMIT ${HOST_COMMANDS_SAMPLE_SIZE}`,
     )

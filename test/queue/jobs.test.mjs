@@ -281,6 +281,7 @@ test("finishing a job closes it and links only the pipeline run of the same proj
         noticeMd: "the pull request is open",
         usage: { tokensIn: 10, tokensOut: 4, cacheRead: 2, cacheCreation: 1, costUsd: 0.5 },
         hostCommands: { bashTimeouts: 2, tasksBackgrounded: 1, tasksKilled: 0 },
+        orchestrator: { turns: 49, reads: 0, bash: 35, bashExplore: 0, ctxLast: 195000 },
       },
       env,
     ),
@@ -294,6 +295,10 @@ test("finishing a job closes it and links only the pipeline run of the same proj
   assert.equal(row.bash_timeouts, 2);
   assert.equal(row.tasks_backgrounded, 1);
   assert.equal(row.tasks_killed, 0);
+  assert.deepEqual(
+    [row.orch_turns, row.orch_reads, row.orch_bash, row.orch_bash_explore, row.orch_ctx_last],
+    [49, 0, 35, 0, 195000],
+  );
   assert.ok(row.finished_at, "the job has no finished_at");
   const linked = openDb(env)
     .prepare("SELECT id, job_id FROM pipeline_runs ORDER BY id")
@@ -508,6 +513,22 @@ test("the public view omits a host-command counter at zero or null, and shows it
   assert.equal(nonZero.bash_timeouts, 3);
   assert.equal(nonZero.tasks_backgrounded, null);
   assert.equal(nonZero.tasks_killed, 1);
+});
+
+test("the public view shows the orchestrator counters at zero, the healthy value, and omits them only while null", (t) => {
+  const env = makeQueue(t, "jobs-view-orchestrator");
+  const measured = enqueue(env);
+  openDb(env)
+    .prepare("UPDATE jobs SET orch_turns = 12, orch_reads = 0, orch_bash = 5, orch_bash_explore = 0, orch_ctx_last = 88000 WHERE id = ?")
+    .run(measured);
+
+  const view = jobView(getJob(measured, env));
+  assert.deepEqual(
+    [view.orch_turns, view.orch_reads, view.orch_bash, view.orch_bash_explore, view.orch_ctx_last],
+    [12, 0, 5, 0, 88000],
+  );
+  const untouched = jobView(getJob(enqueue(env), env));
+  assert.equal(untouched.orch_turns, null, "a job that never ran shows an orchestrator counter");
 });
 
 test("a cut field carries its truncated flag, a field that fits has no key, and the full view flags nothing", (t) => {

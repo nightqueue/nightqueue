@@ -511,6 +511,44 @@ in the runtime or in a hook with a test behind it, never only in the prompt of
 the pipeline, because a sentence in a prompt covers only the wording it happens
 to forbid and is lost the moment the platform underneath changes.
 
+**The orchestrator of a job only coordinates, and the same hook enforces it.** Its
+matcher is `Agent|Task|Bash|Read|Grep|Glob`; `nightshift doctor` warns (`registered
+with an older tool matcher`) until `nightshift setup` rewrites an older one. For a call
+of the orchestrator's own main thread - a payload with no `agent_id`; a subagent's call
+carries one - inside a job (`NIGHTSHIFT_JOB_ID` set):
+
+- `Read`, `Grep` and `Glob` are allowed only under the runs of the job home
+  (`<home>/runs`) and a copy of the plugin (`NIGHTSHIFT_PLUGIN_DIR`, which the runtime
+  pins on the child, the plugin of the running package and of the installed runtime, and
+  the host's `plugins` directory), plus the file where the host spills a tool result too
+  large for the context and tells the model to read it - of the calling session only:
+  `<dirname(transcript_path)>/<session_id>/tool-results/`, both taken from the hook
+  payload (with either missing, no spill directory is readable), never another session's
+  and never the rest of the host's configuration. The counters apply the same rule, finding
+  the transcript of each of the stream's own session ids under
+  `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/`. Paths are compared after
+  `realpath`, so a symlink never smuggles the worktree in; a `Glob` pattern that climbs
+  with `..` is refused.
+- `Bash` is allowed only for the closed list: `git rev-parse`, `git worktree`,
+  `git status --short|-s|--porcelain`, `git add`, `git commit` (never `--amend`),
+  `git push` (never `--force`/`-f`/`--force-with-lease`/`--force-if-includes`/`--delete`/
+  `-d`/`--mirror`/`--all`/`--prune`/`--receive-pack`/`--exec`, their `=value` form, a
+  short-flag cluster carrying one, the abbreviation git accepts, nor a `+`/`:` refspec),
+  `git fetch` (never `--upload-pack`), `git branch --show-current`,
+  `git diff --stat|--shortstat|--name-only|--name-status` (never with `-p`/`-u`/`--patch`),
+  `gh pr view|list|status|checks|create` and `nightshift run check|log|index-save|commit|pr`.
+  Each is the bare program name followed by its subcommand: a path to the binary or a
+  global flag before the subcommand (`git -C <dir>`, `-c`, `--git-dir`, `--work-tree`) is
+  refused. A command carrying a newline or any of ``; & | ` < > $`` is refused: the skill
+  never chains, substitutes or redirects.
+- Anything else is denied (`permissionDecision: "deny"`) with a reason that starts
+  `the orchestrator does not read the repository - hand the path to the coder / ask the
+  verifier` and says where the call would have to go instead.
+
+A subagent's call and any session outside a job take exactly the path described above,
+untouched. The hook fails open: an error inside the check lets the call through rather
+than block a job. The list lives in one frozen table (`src/queue/orchestrator-scope.mjs`).
+
 **The runtime configures the host it spawns: a command finishes or dies in the
 foreground.** Every `claude` child of a job also gets
 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `BASH_DEFAULT_TIMEOUT_MS` and
@@ -534,6 +572,28 @@ each job records `bash_timeouts` (tool results saying a command timed out),
 summed over its attempts. `queue status <id>` (human, `--json` and the MCP
 `queue_status`) shows each only when it is not zero, and `nightshift doctor` sums them
 over the last 20 finished jobs, warning when anything was backgrounded or killed.
+
+**Every job counts what its orchestrator did itself.** From the same stream, reading
+only the orchestrator's own events (a subagent's carry `parent_tool_use_id`), each job
+records, summed over its attempts:
+
+- `orch_turns` - distinct assistant messages (by `message.id`);
+- `orch_reads` - `Read`/`Grep`/`Glob` calls whose target is outside the roots the hook
+  above allows (the run, the plugin, the host's tool-result spill); 0 is healthy;
+- `orch_bash` - every `Bash` call;
+- `orch_bash_explore` - the `Bash` calls outside the closed list; 0 is healthy;
+- `orch_ctx_last` - input + cache read + cache creation tokens of the last orchestrator
+  turn that reported usage (the context it ended with; the last attempt's wins).
+
+A call is counted on the `tool_use` itself, so one the hook denied still counts: the
+regression shows even while it is blocked. Tool calls are deduped by id and a line
+quoted inside a code fence is never read as an event. `queue status <id>` (human,
+`--json` and the MCP `queue_status`) shows all five, zero included - only a job finished
+before the counters existed leaves them out. `nightshift doctor` prints one
+`orchestrator` row summed over the last 20 finished jobs (with the average last context
+and how many of them were measured), warning when `orch_reads` or `orch_bash_explore` is
+above zero. Baseline measured on 2026-09-21, before the contract: 49 turns, 4 reads,
+35 Bash of which 17 exploration, last-turn context 195k per job.
 
 **A job's environment is isolated by default.** A job sees only this package's own MCP
 server, plugin and hooks, plus the project's own `.claude/settings.json` and

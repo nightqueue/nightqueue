@@ -194,6 +194,121 @@ settings must never be repointed.
   runner's own home; that refusal is the guard working, not a failure of the change —
   point the command at the temporary home instead of working around it.
 
+## Mode: RUNTIME (Phase 6.5 lane)
+
+When the prompt says `Mode: RUNTIME`, skip Steps 1-2.7 (Phase 6 already ran them) and prove the
+change by executing it, under the isolation rule of Step 2.9. The same lane measures main for a
+post-merge resume (ARTIFACT_PATH `00-main-measure.md`): run the operator's scenarios with the
+cases below and record `Diff applies plan: n/a`. Decide the path by the change:
+
+**a) A fix that depends on a backend contract/response** (field/shape/value of the API).
+MANDATORY validation: confirm the **REAL payload of the bug account** (the
+`**Bug account:**` field), not the TS type nor "the reading is defensive". The account logged in to the
+emulator is usually another one — if it is different, resolve it by the ticket's identifier
+(lookup → login) and confirm that the payload SHOWS the anomalous state of the report.
+Feasible on your own in the overwhelming majority of cases; **deferring is the LAST resort.**
+- **Hit the endpoint with a real token.** Extract the token from the app already logged in to
+  an emulator/simulator, or from the equivalent store of your stack (example, mobile: iOS container via
+  `xcrun simctl get_app_container` → `RCTAsyncLocalStorage_V1/`, with `manifest.json` + large
+  values in a file named by the MD5 of the key; Android via `adb run-as <pkg>` → `databases/RKStorage`;
+  example, web: the session token from the browser profile or via CDP; example, server: the project's
+  own auth helper). Make the request via **Bash** (`curl`/`python3` — a sandboxed JS
+  runtime usually has no network, `ENOTFOUND`). NEVER print/persist a token/PII — log only the
+  structure (keys, path of the field, target value). Or start the app and read the network response.
+- Confirm: does the field exist? at what path? does the fix read EXACTLY from it? does the value match
+  the source of truth? Do not trust the TS interface — the backend may bring
+  fields that it omits (e.g. `/auth/login` brings `profile`/`goals` outside the
+  `AuthResponse`).
+- **2 proofs by execution, not by reading:** (1) **data** — the real payload of the
+  endpoints the fix consumes; (2) **control-flow** — an executable simulation of the state machine
+  of the fix mapped to the real code, driven by the payload, running
+  WITHOUT the fix vs WITH the fix and showing the output diverge (without the fix → the bug; with the fix →
+  the right value). It is what proves the triage's diagnosis by concrete output.
+- **Stop and return `UNAVAILABLE`** (with what you tried and why each attempt failed) only if the
+  path is genuinely inaccessible (no
+  logged-in account, no token, no network). **If the project memory declares logged-in
+  emulators, that "inaccessible" does not exist — deferring is forbidden**; all that may be left is
+  the step gated by live hardware/SMS (e.g. the OTP of a new login) — that step returns
+  `NEEDS-DEVICE` with its script (steps + what to observe + criterion). When you stop, list
+  what you tried and why each attempt failed.
+
+**b) A bug observable without a backend/native capability** (UI, navigation, state, parsing):
+start the app the way the project starts it, reproduce the BUG
+SCENARIO **with the real state of the bug account seeded** — seed the real account state
+through whatever local store the app uses, with the real payload (case (a)), before navigating; a
+generic/clean state + an isolated function = a guaranteed false positive in routing/gates.
+Confirm the right behavior (from the user's point of view, not "it did not crash") and **take a
+screenshot** for the report. Before concluding "it works"/"it does not work", confirm that the
+running build actually contains your change (a fresh bundle/rebuild, not a cached one).
+If the visual depends on account/data/hardware, validate autonomously everything you can
+(state, data, payload — case (a)) before treating it as (c).
+
+**c) A fix that touches a native/device-gated capability** (health, billing/IAP, camera,
+permissions, push, Bluetooth) — anything the emulator/CI cannot reproduce:
+start the app to confirm that the path loads without crashing (capture the native log —
+e.g. `ClientNotInitialized`), then **stop and return `NEEDS-DEVICE`** with a short script
+(steps + what to observe + criterion) for a test on a physical device: the orchestrator holds
+the pause of step 7 and waits for the verdict before committing.
+
+**d) Acceptance gate — mandatory when Type = feature/refactor:** besides the
+applicable path above, go through the **acceptance criteria of the validated brief item by
+item** and confirm each one with observable evidence (execution, screenshot, output —
+never by reading the code). Format: `[criterion] → MET (evidence) | NOT
+MET`. The QA proves that nothing breaks; this gate proves that **everything that was asked
+was delivered** — a half-done feature that "breaks nothing" does NOT pass. Any
+NOT MET item → back to the coder (the Phase 6 loop, the same limit).
+
+**d2) The same acceptance gate on a bug with `## Usage coverage`:** the two cases in which the
+gate (d) is mandatory are, positively, `Type = feature/refactor` (item (d) above) and
+`Type = bug/error` with `## Usage coverage` present in `03-plan.md`; outside those two, the
+gate does not run. In the bug case, besides the applicable (a)/(b)/(c) path, go through **each scenario
+line** of the same anchored cut that Phase 3 uses (`## Usage coverage`, from the heading to
+the next `## `, outside a code block) and produce
+`[scenario] → MET (evidence) | NOT MET`. **The proof comes out through the entry point declared in the
+`terminal:` of that scenario:** `route:` → a real call to the endpoint; `click:` → the screen opened
+in a browser/CDP with the element measured; `command:` → the command executed;
+`job/cron/webhook:` → the trigger fired. Curl does not close a line whose terminal is `click:`, and
+reading code closes none. A scenario whose proof depends on a product decision not yet
+confirmed (a `source=pipeline` line, `decision=out of scope`, or an item of
+`unconfirmed decisions:` from the QA) and a scenario whose proof is unavailable due to the environment come
+out as `NOT MET / to confirm`: they **do not go back to the coder** (there is no defect to fix) and
+**do not block Phase 7** — they mark `⚠️` on the 6.5 line (which already forces the non-happy path of
+Phase 8 by the fail-safe rule) and become a mandatory open item. `NOT MET` without `to confirm`
+blocks and goes back to the coder, as today. This gate is a **complement** to the mechanical gate of Phase
+3, not a substitute: Phase 3 asks before coding, this one measures after implementation.
+
+**Record the result of gates (d) and (d2) in a table as well**, with the verdict column
+named `Result` (e.g. `| # | Scenario (declared entry point) | Result | Evidence |`): the
+writing of the notice in Phase 8 reads `NOT MET` only in the cell of that column, and a gate written
+only in prose is not read mechanically.
+
+**`unavailable due to the environment` inherits the requirement of item (a): deferring is the LAST resort.**
+It only counts after ACTUALLY trying the real path of the `terminal:` of that scenario — `click:` →
+open the screen in a browser/CDP; `route:` → a real call to the endpoint; `command:` → execute the
+command; `job/cron/webhook:` → fire the trigger — and recording on the line itself what you tried
+and why each attempt failed. A named escape: *"I did not try" is not "unavailable"* — a scenario
+with no recorded attempt is not `to confirm`: it blocks Phase 7 until the attempt happens, and
+the one who must try is this step 6.5, not the coder.
+
+**Runtime output.** Write ARTIFACT_PATH with, in this order:
+
+- `## Runtime verdict` — its first line is exactly one of `CONFIRMED` (the change confirmed at
+  runtime: every applicable case proven, every (d)/(d2) line `MET` or `NOT MET / to confirm`),
+  `NOT-MET` (a criterion/scenario `NOT MET` without `to confirm`), `SYMPTOM-PERSISTS` (bug: the
+  execution shows the bug still present), `NEEDS-DEVICE` (case (c), or a step gated by live
+  hardware/SMS — the device script follows the verdict line) or `UNAVAILABLE` (the path is
+  genuinely inaccessible — what you tried and why each attempt failed follows the verdict line).
+- `Diff applies plan: yes|no` (bug only; `n/a` otherwise) — compare `git diff --stat` and the
+  files of `04-implementation.md` with `03-plan.md`; never paste the diff.
+- The commands run, each with its evidence (structure only — never a token/PII).
+- The (d)/(d2) table with the `Result` column, when the gate runs.
+
+Write each evidence file under `<RUN_DIR>/evidence/` (RUN_DIR = the directory of ARTIFACT_PATH),
+named `api-<name>.log`, `browser-<name>.png|.log` or `emulator-<name>.png|.log`; a token/PII is
+never printed nor persisted there either. Return to the orchestrator ≤10 lines: runtime verdict +
+the handoff file written + open items — never file contents, never a diff. Steps 3-4 do not
+apply in this mode.
+
 ### Step 3 — Report
 
 For each check, record the result and, if it fails, the **relevant snippet** of the
@@ -220,11 +335,13 @@ error (file, line, message) — never dump the whole log.
 **If ARTIFACT_PATH was provided in the prompt:** write the verdict and the detail
 (Failures included) to ARTIFACT_PATH via Write. If ARTIFACT_PATH already exists
 (re-run 🔁), read it and rewrite it preserving the previous content, appending
-`## Verification — iteration N` at the end; otherwise create it with iteration 1. Return to the
-orchestrator ≤10 lines: verdict + artifact path + key failures; do NOT paste the
-complete detail in the answer.
+`## Verification — iteration N` at the end; otherwise create it with iteration 1. Also write
+`<RUN_DIR>/evidence/automated-verification.md` (RUN_DIR = the directory of ARTIFACT_PATH) with
+the final iteration's `## Checks run` + `## Failures` + verdict line. Return to the
+orchestrator ≤10 lines: verdict + the handoff file written (`06-verification.md`) + key
+failures — never file contents, never a diff.
 
-**If ARTIFACT_PATH was NOT provided** (direct invocation or Fast Lite Track):
+**If ARTIFACT_PATH was NOT provided** (direct invocation):
 end the answer with the complete detail (Failures included), as before.
 
 **Citing an applied lesson:** if a lesson from the `## Applicable lessons` section of your

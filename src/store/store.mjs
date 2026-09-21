@@ -48,6 +48,7 @@
  * @property {() => Promise<object[]>} listWithSlug unfinished jobs that already have a run directory
  * @property {() => Promise<object[]>} listOpenJobs every job that is not closed and already named its run, the owners of the worktrees `nightshift doctor` reports
  * @property {() => Promise<object[]>} recentHostCommandCounts the host-command counters of the most recently finished jobs, the sample `nightshift doctor` sums
+ * @property {() => Promise<object[]>} recentOrchestratorCounts the orchestrator counters of the most recently finished jobs, the sample `nightshift doctor` sums
  * @property {(id: number) => Promise<string|null>} status the status column of one job, or null when the row is gone
  */
 
@@ -190,6 +191,7 @@ export const STORE_CONTRACT = Object.freeze({
     "listWithSlug",
     "listOpenJobs",
     "recentHostCommandCounts",
+    "recentOrchestratorCounts",
     "status",
   ],
   runs: ["logPipelineRun", "updateRunTelemetry"],
@@ -259,6 +261,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.countActiveJobs",
   "jobs.countActiveJobsByProject",
   "jobs.recentHostCommandCounts",
+  "jobs.recentOrchestratorCounts",
   "decisions.listDecisions",
   "decisions.decisionTitles",
   "decisions.proposalsOfJob",

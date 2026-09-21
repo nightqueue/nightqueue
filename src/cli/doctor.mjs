@@ -136,12 +136,12 @@ function checkHooks(ctx) {
   } catch (err) {
     return [check("hooks", "fail", err?.message ?? String(err), "fix the host settings file")];
   }
-  return hookStatus(settings.data, ctx.env).map(({ event, expected, current }) => {
+  return hookStatus(settings.data, ctx.env).map(({ event, expected, current, matcherCurrent }) => {
     const name = `hook ${event}`;
     if (!current) return check(name, "fail", "not registered", "run `nightshift setup`");
-    return current === expected
-      ? check(name, "ok", "registered")
-      : check(name, "fail", "registered from another path", "run `nightshift setup`");
+    if (current !== expected) return check(name, "fail", "registered from another path", "run `nightshift setup`");
+    if (matcherCurrent === false) return check(name, "warn", "registered with an older tool matcher", "run `nightshift setup`");
+    return check(name, "ok", "registered");
   });
 }
 
@@ -558,11 +558,50 @@ async function checkHostCommands(ctx) {
   return check("host commands", backgrounded > 0 || killed > 0 ? "warn" : "ok", detail);
 }
 
+// Adds one job's orchestrator counters into the running totals; a job finished before the counters existed is not measured.
+function addOrchestratorRow(totals, row) {
+  if (!Number.isFinite(row?.orch_turns)) return totals;
+  return {
+    measured: totals.measured + 1,
+    turns: totals.turns + row.orch_turns,
+    reads: totals.reads + (row.orch_reads ?? 0),
+    bash: totals.bash + (row.orch_bash ?? 0),
+    explore: totals.explore + (row.orch_bash_explore ?? 0),
+    context: totals.context + (row.orch_ctx_last ?? 0),
+  };
+}
+
+// Sums the orchestrator counters over the sample `nightshift doctor` reports; a database or a column not there yet
+// answers zero - a pure read, never a write and never a failure of its own.
+async function orchestratorTotals(ctx) {
+  const zero = { measured: 0, turns: 0, reads: 0, bash: 0, explore: 0, context: 0 };
+  if (!existsSync(dbPath(ctx.env))) return zero;
+  const store = openStoreReadOnly(ctx.env);
+  try {
+    const rows = await store.jobs.recentOrchestratorCounts();
+    return rows.reduce(addOrchestratorRow, zero);
+  } catch {
+    return zero;
+  } finally {
+    await store.close();
+  }
+}
+
+// Checks what the orchestrator of the last sample of finished jobs did itself; it warns once it read the repository or explored with Bash.
+async function checkOrchestrator(ctx) {
+  const { measured, turns, reads, bash, explore, context } = await orchestratorTotals(ctx);
+  const average = measured ? Math.round(context / measured) : 0;
+  const detail =
+    `orchestrator: ${turns} turns, ${reads} reads outside the run, ${bash} Bash (${explore} exploration), ` +
+    `last context ${context} (avg ${average}) in the last ${HOST_COMMANDS_SAMPLE_SIZE} jobs (${measured} measured)`;
+  return check("orchestrator", reads > 0 || explore > 0 ? "warn" : "ok", detail);
+}
+
 // Checks the queue: the pause sentinel and the runners always, the orphaned jobs and the open proposals of closed jobs only once the database exists.
 async function checkQueue(ctx) {
   const checks = [checkQueuePause(ctx), checkKeepAwake(ctx), checkJobEnvironment(ctx), ...checkRunners(ctx)];
   if (existsSync(dbPath(ctx.env))) checks.push(await checkQueueJobs(ctx), await checkDecisionProposals(ctx));
-  checks.push(await checkHostCommands(ctx));
+  checks.push(await checkHostCommands(ctx), await checkOrchestrator(ctx));
   return checks;
 }
 

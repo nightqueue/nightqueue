@@ -214,6 +214,14 @@ test("`run check` answers OK on a complete artifact and names every section the 
 
   const explore = await runCli(env, ["run", "check", "02"], { jobId: id });
   assert.deepEqual(explore.out, ["MISSING: 02-explore.md (not written)"]);
+
+  writeArtifact(env, "06-runtime.md", "# Runtime\n\nDiff applies plan: yes\n");
+  const runtimeIncomplete = await runCli(env, ["run", "check", "06.5"], { jobId: id });
+  assert.deepEqual(runtimeIncomplete.out, ["MISSING: ## Runtime verdict"]);
+
+  writeArtifact(env, "06-runtime.md", "# Runtime\n\n## Runtime verdict\n\nCONFIRMED\n");
+  const runtime = await runCli(env, ["run", "check", "06.5"], { jobId: id });
+  assert.deepEqual(runtime.out, ["OK"]);
 });
 
 test("`run check 04` generates the file list from the worktree when the coder left none", async (t) => {
@@ -260,7 +268,7 @@ test("`run check` refuses a phase it does not know and a missing argument, and e
 
   const unknown = await runCli(env, ["run", "check", "07"], { jobId: id });
   assert.equal(unknown.code, 1);
-  assert.match(unknown.err.join("\n"), /unknown phase `07`; the artifact gate covers: 01, 02, 03, 04, 05a, 05, 06/);
+  assert.match(unknown.err.join("\n"), /unknown phase `07`; the artifact gate covers: 01, 02, 03, 04, 05a, 05, 06, 06\.5$/m);
 
   const missing = await runCli(env, ["run", "check"], { jobId: id });
   assert.equal(missing.code, 1);

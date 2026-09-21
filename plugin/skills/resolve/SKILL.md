@@ -14,6 +14,39 @@ You receive a task or error description and coordinate a pipeline of agents
 to solve it with integrated triage, architecture, implementation, QA and functional
 verification.
 
+## The orchestrator's contract (read first)
+
+The orchestrator coordinates and nothing else: it never reads source code, never explores the
+repository, never reviews a diff itself — everything it needs reaches it as a handoff file or a
+≤10-line subagent return, in every tier.
+
+Measured 2026-09-21 over 14 jobs: a job's cost is ~77% cache-read (turns × context) and the orchestrator is 33% of it (~49 turns, 111k → 195k).
+42% of what entered its context was its own Bash and 28% its own Reads — only 8% were subagent returns.
+
+It works through five channels only:
+
+- (a) the run's handoff files under `<RUN_DIR>`;
+- (b) the plugin files it is told to read (`references/pr-template.md`, the qa-guardian paths of Phase 5);
+- (c) the `nightshift` MCP tools;
+- (d) the `Agent` tool;
+- (e) the closed Bash list — `git rev-parse`, `git worktree`, `git status --short`, `git add`,
+  `git commit` (never `--amend`), `git push` (never `--force`/`-f`/`--force-with-lease`/`--force-if-includes`/
+  `--delete`/`-d`/`--mirror`/`--all`/`--prune`/`--receive-pack`/`--exec`, nor a `+`/`:` refspec),
+  `git fetch` (never `--upload-pack`), `git branch --show-current`,
+  `git diff --stat|--shortstat|--name-only|--name-status` (never `-p`/`-u`/`--patch`, a full diff, `show` or `log`),
+  `gh pr view|list|status|checks|create` (never `gh pr diff`, `merge`, `edit` or `close`), and
+  `nightshift run check|log|index-save|commit|pr` — each as the bare program name followed by its
+  subcommand, never a path to the binary nor a global flag before the subcommand (`-C`, `--git-dir`,
+  `--work-tree`, `-c`). Nothing else.
+
+Inside a queued job the runtime enforces it: a call outside the channels is denied with a reason
+that says what to do instead — never work around a denial with another tool; hand the need to the
+subagent of the phase. The runtime also counts the orchestrator's turns, reads, Bash and
+exploration Bash per job (`queue status <id>`).
+
+**The uniform return contract:** every subagent returns ≤10 lines — verdict, the handoff file it
+wrote, open items — never file contents, never a diff.
+
 ## Visual identity of the agents (source of truth)
 
 Every agent has a fixed icon and title. ALWAYS use this identity when
@@ -108,7 +141,9 @@ The runtime waits for every subagent and background task of an unattended run; l
 0.6. **Post-merge resume (the operator contradicts what this job already delivered).** Trigger:
    a resumed session where the operator's expected behavior contradicts `## Usage coverage` of
    `03-plan.md`, or the delivery is already merged with no such section. Protocol: (1)
-   **measure** the current behavior on main with real evidence; (2) **show side by side**, one
+   have the runtime lane measure the current behavior on main with real evidence — launch the
+   Phase 6.5 lane (verifier, `Mode: RUNTIME`) with `ARTIFACT_PATH: <RUN_DIR>/00-main-measure.md`
+   and the operator's scenarios; the table of (2) is built from its handoff file; (2) **show side by side**, one
    line per scenario: `<scenario> · today-on-main: <measured> · expected by the operator:
    <what he described> · divergence: yes|no`; (3) **ask** where the fix goes (`gh pr list
    --head <branch>` first: PR open → same branch; merged → a new linked PR or job); (4) until
@@ -281,9 +316,9 @@ The runtime waits for every subagent and background task of an unattended run; l
 
    Rules: a non-`EXECUTE` verdict requires concrete evidence — not a style
    opinion; do not stall the pipeline over preciousness. These count as evidence: lessons and
-   memory injected into the session, the conversation history, and a quick inline inspection
-   (**max 1-2 Grep/Read, no subagent**) when the suspicion justifies looking at the
-   code. Without evidence, the verdict is `EXECUTE`.
+   memory injected into the session, the conversation history, and the paths `index_recall`
+   answers for the Affected area (paths only — this gate never opens a repository file).
+   Without evidence, the verdict is `EXECUTE`.
    Ambiguity in *reading* the request is NOT resolved here — that is Step 3.5
    of the architect. This gate only decides whether **this is worth executing**.
    **An empty repository is greenfield, never a reason to stop:** a repository with no
@@ -380,7 +415,7 @@ The runtime waits for every subagent and background task of an unattended run; l
 
    `Project:` and `RUN_DIR:` come in the prompt — the runtime opened the run before this
    session started. Use that `RUN_DIR` as it comes (ALWAYS outside the worktree, NEVER
-   inside it) and create it with `mkdir -p`; `<project>` is the `Project:` line, the same
+   inside it); the runtime created it before this session started. `<project>` is the `Project:` line, the same
    identifier used in `lesson_recall`/`pipeline_log`. The artifacts live OUTSIDE the worktree
    because Phase 7 (`ExitWorktree`) deletes the worktree BEFORE Phase 8 reads the artifacts.
 
@@ -399,10 +434,11 @@ The runtime waits for every subagent and background task of an unattended run; l
    | `01-triage.md` | 🔍 triager | 📐 architect (P3) |
    | `02-explore.md` | 🧭 explore | 📐 architect (P3) |
    | `03-plan.md` | 📐 architect | ⚙️ coder (P4), 🛡️ qa (P5), orchestrator (gate/pause) |
-   | `04-implementation.md` | ⚙️ coder | 🛡️ qa (P5), ✅ verifier (P6), coder-loop (P6) |
+   | `04-implementation.md` | ⚙️ coder (every tier) | 🛡️ qa (P5), ✅ verifier (P6), coder-loop (P6) |
    | `05a-qa-analyst.md` | 🛡️ qa-guardian (ANALYST, complex only) | provers (P5-B) |
    | `05-qa.md` | 🛡️ qa-guardian (LITE) OR **orchestrator** (consolidation, complex) | ✅ verifier (P6), coder-loop (P6), Phase 8 |
-   | `06-verification.md` | ✅ verifier (append per iteration) | coder-loop (P6), Phase 8 |
+   | `06-verification.md` | ✅ verifier (append per iteration, every tier; also `evidence/automated-verification.md`) | coder-loop (P6), Phase 8 |
+   | `06-runtime.md` | 📱 runtime lane (✅ verifier, Mode: RUNTIME; also `evidence/api-*`, `browser-*`, `emulator-*`) | orchestrator (6.5 gate), Phase 7, Phase 8 |
 
    Each subagent receives its `ARTIFACT_PATH` (RUN_DIR + the phase's file) and the
    **handoff contract** at the TOP of the prompt (stable block), with the variable data
@@ -413,13 +449,13 @@ The runtime waits for every subagent and background task of an unattended run; l
    ARTIFACT_PATH: <RUN_DIR>/<NN-phase>.md
    Read before acting (via Read): <source artifacts of this phase — or "none">
    Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
-   Return to the orchestrator AT MOST 10 lines: verdict/status + artifact path + open items.
+   Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open items — never file contents, never a diff.
    Do NOT paste the complete sections in the response.
    ```
 
    **Artifact gate (apply after every phase that expects a Write):** run
    `nightshift run check <NN>` — one Bash call, from inside the job, with the phase number
-   (`01`, `02`, `03`, `04`, `05a`, `05`, `06`). It answers `OK` (the artifact is there with the
+   (`01`, `02`, `03`, `04`, `05a`, `05`, `06`, `06.5`). It answers `OK` (the artifact is there with the
    sections the next phase reads), `MISSING: <sections>` (absent or incomplete) or `GENERATED`
    (only `04`: the file list was derived from the worktree's own changes and written for you).
    `MISSING` → relaunch the subagent 1×; still `MISSING` → terminate the pipeline, record an
@@ -489,7 +525,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    | `<CWD>/CLAUDE.md` | not named to the coder | named to the coder when it exists | named to the coder (Phase 4) |
    | `index_recall` | no | yes, to locate the affected files | yes, in Phase 2 before the Explore |
    | `context_for_phase` for the coder | no | yes | yes |
-   | `04-implementation.md` | not written — the coder answers with `## Modified files` | not written — the coder answers with `## Modified files` | written by the coder, gate `nightshift run check 04` |
+   | `04-implementation.md` | written by the coder, gate `nightshift run check 04` | written by the coder, gate `nightshift run check 04` | written by the coder, gate `nightshift run check 04` |
    | Time target | under 5 minutes | under 15 minutes | none — the depth is the target |
 
    `—` = the agent does not run in that tier. `haiku (bug only)` = in `simple` the
@@ -530,8 +566,10 @@ The runtime waits for every subagent and background task of an unattended run; l
 > table (step 6)**. The phases the row does not list are skipped; once done, go straight to
 > Phase 7.
 
-1. **Locate the affected files** from the `**Affected area:**` field of the brief —
-   `index_recall` (MCP `nightshift`) locates them faster in the tier whose row allows it.
+1. **Locate the affected files** — not yourself: hand the coder the `**Affected area:**` of
+   the brief plus, in the tier whose row allows it, the PATHS `index_recall` (MCP `nightshift`)
+   answered — paths only, never content. The coder locates the rest itself and lists what it
+   touched in `04-implementation.md`.
    The coder receives the LIST of paths, never their content pasted inline: it has Read.
 
 2. **Triager — only when `Type = bug/error` and the row gives the triager a `model`** (a
@@ -542,15 +580,19 @@ The runtime waits for every subagent and background task of an unattended run; l
 3. **Launch 1 coder agent** (subagent_type="nightshift:coder", the `model` of the row):
 
    ```
+   ## File handoff (contract — read first)
+   ARTIFACT_PATH: <RUN_DIR>/04-implementation.md
+   Read before acting (via Read): [only when the triager ran:] `<RUN_DIR>/01-triage.md` — ## Validated brief and the confirmed cause. [otherwise: none]
+   Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
+   Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open items — never file contents, never a diff.
+   Do NOT paste the complete sections in the response.
+
    Brief:
    [BRIEF FROM PHASE 0]
 
    Affected files (read them yourself, via Read):
-   [FILE LIST]
-
-   [Include only when the triager ran:]
-   Read before acting (via Read):
-   - `<RUN_DIR>/01-triage.md` — ## Validated brief and the confirmed cause.
+   Affected area: [AFFECTED AREA]
+   [PATHS FROM index_recall — omit in the tier whose row says no]
 
    [Include only when the row names CLAUDE.md and <CWD>/CLAUDE.md exists:]
    Project conventions (via Read): <CWD>/CLAUDE.md
@@ -562,19 +604,25 @@ The runtime waits for every subagent and background task of an unattended run; l
    [Include only in the simple tier:] Follow the test patterns already in the project and
    cover the new behaviour in the test file that already covers this area.
 
-   MANDATORY: finish with the section:
-   ## Modified files
-   /absolute/path/file.ts
+   Write `04-implementation.md` per your Required output (`## Modified files`, `## Done`,
+   `## Left`, `## How it was tested`).
 
    Repository: [CWD PATH]
    Project: [PROJECT — the same identifier used in RUN_DIR]
    ```
 
+3.5. Run `nightshift run check 04` (the artifact gate, step 5.2) — `GENERATED` and
+   `MISSING: ## Modified files (no changed files)` are read as in Phase 4.
+
 4. **Launch 1 verifier agent** (subagent_type="nightshift:verifier", the `model` of the row):
 
    ```
-   Modified files:
-   [FILE LIST]
+   ## File handoff (contract — read first)
+   ARTIFACT_PATH: <RUN_DIR>/06-verification.md (append per iteration)
+   Read before acting (via Read): <RUN_DIR>/04-implementation.md — ## Modified files
+   Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
+   Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open items — never file contents, never a diff.
+   Do NOT paste the complete sections in the response.
 
    Repository: [CWD PATH]
    Project: [PROJECT — the same identifier used in RUN_DIR]
@@ -585,10 +633,12 @@ The runtime waits for every subagent and background task of an unattended run; l
    Produce the verdict ## Verification: PASSED or ## Verification: FAILED.
    ```
 
+   Then run `nightshift run check 06`.
+
 5. **Fix loop — the `Max fix iterations` cell of the row is the limit**:
    - `PASSED` → go to Phase 7.
-   - `FAILED` → relaunch the coder with the verifier's failures, then relaunch the
-     verifier.
+   - `FAILED` → relaunch the coder with the Phase 6 fix prompt (it reads
+     `06-verification.md`), then the verifier.
    - Still failing after the last allowed iteration → **do not commit**, go to Phase 8 and
      report the failures.
 
@@ -720,7 +770,7 @@ never only the ticket's title/culprit.
 shows the path that produces the reported symptom — without hedging and with no assumed
 payload. A PROCEED that concludes the system behaves correctly, or that rests the cause on a
 guess about data the logged-in emulator would allow confirming, is invalid: reject it and send
-it back to the triager (or confirm it yourself with the real data). NOT-REPRODUCIBLE or NEEDS-CLARIFICATION → **terminate the pipeline**
+it back to the triager. NOT-REPRODUCIBLE or NEEDS-CLARIFICATION → **terminate the pipeline**
 and take `## Open items` to the user. BEFORE terminating, record it (step 5.3):
 `run_phase_done` with `phase: "triage"` **and** `run_terminate` with `phase: "triage"` and the
 verdict as `reason`. Apply the lesson-capture filter above before terminating; if both
@@ -790,9 +840,6 @@ nightshift run index-save <RUN_DIR>/02-explore.md --project <PROJECT> --repo-roo
 It prints `index saved: N files, M libs`. A failure here NEVER blocks the run: record it as an
 open item of Phase 8, the same as an empty index.
 
-**Before Phase 3 (complex only):** read `<CWD>/CLAUDE.md` via Read (if it exists) and keep the
-content to pass to the architect; if it does not exist, record "No CLAUDE.md found."
-
 ### Phase 3 — Architecture
 
 > Tier scoping: the 📐 architect row of the **Track routing** table (step 6) — a `—` there
@@ -834,8 +881,7 @@ your Step 1.5. Declare `**Diff axis:**` and `**Always-gate class:**`, and produc
 Delivery constraints (the limit of what may be delivered — NEVER design; omit the line if there is none):
 [e.g. it must ship over-the-air; it must not touch native/build code]
 
-Project conventions:
-[CONTENT OF THE PROJECT'S CLAUDE.md — or "No CLAUDE.md found."]
+Project conventions: read `<CWD>/CLAUDE.md` yourself via Read if it exists (the orchestrator no longer reads repository files).
 
 [Paste the `block` of `context_for_phase` (target: "architect") — omit when it came back empty:]
 [CONTEXT BLOCK]
@@ -977,11 +1023,11 @@ ARTIFACT_PATH: <RUN_DIR>/04-implementation.md
 Read before acting (via Read):
 - `<RUN_DIR>/01-triage.md` — ## Validated brief.
 - `<RUN_DIR>/03-plan.md` — the complete implementation plan (attack on the cause/criterion).
-Return summary (≤10 lines, per the handoff contract of step 5.2): status + artifact path +
-files touched + open items.
+Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open
+items — never file contents, never a diff.
 
 Apply the plan following the project's standards (CLAUDE.md). The simplest possible
-solution. Write ## Modified files (absolute paths) to ARTIFACT_PATH.
+solution. Write ARTIFACT_PATH per your Required output.
 
 [Paste the `block` of `context_for_phase` (target: "coder") — omit when it came back empty:]
 [CONTEXT BLOCK]
@@ -994,6 +1040,14 @@ Run `nightshift run check 04` (the artifact gate, step 5.2). `GENERATED` means t
 no file list and the runtime derived one from the worktree's own changes — accept and move on.
 `MISSING: ## Modified files (no changed files)` means the worktree changed nothing: inform the
 user that the implementation did not complete successfully and terminate.
+
+**One coder lane per stage:** a brief/plan with numbered stages launches one coder per stage,
+in order, never in parallel. Each prompt carries `Stage: <n> — <title>` and reads
+`03-plan.md` (its stage) and `04-implementation.md` (what earlier lanes did, when it exists);
+each lane appends its `### Stage <n>` block and rewrites the cumulative `## Modified files`.
+Run `nightshift run check 04` after each lane, then the verifier between stages (the Phase 6
+prompt and its fix loop): a failing stage is fixed before the next lane starts. After the last
+stage, Phase 5 (QA) and the final Phase 6 verification run as usual.
 
 **Parallel coders (batches):** if the implementation is split into concurrent batches, each
 batch runs in an isolated worktree (`isolation: worktree`) — NEVER multiple coders in the same
@@ -1021,8 +1075,9 @@ by the tier. Every qa-guardian runs in **read/PoC mode, it does not edit source*
 creates PoC/test files).
 
 **Before launching any qa-guardian, resolve the plugin root once:** `Glob` for
-`**/skills/qa-guardian/SKILL.md` and take the directory that CONTAINS `skills/` as
-`[PLUGIN_ROOT]`, then substitute it into the `QA_SKILL:` / `RISK_MATRIX:` / `FUZZ_TEMPLATE:`
+`skills/qa-guardian/SKILL.md` with `path` = the plugin root — the directory two levels above
+this skill's base directory (never a Glob of the repository) — and take the directory that
+CONTAINS `skills/` as `[PLUGIN_ROOT]`, then substitute it into the `QA_SKILL:` / `RISK_MATRIX:` / `FUZZ_TEMPLATE:`
 lines of the three prompts below. If it does not resolve, omit those three lines
 entirely — the agent keeps its own `Glob` fallback for that case.
 
@@ -1231,8 +1286,8 @@ contract that Phase 6 consumes:
 - `## Generated PoCs` = the provers' files + a note that the without-fix proof via stash was
   delegated to the verifier.
 - `## Invalidated assumptions` = the analyst's.
-- `INCONCLUSIVE` **never becomes HELD**: try to complete the proof yourself inline; if it
-  remains inconclusive, record an ⚠️ open item.
+- `INCONCLUSIVE` **never becomes HELD**: relaunch ONE prover (🔁) for that hypothesis with
+  what was missing; if it remains inconclusive, record an ⚠️ open item.
 - Aggregate verdict: any proven break → `NEEDS FIX`; nothing proven and no open item →
   `APPROVED`.
 - Record 5.1: one line per agent — `🛡️ QA-Guardian (analyst)`, `🛡️ QA-Guardian (prover
@@ -1289,7 +1344,8 @@ Read before acting (via Read):
 Write the verdict and the detail to ARTIFACT_PATH via Write; if it already exists (a re-run 🔁),
 read it and rewrite it preserving the previous iterations, appending
 ## Verification — iteration N at the end. Return to the orchestrator AT MOST 10 lines:
-verdict + artifact path + key failures. Do NOT paste the complete detail.
+verdict/status + the handoff file written + open items — never file contents, never a diff.
+Do NOT paste the complete detail.
 
 Tier: [trivial | simple | complex]
 
@@ -1342,8 +1398,8 @@ Read before acting (via Read):
 - `<RUN_DIR>/05-qa.md` — ## Proven breaks still open (pending).
 - `<RUN_DIR>/04-implementation.md` — ## Modified files so far.
 Rewrite `## Modified files` in ARTIFACT_PATH with the complete cumulative list via Write.
-Return to the orchestrator AT MOST 10 lines: status + artifact path + files
-touched + open items. Do NOT paste the complete section.
+Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open
+items — never file contents, never a diff. Do NOT paste the complete section.
 
 The verification failed. Fix exactly the failures/breaks reported in the
 06-verification.md and the pending ## Proven breaks of the 05-qa.md, without introducing
@@ -1376,100 +1432,45 @@ works. A verification that can only run against the real home is reported as
 Runs when the change (fix OR feature) is **observable at runtime**
 (UI/screen/flow/integration). Passing tsc/lint does NOT prove that the bug is gone nor that the
 feature delivers what was asked — only executing proves it. A manual CLI/MCP run here obeys
-the isolation rule of Phase 6: it goes through `nightshift sandbox <cmd>`. Decide the path by the change:
+the isolation rule of Phase 6: it goes through `nightshift sandbox <cmd>`.
+The methodology — the cases (a)–(d2), the `Result` table and the `unavailable due to the
+environment` rule — lives in `verifier.md` (`Mode: RUNTIME`); this phase launches the lane and
+reads its verdict.
 
-**a) A fix that depends on a backend contract/response** (field/shape/value of the API).
-MANDATORY validation: confirm the **REAL payload of the bug account** (the
-`**Bug account:**` field), not the TS type nor "the reading is defensive". The account logged in to the
-emulator is usually another one — if it is different, resolve it by the ticket's identifier
-(lookup → login) and confirm that the payload SHOWS the anomalous state of the report.
-Feasible on your own in the overwhelming majority of cases; **deferring is the LAST resort.**
-- **Hit the endpoint with a real token.** Extract the token from the app already logged in to
-  an emulator/simulator, or from the equivalent store of your stack (example, mobile: iOS container via
-  `xcrun simctl get_app_container` → `RCTAsyncLocalStorage_V1/`, with `manifest.json` + large
-  values in a file named by the MD5 of the key; Android via `adb run-as <pkg>` → `databases/RKStorage`;
-  example, web: the session token from the browser profile or via CDP; example, server: the project's
-  own auth helper). Make the request via **Bash** (`curl`/`python3` — a sandboxed JS
-  runtime usually has no network, `ENOTFOUND`). NEVER print/persist a token/PII — log only the
-  structure (keys, path of the field, target value). Or start the app and read the network response.
-- Confirm: does the field exist? at what path? does the fix read EXACTLY from it? does the value match
-  the source of truth? Do not trust the TS interface — the backend may bring
-  fields that it omits (e.g. `/auth/login` brings `profile`/`goals` outside the
-  `AuthResponse`).
-- **2 proofs by execution, not by reading:** (1) **data** — the real payload of the
-  endpoints the fix consumes; (2) **control-flow** — an executable simulation of the state machine
-  of the fix mapped to the real code, driven by the payload, running
-  WITHOUT the fix vs WITH the fix and showing the output diverge (without the fix → the bug; with the fix →
-  the right value). It is what proves the triage's diagnosis by concrete output.
-- **STOP and ask the user** only if the path is genuinely inaccessible (no
-  logged-in account, no token, no network). **If the project memory declares logged-in
-  emulators, that "inaccessible" does not exist — deferring is forbidden**; all that may be left is
-  the step gated by live hardware/SMS (e.g. the OTP of a new login). When you stop, list
-  what you tried and why each attempt failed.
+Launch **1 verifier agent** (subagent_type="nightshift:verifier", the `model` of the ✅ verifier
+row of the **Track routing** table, step 6), with the header
+`📱 RUNTIME · complex · <what it is about to run>`:
 
-**b) A bug observable without a backend/native capability** (UI, navigation, state, parsing):
-start the app the way the project starts it, reproduce the BUG
-SCENARIO **with the real state of the bug account seeded** — seed the real account state
-through whatever local store the app uses, with the real payload (case (a)), before navigating; a
-generic/clean state + an isolated function = a guaranteed false positive in routing/gates.
-Confirm the right behavior (from the user's point of view, not "it did not crash") and **take a
-screenshot** for the report. Before concluding "it works"/"it does not work", confirm that the
-running build actually contains your change (a fresh bundle/rebuild, not a cached one).
-If the visual depends on account/data/hardware, validate autonomously everything you can
-(state, data, payload — case (a)) before treating it as (c).
+```
+## File handoff (contract — read first)
+ARTIFACT_PATH: <RUN_DIR>/06-runtime.md
+Read before acting (via Read): <RUN_DIR>/01-triage.md (## Validated brief, ## Diagnosis on a bug) ·
+<RUN_DIR>/03-plan.md (## Usage coverage when present) · <RUN_DIR>/04-implementation.md · <RUN_DIR>/06-verification.md
+Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
+Return to the orchestrator AT MOST 10 lines: runtime verdict + the handoff file written + open
+items — never file contents, never a diff.
 
-**c) A fix that touches a native/device-gated capability** (health, billing/IAP, camera,
-permissions, push, Bluetooth) — anything the emulator/CI cannot reproduce:
-start the app to confirm that the path loads without crashing (capture the native log —
-e.g. `ClientNotInitialized`), then **STOP and ask for a test on a physical device** (the pause
-of step 7) with a short script (steps + what to observe + criterion). Wait for the
-verdict before committing.
+Mode: RUNTIME
+Type: [bug/error | feature/refactor]
+Bug account: [the Brief's field]
+Expected outcome: [the Brief's field]
+Apply your Mode: RUNTIME cases (a)–(d2); every manual CLI/MCP run goes through `nightshift sandbox <cmd>`.
 
-**d) Acceptance gate — mandatory when Type = feature/refactor:** besides the
-applicable path above, go through the **acceptance criteria of the validated brief item by
-item** and confirm each one with observable evidence (execution, screenshot, output —
-never by reading the code). Format: `[criterion] → MET (evidence) | NOT
-MET`. The QA proves that nothing breaks; this gate proves that **everything that was asked
-was delivered** — a half-done feature that "breaks nothing" does NOT pass. Any
-NOT MET item → back to the coder (the Phase 6 loop, the same limit).
+Repository: [CWD PATH]
+Project: [PROJECT — the same identifier used in RUN_DIR]
+```
 
-**d2) The same acceptance gate on a bug with `## Usage coverage`:** the two cases in which the
-gate (d) is mandatory are, positively, `Type = feature/refactor` (item (d) above) and
-`Type = bug/error` with `## Usage coverage` present in `03-plan.md`; outside those two, the
-gate does not run. In the bug case, besides the applicable (a)/(b)/(c) path, go through **each scenario
-line** of the same anchored cut that Phase 3 uses (`## Usage coverage`, from the heading to
-the next `## `, outside a code block) and produce
-`[scenario] → MET (evidence) | NOT MET`. **The proof comes out through the entry point declared in the
-`terminal:` of that scenario:** `route:` → a real call to the endpoint; `click:` → the screen opened
-in a browser/CDP with the element measured; `command:` → the command executed;
-`job/cron/webhook:` → the trigger fired. Curl does not close a line whose terminal is `click:`, and
-reading code closes none. A scenario whose proof depends on a product decision not yet
-confirmed (a `source=pipeline` line, `decision=out of scope`, or an item of
-`unconfirmed decisions:` from the QA) and a scenario whose proof is unavailable due to the environment come
-out as `NOT MET / to confirm`: they **do not go back to the coder** (there is no defect to fix) and
-**do not block Phase 7** — they mark `⚠️` on the 6.5 line (which already forces the non-happy path of
-Phase 8 by the fail-safe rule) and become a mandatory open item. `NOT MET` without `to confirm`
-blocks and goes back to the coder, as today. This gate is a **complement** to the mechanical gate of Phase
-3, not a substitute: Phase 3 asks before coding, this one measures after implementation.
-
-**Record the result of gates (d) and (d2) in a table as well**, with the verdict column
-named `Result` (e.g. `| # | Scenario (declared entry point) | Result | Evidence |`): the
-writing of the notice in Phase 8 reads `NOT MET` only in the cell of that column, and a gate written
-only in prose is not read mechanically.
-
-**`unavailable due to the environment` inherits the requirement of item (a): deferring is the LAST resort.**
-It only counts after ACTUALLY trying the real path of the `terminal:` of that scenario — `click:` →
-open the screen in a browser/CDP; `route:` → a real call to the endpoint; `command:` → execute the
-command; `job/cron/webhook:` → fire the trigger — and recording on the line itself what you tried
-and why each attempt failed. A named escape: *"I did not try" is not "unavailable"* — a scenario
-with no recorded attempt is not `to confirm`: it blocks Phase 7 until the attempt happens, and
-the one who must try is this step 6.5, not the coder.
+Run `nightshift run check 06.5` (the artifact gate, step 5.2). The lane's verdict
+(`## Runtime verdict`) decides: `CONFIRMED` → Phase 7; `NOT-MET` → the Phase 6 coder loop (same
+limit); `SYMPTOM-PERSISTS` → the discrimination below; `NEEDS-DEVICE` → the pause of step 7
+with the lane's device script, verbatim, in the gate block; `UNAVAILABLE` → ⚠️ open item per
+the rules the lane followed (a scenario with no recorded attempt is not `to confirm`).
 
 **Symptom persisting — diagnosis before a loop (bug):** if the execution shows
 the bug STILL present, do NOT relaunch the coder automatically. First discriminate:
 
-1. **Does the diff apply the plan?** Check whether the implementation corresponds to the
-   architect's plan. It does not correspond → then yes, relaunch the coder (the Phase 6 loop).
+1. **Does the diff apply the plan?** Read the `Diff applies plan:` line of `06-runtime.md` —
+   never the diff itself. `no` → relaunch the coder (the Phase 6 loop).
 2. **The diff applies the plan AND the symptom persists → the CAUSE is wrong.** Hammering
    the coder with the same plan is guaranteed waste. Relaunch the **triager** (🔁,
    the same model as Phase 1) with the original diagnosis + the applied diff + the
@@ -1509,9 +1510,10 @@ The two commands below own the mechanics — staging, the commit, the branch nam
      PoCs/tests that passed (including the bug's `*.regression.test.*`), each added with one
      `--extra <pathspec>`. Leave out Phase 6.5's screenshots/artifacts and anything Step 2.7 of
      the verifier flags; `.claude/`, `tmp/` and lockfiles the command refuses on its own. Check
-     `git status --short` first: an unexpected file → investigate before committing, never
-     include it in the dark; a file IN the scope that mixes pre-existing unrequested hunks → ask
-     the user BEFORE committing.
+     `git status --short` first: a file that is neither in `## Modified files` nor a QA PoC is
+     left out and recorded as an ⚠️ open item — never opened, never included in the dark; a file
+     IN the scope that mixes pre-existing unrequested hunks (read from the verifier's
+     diff-hygiene finding in `06-verification.md`) → ask the user BEFORE committing.
    - The message is yours: follow the convention the repository declares (the command prints
      `CONVENTION: <what it found>`) or, with none declared, **Conventional Commits** with the
      `<type>` of Phase 0. Include a body when the task is not trivial, with a `Tests:` line
@@ -1539,7 +1541,8 @@ The two commands below own the mechanics — staging, the commit, the branch nam
    - Run `nightshift run pr --template` first. It answers `TEMPLATE: repo (<path>)` or
      `TEMPLATE: nightshift (fallback)` and `HEADINGS: <the headings in order>`, and records
      them as `prTemplate` in `state.json`: that is the template of the body — never decide it
-     yourself. Assemble the title and the body per `references/pr-template.md` for THAT
+     yourself. The repository template is the `HEADINGS:` line `nightshift run pr --template`
+     answers — never Read the repository's template file. Assemble the title and the body per `references/pr-template.md` for THAT
      template, filling every section with this run's artifacts (`01-triage.md`, `03-plan.md`,
      `04-implementation.md`, `05-qa.md`, `06-verification.md`). Invent nothing. In the PR
      description, identify the automation, when needed, by the nickname `nightshift` — never
@@ -1547,13 +1550,11 @@ The two commands below own the mechanics — staging, the commit, the branch nam
    - **How it was validated goes inside the template's own test section.** Nightshift template:
      the `## QA` table, one row per method that really ran, each backed by a non-empty file
      under `<RUN_DIR>/evidence/<method>-<name>.<ext>` (`<method>` ∈ `automated`, `api`,
-     `browser`, `emulator`), then the `Not tested:` line. Before the `run pr` call, copy the
-     evidence with Write or `cp`: `automated-verification.md` ← `06-verification.md` (when
-     it does not exist, the verifier's returned answer verbatim; when the tier produced
-     `05-qa.md`, `automated-qa.md` may add its PoC excerpt); `api-*.log` ← the request and
-     response of Phase 6.5 case (a); `browser-*.png|.log` ← the screenshot or page log of
-     case (b); `emulator-*.png|.log` ← the device or emulator screenshot or log. A method with
-     no evidence file has no row. Repository template: its own test section, in its own
+     `browser`, `emulator`), then the `Not tested:` line. The evidence files are already there: the
+     verifier wrote `automated-verification.md` (Phase 6, every tier) and the runtime lane wrote
+     `api-*.log`, `browser-*.png|.log`, `emulator-*.png|.log` (Phase 6.5); when the tier
+     produced `05-qa.md`, you may add `automated-qa.md` with Write from its PoC excerpt. A
+     method with no evidence file has no row. Repository template: its own test section, in its own
      format.
    - **A decision proposed by this run is NOT part of the PR body.** When Phase 3
      saved a `## Proposed decision` block, it is reported only in Phase 8, where the

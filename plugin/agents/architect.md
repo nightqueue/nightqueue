@@ -176,6 +176,7 @@ The result of this axis becomes the `## Usage coverage` section of Step 5.
 
 If there are no Explore findings (simple tier), locate it yourself with Grep/Glob.
 Read only the 3-5 files most relevant to the objective — do not read everything.
+Read `<Repository>/CLAUDE.md` yourself when it exists — the orchestrator no longer pastes it.
 
 **Textual pattern refactoring** (sentence case, naming convention, standardization
 of copy/strings): the Explore is sampled, not exhaustive. For that kind of task,
@@ -343,9 +344,9 @@ in full (## Implementation plan + ## Assumptions + ## Pre-mortem +
 ## Usage coverage when its conditions apply,
 ## Proposed decision when this plan takes one, and
 ## Requires user confirmation when there is one), to
-ARTIFACT_PATH via Write. Return to the orchestrator ≤10 lines: status + path of the
-artifact + whether it requires user confirmation + open items. Do NOT paste the complete
-sections in the answer.
+ARTIFACT_PATH via Write. Return to the orchestrator ≤10 lines: status + the handoff file
+written (`03-plan.md`) + whether it requires user confirmation + open items — never file
+contents, never a diff. Do NOT paste the complete sections in the answer.
 
 **If ARTIFACT_PATH was NOT provided** (direct invocation): end the answer with
 ALL the sections below, in full, as before.

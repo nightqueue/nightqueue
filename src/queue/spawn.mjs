@@ -11,6 +11,7 @@ import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { escapePromptMarkers } from "../memory/prompt-safety.mjs";
 import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "./home-guard.mjs";
 import { holdJobAwake } from "./keep-awake.mjs";
+import { PLUGIN_DIR_ENV } from "./orchestrator-scope.mjs";
 import { isSafeSegment } from "./resume.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 
@@ -322,7 +323,7 @@ export function spawnClaude({
     stream.on("error", (err) => reportLogFailure(logPath, err));
     const resolved = resolveBinImpl(env);
     const args = buildArgs({ prompt, resumeSessionId, env, jobId, inheritUserEnvironment });
-    const runtimeEnv = { ...BG_WAIT_CEILING_ENV, ...noOrphanTaskEnv(bashTimeoutS) };
+    const runtimeEnv = { ...BG_WAIT_CEILING_ENV, ...noOrphanTaskEnv(bashTimeoutS), [PLUGIN_DIR_ENV]: pluginDir() };
     const childEnv = jobId === null ? { ...env, ...runtimeEnv } : { ...env, ...jobIdentity(env, jobId), ...runtimeEnv };
     const child = spawnImpl(resolved?.bin ?? "claude", args, { cwd, env: childEnv, stdio: SPAWN_STDIO });
     if (Number.isInteger(child?.pid)) holdJobAwakeImpl({ pid: child.pid, env });

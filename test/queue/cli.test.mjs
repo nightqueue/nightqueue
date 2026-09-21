@@ -931,6 +931,29 @@ test("queue status of a job shows a host-command counter only when it is not zer
   assert.equal(someJson.tasks_killed, 1);
 });
 
+test("queue status of a job shows the five orchestrator counters, zero included, on the text and on --json", (t) => {
+  const env = makeCliHome(t, "cli-status-orchestrator");
+  const id = enqueue(env, "measured job");
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'done', orch_turns = 49, orch_reads = 0, orch_bash = 35, orch_bash_explore = 0, orch_ctx_last = 195000, tasks_backgrounded = 1 WHERE id = ?")
+    .run(id);
+
+  const status = runCli(env, ["queue", "status", String(id)]);
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /^orch_turns {6}49$/m);
+  assert.match(status.stdout, /^orch_reads {6}0$/m);
+  assert.match(status.stdout, /^orch_bash {7}35$/m);
+  assert.match(status.stdout, /^orch_bash_explore 0$/m);
+  assert.match(status.stdout, /^orch_ctx_last {3}195000$/m);
+  assert.match(status.stdout, /^tasks_backgrounded 1$/m);
+
+  const json = JSON.parse(runCli(env, ["queue", "status", String(id), "--json"]).stdout).job;
+  assert.deepEqual(
+    [json.orch_turns, json.orch_reads, json.orch_bash, json.orch_bash_explore, json.orch_ctx_last],
+    [49, 0, 35, 0, 195000],
+  );
+});
+
 test("queue status of a job shows baseline_ctx the same way it shows bash_timeouts: on the text and on --json, absent when there is none", (t) => {
   const env = makeCliHome(t, "cli-status-baseline-ctx");
   const withoutOne = enqueue(env, "never recorded a baseline");

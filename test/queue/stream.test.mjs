@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { classifyJobResult } from "../../src/queue/classify.mjs";
+import { orchestratorRoots } from "../../src/queue/orchestrator-scope.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
 import {
   extractBaselineCtx,
@@ -10,6 +11,8 @@ import {
   extractPrUrlFromStream,
   extractPublishedPrUrl,
   extractHostCommandCounts,
+  extractOrchestratorCounts,
+  extractOrchestratorSessionIds,
   extractResultText,
   extractSessionIdFromEventLine,
   extractSlugFromEventLine,
@@ -28,6 +31,7 @@ import {
   runtimeKillFromStream,
   sawDisabledBackgroundTask,
   sumHostCommandCounts,
+  sumOrchestratorCounts,
   sumUsage,
   tokensFromEventLine,
 } from "../../src/queue/stream.mjs";
@@ -529,6 +533,99 @@ test("host command counts sum across attempts, the same way the usage does", () 
   assert.deepEqual(sumHostCommandCounts([first, null, second]), { bashTimeouts: 3, tasksBackgrounded: 1, tasksKilled: 1 });
   assert.deepEqual(sumHostCommandCounts([]), { bashTimeouts: 0, tasksBackgrounded: 0, tasksKilled: 0 });
   assert.deepEqual(sumHostCommandCounts(null), { bashTimeouts: 0, tasksBackgrounded: 0, tasksKilled: 0 });
+});
+
+const ORCH_RUNS = "/ns-orchestrator-test-home/runs";
+const ORCH_WORKTREE = "/ns-orchestrator-test-repo/.claude/worktrees/feat+x";
+const ORCH_SESSION = "e8137e49-9348-4b40-a4dc-dfc52cc663fa";
+
+// An assistant event shaped like the CLI's stream-json: the orchestrator's has a null parent, a subagent's names its Agent call.
+function orchAssistant({ id, tools = [], usage = null, parent = null, subagentType = null }) {
+  const message = {
+    model: "claude-opus-5",
+    id,
+    type: "message",
+    role: "assistant",
+    content: tools.map(([toolId, name, input]) => ({ type: "tool_use", id: toolId, name, input })),
+  };
+  if (usage) message.usage = usage;
+  const event = { type: "assistant", message, parent_tool_use_id: parent, session_id: ORCH_SESSION };
+  if (subagentType) event.subagent_type = subagentType;
+  return event;
+}
+
+// The stream of one orchestrator attempt that exercises every counter and every exclusion.
+function orchestratorStream() {
+  const usage = (input, read, created) => ({ input_tokens: input, output_tokens: 50, cache_read_input_tokens: read, cache_creation_input_tokens: created });
+  return [
+    line(systemInitEvent()),
+    line(orchAssistant({ id: "msg_1", tools: [["toolu_a", "Read", { file_path: `${ORCH_RUNS}/nightshift/s/01-triage.md` }]], usage: usage(10, 1000, 100) })),
+    line(orchAssistant({ id: "msg_1", tools: [["toolu_a", "Read", { file_path: `${ORCH_RUNS}/nightshift/s/01-triage.md` }]], usage: usage(10, 1000, 100) })),
+    line(orchAssistant({ id: "msg_2", tools: [["toolu_b", "Read", { file_path: `${ORCH_WORKTREE}/src/a.mjs` }]] })),
+    line(orchAssistant({ id: "msg_3", tools: [["toolu_c", "Grep", { pattern: "foo" }]] })),
+    line(orchAssistant({ id: "msg_4", tools: [["toolu_d", "Bash", { command: "git status --short" }], ["toolu_e", "Bash", { command: "git log --oneline" }]] })),
+    line(
+      orchAssistant({
+        id: "msg_5",
+        tools: [["toolu_f", "Read", { file_path: `${ORCH_WORKTREE}/src/b.mjs` }], ["toolu_g", "Bash", { command: "grep -rn x src" }]],
+        parent: "toolu_agent",
+        subagentType: "nightshift:coder",
+      }),
+    ),
+    "```",
+    line(orchAssistant({ id: "msg_fenced", tools: [["toolu_h", "Bash", { command: "cat x" }]] })),
+    "```",
+    line(orchAssistant({ id: "msg_6", usage: usage(5, 2000, 300) })),
+  ].join("\n");
+}
+
+test("the orchestrator counts: turns by message id, reads outside the roots, Bash and exploration Bash, and the last turn's context", () => {
+  const counts = extractOrchestratorCounts(orchestratorStream(), { roots: [ORCH_RUNS], cwd: ORCH_WORKTREE });
+  assert.deepEqual(counts, { turns: 5, reads: 2, bash: 2, bashExplore: 1, ctxLast: 2305 });
+});
+
+test("the orchestrator counts are zero on an empty stream, and a stream with no usage has no context", () => {
+  assert.deepEqual(extractOrchestratorCounts(""), { turns: 0, reads: 0, bash: 0, bashExplore: 0, ctxLast: null });
+  const noUsage = toNdjson([orchAssistant({ id: "msg_1", tools: [["toolu_a", "Glob", { pattern: "**/*.mjs" }]] })]);
+  assert.deepEqual(extractOrchestratorCounts(noUsage, { roots: [ORCH_RUNS], cwd: ORCH_WORKTREE }), {
+    turns: 1,
+    reads: 1,
+    bash: 0,
+    bashExplore: 0,
+    ctxLast: null,
+  });
+});
+
+test("an orchestrator Read of its own session's spilled tool result is never counted, another session's always is", () => {
+  const env = { NIGHTSHIFT_JOB_HOME: "/ns-orchestrator-test-home", HOME: "/ns-orchestrator-test-user", CLAUDE_CONFIG_DIR: "/ns-orchestrator-test-claude" };
+  const project = "/ns-orchestrator-test-claude/projects/-ns-orchestrator-test-repo";
+  const log = toNdjson([
+    orchAssistant({ id: "msg_1", tools: [["toolu_a", "Read", { file_path: `${project}/${ORCH_SESSION}/tool-results/toolu_big.txt` }]] }),
+    orchAssistant({ id: "msg_2", tools: [["toolu_b", "Read", { file_path: `${project}/other-session/tool-results/toolu_big.txt` }]] }),
+    orchAssistant({ id: "msg_3", tools: [["toolu_c", "Read", { file_path: "/ns-orchestrator-test-claude/settings.json" }]] }),
+  ]);
+  const own = [{ transcriptPath: `${project}/${ORCH_SESSION}.jsonl`, sessionId: ORCH_SESSION }];
+  assert.equal(extractOrchestratorCounts(log, { roots: orchestratorRoots(env, own), cwd: ORCH_WORKTREE }).reads, 2);
+  assert.equal(extractOrchestratorCounts(log, { roots: orchestratorRoots(env), cwd: ORCH_WORKTREE }).reads, 3);
+});
+
+test("the orchestrator's own session ids come from its assistant events only, fenced lines ignored", () => {
+  const subagent = { ...orchAssistant({ id: "msg_s", parent: "toolu_agent" }), session_id: "subagent-session" };
+  const fenced = { ...orchAssistant({ id: "msg_f" }), session_id: "fenced-session" };
+  const unsafe = { ...orchAssistant({ id: "msg_u" }), session_id: "../escape" };
+  const log = [toNdjson([orchAssistant({ id: "msg_1" }), subagent, unsafe, orchAssistant({ id: "msg_2" })]), "```", line(fenced), "```"].join("\n");
+  assert.deepEqual(extractOrchestratorSessionIds(log), [ORCH_SESSION]);
+  assert.deepEqual(extractOrchestratorSessionIds(""), []);
+});
+
+test("the orchestrator counts sum across attempts, the context of the last attempt that reported one winning", () => {
+  const first = { turns: 10, reads: 1, bash: 4, bashExplore: 2, ctxLast: 150000 };
+  const second = { turns: 5, reads: 0, bash: 1, bashExplore: 0, ctxLast: null };
+  const third = { turns: 3, reads: 0, bash: 2, bashExplore: 1, ctxLast: 90000 };
+  assert.deepEqual(sumOrchestratorCounts([first, null, second]), { turns: 15, reads: 1, bash: 5, bashExplore: 2, ctxLast: 150000 });
+  assert.deepEqual(sumOrchestratorCounts([first, second, third]), { turns: 18, reads: 1, bash: 7, bashExplore: 3, ctxLast: 90000 });
+  assert.deepEqual(sumOrchestratorCounts([]), { turns: 0, reads: 0, bash: 0, bashExplore: 0, ctxLast: null });
+  assert.deepEqual(sumOrchestratorCounts(null), { turns: 0, reads: 0, bash: 0, bashExplore: 0, ctxLast: null });
 });
 
 // An `assistant` event with an explicit `parent_tool_use_id`, the same shape the real CLI writes: `null` for the orchestrator's own turn, a tool_use id for a subagent's.

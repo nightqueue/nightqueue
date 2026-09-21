@@ -8,6 +8,36 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The resolve skill opens with the orchestrator's contract: it coordinates and nothing
+  else - it never reads source code, explores the repository or reviews a diff; what it
+  needs reaches it as a handoff file under the run directory or a subagent return of at
+  most 10 lines (verdict, the file written, open items - never file contents, never a
+  diff), in every tier. Its channels are the run's handoff files, the plugin's own files,
+  the `nightshift` MCP tools, the `Agent` tool and a closed Bash list.
+- Phase 6.5 is a runtime lane: the verifier in `Mode: RUNTIME` runs the API / browser /
+  emulator / acceptance cases, writes `06-runtime.md` (`## Runtime verdict`:
+  `CONFIRMED | NOT-MET | SYMPTOM-PERSISTS | NEEDS-DEVICE | UNAVAILABLE`, plus
+  `Diff applies plan:` on a bug) and its evidence files; `nightshift run check 06.5`
+  gates it. The same lane measures main for Phase 0.6 (`00-main-measure.md`). The runner
+  creates the run directory before the session starts.
+- The coder writes `04-implementation.md` in every tier (`## Modified files`, `## Done`,
+  `## Left`, `## How it was tested`), one coder lane per numbered stage, and the verifier
+  writes `evidence/automated-verification.md`.
+- Inside a queued job, the `PreToolUse` hook scopes the orchestrator's own main thread
+  (a call with no `agent_id`): `Read`/`Grep`/`Glob` only under the job's runs, the plugin
+  and the host's tool-result spill of its own session only (`<dirname(transcript_path)>/<session_id>/tool-results/`),
+  and `Bash` only for the closed list (`git rev-parse|worktree|status --short|add|commit|push|fetch|
+  branch --show-current|diff --stat…` - never `commit --amend`, a forced, deleting or mirroring
+  push, a global flag such as `-C`/`-c`/`--git-dir` nor a path to the binary -, `gh pr
+  view|list|status|checks|create`, `nightshift run check|log|index-save|commit|pr`). Anything else is denied with a reason that says to
+  hand the work to the phase's subagent. Subagents and sessions outside a job are
+  untouched, and the check fails open.
+- Each job records what its orchestrator did (schema v14): `orch_turns`, `orch_reads`
+  (reads outside the allowed roots), `orch_bash`, `orch_bash_explore` (Bash outside the
+  closed list) and `orch_ctx_last` (the last turn's context), counted from the stream and
+  summed over attempts. `queue status <id>` (human, `--json`, MCP) shows all five, zero
+  included, and `nightshift doctor` sums them over the last 20 finished jobs in an
+  `orchestrator` row that warns when a read or an exploration Bash shows up.
 - An unattended job now runs isolated from the operator's own environment by default:
   `--strict-mcp-config --setting-sources project,local` plus a `--settings` payload
   carrying only this package's own hooks and a `claudeMdExcludes` entry that keeps the
@@ -363,6 +393,17 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   merge and nothing to repair no longer opens a write connection at all.
 
 ### Changed
+
+- The `PreToolUse` hook matcher is now `Agent|Task|Bash|Read|Grep|Glob`. An existing
+  install picks it up only after `nightshift update` or `nightshift setup`;
+  `nightshift doctor` warns (`registered with an older tool matcher`) meanwhile. Known
+  limits: the hook enforces `Read`/`Grep`/`Glob`/`Bash` only - an orchestrator
+  `Write`/`Edit` into the repository is forbidden by the skill but not denied at runtime;
+  and every `Read`/`Grep`/`Glob` of every session on a machine with the hook installed
+  now starts the hook process (about 120 ms), which answers nothing outside a job.
+- `queue status <id>` separates a field name from its value by at least one space, so a
+  name longer than 15 characters (`orch_bash_explore`, `tasks_backgrounded`) no longer
+  glues to its value.
 
 - Inside a queued job, the `PreToolUse` hook now also sees `Bash`: a call with
   `run_in_background: true` is rewritten to the foreground with the same

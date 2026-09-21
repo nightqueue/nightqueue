@@ -180,7 +180,7 @@ test("every artifact gate of the skill is one `nightshift run check` call the CL
   const gate = passageAt("**Artifact gate (apply after every phase that expects a Write):**");
   assert.ok(gate.includes("`nightshift run check <NN>`"), "the gate is no longer a single command");
   assert.ok(gate.includes("Never check an artifact with `ls`"), "the gate no longer forbids checking an artifact by hand");
-  for (const phase of ["01", "02", "03", "04", "05a", "05"]) {
+  for (const phase of ["01", "02", "03", "04", "05a", "05", "06", "06.5"]) {
     assert.ok(SKILL.includes(`nightshift run check ${phase}`), `the gate of phase ${phase} is not a \`run check\` call`);
     assert.ok(CLI_RUN.includes(`["${phase}", {`), `the skill calls \`run check ${phase}\`, a phase the CLI does not know`);
   }

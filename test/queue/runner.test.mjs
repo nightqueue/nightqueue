@@ -108,6 +108,52 @@ test("a run that opens a pull request ends as done, with its facts, usage and pi
   assert.match(readFileSync(jobLogPath(id, env), "utf8"), /=== attempt 1 @ /);
 });
 
+// An orchestrator assistant event whose content is the given tool calls, in the shape stream-json writes them.
+function orchestratorToolsEvent(messageId, tools, usage) {
+  const event = assistantEvent("", { messageId, usage });
+  event.message.content = tools.map(([id, name, input]) => ({ type: "tool_use", id, name, input }));
+  return event;
+}
+
+test("a finished run persists what its orchestrator did: turns, reads outside the run, Bash, exploration Bash and the last context", async (t) => {
+  const env = makeHome(t, "runner-orchestrator-counts");
+  const repo = makeProject(t, env, "alpha");
+  const triage = join(runDir("alpha", SLUG, env), "01-triage.md");
+  env.CLAUDE_CONFIG_DIR = makeDir(t, "runner-orchestrator-counts-claude");
+  const hostProject = join(env.CLAUDE_CONFIG_DIR, "projects", "-repo-alpha");
+  mkdirSync(hostProject, { recursive: true });
+  writeFileSync(join(hostProject, `${SESSION_ID}.jsonl`), "{}\n");
+  const stdout = toNdjson([
+    systemInitEvent(),
+    slugEvent(),
+    orchestratorToolsEvent(
+      "msg_tools",
+      [
+        ["toolu_1", "Read", { file_path: triage }],
+        ["toolu_2", "Read", { file_path: join(repo, "src", "a.mjs") }],
+        ["toolu_s1", "Read", { file_path: join(hostProject, SESSION_ID, "tool-results", "toolu_big.txt") }],
+        ["toolu_s2", "Read", { file_path: join(hostProject, "another-session", "tool-results", "toolu_big.txt") }],
+        ["toolu_3", "Bash", { command: "git status --short" }],
+        ["toolu_4", "Bash", { command: "git log --oneline" }],
+      ],
+      { tokensIn: 10, cacheRead: 1000 },
+    ),
+    assistantEvent(noticeText("the pull request is open"), { messageId: "msg_notice", usage: { tokensIn: 5, cacheRead: 2000, cacheCreation: 300 } }),
+    resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
+  ]);
+  useFakeClaude(env, makeDir(t, "runner-orchestrator-counts-plan"), [{ stdout, exitCode: 0 }]);
+  const id = enqueue(env);
+
+  const cycle = await runJobCycle(env, id);
+
+  assert.equal(cycle.processed[0].status, "done");
+  const row = getJob(id, env);
+  assert.deepEqual(
+    { turns: row.orch_turns, reads: row.orch_reads, bash: row.orch_bash, explore: row.orch_bash_explore, context: row.orch_ctx_last },
+    { turns: 3, reads: 2, bash: 2, explore: 1, context: 2305 },
+  );
+});
+
 const DISABLED_BACKGROUND_ESCAPE_LINE =
   "⚠️ the host moved a command to the background although background tasks are disabled - the CLI may have dropped CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
 
@@ -723,6 +769,19 @@ test("the run is opened before the spawn, and the ONE declaration of the pipelin
   assert.equal(readFileSync(join(renamed, "01-triage.md"), "utf8"), "the artifact of the provisional run\n");
   assert.equal(JSON.parse(readFileSync(join(renamed, "state.json"), "utf8")).type, "bug/error");
   assert.equal(existsSync(runDir("alpha", "a-later-name", env)), false, "a second `SLUG:` line renamed the run again");
+});
+
+test("the runtime creates the run directory before the spawn, so the session never runs mkdir itself", async (t) => {
+  const { env, planPath } = makeRunnerHome(t, "runner-run-dir", [{ stdout: doneStream(), exitCode: 0 }]);
+  const id = enqueue(env);
+  const provisional = runDir("alpha", SLUG, env);
+  const plan = JSON.parse(readFileSync(planPath, "utf8"));
+  writeFileSync(planPath, JSON.stringify({ ...plan, probePath: provisional }));
+  assert.equal(existsSync(provisional), false, "the test home already had the run directory");
+
+  await runJobCycle(env, id);
+
+  assert.equal(fakeCalls(planPath)[0].probeExisted, true, "the session started before its run directory existed");
 });
 
 test("a slug another run of the project already took is refused, and the job keeps the one the runtime gave it", async (t) => {

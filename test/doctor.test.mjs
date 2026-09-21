@@ -16,7 +16,7 @@ import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
 import { addProject } from "../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
-import { makeHostEnv, writeLegacyShim } from "../test-support/host.mjs";
+import { makeHostEnv, readSettingsFile, writeLegacyShim, writeSettingsFixture } from "../test-support/host.mjs";
 import { makeDir, makeProject, seedLegacyV8Home } from "../test-support/memory.mjs";
 import { addWorktree, deadPid, lockWorktree, publishedCheckout } from "../test-support/worktrees.mjs";
 
@@ -87,6 +87,22 @@ test("a host that went through setup has no failing check", async (t) => {
   assert.equal(statusOf(report, "path"), "warn");
   assert.equal(statusOf(report, "embedding"), "warn");
   assert.equal(report.checks.some((check) => check.name === "embedding audit"), false, "the audit ran on an absent prefix");
+});
+
+test("a PreToolUse hook registered with an older tool matcher warns, pointing at setup", async (t) => {
+  const host = makeHostEnv(t, "doctor-stale-matcher");
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+  const settings = readSettingsFile(host.configDir);
+  settings.hooks.PreToolUse[0].matcher = "Agent|Task|Bash";
+  writeSettingsFixture(host.configDir, settings);
+
+  const { code, report } = await diagnose(host.env);
+  const row = report.checks.find((check) => check.name === "hook PreToolUse");
+  assert.deepEqual(
+    { status: row.status, detail: row.detail, hint: row.hint },
+    { status: "warn", detail: "registered with an older tool matcher", hint: "run `nightshift setup`" },
+  );
+  assert.equal(code, 0, "a stale matcher must never fail the diagnosis");
 });
 
 test("runtime, shim, path and embedding are checked, and the audit only once the prefix is there", async (t) => {
@@ -231,7 +247,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v13/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v14/);
 });
 
 test("the database check warns about a v8 home and points at the command that migrates it", async (t) => {
@@ -241,7 +257,7 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, expected v13/);
+  assert.match(database.detail, /schema v8, expected v14/);
   assert.match(database.hint, /run `nightshift queue status` once to migrate it/);
   assert.doesNotMatch(database.hint, /nightshift memory stats/);
 });
@@ -254,7 +270,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, expected v13/);
+  assert.match(database.detail, /schema v99, expected v14/);
   assert.match(database.hint, /upgrade nightshift/);
 });
 
@@ -445,6 +461,76 @@ test("the host commands check sums the counters of the last finished jobs, warni
     { status: hostCommandsCheck(withKill).status, detail: hostCommandsCheck(withKill).detail },
     { status: "warn", detail: "host commands: 0 backgrounded, 1 killed, 3 timed out in the last 20 jobs" },
   );
+});
+
+// The status and detail of the orchestrator check.
+function orchestratorCheck(report) {
+  const row = report.checks.find((entry) => entry.name === "orchestrator");
+  return { status: row?.status, detail: row?.detail };
+}
+
+// Finishes a job straight in the database with the given orchestrator counters.
+function finishedWithOrchestrator(env, counters) {
+  const id = addJob({ project: "alpha", prompt: "measured" }, env).id;
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'done', orch_turns = ?, orch_reads = ?, orch_bash = ?, orch_bash_explore = ?, orch_ctx_last = ? WHERE id = ?")
+    .run(counters.turns, counters.reads, counters.bash, counters.explore, counters.context, id);
+  closeDb(env);
+  return id;
+}
+
+test("the orchestrator check sums the counters of the last 20 finished jobs, warning once the orchestrator read the repository or explored", async (t) => {
+  const host = makeHostEnv(t, "doctor-orchestrator");
+  const { report: noDatabase } = await diagnose(host.env);
+  assert.deepEqual(orchestratorCheck(noDatabase), {
+    status: "ok",
+    detail: "orchestrator: 0 turns, 0 reads outside the run, 0 Bash (0 exploration), last context 0 (avg 0) in the last 20 jobs (0 measured)",
+  });
+
+  makeProject(t, host.env, "alpha");
+  const unmeasured = addJob({ project: "alpha", prompt: "finished before the counters" }, host.env).id;
+  openDb(host.env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(unmeasured);
+  closeDb(host.env);
+  finishedWithOrchestrator(host.env, { turns: 10, reads: 0, bash: 4, explore: 0, context: 100000 });
+  finishedWithOrchestrator(host.env, { turns: 20, reads: 0, bash: 6, explore: 0, context: 150000 });
+  const { report: healthy } = await diagnose(host.env);
+  assert.deepEqual(orchestratorCheck(healthy), {
+    status: "ok",
+    detail: "orchestrator: 30 turns, 0 reads outside the run, 10 Bash (0 exploration), last context 250000 (avg 125000) in the last 20 jobs (2 measured)",
+  });
+
+  finishedWithOrchestrator(host.env, { turns: 49, reads: 4, bash: 35, explore: 17, context: 195000 });
+  const { report: regressed } = await diagnose(host.env);
+  assert.deepEqual(orchestratorCheck(regressed), {
+    status: "warn",
+    detail: "orchestrator: 79 turns, 4 reads outside the run, 45 Bash (17 exploration), last context 445000 (avg 148333) in the last 20 jobs (3 measured)",
+  });
+
+  for (let index = 0; index < 20; index += 1) finishedWithOrchestrator(host.env, { turns: 1, reads: 0, bash: 0, explore: 0, context: 10 });
+  const { report: sampled } = await diagnose(host.env);
+  assert.deepEqual(orchestratorCheck(sampled), {
+    status: "ok",
+    detail: "orchestrator: 20 turns, 0 reads outside the run, 0 Bash (0 exploration), last context 200 (avg 10) in the last 20 jobs (20 measured)",
+  });
+});
+
+test("the orchestrator check reads a database without the counter columns as zero and never writes it", async (t) => {
+  const host = makeHostEnv(t, "doctor-orchestrator-old-db");
+  makeProject(t, host.env, "alpha");
+  const id = addJob({ project: "alpha", prompt: "old row" }, host.env).id;
+  const db = openDb(host.env);
+  db.prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(id);
+  for (const column of ["orch_turns", "orch_reads", "orch_bash", "orch_bash_explore", "orch_ctx_last"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
+  closeDb(host.env);
+
+  const { report } = await diagnose(host.env);
+  assert.deepEqual(orchestratorCheck(report), {
+    status: "ok",
+    detail: "orchestrator: 0 turns, 0 reads outside the run, 0 Bash (0 exploration), last context 0 (avg 0) in the last 20 jobs (0 measured)",
+  });
+  const raw = new DatabaseSync(dbPath(host.env), { readOnly: true });
+  t.after(() => raw.close());
+  assert.equal(raw.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "orch_turns"), false, "the doctor migrated the database");
 });
 
 // A decision proposed by the given job, stamped straight in the database.

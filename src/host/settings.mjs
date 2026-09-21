@@ -10,7 +10,7 @@ const HOOK_EVENTS = [
   { event: "SessionStart", hook: "session-start", timeout: 10 },
   { event: "UserPromptSubmit", hook: "prompt-context", timeout: 10 },
   { event: "SessionEnd", hook: "reflect", timeout: 15 },
-  { event: "PreToolUse", hook: "agent-foreground", timeout: 5, matcher: "Agent|Task|Bash" },
+  { event: "PreToolUse", hook: "agent-foreground", timeout: 5, matcher: "Agent|Task|Bash|Read|Grep|Glob" },
 ];
 
 // Command line registered in the host for one hook of this package.
@@ -66,6 +66,11 @@ function groupIsExclusive(group) {
   return entries.length > 0 && entries.every((entry) => isOwnCommand(entry?.command));
 }
 
+// Tells whether the matcher of the group holding our entry is the wanted one, a group shared with a third party always counting as current.
+function matcherIsCurrent(group, matcher) {
+  return !groupIsExclusive(group) || group.matcher === matcher;
+}
+
 // Entries of one event that belong to this package, each with the group holding it.
 function ownEntries(groups) {
   const found = [];
@@ -98,7 +103,7 @@ function mergeEvent(data, { event, command, timeout, matcher }) {
   const [first, ...extra] = own;
   const entryCurrent = first.entry.type === "command" && first.entry.command === command && first.entry.timeout === timeout;
   const exclusive = groupIsExclusive(first.group);
-  const matcherCurrent = !exclusive || first.group.matcher === matcher;
+  const matcherCurrent = matcherIsCurrent(first.group, matcher);
   first.entry.type = "command";
   first.entry.command = command;
   first.entry.timeout = timeout;
@@ -133,7 +138,12 @@ export function removeHooks(data, env = process.env) {
 export function hookStatus(data, env = process.env) {
   return desiredHooks(env).map((hook) => {
     const [own] = ownEntries(eventGroups(data, hook.event));
-    return { event: hook.event, expected: hook.command, current: own ? own.entry.command : null };
+    return {
+      event: hook.event,
+      expected: hook.command,
+      current: own ? own.entry.command : null,
+      matcherCurrent: own ? matcherIsCurrent(own.group, hook.matcher) : true,
+    };
   });
 }
 

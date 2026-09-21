@@ -23,8 +23,9 @@ function nextAttempt(total) {
 }
 
 // Records the argv and the job id of this call, so a test can assert the command the runner really built.
-function recordCall() {
+function recordCall(plan) {
   const call = { pid: process.pid, argv: process.argv.slice(2), jobId: process.env.NIGHTSHIFT_JOB_ID ?? null, cwd: process.cwd() };
+  if (typeof plan.probePath === "string") call.probeExisted = existsSync(plan.probePath);
   appendFileSync(CALLS_PATH, `${JSON.stringify(call)}\n`);
 }
 
@@ -45,7 +46,7 @@ async function play(step) {
 // Runs the fake CLI: it never touches the network and never reads the real Claude configuration.
 async function main() {
   const plan = readPlan();
-  recordCall();
+  recordCall(plan);
   await play(plan.attempts[nextAttempt(plan.attempts.length)]);
 }
 

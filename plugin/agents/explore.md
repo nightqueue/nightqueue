@@ -96,8 +96,9 @@ answer. Failure, unavailable tool or empty return does NOT block — move on wit
 
 **If ARTIFACT_PATH was provided in the prompt:** write ALL the sections below,
 complete, to ARTIFACT_PATH via Write. Return to the orchestrator ≤10 lines:
-status + artifact path + "index saved: N files" (or "not saved:
-<reason>") + open items. Do NOT paste the complete sections in the answer.
+status + the handoff file written (`02-explore.md`) + "index saved: N files" (or "not saved:
+<reason>") + open items — never file contents, never a diff. Do NOT paste the complete
+sections in the answer.
 
 **If ARTIFACT_PATH was NOT provided** (direct invocation): end the answer
 with ALL the sections below, complete, as before.

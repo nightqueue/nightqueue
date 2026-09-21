@@ -435,6 +435,7 @@ test("the child env disables background tasks and carries the configured bash ti
     assert.equal(captured.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, "1");
     assert.equal(captured.BASH_DEFAULT_TIMEOUT_MS, "120000");
     assert.equal(captured.BASH_MAX_TIMEOUT_MS, "240000");
+    assert.equal(captured.NIGHTSHIFT_PLUGIN_DIR, pluginDir(), "the child does not know the plugin dir the orchestrator may read");
   }
 });
 

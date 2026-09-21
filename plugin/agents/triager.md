@@ -243,8 +243,8 @@ is not what is wanted — the pipeline **continues** and the one who decides to 
 
 **If ARTIFACT_PATH was provided in the prompt:** write ALL the sections below,
 complete, to ARTIFACT_PATH via Write. Return to the orchestrator ≤10 lines: verdict
-+ artifact path + whether you issued an Intent/Depth note + open items. Do NOT
-paste the complete sections in the answer.
++ the handoff file written (`01-triage.md`) + whether you issued an Intent/Depth note + open
+items — never file contents, never a diff. Do NOT paste the complete sections in the answer.
 
 **If ARTIFACT_PATH was NOT provided** (direct invocation): end the answer with
 ALL the sections below, complete, as before.

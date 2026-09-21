@@ -34,7 +34,7 @@ test("each event carries its own timeout, and the reflection gets the longest on
     { event: "SessionStart", command: hookCommand("session-start", ENV), timeout: 10 },
     { event: "UserPromptSubmit", command: hookCommand("prompt-context", ENV), timeout: 10 },
     { event: "SessionEnd", command: hookCommand("reflect", ENV), timeout: 15 },
-    { event: "PreToolUse", command: hookCommand("agent-foreground", ENV), timeout: 5, matcher: "Agent|Task|Bash" },
+    { event: "PreToolUse", command: hookCommand("agent-foreground", ENV), timeout: 5, matcher: "Agent|Task|Bash|Read|Grep|Glob" },
   ]);
 });
 
@@ -54,7 +54,7 @@ test("the merge appends one group per event and says so", () => {
   ]);
   assert.deepEqual(data.hooks.PreToolUse, [
     {
-      matcher: "Agent|Task|Bash",
+      matcher: "Agent|Task|Bash|Read|Grep|Glob",
       hooks: [{ type: "command", command: AGENT_FOREGROUND.command, timeout: AGENT_FOREGROUND.timeout }],
     },
   ]);
@@ -129,13 +129,14 @@ test("the status of the hooks compares the registered command with the wanted on
   const data = thirdPartySettings();
   data.hooks.SessionEnd[0].hooks.push({ type: "command", command: "node /old/bin/nightshift.mjs hook reflect" });
   const status = hookStatus(data, ENV);
-  assert.deepEqual(status[0], { event: "SessionStart", expected: SESSION_START.command, current: null });
+  assert.deepEqual(status[0], { event: "SessionStart", expected: SESSION_START.command, current: null, matcherCurrent: true });
   assert.deepEqual(status[2], {
     event: "SessionEnd",
     expected: SESSION_END.command,
     current: "node /old/bin/nightshift.mjs hook reflect",
+    matcherCurrent: true,
   });
-  assert.deepEqual(status[3], { event: "PreToolUse", expected: AGENT_FOREGROUND.command, current: null });
+  assert.deepEqual(status[3], { event: "PreToolUse", expected: AGENT_FOREGROUND.command, current: null, matcherCurrent: true });
   mergeHooks(data, ENV);
   assert.equal(hookStatus(data, ENV)[2].current, SESSION_END.command);
   assert.equal(hookStatus(data, ENV)[3].current, AGENT_FOREGROUND.command);
@@ -205,19 +206,41 @@ test("the matcher of PreToolUse is written on a fresh merge", () => {
   const data = {};
   const [status] = mergeHooks(data, ENV).filter((entry) => entry.event === "PreToolUse");
   assert.equal(status.status, "created");
-  assert.equal(data.hooks.PreToolUse[0].matcher, "Agent|Task|Bash");
+  assert.equal(data.hooks.PreToolUse[0].matcher, "Agent|Task|Bash|Read|Grep|Glob");
 });
 
 test("a wrong or missing matcher on our own group is repaired, and the repair counts as updated", () => {
   const wrong = { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: AGENT_FOREGROUND.command, timeout: AGENT_FOREGROUND.timeout }] }] } };
   const [wrongStatus] = mergeHooks(wrong, ENV).filter((entry) => entry.event === "PreToolUse");
   assert.equal(wrongStatus.status, "updated");
-  assert.equal(wrong.hooks.PreToolUse[0].matcher, "Agent|Task|Bash");
+  assert.equal(wrong.hooks.PreToolUse[0].matcher, "Agent|Task|Bash|Read|Grep|Glob");
 
   const missing = { hooks: { PreToolUse: [{ hooks: [{ type: "command", command: AGENT_FOREGROUND.command, timeout: AGENT_FOREGROUND.timeout }] }] } };
   const [missingStatus] = mergeHooks(missing, ENV).filter((entry) => entry.event === "PreToolUse");
   assert.equal(missingStatus.status, "updated");
-  assert.equal(missing.hooks.PreToolUse[0].matcher, "Agent|Task|Bash");
+  assert.equal(missing.hooks.PreToolUse[0].matcher, "Agent|Task|Bash|Read|Grep|Glob");
+});
+
+test("desiredHooks carries the orchestrator-scope matcher, the one source every consumer of the hook list reads", () => {
+  const preToolUse = desiredHooks(ENV).filter((hook) => hook.event === "PreToolUse");
+  assert.equal(preToolUse.length, 1);
+  assert.equal(preToolUse[0].matcher, "Agent|Task|Bash|Read|Grep|Glob");
+});
+
+test("the status flags our own group registered with an older matcher, never a group shared with a third party", () => {
+  const stale = { hooks: { PreToolUse: [{ matcher: "Agent|Task|Bash", hooks: [{ type: "command", command: AGENT_FOREGROUND.command, timeout: 5 }] }] } };
+  assert.equal(hookStatus(stale, ENV)[3].matcherCurrent, false);
+  mergeHooks(stale, ENV);
+  assert.equal(hookStatus(stale, ENV)[3].matcherCurrent, true);
+
+  const shared = {
+    hooks: {
+      PreToolUse: [
+        { matcher: "Bash", hooks: [{ type: "command", command: "other-tool guard" }, { type: "command", command: AGENT_FOREGROUND.command, timeout: 5 }] },
+      ],
+    },
+  };
+  assert.equal(hookStatus(shared, ENV)[3].matcherCurrent, true);
 });
 
 test("the matcher of a group shared with a third-party entry is left alone", () => {

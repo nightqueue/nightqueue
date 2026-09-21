@@ -95,6 +95,47 @@ test("the qa-guardian calls the sweep and still resolves its own plugin paths", 
   );
 });
 
+// The orchestrator only coordinates, so every lane returns pointers to its handoff file, never its contents.
+test("each agent returns a short pointer, never file contents nor a diff", () => {
+  for (const agent of AGENTS) {
+    assert.ok(readAgent(agent).includes("never file contents, never a diff"), `${agent} may still return file contents or a diff`);
+  }
+});
+
+// The coder writes the sections the stage lanes append to, and reads with the discipline that keeps a lane small.
+test("the coder writes the staged handoff sections and reads with discipline", () => {
+  const agent = readAgent("coder");
+  for (const section of ["## Done", "## Left", "## How it was tested", "## Reading discipline (every lane)"]) {
+    assert.ok(agent.includes(section), `coder.md does not name \`${section}\``);
+  }
+  assert.ok(agent.includes("under ~300 lines"), "coder.md lost the whole-file Read threshold");
+  assert.ok(agent.includes("when the prompt names `Stage: <n>`"), "coder.md does not scope a lane to its stage");
+});
+
+// Phase 6.5 moved into the verifier, so the verifier must write the verdict and the plan line the skill branches on.
+test("the verifier owns the runtime lane the skill reads", () => {
+  const agent = readAgent("verifier");
+  const skill = readFileSync(SKILL, "utf8");
+  for (const phrase of ["## Mode: RUNTIME (Phase 6.5 lane)", "## Runtime verdict", "Diff applies plan: yes|no"]) {
+    assert.ok(agent.includes(phrase), `verifier.md does not carry \`${phrase}\``);
+  }
+  for (const verdict of ["CONFIRMED", "NOT-MET", "SYMPTOM-PERSISTS", "NEEDS-DEVICE", "UNAVAILABLE"]) {
+    assert.ok(agent.includes(`\`${verdict}\``), `verifier.md does not name the \`${verdict}\` verdict`);
+    assert.ok(skill.includes(`\`${verdict}\``), `the skill does not route the \`${verdict}\` verdict`);
+  }
+  assert.ok(agent.includes("the one who must try is this step 6.5, not the coder."), "the unavailable rule did not move");
+  assert.ok(agent.includes("evidence/automated-verification.md"), "the verifier does not write its evidence file");
+  assert.equal(skill.includes("Decide the path by the change:"), false, "the skill still carries the runtime cases");
+});
+
+// One coder lane per stage keeps the binding rule of Phase 0: the verifier runs between stages.
+test("the stage lanes keep the verifier between stages", () => {
+  const skill = readFileSync(SKILL, "utf8").replace(/\s+/g, " ");
+  assert.ok(skill.includes("Phase 4 implements stage by stage with the verifier between stages"), "Phase 0 lost the binding stage rule");
+  assert.ok(skill.includes("then the verifier between stages"), "the one-lane-per-stage text skips the verifier between stages");
+  assert.equal(skill.includes("Phase 5 and Phase 6 run once"), false, "the stage lanes still defer every verification to the end");
+});
+
 // The agents have a standalone caller too, so the contract must stay safe for a prompt with no Project.
 test("each agent states the fallback for a prompt that carries no Project", () => {
   for (const agent of AGENTS) {

@@ -23,10 +23,21 @@ The run is isolated in a git worktree, and the host refuses any Bash command it 
 - A search for a file or a pattern stays inside the worktree or the project checkout — never from `/` or the home (the job refuses them) — and a plugin file lives under `plugin/` of the checkout, never elsewhere on disk.
 - Every test command (`npm test`, `node --test ...`, a framework runner) runs under an explicit `timeout <seconds>` sized to the suite, e.g. `timeout 120 node --test test/queue/classify.test.mjs`: inside a job a command that outlives the Bash timeout is KILLED, not backgrounded, so give a long command a Bash `timeout` parameter sized to it, up to `queue.bashTimeoutS.max`, instead of letting the default kill it.
 
+## Reading discipline (every lane)
+
+- Locate first: Grep inside the worktree, or the `index_recall` paths the prompt names — never
+  open a file to find where something is.
+- Read with `offset`/`limit` around what was located; a whole-file Read only for a file under
+  ~300 lines (check the size with `wc -l <file>` when unsure).
+- Never re-read a file already read in this lane unless you edited it since.
+- Read each handoff file of the prompt once, at the start.
+
 ## Operating mode
 
 - **Pipeline (/resolve):** you receive the architect's plan. Execute it faithfully
-  — a deviation from the plan is reported, not improvised.
+  — a deviation from the plan is reported, not improvised. **One lane per stage:** when the
+  prompt names `Stage: <n>`, implement only that stage; read `04-implementation.md` first for
+  what earlier lanes did.
 - **Standalone (direct invocation):** there is no plan. Before editing, write your
   approach in 2-4 lines (target files, what changes, definition of done) and
   follow it. An ambiguous request with 2+ interpretations → ask before editing, never
@@ -257,14 +268,22 @@ incomplete. Leaving one occurrence out of the pattern = an incomplete change.
 
 ## Required output
 
-**If ARTIFACT_PATH was provided in the prompt:** write the `## Modified
-files` section (+ notes on deviations from the plan, when there are any) — listing each file
-created or modified, one per line, as an absolute path — to ARTIFACT_PATH via
-Write. On a re-run of the fix loop, rewrite the complete cumulative list.
-Return to the orchestrator ≤10 lines: status + artifact path + files touched
-+ open items; do NOT paste the complete section in the answer.
+**If ARTIFACT_PATH was provided in the prompt** (every tier): write to ARTIFACT_PATH via
+Write, in this order:
 
-**If ARTIFACT_PATH was NOT provided** (direct invocation or Fast Lite Track):
+1. `## Modified files` — cumulative, each file created or modified as an absolute path, one per
+   line, nothing else (the gate reads it).
+2. `## Done` — one `### Stage <n> — <title>` block per stage (a single block when the brief has
+   no stages).
+3. `## Left` — what is left or deviates from the plan, or `nothing`.
+4. `## How it was tested` — the commands run and their result.
+
+A stage lane appends its `### Stage <n>` block and rewrites the cumulative list; a re-run of the
+fix loop rewrites the cumulative list too. Return to the orchestrator ≤10 lines: status + the
+handoff file written (`04-implementation.md`) + files touched + open items — never file
+contents, never a diff.
+
+**If ARTIFACT_PATH was NOT provided** (direct invocation):
 end the answer with the complete `## Modified files` section, as before.
 
 **Citing an applied lesson:** if a lesson from the `## Applicable lessons` section of your

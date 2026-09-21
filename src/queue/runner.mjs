@@ -27,12 +27,15 @@ import {
 import { holdRunnerAwake } from "./keep-awake.mjs";
 import { killProcess, ownRunnerRecord } from "./registry.mjs";
 import { runMaintenance } from "./maintenance.mjs";
-import { clearRunOutcome, decideResume, isSafeSegment, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
+import { clearRunOutcome, decideResume, isRunPath, isSafeSegment, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
 import { recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
 import { buildPrompt, IDLE_TIMEOUT_S, provisionalSlug, spawnClaude } from "./spawn.mjs";
+import { orchestratorRoots, sessionTranscriptPath } from "./orchestrator-scope.mjs";
 import {
   extractBaselineCtx,
   extractHostCommandCounts,
+  extractOrchestratorCounts,
+  extractOrchestratorSessionIds,
   extractRateLimitFromEventLine,
   extractSessionIdFromEventLine,
   extractSlugFromEventLine,
@@ -42,6 +45,7 @@ import {
   isPrUrl,
   sawDisabledBackgroundTask,
   sumHostCommandCounts,
+  sumOrchestratorCounts,
   sumUsage,
 } from "./stream.mjs";
 import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
@@ -287,6 +291,30 @@ function wasRateLimitParked(job) {
   return typeof job?.not_before === "string" && job.not_before.trim() !== "";
 }
 
+// The roots the hook allowed the orchestrator of one attempt, its own sessions' spilled tool results included.
+function attemptOrchestratorRoots(log, env) {
+  const sessions = extractOrchestratorSessionIds(log).map((sessionId) => ({ sessionId, transcriptPath: sessionTranscriptPath(env, sessionId) }));
+  return orchestratorRoots(env, sessions);
+}
+
+// Records what one attempt's stream measured: its tokens, its host commands, its orchestrator's activity and, on the first fresh (not resumed) attempt, the orchestrator's baseline context.
+function tallyAttempt(tally, log, ctx, { resumed = false } = {}) {
+  if (tally.baselineCtx === null && !resumed) tally.baselineCtx = extractBaselineCtx(log);
+  tally.usages.push(extractUsage(log));
+  tally.hostCommands.push(extractHostCommandCounts(log));
+  tally.orchestrator.push(extractOrchestratorCounts(log, { roots: attemptOrchestratorRoots(log, ctx.env), cwd: ctx.cwd }));
+}
+
+// The totals of every attempt tallied so far, in the shape the finish of a job persists.
+function attemptTotals(tally) {
+  return {
+    usage: sumUsage(tally.usages),
+    hostCommands: sumHostCommandCounts(tally.hostCommands),
+    orchestrator: sumOrchestratorCounts(tally.orchestrator),
+    baselineCtx: tally.baselineCtx,
+  };
+}
+
 // Runs the attempts of a job, re-arming the lease before each one and backing off between retries.
 async function runAttempts(job, ctx) {
   const { env, deps } = ctx;
@@ -303,13 +331,10 @@ async function runAttempts(job, ctx) {
   const pauseSignalImpl = deps.pauseSignalImpl ?? (() => ownPauseUntilMs(env) ?? pauseUntilMs(facts.pause));
   const resumeForced = resumeSessionEnabled(env) || wasRateLimitParked(job);
   const ownership = { lost: false };
-  const usages = [];
-  const hostCommandCounts = [];
-  let baselineCtx = null;
+  const tally = { usages: [], hostCommands: [], orchestrator: [], baselineCtx: null };
   let attempt = job.attempts;
   while (true) {
-    if (!(await renew(job, env)))
-      return { lost: true, facts, attempt, usage: sumUsage(usages), hostCommands: sumHostCommandCounts(hostCommandCounts), baselineCtx, outcome: null, result: null };
+    if (!(await renew(job, env))) return { lost: true, facts, attempt, ...attemptTotals(tally), outcome: null, result: null };
     if (isSafeSegment(facts.slug)) clearRunOutcome({ project: job.project, slug: facts.slug, env });
     const resumeSessionId = resumeForced ? facts.sessionId : null;
     const result = await spawnClaude({
@@ -332,23 +357,20 @@ async function runAttempts(job, ctx) {
       bashTimeoutS: deps.bashTimeoutS,
       inheritUserEnvironment: deps.inheritUserEnvironment,
     });
-    if (ownership.lost)
-      return { lost: true, facts, attempt, usage: sumUsage(usages), hostCommands: sumHostCommandCounts(hostCommandCounts), baselineCtx, outcome: null, result };
-    usages.push(extractUsage(result.log));
-    hostCommandCounts.push(extractHostCommandCounts(result.log));
-    if (baselineCtx === null && !resumeSessionId) baselineCtx = extractBaselineCtx(result.log);
-    const hostCommands = sumHostCommandCounts(hostCommandCounts);
+    if (ownership.lost) return { lost: true, facts, attempt, ...attemptTotals(tally), outcome: null, result };
+    tallyAttempt(tally, result.log, ctx, { resumed: Boolean(resumeSessionId) });
+    const totals = attemptTotals(tally);
     const notBefore = rateLimitExit(result, facts);
-    if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, usage: sumUsage(usages), hostCommands, baselineCtx, outcome: null, result };
+    if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, ...totals, outcome: null, result };
     const planPath = isSafeSegment(facts.slug) ? join(runDir(job.project, facts.slug, env), "03-plan.md") : null;
     const state = readRunState({ project: job.project, slug: facts.slug, env });
     const outcome = classifyJobResult({ ...result, state, planPath });
     if (!isRetryable(job, attempt, result, outcome, state)) {
-      return { lost: false, facts, attempt, usage: sumUsage(usages), hostCommands, baselineCtx, outcome, result };
+      return { lost: false, facts, attempt, ...totals, outcome, result };
     }
     await deps.sleepImpl(backoffMs(attempt));
     if (!(await ctx.store.jobs.countAttempt(job.id, { worker: job.worker }))) {
-      return { lost: true, facts, attempt, usage: sumUsage(usages), hostCommands, baselineCtx, outcome, result };
+      return { lost: true, facts, attempt, ...totals, outcome, result };
     }
     attempt += 1;
   }
@@ -495,6 +517,7 @@ async function finalize(job, run, ctx) {
           usage: run.usage,
           hostCommands: run.hostCommands,
           baselineCtx: run.baselineCtx,
+          orchestrator: run.orchestrator,
         },
         env,
       ),
@@ -540,6 +563,16 @@ async function withRunSlug(job, { store, env }) {
   return { ...job, slug };
 }
 
+// Creates the run directory before the spawn, so the session never runs `mkdir` itself; a failure is logged and never costs the job.
+function ensureRunDir(job, env) {
+  if (!isRunPath(job.project, job.slug)) return;
+  try {
+    mkdirSync(runDir(job.project, job.slug, env), { recursive: true });
+  } catch (err) {
+    appendJobLog(job.id, `the run directory could not be created before the session: ${err?.message ?? String(err)}`, env);
+  }
+}
+
 // Search key of a job: its slug once it has one, and otherwise the first significant words of its prompt, with no punctuation gh could read as syntax.
 export function prSearchKey(job) {
   const slug = typeof job?.slug === "string" ? job.slug.trim() : "";
@@ -576,6 +609,7 @@ async function runJob(claimed, ctx) {
   }
   const openPrs = await openPrsForJob(claimed, { env, deps });
   const job = await withRunSlug(claimed, ctx);
+  ensureRunDir(job, env);
   const state = readRunState({ project: job.project, slug: job.slug, env });
   const resume = decideResume({ state });
   const handoff = resumeHandoff({ job, resume, state, env });

@@ -1,3 +1,5 @@
+import { insideRoots, orchestratorBashAllowed, readTarget } from "./orchestrator-scope.mjs";
+
 const FENCE_LINE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 const QUOTED_LINE_RE = /^\s*\d+\t/;
 const GATE_HEADING_RE = /^#{1,6}\s+Requires user confirmation\s*$/i;
@@ -688,5 +690,92 @@ export function sumHostCommandCounts(counts) {
       tasksKilled: total.tasksKilled + finite(entry.tasksKilled),
     }),
     { bashTimeouts: 0, tasksBackgrounded: 0, tasksKilled: 0 },
+  );
+}
+
+const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
+
+// Context the model saw on one turn: its fresh input plus what it read from and wrote to the prompt cache; null without usage.
+function turnContext(event) {
+  const usage = event.message?.usage;
+  if (!usage || typeof usage !== "object") return null;
+  return finite(usage.input_tokens) + finite(usage.cache_read_input_tokens) + finite(usage.cache_creation_input_tokens);
+}
+
+// Records one orchestrator assistant event as a turn: once per message id, once per event when it carries none.
+function countOrchestratorTurn(counts, turnIds, event) {
+  const id = event.message?.id;
+  if (typeof id === "string" && id !== "") {
+    if (!turnIds.has(id)) counts.turns += 1;
+    turnIds.add(id);
+  } else {
+    counts.turns += 1;
+  }
+  const context = turnContext(event);
+  if (context !== null) counts.ctxLast = context;
+}
+
+// The tool_use blocks of one assistant event not seen before in the stream, deduped by block id.
+function newToolUses(event, toolIds) {
+  const content = Array.isArray(event.message?.content) ? event.message.content : [];
+  return content.filter((block) => {
+    if (block?.type !== "tool_use" || typeof block.name !== "string") return false;
+    if (typeof block.id !== "string" || block.id === "") return true;
+    if (toolIds.has(block.id)) return false;
+    toolIds.add(block.id);
+    return true;
+  });
+}
+
+// Adds one orchestrator tool call to the counts: a read outside the allowed roots, a Bash call and a Bash call outside the closed list.
+function countOrchestratorToolUse(counts, block, scope) {
+  if (READ_TOOLS.has(block.name) && !insideRoots(readTarget(block.name, block.input, scope.cwd), scope.roots)) counts.reads += 1;
+  if (block.name !== "Bash") return;
+  counts.bash += 1;
+  if (!orchestratorBashAllowed(block.input?.command)) counts.bashExplore += 1;
+}
+
+// Counts of one attempt's orchestrator (never a subagent): its turns, its reads outside the run and the plugin, its Bash
+// calls and those outside the closed list, and the context of its last turn. Respects the fence/marker discipline of the
+// sibling extractors, so a line quoted inside a code fence is never read as an event.
+export function extractOrchestratorCounts(log, { roots = [], cwd = null } = {}) {
+  const counts = { turns: 0, reads: 0, bash: 0, bashExplore: 0, ctxLast: null };
+  const turnIds = new Set();
+  const toolIds = new Set();
+  const scope = { roots: Array.isArray(roots) ? roots : [], cwd };
+  for (const entry of linesWithFenceState(log)) {
+    if (!isMarkerCandidate(entry)) continue;
+    const event = parseEventLine(entry.line);
+    if (event?.type !== "assistant" || isSubagentEvent(event)) continue;
+    countOrchestratorTurn(counts, turnIds, event);
+    for (const block of newToolUses(event, toolIds)) countOrchestratorToolUse(counts, block, scope);
+  }
+  return counts;
+}
+
+// The distinct safe session ids of the orchestrator's own assistant events, in order of appearance, fenced lines ignored.
+export function extractOrchestratorSessionIds(log) {
+  const ids = new Set();
+  for (const entry of linesWithFenceState(log)) {
+    if (!isMarkerCandidate(entry)) continue;
+    const event = parseEventLine(entry.line);
+    if (event?.type !== "assistant" || isSubagentEvent(event)) continue;
+    if (isSessionIdSafe(event.session_id)) ids.add(event.session_id);
+  }
+  return [...ids];
+}
+
+// Consolidates the orchestrator counts of several attempts: the four counts summed, the context of the last attempt that reported one.
+export function sumOrchestratorCounts(counts) {
+  const list = (Array.isArray(counts) ? counts : []).filter((entry) => entry && typeof entry === "object");
+  return list.reduce(
+    (total, entry) => ({
+      turns: total.turns + finite(entry.turns),
+      reads: total.reads + finite(entry.reads),
+      bash: total.bash + finite(entry.bash),
+      bashExplore: total.bashExplore + finite(entry.bashExplore),
+      ctxLast: Number.isFinite(entry.ctxLast) ? entry.ctxLast : total.ctxLast,
+    }),
+    { turns: 0, reads: 0, bash: 0, bashExplore: 0, ctxLast: null },
   );
 }
