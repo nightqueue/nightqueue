@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
-import { runnerRegistryPath, runnersDir } from "../../src/config/paths.mjs";
+import { jobLogPath, logsDir, runnerRegistryPath, runnersDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
+import { ABANDONED_COMMAND_PREFIX } from "../../src/queue/classify.mjs";
 import { createPrStateCache } from "../../src/queue/pr-state.mjs";
 import { pruneDeadRunners, writeRunnerRecord } from "../../src/queue/registry.mjs";
+import { DISABLED_BACKGROUND_ESCAPE_LINE } from "../../src/queue/runner.mjs";
 import { closeSuggestion, failedCoreSection, jobDetailView, prUrlsOf, queueView, truncationSuggestion } from "../../src/queue/view.mjs";
+import { KEPT_PREFIX } from "../../src/queue/worktree.mjs";
 import { withReadOnlyStore } from "../../src/store/open.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { doneStream } from "../../test-support/streams.mjs";
 
 const DEAD_PID = 999_999;
 
@@ -26,6 +30,20 @@ function seedHome(t, name, jobs) {
     openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ? WHERE id = ?").run(status, prUrl, id);
   }
   return env;
+}
+
+// A done job whose run log carries `runNotice` under `## Notice` and whose row carries `rowNotice` in `notice_md`.
+function seedJobWithRunLog(t, name, { runNotice, rowNotice }) {
+  const env = makeHome(t, name);
+  makeProject(t, env, "alpha");
+  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  mkdirSync(logsDir(env), { recursive: true });
+  const logPath = jobLogPath(id, env);
+  writeFileSync(logPath, doneStream({ notice: runNotice }));
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'done', notice_md = ?, result = ? WHERE id = ?")
+    .run(rowNotice, JSON.stringify({ logPath }), id);
+  return { env, id };
 }
 
 // A cache already holding the state gh answered for each URL, without a single process spawned.
@@ -205,4 +223,53 @@ test("a store whose listing throws fails the jobs section with its first line, a
 test("prUrlsOf keeps only the URLs a job carries, and tolerates rows that are gone", () => {
   assert.deepEqual(prUrlsOf([{ pr_url: "https://github.com/acme/api/pull/1" }, { pr_url: null }, null, {}]), ["https://github.com/acme/api/pull/1"]);
   assert.deepEqual(prUrlsOf(undefined), []);
+});
+
+test("jobDetailView hides run_notice when the row's notice differs from the run's only by the worktree-kept line the runtime appended", async (t) => {
+  const runNotice = "## Requires user confirmation\n\nmay this touch the payments table?";
+  const rowNotice = `${runNotice}\n\n${KEPT_PREFIX}/tmp/wt-52 - it has uncommitted changes.`;
+  const { env, id } = seedJobWithRunLog(t, "view-run-notice-worktree", { runNotice, rowNotice });
+
+  const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
+  assert.equal(detail.notice_md, rowNotice);
+  assert.equal("run_notice" in detail, false, "the worktree line the runtime appended made the notices look different");
+});
+
+test("jobDetailView hides run_notice when the row's notice differs from the run's only by the abandoned-command line the runtime appended", async (t) => {
+  const runNotice = "the run's real notice, kept whole";
+  const rowNotice = `${runNotice}\n\n${ABANDONED_COMMAND_PREFIX}npm test`;
+  const { env, id } = seedJobWithRunLog(t, "view-run-notice-abandoned", { runNotice, rowNotice });
+
+  const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
+  assert.equal(detail.notice_md, rowNotice);
+  assert.equal("run_notice" in detail, false, "the abandoned-command line the runtime appended made the notices look different");
+});
+
+test("jobDetailView hides run_notice when the row's notice carries every line the runtime appends, in a row", async (t) => {
+  const runNotice = "the run's real notice, kept whole";
+  const rowNotice = `${runNotice}\n\n${ABANDONED_COMMAND_PREFIX}npm test\n\n${KEPT_PREFIX}/tmp/wt-52 - it has uncommitted changes.\n\n${DISABLED_BACKGROUND_ESCAPE_LINE}`;
+  const { env, id } = seedJobWithRunLog(t, "view-run-notice-all-appended", { runNotice, rowNotice });
+
+  const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
+  assert.equal(detail.notice_md, rowNotice);
+  assert.equal("run_notice" in detail, false, "the runtime's own appended lines made the notices look different");
+});
+
+test("jobDetailView still shows run_notice when the classifier really replaced the run's notice", async (t) => {
+  const runNotice = "✅ Delivered the fix and opened the pull request.";
+  const rowNotice = 'runtime: the CLI killed the background task "npm test"; the run did not finish';
+  const { env, id } = seedJobWithRunLog(t, "view-run-notice-replaced", { runNotice, rowNotice });
+
+  const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
+  assert.equal(detail.notice_md, rowNotice);
+  assert.equal(detail.run_notice, runNotice);
+});
+
+test("jobDetailView hides run_notice when only trailing whitespace tells the row's notice apart from the run's", async (t) => {
+  const runNotice = "the run's real notice, kept whole";
+  const rowNotice = `${runNotice}\n\n  `;
+  const { env, id } = seedJobWithRunLog(t, "view-run-notice-trailing-space", { runNotice, rowNotice });
+
+  const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
+  assert.equal("run_notice" in detail, false, "trailing whitespace alone made the notices look different");
 });

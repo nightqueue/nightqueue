@@ -106,9 +106,12 @@ export function isTerminalRuntimeKill(log, state = null) {
   return kill !== null && isTerminalKill(kill, pipelineOutcome(state));
 }
 
+// The prefix of the line appended to a non-terminal kill's notice, so an abandoned command is never hidden behind a run that otherwise finished.
+export const ABANDONED_COMMAND_PREFIX = "⚠️ a command was abandoned mid-run: ";
+
 // The line appended to a non-terminal kill's notice, so an abandoned command is never hidden behind a run that otherwise finished.
 function abandonedCommandLine(description) {
-  return `⚠️ a command was abandoned mid-run: ${truncateByCodePoint(description, ABANDONED_COMMAND_LIMIT)}`;
+  return `${ABANDONED_COMMAND_PREFIX}${truncateByCodePoint(description, ABANDONED_COMMAND_LIMIT)}`;
 }
 
 // Appends the abandoned-command line to a notice, never replacing it; an empty notice leaves the line on its own.

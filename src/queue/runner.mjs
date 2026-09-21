@@ -457,7 +457,7 @@ async function inspectJobWorktree(run, state, ctx) {
 }
 
 // The line appended once when the last attempt shows the host backgrounding a task despite the disable env var the runtime sets.
-const DISABLED_BACKGROUND_ESCAPE_LINE =
+export const DISABLED_BACKGROUND_ESCAPE_LINE =
   "⚠️ the host moved a command to the background although background tasks are disabled - the CLI may have dropped CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
 
 // Appends the disabled-background escape line once when the last attempt shows one, mirroring it to the runner's own log.

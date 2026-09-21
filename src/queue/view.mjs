@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
 import { JOB_STATUSES, VIEW_TEXT_LIMIT, jobView } from "../memory/jobs.mjs";
 import { advisoryLinesFor } from "./advisory.mjs";
+import { ABANDONED_COMMAND_PREFIX } from "./classify.mjs";
 import { isQueueIdle } from "./hints.mjs";
 import { prStateKey } from "./pr-state.mjs";
 import { liveRunnersReport } from "./registry.mjs";
+import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./runner.mjs";
 import { extractNoticeFromStream } from "./stream.mjs";
+import { KEPT_PREFIX } from "./worktree.mjs";
 
 // The state of the pull request of a job as the cache holds it right now: null without a GitHub pull request, `unknown` on a miss.
 function prStateOf(url, prStates) {
@@ -153,12 +156,33 @@ function runNoticeOf(job) {
   }
 }
 
+// The lines the runtime itself appends to a row's notice after a run finishes, never text a run wrote.
+const RUNTIME_APPENDED_LINE_PREFIXES = [KEPT_PREFIX, ABANDONED_COMMAND_PREFIX, DISABLED_BACKGROUND_ESCAPE_LINE];
+
+// Whether a trailing paragraph is one the runtime itself appends to a row's notice.
+function isRuntimeAppendedLine(paragraph) {
+  return RUNTIME_APPENDED_LINE_PREFIXES.some((prefix) => paragraph.startsWith(prefix));
+}
+
+// A row's notice with every trailing paragraph the runtime itself appended stripped off, so only what a run actually wrote remains.
+function withoutRuntimeAppendedLines(notice) {
+  let text = typeof notice === "string" ? notice.trimEnd() : "";
+  for (;;) {
+    const cut = text.lastIndexOf("\n\n");
+    const tail = cut < 0 ? text : text.slice(cut + 2);
+    if (!isRuntimeAppendedLine(tail)) return text;
+    text = cut < 0 ? "" : text.slice(0, cut).trimEnd();
+  }
+}
+
 // One job in full with the state of its pull request, or null when the row is gone. When the run's own notice (read fresh
-// from its log) differs from the row's `notice_md`, both are carried: `notice` is the row's, `run_notice` the run's whole own.
+// from its log) really differs from the row's `notice_md` - once the lines the runtime itself appends to the row are set
+// aside - both are carried: `notice` is the row's, `run_notice` the run's whole own.
 export async function jobDetailView(readStore, id, { prStates = null } = {}) {
   const job = jobView(await readStore.jobs.getJob(id), { full: true });
   if (!job) return null;
   const withState = withPrState(job, prStates);
   const runNotice = runNoticeOf(job);
-  return runNotice && runNotice !== job.notice_md ? { ...withState, run_notice: runNotice } : withState;
+  const rowNotice = withoutRuntimeAppendedLines(job.notice_md).trim();
+  return runNotice && runNotice.trim() !== rowNotice ? { ...withState, run_notice: runNotice } : withState;
 }

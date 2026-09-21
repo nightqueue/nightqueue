@@ -296,6 +296,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   and the runner's own retry decision follow the same terminal/non-terminal
   read.
 
+- `queue status <id>` no longer shows `run_notice` as a second, near-identical
+  copy of `notice` when the two differ only by a line the runtime itself
+  appended to the row's notice (the kept-worktree line, the abandoned-command
+  warning, the disabled-background escape) or by trailing whitespace - the
+  comparison now sets those aside first (job #52, whose `## Requires user
+  confirmation` gate printed the same block twice).
+
 - `nightshift queue status --follow` redraws the table over itself on a
   terminal instead of clearing the screen every tick, which piled one copy of
   the table per tick in the scrollback of iTerm2 and Terminal.app. The frame

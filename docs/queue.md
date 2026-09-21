@@ -310,12 +310,15 @@ and the MCP `hint` ends with. `nightshift queue status <id>` (and `queue_status`
 
 **`queue status <id>` can show two notices.** The single-job view (CLI human, CLI `--json`
 and the MCP `queue_status` with `job_id`) reads the log the row's `result.logPath` names
-and re-extracts the run's own `## Notice` straight from it. When that differs from the
-row's `notice_md` (a repair that never ran, a witness written before a fix, a job like #49
-below), the answer carries both: `notice` (the row's) and `run_notice` (the run's own,
-whole, never truncated). They agree far more often than not, in which case `run_notice`
-is simply absent - a missing or unreadable log leaves it absent too, never an error: this
-is a pure read, no write, no network.
+and re-extracts the run's own `## Notice` straight from it. When that really differs from
+the row's `notice_md` (a repair that never ran, a witness written before a fix, a job like
+#49 below), the answer carries both: `notice` (the row's) and `run_notice` (the run's own,
+whole, never truncated). The comparison first sets aside the lines the runtime itself
+appends to the row's notice (the kept-worktree line, the abandoned-command warning, the
+disabled-background escape) and trailing whitespace, so a row that only got one of those
+lines appended never earns a `run_notice` of its own. They agree far more often than not,
+in which case `run_notice` is simply absent - a missing or unreadable log leaves it absent
+too, never an error: this is a pure read, no write, no network.
 
 **Maintenance is not a read.** Pruning the registrations no process answers for (a
 registration owned by another user is left alone) and repairing a job from its witness
