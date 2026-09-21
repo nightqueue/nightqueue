@@ -4,7 +4,7 @@ Every notable change of this project is recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.3.0 - 2026-09-21
 
 ### Added
 
@@ -398,6 +398,10 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   finished, merged or repaired is rendered on the next poll, where a session
   could keep showing it as `running` for hours; and a follow with nothing to
   merge and nothing to repair no longer opens a write connection at all.
+- `roadmap_update` now answers with the linked decision number and the status of
+  the job the item was queued as, the way `roadmap_get` already did. Its answer
+  read the item without joining those two tables, so both fields always came back
+  empty - the link itself was never lost.
 
 ### Changed
 
@@ -544,13 +548,6 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   and stayed empty on every job closed afterwards. The v10 migration drops both
   the same read-guarded, idempotent way, and `merged_at`/`merge_sha` are gone
   from `queue status --json` and `queue_status`.
-
-### Fixed
-
-- `roadmap_update` now answers with the linked decision number and the status of
-  the job the item was queued as, the way `roadmap_get` already did. Its answer
-  read the item without joining those two tables, so both fields always came back
-  empty - the link itself was never lost.
 
 ## 0.2.0 - 2026-09-14
 
