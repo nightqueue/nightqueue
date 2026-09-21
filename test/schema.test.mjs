@@ -44,8 +44,20 @@ test("normalizeConfig fills defaults over a partial, hand-edited file", () => {
   assert.equal(config.orgs.acme.displayName, "acme");
   assert.deepEqual({ ...config.orgs.acme.connections }, { github: null });
   assert.deepEqual(config.projects.api, { path: "/tmp/api", org: "acme" });
-  assert.deepEqual(config.queue, { maxConcurrent: null, resumeSession: false, leaseHeartbeatS: 5, keepAwake: "auto" });
-  assert.deepEqual(emptyConfig().queue, { maxConcurrent: null, resumeSession: false, leaseHeartbeatS: 5, keepAwake: "auto" });
+  assert.deepEqual(config.queue, {
+    maxConcurrent: null,
+    resumeSession: false,
+    leaseHeartbeatS: 5,
+    keepAwake: "auto",
+    bashTimeoutS: { default: 900, max: 3600 },
+  });
+  assert.deepEqual(emptyConfig().queue, {
+    maxConcurrent: null,
+    resumeSession: false,
+    leaseHeartbeatS: 5,
+    keepAwake: "auto",
+    bashTimeoutS: { default: 900, max: 3600 },
+  });
 });
 
 test("queue.maxConcurrent is an opt-in ceiling: only a positive integer sets one", () => {
@@ -91,6 +103,30 @@ test("queue.keepAwake only accepts its three documented modes, anything else fal
     assert.equal(normalizeConfig({ queue: { keepAwake: invalid } }).queue.keepAwake, "auto", `\`${String(invalid)}\` was accepted`);
   }
   assert.equal(normalizeConfig({}).queue.keepAwake, "auto", "a missing key must default to auto");
+});
+
+test("queue.bashTimeoutS accepts two positive integers with max >= default, otherwise falls back to 900/3600", () => {
+  assert.deepEqual(normalizeConfig({ queue: { bashTimeoutS: { default: 60, max: 120 } } }).queue.bashTimeoutS, { default: 60, max: 120 });
+  assert.deepEqual(normalizeConfig({ queue: { bashTimeoutS: { default: 600, max: 600 } } }).queue.bashTimeoutS, { default: 600, max: 600 });
+  for (const raw of [
+    { default: "600", max: 1200 },
+    { default: 0, max: 1200 },
+    { default: -1, max: 1200 },
+    { default: 600, max: 300 },
+    { default: 600 },
+    { max: 1200 },
+    {},
+    null,
+    undefined,
+    "900",
+  ]) {
+    assert.deepEqual(
+      normalizeConfig({ queue: { bashTimeoutS: raw } }).queue.bashTimeoutS,
+      { default: 900, max: 3600 },
+      `\`${JSON.stringify(raw)}\` was accepted as bash timeouts`,
+    );
+  }
+  assert.deepEqual(normalizeConfig({}).queue.bashTimeoutS, { default: 900, max: 3600 }, "a missing key must default to 900/3600");
 });
 
 test("normalizeConfig recreates the default org and drops broken project entries", () => {

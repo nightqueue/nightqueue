@@ -901,6 +901,36 @@ test("queue status of a job prints the whole notice, on the text and on --json",
   assert.equal(JSON.parse(json.stdout).job.notice_md, LONG_NOTICE, "the JSON detail carries a prefix of the notice instead of the whole text");
 });
 
+test("queue status of a job shows a host-command counter only when it is not zero, on the text and on --json", (t) => {
+  const env = makeCliHome(t, "cli-status-host-commands");
+  const zero = enqueue(env, "never timed out");
+  const some = enqueue(env, "timed out and got killed");
+  openDb(env).prepare("UPDATE jobs SET status = 'done', bash_timeouts = 0, tasks_backgrounded = 0, tasks_killed = 0 WHERE id = ?").run(zero);
+  openDb(env).prepare("UPDATE jobs SET status = 'done', bash_timeouts = 2, tasks_backgrounded = 0, tasks_killed = 1 WHERE id = ?").run(some);
+
+  const zeroStatus = runCli(env, ["queue", "status", String(zero)]);
+  assert.equal(zeroStatus.status, 0, zeroStatus.stderr);
+  assert.equal(zeroStatus.stdout.includes("bash_timeouts"), false, zeroStatus.stdout);
+  assert.equal(zeroStatus.stdout.includes("tasks_backgrounded"), false, zeroStatus.stdout);
+  assert.equal(zeroStatus.stdout.includes("tasks_killed"), false, zeroStatus.stdout);
+
+  const someStatus = runCli(env, ["queue", "status", String(some)]);
+  assert.equal(someStatus.status, 0, someStatus.stderr);
+  assert.match(someStatus.stdout, /^bash_timeouts {3}2$/m);
+  assert.match(someStatus.stdout, /^tasks_killed {4}1$/m);
+  assert.equal(someStatus.stdout.includes("tasks_backgrounded"), false, someStatus.stdout);
+
+  const zeroJson = JSON.parse(runCli(env, ["queue", "status", String(zero), "--json"]).stdout).job;
+  assert.equal(zeroJson.bash_timeouts, null);
+  assert.equal(zeroJson.tasks_backgrounded, null);
+  assert.equal(zeroJson.tasks_killed, null);
+
+  const someJson = JSON.parse(runCli(env, ["queue", "status", String(some), "--json"]).stdout).job;
+  assert.equal(someJson.bash_timeouts, 2);
+  assert.equal(someJson.tasks_backgrounded, null);
+  assert.equal(someJson.tasks_killed, 1);
+});
+
 // A gate notice near the size of a real multi-point confirmation block: the heading, eight bullet points and the answer line.
 function bigGateNotice(id) {
   const points = Array.from(

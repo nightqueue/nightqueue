@@ -331,6 +331,16 @@ export function runtimeKillFromStream(log) {
   };
 }
 
+// Tells whether the LAST attempt of a log shows the host backgrounding a task despite CLAUDE_CODE_DISABLE_BACKGROUND_TASKS.
+export function sawDisabledBackgroundTask(log) {
+  for (const entry of linesWithFenceState(lastAttemptStream(log))) {
+    if (!isMarkerCandidate(entry)) continue;
+    const event = parseEventLine(entry.line);
+    if (event?.type === "system" && event.subtype === "task_updated" && event.patch?.is_backgrounded === true) return true;
+  }
+  return false;
+}
+
 // Body of the LAST `## Notice` section of a text, ignoring headings quoted inside a code fence.
 export function extractNotice(text) {
   const scanned = linesWithFenceState(text);
@@ -609,4 +619,62 @@ export function sumUsage(usages) {
     if (usage.estimated) total.estimated = true;
   }
   return total;
+}
+
+// The literal the Bash tool's own timeout writes into an error result; distinct from a mention of it in prose.
+const BASH_TIMEOUT_TEXT_RE = /Command timed out/;
+
+// Plain text of a tool_result block's `content`, whether the CLI wrote it as a bare string or as an array of text blocks.
+function toolResultText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block) => block?.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("\n");
+}
+
+// How many tool_result blocks of a `user` event are the Bash tool's own timeout: is_error true and its content names it.
+function bashTimeoutsOf(event) {
+  if (event?.type !== "user" || !Array.isArray(event.message?.content)) return 0;
+  return event.message.content.filter(
+    (block) => block?.type === "tool_result" && block.is_error === true && BASH_TIMEOUT_TEXT_RE.test(toolResultText(block.content)),
+  ).length;
+}
+
+// Records the task id of a `task_updated` event into the given set, when its patch carries the literal this counter looks for.
+function trackTaskUpdated(set, event, matches) {
+  if (event?.type !== "system" || event.subtype !== "task_updated" || typeof event.task_id !== "string") return;
+  if (matches(event.patch)) set.add(event.task_id);
+}
+
+// Counts of one attempt's own host commands: bash timeouts (once per tool result), and the distinct tasks the host
+// backgrounded or killed - never a `task_updated` a subagent emits with `is_backgrounded: false`. Respects the same
+// fence/marker discipline the sibling extractors use, so a line quoted inside a code fence is never read as an event.
+export function extractHostCommandCounts(log) {
+  let bashTimeouts = 0;
+  const backgrounded = new Set();
+  const killed = new Set();
+  for (const entry of linesWithFenceState(log)) {
+    if (!isMarkerCandidate(entry)) continue;
+    const event = parseEventLine(entry.line);
+    if (event === null) continue;
+    bashTimeouts += bashTimeoutsOf(event);
+    trackTaskUpdated(backgrounded, event, (patch) => patch?.is_backgrounded === true);
+    trackTaskUpdated(killed, event, (patch) => patch?.status === "killed");
+  }
+  return { bashTimeouts, tasksBackgrounded: backgrounded.size, tasksKilled: killed.size };
+}
+
+// Consolidates the host command counts of several attempts into one total, the same way `sumUsage` does for tokens.
+export function sumHostCommandCounts(counts) {
+  const list = (Array.isArray(counts) ? counts : []).filter((entry) => entry && typeof entry === "object");
+  return list.reduce(
+    (total, entry) => ({
+      bashTimeouts: total.bashTimeouts + finite(entry.bashTimeouts),
+      tasksBackgrounded: total.tasksBackgrounded + finite(entry.tasksBackgrounded),
+      tasksKilled: total.tasksKilled + finite(entry.tasksKilled),
+    }),
+    { bashTimeouts: 0, tasksBackgrounded: 0, tasksKilled: 0 },
+  );
 }

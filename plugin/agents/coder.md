@@ -21,7 +21,7 @@ The run is isolated in a git worktree, and the host refuses any Bash command it 
 - Multi-step work is several Bash calls, each with a relative path from the worktree root; never an absolute path to another checkout.
 - A refused command is never retried as is: rewrite it by the rules above.
 - A search for a file or a pattern stays inside the worktree or the project checkout — never from `/` or the home (the job refuses them) — and a plugin file lives under `plugin/` of the checkout, never elsewhere on disk.
-- Every test command (`npm test`, `node --test ...`, a framework runner) runs under an explicit `timeout <seconds>` sized to the suite, e.g. `timeout 120 node --test test/queue/classify.test.mjs`: a hung foreground test is moved to the background by the Bash tool and later killed as an orphan task, so a timeout makes it fail fast instead.
+- Every test command (`npm test`, `node --test ...`, a framework runner) runs under an explicit `timeout <seconds>` sized to the suite, e.g. `timeout 120 node --test test/queue/classify.test.mjs`: inside a job a command that outlives the Bash timeout is KILLED, not backgrounded, so give a long command a Bash `timeout` parameter sized to it, up to `queue.bashTimeoutS.max`, instead of letting the default kill it.
 
 ## Operating mode
 

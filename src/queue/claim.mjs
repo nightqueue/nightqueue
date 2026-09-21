@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { hostname } from "node:os";
 import { UserError } from "../config/errors.mjs";
 import { queuePausedPath } from "../config/paths.mjs";
-import { LEASE_HEARTBEAT_DEFAULT_S } from "../config/schema.mjs";
+import { BASH_TIMEOUT_DEFAULT, LEASE_HEARTBEAT_DEFAULT_S } from "../config/schema.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { openStore } from "../store/open.mjs";
 import { liveRunnersReport } from "./registry.mjs";
@@ -33,6 +33,11 @@ export function leaseHeartbeatMs(env = process.env) {
   const configured = loadConfig(env, { warn: () => {} }).queue?.leaseHeartbeatS;
   const seconds = Number.isInteger(configured) && configured > 0 ? configured : LEASE_HEARTBEAT_DEFAULT_S;
   return seconds * 1000;
+}
+
+// Ceilings of the bash timeouts handed to every `claude` child, already normalized by config/schema.mjs.
+export function bashTimeoutS(env = process.env) {
+  return loadConfig(env, { warn: () => {} }).queue?.bashTimeoutS ?? BASH_TIMEOUT_DEFAULT;
 }
 
 // Tells whether a `<host>:<pid>` worker of THIS host still has a live process; anything unexpected is not alive.

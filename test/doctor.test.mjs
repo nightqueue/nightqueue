@@ -231,7 +231,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v11/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v12/);
 });
 
 test("the database check warns about a v8 home and points at the command that migrates it", async (t) => {
@@ -241,7 +241,7 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, expected v11/);
+  assert.match(database.detail, /schema v8, expected v12/);
   assert.match(database.hint, /run `nightshift queue status` once to migrate it/);
   assert.doesNotMatch(database.hint, /nightshift memory stats/);
 });
@@ -254,7 +254,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, expected v11/);
+  assert.match(database.detail, /schema v99, expected v12/);
   assert.match(database.hint, /upgrade nightshift/);
 });
 
@@ -396,6 +396,39 @@ test("the queue jobs check counts the jobs whose runner died, and only once the 
   assert.equal(statusOf(orphaned, "queue jobs"), "warn");
   assert.equal(orphaned.checks.find((entry) => entry.name === "queue jobs").detail, "1 orphaned");
   assert.deepEqual(orphaned.checks.filter((entry) => entry.name.startsWith("queue") && entry.status === "fail"), []);
+});
+
+// The report row of the host commands check.
+function hostCommandsCheck(report) {
+  return report.checks.find((entry) => entry.name === "host commands");
+}
+
+test("the host commands check sums the counters of the last finished jobs, warning only when a task was backgrounded or killed", async (t) => {
+  const host = makeHostEnv(t, "doctor-host-commands");
+  const { report: noDatabase } = await diagnose(host.env);
+  assert.deepEqual(
+    { status: hostCommandsCheck(noDatabase).status, detail: hostCommandsCheck(noDatabase).detail },
+    { status: "ok", detail: "host commands: 0 backgrounded, 0 killed, 0 timed out in the last 20 jobs" },
+  );
+
+  makeProject(t, host.env, "alpha");
+  const timedOut = addJob({ project: "alpha", prompt: "times out" }, host.env).id;
+  openDb(host.env).prepare("UPDATE jobs SET status = 'done', bash_timeouts = 3 WHERE id = ?").run(timedOut);
+  closeDb(host.env);
+  const { report: onlyTimeouts } = await diagnose(host.env);
+  assert.deepEqual(
+    { status: hostCommandsCheck(onlyTimeouts).status, detail: hostCommandsCheck(onlyTimeouts).detail },
+    { status: "ok", detail: "host commands: 0 backgrounded, 0 killed, 3 timed out in the last 20 jobs" },
+  );
+
+  const killedJob = addJob({ project: "alpha", prompt: "gets killed" }, host.env).id;
+  openDb(host.env).prepare("UPDATE jobs SET status = 'failed', tasks_killed = 1 WHERE id = ?").run(killedJob);
+  closeDb(host.env);
+  const { report: withKill } = await diagnose(host.env);
+  assert.deepEqual(
+    { status: hostCommandsCheck(withKill).status, detail: hostCommandsCheck(withKill).detail },
+    { status: "warn", detail: "host commands: 0 backgrounded, 1 killed, 3 timed out in the last 20 jobs" },
+  );
 });
 
 // A decision proposed by the given job, stamped straight in the database.

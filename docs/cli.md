@@ -242,7 +242,11 @@ runner does at `from` and at `until`). Both flags only have meaning with `--watc
 `--from` requires `--until`, and neither is accepted next to `--job`. `queue.keepAwake`
 (`"auto"` default, `"always"`, `"off"`) in `config.json` keeps the machine from
 sleeping while a runner or a job needs it; see the same section for what it does and
-does not cover.
+does not cover. `queue.bashTimeoutS` (`{ "default": 900, "max": 3600 }`, in seconds) sets
+the Bash timeouts of the `claude` a job runs: `default` is what a command gets with no
+`timeout` parameter, `max` the most it may ask for. Both must be positive integers with
+`max >= default`; any other value falls back to the defaults as a whole. See
+[Queue](queue.md) for why a command that outlives it is killed, never backgrounded.
 
 ## Decisions
 
@@ -311,7 +315,9 @@ whether the machine is kept awake for a runner or a job (`queue.keepAwake`, and 
 macOS whether `caffeinate` was found), the
 pidfile of the runner (a registration whose process is gone only warns, and so does one
 whose pid belongs to another user; the diagnosis never removes either), the jobs whose
-runner died and every registered
+runner died, the host commands of the last 20 finished jobs (`host commands: 0
+backgrounded, 0 killed, 3 timed out in the last 20 jobs`, a `warn` when any was
+backgrounded or killed) and every registered
 project. It exits `1` when any check fails, `0` otherwise - a `warn` never fails
 the run.
 

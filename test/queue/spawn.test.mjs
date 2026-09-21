@@ -346,6 +346,57 @@ test("a wait ceiling inherited from the parent environment is always overridden 
   assert.equal(capturedEnv.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS, "0", "an inherited wait ceiling leaked into the child");
 });
 
+test("the child env disables background tasks and carries the configured bash timeouts in ms, whether or not the job carries an identity", async (t) => {
+  const env = makeHome(t, "spawn-no-orphan");
+  const capturedEnvs = [];
+  const spawnImpl = (bin, args, opts) => {
+    capturedEnvs.push(opts.env);
+    return fakeChild();
+  };
+  const bashTimeoutS = { default: 120, max: 240 };
+
+  await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(104, env), env, spawnImpl, bashTimeoutS });
+  await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(105, env), env, jobId: 9, spawnImpl, bashTimeoutS });
+
+  for (const captured of capturedEnvs) {
+    assert.equal(captured.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, "1");
+    assert.equal(captured.BASH_DEFAULT_TIMEOUT_MS, "120000");
+    assert.equal(captured.BASH_MAX_TIMEOUT_MS, "240000");
+  }
+});
+
+test("spawnClaude defaults the bash timeouts to 900s/3600s when no config is passed", async (t) => {
+  const env = makeHome(t, "spawn-no-orphan-default");
+  let capturedEnv = null;
+  const spawnImpl = (bin, args, opts) => {
+    capturedEnv = opts.env;
+    return fakeChild();
+  };
+
+  await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(106, env), env, spawnImpl });
+
+  assert.equal(capturedEnv.BASH_DEFAULT_TIMEOUT_MS, "900000");
+  assert.equal(capturedEnv.BASH_MAX_TIMEOUT_MS, "3600000");
+});
+
+test("an inherited value of the no-orphan-background vars never leaks into the child", async (t) => {
+  const env = makeHome(t, "spawn-no-orphan-override");
+  env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "0";
+  env.BASH_DEFAULT_TIMEOUT_MS = "1";
+  env.BASH_MAX_TIMEOUT_MS = "2";
+  let capturedEnv = null;
+  const spawnImpl = (bin, args, opts) => {
+    capturedEnv = opts.env;
+    return fakeChild();
+  };
+
+  await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(107, env), env, spawnImpl });
+
+  assert.equal(capturedEnv.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, "1", "an inherited disable flag leaked into the child");
+  assert.equal(capturedEnv.BASH_DEFAULT_TIMEOUT_MS, "900000", "an inherited default timeout leaked into the child");
+  assert.equal(capturedEnv.BASH_MAX_TIMEOUT_MS, "3600000", "an inherited max timeout leaked into the child");
+});
+
 // A fake child that prints one line, ends its stdout and closes only after the end was seen.
 function talkingChild() {
   const child = new EventEmitter();

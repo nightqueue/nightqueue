@@ -63,10 +63,15 @@ const JOB_VIEW_COLUMNS = [
   "cache_read",
   "cache_creation",
   "cost_usd",
+  "bash_timeouts",
+  "tasks_backgrounded",
+  "tasks_killed",
 ];
 const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "not_before"];
 const JOB_VIEW_TRUNCATED = ["notice_md", "result"];
 const TRUNCATION_FLAGS = { notice_md: "notice_truncated", result: "result_truncated" };
+// Host-command counters the view omits at zero, the same way a null one is left out: a regression shows only once there is one to show.
+const JOB_VIEW_ZERO_OMITTED = ["bash_timeouts", "tasks_backgrounded", "tasks_killed"];
 export const VIEW_TEXT_LIMIT = 500;
 const LIST_LIMIT_RANGE = { min: 1, max: 50, fallback: 10 };
 
@@ -166,6 +171,7 @@ export function jobView(row, { full = false } = {}) {
   if (!row) return null;
   const view = {};
   for (const column of JOB_VIEW_COLUMNS) view[column] = row[column] ?? null;
+  for (const column of JOB_VIEW_ZERO_OMITTED) if (view[column] === 0) view[column] = null;
   for (const column of JOB_VIEW_TIMESTAMPS) view[column] = sqliteToIso(row[column]);
   for (const column of JOB_VIEW_TRUNCATED) {
     const whole = row[column] ?? null;
@@ -471,9 +477,10 @@ function ensureFinishDurable(id, written, env) {
 }
 
 // Closes a job with its outcome and links the pipeline run, in one transaction; false means the job was lost.
-export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage } = {}, env = process.env) {
+export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, hostCommands } = {}, env = process.env) {
   const db = openDb(env);
   const tokens = usage ?? {};
+  const commands = hostCommands ?? {};
   const statement = db.prepare(
     `UPDATE jobs
         SET status = ?,
@@ -488,7 +495,10 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage }
             tokens_out = COALESCE(?, tokens_out),
             cache_read = COALESCE(?, cache_read),
             cache_creation = COALESCE(?, cache_creation),
-            cost_usd = COALESCE(?, cost_usd)
+            cost_usd = COALESCE(?, cost_usd),
+            bash_timeouts = COALESCE(?, bash_timeouts),
+            tasks_backgrounded = COALESCE(?, tasks_backgrounded),
+            tasks_killed = COALESCE(?, tasks_killed)
       WHERE id = ? AND status = 'running' AND worker = ?
       RETURNING project, slug, status, pr_url, finished_at`,
   );
@@ -502,6 +512,9 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage }
     optionalNumber(tokens.cacheRead),
     optionalNumber(tokens.cacheCreation),
     optionalNumber(tokens.costUsd),
+    optionalNumber(commands.bashTimeouts),
+    optionalNumber(commands.tasksBackgrounded),
+    optionalNumber(commands.tasksKilled),
     requireId(id),
     requireText("worker", worker),
   ];
@@ -645,6 +658,22 @@ export function jobStatus(id, env = process.env, db = openDb(env)) {
 // Counts the jobs left `running` by a runner that died, on the connection the caller already holds: a diagnosis never creates nor migrates the database it inspects.
 export function countOrphanJobs(db) {
   return db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE ${ORPHAN_PREDICATE}`).get().n;
+}
+
+// The terminal statuses `nightshift doctor` samples the host-command counters from; a job still `pending` or `running` has none to report yet.
+const TERMINAL_STATUSES = JOB_STATUSES.filter((status) => status !== "pending" && status !== "running");
+const TERMINAL_PLACEHOLDERS = TERMINAL_STATUSES.map(() => "?").join(", ");
+export const HOST_COMMANDS_SAMPLE_SIZE = 20;
+
+// The host-command counters of the most recently finished jobs, the sample `nightshift doctor` sums; a diagnosis never creates nor migrates the database it inspects.
+export function recentHostCommandCounts(env = process.env, db = openDb(env)) {
+  return db
+    .prepare(
+      `SELECT bash_timeouts, tasks_backgrounded, tasks_killed FROM jobs
+        WHERE status IN (${TERMINAL_PLACEHOLDERS})
+        ORDER BY id DESC LIMIT ${HOST_COMMANDS_SAMPLE_SIZE}`,
+    )
+    .all(...TERMINAL_STATUSES);
 }
 
 // Counts the pending jobs a preflight block is holding back, the number the queue view shows next to `pending`.

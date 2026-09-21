@@ -108,6 +108,64 @@ test("a run that opens a pull request ends as done, with its facts, usage and pi
   assert.match(readFileSync(jobLogPath(id, env), "utf8"), /=== attempt 1 @ /);
 });
 
+const DISABLED_BACKGROUND_ESCAPE_LINE =
+  "⚠️ the host moved a command to the background although background tasks are disabled - the CLI may have dropped CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
+
+// The `task_updated` event a host emits when it patches whether a task is backgrounded.
+function taskUpdatedIsBackgrounded(isBackgrounded) {
+  return { type: "system", subtype: "task_updated", task_id: "task_1", patch: { is_backgrounded: isBackgrounded } };
+}
+
+test("a run whose stream shows a task backgrounded despite the disable flag gets the escape line appended once, mirrored to the runner's own log", async (t) => {
+  const stdout = toNdjson([
+    systemInitEvent(),
+    slugEvent(),
+    taskUpdatedIsBackgrounded(true),
+    assistantEvent(noticeText("the pull request is open"), { messageId: "msg_notice" }),
+    resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
+  ]);
+  const { env } = makeRunnerHome(t, "runner-bg-escape", [{ stdout, exitCode: 0 }]);
+  const id = enqueue(env);
+
+  const originalWrite = process.stderr.write;
+  const written = [];
+  process.stderr.write = (chunk) => {
+    written.push(String(chunk));
+    return true;
+  };
+  let cycle;
+  try {
+    cycle = await runJobCycle(env, id);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+
+  assert.equal(cycle.processed[0].status, "done");
+  assert.equal(getJob(id, env).notice_md, `the pull request is open\n\n${DISABLED_BACKGROUND_ESCAPE_LINE}`);
+  assert.equal(
+    written.filter((line) => line.includes(DISABLED_BACKGROUND_ESCAPE_LINE)).length,
+    1,
+    "the escape line was not mirrored to the runner's own log exactly once",
+  );
+});
+
+test("a run whose subagent stayed in the foreground (is_backgrounded: false) never gets the escape line", async (t) => {
+  const stdout = toNdjson([
+    systemInitEvent(),
+    slugEvent(),
+    taskUpdatedIsBackgrounded(false),
+    assistantEvent(noticeText("the pull request is open"), { messageId: "msg_notice" }),
+    resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
+  ]);
+  const { env } = makeRunnerHome(t, "runner-bg-escape-off", [{ stdout, exitCode: 0 }]);
+  const id = enqueue(env);
+
+  const cycle = await runJobCycle(env, id);
+
+  assert.equal(cycle.processed[0].status, "done");
+  assert.equal(getJob(id, env).notice_md, "the pull request is open");
+});
+
 test("the runner leaves the witness of the outcome next to the run, with its five keys and the tree it loaded from", async (t) => {
   const { env } = makeRunnerHome(t, "runner-witness", [{ stdout: doneStream(), exitCode: 0 }]);
   const id = enqueue(env);

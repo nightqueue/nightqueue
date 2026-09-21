@@ -24,7 +24,7 @@ The run is isolated in a git worktree, and the host refuses any Bash command it 
 - A script or a multi-line snippet is a FILE: `Write` it under the worktree (e.g. `tmp/<name>.mjs`, `.py`, `.sh`), run it with `node tmp/<name>.mjs` / `python3 tmp/<name>.py` / `sh tmp/<name>.sh`, delete it before the commit.
 - Multi-step work is several Bash calls, each with a relative path from the worktree root; never an absolute path to another checkout.
 - A refused command is never retried as is: rewrite it by the rules above.
-- A test command run by hand (the Step 2 fallback, or a PoC run outside `nightshift verify --scope +poc`) always runs under an explicit `timeout <seconds>` sized to the suite, e.g. `timeout 120 node --test test/queue/classify.test.mjs`: a hung foreground test is moved to the background by the Bash tool and later killed as an orphan task, so a timeout makes it fail fast instead.
+- A test command run by hand (the Step 2 fallback, or a PoC run outside `nightshift verify --scope +poc`) always runs under an explicit `timeout <seconds>` sized to the suite, e.g. `timeout 120 node --test test/queue/classify.test.mjs`: inside a job a command that outlives the Bash timeout is KILLED, not backgrounded, so give a long command a Bash `timeout` parameter sized to it, up to `queue.bashTimeoutS.max`, instead of letting the default kill it.
 
 ## Required flow (execute in this order)
 

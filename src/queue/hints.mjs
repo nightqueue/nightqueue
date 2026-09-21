@@ -1,3 +1,7 @@
+import { realpathSync } from "node:fs";
+import { sep } from "node:path";
+import { runtimeVersionsDir } from "../config/paths.mjs";
+import { packageRoot, spawnRoot } from "../host/paths.mjs";
 import { CROWDED_WINDOW_UTILIZATION, pauseUntilMs } from "./rate-limit.mjs";
 
 // How each window of the provider reads in a line the operator sees; a limit the event did not name is simply a rate limit.
@@ -176,4 +180,29 @@ export function windowClosedLine({ windowClosedAt, pending }) {
   const at = `${pad(closed.getHours())}:${pad(closed.getMinutes())}`;
   if (!pending) return `window closed at ${at}`;
   return `window closed at ${at} - ${pending} job${pending === 1 ? "" : "s"} still pending`;
+}
+
+// Real path of the versions directory of this home, or itself when it cannot be read - the same normalization `packageRoot()` and
+// `spawnRoot()` already apply to the paths this label compares it against.
+function realVersionsDir(env) {
+  try {
+    return realpathSync(runtimeVersionsDir(env));
+  } catch {
+    return runtimeVersionsDir(env);
+  }
+}
+
+// How a tree this home installed is named in a hint: the version directory alone when it is one of this home's, the whole path otherwise.
+function runtimeVersionLabel(dir, env) {
+  const versions = `${realVersionsDir(env)}${sep}`;
+  return dir.startsWith(versions) ? dir.slice(versions.length).split(sep)[0] : dir;
+}
+
+// The one line every MCP tool hint carries when this server still runs a runtime an install already superseded, or
+// null when it runs the current one or none is installed at all. A pure read: no write, no network.
+export function staleRuntimeHint(env = process.env) {
+  const own = packageRoot();
+  const current = spawnRoot(env);
+  if (own === current) return null;
+  return `this MCP server runs a superseded runtime (${runtimeVersionLabel(own, env)}) - restart the MCP client to load ${runtimeVersionLabel(current, env)}`;
 }

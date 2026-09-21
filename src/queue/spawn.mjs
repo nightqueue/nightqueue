@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { homeDir, runDir } from "../config/paths.mjs";
-import { NAME_RE } from "../config/schema.mjs";
+import { BASH_TIMEOUT_DEFAULT, NAME_RE } from "../config/schema.mjs";
 import { claudeConfigDir, packageRoot } from "../host/paths.mjs";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { escapePromptMarkers } from "../memory/prompt-safety.mjs";
@@ -17,6 +17,14 @@ import { isSessionIdSafe } from "./stream.mjs";
 export const IDLE_TIMEOUT_S = 1200;
 // The CLI's own wait for a background subagent task gets no ceiling here: `timeout_s` and the idle timeout above already bound the attempt, so a ceiling of its own would only kill a subagent the run is still waiting for.
 const BG_WAIT_CEILING_ENV = { CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0" };
+// Env vars pinned on every child so a command it runs can never become an orphan background task, with the configured bash timeouts converted to ms.
+function noOrphanTaskEnv(bashTimeoutS) {
+  return {
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+    BASH_DEFAULT_TIMEOUT_MS: String(bashTimeoutS.default * 1000),
+    BASH_MAX_TIMEOUT_MS: String(bashTimeoutS.max * 1000),
+  };
+}
 // Interval of the ownership poll inside the spawn: one lease renewal per tick, never per line.
 export const STOP_POLL_MS = 5000;
 export const SPAWN_STDIO = ["ignore", "pipe", "pipe"];
@@ -301,6 +309,7 @@ export function spawnClaude({
   resumeSessionId = null,
   resolveBinImpl = resolveClaudeBin,
   holdJobAwakeImpl = holdJobAwake,
+  bashTimeoutS = BASH_TIMEOUT_DEFAULT,
 } = {}) {
   return new Promise((settle) => {
     const stream = openAttemptLog(logPath, attempt);
@@ -308,7 +317,8 @@ export function spawnClaude({
     stream.on("error", (err) => reportLogFailure(logPath, err));
     const resolved = resolveBinImpl(env);
     const args = buildArgs({ prompt, resumeSessionId, env, jobId });
-    const childEnv = jobId === null ? { ...env, ...BG_WAIT_CEILING_ENV } : { ...env, ...jobIdentity(env, jobId), ...BG_WAIT_CEILING_ENV };
+    const runtimeEnv = { ...BG_WAIT_CEILING_ENV, ...noOrphanTaskEnv(bashTimeoutS) };
+    const childEnv = jobId === null ? { ...env, ...runtimeEnv } : { ...env, ...jobIdentity(env, jobId), ...runtimeEnv };
     const child = spawnImpl(resolved?.bin ?? "claude", args, { cwd, env: childEnv, stdio: SPAWN_STDIO });
     if (Number.isInteger(child?.pid)) holdJobAwakeImpl({ pid: child.pid, env });
     const chunks = [];

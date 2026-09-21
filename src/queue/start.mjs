@@ -23,7 +23,9 @@ function registeredWindow({ watchIntervalS, from, until }) {
 
 // Registers the runner that is about to work the queue; a runner nobody can find in the registry is worse than no runner at all.
 // A runner born while a live runner of this home waits out a rate limit adopts that wait here, at registration and only here.
-function registerRunner({ pid, jobId, watchIntervalS, logPath, detached, killImpl, from = null, until = null }, env) {
+// `runtimeDir` names the tree the runner ITSELF loads: the detached branch passes the one its argv was launched from,
+// a foreground runner is this very process, so it always names its own `packageRoot()`.
+function registerRunner({ pid, jobId, watchIntervalS, logPath, detached, killImpl, from = null, until = null, runtimeDir }, env) {
   try {
     return writeRunnerRecord(
       {
@@ -34,7 +36,7 @@ function registerRunner({ pid, jobId, watchIntervalS, logPath, detached, killImp
         intervalS: watchIntervalS,
         detached,
         logPath,
-        runtimeDir: packageRoot(),
+        runtimeDir,
         rateLimit: inheritablePause(env, killImpl),
         window: registeredWindow({ watchIntervalS, from, until }),
       },
@@ -50,9 +52,9 @@ function registerRunner({ pid, jobId, watchIntervalS, logPath, detached, killImp
 // Spawns the detached child and registers it, the critical section that must not be split by another process.
 function spawnAndRegister({ jobId, max, watchIntervalS, from, until, env, spawnImpl, killImpl }) {
   pruneDeadRunners(env, killImpl);
-  const { pid, logPath } = launchDetachedRunner({ jobId, max, watchIntervalS, from, until, env, spawnImpl });
+  const { pid, logPath, runtimeDir } = launchDetachedRunner({ jobId, max, watchIntervalS, from, until, env, spawnImpl });
   if (!Number.isInteger(pid) || pid <= 0) throw new UserError("the detached runner did not report a pid; nothing was started");
-  registerRunner({ pid, jobId, watchIntervalS, logPath, detached: true, killImpl, from, until }, env);
+  registerRunner({ pid, jobId, watchIntervalS, logPath, detached: true, killImpl, from, until, runtimeDir }, env);
   return { started: true, pid, mode: runnerMode({ jobId, watchIntervalS }), logPath, waiting: null };
 }
 
@@ -71,7 +73,7 @@ export async function registerForegroundRunner({ jobId = null, watchIntervalS = 
     const own = ownRunnerRecord(env);
     if (own) return { registered: true, self: false, pid: process.pid, mode: own.mode ?? null };
     pruneDeadRunners(env, killImpl);
-    registerRunner({ pid: process.pid, jobId, watchIntervalS, logPath: null, detached: false, killImpl, from, until }, env);
+    registerRunner({ pid: process.pid, jobId, watchIntervalS, logPath: null, detached: false, killImpl, from, until, runtimeDir: packageRoot() }, env);
     return { registered: true, self: true, pid: process.pid, mode: runnerMode({ jobId, watchIntervalS }) };
   });
 }

@@ -280,6 +280,7 @@ test("finishing a job closes it and links only the pipeline run of the same proj
         prUrl: "https://github.com/acme/api/pull/42",
         noticeMd: "the pull request is open",
         usage: { tokensIn: 10, tokensOut: 4, cacheRead: 2, cacheCreation: 1, costUsd: 0.5 },
+        hostCommands: { bashTimeouts: 2, tasksBackgrounded: 1, tasksKilled: 0 },
       },
       env,
     ),
@@ -290,6 +291,9 @@ test("finishing a job closes it and links only the pipeline run of the same proj
   assert.equal(row.worker, null);
   assert.equal(row.tokens_in, 10);
   assert.equal(row.cost_usd, 0.5);
+  assert.equal(row.bash_timeouts, 2);
+  assert.equal(row.tasks_backgrounded, 1);
+  assert.equal(row.tasks_killed, 0);
   assert.ok(row.finished_at, "the job has no finished_at");
   const linked = openDb(env)
     .prepare("SELECT id, job_id FROM pipeline_runs ORDER BY id")
@@ -479,6 +483,31 @@ test("the public view drops the prompt, truncates the free text by code point an
   assert.equal("merged_at" in view, false, "the view still carries the dropped merged_at column");
   assert.equal("merge_sha" in view, false, "the view still carries the dropped merge_sha column");
   assert.equal(jobView(null), null);
+});
+
+test("the public view omits a host-command counter at zero or null, and shows it once it is not", (t) => {
+  const env = makeQueue(t, "jobs-view-host-commands");
+  const zero = enqueue(env);
+  const some = enqueue(env);
+  openDb(env)
+    .prepare("UPDATE jobs SET bash_timeouts = 0, tasks_backgrounded = 0, tasks_killed = 0 WHERE id = ?")
+    .run(zero);
+  openDb(env)
+    .prepare("UPDATE jobs SET bash_timeouts = 3, tasks_backgrounded = 0, tasks_killed = 1 WHERE id = ?")
+    .run(some);
+
+  const untouched = jobView(getJob(enqueue(env), env));
+  assert.equal(untouched.bash_timeouts, null, "a job that never ran shows a counter other than null");
+
+  const atZero = jobView(getJob(zero, env));
+  assert.equal(atZero.bash_timeouts, null);
+  assert.equal(atZero.tasks_backgrounded, null);
+  assert.equal(atZero.tasks_killed, null);
+
+  const nonZero = jobView(getJob(some, env));
+  assert.equal(nonZero.bash_timeouts, 3);
+  assert.equal(nonZero.tasks_backgrounded, null);
+  assert.equal(nonZero.tasks_killed, 1);
 });
 
 test("a cut field carries its truncated flag, a field that fits has no key, and the full view flags nothing", (t) => {

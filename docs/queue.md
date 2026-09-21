@@ -511,10 +511,45 @@ in the runtime or in a hook with a test behind it, never only in the prompt of
 the pipeline, because a sentence in a prompt covers only the wording it happens
 to forbid and is lost the moment the platform underneath changes.
 
+**The runtime configures the host it spawns: a command finishes or dies in the
+foreground.** Every `claude` child of a job also gets
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `BASH_DEFAULT_TIMEOUT_MS` and
+`BASH_MAX_TIMEOUT_MS`, the last two from `queue.bashTimeoutS` (default
+`{ "default": 900, "max": 3600 }` seconds, converted to ms). With background tasks off,
+the CLI can no longer move a slow foreground command to the background and kill it later
+as an orphan: the command that outlives its timeout dies where it runs and the agent sees
+`Command timed out`, so a long command has to ask for a `timeout` parameter up to
+`max`. That is why the default is 15 minutes and not the CLI's own 2: a test suite must
+fit. With the variable set, the `Agent` tool no longer even offers `run_in_background`,
+and subagents keep running in the foreground. The runtime's values always win over the
+same variables inherited from the runner's own environment. The variable is effective
+but not in the CLI's env-vars reference, so the runtime checks it: when a job's stream
+still shows a task moved to the background, the runner log and the job's notice get one
+line - `⚠️ the host moved a command to the background although background tasks are
+disabled - the CLI may have dropped CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`.
+
+**Every job counts its host commands.** From the same stream pass that sums its tokens,
+each job records `bash_timeouts` (tool results saying a command timed out),
+`tasks_backgrounded` and `tasks_killed` (distinct tasks the CLI backgrounded or killed),
+summed over its attempts. `queue status <id>` (human, `--json` and the MCP
+`queue_status`) shows each only when it is not zero, and `nightshift doctor` sums them
+over the last 20 finished jobs, warning when anything was backgrounded or killed.
+
+**A new process is born from the current runtime.** A detached runner is launched from
+the installed current runtime (`runtime/current`) whenever one exists - never from the
+tree of the process that asked for it - and its registration names that tree, which is
+what the install guard and doctor read. A long-lived MCP server started before an install
+would otherwise spawn every new runner on the superseded version; it now only warns, in
+the hints of `queue_status`, `queue_run` and `queue_add`: `this MCP server runs a
+superseded runtime (<its version dir>) - restart the MCP client to load <current>`. Only
+a dev checkout or a test, with no runtime installed, spawns from its own tree. An install
+still never swaps the tree under a live process.
+
 **A kill fails the run only when it ended it.** The CLI's own wait ceiling still exists
 (the hook above only keeps a *subagent* launch foreground; a Bash call the CLI itself
-backgrounds, or the Bash tool's OWN 120s timeout moving a foreground command there, can
-still be killed later). A kill is TERMINAL - `failed`, never a gate, never retried -
+backgrounds, or the Bash tool's OWN timeout moving a foreground command there, could
+still be killed later; with background tasks disabled on the host, above, this is the
+fallback for a CLI that ignores the variable). A kill is TERMINAL - `failed`, never a gate, never retried -
 when either the raw ceiling line is in the log (it literally says "terminating"), or no
 `result` event carrying a `## Notice` ever followed the kill AND `state.json` recorded no
 outcome of its own. Job #28 is the terminal case: the ceiling line, then an unrelated

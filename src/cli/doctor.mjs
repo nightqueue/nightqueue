@@ -24,6 +24,7 @@ import { legacyShimState, packageVersion, registrySpec, runtimeVersion, shimStat
 import { hookStatus, readHostSettings } from "../host/settings.mjs";
 import { PATH_MARK, binDirInPath, rcFilePath } from "../host/shell.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
+import { HOST_COMMANDS_SAMPLE_SIZE } from "../memory/jobs.mjs";
 import { DB_USER_VERSION } from "../memory/schema.mjs";
 import { ownerLabel } from "../memory/scope.mjs";
 import { keepAwakeMode, resolveCaffeinateBin } from "../queue/keep-awake.mjs";
@@ -508,10 +509,42 @@ function checkRunners(ctx) {
   return records.map((record) => checkRunnerRecord(record, ctx.env));
 }
 
+// Sums the host-command counters over the sample `nightshift doctor` reports; a database or a column not there yet
+// answers zero exactly like a build that has not migrated - a pure read, never a write and never a failure of its own.
+async function hostCommandTotals(ctx) {
+  const zero = { backgrounded: 0, killed: 0, timedOut: 0 };
+  if (!existsSync(dbPath(ctx.env))) return zero;
+  const store = openStoreReadOnly(ctx.env);
+  try {
+    const rows = await store.jobs.recentHostCommandCounts();
+    return rows.reduce(
+      (totals, row) => ({
+        backgrounded: totals.backgrounded + (row.tasks_backgrounded ?? 0),
+        killed: totals.killed + (row.tasks_killed ?? 0),
+        timedOut: totals.timedOut + (row.bash_timeouts ?? 0),
+      }),
+      zero,
+    );
+  } catch {
+    return zero;
+  } finally {
+    await store.close();
+  }
+}
+
+// Checks the host commands a runner had to time out, background or kill over the last sample of finished jobs; a
+// regression only warns once a task was actually backgrounded or killed, a timeout alone stays informative.
+async function checkHostCommands(ctx) {
+  const { backgrounded, killed, timedOut } = await hostCommandTotals(ctx);
+  const detail = `host commands: ${backgrounded} backgrounded, ${killed} killed, ${timedOut} timed out in the last ${HOST_COMMANDS_SAMPLE_SIZE} jobs`;
+  return check("host commands", backgrounded > 0 || killed > 0 ? "warn" : "ok", detail);
+}
+
 // Checks the queue: the pause sentinel and the runners always, the orphaned jobs and the open proposals of closed jobs only once the database exists.
 async function checkQueue(ctx) {
   const checks = [checkQueuePause(ctx), checkKeepAwake(ctx), ...checkRunners(ctx)];
   if (existsSync(dbPath(ctx.env))) checks.push(await checkQueueJobs(ctx), await checkDecisionProposals(ctx));
+  checks.push(await checkHostCommands(ctx));
   return checks;
 }
 

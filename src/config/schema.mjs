@@ -13,6 +13,9 @@ export const LEASE_HEARTBEAT_RANGE = { min: 1, max: 20 };
 export const KEEP_AWAKE_MODES = ["auto", "always", "off"];
 export const KEEP_AWAKE_DEFAULT = "auto";
 
+// Ceilings of `queue.bashTimeoutS`, handed to every `claude` child as BASH_DEFAULT_TIMEOUT_MS/BASH_MAX_TIMEOUT_MS.
+export const BASH_TIMEOUT_DEFAULT = Object.freeze({ default: 900, max: 3600 });
+
 // Tells whether the value is a plain object usable as a map.
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -39,7 +42,13 @@ export function emptyConfig() {
     defaultOrg: DEFAULT_ORG,
     orgs,
     projects: emptyMap(),
-    queue: { maxConcurrent: null, resumeSession: false, leaseHeartbeatS: LEASE_HEARTBEAT_DEFAULT_S, keepAwake: KEEP_AWAKE_DEFAULT },
+    queue: {
+      maxConcurrent: null,
+      resumeSession: false,
+      leaseHeartbeatS: LEASE_HEARTBEAT_DEFAULT_S,
+      keepAwake: KEEP_AWAKE_DEFAULT,
+      bashTimeoutS: { ...BASH_TIMEOUT_DEFAULT },
+    },
     embedding: null,
   };
 }
@@ -146,6 +155,14 @@ function normalizeKeepAwake(value) {
   return KEEP_AWAKE_MODES.includes(value) ? value : KEEP_AWAKE_DEFAULT;
 }
 
+// Ceilings of the bash timeouts handed to the child CLI; anything but two positive integers with max >= default falls back to the documented default.
+function normalizeBashTimeout(value) {
+  const source = isPlainObject(value) ? value : {};
+  const isValid =
+    Number.isInteger(source.default) && source.default > 0 && Number.isInteger(source.max) && source.max >= source.default;
+  return isValid ? { default: source.default, max: source.max } : { ...BASH_TIMEOUT_DEFAULT };
+}
+
 // Fills defaults over a config read from disk or edited by hand.
 export function normalizeConfig(raw, { warn = () => {} } = {}) {
   if (!isPlainObject(raw)) return emptyConfig();
@@ -165,6 +182,7 @@ export function normalizeConfig(raw, { warn = () => {} } = {}) {
       resumeSession: raw.queue?.resumeSession === true,
       leaseHeartbeatS: normalizeHeartbeat(raw.queue?.leaseHeartbeatS),
       keepAwake: normalizeKeepAwake(raw.queue?.keepAwake),
+      bashTimeoutS: normalizeBashTimeout(raw.queue?.bashTimeoutS),
     },
     embedding: normalizeEmbedding(raw.embedding),
   };

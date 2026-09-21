@@ -63,6 +63,7 @@ function jobsDomain(env, db) {
     peekNextJob: async () => jobs.peekNextJob(env),
     listWithSlug: async () => jobs.listJobsWithSlug(env, db()),
     listOpenJobs: async () => jobs.listOpenJobs(env, db()),
+    recentHostCommandCounts: async () => jobs.recentHostCommandCounts(env, db()),
     status: async (id) => jobs.jobStatus(id, env, db()),
   };
 }

@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,12 @@ export function hostPackageRoot(env = process.env) {
 // Absolute path of the CLI entry point, the one registered in the host.
 export function cliEntryPath(env = process.env) {
   return join(hostPackageRoot(env), "bin", "nightshift.mjs");
+}
+
+// Root a NEW process is born from: the installed current runtime whenever one truly exists, the tree this process itself runs from otherwise - so a long-lived caller never hands a spawned child its own, possibly superseded, tree.
+export function spawnRoot(env = process.env) {
+  const installed = realPathOrSelf(hostPackageRoot(env));
+  return existsSync(join(installed, "bin", "nightshift.mjs")) ? installed : packageRoot();
 }
 
 // Path of the marketplace manifest inside the runtime, the file the host reads.

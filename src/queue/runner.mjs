@@ -5,10 +5,10 @@ import { UserError } from "../config/errors.mjs";
 import { jobLogPath, logsDir, runDir } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { ghPrList } from "../host/gh.mjs";
-import { packageRoot } from "../host/paths.mjs";
+import { packageRoot, spawnRoot } from "../host/paths.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore, openStoreReadOnly } from "../store/open.mjs";
-import { acquire, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
+import { acquire, bashTimeoutS, concurrencyCap, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isTerminalRuntimeKill, isTransientFailure } from "./classify.mjs";
 import { preflight } from "./preflight.mjs";
 import {
@@ -29,8 +29,9 @@ import { killProcess, ownRunnerRecord } from "./registry.mjs";
 import { runMaintenance } from "./maintenance.mjs";
 import { clearRunOutcome, decideResume, isSafeSegment, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
 import { recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
-import { buildPrompt, cliEntrypoint, IDLE_TIMEOUT_S, provisionalSlug, spawnClaude } from "./spawn.mjs";
+import { buildPrompt, IDLE_TIMEOUT_S, provisionalSlug, spawnClaude } from "./spawn.mjs";
 import {
+  extractHostCommandCounts,
   extractRateLimitFromEventLine,
   extractSessionIdFromEventLine,
   extractSlugFromEventLine,
@@ -38,6 +39,8 @@ import {
   extractTierRaiseFromEventLine,
   extractUsage,
   isPrUrl,
+  sawDisabledBackgroundTask,
+  sumHostCommandCounts,
   sumUsage,
 } from "./stream.mjs";
 import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
@@ -81,7 +84,7 @@ const PR_SEARCH_MAX_CHARS = 80;
 
 // Merges the injected seams over the real implementations; the ownership poll is the configured heartbeat.
 function withDefaults(deps, env) {
-  const merged = { ...DEFAULT_DEPS, stopPollMs: leaseHeartbeatMs(env) };
+  const merged = { ...DEFAULT_DEPS, stopPollMs: leaseHeartbeatMs(env), bashTimeoutS: bashTimeoutS(env) };
   for (const [key, value] of Object.entries(deps ?? {})) {
     if (value !== undefined) merged[key] = value;
   }
@@ -295,9 +298,11 @@ async function runAttempts(job, ctx) {
   const resumeForced = resumeSessionEnabled(env) || wasRateLimitParked(job);
   const ownership = { lost: false };
   const usages = [];
+  const hostCommandCounts = [];
   let attempt = job.attempts;
   while (true) {
-    if (!(await renew(job, env))) return { lost: true, facts, attempt, usage: sumUsage(usages), outcome: null, result: null };
+    if (!(await renew(job, env)))
+      return { lost: true, facts, attempt, usage: sumUsage(usages), hostCommands: sumHostCommandCounts(hostCommandCounts), outcome: null, result: null };
     if (isSafeSegment(facts.slug)) clearRunOutcome({ project: job.project, slug: facts.slug, env });
     const result = await spawnClaude({
       prompt: ctx.prompt,
@@ -316,20 +321,24 @@ async function runAttempts(job, ctx) {
       resumeSessionId: resumeForced ? facts.sessionId : null,
       resolveBinImpl: deps.resolveBinImpl,
       holdJobAwakeImpl: deps.holdJobAwakeImpl,
+      bashTimeoutS: deps.bashTimeoutS,
     });
-    if (ownership.lost) return { lost: true, facts, attempt, usage: sumUsage(usages), outcome: null, result };
+    if (ownership.lost)
+      return { lost: true, facts, attempt, usage: sumUsage(usages), hostCommands: sumHostCommandCounts(hostCommandCounts), outcome: null, result };
     usages.push(extractUsage(result.log));
+    hostCommandCounts.push(extractHostCommandCounts(result.log));
+    const hostCommands = sumHostCommandCounts(hostCommandCounts);
     const notBefore = rateLimitExit(result, facts);
-    if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, usage: sumUsage(usages), outcome: null, result };
+    if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, usage: sumUsage(usages), hostCommands, outcome: null, result };
     const planPath = isSafeSegment(facts.slug) ? join(runDir(job.project, facts.slug, env), "03-plan.md") : null;
     const state = readRunState({ project: job.project, slug: facts.slug, env });
     const outcome = classifyJobResult({ ...result, state, planPath });
     if (!isRetryable(job, attempt, result, outcome, state)) {
-      return { lost: false, facts, attempt, usage: sumUsage(usages), outcome, result };
+      return { lost: false, facts, attempt, usage: sumUsage(usages), hostCommands, outcome, result };
     }
     await deps.sleepImpl(backoffMs(attempt));
     if (!(await ctx.store.jobs.countAttempt(job.id, { worker: job.worker }))) {
-      return { lost: true, facts, attempt, usage: sumUsage(usages), outcome, result };
+      return { lost: true, facts, attempt, usage: sumUsage(usages), hostCommands, outcome, result };
     }
     attempt += 1;
   }
@@ -415,10 +424,22 @@ async function inspectJobWorktree(run, state, ctx) {
   });
 }
 
-// The outcome the finish writes: the run's own, with the kept-worktree line appended to whatever notice exists; the line also goes to the job log.
+// The line appended once when the last attempt shows the host backgrounding a task despite the disable env var the runtime sets.
+const DISABLED_BACKGROUND_ESCAPE_LINE =
+  "⚠️ the host moved a command to the background although background tasks are disabled - the CLI may have dropped CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
+
+// Appends the disabled-background escape line once when the last attempt shows one, mirroring it to the runner's own log.
+function withDisabledBackgroundEscape(noticeMd, log) {
+  if (!sawDisabledBackgroundTask(log)) return noticeMd;
+  process.stderr.write(`${DISABLED_BACKGROUND_ESCAPE_LINE}\n`);
+  return noticeMd ? `${noticeMd}\n\n${DISABLED_BACKGROUND_ESCAPE_LINE}` : DISABLED_BACKGROUND_ESCAPE_LINE;
+}
+
+// The outcome the finish writes: the run's own, with the kept-worktree line and the disabled-background escape appended to whatever notice exists; both lines also go to their own log.
 function outcomeWithWorktree(job, run, worktree, env) {
   if (worktree && !worktree.removable) appendJobLog(job.id, keptWorktreeLine(worktree), env);
-  return { ...run.outcome, noticeMd: finishNotice({ runNotice: run.outcome.noticeMd, rowNotice: job.notice_md, worktree }) };
+  const noticeMd = finishNotice({ runNotice: run.outcome.noticeMd, rowNotice: job.notice_md, worktree });
+  return { ...run.outcome, noticeMd: withDisabledBackgroundEscape(noticeMd, run.result.log) };
 }
 
 // Removes the worktree of a job that ended `done`; a refusal is written to the job log and stderr, and never costs the job.
@@ -462,6 +483,7 @@ async function finalize(job, run, ctx) {
           prUrl: run.outcome.prUrl,
           noticeMd: outcome.noticeMd,
           usage: run.usage,
+          hostCommands: run.hostCommands,
         },
         env,
       ),
@@ -879,10 +901,11 @@ function compactStamp() {
 }
 
 // Arguments of the detached child: `--foreground` is what makes it run the queue instead of detaching again; the
-// child parses `--from`/`--until` itself, so they travel unchanged.
-function detachedArgs({ jobId, max, watchIntervalS, from = null, until = null }) {
+// child parses `--from`/`--until` itself, so they travel unchanged. The entry point is the CURRENT installed
+// runtime, never this process's own tree, so a long-lived caller can never hand the child a superseded one.
+function detachedArgs({ jobId, max, watchIntervalS, from = null, until = null, runtimeDir }) {
   return [
-    cliEntrypoint(),
+    join(runtimeDir, "bin", "nightshift.mjs"),
     "queue",
     "run",
     "--foreground",
@@ -903,23 +926,26 @@ function recordSpawnFailure(logPath, err) {
 }
 
 // Starts the child on the open log descriptor and takes over the failures that arrive after this call returned.
-function spawnRunner({ args, fd, logPath, env, spawnImpl }) {
+function spawnRunner({ args, fd, logPath, runtimeDir, env, spawnImpl }) {
   const child = spawnImpl(process.execPath, args, { detached: true, stdio: ["ignore", fd, fd], env: { ...env } });
   child?.on?.("error", (err) => recordSpawnFailure(logPath, err));
   child?.unref?.();
-  return { pid: child?.pid ?? null, logPath };
+  return { pid: child?.pid ?? null, logPath, runtimeDir };
 }
 
-// Starts `nightshift queue run` detached, with its output going to a log file, and returns right away.
+// Starts `nightshift queue run` detached, with its output going to a log file, and returns right away; the
+// `runtimeDir` it answers with is the same tree the child's argv points into, so the caller registers what the
+// child really loads instead of guessing it a second time.
 export function launchDetachedRunner({ jobId = null, max = null, watchIntervalS = null, from = null, until = null, env = process.env, spawnImpl = spawn } = {}) {
   ensureHome(env);
   const logPath = join(logsDir(env), `runner-${compactStamp()}.log`);
+  const runtimeDir = spawnRoot(env);
   try {
     mkdirSync(logsDir(env), { recursive: true });
     const fd = openSync(logPath, "a");
-    const args = detachedArgs({ jobId, max, watchIntervalS, from, until });
+    const args = detachedArgs({ jobId, max, watchIntervalS, from, until, runtimeDir });
     try {
-      return spawnRunner({ args, fd, logPath, env, spawnImpl });
+      return spawnRunner({ args, fd, logPath, runtimeDir, env, spawnImpl });
     } finally {
       closeSync(fd);
     }

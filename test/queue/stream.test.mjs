@@ -8,6 +8,7 @@ import {
   extractPrUrl,
   extractPrUrlFromStream,
   extractPublishedPrUrl,
+  extractHostCommandCounts,
   extractResultText,
   extractSessionIdFromEventLine,
   extractSlugFromEventLine,
@@ -24,6 +25,8 @@ import {
   parseSlugTypeLine,
   parseTierRaiseLine,
   runtimeKillFromStream,
+  sawDisabledBackgroundTask,
+  sumHostCommandCounts,
   sumUsage,
   tokensFromEventLine,
 } from "../../src/queue/stream.mjs";
@@ -42,6 +45,7 @@ import {
   slugEvent,
   systemInitEvent,
   toNdjson,
+  toolResultEvent,
 } from "../../test-support/streams.mjs";
 
 // One NDJSON line, the unit every extractor of the stream consumes.
@@ -374,6 +378,27 @@ test("a forged mention of the ceiling line never counts as a kill: quoted inside
   assert.equal(runtimeKillFromStream(fenced), null, "a fenced quotation of the ceiling line was read as a real kill");
 });
 
+// A `task_updated` event patching `is_backgrounded`, in the shape the host writes it.
+function backgroundedEvent(taskId, isBackgrounded) {
+  return { type: "system", subtype: "task_updated", task_id: taskId, patch: { is_backgrounded: isBackgrounded } };
+}
+
+test("sawDisabledBackgroundTask is true only when a task_updated patch carries is_backgrounded: true", () => {
+  assert.equal(sawDisabledBackgroundTask(toNdjson([systemInitEvent(), backgroundedEvent("task_1", true)])), true);
+  assert.equal(sawDisabledBackgroundTask(toNdjson([systemInitEvent(), backgroundedEvent("task_1", false)])), false, "a subagent that still ran foreground counted as backgrounded");
+});
+
+test("sawDisabledBackgroundTask is false on a clean stream and an empty log", () => {
+  assert.equal(sawDisabledBackgroundTask(doneStream()), false);
+  assert.equal(sawDisabledBackgroundTask(""), false);
+});
+
+test("sawDisabledBackgroundTask only reads the LAST attempt of the log", () => {
+  const earlierAttempt = `${attemptMarker(1)}\n${toNdjson([systemInitEvent(), backgroundedEvent("task_1", true)])}`;
+  const lastAttemptClean = `${attemptMarker(2)}\n${toNdjson([systemInitEvent()])}`;
+  assert.equal(sawDisabledBackgroundTask(`${earlierAttempt}${lastAttemptClean}`), false, "an earlier attempt's backgrounded task leaked into the last one");
+});
+
 test("usage adds up per message id and the result event of the session has the final word", () => {
   const twice = assistantEvent("same message", { messageId: "msg_dup", usage: { tokensIn: 7, tokensOut: 3 } });
   const estimated = extractUsage(toNdjson([twice, twice, assistantEvent("no usage")]));
@@ -458,4 +483,49 @@ test("the usage of several attempts is one total, and a missing attempt never po
   });
   assert.equal(sumUsage([null, null]), null);
   assert.equal(sumUsage(null), null);
+});
+
+test("bash_timeouts counts one per matching tool_result block, whether its content is a string or an array of text blocks", () => {
+  const stringTimeout = toolResultEvent({ toolUseId: "toolu_1", content: "Exit code 143\nCommand timed out after 5s", isError: true });
+  const arrayTimeout = toolResultEvent({
+    toolUseId: "toolu_2",
+    content: [{ type: "text", text: "Exit code 143\nCommand timed out after 30s" }],
+    isError: true,
+  });
+  const notAnError = toolResultEvent({ toolUseId: "toolu_3", content: "Command timed out after 5s", isError: false });
+  const notATimeout = toolResultEvent({ toolUseId: "toolu_4", content: "ok", isError: true });
+  const log = toNdjson([systemInitEvent(), stringTimeout, arrayTimeout, notAnError, notATimeout]);
+  assert.deepEqual(extractHostCommandCounts(log), { bashTimeouts: 2, tasksBackgrounded: 0, tasksKilled: 0 });
+});
+
+test("tasks_backgrounded counts distinct task ids, never a task_updated with is_backgrounded: false", () => {
+  const log = toNdjson([
+    systemInitEvent(),
+    backgroundedEvent("task_1", true),
+    backgroundedEvent("task_1", true),
+    backgroundedEvent("task_2", true),
+    backgroundedEvent("task_3", false),
+  ]);
+  assert.deepEqual(extractHostCommandCounts(log), { bashTimeouts: 0, tasksBackgrounded: 2, tasksKilled: 0 });
+});
+
+test("tasks_killed counts distinct task ids of a task_updated patch carrying status: killed", () => {
+  const killedEvent = (taskId) => ({ type: "system", subtype: "task_updated", task_id: taskId, patch: { status: "killed" } });
+  const log = toNdjson([systemInitEvent(), killedEvent("task_1"), killedEvent("task_1"), killedEvent("task_2")]);
+  assert.deepEqual(extractHostCommandCounts(log), { bashTimeouts: 0, tasksBackgrounded: 0, tasksKilled: 2 });
+});
+
+test("a host-command event quoted inside a code fence is never read as one", () => {
+  const timeout = toolResultEvent({ content: "Exit code 143\nCommand timed out after 5s", isError: true });
+  const fenced = [line(systemInitEvent()), "```", line(timeout), line(backgroundedEvent("task_1", true)), "```"].join("\n");
+  assert.deepEqual(extractHostCommandCounts(fenced), { bashTimeouts: 0, tasksBackgrounded: 0, tasksKilled: 0 });
+  assert.equal(extractHostCommandCounts("").bashTimeouts, 0);
+});
+
+test("host command counts sum across attempts, the same way the usage does", () => {
+  const first = { bashTimeouts: 1, tasksBackgrounded: 1, tasksKilled: 0 };
+  const second = { bashTimeouts: 2, tasksBackgrounded: 0, tasksKilled: 1 };
+  assert.deepEqual(sumHostCommandCounts([first, null, second]), { bashTimeouts: 3, tasksBackgrounded: 1, tasksKilled: 1 });
+  assert.deepEqual(sumHostCommandCounts([]), { bashTimeouts: 0, tasksBackgrounded: 0, tasksKilled: 0 });
+  assert.deepEqual(sumHostCommandCounts(null), { bashTimeouts: 0, tasksBackgrounded: 0, tasksKilled: 0 });
 });

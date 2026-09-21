@@ -24,7 +24,7 @@ import {
   roadmapItemView,
 } from "../memory/roadmap.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
-import { noRunnerWait, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline, windowWaitingLine } from "../queue/hints.mjs";
+import { noRunnerWait, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline, staleRuntimeHint, windowWaitingLine } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { blockerLines } from "../queue/claim.mjs";
 import { closeJobAndWorktree } from "../queue/close.mjs";
@@ -352,6 +352,7 @@ function queuedRunnerLine(env) {
 async function queuedAnswer({ job, registered = null, roadmapItemId = null, note = "" }, env) {
   const pending = (await openStore(env).jobs.countsByStatus()).pending;
   const done = registered ? `registered project \`${registered.name}\` (${registered.path}). ` : "";
+  const stale = staleRuntimeHint(env);
   return {
     ok: true,
     id: job.id,
@@ -360,7 +361,7 @@ async function queuedAnswer({ job, registered = null, roadmapItemId = null, note
     timeoutS: job.timeoutS,
     ...(roadmapItemId === null ? {} : { roadmapItemId }),
     ...(job.tier ? { tier: job.tier } : {}),
-    hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending).${note} ${queuedRunnerLine(env)}`,
+    hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending).${note} ${queuedRunnerLine(env)}${stale ? ` ${stale}` : ""}`,
   };
 }
 
@@ -484,16 +485,18 @@ async function queueStatusAnswer(args, { store, warning, env }) {
   if (unread) throw new UserError(`the queue cannot be read: ${unread.error}`);
   if (view.registryError !== null) throw unreadableRegistry(view.registryError, env);
   const { runners, advisories, jobs, counts, suggestions, activeJobs, sections } = view;
+  const stale = staleRuntimeHint(env);
+  const advisoriesWithStale = stale ? [...advisories, stale] : advisories;
   return {
     runner: runners[0] ?? STOPPED_RUNNER,
     runners,
     runnersOnline: runners.length,
-    advisories,
+    advisories: advisoriesWithStale,
     jobs,
     counts,
     suggestions,
     sections,
-    hint: [queueHint({ activeJobs, counts, runners, jobs }), ...advisories, ...suggestions].join(" "),
+    hint: [queueHint({ activeJobs, counts, runners, jobs }), ...advisoriesWithStale, ...suggestions].join(" "),
     ...warningAnswer(warning),
   };
 }
@@ -791,7 +794,9 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const started = await startQueueRunner({ jobId: Number.isInteger(args.job_id) ? args.job_id : null, env });
-        return { ok: true, ...runnerAnswer(started, env, await startAdvisoryLines({ env })) };
+        const advisories = await startAdvisoryLines({ env });
+        const stale = staleRuntimeHint(env);
+        return { ok: true, ...runnerAnswer(started, env, stale ? [...advisories, stale] : advisories) };
       },
     },
     {

@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { homeDir, jobLogPath, logsDir, queuePausedPath, runnersDir } from "../../src/config/paths.mjs";
+import { homeDir, jobLogPath, logsDir, PACKAGE_NAME, queuePausedPath, runnersDir, runtimeCurrentLink, runtimeDir, runtimeVersionsDir } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
+import { packageRoot } from "../../src/host/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
 import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
@@ -594,6 +595,25 @@ test("queue_status never returns the prompt and truncates the free text at five 
   assert.match(textOf(unknown), /unknown job `99`/);
 });
 
+test("queue_status of one job shows a host-command counter only when it is not zero", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-status-host-commands");
+  const zero = addJob({ project: "alpha", prompt: "never timed out" }, env).id;
+  const some = addJob({ project: "alpha", prompt: "timed out and got backgrounded" }, env).id;
+  openDb(env).prepare("UPDATE jobs SET bash_timeouts = 0, tasks_backgrounded = 0, tasks_killed = 0 WHERE id = ?").run(zero);
+  openDb(env).prepare("UPDATE jobs SET bash_timeouts = 1, tasks_backgrounded = 2, tasks_killed = 0 WHERE id = ?").run(some);
+  const client = await connect(t, env);
+
+  const atZero = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: zero } })).job;
+  assert.equal(atZero.bash_timeouts, null);
+  assert.equal(atZero.tasks_backgrounded, null);
+  assert.equal(atZero.tasks_killed, null);
+
+  const nonZero = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: some } })).job;
+  assert.equal(nonZero.bash_timeouts, 1);
+  assert.equal(nonZero.tasks_backgrounded, 2);
+  assert.equal(nonZero.tasks_killed, null);
+});
+
 test("queue_status carries the run's own notice, whole, whenever it differs from the row's - and only for one job", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-status-run-notice");
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
@@ -924,6 +944,60 @@ test("queue_run starts a runner even while another one is live, and queue_status
   const listed = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(listed.runners.some((runner) => runner.pid === process.pid), true, "the live runner left the listing");
   assert.equal(listed.runner.pid, listed.runners[0].pid);
+});
+
+// Writes a minimal installed version of this package under `runtime/versions/<name>`, holding only the entry point the resolver checks for.
+function writeRuntimeVersion(env, name) {
+  const pkgDir = join(runtimeVersionsDir(env), name, "node_modules", PACKAGE_NAME);
+  mkdirSync(join(pkgDir, "bin"), { recursive: true });
+  writeFileSync(join(pkgDir, "bin", "nightshift.mjs"), "");
+}
+
+// Points `runtime/current` at one version directory, the way an install does.
+function switchRuntimeCurrent(env, name) {
+  mkdirSync(runtimeDir(env), { recursive: true });
+  symlinkSync(join("versions", name), runtimeCurrentLink(env));
+}
+
+const SUPERSEDED_VERSION = "0.2.0-20260919T181653Z";
+const CURRENT_VERSION = "0.2.0-20260921T142701Z";
+
+test("a server kept open since before an install names its own superseded runtime, in the hint of queue_status, queue_run and queue_add", async (t) => {
+  const env = makeQueueHome(t, "mcp-stale-runtime");
+  writeRuntimeVersion(env, SUPERSEDED_VERSION);
+  writeRuntimeVersion(env, CURRENT_VERSION);
+  switchRuntimeCurrent(env, CURRENT_VERSION);
+  const client = await connect(t, env);
+  const restartLine = `this MCP server runs a superseded runtime`;
+
+  const status = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.ok(status.hint.includes(restartLine), status.hint);
+  assert.ok(
+    status.advisories.some((line) => line === `${restartLine} (${packageRoot()}) - restart the MCP client to load ${CURRENT_VERSION}`),
+    JSON.stringify(status.advisories),
+  );
+
+  const run = payloadOf(await client.callTool({ name: "queue_run", arguments: { job_id: null } }));
+  assert.equal(run.started, false, "the paused queue would have spawned a runner anyway");
+  assert.ok(
+    run.advisories.some((line) => line.startsWith(restartLine)),
+    JSON.stringify(run.advisories),
+  );
+
+  const added = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker" } }));
+  assert.ok(added.hint.includes(restartLine), added.hint);
+});
+
+test("the stale-runtime hint never appears when this server already runs the current one, or none is installed at all", async (t) => {
+  const env = makeQueueHome(t, "mcp-fresh-runtime");
+  const client = await connect(t, env);
+
+  const status = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.equal(status.hint.includes("superseded runtime"), false, status.hint);
+  assert.deepEqual(status.advisories, []);
+
+  const added = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker" } }));
+  assert.equal(added.hint.includes("superseded runtime"), false, added.hint);
 });
 
 test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a live run or a finished one", async (t) => {

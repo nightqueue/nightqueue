@@ -8,6 +8,23 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The runtime configures the `claude` it spawns for a job:
+  `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` plus `BASH_DEFAULT_TIMEOUT_MS` and
+  `BASH_MAX_TIMEOUT_MS` from the new `queue.bashTimeoutS` (default
+  `{ "default": 900, "max": 3600 }` seconds). A command that outlives its timeout now
+  dies in the foreground with `Command timed out` instead of being moved to the
+  background and killed later as an orphan task; an inherited value of these variables
+  never leaks into the child. When a job's stream still shows a backgrounded task, its
+  notice and the runner log get one warning line.
+- Each job records `bash_timeouts`, `tasks_backgrounded` and `tasks_killed` (schema v12),
+  shown by `queue status <id>` (human, `--json`, MCP) only when not zero, and
+  `nightshift doctor` sums them over the last 20 finished jobs in a `host commands` row.
+- A long-lived MCP server that runs a superseded runtime says so in the hints of
+  `queue_status`, `queue_run` and `queue_add`.
+- A detached runner is launched from the installed current runtime, never from the tree
+  of the process that started it, and its registration names that tree.
+- `npm test` runs with `--test-timeout=60000`, so a hung test fails in 60 s by name.
+
 - `nightshift queue status <id>` (CLI, human and `--json`, and the MCP tool
   `queue_status` with `job_id`) now also answers `run_notice` whenever the
   run's own `## Notice` - read fresh from the log the row's `result.logPath`
