@@ -52,9 +52,9 @@ import {
 } from "../memory/runs.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
 import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons } from "./phase-context.mjs";
+import { readVersion } from "../cli/version.mjs";
 
 const SERVER_NAME = "nightshift";
-const SERVER_VERSION = "0.1.0";
 const SERVER_INSTRUCTIONS = [
   "nightshift is a backlog of unattended coding jobs, not a synchronous executor: `queue_add` records work, it never runs it.",
   "Queue every task or plan the moment it comes up - one job is one self-contained deliverable, and a large plan is ONE job with numbered stages written in the prompt, never several jobs that depend on each other.",
@@ -1118,7 +1118,7 @@ function toolHandler(tool, env) {
 
 // Builds the MCP server with the twenty-five tools of the plugin contract.
 export function createServer(env = process.env) {
-  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, { instructions: SERVER_INSTRUCTIONS });
+  const server = new McpServer({ name: SERVER_NAME, version: readVersion() }, { instructions: SERVER_INSTRUCTIONS });
   const schemas = new Map();
   for (const tool of toolDefinitions(env)) {
     schemas.set(tool.name, tool.config.inputSchema);

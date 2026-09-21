@@ -403,6 +403,10 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   read the item without joining those two tables, so both fields always came back
   empty - the link itself was never lost.
 
+- The MCP server reports the installed package version to its client. It declared
+  `0.1.0` in a constant that no release touched, so Claude and `claude mcp list`
+  showed an MCP two versions behind the CLI running it.
+
 ### Changed
 
 - The `PreToolUse` hook matcher is now `Agent|Task|Bash|Read|Grep|Glob`. An existing
