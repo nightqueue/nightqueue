@@ -28,6 +28,7 @@ nightshift queue session 7 [--print]                           # resume the clau
 nightshift queue cancel 7 --reason "not needed"                # cancel a pending, gated or orphaned job
 nightshift queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue
 nightshift queue repair 7 [--json]                             # re-classify a gated or failed job from its own log
+nightshift queue ship 7 [--force] [--foreground] [--json]      # merge a done job's pull request and close the job, detached
 nightshift queue pause | nightshift queue resume                    # stop claiming new jobs, or claim again
 ```
 
@@ -191,7 +192,9 @@ runners are live - start another with `nightshift queue run`; a single runner ne
 runner are all registered the same way, one file per pid, and every start path - `queue run`,
 `--watch`, `--job`, `queue add --run`, `queue retry --run`, their `--foreground` forms and the
 `queue_run` and `queue_retry` MCP tools - registers its runner under the home lock, in the
-same critical section as the prune of the dead registrations.
+same critical section as the prune of the dead registrations. `queue ship` and the
+`queue_ship` MCP tool register theirs the same way, as a runner of mode `ship` that claims
+no job (see *Shipping a job*).
 **No start is ever refused because another runner is live**: the claim is one atomic `UPDATE`
 inside SQLite, so a second runner costs nothing and takes nothing away. `queue.maxConcurrent` is an opt-in ceiling over
 the whole home, with no default: there is no ceiling until the operator sets a positive
@@ -704,11 +707,99 @@ cause (clean the checkout, register the project, put `claude` back on the
 no retry, no operator call. The claim clears `blocked_code` the instant it
 picks the job back up.
 
-**What it does NOT do in v1.** It never merges anything, never closes the cycle
-after the pull request, keeps no token budget, ships no launchd (or any other)
+**What it does NOT do in v1.** The runner never merges anything and never closes the
+cycle after the pull request on its own - that is `nightshift queue ship`, an operator
+command (see *Shipping a job* below). It keeps no token budget, ships no launchd (or any other)
 scheduler, sends no notification and has no cockpit. It also never changes the
 state of a git repository: the only git commands it runs are reads of the
 checkout, and every branch and worktree is created by the pipeline itself.
+
+### Shipping a job
+
+**A ship takes a `done` job's pull request from open to merged and closes the job.**
+`nightshift queue ship <id>` (and the MCP `queue_ship`) runs a code pipeline of four
+steps in the command's own process - never an agent, never a second job, never queue work:
+
+1. **preflight** - `git fetch origin` in the project's checkout (a failed fetch is not a
+   stop: `WARNING: git fetch origin failed (...)` is prefixed to every later step note),
+   then the pull request is read with gh. A closed one stops the ship; one that is already
+   merged is recorded as merged and nothing else is checked. Otherwise the checks must be
+   green - a red or a pending check stops the ship naming it, and it never waits for one.
+   Uncommitted files in the checkout only stop it when the pull that follows the merge
+   would touch them (`checkout-dirty` names up to ten): nightshift never stashes, so they are
+   yours to commit or stash.
+2. **conflict** - skipped when GitHub reports the pull request mergeable. When it conflicts,
+   the head branch is rebased onto the base in a throwaway worktree (its own temporary
+   directory, with the checkout's `node_modules` linked in), the project's `npm test` must
+   pass there, and only then the rebased head is pushed with
+   `--force-with-lease` against the head the ship read. A rebase that stops on real
+   conflicts is aborted and the ship stops with `real-conflict` and the conflicted files -
+   a ship never resolves a real conflict. The throwaway worktree is removed whatever
+   happens.
+3. **merge** - `gh pr merge --squash --match-head-commit <the verified head>`, never
+   `--delete-branch`, `--admin` or `--auto`. gh's exit code is never the evidence: the pull
+   request is re-read until GitHub reports it merged with its merge commit, and that
+   commit is what is recorded. Afterwards the checkout is fast-forwarded with `git pull
+   --ff-only` only when it sits on the base branch; the result is noted, never a failure.
+4. **settle** - closes the job and appends `Shipped: PR #<n> merged as <sha7> on
+   <YYYY-MM-DD>` to its notice (after a blank line, never replacing it), in one write; the
+   job's worktree is then released by the same rule as `queue close` (see *Worktrees*).
+
+The job's status is untouched until settle: a ship that stops leaves it `done`.
+
+**The checklist lives on the job.** Each step writes its result to the job row as soon as it
+settles: `ship_status` (`shipping`, `shipped` or `failed`) and `ship`, a checklist with the
+attempt count, one entry per step (`done`, `skipped` or `failed`, a note and the time) and
+the data the steps read (pull request number, head, merge commit). `queue status` shows it:
+the STATUS cell gains ` · shipping`, ` · shipped`, ` · ship failed` or ` · ship stalled`,
+`SLUG/LAST` names the current step or the stop, and `queue status <id>` prints the whole
+checklist under the status line; `--json` and the MCP `queue_status` carry `ship_status`,
+`ship_worker`, `ship_lease_until` and `ship`. A ship that stops prints, in the listing, the
+detail and the queue's hint lines,
+`⛔ ship stopped at <step>: <reason> - run again with: nightshift queue ship <id>`, and a ship
+in flight adds `ship in flight: #<id> at <step> (pid <pid>) - follow with: nightshift queue
+status <id>`. `nightshift doctor` has a `ships` row that warns on a failed ship or one whose
+lease expired.
+
+**Running it again resumes it at the step that failed.** A step already `done` is not run
+again, and whether the merge happened is decided by the merge commit recorded from GitHub -
+never by a step status - so a ship that stopped after the merge never merges twice. A merge
+that finds the pull request conflicted again, or its head moved, reopens the earlier steps
+it depends on.
+
+**The lease is only a mutex.** Starting a ship takes a lease on the job, in one atomic
+update, so two ships of the same job never run together: a second start is refused
+naming the ship that holds it and until when. The lease lasts the ship's timeout plus 60 s
+and is renewed on every checklist write; a lease that expired (the process died or passed
+its timeout) shows as `ship stalled` and is taken over by the next `queue ship`. The ship
+claims nothing: it holds no job lease and never changes what a runner may pick up.
+
+**Detached by default.** `nightshift queue ship <id>` starts a child and returns at once
+with `ship of job #<id> started (pid <pid>) - follow with: tail -f <log> (log: <log>), or
+nightshift queue status <id>`; the log is `<home>/logs/ship-<id>-<stamp>.log`, and `--json`
+prints `{ started, jobId, pid, logPath }`. The child registers as a runner of mode `ship`, so
+`queue status`, doctor and the install guard see it live, but a pending job is never
+promised to it. `--foreground` runs the steps in this process, prints one line per step and
+a final `job #<id> shipped: PR #<n> merged as <sha7>; job closed` (plus what happened to
+the worktree) or the `⛔ ship stopped ...` line, and exits `0` only when the job shipped;
+with `--json` it prints one `{ job, outcome }` object and nothing else on stdout.
+`queue.shipTimeoutS` (default `600`, accepted range `60..3600` seconds) is the hard
+timeout of the whole ship; a ship that passes it, or that `queue run --stop` ends, stops
+with `timeout` or `interrupted` and resumes on the next run.
+
+**What it ships.** Only a `done` job with a GitHub pull request URL of a registered project
+whose checkout exists. `--force` (`force: true` over MCP) ships a `failed` or `gate` job
+that carries a pull request, and says so first. `closed`, `running`, `pending`,
+`cancelled`, a job without a pull request and a job another ship holds under a live lease
+are refused by name, and nothing is written. An unattended run never ships: inside a job
+the command and the tool are refused.
+
+**What it never does.** It never stashes, never deletes a branch (`--delete-branch`),
+never resolves a real conflict, never retries the run that produced the pull request and
+never ships on its own - the operator decides when to ship. Ships of one project share its
+checkout (the fetch, the throwaway worktrees, the pull), so they are best run one after
+the other; a collision fails the ship safely (`fetch-failed`, `worktree-failed`) and it
+resumes on the next run.
 
 ## Writing a job
 

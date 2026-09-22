@@ -51,6 +51,7 @@ test("normalizeConfig fills defaults over a partial, hand-edited file", () => {
     keepAwake: "auto",
     bashTimeoutS: { default: 900, max: 3600 },
     inheritUserEnvironment: false,
+    shipTimeoutS: 600,
   });
   assert.deepEqual(emptyConfig().queue, {
     maxConcurrent: null,
@@ -59,6 +60,7 @@ test("normalizeConfig fills defaults over a partial, hand-edited file", () => {
     keepAwake: "auto",
     bashTimeoutS: { default: 900, max: 3600 },
     inheritUserEnvironment: false,
+    shipTimeoutS: 600,
   });
 });
 
@@ -141,6 +143,16 @@ test("queue.bashTimeoutS accepts two positive integers with max >= default, othe
     );
   }
   assert.deepEqual(normalizeConfig({}).queue.bashTimeoutS, { default: 900, max: 3600 }, "a missing key must default to 900/3600");
+});
+
+test("queue.shipTimeoutS accepts an integer between 60 and 3600, otherwise falls back to 600", () => {
+  for (const valid of [60, 600, 3600]) {
+    assert.equal(normalizeConfig({ queue: { shipTimeoutS: valid } }).queue.shipTimeoutS, valid, String(valid));
+  }
+  for (const invalid of [0, 59, 3601, -600, 90.5, "600", null, {}, undefined]) {
+    assert.equal(normalizeConfig({ queue: { shipTimeoutS: invalid } }).queue.shipTimeoutS, 600, `\`${String(invalid)}\` was accepted`);
+  }
+  assert.equal(emptyConfig().queue.shipTimeoutS, 600);
 });
 
 test("normalizeConfig recreates the default org and drops broken project entries", () => {

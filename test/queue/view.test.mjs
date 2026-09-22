@@ -8,6 +8,7 @@ import { ABANDONED_COMMAND_PREFIX } from "../../src/queue/classify.mjs";
 import { createPrStateCache } from "../../src/queue/pr-state.mjs";
 import { pruneDeadRunners, writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "../../src/queue/runner.mjs";
+import { shippedLine } from "../../src/queue/ship-view.mjs";
 import { closeSuggestion, failedCoreSection, jobDetailView, prUrlsOf, queueView, truncationSuggestion } from "../../src/queue/view.mjs";
 import { KEPT_PREFIX } from "../../src/queue/worktree.mjs";
 import { withReadOnlyStore } from "../../src/store/open.mjs";
@@ -173,10 +174,10 @@ test("queueView on a read-only store never prunes: a dead runner's registration 
   assert.equal(existsSync(pidfile), false);
 });
 
-test("sections name jobs, counts, runners and advisories, each read with an integer elapsed time", async (t) => {
+test("sections name jobs, counts, runners, advisories and ships, each read with an integer elapsed time", async (t) => {
   const env = seedHome(t, "view-sections", [{ status: "pending" }]);
   const view = await withReadOnlyStore(env, (store) => queueView(store, { env, killImpl: deadKill }));
-  assert.deepEqual(view.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories"]);
+  assert.deepEqual(view.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories", "ships"]);
   for (const section of view.sections) {
     assert.equal(section.ok, true, `${section.name}: ${section.error}`);
     assert.equal(section.error, null);
@@ -243,6 +244,16 @@ test("jobDetailView hides run_notice when the row's notice differs from the run'
   const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
   assert.equal(detail.notice_md, rowNotice);
   assert.equal("run_notice" in detail, false, "the abandoned-command line the runtime appended made the notices look different");
+});
+
+test("jobDetailView hides run_notice when the row's notice differs from the run's only by the Shipped line a ship appended", async (t) => {
+  const runNotice = "the run's real notice, kept whole";
+  const rowNotice = `${runNotice}\n\n${shippedLine({ number: 7, sha: "abc1234def", at: "2026-09-21T10:00:00Z" })}`;
+  const { env, id } = seedJobWithRunLog(t, "view-run-notice-shipped", { runNotice, rowNotice });
+
+  const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
+  assert.equal(detail.notice_md, `${runNotice}\n\nShipped: PR #7 merged as abc1234 on 2026-09-21`);
+  assert.equal("run_notice" in detail, false, "the Shipped line a ship appended made the notices look different");
 });
 
 test("jobDetailView hides run_notice when the row's notice carries every line the runtime appends, in a row", async (t) => {

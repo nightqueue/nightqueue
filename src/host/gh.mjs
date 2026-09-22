@@ -5,6 +5,10 @@ const PR_VIEW_TIMEOUT_MS = 5000;
 const PR_LIST_TIMEOUT_MS = 5000;
 const PR_LIST_LIMIT = "5";
 const PR_STATES = ["MERGED", "CLOSED", "OPEN"];
+const MERGE_TIMEOUT_MS = 60000;
+const PR_DETAIL_FIELDS = "state,mergeable,mergeStateStatus,headRefName,headRefOid,baseRefName,mergeCommit,mergedAt,title,number,isDraft";
+const STATUS_PENDING = new Set(["PENDING", "EXPECTED"]);
+const CHECK_PASSED = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 const LOGIN_RE = /\blogged in to \S+ (?:account|as) ([A-Za-z0-9][A-Za-z0-9-]*)/i;
 
 // Path of the GitHub CLI, the resolver every call of this module goes through.
@@ -89,6 +93,95 @@ export async function ghPrViewAsync(url, { env = process.env, execFileImpl = exe
   const args = ["pr", "view", String(url ?? ""), "--json", "state,mergedAt,mergeCommit,mergeable,isDraft"];
   const result = await runGhAsync(args, { env, execFileImpl, timeoutMs, signal });
   return result.ok ? parsePrView(result.stdout) : { ok: false };
+}
+
+// Parses a json text, answering null instead of throwing.
+function parseJson(text) {
+  try {
+    return JSON.parse(String(text ?? ""));
+  } catch {
+    return null;
+  }
+}
+
+// A trimmed string field of a payload, or null when it is absent or empty.
+function textOrNull(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+// Parses the json of the detail read a ship makes, keeping only the fields it asked for; an unknown state is undetermined.
+function parsePrDetail(text) {
+  const payload = parseJson(text);
+  if (!PR_STATES.includes(payload?.state)) return { ok: false, error: "gh answered an unreadable pull request" };
+  return {
+    ok: true,
+    state: payload.state,
+    mergeable: textOrNull(payload.mergeable),
+    mergeStateStatus: textOrNull(payload.mergeStateStatus),
+    headRefName: textOrNull(payload.headRefName),
+    headRefOid: textOrNull(payload.headRefOid),
+    baseRefName: textOrNull(payload.baseRefName),
+    mergeSha: textOrNull(payload.mergeCommit?.oid),
+    mergedAt: textOrNull(payload.mergedAt),
+    title: textOrNull(payload.title),
+    number: Number.isInteger(payload.number) ? payload.number : null,
+    isDraft: payload.isDraft === true,
+  };
+}
+
+// Everything a ship reads about one pull request, never rejecting: `ok: false` means nobody could tell.
+export async function ghPrDetail(url, { env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
+  const args = ["pr", "view", String(url ?? ""), "--json", PR_DETAIL_FIELDS];
+  const result = await runGhAsync(args, { env, execFileImpl, timeoutMs, signal });
+  return result.ok ? parsePrDetail(result.stdout) : { ok: false, error: firstLine(result.stderr) };
+}
+
+// The first non-empty line of a text, or a placeholder naming its absence.
+function firstLine(text) {
+  return String(text ?? "").trim().split("\n")[0]?.trim() || "no output";
+}
+
+// The bucket of one entry of a status check rollup: `pass`, `pending` or `fail`.
+function checkBucket(item) {
+  if (typeof item?.state === "string") {
+    if (STATUS_PENDING.has(item.state)) return "pending";
+    return item.state === "SUCCESS" ? "pass" : "fail";
+  }
+  if (item?.status !== "COMPLETED") return "pending";
+  return CHECK_PASSED.has(item?.conclusion) ? "pass" : "fail";
+}
+
+// Parses the status check rollup of a pull request; an empty rollup is no check at all, which is green.
+function parsePrChecks(text) {
+  const payload = parseJson(text);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const rollup = payload.statusCheckRollup ?? [];
+  if (!Array.isArray(rollup)) return null;
+  const checks = rollup.map((item) => ({ name: textOrNull(item?.name) ?? textOrNull(item?.context) ?? "unnamed check", bucket: checkBucket(item) }));
+  const named = (bucket) => checks.filter((check) => check.bucket === bucket).map((check) => check.name);
+  return { ok: true, checks, failing: named("fail"), pending: named("pending") };
+}
+
+// The checks of one pull request, parsed from what gh printed even when it exited non-zero; never rejects.
+export async function ghPrChecks(url, { env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
+  const result = await runGhAsync(["pr", "view", String(url ?? ""), "--json", "statusCheckRollup"], { env, execFileImpl, timeoutMs, signal });
+  const parsed = parsePrChecks(result.stdout);
+  return parsed ?? { ok: false, checks: [], failing: [], pending: [], error: firstLine(result.stderr) };
+}
+
+// Squash-merges one pull request, never deleting its branch; the answer is only reported, the merge is proven by a re-read.
+export async function ghPrMerge(url, { matchHeadCommit = null, env = process.env, execFileImpl = execFile, timeoutMs = MERGE_TIMEOUT_MS, signal } = {}) {
+  const args = ["pr", "merge", String(url ?? ""), "--squash"];
+  if (textOrNull(matchHeadCommit)) args.push("--match-head-commit", textOrNull(matchHeadCommit));
+  const result = await runGhAsync(args, { env, execFileImpl, timeoutMs, signal });
+  return { ok: result.ok, stderr: result.stderr };
+}
+
+// The files one pull request changes, never rejecting: `ok: false` means nobody could tell.
+export async function ghPrDiffNames(url, { env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
+  const result = await runGhAsync(["pr", "diff", String(url ?? ""), "--name-only"], { env, execFileImpl, timeoutMs, signal });
+  if (!result.ok) return { ok: false, files: [], error: firstLine(result.stderr) };
+  return { ok: true, files: result.stdout.split("\n").map((line) => line.trim()).filter(Boolean) };
 }
 
 // Opens a pull request for a branch already on the remote; the URL it answers is information, never the record of the run.

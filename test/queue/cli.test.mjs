@@ -184,7 +184,7 @@ test("queue status --json answers with the jobs and the counts, and never with t
   assert.equal(payload.jobs[0].pr_state, null, "a job without a pull request carries a pull request state");
   assert.equal(payload.counts.merged, undefined, "the retired merged status is still counted");
   assert.deepEqual(payload.suggestions, []);
-  assert.deepEqual(payload.sections.map((section) => [section.name, section.ok]), [["jobs", true], ["counts", true], ["runners", true], ["advisories", true]]);
+  assert.deepEqual(payload.sections.map((section) => [section.name, section.ok]), [["jobs", true], ["counts", true], ["runners", true], ["advisories", true], ["ships", true]]);
 
   const one = JSON.parse(runCli(env, ["queue", "status", String(first), "--json"]).stdout);
   assert.deepEqual({ id: one.job.id, status: one.job.status, project: one.job.project }, { id: first, status: "pending", project: "alpha" });

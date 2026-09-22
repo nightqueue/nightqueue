@@ -94,6 +94,7 @@ nightshift queue session <id> [--print]
 nightshift queue retry <id> --note "<answer>"
 nightshift queue cancel <id> --reason "<why>"
 nightshift queue close <id>... | --merged [--decisions accept|reject|keep]
+nightshift queue ship <id> [--force] [--foreground] [--json]
 nightshift queue pause | resume
 
 # memory

@@ -192,7 +192,7 @@ otherwise it is parsed as an unknown option and rejected.
 
 ## Queue
 
-The full reference of `nightshift queue` is [Queue](queue.md); these two subcommands are
+The full reference of `nightshift queue` is [Queue](queue.md); these subcommands are
 recent enough that this is their first mention here.
 
 ```sh
@@ -205,6 +205,10 @@ nightshift queue close --merged --decisions accept     # close every terminal jo
 
 nightshift queue run --watch --from 22:00 --until 04:00   # watch only inside that window, local wall clock, then exit
 nightshift queue run --watch --until 04:00                # `--from` defaults to now
+
+nightshift queue ship 42                              # merge a done job's pull request and close the job, detached
+nightshift queue ship 42 --foreground                 # run the four steps in this process, one line per step
+nightshift queue ship 42 --force --json               # ship a failed or gated job's pull request anyway; JSON on stdout
 ```
 
 `queue session <id>` opens the `claude` session of a job's LAST attempt - `last_session_id`
@@ -235,6 +239,22 @@ without `--decisions`, it asks `decision <owner> "<title>" of job #<id>: accept 
 them without asking, and no terminal (or `--json`) leaves every proposal `kept (proposed)`, so a
 script's behaviour never changes underneath it. Each settled proposal prints `decision <label>
 <title>: accepted|rejected|kept (proposed)`, and `--json` carries them under `decisions`.
+
+`queue ship <id>` takes a `done` job's pull request from open to merged and closes the job,
+through four steps recorded on the job - preflight (fetch, pull request state, green checks,
+uncommitted files the pull would touch), conflict (a rebase in a throwaway worktree, the
+project's `npm test`, a `--force-with-lease` push; skipped when GitHub reports it mergeable),
+merge (`gh pr merge --squash`, confirmed by re-reading the merge commit) and settle (close the
+job and append `Shipped: PR #<n> merged as <sha7> on <date>` to its notice). It starts detached
+and prints the pid and its log, `<home>/logs/ship-<id>-<stamp>.log`; `--foreground` runs it here
+and exits `0` only when the job shipped; `--json` prints `{ started, jobId, pid, logPath }`
+detached, or one `{ job, outcome }` object in the foreground. `--force` ships a `failed` or
+`gate` job that carries a pull request. A ship that stops prints `⛔ ship stopped at <step>:
+<reason> - run again with: nightshift queue ship <id>`, leaves the job `done`, and running it
+again resumes at that step - never merging twice. `queue.shipTimeoutS` (default `600`, range
+`60..3600`) bounds the whole ship. The MCP tool `queue_ship` (`job_id`, `force?`) starts the
+same detached ship. See [Queue](queue.md#shipping-a-job) for the steps, the lease and what a
+ship never does.
 
 `queue run --watch --from HH:MM --until HH:MM` bounds a watcher to one local
 wall-clock window and exits at its end; see [Queue](queue.md#running-the-queue) for

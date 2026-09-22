@@ -28,7 +28,8 @@ import { HOST_COMMANDS_SAMPLE_SIZE } from "../memory/jobs.mjs";
 import { DB_USER_VERSION } from "../memory/schema.mjs";
 import { ownerLabel } from "../memory/scope.mjs";
 import { keepAwakeMode, resolveCaffeinateBin } from "../queue/keep-awake.mjs";
-import { isRegistryFailure, killProcess, listRunnerRecords, registryReadError } from "../queue/registry.mjs";
+import { isRegistryFailure, killProcess, listRunnerRecords, liveRunnersReport, registryReadError } from "../queue/registry.mjs";
+import { shipsSummary } from "../queue/ship-view.mjs";
 import { readRunState } from "../queue/resume.mjs";
 import { canonicalPath, lockState, parseWorktreeList } from "../queue/worktree.mjs";
 import { openStoreReadOnly } from "../store/open.mjs";
@@ -483,9 +484,16 @@ async function checkDecisionProposals(ctx) {
   }
 }
 
+// What a live registration does, as the report adds it: a watcher's cadence, the job a ship ships, nothing otherwise.
+function runnerCadenceDetail(info) {
+  if (Number.isInteger(info.intervalS)) return `, ${info.mode} every ${info.intervalS} s`;
+  if (info.mode === "ship") return `, ship job #${info.jobId}`;
+  return "";
+}
+
 // How a live runner is described in the report, with its cadence and the tree it loaded from only when its registration carries them.
 function liveRunnerDetail(info, env) {
-  const cadence = Number.isInteger(info.intervalS) ? `, ${info.mode} every ${info.intervalS} s` : "";
+  const cadence = runnerCadenceDetail(info);
   const label = runtimeLabel(info.runtimeDir, env);
   return `running (pid ${info.pid}${cadence}${label ? `, runtime ${label}` : ""})`;
 }
@@ -597,10 +605,40 @@ async function checkOrchestrator(ctx) {
   return check("orchestrator", reads > 0 || explore > 0 ? "warn" : "ok", detail);
 }
 
-// Checks the queue: the pause sentinel and the runners always, the orphaned jobs and the open proposals of closed jobs only once the database exists.
+// One group of the ships row, `<n> <label> (<items>)`, or nothing when the group is empty.
+function shipGroup(entries, label, describe) {
+  return entries.length ? [`${entries.length} ${label} (${entries.map(describe).join(", ")})`] : [];
+}
+
+// The detail of the ships row: every ship in flight, failed or on a dead lease, grouped.
+function shipsDetail({ inFlight, failed, stalled }) {
+  const groups = [
+    ...shipGroup(inFlight, "in flight", ({ id, step, pid }) => `#${id} at ${step}${pid === null ? "" : `, pid ${pid}`}`),
+    ...shipGroup(failed, "failed", ({ id, step, reason }) => `#${id} at ${step}: ${reason}`),
+    ...shipGroup(stalled, "with a dead lease", ({ id }) => `#${id}`),
+  ];
+  return groups.length ? groups.join(", ") : "no ship in flight, failed or stalled";
+}
+
+// Reports the ships in flight, failed or stalled on a dead lease, reading the database read-only; a database without the ship columns only asks for the migration.
+async function checkShips(ctx) {
+  const store = openStoreReadOnly(ctx.env);
+  try {
+    const { runners } = liveRunnersReport(ctx.env, ctx.killImpl);
+    const summary = shipsSummary(await store.jobs.listShips(), runners);
+    const stuck = summary.failed.length + summary.stalled.length > 0;
+    return stuck ? check("ships", "warn", shipsDetail(summary), "run again with: nightshift queue ship <id>") : check("ships", "ok", shipsDetail(summary));
+  } catch (err) {
+    return check("ships", "warn", err?.message ?? String(err), QUEUE_JOBS_MIGRATE_HINT);
+  } finally {
+    await store.close();
+  }
+}
+
+// Checks the queue: the pause sentinel and the runners always, the orphaned jobs, the ships and the open proposals of closed jobs only once the database exists.
 async function checkQueue(ctx) {
   const checks = [checkQueuePause(ctx), checkKeepAwake(ctx), checkJobEnvironment(ctx), ...checkRunners(ctx)];
-  if (existsSync(dbPath(ctx.env))) checks.push(await checkQueueJobs(ctx), await checkDecisionProposals(ctx));
+  if (existsSync(dbPath(ctx.env))) checks.push(await checkQueueJobs(ctx), await checkShips(ctx), await checkDecisionProposals(ctx));
   checks.push(await checkHostCommands(ctx), await checkOrchestrator(ctx));
   return checks;
 }

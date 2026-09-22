@@ -35,6 +35,8 @@ import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/
 import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
+import { startShipDetached } from "../queue/ship-start.mjs";
+import { queueWorkers } from "../queue/ship-view.mjs";
 import {
   recordOutcome,
   recordPhaseDone,
@@ -338,8 +340,9 @@ function wantsRoadmapItem(args) {
 // The closing sentence of the `queue_add` hint: what happens to the job given who is online right now - and, when the
 // live runner is waiting out a rate limit, that wait instead of a promise it will be picked up before the reset.
 function queuedRunnerLine(env) {
-  const { runners, error } = liveRunnersReport(env);
-  if (error !== null) return "Start the batch with queue_run when you are ready.";
+  const report = liveRunnersReport(env);
+  if (report.error !== null) return "Start the batch with queue_run when you are ready.";
+  const runners = queueWorkers(report.runners);
   if (runners.length === 0) return `${noRunnerWait()}.`;
   const paused = pausedRunnerLine(runners);
   if (paused) return `${runnersOnline(runners.length)} - nothing to start: ${paused}; it claims again by itself when the limit resets.`;
@@ -437,7 +440,8 @@ function guard(name, handler) {
 // The one-line nudge queue_status answers with, leading with the live-runner count; a rate limit is what the agent hears
 // next - the one a live runner waits out, or the one a backlog was parked by after its runner exited - so it never starts
 // a batch that would only sleep.
-function queueHint({ activeJobs, counts, runners, jobs = [] }) {
+function queueHint({ activeJobs, counts, runners: registered, jobs = [] }) {
+  const runners = queueWorkers(registered);
   const paused = pausedRunnerLine(runners);
   if (paused) {
     const backlog = counts.pending === 0 ? "nothing is pending" : `${pendingJobs(counts.pending)} waiting`;
@@ -484,7 +488,7 @@ async function queueStatusAnswer(args, { store, warning, env }) {
   const unread = failedCoreSection(view);
   if (unread) throw new UserError(`the queue cannot be read: ${unread.error}`);
   if (view.registryError !== null) throw unreadableRegistry(view.registryError, env);
-  const { runners, advisories, jobs, counts, suggestions, activeJobs, sections } = view;
+  const { runners, advisories, jobs, counts, suggestions, ships, activeJobs, sections } = view;
   const stale = staleRuntimeHint(env);
   const advisoriesWithStale = stale ? [...advisories, stale] : advisories;
   return {
@@ -495,6 +499,7 @@ async function queueStatusAnswer(args, { store, warning, env }) {
     jobs,
     counts,
     suggestions,
+    ships,
     sections,
     hint: [queueHint({ activeJobs, counts, runners, jobs }), ...advisoriesWithStale, ...suggestions].join(" "),
     ...warningAnswer(warning),
@@ -506,7 +511,7 @@ function answeredPrUrls(answer) {
   return prUrlsOf(answer.job ? [answer.job] : answer.jobs);
 }
 
-// The twenty-five tools of the plugin contract, with the parameter names the plugin actually sends.
+// The twenty-six tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env) {
   return [
     {
@@ -859,6 +864,22 @@ function toolDefinitions(env) {
       },
     },
     {
+      name: "queue_ship",
+      guardsHome: true,
+      config: {
+        description:
+          "Ships a job: takes its open pull request to merged and closes the job, through the code pipeline preflight, conflict, merge, settle - never an agent, never a second job. " +
+          "It starts DETACHED and returns immediately with the pid and the log path; it never waits for the merge. Follow it with `queue_status` and the job id. " +
+          "Only a `done` job is shipped; a `failed` or `gate` job that carries a pull request needs `force`. `closed`, `running`, `pending`, `cancelled` and a job another ship is already shipping under a live lease are refused by name, and nothing is written. " +
+          "A ship that stopped keeps its checklist and its reason on the job (`ship`, `ship_status: failed`); calling this tool again resumes it at the step that failed.",
+        inputSchema: { job_id: z.number().int().min(1), force: z.boolean().nullable().optional() },
+      },
+      handler: async (args) => {
+        const started = await startShipDetached({ store: openStore(env), id: args.job_id, force: args.force === true, env });
+        return { ok: true, started: true, job_id: args.job_id, pid: started.pid, logPath: started.logPath, follow: `nightshift queue status ${args.job_id}` };
+      },
+    },
+    {
       name: "decision_save",
       config: {
         description:
@@ -1116,7 +1137,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the twenty-five tools of the plugin contract.
+// Builds the MCP server with the twenty-six tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer({ name: SERVER_NAME, version: readVersion() }, { instructions: SERVER_INSTRUCTIONS });
   const schemas = new Map();

@@ -109,7 +109,8 @@ function normalize(text, substitutions) {
     .replace(/\{"name":"keep awake"[^{}]*\},?/g, "")
     .replace(/\{"name":"host commands"[^{}]*\},?/g, "")
     .replace(/\{"name":"orchestrator"[^{}]*\},?/g, "")
-    .replace(/\{"name":"job environment"[^{}]*\},?/g, "");
+    .replace(/\{"name":"job environment"[^{}]*\},?/g, "")
+    .replace(/\{"name":"ships"[^{}]*\},?/g, "");
 }
 
 function assertParity(label, before, after, substitutionsBefore, substitutionsAfter) {

@@ -156,7 +156,7 @@ default. `queue_status` answers `runners` with every live runner, and keeps `run
 alias of the first for one release. `queue_status`, `queue_run` and `queue_retry` also answer
 `advisories`, the advisory lines described in [Queue](queue.md); they never block a start.
 
-The twenty-four MCP tools, with the parameters `nightshift mcp` actually accepts:
+The twenty-six MCP tools, with the parameters `nightshift mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -170,9 +170,11 @@ The twenty-four MCP tools, with the parameters `nightshift mcp` actually accepts
 | `queue_add` | `project?`, `prompt?`, `roadmap_item_id?`, `cwd?`, `register?`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`) |
 | `queue_status` | `job_id?`, `limit?` (1-50) |
 | `queue_run` | `job_id?` |
+| `queue_session` | `job_id` |
 | `queue_cancel` | `job_id`, `reason?` |
 | `queue_close` | `job_id` |
 | `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` |
+| `queue_ship` | `job_id`, `force?` |
 | `decision_save` | `project`, `title`, `context`, `decision`, `consequences?`, `status?` (`proposed`, `accepted`, `superseded`, `rejected`; default `accepted`) |
 | `decision_update` | `id`, `title?`, `context?`, `decision?`, `consequences?`, `status?`, `superseded_by?` |
 | `decision_list` | `project`, `status?` |
@@ -215,7 +217,7 @@ the order the phases were launched - and they overwrite what the call sent. A ph
 runtime measured no lane for keeps the value the call carried, and a phase the call
 never recorded is not inserted.
 
-The six queue tools are the same subsystem as `nightshift queue` (see [Queue](queue.md)):
+The eight queue tools are the same subsystem as `nightshift queue` (see [Queue](queue.md)):
 `queue_add` takes the registered project NAME and never a path - or, with
 `project` omitted, the absolute `cwd` of the caller, which resolves the project
 that contains it; a `cwd` inside a git repository that is registered nowhere
@@ -239,7 +241,12 @@ starts the runner detached and answers right away with the path of its log,
 anything - the CLI also offers `nightshift queue close --merged`, which closes every
 such job whose pull request is merged in one call, and `queue_retry` sends a gated, failed or cancelled job back to the queue - its
 `run` starts a DETACHED runner, the same one the `--run` of the CLI starts unless
-it is asked for `--foreground`.
+it is asked for `--foreground`. `queue_ship` starts the same DETACHED ship as
+`nightshift queue ship <id>` and answers `{ ok, started, job_id, pid, logPath, follow }` without
+waiting for the merge: a `done` job only, a `failed` or `gate` one with `force: true`, and every
+other status, a job without a pull request or one already under a live ship lease refused by
+name with nothing written; calling it again resumes a ship that stopped at the step that
+failed (see [Queue](queue.md#shipping-a-job)).
 
 Inside a job, a tool that takes a free id only reaches its own: `queue_retry`
 retries the job it is running, and `decision_update` and `roadmap_update` accept

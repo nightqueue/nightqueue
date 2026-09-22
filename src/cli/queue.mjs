@@ -59,6 +59,8 @@ import { reclassifyFromLog } from "../queue/repair.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
+import { runShipHere, startShipDetached } from "../queue/ship-start.mjs";
+import { queueWorkers, shipChecklistLines, shipLastCell, shipStatusSuffix, shipStoppedLine } from "../queue/ship-view.mjs";
 import { CLAUDE_MISSING_MESSAGE, resolveClaudeBin } from "../queue/spawn.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
@@ -74,6 +76,7 @@ export const USAGE = {
   cancel: "nightshift queue cancel <id> [--reason <text>]",
   close: "nightshift queue close <id>... [--decisions accept|reject|keep] [--json], or nightshift queue close --merged [--decisions accept|reject|keep] [--json]",
   retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
+  ship: "nightshift queue ship <id> [--force] [--foreground] [--json]",
   repair: "nightshift queue repair <id> [--json]",
   pause: "nightshift queue pause",
   resume: "nightshift queue resume",
@@ -275,8 +278,9 @@ function checkForegroundNeedsRun(values, usage) {
 function queuedRunnerLine(ctx) {
   const { runners, error } = liveRunnersReport(ctx.env, ctx.killImpl);
   if (error !== null) return "Start the batch: nightshift queue run";
-  if (runners.length === 0) return `${noRunnerWait()}.`;
-  return `${runnersOnline(runners.length)} - it will be picked up.`;
+  const workers = queueWorkers(runners);
+  if (workers.length === 0) return `${noRunnerWait()}.`;
+  return `${runnersOnline(workers.length)} - it will be picked up.`;
 }
 
 // The line `queue add` answers with: the old confirmation when the job is about to run, the backlog nudge otherwise.
@@ -454,9 +458,21 @@ function terminalWidth(ctx) {
 }
 
 // Width left for SLUG/LAST once the fixed columns and PR took theirs; never below the minimum, so a narrow terminal still shows something.
-function lastWidth(ctx, pr) {
-  const fixed = COLUMNS.reduce((total, column) => total + column.width, 0) + pr + 1;
+function lastWidth(ctx, pr, columns) {
+  const fixed = columns.reduce((total, column) => total + column.width, 0) + pr + 1;
   return Math.max(MIN_LAST_WIDTH, terminalWidth(ctx) - fixed);
+}
+
+// The fixed columns of this listing: STATUS grows past its width only when a ship suffix needs it, so a listing with no ship renders as before.
+function columnsFor(jobs, nowMs) {
+  const shipping = jobs.filter((job) => shipStatusSuffix(job, nowMs) !== "");
+  const statusCell = shipping.reduce((width, job) => Math.max(width, statusCellOf(job, nowMs).length + 1), 0);
+  return COLUMNS.map((column) => (column.key === "status" ? { ...column, width: Math.max(column.width, statusCell) } : column));
+}
+
+// The STATUS cell of a job: its icon and status, plus the state of its ship when it has one.
+function statusCellOf(job, nowMs) {
+  return `${statusStyleOf(job.status).icon} ${job.status}${shipStatusSuffix(job, nowMs)}`;
 }
 
 // Cuts a cell to its column, with an ellipsis when something was left out.
@@ -529,6 +545,8 @@ function blockedOf(job) {
 // back, which reset it waits for when a rate limit parked it, its slug otherwise.
 function lastCell(job, env) {
   if (job.status === "running") return lastNarration(job.id, env);
+  const ship = shipLastCell(job);
+  if (ship) return ship;
   if (job.status === "gate" || job.status === "failed") return firstNoticeLine(job) ?? job.slug ?? "-";
   const blocked = blockedOf(job);
   if (blocked) return blocked.message ? `⛔ ${blocked.code}: ${blocked.message}` : `⛔ ${blocked.code}`;
@@ -539,7 +557,7 @@ function lastCell(job, env) {
 function rowCells(job, nowMs, env) {
   return {
     id: `#${job.id}`,
-    status: `${statusStyleOf(job.status).icon} ${job.status}`,
+    status: statusCellOf(job, nowMs),
     duration: formatDurationCell(job, nowMs),
     tokens: formatTokens(job),
     project: String(job.project),
@@ -548,9 +566,9 @@ function rowCells(job, nowMs, env) {
 }
 
 // One row of the table: fixed columns padded to their width, SLUG/LAST cut to what is left, the status painted on a terminal.
-function formatRow(job, { nowMs, env, width, color }) {
+function formatRow(job, { nowMs, env, width, color, columns }) {
   const cells = rowCells(job, nowMs, env);
-  const fixed = COLUMNS.map((column) => {
+  const fixed = columns.map((column) => {
     const cell = fit(cells[column.key], column.width - 1).padEnd(column.width);
     return column.key === "status" ? paint(cell, statusStyleOf(job.status).color, color) : cell;
   });
@@ -559,13 +577,15 @@ function formatRow(job, { nowMs, env, width, color }) {
 }
 
 // Header of the table and the rule under it, dimmed on a terminal.
-function formatHeader({ width, color }) {
-  const titles = `${COLUMNS.map((column) => column.title.padEnd(column.width)).join("")}${"SLUG/LAST".padEnd(width)}PR`;
+function formatHeader({ width, color, columns }) {
+  const titles = `${columns.map((column) => column.title.padEnd(column.width)).join("")}${"SLUG/LAST".padEnd(width)}PR`;
   return [paint(titles, "2", color), paint("─".repeat(titles.length), "2", color)];
 }
 // The whole table: header, one row per job, nothing else.
 function formatTable(jobs, ctx) {
-  const layout = { nowMs: Date.now(), env: ctx.env, width: lastWidth(ctx, prWidth(jobs)), color: useColor(ctx) };
+  const nowMs = Date.now();
+  const columns = columnsFor(jobs, nowMs);
+  const layout = { nowMs, env: ctx.env, width: lastWidth(ctx, prWidth(jobs), columns), color: useColor(ctx), columns };
   return [...formatHeader(layout), ...jobs.map((job) => formatRow(job, layout))];
 }
 
@@ -592,14 +612,23 @@ function formatBlocked(job) {
   return [`${"blocked".padEnd(16)}${label}`];
 }
 
+// The fields the detail view prints as blocks of their own instead of one key/value line.
+const DETAIL_BLOCK_KEYS = new Set(["notice_md", "run_notice", "ship"]);
+
 // Detail block of a single job, one field per line, with the reason it stopped spelled out instead of dumped on one line.
 function formatDetail(job) {
   const fields = Object.entries(job)
-    .filter(([key, value]) => key !== "notice_md" && key !== "run_notice" && value !== null && value !== undefined)
+    .filter(([key, value]) => !DETAIL_BLOCK_KEYS.has(key) && value !== null && value !== undefined)
     .map(([key, value]) => `${key.padEnd(15)} ${value}`);
   const at = fields.findIndex((line) => line.startsWith("status".padEnd(16)));
   const suggestion = closeSuggestion([job]);
-  const extra = [...formatBlocked(job), ...(suggestion ? [suggestion] : []), ...formatNotice(job), ...formatRunNotice(job)];
+  const extra = [
+    ...shipChecklistLines(job),
+    ...formatBlocked(job),
+    ...(suggestion ? [suggestion] : []),
+    ...formatNotice(job),
+    ...formatRunNotice(job),
+  ];
   return at < 0 ? [...fields, ...extra] : [...fields.slice(0, at + 1), ...extra, ...fields.slice(at + 1)];
 }
 
@@ -610,6 +639,7 @@ function runnerCadence(runner) {
     return `watch every ${runner.intervalS} s${window ? ` · ${window}` : ""}`;
   }
   if (runner.mode === "once") return runner.jobId === null ? "once" : `once, job #${runner.jobId}`;
+  if (runner.mode === "ship") return `ship, job #${runner.jobId}`;
   return `${runner.mode ?? "runner"}`;
 }
 
@@ -643,7 +673,7 @@ function backlogLine({ activeJobs, counts, runners, jobs = [] }) {
   if (paused) return `${pendingJobs(counts.pending)} waiting - ${paused}`;
   const waiting = windowWaitingLine(runners);
   if (waiting) return `${pendingJobs(counts.pending)} waiting - ${waiting}`;
-  if (!isQueueIdle({ activeJobs, runners })) return null;
+  if (!isQueueIdle({ activeJobs, runners: queueWorkers(runners) })) return null;
   const parked = parkedBacklogLine({ jobs, pending: counts.pending });
   if (parked) return `${pendingJobs(counts.pending)} waiting - ${parked}`;
   return `${pendingJobs(counts.pending)} waiting - start the batch: nightshift queue run`;
@@ -1260,6 +1290,77 @@ async function runRetry(argv, ctx) {
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }
 
+const SHIP_OPTIONS = { force: { type: "boolean" }, foreground: { type: "boolean" }, json: { type: "boolean" } };
+const SHIP_STEP_ICONS = { done: "✓", skipped: "-", failed: "✗" };
+
+// The line a forced ship prints first, so shipping a job that did not end `done` is always said out loud.
+function forcedShipLine(id, status) {
+  return `job #${id} is \`${status}\`; shipping its pull request anyway (--force)`;
+}
+
+// One settled step of a foreground ship, as the operator reads it.
+function shipStepLine({ name, status, note, earlier = false }) {
+  const icon = SHIP_STEP_ICONS[status] ?? "·";
+  return `${icon} ${String(name).padEnd(10)} ${note ?? ""}${earlier ? " (earlier attempt)" : ""}`.trimEnd();
+}
+
+// The number of a pull request, from the ship's own data or its URL.
+function prNumberOf(job) {
+  const recorded = jobView(job)?.ship?.data?.prNumber;
+  if (Number.isInteger(recorded)) return recorded;
+  return /\/pull\/(\d+)/.exec(String(job?.pr_url ?? ""))?.[1] ?? "?";
+}
+
+// The last line of a foreground ship: what it merged and how the job ended, or where it stopped and how to resume.
+function shipOutcomeLine(id, { outcome, job }) {
+  if (outcome.status === "shipped") {
+    const worktree = outcome.worktree ? ` (${worktreeLine(outcome.worktree)})` : "";
+    return `job #${id} shipped: PR #${prNumberOf(job)} merged as ${String(outcome.mergeSha ?? "").slice(0, 7)}; job closed${worktree}`;
+  }
+  if (outcome.status === "lost") return `job #${id}: the ship lease was taken over by another process; follow it with nightshift queue status ${id}`;
+  return shipStoppedLine(jobView(job)) ?? `⛔ ship stopped at ${outcome.step}: ${outcome.reason} - run again with: nightshift queue ship ${id}`;
+}
+
+// Runs the ship of a job in this process, printing each settled step, and exits 0 only when it shipped.
+async function runShipForeground(id, values, ctx) {
+  const json = values.json === true;
+  const say = json ? ctx.err : ctx.out;
+  const result = await runShipHere({
+    store: openStore(ctx.env),
+    id,
+    force: values.force === true,
+    env: ctx.env,
+    deps: ctx.shipDeps ?? null,
+    killImpl: ctx.killImpl,
+    onStart: (lease) => lease.forced && say(forcedShipLine(id, lease.job.status)),
+    onStep: (step) => say(shipStepLine(step)),
+  });
+  const { status, step = null, reason = null, mergeSha = null } = result.outcome;
+  if (json) ctx.out(JSON.stringify({ job: jobView(result.job, { full: true }), outcome: { status, step, reason, mergeSha } }));
+  else ctx.out(shipOutcomeLine(id, result));
+  return status === "shipped" ? 0 : 1;
+}
+
+// Starts the ship of a job detached and says how to follow it.
+async function runShipDetached(id, values, ctx) {
+  const started = await startShipDetached({ store: openStore(ctx.env), id, force: values.force === true, env: ctx.env, spawnImpl: ctx.spawnImpl, killImpl: ctx.killImpl });
+  if (values.json) {
+    ctx.out(JSON.stringify({ started: true, jobId: id, pid: started.pid, logPath: started.logPath }));
+    return 0;
+  }
+  if (started.forced) ctx.out(forcedShipLine(id, started.status));
+  ctx.out(`ship of job #${id} started (pid ${started.pid}) - follow with: tail -f ${started.logPath} (log: ${started.logPath}), or nightshift queue status ${id}`);
+  return 0;
+}
+
+// Runs `queue ship`, which takes a job's pull request from open to merged and closes the job: detached unless --foreground.
+async function runShipCommand(argv, ctx) {
+  const { values, positionals } = parseCommand(argv, SHIP_OPTIONS);
+  checkArgs(positionals, { min: 1, max: 1, usage: USAGE.ship });
+  const id = requireInt("id", positionals[0]);
+  return values.foreground === true ? await runShipForeground(id, values, ctx) : await runShipDetached(id, values, ctx);
+}
+
 // What a re-classification answers the operator: the outcome it corrected, or that there was nothing to correct.
 function repairLine(outcome) {
   if (!outcome.changed) return `job #${outcome.id} is still \`${outcome.from}\`; there is nothing to correct`;
@@ -1486,6 +1587,7 @@ const SUBCOMMANDS = new Map([
   ["cancel", runCancel],
   ["close", runClose],
   ["retry", runRetry],
+  ["ship", runShipCommand],
   ["repair", runRepair],
   ["pause", runPause],
   ["resume", runResume],

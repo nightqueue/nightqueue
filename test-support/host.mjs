@@ -18,6 +18,7 @@ export const FAKE_GH_PR_URL = "https://github.com/octocat/hello-world/pull/7";
 const OWN_ENV_KEYS = [
   "NIGHTSHIFT_HOME",
   "NIGHTSHIFT_JOB_ID",
+  "NIGHTSHIFT_SHIP_WORKER",
   "NIGHTSHIFT_JOB_HOME",
   "NIGHTSHIFT_JOB_CLAUDE_DIR",
   "NIGHTSHIFT_EMBED_DISABLED",

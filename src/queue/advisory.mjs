@@ -2,12 +2,13 @@ import { openStore } from "../store/open.mjs";
 import { advisoryLines } from "./hints.mjs";
 import { liveFiveHourUtilization } from "./rate-limit.mjs";
 import { liveRunnersReport } from "./registry.mjs";
+import { queueWorkers } from "./ship-view.mjs";
 
-// The advisory lines of this home read through the store it is given; a read that fails answers no advice, because a warning never blocks anything.
+// The advisory lines of this home read through the store it is given, counting only the runners that work the queue; a read that fails answers no advice, because a warning never blocks anything.
 export async function advisoryLinesFor({ store, runners, env = process.env, killImpl } = {}) {
   try {
     const activeByProject = await store.jobs.countActiveJobsByProject();
-    return advisoryLines({ runners, fiveHourUtilization: liveFiveHourUtilization(env, killImpl), activeByProject });
+    return advisoryLines({ runners: queueWorkers(runners), fiveHourUtilization: liveFiveHourUtilization(env, killImpl), activeByProject });
   } catch {
     return [];
   }

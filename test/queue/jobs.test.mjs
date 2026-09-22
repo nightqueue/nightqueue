@@ -2,8 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
 import {
+  acquireShip,
   addJob,
+  adoptShip,
   cancelJob,
+  failShip,
+  listShips,
+  noteShipWorktree,
+  recordShipStep,
+  settleShip,
+  shipRefusal,
   claimJobById,
   claimNextJob,
   closeJob,
@@ -631,4 +639,139 @@ test("the blocked-pending count and listing only ever see a pending job with a b
   claimJobById(blocked, { worker: WORKER, cap: CAP }, env);
   assert.equal(countPendingBlocked(env), 0, "the claim cleared the block code, so the count must drop with it");
   assert.deepEqual(listJobs({ blockedOnly: true }, env), []);
+});
+
+const SHIP_WORKER = "ship:host:1:aaaa";
+const OTHER_SHIP_WORKER = "ship:host:2:bbbb";
+const PR_URL = "https://github.com/acme/api/pull/7";
+
+// A job in the given terminal status carrying a pull request, the target a ship starts from.
+function shippableJob(env, { status = "done", prUrl = PR_URL } = {}) {
+  const id = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ? WHERE id = ?").run(status, prUrl, id);
+  return id;
+}
+
+// Moves the ship lease of a job relative to SQLite's own clock, which is how a ship that died looks from the outside.
+function moveShipLease(env, id, seconds) {
+  openDb(env).prepare("UPDATE jobs SET ship_lease_until = datetime('now', ? || ' seconds') WHERE id = ?").run(String(seconds), id);
+}
+
+test("acquireShip takes the lease of a done job from NULL and re-arms a failed one, keeping its checklist", (t) => {
+  const env = makeQueue(t, "jobs-ship-acquire");
+  const id = shippableJob(env);
+  const first = acquireShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env);
+  assert.equal(first.ship_status, "shipping");
+  assert.equal(first.ship_worker, SHIP_WORKER);
+  assert.equal(first.status, "done", "a ship never moves the job status before settle");
+  assert.equal(JSON.parse(first.ship).attempts, 1);
+  assert.deepEqual(JSON.parse(first.ship).steps, {});
+
+  const checklist = { ...JSON.parse(first.ship), steps: { preflight: { status: "done", note: "ok", at: "x" } }, failed: { step: "conflict", reason: "suite-red" } };
+  assert.equal(failShip(id, { worker: SHIP_WORKER, ship: checklist }, env), true);
+  const failed = getJob(id, env);
+  assert.equal(failed.ship_status, "failed");
+  assert.equal(failed.ship_worker, null);
+  assert.equal(failed.ship_lease_until, null);
+
+  const second = acquireShip(id, { worker: OTHER_SHIP_WORKER, leaseS: 660 }, env);
+  const rearmed = JSON.parse(second.ship);
+  assert.equal(rearmed.attempts, 2);
+  assert.equal(rearmed.failed, null);
+  assert.equal(rearmed.steps.preflight.status, "done", "the steps of an earlier attempt survive the re-arm");
+});
+
+test("acquireShip refuses a live lease and reclaims a dead one", (t) => {
+  const env = makeQueue(t, "jobs-ship-lease");
+  const id = shippableJob(env);
+  assert.ok(acquireShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env));
+  assert.equal(acquireShip(id, { worker: OTHER_SHIP_WORKER, leaseS: 660 }, env), null, "a live lease must refuse a second ship");
+  assert.equal(getJob(id, env).ship_worker, SHIP_WORKER, "a refusal writes nothing");
+  assert.match(shipRefusal(id, getJob(id, env)), /already being shipped by `ship:host:1:aaaa`/);
+
+  moveShipLease(env, id, -5);
+  const reclaimed = acquireShip(id, { worker: OTHER_SHIP_WORKER, leaseS: 660 }, env);
+  assert.equal(reclaimed.ship_worker, OTHER_SHIP_WORKER);
+  assert.equal(JSON.parse(reclaimed.ship).attempts, 2);
+});
+
+test("acquireShip refuses every status but done unless forced, and forced only from failed or gate with a pull request", (t) => {
+  const env = makeQueue(t, "jobs-ship-status");
+  for (const status of ["pending", "running", "cancelled", "closed", "failed", "gate"]) {
+    const id = shippableJob(env, { status });
+    assert.equal(acquireShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env), null, status);
+    assert.equal(getJob(id, env).ship_status, null, `${status}: a refusal writes nothing`);
+  }
+  for (const status of ["failed", "gate"]) {
+    const id = shippableJob(env, { status });
+    assert.equal(acquireShip(id, { worker: SHIP_WORKER, leaseS: 660, force: true }, env).ship_status, "shipping", status);
+  }
+  const noPr = shippableJob(env, { prUrl: null });
+  assert.equal(acquireShip(noPr, { worker: SHIP_WORKER, leaseS: 660, force: true }, env), null);
+  assert.throws(() => acquireShip(noPr, { worker: SHIP_WORKER, leaseS: 5 }, env), /invalid ship lease/);
+});
+
+test("shipRefusal phrases every refusal and answers null for a shippable job", (t) => {
+  const env = makeQueue(t, "jobs-ship-refusal");
+  assert.match(shipRefusal(99, null), /unknown job `99`/);
+  const phrase = (status, options) => shipRefusal(1, { status, pr_url: PR_URL, worker: WORKER }, options);
+  assert.match(phrase("closed"), /already closed/);
+  assert.match(shipRefusal(1, { status: "closed", ship_status: "shipped" }), /already shipped/);
+  assert.match(phrase("running"), /running with a live lease/);
+  assert.match(phrase("pending"), /has not produced a pull request yet/);
+  assert.match(phrase("cancelled"), /cancelled/);
+  assert.match(phrase("failed"), /pass --force to ship its pull request anyway \(https:\/\/github.com\/acme\/api\/pull\/7\)/);
+  assert.match(shipRefusal(1, { status: "done", pr_url: null }), /no pull request/);
+  assert.equal(phrase("done"), null);
+  assert.equal(phrase("gate", { force: true }), null);
+  assert.equal(shipRefusal(shippableJob(env), getJob(1, env)), null);
+});
+
+test("adoptShip and recordShipStep hold only for the worker that owns the lease", (t) => {
+  const env = makeQueue(t, "jobs-ship-adopt");
+  const id = shippableJob(env);
+  const row = acquireShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env);
+  assert.equal(adoptShip(id, { worker: OTHER_SHIP_WORKER, leaseS: 660 }, env), false);
+  assert.equal(adoptShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env), true);
+  const checklist = { ...JSON.parse(row.ship), steps: { preflight: { status: "done", note: "green", at: "now" } } };
+  assert.equal(recordShipStep(id, { worker: OTHER_SHIP_WORKER, ship: checklist, leaseS: 660 }, env), false);
+  assert.equal(recordShipStep(id, { worker: SHIP_WORKER, ship: checklist, leaseS: 660 }, env), true);
+  assert.deepEqual(jobView(getJob(id, env)).ship.steps, checklist.steps);
+  assert.equal(failShip(id, { worker: OTHER_SHIP_WORKER, ship: checklist }, env), false);
+});
+
+test("settleShip closes, marks shipped, clears the lease and appends the shipped line to the notice", (t) => {
+  const env = makeQueue(t, "jobs-ship-settle");
+  const id = shippableJob(env);
+  openDb(env).prepare("UPDATE jobs SET notice_md = 'A\n' WHERE id = ?").run(id);
+  const row = acquireShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env);
+  const line = "Shipped: PR #7 merged as abc1234 on 2026-09-21";
+  assert.equal(settleShip(id, { worker: OTHER_SHIP_WORKER, ship: JSON.parse(row.ship), noticeLine: line }, env), null);
+  const settled = settleShip(id, { worker: SHIP_WORKER, ship: JSON.parse(row.ship), noticeLine: line }, env);
+  assert.equal(settled.status, "closed");
+  assert.equal(settled.ship_status, "shipped");
+  assert.equal(settled.ship_worker, null);
+  assert.equal(settled.ship_lease_until, null);
+  assert.equal(getJob(id, env).notice_md, `A\n\n${line}`);
+  assert.equal(noteShipWorktree(id, { worktree: { removed: "/tmp/wt" } }, env), false, "a checklist without a settle step is left alone");
+});
+
+test("listShips answers the ships in flight, failed or stalled with the liveness of each lease", (t) => {
+  const env = makeQueue(t, "jobs-ship-list");
+  const live = shippableJob(env);
+  const stalled = shippableJob(env);
+  const failed = shippableJob(env);
+  shippableJob(env);
+  for (const id of [live, stalled, failed]) acquireShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env);
+  moveShipLease(env, stalled, -5);
+  failShip(failed, { worker: SHIP_WORKER, ship: { attempts: 1, steps: {}, data: {}, failed: { step: "merge", reason: "merge-without-sha" } } }, env);
+  const rows = listShips(env);
+  assert.deepEqual(
+    rows.map((row) => [row.id, row.ship_status, row.ship_lease_live]),
+    [
+      [failed, "failed", 0],
+      [stalled, "shipping", 0],
+      [live, "shipping", 1],
+    ],
+  );
 });

@@ -41,6 +41,7 @@ const CONTRACT_TOOLS = [
   "queue_retry",
   "queue_run",
   "queue_session",
+  "queue_ship",
   "queue_status",
   "roadmap_get",
   "roadmap_save",
@@ -79,12 +80,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the twenty-five tools of the contract", async (t) => {
+test("the server exposes exactly the twenty-six tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 25, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 26, "the contract list and the server disagree on how many tools there are");
 });
 
 test("the server migrates a v8 home to v9 once at boot, before it answers any tool", async (t) => {
@@ -526,6 +527,21 @@ test("queue_add and queue_cancel refuse the home of the runner from inside a job
   assert.equal(getJob(id + 1, env), null, "a call isolated in a temporary home reached the home of the operator");
 });
 
+test("queue_ship refuses the home of the runner from inside a job, and refuses a pending job by name without writing", async (t) => {
+  const env = makeQueueHome(t, "mcp-ship-refusals");
+  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "9", NIGHTSHIFT_JOB_HOME: homeDir(env) });
+  const guarded = await inJob.callTool({ name: "queue_ship", arguments: { job_id: id } });
+  assert.equal(guarded.isError, true, textOf(guarded));
+  assert.ok(textOf(guarded).includes(HOME_REFUSAL), textOf(guarded));
+
+  const client = await connect(t, env);
+  const refused = await client.callTool({ name: "queue_ship", arguments: { job_id: id, force: true } });
+  assert.equal(refused.isError, true, textOf(refused));
+  assert.match(textOf(refused), /queue_ship: job `\d+` is pending; it has not produced a pull request yet/);
+  assert.equal(getJob(id, env).ship_status, null, "a refused ship wrote to the job");
+});
+
 test("queue_status never returns the prompt and truncates the free text at five hundred code points", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-status");
   const id = addJob({ project: "alpha", prompt: "a prompt no tool may ever return" }, env).id;
@@ -732,7 +748,7 @@ test("queue_status never writes a delivered job whose pull request is merged, an
   const first = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(first.jobs[0].pr_state, "unknown", "the first answer waited for gh instead of answering from the cache");
   assert.deepEqual(first.suggestions, []);
-  assert.deepEqual(first.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories"]);
+  assert.deepEqual(first.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories", "ships"]);
   assert.ok(first.sections.every((section) => section.ok && Number.isInteger(section.ms)), JSON.stringify(first.sections));
 
   const listed = await pollPrState(client, "merged");

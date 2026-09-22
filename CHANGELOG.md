@@ -8,6 +8,20 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `nightshift queue ship <id> [--force] [--foreground] [--json]` and the MCP tool `queue_ship`
+  take a `done` job's pull request from open to merged and close the job, through a code
+  pipeline of four steps run by the command's own process - preflight (fetch, pull request
+  state, green checks, uncommitted files the pull would touch), conflict (a rebase in a
+  throwaway worktree, `npm test`, a `--force-with-lease` push), merge (`gh pr merge --squash
+  --match-head-commit`, confirmed by re-reading the merge commit) and settle (close the job
+  and append `Shipped: PR #<n> merged as <sha7> on <date>` to its notice). Each step is
+  recorded on the job (`ship_status`, the `ship` checklist, schema v15), a lease keeps two
+  ships of one job apart, and running it again after a stop resumes at the failed step and
+  never merges twice. Detached by default (log `ship-<id>-<stamp>.log`, a runner of mode
+  `ship`); `--force` ships a `failed` or `gate` job's pull request. `queue status`, the MCP
+  `queue_status` and doctor's new `ships` row show ships in flight, stopped or stalled;
+  `queue.shipTimeoutS` (default 600 s) bounds a ship. It never stashes, deletes a branch,
+  resolves a real conflict, retries the run or ships on its own.
 - The resolve skill opens with the orchestrator's contract: it coordinates and nothing
   else - it never reads source code, explores the repository or reviews a diff; what it
   needs reaches it as a handoff file under the run directory or a subagent return of at

@@ -50,6 +50,13 @@
  * @property {() => Promise<object[]>} recentHostCommandCounts the host-command counters of the most recently finished jobs, the sample `nightshift doctor` sums
  * @property {() => Promise<object[]>} recentOrchestratorCounts the orchestrator counters of the most recently finished jobs, the sample `nightshift doctor` sums
  * @property {(id: number) => Promise<string|null>} status the status column of one job, or null when the row is gone
+ * @property {(id: number, spec: object) => Promise<object|null>} acquireShip takes the ship lease of a job in one compare-and-swap and re-arms its checklist; null means refused, nothing written
+ * @property {(id: number, spec: object) => Promise<boolean>} adoptShip confirms the ship lease is this worker's and renews it
+ * @property {(id: number, spec: object) => Promise<boolean>} recordShipStep writes the checklist after a step and renews the ship lease, witnessed on disk
+ * @property {(id: number, spec: object) => Promise<boolean>} failShip stops a ship as failed, keeping its checklist and releasing the lease, witnessed on disk
+ * @property {(id: number, spec: object) => Promise<object|null>} settleShip closes the shipped job, marks it shipped, releases the lease and appends the shipped line to its notice, witnessed on disk
+ * @property {(id: number, spec: object) => Promise<boolean>} noteShipWorktree records where the settled ship left the job's worktree, best effort
+ * @property {() => Promise<object[]>} listShips the ships in flight, failed or stalled, with the liveness of each lease
  */
 
 /**
@@ -193,6 +200,13 @@ export const STORE_CONTRACT = Object.freeze({
     "recentHostCommandCounts",
     "recentOrchestratorCounts",
     "status",
+    "acquireShip",
+    "adoptShip",
+    "recordShipStep",
+    "failShip",
+    "settleShip",
+    "noteShipWorktree",
+    "listShips",
   ],
   runs: ["logPipelineRun", "updateRunTelemetry"],
   lessons: [
@@ -262,6 +276,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.countActiveJobsByProject",
   "jobs.recentHostCommandCounts",
   "jobs.recentOrchestratorCounts",
+  "jobs.listShips",
   "decisions.listDecisions",
   "decisions.decisionTitles",
   "decisions.proposalsOfJob",

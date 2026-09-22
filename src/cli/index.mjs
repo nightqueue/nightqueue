@@ -112,6 +112,7 @@ commands:
   queue cancel <id> [--reason "..."]        cancel a pending, gated or orphaned job
   queue close <id>... | --merged            close one or more terminal jobs, or every one whose pull request is merged; --decisions accept|reject|keep settles the decisions they proposed (default keep, asked on a terminal)
   queue retry <id> [--note] [--fresh]       send a gated, failed or cancelled job back to the queue; --run starts it detached
+  queue ship <id> [--force]                 merge a done job's pull request and close the job: preflight, conflict, merge, settle; detached unless --foreground
   queue repair <id> [--json]                re-classify a gated or failed job from its own log; corrects a lost PR link
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written

@@ -941,7 +941,7 @@ export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env =
 }
 
 // Timestamp of the runner log file name, compact enough to stay one path segment.
-function compactStamp() {
+export function compactStamp() {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 }
 

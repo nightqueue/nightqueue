@@ -1,7 +1,8 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 const INSTALL_TIMEOUT_MS = 600000;
+const OUTPUT_TAIL_CHARS = 8192;
 const REGISTRY_TIMEOUT_MS = 15000;
 
 // Path of the npm CLI, injectable so a test never reaches the real package manager.
@@ -31,6 +32,51 @@ export function runNpm(args, { env = process.env, spawnSyncImpl = spawnSync, tim
     stderr: typeof result?.stderr === "string" && result.stderr ? result.stderr : (failure?.message ?? ""),
     missing: failure?.code === "ENOENT",
   };
+}
+
+// Runs the npm CLI without blocking and never rejects: it keeps the tail of the output and echoes all of it to stderr as it comes.
+export function runNpmAsync(args, { cwd, env = process.env, timeoutMs = INSTALL_TIMEOUT_MS, signal, spawnImpl = spawn, echo = echoToStderr } = {}) {
+  return new Promise((done) => {
+    const run = { tail: "", timedOut: false, settled: false, timer: null };
+    const finish = (result) => {
+      if (run.settled) return;
+      run.settled = true;
+      clearTimeout(run.timer);
+      done({ ...result, output: run.tail, timedOut: run.timedOut });
+    };
+    let child;
+    try {
+      child = spawnImpl(npmBin(env), args, { cwd, env, stdio: ["ignore", "pipe", "pipe"], signal });
+    } catch (err) {
+      run.tail = err?.message ?? String(err);
+      return finish({ ok: false, status: null, missing: err?.code === "ENOENT" });
+    }
+    const keep = (chunk) => {
+      const text = String(chunk);
+      echo(text);
+      run.tail = (run.tail + text).slice(-OUTPUT_TAIL_CHARS);
+    };
+    child.stdout?.on("data", keep);
+    child.stderr?.on("data", keep);
+    run.timer = setTimeout(() => {
+      run.timedOut = true;
+      child.kill?.("SIGTERM");
+    }, Math.max(1, Number.isFinite(timeoutMs) ? timeoutMs : INSTALL_TIMEOUT_MS));
+    child.on("error", (err) => {
+      run.tail = `${run.tail}\n${err?.message ?? String(err)}`.slice(-OUTPUT_TAIL_CHARS);
+      finish({ ok: false, status: null, missing: err?.code === "ENOENT" });
+    });
+    child.on("close", (code) => finish({ ok: code === 0 && !run.timedOut, status: typeof code === "number" ? code : null, missing: false }));
+  });
+}
+
+// Writes a chunk of a child's output to this process's stderr, the stream that never carries a --json answer.
+function echoToStderr(text) {
+  try {
+    process.stderr.write(text);
+  } catch {
+    return;
+  }
 }
 
 // Arguments of an installation into an isolated prefix, quiet, without development dependencies and without the audit npm would run on its own.

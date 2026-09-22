@@ -6,6 +6,7 @@ import { isQueueIdle } from "./hints.mjs";
 import { prStateKey } from "./pr-state.mjs";
 import { liveRunnersReport } from "./registry.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./runner.mjs";
+import { SHIPPED_PREFIX, shipLines, shipState, shipsSummary } from "./ship-view.mjs";
 import { extractNoticeFromStream } from "./stream.mjs";
 import { KEPT_PREFIX } from "./worktree.mjs";
 
@@ -23,9 +24,9 @@ function withPrState(job, prStates) {
 const CLOSEABLE_STATUSES = new Set(["done", "failed", "gate", "cancelled"]);
 const SUGGESTION_ID_LIMIT = 5;
 
-// Whether a job qualifies for a close suggestion: a terminal status whose cached pull request state is merged.
+// Whether a job qualifies for a close suggestion: a terminal status whose cached pull request state is merged, and no ship already closing it.
 function qualifiesForClose(job) {
-  return CLOSEABLE_STATUSES.has(job?.status) && job?.pr_state === "merged";
+  return CLOSEABLE_STATUSES.has(job?.status) && job?.pr_state === "merged" && shipState(job) !== "shipping";
 }
 
 // The ids a suggestion line names, at most five, with the rest folded into a count.
@@ -121,13 +122,15 @@ export async function queueView(readStore, { env = process.env, limit, blockedOn
   const runners = runnersPart.value ?? [];
   const registryError = runnersPart.ok ? null : runnersPart.error;
   const advisoriesPart = await timedSection("advisories", async () => (runnersPart.ok ? await advisoryLinesFor({ store: readStore, runners, env, killImpl }) : []), now);
+  const shipsPart = await timedSection("ships", async () => shipsSummary(await readStore.jobs.listShips(), runners), now);
   const jobs = (jobsPart.value ?? []).map((job) => withPrState(job, prStates));
   const { counts, blockedPending, activeJobs } = countsPart.value ?? { counts: zeroCounts(), blockedPending: 0, activeJobs: 0 };
-  const sections = [jobsPart, countsPart, runnersPart, advisoriesPart].map(({ name, ok, ms, error }) => ({ name, ok, ms, error }));
+  const sections = [jobsPart, countsPart, runnersPart, advisoriesPart, shipsPart].map(({ name, ok, ms, error }) => ({ name, ok, ms, error }));
   const advisories = advisoriesPart.value ?? [];
-  const suggestions = [closeSuggestion(jobs), truncationSuggestion(jobs), ...unknownStatusAdvisories(jobs)].filter(Boolean);
+  const ships = shipsPart.value ?? { inFlight: [], failed: [], stalled: [] };
+  const suggestions = [closeSuggestion(jobs), truncationSuggestion(jobs), ...unknownStatusAdvisories(jobs), ...shipLines(ships)].filter(Boolean);
   const idle = isViewIdle({ jobs, counts, activeJobs, runners, registryError, readable: jobsPart.ok && countsPart.ok });
-  return { jobs, counts, blockedPending, activeJobs, runners, registryError, advisories, suggestions, idle, sections };
+  return { jobs, counts, blockedPending, activeJobs, runners, registryError, advisories, suggestions, ships, idle, sections };
 }
 
 // The first failed section among the ones a listing cannot do without (jobs, counts), or null when both were read.
@@ -157,7 +160,7 @@ function runNoticeOf(job) {
 }
 
 // The lines the runtime itself appends to a row's notice after a run finishes, never text a run wrote.
-const RUNTIME_APPENDED_LINE_PREFIXES = [KEPT_PREFIX, ABANDONED_COMMAND_PREFIX, DISABLED_BACKGROUND_ESCAPE_LINE];
+const RUNTIME_APPENDED_LINE_PREFIXES = [KEPT_PREFIX, ABANDONED_COMMAND_PREFIX, DISABLED_BACKGROUND_ESCAPE_LINE, SHIPPED_PREFIX];
 
 // Whether a trailing paragraph is one the runtime itself appends to a row's notice.
 function isRuntimeAppendedLine(paragraph) {

@@ -31,6 +31,14 @@ export async function closeJobAndWorktree({ store, id, env = process.env, killIm
   return { job, worktree };
 }
 
+// Closes a shipped job in the ship's one settling write and only then releases its worktree; a refused settle touches nothing on disk.
+export async function closeShippedJob({ store, id, worker, ship, noticeLine, env = process.env, killImpl } = {}) {
+  const job = await store.jobs.settleShip(id, { worker, ship, noticeLine });
+  if (!job) return { job: null, worktree: null };
+  const worktree = await releaseJobWorktree({ job, env, killImpl });
+  return { job, worktree };
+}
+
 // The entry a close reports for the worktree of one closed job, or null when the job had none.
 export function worktreeEntry(job, worktree) {
   return worktree ? { id: job.id, ...worktree } : null;

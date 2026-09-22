@@ -66,6 +66,13 @@ function jobsDomain(env, db) {
     recentHostCommandCounts: async () => jobs.recentHostCommandCounts(env, db()),
     recentOrchestratorCounts: async () => jobs.recentOrchestratorCounts(env, db()),
     status: async (id) => jobs.jobStatus(id, env, db()),
+    acquireShip: async (id, spec) => jobs.acquireShip(id, spec, env),
+    adoptShip: async (id, spec) => jobs.adoptShip(id, spec, env),
+    recordShipStep: async (id, spec) => jobs.recordShipStep(id, spec, env),
+    failShip: async (id, spec) => jobs.failShip(id, spec, env),
+    settleShip: async (id, spec) => jobs.settleShip(id, spec, env),
+    noteShipWorktree: async (id, spec) => jobs.noteShipWorktree(id, spec, env),
+    listShips: async () => jobs.listShips(env, db()),
   };
 }
 

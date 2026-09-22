@@ -72,8 +72,10 @@ const JOB_VIEW_COLUMNS = [
   "orch_bash",
   "orch_bash_explore",
   "orch_ctx_last",
+  "ship_status",
+  "ship_worker",
 ];
-const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "not_before"];
+const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "not_before", "ship_lease_until"];
 const JOB_VIEW_TRUNCATED = ["notice_md", "result"];
 const TRUNCATION_FLAGS = { notice_md: "notice_truncated", result: "result_truncated" };
 // Host-command counters the view omits at zero, the same way a null one is left out: a regression shows only once there is one to show.
@@ -184,7 +186,19 @@ export function jobView(row, { full = false } = {}) {
     view[column] = full ? whole : truncateByCodePoint(whole, VIEW_TEXT_LIMIT);
     if (view[column] !== whole) view[TRUNCATION_FLAGS[column]] = true;
   }
+  view.ship = parseShipColumn(row.ship);
   return view;
+}
+
+// The ship checklist of a row as an object, or null when there is none or it is not a JSON object.
+export function parseShipColumn(text) {
+  if (typeof text !== "string" || !text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 // Enqueues a job for a project, validating every range before the write.
@@ -412,16 +426,16 @@ export function linkPipelineRun(jobId, { project, slug } = {}, env = process.env
 
 const FINISH_COLUMNS = ["status", "pr_url", "finished_at"];
 
-// The terminal columns of a finish, in the fixed order the verification message prints them.
-function describeFinish(row) {
-  return FINISH_COLUMNS.map((column) => `${column}=${row?.[column] ?? "null"}`).join(" ");
+// The witnessed columns of a write, in the fixed order the verification message prints them.
+function describeColumns(columns, row) {
+  return columns.map((column) => `${column}=${row?.[column] ?? "null"}`).join(" ");
 }
 
-// Reads the terminal columns of a job through a connection of its own, so no cached snapshot answers for the file.
-function readFinishedColumns(id, env) {
+// Reads the witnessed columns of a job through a connection of its own, so no cached snapshot answers for the file.
+function readWitnessedColumns(id, columns, env) {
   const db = openDbReadOnly(env);
   try {
-    return db.prepare(`SELECT ${FINISH_COLUMNS.join(", ")} FROM jobs WHERE id = ?`).get(id) ?? null;
+    return db.prepare(`SELECT ${columns.join(", ")} FROM jobs WHERE id = ?`).get(id) ?? null;
   } finally {
     db.close();
   }
@@ -449,10 +463,10 @@ function reportFinishMismatch(id, detail, env) {
 }
 
 // Compares what the transaction committed with what a fresh connection reads back, reporting the difference.
-function verifyFinish(id, written, env) {
-  const read = readFinishedColumns(id, env);
-  if (read && FINISH_COLUMNS.every((column) => (read[column] ?? null) === (written[column] ?? null))) return true;
-  reportFinishMismatch(id, `expected ${describeFinish(written)}; read ${describeFinish(read)}`, env);
+function verifyWitnessed(id, written, witness, env) {
+  const read = readWitnessedColumns(id, witness.columns, env);
+  if (read && witness.columns.every((column) => (read[column] ?? null) === (written[column] ?? null))) return true;
+  reportFinishMismatch(id, `expected ${describeColumns(witness.columns, written)}; read ${describeColumns(witness.columns, read)}`, env);
   return false;
 }
 
@@ -470,14 +484,16 @@ function reapplyFinish(id, written, env) {
   withWriteRetry(() => statement.run(written.status, written.pr_url ?? null, written.finished_at ?? null, id));
 }
 
-// Confirms on disk what the finish committed and repairs it once; a failure that survives is logged, never a lost job.
-function ensureFinishDurable(id, written, env) {
+const FINISH_WITNESS = { columns: FINISH_COLUMNS, reapply: reapplyFinish };
+
+// Confirms on disk what a write committed and repairs it once through the witness's own re-apply; a failure that survives is logged, never a lost job.
+function ensureDurable(id, written, witness, env) {
   try {
-    if (verifyFinish(id, written, env)) return true;
-    reapplyFinish(id, written, env);
-    return verifyFinish(id, written, env);
+    if (verifyWitnessed(id, written, witness, env)) return true;
+    witness.reapply(id, written, env);
+    return verifyWitnessed(id, written, witness, env);
   } catch (err) {
-    reportFinishMismatch(id, `expected ${describeFinish(written)}; read failed: ${err?.message ?? String(err)}`, env);
+    reportFinishMismatch(id, `expected ${describeColumns(witness.columns, written)}; read failed: ${err?.message ?? String(err)}`, env);
     return false;
   }
 }
@@ -545,7 +561,7 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
     }),
   );
   if (!written) return false;
-  ensureFinishDurable(requireId(id), written, env);
+  ensureDurable(requireId(id), written, FINISH_WITNESS, env);
   return true;
 }
 
@@ -635,6 +651,178 @@ export function retryJob(id, { note, fresh } = {}, env = process.env) {
   const row = withWriteRetry(() => statement.get(answer, jobId, answer));
   if (row) return jobView(row);
   throw new UserError(retryRefusal(jobId, getJob(jobId, env), { note: answer }));
+}
+
+// A ship lease is live while its ship is `shipping` and the lease has not passed yet, both sides compared on SQLite's own clock.
+const SHIP_LEASE_LIVE = `ship_status = 'shipping' AND ship_lease_until IS NOT NULL AND datetime(ship_lease_until) >= datetime('now')`;
+const SHIP_LEASE_EXPRESSION = `datetime('now', '+' || ? || ' seconds')`;
+// The checklist a new ship attempt re-arms: the JSON object already there, so the steps and data of an earlier attempt survive, or a fresh one.
+const SHIP_OBJECT_BASE = `CASE
+              WHEN ship IS NOT NULL AND json_valid(ship) AND json_type(ship) = 'object' THEN ship
+              ELSE '{"attempts":0,"steps":{},"data":{}}' END`;
+const SHIP_WITNESS_COLUMNS = ["ship_status", "ship", "ship_worker", "ship_lease_until"];
+const SETTLE_WITNESS_COLUMNS = [...SHIP_WITNESS_COLUMNS, "status"];
+const SHIP_LEASE_RANGE = { min: 60, max: 7200 };
+
+// Requires a lease length in seconds inside the accepted range, so a lease can never be written already expired or endless.
+function requireLeaseSeconds(value) {
+  if (Number.isInteger(value) && value >= SHIP_LEASE_RANGE.min && value <= SHIP_LEASE_RANGE.max) return value;
+  throw new UserError(`invalid ship lease \`${String(value)}\`; expected an integer between ${SHIP_LEASE_RANGE.min} and ${SHIP_LEASE_RANGE.max} seconds`);
+}
+
+// Serializes a ship checklist, refusing anything that is not a plain object so a broken checklist is never stored.
+function requireShipText(ship) {
+  if (!ship || typeof ship !== "object" || Array.isArray(ship)) throw new UserError("a ship checklist must be a JSON object");
+  return JSON.stringify(ship);
+}
+
+// Tells whether a stored ship lease is still in the future, for phrasing a refusal only; the lease decision itself is always the WHERE of a write.
+function shipLeaseLooksLive(row, nowMs) {
+  if (row?.ship_status !== "shipping" || !row.ship_lease_until) return false;
+  const until = Date.parse(sqliteToIso(row.ship_lease_until));
+  return Number.isFinite(until) && Number.isFinite(nowMs) && until >= nowMs;
+}
+
+// Explains, from the current row, why a ship would be refused, or null when nothing refuses it; the lease itself is decided by `acquireShip`.
+export function shipRefusal(id, row, { force = false, nowMs = Date.now() } = {}) {
+  if (!row) return `unknown job \`${id}\``;
+  if (row.status === "closed") return row.ship_status === "shipped" ? `job \`${id}\` is already shipped and closed` : `job \`${id}\` is already closed`;
+  if (row.status === "running") return `job \`${id}\` is running with a live lease on worker \`${row.worker}\`; stop that runner first`;
+  if (row.status === "pending") return `job \`${id}\` is pending; it has not produced a pull request yet`;
+  if (row.status === "cancelled") return `job \`${id}\` is cancelled; retry it before shipping`;
+  if (!row.pr_url) return `job \`${id}\` has no pull request to ship`;
+  if (shipLeaseLooksLive(row, nowMs)) {
+    return `job \`${id}\` is already being shipped by \`${row.ship_worker}\` until ${sqliteToIso(row.ship_lease_until)}; follow it with nightshift queue status ${id}`;
+  }
+  if (row.status !== "done" && !force) return `job \`${id}\` is \`${row.status}\`; pass --force to ship its pull request anyway (${row.pr_url})`;
+  if (!["done", "failed", "gate"].includes(row.status)) return `job \`${id}\` cannot be shipped from status \`${row.status}\``;
+  return null;
+}
+
+// Takes the ship lease of a job in one compare-and-swap and re-arms its checklist for a new attempt; null means the WHERE refused and nothing was written.
+export function acquireShip(id, { worker, leaseS, force = false } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET ship_status = 'shipping',
+            ship_worker = ?,
+            ship_lease_until = ${SHIP_LEASE_EXPRESSION},
+            ship = json_set(${SHIP_OBJECT_BASE},
+              '$.attempts', COALESCE(json_extract(${SHIP_OBJECT_BASE}, '$.attempts'), 0) + 1,
+              '$.startedAt', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+              '$.finishedAt', json('null'),
+              '$.failed', json('null'))
+      WHERE id = ?
+        AND pr_url IS NOT NULL
+        AND (status = 'done' OR (? = 1 AND status IN ('failed', 'gate')))
+        AND (ship_status IS NULL OR ship_status = 'failed' OR (ship_status = 'shipping' AND NOT (${SHIP_LEASE_LIVE})))
+      RETURNING *`,
+  );
+  const values = [requireText("worker", worker), requireLeaseSeconds(leaseS), requireId(id), force === true ? 1 : 0];
+  return withWriteRetry(() => statement.get(...values)) ?? null;
+}
+
+// Confirms that the ship lease of a job is held by this worker and renews it; false means the lease is not this worker's any more.
+export function adoptShip(id, { worker, leaseS } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs SET ship_lease_until = ${SHIP_LEASE_EXPRESSION} WHERE id = ? AND ship_status = 'shipping' AND ship_worker = ?`,
+  );
+  const values = [requireLeaseSeconds(leaseS), requireId(id), requireText("worker", worker)];
+  return withWriteRetry(() => statement.run(...values)).changes === 1;
+}
+
+// Writes the witnessed ship columns again, by id, only while no other worker took the ship over in between.
+function reapplyShipColumns(id, written, columns, worker, env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs SET ${columns.map((column) => `${column} = ?`).join(", ")}
+      WHERE id = ? AND (ship_worker IS NULL OR ship_worker = ?)`,
+  );
+  withWriteRetry(() => statement.run(...columns.map((column) => written[column] ?? null), id, worker));
+}
+
+// The witness of a ship write: the columns a fresh connection must read back and the re-apply that repairs them once.
+function shipWitness(columns, worker) {
+  return { columns, reapply: (id, written, env) => reapplyShipColumns(id, written, columns, worker, env) };
+}
+
+// Runs one ship write fully synced inside a transaction and confirms it on disk; null means the WHERE refused it.
+function writeShipDurably({ id, statement, values, witness, env }) {
+  const db = openDb(env);
+  const written = withFullSync(db, () => inTransaction(db, () => statement.get(...values) ?? null));
+  if (written) ensureDurable(id, written, witness, env);
+  return written;
+}
+
+// Records the checklist after a step and renews the ship lease, in one statement; false means the lease is not this worker's any more.
+export function recordShipStep(id, { worker, ship, leaseS } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs SET ship = ?, ship_lease_until = ${SHIP_LEASE_EXPRESSION}
+      WHERE id = ? AND ship_status = 'shipping' AND ship_worker = ?
+      RETURNING ${SHIP_WITNESS_COLUMNS.join(", ")}`,
+  );
+  const owner = requireText("worker", worker);
+  const values = [requireShipText(ship), requireLeaseSeconds(leaseS), requireId(id), owner];
+  return writeShipDurably({ id, statement, values, witness: shipWitness(SHIP_WITNESS_COLUMNS, owner), env }) !== null;
+}
+
+// Stops a ship as failed, keeping its checklist and releasing the lease; false means the lease is not this worker's any more.
+export function failShip(id, { worker, ship } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs SET ship_status = 'failed', ship = ?, ship_worker = NULL, ship_lease_until = NULL
+      WHERE id = ? AND ship_status = 'shipping' AND ship_worker = ?
+      RETURNING ${SHIP_WITNESS_COLUMNS.join(", ")}`,
+  );
+  const owner = requireText("worker", worker);
+  const values = [requireShipText(ship), requireId(id), owner];
+  return writeShipDurably({ id, statement, values, witness: shipWitness(SHIP_WITNESS_COLUMNS, owner), env }) !== null;
+}
+
+// Closes a shipped job, marks it shipped, releases the lease and appends the shipped line to its notice, in one statement; null means the WHERE refused it.
+export function settleShip(id, { worker, ship, noticeLine } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET status = 'closed',
+            ship_status = 'shipped',
+            ship = ?,
+            ship_worker = NULL,
+            ship_lease_until = NULL,
+            notice_md = CASE
+              WHEN notice_md IS NULL OR trim(notice_md) = '' THEN ?
+              ELSE rtrim(notice_md, ' ' || char(10)) || char(10) || char(10) || ? END
+      WHERE id = ? AND ship_status = 'shipping' AND ship_worker = ?
+        AND status IN ('done', 'failed', 'gate', 'cancelled', 'closed')
+      RETURNING *`,
+  );
+  const owner = requireText("worker", worker);
+  const line = requireText("noticeLine", noticeLine);
+  const values = [requireShipText(ship), line, line, requireId(id), owner];
+  const row = writeShipDurably({ id, statement, values, witness: shipWitness(SETTLE_WITNESS_COLUMNS, owner), env });
+  return row ? jobView(row, { full: true }) : null;
+}
+
+// Records where the settled ship left the job's worktree; best effort, a failure never costs the ship that already happened.
+export function noteShipWorktree(id, { worktree } = {}, env = process.env) {
+  try {
+    const statement = openDb(env).prepare(
+      `UPDATE jobs SET ship = json_set(ship, '$.steps.settle.worktree', json(?))
+        WHERE id = ? AND ship_status = 'shipped' AND json_valid(ship) AND json_type(ship, '$.steps.settle') = 'object'`,
+    );
+    return withWriteRetry(() => statement.run(JSON.stringify(worktree ?? null), requireId(id))).changes === 1;
+  } catch {
+    return false;
+  }
+}
+
+// The ships in flight, failed or stalled, newest first, with the liveness of each lease read on SQLite's own clock.
+export function listShips(env = process.env, db = openDb(env)) {
+  return db
+    .prepare(
+      `SELECT id, project, status, pr_url, ship_status, ship_worker, ship_lease_until, ship,
+              CASE WHEN ${SHIP_LEASE_LIVE} THEN 1 ELSE 0 END AS ship_lease_live
+         FROM jobs
+        WHERE ship_status IN ('shipping', 'failed') AND (status <> 'closed' OR ship_status = 'shipping')
+        ORDER BY id DESC LIMIT 50`,
+    )
+    .all();
 }
 
 // Returns the raw row of a job, or null.
