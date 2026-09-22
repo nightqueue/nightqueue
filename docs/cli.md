@@ -95,10 +95,12 @@ and exits `1` with nothing pushed. Otherwise it renames the branch
 when it still carries the `worktree-` prefix (`worktree-feat+login-google` →
 `feat/login-google`, falling back to `<type>/<slug>` from `state.json` when the
 name carries no `+`), pushes it with `git push -u origin <branch>`, opens the
-pull request with `gh pr create` and records the outcome `done` in `state.json`.
-The `PR: <url>` line it prints is information only - the pull request of the run
-is the one the host published in its own `code_change_published` event (see
-[Runtime contract](runtime-contract.md)). It closes with `WORKTREE: <path>` and
+pull request with `gh pr create` and records in `state.json` the outcome `done`,
+the pull request URL gh answered and, as the run's `branch`, the name it pushed
+(a record it cannot write is reported on stderr, never fatal: the pull request is
+open). The `PR: <url>` line it prints is information only - the pull request of the
+run is the host's publication when it is on the run's branch, otherwise the one this
+command recorded (see [Runtime contract](runtime-contract.md)). It closes with `WORKTREE: <path>` and
 removes the worktree only when asked with `--remove-worktree`, because the
 session that called it still lives in that directory. That default is unchanged:
 in a queue job the runner itself removes a clean, pushed worktree once the run ends

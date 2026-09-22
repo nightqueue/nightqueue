@@ -6,7 +6,7 @@ export const SHIPPED_PREFIX = "Shipped: ";
 
 const PASSED_STEP_STATUSES = new Set(["done", "skipped"]);
 const STEP_ICONS = { done: "✓", skipped: "-", failed: "✗" };
-const STATUS_SUFFIXES = { shipping: " · shipping", stalled: " · ship stalled", shipped: " · shipped", failed: " · ship failed" };
+const STATUS_SUFFIXES = { stalled: " · ship stalled", failed: " · ship failed" };
 
 // The line a settled ship appends to the job's notice: `Shipped: PR #N merged as <sha7> on <YYYY-MM-DD>`.
 export function shippedLine({ number, sha, at }) {
@@ -54,9 +54,11 @@ function failedReason(checklist) {
   return String(parseShipChecklist(checklist)?.failed?.reason ?? "unknown");
 }
 
-// What the STATUS cell appends for a job with a ship: ` · shipping`, ` · ship stalled`, ` · shipped`, ` · ship failed`, or nothing.
-export function shipStatusSuffix(job, nowMs = Date.now()) {
-  return STATUS_SUFFIXES[shipState(job, nowMs)] ?? "";
+// What the STATUS cell says of a job: `shipping` alone while a ship holds it, else its status plus ` · ship stalled`/` · ship failed` when its ship stopped.
+export function statusLabel(job, nowMs = Date.now()) {
+  const state = shipState(job, nowMs);
+  if (state === "shipping") return "shipping";
+  return `${job?.status ?? ""}${STATUS_SUFFIXES[state] ?? ""}`;
 }
 
 // The line that tells the operator a ship stopped and how to resume it, or null when the job's ship did not fail.

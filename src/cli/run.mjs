@@ -6,11 +6,12 @@ import { projectByName } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { ghPrCreate } from "../host/gh.mjs";
 import { runGit } from "../host/git.mjs";
+import { publishedBranchName } from "../queue/branch-name.mjs";
 import { formatDuration } from "../queue/narrate.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
-import { recordOutcome, recordPrTemplate, recordPrUrl } from "../queue/run-state.mjs";
+import { recordOutcome, recordPrTemplate, recordPrUrl, recordRunFields } from "../queue/run-state.mjs";
 import { phaseTelemetry, runDurationS } from "../queue/telemetry.mjs";
 import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -457,9 +458,6 @@ async function runCommit(argv, ctx) {
   return 0;
 }
 
-// The branch name a worktree mangles the `<type>/<slug>` of a run into.
-const WORKTREE_BRANCH_PREFIX = "worktree-";
-
 // One violation of the body as the command prints it, the rules being the template's own (`references/pr-template.md`).
 function problemLine(problem) {
   return problem.missing === undefined ? `REJECTED: ${problem.rejected}` : `MISSING: ${problem.missing}`;
@@ -472,19 +470,6 @@ function prTitle(given, body) {
   const heading = body.split("\n").find((line) => /^#\s+\S/.test(line.trim()));
   if (!heading) throw new UserError("pass `--title <text>`: the body carries no `# <title>` line to take one from");
   return heading.trim().replace(/^#\s+/, "");
-}
-
-// The branch prefix of a run whose worktree name carried no `<type>` to restore, read from the task type the run recorded.
-function branchPrefix(type) {
-  return type === "bug/error" ? "fix" : "feat";
-}
-
-// The name the branch of a run is published under: the `<type>/<slug>` the worktree mangled, or the one the run itself recorded.
-function finalBranch(current, { type, slug }) {
-  if (!current.startsWith(WORKTREE_BRANCH_PREFIX)) return current;
-  const mangled = current.slice(WORKTREE_BRANCH_PREFIX.length);
-  const separator = mangled.indexOf("+");
-  return separator > 0 ? `${mangled.slice(0, separator)}/${mangled.slice(separator + 1)}` : `${branchPrefix(type)}/${slug}`;
 }
 
 // The branch the worktree is on right now, which is the only name a push may trust.
@@ -503,9 +488,9 @@ function renameBranch({ cwd, current, final, env }) {
   return final;
 }
 
-// Publishes the branch and opens the pull request, then records the run as done with the URL gh answered: the record is written
+// Publishes the branch and opens the pull request, then records the run as done with the URL gh answered and the branch it pushed: the record is written
 // here, at the point of publication, so a run driven outside the queue runner (a resumed session, another program) ends up
-// with the same state.json as one the runner watched. A URL gh answered in a shape the record refuses is reported, never fatal.
+// with the same state.json as one the runner watched. A value the record refuses is reported, never fatal.
 function publishBranch({ run, cwd, branch, title, bodyFile, env }) {
   const pushed = runGit({ args: ["push", "-u", "origin", branch], cwd, env });
   if (!pushed.ok) throw new UserError(`git could not push \`${branch}\`: ${failureLine(pushed)}`);
@@ -514,7 +499,8 @@ function publishBranch({ run, cwd, branch, title, bodyFile, env }) {
   if (!created.ok) throw new UserError(`\`${branch}\` is pushed, but gh could not open the pull request: ${failureLine(created)}`);
   const recorded = recordOutcome({ project: run.project, slug: run.slug, status: "done", env });
   const prRecorded = recordPrUrl({ project: run.project, slug: run.slug, prUrl: created.url, env });
-  return { url: created.url, recorded, prRecorded };
+  const branchRecorded = recordRunFields({ project: run.project, slug: run.slug, fields: { branch }, env });
+  return { url: created.url, recorded, prRecorded, branchRecorded };
 }
 
 // Removes the worktree of the run from the checkout that owns it; the pull request is already open, so a refusal is reported, never fatal.
@@ -563,12 +549,13 @@ async function runPr(argv, ctx) {
   }
   const state = readRunState({ project: run.project, slug: run.slug, env: ctx.env });
   const current = currentBranch(cwd, ctx.env);
-  const branch = renameBranch({ cwd, current, final: finalBranch(current, { type: state?.type, slug: run.slug }), env: ctx.env });
-  const { url, recorded, prRecorded } = publishBranch({ run, cwd, branch, title: prTitle(values.title, body), bodyFile, env: ctx.env });
+  const branch = renameBranch({ cwd, current, final: publishedBranchName(current, { type: state?.type, slug: run.slug }), env: ctx.env });
+  const { url, recorded, prRecorded, branchRecorded } = publishBranch({ run, cwd, branch, title: prTitle(values.title, body), bodyFile, env: ctx.env });
   ctx.out(`BRANCH: ${branch}${branch === current ? "" : ` (renamed from ${current})`}`);
   ctx.out(`PR: ${url ?? "opened"}`);
   if (recorded.status !== "written") ctx.err(`nightshift: the run was not recorded as done: ${recorded.reason}`);
   if (prRecorded.status !== "written") ctx.err(`nightshift: the pull request was not recorded on the run: ${prRecorded.reason}`);
+  if (branchRecorded.status !== "written") ctx.err(`nightshift: the published branch was not recorded on the run: ${branchRecorded.reason}`);
   ctx.out(`WORKTREE: ${cwd}`);
   if (values["remove-worktree"] === true) ctx.out(worktreeRemoval(run, cwd, ctx.env));
   return 0;

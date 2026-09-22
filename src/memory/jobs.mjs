@@ -973,6 +973,30 @@ export function reclassifyJob(id, { status, prUrl, noticeMd } = {}, env = proces
   return withWriteRetry(() => statement.run(...values)).changes === 1;
 }
 
+// Moves a job's pull request attribution from one URL to another and swaps its one notice line, in a single compare-and-swap: a row whose URL differs or whose notice does not hold the line exactly once is refused and nothing is written.
+export function correctJobPrAttribution(id, { fromUrl, toUrl, fromLine, toLine } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET pr_url = ?,
+            notice_md = replace(notice_md, ?, ?)
+      WHERE id = ? AND pr_url = ? AND instr(notice_md, ?) > 0
+        AND instr(substr(notice_md, instr(notice_md, ?) + length(?)), ?) = 0`,
+  );
+  const from = requireText("fromLine", fromLine);
+  const values = [
+    requireText("toUrl", toUrl),
+    from,
+    requireText("toLine", toLine),
+    requireId(id),
+    requireText("fromUrl", fromUrl),
+    from,
+    from,
+    from,
+    from,
+  ];
+  return withWriteRetry(() => statement.run(...values)).changes === 1;
+}
+
 // Tells whether some pending job is waiting to be claimed, which is what tells an empty queue from a full ceiling.
 export function hasClaimablePending(env = process.env) {
   return Boolean(openDb(env).prepare(`${CANDIDATE_QUERY}`).get());

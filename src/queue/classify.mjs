@@ -5,12 +5,12 @@ import {
   confirmationSection,
   extractNoticeFromStream,
   extractPrUrlFromStream,
-  extractPublishedPrUrl,
   extractResultText,
   hasGateMarker,
   hasGateMarkerInStream,
   isPrUrl,
   prUrlRepo,
+  publishedDelivery,
   runtimeKillFromStream,
 } from "./stream.mjs";
 
@@ -120,6 +120,36 @@ function withAbandonedCommand(noticeMd, description) {
   return noticeMd ? `${noticeMd}\n\n${line}` : line;
 }
 
+// The prefix of the line naming a pull request published during the run that was not recorded as its delivery.
+export const STRAY_PR_PREFIX = "⚠️ another pull request was published during this run and was NOT recorded as its delivery: ";
+
+// The line naming a dropped publication, its branch when the host named one, and what was recorded instead.
+function strayPrLine(stray, prUrl) {
+  const branch = stray.branch ? ` on branch \`${stray.branch}\`` : "";
+  const instead = prUrl ? `; recorded instead: ${prUrl}` : "; no pull request of this run's own branch was found";
+  return `${STRAY_PR_PREFIX}${stray.url}${branch}${instead}`;
+}
+
+// Appends the stray pull request line to a notice, never replacing it; no stray leaves the notice as it was.
+function withStrayPr(noticeMd, stray, prUrl) {
+  if (!stray) return noticeMd;
+  const line = strayPrLine(stray, prUrl);
+  return noticeMd ? `${noticeMd}\n\n${line}` : line;
+}
+
+// The pull request of the run: its own branch's publication, the runtime's record, then the text - never a publication proven to be another branch's.
+function resolvePrUrl(log, { state, record }) {
+  const reported = record?.prUrl ?? extractPrUrlFromStream(log);
+  const delivery = publishedDelivery(log, {
+    repo: prUrlRepo(reported),
+    branch: state?.branch ?? null,
+    hints: { type: state?.type, slug: state?.slug },
+    recorded: record?.prUrl ?? null,
+  });
+  const fallback = reported === delivery.stray?.url ? null : reported;
+  return { prUrl: delivery.url ?? fallback, stray: delivery.stray };
+}
+
 // Classifies the run's own ending, exactly as if a runtime kill never happened: the gate, the pull request and the notice rules.
 function classifyEnding({ record, resultText, log, ending, prUrl, planPath }) {
   const gate = record?.status ? record.status === "gate" : hasGateMarker(resultText) || hasGateMarkerInStream(log);
@@ -136,16 +166,15 @@ function classifyEnding({ record, resultText, log, ending, prUrl, planPath }) {
 export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null, planPath = null } = {}) {
   const resultText = extractResultText(log) ?? "";
   const record = pipelineOutcome(state);
-  const reported = record?.prUrl ?? extractPrUrlFromStream(log);
-  const prUrl = extractPublishedPrUrl(log, { repo: prUrlRepo(reported) }) ?? reported;
+  const { prUrl, stray } = resolvePrUrl(log, { state, record });
   const kill = runtimeKillFromStream(log);
   if (kill && isTerminalKill(kill, record)) {
-    return { status: "failed", prUrl, noticeMd: runtimeKillNotice(kill), resultText };
+    return { status: "failed", prUrl, noticeMd: withStrayPr(runtimeKillNotice(kill), stray, prUrl), resultText };
   }
   const ending = { exitCode, timedOut, idleTimedOut, stopped };
   const base = classifyEnding({ record, resultText, log, ending, prUrl, planPath });
   const noticeMd = kill ? withAbandonedCommand(base.noticeMd, kill.description) : base.noticeMd;
-  return { ...base, prUrl, noticeMd, resultText };
+  return { ...base, prUrl, noticeMd: withStrayPr(noticeMd, stray, prUrl), resultText };
 }
 
 // Tells whether the failure was a transient network or provider overload, the only kind worth an automatic retry.

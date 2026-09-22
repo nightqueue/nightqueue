@@ -74,9 +74,10 @@ export function resultEvent({
   return event;
 }
 
-// The `system` event the HOST emits when it publishes the change, in the measured shape: every field is top level and there is no timestamp.
-export function codeChangePublishedEvent({ url = PR_URL, provider = "github", repo = "acme/api", identifier = "42", action = "created", sessionId = SESSION_ID } = {}) {
-  return { type: "system", subtype: "code_change_published", provider, url, repo, identifier, action, uuid: `uuid_${identifier}`, session_id: sessionId };
+// The `system` event the HOST emits when it publishes the change, in the measured shape: every field is top level, there is no timestamp, and `branch` only when given.
+export function codeChangePublishedEvent({ url = PR_URL, provider = "github", repo = "acme/api", identifier = "42", action = "created", sessionId = SESSION_ID, branch = undefined } = {}) {
+  const event = { type: "system", subtype: "code_change_published", provider, url, repo, identifier, action, uuid: `uuid_${identifier}`, session_id: sessionId };
+  return branch === undefined ? event : { ...event, branch };
 }
 
 // A `## Notice` section, the executive summary the runner stores in notice_md.

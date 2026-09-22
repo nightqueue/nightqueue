@@ -28,6 +28,7 @@ import {
   parseSlugLine,
   parseSlugTypeLine,
   parseTierRaiseLine,
+  publishedDelivery,
   runtimeKillFromStream,
   sawDisabledBackgroundTask,
   sumHostCommandCounts,
@@ -284,6 +285,34 @@ test("the pull request the HOST published is read from its own event, and only t
   assert.equal(extractPublishedPrUrl(doneStream()), null, "a stream with no published event invented one");
   assert.equal(extractPublishedPrUrl(toNdjson([{ ...codeChangePublishedEvent(), type: "assistant" }])), null, "another type of event published a pull request");
   assert.equal(extractPublishedPrUrl(null), null);
+});
+
+test("the host's publication is the run's delivery only on the run's own branch; the runtime record beats one that cannot prove it", () => {
+  const recorded = "https://github.com/acme/api/pull/40";
+  const ownUrl = "https://github.com/acme/api/pull/43";
+  const foreignUrl = "https://github.com/acme/api/pull/44";
+  const own = codeChangePublishedEvent({ url: ownUrl, identifier: "43", branch: "feat/x" });
+  const foreign = codeChangePublishedEvent({ url: foreignUrl, identifier: "44", branch: "scratch/qa" });
+  const unproven = codeChangePublishedEvent();
+  const otherRepo = codeChangePublishedEvent({ url: "https://github.com/other-org/other-repo/pull/7", repo: "other-org/other-repo", identifier: "7", branch: "worktree-feat+x" });
+  const run = { repo: "acme/api", branch: "worktree-feat+x" };
+  const cases = [
+    { name: "own, with record", events: [own], opts: { ...run, recorded }, url: ownUrl, stray: null },
+    { name: "own, no record", events: [own], opts: run, url: ownUrl, stray: null },
+    { name: "own after foreign", events: [foreign, own], opts: { ...run, recorded }, url: ownUrl, stray: { url: foreignUrl, branch: "scratch/qa" } },
+    { name: "foreign, with record", events: [foreign], opts: { ...run, recorded }, url: null, stray: { url: foreignUrl, branch: "scratch/qa" } },
+    { name: "foreign, no record", events: [foreign], opts: run, url: null, stray: { url: foreignUrl, branch: "scratch/qa" } },
+    { name: "unproven, with record", events: [unproven], opts: { ...run, recorded }, url: null, stray: { url: PR_URL, branch: null } },
+    { name: "unproven equal to the record", events: [unproven], opts: { ...run, recorded: PR_URL }, url: null, stray: null },
+    { name: "unproven, no record", events: [unproven], opts: run, url: PR_URL, stray: null },
+    { name: "unproven wins, foreign flagged", events: [unproven, foreign], opts: run, url: PR_URL, stray: { url: foreignUrl, branch: "scratch/qa" } },
+    { name: "branch named, run has none, with record", events: [foreign], opts: { repo: "acme/api", recorded }, url: null, stray: { url: foreignUrl, branch: "scratch/qa" } },
+    { name: "another repository never speaks", events: [otherRepo, unproven], opts: { ...run, recorded: PR_URL }, url: null, stray: null },
+    { name: "nothing published", events: [], opts: { ...run, recorded }, url: null, stray: null },
+  ];
+  for (const { name, events, opts, url, stray } of cases) {
+    assert.deepEqual(publishedDelivery(toNdjson(events), opts), { url, stray }, name);
+  }
 });
 
 test("only a marker the runtime itself wrote, in sequence and unquoted, closes an attempt of an accumulated log", () => {

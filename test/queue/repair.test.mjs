@@ -14,6 +14,7 @@ import { readRunState } from "../../src/queue/resume.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 import {
   attemptMarker,
+  codeChangePublishedEvent,
   GATE_MARKER,
   GATE_NOTICE,
   gateStream,
@@ -272,4 +273,34 @@ test("a failed job that had already delivered its pull request keeps the failure
   assert.deepEqual({ from: outcome.from, to: outcome.to, prUrl: outcome.prUrl }, { from: "failed", to: "failed", prUrl: PR_URL });
   assert.equal(getJob(id, env).status, "failed", "a non-zero exit was turned into a delivery by a log");
   assert.equal(getJob(id, env).pr_url, PR_URL);
+});
+
+test("`queue repair` of a job whose QA published another branch's pull request re-derives the run's own one", async (t) => {
+  const env = makeQueue(t, "repair-qa-branch");
+  const qaUrl = "https://github.com/acme/api/pull/71";
+  const log = toNdjson([
+    systemInitEvent(),
+    slugEvent(SLUG),
+    codeChangePublishedEvent({ url: qaUrl, identifier: "71", branch: "scratch/ship-qa" }),
+    resultEvent({ text: noticeText(NOTICE) }),
+  ]);
+  const id = finishedJob(env, { status: "failed", result: { ...CLEAN_ENDING, status: "failed", prUrl: qaUrl }, log });
+  const dir = runDir("alpha", SLUG, env);
+  mkdirSync(dir, { recursive: true });
+  const state = {
+    schemaVersion: 1,
+    slug: SLUG,
+    project: "alpha",
+    resumeCount: 0,
+    branch: "worktree-fix+the-worker",
+    phases: [],
+    outcome: { status: "done", prUrl: PR_URL },
+    terminal: { status: "failed", prUrl: qaUrl, finishedAt: "2026-09-14T21:00:00Z" },
+  };
+  writeFileSync(join(dir, "state.json"), `${JSON.stringify(state, null, 2)}\n`);
+
+  const outcome = await reclassifyFromLog({ id, env });
+  assert.deepEqual({ to: outcome.to, prUrl: outcome.prUrl }, { to: "done", prUrl: PR_URL }, "the repair re-derived the QA's pull request");
+  assert.equal(getJob(id, env).pr_url, PR_URL);
+  assert.ok(getJob(id, env).notice_md.includes(qaUrl), "the dropped publication was not named in the notice");
 });

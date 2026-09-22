@@ -43,6 +43,7 @@
  * @property {(id: number) => Promise<boolean>} isJobActive
  * @property {(id: number, terminal: object) => Promise<boolean>} repairJobFromWitness
  * @property {(id: number, outcome: object) => Promise<boolean>} reclassifyJob the outcome re-derived from the job's own log
+ * @property {(id: number, spec: object) => Promise<boolean>} correctJobPrAttribution moves a job's pull request URL and swaps its one notice line in a single compare-and-swap; false means refused, nothing written
  * @property {() => Promise<boolean>} hasClaimablePending
  * @property {() => Promise<object|null>} peekNextJob
  * @property {() => Promise<object[]>} listWithSlug unfinished jobs that already have a run directory
@@ -193,6 +194,7 @@ export const STORE_CONTRACT = Object.freeze({
     "isJobActive",
     "repairJobFromWitness",
     "reclassifyJob",
+    "correctJobPrAttribution",
     "hasClaimablePending",
     "peekNextJob",
     "listWithSlug",

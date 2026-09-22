@@ -21,11 +21,11 @@ const CANONICAL_COMMANDS = /^(fetch origin|status --porcelain -z|diff --name-onl
 const CONFLICTING = { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" };
 
 // A home with a `done` job of `alpha` carrying the pull request, whose ship lease `worker` holds.
-function shipHome(t, name, { worker = "ship:test:1:aaaa", notice = "A" } = {}) {
+function shipHome(t, name, { worker = "ship:test:1:aaaa", notice = "A", branch = "fix/worker" } = {}) {
   const env = makeHome(t, name);
   const checkout = makeProject(t, env, "alpha");
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
-  openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ?, notice_md = ? WHERE id = ?").run(SHIP_PR_URL, notice, id);
+  openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ?, notice_md = ?, branch = ? WHERE id = ?").run(SHIP_PR_URL, notice, branch, id);
   acquireShip(id, { worker, leaseS: 660 }, env);
   return { env, checkout, id, worker, store: openStore(env) };
 }
@@ -37,14 +37,14 @@ function reacquire(home, worker) {
 }
 
 // Runs one attempt of the real steps against the fake gh, git and npm.
-async function ship(home, fake) {
-  const outcome = await runShip({ store: home.store, job: getJob(home.id, home.env), worker: home.worker, env: home.env, deps: fake.deps, timeoutS: 600, checkout: home.checkout });
+async function ship(home, fake, { force = false } = {}) {
+  const outcome = await runShip({ store: home.store, job: getJob(home.id, home.env), worker: home.worker, env: home.env, deps: fake.deps, timeoutS: 600, checkout: home.checkout, force });
   return { outcome, row: getJob(home.id, home.env), checklist: JSON.parse(getJob(home.id, home.env).ship) };
 }
 
 // The context one step reads when it is called on its own.
-function ctxFor(data = {}, checkout = "/work/alpha") {
-  return { jobId: 3, prUrl: SHIP_PR_URL, prNumber: 7, project: "alpha", checkout, remainingMs: () => REMAINING_MS, signal: new AbortController().signal, warning: null, data };
+function ctxFor(data = {}, checkout = "/work/alpha", changes = {}) {
+  return { jobId: 3, prUrl: SHIP_PR_URL, prNumber: 7, project: "alpha", branch: "fix/worker", slug: null, type: null, force: false, checkout, remainingMs: () => REMAINING_MS, signal: new AbortController().signal, warning: null, data, ...changes };
 }
 
 // Asserts the canonical checkout only ever saw the commands a ship may run there.
@@ -130,6 +130,56 @@ test("preflight passes a dirty checkout whose changes the pull does not touch, a
 test("preflight stops at checkout-missing when the checkout vanished", async () => {
   const result = await preflightStep({ ctx: ctxFor(), deps: fakeShipDeps({ exists: () => false }).deps });
   assert.equal(result.reason, "checkout-missing");
+});
+
+test("preflight refuses a pull request that is not on the job's branch, naming both branches and --force, and merges nothing", async (t) => {
+  const home = shipHome(t, "ship-steps-foreign-branch", { branch: "worktree-feat+queue-ship" });
+  const fake = fakeShipDeps({ pr: openPr({ headRefName: "scratch/ship-qa-20260921201325" }) });
+  const { outcome, row, checklist } = await ship(home, fake);
+  assert.deepEqual(outcome, { status: "failed", step: "preflight", reason: "pr-not-the-job-branch", mergeSha: null, worktree: null });
+  assert.equal(
+    checklist.steps.preflight.note,
+    `pr-not-the-job-branch - PR #7 is on branch \`scratch/ship-qa-20260921201325\`, but job \`${home.id}\` ran on \`worktree-feat+queue-ship\`; it is not this job's pull request. Fix the job's pr_url, or ship it anyway with nightshift queue ship ${home.id} --force`,
+  );
+  assert.equal(fake.log.merges.length, 0, "a foreign pull request was merged");
+  assert.equal(fake.log.checkReads, 0, "the checks of a foreign pull request were read");
+  assert.equal(row.status, "done");
+  assert.equal(row.notice_md, "A");
+});
+
+test("an already merged pull request of another branch is refused at preflight, never settled onto the job", async (t) => {
+  const home = shipHome(t, "ship-steps-foreign-merged", { branch: "worktree-feat+queue-ship" });
+  const fake = fakeShipDeps({ pr: mergedPr({ headRefName: "scratch/ship-qa-20260921201325" }) });
+  const { outcome, row, checklist } = await ship(home, fake);
+  assert.equal(outcome.reason, "pr-not-the-job-branch");
+  assert.equal(checklist.data.merged, undefined, "the foreign merge was recorded on the job");
+  assert.equal(checklist.steps.settle, undefined);
+  assert.equal(row.status, "done");
+  assert.equal(row.notice_md, "A", "a Shipped line was appended for a foreign pull request");
+});
+
+test("preflight passes a pull request on the published alias of the job's worktree branch, with nothing added to the note", async () => {
+  const result = await preflightStep({ ctx: ctxFor({}, "/work/alpha", { branch: "worktree-fix+worker" }), deps: fakeShipDeps().deps });
+  assert.equal(result.status, "done");
+  assert.equal(result.note, "PR #7 open; 1 checks green; canonical checkout clean");
+});
+
+test("preflight proceeds when the job recorded no branch, and says the attribution was not checked", async () => {
+  for (const branch of [null, "", "  "]) {
+    const result = await preflightStep({ ctx: ctxFor({}, "/work/alpha", { branch }), deps: fakeShipDeps().deps });
+    assert.equal(result.status, "done");
+    assert.equal(result.note, "PR #7 open; 1 checks green; canonical checkout clean; branch not recorded; attribution not checked");
+  }
+});
+
+test("--force ships a pull request on another branch, and the checklist says the attribution was overridden", async (t) => {
+  const home = shipHome(t, "ship-steps-foreign-forced", { branch: "worktree-feat+queue-ship" });
+  const fake = fakeShipDeps({ pr: openPr({ headRefName: "scratch/qa" }) });
+  const { outcome, row, checklist } = await ship(home, fake, { force: true });
+  assert.equal(outcome.status, "shipped");
+  assert.match(checklist.steps.preflight.note, /; attribution overridden with --force \(PR on `scratch\/qa`, job on `worktree-feat\+queue-ship`\)$/);
+  assert.equal(fake.log.merges.length, 1);
+  assert.equal(row.status, "closed");
 });
 
 test("a failed git fetch origin is a warning carried on every later note of the checklist, never a failure", async (t) => {

@@ -263,7 +263,8 @@ another runner.
 **`queue status` is a table, and `--follow` keeps it live.** One row per job with
 the columns of the cockpit: `ID STATUS DURATION TOKENS PROJECT SLUG/LAST PR`.
 `STATUS` carries an icon (`● running`, `✓ done`, `■ closed`, `⚑ gate`, `✗ failed`,
-`⊘ cancelled`, `○ pending`) and a color on a terminal. `DURATION` is how long a
+`⊘ cancelled`, `○ pending`) and a color on a terminal; a job whose ship is in progress
+reads `✓ shipping` alone, and a shipped one `■ closed` alone. `DURATION` is how long a
 running job has been up (from its own `started_at`) or how long a finished one
 took; `TOKENS` is what it spent so far (`374k`, `1.2M`). `SLUG/LAST` is the last
 thing the orchestrator said in its log while the job runs (`» ...`), the first
@@ -722,7 +723,13 @@ steps in the command's own process - never an agent, never a second job, never q
 
 1. **preflight** - `git fetch origin` in the project's checkout (a failed fetch is not a
    stop: `WARNING: git fetch origin failed (...)` is prefixed to every later step note),
-   then the pull request is read with gh. A closed one stops the ship; one that is already
+   then the pull request is read with gh. First, the pull request must be the job's own: when
+   its head branch is not the job's recorded branch (or the published `<type>/<slug>` name of
+   its `worktree-<type>+<slug>` branch), the ship stops with `pr-not-the-job-branch`, naming
+   both branches, before anything is merged or settled - even when the pull request is already
+   merged, so a foreign merge is never written onto the job. A job that recorded no branch
+   is shipped with `branch not recorded; attribution not checked` in the step note. A closed
+   pull request stops the ship; one that is already
    merged is recorded as merged and nothing else is checked. Otherwise the checks must be
    green - a red or a pending check stops the ship naming it, and it never waits for one.
    Uncommitted files in the checkout only stop it when the pull that follows the merge
@@ -751,7 +758,8 @@ The job's status is untouched until settle: a ship that stops leaves it `done`.
 settles: `ship_status` (`shipping`, `shipped` or `failed`) and `ship`, a checklist with the
 attempt count, one entry per step (`done`, `skipped` or `failed`, a note and the time) and
 the data the steps read (pull request number, head, merge commit). `queue status` shows it:
-the STATUS cell gains ` · shipping`, ` · shipped`, ` · ship failed` or ` · ship stalled`,
+the STATUS cell reads `shipping` alone while a ship is in progress and `closed` alone once
+it shipped, a stopped ship adds ` · ship failed` or ` · ship stalled` to the job's status,
 `SLUG/LAST` names the current step or the stop, and `queue status <id>` prints the whole
 checklist under the status line; `--json` and the MCP `queue_status` carry `ship_status`,
 `ship_worker`, `ship_lease_until` and `ship`. A ship that stops prints, in the listing, the
@@ -789,7 +797,10 @@ with `timeout` or `interrupted` and resumes on the next run.
 
 **What it ships.** Only a `done` job with a GitHub pull request URL of a registered project
 whose checkout exists. `--force` (`force: true` over MCP) ships a `failed` or `gate` job
-that carries a pull request, and says so first. `closed`, `running`, `pending`,
+that carries a pull request, and says so first; it also overrides the
+`pr-not-the-job-branch` refusal, recording `attribution overridden with --force (PR on
+<head>, job on <branch>)` in the preflight note - fix the job's `pr_url` instead when the
+pull request is really not the job's. `closed`, `running`, `pending`,
 `cancelled`, a job without a pull request and a job another ship holds under a live lease
 are refused by name, and nothing is written. An unattended run never ships: inside a job
 the command and the tool are refused.

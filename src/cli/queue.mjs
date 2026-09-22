@@ -60,7 +60,7 @@ import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
 import { runShipHere, startShipDetached } from "../queue/ship-start.mjs";
-import { queueWorkers, shipChecklistLines, shipLastCell, shipStatusSuffix, shipStoppedLine } from "../queue/ship-view.mjs";
+import { queueWorkers, shipChecklistLines, shipLastCell, shipStoppedLine, statusLabel } from "../queue/ship-view.mjs";
 import { CLAUDE_MISSING_MESSAGE, resolveClaudeBin } from "../queue/spawn.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
@@ -463,16 +463,15 @@ function lastWidth(ctx, pr, columns) {
   return Math.max(MIN_LAST_WIDTH, terminalWidth(ctx) - fixed);
 }
 
-// The fixed columns of this listing: STATUS grows past its width only when a ship suffix needs it, so a listing with no ship renders as before.
+// The fixed columns of this listing: STATUS grows past its width only when a status label needs it, so a listing of short labels renders as before.
 function columnsFor(jobs, nowMs) {
-  const shipping = jobs.filter((job) => shipStatusSuffix(job, nowMs) !== "");
-  const statusCell = shipping.reduce((width, job) => Math.max(width, statusCellOf(job, nowMs).length + 1), 0);
+  const statusCell = jobs.reduce((width, job) => Math.max(width, statusCellOf(job, nowMs).length + 1), 0);
   return COLUMNS.map((column) => (column.key === "status" ? { ...column, width: Math.max(column.width, statusCell) } : column));
 }
 
-// The STATUS cell of a job: its icon and status, plus the state of its ship when it has one.
+// The STATUS cell of a job: the icon of its status and the label the ship view gives it.
 function statusCellOf(job, nowMs) {
-  return `${statusStyleOf(job.status).icon} ${job.status}${shipStatusSuffix(job, nowMs)}`;
+  return `${statusStyleOf(job.status).icon} ${statusLabel(job, nowMs)}`;
 }
 
 // Cuts a cell to its column, with an ellipsis when something was left out.

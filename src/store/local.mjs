@@ -59,6 +59,7 @@ function jobsDomain(env, db) {
     repairJobFromWitness: async (id, terminal) =>
       writeJobStatus({ id, status: terminal?.status, write: () => jobs.repairJobFromWitness(id, terminal, env), env }),
     reclassifyJob: async (id, outcome) => writeJobStatus({ id, status: outcome?.status, write: () => jobs.reclassifyJob(id, outcome, env), env }),
+    correctJobPrAttribution: async (id, spec) => jobs.correctJobPrAttribution(id, spec, env),
     hasClaimablePending: async () => jobs.hasClaimablePending(env),
     peekNextJob: async () => jobs.peekNextJob(env),
     listWithSlug: async () => jobs.listJobsWithSlug(env, db()),

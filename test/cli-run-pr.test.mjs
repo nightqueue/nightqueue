@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { run } from "../src/cli/index.mjs";
@@ -188,6 +188,7 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
     { status: readRunState({ project: "alpha", slug: SLUG, env }).outcome.status, prUrl: readRunState({ project: "alpha", slug: SLUG, env }).outcome.prUrl },
     { status: "done", prUrl: FAKE_GH_PR_URL },
   );
+  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).branch, "feat/login-google", "the run kept the name its branch no longer carries");
   assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).prTemplate.source, "nightshift");
   assert.equal(existsSync(worktree), true);
 });
@@ -329,6 +330,19 @@ test("a worktree branch with no `<type>` to restore is published as the `<type>/
   assert.deepEqual(remoteBranches(remote), ["fix/login-google", "main"]);
   assert.deepEqual(ghCalls(env)[0].slice(0, 3), ["pr", "create", "--title"]);
   assert.equal(ghCalls(env)[0][3], "fix(auth): the google login");
+});
+
+test("a published branch the run cannot record is reported on stderr, never fatal: the pull request is open", async (t) => {
+  const { env, id } = makeRun(t, "run-pr-unrecorded");
+  const body = writeBody(t, "run-pr-unrecorded-body", BODY);
+  const dir = runDir("alpha", SLUG, env);
+  chmodSync(dir, 0o555);
+  const { code, out, errText } = await runCli(env, ["run", "pr", "--body-file", body, "--title", "feat: x"], { jobId: id }).finally(() => chmodSync(dir, 0o755));
+
+  assert.equal(code, 0, errText);
+  assert.ok(out.includes(`PR: ${FAKE_GH_PR_URL}`), out.join("\n"));
+  assert.match(errText, /nightshift: the published branch was not recorded on the run: /);
+  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).branch, undefined, "setup: the run directory was still writable");
 });
 
 test("`run pr` refuses a body it cannot read, a body with no title to take and a run whose gh cannot answer", async (t) => {

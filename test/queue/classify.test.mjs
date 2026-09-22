@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SILENT_STOP_NOTICE, backoffMs, classifyJobResult, isTransientFailure } from "../../src/queue/classify.mjs";
+import { SILENT_STOP_NOTICE, STRAY_PR_PREFIX, backoffMs, classifyJobResult, isTransientFailure } from "../../src/queue/classify.mjs";
 import {
   assistantEvent,
   codeChangePublishedEvent,
@@ -164,6 +164,15 @@ test("the whole-stream fallback keeps every rule of a delivery: a citation, a de
 
 test("the pull request the HOST published wins over every text: a contradicting final line never moves it", () => {
   const cited = "https://github.com/acme/api/pull/1";
+  const log = toNdjson([systemInitEvent(), codeChangePublishedEvent(), resultEvent({ text: `Done. Pull request: ${cited}` })]);
+
+  const outcome = classifyJobResult({ log, exitCode: 0 });
+  assert.equal(outcome.prUrl, PR_URL, "the URL the host published lost to what the agent wrote afterwards");
+  assert.equal(outcome.status, "done");
+});
+
+test("an unbranded publication that contradicts the runtime record loses to it, and is flagged", () => {
+  const cited = "https://github.com/acme/api/pull/1";
   const log = toNdjson([
     systemInitEvent(),
     codeChangePublishedEvent(),
@@ -171,8 +180,9 @@ test("the pull request the HOST published wins over every text: a contradicting 
   ]);
 
   const outcome = classifyJobResult({ log, exitCode: 0, state: stateWith({ status: "done", prUrl: cited }) });
-  assert.equal(outcome.prUrl, PR_URL, "the URL the host published lost to what the agent wrote afterwards");
+  assert.equal(outcome.prUrl, cited, "a publication that names no branch outranked the runtime's own record");
   assert.equal(outcome.status, "done");
+  assert.ok(outcome.noticeMd.endsWith(`${STRAY_PR_PREFIX}${PR_URL}; recorded instead: ${cited}`), outcome.noticeMd);
 });
 
 test("a text that denies the delivery, with no published event, delivers no pull request at all", () => {

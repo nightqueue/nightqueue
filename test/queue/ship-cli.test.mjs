@@ -53,9 +53,9 @@ function makeShipHome(t, name) {
 }
 
 // A job of `alpha` in the given status, carrying the given pull request.
-function jobIn(env, { status = "done", prUrl = PR_URL, project = "alpha" } = {}) {
+function jobIn(env, { status = "done", prUrl = PR_URL, project = "alpha", branch = "fix/worker" } = {}) {
   const id = addJob({ project, prompt: "fix the worker" }, env).id;
-  openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ?, worker = 'host:1' WHERE id = ?").run(status, prUrl, id);
+  openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ?, branch = ?, worker = 'host:1' WHERE id = ?").run(status, prUrl, branch, id);
   return id;
 }
 
@@ -217,6 +217,27 @@ test("queue ship re-runs a failed ship keeping its checklist, reclaims a dead le
   const checklist = JSON.parse(row.ship);
   assert.equal(checklist.attempts, 3);
   assert.equal(checklist.steps.preflight.status, "done");
+});
+
+test("queue ship refuses a pull request on another branch at preflight, and the detached child of --force ships it", async (t) => {
+  const { env } = makeShipHome(t, "ship-cli-attribution");
+  const id = jobIn(env, { branch: "worktree-feat+queue-ship" });
+  const foreign = () => fakeShipDeps({ pr: openPr({ headRefName: "scratch/qa" }) });
+
+  const refused = await runCli(env, ["queue", "ship", String(id), "--foreground"], { shipDeps: foreign().deps });
+  assert.equal(refused.code, 1);
+  assert.match(refused.out[0], /^✗ preflight\s+pr-not-the-job-branch - PR #7 is on branch `scratch\/qa`, but job `\d+` ran on `worktree-feat\+queue-ship`;.* --force$/);
+  assert.equal(getJob(id, env).status, "done");
+
+  const calls = [];
+  await runCli(env, ["queue", "ship", String(id), "--force"], { calls });
+  assert.deepEqual(calls[0].args.slice(1), ["queue", "ship", String(id), "--foreground", "--force"]);
+  const fake = foreign();
+  const child = await runCli({ ...env, NIGHTSHIFT_SHIP_WORKER: calls[0].options.env.NIGHTSHIFT_SHIP_WORKER }, calls[0].args.slice(1), { shipDeps: fake.deps });
+  assert.equal(child.code, 0, child.stdout);
+  assert.match(child.out[0], /attribution overridden with --force \(PR on `scratch\/qa`, job on `worktree-feat\+queue-ship`\)$/);
+  assert.equal(fake.log.merges.length, 1);
+  assert.equal(getJob(id, env).status, "closed");
 });
 
 test("the detached child adopts the lease through its token, and a token that does not hold it writes nothing", async (t) => {

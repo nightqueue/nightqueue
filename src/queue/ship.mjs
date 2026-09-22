@@ -1,6 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 import { projectByName } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
+import { sameBranch } from "./branch-name.mjs";
 import { closeShippedJob } from "./close.mjs";
 import { defaultShipDeps } from "./ship-deps.mjs";
 import { parseShipChecklist, shippedLine } from "./ship-view.mjs";
@@ -137,7 +138,23 @@ async function checkoutVerdict(ctx, deps, base) {
   return { note: `${dirty.length} local changes the pull does not touch` };
 }
 
-// Checks, before anything is changed, that the pull request is open, green and pullable into the canonical checkout.
+// Tells whether the pull request is on the job's own branch (or its published alias), and what the check leaves in the note.
+function attributionVerdict(ctx, pr) {
+  const branch = typeof ctx.branch === "string" ? ctx.branch.trim() : "";
+  if (!branch) return { note: "branch not recorded; attribution not checked" };
+  if (sameBranch(pr.headRefName, branch, { type: ctx.type, slug: ctx.slug })) return { note: null };
+  const head = pr.headRefName || "unknown";
+  if (ctx.force) return { note: `attribution overridden with --force (PR on \`${head}\`, job on \`${branch}\`)` };
+  const note = `PR #${pr.number} is on branch \`${head}\`, but job \`${ctx.jobId}\` ran on \`${branch}\`; it is not this job's pull request. Fix the job's pr_url, or ship it anyway with nightshift queue ship ${ctx.jobId} --force`;
+  return { problem: failed("pr-not-the-job-branch", note) };
+}
+
+// A step note with the attribution note appended when there is one.
+function withAttributionNote(note, attribution) {
+  return attribution.note ? `${note}; ${attribution.note}` : note;
+}
+
+// Checks, before anything is changed, that the pull request is the job's own, open, green and pullable into the canonical checkout.
 async function preflightStep({ ctx, deps }) {
   if (!ctx.checkout || !deps.fs.exists(ctx.checkout)) return failed("checkout-missing", `the checkout of project \`${ctx.project}\` is missing: ${ctx.checkout ?? "not registered"}`);
   const fetched = await git(ctx, deps, ["fetch", "origin"]);
@@ -145,13 +162,15 @@ async function preflightStep({ ctx, deps }) {
   const pr = await readPr(ctx, deps);
   if (!pr?.ok) return { ...unreadablePr(ctx, pr), data };
   Object.assign(data, prData(pr));
+  const attribution = attributionVerdict(ctx, pr);
+  if (attribution.problem) return { ...attribution.problem, data };
   if (pr.state === "CLOSED") return failed("pr-closed", `PR #${pr.number} was closed without being merged`, { data });
-  if (pr.state === "MERGED") return { status: "done", note: `PR #${pr.number} already merged as ${sha7(pr.mergeSha)}`, data: { ...data, ...mergedData(pr) } };
+  if (pr.state === "MERGED") return { status: "done", note: withAttributionNote(`PR #${pr.number} already merged as ${sha7(pr.mergeSha)}`, attribution), data: { ...data, ...mergedData(pr) } };
   const checks = await checksVerdict(ctx, deps);
   if (checks.problem) return { ...checks.problem, data };
   const checkout = await checkoutVerdict(ctx, deps, pr.baseRefName);
   if (checkout.problem) return { ...checkout.problem, data };
-  return { status: "done", note: `PR #${pr.number} open; ${checks.note}; ${checkout.note}`, data };
+  return { status: "done", note: withAttributionNote(`PR #${pr.number} open; ${checks.note}; ${checkout.note}`, attribution), data };
 }
 
 // Reads the pull request's mergeability, reading once more after a pause when GitHub has not computed it yet.
@@ -402,12 +421,16 @@ function armDeadline({ timeoutS, signal, now }) {
 }
 
 // The context every step reads: the job, its pull request, the deadline and the data recorded by earlier steps.
-function buildContext({ job, checkout, checklist, deadline, now }) {
+function buildContext({ job, checkout, checklist, deadline, now, force }) {
   return {
     jobId: job.id,
     prUrl: job.pr_url,
     prNumber: prNumberOf(job.pr_url, checklist.data),
     project: job.project,
+    branch: job.branch ?? null,
+    slug: job.slug ?? null,
+    type: job.type ?? null,
+    force: force === true,
     checkout,
     deadlineMs: deadline.deadlineMs,
     remainingMs: () => Math.max(0, deadline.deadlineMs - now()),
@@ -544,11 +567,11 @@ async function recordOrStop(run, name) {
 }
 
 // Runs one attempt of a ship over its steps, resuming from the stored checklist; a step failure is an outcome, never an exception.
-export async function runShip({ store, job, worker, env = process.env, deps = null, timeoutS, signal = null, now = Date.now, onStep = null, checkout, steps = SHIP_STEPS }) {
+export async function runShip({ store, job, worker, env = process.env, deps = null, timeoutS, signal = null, now = Date.now, onStep = null, checkout, force = false, steps = SHIP_STEPS }) {
   if (!job) throw new UserError("runShip needs the job it ships");
   const deadline = armDeadline({ timeoutS: requireTimeoutS(timeoutS), signal, now });
   const checklist = startingChecklist(job);
-  const run = { store, job, worker, env, deps: deps ?? defaultShipDeps(env), now, onStep, checklist, deadline, checkout: checkout ?? resolveCheckout(job, env) };
+  const run = { store, job, worker, env, deps: deps ?? defaultShipDeps(env), now, onStep, checklist, deadline, force, checkout: checkout ?? resolveCheckout(job, env) };
   try {
     for (const [index, step] of steps.entries()) {
       const outcome = await advance(run, step, index === steps.length - 1);

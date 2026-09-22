@@ -94,14 +94,24 @@ What a runtime has to provide, and what it can rely on:
   with `RUN_DIR:`, `Branch:`, `Worktree:`, `Last completed phase:`, `Resume from
   phase:` and `From stage:` - the decision is already taken when the prompt is built,
   and the pipeline reads it instead of re-deriving it (see [Queue](queue.md)).
-- The pull request of the run has three sources, in this order: the
-  `{"type":"system","subtype":"code_change_published","url":…}` event the HOST emits
-  when it publishes the change, then the `outcome.prUrl` the runtime itself recorded
-  in `state.json`, then the text of the stream. Only an event with
+- The pull request of the run has one source chain, in this order: the
+  `{"type":"system","subtype":"code_change_published","url":…,"branch":…}` event the HOST emits
+  when it publishes the change - only when it proves it is the run's own delivery -, then the
+  `outcome.prUrl` the runtime itself recorded in `state.json`, then a publication that cannot
+  prove it, then the text of the stream. Only an event with
   `"action":"created"` publishes a delivery, and one session may publish for more than
   one repository: the run's own repository is the one the rest of the classification
-  reports, or the one of its FIRST publication, and the LAST publication of THAT
-  repository is the delivery. A publication for another repository, an event with any
+  reports, or the one of its FIRST publication. The run's own delivery is the LAST
+  publication of THAT repository whose `branch` is the run's own branch - the `branch`
+  of `state.json` or its published alias (`worktree-feat+x` is `feat/x`, the rename
+  `nightshift run pr` applies and then records as the run's branch). A publication that
+  names no branch, or that the run cannot compare because it recorded none, is unproven:
+  it loses to a recorded `outcome.prUrl` and is only the delivery when the runtime
+  recorded none. A publication naming ANOTHER branch - a QA's scratch pull request, say -
+  is never the run's pull request, not even for lack of a better one. Every publication
+  dropped by these rules is named in the notice, on one line starting with
+  `⚠️ another pull request was published during this run and was NOT recorded as its delivery:`.
+  A publication for another repository, an event with any
   other `action` and a `url` of another shape are all ignored. In the text - the last source, which serves
   another provider and a runtime older than the event - a URL only counts as delivered
   when it closes a line outside any code fence and that line does not report a failure;

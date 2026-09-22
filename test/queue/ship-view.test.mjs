@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { acquireShip, addJob, failShip } from "../../src/memory/jobs.mjs";
+import { acquireShip, addJob, failShip, settleShip } from "../../src/memory/jobs.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import {
   currentShipStep,
@@ -11,9 +11,9 @@ import {
   shipLines,
   shippedLine,
   shipState,
-  shipStatusSuffix,
   shipsSummary,
   shipStoppedLine,
+  statusLabel,
 } from "../../src/queue/ship-view.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
@@ -55,14 +55,15 @@ test("shipState reads in flight only under a live lease, and a dead lease as sta
   assert.equal(shipState(shipJob({ ship_status: "failed" }), NOW), "failed");
 });
 
-test("the status suffix, the current step and the stopped line follow the checklist", () => {
+test("the status label, the current step and the stopped line follow the checklist", () => {
   const steps = { preflight: { status: "done" }, conflict: { status: "skipped" } };
   const failed = shipJob({ ship_status: "failed", ship: { steps, failed: { step: "merge", reason: "merge-without-sha" } } });
-  assert.equal(shipStatusSuffix(shipJob({}), NOW), "");
-  assert.equal(shipStatusSuffix(shipJob({ ship_status: "shipping", ship_lease_until: LATER }), NOW), " · shipping");
-  assert.equal(shipStatusSuffix(shipJob({ ship_status: "shipping", ship_lease_until: EARLIER }), NOW), " · ship stalled");
-  assert.equal(shipStatusSuffix(failed, NOW), " · ship failed");
-  assert.equal(shipStatusSuffix(shipJob({ status: "closed", ship_status: "shipped" }), NOW), " · shipped");
+  assert.equal(statusLabel(shipJob({}), NOW), "done");
+  assert.equal(statusLabel(shipJob({ ship_status: "shipping", ship_lease_until: LATER }), NOW), "shipping");
+  assert.equal(statusLabel(shipJob({ ship_status: "shipping", ship_lease_until: EARLIER }), NOW), "done · ship stalled");
+  assert.equal(statusLabel(failed, NOW), "done · ship failed");
+  assert.equal(statusLabel(shipJob({ status: "closed", ship_status: "shipped" }), NOW), "closed");
+  assert.equal(statusLabel(shipJob({ status: "closed" }), NOW), "closed");
   assert.equal(currentShipStep({ steps }), "merge");
   assert.equal(currentShipStep(JSON.stringify({ steps: {} })), "preflight");
   assert.equal(shipStoppedLine(failed), "⛔ ship stopped at merge: merge-without-sha - run again with: nightshift queue ship 12");
@@ -111,20 +112,22 @@ test("the Shipped line names the pull request, the short sha and the day it merg
   assert.equal(shippedLine({ number: 7, sha: "abc1234def5678", at: "2026-09-21T23:59:00Z" }), "Shipped: PR #7 merged as abc1234 on 2026-09-21");
 });
 
-test("queue status widens STATUS only for a listing with a ship, and prints the ship hint lines", async (t) => {
+test("queue status shows `shipping` alone while a ship holds the job, widens STATUS only for a stopped ship, and prints the ship hint lines", async (t) => {
   const { env, id } = shipHome(t, "ship-view-render");
   const before = await runCli(env, ["queue", "status"]);
   assert.match(before.out[1], /^ID {4}STATUS {7}DURATION/, "a listing with no ship changed its STATUS width");
 
   acquireShip(id, { worker: WORKER, leaseS: 660 }, env);
   const shipping = await runCli(env, ["queue", "status"]);
-  assert.match(shipping.stdout, /^ID {4}STATUS {12}DURATION/m, "STATUS did not grow to the ship suffix");
-  assert.match(shipping.stdout, /✓ done · shipping -/);
+  assert.match(shipping.stdout, /^ID {4}STATUS {7}DURATION/m, "a `shipping` label widened STATUS");
+  assert.match(shipping.stdout, new RegExp(`^#${id} +✓ shipping +-`, "m"));
+  assert.equal(shipping.stdout.includes("done · shipping"), false, "the cell kept the old `done · shipping` label");
   assert.match(shipping.stdout, /shipping: preflight/);
   assert.ok(shipping.out.includes(`ship in flight: #${id} at preflight - follow with: nightshift queue status ${id}`), shipping.stdout);
 
   failShip(id, { worker: WORKER, ship: { attempts: 1, steps: {}, data: {}, failed: { step: "conflict", reason: "suite-red" } } }, env);
   const failed = await runCli(env, ["queue", "status"]);
+  assert.match(failed.stdout, /^ID {4}STATUS {15}DURATION/m, "STATUS did not grow to the stopped ship's label");
   assert.match(failed.stdout, /✓ done · ship failed/);
   assert.ok(failed.out.includes(`⛔ ship stopped at conflict: suite-red - run again with: nightshift queue ship ${id}`), failed.stdout);
 
@@ -136,6 +139,35 @@ test("queue status widens STATUS only for a listing with a ship, and prints the 
   const { job } = JSON.parse((await runCli(env, ["queue", "status", String(id), "--json"])).stdout);
   assert.equal(job.ship_status, "failed");
   assert.deepEqual(job.ship.failed, { step: "conflict", reason: "suite-red" });
+});
+
+// Runs `queue status --follow --until-idle` in this process on a pipe, with a sleep that never waits.
+async function followOnce(env) {
+  const out = [];
+  const ctx = { ...defaultContext(), env, out: (line) => out.push(line), err: () => {}, stdout: { isTTY: false, columns: 160, write: () => {} }, sleep: async () => {} };
+  const code = await run(["queue", "status", "--follow", "--until-idle"], ctx);
+  return { code, stdout: out.join("\n") };
+}
+
+test("a shipped job shows `closed` alone, in the table and in the live view, while --json keeps its ship_status", async (t) => {
+  const { env, id } = shipHome(t, "ship-view-shipped");
+  acquireShip(id, { worker: WORKER, leaseS: 660 }, env);
+  const live = await followOnce(env);
+  assert.equal(live.code, 0, live.stdout);
+  assert.match(live.stdout, new RegExp(`^#${id} +✓ shipping +-`, "m"), "the live view did not show `shipping` alone");
+
+  settleShip(id, { worker: WORKER, ship: { attempts: 1, steps: {}, data: {} }, noticeLine: "Shipped: PR #7 merged as abc1234 on 2026-09-21" }, env);
+  const table = await runCli(env, ["queue", "status"]);
+  assert.match(table.stdout, /^ID {4}STATUS {7}DURATION/m, "a shipped job widened STATUS");
+  assert.match(table.stdout, new RegExp(`^#${id} +■ closed +-`, "m"));
+  assert.equal(/· shipped/.test(table.stdout), false, "the cell kept the old `· shipped` suffix");
+  const followed = await followOnce(env);
+  assert.match(followed.stdout, new RegExp(`^#${id} +■ closed +-`, "m"), "the live view did not show `closed` alone");
+  assert.equal(/· shipped/.test(followed.stdout), false, "the live view kept the old `· shipped` suffix");
+
+  const { job } = JSON.parse((await runCli(env, ["queue", "status", String(id), "--json"])).stdout);
+  assert.equal(job.ship_status, "shipped");
+  assert.equal(job.status, "closed");
 });
 
 test("a live ship runner alone never promises a pending job will be picked up", async (t) => {

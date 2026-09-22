@@ -4,6 +4,31 @@ Every notable change of this project is recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- A job records its own pull request, and `queue ship` only ships that one. The run's pull
+  request chain (decision #19, amended) now trusts the host's publication only when it is
+  created, in the run's repository AND on the run's own branch (its recorded name or the
+  `<type>/<slug>` name `run pr` publishes it under); a publication that names no branch
+  loses to the pull request the runtime recorded, one on another branch never wins, and
+  every publication dropped this way is named on one line of the job's notice. `nightshift
+  run pr` now records the branch it pushed as the run's branch, so resume and `jobs.branch`
+  name the branch that exists. `queue ship <id>` stops at `✗ preflight
+  pr-not-the-job-branch` when the pull request's head is not the job's branch - also for a
+  pull request already merged - and `--force` now overrides this check too, recording the
+  override in the step note. The pipeline and QA instructions carry two hard rules: a
+  verification never unsets or works around a nightshift guard or its variables
+  (`NIGHTSHIFT_JOB_ID` ...), and a real pull request is only ever created, merged or closed
+  in the operator's nstest-demo checkout. Two operator-run scripts, not published:
+  `scripts/ship-qa-demo.mjs` (the real ship acceptance on nstest-demo, refused inside a
+  job) and `scripts/repair-job-pr-attribution.mjs` (a dry-run-first, read-guarded fix of
+  job 57's recorded pull request and `Shipped:` line). The `queue status` STATUS cell, in
+  the table and under `--follow`, reads `shipping` alone while a ship is in progress and
+  `closed` alone once shipped, in place of `done · shipping` and `closed · shipped`;
+  `· ship stalled` and `· ship failed` are unchanged, and `--json`/MCP `ship_status` too.
+
 ## 0.3.0 - 2026-09-21
 
 ### Added

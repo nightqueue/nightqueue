@@ -38,6 +38,21 @@ test("a closed job is painted 38;5;91 on a terminal, and carries no escape when 
   assert.equal(/\u001b\[/.test(tableLine(withoutColor.out, id)), false, "a non-terminal output carried colour");
 });
 
+test("a job under a live ship is painted as its status but labelled `shipping` alone, and a shipped one `closed` alone", async (t) => {
+  const env = makeHome(t, "status-render-ship");
+  makeProject(t, env, "alpha");
+  const shipping = seedJob(env, "done");
+  const shipped = seedJob(env, "closed");
+  const db = openDb(env);
+  db.prepare("UPDATE jobs SET ship_status = 'shipping', ship_worker = 'ship:host:1:aaaa', ship_lease_until = datetime('now', '+10 minutes') WHERE id = ?").run(shipping);
+  db.prepare("UPDATE jobs SET ship_status = 'shipped' WHERE id = ?").run(shipped);
+
+  const { code, out } = await statusLines(env);
+  assert.equal(code, 0, out.join("\n"));
+  assert.match(tableLine(out, shipping), /\u001b\[32m✓ shipping\s*\u001b\[0m/);
+  assert.match(tableLine(out, shipped), /\u001b\[38;5;91m■ closed\s*\u001b\[0m/);
+});
+
 test("a row whose status is outside the job status enum renders marked, with one advisory naming it and the row count", async (t) => {
   const env = makeHome(t, "status-render-unknown");
   makeProject(t, env, "alpha");

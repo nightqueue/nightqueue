@@ -1,3 +1,4 @@
+import { sameBranch } from "./branch-name.mjs";
 import { insideRoots, orchestratorBashAllowed, readTarget } from "./orchestrator-scope.mjs";
 
 const FENCE_LINE_RE = /^\s{0,3}(`{3,}|~{3,})/;
@@ -446,16 +447,56 @@ function ownRepo(published, repo) {
   return publishedRepo(published[0]);
 }
 
-// Pull request the HOST itself published (`system`/`code_change_published` with `action: "created"`): a fact of the platform, which no text of the agent contradicts.
-// A session may publish into more than one repository, so only the run's own speaks - the LAST publication of that repository is the delivery, and a `url` that is not a pull request URL is ignored.
-export function extractPublishedPrUrl(log, { repo = null } = {}) {
+// Branch a publication happened on, as the host named it; "" when it named none.
+function publishedBranch(event) {
+  return typeof event.branch === "string" ? event.branch.trim() : "";
+}
+
+// Every pull request the host published in the run's own repository, in stream order.
+function ownRepoPublications(log, repo) {
   const published = String(log ?? "")
     .split("\n")
     .map(parseEventLine)
     .filter(isPublishedPr);
-  if (published.length === 0) return null;
+  if (published.length === 0) return [];
   const own = ownRepo(published, repo);
-  return published.filter((event) => publishedRepo(event) === own).at(-1).url;
+  return published.filter((event) => publishedRepo(event) === own);
+}
+
+// Whether a publication is the run's own (`own`), provably another branch's (`foreign`) or cannot be told (`unproven`).
+function publicationKind(event, { branch, hints }) {
+  const named = publishedBranch(event);
+  const runBranch = typeof branch === "string" ? branch.trim() : "";
+  if (!named || !runBranch) return "unproven";
+  return sameBranch(named, runBranch, hints) ? "own" : "foreign";
+}
+
+// The publication that is the run's delivery: its own branch's last, else - when the runtime recorded none - the last one that names no comparable branch.
+function deliveredPublication(publications, recorded) {
+  const own = publications.filter((entry) => entry.kind === "own").at(-1);
+  if (own) return own;
+  if (recorded) return null;
+  return publications.filter((entry) => entry.kind === "unproven").at(-1) ?? null;
+}
+
+// The last publication dropped as not the run's delivery whose URL differs from the one recorded, as `{ url, branch }`, or null.
+function strayPublication(publications, finalUrl) {
+  const stray = publications.filter((entry) => entry.kind !== "own" && entry.event.url !== finalUrl).at(-1);
+  return stray ? { url: stray.event.url, branch: publishedBranch(stray.event) || null } : null;
+}
+
+// Pull request the HOST itself published (`system`/`code_change_published` with `action: "created"`) that is the run's own delivery, and the last one dropped.
+// Only the run's repository speaks; a publication leads the runtime's `recorded` URL only when it names the run's own branch, and one naming another branch never wins.
+export function publishedDelivery(log, { repo = null, branch = null, hints = {}, recorded = null } = {}) {
+  const publications = ownRepoPublications(log, repo).map((event) => ({ event, kind: publicationKind(event, { branch, hints }) }));
+  const delivered = deliveredPublication(publications, recorded);
+  const url = delivered ? delivered.event.url : null;
+  return { url, stray: strayPublication(publications, url ?? recorded) };
+}
+
+// Pull request the HOST itself published in the run's repository, when nothing about the run's branch or record is known: the LAST one is the delivery.
+export function extractPublishedPrUrl(log, { repo = null } = {}) {
+  return publishedDelivery(log, { repo }).url;
 }
 
 // Last pull request the ORCHESTRATOR delivered in an intermediate event, the only fallback when the final text delivers none.

@@ -205,6 +205,7 @@ export async function runShipHere({ store, id, force = false, env = process.env,
       signal: controller.signal,
       onStep,
       checkout: lease.checkout,
+      force,
     });
     return { outcome, job: await store.jobs.getJob(id) };
   } finally {
@@ -216,5 +217,5 @@ export async function runShipHere({ store, id, force = false, env = process.env,
 // Ships a job in the calling process without any CLI around it: validate, take the lease, run the steps, and answer the outcome.
 export async function shipJob({ store, id, env = process.env, deps = null, force = false, onStep = null, signal = null }) {
   const claimed = await claimShip({ store, id, force, env });
-  return await runShip({ store, job: claimed.row, worker: claimed.worker, env, deps, timeoutS: shipTimeoutS(env), signal, onStep, checkout: claimed.checkout });
+  return await runShip({ store, job: claimed.row, worker: claimed.worker, env, deps, timeoutS: shipTimeoutS(env), signal, onStep, checkout: claimed.checkout, force });
 }

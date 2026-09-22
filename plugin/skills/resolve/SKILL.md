@@ -1422,6 +1422,13 @@ test fixture: nothing is created, cancelled or deleted there to prove that a com
 works. A verification that can only run against the real home is reported as
 `not verifiable here`, never performed.
 
+These rules govern Phases 5 and 6.5 and every subagent launched from them:
+
+**Real pull requests and nightshift guards — hard rules.**
+
+- **(a)** Never unset, stub, override or work around a nightshift guard or its environment variables (`NIGHTSHIFT_JOB_ID`, `NIGHTSHIFT_JOB_HOME`, `NIGHTSHIFT_JOB_CLAUDE_DIR`, or any refusal nightshift prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
+- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightshift run pr`.
+
 ### Phase 6.5 — Runtime validation (real execution)
 
 > Tier scoping: only the `complex` column of the **Track routing** table (step 6) lists this
