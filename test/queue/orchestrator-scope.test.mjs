@@ -6,11 +6,14 @@ import { test } from "node:test";
 import { packageRoot } from "../../src/host/paths.mjs";
 import { JOB_HOME_ENV } from "../../src/queue/home-guard.mjs";
 import {
+  OPERATOR_BASH_RULES,
   ORCHESTRATOR_BASH_RULES,
   PLUGIN_DIR_ENV,
+  describeOperatorBashRules,
   describeOrchestratorBashRules,
   insideRoots,
   isOrchestratorCall,
+  operatorBashAllowed,
   orchestratorBashAllowed,
   orchestratorRoots,
   readTarget,
@@ -305,4 +308,122 @@ test("only a payload with a non-empty agent_id is a subagent's", () => {
   assert.equal(isOrchestratorCall({ tool_name: "Read", agent_id: 7 }), true);
   assert.equal(isOrchestratorCall({ tool_name: "Read", agent_id: "a83ebd0b428a73e4b", agent_type: "general-purpose" }), false);
   assert.equal(isOrchestratorCall(null), true);
+});
+
+const OPERATOR_ALLOWED = [
+  "git log --oneline -n 30",
+  "git diff --name-only v1.0.0..HEAD",
+  "git diff --stat",
+  "git worktree add .claude/worktrees/operator-qa-x HEAD",
+  "git worktree add --detach .claude/worktrees/operator-qa-chat-photo origin/main",
+  "git worktree remove --force .claude/worktrees/operator-qa-x",
+  "git worktree remove .claude/worktrees/operator-qa-x",
+  "git worktree list",
+  "git worktree list --porcelain",
+  "git worktree prune",
+  "gh issue list",
+  "gh issue view 12",
+  "gh pr checks 3",
+  "gh pr view 3",
+  "adb devices",
+  "nightshift run check 01 --project p --slug s",
+  "nightshift run log --project p --slug s",
+  "git status --short",
+  "git rev-parse HEAD",
+  "git branch --show-current",
+];
+
+const OPERATOR_DENIED = [
+  "git add .",
+  "git commit -m x",
+  "git commit --amend",
+  "git push",
+  "git push -u origin feat/x",
+  "git fetch",
+  "git fetch origin",
+  "gh pr create",
+  "gh pr merge 3",
+  "gh issue close 12",
+  "nightshift run commit",
+  "nightshift run pr",
+  "git -C /x worktree add .claude/worktrees/operator-qa-x HEAD",
+  "git worktree add --force .claude/worktrees/operator-qa-x HEAD",
+  "git worktree add -f .claude/worktrees/operator-qa-x HEAD",
+  "git worktree add -b y .claude/worktrees/operator-qa-x HEAD",
+  "git worktree add -B y .claude/worktrees/operator-qa-x HEAD",
+  "git worktree add .claude/worktrees/operator-qa-x",
+  "git worktree add ../operator-qa-x HEAD",
+  "git worktree add .claude/worktrees/operator-qa-x/../../y HEAD",
+  "git worktree add /abs/.claude/worktrees/operator-qa-x HEAD",
+  "git worktree add ~/.claude/worktrees/operator-qa-x HEAD",
+  "git worktree add .claude/worktrees/operator-qa- HEAD",
+  "git worktree add .claude/worktrees/other HEAD",
+  "git worktree add .claude/worktrees/operator-qa-x HEAD extra",
+  "git worktree add .claude/worktrees/operator-qa-x -- HEAD",
+  "git worktree add .claude/worktrees/operator-qa-x --no-checkout HEAD",
+  "git worktree remove .claude/worktrees/other",
+  "git worktree remove /tmp/x",
+  "git worktree remove",
+  "git worktree move a b",
+  "git worktree lock .claude/worktrees/operator-qa-x",
+  "git worktree",
+  "git worktree list /tmp",
+  "git worktree prune --expire now",
+  "git log --oneline -n 5 -p",
+  "git log --oneline -n 5 --output=/tmp/x",
+  "git log --oneline -n 0",
+  "git log --oneline",
+  "git log",
+  "git show HEAD",
+  "git diff --stat --output=x",
+  "git diff --stat --output x",
+  "git diff --stat --ext-diff",
+  "git diff --stat --no-index a b",
+  "git diff -p",
+  "git diff --stat -p",
+  "git diff",
+  "adb shell ls",
+  "adb devices -l",
+  "adb install app.apk",
+  "/usr/bin/git status --short",
+  "git status --short; rm -rf x",
+  "git status --short && git push",
+  "git log --oneline -n 5 > /tmp/log",
+  "npm test",
+  "cat src/app.mjs",
+  "",
+];
+
+for (const command of OPERATOR_ALLOWED) {
+  test(`the operator's closed list allows: ${JSON.stringify(command)}`, () => {
+    assert.equal(operatorBashAllowed(command), true);
+  });
+}
+
+for (const command of OPERATOR_DENIED) {
+  test(`the operator's closed list refuses: ${JSON.stringify(command)}`, () => {
+    assert.equal(operatorBashAllowed(command), false);
+  });
+}
+
+test("the operator's list leaves the job's list untouched: the orchestrator still adds any worktree, commits and pushes", () => {
+  assert.equal(orchestratorBashAllowed("git worktree add /tmp/x"), true);
+  assert.equal(orchestratorBashAllowed("git commit -m x"), true);
+  assert.equal(orchestratorBashAllowed("nightshift run pr"), true);
+  assert.equal(orchestratorBashAllowed("gh issue list"), false);
+  assert.equal(orchestratorBashAllowed("adb devices"), false);
+});
+
+test("the operator's list is frozen data, and its rendering names the QA worktree and no write", () => {
+  assert.equal(Object.isFrozen(OPERATOR_BASH_RULES), true);
+  assert.equal(OPERATOR_BASH_RULES.every((rule) => Object.isFrozen(rule) && Object.isFrozen(rule.argv)), true);
+  const rendered = describeOperatorBashRules();
+  assert.match(rendered, /git log --oneline -n <N>/);
+  assert.match(rendered, /git worktree add \.claude\/worktrees\/operator-qa-<slug> <commit-ish>/);
+  assert.match(rendered, /git worktree remove \[--force\] \.claude\/worktrees\/operator-qa-<slug>/);
+  assert.match(rendered, /gh issue list\|view/);
+  assert.match(rendered, /nightshift run check\|log\|index-save(,|$)/);
+  for (const write of ["git add", "git commit", "git push", "git fetch", "create", "commit|", "|pr"]) {
+    assert.equal(rendered.includes(write), false, `${write} is in ${rendered}`);
+  }
 });

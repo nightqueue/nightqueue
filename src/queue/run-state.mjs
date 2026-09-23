@@ -16,6 +16,9 @@ const PR_TEMPLATE_SOURCES = ["repo", "nightshift"];
 // The only sub-phase of the pipeline with a record of its own: a top-level marker, never an entry of `phases`.
 const QA_STAGE_A = "qaStageA";
 
+// The one numeric field of the run: the evidence level the triage reached, 1 to 4.
+const EVIDENCE_LEVEL = "evidenceLevel";
+
 // The fields of the run itself a phase may still discover, each with the values it accepts (`null` means any text).
 const RUN_FIELDS = {
   type: PIPELINE_TASK_TYPES,
@@ -24,6 +27,9 @@ const RUN_FIELDS = {
   branch: null,
   worktree: null,
   [QA_STAGE_A]: null,
+  origin: ["operator"],
+  [EVIDENCE_LEVEL]: [1, 2, 3, 4],
+  planStatus: ["draft", "approved"],
 };
 
 // Refusal to record, always with the same shape as a write.
@@ -153,14 +159,15 @@ function invalidRunField([name, value]) {
   if (!(name in RUN_FIELDS)) return refuseEnum("field", name, Object.keys(RUN_FIELDS));
   if (name === QA_STAGE_A) return invalidQaStageA(value);
   const accepted = RUN_FIELDS[name];
+  if (name === EVIDENCE_LEVEL) return Number.isInteger(value) && accepted.includes(value) ? null : refuseEnum(name, value, accepted);
   if (accepted && !accepted.includes(value)) return refuseEnum(name, value, accepted);
   return trimmedText(value) === null ? kept(`field \`${name}\` cannot be empty`) : null;
 }
 
-// The fields as state.json keeps them: the text ones trimmed, and the QA stage A marker stamped by the runtime.
+// The fields as state.json keeps them: the text ones trimmed, the evidence level as its number, and the QA stage A marker stamped by the runtime.
 function runFieldsRecord(fields, at) {
-  const { [QA_STAGE_A]: marker, ...text } = fields;
-  const written = withText({}, text);
+  const { [QA_STAGE_A]: marker, [EVIDENCE_LEVEL]: evidenceLevel, ...text } = fields;
+  const written = { ...withText({}, text), ...(evidenceLevel === undefined ? {} : { [EVIDENCE_LEVEL]: evidenceLevel }) };
   if (!marker) return written;
   return { ...written, [QA_STAGE_A]: withText({ artifact: trimmedText(marker.artifact), at }, { verdict: marker.verdict }) };
 }

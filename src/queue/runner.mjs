@@ -186,9 +186,10 @@ function readJobLog(jobId, env) {
   }
 }
 
-// Appends one line to the accumulated log of a job; a log that refuses the write never costs the run.
+// Appends one line to the accumulated log of a job, creating the logs directory a first attempt has not made yet; a log that refuses the write never costs the run.
 function appendJobLog(jobId, line, env) {
   try {
+    mkdirSync(logsDir(env), { recursive: true });
     appendFileSync(jobLogPath(jobId, env), `${line}\n`);
   } catch {
     return;
@@ -552,6 +553,11 @@ function persistResume(job, resumeCount, env) {
   if (written.status !== "written") appendJobLog(job.id, `the resume could not be counted in the state of the run: ${written.reason}`, env);
 }
 
+// Says in the job log each recorded phase of an operator run the runtime refused to skip.
+function logOperatorReruns(job, handoff, env) {
+  for (const rerun of handoff?.reruns ?? []) appendJobLog(job.id, `operator run: ${rerun.phase} re-runs: ${rerun.reason}`, env);
+}
+
 // The job with the run it writes into already named: the slug of its row, or a provisional one derived from its prompt and
 // persisted before the spawn, so the run directory exists from the first attempt and a retry finds it again.
 async function withRunSlug(job, { store, env }) {
@@ -614,6 +620,7 @@ async function runJob(claimed, ctx) {
   const resume = decideResume({ state });
   const handoff = resumeHandoff({ job, resume, state, env });
   if (handoff) persistResume(job, resume.resumeCount, env);
+  logOperatorReruns(job, handoff, env);
   const prompt = buildPrompt({ job, handoff, openPrs, env });
   const run = await runAttempts(job, { ...ctx, cwd: check.cwd, prompt });
   if (run.lost) {

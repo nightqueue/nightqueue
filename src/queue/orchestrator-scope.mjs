@@ -7,6 +7,11 @@ export const PLUGIN_DIR_ENV = "NIGHTSHIFT_PLUGIN_DIR";
 const JOB_HOME_ENV = "NIGHTSHIFT_JOB_HOME";
 const SPILL_DIR = "tool-results";
 
+// Freezes one rule of a closed list, with its argv.
+function freezeRule(rule) {
+  return Object.freeze({ ...rule, argv: Object.freeze(rule.argv) });
+}
+
 // The closed list of commands the orchestrator of a queued job may run: one frozen row per allowed program and subcommand,
 // the subcommand right after the bare program name (so a global flag such as `git -C`/`-c`/`--git-dir` never matches a row).
 export const ORCHESTRATOR_BASH_RULES = Object.freeze(
@@ -26,7 +31,47 @@ export const ORCHESTRATOR_BASH_RULES = Object.freeze(
     { argv: ["git", "diff"], anyOf: ["--stat", "--shortstat", "--name-only", "--name-status"], noneOf: ["-p", "-u", "--patch"] },
     { argv: ["gh", "pr"], next: ["view", "list", "status", "checks", "create"] },
     { argv: ["nightshift", "run"], next: ["check", "log", "index-save", "commit", "pr"] },
-  ].map((rule) => Object.freeze({ ...rule, argv: Object.freeze(rule.argv) })),
+  ].map(freezeRule),
+);
+
+// A QA worktree of the operator: a relative path of one segment under `.claude/worktrees/operator-qa-`, so `..`, `~` and an absolute path never match.
+const OPERATOR_QA_WORKTREE = /^\.claude\/worktrees\/operator-qa-[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+const COMMIT_ISH = /^[A-Za-z0-9][A-Za-z0-9._/~^-]{0,199}$/;
+const QA_WORKTREE_SHOWN = ".claude/worktrees/operator-qa-<slug>";
+
+// The closed list of commands the operator of `nightshift open` may run: read-only git, its own QA worktree, and nothing that commits, pushes or fetches.
+export const OPERATOR_BASH_RULES = Object.freeze(
+  [
+    { argv: ["git", "rev-parse"] },
+    { argv: ["git", "status"], anyOf: ["--short", "-s", "--porcelain"] },
+    { argv: ["git", "branch"], anyOf: ["--show-current"] },
+    { argv: ["git", "log"], exact: [/^--oneline$/, /^-n$/, /^[1-9]\d{0,3}$/], describe: "git log --oneline -n <N>" },
+    {
+      argv: ["git", "diff"],
+      anyOf: ["--stat", "--shortstat", "--name-only", "--name-status"],
+      noneOf: ["-p", "-u", "--patch", "--output", "--ext-diff", "--no-index"],
+    },
+    {
+      argv: ["git", "worktree", "add"],
+      flags: ["--detach", "-q", "--quiet"],
+      positionals: [OPERATOR_QA_WORKTREE, COMMIT_ISH],
+      minPositionals: 2,
+      describe: `git worktree add ${QA_WORKTREE_SHOWN} <commit-ish>`,
+    },
+    {
+      argv: ["git", "worktree", "remove"],
+      flags: ["--force", "-f"],
+      positionals: [OPERATOR_QA_WORKTREE],
+      minPositionals: 1,
+      describe: `git worktree remove [--force] ${QA_WORKTREE_SHOWN}`,
+    },
+    { argv: ["git", "worktree", "list"], flags: ["--porcelain", "-v", "--verbose"], positionals: [] },
+    { argv: ["git", "worktree", "prune"], flags: ["-n", "--dry-run", "-v", "--verbose"], positionals: [] },
+    { argv: ["gh", "pr"], next: ["view", "list", "status", "checks"] },
+    { argv: ["gh", "issue"], next: ["list", "view"] },
+    { argv: ["adb", "devices"], exact: [] },
+    { argv: ["nightshift", "run"], next: ["check", "log", "index-save"] },
+  ].map(freezeRule),
 );
 
 const FORBIDDEN_SHELL_CHARS = /[\n\r;&|`<>$]/;
@@ -53,26 +98,62 @@ function isDeniedFlag(token, flag) {
   return flag.startsWith("--") && name.length > 2 && name.startsWith("--") && flag.startsWith(name);
 }
 
+// Tells whether the arguments are exactly as many as the patterns, each matching its own in order.
+function matchesExactly(patterns, rest) {
+  return rest.length === patterns.length && patterns.every((pattern, index) => pattern.test(rest[index]));
+}
+
+// Tells whether every flag among the arguments is one of the closed list.
+function onlyListedFlags(flags, rest) {
+  return rest.every((token) => !token.startsWith("-") || flags.includes(token));
+}
+
+// Tells whether the non-flag arguments are between the minimum and the pattern count, each matching the pattern of its position.
+function positionalsMatch({ positionals, minPositionals = 0 }, rest) {
+  const values = rest.filter((token) => !token.startsWith("-"));
+  if (values.length < minPositionals || values.length > positionals.length) return false;
+  return values.every((value, index) => positionals[index].test(value));
+}
+
 // Tells whether the arguments after the subcommand satisfy the constraints of one rule.
 function ruleAccepts(rule, rest) {
   if (rule.anyOf && !rest.some((token) => rule.anyOf.some((flag) => isFlag(token, flag)))) return false;
   if (rule.noneOf && rest.some((token) => rule.noneOf.some((flag) => isDeniedFlag(token, flag)))) return false;
   if (rule.noPrefix && rest.some((token) => rule.noPrefix.some((prefix) => token.startsWith(prefix)))) return false;
   if (rule.next && !rule.next.includes(rest[0])) return false;
+  if (rule.exact && !matchesExactly(rule.exact, rest)) return false;
+  if (rule.flags && !onlyListedFlags(rule.flags, rest)) return false;
+  if (rule.positionals && !positionalsMatch(rule, rest)) return false;
   return true;
+}
+
+// The row whose argv opens the command, the longest one when several do; null when none does.
+function matchingRule(rules, tokens) {
+  const matches = rules.filter(({ argv }) => argv.every((word, index) => tokens[index] === word));
+  return matches.reduce((best, rule) => (best === null || rule.argv.length > best.argv.length ? rule : best), null);
+}
+
+// Tells whether a Bash command is one row of a closed list: no shell operator, the bare program name, the row's own constraints.
+function bashAllowed(rules, command) {
+  if (typeof command !== "string" || FORBIDDEN_SHELL_CHARS.test(command)) return false;
+  const tokens = tokenize(command.trim());
+  const rule = matchingRule(rules, tokens);
+  return rule ? ruleAccepts(rule, tokens.slice(rule.argv.length)) : false;
 }
 
 // Tells whether a Bash command is one of the closed list the orchestrator of a queued job may run.
 export function orchestratorBashAllowed(command) {
-  if (typeof command !== "string" || FORBIDDEN_SHELL_CHARS.test(command)) return false;
-  const [program, sub, ...rest] = tokenize(command.trim());
-  if (typeof sub !== "string") return false;
-  const rule = ORCHESTRATOR_BASH_RULES.find(({ argv }) => argv[0] === program && argv[1] === sub);
-  return rule ? ruleAccepts(rule, rest) : false;
+  return bashAllowed(ORCHESTRATOR_BASH_RULES, command);
+}
+
+// Tells whether a Bash command is one of the closed list the operator of `nightshift open` may run.
+export function operatorBashAllowed(command) {
+  return bashAllowed(OPERATOR_BASH_RULES, command);
 }
 
 // Human rendering of one rule: the program and subcommand, what must follow, and what never may.
-function describeRule({ argv, anyOf, noneOf, noPrefix, next }) {
+function describeRule({ argv, anyOf, noneOf, noPrefix, next, describe }) {
+  if (describe) return describe;
   const allowed = next ?? anyOf;
   const never = [...(noneOf ?? []), ...(noPrefix ?? []).map((prefix) => `a ${prefix}refspec`)];
   const head = allowed ? `${argv.join(" ")} ${allowed.join("|")}` : argv.join(" ");
@@ -82,6 +163,11 @@ function describeRule({ argv, anyOf, noneOf, noPrefix, next }) {
 // Human rendering of the closed list, one entry per rule, for a deny reason or a document.
 export function describeOrchestratorBashRules() {
   return ORCHESTRATOR_BASH_RULES.map(describeRule).join(", ");
+}
+
+// Human rendering of the operator's closed list, one entry per rule, for a deny reason.
+export function describeOperatorBashRules() {
+  return OPERATOR_BASH_RULES.map(describeRule).join(", ");
 }
 
 // Real path of a path, or of its nearest existing ancestor with the missing rest appended, so a symlink never hides where a path really points.

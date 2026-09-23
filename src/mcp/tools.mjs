@@ -34,6 +34,7 @@ import { liveRunnersReport, STOPPED_RUNNER, unreadableRegistry } from "../queue/
 import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
 import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
+import { priorRunBlock, resolveOperatorRunDir, withPriorRun } from "../queue/operator-run.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
 import { startShipDetached } from "../queue/ship-start.mjs";
 import { queueWorkers } from "../queue/ship-view.mjs";
@@ -46,6 +47,7 @@ import {
 } from "../queue/run-state.mjs";
 import { startQueueRunner } from "../queue/start.mjs";
 import {
+  OPERATOR_PIPELINE_OUTCOMES,
   PIPELINE_GATE_STOPS,
   PIPELINE_OUTCOMES,
   PIPELINE_PHASE_STATUSES,
@@ -208,6 +210,12 @@ function requireLogged(field, value) {
   );
 }
 
+// Refuses an operator outcome sent from inside a job, whose run always ends on one of the pipeline's own.
+function refuseOperatorOutcomeInsideJob(outcome, env) {
+  if (callerJobId(env) === null || !OPERATOR_PIPELINE_OUTCOMES.includes(outcome)) return;
+  throw new UserError(`outcome \`${outcome}\` is the operator's: a job records pr_opened, local_commit or no_commit`);
+}
+
 // Closes the roadmap item of the job this process belongs to, once its run recorded a delivery; outside a job there is no item to close.
 async function closeCallerRoadmapItem(env) {
   const own = callerJobId(env);
@@ -230,13 +238,16 @@ const RUN_SET_FIELDS = {
   tier_raise_reason: "tierRaiseReason",
   branch: "branch",
   worktree: "worktree",
+  origin: "origin",
+  plan_status: "planStatus",
 };
 
 // The fields `run_set` was asked to change, under the names state.json uses; an absent or empty one is not a change.
 function runSetFields(args) {
   const asked = Object.entries(RUN_SET_FIELDS).filter(([arg]) => typeof args[arg] === "string" && args[arg].trim() !== "");
   const fields = Object.fromEntries(asked.map(([arg, field]) => [field, args[arg].trim()]));
-  return args.qa_stage_a ? { ...fields, qaStageA: args.qa_stage_a } : fields;
+  const withLevel = args.evidence_level === undefined || args.evidence_level === null ? fields : { ...fields, evidenceLevel: args.evidence_level };
+  return args.qa_stage_a ? { ...withLevel, qaStageA: args.qa_stage_a } : withLevel;
 }
 
 // Requires the absolute working directory of the caller, because the directory of this server is never the user's.
@@ -326,6 +337,17 @@ async function registerOffer(offer, env) {
   const ctx = { env, out: () => {}, err: () => {}, saveConfig };
   const { project } = await withLock(env, () => saveProject(ctx, { path: offer.path, name: offer.name }));
   return project;
+}
+
+// Tells whether `queue_add` was asked to seed the job from an operator run.
+function hasRunDir(args) {
+  return typeof args.run_dir === "string" && args.run_dir.trim() !== "";
+}
+
+// The prompt and the run slug of a job queued from an operator run: the run is checked and its block is built by the runtime; `addJob` refuses a run already bound.
+function operatorRunSeed({ args, project, env }) {
+  const run = resolveOperatorRunDir({ runDir: args.run_dir, project, env });
+  return { prompt: withPriorRun(args.prompt, priorRunBlock({ project, slug: run.slug, state: run.state, env })), slug: run.slug };
 }
 
 // Requires exactly one source for the prompt of a job: the text itself, or the roadmap item that builds it.
@@ -665,7 +687,8 @@ function toolDefinitions(env) {
           "Records the telemetry of one /resolve run, gate terminations included. One call per run. " +
           "Inside a job, `project` and `slug` come from the job's own row and are ignored here; outside one, both name the run. " +
           "`tier` is the FINAL tier the run executed, `tier_operator` is the tier the operator declared (omit it when there was none) and `tier_raise_reason` carries the evidence of a raise. " +
-          "`tier`, `task_type` and `tier_raise_reason` may be left out when the run already recorded them with `run_set`; the durations and the models the runtime measured in the stream are filled in afterwards and always win over the ones sent here.",
+          "`tier`, `task_type` and `tier_raise_reason` may be left out when the run already recorded them with `run_set`; the durations and the models the runtime measured in the stream are filled in afterwards and always win over the ones sent here. " +
+          "`investigated` and `queued` are the operator's outcomes (a session that investigated only, or queued a job): outside a job they are recorded, inside a job they are refused.",
         inputSchema: {
           project: optionalText,
           slug: optionalText,
@@ -680,6 +703,7 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
+        refuseOperatorOutcomeInsideJob(args.outcome, env);
         const run = await pipelineLogRun(args, env);
         const recorded = runFacts(run, env);
         const logged = await openStore(env).runs.logPipelineRun({
@@ -735,10 +759,18 @@ function toolDefinitions(env) {
             .nullable()
             .optional()
             .describe("Risk tier of the job, set by the operator. The pipeline may only raise it, with evidence, never lower it."),
+          run_dir: z
+            .string()
+            .nullable()
+            .optional()
+            .describe(
+              "The RUN_DIR of an operator run (`~/.nightshift/runs/<project>/<slug>`, absolute or `~/`) this job continues: the job writes into that run, and the runtime places the `## PRIOR RUN (operator)` block right after the prompt's `## Brief` section. Never write that block yourself. A run already bound to an open job is refused; `queue_retry --fresh` of the job discards the run.",
+            ),
         },
       },
       handler: async (args) => {
         if (wantsRoadmapItem(args)) {
+          if (hasRunDir(args)) throw new UserError("`run_dir` needs the operator's `prompt`: it cannot seed a job built from `roadmap_item_id`");
           const queued = await openStore(env).roadmap.queueRoadmapItem({
             id: args.roadmap_item_id,
             project: namedProject(args.project, env),
@@ -752,13 +784,16 @@ function toolDefinitions(env) {
         const target = resolveQueueTarget(args, env);
         if (target.offer && args.register !== true) return needsRegistration(target);
         const registered = target.offer ? await registerOffer(target.offer, env) : null;
+        const project = registered?.name ?? target.project;
+        const seeded = hasRunDir(args) ? operatorRunSeed({ args, project, env }) : { prompt: args.prompt, slug: null };
         const job = await openStore(env).jobs.addJob({
-          project: registered?.name ?? target.project,
-          prompt: args.prompt,
+          project,
+          prompt: seeded.prompt,
           priority: args.priority,
           maxAttempts: args.max_attempts,
           timeoutS: args.timeout_s,
           tier: args.tier,
+          slug: seeded.slug,
         });
         return await queuedAnswer({ job, registered }, env);
       },
@@ -809,7 +844,7 @@ function toolDefinitions(env) {
       config: {
         description:
           "The claude session of a job's last attempt: its attempt number, session id and the cwd it ran in (the run's worktree, or the project's checkout when that worktree was already released, with `worktree_released: true`). " +
-          "Never resumes it - this tool only reads; resume it yourself with `claude --resume <session>` in `cwd`, or run `nightshift queue session <job_id>` in a terminal. " +
+          "Never resumes it - this tool only reads; resume it yourself with `nightshift open --resume <session>` in `cwd`, or run `nightshift queue session <job_id>` in a terminal (the same operator launch). " +
           "`pending` and `running` are refused by name: a live runner owns a running job, and a pending one has not run yet. A job that never reached the agent has no session to answer with, and is refused too.",
         inputSchema: { job_id: z.number().int().min(1) },
       },
@@ -1108,6 +1143,7 @@ function toolDefinitions(env) {
         description:
           "Records the fields of the run itself in `state.json` as the pipeline discovers them: its `type`, its `tier`, the evidence of a tier raise, and the branch and worktree the code lives in. Only the fields sent are touched. " +
           "`qa_stage_a` records the one sub-phase with a marker of its own — sent when the QA stage A gate closes, it is what makes a resume re-enter the QA phase straight at stage B instead of paying the analyst again. " +
+          "`origin: operator` marks a run an operator session recorded; `evidence_level` (1-4) is the level its triage reached and `plan_status` whether its plan was approved. A job queued from that run (`queue_add` with `run_dir`) skips its triage only at level 3 or more on a bug, and its architecture only with `plan_status: approved`. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: {
           type: z.enum(PIPELINE_TASK_TYPES).nullable().optional(),
@@ -1116,6 +1152,9 @@ function toolDefinitions(env) {
           branch: optionalText,
           worktree: optionalText,
           qa_stage_a: z.object({ artifact: z.string(), verdict: optionalText }).optional(),
+          origin: z.enum(["operator"]).nullable().optional(),
+          evidence_level: z.number().int().min(1).max(4).nullable().optional(),
+          plan_status: z.enum(["draft", "approved"]).nullable().optional(),
           project: optionalText,
           slug: optionalText,
         },

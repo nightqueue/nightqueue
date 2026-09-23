@@ -52,7 +52,7 @@ test("`queue session --print` on a job with three attempts opens the third attem
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.deepEqual(result.out, [
     `job ${id} · attempt 3 · session sess-attempt-3 · cwd ${worktree.path}`,
-    `cd '${worktree.path}' && claude --resume sess-attempt-3`,
+    `cd '${worktree.path}' && nightshift open --resume sess-attempt-3`,
   ]);
 });
 
@@ -67,7 +67,7 @@ test("`queue session` falls back to the checkout and says so when the run's work
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.deepEqual(result.out, [
     `job ${id} · attempt 1 · session sess-released · cwd ${realpathSync(home.checkout)} (worktree released, using the checkout)`,
-    `cd '${realpathSync(home.checkout)}' && claude --resume sess-released`,
+    `cd '${realpathSync(home.checkout)}' && nightshift open --resume sess-released`,
   ]);
 });
 
@@ -96,7 +96,7 @@ test("`queue session` refuses a job that recorded no session", async (t) => {
   assert.match(result.err.join("\n"), /recorded no session; it never reached the agent/);
 });
 
-test("`queue session` execs claude --resume in the resolved cwd, through the injected spawn", async (t) => {
+test("`queue session` resumes through the operator launcher in the resolved cwd, through the injected spawn", async (t) => {
   const home = makeSessionHome(t, "session-exec");
   const worktree = addWorktree(home.checkout, "feat+exec");
   const id = jobWithSession(home, { slug: "exec-run", status: "done", session: "sess-exec", attempt: 1, worktree: worktree.path });
@@ -106,16 +106,21 @@ test("`queue session` execs claude --resume in the resolved cwd, through the inj
     resolveBinImpl: () => ({ bin: "/opt/claude/claude", via: "test" }),
     spawnSyncImpl: (bin, args, options) => {
       calls.push({ bin, args, options });
-      return { status: 0 };
+      return args[0] === "--help" ? { status: 0, stdout: "  --agent <agent>  Agent for the current session\n" } : { status: 0 };
     },
   });
 
   assert.equal(result.code, 0, result.err.join("\n"));
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].bin, "/opt/claude/claude");
-  assert.deepEqual(calls[0].args, ["--resume", "sess-exec"]);
-  assert.equal(calls[0].options.cwd, worktree.path);
-  assert.equal(calls[0].options.stdio, "inherit");
+  const session = calls.filter((call) => call.args.includes("--resume"));
+  assert.equal(session.length, 1);
+  const [claude] = session;
+  assert.equal(claude.bin, "/opt/claude/claude");
+  assert.equal(claude.args[claude.args.indexOf("--agent") + 1], "nightshift:nightshift-operator");
+  assert.equal(claude.args[claude.args.indexOf("--resume") + 1], "sess-exec");
+  assert.equal(claude.options.env.NIGHTSHIFT_MODE, "operator");
+  assert.equal(claude.options.cwd, worktree.path);
+  assert.equal(claude.options.stdio, "inherit");
+  assert.ok(calls.some((call) => call.bin === "git" && call.args.join(" ") === "worktree prune"), "git worktree prune did not run first");
 });
 
 test("MCP queue_session returns the attempt, session and cwd of the last attempt, and never execs", async (t) => {

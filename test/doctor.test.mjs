@@ -70,6 +70,7 @@ test("a host that went through setup has no failing check", async (t) => {
   );
   assert.equal(statusOf(report, "node"), "ok");
   assert.equal(statusOf(report, "claude"), "ok");
+  assert.equal(statusOf(report, "operator"), "ok");
   assert.equal(statusOf(report, "gh"), "ok");
   assert.equal(statusOf(report, "config"), "ok");
   assert.equal(statusOf(report, "secrets"), "ok");
@@ -200,7 +201,39 @@ test("the diagnosis writes nothing at all: no database, no settings, no home", a
   await diagnose(host.env);
   assert.equal(existsSync(dbPath(host.env)), false);
   assert.equal(existsSync(host.settingsPath), false);
-  assert.deepEqual(host.calls().filter((call) => call[0] !== "--version"), []);
+  assert.deepEqual(host.calls().filter((call) => call[0] !== "--version" && call[0] !== "--help"), []);
+});
+
+// Subprocess runner that answers `claude --help` with or without the `--agent` line, delegating every other call to the fake gh runner.
+function withClaudeHelp(listsAgent) {
+  const fallback = withFakeGh(true);
+  return (file, args, options) => {
+    if (args?.[0] !== "--help") return fallback(file, args, options);
+    const stdout = listsAgent ? "Options:\n  --agent <agent>  Agent for the current session\n" : "Options:\n  -p, --print\n";
+    return { status: 0, stdout, stderr: "" };
+  };
+}
+
+test("the operator row says how `nightshift open` loads the agent, and a fallback only warns", async (t) => {
+  const host = makeHostEnv(t, "doctor-operator");
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+
+  const agent = await diagnose(host.env, { spawnSyncImpl: withClaudeHelp(true) });
+  const agentRow = agent.report.checks.find((check) => check.name === "operator");
+  assert.equal(agentRow.status, "ok");
+  assert.match(agentRow.detail, /--agent nightshift:nightshift-operator/);
+
+  const fallback = await diagnose(host.env, { spawnSyncImpl: withClaudeHelp(false) });
+  const fallbackRow = fallback.report.checks.find((check) => check.name === "operator");
+  assert.equal(fallbackRow.status, "warn");
+  assert.match(fallbackRow.detail, /--append-system-prompt`; the agent's tool restriction does not apply/);
+  assert.equal(fallbackRow.hint, "update Claude Code");
+  assert.equal(fallback.code, agent.code, "a fallback changed the exit code of the diagnosis");
+
+  const mute = (file, args, options) => (args?.[0] === "--help" ? { status: null, error: new Error("spawn ETIMEDOUT") } : withFakeGh(true)(file, args, options));
+  const silent = await diagnose(host.env, { spawnSyncImpl: mute });
+  assert.equal(statusOf(silent.report, "operator"), "warn");
+  assert.match(silent.report.checks.find((check) => check.name === "operator").detail, /claude did not answer/);
 });
 
 test("a claude CLI that cannot run is the only failure of an otherwise clean host", async (t) => {

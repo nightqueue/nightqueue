@@ -198,7 +198,7 @@ function boundWorktree(t, env, { slug = SLUG } = {}) {
 test("`run check` answers OK on a complete artifact and names every section the artifact does not carry", async (t) => {
   const env = makeQueue(t, "cli-run-check-sections");
   const id = boundJob(env);
-  writeArtifact(env, "01-triage.md", "# Triage\n\n## Verdict\n\nPROCEED\n");
+  writeArtifact(env, "01-triage.md", "# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 3\n");
   writeArtifact(env, "03-plan.md", "# Plan\n\n## Implementation plan\n\n- do it\n\n## Assumptions\n\nnone\n");
 
   const triage = await runCli(env, ["run", "check", "01"], { jobId: id });
@@ -222,6 +222,40 @@ test("`run check` answers OK on a complete artifact and names every section the 
   writeArtifact(env, "06-runtime.md", "# Runtime\n\n## Runtime verdict\n\nCONFIRMED\n");
   const runtime = await runCli(env, ["run", "check", "06.5"], { jobId: id });
   assert.deepEqual(runtime.out, ["OK"]);
+});
+
+const EVIDENCE_MISSING = "MISSING: Evidence level: <1|2|3|4> as the first line under ## Verdict";
+
+test("`run check 01` requires `Evidence level: <1-4>` as the first line under ## Verdict, and nowhere else", async (t) => {
+  const env = makeQueue(t, "cli-run-check-evidence");
+  const id = boundJob(env);
+  const cases = [
+    ["# Triage\n\n## Verdict: PROCEED\n\nThe cause is confirmed.\n", EVIDENCE_MISSING],
+    ["# Triage\n\n## Verdict: PROCEED\n\n## Diagnosis\nEvidence level: 3\n", EVIDENCE_MISSING],
+    ["# Triage\n\n## Verdict: PROCEED\n\nThe cause.\nEvidence level: 3\n", EVIDENCE_MISSING],
+    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 0\n", EVIDENCE_MISSING],
+    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 5\n", EVIDENCE_MISSING],
+    ["# Triage\n\n## Verdict: NOT-REPRODUCIBLE\nEvidence level: 1\n", "OK"],
+    ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level:** 4\n", "OK"],
+    ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level: 3**\n", "OK"],
+    ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level: 5**\n", EVIDENCE_MISSING],
+    ["# Triage\n\n## Diagnosis\n\n- cause\n", "MISSING: ## Verdict"],
+  ];
+  for (const [body, expected] of cases) {
+    writeArtifact(env, "01-triage.md", body);
+    const { out } = await runCli(env, ["run", "check", "01"], { jobId: id });
+    assert.deepEqual(out, [expected], JSON.stringify(body));
+  }
+});
+
+test("`run check 05a` outside a job answers for an operator run named by project and slug", async (t) => {
+  const env = makeQueue(t, "cli-run-check-operator-05a");
+  const slug = "hunt-the-notice";
+  recordRunFields({ project: "alpha", slug, fields: { origin: "operator" }, env });
+  writeArtifact(env, "05a-qa-analyst.md", "# QA\n\n## Break hypotheses\n\n- H1\n\n## Test recipe\n\nnode --test\n", { slug });
+  const qa = await runCli(env, ["run", "check", "05a", "--project", "alpha", "--slug", slug]);
+  assert.equal(qa.code, 0);
+  assert.deepEqual(qa.out, ["OK"]);
 });
 
 test("`run check 04` generates the file list from the worktree when the coder left none", async (t) => {

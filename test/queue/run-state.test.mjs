@@ -169,6 +169,22 @@ test("run fields refuse an unknown field and a value outside the enum, and recor
   );
 });
 
+test("the operator fields accept only their enums, and the evidence level is kept as an integer", (t) => {
+  const env = makeHome(t, "run-state-operator-fields");
+
+  assert.match(recordRunFields({ ...RUN, fields: { origin: "x" }, env }).reason, /unknown origin `x`; accepted: operator/);
+  assert.match(recordRunFields({ ...RUN, fields: { evidenceLevel: 0 }, env }).reason, /unknown evidenceLevel `0`; accepted: 1, 2, 3, 4/);
+  assert.match(recordRunFields({ ...RUN, fields: { evidenceLevel: "3" }, env }).reason, /unknown evidenceLevel `3`/);
+  assert.match(recordRunFields({ ...RUN, fields: { evidenceLevel: 2.5 }, env }).reason, /unknown evidenceLevel/);
+  assert.match(recordRunFields({ ...RUN, fields: { planStatus: "final" }, env }).reason, /unknown planStatus `final`; accepted: draft, approved/);
+  assert.equal(existsSync(join(runDir(RUN.project, RUN.slug, env), "state.json")), false, "a refused record created the file");
+
+  const written = recordRunFields({ ...RUN, fields: { origin: "operator", evidenceLevel: 3, planStatus: "approved" }, env });
+  assert.equal(written.status, "written");
+  const state = readState(env);
+  assert.deepEqual({ origin: state.origin, evidenceLevel: state.evidenceLevel, planStatus: state.planStatus }, { origin: "operator", evidenceLevel: 3, planStatus: "approved" });
+});
+
 test("the writers never lose each other's fields, and the resume decision reads the file they built", (t) => {
   const env = makeHome(t, "run-state-sequence");
 

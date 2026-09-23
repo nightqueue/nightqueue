@@ -336,3 +336,75 @@ test("a failure inside the scope check fails open and never blocks the job", (t)
   });
   assert.equal(runAgentForeground({ input: mainCall("Read", hostile, worktree), env }), "");
 });
+
+const OPERATOR_READ_REASON = "the operator does not read the repository";
+const OPERATOR_BASH_REASON = "the operator does not run this command";
+
+// The operator's env of the same fixture: no job id, the operator mode, and the home its runs live in.
+function operatorFixture(t) {
+  const { env, ...fixture } = jobFixture(t);
+  const { NIGHTSHIFT_JOB_ID, NIGHTSHIFT_JOB_HOME, ...rest } = env;
+  assert.equal(NIGHTSHIFT_JOB_ID, "7");
+  assert.equal(NIGHTSHIFT_JOB_HOME, env.NIGHTSHIFT_HOME);
+  return { ...fixture, env: { ...rest, NIGHTSHIFT_MODE: "operator" } };
+}
+
+test("the operator reads its run's handoff files and the plugin, never the repository", (t) => {
+  const { env, runDir, plugin, worktree } = operatorFixture(t);
+  assert.equal(runAgentForeground({ input: mainCall("Read", { file_path: join(runDir, "03-plan.md") }, worktree), env }), "");
+  assert.equal(runAgentForeground({ input: mainCall("Read", { file_path: join(plugin, "agents", "triager.md") }, worktree), env }), "");
+  for (const [tool, toolInput] of [
+    ["Read", { file_path: join(worktree, "src", "app.mjs") }],
+    ["Grep", { pattern: "export" }],
+    ["Glob", { pattern: "**/*.mjs" }],
+  ]) {
+    const reason = denyReasonOf(runAgentForeground({ input: mainCall(tool, toolInput, worktree), env }));
+    assert.ok(reason.startsWith(OPERATOR_READ_REASON), reason);
+    assert.match(reason, /the triager, the explore or the architect writes what you need into a handoff file under RUN_DIR$/);
+  }
+});
+
+test("the operator's Bash outside its closed list is denied with the operator's reason, and its own list passes untouched", (t) => {
+  const { env, worktree } = operatorFixture(t);
+  for (const command of ["git commit -m x", "git push", "git fetch origin", "nightshift run commit", "gh pr create", "git worktree add /tmp/x HEAD", "npm test"]) {
+    const reason = denyReasonOf(runAgentForeground({ input: mainCall("Bash", { command }, worktree), env }));
+    assert.ok(reason.startsWith(OPERATOR_BASH_REASON), reason);
+    assert.match(reason, /no commit, no push, no write to the repository$/);
+  }
+  for (const command of ["git worktree add .claude/worktrees/operator-qa-x HEAD", "git log --oneline -n 30", "adb devices"]) {
+    assert.equal(runAgentForeground({ input: mainCall("Bash", { command }, worktree), env }), "", command);
+  }
+  assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "git status --short", run_in_background: true }, worktree), env }), "");
+});
+
+test("the operator's subagents are never moved to the foreground, and only a root/home scan of theirs is denied", (t) => {
+  const { env, worktree } = operatorFixture(t);
+  assert.equal(runAgentForeground({ input: mainCall("Agent", { prompt: "triage", run_in_background: true }, worktree), env }), "");
+  assert.equal(runAgentForeground({ input: mainCall("Task", { prompt: "triage" }, worktree), env }), "");
+  const subagent = (toolInput) => ({ ...mainCall("Bash", toolInput, worktree), agent_id: "a1", agent_type: "triager" });
+  assert.equal(runAgentForeground({ input: subagent({ command: "npm test", run_in_background: true }), env }), "");
+  assert.deepEqual(JSON.parse(runAgentForeground({ input: subagent({ command: "find / -name x" }), env })), {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: `the unattended run refuses a scan from the filesystem root or the home (find /); ${DENY_REASON_SUFFIX}`,
+    },
+  });
+  const read = { ...mainCall("Read", { file_path: join(worktree, "src", "app.mjs") }, worktree), agent_id: "a1", agent_type: "triager" };
+  assert.equal(runAgentForeground({ input: read, env }), "");
+});
+
+test("no job id and no operator mode answers nothing; a job id wins over the operator mode", (t) => {
+  const { env, worktree } = operatorFixture(t);
+  for (const bare of [{}, { NIGHTSHIFT_MODE: "  " }, { NIGHTSHIFT_MODE: "interactive" }]) {
+    assert.equal(runAgentForeground({ input: mainCall("Read", { file_path: join(worktree, "src", "app.mjs") }, worktree), env: bare }), "");
+    assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "git commit -m x" }, worktree), env: bare }), "");
+    assert.equal(runAgentForeground({ input: mainCall("Agent", { prompt: "p", run_in_background: true }, worktree), env: bare }), "");
+  }
+  const both = { ...env, NIGHTSHIFT_JOB_ID: "7", NIGHTSHIFT_MODE: "operator" };
+  assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "git commit -m x" }, worktree), env: both }), "");
+  const agent = JSON.parse(runAgentForeground({ input: mainCall("Agent", { prompt: "p", run_in_background: true }, worktree), env: both }));
+  assert.equal(agent.hookSpecificOutput.updatedInput.run_in_background, false);
+  const reason = denyReasonOf(runAgentForeground({ input: mainCall("Bash", { command: "adb devices" }, worktree), env: both }));
+  assert.ok(reason.startsWith(ORCHESTRATOR_REDIRECT), reason);
+});

@@ -551,6 +551,33 @@ test("a retried job resumes on its own slug and run directory, and the runtime c
   assert.equal(state.phases.length, 1, "counting the resume rewrote the run instead of merging into it");
 });
 
+test("a job queued from an operator run whose bug triage stayed below level 3 re-runs it, and says so in its prompt and its log", async (t) => {
+  const { env, planPath } = makeRunnerHome(t, "runner-operator-rerun", [{ stdout: "", exitCode: 0 }]);
+  const id = enqueue(env);
+  mkdirSync(runDir("alpha", SLUG, env), { recursive: true });
+  writeFileSync(
+    join(runDir("alpha", SLUG, env), "state.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      slug: SLUG,
+      project: "alpha",
+      origin: "operator",
+      type: "bug/error",
+      evidenceLevel: 2,
+      resumeCount: 0,
+      phases: [{ phase: "triage", artifact: "01-triage.md", verdict: "PROCEED" }],
+    }),
+  );
+  openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
+
+  await runJobCycle(env, id);
+
+  const prompt = argValue(fakeCalls(planPath)[0].argv, "-p");
+  assert.ok(prompt.includes("Resume from phase: triage"), prompt);
+  assert.ok(prompt.includes("Re-run: triage — evidence level 2 is below 3 on a bug (operator run)"), prompt);
+  assert.match(readFileSync(jobLogPath(id, env), "utf8"), /operator run: triage re-runs: evidence level 2 is below 3 on a bug/);
+});
+
 test("a job that stops belonging to this runner is killed and closed as cancelled", async (t) => {
   const { env } = makeRunnerHome(t, "runner-cancel", [{ stdout: toNdjson([systemInitEvent()]), holdMs: 5000, exitCode: 0 }]);
   const id = enqueue(env);

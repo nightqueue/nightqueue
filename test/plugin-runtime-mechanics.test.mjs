@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const AGENTS = ["coder", "qa-guardian", "verifier", "triager", "explore", "architect"];
 const SKILL = join(ROOT, "plugin/skills/resolve/SKILL.md");
+const QA_PHASE = join(ROOT, "plugin/skills/resolve/references/qa-phase.md");
 const REPOSITORY_LINE = "Repository: [CWD PATH]";
 const PROJECT_LINE = "Project: [PROJECT — the same identifier used in RUN_DIR]";
 const RUNTIME_WORK = {
@@ -59,7 +60,7 @@ test("the verifier reads the diff-hygiene line instead of running git itself", (
 
 // Every orchestrator prompt template that carries the repository path also names the project.
 test("each Repository template of the skill carries a Project line", () => {
-  const lines = readFileSync(SKILL, "utf8").split("\n");
+  const lines = [SKILL, QA_PHASE].flatMap((file) => readFileSync(file, "utf8").split("\n"));
   const projectLines = lines.filter((line) => line.trim() === PROJECT_LINE);
   const repositoryLines = lines.filter((line) => line.trim() === REPOSITORY_LINE);
   assert.ok(repositoryLines.length >= 8, "the skill lost its Repository templates");
@@ -77,7 +78,7 @@ test("each Repository template of the skill carries a Project line", () => {
 // The secret-in-a-log sweep is a runtime command now, and its mandatory readings survive a host where the plugin root does not resolve.
 test("the qa-guardian calls the sweep and still resolves its own plugin paths", () => {
   const agent = readAgent("qa-guardian");
-  const skill = readFileSync(SKILL, "utf8");
+  const skill = readFileSync(QA_PHASE, "utf8");
   assert.ok(agent.includes("nightshift run secrets-sweep --files"), "qa-guardian does not call the sweep command");
   assert.equal(agent.includes("grep -niE"), false, "qa-guardian still runs the greps the command replaced");
   assert.ok(

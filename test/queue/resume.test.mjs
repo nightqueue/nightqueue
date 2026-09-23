@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { runDir } from "../../src/config/paths.mjs";
 import { clearRunOutcome, decideResume, isSafeSegment, readRunState, RESUME_PHASE_ORDER, resumeHandoff } from "../../src/queue/resume.mjs";
+import { buildPrompt } from "../../src/queue/spawn.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 
 // A state.json in the shape the plugin writes it, with the canonical ENGLISH keys and phase names.
@@ -190,4 +191,93 @@ test("the state file is read from the run directory, and an unsafe segment never
 
   writeState(env, { project: "alpha", slug: "broken-run", content: "{ not json" });
   assert.equal(readRunState({ project: "alpha", slug: "broken-run", env }), null);
+});
+
+// A state.json an operator session recorded: no branch nor worktree, and `origin: operator`.
+function operatorState({ phases = ["triage"], resumeCount = 0, ...extra } = {}) {
+  const { branch, worktree, ...base } = state({ phases, resumeCount });
+  return { ...base, origin: "operator", ...extra };
+}
+
+// The prompt the runner builds for a job resumed from the given state.
+function resumePrompt(recorded) {
+  const job = { id: 7, project: "alpha", slug: "fix-the-worker", prompt: "p" };
+  const handoff = resumeHandoff({ job, resume: decideResume({ state: recorded }), state: recorded, env: { NIGHTSHIFT_HOME: "/tmp/ns" } });
+  return buildPrompt({ job, handoff });
+}
+
+test("an operator run with a triage at evidence level 3 resumes at explore, with nothing to re-run", () => {
+  const recorded = operatorState({ evidenceLevel: 3 });
+  const decision = decideResume({ state: recorded });
+  assert.equal(decision.fromPhase, "explore");
+  assert.equal(decision.reuseWorktree, false);
+  assert.equal("reruns" in decision, false);
+  assert.ok(resumePrompt(recorded).includes("Resume from phase: explore"));
+});
+
+test("an operator run whose bug triage stopped below level 3 re-runs the triage, and says so in the prompt", () => {
+  const recorded = operatorState({ evidenceLevel: 2 });
+  const decision = decideResume({ state: recorded });
+  assert.equal(decision.resume, true);
+  assert.equal(decision.fromPhase, "triage");
+  assert.equal(decision.lastPhase, null);
+  assert.equal(decision.reason, "operator-rerun");
+  assert.equal(decision.reruns[0].phase, "triage");
+  assert.match(decision.reruns[0].reason, /evidence level 2/);
+  const prompt = resumePrompt(recorded);
+  assert.ok(prompt.includes("Re-run: triage"), prompt);
+  assert.ok(prompt.includes("Last completed phase: none"), prompt);
+});
+
+test("an operator run resumes at implementation only with an approved plan, and re-runs a draft architecture", () => {
+  const phases = ["triage", "explore", "architecture"];
+  const approved = decideResume({ state: operatorState({ phases, evidenceLevel: 3, planStatus: "approved" }) });
+  assert.equal(approved.fromPhase, "implementation");
+  assert.equal("reruns" in approved, false);
+
+  const draft = decideResume({ state: operatorState({ phases, evidenceLevel: 3, planStatus: "draft" }) });
+  assert.equal(draft.fromPhase, "architecture");
+  assert.equal(draft.lastPhase, "explore");
+  assert.deepEqual(draft.reruns.map((rerun) => rerun.phase), ["architecture"]);
+  assert.match(draft.reruns[0].reason, /plan status draft/);
+
+  const unrecorded = decideResume({ state: operatorState({ phases, evidenceLevel: 3 }) });
+  assert.match(unrecorded.reruns[0].reason, /plan status not recorded/);
+});
+
+test("the triage trap reads a missing type as a bug, and never applies to a feature", () => {
+  const { type, ...untyped } = operatorState({ evidenceLevel: 2 });
+  assert.equal(decideResume({ state: untyped }).fromPhase, "triage");
+  const unrecorded = decideResume({ state: operatorState({}) });
+  assert.match(unrecorded.reruns[0].reason, /evidence level not recorded/);
+  const feature = decideResume({ state: operatorState({ type: "feature/refactor" }) });
+  assert.equal(feature.fromPhase, "explore");
+  assert.equal("reruns" in feature, false);
+});
+
+test("the operator handoff does not spend the job's own resume, and the cap still bites after it", () => {
+  assert.equal(decideResume({ state: operatorState({ evidenceLevel: 3, resumeCount: 1 }) }).fromPhase, "explore");
+  assert.equal(decideResume({ state: operatorState({ evidenceLevel: 3, resumeCount: 2 }) }).reason, "resume-cap");
+});
+
+test("a trapped triage is re-run even when its recorded verdict would have closed the run", () => {
+  const recorded = operatorState({ evidenceLevel: 2 });
+  recorded.phases[0].verdict = "NOT-REPRODUCIBLE";
+  const decision = decideResume({ state: recorded });
+  assert.equal(decision.resume, true);
+  assert.equal(decision.fromPhase, "triage");
+});
+
+test("a run with no operator origin takes exactly the decision it took before", () => {
+  const phases = ["triage", "explore", "architecture"];
+  assert.deepEqual(decideResume({ state: state({ phases, evidenceLevel: 1 }) }), {
+    resume: true,
+    fromPhase: "implementation",
+    fromStage: null,
+    reuseWorktree: true,
+    reason: "resume",
+    resumeCount: 1,
+    lastPhase: "architecture",
+  });
+  assert.equal(decideResume({ state: state({ phases, resumeCount: 1 }) }).reason, "resume-cap");
 });

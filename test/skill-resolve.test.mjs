@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { PHASE_TARGETS } from "../src/mcp/phase-context.mjs";
 import { PIPELINE_TASK_TYPES } from "../src/memory/runs.mjs";
@@ -9,6 +9,8 @@ import { buildPrompt } from "../src/queue/spawn.mjs";
 import { parseSlugTypeLine, parseTierRaiseLine } from "../src/queue/stream.mjs";
 
 const SKILL = readFileSync(new URL("../plugin/skills/resolve/SKILL.md", import.meta.url), "utf8");
+const QA_PHASE = readFileSync(new URL("../plugin/skills/resolve/references/qa-phase.md", import.meta.url), "utf8");
+const OPERATOR = readFileSync(new URL("../plugin/agents/operator.md", import.meta.url), "utf8");
 const CLASSIFY = readFileSync(new URL("../src/queue/classify.mjs", import.meta.url), "utf8");
 const TOOLS = readFileSync(new URL("../src/mcp/tools.mjs", import.meta.url), "utf8");
 const CLI_RUN = readFileSync(new URL("../src/cli/run.mjs", import.meta.url), "utf8");
@@ -30,8 +32,10 @@ const OUTCOME_ANCHORS = [
   "**Before printing the gate block, record the outcome**",
 ];
 
-// The target every per-phase placeholder of the skill names, in the order the prompts appear.
-const CONTEXT_TARGETS = [...SKILL.matchAll(/`context_for_phase` \(target: "([a-z]+)"\)/g)].map((match) => match[1]);
+// The target every per-phase placeholder of a plugin text names, in the order the prompts appear.
+function contextTargets(text) {
+  return [...text.matchAll(/`context_for_phase` \(target: "([a-z]+)"\)/g)].map((match) => match[1]);
+}
 
 // The cells of a markdown table row, trimmed and without the outer pipes.
 function cellsOf(line) {
@@ -46,11 +50,14 @@ function routingRow(label) {
 }
 
 test("every subagent prompt takes its context from one context_for_phase block", () => {
-  assert.deepEqual(CONTEXT_TARGETS, ["coder", "triager", "explore", "architect", "coder", "qa", "qa", "verifier"]);
-  for (const target of CONTEXT_TARGETS) {
-    assert.ok(PHASE_TARGETS.includes(target), `the skill names \`${target}\`, which context_for_phase does not accept`);
+  assert.deepEqual(contextTargets(SKILL), ["coder", "triager", "explore", "architect", "coder", "verifier"]);
+  assert.deepEqual(contextTargets(QA_PHASE), ["qa", "qa"]);
+  for (const text of [SKILL, QA_PHASE]) {
+    for (const target of contextTargets(text)) {
+      assert.ok(PHASE_TARGETS.includes(target), `the skill names \`${target}\`, which context_for_phase does not accept`);
+    }
+    assert.equal(text.split("[CONTEXT BLOCK]").length - 1, contextTargets(text).length, "a placeholder lost its target line");
   }
-  assert.equal(SKILL.split("[CONTEXT BLOCK]").length - 1, CONTEXT_TARGETS.length, "a placeholder lost its target line");
   assert.equal(SKILL.includes("[Include only if lesson_recall returned something:]"), false, "a lesson_recall placeholder survived");
   assert.equal(SKILL.includes("[Include only if memory_recall returned something:]"), false, "a memory_recall placeholder survived");
 });
@@ -133,11 +140,11 @@ test("the fast tracks hand the coder the file list, never the pasted content", (
   assert.match(passageAt("1. **Locate the affected files**"), /never their content pasted inline: it has Read/);
 });
 
-// The passage of the skill that starts at an anchor, long enough to carry the whole instruction under it.
-function passageAt(anchor) {
-  const start = SKILL.indexOf(anchor);
+// The passage of the skill (or of another plugin text) that starts at an anchor, long enough to carry the whole instruction under it.
+function passageAt(anchor, text = SKILL) {
+  const start = text.indexOf(anchor);
   assert.ok(start >= 0, `the skill no longer documents the instruction at: ${anchor}`);
-  return SKILL.slice(start, start + 900);
+  return text.slice(start, start + 900);
 }
 
 // The source of one MCP tool, from its name to its handler — the slice that carries its input schema.
@@ -181,7 +188,7 @@ test("every artifact gate of the skill is one `nightshift run check` call the CL
   assert.ok(gate.includes("`nightshift run check <NN>`"), "the gate is no longer a single command");
   assert.ok(gate.includes("Never check an artifact with `ls`"), "the gate no longer forbids checking an artifact by hand");
   for (const phase of ["01", "02", "03", "04", "05a", "05", "06", "06.5"]) {
-    assert.ok(SKILL.includes(`nightshift run check ${phase}`), `the gate of phase ${phase} is not a \`run check\` call`);
+    assert.ok(`${SKILL}${QA_PHASE}`.includes(`nightshift run check ${phase}`), `the gate of phase ${phase} is not a \`run check\` call`);
     assert.ok(CLI_RUN.includes(`["${phase}", {`), `the skill calls \`run check ${phase}\`, a phase the CLI does not know`);
   }
   assert.equal(/existence gate \(step 5\.2\)/.test(SKILL), false, "a phase still applies the gate by hand");
@@ -194,12 +201,12 @@ test("the QA echo is gone, and the pair that replaces it is really in the flow",
   assert.equal(/ECHO per section/.test(SKILL), false, "a QA prompt still asks for the echo of the plan");
   assert.equal(/echo line per section/.test(QA_AGENT), false, "the qa-guardian agent still returns the echo of the plan");
   assert.equal(SKILL.includes("Validation of the QA echo"), false, "the orchestrator still audits an echo nobody returns");
-  assert.equal(SKILL.split("`<RUN_DIR>/03-plan.md` (open it only AFTER step 0").length - 1, 2, "a QA prompt stopped reading the plan");
+  assert.equal(QA_PHASE.split("`<RUN_DIR>/03-plan.md` (open it only AFTER step 0").length - 1, 2, "a QA prompt stopped reading the plan");
   assert.ok(CLI_RUN.includes('sections: ["## Validated risks"]'), "`run check 05` no longer requires the section the plan feeds");
 });
 
 test("the QA stage A gate records its marker with the tool, before stage B is launched", () => {
-  const gate = passageAt("**Stage A gate:**");
+  const gate = passageAt("**Stage A gate:**", QA_PHASE);
   assert.ok(gate.includes("`run_set` with `qa_stage_a`"), "the stage A gate no longer records the marker with the tool");
   assert.ok(gate.includes("05a-qa-analyst.md"), "the marker no longer names the artifact the resume decision reads");
   assert.ok(gate.includes("BEFORE launching stage B"), "the marker is no longer recorded before the provers start");
@@ -378,4 +385,29 @@ test("the raise line the Brief prints is the line the runtime parses", () => {
     to: "complex",
     reason: "the brief did not name the money surface",
   });
+});
+
+test("the QA methodology lives in references/qa-phase.md alone, and both of its readers point there", () => {
+  const phase5 = SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —"));
+  assert.match(phase5, /Read `references\/qa-phase\.md`/, "Phase 5 no longer points to the QA reference");
+  assert.ok(OPERATOR.includes("skills/resolve/references/qa-phase.md"), "the operator no longer points to the QA reference");
+  for (const anchor of ["#### QA attack brief", "**Stage A gate:**", "Mode: ANALYST", "Mode: PROVER", "**Consolidation (inline"]) {
+    const count = [SKILL, QA_PHASE, OPERATOR].reduce((sum, text) => sum + text.split(anchor).length - 1, 0);
+    assert.equal(count, 1, `\`${anchor}\` is not written exactly once across the skill, the reference and the operator`);
+    assert.ok(QA_PHASE.includes(anchor), `\`${anchor}\` left references/qa-phase.md`);
+  }
+  for (const [, name] of SKILL.matchAll(/references\/([a-z0-9-]+\.md)/g)) {
+    assert.ok(existsSync(new URL(`../plugin/skills/resolve/references/${name}`, import.meta.url)), `the skill names references/${name}, which is not on disk`);
+  }
+});
+
+test("step 0.5 reads the re-run lines and the prior-run block of a job queued from an operator run", () => {
+  const step = resumeStep();
+  assert.ok(step.includes("Re-run:"), "step 0.5 no longer reads the phases the runtime refused to skip");
+  assert.ok(step.includes("## PRIOR RUN (operator)"), "step 0.5 no longer names the operator's block");
+  const prompt = buildPrompt({
+    job: { id: 1, prompt: "p" },
+    handoff: { slug: "demo-slug", runDir: "/runs/demo/demo-slug", lastPhase: null, fromPhase: "triage", reruns: [{ phase: "triage", reason: "evidence level 2 is below 3 on a bug (operator run)" }] },
+  });
+  assert.ok(prompt.includes("\nRe-run: triage — evidence level 2 is below 3 on a bug (operator run)\n"), prompt);
 });

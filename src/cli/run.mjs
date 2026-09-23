@@ -167,9 +167,16 @@ async function runLog(argv, ctx) {
   return 0;
 }
 
+// The line the triage verdict must open with: the evidence level, 1 to 4, bold or plain.
+const EVIDENCE_FIRST_LINE = {
+  heading: "## Verdict",
+  pattern: /^(\*\*)?Evidence level:(\*\*)?\s*[1-4](\*\*)?\s*$/,
+  label: "Evidence level: <1|2|3|4> as the first line under ## Verdict",
+};
+
 // The artifact of each phase and the sections its gate requires; a phase with no required section is checked for existence alone.
 const ARTIFACTS = new Map([
-  ["01", { file: "01-triage.md", sections: ["## Verdict"] }],
+  ["01", { file: "01-triage.md", sections: ["## Verdict"], firstLineUnder: EVIDENCE_FIRST_LINE }],
   ["02", { file: "02-explore.md", sections: [] }],
   ["03", { file: "03-plan.md", sections: ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"] }],
   ["04", { file: "04-implementation.md", sections: [FILE_LIST] }],
@@ -193,11 +200,30 @@ function hasHeading(text, heading) {
   return text.split("\n").some((line) => line.trimEnd().startsWith(heading));
 }
 
-// What the gate found absent: the required sections the artifact does not carry, or the artifact itself when nothing was written.
-function missingParts(text, { file, sections }) {
+// The first non-blank line of a section, closed by the next `## ` heading; null when the section is absent or empty.
+function firstLineOfSection(text, heading) {
+  const lines = text.split("\n");
+  const start = lines.findIndex((line) => line.trimEnd().startsWith(heading));
+  if (start === -1) return null;
+  for (const line of lines.slice(start + 1)) {
+    if (line.startsWith("## ")) return null;
+    if (line.trim() !== "") return line.trim();
+  }
+  return null;
+}
+
+// Whether the section's first line is the one the gate requires in that position.
+function firstLineHolds(text, { heading, pattern }) {
+  const line = firstLineOfSection(text, heading);
+  return line !== null && pattern.test(line);
+}
+
+// What the gate found absent: the required sections the artifact does not carry, the artifact itself when nothing was written, or the line a section must open with.
+function missingParts(text, { file, sections, firstLineUnder }) {
   const absent = sections.filter((heading) => !hasHeading(text, heading));
   if (absent.length > 0) return absent;
-  return text.trim() === "" ? [`${file} (not written)`] : [];
+  if (text.trim() === "") return [`${file} (not written)`];
+  return firstLineUnder && !firstLineHolds(text, firstLineUnder) ? [firstLineUnder.label] : [];
 }
 
 // The lines a read-only git command answered, or null when git refused to answer at all.

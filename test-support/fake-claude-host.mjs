@@ -135,6 +135,7 @@ function main() {
   if (exitCode) fail(`refusing to run (NIGHTSHIFT_FAKE_CLAUDE_EXIT=${exitCode})`, exitCode);
   const [command, ...rest] = args;
   if (command === "--version" || command === "-v") return process.stdout.write(`${VERSION}\n`);
+  if (command === "--help") return process.stdout.write("Options:\n  --agent <agent>  Agent for the current session\n");
   if (command === "mcp" && rest[0] === "add") return mcpAdd(rest.slice(1));
   if (command === "mcp" && rest[0] === "remove") return mcpRemove(rest.slice(1));
   if (command === "plugin") return runPlugin(rest);

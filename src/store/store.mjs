@@ -18,7 +18,7 @@
  * `reclassifyJob` - close the job's roadmap item through `roadmap.closeForJob` when, and only when,
  * they report the row really reached `done`: a refused or no-op write closes nothing.
  * @typedef {object} JobsDomain
- * @property {(spec: object) => Promise<object>} addJob
+ * @property {(spec: object) => Promise<object>} addJob a `slug` binds the job to a run, refused in the same transaction while a job not yet closed is bound to it
  * @property {(spec: object) => Promise<object|null>} claimNextJob
  * @property {(id: number, spec: object) => Promise<object|null>} claimJobById
  * @property {(id: number, spec: object) => Promise<boolean>} releaseJob

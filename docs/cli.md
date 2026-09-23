@@ -5,7 +5,7 @@ their secrets), and it drives the memory runtime.
 
 - `nightshift --help` lists every command: `setup`, `doctor`, `init`, `org`,
   `project`, `update`, `connection`, `mcp`, `hook`, `reflect`, `embed`,
-  `memory`, `queue`, `verify`, `sandbox`, `libs`, `run` and `version`.
+  `memory`, `queue`, `open`, `verify`, `sandbox`, `libs`, `run` and `version`.
 - `nightshift --version` (same as `nightshift version`) prints the installed version
   and exits `0`.
 - Exit codes: `0` ok, `1` user error (a single line on stderr), `2` unexpected
@@ -214,13 +214,13 @@ nightshift queue ship 42 --force --json               # ship a failed or gated j
 ```
 
 `queue session <id>` opens the `claude` session of a job's LAST attempt - `last_session_id`
-when the job carries one, else its first `session_id` - by resuming it with `claude --resume
-<session>` in the cwd the run itself used: the run's worktree when it is still on disk, or the
+when the job carries one, else its first `session_id` - by resuming it with `nightshift open
+--resume <session>` (the operator launch, see [Open](#open)) in the cwd the run itself used: the run's worktree when it is still on disk, or the
 project's checkout with a warning line (`(worktree released, using the checkout)`) once the
 worktree was already released. A `pending` or a `running` job is refused by name - a live
 runner owns a running job's session, a pending one has none yet - and so is a job that never
-reached the agent at all. `--print` stops there and prints the equivalent `cd <cwd> && claude
---resume <session>` line instead of running it, and `--json` prints `{ jobId, attempt, session,
+reached the agent at all. `--print` stops there and prints the equivalent `cd '<cwd>' && nightshift
+open --resume <session>` line instead of running it, and `--json` prints `{ jobId, attempt, session,
 cwd, worktreeReleased, command }` as the only thing on stdout; without either flag the exit
 code is the resumed session's own. The MCP tool `queue_session` resolves the same session but
 only ever reads it - it answers `job_id`, `attempt`, `session`, `cwd` and `worktree_released`,
@@ -510,6 +510,24 @@ stderr are inherited, and the exit code is the child's own — 128 plus the
 signal number when the child was killed by one, or `127` with a message on
 stderr when the command itself could not be spawned (for example, an unknown
 binary).
+
+## Open
+
+```sh
+nightshift open                          # the operator session of the project registered for this checkout
+nightshift open my-app                   # the same for a registered project by name, from any directory
+nightshift open --resume <session>       # resume an operator (or job) session
+```
+
+`nightshift open [project] [--resume <session>]` starts an interactive `claude` with the
+`nightshift:nightshift-operator` agent as the main thread (`--append-system-prompt` with the
+agent's body when `claude --help` does not list `--agent`; `nightshift doctor` reports which),
+the job settings, `--setting-sources project,local`, the plugin and the nightshift MCP server,
+and `NIGHTSHIFT_MODE=operator`, which puts the guard hook in operator mode: reads only under
+the runs, plugin and spill roots, and a closed read-only Bash list. `git worktree prune` runs
+first. The cwd is the registered checkout, or with `--resume` the current directory when it
+lies inside that checkout. An unregistered directory is refused with one line naming
+`nightshift setup`. It never holds the config lock.
 
 ## Libs
 

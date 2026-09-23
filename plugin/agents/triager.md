@@ -122,8 +122,8 @@ symptom.**
      control fails the same way, the cause is global (service/worker), not the input.
    - **Database/query perf:** a suspicion of slowness or a proposal to optimize a
      query is only confirmed with a real `EXPLAIN ANALYZE` + row count +
-     existing indexes. An estimate based on counting JOINs/subqueries is evidence level 0
-     — it sustains neither a diagnosis nor a recommendation.
+     existing indexes. An estimate based on counting JOINs/subqueries is below evidence
+     level 1 (a guess, not a reading) — it sustains neither a diagnosis nor a recommendation.
    - **A zeroed/stale field in the UI:** classify it as PERSISTENT vs TRANSIENT
      before blaming the frontend. If there is a refetch that overwrites the cache, a stale read
      does not generate a persistent zero → the origin is in the data/endpoint. Inspect the
@@ -258,15 +258,23 @@ label anywhere.
 
 ## Verdict: PROCEED | NOT-REPRODUCIBLE | NEEDS-CLARIFICATION
 
+Evidence level: <1|2|3|4>
+
+The `Evidence level:` line is the FIRST line under `## Verdict`, on EVERY verdict, with one
+digit: 1 = read the code, 2 = static simulation, 3 = reproduced against the real API/service,
+4 = reproduced in the running app (emulator/device). It is the level of the evidence behind the
+verdict (the confirmed cause on PROCEED; the strongest check that ran otherwise). A bug that
+depends on runtime/external data requires ≥3 for PROCEED. `nightshift run check 01` fails when
+the line is absent or not first.
+
 ## Diagnosis  (bug only)
 - Exact symptom (target): [what the user observes, in mechanical terms]
 - Hypotheses raised: [list]
-- How each one was validated: [real evidence — payload/execution, not assumption]
+- How each one was validated: [real evidence — payload/execution, not assumption — and its evidence level, 1-4]
 - Ticket prescription: [yes — the request already says what the fix is: "<literal quote>" | no]
 - Confirmed root cause: [winning hypothesis + direct evidence that proves it]
 - Symptom proof: [line-by-line path that produces the target symptom]
 - Depth test: [is the cause a root (no family) or a leaf of a family? if a leaf, which change would dissolve the family without enumerating it]
-- Evidence level: [0-4, per validated hypothesis — see the Evidence hierarchy of the global rules. A bug that depends on runtime/external data requires ≥3 for PROCEED]
 
 When `Ticket prescription: yes`, the prescribed cause **cannot be promoted to
 `Confirmed root cause`** without evidence independent of the ticket, confronted with the

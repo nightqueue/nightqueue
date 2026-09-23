@@ -19,6 +19,7 @@ import { DESKTOP_LABEL, desktopState } from "../host/desktop.mjs";
 import { MCP_SERVER_NAME, readRegisteredServer, serverIsCurrent } from "../host/mcp.mjs";
 import { RISKY_FS_TYPES, isRiskyFsType, mountOfPath } from "../host/mounts.mjs";
 import { npmBin, npmView } from "../host/npm.mjs";
+import { OPERATOR_AGENT, OPERATOR_MODE_AGENT, operatorAgentPath, probeOperatorLaunch } from "../host/operator.mjs";
 import { marketplaceIsCurrent, pluginRef, readInstalledPlugin, readKnownMarketplace } from "../host/plugin.mjs";
 import { legacyShimState, packageVersion, registrySpec, runtimeVersion, shimState } from "../host/runtime.mjs";
 import { hookStatus, readHostSettings } from "../host/settings.mjs";
@@ -76,6 +77,22 @@ function checkClaude(ctx) {
   return result.ok
     ? check("claude", "ok", `${bin} ${result.stdout.trim().split("\n")[0]}`.trim())
     : check("claude", "fail", `${bin} did not answer`, "install the claude CLI or point NIGHTSHIFT_CLAUDE_BIN at it");
+}
+
+// Checks how `nightshift open` will load the operator: as the main-thread agent, or through the documented fallback.
+function checkOperator(ctx) {
+  if (!existsSync(operatorAgentPath())) return check("operator", "fail", "plugin/agents/operator.md missing", "reinstall with `nightshift update`");
+  const probe = probeOperatorLaunch({ bin: claudeBin(ctx.env), ctx });
+  if (!probe.answered) return check("operator", "warn", "claude did not answer; `nightshift open` cannot probe `--agent`", "install the claude CLI or point NIGHTSHIFT_CLAUDE_BIN at it");
+  if (probe.mode === OPERATOR_MODE_AGENT) {
+    return check("operator", "ok", `\`nightshift open\` runs the operator as the main thread (\`--agent ${OPERATOR_AGENT}\`)`);
+  }
+  return check(
+    "operator",
+    "warn",
+    "claude does not list `--agent`: `nightshift open` appends the agent body with `--append-system-prompt`; the agent's tool restriction does not apply",
+    "update Claude Code",
+  );
 }
 
 // Checks the GitHub CLI, which the pipeline uses but the memory does not require.
@@ -771,6 +788,7 @@ async function collect(ctx, values) {
   return [
     checkNode(),
     checkClaude(ctx),
+    checkOperator(ctx),
     checkGh(ctx),
     checkConfig(ctx),
     checkSecrets(ctx),

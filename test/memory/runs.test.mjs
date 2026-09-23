@@ -112,6 +112,14 @@ test("every enum names the values it accepts when it refuses one", (t) => {
   assert.deepEqual(telemetry(env), { runs: [], phases: [] });
 });
 
+test("the operator's two outcomes are stored like any other", (t) => {
+  const env = makeHome(t, "runs-operator-outcomes");
+  makeProject(t, env, "alpha");
+  logPipelineRun(run({ slug: "hunt-a", outcome: "investigated" }), env);
+  logPipelineRun(run({ slug: "hunt-b", outcome: "queued" }), env);
+  assert.deepEqual(telemetry(env).runs.map((row) => row.outcome), ["investigated", "queued"]);
+});
+
 test("a run without gate stop and without phases is valid", (t) => {
   const env = makeHome(t, "runs-minimal");
   makeProject(t, env, "alpha");

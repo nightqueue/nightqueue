@@ -193,6 +193,38 @@ test("inside a job `pipeline_log` records the run of its own row and the fields 
   );
 });
 
+test("outside a job `pipeline_log` records the operator's outcomes, and inside a job it refuses them", async (t) => {
+  const { env, job } = makeRunningJob(t, "mcp-pipeline-log-operator");
+  const outside = await connect(t, env);
+  for (const outcome of ["investigated", "queued"]) {
+    const logged = payloadOf(
+      await outside.callTool({ name: "pipeline_log", arguments: { project: "alpha", slug: `hunt-${outcome}`, tier: "complex", outcome } }),
+    );
+    const row = openDb(env).prepare("SELECT slug, outcome FROM pipeline_runs WHERE id = ?").get(logged.runId);
+    assert.deepEqual({ slug: row.slug, outcome: row.outcome }, { slug: `hunt-${outcome}`, outcome });
+  }
+
+  const inside = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const refused = await inside.callTool({ name: "pipeline_log", arguments: { tier: "complex", outcome: "investigated" } });
+  assert.equal(refused.isError, true);
+  assert.match(textOf(refused), /outcome `investigated` is the operator's/);
+});
+
+test("outside a job `run_set` records the operator fields, the evidence level as a number, and the schema refuses a level out of range", async (t) => {
+  const env = makeHome(t, "mcp-run-set-operator");
+  makeProject(t, env, "alpha");
+  const client = await connect(t, env);
+  const run = { project: "alpha", slug: "hunt-the-notice" };
+
+  payloadOf(await client.callTool({ name: "run_set", arguments: { ...run, origin: "operator", evidence_level: 3, plan_status: "draft" } }));
+  const state = readState(env, "alpha", run.slug);
+  assert.deepEqual({ origin: state.origin, evidenceLevel: state.evidenceLevel, planStatus: state.planStatus }, { origin: "operator", evidenceLevel: 3, planStatus: "draft" });
+
+  const outOfRange = await client.callTool({ name: "run_set", arguments: { ...run, evidence_level: 5 } });
+  assert.equal(outOfRange.isError, true);
+  assert.equal(readState(env, "alpha", run.slug).evidenceLevel, 3);
+});
+
 test("a phase, a status or a call with nothing to record is refused with the accepted contract", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-run-tools-enums");
   const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });

@@ -12,7 +12,7 @@ import { escapePromptMarkers } from "../memory/prompt-safety.mjs";
 import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "./home-guard.mjs";
 import { holdJobAwake } from "./keep-awake.mjs";
 import { PLUGIN_DIR_ENV } from "./orchestrator-scope.mjs";
-import { isSafeSegment } from "./resume.mjs";
+import { isSafeSegment, rerunLines } from "./resume.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 
 // Silence of the stream that means a dead process: no event at all for this long ends the attempt.
@@ -135,9 +135,10 @@ function resumeBlock(handoff) {
     `RUN_DIR: ${handoff.runDir}`,
     `Branch: ${handoff.branch ?? "none"}`,
     `Worktree: ${handoff.worktree ?? "none"}`,
-    `Last completed phase: ${handoff.lastPhase}`,
+    `Last completed phase: ${handoff.lastPhase ?? "none"}`,
     `Resume from phase: ${handoff.fromPhase}`,
     `From stage: ${handoff.fromStage ?? "none"}`,
+    ...rerunLines(handoff.reruns),
     "Trust this block: skip every phase already listed in the state and read its artifact.",
     "Run `git status --short` in the worktree first.",
   ].join("\n");

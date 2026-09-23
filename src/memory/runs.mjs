@@ -10,7 +10,8 @@ import {
 
 export const PIPELINE_TIERS = ["trivial", "simple", "complex"];
 export const PIPELINE_TASK_TYPES = ["bug/error", "feature/refactor"];
-export const PIPELINE_OUTCOMES = ["pr_opened", "local_commit", "no_commit"];
+export const OPERATOR_PIPELINE_OUTCOMES = ["investigated", "queued"];
+export const PIPELINE_OUTCOMES = ["pr_opened", "local_commit", "no_commit", ...OPERATOR_PIPELINE_OUTCOMES];
 export const PIPELINE_GATE_STOPS = ["critique", "triage", "architect", "qa", "verification", "runtime", "user"];
 export const PIPELINE_PHASE_STATUSES = ["ok", "failed", "skipped"];
 

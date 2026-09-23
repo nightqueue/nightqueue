@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
-import { jobLogPath, logsDir } from "../config/paths.mjs";
+import { jobLogPath, logsDir, runDir } from "../config/paths.mjs";
 import {
   finishVerificationReport,
   isoToSqlite,
@@ -10,6 +10,7 @@ import {
   withFullSync,
   withWriteRetry,
 } from "./db.mjs";
+import { isSafeSegment } from "../queue/resume.mjs";
 import { PIPELINE_TIERS } from "./runs.mjs";
 
 export const JOB_STATUSES = ["pending", "running", "done", "gate", "failed", "cancelled", "closed"];
@@ -201,8 +202,33 @@ export function parseShipColumn(text) {
   }
 }
 
-// Enqueues a job for a project, validating every range before the write.
-export function addJob({ project, prompt, priority, maxAttempts, timeoutS, tier } = {}, env = process.env) {
+// Requires the run slug a job starts bound to, when one was informed, as one safe path segment.
+function optionalRunSlug(value) {
+  if (value === undefined || value === null) return null;
+  if (isSafeSegment(value)) return value;
+  throw new UserError(`invalid \`slug\`: \`${String(value)}\`; expected one safe path segment`);
+}
+
+const INSERT_JOB = "INSERT INTO jobs (project, prompt, priority, max_attempts, timeout_s, tier, slug) VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+// Inserts one job row from its validated column values.
+function insertJob(db, values) {
+  const statement = db.prepare(INSERT_JOB);
+  return withWriteRetry(() => statement.run(...values));
+}
+
+// Inserts a job bound to a run in the same transaction that proves no open job is bound to it already.
+function insertRunJob(db, values, env) {
+  const [project, , , , , , slug] = values;
+  return inTransaction(db, () => {
+    const bound = openJobForRun({ project, slug }, env, db);
+    if (bound) throw new UserError(`job #${bound.id} already runs from ${runDir(project, slug, env)}`);
+    return db.prepare(INSERT_JOB).run(...values);
+  });
+}
+
+// Enqueues a job for a project, validating every range before the write; a run slug is refused while an open job is bound to it.
+export function addJob({ project, prompt, priority, maxAttempts, timeoutS, tier, slug } = {}, env = process.env) {
   const values = [
     requireText("project", project),
     requireText("prompt", prompt),
@@ -210,11 +236,9 @@ export function addJob({ project, prompt, priority, maxAttempts, timeoutS, tier 
     optionalRangedInt("max_attempts", maxAttempts, MAX_ATTEMPTS_RANGE),
     optionalRangedInt("timeout_s", timeoutS, TIMEOUT_RANGE),
     optionalTier(tier),
+    optionalRunSlug(slug),
   ];
-  const statement = openDb(env).prepare(
-    "INSERT INTO jobs (project, prompt, priority, max_attempts, timeout_s, tier) VALUES (?, ?, ?, ?, ?, ?)",
-  );
-  const inserted = withWriteRetry(() => statement.run(...values));
+  const inserted = values[6] === null ? insertJob(openDb(env), values) : insertRunJob(openDb(env), values, env);
   return {
     id: Number(inserted.lastInsertRowid),
     project: values[0],
@@ -223,6 +247,14 @@ export function addJob({ project, prompt, priority, maxAttempts, timeoutS, tier 
     timeoutS: values[4],
     tier: values[5],
   };
+}
+
+// The job not yet closed that is bound to the run of a project and slug, or null when none is.
+function openJobForRun({ project, slug } = {}, env = process.env, db = openDb(env)) {
+  const row = db
+    .prepare("SELECT id, status FROM jobs WHERE project = ? AND slug = ? AND status <> 'closed' ORDER BY id DESC LIMIT 1")
+    .get(project, slug);
+  return row ? { id: Number(row.id), status: row.status } : null;
 }
 
 const CLAIM_ASSIGNMENT = `SET status = 'running',

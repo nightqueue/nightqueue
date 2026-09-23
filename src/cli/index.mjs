@@ -13,6 +13,7 @@ import * as init from "./init.mjs";
 import * as libs from "./libs.mjs";
 import * as mcp from "./mcp.mjs";
 import * as memory from "./memory.mjs";
+import * as open from "./open.mjs";
 import * as org from "./org.mjs";
 import * as project from "./project.mjs";
 import * as queue from "./queue.mjs";
@@ -29,6 +30,7 @@ const COMMANDS = new Map([
   ["setup", setup.run],
   ["doctor", doctor.run],
   ["init", init.run],
+  ["open", open.run],
   ["update", update.run],
   ["org", org.run],
   ["project", project.run],
@@ -52,7 +54,7 @@ const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
 const HELP_OPTIONS = new Set(["--help", "-h"]);
 
-const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "roadmap", "verify", "sandbox", "libs"]);
+const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "roadmap", "verify", "sandbox", "libs", "open"]);
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
@@ -76,6 +78,7 @@ commands:
   setup [--from <dir>] [--remove]           install the runtime in the home and register the MCP server, hooks and plugin in the host
   doctor [--json] [--check-updates]         check the host and the home, one line per check; exits 1 on any failure
   init [path] [--gh|--no-gh]                install the runtime and register the git repository at [path] (default: .) as a project
+  open [project] [--resume <session>]       open the operator in a terminal: it investigates, plans and queues jobs, and never edits the code
   update [<version>] [--from] [--force]     reinstall the runtime at the newest version (or at <version>) and re-point the host at it
   org add <name> [--display-name "..."]     create an org
   org list [--json]                         list orgs, their connection slots and project counts
@@ -116,7 +119,7 @@ commands:
   queue repair <id> [--json]                re-classify a gated or failed job from its own log; corrects a lost PR link
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written
-  queue session <id> [--print] [--json]     resume the claude session of a job's last attempt; --print shows it without exec'ing
+  queue session <id> [--print] [--json]     resume the claude session of a job's last attempt as the operator (nightshift open --resume); --print shows it without exec'ing
   verify [--scope touched|full|+poc]        run the project's own checks in a fixed order, one line per check; exits 1 on any failure
   verify [--files <list>]                   narrow the checks that accept a file list to those paths (comma-separated, repeatable)
   sandbox <command> [args...]               run one command against a throwaway NIGHTSHIFT_HOME and CLAUDE_CONFIG_DIR

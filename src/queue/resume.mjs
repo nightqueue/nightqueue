@@ -84,27 +84,85 @@ function hasRequiredFields(parsed) {
   return typeof parsed.schemaVersion === "number" && typeof parsed.slug === "string" && Array.isArray(parsed.phases);
 }
 
-// Decides whether a run resumes from an already read state.json; it never reads disk and never throws.
-export function decideResume({ state, maxResumes = DEFAULT_MAX_RESUMES } = {}) {
-  if (state === null || state === undefined || state === "") return stop("no-state");
+// Tells whether a state was recorded by an operator session rather than by a job.
+function isOperatorRun(parsed) {
+  return parsed?.origin === "operator";
+}
+
+// Tells whether the state recorded a completed entry of the phase.
+function hasPhase(parsed, phase) {
+  return Array.isArray(parsed?.phases) && parsed.phases.some((entry) => entry?.phase === phase);
+}
+
+// The earliest recorded phase of an operator run the runtime refuses to skip, with its reason, as a one-item list; empty for any other run.
+export function operatorReruns(state) {
+  if (!isOperatorRun(state)) return [];
+  const level = state.evidenceLevel;
+  if (hasPhase(state, "triage") && state.type !== "feature/refactor" && !(Number.isInteger(level) && level >= 3)) {
+    return [{ phase: "triage", reason: `evidence level ${Number.isInteger(level) ? level : "not recorded"} is below 3 on a bug (operator run)` }];
+  }
+  if (hasPhase(state, "architecture") && state.planStatus !== "approved") {
+    return [{ phase: "architecture", reason: `plan status ${state.planStatus === "draft" ? "draft" : "not recorded"}, not approved (operator run)` }];
+  }
+  return [];
+}
+
+// One prompt line per recorded phase of an operator run the runtime refuses to skip.
+export function rerunLines(reruns) {
+  return (Array.isArray(reruns) ? reruns : []).map((rerun) => `Re-run: ${rerun.phase} — ${rerun.reason}`);
+}
+
+// Position of the earliest phase that must re-run, or the end of the order when none does.
+function firstRerunIndex(reruns) {
+  return Math.min(RESUME_PHASE_ORDER.length, ...reruns.map((rerun) => RESUME_PHASE_ORDER.indexOf(rerun.phase)));
+}
+
+// The phases the resume may count: every entry before the first re-run phase, unknown names kept so they still discard the state.
+function phasesBeforeRerun(phases, reruns) {
+  if (reruns.length === 0) return phases;
+  const firstTrap = firstRerunIndex(reruns);
+  return phases.filter((entry) => RESUME_PHASE_ORDER.indexOf(entry?.phase) < firstTrap);
+}
+
+// Parses the state handed to the decision, or returns the refusal of a state that cannot be read.
+function parseState(state) {
+  if (state === null || state === undefined || state === "") return { refusal: stop("no-state") };
   let parsed = state;
   if (typeof state === "string") {
     try {
       parsed = JSON.parse(state);
     } catch {
-      return stop("corrupt-state");
+      return { refusal: stop("corrupt-state") };
     }
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return stop("invalid-state");
-  if (!hasRequiredFields(parsed)) return stop("invalid-state");
-  if (parsed.schemaVersion !== RESUME_SCHEMA_VERSION) return stop("unknown-schema");
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { refusal: stop("invalid-state") };
+  if (!hasRequiredFields(parsed)) return { refusal: stop("invalid-state") };
+  if (parsed.schemaVersion !== RESUME_SCHEMA_VERSION) return { refusal: stop("unknown-schema") };
+  return { parsed };
+}
+
+// The decision with the re-runs of an operator run attached, and the key absent when there is none.
+function withReruns(decision, reruns) {
+  return reruns.length === 0 ? decision : { ...decision, reruns };
+}
+
+// Decides whether a run resumes from an already read state.json; it never reads disk and never throws.
+export function decideResume({ state, maxResumes = DEFAULT_MAX_RESUMES } = {}) {
+  const { parsed, refusal } = parseState(state);
+  if (refusal) return refusal;
   if (closedByTermination(parsed)) return stop("terminated-by-verdict");
 
+  const cap = isOperatorRun(parsed) ? maxResumes + 1 : maxResumes;
   const resumeCount = parsed.resumeCount;
-  if (!Number.isInteger(resumeCount) || resumeCount < 0 || resumeCount >= maxResumes) return stop("resume-cap");
+  if (!Number.isInteger(resumeCount) || resumeCount < 0 || resumeCount >= cap) return stop("resume-cap");
 
-  const last = lastCompletedPhase(parsed.phases);
+  const reruns = operatorReruns(parsed);
+  const last = lastCompletedPhase(phasesBeforeRerun(parsed.phases, reruns));
   if (!last) return stop("unknown-phase");
+  if (last.index < 0 && reruns.length > 0) {
+    const fromPhase = RESUME_PHASE_ORDER[firstRerunIndex(reruns)];
+    return { resume: true, fromPhase, fromStage: null, reuseWorktree: false, reason: "operator-rerun", resumeCount: resumeCount + 1, lastPhase: null, reruns };
+  }
   if (last.index < 0) return stop("no-completed-phase");
 
   const lastPhase = RESUME_PHASE_ORDER[last.index];
@@ -112,15 +170,18 @@ export function decideResume({ state, maxResumes = DEFAULT_MAX_RESUMES } = {}) {
   if (last.index >= RESUME_PHASE_ORDER.length - 1) return stop("run-already-done", { resumeCount, lastPhase });
 
   const fromPhase = RESUME_PHASE_ORDER[last.index + 1];
-  return {
-    resume: true,
-    fromPhase,
-    fromStage: fromPhase === "qa" && qaStageArtifact(parsed) ? "qa-stage-b" : null,
-    reuseWorktree: Boolean(parsed.branch || parsed.worktree),
-    reason: "resume",
-    resumeCount: resumeCount + 1,
-    lastPhase,
-  };
+  return withReruns(
+    {
+      resume: true,
+      fromPhase,
+      fromStage: fromPhase === "qa" && qaStageArtifact(parsed) ? "qa-stage-b" : null,
+      reuseWorktree: Boolean(parsed.branch || parsed.worktree),
+      reason: "resume",
+      resumeCount: resumeCount + 1,
+      lastPhase,
+    },
+    reruns,
+  );
 }
 
 // A fixed field of the state as the agent may read it back: a non-empty trimmed string, or null.
@@ -142,6 +203,7 @@ export function resumeHandoff({ job, resume, state, env = process.env } = {}) {
     lastPhase: fixedField(resume.lastPhase),
     fromPhase: fixedField(resume.fromPhase),
     fromStage: fixedField(resume.fromStage),
+    ...(Array.isArray(resume.reruns) && resume.reruns.length > 0 ? { reruns: resume.reruns } : {}),
   };
 }
 
