@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { configPath, dbPath } from "../src/config/paths.mjs";
 import { getDecisionByNumber, saveDecision } from "../src/memory/decisions.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
-import { markRoadmapItemQueued, saveRoadmapItem } from "../src/memory/roadmap.mjs";
+import { linkRoadmapItemJob, saveRoadmapItem } from "../src/memory/roadmap.mjs";
 import { makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
@@ -87,29 +87,34 @@ test("decision show prints the decision in full and refuses an unknown number", 
   assert.equal(runCli(env, ["decision", "show", "zero"], { cwd }).status, 1);
 });
 
-test("roadmap prints the three horizons in order, with the position, the linked decision and the job", (t) => {
+test("roadmap groups the items by status in workflow order, p1 first, with the linked decision and the job", (t) => {
   const { env, cwd } = makeCliHome(t, "roadmap-list");
   const decision = seedDecisions(env);
-  const queued = saveRoadmapItem({ project: "alpha", horizon: "now", title: "Deliver the queue", decision_id: decision.id }, env);
-  saveRoadmapItem({ project: "alpha", horizon: "later", title: "Write the dashboard" }, env);
+  const queued = saveRoadmapItem({ type: "improvement", project: "alpha", title: "Deliver the queue", decision_id: decision.id }, env);
+  const dashboard = saveRoadmapItem({ type: "improvement", project: "alpha", title: "Write the dashboard" }, env);
+  const urgent = saveRoadmapItem({ type: "improvement", project: "alpha", title: "Fix the crash", priority: 1 }, env);
   const job = addJob({ project: "alpha", prompt: "deliver the queue" }, env);
-  assert.equal(markRoadmapItemQueued(queued.id, job.id, env), true);
+  assert.equal(linkRoadmapItemJob(queued.id, job.id, env), true);
   const result = runCli(env, ["roadmap"], { cwd });
   assert.equal(result.status, 0);
-  assert.ok(result.stdout.indexOf("now:") < result.stdout.indexOf("next:"), "the horizons are out of order");
-  assert.ok(result.stdout.indexOf("next:") < result.stdout.indexOf("later:"), "the horizons are out of order");
-  assert.ok(result.stdout.includes("  1. Deliver the queue  [queued]"));
-  assert.ok(result.stdout.includes(`     decision #${decision.number}`));
-  assert.ok(result.stdout.includes(`     job #${job.id} (pending)`));
-  assert.ok(result.stdout.includes("  1. Write the dashboard  [open]"));
-  assert.match(result.stdout, /^next:\n {2}\(empty\)$/m);
+  assert.ok(result.stdout.indexOf("todo:") < result.stdout.indexOf("in_progress:"), "the statuses are out of order");
+  assert.ok(result.stdout.includes(`  p5 #${queued.id} Deliver the queue\n     decision #${decision.number}\n     job #${job.id} (pending)`));
+  assert.ok(result.stdout.indexOf(`p1 #${urgent.id} Fix the crash`) < result.stdout.indexOf(`p5 #${dashboard.id} Write the dashboard`), "p1 is not first");
+  assert.equal(result.stdout.includes("backlog:"), false, "a status with no item printed a heading");
+
+  const filtered = runCli(env, ["roadmap", "--status", "todo", "--priority", "1"], { cwd });
+  assert.equal(filtered.status, 0, filtered.stderr);
+  assert.equal(filtered.stdout, `todo:\n  p1 #${urgent.id} Fix the crash\n`);
+  const wrong = runCli(env, ["roadmap", "--priority", "high"], { cwd });
+  assert.equal(wrong.status, 1);
+  assert.match(wrong.stderr, /invalid `--priority` `high`/);
 });
 
-test("roadmap of a project with nothing planned prints every horizon as empty", (t) => {
+test("roadmap of a project with nothing planned prints one empty line", (t) => {
   const { env, cwd } = makeCliHome(t, "roadmap-empty");
   const result = runCli(env, ["roadmap"], { cwd });
   assert.equal(result.status, 0);
-  assert.equal(result.stdout, "now:\n  (empty)\nnext:\n  (empty)\nlater:\n  (empty)\n");
+  assert.equal(result.stdout, "(empty)\n");
 });
 
 test("--project names the project, the current directory resolves it, and neither command ever registers one", (t) => {
@@ -144,7 +149,7 @@ test("the three commands never create the database, and a home that has none rea
 
   const roadmap = runCli(env, ["roadmap"], { cwd });
   assert.equal(roadmap.status, 0, roadmap.stderr);
-  assert.equal(roadmap.stdout, "now:\n  (empty)\nnext:\n  (empty)\nlater:\n  (empty)\n");
+  assert.equal(roadmap.stdout, "(empty)\n");
 
   const show = runCli(env, ["decision", "show", "1"], { cwd });
   assert.equal(show.status, 1);

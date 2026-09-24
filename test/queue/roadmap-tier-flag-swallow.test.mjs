@@ -11,7 +11,7 @@ const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
 function makeRoadmapHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  const item = saveRoadmapItem({ project: "alpha", horizon: "now", title: "rewrite runner heartbeat", detail: "survive a slow disk" }, env);
+  const item = saveRoadmapItem({ type: "improvement", project: "alpha", title: "rewrite runner heartbeat", detail: "survive a slow disk" }, env);
   return { env, item };
 }
 
@@ -33,6 +33,6 @@ test("`queue add --roadmap <id> --tier --run` refuses cleanly and leaves the roa
   assert.match(result.stderr, /Did you forget to specify the option argument for '--tier'\?/);
 
   const row = getRoadmapItem(item.id, env);
-  assert.equal(row.status, "open", "the roadmap item changed status even though the tier was refused");
+  assert.equal(row.status, "todo", "the roadmap item changed status even though the tier was refused");
   assert.equal(row.job_id, null, "the roadmap item got a job_id even though the tier was refused");
 });

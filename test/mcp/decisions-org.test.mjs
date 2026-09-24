@@ -63,7 +63,7 @@ test("decision_save and roadmap_save take project XOR org, and refuse both, neit
   assert.equal(neither.isError, true);
   assert.match(textOf(neither), /pass `project` .* or `org`/);
 
-  const unknown = await client.callTool({ name: "roadmap_save", arguments: { org: "ghost", horizon: "now", title: "x" } });
+  const unknown = await client.callTool({ name: "roadmap_save", arguments: { type: "improvement", org: "ghost", title: "x" } });
   assert.equal(unknown.isError, true);
   assert.match(textOf(unknown), /unknown org `ghost`/);
 });
@@ -84,9 +84,9 @@ test("decision_list, decision_recall and roadmap_get answer the union for a proj
       },
     }),
   );
-  payloadOf(await client.callTool({ name: "roadmap_save", arguments: { org: "acme", horizon: "now", title: "raise node" } }));
+  payloadOf(await client.callTool({ name: "roadmap_save", arguments: { type: "improvement", org: "acme", title: "raise node" } }));
   payloadOf(
-    await client.callTool({ name: "roadmap_save", arguments: { project: "acme-mobile-app", horizon: "now", title: "deliver the cache" } }),
+    await client.callTool({ name: "roadmap_save", arguments: { type: "improvement", project: "acme-mobile-app", title: "deliver the cache" } }),
   );
 
   const listed = payloadOf(await client.callTool({ name: "decision_list", arguments: { project: "acme-mobile-app" } }));
@@ -107,7 +107,7 @@ test("decision_list, decision_recall and roadmap_get answer the union for a proj
 
   const roadmap = payloadOf(await client.callTool({ name: "roadmap_get", arguments: { project: "acme-mobile-app" } }));
   assert.deepEqual(
-    roadmap.horizons[0].items.map((item) => [item.scope, item.owner, item.title]),
+    roadmap.items.map((item) => [item.scope, item.owner, item.title]),
     [
       ["org", "acme", "raise node"],
       ["project", "acme-mobile-app", "deliver the cache"],
@@ -124,7 +124,7 @@ test("decision_list, decision_recall and roadmap_get answer the union for a proj
 test("inside a job, an org row is refused by name while the job's own project is still writable", async (t) => {
   const env = makeOrgHome(t, "mcp-org-write-guard");
   const orgDecision = saveDecision({ ...ORG_DECISION, status: "accepted" }, env);
-  const orgItem = saveRoadmapItem({ org: "acme", horizon: "now", title: "raise node" }, env);
+  const orgItem = saveRoadmapItem({ type: "improvement", org: "acme", title: "raise node" }, env);
   const own = saveDecision(
     { project: "acme-mobile-app", title: "the app caches", context: "c", decision: "d", status: "accepted" },
     env,
@@ -135,12 +135,12 @@ test("inside a job, an org row is refused by name while the job's own project is
   const decision = await client.callTool({ name: "decision_update", arguments: { id: orgDecision.id, status: "rejected" } });
   assert.equal(decision.isError, true);
   assert.match(textOf(decision), /it belongs to org `acme`, not `acme-mobile-app`/);
-  const item = await client.callTool({ name: "roadmap_update", arguments: { id: orgItem.id, status: "dropped" } });
+  const item = await client.callTool({ name: "roadmap_update", arguments: { id: orgItem.id, status: "cancelled" } });
   assert.equal(item.isError, true);
   assert.match(textOf(item), /it belongs to org `acme`/);
 
   assert.equal(getDecision(orgDecision.id, env).status, "accepted", "the refused update reached the org decision");
-  assert.equal(getRoadmapItem(orgItem.id, env).status, "open", "the refused update reached the org item");
+  assert.equal(getRoadmapItem(orgItem.id, env).status, "todo", "the refused update reached the org item");
   const mine = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: own.id, status: "rejected" } }));
   assert.equal(mine.decision.status, "rejected", "a job must still update its own project");
 

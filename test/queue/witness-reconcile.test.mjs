@@ -9,7 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { jobLogPath, runDir } from "../../src/config/paths.mjs";
 import { openDb, sqliteToIso } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
-import { getRoadmapItem, markRoadmapItemQueued, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { getRoadmapItem, linkRoadmapItemJob, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { clearRunTerminal, readRunState, writeRunTerminal } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
@@ -88,10 +88,10 @@ function witness(env, { slug = SLUG, status = "done", prUrl = PR_URL } = {}) {
   });
 }
 
-// Records a roadmap item as queued under a job, the link the reconciliation has to close.
+// Records a roadmap item as linked to a job, the link the reconciliation has to move.
 function linkedItem(env, id, title) {
-  const item = saveRoadmapItem({ project: "alpha", horizon: "now", title }, env);
-  assert.equal(markRoadmapItemQueued(item.id, id, env), true, "setup: the item was not linked to its job");
+  const item = saveRoadmapItem({ type: "improvement", project: "alpha", title }, env);
+  assert.equal(linkRoadmapItemJob(item.id, id, env), true, "setup: the item was not linked to its job");
   return item.id;
 }
 
@@ -167,7 +167,7 @@ test("a job the database lost is restored from its witness, with repairedFrom in
   assert.deepEqual(await reconcileFromWitness(env), { repaired: [], error: null }, "a job that already ended was repaired again");
 });
 
-test("the reconciliation closes the roadmap item of a job its witness says delivered, and leaves open the one of a failed witness", async (t) => {
+test("the reconciliation puts in review the roadmap item of a job its witness says delivered, and sends the one of a failed witness to todo", async (t) => {
   const env = makeQueue(t, "reconcile-roadmap");
   const delivered = lostFinish(env);
   const deliveredItem = linkedItem(env, delivered, "deliver the delivery");
@@ -179,8 +179,8 @@ test("the reconciliation closes the roadmap item of a job its witness says deliv
   assert.deepEqual((await reconcileFromWitness(env)).repaired.sort(), [delivered, failed].sort());
   assert.equal(getJob(delivered, env).status, "done");
   assert.equal(getJob(failed, env).status, "failed");
-  assert.equal(getRoadmapItem(deliveredItem, env).status, "done", "the reconciliation left the item of a delivered job queued forever");
-  assert.equal(getRoadmapItem(failedItem, env).status, "queued", "a failed witness closed the item of a job that delivered nothing");
+  assert.equal(getRoadmapItem(deliveredItem, env).status, "in_review", "the reconciliation left the item of a delivered job in progress forever");
+  assert.equal(getRoadmapItem(failedItem, env).status, "todo", "a failed witness left the item of a job that delivered nothing in progress");
 });
 
 test("the reconciliation never touches a job a live runner owns, a row that already ended, or a job that never ran", async (t) => {

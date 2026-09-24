@@ -103,7 +103,7 @@ test("a run that opens a pull request ends as done, with its facts, usage and pi
     { tokensIn: row.tokens_in, tokensOut: row.tokens_out, cacheRead: row.cache_read, cacheCreation: row.cache_creation, cost: row.cost_usd },
     { tokensIn: 1000, tokensOut: 200, cacheRead: 50, cacheCreation: 25, cost: 0.12 },
   );
-  assert.deepEqual(JSON.parse(row.result), { status: "done", prUrl: PR_URL, logPath: jobLogPath(id, env), exitCode: 0, timedOut: false, idleTimedOut: false, attempts: 1 });
+  assert.deepEqual(JSON.parse(row.result), { status: "done", prUrl: PR_URL, logPath: jobLogPath(id, env), exitCode: 0, timedOut: false, idleTimedOut: false, attempts: 1, files: [] });
   assert.equal(openDb(env).prepare("SELECT job_id FROM pipeline_runs WHERE id = ?").get(logged.runId).job_id, id);
   assert.match(readFileSync(jobLogPath(id, env), "utf8"), /=== attempt 1 @ /);
 });

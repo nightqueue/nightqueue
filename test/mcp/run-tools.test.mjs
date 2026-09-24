@@ -9,7 +9,7 @@ import { runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
-import { getRoadmapItem, markRoadmapItemQueued, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { getRoadmapItem, linkRoadmapItemJob, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { decideResume } from "../../src/queue/resume.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
@@ -128,17 +128,18 @@ test("outside a job the project and the slug are both required, and a registered
   assert.deepEqual(readState(env, "alpha", SLUG).phases.map((entry) => entry.phase), ["triage"]);
 });
 
-test("`run_outcome` done closes the roadmap item the job came from, and a gate leaves it open", async (t) => {
+test("`run_outcome` never moves the roadmap item the job came from: only the job's own row does", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-run-tools-roadmap");
-  const item = saveRoadmapItem({ project: "alpha", horizon: "now", title: "deliver the thing" }, env);
-  assert.equal(markRoadmapItemQueued(item.id, job.id, env), true, "setup: the item was not linked to its job");
+  const item = saveRoadmapItem({ type: "improvement", project: "alpha", title: "deliver the thing" }, env);
+  assert.equal(linkRoadmapItemJob(item.id, job.id, env), true, "setup: the item was not linked to its job");
   const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
 
   payloadOf(await client.callTool({ name: "run_outcome", arguments: { status: "gate", notice: "the operator has to choose" } }));
-  assert.equal(getRoadmapItem(item.id, env).status, "queued", "a gated run closed the item it never delivered");
+  assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
 
   payloadOf(await client.callTool({ name: "run_outcome", arguments: { status: "done" } }));
-  assert.equal(getRoadmapItem(item.id, env).status, "done");
+  assert.equal(getRoadmapItem(item.id, env).status, "in_progress", "a run's own report moved the item before the runner wrote the job");
+  assert.equal(getRoadmapItem(item.id, env).closed_at, null);
   assert.equal(readState(env, "alpha", SLUG).outcome.status, "done");
 });
 

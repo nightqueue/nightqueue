@@ -7,6 +7,7 @@ import { saveProjectIndex } from "../../src/memory/index.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
+import { saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const WORKER = "host:4242";
@@ -100,4 +101,19 @@ test("a project with nothing to say produces an empty block, not a header", asyn
   const { env } = makeRunningJob(t, "phase-context-empty");
   const answer = await phaseContextBlock({ target: "architect", query: "nothing was ever recorded here" }, env);
   assert.equal(answer.block, "");
+});
+
+test("only the triager gets the related roadmap items of its project, in the ref-title-status line", async (t) => {
+  const { env, home } = makeRunningJob(t, "phase-context-roadmap");
+  const item = saveRoadmapItem({ type: "bug", project: "alpha", title: "the runner drops its lease", priority: 2 }, home);
+  saveRoadmapItem({ type: "chore", project: "alpha", title: "unrelated cleanup" }, home);
+
+  const triager = await phaseContextBlock({ target: "triager", query: "runner lease" }, env);
+  assert.ok(
+    triager.block.includes(`## Related roadmap items\n- [alpha#${item.id}] the runner drops its lease [todo, p2, bug]`),
+    triager.block,
+  );
+  assert.equal(triager.block.includes("unrelated cleanup"), false);
+  const coder = await phaseContextBlock({ target: "coder", query: "runner lease" }, env);
+  assert.equal(coder.block.includes("## Related roadmap items"), false);
 });

@@ -25,8 +25,8 @@ function makeOrgHome(t, name) {
   saveDecision({ project: "acme-mobile-app", title: "the app owns its cache", context: "c", decision: "d", status: "accepted" }, env);
   saveDecision({ org: "acme", title: "one queue per product", context: "c", decision: "d", status: "accepted" }, env);
   saveDecision({ org: "orbit", title: "orbit decides alone", context: "c", decision: "d", status: "accepted" }, env);
-  saveRoadmapItem({ project: "acme-mobile-app", horizon: "now", title: "deliver the app cache" }, env);
-  saveRoadmapItem({ org: "acme", horizon: "now", title: "raise the node version" }, env);
+  saveRoadmapItem({ type: "improvement", project: "acme-mobile-app", title: "deliver the app cache" }, env);
+  saveRoadmapItem({ type: "improvement", org: "acme", title: "raise the node version" }, env);
   return { env, cwd };
 }
 
@@ -44,7 +44,7 @@ function makeV5Home(t, name) {
       `old decision ${number}`,
     );
   }
-  db.prepare("INSERT INTO roadmap_items (project, horizon, title, position) VALUES (?, 'now', ?, 1)").run("alpha", "legacy roadmap item");
+  db.prepare("INSERT INTO roadmap_items (project, title, position) VALUES (?, ?, 1)").run("alpha", "legacy roadmap item");
   db.exec(DOWNGRADE_TO_V5);
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, 5);
   assert.equal(
@@ -71,9 +71,9 @@ test("the read commands migrate a database written before the owner scope, with 
 
   const roadmap = runCli(env, ["roadmap", "--project", "alpha"], { cwd });
   assert.equal(roadmap.status, 0, roadmap.stderr);
-  assert.ok(roadmap.stdout.includes("  1. legacy roadmap item  [open]"), roadmap.stdout);
+  assert.ok(roadmap.stdout.includes("todo:\n  p5 #1 legacy roadmap item"), roadmap.stdout);
 
-  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v16/);
+  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v17/);
 });
 
 test("a v5 database that cannot be migrated answers with the schema, never with a raw missing column", (t) => {
@@ -84,7 +84,7 @@ test("a v5 database that cannot be migrated answers with the schema, never with 
 
   const listed = runCli(env, ["decision", "list", "--project", "alpha"], { cwd });
   assert.equal(listed.status, 1, listed.stdout);
-  assert.match(listed.stderr, /schema v5 and this build needs v16/);
+  assert.match(listed.stderr, /schema v5 and this build needs v17/);
   assert.equal(listed.stderr.includes("no such column"), false, listed.stderr);
 });
 
@@ -122,12 +122,12 @@ test("roadmap prints the org items with their owner, and --org reads that org al
   const { env, cwd } = makeOrgHome(t, "roadmap-org-list");
   const result = runCli(env, ["roadmap"], { cwd });
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.stdout.includes("  acme 1. raise the node version  [open]"), result.stdout);
-  assert.ok(result.stdout.includes("  1. deliver the app cache  [open]"), result.stdout);
+  assert.ok(result.stdout.includes("  p5 acme #2 raise the node version"), result.stdout);
+  assert.ok(result.stdout.includes("  p5 #1 deliver the app cache"), result.stdout);
 
   const org = runCli(env, ["roadmap", "--org", "acme"], { cwd });
   assert.equal(org.status, 0, org.stderr);
-  assert.ok(org.stdout.includes("  acme 1. raise the node version  [open]"));
+  assert.ok(org.stdout.includes("  p5 acme #2 raise the node version"));
   assert.equal(org.stdout.includes("deliver the app cache"), false, "a project item reached an org roadmap");
 });
 
@@ -157,7 +157,7 @@ test("the org read commands never create the database, and a home with none read
   assert.equal(listed.stdout.trim(), "no decisions for org `acme`");
   const roadmap = runCli(env, ["roadmap", "--org", "acme"], { cwd });
   assert.equal(roadmap.status, 0, roadmap.stderr);
-  assert.equal(roadmap.stdout, "now:\n  (empty)\nnext:\n  (empty)\nlater:\n  (empty)\n");
+  assert.equal(roadmap.stdout, "(empty)\n");
   assert.equal(existsSync(dbPath(env)), false, "a read-only command created the database");
 });
 

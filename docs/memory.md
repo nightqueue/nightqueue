@@ -23,8 +23,11 @@ Nine tables plus three full text mirrors:
 | `pipeline_phases` | one row per phase of a run: sequence, phase, model, status, retry and duration |
 | `jobs` | one row per queue job: project, prompt, priority, status, attempts, lease, slug, session, branch, pull request, notice, usage and cost |
 | `decisions` | one architecture decision per row: number inside its project, title, context, decision, consequences, status, the decision that superseded it, and its embedding |
-| `roadmap_items` | one intent per row: horizon (`now`, `next`, `later`), title, detail, status, position inside its horizon, the decision that motivated it and the job it was queued as |
+| `roadmap_items` | one intent per row: title, detail, type (`bug`, `feature`, `improvement`, `chore`, `incident`), status (`backlog`, `todo`, `in_progress`, `in_review`, `done`, `cancelled`), priority (1-9, 1 first), position inside its priority group, `closed_at`, the decision that motivated it, the job it was queued as and the job status it last followed |
+| `roadmap_comments` | the append-only thread of a roadmap item: kind, author (`operator` or `job:<id>`), body, `refs` JSON, the project that owns the comment (none for the item's owner) and its date; triggers refuse every update and delete |
+| `roadmap_item_projects` | one row per project an org item was queued for: its status, `closed_at`, the job it was queued as and the job status it last followed; one row per item and project |
 | `lessons_fts`, `memory_fts`, `decisions_fts` | FTS5 mirrors of the three text tables, kept in sync by triggers on insert, update and delete |
+| `roadmap_items_fts`, `roadmap_comments_fts` | FTS5 mirrors of the roadmap titles and details (every write) and of the comment bodies (inserts; comments are append-only), read by `roadmap_search` |
 
 **Hybrid recall.** A recall with a query always runs BM25 over the FTS mirror,
 with a coverage floor: a row only counts as a hit when it matches enough of the
@@ -72,7 +75,7 @@ persisted, so a failed run reprocesses the same slice instead of losing it.
 **Commands.**
 
 ```sh
-nightshift mcp                     # start the stdio MCP server with the twenty-five tools
+nightshift mcp                     # start the stdio MCP server with the twenty-seven tools
 nightshift mcp --http --port 4747 --token <t>   # serve the same tools over Streamable HTTP on 127.0.0.1
 nightshift hook session-start      # run a hook, reading the event JSON from stdin
 nightshift reflect --transcript <path>   # reflect on a transcript now, in the foreground
@@ -83,7 +86,8 @@ nightshift decision list [--project <name> | --org <name>] [--status <status>]  
 nightshift decision show <number> [--project <name> | --org <name>]              # one decision, in full
 nightshift decision export <number> [--dir <path>] [--force]                     # one decision as a markdown file
 nightshift decision import <file.md> [--status <s>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]   # save a markdown decision file
-nightshift roadmap [--project <name> | --org <name>]                             # the now/next/later roadmap
+nightshift roadmap [--project <name> | --org <name>] [--status <s>]... [--priority <n>]... [--type <t>]...  # the roadmap, grouped by status, p1 first
+nightshift roadmap show <id> [--json]   # one roadmap item in full, with its comment thread
 ```
 
 **Environment variables.**
@@ -148,26 +152,74 @@ nothing. The other two statuses are read with `decision_list`,
 `nightshift decision list` and `nightshift decision show`, and never reach a
 prompt.
 
-The **roadmap** is where "what next" lives: one line per intent, in one of the
-three horizons `now`, `next` and `later`, ordered inside its horizon by a
-contiguous position (`1..N`, renumbered on every move). An item carries a status
-among `open`, `queued`, `done` and `dropped`, may link to the decision that
-motivated it, and, once queued, to the job built from it.
+The **roadmap** is where "what next" lives: one line per intent, with a
+`priority` from 1 to 9 (default 5, 1 first, the same direction as a job's) and a
+contiguous position inside its priority group (`1..N`, renumbered on every move).
+An item carries a status among `backlog`, `todo`, `in_progress`, `in_review`,
+`done` and `cancelled` (plus `closed_at` while it is `done`), may link to the
+decision that motivated it, and, once queued, to the job built from it. By hand
+every status may be set but `in_progress`, which only a job sets, and moving back
+from `in_review` or `done` is allowed. A linked item follows its job: queued or
+retried → `in_progress`, job `done` → `in_review`, job closed (its pull request
+merged through `nightshift queue close`) → `done` with `closed_at`, job failed or
+cancelled → `todo` (a close that finds the pull request closed without merge
+cancels the job).
+
+Every item has a **type** (`bug`, `feature`, `improvement`, `chore`,
+`incident`), required on save. It sets the default tier of a job queued from it
+(`bug`, `improvement`, `incident` → `simple`; `feature` → `complex`; `chore` →
+`trivial`; an explicit tier wins) and the commit type the job is told to use
+(`fix`, `feat`, `refactor` or `perf`, `chore`). Every item also has a
+**comment thread**, append-only: each job event leaves one comment signed
+`job:<id>` in the same transaction as the status (`queued`, `gate`, `pr`,
+`failed`, `closed`), with `refs` read from the job's row - the pull
+request, the branch, the merge sha, the files the implementation listed and the
+decision the job proposed; an operator's move back from `in_review` or `done`
+leaves `reopened`, and `roadmap_comment` adds a `note`. A one-off
+`node scripts/roadmap-backfill.mjs [--dry-run]` synthesizes the `queued`, `pr`
+and `closed` comments of items linked before comments existed, in the
+home `NIGHTSHIFT_HOME` names; it is idempotent, and an item closed by hand gets
+nothing.
+
+An **org item** follows its jobs through one **project row** per project it was
+queued for: each row is linked to its own job and moves exactly like a project
+item does, and its comments carry that `project`. The org item itself carries no
+job; its status is **derived** from its rows in the same transaction as every
+row change - `in_progress` while any row is, `done` once every row is `done` or
+`cancelled`, otherwise the lowest open status among them - and a derived move
+leaves an org-level comment. Closing an org item by hand (`done` or `cancelled`)
+cancels every open row, with one `closed` comment per row. A project reads only
+its own row and its own comments of an org item, never a sibling project's; the
+org reads the whole matrix. `nightshift doctor` flags an org item whose persisted
+status disagrees with what its rows derive.
+
+**Search.** `roadmap_search` finds at most five items an owner sees: `query`
+matches the title, the detail and the comment thread (FTS5, relevance first),
+and `file` matches a path a job recorded in its comments, exactly or as a
+directory above it (`src/queue` matches `src/queue/x.mjs`, never
+`src/queue2/x.mjs`), with no wildcard character; file matches come first. The triager phase
+of `/resolve` gets the same search, over the job's project and the task, as a
+`## Related roadmap items` block of its phase context.
+
+Schema v17 replaced the horizons: an `open` item of `now` became `todo`, one of
+`next` or `later` became `backlog`, `queued` became `in_progress`, `dropped`
+became `cancelled`, and every item got priority 5.
 
 **Private by design.** Both live only in `$NIGHTSHIFT_HOME/nightshift.db`, the
 same file as the rest of the memory. The runtime writes nothing into the
-repository, publishes nothing, and puts nothing in a pull request: no
-`docs/adr/` tree, no `ROADMAP.md`; only an explicit `nightshift decision export`
+repository and publishes nothing; the one thing it puts in a pull request is the
+last `Roadmap: <owner>#<id>` line of the body of a job queued from a roadmap
+item: no `docs/adr/` tree, no `ROADMAP.md`; only an explicit `nightshift decision export`
 writes a file. The only ways in are the MCP tools below and the one deliberate
 terminal write, `nightshift decision import` (see below), and the only ways to
-read them from a terminal are the three read-only commands
-(`nightshift decision list`, `nightshift decision show <number>` and
-`nightshift roadmap`), which resolve the project from the current directory when
+read them from a terminal are the four read-only commands
+(`nightshift decision list`, `nightshift decision show <number>`,
+`nightshift roadmap` and `nightshift roadmap show <id>`), which resolve the project from the current directory when
 `--project` is omitted, read one org alone with `--org <name>` instead, never
 write, and never register a project. Read-only
-means the database too: the three open it read-only, so they never create it and
+means the database too: the four open it read-only, so they never create it and
 never migrate it, and a home where nothing was ever saved reads as an empty one
-(`no decisions for <project>`, every horizon empty) instead of a SQLite error.
+(`no decisions for <project>`, an `(empty)` roadmap) instead of a SQLite error.
 
 **One source, moved on purpose.** `nightshift decision export <number>` writes
 one decision as a markdown file, `<dir>/<nnnn>-<slug>.md` (default
@@ -187,7 +239,7 @@ file's header; a file whose header already names an existing row of the owner is
 refused, so a re-run imports nothing twice. The runtime itself never reads
 `docs/decisions/`.
 
-**The seven MCP tools** (parameters marked `?` are optional):
+**The nine MCP tools** (parameters marked `?` are optional):
 
 | tool | what it does |
 |---|---|
@@ -195,9 +247,11 @@ refused, so a re-run imports nothing twice. The runtime itself never reads
 | `decision_update` | changes a decision by `id`: any of `title`, `context`, `decision`, `consequences`, `status`, `superseded_by` — this is how a `proposed` one is accepted or rejected; `status: "superseded"` requires `superseded_by`, unless the row already names its successor; the row it answers is a compact one, truncated like `decision_list` |
 | `decision_list` | the log in numbering order: `project` or `org`, `status?`; compact rows, org rows first |
 | `decision_recall` | the standing constraints: `project` or `org`, `query?`, `limit?`; only `accepted` decisions, hybrid BM25 plus semantic, org rows first, and the text comes back untruncated because it feeds prompts |
-| `roadmap_save` | adds an intent at the end of a horizon: `project` or `org`, `horizon`, `title`, `detail?`, `decision_id?` |
-| `roadmap_update` | changes an item by `id`: `horizon`, `title`, `detail`, `status`, `position`, `decision_id`; `queued` is not a status that can be set by hand |
-| `roadmap_get` | the whole roadmap of an owner: `project` or `org`; the three horizons in order, each item with its position, its linked decision and the live status of its job |
+| `roadmap_save` | adds an intent at the end of its priority group: `project` or `org`, `title`, `type`, `detail?`, `priority?` (default 5), `status?` (default `todo`), `decision_id?`; `horizon` is refused by name |
+| `roadmap_update` | changes an item by `id`: `title`, `detail`, `type`, `status`, `priority`, `position`, `decision_id`; `in_progress` is not a status that can be set by hand, a move back from `in_review` or `done` leaves a `reopened` comment, and `horizon` is refused by name |
+| `roadmap_get` | the roadmap of an owner as one list of `items`: `project` or `org`, `status?`, `priority?` and `type?` filters; in workflow order, org items first, then by priority and position, each item with its linked decision, the status of its job and `closed_at`; an org item carries `project_status` (the reading project's own row) or, read by `org`, `projects` (every row). With `id` alone, that one item untruncated with its comment thread in chronological order and, for an org item, its project rows |
+| `roadmap_comment` | appends a `note` to an item's thread by `id`: `body`; signed `operator` outside a job and `job:<id>` inside one |
+| `roadmap_search` | at most five items an owner sees: `query?` (title, detail, comments), `file?` (a recorded path, exact or a directory above it), `project` or `org`, `limit?` (1-5); inside a job always the job's own project |
 
 As everywhere else in the server, an explicit `null` is treated exactly like an
 absent parameter, and `project` is the registered NAME, never a path.
@@ -205,9 +259,12 @@ absent parameter, and `project` is the registered NAME, never a path.
 unattended run they are restricted to the project of the job that is running:
 an `id` belonging to another project is refused, naming both projects, the same
 way `queue_retry` only retries its own job. An org row is refused there too,
-naming its org — a job reads its org's decisions and never rewrites one. Outside
-a job the restriction does not exist, and the operator updates any project from
-anywhere.
+naming its org — a job reads its org's decisions and never rewrites one.
+`roadmap_get` by `id` and `roadmap_comment` inside a job reach an item of the
+job's project or of its org, never a sibling project's; the comment belongs to the
+job's project, and a thread read from a job leaves out the comments of a sibling
+project. Outside a job the restriction does not exist, and the operator updates
+any project from anywhere.
 
 Renaming an org carries its rows with it (`nightshift org rename` rewrites the
 `org` of every decision and roadmap item), and an org that still owns rows
@@ -222,22 +279,25 @@ them under an existing org.
 **Queueing from the roadmap.** `queue_add` with `roadmap_item_id` and no
 `prompt` (or `nightshift queue add --roadmap <id>`) builds the prompt from the
 item instead of asking for it again: `## Task` with the title and the detail,
-`## Linked decision` when the item links one, `## Standing decisions` with the
+`## Roadmap item` with `Roadmap: <owner>#<id>`, its `Type:` and the `Commit type:`
+the job uses, `## Linked decision` when the item links one, `## Standing decisions` with the
 title of every accepted decision of the item's owner, `## Proposed (not binding)`
 with the title of every proposed one, and `## Related decisions`
 with at most eight accepted decisions the title recalled, in full - each heading
 disappears when it has nothing under it. A **project** item decides where the job goes by itself,
-so nothing is resolved from the current directory, and it is then marked `queued`
-with the job id and flips to `done` when that job finishes `done`. An **org**
-item cannot: a job is always one project's, so it takes the project from
-`--project <name>` (`project` in `queue_add`), or from the current directory when
-neither is given, and it must be a project of that org. That item is never linked
-to a job — it stays `open` so it can be queued for every project of the org, and
-only the operator marks it `done`. Passing both
+so nothing is resolved from the current directory, and it is then linked to the
+job and moved to `in_progress`, following the job from there (see above). An **org**
+item cannot: a job is always one project's, so it needs `--project <name|all>`
+(`project` in `queue_add`), never the current directory - one project of that
+org, or `all` for every project of it. Each project gets its own row linked to
+its own job, and the item's status is derived from its rows (see above); a
+project whose row still has a live job is skipped and named, and the answer of
+`queue_add` lists every job in `jobs` and every skipped project in `skipped`.
+`--run` is refused with `all`, because it starts one job. Passing both
 `prompt` and `roadmap_item_id` is refused, because a silent precedence would let
 the caller believe the item drove the job when it did not. Re-queueing a project
-item whose job is still alive is refused too, naming that job; an org item, which
-carries no job, is never refused for that reason. The text the operator
+item whose job is still alive is refused too, naming that job, and so is an org
+item every named project of which still has a live job. The text the operator
 wrote - the title, the detail and the text of the decisions quoted under them -
 is escaped on its way into that prompt: a line that would read as a heading
 (`# ...` to `###### ...`) or as a `QUEUE_SLUG:` line is prefixed with a

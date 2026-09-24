@@ -7,10 +7,12 @@ import { loadConfig } from "../config/store.mjs";
 import { ghPrCreate } from "../host/gh.mjs";
 import { runGit } from "../host/git.mjs";
 import { publishedBranchName } from "../queue/branch-name.mjs";
+import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
 import { formatDuration } from "../queue/narrate.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
+import { roadmapBodyFile } from "../queue/roadmap-trail.mjs";
 import { recordOutcome, recordPrTemplate, recordPrUrl, recordRunFields } from "../queue/run-state.mjs";
 import { phaseTelemetry, runDurationS } from "../queue/telemetry.mjs";
 import { openStore } from "../store/open.mjs";
@@ -36,9 +38,6 @@ const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 const RUN_OPTIONS = { project: { type: "string" }, slug: { type: "string" } };
 
 const NOTHING_TO_PRINT = "no phase recorded yet";
-
-// The one section of the pipeline the runtime can write by itself, because git already knows what the implementation touched.
-const FILE_LIST = "## Modified files";
 
 // Refuses to read another run from inside a job: the run of a job is the one its own row names, never one the prompt spelled out.
 function refuseNamedRun(own) {
@@ -372,20 +371,6 @@ function requireMessageFile(path) {
   return absolute;
 }
 
-// One path of a `## Modified files` list, with the bullet and the backticks the agent may have written around it; a line carrying inner whitespace is the prose an agent tends to leave in the section, never one of the paths it lists one per line.
-function pathOfLine(line) {
-  const text = line.trim().replace(/^[-*]\s+/, "").replace(/^`+|`+$/g, "").trim();
-  if (text.startsWith("#") || /\s/.test(text)) return "";
-  return text;
-}
-
-// The paths the implementation artifact listed under `## Modified files`, which is the list this commit is allowed to stage.
-function listedFiles(text) {
-  const after = text.split(FILE_LIST).slice(1).join(FILE_LIST);
-  const body = after.split("\n## ")[0] ?? "";
-  return body.split("\n").map(pathOfLine).filter(Boolean);
-}
-
 // Why the pipeline refuses to commit a path, or null when it may be staged; the comparison folds the case, because the filesystem resolves `.Claude/hook.js` to the very `.claude/hook.js` this refusal exists for.
 function refusalReason(path) {
   const segments = path.split("/").filter(Boolean).map((segment) => segment.toLowerCase());
@@ -576,7 +561,8 @@ async function runPr(argv, ctx) {
   const state = readRunState({ project: run.project, slug: run.slug, env: ctx.env });
   const current = currentBranch(cwd, ctx.env);
   const branch = renameBranch({ cwd, current, final: publishedBranchName(current, { type: state?.type, slug: run.slug }), env: ctx.env });
-  const { url, recorded, prRecorded, branchRecorded } = publishBranch({ run, cwd, branch, title: prTitle(values.title, body), bodyFile, env: ctx.env });
+  const published = await roadmapBodyFile({ bodyFile, runDir: run.runDir, jobId: callerJobId(ctx.env), store: openStore(ctx.env) });
+  const { url, recorded, prRecorded, branchRecorded } = publishBranch({ run, cwd, branch, title: prTitle(values.title, body), bodyFile: published, env: ctx.env });
   ctx.out(`BRANCH: ${branch}${branch === current ? "" : ` (renamed from ${current})`}`);
   ctx.out(`PR: ${url ?? "opened"}`);
   if (recorded.status !== "written") ctx.err(`nightshift: the run was not recorded as done: ${recorded.reason}`);

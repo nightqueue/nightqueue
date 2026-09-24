@@ -16,13 +16,17 @@ import {
 } from "../memory/jobs.mjs";
 import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
+import { ROADMAP_SEARCH_LIMIT } from "../memory/roadmap-search.mjs";
 import {
+  ALL_PROJECTS,
   PROMPT_SOURCE_CONFLICT,
   PROMPT_SOURCE_MISSING,
-  ROADMAP_HORIZONS,
+  MANUAL_STATUSES,
   ROADMAP_STATUSES,
+  ROADMAP_TYPES,
   roadmapItemView,
 } from "../memory/roadmap.mjs";
+import { OPERATOR_AUTHOR, TIER_BY_TYPE, jobAuthor } from "../memory/roadmap-workflow.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { noRunnerWait, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline, staleRuntimeHint, windowWaitingLine } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
@@ -83,7 +87,18 @@ const optionalId = z.number().int().min(1).nullable().optional();
 const optionalNumbers = z.array(z.number().int().min(1)).nullable().optional();
 const optionalDecisionStatus = z.enum(DECISION_STATUSES).nullable().optional();
 const looseDecisionStatus = z.string().nullable().optional();
-const optionalRoadmapStatus = z.enum(ROADMAP_STATUSES).nullable().optional();
+const optionalManualRoadmapStatus = z
+  .enum(ROADMAP_STATUSES)
+  .nullable()
+  .optional()
+  .describe(`Set by hand: ${MANUAL_STATUSES.join("|")}; \`in_progress\` is refused, only a job sets it.`);
+const optionalRoadmapPriority = z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).nullable().optional();
+const retiredHorizon = z.unknown().optional().describe("Removed in schema v17 and refused by name: use `priority` and `position`.");
+const roadmapType = z
+  .enum(ROADMAP_TYPES)
+  .describe(
+    `What the item is; it sets the default tier of its job (${ROADMAP_TYPES.map((type) => `${type}→${TIER_BY_TYPE[type]}`).join(", ")}) and the commit type the job uses.`,
+  );
 
 const phaseSchema = z.object({
   phase: z.string(),
@@ -129,6 +144,17 @@ async function requireOwnProject({ kind, id, row }, env) {
       `not \`${mine ?? "unknown"}\`; an unattended run may only update its own project, ` +
       "so ask the operator to do it outside the queue",
   );
+}
+
+// Who is reading or writing the roadmap: the operator outside a job, or the job and the project it runs for, which bounds what it sees.
+async function roadmapCaller(env) {
+  const own = callerJobId(env);
+  if (own === null) return { author: OPERATOR_AUTHOR, viewer: null };
+  const mine = await callerProject(own, env);
+  if (mine === null) {
+    throw new UserError(`job \`${own}\` is not in the queue, so its project is unknown; the roadmap cannot be read or commented from it`);
+  }
+  return { author: jobAuthor(own), viewer: mine };
 }
 
 // Refuses to write a run named from the outside while inside a job: the state.json of a run belongs to the job that owns it.
@@ -214,13 +240,6 @@ function requireLogged(field, value) {
 function refuseOperatorOutcomeInsideJob(outcome, env) {
   if (callerJobId(env) === null || !OPERATOR_PIPELINE_OUTCOMES.includes(outcome)) return;
   throw new UserError(`outcome \`${outcome}\` is the operator's: a job records pr_opened, local_commit or no_commit`);
-}
-
-// Closes the roadmap item of the job this process belongs to, once its run recorded a delivery; outside a job there is no item to close.
-async function closeCallerRoadmapItem(env) {
-  const own = callerJobId(env);
-  if (own === null) return;
-  await openStore(env).roadmap.closeForJob(own);
 }
 
 // The answer of a `run_*` tool; a refused write comes back as an error, because a silent `kept` would let the run believe it was recorded.
@@ -390,10 +409,53 @@ async function queuedAnswer({ job, registered = null, roadmapItemId = null, note
   };
 }
 
-// What the answer of a roadmap-built job adds: an org item fathers one job per project and is closed by the operator.
-function roadmapNote(item) {
+// What the answer of a roadmap-built job adds: an org item fathers one job per project, each on its own project row, and its status is derived from the rows.
+function roadmapNote({ item, jobs, skipped }) {
   if (item.scope !== "org") return "";
-  return ` Roadmap item #${item.id} belongs to org \`${item.org}\`: it stays \`open\` and unlinked, so queue it for the other projects of the org too and mark it done yourself.`;
+  const queued = jobs.map((job) => `#${job.id} for \`${job.project}\``).join(", ");
+  const held = skipped.length ? ` Skipped, a live job already holds them: ${skipped.map((entry) => `\`${entry.project}\``).join(", ")}.` : "";
+  return (
+    ` Roadmap item #${item.id} of org \`${item.org}\` queued as ${queued}; each project row follows its job, and the item is ` +
+    `\`in_progress\` while any row is, \`done\` once every row is done or cancelled, otherwise the lowest open row status.${held}`
+  );
+}
+
+// The project a roadmap-built job names: a registered NAME, or `all` for every project of an org item's org.
+function roadmapQueueProject(project, env) {
+  if (typeof project === "string" && project.trim() === ALL_PROJECTS) return ALL_PROJECTS;
+  return namedProject(project, env);
+}
+
+// The answer of `queue_add` for a roadmap-built job: the first job as before, plus every job and every skipped project of an org item.
+async function roadmapQueuedAnswer(queued, env) {
+  const answer = await queuedAnswer({ job: queued.job, roadmapItemId: queued.item.id, note: roadmapNote(queued) }, env);
+  if (queued.item.scope !== "org") return answer;
+  return {
+    ...answer,
+    jobs: queued.jobs.map((job) => ({ id: job.id, project: job.project })),
+    skipped: queued.skipped,
+  };
+}
+
+// The one item `roadmap_get` reads by `id`, as the caller may see it; an owner beside the id is refused, because the id already names the item.
+async function roadmapItemDetail(args, env) {
+  const named = [args.project, args.org].some((value) => typeof value === "string" && value.trim() !== "");
+  if (named) throw new UserError("pass `id` alone to read one roadmap item, or `project`/`org` without `id` to list a roadmap");
+  const { viewer } = await roadmapCaller(env);
+  return await openStore(env).roadmap.getRoadmapItemDetail(args.id, { viewer });
+}
+
+// The owner `roadmap_search` reads: the named one outside a job; inside a job always the job's own project, refusing any other owner.
+async function roadmapSearchOwner(args, env) {
+  const { viewer } = await roadmapCaller(env);
+  if (viewer === null) return ownerArgs(args, env);
+  const named = [args.project, args.org].filter((value) => typeof value === "string" && value.trim() !== "");
+  if (named.some((value) => value.trim() !== viewer)) {
+    throw new UserError(
+      `inside a job \`roadmap_search\` reads the job's project \`${viewer}\` (and its org's items): omit \`project\`/\`org\` or pass \`${viewer}\``,
+    );
+  }
+  return { project: viewer };
 }
 
 // Clamps the size of a job listing into the accepted window.
@@ -533,7 +595,7 @@ function answeredPrUrls(answer) {
   return prUrlsOf(answer.job ? [answer.job] : answer.jobs);
 }
 
-// The twenty-five tools of the plugin contract, with the parameter names the plugin actually sends.
+// The twenty-seven tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env) {
   return [
     {
@@ -729,8 +791,8 @@ function toolDefinitions(env) {
           "Enqueues an unattended /nightshift:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
           "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. The hint reports how many runners are live right now, and a job queued with none online waits until `nightshift queue run` starts one. " +
           "With `project` omitted, `cwd` (the absolute working directory of the caller) resolves the project. When no project is registered for it, the answer is `needs_registration`: ask the user to confirm, then call again with the same `cwd` and `register: true`. Registration never happens without `register: true`. " +
-          "With `roadmap_item_id` and no `prompt`, the job prompt is built from that roadmap item, its linked decision and the accepted decisions related to it; a project item is marked `queued` and flips to `done` when the job finishes. " +
-          "An ORG roadmap item needs an explicit `project` of that org, because a job is always one project's: it stays `open` and unlinked, so the same item may be queued for every project of the org and only the operator closes it.",
+          "With `roadmap_item_id` and no `prompt`, the job prompt is built from that roadmap item, its linked decision and the accepted decisions related to it; a project item moves to `in_progress` and then follows its job: `in_review` once the job is done, `done` once the job is closed - its pull request merged through `queue_close` - and back to `todo` when the job fails or is cancelled (a close that finds the pull request closed without merge cancels the job)." +
+          "An ORG roadmap item needs an explicit `project` of that org, or `all` for every project of the org, because a job is always one project's: each project gets its own row linked to its own job (a project whose row still has a live job is skipped and reported in `skipped`; the answer lists every job in `jobs`), and the item's status is derived from its rows - `in_progress` while any row is, `done` once every row is done or cancelled, otherwise the lowest open row status. Closing it by hand cancels its open rows.",
         inputSchema: {
           project: z.string().nullable().optional(),
           cwd: z
@@ -773,13 +835,13 @@ function toolDefinitions(env) {
           if (hasRunDir(args)) throw new UserError("`run_dir` needs the operator's `prompt`: it cannot seed a job built from `roadmap_item_id`");
           const queued = await openStore(env).roadmap.queueRoadmapItem({
             id: args.roadmap_item_id,
-            project: namedProject(args.project, env),
+            project: roadmapQueueProject(args.project, env),
             priority: args.priority,
             maxAttempts: args.max_attempts,
             timeoutS: args.timeout_s,
             tier: args.tier,
           });
-          return await queuedAnswer({ job: queued.job, roadmapItemId: queued.item.id, note: roadmapNote(queued.item) }, env);
+          return await roadmapQueuedAnswer(queued, env);
         }
         const target = resolveQueueTarget(args, env);
         if (target.offer && args.register !== true) return needsRegistration(target);
@@ -1016,55 +1078,72 @@ function toolDefinitions(env) {
       name: "roadmap_save",
       config: {
         description:
-          "Adds one intent to a roadmap, at the end of its horizon (`now`, `next` or `later`). Owned by `project` or by `org`, never both: an org item is work every project of the org has to do, and names the project its job goes to at queue time. " +
-          "`decision_id` links it to the decision that motivated it.",
+          "Adds one intent to a roadmap, at the end of its `priority` group (1-9, default 5, 1 first like a job's). Owned by `project` or by `org`, never both: an org item is work every project of the org has to do, and names the project its job goes to at queue time. " +
+          `\`type\` (${ROADMAP_TYPES.join("|")}) is required. ` +
+          `\`status\` defaults to \`todo\`; by hand it may be ${MANUAL_STATUSES.join("|")}, never \`in_progress\`, which only a job sets. ` +
+          "`decision_id` links it to the decision that motivated it. `horizon` was removed in schema v17 and is refused by name.",
         inputSchema: {
           project: optionalText,
           org: optionalText,
-          horizon: z.enum(ROADMAP_HORIZONS),
           title: z.string(),
+          type: roadmapType,
           detail: optionalText,
+          priority: optionalRoadmapPriority,
+          status: optionalManualRoadmapStatus,
           decision_id: optionalId,
+          horizon: retiredHorizon,
         },
       },
       handler: async (args) => {
         const saved = await openStore(env).roadmap.saveRoadmapItem({
           ...ownerArgs(args, env),
-          horizon: args.horizon,
           title: args.title,
+          type: args.type,
           detail: args.detail,
+          priority: args.priority,
+          status: args.status,
           decision_id: args.decision_id,
+          horizon: args.horizon,
         });
-        return { ok: true, id: saved.id, position: saved.position };
+        return { ok: true, id: saved.id, type: saved.type, priority: saved.priority, position: saved.position, status: saved.status };
       },
     },
     {
       name: "roadmap_update",
       config: {
         description:
-          "Changes a roadmap item by its `id`: its text, its horizon, its position inside the horizon, its `decision_id`, or its status. " +
-          "`queued` is not one of the statuses that can be set by hand: an item becomes `queued` only through `queue_add` with `roadmap_item_id`.",
+          "Changes a roadmap item by its `id`: its text, its `type`, its `priority` (a change moves it to the end of the new priority group), its position inside the priority group, its `decision_id`, or its status. " +
+          `By hand the status may be ${MANUAL_STATUSES.join("|")}; \`in_progress\` is refused because only a job sets it, and moving back from \`in_review\` or \`done\` is allowed and leaves a \`reopened\` comment. ` +
+          "A linked item follows its job: `in_progress` while it runs or waits at a gate, `in_review` once it is done, `done` once it is closed - its pull request merged through `queue_close` - and `todo` when it fails or is cancelled (a close that finds the pull request closed without merge cancels the job)." +
+          "An org item's status is derived from its project rows; setting it to `done` or `cancelled` by hand cancels every open row, with a `closed` comment per row. " +
+          "`horizon` was removed in schema v17 and is refused by name.",
         inputSchema: {
           id: z.number().int().min(1),
-          horizon: z.enum(ROADMAP_HORIZONS).nullable().optional(),
           title: optionalText,
           detail: optionalText,
-          status: optionalRoadmapStatus,
+          type: roadmapType.nullable().optional(),
+          status: optionalManualRoadmapStatus,
+          priority: optionalRoadmapPriority,
           position: optionalId,
           decision_id: optionalId,
+          horizon: retiredHorizon,
         },
       },
       handler: async (args) => {
         const store = openStore(env);
         const current = await store.roadmap.getRoadmapItem(args.id);
         if (current) await requireOwnProject({ kind: "roadmap item", id: args.id, row: current }, env);
+        const { author } = await roadmapCaller(env);
         const row = await store.roadmap.updateRoadmapItem(args.id, {
-          horizon: args.horizon,
           title: args.title,
           detail: args.detail,
+          type: args.type,
           status: args.status,
+          priority: args.priority,
           position: args.position,
           decision_id: args.decision_id,
+          horizon: args.horizon,
+          author,
         });
         return { ok: true, item: roadmapItemView(row) };
       },
@@ -1073,11 +1152,62 @@ function toolDefinitions(env) {
       name: "roadmap_get",
       config: {
         description:
-          "The whole roadmap of an owner: the `now`, `next` and `later` horizons in order, each item with its position, its linked decision and the live status of the job it was queued as. " +
-          "With `project`, the project's items plus its org's, org items first, each carrying its `scope` and its `owner`; with `org`, only that org's items.",
-        inputSchema: { project: optionalText, org: optionalText },
+          "The roadmap of an owner as one list of `items`, in workflow order (backlog, todo, in_progress, in_review, done, cancelled), then org items first, then by `priority` (1 first) and `position`; each item carries its linked decision, the status of the job it was queued as and `closed_at`. " +
+          "With `project`, the project's items plus its org's, each carrying its `scope` and its `owner`, and each org item the `project_status` of that project's own row; with `org`, only that org's items, each with `projects` (every project row: `project`, `status`, `job_id`, `job_status`). " +
+          "`status`, `priority` and `type` narrow the list to the values given; without them every item is returned. " +
+          "With `id` alone, that one item with its text untruncated and its comment thread in chronological order (the job events the runtime recorded and the notes); inside a job only an item of the job's project or of its org is readable.",
+        inputSchema: {
+          id: optionalId,
+          project: optionalText,
+          org: optionalText,
+          status: z.array(z.enum(ROADMAP_STATUSES)).nullable().optional(),
+          priority: z.array(z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max)).nullable().optional(),
+          type: z.array(z.enum(ROADMAP_TYPES)).nullable().optional(),
+        },
       },
-      handler: async (args) => openStore(env).roadmap.listRoadmap(ownerArgs(args, env)),
+      handler: async (args) => {
+        if (args.id !== undefined && args.id !== null) return await roadmapItemDetail(args, env);
+        return await openStore(env).roadmap.listRoadmap(ownerArgs(args, env), {
+          status: args.status,
+          priority: args.priority,
+          type: args.type,
+        });
+      },
+    },
+    {
+      name: "roadmap_comment",
+      config: {
+        description:
+          "Appends a `note` to the comment thread of a roadmap item by its `id`; comments are append-only, never edited nor deleted. " +
+          "Outside a job the author is `operator`; inside a job it is `job:<id>`, and only an item of the job's project or of its org may be commented.",
+        inputSchema: { id: z.number().int().min(1), body: z.string() },
+      },
+      handler: async (args) => {
+        const caller = await roadmapCaller(env);
+        const comment = await openStore(env).roadmap.addRoadmapComment({ id: args.id, body: args.body, ...caller });
+        return { ok: true, comment };
+      },
+    },
+    {
+      name: "roadmap_search",
+      config: {
+        description:
+          `Finds at most ${ROADMAP_SEARCH_LIMIT} roadmap items an owner sees: \`query\` matches their title, detail and comment thread; \`file\` matches a path a job of theirs touched, exactly or as a directory above it (\`src/queue\` never matches \`src/queue2/\`).` +
+          "File matches come first, then by relevance; each hit is `{id, ref, title, status, priority, type, via}`. " +
+          "Outside a job name the owner with `project` or `org`; inside a job the search always reads the job's own project and its org's items, never a sibling project's comments.",
+        inputSchema: {
+          query: optionalText,
+          file: optionalText,
+          project: optionalText,
+          org: optionalText,
+          limit: z.number().int().min(1).max(ROADMAP_SEARCH_LIMIT).nullable().optional(),
+        },
+      },
+      handler: async (args) => {
+        const owner = await roadmapSearchOwner(args, env);
+        const hits = await openStore(env).roadmap.searchRoadmap({ ...owner, query: args.query, file: args.file, limit: args.limit });
+        return { ...owner, hits };
+      },
     },
     {
       name: "run_phase_done",
@@ -1123,9 +1253,7 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const run = await callerRun(args, env);
-        const answer = runAnswer(recordOutcome({ ...run, status: args.status, notice: args.notice, env }), run);
-        if (args.status === "done") await closeCallerRoadmapItem(env);
-        return answer;
+        return runAnswer(recordOutcome({ ...run, status: args.status, notice: args.notice, env }), run);
       },
     },
     {
@@ -1167,7 +1295,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the twenty-five tools of the plugin contract.
+// Builds the MCP server with the twenty-seven tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer({ name: SERVER_NAME, version: readVersion() }, { instructions: SERVER_INSTRUCTIONS });
   const schemas = new Map();

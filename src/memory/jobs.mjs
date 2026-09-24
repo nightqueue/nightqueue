@@ -503,7 +503,7 @@ function verifyWitnessed(id, written, witness, env) {
   return false;
 }
 
-// Writes the terminal columns again, by id: after a successful commit the claim predicate matches nothing anymore.
+// Writes the terminal columns again, only on a row still running under the finishing worker (or none): a row that moved on, e.g. retried, is left alone.
 function reapplyFinish(id, written, env) {
   const statement = openDb(env).prepare(
     `UPDATE jobs
@@ -512,9 +512,9 @@ function reapplyFinish(id, written, env) {
             finished_at = COALESCE(finished_at, ?),
             worker = NULL,
             lease_until = NULL
-      WHERE id = ?`,
+      WHERE id = ? AND status = 'running' AND (worker IS NULL OR worker = ?)`,
   );
-  withWriteRetry(() => statement.run(written.status, written.pr_url ?? null, written.finished_at ?? null, id));
+  withWriteRetry(() => statement.run(written.status, written.pr_url ?? null, written.finished_at ?? null, id, written.worker));
 }
 
 const FINISH_WITNESS = { columns: FINISH_COLUMNS, reapply: reapplyFinish };
@@ -594,7 +594,7 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
     }),
   );
   if (!written) return false;
-  ensureDurable(requireId(id), written, FINISH_WITNESS, env);
+  ensureDurable(requireId(id), { ...written, worker }, FINISH_WITNESS, env);
   return true;
 }
 

@@ -13,8 +13,8 @@ import {
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // Saves a roadmap item of an owner with the fields every test would otherwise repeat.
-function addItem(env, { project, org, horizon = "now", title, detail, decision_id }) {
-  return saveRoadmapItem({ project, org, horizon, title, detail, decision_id }, env);
+function addItem(env, { project, org, title, detail, decision_id }) {
+  return saveRoadmapItem({ type: "improvement", project, org, title, detail, decision_id }, env);
 }
 
 // A home with the two orgs of the brief: two projects in `acme`, one in `orbit`.
@@ -26,22 +26,22 @@ function makeTwoOrgHome(t, name) {
   return env;
 }
 
-// Titles of a horizon group, in the order the roadmap returns them.
-function titlesOf(roadmap, horizon) {
-  return roadmap.horizons.find((group) => group.horizon === horizon).items.map((item) => item.title);
+// Titles of a roadmap listing, in the order it returns them.
+function titlesOf(roadmap) {
+  return roadmap.items.map((item) => item.title);
 }
 
-// Positions an owner holds in a horizon, straight from the database.
-function positionsOf(env, horizon, { project = null, org = null }) {
+// Positions an owner holds in a priority group, straight from the database.
+function positionsOf(env, priority, { project = null, org = null }) {
   return openDb(env)
     .prepare(
-      "SELECT title, position FROM roadmap_items WHERE project IS ? AND org IS ? AND horizon = ? ORDER BY position",
+      "SELECT title, position FROM roadmap_items WHERE project IS ? AND org IS ? AND priority = ? ORDER BY position",
     )
-    .all(project, org, horizon)
+    .all(project, org, priority)
     .map((row) => [row.title, row.position]);
 }
 
-test("positions are counted inside one owner: two orgs and a project share a horizon without renumbering each other", (t) => {
+test("positions are counted inside one owner: two orgs and a project share a priority without renumbering each other", (t) => {
   const env = makeTwoOrgHome(t, "roadmap-org-position");
   addItem(env, { org: "acme", title: "acme first" });
   const second = addItem(env, { org: "acme", title: "acme second" });
@@ -50,12 +50,12 @@ test("positions are counted inside one owner: two orgs and a project share a hor
   assert.equal(second.position, 2);
 
   updateRoadmapItem(second.id, { position: 1 }, env);
-  assert.deepEqual(positionsOf(env, "now", { org: "acme" }), [
+  assert.deepEqual(positionsOf(env, 5, { org: "acme" }), [
     ["acme second", 1],
     ["acme first", 2],
   ]);
-  assert.deepEqual(positionsOf(env, "now", { org: "orbit" }), [["orbit first", 1]]);
-  assert.deepEqual(positionsOf(env, "now", { project: "acme-mobile-app" }), [["project first", 1]]);
+  assert.deepEqual(positionsOf(env, 5, { org: "orbit" }), [["orbit first", 1]]);
+  assert.deepEqual(positionsOf(env, 5, { project: "acme-mobile-app" }), [["project first", 1]]);
 });
 
 test("a project roadmap shows its org's items first and never another org's", (t) => {
@@ -64,12 +64,12 @@ test("a project roadmap shows its org's items first and never another org's", (t
   addItem(env, { org: "acme", title: "every repo delivers the cache" });
   addItem(env, { org: "orbit", title: "orbit delivers nothing" });
 
-  assert.deepEqual(titlesOf(listRoadmap("acme-mobile-app", env), "now"), [
+  assert.deepEqual(titlesOf(listRoadmap("acme-mobile-app", {}, env)), [
     "every repo delivers the cache",
     "deliver the app cache",
   ]);
-  assert.deepEqual(titlesOf(listRoadmap("orbit-app", env), "now"), ["orbit delivers nothing"]);
-  assert.deepEqual(titlesOf(listRoadmap({ org: "acme" }, env), "now"), ["every repo delivers the cache"]);
+  assert.deepEqual(titlesOf(listRoadmap("orbit-app", {}, env)), ["orbit delivers nothing"]);
+  assert.deepEqual(titlesOf(listRoadmap({ org: "acme" }, {}, env)), ["every repo delivers the cache"]);
 });
 
 test("an item links a decision its owner sees: its own, or its org's for a project item, never a sibling project's", (t) => {
@@ -91,11 +91,11 @@ test("an item links a decision its owner sees: its own, or its org's for a proje
   assert.equal(getRoadmapItem(orgItem.id, env).decision_id, orgDecision.id);
 });
 
-test("an org item queues one job per named project, stays open and unlinked, and refuses a project outside its org", async (t) => {
+test("an org item queues one job per named project on its own row, stays unlinked itself, and refuses a project outside its org", async (t) => {
   const env = makeTwoOrgHome(t, "roadmap-org-queue");
   const item = addItem(env, { org: "acme", title: "raise the node version" });
 
-  await assert.rejects(() => queueRoadmapItem({ id: item.id }, env), /belongs to org `acme`.*--project <name>/s);
+  await assert.rejects(() => queueRoadmapItem({ id: item.id }, env), /belongs to org `acme`.*--project <name\|all>/s);
   await assert.rejects(
     () => queueRoadmapItem({ id: item.id, project: "orbit-app" }, env),
     /projects of `acme`: acme-mobile-app, acme-api/,
@@ -105,13 +105,13 @@ test("an org item queues one job per named project, stays open and unlinked, and
   assert.equal(first.targetProject, "acme-mobile-app");
   assert.equal(getJob(first.job.id, env).project, "acme-mobile-app");
   const stored = getRoadmapItem(item.id, env);
-  assert.equal(stored.status, "open", "an org item must stay open");
+  assert.equal(stored.status, "in_progress", "an org item derives its status from its in-progress row");
   assert.equal(stored.job_id, null, "an org item must never carry a job id");
 
   const second = await queueRoadmapItem({ id: item.id, project: "acme-api" }, env);
   assert.equal(second.targetProject, "acme-api");
   assert.notEqual(second.job.id, first.job.id, "the second project got no job of its own");
-  assert.equal(getRoadmapItem(item.id, env).status, "open");
+  assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
   assert.equal(updateRoadmapItem(item.id, { status: "done" }, env).status, "done", "the operator closes it by hand");
 });
 
@@ -126,6 +126,6 @@ test("a project item keeps its own queue path: it is linked, and a project that 
   const queued = await queueRoadmapItem({ id: item.id, project: "acme-mobile-app" }, env);
   assert.equal(queued.targetProject, "acme-mobile-app");
   const stored = getRoadmapItem(item.id, env);
-  assert.equal(stored.status, "queued");
+  assert.equal(stored.status, "in_progress");
   assert.equal(stored.job_id, queued.job.id);
 });

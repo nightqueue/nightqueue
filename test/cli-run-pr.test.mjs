@@ -10,6 +10,7 @@ import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { ghBin } from "../src/host/gh.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
+import { linkRoadmapItemJob, saveRoadmapItem } from "../src/memory/roadmap.mjs";
 import { readRunState } from "../src/queue/resume.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
@@ -191,6 +192,23 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
   assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).branch, "feat/login-google", "the run kept the name its branch no longer carries");
   assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).prTemplate.source, "nightshift");
   assert.equal(existsSync(worktree), true);
+});
+
+test("`run pr` of a job queued from a roadmap item opens the pull request with a body ending in its Roadmap line", async (t) => {
+  const { env, id } = makeRun(t, "run-pr-roadmap");
+  const item = saveRoadmapItem({ type: "feature", project: "alpha", title: "log in with google" }, env);
+  assert.equal(linkRoadmapItemJob(item.id, id, env), true);
+  const body = writeBody(t, "run-pr-roadmap-body", BODY);
+
+  const { code } = await runCli(env, ["run", "pr", "--body-file", body, "--title", "feat(auth): log in with google"], { jobId: id });
+
+  assert.equal(code, 0);
+  const published = join(runDir("alpha", SLUG, env), "pr-body.roadmap.md");
+  assert.deepEqual(ghCalls(env), [
+    ["pr", "create", "--title", "feat(auth): log in with google", "--body-file", published, "--head", "feat/login-google"],
+  ]);
+  assert.equal(readFileSync(published, "utf8"), `${BODY.trimEnd()}\n\nRoadmap: alpha#${item.id}\n`);
+  assert.equal(readFileSync(body, "utf8"), BODY, "the agent's body file was edited");
 });
 
 test("a repository template in the worktree is the one the body follows: its headings in its order, and no nightshift heading it lacks", async (t) => {

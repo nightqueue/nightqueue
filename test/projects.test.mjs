@@ -17,6 +17,7 @@ import {
   repoSlugOf,
   resolveProject,
   slugFromRemote,
+  suggestName,
 } from "../src/config/projects.mjs";
 import { emptyConfig } from "../src/config/schema.mjs";
 
@@ -81,6 +82,19 @@ test("a name already used by another path is refused citing that path", (t) => {
     assert.equal(err.message, `project name \`api\` is already registered for ${normalizePath(first)}`);
     return true;
   });
+});
+
+test("`all` is reserved for the org target: refused by name and never derived nor suggested", (t) => {
+  const named = makeRepo(t, "named");
+  assert.throws(() => addProject(emptyConfig(), { path: named, name: "all" }), (err) => {
+    assert.ok(err instanceof UserError);
+    assert.match(err.message, /project name `all` is reserved: it targets every project of an org/);
+    return true;
+  });
+  const repo = join(makeDir(t, "reserved"), "all");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  assert.throws(() => addProject(emptyConfig(), { path: repo }), /project name `all` is reserved/);
+  assert.equal(suggestName(emptyConfig(), repo), "all-2");
 });
 
 test("the same path is a no-op in the same org and an error in another org", (t) => {

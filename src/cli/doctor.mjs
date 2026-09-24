@@ -325,10 +325,48 @@ async function checkOrgRows(ctx) {
   }
 }
 
-// The database check plus, only on a database at the current schema, the org rows check that reads its columns.
+// One drifted entry: an item or a project row behind its job, or an org item whose status disagrees with its rows.
+function roadmapDriftEntry(row) {
+  if (row.job_id === null) return `${row.owner}#${row.id} ${row.status} (derived from its project rows: ${row.expected})`;
+  const where = row.project ? ` row ${row.project}` : "";
+  return `#${row.id}${where} ${row.status} (job ${row.job_id} ${row.job_status}, expected ${row.expected})`;
+}
+
+// The detail of the roadmap entries whose status disagrees with their job or their rows: how many, then each with its status and the expected one.
+function roadmapDriftDetail(rows) {
+  const noun = rows.length === 1 ? "roadmap status out of step" : "roadmap statuses out of step";
+  return `${rows.length} ${noun}: ${rows.map(roadmapDriftEntry).join(", ")}`;
+}
+
+// What to do about the drift: the claim cycle re-syncs what is behind a job; an org item is re-derived at its next row change or set by hand.
+function roadmapDriftHint(rows) {
+  const hints = [];
+  if (rows.some((row) => row.job_id !== null)) hints.push("the next `nightshift queue run` claim cycle re-syncs the ones behind a job");
+  if (rows.some((row) => row.job_id === null)) {
+    hints.push("an org item is re-derived at its next project row change, or set its status with `roadmap_update`");
+  }
+  return hints.join("; ");
+}
+
+// Reports the roadmap items and rows whose status disagrees with their linked job, and the org items whose status disagrees with their rows, reading read-only.
+async function checkRoadmapWorkflow(ctx) {
+  const store = openStoreReadOnly(ctx.env);
+  try {
+    const rows = await store.roadmap.roadmapDrift();
+    if (!rows.length) return check("roadmap workflow", "ok", "every linked item follows its job");
+    return check("roadmap workflow", "warn", roadmapDriftDetail(rows), roadmapDriftHint(rows));
+  } catch (err) {
+    return check("roadmap workflow", "warn", err?.message ?? String(err), `inspect ${dbPath(ctx.env)}`);
+  } finally {
+    await store.close();
+  }
+}
+
+// The database check plus, only on a database at the current schema, the checks that read its columns.
 async function checkDatabaseAndRows(ctx) {
   const database = await checkDatabase(ctx);
-  return database.status === "ok" ? [database, await checkOrgRows(ctx)] : [database];
+  if (database.status !== "ok") return [database];
+  return [database, await checkOrgRows(ctx), await checkRoadmapWorkflow(ctx)];
 }
 
 const ORPHAN_PREFIXES = [".fuse_hidden", ".nfs"];

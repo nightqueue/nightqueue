@@ -42,8 +42,10 @@ const CONTRACT_TOOLS = [
   "queue_run",
   "queue_session",
   "queue_status",
+  "roadmap_comment",
   "roadmap_get",
   "roadmap_save",
+  "roadmap_search",
   "roadmap_update",
   "run_outcome",
   "run_phase_done",
@@ -79,12 +81,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the twenty-five tools of the contract", async (t) => {
+test("the server exposes exactly the twenty-seven tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 25, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 27, "the contract list and the server disagree on how many tools there are");
 });
 
 test("the server migrates a v8 home to v9 once at boot, before it answers any tool", async (t) => {

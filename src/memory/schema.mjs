@@ -1,4 +1,4 @@
-export const DB_USER_VERSION = 16;
+export const DB_USER_VERSION = 17;
 
 // The invariant of a closed job: it carries a pull request and a close checklist recording the merge, with no close in flight.
 export const CLOSED_REQUIRES_MERGE = `CHECK (status <> 'closed' OR (pr_url IS NOT NULL AND trim(pr_url) <> '' AND close_status IS NULL

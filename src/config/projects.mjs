@@ -8,6 +8,16 @@ import { NAME_RE, assertName, normalizeName } from "./schema.mjs";
 const REMOTE_RE = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^/@]+@)?[^/:]+[/:]([^/]+)\/([^/]+)$/i;
 const NAME_SUGGESTION_LIMIT = 99;
 
+export const ALL_PROJECTS = "all";
+
+// Refuses the name that targets every project of an org, so `all` never means a single project.
+function requireUnreservedName(name) {
+  if (name === ALL_PROJECTS) {
+    throw new UserError(`project name \`${ALL_PROJECTS}\` is reserved: it targets every project of an org; pass --name <name>`);
+  }
+  return name;
+}
+
 // Resolves a path to the absolute, canonical form used in the config.
 export function normalizePath(p) {
   const abs = resolve(p ?? ".");
@@ -87,7 +97,7 @@ export function suggestName(config, path) {
   if (base === null) return null;
   for (let suffix = 1; suffix <= NAME_SUGGESTION_LIMIT; suffix += 1) {
     const candidate = suffix === 1 ? base : `${base}-${suffix}`;
-    if (config.projects[candidate] === undefined && NAME_RE.test(candidate)) return candidate;
+    if (config.projects[candidate] === undefined && NAME_RE.test(candidate) && candidate !== ALL_PROJECTS) return candidate;
   }
   return null;
 }
@@ -108,7 +118,7 @@ export function addProject(config, { path, name, org } = {}) {
   const abs = requireGitPath(path);
   const orgName = org ?? config.defaultOrg;
   requireOrg(config, orgName);
-  const projectName = name === undefined ? deriveName(abs) : assertName("project", name);
+  const projectName = requireUnreservedName(name === undefined ? deriveName(abs) : assertName("project", name));
   const registered = Object.entries(config.projects).find(([, entry]) => entry.path === abs);
   if (registered) {
     const [existingName, entry] = registered;

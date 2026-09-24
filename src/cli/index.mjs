@@ -94,7 +94,7 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the twenty-five memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the twenty-seven memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   hook session-start|prompt-context|reflect run a hook, reading the event JSON from stdin
   reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground
@@ -107,7 +107,8 @@ commands:
   decision export <number> [--dir] [--force]  write one decision as a markdown file (default: docs, folder decisions, of the current directory); never writes the database
   decision import <file.md> [--status] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]  save a markdown decision file, reviewed like decision_save, and stamp its row number into it
   decision update <number> --status accepted|rejected|superseded [--superseded-by <n>]  accept, reject or supersede a decision, same as decision_update
-  roadmap [--project|--org]                 print the now/next/later roadmap of a project and of its org
+  roadmap [--project|--org] [--status] [--priority] [--type]  print the roadmap of a project and of its org, grouped by status, p1 first; --org adds each item's project rows
+  roadmap show <id> [--json]               print one roadmap item in full with its comment thread
   queue add [project] <prompt...> [--run]   enqueue an unattended /nightshift:resolve run; --run starts it detached
   queue status [id] [--limit] [--json]      show one job or the table of the queue plus the counts per status
   queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)
@@ -141,10 +142,33 @@ options:
 exit codes: 0 ok · 1 user error · 2 unexpected error
 configuration home: $NIGHTSHIFT_HOME (default ~/.nightshift)`;
 
+let stdoutGuarded = false;
+let stdoutClosed = false;
+
+// Turns a reader that closed the pipe (`nightshift roadmap | head`) into dropped output instead of an uncaught EPIPE; any other stream error still surfaces.
+function installStdoutGuard() {
+  if (stdoutGuarded) return;
+  stdoutGuarded = true;
+  process.stdout.on("error", (err) => {
+    if (err?.code === "EPIPE") {
+      stdoutClosed = true;
+      return;
+    }
+    throw err;
+  });
+}
+
+// Writes one line of output, or nothing once the reader closed the pipe.
+function writeOut(line) {
+  if (stdoutClosed) return;
+  process.stdout.write(`${line}\n`);
+}
+
 // Creates the default execution context of the CLI.
 export function defaultContext() {
+  installStdoutGuard();
   return {
-    out: (line) => process.stdout.write(`${line}\n`),
+    out: writeOut,
     err: (line) => process.stderr.write(`${line}\n`),
     env: process.env,
     cwd: process.cwd(),

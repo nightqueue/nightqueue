@@ -55,7 +55,7 @@ async function injectedPrompt(t, name) {
     env,
   );
   const { id } = saveRoadmapItem(
-    { project: "alpha", horizon: "now", title: "deliver the queue", detail: INJECTED_DETAIL, decision_id: linked.id },
+    { type: "improvement", project: "alpha", title: "deliver the queue", detail: INJECTED_DETAIL, decision_id: linked.id },
     env,
   );
   return buildRoadmapPrompt({ item: getRoadmapItem(id, env) }, env);

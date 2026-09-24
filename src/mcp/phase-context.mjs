@@ -73,6 +73,22 @@ async function indexSection({ target, project, repoRoot, query }, env) {
   return section("Structural index", rows, (row) => row);
 }
 
+// One roadmap line of the triager block: its reference, its title and where it stands.
+function roadmapLine(item) {
+  return `- [${item.ref}] ${clip(item.title, LINE_MAX)} [${item.status}, p${item.priority}, ${item.type}]`;
+}
+
+// The roadmap items the triager should know about before judging a request; any other phase, a run without an owner or a failed search gets nothing.
+async function roadmapSection({ target, project, query }, env) {
+  if (target !== "triager" || !project || typeof query !== "string" || !query.trim()) return "";
+  try {
+    const items = await openStore(env).roadmap.searchRoadmap({ project, query });
+    return section("Related roadmap items", items, roadmapLine);
+  } catch {
+    return "";
+  }
+}
+
 // The context block of one phase, ready to paste into the subagent's prompt: the lessons it has not seen, the project memory and, for the explore, the known map.
 export async function phaseContextBlock({ target, query, project, repoRoot, excludeIds }, env = process.env) {
   const caller = await callerContext(env);
@@ -87,6 +103,7 @@ export async function phaseContextBlock({ target, query, project, repoRoot, excl
     section("Applicable lessons", lessons, lessonLine),
     section("Project memory", memories, memoryLine),
     await indexSection({ target, project: owner, repoRoot, query }, env),
+    await roadmapSection({ target, project: owner, query }, env),
   ].filter(Boolean);
   return { project: owner, block: sections.join("\n\n") };
 }

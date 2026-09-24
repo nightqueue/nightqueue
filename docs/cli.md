@@ -411,6 +411,27 @@ settled before its job was closed, by number and job - settle it with `decision_
 accepted|rejected`, or, next time, settle it in the same call with `nightshift queue
 close <id> --decisions accept|reject`.
 
+On a database at the current schema, the `roadmap workflow` row names every roadmap item or org
+project row whose status disagrees with what its linked job's row means (for example `#12
+in_progress (job 40 done, expected in_review)`, or `#7 row api ...` for an org item's row): a job
+write whose roadmap follow failed. The next `nightshift queue run` claim cycle re-syncs those on its
+own. It also names every org item whose persisted status disagrees with what its project rows derive
+(for example `acme#7 todo (derived from its project rows: in_progress)`), re-derived at its next row
+change or set by hand with `roadmap_update`. It is a `warn`, never a failure.
+
+`nightshift roadmap [--project <name> | --org <name>] [--status <s>]... [--priority <n>]...
+[--type <t>]... [--json]` prints the roadmap grouped by status in workflow order (`backlog`, `todo`,
+`in_progress`, `in_review`, `done`, `cancelled`), one `p<priority> #<id> <title>` line per item (an
+org item carries its org before the `#`), p1 first. `--status`, `--priority` and `--type` repeat to keep several values. Read by a
+project, an org item shows the status of that project's own row in parentheses; read with `--org`,
+each org item lists its project rows under it (`<project>: <status> job #<id> (<job status>)`), the
+item × project matrix. It survives a reader
+that closes the pipe early (`nightshift roadmap | head`): the CLI stops writing instead of
+crashing with `EPIPE`. `nightshift roadmap show <id> [--json]` prints one item in full - its
+`<owner>#<id>`, type, status and priority, its untruncated title and detail, an org item's project
+rows under `projects:` - and then its comment thread in chronological order, one `<when> <author> <kind>` line per comment with its body
+indented under it. Both read the database and never write to it.
+
 The diagnosis is offline: without `--check-updates` it opens no network
 connection at all. With the flag it adds one last check, `registry`, which asks
 the registry for the newest published version and compares it with the installed

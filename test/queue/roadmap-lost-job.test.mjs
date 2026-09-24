@@ -19,7 +19,7 @@ function fakeGit() {
 function makeItemHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  const item = saveRoadmapItem({ project: "alpha", horizon: "now", title: "deliver the thing" }, env);
+  const item = saveRoadmapItem({ type: "improvement", project: "alpha", title: "deliver the thing" }, env);
   return { env, item };
 }
 
@@ -63,7 +63,7 @@ test("finishJob returning false strands the item behind a phantom `running` job,
     { status: "running", worker: "phantom:9999", finished: null, result: null },
     "finishJob's `written &&` guard skipped the write, but never released the row either: the job is stuck `running` forever under a worker that does not exist",
   );
-  assert.equal(getRoadmapItem(item.id, env).status, "queued", "closeRoadmapItem was correctly skipped: the item was never marked done for work that was never confirmed written");
+  assert.equal(getRoadmapItem(item.id, env).status, "in_progress", "the follow was correctly skipped: the item never moved on for work that was never confirmed written");
 
   assert.throws(
     () => queueableRoadmapItem(item.id, env),
@@ -79,6 +79,7 @@ test("finishJob returning false strands the item behind a phantom `running` job,
   expireLease(env, queued.job.id);
   await runCycle({ env, deps: { gitImpl: fakeGit() } });
   assert.equal(getJob(queued.job.id, env).status, "failed", "once the lease's grace window passes, the NEXT queue cycle sweeps the orphan on its own");
+  assert.equal(getRoadmapItem(item.id, env).status, "todo", "the sweep that failed the orphan also sent its item back to todo");
   const requeued = await queueRoadmapItem({ id: item.id }, env);
   assert.notEqual(requeued.job.id, queued.job.id, "the item is queueable again through the normal path, once the stolen lease has aged out");
   assert.equal(getRoadmapItem(item.id, env).job_id, requeued.job.id);
@@ -101,7 +102,7 @@ test("runJob returning early via run.lost (ownership stolen mid-run, detected by
     { status: "running", worker: "phantom:1234", finished: null },
     "runJob returned via `run.lost` before `finalize()` ever ran: closeRoadmapItem was never even a candidate to be called",
   );
-  assert.equal(getRoadmapItem(item.id, env).status, "queued");
+  assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
   assert.throws(
     () => queueableRoadmapItem(item.id, env),
     /already queued as job `\d+` \(`running`\); cancel that job first/,
@@ -126,21 +127,21 @@ test("runJob returning early via ctx.state.stopping (an interrupted runner) is N
     { status: "pending", worker: null, attempts: 0 },
     "release() puts the SAME job back at the front of the queue; this is not a phantom, it is a normal retryable job",
   );
-  assert.equal(getRoadmapItem(item.id, env).status, "queued", "the item still points at the same job id, which is exactly correct here");
+  assert.equal(getRoadmapItem(item.id, env).status, "in_progress", "the item still points at the same job id, which is exactly correct here");
 
   const finish = await runCycle({ jobId: queued.job.id, env, deps: { gitImpl: fakeGit() } });
   assert.deepEqual(finish.processed.map((entry) => entry.status), ["done"]);
-  assert.equal(getRoadmapItem(item.id, env).status, "done", "the interrupted path self-heals completely with no operator action at all, unlike the two lost-ownership paths above");
+  assert.equal(getRoadmapItem(item.id, env).status, "in_review", "the interrupted path self-heals completely with no operator action at all, unlike the two lost-ownership paths above");
 });
 
-test("a `gate` outcome keeps the item correctly queued behind a retryable job; a `failed` outcome frees the item for a normal re-queue", async (t) => {
+test("a `gate` outcome keeps the item correctly in progress behind a retryable job; a `failed` outcome frees the item for a normal re-queue", async (t) => {
   const { env: gateEnv, item: gateItem } = makeItemHome(t, "roadmap-lost-gate");
   useFakeClaude(gateEnv, makeDir(t, "roadmap-lost-gate-plan"), [{ stdout: gateStream(), exitCode: 0 }, { stdout: doneStream(), exitCode: 0 }]);
   const gateQueued = await queueRoadmapItem({ id: gateItem.id }, gateEnv);
   const gateCycle = await runCycle({ jobId: gateQueued.job.id, env: gateEnv, deps: { gitImpl: fakeGit() } });
   assert.deepEqual(gateCycle.processed.map((entry) => entry.status), ["gate"]);
   assert.equal(getJob(gateQueued.job.id, gateEnv).status, "gate");
-  assert.equal(getRoadmapItem(gateItem.id, gateEnv).status, "queued");
+  assert.equal(getRoadmapItem(gateItem.id, gateEnv).status, "in_progress");
   assert.throws(
     () => queueableRoadmapItem(gateItem.id, gateEnv),
     /already queued as job `\d+` \(`gate`\); cancel that job first/,
@@ -149,7 +150,7 @@ test("a `gate` outcome keeps the item correctly queued behind a retryable job; a
   await applyRetry({ id: gateQueued.job.id, note: "go ahead", env: gateEnv });
   const gateRetryCycle = await runCycle({ jobId: gateQueued.job.id, env: gateEnv, deps: { gitImpl: fakeGit() } });
   assert.deepEqual(gateRetryCycle.processed.map((entry) => entry.status), ["done"]);
-  assert.equal(getRoadmapItem(gateItem.id, gateEnv).status, "done", "the intended path (queue_retry, not queue_add) resolves the SAME job and closes the SAME item; gate is recoverable by design");
+  assert.equal(getRoadmapItem(gateItem.id, gateEnv).status, "in_review", "the intended path (queue_retry, not queue_add) resolves the SAME job and moves the SAME item; gate is recoverable by design");
 
   const { env: failedEnv, item: failedItem } = makeItemHome(t, "roadmap-lost-failed");
   useFakeClaude(failedEnv, makeDir(t, "roadmap-lost-failed-plan"), [{ stdout: failureStream(), exitCode: 1 }]);
@@ -157,7 +158,7 @@ test("a `gate` outcome keeps the item correctly queued behind a retryable job; a
   const failedCycle = await runCycle({ jobId: failedQueued.job.id, env: failedEnv, deps: { gitImpl: fakeGit() } });
   assert.deepEqual(failedCycle.processed.map((entry) => entry.status), ["failed"]);
   assert.equal(getJob(failedQueued.job.id, failedEnv).status, "failed");
-  assert.equal(getRoadmapItem(failedItem.id, failedEnv).status, "queued", "the item's own status column is untouched by a failed job, same as a done one");
+  assert.equal(getRoadmapItem(failedItem.id, failedEnv).status, "todo", "a failed job sends its item back to todo");
   assert.doesNotThrow(
     () => queueableRoadmapItem(failedItem.id, failedEnv),
     "a `failed` job is NOT live: queueableRoadmapItem lets the item straight through the normal path, no cancel needed",

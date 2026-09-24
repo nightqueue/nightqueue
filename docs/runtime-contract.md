@@ -166,7 +166,7 @@ default. `queue_status` answers `runners` with every live runner, and keeps `run
 alias of the first for one release. `queue_status`, `queue_run` and `queue_retry` also answer
 `advisories`, the advisory lines described in [Queue](queue.md); they never block a start.
 
-The twenty-five MCP tools, with the parameters `nightshift mcp` actually accepts:
+The twenty-seven MCP tools, with the parameters `nightshift mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -177,7 +177,7 @@ The twenty-five MCP tools, with the parameters `nightshift mcp` actually accepts
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |
 | `pipeline_log` | `outcome`, `project?`, `slug?`, `tier?`, `tier_operator?`, `tier_raise_reason?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?}]` |
-| `queue_add` | `project?`, `prompt?`, `roadmap_item_id?`, `cwd?`, `register?`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`) |
+| `queue_add` | `project?` (for an org roadmap item: a project of the org, or `all`), `prompt?`, `roadmap_item_id?`, `cwd?`, `register?`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`) |
 | `queue_status` | `job_id?`, `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_session` | `job_id` |
@@ -188,9 +188,11 @@ The twenty-five MCP tools, with the parameters `nightshift mcp` actually accepts
 | `decision_update` | `id`, `title?`, `context?`, `decision?`, `consequences?`, `status?`, `superseded_by?` |
 | `decision_list` | `project`, `status?` |
 | `decision_recall` | `project`, `query?`, `limit?` (1-20) |
-| `roadmap_save` | `project`, `horizon` (`now`, `next`, `later`), `title`, `detail?`, `decision_id?` |
-| `roadmap_update` | `id`, `horizon?`, `title?`, `detail?`, `status?` (`open`, `done`, `dropped`; `queued` is refused), `position?`, `decision_id?` |
-| `roadmap_get` | `project` |
+| `roadmap_save` | `project`, `title`, `type` (`bug`, `feature`, `improvement`, `chore`, `incident`), `detail?`, `priority?` (1-9, default 5, 1 first), `status?` (default `todo`; `in_progress` is refused), `decision_id?`; `horizon` is refused by name |
+| `roadmap_update` | `id`, `title?`, `detail?`, `type?`, `status?` (`backlog`, `todo`, `in_review`, `done`, `cancelled`; `in_progress` is refused), `priority?`, `position?`, `decision_id?`; `horizon` is refused by name |
+| `roadmap_get` | `project`, `status?` (list), `priority?` (list), `type?` (list); or `id` alone for one item with its comment thread |
+| `roadmap_comment` | `id`, `body` |
+| `roadmap_search` | `query?`, `file?` (a recorded path, exact or a directory above it), `project` or `org` (inside a job: the job's own project), `limit?` (1-5) |
 | `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `project?`, `slug?` |
 | `run_terminate` | `phase`, `reason`, `project?`, `slug?` |
 | `run_outcome` | `status` (`done`, `gate`), `notice?`, `project?`, `slug?` |
@@ -202,11 +204,12 @@ own row, and a `project` or a `slug` sent there is REFUSED instead of silently
 overridden - naming another job's run from inside one is never an accident worth
 guessing at; outside a job both are required. A row that carries no slug yet is
 answered with the `SLUG:` line to print, never with a guessed run directory.
-`run_outcome` with `status: "done"` also closes the roadmap item the job was queued
-from, which is the same closure `queue repair` and the witness reconciliation go
-through. `context_for_phase` returns `{project, block}`: the block is
+`run_outcome` never touches the roadmap: the item the job was queued from follows
+the job's row (see below). `context_for_phase` returns `{project, block}`: the block is
 `## Applicable lessons` + `## Project memory` (+ `## Structural index` for
-`target: "explore"`), already formatted, and is empty when there is genuinely
+`target: "explore"`, + `## Related roadmap items` for `target: "triager"`: at most
+five `- [<ref>] <title> [<status>, p<priority>, <type>]` lines `roadmap_search`
+finds for the query in the job's project), already formatted, and is empty when there is genuinely
 nothing to inject. Inside a job it excludes the lessons this run was already given
 and asks again without the exclusion when that would leave the phase with nothing -
 `lesson_recall` does the same, so no caller keeps that bookkeeping by hand.
@@ -266,8 +269,14 @@ it is refused, like the CLI (see [Queue](queue.md#closing-a-job)).
 Inside a job, a tool that takes a free id only reaches its own: `queue_retry`
 retries the job it is running, and `decision_update` and `roadmap_update` accept
 only ids belonging to the project of that job - another project's id is refused
-naming both projects, and nothing is written. Outside a job none of these
-restrictions apply.
+naming both projects, and nothing is written. `roadmap_get` by `id` and
+`roadmap_comment` accept an item of the job's project or of its org, never a
+sibling project's; a comment written there is signed `job:<id>` and owned by the
+job's project, and the thread read there leaves out a sibling project's comments
+and project rows. `roadmap_search` inside a job always reads the job's own
+project (and its org's items, never a sibling project's comments), and refuses
+any other owner by name.
+Outside a job none of these restrictions apply, and a comment is signed `operator`.
 
 Every optional parameter accepts an explicit `null` and treats it exactly like
 an absent one, so a caller that fills its whole argument object never gets an
@@ -281,10 +290,46 @@ ended stays the runtime's call),
 `feature/refactor`), `outcome` (`pr_opened`, `local_commit`, `no_commit`),
 `gate_stop` (`critique`, `triage`, `architect`, `qa`, `verification`, `runtime`,
 `user`), the phase `status` (`ok`, `failed`, `skipped`), the decision `status`
-(`proposed`, `accepted`, `superseded`, `rejected`), the roadmap `horizon` (`now`,
-`next`, `later`) and the roadmap `status` (`open`, `queued`, `done`, `dropped`,
-of which `queued` is the only one `roadmap_update` refuses to set). A value
-outside them comes back as an error message, never as a stack.
+(`proposed`, `accepted`, `superseded`, `rejected`), the roadmap `priority` (1-9,
+1 first, like a job's) and the roadmap `status` (`backlog`, `todo`,
+`in_progress`, `in_review`, `done`, `cancelled`, of which `in_progress` is the
+only one `roadmap_save` and `roadmap_update` refuse to set: only a job sets it),
+the roadmap `type` (`bug`, `feature`, `improvement`, `chore`, `incident`) and the
+comment `kind` (`note`, `queued`, `pr`, `gate`, `merged`, `failed`, `reopened`,
+`closed`). A value outside them comes back as an error message, never as a stack.
+
+A roadmap item linked to a job follows the job's own row, never the run's report:
+`in_progress` while the job is pending, running or at a gate, `in_review` once it
+is `done`, `done` (with `closed_at`) once it is closed - its pull request merged
+through `queue close` - and `todo` when it fails or is cancelled (a close that
+finds the pull request closed without merge cancels the job). The store
+applies it after every job-status write (`roadmap-workflow.mjs`,
+`JOB_TO_ROADMAP`), and every claim cycle re-syncs an item a missed event left
+behind; `run_outcome` moves nothing. Each event also appends one comment to the
+item's append-only thread, signed `job:<id>`, in the same transaction as the
+status: `queued` (queued or retried), `gate`, `pr` (the job is done), `failed`
+(failed or cancelled) and `closed` (the close, with the merge sha in `refs.sha`);
+running, a release and a park leave none. Its `refs` are read from the job's row: `{job_id, pr, branch,
+sha, files: [{path}], decision_id}`, `files` being what the run's
+`04-implementation.md` lists under `## Modified files`, recorded by the runner.
+An operator's move back from `in_review` or `done` appends `reopened`. A job
+queued from a roadmap item gets a `## Roadmap item` block in its prompt
+(`Roadmap: <owner>#<id>`, `Type:`, `Commit type:`), its tier defaults from the
+type (`bug`/`improvement`/`incident` → `simple`, `feature` → `complex`, `chore` →
+`trivial`; an explicit tier wins), and `nightshift run pr` publishes its body with
+a last `Roadmap: <owner>#<id>` line - a copy in the run directory
+(`pr-body.roadmap.md`), the agent's file untouched, and nothing added when the
+body already has a `Roadmap:` line.
+
+An org item is queued per project (`project` names one project of the org, or
+`all`), each on its own `roadmap_item_projects` row linked to that project's
+job; the item itself carries no job. Each row follows its job exactly as above,
+its comments carry the row's `project`, and a job of a row publishes
+`Roadmap: <org>#<id>`. The org item's status is derived from its rows in the
+same transaction: `in_progress` while any row is, `done` once every row is
+`done` or `cancelled`, otherwise the lowest open status among them. Closing it by
+hand cancels every open row with a `closed` comment each. `nightshift doctor`
+reports an org item whose persisted status disagrees with its rows.
 
 `pipeline_runs.model` and `pipeline_runs.session_id` are not parameters: the
 server reads them from `NIGHTSHIFT_MODEL` and `NIGHTSHIFT_SESSION_ID` in its own

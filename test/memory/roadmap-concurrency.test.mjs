@@ -15,14 +15,14 @@ function buildWriterSource(moduleUrl) {
   return [
     `import { saveRoadmapItem } from ${JSON.stringify(moduleUrl)};`,
     "",
-    "const [, , project, horizon, label, durationRaw] = process.argv;",
+    "const [, , project, priorityRaw, label, durationRaw] = process.argv;",
     "const deadline = Date.now() + Number(durationRaw);",
     "let written = 0;",
     "const positions = [];",
     "const errors = [];",
     "while (Date.now() < deadline) {",
     "  try {",
-    "    const row = saveRoadmapItem({ project, horizon, title: `${label}-${written}` }, process.env);",
+    "    const row = saveRoadmapItem({ type: 'improvement', project, priority: Number(priorityRaw), title: `${label}-${written}` }, process.env);",
     "    positions.push(row.position);",
     "    written += 1;",
     "  } catch (err) {",
@@ -40,10 +40,10 @@ function writeChildScript(dir) {
   return scriptPath;
 }
 
-// Spawns one real OS process hammering saveRoadmapItem into the same (project, horizon) group.
-function runWriter(scriptPath, env, project, horizon, label, durationMs) {
+// Spawns one real OS process hammering saveRoadmapItem into the same (project, priority) group.
+function runWriter(scriptPath, env, project, priority, label, durationMs) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, project, horizon, label, String(durationMs)], {
+    const child = spawn(process.execPath, [scriptPath, project, String(priority), label, String(durationMs)], {
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -59,7 +59,7 @@ function runWriter(scriptPath, env, project, horizon, label, durationMs) {
 }
 
 test(
-  `${WRITERS} real OS processes racing saveRoadmapItem into the same horizon for ${DURATION_MS}ms ` +
+  `${WRITERS} real OS processes racing saveRoadmapItem into the same priority group for ${DURATION_MS}ms ` +
     "(many thousands of attempts, not a single shot) never leave a duplicate or gapped position",
   async (t) => {
     const env = makeHome(t, "roadmap-race");
@@ -69,7 +69,7 @@ test(
 
     const labels = Array.from({ length: WRITERS }, (_, index) => `W${index}`);
     const results = await Promise.all(
-      labels.map((label) => runWriter(scriptPath, env, "alpha", "now", label, DURATION_MS)),
+      labels.map((label) => runWriter(scriptPath, env, "alpha", 5, label, DURATION_MS)),
     );
 
     results.forEach((result, index) => {
@@ -94,8 +94,8 @@ test(
 
     const db = openDb(env);
     const rows = db
-      .prepare("SELECT position FROM roadmap_items WHERE project IS ? AND horizon = ? ORDER BY position")
-      .all("alpha", "now");
+      .prepare("SELECT position FROM roadmap_items WHERE project IS ? AND priority = ? ORDER BY position")
+      .all("alpha", 5);
     assert.equal(
       rows.length,
       totalWritten,

@@ -88,12 +88,13 @@ test("every domain of the store writes and reads back on a real home", async (t)
   });
   assert.equal((await store.decisions.listDecisions({ project: "alpha" })).length, 1);
 
-  await store.roadmap.saveRoadmapItem({ project: "alpha", horizon: "now", title: "close the boundary" });
+  await store.roadmap.saveRoadmapItem({ type: "improvement", project: "alpha", title: "close the boundary" });
   const roadmap = await store.roadmap.listRoadmap("alpha");
   assert.deepEqual(
-    roadmap.horizons.map((horizon) => horizon.items.length),
-    [1, 0, 0],
+    roadmap.items.map((item) => [item.title, item.status, item.priority]),
+    [["close the boundary", "todo", 5]],
   );
+  assert.deepEqual(await store.roadmap.roadmapDrift(), []);
 
   assert.deepEqual(await store.orgs.usage("acme"), []);
 });
@@ -121,9 +122,9 @@ async function queuedItem(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const store = createLocalStore(env);
-  const item = await store.roadmap.saveRoadmapItem({ project: "alpha", horizon: "now", title: "deliver the thing" });
+  const item = await store.roadmap.saveRoadmapItem({ type: "improvement", project: "alpha", title: "deliver the thing" });
   const job = await store.jobs.addJob({ project: "alpha", prompt: "deliver the thing" });
-  assert.equal(await store.roadmap.markRoadmapItemQueued(item.id, job.id), true, "setup: the item was not linked to its job");
+  assert.equal(await store.roadmap.linkRoadmapItemJob(item.id, job.id), true, "setup: the item was not linked to its job");
   return { store, item, job };
 }
 
@@ -132,61 +133,61 @@ async function itemStatus(store, item) {
   return (await store.roadmap.getRoadmapItem(item.id)).status;
 }
 
-test("a job the store finishes as done closes its roadmap item, and one that gates leaves it open", async (t) => {
+test("a job the store finishes as done puts its roadmap item in review, and one that gates keeps it in progress", async (t) => {
   const gated = await queuedItem(t, "store-close-gate");
   await gated.store.jobs.claimJobById(gated.job.id, { worker: WORKER, cap: 4 });
   assert.equal(await gated.store.jobs.finishJob(gated.job.id, { worker: WORKER, status: "gate", noticeMd: "answer me" }), true);
-  assert.equal(await itemStatus(gated.store, gated.item), "queued", "a gated job closed the item it never delivered");
+  assert.equal(await itemStatus(gated.store, gated.item), "in_progress", "a gated job moved the item it never delivered");
 
   const delivered = await queuedItem(t, "store-close-finish");
   await delivered.store.jobs.claimJobById(delivered.job.id, { worker: WORKER, cap: 4 });
   assert.equal(await delivered.store.jobs.finishJob(delivered.job.id, { worker: WORKER, status: "done", prUrl: PR_URL }), true);
-  assert.equal(await itemStatus(delivered.store, delivered.item), "done");
+  assert.equal(await itemStatus(delivered.store, delivered.item), "in_review");
 });
 
-test("a re-classification into done closes the item, and one that stays failed leaves it open", async (t) => {
+test("a re-classification into done puts the item in review, and one that stays failed keeps it at todo", async (t) => {
   const { store, item, job } = await queuedItem(t, "store-close-reclassify");
   await store.jobs.claimJobById(job.id, { worker: WORKER, cap: 4 });
   await store.jobs.finishJob(job.id, { worker: WORKER, status: "failed" });
 
   assert.equal(await store.jobs.reclassifyJob(job.id, { status: "failed", prUrl: PR_URL }), true);
-  assert.equal(await itemStatus(store, item), "queued", "a re-classification that kept the failure closed the item");
+  assert.equal(await itemStatus(store, item), "todo", "a re-classification that kept the failure moved the item");
 
   assert.equal(await store.jobs.reclassifyJob(job.id, { status: "done", prUrl: PR_URL }), true);
-  assert.equal(await itemStatus(store, item), "done");
+  assert.equal(await itemStatus(store, item), "in_review");
 });
 
-test("a repair from a done witness closes the item, and a failed witness leaves it open", async (t) => {
+test("a repair from a done witness puts the item in review, and a failed witness sends it back to todo", async (t) => {
   const failed = await queuedItem(t, "store-close-witness-failed");
   await failed.store.jobs.claimJobById(failed.job.id, { worker: WORKER, cap: 4 });
   assert.equal(await failed.store.jobs.repairJobFromWitness(failed.job.id, { status: "failed", prUrl: null }), true);
-  assert.equal(await itemStatus(failed.store, failed.item), "queued", "a failed witness closed the item");
+  assert.equal(await itemStatus(failed.store, failed.item), "todo");
 
   const delivered = await queuedItem(t, "store-close-witness-done");
   await delivered.store.jobs.claimJobById(delivered.job.id, { worker: WORKER, cap: 4 });
   assert.equal(await delivered.store.jobs.repairJobFromWitness(delivered.job.id, { status: "done", prUrl: PR_URL }), true);
-  assert.equal(await itemStatus(delivered.store, delivered.item), "done");
+  assert.equal(await itemStatus(delivered.store, delivered.item), "in_review");
 });
 
-test("a write another worker owns reports false and closes nothing", async (t) => {
+test("a write another worker owns reports false and moves nothing", async (t) => {
   const { store, item, job } = await queuedItem(t, "store-close-refused");
   await store.jobs.claimJobById(job.id, { worker: WORKER, cap: 4 });
 
   assert.equal(await store.jobs.finishJob(job.id, { worker: "host:9999", status: "done", prUrl: PR_URL }), false);
-  assert.equal(await itemStatus(store, item), "queued", "the item of a job another worker owns was closed by a refused write");
+  assert.equal(await itemStatus(store, item), "in_progress", "the item of a job another worker owns was moved by a refused write");
   assert.equal((await store.jobs.getJob(job.id)).status, "running");
 });
 
-test("closeForJob is tolerant: an unknown job answers false instead of raising", async (t) => {
-  const { store, item, job } = await queuedItem(t, "store-close-for-job");
+test("followJob answers 0 for an unknown job, refuses a malformed id, and is idempotent", async (t) => {
+  const { store, item, job } = await queuedItem(t, "store-follow-job");
 
-  assert.equal(await store.roadmap.closeForJob(4242), false);
-  assert.equal(await store.roadmap.closeForJob("not an id"), false);
-  assert.equal(await itemStatus(store, item), "queued");
+  assert.equal(await store.roadmap.followJob(4242), 0);
+  await assert.rejects(store.roadmap.followJob("not an id"), /positive integer roadmap item id/);
+  assert.equal(await itemStatus(store, item), "in_progress");
 
-  assert.equal(await store.roadmap.closeForJob(job.id), true);
-  assert.equal(await itemStatus(store, item), "done");
-  assert.equal(await store.roadmap.closeForJob(job.id), false, "closing an item twice reported a second close");
+  await store.jobs.cancelJob(job.id, { reason: "not now" });
+  assert.equal(await itemStatus(store, item), "todo");
+  assert.equal(await store.roadmap.followJob(job.id), 0, "a second follow moved the item again");
 });
 
 test("health answers the raw numbers of a diagnosis, never an exception", async (t) => {

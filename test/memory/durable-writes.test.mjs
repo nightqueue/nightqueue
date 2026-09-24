@@ -125,6 +125,22 @@ test("a finish that survives the retry keeps the job finished and says so twice,
   assert.equal(occurrences(stderr(), FAILURE), 2, "the two attempts were not both reported on stderr");
 });
 
+test("the repair of a finish never reverts a row that legitimately moved on, like a retry back to pending", (t) => {
+  const env = makeQueue(t, "finish-verify-moved-on");
+  captureStderr(t);
+  const id = claimed(env);
+  openDb(env).exec(
+    `CREATE TRIGGER retried_after_finish AFTER UPDATE OF status ON jobs WHEN NEW.status = 'failed' AND OLD.status = 'running'
+     BEGIN UPDATE jobs SET status = 'pending', finished_at = NULL WHERE id = NEW.id; END`,
+  );
+
+  assert.equal(finishJob(id, { worker: WORKER, status: "failed" }, env), true);
+
+  const row = getJob(id, env);
+  assert.equal(row.status, "pending", "the repair reverted a retried job to its finished status");
+  assert.equal(row.finished_at, null);
+});
+
 test("finishJob still answers false for the one reason it always did: no row matched the claim", (t) => {
   const env = makeQueue(t, "finish-lost-job");
   const stderr = captureStderr(t);

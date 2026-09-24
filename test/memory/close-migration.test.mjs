@@ -147,13 +147,13 @@ function openerPath(t) {
   return path;
 }
 
-test("a v15 home opens at v16 with the close columns, no ship column, and the closed invariant in the schema", (t) => {
+test("a v15 home opens at v17 with the close columns, no ship column, and the closed invariant in the schema", (t) => {
   const env = makeHome(t, "close-migration-schema");
   seedV15Home(env);
   const db = openDb(env);
 
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 16);
-  assert.equal(DB_USER_VERSION, 16);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17);
+  assert.equal(DB_USER_VERSION, 17);
   const columns = db.prepare("PRAGMA table_info(jobs)").all().map((column) => column.name);
   for (const column of ["close_status", "close", "close_lease_until", "close_worker"]) assert.ok(columns.includes(column), `${column} is missing`);
   for (const column of LEGACY_COLUMNS) assert.equal(columns.includes(column), false, `${column} survived the migration`);

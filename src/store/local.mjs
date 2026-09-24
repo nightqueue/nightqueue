@@ -8,30 +8,89 @@ import * as lessons from "../memory/lessons.mjs";
 import * as memory from "../memory/memory.mjs";
 import * as orgs from "../memory/orgs.mjs";
 import * as roadmap from "../memory/roadmap.mjs";
+import * as roadmapBackfill from "../memory/roadmap-backfill.mjs";
+import * as roadmapSearch from "../memory/roadmap-search.mjs";
 import * as runs from "../memory/runs.mjs";
 import * as search from "../memory/search.mjs";
 import { READ_ONLY_METHODS } from "./store.mjs";
 
 const READ_ONLY_ALLOWED = new Set(READ_ONLY_METHODS);
 
-// Closes the roadmap item a job came from; the bookkeeping never costs the outcome that was just written.
-async function closeRoadmapItemOf(jobId, env) {
+// Every job method whose write can move a job's status; the roadmap follows each of them after the write succeeds.
+export const JOB_STATUS_WRITERS = Object.freeze([
+  "claimNextJob",
+  "claimJobById",
+  "releaseJob",
+  "parkJob",
+  "finishJob",
+  "cancelJob",
+  "retryJob",
+  "repairJobFromWitness",
+  "reclassifyJob",
+  "settleClose",
+  "cancelOnClosedPr",
+]);
+
+// Runs a write that moves a job out of a status the roadmap comments on in one transaction with the follow of the status it
+// left, so a writer racing the one that set it never skips its event; an id the write refuses anyway goes to the write alone.
+function followingPassedStatus({ jobId, write, fromKey }, env) {
+  if (!Number.isInteger(jobId) || jobId < 1) return write();
+  return roadmap.followJobWrite({ jobId, write, fromKey }, env);
+}
+
+// Brings the roadmap items of a job in line with its row; the bookkeeping never costs the job write it follows.
+function followJobQuietly(jobId, env) {
   try {
-    return roadmap.markRoadmapItemDone(jobId, env) > 0;
+    roadmap.followJob(jobId, env);
   } catch {
-    return false;
+    return;
   }
 }
 
-// Runs a writer that can land a job row on `done` and closes the job's roadmap item when the writer reports the row really got there; a refusal or a no-op closes nothing.
-async function writeJobStatus({ id, status, write, env }) {
-  const written = write();
-  if (written === true && status === "done") await closeRoadmapItemOf(id, env);
-  return written;
+// Re-syncs every roadmap item whose job moved without it; the bookkeeping never costs the sweep it follows.
+function followDriftedQuietly(env) {
+  try {
+    roadmap.followDriftedJobs(env);
+  } catch {
+    return;
+  }
+}
+
+// The job a successful write moved: the row it returned, or the id it was called with; null when the write refused.
+function writtenJobId(written, firstArg) {
+  if (!written) return null;
+  if (typeof written === "object" && Number.isInteger(written.id)) return written.id;
+  return Number.isInteger(firstArg) ? firstArg : null;
+}
+
+// Wraps every job-status writer so the roadmap follows the row the writer just committed.
+function followingJobWrites(domain, env) {
+  for (const name of JOB_STATUS_WRITERS) {
+    const write = domain[name];
+    domain[name] = async (...args) => {
+      const written = await write(...args);
+      const jobId = writtenJobId(written, args[0]);
+      if (jobId !== null) followJobQuietly(jobId, env);
+      return written;
+    };
+  }
+  return domain;
+}
+
+// Sweeps the orphaned jobs and then re-syncs the roadmap items any missed event left behind.
+function sweepAndFollow(env, options) {
+  const swept = jobs.sweepOrphans(env, options);
+  followDriftedQuietly(env);
+  return swept;
 }
 
 // Every job method; the reads take the store's own connection, which is what lets a follow poll through `withReadOnlyStore` and never answer from a stale WAL snapshot.
 function jobsDomain(env, db) {
+  return followingJobWrites(jobsMethods(env, db), env);
+}
+
+// The job methods as `src/memory/jobs.mjs` answers them, before the roadmap follow is wrapped around the writers.
+function jobsMethods(env, db) {
   return {
     addJob: async (spec) => jobs.addJob(spec, env),
     claimNextJob: async (spec) => jobs.claimNextJob(spec, env),
@@ -40,13 +99,14 @@ function jobsDomain(env, db) {
     parkJob: async (id, spec) => jobs.parkJob(id, spec, env),
     renewLease: async (id, spec) => jobs.renewLease(id, spec, env),
     countAttempt: async (id, spec) => jobs.countAttempt(id, spec, env),
-    sweepOrphans: async (options) => jobs.sweepOrphans(env, options),
+    sweepOrphans: async (options) => sweepAndFollow(env, options),
     persistRunFacts: async (id, facts) => jobs.persistRunFacts(id, facts, env),
     linkPipelineRun: async (jobId, ref) => jobs.linkPipelineRun(jobId, ref, env),
-    finishJob: async (id, outcome) => writeJobStatus({ id, status: outcome?.status, write: () => jobs.finishJob(id, outcome, env), env }),
+    finishJob: async (id, outcome) => jobs.finishJob(id, outcome, env),
     cancelJob: async (id, options) => jobs.cancelJob(id, options, env),
     listCloseCandidates: async () => jobs.listCloseCandidates(env, db()),
-    retryJob: async (id, options) => jobs.retryJob(id, options, env),
+    retryJob: async (id, options) =>
+      followingPassedStatus({ jobId: id, write: () => jobs.retryJob(id, options, env), fromKey: "retriedFrom" }, env),
     getJob: async (id) => jobs.getJob(id, env, db()),
     listJobs: async (options) => jobs.listJobs(options, env, db()),
     countsByStatus: async () => jobs.countsByStatus(env, db()),
@@ -55,9 +115,8 @@ function jobsDomain(env, db) {
     countActiveJobsByProject: async () => jobs.countActiveJobsByProject(env, db()),
     firstActiveJobId: async () => jobs.firstActiveJobId(env),
     isJobActive: async (id) => jobs.isJobActive(id, env, db()),
-    repairJobFromWitness: async (id, terminal) =>
-      writeJobStatus({ id, status: terminal?.status, write: () => jobs.repairJobFromWitness(id, terminal, env), env }),
-    reclassifyJob: async (id, outcome) => writeJobStatus({ id, status: outcome?.status, write: () => jobs.reclassifyJob(id, outcome, env), env }),
+    repairJobFromWitness: async (id, terminal) => jobs.repairJobFromWitness(id, terminal, env),
+    reclassifyJob: async (id, outcome) => jobs.reclassifyJob(id, outcome, env),
     correctJobPrAttribution: async (id, spec) => jobs.correctJobPrAttribution(id, spec, env),
     hasClaimablePending: async () => jobs.hasClaimablePending(env),
     peekNextJob: async () => jobs.peekNextJob(env),
@@ -144,17 +203,23 @@ function decisionsDomain(env, db) {
   };
 }
 
-// The roadmap; `listRoadmap` takes the store's own connection, which is what makes it work read-only.
+// The roadmap; `listRoadmap`, `searchRoadmap`, `getRoadmapItemDetail` and `roadmapDrift` take the store's own connection, which is what makes them work read-only.
 function roadmapDomain(env, db) {
   return {
     getRoadmapItem: async (id) => roadmap.getRoadmapItem(id, env),
+    getRoadmapItemDetail: async (id, options) => roadmap.getRoadmapItemDetail(id, options, env, db()),
     saveRoadmapItem: async (item) => roadmap.saveRoadmapItem(item, env),
     updateRoadmapItem: async (id, patch) => roadmap.updateRoadmapItem(id, patch, env),
-    listRoadmap: async (owner) => roadmap.listRoadmap(owner, env, db()),
+    addRoadmapComment: async (spec) => roadmap.addRoadmapComment(spec, env),
+    roadmapRefOfJob: async (jobId) => roadmap.roadmapRefOfJob(jobId, env),
+    backfillRoadmap: async (options) => roadmapBackfill.backfillRoadmap(options, env),
+    listRoadmap: async (owner, filters) => roadmap.listRoadmap(owner, filters, env, db()),
+    searchRoadmap: async (spec) => roadmapSearch.searchRoadmap(spec, env, db()),
     queueableRoadmapItem: async (id) => roadmap.queueableRoadmapItem(id, env),
-    markRoadmapItemQueued: async (id, jobId) => roadmap.markRoadmapItemQueued(id, jobId, env),
-    markRoadmapItemDone: async (jobId) => roadmap.markRoadmapItemDone(jobId, env),
-    closeForJob: async (jobId) => closeRoadmapItemOf(jobId, env),
+    linkRoadmapItemJob: async (id, jobId) => roadmap.linkRoadmapItemJob(id, jobId, env),
+    followJob: async (jobId) => roadmap.followJob(jobId, env),
+    followDriftedJobs: async () => roadmap.followDriftedJobs(env),
+    roadmapDrift: async () => roadmap.roadmapDrift(env, db()),
     buildRoadmapPrompt: async (spec) => roadmap.buildRoadmapPrompt(spec, env),
     queueRoadmapItem: async (spec) => roadmap.queueRoadmapItem(spec, env),
   };

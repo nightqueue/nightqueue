@@ -7,7 +7,7 @@ import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { launchOperator } from "../host/operator.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
-import { PROMPT_SOURCE_CONFLICT, getRoadmapItem, queueRoadmapItem } from "../memory/roadmap.mjs";
+import { ALL_PROJECTS, PROMPT_SOURCE_CONFLICT } from "../memory/roadmap.mjs";
 import { ownerLabel } from "../memory/scope.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
@@ -68,7 +68,7 @@ import { choose, confirm } from "./prompt.mjs";
 import { runtimeLabel } from "./runtime-versions.mjs";
 
 export const USAGE = {
-  add: "nightshift queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id>]",
+  add: "nightshift queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id> [--project <name|all>]]",
   status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightshift queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightshift queue cancel <id> [--reason <text>] [--json]",
@@ -307,29 +307,31 @@ async function addFromPrompt(positionals, values, ctx) {
   return await openStore(ctx.env).jobs.addJob({ project: target.project.name, prompt, ...addLimits(values) });
 }
 
-// Project the job of a roadmap item goes to: a project item owns it, an org item takes `--project` or the current directory.
-function roadmapTarget(item, values, ctx) {
-  if (values.project !== undefined) return { name: values.project, fromCwd: false };
-  if (item?.scope !== "org") return { name: undefined, fromCwd: false };
-  const resolved = resolveProject(loadConfig(ctx.env, { warn: ctx.err }), { cwd: ctx.cwd ?? process.cwd() });
-  return { name: resolved?.name, fromCwd: Boolean(resolved) };
+// Refuses `--run` for an org item queued for `all`, because it starts one job and `all` fathers one per project.
+function refuseRunForAll(values) {
+  if (values.run === true && values.project === ALL_PROJECTS) {
+    throw new UserError(`\`--run\` starts one job, and \`--project ${ALL_PROJECTS}\` queues one per project; queue them, then start the batch with \`nightshift queue run\``);
+  }
 }
 
-// The line the roadmap path answers with: a project item is now `queued`, an org item stays open and names where its job went.
-function roadmapQueuedLine({ item, targetProject }) {
-  if (item.scope !== "org") return `roadmap item #${item.id} of \`${item.project}\` is now \`queued\``;
-  return `roadmap item #${item.id} of org \`${item.org}\` queued for \`${targetProject}\`; it stays \`open\` until you mark it done`;
+// The lines the roadmap path answers with: a project item is now `in_progress`; an org item names each project row its jobs went to and the ones skipped.
+function roadmapQueuedLines({ item, jobs, skipped }) {
+  if (item.scope !== "org") return [`roadmap item #${item.id} of \`${item.project}\` is now \`in_progress\``];
+  const lines = [
+    `roadmap item #${item.id} of org \`${item.org}\` queued for ${jobs.map((job) => `\`${job.project}\``).join(", ")}; its status is derived from its project rows`,
+  ];
+  for (const entry of skipped) lines.push(`skipped \`${entry.project}\`: job #${entry.job_id ?? "?"} (${entry.job_status ?? "unknown"}) still holds it`);
+  return lines;
 }
 
-// Queues the job a roadmap item builds; a project item owns its project, an org item names the project of the job.
+// Queues the job a roadmap item builds; a project item owns its project, an org item needs `--project <name|all>`.
 async function addFromRoadmap(positionals, values, ctx) {
   if (positionals.length) throw new UserError(PROMPT_SOURCE_CONFLICT);
+  refuseRunForAll(values);
   const id = requireInt("--roadmap", values.roadmap);
-  const target = roadmapTarget(getRoadmapItem(id, ctx.env), values, ctx);
-  const queued = await queueRoadmapItem({ id, project: target.name, ...addLimits(values) }, ctx.env);
-  if (target.fromCwd) ctx.out(`project \`${target.name}\` resolved from the current directory`);
-  ctx.out(roadmapQueuedLine(queued));
-  return queued.job;
+  const queued = await openStore(ctx.env).roadmap.queueRoadmapItem({ id, project: values.project, ...addLimits(values) });
+  for (const line of roadmapQueuedLines(queued)) ctx.out(line);
+  return queued.jobs;
 }
 
 // Runs `queue add`, with the job built from the words of the command line or from the roadmap item `--roadmap` names.
@@ -340,10 +342,12 @@ async function runAdd(argv, ctx) {
   }
   const { values, positionals } = parseAdd(argv);
   checkForegroundNeedsRun(values, USAGE.add);
-  const job =
+  const jobs =
     values.roadmap === undefined
-      ? await addFromPrompt(positionals, values, ctx)
+      ? [await addFromPrompt(positionals, values, ctx)]
       : await addFromRoadmap(positionals, values, ctx);
+  const job = jobs[jobs.length - 1];
+  for (const earlier of jobs.slice(0, -1)) ctx.out(`queued job #${earlier.id} for \`${earlier.project}\``);
   ctx.out(await addedLine(job, values.run === true, ctx));
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }

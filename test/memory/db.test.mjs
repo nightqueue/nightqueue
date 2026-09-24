@@ -58,18 +58,21 @@ const DECISION_COLUMNS = [
 
 const ROADMAP_COLUMNS = [
   "id",
+  "scope",
   "project",
-  "horizon",
+  "org",
   "title",
   "detail",
   "status",
+  "priority",
+  "type",
   "position",
   "decision_id",
   "job_id",
+  "job_status_seen",
+  "closed_at",
   "created_at",
   "updated_at",
-  "scope",
-  "org",
 ];
 
 // Everything a database written by the previous schema version does NOT have yet.
@@ -204,13 +207,13 @@ test("the migration is idempotent and keeps the data across a reopen", (t) => {
   const env = makeHome(t, "db-migrate");
   const first = openDb(env);
   const id = insertLesson(first, { title: "the migration keeps the rows" });
-  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 16);
+  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 17);
   assert.deepEqual(columnsOf(first, "lessons"), LESSON_COLUMNS);
   closeDb(env);
 
   const second = openDb(env);
   assert.notEqual(second, first);
-  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 16);
+  assert.equal(second.prepare("PRAGMA user_version").get().user_version, 17);
   assert.deepEqual(columnsOf(second, "lessons"), LESSON_COLUMNS);
   assert.equal(second.prepare("SELECT title FROM lessons WHERE id = ?").get(id).title, "the migration keeps the rows");
   assert.deepEqual(matchIds(second, "lessons_fts", '"migration"'), [id]);
@@ -241,14 +244,21 @@ test("the decisions and roadmap tables are created with their columns, defaults 
     /CHECK constraint failed/,
   );
 
-  db.prepare("INSERT INTO roadmap_items (project, horizon, title, position) VALUES (?, ?, ?, 1)").run(
-    "alpha",
-    "now",
-    "deliver the roadmap",
+  db.prepare("INSERT INTO roadmap_items (project, title, position) VALUES (?, ?, 1)").run("alpha", "deliver the roadmap");
+  assert.deepEqual(
+    { ...db.prepare("SELECT status, priority, type FROM roadmap_items").get() },
+    { status: "todo", priority: 5, type: "improvement" },
   );
-  assert.equal(db.prepare("SELECT status FROM roadmap_items").get().status, "open");
   assert.throws(
-    () => db.prepare("INSERT INTO roadmap_items (project, horizon, title, position) VALUES (?, ?, ?, 1)").run("alpha", "someday", "t"),
+    () => db.prepare("INSERT INTO roadmap_items (project, title, type, position) VALUES (?, ?, ?, 1)").run("alpha", "t", "epic"),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
+    () => db.prepare("INSERT INTO roadmap_items (project, title, status, position) VALUES (?, ?, ?, 1)").run("alpha", "t", "open"),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
+    () => db.prepare("INSERT INTO roadmap_items (project, title, priority, position) VALUES (?, ?, ?, 1)").run("alpha", "t", 10),
     /CHECK constraint failed/,
   );
 });
@@ -264,7 +274,7 @@ test("the migration from user_version 2 keeps every row and adds the decisions s
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 16, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
     assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
     assert.ok(columnsOf(db, "jobs").includes("tier"), `jobs.tier missing on pass ${pass}`);
@@ -303,7 +313,7 @@ test("the migration from user_version 3 adds the tier columns once and keeps eve
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 16, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     const row = db.prepare("SELECT * FROM jobs").get();
     assert.equal(row.prompt, "fix the worker");
@@ -327,7 +337,7 @@ test("a home seeded at v9 with merged_at and merge_sha populated opens at the cu
   closeDb(env);
 
   const opened = openDb(env);
-  assert.equal(opened.prepare("PRAGMA user_version").get().user_version, 16);
+  assert.equal(opened.prepare("PRAGMA user_version").get().user_version, 17);
   assert.equal(columnsOf(opened, "jobs").includes("merged_at"), false);
   assert.equal(columnsOf(opened, "jobs").includes("merge_sha"), false);
   const row = opened.prepare("SELECT project, prompt, status FROM jobs WHERE id = ?").get(Number(inserted.lastInsertRowid));
@@ -335,7 +345,7 @@ test("a home seeded at v9 with merged_at and merge_sha populated opens at the cu
   closeDb(env);
 
   const reopened = openDb(env);
-  assert.equal(reopened.prepare("PRAGMA user_version").get().user_version, 16);
+  assert.equal(reopened.prepare("PRAGMA user_version").get().user_version, 17);
   assert.equal(columnsOf(reopened, "jobs").includes("merged_at"), false);
   assert.equal(columnsOf(reopened, "jobs").includes("merge_sha"), false);
 });
@@ -366,7 +376,7 @@ test("the migration to v10 turns a merged row into closed, drops pr_checked_at/m
 
   for (const pass of [1, 2]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 16, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     assert.deepEqual(jobStatuses(db), ["closed", "done"], `pass ${pass}`);
     const row = db.prepare("SELECT pr_url FROM jobs WHERE id = ?").get(merged);
@@ -408,7 +418,7 @@ test("the migration from user_version 10 adds last_session_id and last_session_a
 
   for (const pass of [1, 2]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 16, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     const row = db.prepare("SELECT session_id, last_session_id, last_session_attempt FROM jobs").get();
     assert.deepEqual({ ...row }, { session_id: "sess-1", last_session_id: null, last_session_attempt: null }, `pass ${pass}`);
@@ -439,7 +449,7 @@ test("the migration from user_version 11 adds bash_timeouts, tasks_backgrounded 
 
   for (const pass of [1, 2]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 16, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     const row = db.prepare("SELECT prompt, bash_timeouts, tasks_backgrounded, tasks_killed FROM jobs").get();
     assert.deepEqual(
@@ -466,7 +476,7 @@ test("the migration from user_version 12 adds baseline_ctx once and keeps every 
 
   for (const pass of [1, 2]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 16, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     const row = db.prepare("SELECT prompt, baseline_ctx FROM jobs").get();
     assert.deepEqual({ ...row }, { prompt: "fix the worker", baseline_ctx: null }, `pass ${pass}`);
@@ -487,7 +497,7 @@ test("the migration from user_version 13 adds the five orchestrator counters onc
 
   for (const pass of [1, 2]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 16, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     const row = db.prepare("SELECT prompt, bash_timeouts, orch_turns, orch_reads, orch_bash, orch_bash_explore, orch_ctx_last FROM jobs").get();
     assert.deepEqual(
@@ -510,7 +520,7 @@ test("the migration from user_version 14 adds the four close columns once and ke
 
   for (const pass of [1, 2]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 16, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     const row = db.prepare("SELECT prompt, status, close_status, close, close_worker, close_lease_until FROM jobs").get();
     assert.deepEqual(
@@ -553,7 +563,7 @@ test("the migration from user_version 4 adds the tier columns once and keeps eve
 
   for (const pass of [1, 2, 3]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 16, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "jobs"), JOB_COLUMNS, `pass ${pass}`);
     assert.ok(columnsOf(db, "pipeline_runs").includes("tier_operator"), `pipeline_runs.tier_operator missing on pass ${pass}`);
     assert.ok(
@@ -576,16 +586,16 @@ test("the migration from user_version 5 gives every existing row the project sco
       .prepare("INSERT INTO decisions (project, number, title, context, decision) VALUES (?, ?, ?, ?, ?)")
       .run("alpha", number, `decision ${number}`, "context", "decision");
   }
-  first.prepare("INSERT INTO roadmap_items (project, horizon, title, position) VALUES (?, 'now', ?, 1)").run("alpha", "deliver it");
+  first.prepare("INSERT INTO roadmap_items (project, title, position) VALUES (?, ?, 1)").run("alpha", "deliver it");
   first.exec(DOWNGRADE_TO_V5);
   assert.equal(first.prepare("PRAGMA user_version").get().user_version, 5);
   assert.equal(columnsOf(first, "decisions").includes("scope"), false, "the downgrade kept the scope column");
   closeDb(env);
 
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 16);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17);
   assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
-  assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
+  assert.deepEqual(columnsOf(db, "roadmap_items").sort(), [...ROADMAP_COLUMNS].sort());
   assert.equal(db.prepare("SELECT COUNT(*) AS total FROM decisions WHERE scope = 'project' AND org IS NULL").get().total, 3);
   assert.equal(db.prepare("SELECT scope FROM roadmap_items").get().scope, "project");
   assert.deepEqual(
@@ -718,10 +728,10 @@ test("a v10 database gains decisions.job_id and its index, keeping every decisio
   first.exec("DROP INDEX decisions_job_idx; ALTER TABLE decisions DROP COLUMN job_id; PRAGMA user_version = 10;");
   closeDb(env);
 
-  assert.equal(DB_USER_VERSION, 16);
+  assert.equal(DB_USER_VERSION, 17);
   for (const pass of [1, 2]) {
     const db = openDb(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 16, `pass ${pass}`);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17, `pass ${pass}`);
     assert.ok(columnsOf(db, "decisions").includes("job_id"), `decisions.job_id missing on pass ${pass}`);
     const indexes = db.prepare("PRAGMA index_list(decisions)").all().map((index) => index.name);
     assert.ok(indexes.includes("decisions_job_idx"), `job index missing on pass ${pass}: ${indexes.join(", ")}`);

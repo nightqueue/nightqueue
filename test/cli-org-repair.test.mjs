@@ -21,7 +21,7 @@ function makeOrgHome(t, name) {
   const env = makeHome(t, name);
   const cwd = makeProject(t, env, "alpha", { org: "acme" });
   saveDecision({ org: "acme", title: "one queue per product", context: "c", decision: "d" }, env);
-  saveRoadmapItem({ org: "acme", horizon: "now", title: "raise the node version" }, env);
+  saveRoadmapItem({ type: "improvement", org: "acme", title: "raise the node version" }, env);
   return { env, cwd };
 }
 

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, logsDir, runDir } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
@@ -10,6 +10,7 @@ import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore, openStoreReadOnly } from "../store/open.mjs";
 import { acquire, bashTimeoutS, concurrencyCap, inheritUserEnvironment, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isTerminalRuntimeKill, isTransientFailure } from "./classify.mjs";
+import { recordedFiles } from "./file-list.mjs";
 import { preflight } from "./preflight.mjs";
 import {
   clearOwnPause,
@@ -499,6 +500,25 @@ async function dropRunWorktree(job, worktree, { env, checkout }) {
   process.stderr.write(`job #${job.id}: ${line}\n`);
 }
 
+// A path the implementation listed, relative to the run's worktree when it lives under it, the way the repository names it.
+function repoPath(path, worktree) {
+  if (!worktree || !isAbsolute(path)) return path;
+  const inside = relative(worktree, path);
+  return inside && !inside.startsWith("..") && !isAbsolute(inside) ? inside : path;
+}
+
+// The files the run's implementation artifact lists, for the roadmap's trail; a missing or unreadable artifact lists none.
+function implementedFiles(job, run, state, env) {
+  if (!isSafeSegment(run.facts.slug)) return [];
+  try {
+    const text = readFileSync(join(runDir(job.project, run.facts.slug, env), "04-implementation.md"), "utf8");
+    const worktree = typeof state?.worktree === "string" ? state.worktree.trim() : "";
+    return recordedFiles(text).map((path) => repoPath(path, worktree));
+  } catch {
+    return [];
+  }
+}
+
 // Writes the outcome of a finished job, together with the branch the pipeline registered in its state.
 async function finalize(job, run, ctx) {
   const { env, store } = ctx;
@@ -524,6 +544,7 @@ async function finalize(job, run, ctx) {
             timedOut: run.result.timedOut,
             idleTimedOut: run.result.idleTimedOut,
             attempts: run.attempt,
+            files: implementedFiles(job, run, state, env),
           },
           prUrl: run.outcome.prUrl,
           noticeMd: outcome.noticeMd,

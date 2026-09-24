@@ -280,7 +280,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v16/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v17/);
 });
 
 test("the database check warns about a v8 home and points at the command that migrates it", async (t) => {
@@ -290,9 +290,47 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, expected v16/);
+  assert.match(database.detail, /schema v8, expected v17/);
   assert.match(database.hint, /run `nightshift queue status` once to migrate it/);
   assert.doesNotMatch(database.hint, /nightshift memory stats/);
+});
+
+test("the roadmap workflow check is ok when every linked item follows its job and warns about one left behind", async (t) => {
+  const host = makeHostEnv(t, "doctor-roadmap-workflow");
+  const db = openDb(host.env);
+  const job = addJob({ project: "alpha", prompt: "deliver it" }, host.env);
+  db.prepare("INSERT INTO roadmap_items (project, title, position, status, job_id, job_status_seen) VALUES ('alpha', 'deliver it', 1, 'in_progress', ?, 'pending')").run(job.id);
+  closeDb(host.env);
+
+  const quiet = await diagnose(host.env);
+  assert.equal(statusOf(quiet.report, "roadmap workflow"), "ok");
+
+  openDb(host.env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(job.id);
+  closeDb(host.env);
+  const { report } = await diagnose(host.env);
+  const check = report.checks.find((entry) => entry.name === "roadmap workflow");
+  assert.equal(check.status, "warn");
+  assert.equal(check.detail, `1 roadmap status out of step: #1 in_progress (job ${job.id} done, expected in_review)`);
+  assert.match(check.hint, /next `nightshift queue run` claim cycle re-syncs the ones behind a job/);
+});
+
+test("the roadmap workflow check flags an org item whose status disagrees with its project rows", async (t) => {
+  const host = makeHostEnv(t, "doctor-roadmap-org-derived");
+  const db = openDb(host.env);
+  db.prepare("INSERT INTO roadmap_items (scope, org, title, position, status) VALUES ('org', 'acme', 'raise node', 1, 'in_progress')").run();
+  db.prepare("INSERT INTO roadmap_item_projects (item_id, project, status) VALUES (1, 'api', 'done'), (1, 'app', 'in_progress')").run();
+  closeDb(host.env);
+
+  const quiet = await diagnose(host.env);
+  assert.equal(statusOf(quiet.report, "roadmap workflow"), "ok");
+
+  openDb(host.env).prepare("UPDATE roadmap_items SET status = 'todo' WHERE id = 1").run();
+  closeDb(host.env);
+  const { report } = await diagnose(host.env);
+  const check = report.checks.find((entry) => entry.name === "roadmap workflow");
+  assert.equal(check.status, "warn");
+  assert.equal(check.detail, "1 roadmap status out of step: acme#1 todo (derived from its project rows: in_progress)");
+  assert.match(check.hint, /re-derived at its next project row change/);
 });
 
 test("the database check fails a schema newer than this build and asks for an upgrade", async (t) => {
@@ -303,7 +341,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, expected v16/);
+  assert.match(database.detail, /schema v99, expected v17/);
   assert.match(database.hint, /upgrade nightshift/);
 });
 

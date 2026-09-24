@@ -14,9 +14,11 @@
  */
 
 /**
- * The three writers that can land a job row on `done` - `finishJob`, `repairJobFromWitness` and
- * `reclassifyJob` - close the job's roadmap item through `roadmap.closeForJob` when, and only when,
- * they report the row really reached `done`: a refused or no-op write closes nothing.
+ * Every writer that can move a job's status (`JOB_STATUS_WRITERS` of `local.mjs`) is followed, once it
+ * reports success, by `roadmap.followJob`: one reconciler reads the job's current row and moves each
+ * linked roadmap item through the `JOB_TO_ROADMAP` table of `roadmap-workflow.mjs`. A refused write
+ * follows nothing, a failure of the follow never costs the job write, and `sweepOrphans` re-syncs,
+ * on every claim cycle, whatever a missed event left behind (`roadmap.followDriftedJobs`).
  * @typedef {object} JobsDomain
  * @property {(spec: object) => Promise<object>} addJob a `slug` binds the job to a run, refused in the same transaction while a job not yet closed is bound to it
  * @property {(spec: object) => Promise<object|null>} claimNextJob
@@ -120,15 +122,21 @@
 /**
  * @typedef {object} RoadmapDomain
  * @property {(id: number) => Promise<object|null>} getRoadmapItem
- * @property {(item?: object) => Promise<object>} saveRoadmapItem
- * @property {(id: number, patch?: object) => Promise<object>} updateRoadmapItem
- * @property {(owner: object) => Promise<object>} listRoadmap
+ * @property {(id: number, options?: {viewer?: string|null}) => Promise<object>} getRoadmapItemDetail one item untruncated with its comment thread; a project viewer reads only what its project sees
+ * @property {(item?: object) => Promise<object>} saveRoadmapItem `type` is required
+ * @property {(id: number, patch?: object) => Promise<object>} updateRoadmapItem a move back from review or done appends `reopened`, signed by `patch.author` (the operator by default)
+ * @property {(spec: {id: number, body: string, author?: string, viewer?: string|null}) => Promise<object>} addRoadmapComment appends a `note`; comments are append-only
+ * @property {(jobId: number) => Promise<string|null>} roadmapRefOfJob `<owner>#<id>` of the item a job was queued from, or null
+ * @property {(options?: {dryRun?: boolean}) => Promise<{items: number, written: number, skipped: number}>} backfillRoadmap the one-off synthesis of the comments of items linked before comments existed; idempotent
+ * @property {(owner: object, filters?: {status?: string[], priority?: number[], type?: string[]}) => Promise<object>} listRoadmap every item the owner sees, in workflow order, then org first, then priority (1 first) and position; an org item carries `project_status` (a project's own row) or `projects` (the org's matrix)
+ * @property {(spec: {query?: string, file?: string, project?: string, org?: string, limit?: number}) => Promise<object[]>} searchRoadmap up to five items the owner sees matching the text or a file path its jobs touched
  * @property {(id: number) => Promise<object>} queueableRoadmapItem
- * @property {(id: number, jobId: number) => Promise<boolean>} markRoadmapItemQueued
- * @property {(jobId: number) => Promise<boolean>} markRoadmapItemDone
- * @property {(jobId: number) => Promise<boolean>} closeForJob the tolerant close every path that lands a row on `done` goes through; a failure of its own is never raised, so it can never cost the outcome that was just written
+ * @property {(id: number, jobId: number) => Promise<boolean>} linkRoadmapItemJob links an open item to its job and moves it to `in_progress`; false means a concurrent caller linked it first
+ * @property {(jobId: number) => Promise<number>} followJob moves the items and org project rows linked to a job by what its current row means, re-deriving each org item; idempotent, it returns how many moved
+ * @property {() => Promise<number>} followDriftedJobs follows every job whose linked items or rows missed its last status
+ * @property {() => Promise<object[]>} roadmapDrift the linked items and rows whose status disagrees with their job's row, and the org items whose status disagrees with their rows, read without writing
  * @property {(spec?: object) => Promise<string>} buildRoadmapPrompt
- * @property {(spec?: object) => Promise<object>} queueRoadmapItem
+ * @property {(spec?: object) => Promise<object>} queueRoadmapItem `{job, jobs, skipped, item, targetProject}`: an org item queued for `all` fathers one job per project
  */
 
 /**
@@ -247,13 +255,19 @@ export const STORE_CONTRACT = Object.freeze({
   ],
   roadmap: [
     "getRoadmapItem",
+    "getRoadmapItemDetail",
     "saveRoadmapItem",
     "updateRoadmapItem",
+    "addRoadmapComment",
+    "roadmapRefOfJob",
+    "backfillRoadmap",
     "listRoadmap",
+    "searchRoadmap",
     "queueableRoadmapItem",
-    "markRoadmapItemQueued",
-    "markRoadmapItemDone",
-    "closeForJob",
+    "linkRoadmapItemJob",
+    "followJob",
+    "followDriftedJobs",
+    "roadmapDrift",
     "buildRoadmapPrompt",
     "queueRoadmapItem",
   ],
@@ -286,6 +300,9 @@ export const READ_ONLY_METHODS = Object.freeze([
   "decisions.staleProposals",
   "decisions.getDecisionByNumber",
   "roadmap.listRoadmap",
+  "roadmap.getRoadmapItemDetail",
+  "roadmap.roadmapDrift",
+  "roadmap.searchRoadmap",
   "orgs.rowCountsByOrg",
   "health",
   "close",

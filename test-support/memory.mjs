@@ -76,6 +76,7 @@ export function makeProject(t, env, name, { org } = {}) {
 export const DOWNGRADE_TO_V5 = `
 DROP INDEX decisions_org_number_idx;
 DROP INDEX roadmap_items_org_order_idx;
+DROP INDEX roadmap_items_order_idx;
 DROP INDEX decisions_job_idx;
 ALTER TABLE decisions DROP COLUMN job_id;
 ALTER TABLE decisions DROP COLUMN scope;
@@ -131,6 +132,70 @@ export function seedClosedJob(env, options = {}) {
     throw new Error(`seedClosedJob: job #${id} refused the settle`);
   }
   return id;
+}
+
+// Closes a `done` job through a store's own close writes - lease, then settle with a merged checklist - so the roadmap follows it, and answers the settled view.
+export async function settleThroughStore(store, jobId, { worker = "test:close", prNumber = 7 } = {}) {
+  if (!(await store.jobs.acquireClose(jobId, { worker, leaseS: 600 }))) throw new Error(`settleThroughStore: job #${jobId} refused the close lease`);
+  const checklist = mergedChecklist(prNumber);
+  const settled = await store.jobs.settleClose(jobId, { worker, close: checklist, noticeLine: checklist.data.noticeLine });
+  if (!settled) throw new Error(`settleThroughStore: job #${jobId} refused the settle`);
+  return settled;
+}
+
+// The `roadmap_items` table exactly as a v16 build left it: the horizon, the four legacy statuses and the indexes on them.
+export const LEGACY_V16_ROADMAP_DDL = `
+DROP TRIGGER IF EXISTS roadmap_comments_fts_ai;
+DROP TABLE IF EXISTS roadmap_comments_fts;
+DROP TABLE IF EXISTS roadmap_items_fts;
+DROP TABLE roadmap_items;
+CREATE TABLE roadmap_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project TEXT,
+  horizon TEXT NOT NULL CHECK(horizon IN ('now','next','later')),
+  title TEXT NOT NULL,
+  detail TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','queued','done','dropped')),
+  position INTEGER NOT NULL,
+  decision_id INTEGER,
+  job_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+ALTER TABLE roadmap_items ADD COLUMN scope TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'));
+ALTER TABLE roadmap_items ADD COLUMN org TEXT;
+CREATE INDEX roadmap_items_order_idx ON roadmap_items(project, horizon, position);
+CREATE INDEX roadmap_items_job_idx ON roadmap_items(job_id);
+CREATE INDEX roadmap_items_org_order_idx ON roadmap_items(org, horizon, position) WHERE scope = 'org';
+`;
+
+// Turns the database of a home back into the v16 roadmap shape and seeds it with raw legacy rows, then closes it so the next open migrates.
+export function seedLegacyV16Roadmap(env, { items = [], jobs = [], sequence = null } = {}) {
+  const db = openDb(env);
+  db.exec(LEGACY_V16_ROADMAP_DDL);
+  const insertJob = db.prepare("INSERT INTO jobs (id, project, prompt, status, result, pr_url) VALUES (?, ?, ?, ?, ?, ?)");
+  for (const job of jobs) insertJob.run(job.id, job.project, "legacy job", job.status, job.result ?? null, job.pr_url ?? null);
+  const insertItem = db.prepare(
+    `INSERT INTO roadmap_items (id, scope, project, org, horizon, title, status, position, job_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const item of items) {
+    insertItem.run(
+      item.id,
+      item.org ? "org" : "project",
+      item.org ? null : (item.project ?? null),
+      item.org ?? null,
+      item.horizon,
+      item.title ?? `item ${item.id}`,
+      item.status,
+      item.position,
+      item.job_id ?? null,
+      item.updated_at ?? "2026-01-02 03:04:05",
+    );
+  }
+  if (sequence !== null) db.prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'roadmap_items'").run(sequence);
+  db.exec("PRAGMA user_version = 16");
+  closeDb(env);
 }
 
 // Embedder double with a fixed vector, so the hybrid recall never depends on the real model.

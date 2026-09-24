@@ -4,6 +4,16 @@ import { dbPath } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { closeMigrationPending, migrateCloseColumns } from "./close-migration.mjs";
 import { addColumnIfMissing, dropColumnIfPresent } from "./columns.mjs";
+import {
+  COMMENT_KINDS,
+  DEFAULT_ROADMAP_TYPE,
+  LIVE_JOB_STATUSES,
+  OPERATOR_AUTHOR,
+  ROADMAP_STATUSES,
+  ROADMAP_TYPES,
+  legacyStatusSql,
+  sqlList,
+} from "./roadmap-workflow.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
 
 export { DB_USER_VERSION, isoToSqlite, sqliteToIso } from "./schema.mjs";
@@ -25,6 +35,91 @@ async function importSqlite() {
 }
 
 const { DatabaseSync } = await importSqlite();
+
+const ROADMAP_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ROADMAP_TYPE}' CHECK(type IN (${sqlList(ROADMAP_TYPES)}))`;
+
+// The append-only comment thread of the roadmap items: triggers refuse every UPDATE and DELETE.
+const ROADMAP_COMMENTS = `
+CREATE TABLE IF NOT EXISTS roadmap_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN (${sqlList(COMMENT_KINDS)})),
+  author TEXT NOT NULL CHECK(author = '${OPERATOR_AUTHOR}' OR author GLOB 'job:[0-9]*'),
+  body TEXT NOT NULL,
+  refs TEXT CHECK(refs IS NULL OR json_valid(refs)),
+  project TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TRIGGER IF NOT EXISTS roadmap_comments_no_update BEFORE UPDATE ON roadmap_comments BEGIN
+  SELECT RAISE(ABORT, 'roadmap comments are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS roadmap_comments_no_delete BEFORE DELETE ON roadmap_comments BEGIN
+  SELECT RAISE(ABORT, 'roadmap comments are append-only');
+END;
+`;
+
+// The per-project rows of an org item: one per project it was queued for, each linked to that project's job.
+const ROADMAP_ITEM_PROJECTS = `
+CREATE TABLE IF NOT EXISTS roadmap_item_projects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id INTEGER NOT NULL,
+  project TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
+  job_id INTEGER,
+  job_status_seen TEXT,
+  closed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(item_id, project)
+);
+`;
+
+// The lexical mirrors of the roadmap: item title and detail follow every write, comments are append-only so only inserts.
+const ROADMAP_FTS = `
+CREATE VIRTUAL TABLE IF NOT EXISTS roadmap_items_fts USING fts5(
+  title, detail,
+  content='roadmap_items', content_rowid='id'
+);
+CREATE TRIGGER IF NOT EXISTS roadmap_items_fts_ai AFTER INSERT ON roadmap_items BEGIN
+  INSERT INTO roadmap_items_fts(rowid, title, detail) VALUES (new.id, new.title, new.detail);
+END;
+CREATE TRIGGER IF NOT EXISTS roadmap_items_fts_ad AFTER DELETE ON roadmap_items BEGIN
+  INSERT INTO roadmap_items_fts(roadmap_items_fts, rowid, title, detail) VALUES ('delete', old.id, old.title, old.detail);
+END;
+CREATE TRIGGER IF NOT EXISTS roadmap_items_fts_au AFTER UPDATE OF title, detail ON roadmap_items BEGIN
+  INSERT INTO roadmap_items_fts(roadmap_items_fts, rowid, title, detail) VALUES ('delete', old.id, old.title, old.detail);
+  INSERT INTO roadmap_items_fts(rowid, title, detail) VALUES (new.id, new.title, new.detail);
+END;
+CREATE VIRTUAL TABLE IF NOT EXISTS roadmap_comments_fts USING fts5(
+  body,
+  content='roadmap_comments', content_rowid='id'
+);
+CREATE TRIGGER IF NOT EXISTS roadmap_comments_fts_ai AFTER INSERT ON roadmap_comments BEGIN
+  INSERT INTO roadmap_comments_fts(rowid, body) VALUES (new.id, new.body);
+END;
+`;
+
+// The v17 `roadmap_items` table under a given name, shared by the base schema and the rebuild of a legacy table.
+function roadmapItemsDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org')),
+  project TEXT,
+  org TEXT,
+  title TEXT NOT NULL,
+  detail TEXT,
+  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
+  priority INTEGER NOT NULL DEFAULT 5 CHECK(priority BETWEEN 1 AND 9),
+  type ${ROADMAP_TYPE_COLUMN},
+  position INTEGER NOT NULL,
+  decision_id INTEGER,
+  job_id INTEGER,
+  job_status_seen TEXT,
+  closed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);`;
+}
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS lessons (
@@ -131,19 +226,9 @@ CREATE TABLE IF NOT EXISTS decisions (
   embedding BLOB,
   embedding_model TEXT
 );
-CREATE TABLE IF NOT EXISTS roadmap_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project TEXT,
-  horizon TEXT NOT NULL CHECK(horizon IN ('now','next','later')),
-  title TEXT NOT NULL,
-  detail TEXT,
-  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','queued','done','dropped')),
-  position INTEGER NOT NULL,
-  decision_id INTEGER,
-  job_id INTEGER,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+${roadmapItemsDdl("roadmap_items")}
+${ROADMAP_COMMENTS}
+${ROADMAP_ITEM_PROJECTS}
 `;
 
 const EVOLVING_COLUMNS = [
@@ -180,6 +265,7 @@ const EVOLVING_COLUMNS = [
   ["decisions", "job_id", "INTEGER"],
   ["roadmap_items", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],
   ["roadmap_items", "org", "TEXT"],
+  ["roadmap_items", "type", ROADMAP_TYPE_COLUMN],
 ];
 
 const INDEXES = `
@@ -192,11 +278,13 @@ CREATE INDEX IF NOT EXISTS pipeline_phases_run_idx ON pipeline_phases(run_id, se
 CREATE INDEX IF NOT EXISTS jobs_claim_idx ON jobs(status, priority, created_at);
 CREATE INDEX IF NOT EXISTS jobs_project_slug_idx ON jobs(project, slug);
 CREATE UNIQUE INDEX IF NOT EXISTS decisions_number_idx ON decisions(project, number);
-CREATE INDEX IF NOT EXISTS roadmap_items_order_idx ON roadmap_items(project, horizon, position);
+CREATE INDEX IF NOT EXISTS roadmap_items_order_idx ON roadmap_items(scope, project, org, priority, position);
 CREATE INDEX IF NOT EXISTS roadmap_items_job_idx ON roadmap_items(job_id);
 CREATE UNIQUE INDEX IF NOT EXISTS decisions_org_number_idx ON decisions(org, number) WHERE scope = 'org';
-CREATE INDEX IF NOT EXISTS roadmap_items_org_order_idx ON roadmap_items(org, horizon, position) WHERE scope = 'org';
+CREATE INDEX IF NOT EXISTS roadmap_items_org_order_idx ON roadmap_items(org, priority, position) WHERE scope = 'org';
 CREATE INDEX IF NOT EXISTS decisions_job_idx ON decisions(job_id) WHERE job_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS roadmap_comments_item_idx ON roadmap_comments(item_id, id);
+CREATE INDEX IF NOT EXISTS roadmap_item_projects_job_idx ON roadmap_item_projects(job_id);
 `;
 
 const FTS = `
@@ -329,6 +417,77 @@ function enableWal(db, path) {
   console.warn(`nightshift: warning: could not enable WAL on ${path} (journal_mode=${mode})`);
 }
 
+const V17_BUMPED_ITEMS = Object.freeze({ project: "nightshift", ids: [9, 36], priority: 3 });
+
+// Tells whether `roadmap_items` still has the legacy (v16 and older) shape, the one with a `horizon` column.
+function hasLegacyRoadmapItems(db) {
+  return db.prepare("PRAGMA table_info(roadmap_items)").all().some((column) => column.name === "horizon");
+}
+
+// Copies every legacy (v16 and older) roadmap row into the v17 table: the legacy status map, `closed_at` on `done` only, priority 5 (the bumped
+// nightshift items excepted), positions renumbered per owner and priority, and the job status the item already reflects.
+function copyLegacyRoadmapItems(db) {
+  const bumped = `r.id IN (${V17_BUMPED_ITEMS.ids.join(", ")}) AND r.scope = 'project' AND r.project = '${V17_BUMPED_ITEMS.project}'`;
+  db.exec(`INSERT INTO roadmap_items_v17
+      (id, scope, project, org, title, detail, status, priority, position, decision_id, job_id, job_status_seen, closed_at, created_at, updated_at)
+    SELECT id, scope, project, org, title, detail, status, priority,
+           ROW_NUMBER() OVER (PARTITION BY scope, project, org, priority ORDER BY horizon_rank, position, id),
+           decision_id, job_id, job_status_seen, closed_at, created_at, updated_at
+      FROM (SELECT r.id, r.scope, r.project, r.org, r.title, r.detail, r.position, r.decision_id, r.job_id,
+                   r.created_at, r.updated_at,
+                   ${legacyStatusSql("r")} AS status,
+                   CASE WHEN ${bumped} THEN ${V17_BUMPED_ITEMS.priority} ELSE 5 END AS priority,
+                   CASE r.horizon WHEN 'now' THEN 0 WHEN 'next' THEN 1 ELSE 2 END AS horizon_rank,
+                   CASE WHEN r.status = 'queued' AND (j.status IS NULL OR j.status NOT IN (${sqlList(LIVE_JOB_STATUSES)}))
+                        THEN NULL ELSE j.status END AS job_status_seen,
+                   CASE WHEN r.status = 'done' THEN r.updated_at END AS closed_at
+              FROM roadmap_items r LEFT JOIN jobs j ON j.id = r.job_id)`);
+}
+
+// The AUTOINCREMENT counter of the legacy table, so a rebuilt table never hands out the id of a deleted item again.
+function roadmapSequence(db) {
+  return db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'roadmap_items'").get()?.seq ?? 0;
+}
+
+// Restores the AUTOINCREMENT counter of the rebuilt table to at least what the legacy table had reached.
+function keepRoadmapSequence(db, sequence) {
+  db.prepare("UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'roadmap_items'").run(sequence);
+  db.prepare(
+    "INSERT INTO sqlite_sequence (name, seq) SELECT 'roadmap_items', ? WHERE ? > 0 AND NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'roadmap_items')",
+  ).run(sequence, sequence);
+}
+
+// Rebuilds a legacy (v16 and older) `roadmap_items` into the v17 shape once and tells whether it did; the guard is re-checked inside the
+// transaction, so of many processes opening the same legacy database only the first rebuilds it and the others find it done.
+function rebuildRoadmapItemsIfLegacy(db) {
+  if (!hasLegacyRoadmapItems(db)) return false;
+  return inTransaction(db, () => {
+    if (!hasLegacyRoadmapItems(db)) return false;
+    const sequence = roadmapSequence(db);
+    db.exec("DROP TABLE IF EXISTS roadmap_items_v17");
+    db.exec(roadmapItemsDdl("roadmap_items_v17"));
+    copyLegacyRoadmapItems(db);
+    db.exec("DROP TABLE roadmap_items");
+    db.exec("ALTER TABLE roadmap_items_v17 RENAME TO roadmap_items");
+    keepRoadmapSequence(db, sequence);
+    return true;
+  });
+}
+
+// Tells whether a table (a virtual one included) exists in the schema.
+function hasTable(db, name) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+}
+
+// Creates the roadmap FTS mirrors and indexes the rows written before them: the first time they appear, or after the item table was rebuilt.
+function createRoadmapFts(db, { reindex = false } = {}) {
+  const fresh = !hasTable(db, "roadmap_items_fts");
+  db.exec(ROADMAP_FTS);
+  if (!fresh && !reindex) return;
+  db.exec("INSERT INTO roadmap_items_fts(roadmap_items_fts) VALUES('rebuild')");
+  db.exec("INSERT INTO roadmap_comments_fts(roadmap_comments_fts) VALUES('rebuild')");
+}
+
 // Creates the base tables of the memory runtime.
 function createSchema(db) {
   db.exec(SCHEMA);
@@ -341,8 +500,10 @@ function migrate(db) {
   dropColumnIfPresent(db, "jobs", "merged_at");
   dropColumnIfPresent(db, "jobs", "merge_sha");
   if (closeMigrationPending(db)) inTransaction(db, () => migrateCloseColumns(db));
+  const rebuilt = rebuildRoadmapItemsIfLegacy(db);
   db.exec(INDEXES);
   db.exec(FTS);
+  createRoadmapFts(db, { reindex: rebuilt });
   const version = db.prepare("PRAGMA user_version").get().user_version;
   if (version < 1) {
     db.exec("INSERT INTO lessons_fts(lessons_fts) VALUES('rebuild')");

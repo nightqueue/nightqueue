@@ -1,25 +1,32 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { saveDecision, setDecisionEmbedding } from "../../src/memory/decisions.mjs";
-import { cancelJob, getJob } from "../../src/memory/jobs.mjs";
+import { cancelJob, finishJob, getJob } from "../../src/memory/jobs.mjs";
 import {
   buildRoadmapPrompt,
+  followJob,
   getRoadmapItem,
-  markRoadmapItemDone,
+  getRoadmapItemDetail,
   queueRoadmapItem,
   saveRoadmapItem,
   updateRoadmapItem,
 } from "../../src/memory/roadmap.mjs";
+import { openDb } from "../../src/memory/db.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
-import { fakeEmbedder, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { openStore } from "../../src/store/open.mjs";
+import { fakeEmbedder, makeDir, makeHome, makeProject, mergedChecklist, settleThroughStore } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream } from "../../test-support/streams.mjs";
+import { doneStream, SLUG } from "../../test-support/streams.mjs";
+import { runDir } from "../../src/config/paths.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const PR_URL = "https://github.com/acme/alpha/pull/7";
 
 const LINKED = {
   title: "the heartbeat is renewed by the owner only",
@@ -36,12 +43,17 @@ const RELATED = {
   status: "accepted",
 };
 
-const ITEM = { horizon: "now", title: "rewrite runner heartbeat", detail: "the renew path must survive a slow disk" };
+const ITEM = { title: "rewrite runner heartbeat", detail: "the renew path must survive a slow disk" };
 
 const EXPECTED_PROMPT = `## Task
 rewrite runner heartbeat
 
 the renew path must survive a slow disk
+
+## Roadmap item
+Roadmap: alpha#1
+Type: improvement
+Commit type: refactor or perf
 
 ## Linked decision
 #1 the heartbeat is renewed by the owner only (accepted)
@@ -90,7 +102,7 @@ function makeRoadmapHome(t, name) {
   makeProject(t, env, "alpha");
   const linked = saveDecision({ project: "alpha", ...LINKED }, env);
   saveDecision({ project: "alpha", ...RELATED }, env);
-  const item = saveRoadmapItem({ project: "alpha", ...ITEM, decision_id: linked.id }, env);
+  const item = saveRoadmapItem({ type: "improvement", project: "alpha", ...ITEM, decision_id: linked.id }, env);
   return { env, item };
 }
 
@@ -105,18 +117,18 @@ test("queue_add from a roadmap item builds the prompt of the item and links the 
   assert.equal(getJob(queued.id, env).prompt, EXPECTED_PROMPT);
 
   const row = getRoadmapItem(item.id, env);
-  assert.equal(row.status, "queued");
+  assert.equal(row.status, "in_progress");
   assert.equal(row.job_id, queued.id);
 });
 
 test("an item with no detail and no linked decision queues the task alone", async (t) => {
   const env = makeHome(t, "roadmap-queue-bare");
   makeProject(t, env, "alpha");
-  const item = saveRoadmapItem({ project: "alpha", horizon: "next", title: "index the logs" }, env);
+  const item = saveRoadmapItem({ type: "chore", project: "alpha", title: "index the logs" }, env);
   const client = await connect(t, env);
 
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
-  assert.equal(getJob(queued.id, env).prompt, "## Task\nindex the logs");
+  assert.equal(getJob(queued.id, env).prompt, "## Task\nindex the logs\n\n## Roadmap item\nRoadmap: alpha#1\nType: chore\nCommit type: chore");
 });
 
 test("queue_add refuses two prompt sources, none at all, and a project that is not the item's", async (t) => {
@@ -139,7 +151,7 @@ test("queue_add refuses two prompt sources, none at all, and a project that is n
   const unknown = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: 404 } });
   assert.equal(unknown.isError, true);
   assert.match(textOf(unknown), /unknown roadmap item `404`/);
-  assert.equal(getRoadmapItem(item.id, env).status, "open");
+  assert.equal(getRoadmapItem(item.id, env).status, "todo");
 });
 
 test("a queued item is refused a second job while the first is alive, and accepted once it is cancelled", async (t) => {
@@ -157,30 +169,12 @@ test("a queued item is refused a second job while the first is alive, and accept
   assert.equal(getRoadmapItem(item.id, env).job_id, second.id);
 });
 
-test("a job that ends done closes its own roadmap item, and leaves every other one alone", async (t) => {
+test("a job that ends done puts its own roadmap item in review, and leaves every other one alone", async (t) => {
   const { env, item } = makeRoadmapHome(t, "roadmap-queue-done-hook");
   useFakeClaude(env, makeDir(t, "roadmap-queue-done-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
-  const untouched = saveRoadmapItem({ project: "alpha", horizon: "later", title: "index the logs" }, env);
+  const untouched = saveRoadmapItem({ type: "improvement", project: "alpha", title: "index the logs" }, env);
   const client = await connect(t, env);
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
-
-  const cycle = await runCycle({ jobId: queued.id, env, deps: { gitImpl: fakeGit() } });
-
-  assert.deepEqual(
-    cycle.processed.map((entry) => entry.status),
-    ["done"],
-  );
-  assert.equal(getRoadmapItem(item.id, env).status, "done");
-  assert.equal(getRoadmapItem(untouched.id, env).status, "open");
-  assert.equal(markRoadmapItemDone(queued.id, env), 0, "a second finish flipped an item that was already done");
-});
-
-test("a job that ends done never reopens an item the operator dropped, and the link survives as history", async (t) => {
-  const { env, item } = makeRoadmapHome(t, "roadmap-queue-dropped-item");
-  useFakeClaude(env, makeDir(t, "roadmap-queue-dropped-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
-  const client = await connect(t, env);
-  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
-  updateRoadmapItem(item.id, { status: "dropped" }, env);
 
   const cycle = await runCycle({ jobId: queued.id, env, deps: { gitImpl: fakeGit() } });
 
@@ -189,7 +183,43 @@ test("a job that ends done never reopens an item the operator dropped, and the l
     ["done"],
   );
   const row = getRoadmapItem(item.id, env);
-  assert.equal(row.status, "dropped");
+  assert.equal(row.status, "in_review");
+  assert.equal(row.closed_at, null);
+  assert.equal(getRoadmapItem(untouched.id, env).status, "todo");
+  assert.equal(followJob(queued.id, env), 0, "a second follow moved an item that already followed its job");
+});
+
+test("the runner records the files the implementation artifact lists, and the pr comment carries them", async (t) => {
+  const { env, item } = makeRoadmapHome(t, "roadmap-queue-files");
+  useFakeClaude(env, makeDir(t, "roadmap-queue-files-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
+  const client = await connect(t, env);
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
+  const artifactDir = runDir("alpha", SLUG, env);
+  mkdirSync(artifactDir, { recursive: true });
+  writeFileSync(join(artifactDir, "04-implementation.md"), "## Modified files\n- `src/runner.mjs`\n```\nsrc/example.mjs\n```\n\n## Done\n");
+
+  await runCycle({ jobId: queued.id, env, deps: { gitImpl: fakeGit() } });
+
+  assert.deepEqual(JSON.parse(getJob(queued.id, env).result).files, ["src/runner.mjs"]);
+  const pr = getRoadmapItemDetail(item.id, {}, env).comments.find((comment) => comment.kind === "pr");
+  assert.deepEqual(pr.refs.files, [{ path: "src/runner.mjs" }]);
+});
+
+test("a job that ends done moves an item the operator cancelled while it ran, and the link survives as history", async (t) => {
+  const { env, item } = makeRoadmapHome(t, "roadmap-queue-dropped-item");
+  useFakeClaude(env, makeDir(t, "roadmap-queue-dropped-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
+  const client = await connect(t, env);
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
+  updateRoadmapItem(item.id, { status: "cancelled" }, env);
+
+  const cycle = await runCycle({ jobId: queued.id, env, deps: { gitImpl: fakeGit() } });
+
+  assert.deepEqual(
+    cycle.processed.map((entry) => entry.status),
+    ["done"],
+  );
+  const row = getRoadmapItem(item.id, env);
+  assert.equal(row.status, "in_review");
   assert.equal(row.job_id, queued.id, "the link is history and survives a manual status change");
 });
 
@@ -203,7 +233,7 @@ test("nightshift queue add --roadmap builds the same prompt as the tool, from an
     encoding: "utf8",
   });
   assert.equal(added.status, 0, added.stderr);
-  assert.match(added.stdout, /roadmap item #1 of `alpha` is now `queued`/);
+  assert.match(added.stdout, /roadmap item #1 of `alpha` is now `in_progress`/);
   assert.equal(getJob(1, env).prompt, EXPECTED_PROMPT);
   assert.equal(getRoadmapItem(item.id, env).job_id, 1);
 
@@ -301,7 +331,7 @@ function makeEmbeddedHome(t, name) {
     const saved = saveDecision({ project: "alpha", ...decision }, env);
     setDecisionEmbedding({ id: saved.id, vector: FAKE_VECTOR, model: FAKE_MODEL }, env);
   }
-  const item = saveRoadmapItem({ project: "alpha", ...ITEM, decision_id: linked.id }, env);
+  const item = saveRoadmapItem({ type: "improvement", project: "alpha", ...ITEM, decision_id: linked.id }, env);
   return { env, item };
 }
 
@@ -337,4 +367,111 @@ test("a proposed decision is listed by title under `## Proposed (not binding)`, 
   assert.equal(prompt.includes("nothing settled yet"), false, "a proposal is listed by title only");
   const standing = prompt.slice(prompt.indexOf(STANDING_HEADING), prompt.indexOf(heading));
   assert.equal(standing.includes("heartbeats move to a side table"), false, "a proposal was listed as standing");
+});
+
+// A store on a fresh home whose one roadmap item is queued as a job through the store, the way queue_add links it.
+async function linkedJob(t, name) {
+  const env = makeHome(t, name);
+  makeProject(t, env, "alpha");
+  const store = openStore(env);
+  const item = await store.roadmap.saveRoadmapItem({ type: "improvement", project: "alpha", title: "follow the job" });
+  const { job } = await store.roadmap.queueRoadmapItem({ id: item.id });
+  return { env, store, item, job };
+}
+
+// The status and closed_at of the item right now.
+async function itemState(store, item) {
+  const row = await store.roadmap.getRoadmapItem(item.id);
+  return { status: row.status, closed: row.closed_at !== null };
+}
+
+// Claims the job and finishes it on the given status, through the store the runner uses.
+async function runTo(store, job, status, { prUrl } = {}) {
+  assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }), "setup: the job was not claimed");
+  assert.equal(await store.jobs.finishJob(job.id, { worker: "w1", status, prUrl }), true, "setup: the job was not finished");
+}
+
+test("an item follows its job through gate, retry, failure, done and a delivered close", async (t) => {
+  const { store, item, job } = await linkedJob(t, "roadmap-follow-lifecycle");
+  assert.deepEqual(await itemState(store, item), { status: "in_progress", closed: false });
+
+  await runTo(store, job, "gate");
+  assert.deepEqual(await itemState(store, item), { status: "in_progress", closed: false });
+  await store.jobs.retryJob(job.id, { note: "go on" });
+  assert.deepEqual(await itemState(store, item), { status: "in_progress", closed: false });
+
+  await runTo(store, job, "failed");
+  assert.deepEqual(await itemState(store, item), { status: "todo", closed: false });
+  await store.jobs.retryJob(job.id, {});
+  assert.deepEqual(await itemState(store, item), { status: "in_progress", closed: false });
+
+  await runTo(store, job, "done", { prUrl: PR_URL });
+  assert.deepEqual(await itemState(store, item), { status: "in_review", closed: false });
+  await settleThroughStore(store, job.id);
+  assert.deepEqual(await itemState(store, item), { status: "done", closed: true });
+  assert.equal(await store.roadmap.followJob(job.id), 0);
+});
+
+test("a cancelled job sends its item back to todo", async (t) => {
+  const { store, item, job } = await linkedJob(t, "roadmap-follow-cancel");
+  await store.jobs.cancelJob(job.id, { reason: "not now" });
+  assert.deepEqual(await itemState(store, item), { status: "todo", closed: false });
+});
+
+test("a closed job (settleClose) closes its item as done with the merge sha", async (t) => {
+  const { env, store, item, job } = await linkedJob(t, "roadmap-follow-close");
+  await runTo(store, job, "done", { prUrl: PR_URL });
+  await settleThroughStore(store, job.id);
+  assert.deepEqual(await itemState(store, item), { status: "done", closed: true });
+  const closed = getRoadmapItemDetail(item.id, {}, env).comments.at(-1);
+  assert.deepEqual([closed.kind, closed.refs.pr, closed.refs.sha], ["closed", PR_URL, mergedChecklist().data.mergeSha]);
+});
+
+test("a release or a park back to pending keeps the item in progress", async (t) => {
+  const { store, item, job } = await linkedJob(t, "roadmap-follow-release");
+  assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }));
+  assert.equal(await store.jobs.releaseJob(job.id, { worker: "w1" }), true);
+  assert.deepEqual(await itemState(store, item), { status: "in_progress", closed: false });
+  assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }));
+  assert.equal(await store.jobs.parkJob(job.id, { worker: "w1", notBefore: new Date(Date.now() + 60000).toISOString() }), true);
+  assert.deepEqual(await itemState(store, item), { status: "in_progress", closed: false });
+});
+
+test("a status written behind the store's back is picked up by the next orphan sweep", async (t) => {
+  const { env, store, item, job } = await linkedJob(t, "roadmap-follow-sweep");
+  openDb(env).prepare("UPDATE jobs SET status = 'failed' WHERE id = ?").run(job.id);
+  assert.deepEqual(await itemState(store, item), { status: "in_progress", closed: false });
+  await store.jobs.sweepOrphans();
+  assert.deepEqual(await itemState(store, item), { status: "todo", closed: false });
+});
+
+test("a retry of a job whose failure nobody followed still leaves the failure's comment first", async (t) => {
+  const { env, store, item, job } = await linkedJob(t, "roadmap-follow-unseen-retry");
+  assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }), "setup: the job was not claimed");
+  assert.equal(finishJob(job.id, { worker: "w1", status: "failed" }, env), true, "setup: the job was not finished");
+  await store.jobs.retryJob(job.id, {});
+  const kinds = getRoadmapItemDetail(item.id, {}, env).comments.map((comment) => comment.kind);
+  assert.deepEqual(kinds, ["queued", "failed", "queued"], "the unfollowed failure lost its comment");
+});
+
+test("a close of a job whose finish nobody followed still leaves the pull request's comment first", async (t) => {
+  const { env, store, item, job } = await linkedJob(t, "roadmap-follow-unseen-close");
+  assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }), "setup: the job was not claimed");
+  assert.equal(finishJob(job.id, { worker: "w1", status: "done", prUrl: PR_URL }, env), true, "setup: the job was not finished");
+  await settleThroughStore(store, job.id);
+  assert.deepEqual(await itemState(store, item), { status: "done", closed: true });
+  const kinds = getRoadmapItemDetail(item.id, {}, env).comments.map((comment) => comment.kind);
+  assert.deepEqual(kinds, ["queued", "pr", "closed"], "the unfollowed finish lost its comment");
+});
+
+test("a close that cancels a job whose finish nobody followed still leaves the pull request's comment first", async (t) => {
+  const { env, store, item, job } = await linkedJob(t, "roadmap-follow-unseen-cancel");
+  assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }), "setup: the job was not claimed");
+  assert.equal(finishJob(job.id, { worker: "w1", status: "done", prUrl: PR_URL }, env), true, "setup: the job was not finished");
+  assert.ok(await store.jobs.acquireClose(job.id, { worker: "close-w", leaseS: 600 }), "setup: the close lease was refused");
+  const close = { attempts: 1, steps: {}, data: { prNumber: 7, merged: false } };
+  assert.ok(await store.jobs.cancelOnClosedPr(job.id, { worker: "close-w", close, note: "closed without merge" }), "setup: the cancel was refused");
+  assert.deepEqual(await itemState(store, item), { status: "todo", closed: false });
+  const kinds = getRoadmapItemDetail(item.id, {}, env).comments.map((comment) => comment.kind);
+  assert.deepEqual(kinds, ["queued", "pr", "failed"], "the unfollowed finish lost its comment");
 });

@@ -60,6 +60,68 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - After upgrading, restart every MCP server process started before it (an open Claude Code
   session keeps its own): an old process still reads the removed columns and fails.
 
+### Added
+
+- Roadmap items have a `type` (`bug`, `feature`, `improvement`, `chore`, `incident`), required
+  by `roadmap_save` (existing items get `improvement`). It sets the default tier of a job
+  queued from the item (`bug`/`improvement`/`incident` → `simple`, `feature` → `complex`,
+  `chore` → `trivial`; an explicit tier wins), and the job's prompt gains a `## Roadmap item`
+  block with `Roadmap: <owner>#<id>`, the type and the commit type to use.
+- Roadmap items have an append-only comment thread (`roadmap_comments`, guarded by triggers).
+  Every job event leaves one comment signed `job:<id>`, in the same transaction as the status:
+  `queued` (queued or retried), `gate`, `pr`, `failed` (failed or cancelled) and `closed`
+  (the close, with the merge sha), with `refs` read from the job's row (pull request, branch, merge sha, the files the
+  implementation listed, the decision the job proposed). A move back from `in_review`/`done`
+  leaves `reopened`. The new `roadmap_comment` tool adds a `note`, `roadmap_get` with `id` alone
+  reads one item untruncated with its thread, and `nightshift roadmap show <id>` prints it;
+  inside a job both reach only an item of the job's project or its org.
+- `roadmap_search` finds at most five roadmap items an owner sees, by `query` (title, detail and
+  comment thread, over two new FTS5 mirrors built once for the existing rows) and by `file` (a
+  path a job recorded, exact or a directory above it, file matches first); inside a job it reads only the
+  job's own project. The triager's phase context gains a `## Related roadmap items` block from
+  the same search. 27 MCP tools.
+- `nightshift run pr` of a job queued from a roadmap item publishes the body with a last
+  `Roadmap: <owner>#<id>` line (a copy in the run directory; the agent's file is untouched).
+- `node scripts/roadmap-backfill.mjs [--dry-run]` synthesizes, once and idempotently, the
+  `queued`/`pr`/`closed` comments of items linked to a job before comments existed.
+
+### Changed
+
+- The roadmap is a status workflow with priorities: schema v17 migrates `roadmap_items` in
+  place, once and read-guarded, and drops the `now`/`next`/`later` horizons. An item's status
+  is now `backlog`, `todo`, `in_progress`, `in_review`, `done` or `cancelled` (plus
+  `closed_at` while `done`), and its `priority` is 1-9, default 5, 1 first like a job's; the
+  position orders an item inside its priority group. The migration maps `open`+`now` to
+  `todo`, `open`+`next`/`later` to `backlog`, `queued` to `in_progress`, `dropped` to
+  `cancelled`, `done` to `done` (with `closed_at`), gives every item priority 5 and nightshift
+  items #9 and #36 priority 3. A linked item now follows its job through one table-driven
+  reconciler at the store: queued or retried → `in_progress`, job `done` → `in_review`, job
+  closed (its pull request merged through `nightshift queue close`) → `done`, job failed or
+  cancelled → `todo`; the store follows the close's own `settleClose` and `cancelOnClosedPr`
+  writes, and a close that finds the pull request closed without merge cancels the job. Gate
+  answer A of job 67 (a closed job maps to `done` only when it delivered) is now enforced by
+  the `CLOSED_REQUIRES_MERGE` schema invariant instead of a per-source rule, and the v17
+  roadmap rebuild runs after the v16 close migration. `run_outcome` no longer closes the item. `roadmap_save`/`roadmap_update` take
+  `priority` and refuse `horizon` by name, `in_progress` is set only by a job, and moving an
+  item back from `in_review`/`done` by hand is allowed. `roadmap_get` answers one `items`
+  list in workflow order with optional `status`/`priority` filters, and `nightshift roadmap`
+  prints it grouped by status, p1 first, with `--status`/`--priority`. `nightshift doctor`
+  gains a `roadmap workflow` row that warns about an item left behind its job; the next claim
+  cycle re-syncs it.
+- An org roadmap item is executed per project: `queue_add` (and `nightshift queue add --roadmap
+  <id> --project <name|all>`) needs an explicit project of the org or `all`, never the current
+  directory (`nightshift project add` now refuses `all` as a project name), and queues one job per project, each linked to its own `roadmap_item_projects`
+  row; a project whose row still holds a live job is skipped and reported, and the answer
+  lists `jobs` and `skipped`. The org item carries no job itself, and its status is now
+  derived from its rows in the same transaction as each row change (`in_progress` while any
+  row is, `done` once every row is done or cancelled, otherwise the lowest open status),
+  instead of staying as it was until the operator closed it. Row comments carry their
+  `project`, a row's job publishes `Roadmap: <org>#<id>`, and closing the item by hand cancels
+  every open row with one `closed` comment each. A project reads only its own row
+  (`project_status`) and its own comments of an org item; `roadmap_get` by `org` and
+  `nightshift roadmap --org` show the item × project matrix. `nightshift doctor` also flags an
+  org item whose persisted status disagrees with what its rows derive.
+
 ### Fixed
 
 - A job records its own pull request, and `queue ship` only ships that one. The run's pull
@@ -82,6 +144,8 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the table and under `--follow`, reads `shipping` alone while a ship is in progress and
   `closed` alone once shipped, in place of `done · shipping` and `closed · shipped`;
   `· ship stalled` and `· ship failed` are unchanged, and `--json`/MCP `ship_status` too.
+- `nightshift roadmap | head` no longer crashes with an uncaught `write EPIPE` once the output
+  outgrows the pipe buffer: the CLI stops writing when its reader closes the pipe.
 
 ## 0.3.0 - 2026-09-21
 
