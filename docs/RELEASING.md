@@ -9,7 +9,7 @@ workflow, not commented out.
 
 1. **Decide the next version and put it in the three files that declare it.** Edit `CHANGELOG.md`
    (turn `## Unreleased` into `## <version> - YYYY-MM-DD`) and the `Licensed Work:        nightqueue <version>`
-   line of `LICENSE`, then commit. This step is easy to miss and blocks everything after it:
+   line of `LICENSE` and the `version` of `plugin/.claude-plugin/plugin.json`, then commit. This step is easy to miss and blocks everything after it:
    `release:check` compares `package.json`, `CHANGELOG.md` and `LICENSE`, and `npm version` refuses
    to run on a dirty tree.
 2. **`npm version patch|minor`** — bumps `package.json`, commits the bump and creates the tag
