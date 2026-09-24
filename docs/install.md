@@ -30,7 +30,7 @@ keeps failing as before, without registering anything.
 
 `npx nightqueue init` is the whole installation. It puts the package
 in `~/.nightqueue/runtime`, writes the shims `~/.nightqueue/bin/nightqueue`,
-`nshift` and `nsft` (`--no-shortcuts` writes only `nightqueue`), offers to
+and `nq` (`--no-shortcuts` writes only `nightqueue`), offers to
 put that directory on your PATH, registers the MCP server, the hooks and the
 plugin **against the runtime**, and offers the semantic recall. Nothing depends
 on where the command ran from: the npx cache and a development checkout both
@@ -135,7 +135,7 @@ echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github
 1. the configuration home (`0700`), `config.json` and `secrets.json` (`0600`).
 2. the runtime in `$NIGHTQUEUE_HOME/runtime`, at the version of the package that
    ran the command; already at that version means no reinstall.
-3. the shims `$NIGHTQUEUE_HOME/bin/nightqueue`, `nshift` and `nsft` (`0755`
+3. the shims `$NIGHTQUEUE_HOME/bin/nightqueue` and `nq` (`0755`
    each), plus the offer to add that directory to the PATH through a guarded
    block marked `# nightqueue` in `~/.zshrc`, `~/.bashrc` or
    `~/.config/fish/config.fish`.
@@ -188,7 +188,7 @@ diagnosis call.
 
 **Upgrading from the `shift` command.** The CLI used to be called `shift`. Run
 `nightqueue setup` again: it re-points the hooks and the MCP server at
-`bin/nightqueue.mjs` without duplicating any entry, writes the three new shims
+`bin/nightqueue.mjs` without duplicating any entry, writes the two new shims
 and removes the old `~/.nightqueue/bin/shift`. A file of another tool sitting
 under that name is kept, and `nightqueue doctor` says so instead of deleting it.
 

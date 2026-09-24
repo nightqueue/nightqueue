@@ -23,7 +23,7 @@ import { OPERATOR_AGENT, OPERATOR_MODE_AGENT, operatorAgentPath, probeOperatorLa
 import { marketplaceIsCurrent, pluginRef, readInstalledPlugin, readKnownMarketplace } from "../host/plugin.mjs";
 import { legacyShimState, packageVersion, registrySpec, runtimeVersion, shimState } from "../host/runtime.mjs";
 import { hookStatus, readHostSettings } from "../host/settings.mjs";
-import { PATH_MARK, binDirInPath, rcFilePath } from "../host/shell.mjs";
+import { PATH_MARK, binDirInPath, rcFilePath, shadowingDir } from "../host/shell.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
 import { HOST_COMMANDS_SAMPLE_SIZE } from "../memory/jobs.mjs";
 import { DB_USER_VERSION } from "../memory/schema.mjs";
@@ -217,10 +217,15 @@ function checkShim(ctx, name) {
   }
   if (!state.executable) return check(label, "fail", `${state.path} is not executable`, `run \`chmod +x ${state.path}\``);
   if (!state.current) return check(label, "warn", `${state.path} points elsewhere`, "run `nightqueue setup`");
+  const shadow = shadowingDir(name, ctx.env);
+  if (shadow) {
+    return check(label, "warn", `${state.path} is shadowed by ${join(shadow, name)}, which comes first on PATH`,
+      `put ${binDir(ctx.env)} before ${shadow} in your PATH, or type \`${SHIM_NAME}\` instead`);
+  }
   return check(label, "ok", state.path);
 }
 
-// Checks every command name the installation can write, the canonical one plus the two shortcuts.
+// Checks every command name the installation can write, the canonical one plus the `nq` shortcut.
 function checkShims(ctx) {
   return shimNames().map((name) => checkShim(ctx, name));
 }

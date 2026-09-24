@@ -88,7 +88,7 @@ Requirements: [Claude Code](https://claude.com/claude-code) and Node >= 22.
 
 ```sh
 npx nightqueue init                           # install the runtime and set Claude Code up
-# open a new terminal so `nightqueue` resolves
+# open a new terminal so `nightqueue` (and its shortcut `nq`) resolves
 nightqueue doctor                                      # check the host and the home
 
 nightqueue queue add "fix the flaky worker"            # queue one deliverable

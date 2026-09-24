@@ -143,8 +143,7 @@ export function makeHostEnv(t, name, { exitCode } = {}) {
     shim: join(env.NIGHTQUEUE_HOME, "bin", "nightqueue"),
     shims: {
       nightqueue: join(env.NIGHTQUEUE_HOME, "bin", "nightqueue"),
-      nshift: join(env.NIGHTQUEUE_HOME, "bin", "nshift"),
-      nsft: join(env.NIGHTQUEUE_HOME, "bin", "nsft"),
+      nq: join(env.NIGHTQUEUE_HOME, "bin", "nq"),
     },
     legacyShim: join(env.NIGHTQUEUE_HOME, "bin", "shift"),
     embeddingDir: join(env.NIGHTQUEUE_HOME, "embedding"),

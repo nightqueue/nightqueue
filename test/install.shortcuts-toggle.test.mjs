@@ -21,18 +21,17 @@ function makeCtx(env) {
   return { ctx, out, err };
 }
 
-// H1a: turning shortcuts back on after a --no-shortcuts install must create nshift and nsft.
+// H1a: turning shortcuts back on after a --no-shortcuts install must create nq.
 test("setup --no-shortcuts then setup without the flag turns the shortcuts on", async (t) => {
   const host = makeHostEnv(t, "shortcuts-toggle-on");
   const first = makeCtx(host.env);
   assert.equal(await run(["setup", "--no-path", "--no-embedding", "--no-shortcuts"], first.ctx), 0);
-  assert.equal(existsSync(host.shims.nshift), false);
-  assert.equal(existsSync(host.shims.nsft), false);
+  assert.equal(existsSync(host.shims.nq), false);
 
   const second = makeCtx(host.env);
   assert.equal(await run(["setup", "--no-path", "--no-embedding"], second.ctx), 0);
 
-  for (const name of ["nshift", "nsft"]) {
+  for (const name of ["nq"]) {
     const path = host.shims[name];
     assert.equal(existsSync(path), true, `${name} should exist after re-enabling shortcuts`);
     assert.equal(statSync(path).mode & 0o111, 0o111, `${name} should be executable`);
@@ -42,21 +41,20 @@ test("setup --no-shortcuts then setup without the flag turns the shortcuts on", 
 });
 
 // H1b: --no-shortcuts must never delete shortcuts already written by a previous setup.
-test("setup then setup --no-shortcuts keeps nshift and nsft on disk untouched", async (t) => {
+test("setup then setup --no-shortcuts keeps nq on disk untouched", async (t) => {
   const host = makeHostEnv(t, "shortcuts-toggle-off");
   const first = makeCtx(host.env);
   assert.equal(await run(["setup", "--no-path", "--no-embedding"], first.ctx), 0);
-  for (const name of ["nshift", "nsft"]) assert.equal(existsSync(host.shims[name]), true);
+  for (const name of ["nq"]) assert.equal(existsSync(host.shims[name]), true);
 
   const before = {
-    nshift: statSync(host.shims.nshift).mtimeMs,
-    nsft: statSync(host.shims.nsft).mtimeMs,
+    nq: statSync(host.shims.nq).mtimeMs,
   };
 
   const second = makeCtx(host.env);
   assert.equal(await run(["setup", "--no-path", "--no-embedding", "--no-shortcuts"], second.ctx), 0);
 
-  for (const name of ["nshift", "nsft"]) {
+  for (const name of ["nq"]) {
     const path = host.shims[name];
     assert.equal(existsSync(path), true, `${name} must not be removed by --no-shortcuts`);
     assert.equal(readFileSync(path, "utf8"), shimContent(host.env));

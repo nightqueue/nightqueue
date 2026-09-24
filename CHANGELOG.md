@@ -14,6 +14,9 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `~/.nightqueue` and every environment variable is `NIGHTQUEUE_*`. There is no alias for the old
   names: move the home yourself (`mv ~/.nightshift ~/.nightqueue`), run `npx nightqueue init` and
   remove the old plugin from Claude Code. The repository moved to `nightqueue/nightqueue`.
+- The shortcut shims are gone with the name: `nshift` and `nsft` are replaced by one, `nq`.
+  Because `nq` is also a Unix job queue (`brew install nq`), `nightqueue doctor` warns when another
+  `nq` comes first on PATH and names it; `nightqueue` itself is never shadowed.
 
 ### Changed
 

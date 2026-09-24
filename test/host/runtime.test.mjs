@@ -109,9 +109,9 @@ test("writeShims writes the three command names, and --no-shortcuts writes only 
   const env = makeEnv(t, "runtime-shims");
   assert.deepEqual(
     writeShims(env).map((shim) => shim.name),
-    ["nightqueue", "nshift", "nsft"],
+    ["nightqueue", "nq"],
   );
-  for (const name of ["nightqueue", "nshift", "nsft"]) {
+  for (const name of ["nightqueue", "nq"]) {
     assert.equal(readFileSync(shimPath(env, name), "utf8"), shimContent(env));
     assert.equal(fileMode(shimPath(env, name)), 0o755);
   }
@@ -121,8 +121,7 @@ test("writeShims writes the three command names, and --no-shortcuts writes only 
     writeShims(lean, { shortcuts: false }).map((shim) => shim.name),
     ["nightqueue"],
   );
-  assert.equal(existsSync(shimPath(lean, "nshift")), false);
-  assert.equal(existsSync(shimPath(lean, "nsft")), false);
+  assert.equal(existsSync(shimPath(lean, "nq")), false);
 });
 
 test("removeShims takes out every command name, even the shortcuts a --no-shortcuts install never wrote", (t) => {
@@ -130,7 +129,7 @@ test("removeShims takes out every command name, even the shortcuts a --no-shortc
   writeShims(env, { shortcuts: false });
   assert.deepEqual(
     removeShims(env).map((shim) => shim.status),
-    ["removed", "not present", "not present"],
+    ["removed", "not present"],
   );
   assert.equal(existsSync(shimPath(env, "nightqueue")), false);
 });

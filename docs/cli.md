@@ -122,7 +122,7 @@ $NIGHTQUEUE_HOME/          # 0700
   nightqueue.db            # the memory database (see [Memory](memory.md))
   runtime/versions/        # one directory per installed version, the last two kept
   runtime/current          # symlink into versions/, what the host is registered against
-  bin/                     # the shims: nightqueue, nshift and nsft
+  bin/                     # the shims: nightqueue and nq
   embedding/               # npm prefix of the embedding library, opt-in
   models/                  # embedding weights, downloaded on demand
   state/                   # per-session hook state

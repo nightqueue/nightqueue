@@ -164,7 +164,7 @@ export function dropLegacyShim(ctx, report) {
       return;
     }
     report.step(LEGACY_SHIM_LABEL, status, path);
-    ctx.out("the `shift` command was renamed to `nightqueue`; use `nightqueue`, `nshift` or `nsft` from now on");
+    ctx.out("the `shift` command was renamed to `nightqueue`; use `nightqueue` or `nq` from now on");
   });
 }
 

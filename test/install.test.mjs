@@ -116,16 +116,14 @@ test("--no-shortcuts writes the canonical shim alone, on setup and on init", asy
 
   assert.equal(await run(["setup", "--no-path", "--no-embedding", "--no-shortcuts"], ctx), 0);
   assert.equal(existsSync(host.shims.nightqueue), true);
-  assert.equal(existsSync(host.shims.nshift), false);
-  assert.equal(existsSync(host.shims.nsft), false);
+  assert.equal(existsSync(host.shims.nq), false);
   assert.ok(out.includes("shim shortcuts: skipped (--no-shortcuts)"), out.join("\n"));
 
   const other = makeHostEnv(t, "init-no-shortcuts");
   const init = makeCtx(other.env, { cwd: makeDir(t, "init-no-shortcuts-cwd") });
   assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh", "--no-shortcuts"], init.ctx), 0);
   assert.equal(existsSync(other.shims.nightqueue), true);
-  assert.equal(existsSync(other.shims.nshift), false);
-  assert.equal(existsSync(other.shims.nsft), false);
+  assert.equal(existsSync(other.shims.nq), false);
 });
 
 test("--shortcuts together with --no-shortcuts is refused before anything is installed", async (t) => {

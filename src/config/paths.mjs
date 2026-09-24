@@ -109,7 +109,7 @@ export function binDir(env = process.env) {
 }
 
 export const SHIM_NAME = "nightqueue";
-export const SHORTCUT_SHIM_NAMES = ["nshift", "nsft"];
+export const SHORTCUT_SHIM_NAMES = ["nq"];
 export const LEGACY_SHIM_NAME = "shift";
 
 // Path of one shim that starts the CLI from the runtime, the canonical name unless another is asked for.

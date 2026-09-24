@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -143,16 +143,32 @@ test("the three command names are checked, and a missing shortcut only warns", a
   const host = makeHostEnv(t, "doctor-shortcuts");
   await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
   const full = await diagnose(host.env);
-  for (const name of ["nightqueue", "nshift", "nsft"]) assert.equal(statusOf(full.report, `shim ${name}`), "ok");
+  for (const name of ["nightqueue", "nq"]) assert.equal(statusOf(full.report, `shim ${name}`), "ok");
 
   const lean = makeHostEnv(t, "doctor-no-shortcuts");
   await run([...SETUP, "--no-shortcuts"], { ...defaultContext(), env: lean.env, out: () => {}, err: () => {} });
   const { code, report } = await diagnose(lean.env);
   assert.equal(statusOf(report, "shim nightqueue"), "ok");
-  assert.equal(statusOf(report, "shim nshift"), "warn");
-  assert.equal(statusOf(report, "shim nsft"), "warn");
-  assert.match(report.checks.find((check) => check.name === "shim nshift").hint, /--no-shortcuts/);
+  assert.equal(statusOf(report, "shim nq"), "warn");
+  assert.match(report.checks.find((check) => check.name === "shim nq").hint, /--no-shortcuts/);
   assert.equal(code, 0, "a missing shortcut must never fail the diagnosis");
+});
+
+test("a shortcut shadowed by another executable earlier on PATH warns and names the winner, and the canonical name is untouched", async (t) => {
+  const host = makeHostEnv(t, "doctor-shadowed-shortcut");
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+  const foreign = join(host.env.NIGHTQUEUE_HOME, "foreign-bin");
+  mkdirSync(foreign, { recursive: true });
+  writeFileSync(join(foreign, "nq"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const env = { ...host.env, PATH: [foreign, join(host.env.NIGHTQUEUE_HOME, "bin"), host.env.PATH].join(delimiter) };
+  const { code, report } = await diagnose(env);
+  assert.equal(statusOf(report, "shim nightqueue"), "ok");
+  assert.equal(statusOf(report, "shim nq"), "warn");
+  assert.match(report.checks.find((check) => check.name === "shim nq").detail, new RegExp(`shadowed by ${join(foreign, "nq").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.equal(code, 0, "a shadowed shortcut must never fail the diagnosis");
+
+  const ahead = { ...host.env, PATH: [join(host.env.NIGHTQUEUE_HOME, "bin"), foreign, host.env.PATH].join(delimiter) };
+  assert.equal(statusOf((await diagnose(ahead)).report, "shim nq"), "ok", "the shim directory first on PATH wins");
 });
 
 test("a shim left over from the previous command name warns, with a hint that depends on who wrote it", async (t) => {
@@ -187,7 +203,7 @@ test("a home that never went through setup fails and exits 1", async (t) => {
   assert.equal(statusOf(report, "hook PreToolUse"), "fail");
   assert.equal(statusOf(report, "plugin"), "fail");
   assert.equal(statusOf(report, "gh"), "warn");
-  for (const name of ["nshift", "nsft"]) {
+  for (const name of ["nq"]) {
     const hint = report.checks.find((check) => check.name === `shim ${name}`).hint;
     assert.equal(hint, "run `nightqueue setup`", "a home with no shim at all must never be sent to turn a flag off");
   }
