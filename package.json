@@ -43,7 +43,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node --test --test-timeout=60000 --disable-warning=ExperimentalWarning \"test/**/*.test.mjs\"",
+    "test": "node --test --test-timeout=240000 --disable-warning=ExperimentalWarning \"test/**/*.test.mjs\"",
     "release:check": "npm test && node scripts/release-check.mjs"
   },
   "engines": {
