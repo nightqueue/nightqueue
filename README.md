@@ -2,6 +2,11 @@
 
 **An autonomous queue of coding agents with its own memory.**
 
+[![npm](https://img.shields.io/npm/v/%40maykonv%2Fnightshift?label=npm)](https://www.npmjs.com/package/@maykonv/nightshift)
+[![ci](https://github.com/maykonVinicius/nightshift/actions/workflows/ci.yml/badge.svg)](https://github.com/maykonVinicius/nightshift/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/%40maykonv%2Fnightshift)](package.json)
+[![license: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue)](LICENSE)
+
 Queue the work during the day. Start the batch when you step away. Come back to
 pull requests — and to an agent that remembers what it learned last night.
 
@@ -12,7 +17,8 @@ pull requests — and to an agent that remembers what it learned last night.
   <a href="docs/memory.md">Memory</a> ·
   <a href="docs/cli.md">CLI</a> ·
   <a href="docs/runtime-contract.md">Runtime contract</a> ·
-  <a href="docs/developing.md">Developing</a>
+  <a href="docs/developing.md">Developing</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 ---
@@ -45,6 +51,22 @@ Nothing leaves it.
   queue.
 - **Orgs and projects.** One home, many repositories, grouped by org, each with
   its own decisions log and roadmap.
+
+## How a job runs
+
+```
+queue add ─▶ triage ─▶ explore ─▶ architect ─▶ implement ─▶ adversarial QA ─▶ verify ─▶ runtime check ─▶ commit + PR
+                │                                                                                          │
+                └── every phase writes an artifact the next one is gated on; a gate stops the job ────────┘
+                    with a written notice, and `queue retry <id> --note` sends it back
+```
+
+Each phase is a dedicated subagent with its own instructions (`plugin/agents/`),
+running inside a git worktree of your repository, in a job environment it cannot
+leave. What it learns — lessons, decisions, structural indexes of the codebase —
+is written to a local SQLite home and recalled by the next job through the
+nightshift MCP server. The full promise between the pipeline and the runner is
+written down in [docs/runtime-contract.md](docs/runtime-contract.md).
 
 ## Why nightshift
 
@@ -133,6 +155,16 @@ you set up yourself. The machine is kept awake while a runner or a job needs it
 (`queue.keepAwake`), but the display can still sleep - a closed lid with no external
 display still stops the run, so keep it open. See [Running the
 queue](docs/queue.md#running-the-queue).
+
+## Status
+
+nightshift is pre-1.0 and used daily on real repositories. The CLI, the MCP tools
+and the on-disk formats can still change between minor versions; every change a
+user would notice is in [CHANGELOG.md](CHANGELOG.md), and a breaking one is
+marked as such. Bugs and ideas go to the
+[issues](https://github.com/maykonVinicius/nightshift/issues); see
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and
+[SECURITY.md](SECURITY.md) for anything a guard should have caught.
 
 ## Documentation
 

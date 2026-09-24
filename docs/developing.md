@@ -31,12 +31,13 @@ Publishing itself is a pushed tag, never a local `npm publish`:
 [RELEASING.md](RELEASING.md) has the four-step flow and the one-time npmjs.com setup that
 the release workflow depends on.
 
-`scripts/` is not part of the published tarball.
+`scripts/` is not part of the published tarball. How to contribute — branches, commits,
+the pull request template, what is off the table — is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Real pull request QA
 
 The only target of a verification that creates, merges or closes a real pull request is
-the demo checkout `~/Dev/nstest-demo` (remote
+the maintainer's demo checkout `~/Dev/nstest-demo` (remote
 `maykonVinicius/nstest-demo`) - never nightshift's own repository or any other remote. The
 pipeline and QA instructions (`plugin/skills/resolve/SKILL.md`, `plugin/agents/verifier.md`,
 `plugin/agents/qa-guardian.md`, `plugin/skills/qa-guardian/SKILL.md`) carry this as a hard

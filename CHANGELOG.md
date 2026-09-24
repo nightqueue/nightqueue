@@ -6,6 +6,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Changed
+
+- The repository is public. It gained `CONTRIBUTING.md`, `SECURITY.md`, issue and pull
+  request templates and Dependabot; the README describes how a job runs and the status of
+  the project. The test fixture that stood in for a repository's `CLAUDE.md` is a fictional
+  one of the same shape, and the project names in the tests are fictional too.
+
 ### Breaking
 
 - `closed` means the job's pull request was merged through the closing pipeline, and
