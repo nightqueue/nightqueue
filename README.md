@@ -164,7 +164,8 @@ user would notice is in [CHANGELOG.md](CHANGELOG.md), and a breaking one is
 marked as such. Bugs and ideas go to the
 [issues](https://github.com/maykonVinicius/nightshift/issues); see
 [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and
-[SECURITY.md](SECURITY.md) for anything a guard should have caught.
+[SECURITY.md](SECURITY.md) for anything a guard should have caught. Everyone here
+follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Documentation
 
