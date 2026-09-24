@@ -20,12 +20,21 @@ function escapeForRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Trails a shim of this package can point into: the versioned layout and the one an installation before it wrote.
-const SHIM_TRAILS = [RUNTIME_PACKAGE_TRAIL, LEGACY_RUNTIME_PACKAGE_TRAIL].map(escapeForRegExp).join("|");
+// Names this package was published under before, whose installed shims are still ours.
+const PREVIOUS_PACKAGE_NAMES = ["nightqueue", "@maykonv/nightshift"];
+
+// Trails a shim of this package can point into: the versioned layout and the one an installation before it wrote, under the current name and the previous ones.
+const SHIM_TRAILS = [
+  RUNTIME_PACKAGE_TRAIL,
+  LEGACY_RUNTIME_PACKAGE_TRAIL,
+  ...PREVIOUS_PACKAGE_NAMES.flatMap((name) => [`runtime/current/node_modules/${name}`, `runtime/node_modules/${name}`]),
+]
+  .map(escapeForRegExp)
+  .join("|");
 
 // Shape every shim this package ever wrote has: the CLI of a runtime prefix under some configuration home, the only proof that a file under the previous name is ours to delete.
 const SHIM_SHAPE = new RegExp(
-  `^#!/bin/sh\\nexec node "/.+/(?:${SHIM_TRAILS})/bin/(?:nightqueue|shift)\\.mjs" "\\$@"\\n$`,
+  `^#!/bin/sh\\nexec node "/.+/(?:${SHIM_TRAILS})/bin/(?:nightqueue|nightshift|shift)\\.mjs" "\\$@"\\n$`,
 );
 
 // Version declared by one package.json, or null when the file is missing or unreadable.

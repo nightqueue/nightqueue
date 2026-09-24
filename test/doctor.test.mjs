@@ -176,6 +176,9 @@ test("a shortcut shadowed by another executable earlier on PATH warns and names 
   writeFileSync(join(ours, "nq"), shimContent({ ...host.env, NIGHTQUEUE_HOME: join(host.env.NIGHTQUEUE_HOME, "other-home") }), { mode: 0o755 });
   const sibling = { ...host.env, PATH: [ours, join(host.env.NIGHTQUEUE_HOME, "bin"), host.env.PATH].join(delimiter) };
   assert.equal(statusOf((await diagnose(sibling)).report, "shim nq"), "ok", "a shim of another nightqueue home is ours, never another tool");
+
+  writeFileSync(join(ours, "nq"), '#!/bin/sh\nexec node "/Users/someone/.nightqueue/runtime/current/node_modules/nightqueue/bin/nightqueue.mjs" "$@"\n', { mode: 0o755 });
+  assert.equal(statusOf((await diagnose(sibling)).report, "shim nq"), "ok", "a shim written under the previous package name is ours too");
 });
 
 test("a shim left over from the previous command name warns, with a hint that depends on who wrote it", async (t) => {
