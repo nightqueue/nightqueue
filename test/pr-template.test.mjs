@@ -6,7 +6,7 @@ import { bodyProblems } from "../src/cli/pr-body.mjs";
 import { findPrTemplate, NIGHTSHIFT_SECTIONS } from "../src/cli/pr-template.mjs";
 import { makeDir } from "../test-support/memory.mjs";
 
-// Lines 228-301 of the real acme-mobile-app CLAUDE.md, copied verbatim: the Branch and Commits blocks come before the template.
+// A fictional mobile-app CLAUDE.md excerpt in the shape of a real one: the Branch and Commits blocks come before the template.
 const ACME_CLAUDE_MD = readFileSync(new URL("./fixtures/acme-mobile-app-claude-md.md", import.meta.url), "utf8");
 
 const ACME_HEADINGS = ["## Summary", "## Changes", "## Test plan", "## OTA-able?"];

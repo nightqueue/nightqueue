@@ -19,7 +19,7 @@ test("job #42's real attempt-2 tail: a killed Bash task with no settling result 
   assert.equal(outcome.status, "failed");
   assert.equal(
     outcome.noticeMd,
-    'runtime: the CLI killed the background task "find ~/nightshift/.claude/worktrees/feat+decisions-adr-log -path "*agents/explore.md" 2>/dev/null; f..."' +
+    'runtime: the CLI killed the background task "find ~/nightshift/.claude/worktrees/feat+decisions-adr-log -path "*agents/explore.md" 2>/dev/null; find / -path "*plugin..."' +
       "; the run did not finish; the Bash tool had moved this foreground command to the background after its own timeout",
   );
 });

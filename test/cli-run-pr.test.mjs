@@ -49,7 +49,7 @@ const BODY = [
   "",
 ].join("\n");
 
-// Lines 228-301 of the real acme-mobile-app CLAUDE.md, copied verbatim: the repository template of the tests.
+// A fictional mobile-app CLAUDE.md excerpt in the shape of a real one: the repository template of the tests.
 const ACME_CLAUDE_MD = readFileSync(new URL("./fixtures/acme-mobile-app-claude-md.md", import.meta.url), "utf8");
 
 // A body that follows the acme-mobile-app template, filled.

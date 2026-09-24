@@ -140,7 +140,7 @@ test("the prompt of an org item quotes the decisions of its org and nothing of a
     await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id, project: "acme-api" } }),
   );
   const prompt = getJob(queued.id, env).prompt;
-  assert.ok(prompt.includes("## Linked decision\ndlw#1 every repo runs one node version (accepted)"), prompt);
+  assert.ok(prompt.includes("## Linked decision\nacme#1 every repo runs one node version (accepted)"), prompt);
   assert.equal(prompt.includes("orbit pins node too"), false, "a decision of another org reached the prompt");
 });
 
