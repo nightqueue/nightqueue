@@ -21,7 +21,7 @@ import { RISKY_FS_TYPES, isRiskyFsType, mountOfPath } from "../host/mounts.mjs";
 import { npmBin, npmView } from "../host/npm.mjs";
 import { OPERATOR_AGENT, OPERATOR_MODE_AGENT, operatorAgentPath, probeOperatorLaunch } from "../host/operator.mjs";
 import { marketplaceIsCurrent, pluginRef, readInstalledPlugin, readKnownMarketplace } from "../host/plugin.mjs";
-import { legacyShimState, packageVersion, registrySpec, runtimeVersion, shimState } from "../host/runtime.mjs";
+import { isOwnShim, legacyShimState, packageVersion, registrySpec, runtimeVersion, shimState } from "../host/runtime.mjs";
 import { hookStatus, readHostSettings } from "../host/settings.mjs";
 import { PATH_MARK, binDirInPath, rcFilePath, shadowingDir } from "../host/shell.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
@@ -217,7 +217,7 @@ function checkShim(ctx, name) {
   }
   if (!state.executable) return check(label, "fail", `${state.path} is not executable`, `run \`chmod +x ${state.path}\``);
   if (!state.current) return check(label, "warn", `${state.path} points elsewhere`, "run `nightqueue setup`");
-  const shadow = shadowingDir(name, ctx.env);
+  const shadow = shadowingDir(name, ctx.env, { ignore: isOwnShim });
   if (shadow) {
     return check(label, "warn", `${state.path} is shadowed by ${join(shadow, name)}, which comes first on PATH`,
       `put ${binDir(ctx.env)} before ${shadow} in your PATH, or type \`${SHIM_NAME}\` instead`);

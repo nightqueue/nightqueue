@@ -98,13 +98,14 @@ export function binDirInPath(env = process.env) {
 // The directory of another executable that PATH resolves under a command name before the shim directory, or null
 // when the shim wins (or nothing else carries the name). `nq` is also a Unix job queue (`brew install nq`), so the
 // shortcut can be shadowed by it in silence; the diagnosis names the winner instead of leaving the user guessing.
-export function shadowingDir(name, env = process.env) {
+export function shadowingDir(name, env = process.env, { ignore = () => false } = {}) {
   const wanted = resolve(binDir(env));
   const raw = typeof env?.PATH === "string" ? env.PATH : "";
   for (const entry of raw.split(delimiter).filter(Boolean)) {
     const dir = resolve(entry);
     if (dir === wanted) return null;
-    if (existsSync(join(dir, name))) return dir;
+    const candidate = join(dir, name);
+    if (existsSync(candidate) && !ignore(candidate)) return dir;
   }
   return null;
 }

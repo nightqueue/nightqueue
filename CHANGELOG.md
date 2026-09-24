@@ -20,6 +20,9 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `nightqueue doctor` no longer reports the `nq` shortcut as shadowed by a shim of another
+  nightqueue home (a file of our own shape is never another tool); only a foreign `nq`
+  earlier on PATH warns.
 - The test suite no longer fails on a slow CI runner because one large test file crossed the
   60-second `--test-timeout`, which Node applies to a whole file as well as to each test:
   the limit is 4 minutes, and every CI job carries a 30-minute `timeout-minutes` so a hang

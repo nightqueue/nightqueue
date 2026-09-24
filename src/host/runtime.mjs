@@ -114,6 +114,11 @@ export function removeShims(env = process.env) {
 }
 
 // State of the shim an older installation wrote under the previous command name; ownership is the shape, never the exact content.
+// Whether a file is a shim this package wrote, under any configuration home: another installation's shim is never "another tool".
+export function isOwnShim(path) {
+  return SHIM_SHAPE.test(contentAt(path));
+}
+
 export function legacyShimState(env = process.env) {
   const path = legacyShimPath(env);
   if (!existsSync(path)) return { path, present: false, own: false };
