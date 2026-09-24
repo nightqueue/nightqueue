@@ -67,7 +67,7 @@ test("the status label, the current step and the stopped line follow the checkli
   assert.equal(statusLabel(closeRow({ status: "closed" }), NOW), "closed");
   assert.equal(currentCloseStep({ steps }), "merge");
   assert.equal(currentCloseStep(JSON.stringify({ steps: {} })), "preflight");
-  assert.equal(closeStoppedLine(failed), "⛔ close stopped at merge: merge-without-sha - run again with: nightshift queue close 12");
+  assert.equal(closeStoppedLine(failed), "⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close 12");
   assert.equal(closeStoppedLine(closeRow({ status: "closed", close: { data: { merged: true } } })), null);
 });
 
@@ -83,7 +83,7 @@ test("the checklist block prints every step in order, with the ones not reached 
     "  - conflict   skipped: mergeable",
     "  ✗ merge      merge-without-sha - still open",
     "  · settle     not reached",
-    "⛔ close stopped at merge: merge-without-sha - run again with: nightshift queue close 12",
+    "⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close 12",
   ]);
   assert.deepEqual(closeChecklistLines(closeRow({}), NOW), []);
 });
@@ -102,9 +102,9 @@ test("the summary names closes in flight with their pid, stopped ones with their
     stalled: [{ id: 4, leaseUntil: EARLIER }],
   });
   assert.deepEqual(closeLines(summary), [
-    "close in flight: #12 at conflict (pid 4242) - follow with: nightshift queue status 12",
-    "⛔ close stopped at merge: merge-without-sha - run again with: nightshift queue close 9",
-    `close of #4 stalled: its lease expired at ${EARLIER} - run again with: nightshift queue close 4`,
+    "close in flight: #12 at conflict (pid 4242) - follow with: nightqueue queue status 12",
+    "⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close 9",
+    `close of #4 stalled: its lease expired at ${EARLIER} - run again with: nightqueue queue close 4`,
   ]);
   assert.deepEqual(queueWorkers(runners).map((runner) => runner.pid), [77], "a close runner was counted as a queue worker");
 });
@@ -123,13 +123,13 @@ test("queue status shows `done · closing` while a close holds the job, `done ·
   assert.match(closing.stdout, /^ID {4}STATUS {11}DURATION/m, "STATUS did not grow to the `done · closing` label");
   assert.match(closing.stdout, new RegExp(`^#${id} +✓ done · closing +-`, "m"));
   assert.match(closing.stdout, /closing: preflight/);
-  assert.ok(closing.out.includes(`close in flight: #${id} at preflight - follow with: nightshift queue status ${id}`), closing.stdout);
+  assert.ok(closing.out.includes(`close in flight: #${id} at preflight - follow with: nightqueue queue status ${id}`), closing.stdout);
 
   failClose(id, { worker: WORKER, close: { attempts: 1, steps: {}, data: {}, failed: { step: "conflict", reason: "suite-red" } } }, env);
   const failed = await runCli(env, ["queue", "status"]);
   assert.match(failed.stdout, /^ID {4}STATUS {28}DURATION/m, "STATUS did not grow to the stopped close's label");
   assert.match(failed.stdout, /✓ done · close failed at conflict /);
-  assert.ok(failed.out.includes(`⛔ close stopped at conflict: suite-red - run again with: nightshift queue close ${id}`), failed.stdout);
+  assert.ok(failed.out.includes(`⛔ close stopped at conflict: suite-red - run again with: nightqueue queue close ${id}`), failed.stdout);
 
   const detail = await runCli(env, ["queue", "status", String(id)]);
   assert.ok(detail.out.includes("close           failed, attempt 1"), detail.stdout);
@@ -177,7 +177,7 @@ test("a live close runner alone never promises a pending job will be picked up",
   writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "close", jobId: id, intervalS: null, detached: false, logPath: null, runtimeDir: null }, env);
   const status = await runCli(env, ["queue", "status"]);
   assert.match(status.stdout, new RegExp(`runner: running \\(pid ${process.pid}, close, job #${id}`));
-  assert.ok(status.out.includes("1 pending job waiting - start the batch: nightshift queue run"), status.stdout);
+  assert.ok(status.out.includes("1 pending job waiting - start the batch: nightqueue queue run"), status.stdout);
   const added = await runCli(env, ["queue", "add", "alpha", "one more job"]);
-  assert.match(added.stdout, /0 runners online - pending jobs will wait until `nightshift queue run` starts one\./);
+  assert.match(added.stdout, /0 runners online - pending jobs will wait until `nightqueue queue run` starts one\./);
 });

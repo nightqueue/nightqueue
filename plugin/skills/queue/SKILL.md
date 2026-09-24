@@ -1,17 +1,17 @@
 ---
 name: queue
 description: >-
-  Queues the current plan, task or request as ONE unattended nightshift job,
+  Queues the current plan, task or request as ONE unattended nightqueue job,
   without running it. Use when the user says "queue this", "queue this for
   tonight", "add this to the queue", "run this later", "leave this for the
-  night", or runs /nightshift:queue. It records the job with the `queue_add`
+  night", or runs /nightqueue:queue. It records the job with the `queue_add`
   MCP tool and answers with the job id and how many jobs are pending; the batch
-  itself is started later, by the user, with `nightshift queue run`.
+  itself is started later, by the user, with `nightqueue queue run`.
 ---
 
 # Queue — one unattended job
 
-You turn what the user just asked for into ONE job in the nightshift backlog.
+You turn what the user just asked for into ONE job in the nightqueue backlog.
 `queue_add` only records the job; it never runs it.
 
 ## 1. Decide the job
@@ -28,7 +28,7 @@ You turn what the user just asked for into ONE job in the nightshift backlog.
 
 ## 2. Find the project
 
-- Run `nightshift project list --json`. It answers one entry per registered
+- Run `nightqueue project list --json`. It answers one entry per registered
   project, each with its `name` and its `path`.
 - Pick the project whose `path` is the longest prefix of the current working
   directory. That is the same rule the CLI applies.
@@ -65,7 +65,7 @@ runs unattended, with no access to this conversation:
 - There is no `run` parameter: recording the job is all this tool does.
 - Never start the job. Only when the user explicitly asks for that one job now
   do you call `queue_run` with its `job_id`; otherwise the whole batch is
-  started by the user, later, with `nightshift queue run`.
+  started by the user, later, with `nightqueue queue run`.
 
 ## 5. Answer
 
@@ -75,4 +75,4 @@ Three short lines, no more:
 - how many jobs are pending;
 - the one-line hint the tool itself returned in `hint`, reused as it came
   (``queued job #<id> for <project> (<pending> pending). 0 runners online -
-  pending jobs will wait until `nightshift queue run` starts one.``) — do not rewrite it.
+  pending jobs will wait until `nightqueue queue run` starts one.``) — do not rewrite it.

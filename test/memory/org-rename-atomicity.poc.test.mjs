@@ -8,7 +8,7 @@ import { closeDb } from "../../src/memory/db.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
 // Runs the real CLI in its own process, with the isolated home of the test.
 function runCli(env, args, { cwd } = {}) {

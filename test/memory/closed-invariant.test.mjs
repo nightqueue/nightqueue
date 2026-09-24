@@ -11,7 +11,7 @@ const SRC = fileURLToPath(new URL("../../src", import.meta.url));
 const WORKER = "host:1";
 const CLOSER = "close:host:1:aaaa";
 const PR_URL = "https://github.com/acme/api/pull/7";
-const PIPELINE_ONLY = /status `closed` is written only by the closing pipeline; run nightshift queue close <id>/;
+const PIPELINE_ONLY = /status `closed` is written only by the closing pipeline; run nightqueue queue close <id>/;
 const CLOSED_WRITE = /SET\s+status\s*=\s*'closed'|,\s*status\s*=\s*'closed'|status\s*=\s*'closed'\s*,/g;
 const CLOSED_WRITERS = { "memory/jobs.mjs": 1, "memory/close-migration.mjs": 2 };
 

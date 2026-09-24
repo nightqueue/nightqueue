@@ -9,7 +9,7 @@ import { saveDecision } from "../src/memory/decisions.mjs";
 import { saveRoadmapItem } from "../src/memory/roadmap.mjs";
 import { DOWNGRADE_TO_V5, makeHome, makeOrg, makeProject } from "../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const LONG_ORG = "acme-platform-group";
 
 // Runs the real CLI in its own process, with the isolated home of the test.

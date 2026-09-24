@@ -96,7 +96,7 @@ test("queue close refuses every job it must not close, by name, and writes nothi
 test("queue close refuses a job whose checkout is gone, and a call from inside an unattended job", async (t) => {
   const { env, checkout } = makeCloseHome(t, "close-cli-guards");
   const id = jobIn(env);
-  const inside = await runCli({ ...env, NIGHTSHIFT_JOB_ID: "3" }, ["queue", "close", String(id)]);
+  const inside = await runCli({ ...env, NIGHTQUEUE_JOB_ID: "3" }, ["queue", "close", String(id)]);
   assert.equal(inside.code, 1);
   assert.match(inside.stderr, /an unattended run never closes/);
   rmSync(checkout, { recursive: true, force: true });
@@ -120,7 +120,7 @@ test("queue close starts detached: the child gets --foreground and the lease tok
   assert.equal(spawned.file, process.execPath);
   assert.deepEqual(spawned.args.slice(1), ["queue", "close", String(id), "--foreground"]);
   assert.equal(spawned.options.detached, true);
-  assert.equal(spawned.options.env.NIGHTSHIFT_CLOSE_WORKER, row.close_worker, "the child never received the lease token");
+  assert.equal(spawned.options.env.NIGHTQUEUE_CLOSE_WORKER, row.close_worker, "the child never received the lease token");
   const record = JSON.parse(readFileSync(runnerRegistryPath(CHILD_PID, env), "utf8"));
   assert.equal(record.mode, "close");
   assert.equal(record.jobId, id);
@@ -128,7 +128,7 @@ test("queue close starts detached: the child gets --foreground and the lease tok
   assert.match(record.logPath, new RegExp(`close-${id}-\\d{8}T\\d{6}Z\\.log$`));
   assert.equal(
     ran.stdout,
-    `close of job #${id} started (pid ${CHILD_PID}) - follow with: tail -f ${record.logPath} (log: ${record.logPath}), or nightshift queue status ${id}`,
+    `close of job #${id} started (pid ${CHILD_PID}) - follow with: tail -f ${record.logPath} (log: ${record.logPath}), or nightqueue queue status ${id}`,
   );
 
   const again = await runCli(env, ["queue", "close", String(id)]);
@@ -158,7 +158,7 @@ test("a spawn that fails leaves the close failed at start, the lease cleared and
   const id = jobIn(env);
   const ran = await runCli(env, ["queue", "close", String(id)], { spawnImpl: fakeSpawn([], { fail: new Error("spawn EACCES") }) });
   assert.equal(ran.code, 1);
-  assert.match(ran.stderr, /could not start the close of job #\d+: spawn EACCES; run again with: nightshift queue close \d+/);
+  assert.match(ran.stderr, /could not start the close of job #\d+: spawn EACCES; run again with: nightqueue queue close \d+/);
   const row = getJob(id, env);
   assert.equal(row.close_status, "failed");
   assert.equal(row.close_worker, null);
@@ -187,7 +187,7 @@ test("queue close --foreground runs the engine here, prints where it stopped and
   assert.equal(ran.code, 1, "only a closed job exits 0");
   assert.equal(calls.length, 0, "--foreground spawned a child");
   assert.match(ran.out[0], /^✗ preflight\s+checks-red - failing checks: lint$/);
-  assert.equal(ran.out.at(-1), `⛔ close stopped at preflight: checks-red - run again with: nightshift queue close ${id}`);
+  assert.equal(ran.out.at(-1), `⛔ close stopped at preflight: checks-red - run again with: nightqueue queue close ${id}`);
   const row = getJob(id, env);
   assert.equal(row.close_status, "failed");
   assert.equal(row.close_worker, null);
@@ -212,7 +212,7 @@ test("queue close --foreground --force goes past red checks, says so first, and 
   assert.equal(ran.out.at(-1), `job #${id} closed: PR #7 merged as abc1234`);
   const checklist = JSON.parse(getJob(id, env).close);
   assert.equal(checklist.forced, true);
-  assert.equal(checklist.data.mergedBy, "nightshift");
+  assert.equal(checklist.data.mergedBy, "nightqueue");
   assert.equal(getJob(id, env).status, "closed");
 });
 
@@ -244,7 +244,7 @@ test("queue close re-runs a failed close keeping its checklist, reclaims a dead 
 
   const first = await runCli(env, ["queue", "close", String(id), "--foreground"], { closeDeps: fake.deps });
   assert.equal(first.code, 1);
-  assert.equal(first.out.at(-1), `⛔ close stopped at merge: merge-without-sha - run again with: nightshift queue close ${id}`);
+  assert.equal(first.out.at(-1), `⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close ${id}`);
   assert.equal(getJob(id, env).status, "done");
 
   acquireClose(id, { worker: "close:gone:1:dead", leaseS: 660 }, env);
@@ -280,7 +280,7 @@ test("queue close refuses a pull request on another branch at preflight, and the
   await runCli(env, ["queue", "close", String(id), "--force"], { calls });
   assert.deepEqual(calls[0].args.slice(1), ["queue", "close", String(id), "--foreground", "--force"]);
   const fake = foreign();
-  const child = await runCli({ ...env, NIGHTSHIFT_CLOSE_WORKER: calls[0].options.env.NIGHTSHIFT_CLOSE_WORKER }, calls[0].args.slice(1), { closeDeps: fake.deps });
+  const child = await runCli({ ...env, NIGHTQUEUE_CLOSE_WORKER: calls[0].options.env.NIGHTQUEUE_CLOSE_WORKER }, calls[0].args.slice(1), { closeDeps: fake.deps });
   assert.equal(child.code, 1, child.stdout);
   assert.match(child.out[1], refusal);
   assert.equal(fake.log.merges.length, 0, "--force merged a pull request that is not the job's own");
@@ -293,14 +293,14 @@ test("the detached child adopts the lease through its token, and a token that do
   const id = jobIn(env);
   const calls = [];
   await runCli(env, ["queue", "close", String(id)], { calls });
-  const token = calls[0].options.env.NIGHTSHIFT_CLOSE_WORKER;
+  const token = calls[0].options.env.NIGHTQUEUE_CLOSE_WORKER;
 
-  const stranger = await runCli({ ...env, NIGHTSHIFT_CLOSE_WORKER: "close:other:1:beef" }, ["queue", "close", String(id), "--foreground"]);
+  const stranger = await runCli({ ...env, NIGHTQUEUE_CLOSE_WORKER: "close:other:1:beef" }, ["queue", "close", String(id), "--foreground"]);
   assert.equal(stranger.code, 1);
   assert.match(stranger.stderr, /the close lease of job #\d+ is not held by this process any more/);
   assert.equal(getJob(id, env).close_status, "closing", "a stranger's token changed the close");
 
-  const child = await runCli({ ...env, NIGHTSHIFT_CLOSE_WORKER: token }, ["queue", "close", String(id), "--foreground"]);
+  const child = await runCli({ ...env, NIGHTQUEUE_CLOSE_WORKER: token }, ["queue", "close", String(id), "--foreground"]);
   assert.equal(child.code, 1);
   assert.equal(getJob(id, env).close_status, "failed", "the child never adopted the lease its parent took");
 });

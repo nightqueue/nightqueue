@@ -1,20 +1,20 @@
 {
-  "name": "@maykonv/nightshift",
+  "name": "nightqueue",
   "version": "0.3.0",
-  "description": "Autonomous queue of coding agents with its own memory. Bundles the Claude Code plugin and the nightshift configuration CLI.",
+  "description": "Autonomous queue of coding agents with its own memory. Bundles the Claude Code plugin and the nightqueue configuration CLI.",
   "license": "BUSL-1.1",
   "author": {
     "name": "Maykon Vinicius",
     "url": "https://github.com/maykonVinicius"
   },
   "private": false,
-  "homepage": "https://github.com/maykonVinicius/nightshift#readme",
+  "homepage": "https://github.com/nightqueue/nightqueue#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/maykonVinicius/nightshift.git"
+    "url": "git+https://github.com/nightqueue/nightqueue.git"
   },
   "bugs": {
-    "url": "https://github.com/maykonVinicius/nightshift/issues"
+    "url": "https://github.com/nightqueue/nightqueue/issues"
   },
   "keywords": [
     "claude-code",
@@ -28,7 +28,7 @@
     "automation"
   ],
   "bin": {
-    "nightshift": "bin/nightshift.mjs"
+    "nightqueue": "bin/nightqueue.mjs"
   },
   "files": [
     ".claude-plugin",

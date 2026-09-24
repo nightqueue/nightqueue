@@ -21,15 +21,15 @@ import {
 import { openStore } from "../../src/store/open.mjs";
 import { makeDir, makeHome, makeProject, settleThroughStore } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const PR_URL = "https://github.com/acme/alpha/pull/7";
 const DB_MODULE_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
 const PROJECTS_MODULE_URL = new URL("../../src/memory/roadmap-projects.mjs", import.meta.url).href;
 
-// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connect(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;
@@ -144,7 +144,7 @@ test("the prompt of an org item quotes the decisions of its org and nothing of a
   assert.equal(prompt.includes("orbit pins node too"), false, "a decision of another org reached the prompt");
 });
 
-test("nightshift queue add --roadmap needs --project <name|all> for an org item, never the current directory", (t) => {
+test("nightqueue queue add --roadmap needs --project <name|all> for an org item, never the current directory", (t) => {
   const { env, cwd, item } = makeOrgItemHome(t, "roadmap-org-queue-cli");
   const elsewhere = makeDir(t, "roadmap-org-queue-cwd");
 

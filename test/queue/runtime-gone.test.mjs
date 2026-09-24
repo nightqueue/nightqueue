@@ -9,7 +9,7 @@ import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream } from "../../test-support/streams.mjs";
 
-const WARNING = /^runtime directory (.+) is gone - this runner finishes the job it is running and exits; start a new runner with: nightshift queue run$/m;
+const WARNING = /^runtime directory (.+) is gone - this runner finishes the job it is running and exits; start a new runner with: nightqueue queue run$/m;
 
 // A git double for the preflight: a clean checkout of the default branch.
 function fakeGit(onCall = () => {}) {

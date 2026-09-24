@@ -161,7 +161,7 @@ export function transientFailureStream({ sessionId = SESSION_ID } = {}) {
 
 export const ATTEMPT_ISO = "2026-09-07T19:50:00.000Z";
 export const LANE_TOOL_USE_ID = "toolu_agent1";
-export const SUBAGENT_TYPE = "nightshift:triager";
+export const SUBAGENT_TYPE = "nightqueue:triager";
 
 // The line `openAttemptLog` writes before each attempt of a job.
 export function attemptMarker(attempt = 1, iso = ATTEMPT_ISO) {

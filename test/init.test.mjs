@@ -63,7 +63,7 @@ function readConfig(home) {
 // Host whose fake GitHub CLI reports an authenticated account.
 function makeAuthenticatedHost(t, name) {
   const host = makeHostEnv(t, name);
-  host.env.NIGHTSHIFT_FAKE_GH_STATE = "authenticated";
+  host.env.NIGHTQUEUE_FAKE_GH_STATE = "authenticated";
   return host;
 }
 
@@ -105,7 +105,7 @@ test("init sets the host up, registers the project and stays idempotent", async 
 
 test("the semantic recall question is asked once and the second init never brings it back", async (t) => {
   const host = makeHostEnv(t, "init-embedding-question");
-  delete host.env.NIGHTSHIFT_EMBED_DISABLED;
+  delete host.env.NIGHTQUEUE_EMBED_DISABLED;
   const repo = makeRepo(t, "init-embedding-question-repo");
   const no = tty("n\n");
   const first = makeCtx(host.env, { stdin: no.stdin, stdout: no.stdout });
@@ -113,7 +113,7 @@ test("the semantic recall question is asked once and the second init never bring
   assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--no-gh"], first.ctx), 0, first.err.join("\n"));
   assert.equal(no.written.join("").includes("Enable semantic recall?"), true, no.written.join(""));
   assert.ok(first.out.includes("embedding: skipped (declined)"), first.out.join("\n"));
-  assert.ok(first.out.includes("semantic recall skipped; run `nightshift embed install` to enable it"), first.out.join("\n"));
+  assert.ok(first.out.includes("semantic recall skipped; run `nightqueue embed install` to enable it"), first.out.join("\n"));
   assert.equal(readConfig(host.home).embedding, "declined");
 
   const again = tty("n\n");
@@ -171,7 +171,7 @@ test("an occupied slot and a name already taken stop the import, with --gh inclu
   );
   const collision = makeCtx(host.env);
   assert.equal(await run(["init", "--no-path", other, "--name", "web", "--gh"], collision.ctx), 0);
-  assert.ok(collision.out.includes("connection `gh` already exists; run `nightshift connection bind gh --org default`"), collision.out.join("\n"));
+  assert.ok(collision.out.includes("connection `gh` already exists; run `nightqueue connection bind gh --org default`"), collision.out.join("\n"));
   assert.equal(readConfig(host.home).projects.web.org, "default");
 });
 
@@ -182,7 +182,7 @@ test("without a terminal init only points at the flag, and never reads the token
 
   assert.equal(await run(["init", "--no-path", repo, "--name", "api"], ctx), 0);
   assert.ok(
-    out.includes(`GitHub CLI is authenticated as ${FAKE_GH_LOGIN}; run \`nightshift init --gh\` to import its token as connection \`gh\``),
+    out.includes(`GitHub CLI is authenticated as ${FAKE_GH_LOGIN}; run \`nightqueue init --gh\` to import its token as connection \`gh\``),
     out.join("\n"),
   );
   assert.deepEqual(ghSubcommands(host), ["auth status"]);
@@ -204,7 +204,7 @@ test("on a terminal init asks the exact question and honours the answer", async 
   assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-no-repo"), "--name", "api"], noRun.ctx), 0);
   assert.equal(no.written.join("").includes(QUESTION), true);
   assert.ok(
-    noRun.out.includes('store a token with `echo "$GITHUB_TOKEN" | nightshift connection add gh --type github`'),
+    noRun.out.includes('store a token with `echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github`'),
     noRun.out.join("\n"),
   );
   assert.deepEqual(ghSubcommands(refused), ["auth status"]);
@@ -223,11 +223,11 @@ test("an input that ends without an answer is a no, and the command still finish
 
 test("a GitHub CLI that is missing or logged out costs one line and never an error", async (t) => {
   const missing = makeHostEnv(t, "init-gh-missing");
-  missing.env.NIGHTSHIFT_GH_BIN = join(missing.configDir, "does-not-exist");
+  missing.env.NIGHTQUEUE_GH_BIN = join(missing.configDir, "does-not-exist");
   const absent = makeCtx(missing.env);
   assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-missing-repo"), "--name", "api", "--gh"], absent.ctx), 0);
   assert.ok(
-    absent.out.includes('GitHub CLI not found; store a token with `echo "$GITHUB_TOKEN" | nightshift connection add gh --type github`'),
+    absent.out.includes('GitHub CLI not found; store a token with `echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github`'),
     absent.out.join("\n"),
   );
 
@@ -235,7 +235,7 @@ test("a GitHub CLI that is missing or logged out costs one line and never an err
   const anonymous = makeCtx(loggedOut.env);
   assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-logged-out-repo"), "--name", "api", "--gh"], anonymous.ctx), 0);
   assert.ok(
-    anonymous.out.includes("GitHub CLI is not authenticated; run `gh auth login` and then `nightshift init --gh`"),
+    anonymous.out.includes("GitHub CLI is not authenticated; run `gh auth login` and then `nightqueue init --gh`"),
     anonymous.out.join("\n"),
   );
   assert.deepEqual(ghSubcommands(loggedOut), ["auth status"]);
@@ -261,7 +261,7 @@ test("a path that is not a git repository stops init before it touches the host"
 
 test("a runtime npm could not install stops init before anything else is written", async (t) => {
   const host = makeHostEnv(t, "init-fatal-runtime");
-  host.env.NIGHTSHIFT_FAKE_NPM_EXIT = "1";
+  host.env.NIGHTQUEUE_FAKE_NPM_EXIT = "1";
   const { ctx, out, err } = makeCtx(host.env, { cwd: makeDir(t, "init-fatal-runtime-cwd") });
 
   assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], ctx), 1);
@@ -289,13 +289,13 @@ test("a claude CLI that cannot run degrades the host services and still finishes
   const { ctx, out } = makeCtx(host.env, { cwd: makeDir(t, "init-claude-broken-cwd") });
 
   assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], ctx), 0);
-  assert.ok(out.some((line) => line.startsWith("mcp nightshift: failed")), out.join("\n"));
+  assert.ok(out.some((line) => line.startsWith("mcp nightqueue: failed")), out.join("\n"));
   assert.ok(out.some((line) => line.startsWith("setup finished with")), out.join("\n"));
   assert.equal(readFileSync(host.rcPath, "utf8").includes(pathBlock(host.env)), true, "a degraded host service held the PATH back");
 
   const again = makeCtx(host.env, { cwd: makeDir(t, "init-claude-broken-again") });
   assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], again.ctx), 0);
-  assert.ok(again.out.some((line) => line.startsWith("mcp nightshift: failed")), again.out.join("\n"));
+  assert.ok(again.out.some((line) => line.startsWith("mcp nightqueue: failed")), again.out.join("\n"));
   assert.equal(again.out.some((line) => line.startsWith("host already installed")), false, "a degraded step was hidden behind the summary");
 });
 
@@ -348,12 +348,12 @@ test("init closes by saying what it installed, where the block went and how to m
   const { ctx, out } = makeCtx(host.env, { cwd: makeDir(t, "init-final-message-cwd") });
 
   assert.equal(await run(["init", "--path", "--no-embedding", "--no-gh"], ctx), 0);
-  assert.ok(out.includes(`installed nightshift v${VERSION} in ${resolvedRuntimeDir(host.env)}`), out.join("\n"));
+  assert.ok(out.includes(`installed nightqueue v${VERSION} in ${resolvedRuntimeDir(host.env)}`), out.join("\n"));
   assert.ok(out.includes(`commands: ${Object.values(host.shims).join(", ")}`), out.join("\n"));
   assert.ok(out.includes(`PATH block written to ${host.rcPath}:`), out.join("\n"));
   for (const line of pathBlock(host.env).split("\n")) assert.ok(out.includes(`  ${line}`), out.join("\n"));
   assert.ok(
-    out.includes("Open a new terminal or run `source ~/.zshrc` (or your shell's rc) to use `nightshift`."),
+    out.includes("Open a new terminal or run `source ~/.zshrc` (or your shell's rc) to use `nightqueue`."),
     out.join("\n"),
   );
 });
@@ -363,25 +363,25 @@ test("a skipped PATH step is never sold as written", async (t) => {
   const { ctx, out } = makeCtx(host.env, { cwd: makeDir(t, "init-no-path-message-cwd") });
 
   assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh"], ctx), 0);
-  assert.ok(out.includes(`installed nightshift v${VERSION} in ${resolvedRuntimeDir(host.env)}`), out.join("\n"));
+  assert.ok(out.includes(`installed nightqueue v${VERSION} in ${resolvedRuntimeDir(host.env)}`), out.join("\n"));
   assert.equal(out.some((line) => line.startsWith("PATH block written to")), false, out.join("\n"));
   assert.equal(out.some((line) => line.startsWith("Open a new terminal")), false, out.join("\n"));
 });
 
 const LAST_STEPS = [
-  '  2. When you leave, say "run the queue" or run `nightshift queue run` - every queued job runs unattended and opens a pull request.',
-  '  3. Come back to `nightshift queue status` and review the PRs; a job waiting at the gate is answered with `nightshift queue retry <id> --note "..."`.',
+  '  2. When you leave, say "run the queue" or run `nightqueue queue run` - every queued job runs unattended and opens a pull request.',
+  '  3. Come back to `nightqueue queue status` and review the PRs; a job waiting at the gate is answered with `nightqueue queue retry <id> --note "..."`.',
 ];
 
 const NEXT_STEPS_REGISTERED = [
   "Next steps:",
-  '  1. In Claude Code, plan as usual, then say "queue this for tonight" or run /nightshift:queue.',
+  '  1. In Claude Code, plan as usual, then say "queue this for tonight" or run /nightqueue:queue.',
   ...LAST_STEPS,
 ];
 
 const NEXT_STEPS_UNREGISTERED = [
   "Next steps:",
-  '  1. cd into a repository and run `nightshift queue add "<task>"` - it offers to register the project on the spot. In Claude Code, plan as usual and say "queue this for tonight" or run /nightshift:queue.',
+  '  1. cd into a repository and run `nightqueue queue add "<task>"` - it offers to register the project on the spot. In Claude Code, plan as usual and say "queue this for tonight" or run /nightqueue:queue.',
   ...LAST_STEPS,
 ];
 
@@ -401,7 +401,7 @@ test("init closes with the next steps, with no PATH block written and outside a 
   assert.equal(readFileSync(host.rcPath, "utf8").includes(pathBlock(host.env)), true);
   assert.deepEqual(inside.out.slice(-NEXT_STEPS_REGISTERED.length), NEXT_STEPS_REGISTERED, inside.out.join("\n"));
   assert.equal(inside.out.some((line) => line.startsWith("  4.")), false, inside.out.join("\n"));
-  assert.equal(inside.out.some((line) => line.includes("nightshift project add")), false, inside.out.join("\n"));
+  assert.equal(inside.out.some((line) => line.includes("nightqueue project add")), false, inside.out.join("\n"));
 });
 
 test("init packs this package, installs the tarball and leaves a host the doctor passes", async (t) => {

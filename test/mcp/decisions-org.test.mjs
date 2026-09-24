@@ -8,19 +8,19 @@ import { addJob } from "../../src/memory/jobs.mjs";
 import { getRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
 const ORG_DECISION = {
   org: "acme",
   title: "every repo of the product shares one queue",
   context: "six repos kept their own backlog",
-  decision: "one nightshift home per operator, one queue for the whole product",
+  decision: "one nightqueue home per operator, one queue for the whole product",
 };
 
-// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connect(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;
@@ -130,7 +130,7 @@ test("inside a job, an org row is refused by name while the job's own project is
     env,
   );
   const job = addJob({ project: "acme-mobile-app", prompt: "rewrite the runner" }, env);
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const decision = await client.callTool({ name: "decision_update", arguments: { id: orgDecision.id, status: "rejected" } });
   assert.equal(decision.isError, true);

@@ -213,7 +213,7 @@ test("the measured telemetry of a retried job lands on the LAST run recorded for
 test("the model and the session come from the environment of the process, never from a parameter", (t) => {
   const env = makeHome(t, "runs-env");
   makeProject(t, env, "alpha");
-  logPipelineRun(run(), { ...env, NIGHTSHIFT_MODEL: "opus", NIGHTSHIFT_SESSION_ID: "s-42" });
+  logPipelineRun(run(), { ...env, NIGHTQUEUE_MODEL: "opus", NIGHTQUEUE_SESSION_ID: "s-42" });
   logPipelineRun(run({ slug: "second-run" }), env);
   const stored = telemetry(env);
   assert.deepEqual(

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { makeDir, makeHome } from "../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 
 const NPM_V3 = `${JSON.stringify(
   {
@@ -172,7 +172,7 @@ function makeFixture(t, name, file, content) {
   return cwd;
 }
 
-// Runs `nightshift libs` in the fixture as a real subprocess.
+// Runs `nightqueue libs` in the fixture as a real subprocess.
 function runLibs(t, cwd, names) {
   const env = makeHome(t, "libs-caller");
   const result = spawnSync(process.execPath, [CLI, "libs", ...names], { cwd, env, encoding: "utf8" });
@@ -235,5 +235,5 @@ test("a call with no name is refused with the usage line", (t) => {
   const result = runLibs(t, cwd, []);
 
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /missing argument; usage: nightshift libs <name>\.\.\./);
+  assert.match(result.stderr, /missing argument; usage: nightqueue libs <name>\.\.\./);
 });

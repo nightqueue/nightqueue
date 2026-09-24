@@ -380,7 +380,7 @@ export function withWriteRetry(action) {
     }
   }
   throw new UserError(
-    `the nightshift database is still locked by another process after ${BUSY_ATTEMPTS} attempts; run the command again in a moment`,
+    `the nightqueue database is still locked by another process after ${BUSY_ATTEMPTS} attempts; run the command again in a moment`,
   );
 }
 
@@ -414,10 +414,10 @@ function enableWal(db, path) {
   const mode = db.prepare("PRAGMA journal_mode").get()?.journal_mode;
   if (mode === "wal" || walWarned) return;
   walWarned = true;
-  console.warn(`nightshift: warning: could not enable WAL on ${path} (journal_mode=${mode})`);
+  console.warn(`nightqueue: warning: could not enable WAL on ${path} (journal_mode=${mode})`);
 }
 
-const V17_BUMPED_ITEMS = Object.freeze({ project: "nightshift", ids: [9, 36], priority: 3 });
+const V17_BUMPED_ITEMS = Object.freeze({ project: "nightqueue", ids: [9, 36], priority: 3 });
 
 // Tells whether `roadmap_items` still has the legacy (v16 and older) shape, the one with a `horizon` column.
 function hasLegacyRoadmapItems(db) {
@@ -425,7 +425,7 @@ function hasLegacyRoadmapItems(db) {
 }
 
 // Copies every legacy (v16 and older) roadmap row into the v17 table: the legacy status map, `closed_at` on `done` only, priority 5 (the bumped
-// nightshift items excepted), positions renumbered per owner and priority, and the job status the item already reflects.
+// nightqueue items excepted), positions renumbered per owner and priority, and the job status the item already reflects.
 function copyLegacyRoadmapItems(db) {
   const bumped = `r.id IN (${V17_BUMPED_ITEMS.ids.join(", ")}) AND r.scope = 'project' AND r.project = '${V17_BUMPED_ITEMS.project}'`;
   db.exec(`INSERT INTO roadmap_items_v17
@@ -519,7 +519,7 @@ function migrateOrExplain(db) {
     migrate(db);
   } catch (err) {
     if (!String(err?.message ?? "").toLowerCase().includes("fts5")) throw err;
-    throw new UserError("this Node build has no FTS5 support; nightshift memory needs SQLite with FTS5");
+    throw new UserError("this Node build has no FTS5 support; nightqueue memory needs SQLite with FTS5");
   }
 }
 
@@ -559,7 +559,7 @@ function installExitHook() {
 // lock of the other connections; where it does not — a FUSE or network mount of the home — it lands under a runner
 // still attached to the shared-memory file, which then keeps writing through an inode nobody else can see while the
 // next process creates a fresh one. Two wal-indexes over one log is how a healthy database starts answering
-// `file is not a database` (`nightshift doctor`, checks `db shm` and `home mount`).
+// `file is not a database` (`nightqueue doctor`, checks `db shm` and `home mount`).
 //
 // A read-only connection can never take that delete, so holding one until the process really exits turns the fold on
 // close into a checkpoint every other process survives. The pin READS once on purpose: a connection that has not run a
@@ -577,7 +577,7 @@ function pinWal(env, path) {
   }
 }
 
-// Opens the database of this NIGHTSHIFT_HOME, creating and migrating it on first use.
+// Opens the database of this NIGHTQUEUE_HOME, creating and migrating it on first use.
 export function openDb(env = process.env) {
   const path = dbPath(env);
   const cached = connections.get(path);
@@ -622,7 +622,7 @@ export function migrateIfOutdated(env = process.env) {
   } catch (err) {
     const detail = err instanceof UserError ? err.message : (err?.message ?? String(err));
     throw new UserError(
-      `the memory database at ${path} is at schema v${version} and this build needs v${DB_USER_VERSION}, but it could not be migrated: ${detail}; make the database writable and run \`nightshift queue status\` again`,
+      `the memory database at ${path} is at schema v${version} and this build needs v${DB_USER_VERSION}, but it could not be migrated: ${detail}; make the database writable and run \`nightqueue queue status\` again`,
     );
   }
 }

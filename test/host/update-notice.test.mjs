@@ -14,10 +14,10 @@ const NOW = Date.parse("2026-09-10T12:00:00.000Z");
 // A home whose update check is on, with a runtime that declares the given installed version.
 function makeNoticeHome(t, name, installed = "0.1.0") {
   const env = makeHome(t, name);
-  delete env.NIGHTSHIFT_NO_UPDATE_CHECK;
+  delete env.NIGHTQUEUE_NO_UPDATE_CHECK;
   const dir = runtimePackageDir(env);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "package.json"), `${JSON.stringify({ name: "@maykonv/nightshift", version: installed }, null, 2)}\n`);
+  writeFileSync(join(dir, "package.json"), `${JSON.stringify({ name: "nightqueue", version: installed }, null, 2)}\n`);
   return env;
 }
 
@@ -40,7 +40,7 @@ test("the notice names the published version and the installed one, in the fixed
   const env = cachePublished(makeNoticeHome(t, "notice-newer"), "0.4.0");
   assert.equal(
     await updateNoticeLine({ env, now: () => NOW }),
-    "nightshift 0.4.0 is available (installed 0.1.0) - run `nightshift update`",
+    "nightqueue 0.4.0 is available (installed 0.1.0) - run `nightqueue update`",
   );
 });
 
@@ -55,19 +55,19 @@ test("nothing is said when the published version is not above the installed one"
   assert.equal(await updateNoticeLine({ env: garbage, now: () => NOW }), null);
 
   const noRuntime = cachePublished(makeHome(t, "notice-no-runtime"), "0.4.0");
-  delete noRuntime.NIGHTSHIFT_NO_UPDATE_CHECK;
+  delete noRuntime.NIGHTQUEUE_NO_UPDATE_CHECK;
   assert.equal(await updateNoticeLine({ env: noRuntime, now: () => NOW }), null, "a home with no runtime got a notice");
 });
 
 test("an unattended job never reads the notice and never asks the registry", async (t) => {
-  const env = { ...cachePublished(makeNoticeHome(t, "notice-in-job"), "0.4.0"), NIGHTSHIFT_JOB_ID: "7" };
+  const env = { ...cachePublished(makeNoticeHome(t, "notice-in-job"), "0.4.0"), NIGHTQUEUE_JOB_ID: "7" };
   const calls = [];
   assert.equal(await updateNoticeLine({ env, fetchImpl: fakeFetch(calls, "0.4.0"), now: () => NOW }), null);
   assert.deepEqual(calls, []);
 });
 
 test("the opt-out silences the notice, whatever the cache holds", async (t) => {
-  const env = { ...cachePublished(makeNoticeHome(t, "notice-off"), "0.4.0"), NIGHTSHIFT_NO_UPDATE_CHECK: "1" };
+  const env = { ...cachePublished(makeNoticeHome(t, "notice-off"), "0.4.0"), NIGHTQUEUE_NO_UPDATE_CHECK: "1" };
   const calls = [];
   assert.equal(await updateNoticeLine({ env, fetchImpl: fakeFetch(calls, "0.4.0"), now: () => NOW }), null);
   assert.deepEqual(calls, []);
@@ -85,9 +85,9 @@ test("the session block ends with the notice, and with nothing new when the chec
 
   const block = await runSessionStart({ input, env, fetchImpl: fakeFetch(calls, "0.4.0") });
   assert.equal(calls.length, 1, "the hook was not wired to the injected fetch");
-  assert.equal(block.endsWith("\nnightshift 0.4.0 is available (installed 0.1.0) - run `nightshift update`"), true, block);
+  assert.equal(block.endsWith("\nnightqueue 0.4.0 is available (installed 0.1.0) - run `nightqueue update`"), true, block);
 
-  const quiet = await runSessionStart({ input, env: { ...env, NIGHTSHIFT_NO_UPDATE_CHECK: "1" }, fetchImpl: fakeFetch(calls, "0.4.0") });
+  const quiet = await runSessionStart({ input, env: { ...env, NIGHTQUEUE_NO_UPDATE_CHECK: "1" }, fetchImpl: fakeFetch(calls, "0.4.0") });
   assert.equal(quiet.includes("is available"), false, quiet);
   assert.equal(calls.length, 1, "the opt-out still reached the registry");
 });

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
-const PLAN_PATH = String(process.env.NIGHTSHIFT_FAKE_PLAN ?? "");
+const PLAN_PATH = String(process.env.NIGHTQUEUE_FAKE_PLAN ?? "");
 const COUNTER_PATH = `${PLAN_PATH}.attempt`;
 const CALLS_PATH = `${PLAN_PATH}.calls.jsonl`;
 
 // Reads the plan file that tells this fake what to print, how long to hold and how to exit.
 function readPlan() {
-  if (!PLAN_PATH) throw new Error("NIGHTSHIFT_FAKE_PLAN is not set");
+  if (!PLAN_PATH) throw new Error("NIGHTQUEUE_FAKE_PLAN is not set");
   const plan = JSON.parse(readFileSync(PLAN_PATH, "utf8"));
   if (!Array.isArray(plan.attempts) || !plan.attempts.length) throw new Error("the plan has no attempts");
   return plan;
@@ -24,7 +24,7 @@ function nextAttempt(total) {
 
 // Records the argv and the job id of this call, so a test can assert the command the runner really built.
 function recordCall(plan) {
-  const call = { pid: process.pid, argv: process.argv.slice(2), jobId: process.env.NIGHTSHIFT_JOB_ID ?? null, cwd: process.cwd() };
+  const call = { pid: process.pid, argv: process.argv.slice(2), jobId: process.env.NIGHTQUEUE_JOB_ID ?? null, cwd: process.cwd() };
   if (typeof plan.probePath === "string") call.probeExisted = existsSync(plan.probePath);
   appendFileSync(CALLS_PATH, `${JSON.stringify(call)}\n`);
 }

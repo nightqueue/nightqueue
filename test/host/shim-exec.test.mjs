@@ -1,5 +1,5 @@
 // H2a (group H2): real execution proof of the shim written by `writeShim`, with and without
-// a space in NIGHTSHIFT_HOME. `shimContent`/`shimState` were only exercised as strings
+// a space in NIGHTQUEUE_HOME. `shimContent`/`shimState` were only exercised as strings
 // (test/host/runtime.test.mjs:63-75); this test runs `sh <shim>` for real, through
 // `/bin/sh`, against a real CLI materialized inside the isolated runtime.
 import assert from "node:assert/strict";
@@ -14,12 +14,12 @@ import { makeDir } from "../../test-support/memory.mjs";
 
 const CHECKOUT_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
-// Materializes a real `bin/nightshift.mjs` inside the runtime prefix, the same way the real
-// `npm install` would leave it (mirrors test-support/fake-npm.mjs#installNightshift),
+// Materializes a real `bin/nightqueue.mjs` inside the runtime prefix, the same way the real
+// `npm install` would leave it (mirrors test-support/fake-npm.mjs#installNightqueue),
 // but pointed straight at this checkout's CLI so no network/npm is involved at all.
 function installRealCli(env) {
   const dir = runtimePackageDir(env);
-  const entry = join(dir, "bin", "nightshift.mjs");
+  const entry = join(dir, "bin", "nightqueue.mjs");
   mkdirSync(dirname(entry), { recursive: true });
   writeFileSync(
     entry,
@@ -38,14 +38,14 @@ function installRealCli(env) {
 // through `/bin/sh`, returning exit code, stdout and stderr the way a user's shell would see them.
 function runShim(t, name, args) {
   const home = join(makeDir(t, name), "home");
-  const env = { NIGHTSHIFT_HOME: home };
+  const env = { NIGHTQUEUE_HOME: home };
   installRealCli(env);
   const shim = writeShim(env);
   assert.equal(shim.status, "created");
   assert.equal(shimPath(env), shim.path);
 
   const result = spawnSync("/bin/sh", [shim.path, ...args], {
-    env: { PATH: process.env.PATH ?? "", NIGHTSHIFT_HOME: home },
+    env: { PATH: process.env.PATH ?? "", NIGHTQUEUE_HOME: home },
     encoding: "utf8",
   });
   assert.equal(result.error, undefined, `sh failed to spawn: ${result.error}`);
@@ -58,8 +58,8 @@ test("the shim runs the real CLI through sh, with and without a space in the hom
 
   assert.equal(plain.code, 0, plain.stderr);
   assert.equal(spaced.code, 0, spaced.stderr);
-  assert.match(plain.stdout, /^nightshift — configuration CLI/);
-  assert.equal(spaced.stdout, plain.stdout, "a space in NIGHTSHIFT_HOME must not change what the shim prints");
+  assert.match(plain.stdout, /^nightqueue — configuration CLI/);
+  assert.equal(spaced.stdout, plain.stdout, "a space in NIGHTQUEUE_HOME must not change what the shim prints");
 });
 
 test("the shim forwards argv byte for byte through $@, including an argument that itself has a space", (t) => {
@@ -69,5 +69,5 @@ test("the shim forwards argv byte for byte through $@, including an argument tha
   assert.equal(plain.code, 1);
   assert.equal(spaced.code, 1);
   assert.match(plain.stderr, /unknown command `mystery-command`/);
-  assert.equal(spaced.stderr, plain.stderr, "a space in NIGHTSHIFT_HOME must not change argv forwarding");
+  assert.equal(spaced.stderr, plain.stderr, "a space in NIGHTQUEUE_HOME must not change argv forwarding");
 });

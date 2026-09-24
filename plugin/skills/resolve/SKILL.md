@@ -27,7 +27,7 @@ It works through five channels only:
 
 - (a) the run's handoff files under `<RUN_DIR>`;
 - (b) the plugin files it is told to read (`references/pr-template.md`, `references/qa-phase.md`, the qa-guardian paths of Phase 5);
-- (c) the `nightshift` MCP tools;
+- (c) the `nightqueue` MCP tools;
 - (d) the `Agent` tool;
 - (e) the closed Bash list — `git rev-parse`, `git worktree`, `git status --short`, `git add`,
   `git commit` (never `--amend`), `git push` (never `--force`/`-f`/`--force-with-lease`/`--force-if-includes`/
@@ -35,7 +35,7 @@ It works through five channels only:
   `git fetch` (never `--upload-pack`), `git branch --show-current`,
   `git diff --stat|--shortstat|--name-only|--name-status` (never `-p`/`-u`/`--patch`, a full diff, `show` or `log`),
   `gh pr view|list|status|checks|create` (never `gh pr diff`, `merge`, `edit` or `close`), and
-  `nightshift run check|log|index-save|commit|pr` — each as the bare program name followed by its
+  `nightqueue run check|log|index-save|commit|pr` — each as the bare program name followed by its
   subcommand, never a path to the binary nor a global flag before the subcommand (`-C`, `--git-dir`,
   `--work-tree`, `-c`). Nothing else.
 
@@ -93,17 +93,17 @@ The runtime waits for every subagent and background task of an unattended run; l
 ### Phase 0 — Interpretation, routing, worktree and tasks
 
 0.1. **Memory preflight (before anything else in Phase 0).** Call `lesson_recall` (MCP
-   `nightshift`) ONCE, with `project` = the current project, only to prove the server is
+   `nightqueue`) ONCE, with `project` = the current project, only to prove the server is
    reachable — the return is not used here; the per-phase `context_for_phase` (below) is the
    one that feeds the prompts. There is no memoryless mode.
 
    - **The tool does not exist in the host** → **STOP the run right here**: print one short
-     line — `nightshift memory unavailable: run nightshift setup and retry` — and do not
+     line — `nightqueue memory unavailable: run nightqueue setup and retry` — and do not
      create the worktree, do not record anything, do not launch any subagent.
    - **The tool answers** — including an EMPTY return or a read error → continue. An empty
      memory is the normal state of a fresh install.
    - **The standing decisions are already in your context** — the `## Standing decisions`
-     section of the `# Nightshift context` block injected at the start of the session carries
+     section of the `# Nightqueue context` block injected at the start of the session carries
      them: EVERY accepted title of the project and of its org, org rows first, each already
      named `#<number>` or `<owner>#<number>`, followed by `## Standing decisions in detail`
      with the text of the 8 most recently updated. No preflight
@@ -186,11 +186,11 @@ The runtime waits for every subagent and background task of an unattended run; l
    go against them.
 
    **How `## Standing decisions` is filled in.** The source is the `## Standing decisions`
-   section of the `# Nightshift context` block you already received at the start of the
+   section of the `# Nightqueue context` block you already received at the start of the
    session: copy EVERY title from it, in the order it came. When that section is absent,
-   take the titles from ONE `decision_list` (MCP `nightshift`) with `project` = the current
+   take the titles from ONE `decision_list` (MCP `nightqueue`) with `project` = the current
    project and `status: "accepted"`. The `### In full` part comes from ONE `decision_recall`
-   (MCP `nightshift`) with `project` = the current project, `limit: 8` and
+   (MCP `nightqueue`) with `project` = the current project, `limit: 8` and
    `query` = the `**Affected area:**` plus the `**Objective:**` of the Brief. ONE call
    answers both levels: the project's own decisions and the decisions of its org, with the
    org rows FIRST — never call the tool a second time. Name each row the way it comes: a
@@ -283,7 +283,7 @@ The runtime waits for every subagent and background task of an unattended run; l
 
    <the alternative and its trade-off, or the single objective question — ≤ 5 lines>
 
-   Answer with: nightshift queue retry <id> --note "<your answer>"
+   Answer with: nightqueue queue retry <id> --note "<your answer>"
    ```
 
    `<id>` is the number of this job, in the header of the run ("Unattended run, job #N").
@@ -303,7 +303,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    length cap.**
 
    **Before printing the gate block, record the outcome** — call `run_outcome` (MCP
-   `nightshift`, step 5.3) with `status: "gate"` and `notice` = the whole body of `## Notice`
+   `nightqueue`, step 5.3) with `status: "gate"` and `notice` = the whole body of `## Notice`
    (the block verbatim + the answer line). The runtime reads that record before it reads the
    stream, so a gate survives any paraphrase of the two headings.
 
@@ -407,7 +407,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    Status: ✅ done · ❌ failed · 🔁 re-run · ⏳ in progress. For each agent launched (any phase,
    including loop re-entries): Summary is one sentence of what it delivered in that execution;
    Time stays empty while running — **Never time an agent yourself**, the runtime measures every
-   phase from the session stream and Phase 8 fills this column from `nightshift run log`. If QA
+   phase from the session stream and Phase 8 fills this column from `nightqueue run log`. If QA
    (Phase 5) rejects and the coder is relaunched (Phase 6 loop), add a **new "coder" line** —
    never overwrite the previous one, the history must show every round trip.
 
@@ -460,7 +460,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    ```
 
    **Artifact gate (apply after every phase that expects a Write):** run
-   `nightshift run check <NN>` — one Bash call, from inside the job, with the phase number
+   `nightqueue run check <NN>` — one Bash call, from inside the job, with the phase number
    (`01`, `02`, `03`, `04`, `05a`, `05`, `06`, `06.5`). It answers `OK` (the artifact is there with the
    sections the next phase reads), `MISSING: <sections>` (absent or incomplete) or `GENERATED`
    (only `04`: the file list was derived from the worktree's own changes and written for you).
@@ -476,11 +476,11 @@ The runtime waits for every subagent and background task of an unattended run; l
    **Do not re-read what is already in the context.** The orchestrator does NOT re-read (via
    Read) a file/artifact already read this session and still in context — except Phase 8, where
    the handoff already dropped the content. To merely confirm an artifact is there and complete,
-   use `nightshift run check <NN>`, not `Read`.
+   use `nightqueue run check <NN>`, not `Read`.
 
 5.3. **Record the run (enables the resume — step 0.5).** `<RUN_DIR>/state.json` belongs to the
    runtime. **Never write that file — not with Write, not with a temp file plus a rename,
-   never.** The record is made with the `run_*` tools (MCP `nightshift`); inside a job none of
+   never.** The record is made with the `run_*` tools (MCP `nightqueue`); inside a job none of
    them takes `project`/`slug` — the run is resolved from the job's own row.
 
    - **A phase completed.** When EACH phase completes SUCCESSFULLY (artifact written +
@@ -505,7 +505,7 @@ The runtime waits for every subagent and background task of an unattended run; l
      the runtime writes it from what the session really published.
    - **Tolerant:** a `run_*` call that fails NEVER aborts the pipeline — record it as an open
      item of Phase 8 and continue to the next phase normally.
-   - A `run_*`/`context_for_phase` tool or a `nightshift run` subcommand that answers `unknown`
+   - A `run_*`/`context_for_phase` tool or a `nightqueue run` subcommand that answers `unknown`
      means the runtime is older than this plugin: record it as an open item of Phase 8 and
      continue — never hand-write `state.json` to compensate.
 
@@ -531,7 +531,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    | `<CWD>/CLAUDE.md` | not named to the coder | named to the coder when it exists | named to the coder (Phase 4) |
    | `index_recall` | no | yes, to locate the affected files | yes, in Phase 2 before the Explore |
    | `context_for_phase` for the coder | no | yes | yes |
-   | `04-implementation.md` | written by the coder, gate `nightshift run check 04` | written by the coder, gate `nightshift run check 04` | written by the coder, gate `nightshift run check 04` |
+   | `04-implementation.md` | written by the coder, gate `nightqueue run check 04` | written by the coder, gate `nightqueue run check 04` | written by the coder, gate `nightqueue run check 04` |
    | Time target | under 5 minutes | under 15 minutes | none — the depth is the target |
 
    `—` = the agent does not run in that tier. `haiku (bug only)` = in `simple` the
@@ -558,7 +558,7 @@ The runtime waits for every subagent and background task of an unattended run; l
      valve with no confirmed `feature/refactor`.
    - **Phase 6.5 (native/device-gated capability):** the emulator/CI cannot reproduce it — not a
      pause point for case (a) (backend contract/response or state/control-flow).
-   - **Phase 7:** confirmation before the push + PR — only when `NIGHTSHIFT_JOB_ID` is unset.
+   - **Phase 7:** confirmation before the push + PR — only when `NIGHTQUEUE_JOB_ID` is unset.
 
    Outside those points, never stop to confirm the execution of a command.
 
@@ -573,7 +573,7 @@ The runtime waits for every subagent and background task of an unattended run; l
 > Phase 7.
 
 1. **Locate the affected files** — not yourself: hand the coder the `**Affected area:**` of
-   the brief plus, in the tier whose row allows it, the PATHS `index_recall` (MCP `nightshift`)
+   the brief plus, in the tier whose row allows it, the PATHS `index_recall` (MCP `nightqueue`)
    answered — paths only, never content. The coder locates the rest itself and lists what it
    touched in `04-implementation.md`.
    The coder receives the LIST of paths, never their content pasted inline: it has Read.
@@ -583,7 +583,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    exactly as written. The bug is reproduced before a line is changed;
    `NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION` terminates the run there.
 
-3. **Launch 1 coder agent** (subagent_type="nightshift:coder", the `model` of the row):
+3. **Launch 1 coder agent** (subagent_type="nightqueue:coder", the `model` of the row):
 
    ```
    ## File handoff (contract — read first)
@@ -617,10 +617,10 @@ The runtime waits for every subagent and background task of an unattended run; l
    Project: [PROJECT — the same identifier used in RUN_DIR]
    ```
 
-3.5. Run `nightshift run check 04` (the artifact gate, step 5.2) — `GENERATED` and
+3.5. Run `nightqueue run check 04` (the artifact gate, step 5.2) — `GENERATED` and
    `MISSING: ## Modified files (no changed files)` are read as in Phase 4.
 
-4. **Launch 1 verifier agent** (subagent_type="nightshift:verifier", the `model` of the row):
+4. **Launch 1 verifier agent** (subagent_type="nightqueue:verifier", the `model` of the row):
 
    ```
    ## File handoff (contract — read first)
@@ -639,7 +639,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    Produce the verdict ## Verification: PASSED or ## Verification: FAILED.
    ```
 
-   Then run `nightshift run check 06`.
+   Then run `nightqueue run check 06`.
 
 5. **Fix loop — the `Max fix iterations` cell of the row is the limit**:
    - `PASSED` → go to Phase 7.
@@ -656,7 +656,7 @@ order never changes.
 
 ### Context per phase (applies to every phase with a subagent)
 
-Before launching each subagent (Phases 1–6), call `context_for_phase` (MCP `nightshift`)
+Before launching each subagent (Phases 1–6), call `context_for_phase` (MCP `nightqueue`)
 ONCE with `target` = the target phase (`triager` | `explore` | `architect` | `coder` | `qa`
 | `verifier`) and `query` = 2–4 keywords from the brief. For `target: "explore"`, also pass
 `repo_root` = the pipeline's CWD.
@@ -763,9 +763,9 @@ Repository: [CWD PATH]
 Project: [PROJECT — the same identifier used in RUN_DIR]
 ```
 
-Launch **1 triager agent** (subagent_type="nightshift:triager", `model`: `haiku` if the tier
+Launch **1 triager agent** (subagent_type="nightqueue:triager", `model`: `haiku` if the tier
 is simple, `sonnet` if the tier is complex) — read mode, it does not edit files. It writes the
-output to `01-triage.md`; run `nightshift run check 01` (the artifact gate, step 5.2)
+output to `01-triage.md`; run `nightqueue run check 01` (the artifact gate, step 5.2)
 before evaluating the verdict.
 
 **Bug from a crash reporter:** when an MCP for it is available, pull ≥3 events (stack +
@@ -794,12 +794,12 @@ architect decides whether to pause in their own Step 1.5.
 > means this phase does not run.
 
 **Structural index (recall — before launching the Explore):** call `index_recall`
-(MCP `nightshift`) with `project` = the current project, `repo_root` = the pipeline's CWD
+(MCP `nightqueue`) with `project` = the current project, `repo_root` = the pipeline's CWD
 and `query` = 1-2 words from the Affected area. The return brings the already known map of the
 project with real per-file freshness: `stale`/`missing` = revalidate; the rest are
 fresh. An empty index → proceed exactly as before (graceful degradation).
 
-**complex** — launch **1 explore agent** (subagent_type="nightshift:explore",
+**complex** — launch **1 explore agent** (subagent_type="nightqueue:explore",
 `model: "sonnet"`) — NEVER generic/general-purpose.
 
 ```
@@ -819,7 +819,7 @@ Do NOT rediscover the fresh files of the map — trust them and complement only 
 is missing for this area. Revalidate ONLY the ones marked REVALIDATE (they changed or
 disappeared since the indexing). Fix the responsibilities that are wrong.
 
-The index is persisted by the runtime from your artifact (`nightshift run index-save`); these two lines only name where it lands:
+The index is persisted by the runtime from your artifact (`nightqueue run index-save`); these two lines only name where it lands:
 project: [PROJECT — the same identifier used in RUN_DIR]
 repo_root: [CWD PATH]
 
@@ -834,13 +834,13 @@ auth | other>` lines for every parameter/field/flag read and not used in a decis
 Limit: at most 30 relevant files.
 ```
 
-Wait for the Explore to finish. Run `nightshift run check 02` (the artifact gate, step 5.2)
+Wait for the Explore to finish. Run `nightqueue run check 02` (the artifact gate, step 5.2)
 before proceeding. Phase 3 reads the findings from `02-explore.md`.
 
 Then persist the structural index from the artifact — the Explore no longer saves it:
 
 ```sh
-nightshift run index-save <RUN_DIR>/02-explore.md --project <PROJECT> --repo-root <CWD>
+nightqueue run index-save <RUN_DIR>/02-explore.md --project <PROJECT> --repo-root <CWD>
 ```
 
 It prints `index saved: N files, M libs`. A failure here NEVER blocks the run: record it as an
@@ -851,7 +851,7 @@ open item of Phase 8, the same as an empty index.
 > Tier scoping: the 📐 architect row of the **Track routing** table (step 6) — a `—` there
 > means this phase does not run.
 
-Launch **1 architect agent** (subagent_type="nightshift:architect", `model: "opus"`) —
+Launch **1 architect agent** (subagent_type="nightqueue:architect", `model: "opus"`) —
 complex only:
 
 **What you may NOT inject into the architect's prompt (a prohibition without exception):** the
@@ -935,14 +935,14 @@ coverage` and, when the conditions of their Step 5 match (a bug touching 2+ scen
 `architect.md`). Risks and assumptions feed the QA; the coverage sections enumerate every path
 that produces the symptom.
 
-**Gate:** run `nightshift run check 03` (the artifact gate, step 5.2 — it requires
+**Gate:** run `nightqueue run check 03` (the artifact gate, step 5.2 — it requires
 `## Implementation plan`, `## Assumptions`, `## Pre-mortem` and `## Identified risks`).
 `MISSING` after the 1× relaunch, or an insufficient brief, → inform the user and terminate; on
 the insufficient-brief branch, apply the same gate_stop lesson-capture rule as Phase 1's
 terminal gate, with `target: "architect"`. With the gate closed, read `03-plan.md` via Read.
 
 **Proposed decision (right after that gate, before any other gate and before Phase 4):** if
-`03-plan.md` contains a `## Proposed decision` block, call `decision_save` (MCP `nightshift`)
+`03-plan.md` contains a `## Proposed decision` block, call `decision_save` (MCP `nightqueue`)
 with `project` = the current project, the block's **Title**, **Context**, **Decision** and
 **Consequences** fields and `status: "proposed"`; keep the returned `number` and carry it to
 Phase 7 — saving it here (not at Phase 8) is what survives a run that later stops at a gate.
@@ -1020,7 +1020,7 @@ architect (🔁) instructing the literal plan. Never write code before that conf
 > `simple` the coder is the one the fast-tracks block launches, with the prompt written
 > there; this phase is the `complex` launch.
 
-Launch 1 coder agent (subagent_type="nightshift:coder", `model: "opus"`).
+Launch 1 coder agent (subagent_type="nightqueue:coder", `model: "opus"`).
 The `coder.md` already requires the `## Modified files` section
 and the completeness rule on a textual refactor — the prompt only injects the data:
 
@@ -1042,7 +1042,7 @@ Repository: [CWD PATH]
 Project: [PROJECT — the same identifier used in RUN_DIR]
 ```
 
-Run `nightshift run check 04` (the artifact gate, step 5.2). `GENERATED` means the coder left
+Run `nightqueue run check 04` (the artifact gate, step 5.2). `GENERATED` means the coder left
 no file list and the runtime derived one from the worktree's own changes — accept and move on.
 `MISSING: ## Modified files (no changed files)` means the worktree changed nothing: inform the
 user that the implementation did not complete successfully and terminate.
@@ -1051,7 +1051,7 @@ user that the implementation did not complete successfully and terminate.
 in order, never in parallel. Each prompt carries `Stage: <n> — <title>` and reads
 `03-plan.md` (its stage) and `04-implementation.md` (what earlier lanes did, when it exists);
 each lane appends its `### Stage <n>` block and rewrites the cumulative `## Modified files`.
-Run `nightshift run check 04` after each lane, then the verifier between stages (the Phase 6
+Run `nightqueue run check 04` after each lane, then the verifier between stages (the Phase 6
 prompt and its fix loop): a failing stage is fixed before the next lane starts. After the last
 stage, Phase 5 (QA) and the final Phase 6 verification run as usual.
 
@@ -1116,7 +1116,7 @@ filter above before relaunching; if both conditions hold, call `lesson_save` wit
 
 ### Phase 6 — Verification (final gate + correction loop)
 
-Launch 1 verifier agent (subagent_type="nightshift:verifier", the `model` of the ✅ verifier
+Launch 1 verifier agent (subagent_type="nightqueue:verifier", the `model` of the ✅ verifier
 row of the **Track routing** table, step 6). The `verifier.md` already covers the detection
 of checks, running the QA's PoCs (a PoC missing when there was a changed input/API =
 FAILED; a PoC that fails = the break is still present) and the Runtime API Check (when the diff
@@ -1199,10 +1199,10 @@ Project: [PROJECT — the same identifier used in RUN_DIR]
 ```
 
 Relaunch the coder agent with the prompt above. After it returns, run
-`nightshift run check 04` (the artifact gate, step 5.2) before relaunching the verifier.
+`nightqueue run check 04` (the artifact gate, step 5.2) before relaunching the verifier.
 
 **Manual acceptance never runs against the operator's own home.** Any manual run of a
-CLI/MCP command in this phase (and in Phase 6.5) goes through `nightshift sandbox <cmd>`;
+CLI/MCP command in this phase (and in Phase 6.5) goes through `nightqueue sandbox <cmd>`;
 never export a home yourself. A temporary home alone would still repoint the operator's
 live Claude settings at a directory about to be deleted — the operator's live Claude
 settings must never be repointed. The operator's home, database, queue and Claude settings are never a
@@ -1212,10 +1212,10 @@ works. A verification that can only run against the real home is reported as
 
 These rules govern Phases 5 and 6.5 and every subagent launched from them:
 
-**Real pull requests and nightshift guards — hard rules.**
+**Real pull requests and nightqueue guards — hard rules.**
 
-- **(a)** Never unset, stub, override or work around a nightshift guard or its environment variables (`NIGHTSHIFT_JOB_ID`, `NIGHTSHIFT_JOB_HOME`, `NIGHTSHIFT_JOB_CLAUDE_DIR`, or any refusal nightshift prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
-- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightshift run pr`.
+- **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
+- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightqueue run pr`.
 
 ### Phase 6.5 — Runtime validation (real execution)
 
@@ -1227,12 +1227,12 @@ These rules govern Phases 5 and 6.5 and every subagent launched from them:
 Runs when the change (fix OR feature) is **observable at runtime**
 (UI/screen/flow/integration). Passing tsc/lint does NOT prove that the bug is gone nor that the
 feature delivers what was asked — only executing proves it. A manual CLI/MCP run here obeys
-the isolation rule of Phase 6: it goes through `nightshift sandbox <cmd>`.
+the isolation rule of Phase 6: it goes through `nightqueue sandbox <cmd>`.
 The methodology — the cases (a)–(d2), the `Result` table and the `unavailable due to the
 environment` rule — lives in `verifier.md` (`Mode: RUNTIME`); this phase launches the lane and
 reads its verdict.
 
-Launch **1 verifier agent** (subagent_type="nightshift:verifier", the `model` of the ✅ verifier
+Launch **1 verifier agent** (subagent_type="nightqueue:verifier", the `model` of the ✅ verifier
 row of the **Track routing** table, step 6), with the header
 `📱 RUNTIME · complex · <what it is about to run>`:
 
@@ -1249,13 +1249,13 @@ Mode: RUNTIME
 Type: [bug/error | feature/refactor]
 Bug account: [the Brief's field]
 Expected outcome: [the Brief's field]
-Apply your Mode: RUNTIME cases (a)–(d2); every manual CLI/MCP run goes through `nightshift sandbox <cmd>`.
+Apply your Mode: RUNTIME cases (a)–(d2); every manual CLI/MCP run goes through `nightqueue sandbox <cmd>`.
 
 Repository: [CWD PATH]
 Project: [PROJECT — the same identifier used in RUN_DIR]
 ```
 
-Run `nightshift run check 06.5` (the artifact gate, step 5.2). The lane's verdict
+Run `nightqueue run check 06.5` (the artifact gate, step 5.2). The lane's verdict
 (`## Runtime verdict`) decides: `CONFIRMED` → Phase 7; `NOT-MET` → the Phase 6 coder loop (same
 limit); `SYMPTOM-PERSISTS` → the discrimination below; `NEEDS-DEVICE` → the pause of step 7
 with the lane's device script, verbatim, in the gate block; `UNAVAILABLE` → ⚠️ open item per
@@ -1318,7 +1318,7 @@ The two commands below own the mechanics — staging, the commit, the branch nam
    - Write the message with Write to `<RUN_DIR>/commit-message.txt`, which lives outside the
      worktree and is therefore never committed.
 
-2. **Create the commit:** `nightshift run commit --message-file <RUN_DIR>/commit-message.txt`,
+2. **Create the commit:** `nightqueue run commit --message-file <RUN_DIR>/commit-message.txt`,
    with one `--extra <pathspec>` per file outside the artifact's list. It stages exactly that
    list — never a blind `git add -A` — and answers `COMMITTED: <sha> (<n> files)`.
    `REFUSED: <path> (<reason>)` names a path the pipeline never commits (`.claude/`, `tmp/`, a
@@ -1326,23 +1326,23 @@ The two commands below own the mechanics — staging, the commit, the branch nam
    it — drop that path, commit the rest and record the refusal as an ⚠️ open item of Phase 8.
 
 3. **Before any external action, show the user and wait for confirmation — only when
-   `NIGHTSHIFT_JOB_ID` is unset:** the branch/worktree name, the complete commit message,
+   `NIGHTQUEUE_JOB_ID` is unset:** the branch/worktree name, the complete commit message,
    `git diff --stat` and a status line (e.g. "QA ✅ · Verification ✅ · Runtime ✅"). Do not
    repeat the execution table here — it only reappears in the Phase 8 report if the run is not
-   happy. Ask whether to go ahead with push + PR. Inside a queued job (`NIGHTSHIFT_JOB_ID`
+   happy. Ask whether to go ahead with push + PR. Inside a queued job (`NIGHTQUEUE_JOB_ID`
    set) there is no operator to answer: go straight to step 4.
 
 4. **Open the pull request:**
-   - Run `nightshift run pr --template` first. It answers `TEMPLATE: repo (<path>)` or
-     `TEMPLATE: nightshift (fallback)` and `HEADINGS: <the headings in order>`, and records
+   - Run `nightqueue run pr --template` first. It answers `TEMPLATE: repo (<path>)` or
+     `TEMPLATE: nightqueue (fallback)` and `HEADINGS: <the headings in order>`, and records
      them as `prTemplate` in `state.json`: that is the template of the body — never decide it
-     yourself. The repository template is the `HEADINGS:` line `nightshift run pr --template`
+     yourself. The repository template is the `HEADINGS:` line `nightqueue run pr --template`
      answers — never Read the repository's template file. Assemble the title and the body per `references/pr-template.md` for THAT
      template, filling every section with this run's artifacts (`01-triage.md`, `03-plan.md`,
      `04-implementation.md`, `05-qa.md`, `06-verification.md`). Invent nothing. In the PR
-     description, identify the automation, when needed, by the nickname `nightshift` — never
+     description, identify the automation, when needed, by the nickname `nightqueue` — never
      an agent, model or vendor name, and no `Co-Authored-By` trailer.
-   - **How it was validated goes inside the template's own test section.** Nightshift template:
+   - **How it was validated goes inside the template's own test section.** Nightqueue template:
      the `## QA` table, one row per method that really ran, each backed by a non-empty file
      under `<RUN_DIR>/evidence/<method>-<name>.<ext>` (`<method>` ∈ `automated`, `api`,
      `browser`, `emulator`), then the `Not tested:` line. The evidence files are already there: the
@@ -1359,18 +1359,18 @@ The two commands below own the mechanics — staging, the commit, the branch nam
      (`job 24`, `decision 1`); the only `#<number>` allowed is a real issue of this
      repository in the `Fixes`/`Closes` line.
    - Write the body with Write to `<RUN_DIR>/pr-body.md` and run
-     `nightshift run pr --body-file <RUN_DIR>/pr-body.md`. The command checks the body,
+     `nightqueue run pr --body-file <RUN_DIR>/pr-body.md`. The command checks the body,
      renames the branch to its final name (the worktree creates it with the `worktree-` prefix
      and `+` in place of `/`), pushes it and opens the pull request, answering `BRANCH:`,
      `PR: <url>` and `WORKTREE: <path>`. You never run `git branch -m`, `git push` or
      `gh pr create` by hand.
    - `REJECTED: <reason>` and `MISSING: <what>` (one line per violation; the evidence one
      reads `MISSING: evidence for QA row <method>`) mean the body failed the check of the
-     template in effect (a heading missing or out of order, a nightshift heading against a
+     template in effect (a heading missing or out of order, a nightqueue heading against a
      repository template, the `## QA` table or the `Not tested:` line, a bare `#<number>`, a
      placeholder or a leftover `<...>` example) and nothing was pushed. Fix the body or the
      evidence and call the command again.
-   - **The delivery is recorded by the command itself** — `nightshift run pr` records
+   - **The delivery is recorded by the command itself** — `nightqueue run pr` records
      `status: "done"` the moment the pull request exists; do NOT call `run_outcome` for it.
      The pull request URL is not a parameter. No pull request opened → no outcome recorded.
    - If `gh` is not installed or could not open the pull request, the command says so with the
@@ -1598,13 +1598,13 @@ loop re-entries (🔁), with Time:
 |-------|--------|--------|--------|-------|
 ... one line per agent, in the order in which they ran ...
 
-**Total:** ⏱️ the `total` line of `nightshift run log`
+**Total:** ⏱️ the `total` line of `nightqueue run log`
 ```
 
-**The Time column is read, never computed.** Run `nightshift run log` (Bash, inside the job): it
+**The Time column is read, never computed.** Run `nightqueue run log` (Bash, inside the job): it
 prints one tab-separated `<phase>  <model>  <status>  <duration>` line per phase plus a final
 `total  <duration>` line — paste each into its row and the total into the Total, leaving `-`
-where the runtime measured no lane. `nightshift run log --json` answers the same rows with each
+where the runtime measured no lane. `nightqueue run log --json` answers the same rows with each
 phase's `at` stamp, when the report needs order instead of durations.
 Never compute a duration and never write a timestamp: the times belong to the runtime.
 
@@ -1647,7 +1647,7 @@ open items, reflected in `## Notice`'s "Still open" in user language (no file, n
 On both paths, proceed to the Telemetry below.
 
 **Telemetry (mandatory — one call per run, any outcome):** after
-assembling the tables, persist the run via `pipeline_log` (MCP `nightshift`). Send only what is
+assembling the tables, persist the run via `pipeline_log` (MCP `nightqueue`). Send only what is
 judgment: `task_type`, `outcome` (`pr_opened` | `local_commit` | `no_commit`; `investigated`/`queued` belong to the operator and are refused inside a job), `gate_stop` when
 there was no delivery (which gate ended it: `critique` | `triage` | `architect` | `qa` |
 `verification` | `runtime` | `user`), `tier_operator` (the tier of the `Tier:` line of the

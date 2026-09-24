@@ -108,7 +108,7 @@ export function createPrStateCache({ viewImpl = ghPrViewAsync, now = Date.now } 
   }
 
   async function refresh(urls, env) {
-    if (env?.NIGHTSHIFT_NO_PR_CHECK === "1" || disposed) return;
+    if (env?.NIGHTQUEUE_NO_PR_CHECK === "1" || disposed) return;
     const touched = new Map();
     for (const url of Array.isArray(urls) ? urls : []) {
       const key = prStateKey(url);

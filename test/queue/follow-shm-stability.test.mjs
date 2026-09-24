@@ -9,7 +9,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const HOLDER = fileURLToPath(new URL("../../test-support/db-holder.mjs", import.meta.url));
 
 // Identity of the shared-memory file of the home, the thing a split moves.

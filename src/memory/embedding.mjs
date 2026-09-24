@@ -46,7 +46,7 @@ async function loadLibrary(env) {
   const entry = embeddingLibraryEntry(env);
   if (!entry) {
     throw new UserError(
-      `${EMBEDDING_PACKAGE} is not installed in ${embeddingDir(env)}; run \`nightshift embed install\` to enable the semantic recall`,
+      `${EMBEDDING_PACKAGE} is not installed in ${embeddingDir(env)}; run \`nightqueue embed install\` to enable the semantic recall`,
     );
   }
   const mod = await import(pathToFileURL(entry).href);
@@ -106,7 +106,7 @@ function explainMissingLibrary(err) {
   const message = String(err?.message ?? "");
   if (err?.code !== "ERR_MODULE_NOT_FOUND" && !message.includes(EMBEDDING_PACKAGE)) return err;
   return new UserError(
-    `${EMBEDDING_PACKAGE} is not installed; run \`nightshift embed install\` to enable the semantic recall`,
+    `${EMBEDDING_PACKAGE} is not installed; run \`nightqueue embed install\` to enable the semantic recall`,
   );
 }
 

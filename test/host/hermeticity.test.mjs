@@ -12,25 +12,25 @@ import { latestVersion } from "../../src/host/update-check.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { isolatedHostVars, makeHostEnv } from "../../test-support/host.mjs";
 
-test("makeHome bakes NIGHTSHIFT_NO_UPDATE_CHECK=1 into the env it hands out", (t) => {
+test("makeHome bakes NIGHTQUEUE_NO_UPDATE_CHECK=1 into the env it hands out", (t) => {
   const env = makeHome(t, "hermeticity-make-home");
-  assert.equal(env.NIGHTSHIFT_NO_UPDATE_CHECK, "1");
+  assert.equal(env.NIGHTQUEUE_NO_UPDATE_CHECK, "1");
 });
 
-test("makeHostEnv bakes NIGHTSHIFT_NO_UPDATE_CHECK=1 into the env it hands out", (t) => {
+test("makeHostEnv bakes NIGHTQUEUE_NO_UPDATE_CHECK=1 into the env it hands out", (t) => {
   const host = makeHostEnv(t, "hermeticity-make-host-env");
-  assert.equal(host.env.NIGHTSHIFT_NO_UPDATE_CHECK, "1");
+  assert.equal(host.env.NIGHTQUEUE_NO_UPDATE_CHECK, "1");
 });
 
-test("isolatedHostVars bakes NIGHTSHIFT_NO_UPDATE_CHECK=1 into the vars it hands out", (t) => {
+test("isolatedHostVars bakes NIGHTQUEUE_NO_UPDATE_CHECK=1 into the vars it hands out", (t) => {
   const dir = makeDir(t, "hermeticity-isolated-host-vars");
   const vars = isolatedHostVars(dir);
-  assert.equal(vars.NIGHTSHIFT_NO_UPDATE_CHECK, "1");
+  assert.equal(vars.NIGHTQUEUE_NO_UPDATE_CHECK, "1");
 });
 
 test("latestVersion with no fetchImpl never touches global fetch, even on a stale or missing cache", async (t) => {
   const env = makeHome(t, "hermeticity-no-fetch-impl");
-  delete env.NIGHTSHIFT_NO_UPDATE_CHECK;
+  delete env.NIGHTQUEUE_NO_UPDATE_CHECK;
   assert.equal(existsSync(updateCheckPath(env)), false, "precondition: no cache file exists yet");
 
   const originalFetch = globalThis.fetch;
@@ -51,7 +51,7 @@ test("latestVersion with no fetchImpl never touches global fetch, even on a stal
   assert.equal(calls, 0, "global fetch must never be called when no fetchImpl is threaded in");
 });
 
-test("NIGHTSHIFT_NO_UPDATE_CHECK=1 neither reads nor writes the cache file, nor calls a fetchImpl it is given", async (t) => {
+test("NIGHTQUEUE_NO_UPDATE_CHECK=1 neither reads nor writes the cache file, nor calls a fetchImpl it is given", async (t) => {
   const env = makeHome(t, "hermeticity-opt-out");
   const cachePath = updateCheckPath(env);
   ensureHome(env);

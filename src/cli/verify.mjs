@@ -3,7 +3,7 @@ import { checkArgs, fileList, parseCommand } from "./args.mjs";
 import { CHECK_ORDER, detectChecks } from "./detect.mjs";
 import { makeThrowawayHome } from "./throwaway-home.mjs";
 
-const USAGE = "nightshift verify [--scope touched|full|+poc] [--files <list>]";
+const USAGE = "nightqueue verify [--scope touched|full|+poc] [--files <list>]";
 const SCOPES = new Set(["touched", "full", "+poc"]);
 const CHECK_TIMEOUT_MS = 900000;
 const SNIPPET_LINES = 20;
@@ -16,7 +16,7 @@ const MISSING_DEPS_RES = [
   /^.*is not recognized as an internal or external command/m,
   /^.*executable file not found in \$PATH/m,
 ];
-const MISSING_DEPS_REASON = "dependencies not installed — nightshift verify never installs";
+const MISSING_DEPS_REASON = "dependencies not installed — nightqueue verify never installs";
 const INTRUDER_RE = /(^|\/)\.claude\/|(^|\/)tmp\/|(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|bun\.lock|Cargo\.lock|poetry\.lock|go\.sum)$/;
 
 // Seconds one check took, at the precision the block prints.
@@ -167,23 +167,23 @@ function printBlock(ctx, results) {
 // Tells the caller what the run did with the arguments it could not honour, so a narrowing that never happened is never silently discarded.
 function noteIgnoredFiles(ctx, scope, named) {
   if (scope === "touched" || !named.length) return;
-  ctx.err(`nightshift verify: \`--files\` is ignored under \`--scope ${scope}\`; only \`--scope touched\` narrows a check, and this run checked everything`);
+  ctx.err(`nightqueue verify: \`--files\` is ignored under \`--scope ${scope}\`; only \`--scope touched\` narrows a check, and this run checked everything`);
 }
 
 // Tells the caller that the block reports nothing verified, which is not the same event as every check having passed.
 function noteNothingDetected(ctx, results) {
   if (results.some((result) => result.name !== "diff-hygiene" && result.status !== "SKIPPED")) return;
-  ctx.err(`nightshift verify: no check was detected in ${ctx.cwd}; every line below is SKIPPED, which is "nothing was verified", not a clean pass`);
+  ctx.err(`nightqueue verify: no check was detected in ${ctx.cwd}; every line below is SKIPPED, which is "nothing was verified", not a clean pass`);
 }
 
-// Runs `nightshift verify`: detects the project's own checks, runs them in the fixed order against a throwaway home, and exits 1 on any failure.
+// Runs `nightqueue verify`: detects the project's own checks, runs them in the fixed order against a throwaway home, and exits 1 on any failure.
 export function run(argv, ctx) {
   const options = { scope: { type: "string" }, files: { type: "string", multiple: true } };
   const { values, positionals } = parseCommand(argv, options);
   checkArgs(positionals, { max: 0, usage: USAGE });
   const scope = chosenScope(values);
-  const checks = detectChecks(ctx.cwd, { warn: (message) => ctx.err(`nightshift verify: ${message}`) });
-  const home = makeThrowawayHome("nightshift-verify-");
+  const checks = detectChecks(ctx.cwd, { warn: (message) => ctx.err(`nightqueue verify: ${message}`) });
+  const home = makeThrowawayHome("nightqueue-verify-");
   try {
     const env = { ...ctx.env, ...home.env };
     const named = fileList(values);

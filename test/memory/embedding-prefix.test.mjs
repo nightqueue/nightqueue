@@ -20,7 +20,7 @@ const CJS_FIXTURE = ["module.exports.env = {};", "module.exports.pipeline = asyn
 
 // Environment of an isolated home whose embedding prefix is empty.
 function makeEnv(t, name) {
-  return { NIGHTSHIFT_HOME: join(makeDir(t, name), "home") };
+  return { NIGHTQUEUE_HOME: join(makeDir(t, name), "home") };
 }
 
 // Writes a library fixture into the isolated prefix, the way an npm install into it would.
@@ -71,7 +71,7 @@ test("a missing library is a user error pointing at the install command, never a
   const env = makeEnv(t, "embedding-prefix-missing");
   await assert.rejects(warmupModel({ allowDownload: false }, env), (err) => {
     assert.ok(err instanceof UserError, `expected a UserError, got ${err?.name}`);
-    assert.match(err.message, /is not installed in .*embedding; run `nightshift embed install`/);
+    assert.match(err.message, /is not installed in .*embedding; run `nightqueue embed install`/);
     return true;
   });
 });

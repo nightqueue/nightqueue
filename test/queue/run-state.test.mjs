@@ -115,7 +115,7 @@ test("the pull request template is a top-level record the latest call overwrites
   const env = makeHome(t, "run-state-pr-template");
   const headings = ["## Summary", "## Changes"];
 
-  for (const template of [null, { source: "other", headings }, { source: "nightshift", headings: "## QA" }, { source: "repo", headings }, { source: "repo", path: " ", headings }]) {
+  for (const template of [null, { source: "other", headings }, { source: "nightqueue", headings: "## QA" }, { source: "repo", headings }, { source: "repo", path: " ", headings }]) {
     assert.equal(recordPrTemplate({ ...RUN, template, env }).status, "kept", JSON.stringify(template));
   }
   assert.equal(existsSync(join(runDir(RUN.project, RUN.slug, env), "state.json")), false, "a refused template created the file");
@@ -125,7 +125,7 @@ test("the pull request template is a top-level record the latest call overwrites
   assert.deepEqual(repo, { source: "repo", path: "CLAUDE.md", headings });
   assert.match(at, UTC_ISO);
 
-  assert.equal(recordPrTemplate({ ...RUN, template: { source: "nightshift", path: null, headings: ["## QA"] }, env }).status, "written");
+  assert.equal(recordPrTemplate({ ...RUN, template: { source: "nightqueue", path: null, headings: ["## QA"] }, env }).status, "written");
   assert.deepEqual(Object.keys(readState(env).prTemplate).sort(), ["at", "headings", "source"]);
   assert.equal(readState(env).outcome, undefined, "the template was recorded as an outcome of a run that has not ended");
 

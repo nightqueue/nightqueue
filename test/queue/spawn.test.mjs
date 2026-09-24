@@ -42,7 +42,7 @@ function makeSpawnHome(t, name, attempts) {
   return { env, planPath };
 }
 
-test("the command carries the plugin of this package and the nightshift MCP server", (t) => {
+test("the command carries the plugin of this package and the nightqueue MCP server", (t) => {
   const env = makeHome(t, "spawn-args");
   const args = buildArgs({ prompt: "do the work", env });
 
@@ -52,12 +52,12 @@ test("the command carries the plugin of this package and the nightshift MCP serv
   assert.equal(existsSync(join(pluginDir(), "skills", "resolve", "SKILL.md")), true, "--plugin-dir does not point at the plugin of this package");
 
   const mcp = JSON.parse(argValue(args, "--mcp-config"));
-  assert.deepEqual(Object.keys(mcp.mcpServers), ["nightshift"]);
-  assert.equal(mcp.mcpServers.nightshift.command, process.execPath);
-  assert.deepEqual(mcp.mcpServers.nightshift.args, [cliEntrypoint(), "mcp"]);
-  assert.equal(cliEntrypoint(), join(packageRoot(), "bin", "nightshift.mjs"));
+  assert.deepEqual(Object.keys(mcp.mcpServers), ["nightqueue"]);
+  assert.equal(mcp.mcpServers.nightqueue.command, process.execPath);
+  assert.deepEqual(mcp.mcpServers.nightqueue.args, [cliEntrypoint(), "mcp"]);
+  assert.equal(cliEntrypoint(), join(packageRoot(), "bin", "nightqueue.mjs"));
   assert.equal(existsSync(cliEntrypoint()), true, "the entrypoint handed to the child does not exist");
-  assert.equal(mcp.mcpServers.nightshift.env.NIGHTSHIFT_HOME, homeDir(env));
+  assert.equal(mcp.mcpServers.nightqueue.env.NIGHTQUEUE_HOME, homeDir(env));
 });
 
 test("by default the child is fenced off from the operator's own MCP servers, plugins, skills, agents and user hooks", (t) => {
@@ -136,17 +136,17 @@ test("inheritUserEnvironment: true reproduces byte-for-byte the argv the child g
 test("the MCP server of an unattended child is pinned to the job it runs, and an operator session carries no job at all", (t) => {
   const env = makeHome(t, "spawn-mcp-job-scope");
 
-  const owned = JSON.parse(mcpConfigArg(env, 7)).mcpServers.nightshift.env;
-  assert.equal(owned.NIGHTSHIFT_JOB_ID, "7");
-  assert.equal(owned.NIGHTSHIFT_HOME, homeDir(env));
+  const owned = JSON.parse(mcpConfigArg(env, 7)).mcpServers.nightqueue.env;
+  assert.equal(owned.NIGHTQUEUE_JOB_ID, "7");
+  assert.equal(owned.NIGHTQUEUE_HOME, homeDir(env));
 
-  const operator = JSON.parse(mcpConfigArg(env)).mcpServers.nightshift.env;
-  assert.equal("NIGHTSHIFT_JOB_ID" in operator, false, "an operator session pinned a job identity it does not have");
+  const operator = JSON.parse(mcpConfigArg(env)).mcpServers.nightqueue.env;
+  assert.equal("NIGHTQUEUE_JOB_ID" in operator, false, "an operator session pinned a job identity it does not have");
 
   const args = buildArgs({ prompt: "do the work", env, jobId: 7 });
-  assert.equal(JSON.parse(argValue(args, "--mcp-config")).mcpServers.nightshift.env.NIGHTSHIFT_JOB_ID, "7");
+  assert.equal(JSON.parse(argValue(args, "--mcp-config")).mcpServers.nightqueue.env.NIGHTQUEUE_JOB_ID, "7");
   assert.equal(
-    "NIGHTSHIFT_JOB_ID" in JSON.parse(argValue(buildArgs({ prompt: "p", env }), "--mcp-config")).mcpServers.nightshift.env,
+    "NIGHTQUEUE_JOB_ID" in JSON.parse(argValue(buildArgs({ prompt: "p", env }), "--mcp-config")).mcpServers.nightqueue.env,
     false,
   );
 });
@@ -162,7 +162,7 @@ test("--resume is only appended for a session id that is safe as argv", (t) => {
 
 test("the prompt asks for the pipeline, the slug line and the gate, and carries the answer of the operator", () => {
   const prompt = buildPrompt({ job: { ...JOB, operator_note: "deliver without the migration" } });
-  assert.match(prompt, /^\/nightshift:resolve fix the worker\n/);
+  assert.match(prompt, /^\/nightqueue:resolve fix the worker\n/);
   assert.match(prompt, /job #7/);
   assert.match(prompt, /QUEUE_SLUG: <slug>/);
   assert.match(prompt, /OPERATOR ANSWER TO THE GATE: deliver without the migration/);
@@ -287,10 +287,10 @@ test("a spawned attempt streams every line, appends its own separator to the log
   assert.match(result.log, /"type":"result"/);
 
   const [call] = fakeCalls(planPath);
-  assert.equal(call.jobId, String(JOB.id), "the child did not get NIGHTSHIFT_JOB_ID");
+  assert.equal(call.jobId, String(JOB.id), "the child did not get NIGHTQUEUE_JOB_ID");
   assert.equal(argValue(call.argv, "--plugin-dir"), pluginDir());
   assert.equal(call.argv.includes("--strict-mcp-config"), true, "spawnClaude did not isolate the child by default");
-  assert.equal(JSON.parse(argValue(call.argv, "--mcp-config")).mcpServers.nightshift.command, process.execPath);
+  assert.equal(JSON.parse(argValue(call.argv, "--mcp-config")).mcpServers.nightqueue.command, process.execPath);
 });
 
 test("a run that says nothing for too long dies of the idle timeout, which defaults to twenty minutes", async (t) => {
@@ -365,15 +365,15 @@ test("a binary that is not there comes back as an actionable message, never as a
   const result = await spawnClaude({ prompt: "run it", timeoutS: 30, logPath, env, resolveBinImpl: () => ({ bin: join(makeDir(t, "empty-bin"), "claude"), via: "env" }) });
 
   assert.equal(result.exitCode, -1);
-  assert.match(result.spawnError, /NIGHTSHIFT_CLAUDE_BIN/);
-  assert.match(readFileSync(logPath, "utf8"), /NIGHTSHIFT_CLAUDE_BIN/);
+  assert.match(result.spawnError, /NIGHTQUEUE_CLAUDE_BIN/);
+  assert.match(readFileSync(logPath, "utf8"), /NIGHTQUEUE_CLAUDE_BIN/);
 });
 
 test("the environment override wins over the PATH, and a relative override is ignored", (t) => {
   const env = makeHome(t, "spawn-bin");
-  env.NIGHTSHIFT_CLAUDE_BIN = FAKE_CLAUDE;
+  env.NIGHTQUEUE_CLAUDE_BIN = FAKE_CLAUDE;
   assert.deepEqual(resolveClaudeBin(env), { bin: FAKE_CLAUDE, via: "env" });
-  assert.notEqual(resolveClaudeBin({ ...env, NIGHTSHIFT_CLAUDE_BIN: "./claude" }).via, "env");
+  assert.notEqual(resolveClaudeBin({ ...env, NIGHTQUEUE_CLAUDE_BIN: "./claude" }).via, "env");
 });
 
 // A minimal EventEmitter shaped like a spawned child, closing itself on the next tick with exit code 0.
@@ -435,7 +435,7 @@ test("the child env disables background tasks and carries the configured bash ti
     assert.equal(captured.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, "1");
     assert.equal(captured.BASH_DEFAULT_TIMEOUT_MS, "120000");
     assert.equal(captured.BASH_MAX_TIMEOUT_MS, "240000");
-    assert.equal(captured.NIGHTSHIFT_PLUGIN_DIR, pluginDir(), "the child does not know the plugin dir the orchestrator may read");
+    assert.equal(captured.NIGHTQUEUE_PLUGIN_DIR, pluginDir(), "the child does not know the plugin dir the orchestrator may read");
   }
 });
 
@@ -506,7 +506,7 @@ test("a log directory removed under the attempt is reported, never an uncaught e
 
   assert.equal(result.exitCode, 0);
   assert.deepEqual(
-    reports.filter((line) => line.startsWith("nightshift: the log of the attempt could not be written")).map((line) => line.includes(logPath)),
+    reports.filter((line) => line.startsWith("nightqueue: the log of the attempt could not be written")).map((line) => line.includes(logPath)),
     [true],
     `the lost log was not reported once on stderr: ${JSON.stringify(reports)}`,
   );

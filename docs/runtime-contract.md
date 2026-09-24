@@ -2,12 +2,12 @@
 
 What a runtime has to provide, and what it can rely on:
 
-- `NIGHTSHIFT_HOME` - home directory of the runtime, default `~/.nightshift`.
-- `${NIGHTSHIFT_HOME}/runtime/versions/<version>-<stamp>/` is one installed runtime, and
-  `${NIGHTSHIFT_HOME}/runtime/current` is the symlink that names the one in use. Every
+- `NIGHTQUEUE_HOME` - home directory of the runtime, default `~/.nightqueue`.
+- `${NIGHTQUEUE_HOME}/runtime/versions/<version>-<stamp>/` is one installed runtime, and
+  `${NIGHTQUEUE_HOME}/runtime/current` is the symlink that names the one in use. Every
   path the host is registered against goes through the link, as
-  `${NIGHTSHIFT_HOME}/runtime/current/node_modules/@maykonv/nightshift`.
-- `${NIGHTSHIFT_HOME}/runners/<pid>.json` registers ONE live runner - `watch`, `drain` and
+  `${NIGHTQUEUE_HOME}/runtime/current/node_modules/nightqueue`.
+- `${NIGHTQUEUE_HOME}/runners/<pid>.json` registers ONE live runner - `watch`, `drain` and
   `once` alike - as `{ "pid", "startedAt", "mode", "jobId", "intervalS", "detached",
   "logPath", "runtimeDir", "uptimeS" }` with `startedAt` in ISO 8601. `uptimeS` is the
   uptime of the machine at the instant of the registration, which is what tells a
@@ -25,13 +25,13 @@ What a runtime has to provide, and what it can rely on:
   unless its parent already did it for it. **Any later writer reads, MERGES its own keys
   into and rewrites ONLY the file whose `pid` is its own, under the home lock** - that is
   how the `dbShm` witness of the shared-memory file reaches the record. It is removed by the
-  runner itself on a clean exit, matched by pid, by `nightshift queue run --stop`, or by the
+  runner itself on a clean exit, matched by pid, by `nightqueue queue run --stop`, or by the
   prune of any reader once no process answers for it. A `runner.pid` left by a version
   before the registry is adopted read-only: listed, counted by the install refusal, stopped
   by `--stop` and pruned when dead, never written again.
 - The output of a detached runner lives in
-  `${NIGHTSHIFT_HOME}/logs/runner-<stamp>.log`, next to the one log per job.
-- Run artifacts live in `${NIGHTSHIFT_HOME}/runs/<project>/<slug>/`, always
+  `${NIGHTQUEUE_HOME}/logs/runner-<stamp>.log`, next to the one log per job.
+- Run artifacts live in `${NIGHTQUEUE_HOME}/runs/<project>/<slug>/`, always
   outside the worktree, because the worktree is removed before the last phase
   reads them. The runtime creates the directory before the session starts.
 - Artifact names, in order: `00-main-measure.md` (post-merge resume only),
@@ -40,7 +40,7 @@ What a runtime has to provide, and what it can rely on:
 - `state.json` in the same directory carries the resumable state, and **the runtime
   is its only writer**: every key goes through `src/queue/run-state.mjs`, which the
   MCP tools `run_phase_done`, `run_terminate`, `run_outcome` and `run_set`, the
-  command `nightshift run pr` and the runner itself call. The pipeline never writes
+  command `nightqueue run pr` and the runner itself call. The pipeline never writes
   the file, and an `updatedAt` an older plugin hand-wrote is overwritten by the
   runtime's clock and never read. Every key, and who writes it:
   - `schemaVersion` (always `1`), `project` and `slug`: every write, as fixed fields.
@@ -51,11 +51,11 @@ What a runtime has to provide, and what it can rely on:
   - `termination{phase, reason, at}`: `run_terminate`; a run terminated this way is
     never resumed by a retry.
   - `outcome{status, at, notice?, prUrl?}`: `run_outcome` (`status`, `notice`),
-    `nightshift run pr` (`status: "done"`) and the runner, which writes `prUrl` at
+    `nightqueue run pr` (`status: "done"`) and the runner, which writes `prUrl` at
     finalize from what the session really published - it is never a parameter.
-  - `prTemplate{source, path?, headings, at}`: `nightshift run pr` (both the
+  - `prTemplate{source, path?, headings, at}`: `nightqueue run pr` (both the
     `--template` query and the publishing call), the template the body is checked
-    against - `repo` with its path, or `nightshift`.
+    against - `repo` with its path, or `nightqueue`.
   - `type`, `tier`, `tierRaiseReason`, `branch`, `worktree` and
     `qaStageA{artifact, verdict?, at}`: `run_set`; the runner also records
     `tier`/`tierRaiseReason` from the `Tier raised:` line and `type` from the `TYPE:`
@@ -104,7 +104,7 @@ What a runtime has to provide, and what it can rely on:
   reports, or the one of its FIRST publication. The run's own delivery is the LAST
   publication of THAT repository whose `branch` is the run's own branch - the `branch`
   of `state.json` or its published alias (`worktree-feat+x` is `feat/x`, the rename
-  `nightshift run pr` applies and then records as the run's branch). A publication that
+  `nightqueue run pr` applies and then records as the run's branch). A publication that
   names no branch, or that the run cannot compare because it recorded none, is unproven:
   it loses to a recorded `outcome.prUrl` and is only the delivery when the runtime
   recorded none. A publication naming ANOTHER branch - a QA's scratch pull request, say -
@@ -147,7 +147,7 @@ under `runtime/node_modules/`, keeps working and is never deleted by an install.
 **`setup`, `setup --from`, `update` and `init` refuse to replace the runtime while it
 is in use.** When ANY registration of the registry is alive or a job holds a live lease,
 they exit `1` with `a runner is active (pid P / pid Q / job #N) - the runtime cannot be
-replaced while it runs; stop it with nightshift queue run --stop or wait for the queue to
+replaced while it runs; stop it with nightqueue queue run --stop or wait for the queue to
 drain`, naming every live pid, and install nothing. `--force` installs anyway and says so on stderr. A runner whose version
 directory disappears anyway - a `--force`, or a hand-deleted tree - stops claiming,
 finishes the job it is running and exits saying so.
@@ -166,7 +166,7 @@ default. `queue_status` answers `runners` with every live runner, and keeps `run
 alias of the first for one release. `queue_status`, `queue_run` and `queue_retry` also answer
 `advisories`, the advisory lines described in [Queue](queue.md); they never block a start.
 
-The twenty-seven MCP tools, with the parameters `nightshift mcp` actually accepts:
+The twenty-seven MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -229,7 +229,7 @@ the order the phases were launched - and they overwrite what the call sent. A ph
 runtime measured no lane for keeps the value the call carried, and a phase the call
 never recorded is not inserted.
 
-The eight queue tools are the same subsystem as `nightshift queue` (see [Queue](queue.md)):
+The eight queue tools are the same subsystem as `nightqueue queue` (see [Queue](queue.md)):
 `queue_add` takes the registered project NAME and never a path - or, with
 `project` omitted, the absolute `cwd` of the caller, which resolves the project
 that contains it; a `cwd` inside a git repository that is registered nowhere
@@ -243,7 +243,7 @@ the project (see [Decisions and roadmap](memory.md#decisions-and-roadmap)); pass
 characters in a listing; a row whose text was cut carries `notice_truncated: true` or
 `result_truncated: true` (the key is absent when the text fits, and the detail of one job by
 `job_id` is never cut), and `suggestions` plus the `hint` gain one line naming
-`nightshift queue status <id>`, where the whole text is. It answers with the state of the runner next to the jobs; it is a pure read
+`nightqueue queue status <id>`, where the whole text is. It answers with the state of the runner next to the jobs; it is a pure read
 that never repairs nor prunes on call, and reports the last repair warning of the server's
 maintenance (once at start, then every 60 s, never inside a job) as `warning`. `queue_run`
 starts the runner detached and answers right away with the path of its log,
@@ -252,8 +252,8 @@ job, worktree }` - `worktree` is `{ path, status, reason? }` when cancelling a `
 job released (`removed`) or kept (`kept`, with the reason) its worktree, and `null` otherwise; it
 refuses a job running under a live lease, or one whose close is in flight or was interrupted, without
 writing anything (an interrupted close is resumed with `queue_close`, never cancelled blind).
-`queue_close` starts the same DETACHED closing pipeline as `nightshift queue close <id>` (the CLI
-also offers `nightshift queue close --merged`, which closes every `done` job whose pull request is
+`queue_close` starts the same DETACHED closing pipeline as `nightqueue queue close <id>` (the CLI
+also offers `nightqueue queue close --merged`, which closes every `done` job whose pull request is
 merged in one call), and `queue_retry` sends a gated, failed or cancelled job back to the queue - its
 `run` starts a DETACHED runner, the same one the `--run` of the CLI starts unless
 it is asked for `--foreground`. `queue_close` answers `{ ok, started, job_id, pid, logPath, follow }` without
@@ -316,7 +316,7 @@ An operator's move back from `in_review` or `done` appends `reopened`. A job
 queued from a roadmap item gets a `## Roadmap item` block in its prompt
 (`Roadmap: <owner>#<id>`, `Type:`, `Commit type:`), its tier defaults from the
 type (`bug`/`improvement`/`incident` → `simple`, `feature` → `complex`, `chore` →
-`trivial`; an explicit tier wins), and `nightshift run pr` publishes its body with
+`trivial`; an explicit tier wins), and `nightqueue run pr` publishes its body with
 a last `Roadmap: <owner>#<id>` line - a copy in the run directory
 (`pr-body.roadmap.md`), the agent's file untouched, and nothing added when the
 body already has a `Roadmap:` line.
@@ -328,10 +328,10 @@ its comments carry the row's `project`, and a job of a row publishes
 `Roadmap: <org>#<id>`. The org item's status is derived from its rows in the
 same transaction: `in_progress` while any row is, `done` once every row is
 `done` or `cancelled`, otherwise the lowest open status among them. Closing it by
-hand cancels every open row with a `closed` comment each. `nightshift doctor`
+hand cancels every open row with a `closed` comment each. `nightqueue doctor`
 reports an org item whose persisted status disagrees with its rows.
 
 `pipeline_runs.model` and `pipeline_runs.session_id` are not parameters: the
-server reads them from `NIGHTSHIFT_MODEL` and `NIGHTSHIFT_SESSION_ID` in its own
+server reads them from `NIGHTQUEUE_MODEL` and `NIGHTQUEUE_SESSION_ID` in its own
 environment, and stores `NULL` when they are not set.
 

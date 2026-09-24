@@ -11,7 +11,7 @@ import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // ACCEPTANCE of decisions #24/#25: a follow behind a gh that takes 2s to fail redraws as often as one with the checks off.
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const REDRAW = "\u001b[0J";
 const RUN_MS = 22_000;
 const SLOW_GH_MS = 2_000;
@@ -33,8 +33,8 @@ function seedHome(t, name, jobs) {
 
 // The same home behind the fake gh, which sleeps before it fails because no pull request state was given to it.
 function withSlowFailingGh(t, env, name) {
-  const slow = { ...env, ...isolatedHostVars(makeDir(t, `${name}-host`)), NIGHTSHIFT_FAKE_GH_SLEEP_MS: String(SLOW_GH_MS) };
-  delete slow.NIGHTSHIFT_NO_PR_CHECK;
+  const slow = { ...env, ...isolatedHostVars(makeDir(t, `${name}-host`)), NIGHTQUEUE_FAKE_GH_SLEEP_MS: String(SLOW_GH_MS) };
+  delete slow.NIGHTQUEUE_NO_PR_CHECK;
   return slow;
 }
 
@@ -62,7 +62,7 @@ function startFollow(env, intervalS) {
 
 // The `gh pr view` calls the fake gh of a home recorded so far.
 function prViewCalls(env) {
-  const log = env.NIGHTSHIFT_FAKE_GH_LOG;
+  const log = env.NIGHTQUEUE_FAKE_GH_LOG;
   if (!log || !existsSync(log)) return [];
   return readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((call) => call[0] === "pr" && call[1] === "view");
 }
@@ -164,7 +164,7 @@ test("a follow behind a gh that takes 2s to fail redraws as often as one with th
   const prJobs = [1, 2, 3].map((n) => ({ status: "done", prUrl: `https://github.com/acme/repo/pull/${n}` }));
   const slow = withSlowFailingGh(t, seedHome(t, "cadence-slow-gh", prJobs).env, "cadence-slow-gh");
   const off = seedHome(t, "cadence-no-pr-check", prJobs).env;
-  assert.equal(off.NIGHTSHIFT_NO_PR_CHECK, "1");
+  assert.equal(off.NIGHTQUEUE_NO_PR_CHECK, "1");
 
   const withGh = startFollow(slow, 2);
   const withoutGh = startFollow(off, 2);

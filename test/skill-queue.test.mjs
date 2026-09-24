@@ -15,7 +15,7 @@ test("the queue skill is discoverable: frontmatter, a description and a size a h
   const head = frontmatter(SKILL);
   assert.match(head, /^\s*name: queue$/m);
   assert.match(head, /^\s*description: >-$/m);
-  assert.ok(head.includes("/nightshift:queue"), head);
+  assert.ok(head.includes("/nightqueue:queue"), head);
   assert.ok(SKILL.split("\n").length < MAX_LINES, `the skill is ${SKILL.split("\n").length} lines, over the ${MAX_LINES} allowed`);
 });
 
@@ -32,14 +32,14 @@ test("the queue skill carries the three cutting rules of a job", () => {
 });
 
 test("the queue skill resolves the project by the longest registered path prefix, and asks ONE question in both forms", () => {
-  assert.ok(SKILL.includes("nightshift project list --json"), SKILL);
+  assert.ok(SKILL.includes("nightqueue project list --json"), SKILL);
   assert.ok(SKILL.includes("longest prefix of the current working"), SKILL);
   assert.ok(SKILL.includes('`Queue "<title>" for <project> as <tier>? [Y/n]`'), SKILL);
   assert.ok(SKILL.includes('`Queue "<title>" for <cwd> (register as <name>) as <tier>? [Y/n]`'), SKILL);
   assert.equal(SKILL.includes("Register <cwd> as <name> and queue the job?"), false, "the old registration question survived");
   assert.ok(SKILL.includes("`register: true`"), SKILL);
   assert.ok(SKILL.includes("One question, never more."), SKILL);
-  assert.equal(SKILL.includes("nightshift project add <path>"), false, "the skill still sends the user to `project add`");
+  assert.equal(SKILL.includes("nightqueue project add <path>"), false, "the skill still sends the user to `project add`");
 });
 
 test("the queue skill proposes a tier the user can override in that same answer, and repeats it in the report", () => {

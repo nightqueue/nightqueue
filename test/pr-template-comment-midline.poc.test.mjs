@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { bodyProblems } from "../src/cli/pr-body.mjs";
-import { findPrTemplate, NIGHTSHIFT_SECTIONS } from "../src/cli/pr-template.mjs";
+import { findPrTemplate, NIGHTQUEUE_SECTIONS } from "../src/cli/pr-template.mjs";
 import { makeDir } from "../test-support/memory.mjs";
 
 // A fictional mobile-app CLAUDE.md excerpt in the shape of a real one: the Branch and Commits blocks come before the template.
@@ -67,7 +67,7 @@ test("probe: CRLF line endings on the acme-shaped fixture still yield the 4 real
   assert.deepEqual(headings, ACME_HEADINGS);
 });
 
-test("probe: a CRLF body still validates against the nightshift template", (t) => {
+test("probe: a CRLF body still validates against the nightqueue template", (t) => {
   const evidenceDir = makeDir(t, "pr-body-crlf-evidence");
   writeFileSync(join(evidenceDir, "automated-verification.md"), "PASSED\n");
   const body = [
@@ -84,7 +84,7 @@ test("probe: a CRLF body still validates against the nightshift template", (t) =
     "Not tested: the real device; low risk",
     "",
   ].join("\r\n");
-  const template = { source: "nightshift", headings: NIGHTSHIFT_SECTIONS };
+  const template = { source: "nightqueue", headings: NIGHTQUEUE_SECTIONS };
   assert.deepEqual(bodyProblems({ body, template, evidenceDir }), []);
 });
 

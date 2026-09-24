@@ -45,7 +45,7 @@ const BODY = [
   "",
   "Not tested: the real google consent screen; low risk, the callback is covered by the suite.",
   "",
-  "Opened by nightshift · run login-google · job 1",
+  "Opened by nightqueue · run login-google · job 1",
   "",
 ].join("\n");
 
@@ -68,7 +68,7 @@ const ACME_BODY = [
   "",
 ].join("\n");
 
-// The body an older plugin wrote, before the nightshift template had four sections.
+// The body an older plugin wrote, before the nightqueue template had four sections.
 const OLD_BODY = "## Summary\n\nthe run did the thing.\n\n## Changes\n\n- one file\n\n## QA\n\nVerdict: APPROVED\n\nProven:\n- the run did the thing\n";
 
 // A git environment that depends on nothing of the machine: no global or system configuration, and an identity of its own.
@@ -76,10 +76,10 @@ function gitVars() {
   return {
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_SYSTEM: "/dev/null",
-    GIT_AUTHOR_NAME: "nightshift",
-    GIT_AUTHOR_EMAIL: "nightshift@example.invalid",
-    GIT_COMMITTER_NAME: "nightshift",
-    GIT_COMMITTER_EMAIL: "nightshift@example.invalid",
+    GIT_AUTHOR_NAME: "nightqueue",
+    GIT_AUTHOR_EMAIL: "nightqueue@example.invalid",
+    GIT_COMMITTER_NAME: "nightqueue",
+    GIT_COMMITTER_EMAIL: "nightqueue@example.invalid",
   };
 }
 
@@ -90,11 +90,11 @@ function git(args) {
 
 // Proves the `gh` the runtime will spawn is the fake of the test: the file is executable and the resolver answers it, not the real CLI.
 function assertFakeGh(env) {
-  const bin = env.NIGHTSHIFT_GH_BIN;
+  const bin = env.NIGHTQUEUE_GH_BIN;
   assert.equal(ghBin(env), bin, "the gh resolver does not answer the fake");
   assert.ok(existsSync(bin), `the fake gh is not at ${bin}`);
   assert.ok((statSync(bin).mode & 0o111) !== 0, "the fake gh is not executable, so the real gh would answer instead");
-  const probe = spawnSync(bin, ["--proof"], { encoding: "utf8", env: { ...env, NIGHTSHIFT_FAKE_GH_LOG: "" } });
+  const probe = spawnSync(bin, ["--proof"], { encoding: "utf8", env: { ...env, NIGHTQUEUE_FAKE_GH_LOG: "" } });
   assert.match(probe.stderr, /fake gh: unknown command/, "the binary that answered is not the fake gh");
 }
 
@@ -130,7 +130,7 @@ async function runCli(env, argv, { jobId }) {
   const out = [];
   const err = [];
   const code = await run(argv, {
-    env: { ...env, NIGHTSHIFT_JOB_ID: String(jobId) },
+    env: { ...env, NIGHTQUEUE_JOB_ID: String(jobId) },
     out: (line) => out.push(line),
     err: (line) => err.push(line),
     stdout: { write: () => {} },
@@ -155,7 +155,7 @@ async function rejectedProblems(t, { env, id, name, body }) {
 
 // The calls the fake gh received, one array of arguments per call.
 function ghCalls(env) {
-  const log = env.NIGHTSHIFT_FAKE_GH_LOG;
+  const log = env.NIGHTQUEUE_FAKE_GH_LOG;
   if (!existsSync(log)) return [];
   return readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
@@ -174,7 +174,7 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
   assert.equal(code, 0);
   assert.deepEqual(err, []);
   assert.deepEqual(out, [
-    "TEMPLATE: nightshift (fallback)",
+    "TEMPLATE: nightqueue (fallback)",
     "HEADINGS: ## Report · ## Cause · ## Changes · ## QA",
     `BRANCH: feat/login-google (renamed from ${BRANCH})`,
     `PR: ${FAKE_GH_PR_URL}`,
@@ -190,7 +190,7 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
     { status: "done", prUrl: FAKE_GH_PR_URL },
   );
   assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).branch, "feat/login-google", "the run kept the name its branch no longer carries");
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).prTemplate.source, "nightshift");
+  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).prTemplate.source, "nightqueue");
   assert.equal(existsSync(worktree), true);
 });
 
@@ -211,18 +211,18 @@ test("`run pr` of a job queued from a roadmap item opens the pull request with a
   assert.equal(readFileSync(body, "utf8"), BODY, "the agent's body file was edited");
 });
 
-test("a repository template in the worktree is the one the body follows: its headings in its order, and no nightshift heading it lacks", async (t) => {
+test("a repository template in the worktree is the one the body follows: its headings in its order, and no nightqueue heading it lacks", async (t) => {
   const { env, id, remote, worktree } = makeRun(t, "run-pr-repo-template");
   writeFileSync(join(worktree, "CLAUDE.md"), ACME_CLAUDE_MD);
   const problems = (name, body) => rejectedProblems(t, { env, id, name, body });
 
-  const nightshiftShaped = await problems("run-pr-repo-nightshift", BODY);
-  assert.ok(nightshiftShaped.includes("REJECTED: the body is missing `## Summary` of the repository template (CLAUDE.md § Git & PR workflow)"), nightshiftShaped.join("\n"));
+  const nightqueueShaped = await problems("run-pr-repo-nightqueue", BODY);
+  assert.ok(nightqueueShaped.includes("REJECTED: the body is missing `## Summary` of the repository template (CLAUDE.md § Git & PR workflow)"), nightqueueShaped.join("\n"));
   assert.ok(
-    nightshiftShaped.includes("REJECTED: the body carries the nightshift heading `## Report`, which the repository template (CLAUDE.md § Git & PR workflow) does not have"),
-    nightshiftShaped.join("\n"),
+    nightqueueShaped.includes("REJECTED: the body carries the nightqueue heading `## Report`, which the repository template (CLAUDE.md § Git & PR workflow) does not have"),
+    nightqueueShaped.join("\n"),
   );
-  assert.equal(nightshiftShaped.some((line) => line.includes("`## Changes`")), false, "`## Changes` is the repository template's own heading");
+  assert.equal(nightqueueShaped.some((line) => line.includes("`## Changes`")), false, "`## Changes` is the repository template's own heading");
 
   const swapped = ACME_BODY.replace("## Changes", "## Swap").replace("## Test plan", "## Changes").replace("## Swap", "## Test plan");
   assert.deepEqual(await problems("run-pr-repo-swapped", swapped), [
@@ -253,9 +253,9 @@ test("`run pr --template` prints and records the template in effect, reads no bo
 
   const fallback = makeRun(t, "run-pr-template-fallback");
   const plain = await runCli(fallback.env, ["run", "pr", "--template"], { jobId: fallback.id });
-  assert.deepEqual(plain.out, ["TEMPLATE: nightshift (fallback)", "HEADINGS: ## Report · ## Cause · ## Changes · ## QA"]);
+  assert.deepEqual(plain.out, ["TEMPLATE: nightqueue (fallback)", "HEADINGS: ## Report · ## Cause · ## Changes · ## QA"]);
   const state = readRunState({ project: "alpha", slug: SLUG, env: fallback.env }).prTemplate;
-  assert.equal(state.source, "nightshift");
+  assert.equal(state.source, "nightqueue");
   assert.equal("path" in state, false);
 
   const both = await runCli(fallback.env, ["run", "pr", "--template", "--body-file", writeBody(t, "run-pr-template-both", BODY)], { jobId: fallback.id });
@@ -359,7 +359,7 @@ test("a published branch the run cannot record is reported on stderr, never fata
 
   assert.equal(code, 0, errText);
   assert.ok(out.includes(`PR: ${FAKE_GH_PR_URL}`), out.join("\n"));
-  assert.match(errText, /nightshift: the published branch was not recorded on the run: /);
+  assert.match(errText, /nightqueue: the published branch was not recorded on the run: /);
   assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).branch, undefined, "setup: the run directory was still writable");
 });
 
@@ -378,10 +378,10 @@ test("`run pr` refuses a body it cannot read, a body with no title to take and a
   assert.equal(noTitle.code, 1);
   assert.match(noTitle.errText, /pass `--title <text>`: the body carries no `# <title>` line/);
 
-  const refusing = { ...env, NIGHTSHIFT_FAKE_GH_PR_URL: "" };
+  const refusing = { ...env, NIGHTQUEUE_FAKE_GH_PR_URL: "" };
   const failed = await runCli(refusing, ["run", "pr", "--body-file", body, "--title", "feat: x"], { jobId: id });
   assert.equal(failed.code, 1);
-  assert.match(failed.errText, /`feat\/login-google` is pushed, but gh could not open the pull request: fake gh: NIGHTSHIFT_FAKE_GH_PR_URL/);
+  assert.match(failed.errText, /`feat\/login-google` is pushed, but gh could not open the pull request: fake gh: NIGHTQUEUE_FAKE_GH_PR_URL/);
   assert.deepEqual(remoteBranches(remote), ["feat/login-google", "main"]);
   assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).outcome, undefined);
 });

@@ -6,7 +6,7 @@ import { homeDir, runDir } from "../../src/config/paths.mjs";
 import { discardRunDir } from "../../src/queue/resume.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
-// Builds a foreign tree outside NIGHTSHIFT_HOME with a subdirectory named like the slug and a canary file inside it.
+// Builds a foreign tree outside NIGHTQUEUE_HOME with a subdirectory named like the slug and a canary file inside it.
 function makeForeignTree(t, slug) {
   const root = makeDir(t, "foreign-tree");
   const slugDir = join(root, slug);

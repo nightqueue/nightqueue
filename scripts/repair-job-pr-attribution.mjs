@@ -7,8 +7,8 @@ import { CLOSED_PREFIX, parseCloseChecklist } from "../src/queue/close-view.mjs"
 import { openStore, withReadOnlyStore } from "../src/store/open.mjs";
 
 export const JOB_ID = 57;
-export const FROM_URL = "https://github.com/maykonVinicius/nightshift/pull/71";
-export const TO_URL = "https://github.com/maykonVinicius/nightshift/pull/72";
+export const FROM_URL = "https://github.com/nightqueue/nightqueue/pull/71";
+export const TO_URL = "https://github.com/nightqueue/nightqueue/pull/72";
 export const FROM_LINE = "Closed: PR #71 merged as c1fe093 on 2026-09-22";
 export const TO_LINE = "Closed: PR #72 merged as 1b62622 on 2026-09-22";
 export const REFUSAL_EXIT = 2;

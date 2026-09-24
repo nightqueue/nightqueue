@@ -52,7 +52,7 @@ function writeCache(env, latest, checkedAt) {
 
 // Newest published version of this package, refreshed from the registry at most once a day; it never prints, never throws, and without a `fetchImpl` it never opens a socket.
 export async function latestVersion({ env = process.env, fetchImpl = null, now = Date.now } = {}) {
-  if (env?.NIGHTSHIFT_NO_UPDATE_CHECK === "1") return null;
+  if (env?.NIGHTQUEUE_NO_UPDATE_CHECK === "1") return null;
   try {
     const cache = readJsonOrNull(updateCheckPath(env));
     const previous = cachedVersion(cache);

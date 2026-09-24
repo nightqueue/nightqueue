@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { bodyProblems } from "../src/cli/pr-body.mjs";
-import { findPrTemplate, NIGHTSHIFT_SECTIONS } from "../src/cli/pr-template.mjs";
+import { findPrTemplate, NIGHTQUEUE_SECTIONS } from "../src/cli/pr-template.mjs";
 import { makeDir } from "../test-support/memory.mjs";
 
 // A fictional mobile-app CLAUDE.md excerpt in the shape of a real one: the Branch and Commits blocks come before the template.
@@ -31,7 +31,7 @@ function picked(checkout) {
   return { source, path, label, headings };
 }
 
-test("the first candidate the checkout carries wins, in the fixed order, and nothing at all falls back to nightshift's", (t) => {
+test("the first candidate the checkout carries wins, in the fixed order, and nothing at all falls back to nightqueue's", (t) => {
   const checkout = checkoutWith(t, "pr-template-precedence", {
     ".github/PULL_REQUEST_TEMPLATE.md": "## Upper\n",
     "docs/PR_TEMPLATE.md": "## Docs\n",
@@ -46,7 +46,7 @@ test("the first candidate the checkout carries wins, in the fixed order, and not
   rmSync(join(checkout, "CONTRIBUTING.md"));
   assert.equal(picked(checkout).path, "CLAUDE.md");
   rmSync(join(checkout, "CLAUDE.md"));
-  assert.deepEqual(picked(checkout), { source: "nightshift", path: null, label: "fallback", headings: NIGHTSHIFT_SECTIONS });
+  assert.deepEqual(picked(checkout), { source: "nightqueue", path: null, label: "fallback", headings: NIGHTQUEUE_SECTIONS });
 });
 
 test("the lowercase `.github` template counts when it is the only one, and it outranks `docs/PR_TEMPLATE.md`", (t) => {
@@ -67,12 +67,12 @@ test("a PR section with no heading-bearing markdown block is no template, and th
   const checkout = checkoutWith(t, "pr-template-fallthrough", { "CONTRIBUTING.md": contributing, "CLAUDE.md": ACME_CLAUDE_MD });
   assert.equal(picked(checkout).path, "CLAUDE.md");
   rmSync(join(checkout, "CLAUDE.md"));
-  assert.equal(picked(checkout).source, "nightshift");
+  assert.equal(picked(checkout).source, "nightqueue");
 });
 
 test("only a whole-word `PR` or `pull request` heading opens a section", (t) => {
   const approval = "## Critério de aprovação\n\n```markdown\n## Wrong\n```\n";
-  assert.equal(picked(checkoutWith(t, "pr-template-word", { "CLAUDE.md": approval })).source, "nightshift");
+  assert.equal(picked(checkoutWith(t, "pr-template-word", { "CLAUDE.md": approval })).source, "nightqueue");
   const checklist = "## Pull request checklist\n\n```\n## Right\n```\n";
   assert.deepEqual(picked(checkoutWith(t, "pr-template-checklist", { "CLAUDE.md": checklist })).headings, ["## Right"]);
 });
@@ -85,11 +85,11 @@ test("a whole-file template skips the headings inside fences and HTML comments, 
   assert.deepEqual(picked(empty), { source: "repo", path: ".github/PULL_REQUEST_TEMPLATE.md", label: ".github/PULL_REQUEST_TEMPLATE.md", headings: [] });
 });
 
-test("a repository template with no heading accepts any body except one carrying a nightshift heading", (t) => {
+test("a repository template with no heading accepts any body except one carrying a nightqueue heading", (t) => {
   const template = { source: "repo", path: "x.md", label: "x.md", headings: [] };
   assert.deepEqual(bodyProblems({ body: "just a description\n", template }), []);
   assert.deepEqual(bodyProblems({ body: "## Report\n\nx\n", template }), [
-    { rejected: "the body carries the nightshift heading `## Report`, which the repository template (x.md) does not have" },
+    { rejected: "the body carries the nightqueue heading `## Report`, which the repository template (x.md) does not have" },
   ]);
 });
 
@@ -97,7 +97,7 @@ test("a `Not tested:` line above the QA table does not count", (t) => {
   const evidenceDir = makeDir(t, "pr-body-evidence");
   writeFileSync(join(evidenceDir, "automated-verification.md"), "PASSED\n");
   const body = "## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\nNot tested: nothing\n| Method | Executed | Result |\n| --- | --- | --- |\n| Automated | `npm test` | PASSED |\n";
-  const template = { source: "nightshift", headings: NIGHTSHIFT_SECTIONS };
+  const template = { source: "nightqueue", headings: NIGHTQUEUE_SECTIONS };
   assert.deepEqual(bodyProblems({ body, template, evidenceDir }), [{ missing: "Not tested: line after the QA table" }]);
   assert.deepEqual(bodyProblems({ body: `${body}Not tested: the real device; low risk\n`, template, evidenceDir }), []);
 });

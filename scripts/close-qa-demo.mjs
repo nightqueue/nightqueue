@@ -12,21 +12,21 @@ import { openStore } from "../src/store/open.mjs";
 
 export const DEMO_REMOTE = "maykonVinicius/nstest-demo";
 export const DEFAULT_DEMO_CHECKOUT = "~/Dev/nstest-demo";
-export const JOB_IDENTITY_VARS = ["NIGHTSHIFT_JOB_ID", "NIGHTSHIFT_JOB_HOME", "NIGHTSHIFT_JOB_CLAUDE_DIR"];
+export const JOB_IDENTITY_VARS = ["NIGHTQUEUE_JOB_ID", "NIGHTQUEUE_JOB_HOME", "NIGHTQUEUE_JOB_CLAUDE_DIR"];
 export const REFUSAL_EXIT = 2;
 
-const CLI = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "bin", "nightshift.mjs");
+const CLI = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "bin", "nightqueue.mjs");
 const PROJECT = "nstest-demo";
 const SEED_WORKER = "close-qa-demo:seed";
 const READY_POLLS = 10;
 const READY_POLL_MS = 3000;
 const CHECKS_TIMEOUT_MS = 600000;
 
-// The refusal of a start inside an unattended nightshift run, or null in the operator's own shell; it never unsets anything.
+// The refusal of a start inside an unattended nightqueue run, or null in the operator's own shell; it never unsets anything.
 export function jobIdentityRefusal(env) {
   const present = JOB_IDENTITY_VARS.filter((name) => typeof env?.[name] === "string" && env[name].trim() !== "");
   if (!present.length) return null;
-  return `close-qa-demo refuses to start inside a nightshift job (${present.join(", ")} set): operator-run acceptance: run it from your own terminal. It never unsets a nightshift variable.`;
+  return `close-qa-demo refuses to start inside a nightqueue job (${present.join(", ")} set): operator-run acceptance: run it from your own terminal. It never unsets a nightqueue variable.`;
 }
 
 // The refusal of a checkout whose origin is not the nstest-demo remote, or null when it is.
@@ -55,9 +55,9 @@ function must(command, args, options) {
   return ran;
 }
 
-// Runs this checkout's nightshift CLI against the throwaway home, printing the command and its output.
-function nightshift(ctx, args) {
-  console.log(`\n$ nightshift ${args.join(" ")}`);
+// Runs this checkout's nightqueue CLI against the throwaway home, printing the command and its output.
+function nightqueue(ctx, args) {
+  console.log(`\n$ nightqueue ${args.join(" ")}`);
   const ran = exec(process.execPath, [CLI, ...args], { cwd: ctx.repo, env: ctx.env });
   const output = `${ran.stdout}${ran.stderr}`;
   process.stdout.write(output);
@@ -93,7 +93,7 @@ async function waitUntilReady(url) {
 // Opens a scratch pull request on nstest-demo from a new branch and answers its URL once it is ready to close.
 async function openScratchPr(ctx, branch) {
   pushScratchBranch(ctx, branch);
-  const body = "Scratch pull request of nightshift's scripts/close-qa-demo.mjs; merged or closed by the script.";
+  const body = "Scratch pull request of nightqueue's scripts/close-qa-demo.mjs; merged or closed by the script.";
   const created = must("gh", ["pr", "create", "--repo", DEMO_REMOTE, "--head", branch, "--base", ctx.base, "--title", `close QA ${branch}`, "--body", body]);
   const url = created.stdout.trim().split("\n").pop();
   ctx.prs.push(url);
@@ -133,7 +133,7 @@ function outcome(name, pass, detail) {
 async function realMerge(ctx) {
   const branch = `qa/close-merge-${ctx.stamp}`;
   const id = await seedDoneJob(ctx, { prUrl: await openScratchPr(ctx, branch), branch });
-  const ran = nightshift(ctx, ["queue", "close", String(id), "--foreground"]);
+  const ran = nightqueue(ctx, ["queue", "close", String(id), "--foreground"]);
   const row = await ctx.store.jobs.getJob(id);
   const pass = ran.code === 0 && row.status === "closed" && /Closed: PR #\d+ merged as/.test(row.notice_md ?? "");
   if (pass) ctx.closedJob = id;
@@ -148,13 +148,13 @@ async function trivialRebase(ctx) {
   must("gh", ["pr", "merge", advance, "--squash"]);
   await waitUntilReady(prUrl);
   const id = await seedDoneJob(ctx, { prUrl, branch });
-  const ran = nightshift(ctx, ["queue", "close", String(id), "--foreground"]);
+  const ran = nightqueue(ctx, ["queue", "close", String(id), "--foreground"]);
   return outcome("(ii) trivial rebase", ran.code === 0, `exit ${ran.code}; conflict step: ${await stepNote(ctx, id, "conflict")}`);
 }
 
 // Runs a foreground close and interrupts it with SIGINT as soon as its preflight step is recorded done.
 function closeInterruptedAfterPreflight(ctx, id) {
-  console.log(`\n$ nightshift queue close ${id} --foreground   (SIGINT after preflight)`);
+  console.log(`\n$ nightqueue queue close ${id} --foreground   (SIGINT after preflight)`);
   return new Promise((done) => {
     const child = spawn(process.execPath, [CLI, "queue", "close", String(id), "--foreground"], { cwd: ctx.repo, env: ctx.env });
     const state = { output: "", interrupted: false };
@@ -177,7 +177,7 @@ async function resumeAfterInterrupt(ctx) {
   const branch = `qa/close-resume-${ctx.stamp}`;
   const id = await seedDoneJob(ctx, { prUrl: await openScratchPr(ctx, branch), branch });
   const first = await closeInterruptedAfterPreflight(ctx, id);
-  const second = nightshift(ctx, ["queue", "close", String(id), "--foreground"]);
+  const second = nightqueue(ctx, ["queue", "close", String(id), "--foreground"]);
   const resumed = /^✓ preflight\s.*\(earlier attempt\)$/m.test(second.output);
   const pass = first.interrupted && first.code !== 0 && second.code === 0 && resumed;
   return outcome("(iii) resume after interrupt", pass, `first exit ${first.code} (interrupted: ${first.interrupted}), second exit ${second.code}, preflight resumed: ${resumed}`);
@@ -186,7 +186,7 @@ async function resumeAfterInterrupt(ctx) {
 // Scenario (iv): a second close of a closed job is refused.
 async function secondCloseRefused(ctx) {
   if (!ctx.closedJob) return outcome("(iv) second close refused", false, "scenario (i) closed no job");
-  const ran = nightshift(ctx, ["queue", "close", String(ctx.closedJob), "--foreground"]);
+  const ran = nightqueue(ctx, ["queue", "close", String(ctx.closedJob), "--foreground"]);
   return outcome("(iv) second close refused", ran.code !== 0 && /already closed/.test(ran.output), `exit ${ran.code}`);
 }
 
@@ -194,8 +194,8 @@ async function secondCloseRefused(ctx) {
 async function foreignBranchGuard(ctx) {
   const prUrl = await openScratchPr(ctx, `qa/close-foreign-${ctx.stamp}`);
   const id = await seedDoneJob(ctx, { prUrl, branch: `worktree-feat+close-qa-own-${ctx.stamp}` });
-  const refused = nightshift(ctx, ["queue", "close", String(id), "--foreground"]);
-  const forced = nightshift(ctx, ["queue", "close", String(id), "--foreground", "--force"]);
+  const refused = nightqueue(ctx, ["queue", "close", String(id), "--foreground"]);
+  const forced = nightqueue(ctx, ["queue", "close", String(id), "--foreground", "--force"]);
   const stillOpen = prState(prUrl) === "OPEN";
   const pass = refused.code !== 0 && forced.code !== 0 && [refused, forced].every((ran) => /pr-not-the-job-branch/.test(ran.output)) && stillOpen;
   return outcome("(v) PR not the job's branch, even with --force", pass, `refused exit ${refused.code}, forced exit ${forced.code} (PR still open: ${stillOpen})`);
@@ -207,7 +207,7 @@ async function closedPrCancels(ctx) {
   const prUrl = await openScratchPr(ctx, branch);
   const id = await seedDoneJob(ctx, { prUrl, branch });
   must("gh", ["pr", "close", prUrl]);
-  const ran = nightshift(ctx, ["queue", "close", String(id), "--foreground"]);
+  const ran = nightqueue(ctx, ["queue", "close", String(id), "--foreground"]);
   const row = await ctx.store.jobs.getJob(id);
   const pass = ran.code !== 0 && /was closed without being merged; nothing to close/.test(ran.output) && row.status === "cancelled" && prState(prUrl) === "CLOSED";
   return outcome("(vi) PR closed without merge cancels", pass, `exit ${ran.code}, job ${row.status}`);
@@ -235,14 +235,14 @@ function cleanUp(ctx) {
 // Registers nstest-demo in the throwaway home and opens its store.
 function registerDemo(ctx) {
   must("git", ["-C", ctx.repo, "fetch", "origin"]);
-  const added = nightshift(ctx, ["project", "add", ctx.repo, "--name", PROJECT]);
+  const added = nightqueue(ctx, ["project", "add", ctx.repo, "--name", PROJECT]);
   if (added.code !== 0) throw new Error(`nstest-demo could not be registered in the throwaway home: ${added.output.trim()}`);
   ctx.store = openStore(ctx.env);
 }
 
 // Builds the throwaway home with nstest-demo registered and answers the context every scenario reads; a failed build removes the home.
 function prepare(options, env) {
-  const home = makeThrowawayHome("nightshift-close-qa-");
+  const home = makeThrowawayHome("nightqueue-close-qa-");
   const ctx = { ...options, home, env: { ...env, ...home.env }, stamp: new Date().toISOString().replace(/\D/g, "").slice(0, 14), branches: [], prs: [], closedJob: null };
   try {
     registerDemo(ctx);

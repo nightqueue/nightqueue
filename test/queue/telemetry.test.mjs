@@ -63,9 +63,9 @@ test("only `assistant` and `user` events are read for the duration: a `result` t
 test("every lane of the stream reports its phase, the model it ran and the duration the host measured", () => {
   const log = attemptLog([
     systemInitEvent(),
-    ...lane({ id: "toolu_t", subagentType: "nightshift:triager", model: "haiku", durationMs: 61000, seconds: 1 }),
-    ...lane({ id: "toolu_c", subagentType: "nightshift:coder", model: "opus", durationMs: 420000, seconds: 70 }),
-    ...lane({ id: "toolu_q", subagentType: "nightshift:qa-guardian", model: "sonnet", durationMs: 227400, seconds: 500 }),
+    ...lane({ id: "toolu_t", subagentType: "nightqueue:triager", model: "haiku", durationMs: 61000, seconds: 1 }),
+    ...lane({ id: "toolu_c", subagentType: "nightqueue:coder", model: "opus", durationMs: 420000, seconds: 70 }),
+    ...lane({ id: "toolu_q", subagentType: "nightqueue:qa-guardian", model: "sonnet", durationMs: 227400, seconds: 500 }),
     resultEvent({ text: "Done." }),
   ]);
 
@@ -78,7 +78,7 @@ test("every lane of the stream reports its phase, the model it ran and the durat
 
 test("a lane whose report carried no usage keeps its model and reports no duration, and a lane outside the pipeline is not a phase", () => {
   const log = attemptLog([
-    agentToolUseEvent({ id: "toolu_v", subagentType: "nightshift:verifier", model: "haiku", timestamp: secondsIntoAttempt(1) }),
+    agentToolUseEvent({ id: "toolu_v", subagentType: "nightqueue:verifier", model: "haiku", timestamp: secondsIntoAttempt(1) }),
     { type: "system", subtype: "task_notification", tool_use_id: "toolu_v", status: "completed", summary: "the report" },
     agentToolUseEvent({ id: "toolu_x", subagentType: "general-purpose", model: "sonnet", timestamp: secondsIntoAttempt(2) }),
     taskNotificationEvent({ toolUseId: "toolu_x", durationMs: 9000 }),
@@ -89,8 +89,8 @@ test("a lane whose report carried no usage keeps its model and reports no durati
 
 test("a phase that ran twice reports one lane per run, in order, and a lane never reported back has no duration", () => {
   const log = attemptLog([
-    ...lane({ id: "toolu_c1", subagentType: "nightshift:coder", model: "opus", durationMs: 120000, seconds: 1 }),
-    agentToolUseEvent({ id: "toolu_c2", subagentType: "nightshift:coder", model: "sonnet", timestamp: secondsIntoAttempt(200) }),
+    ...lane({ id: "toolu_c1", subagentType: "nightqueue:coder", model: "opus", durationMs: 120000, seconds: 1 }),
+    agentToolUseEvent({ id: "toolu_c2", subagentType: "nightqueue:coder", model: "sonnet", timestamp: secondsIntoAttempt(200) }),
   ]);
 
   assert.deepEqual(phaseTelemetry(log), [
@@ -101,9 +101,9 @@ test("a phase that ran twice reports one lane per run, in order, and a lane neve
 
 test("a report closes the MOST RECENT lane of its tool id, which two sequential subagents may reuse", () => {
   const log = attemptLog([
-    agentToolUseEvent({ id: "toolu_same", subagentType: "nightshift:explore", model: "sonnet", timestamp: secondsIntoAttempt(1) }),
+    agentToolUseEvent({ id: "toolu_same", subagentType: "nightqueue:explore", model: "sonnet", timestamp: secondsIntoAttempt(1) }),
     taskNotificationEvent({ toolUseId: "toolu_same", durationMs: 30000 }),
-    agentToolUseEvent({ id: "toolu_same", subagentType: "nightshift:architect", model: "opus", timestamp: secondsIntoAttempt(60) }),
+    agentToolUseEvent({ id: "toolu_same", subagentType: "nightqueue:architect", model: "opus", timestamp: secondsIntoAttempt(60) }),
     taskNotificationEvent({ toolUseId: "toolu_same", durationMs: 900000 }),
   ]);
 
@@ -114,9 +114,9 @@ test("a report closes the MOST RECENT lane of its tool id, which two sequential 
 });
 
 test("the lanes of an attempt that was retried never speak for the run: the last attempt marker restarts the reading", () => {
-  const first = attemptLog(lane({ id: "toolu_a", subagentType: "nightshift:triager", model: "haiku", durationMs: 30000, seconds: 1 }));
+  const first = attemptLog(lane({ id: "toolu_a", subagentType: "nightqueue:triager", model: "haiku", durationMs: 30000, seconds: 1 }));
   const second = `${attemptMarker(2, "2026-09-07T21:00:00.000Z")}\n${toNdjson(
-    lane({ id: "toolu_b", subagentType: "nightshift:coder", model: "opus", durationMs: 90000, seconds: 1 }),
+    lane({ id: "toolu_b", subagentType: "nightqueue:coder", model: "opus", durationMs: 90000, seconds: 1 }),
   )}`;
 
   assert.deepEqual(phaseTelemetry(`${first}\n${second}`), [{ phase: "implementation", model: "opus", durationS: 90 }]);
@@ -124,7 +124,7 @@ test("the lanes of an attempt that was retried never speak for the run: the last
 
 test("a lane with no model in its `tool_use` reports none instead of inventing one, and a log with no lane is empty", () => {
   const log = attemptLog([
-    agentToolUseEvent({ id: "toolu_n", subagentType: "nightshift:triager", model: null, timestamp: secondsIntoAttempt(1) }),
+    agentToolUseEvent({ id: "toolu_n", subagentType: "nightqueue:triager", model: null, timestamp: secondsIntoAttempt(1) }),
     taskNotificationEvent({ toolUseId: "toolu_n", durationMs: 1000 }),
   ]);
 
@@ -135,7 +135,7 @@ test("a lane with no model in its `tool_use` reports none instead of inventing o
 
 test("the `task_started` event never opens a phase of its own: it carries no model, so the lane is the `tool_use` block", () => {
   const log = attemptLog([
-    taskStartedEvent({ toolUseId: "toolu_lost", subagentType: "nightshift:triager" }),
+    taskStartedEvent({ toolUseId: "toolu_lost", subagentType: "nightqueue:triager" }),
     taskNotificationEvent({ toolUseId: "toolu_lost", durationMs: 5000 }),
   ]);
 

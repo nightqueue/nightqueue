@@ -10,7 +10,7 @@ import { addJob } from "../src/memory/jobs.mjs";
 import { linkRoadmapItemJob, saveRoadmapItem } from "../src/memory/roadmap.mjs";
 import { makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 
 // Runs the real CLI in its own process, with the isolated home of the test.
 function runCli(env, args, { cwd } = {}) {
@@ -130,7 +130,7 @@ test("--project names the project, the current directory resolves it, and neithe
   const databaseBefore = readFileSync(dbPath(env));
   const unresolved = runCli(env, ["roadmap"], { cwd: outside });
   assert.equal(unresolved.status, 1);
-  assert.match(unresolved.stderr, /no project registered for .*; run `nightshift init` here, or pass --project <name>/);
+  assert.match(unresolved.stderr, /no project registered for .*; run `nightqueue init` here, or pass --project <name>/);
   assert.equal(readFileSync(configPath(env), "utf8"), before, "a read-only command registered a project");
   assert.deepEqual(readFileSync(dbPath(env)), databaseBefore, "a read-only command wrote to the database");
 });

@@ -40,7 +40,7 @@ test("the session block lists the lessons and the memory of the project", async 
   saveMemory({ project: "alpha", key: "deploy", value: "the deployment runs from the pipeline" }, env);
 
   const block = await runSessionStart({ input: { session_id: "s1", cwd: repo }, env });
-  assert.match(block, /^# Nightshift context/);
+  assert.match(block, /^# Nightqueue context/);
   assert.match(block, new RegExp(`\\[L${id}\\] the worker leaks a file descriptor on failure`));
   assert.match(block, /## Project memory \(alpha\)/);
   assert.match(block, /- deploy: the deployment runs from the pipeline/);
@@ -69,7 +69,7 @@ test("a home with nothing to say produces no block at all", async (t) => {
 });
 
 test("the reflection process gets no context block and never opens the database", async (t) => {
-  const env = { ...makeHome(t, "hook-start-reflect"), NIGHTSHIFT_REFLECT: "1" };
+  const env = { ...makeHome(t, "hook-start-reflect"), NIGHTQUEUE_REFLECT: "1" };
   assert.equal(await runSessionStart({ input: { session_id: "s1", cwd: process.cwd() }, env }), "");
   assert.equal(existsSync(dbPath(env)), false);
 });

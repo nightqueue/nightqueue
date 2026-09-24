@@ -10,7 +10,7 @@ import { searchRoadmap } from "../../src/memory/roadmap-search.mjs";
 import { saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { makeHome, makeProject, seedLegacyV16Roadmap } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
 // A home with two projects of `acme` and one of `orbit`.
 function makeSearchHome(t, name) {
@@ -105,10 +105,10 @@ test("the FTS finds a legacy title right after the v17 migration", (t) => {
   assert.deepEqual(ids(searchRoadmap({ project: "alpha", query: "flamingo" }, env)), [4]);
 });
 
-// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connect(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;
@@ -125,7 +125,7 @@ test("roadmap_search inside a job reads only the job's project, and refuses anot
   comment(env, orgItem.id, { body: "beta cache miss", project: "beta" });
   item(env, { project: "beta" }, "beta cache layer");
   const job = addJob({ project: "alpha", prompt: "work" }, env);
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const own = JSON.parse(textOf(await client.callTool({ name: "roadmap_search", arguments: { query: "cache" } })));
   assert.equal(own.project, "alpha");

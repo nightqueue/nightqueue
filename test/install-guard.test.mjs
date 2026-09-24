@@ -12,13 +12,13 @@ import { makeDir, makeProject } from "../test-support/memory.mjs";
 
 const CHECKOUT = fileURLToPath(new URL("../", import.meta.url));
 const REFUSAL_TAIL =
-  "the runtime cannot be replaced while it runs; stop it with nightshift queue run --stop or wait for the queue to drain";
+  "the runtime cannot be replaced while it runs; stop it with nightqueue queue run --stop or wait for the queue to drain";
 const RUNNER_PID = 5151;
 const WORKER = "host:5151";
 
 // The refusal, with whichever of the pid and the job the guard could name.
 function refusal(label) {
-  return `nightshift: a runner is active (${label}) - ${REFUSAL_TAIL}`;
+  return `nightqueue: a runner is active (${label}) - ${REFUSAL_TAIL}`;
 }
 
 // Context that captures the output and answers `kill` only for the pids the test says are alive.

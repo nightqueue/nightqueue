@@ -29,7 +29,7 @@ function cancelHome(t, name) {
 async function callTool(t, env, name, args) {
   const server = createServer(env);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "nightshift-tests-cancel", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests-cancel", version: "0.0.0" });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   t.after(async () => {
     await client.close();

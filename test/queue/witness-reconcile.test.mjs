@@ -16,7 +16,7 @@ import { applyRetry } from "../../src/queue/retry.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const REPAIRER = fileURLToPath(new URL("../../test-support/witness-repairer.mjs", import.meta.url));
 const MCP_SRC = fileURLToPath(new URL("../../src/mcp/tools.mjs", import.meta.url));
 const FIXED_TZ = "America/Sao_Paulo";
@@ -51,10 +51,10 @@ function startCli(env, args) {
   });
 }
 
-// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connectMcp(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;

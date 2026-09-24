@@ -37,7 +37,7 @@ async function runFollow(env, { onTick } = {}) {
   return { code, out, err, ticks };
 }
 
-// Plays a newer nightshift version's migration (an `ALTER TABLE ADD COLUMN`) from a real, independent process,
+// Plays a newer nightqueue version's migration (an `ALTER TABLE ADD COLUMN`) from a real, independent process,
 // against the same database file, without ever touching this repo's own DB_USER_VERSION constant.
 function migrateFromSecondProcess(path, jobId, value) {
   const script = [

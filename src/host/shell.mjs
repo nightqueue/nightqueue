@@ -4,8 +4,8 @@ import { binDir } from "../config/paths.mjs";
 import { modeOf, writeFileAtomic } from "../config/store.mjs";
 import { userHome } from "./paths.mjs";
 
-export const PATH_MARK = "# nightshift";
-export const PATH_MARK_END = "# nightshift end";
+export const PATH_MARK = "# nightqueue";
+export const PATH_MARK_END = "# nightqueue end";
 
 const LEGACY_LINE_RE = new RegExp(`^(?:export PATH="[^"]*:\\$PATH"|fish_add_path \\S.*) ${PATH_MARK}[ \t]*$`);
 
@@ -43,7 +43,7 @@ function blockBody(env) {
   return [CASE_HEAD, `  *":${dir}:"*) ;;`, `  *) export PATH="${dir}:$PATH" ;;`, CASE_END];
 }
 
-// Number of lines the region of ours that starts at this index takes, and zero when nothing of ours starts there: the shape alone never proves ownership, because `# nightshift` is text a user may have typed for any reason - the region has to CLOSE with the end marker, or be exactly the block an older build of this package wrote in this very home.
+// Number of lines the region of ours that starts at this index takes, and zero when nothing of ours starts there: the shape alone never proves ownership, because `# nightqueue` is text a user may have typed for any reason - the region has to CLOSE with the end marker, or be exactly the block an older build of this package wrote in this very home.
 function ownRegionAt(lines, index, env) {
   if (LEGACY_LINE_RE.test(lineAt(lines, index))) return 1;
   if (lineAt(lines, index) !== PATH_MARK) return 0;

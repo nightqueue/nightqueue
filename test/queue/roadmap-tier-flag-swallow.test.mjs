@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { getRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
 // A home with a registered project and one roadmap item to queue from.
 function makeRoadmapHome(t, name) {
@@ -29,7 +29,7 @@ test("`queue add --roadmap <id> --tier --run` refuses cleanly and leaves the roa
   });
 
   assert.equal(result.status, 1, `expected a refusal, got: ${result.stdout}`);
-  assert.match(result.stderr, /nightshift: Option '--tier' argument is ambiguous\./);
+  assert.match(result.stderr, /nightqueue: Option '--tier' argument is ambiguous\./);
   assert.match(result.stderr, /Did you forget to specify the option argument for '--tier'\?/);
 
   const row = getRoadmapItem(item.id, env);

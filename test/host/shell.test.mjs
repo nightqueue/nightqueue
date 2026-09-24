@@ -20,7 +20,7 @@ const THIRD_PARTY = 'export PATH="/opt/x:$PATH"';
 // Environment of an isolated user home plus an isolated configuration home.
 function makeEnv(t, name, { shell = "/bin/zsh", path = "" } = {}) {
   const base = makeDir(t, name);
-  return { HOME: base, NIGHTSHIFT_HOME: join(base, "nightshift"), SHELL: shell, PATH: path };
+  return { HOME: base, NIGHTQUEUE_HOME: join(base, "nightqueue"), SHELL: shell, PATH: path };
 }
 
 // Content of the rc file, or an empty string when the file was never created.
@@ -60,7 +60,7 @@ test("the PATH check compares resolved directories, not strings", (t) => {
   const env = makeEnv(t, "shell-in-path");
   assert.equal(binDirInPath(env), false);
   assert.equal(binDirInPath({ ...env, PATH: ["/usr/bin", `${binDir(env)}/`].join(delimiter) }), true);
-  assert.equal(binDirInPath({ ...env, PATH: `/usr/bin${delimiter}/opt/nightshift/bin` }), false);
+  assert.equal(binDirInPath({ ...env, PATH: `/usr/bin${delimiter}/opt/nightqueue/bin` }), false);
   assert.equal(binDirInPath({ ...env, PATH: undefined }), false);
 });
 
@@ -106,7 +106,7 @@ test("a line of the user that merely mentions the mark is neither replaced nor r
     "alias deploy='make deploy'",
     `echo "installed with ${PATH_MARK}"`,
     `# ${PATH_MARK}`,
-    `export PATH="/opt/x:$PATH" # nightshift-old`,
+    `export PATH="/opt/x:$PATH" # nightqueue-old`,
     `alias ns='shift' ${PATH_MARK} helper`,
   ];
   writeFileSync(rcFilePath(env), `${decoys.join("\n")}\n`);

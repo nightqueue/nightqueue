@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { openStore } from "../src/store/open.mjs";
 import { makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 
 // An artifact shaped like the one an Explore really writes: responsibilities carrying their own dashes and arrows, a scoped lib, and a prose bullet among the libs.
 function exploreArtifact(repo) {
@@ -45,7 +45,7 @@ function writeArtifact(t, name, text) {
   return path;
 }
 
-// Runs `nightshift run index-save` as a real subprocess.
+// Runs `nightqueue run index-save` as a real subprocess.
 function runIndexSave(env, cwd, args) {
   const result = spawnSync(process.execPath, [CLI, "run", "index-save", ...args], { cwd, env, encoding: "utf8" });
   assert.equal(result.error, undefined, `the CLI failed to spawn: ${result.error}`);
@@ -230,10 +230,10 @@ test("a repository that is not a registered project is refused with the init mes
   const result = runIndexSave(env, outsider, [artifact]);
 
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /is not registered; run `nightshift init` in the repository first/);
+  assert.match(result.stderr, /is not registered; run `nightqueue init` in the repository first/);
 });
 
-test("`nightshift run` lists its subcommands and refuses an unknown one", (t) => {
+test("`nightqueue run` lists its subcommands and refuses an unknown one", (t) => {
   const env = makeHome(t, "index-save-steps");
   const cwd = makeDir(t, "index-save-steps-cwd");
 
@@ -241,7 +241,7 @@ test("`nightshift run` lists its subcommands and refuses an unknown one", (t) =>
   const unknown = spawnSync(process.execPath, [CLI, "run", "secrets-swep"], { cwd, env, encoding: "utf8" });
 
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /subcommands:\n(?:.*\n)*? {2}nightshift run index-save <artifact>/);
+  assert.match(help.stdout, /subcommands:\n(?:.*\n)*? {2}nightqueue run index-save <artifact>/);
   assert.equal(unknown.status, 1);
   assert.match(unknown.stderr, /unknown run subcommand `secrets-swep`; use: check, commit, log, pr, index-save/);
 });

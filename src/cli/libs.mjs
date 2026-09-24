@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
-const USAGE = "nightshift libs <name>...";
+const USAGE = "nightqueue libs <name>...";
 const NOT_FOUND = "not-found";
 const VERSION_RE = /^v?\d\S*$/;
 const PNPM_ENTRY_RE = /^\s+['"]?\/?(\S+?)['"]?:(?:\s|$)/;
@@ -211,12 +211,12 @@ function resolveVersion(lockfiles, name) {
   return null;
 }
 
-// Runs `nightshift libs`: prints the INSTALLED version of each named lib, read from the lockfiles of the current directory, one line per name and in the order given.
+// Runs `nightqueue libs`: prints the INSTALLED version of each named lib, read from the lockfiles of the current directory, one line per name and in the order given.
 export function run(argv, ctx) {
   const { positionals } = parseCommand(argv, {});
   const names = checkArgs(positionals, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE });
   const lockfiles = readLockfiles(ctx.cwd);
-  if (!lockfiles.length) ctx.err(`nightshift libs: no lockfile in ${ctx.cwd}; every name is reported ${NOT_FOUND}`);
+  if (!lockfiles.length) ctx.err(`nightqueue libs: no lockfile in ${ctx.cwd}; every name is reported ${NOT_FOUND}`);
   for (const name of names) ctx.out(`${name} ${resolveVersion(lockfiles, name) ?? NOT_FOUND}`);
   return 0;
 }

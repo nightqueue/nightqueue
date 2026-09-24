@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 
 // Resolves the configuration home, reading the environment on every call.
 export function homeDir(env = process.env) {
-  const raw = typeof env?.NIGHTSHIFT_HOME === "string" ? env.NIGHTSHIFT_HOME.trim() : "";
-  return raw ? resolve(raw) : join(homedir(), ".nightshift");
+  const raw = typeof env?.NIGHTQUEUE_HOME === "string" ? env.NIGHTQUEUE_HOME.trim() : "";
+  return raw ? resolve(raw) : join(homedir(), ".nightqueue");
 }
 
 // Path of the configuration file.
@@ -21,7 +21,7 @@ export function secretsPath(env = process.env) {
 
 // Path of the SQLite database of the memory runtime.
 export function dbPath(env = process.env) {
-  return join(homeDir(env), "nightshift.db");
+  return join(homeDir(env), "nightqueue.db");
 }
 
 // Path of the shared-memory index of the WAL, the file every open connection of the database maps.
@@ -62,10 +62,10 @@ function declaredPackageName() {
     name = JSON.parse(readFileSync(path, "utf8"))?.name;
   } catch (err) {
     throw new Error(
-      `cannot read ${path}: ${err?.message ?? String(err)}; this installation of nightshift is incomplete, reinstall it with \`npm i -g @maykonv/nightshift\``,
+      `cannot read ${path}: ${err?.message ?? String(err)}; this installation of nightqueue is incomplete, reinstall it with \`npm i -g nightqueue\``,
     );
   }
-  if (typeof name !== "string" || !name.trim()) throw new Error(`${path} declares no name; this installation of nightshift is incomplete, reinstall it`);
+  if (typeof name !== "string" || !name.trim()) throw new Error(`${path} declares no name; this installation of nightqueue is incomplete, reinstall it`);
   return name.trim();
 }
 
@@ -108,7 +108,7 @@ export function binDir(env = process.env) {
   return join(homeDir(env), "bin");
 }
 
-export const SHIM_NAME = "nightshift";
+export const SHIM_NAME = "nightqueue";
 export const SHORTCUT_SHIM_NAMES = ["nshift", "nsft"];
 export const LEGACY_SHIM_NAME = "shift";
 

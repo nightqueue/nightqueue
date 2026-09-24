@@ -21,7 +21,7 @@ test("doctor: short names keep the historical width of 22", () => {
 });
 
 test("memory stats: the project column grows with the longest name and never below 24", () => {
-  assert.equal(statsWidth([{ project: "nightshift" }]), 24);
+  assert.equal(statsWidth([{ project: "nightqueue" }]), 24);
   assert.equal(statsWidth([{ project: "acme-new-dashboard-b2b-web" }]), 27);
   assert.equal(statsWidth([{ project: null }]), 24);
 });

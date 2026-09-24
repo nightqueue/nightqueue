@@ -7,19 +7,19 @@ import { fileURLToPath } from "node:url";
 import { initGitRepo } from "../test-support/git.mjs";
 import { makeDir, makeHome } from "../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const FAKE_PM = fileURLToPath(new URL("../test-support/fake-pm.mjs", import.meta.url));
 const MANAGERS = ["npm", "pnpm", "yarn", "bun"];
 const LOCKFILES = { npm: "package-lock.json", pnpm: "pnpm-lock.yaml", yarn: "yarn.lock", bun: "bun.lockb" };
 const ORDER = ["typecheck", "lint", "build", "test", "poc", "diff-hygiene"];
-const NEVER_INSTALLS = "dependencies not installed — nightshift verify never installs";
+const NEVER_INSTALLS = "dependencies not installed — nightqueue verify never installs";
 const INSTALL_WORDS = ["install", "ci", "add", "--frozen-lockfile"];
 const STATUS_LINE_RE = /^(PASSED|FAILED|SKIPPED) (\S+) (\d+\.\d+)s$/;
 const GIT_IDENTITY = {
-  GIT_AUTHOR_NAME: "nightshift",
-  GIT_AUTHOR_EMAIL: "nightshift@example.invalid",
-  GIT_COMMITTER_NAME: "nightshift",
-  GIT_COMMITTER_EMAIL: "nightshift@example.invalid",
+  GIT_AUTHOR_NAME: "nightqueue",
+  GIT_AUTHOR_EMAIL: "nightqueue@example.invalid",
+  GIT_COMMITTER_NAME: "nightqueue",
+  GIT_COMMITTER_EMAIL: "nightqueue@example.invalid",
 };
 
 // Commits everything the fixture wrote, so the working tree the checks see is clean.
@@ -63,13 +63,13 @@ function readCalls(log) {
   return readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
-// Runs `nightshift verify` in the fixture as a real subprocess, with the fake package manager first on PATH.
+// Runs `nightqueue verify` in the fixture as a real subprocess, with the fake package manager first on PATH.
 function runVerify(t, cwd, { outcomes = {}, args = [], extraEnv = {} } = {}) {
   const pm = installFakePm(t);
   const env = { ...makeHome(t, "verify-caller"), ...extraEnv };
   env.PATH = `${pm.dir}:${env.PATH ?? ""}`;
-  env.NIGHTSHIFT_FAKE_PM_LOG = pm.log;
-  env.NIGHTSHIFT_FAKE_PM_SCRIPTS = JSON.stringify(outcomes);
+  env.NIGHTQUEUE_FAKE_PM_LOG = pm.log;
+  env.NIGHTQUEUE_FAKE_PM_SCRIPTS = JSON.stringify(outcomes);
   const result = spawnSync(process.execPath, [CLI, "verify", ...args], { cwd, env, encoding: "utf8" });
   assert.equal(result.error, undefined, `the CLI failed to spawn: ${result.error}`);
   return { code: result.status, stdout: result.stdout, stderr: result.stderr, env, calls: readCalls(pm.log) };
@@ -236,7 +236,7 @@ test("a declared check whose dependencies are missing is FAILED with the never-i
   assert.equal(snippetOf(result.stdout, "typecheck")[0], NEVER_INSTALLS);
   assert.equal(result.code, 1);
   const installs = result.calls.filter((call) => call.args.some((arg) => INSTALL_WORDS.includes(arg)));
-  assert.deepEqual(installs, [], "nightshift verify must never ask the package manager to install anything");
+  assert.deepEqual(installs, [], "nightqueue verify must never ask the package manager to install anything");
 });
 
 test("the never-installs reason comes from the process's own resolution failure, never from a phrase inside a check's output", (t) => {
@@ -277,9 +277,9 @@ test("every check runs against a throwaway home and host config, both gone once 
 
   const [call] = result.calls;
   assert.ok(call, "the check was never spawned");
-  assert.ok(call.home && call.home !== result.env.NIGHTSHIFT_HOME, "the check saw the caller's own NIGHTSHIFT_HOME");
+  assert.ok(call.home && call.home !== result.env.NIGHTQUEUE_HOME, "the check saw the caller's own NIGHTQUEUE_HOME");
   assert.ok(call.claudeConfigDir && call.claudeConfigDir !== callerClaudeDir, "the check saw the caller's own CLAUDE_CONFIG_DIR");
-  assert.equal(existsSync(call.home), false, "the throwaway NIGHTSHIFT_HOME outlived the command");
+  assert.equal(existsSync(call.home), false, "the throwaway NIGHTQUEUE_HOME outlived the command");
   assert.equal(existsSync(call.claudeConfigDir), false, "the throwaway CLAUDE_CONFIG_DIR outlived the command");
 });
 
@@ -305,7 +305,7 @@ test("diff hygiene fails on a path under .claude/ and names it, without the comm
   assert.equal(statuses(result.stdout).get("diff-hygiene"), "FAILED");
   assert.ok(snippetOf(result.stdout, "diff-hygiene").includes(".claude/settings.json"), result.stdout);
   assert.equal(result.code, 1);
-  assert.equal(gitStatus(cwd), before, "nightshift verify must never modify the repository under test");
+  assert.equal(gitStatus(cwd), before, "nightqueue verify must never modify the repository under test");
 });
 
 test("diff hygiene reports the scale of the change, and says so when nothing tracked changed", (t) => {

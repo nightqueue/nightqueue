@@ -4,7 +4,7 @@ import { DEFAULT_HTTP_PORT, startHttpServer } from "../mcp/transports/http.mjs";
 import { startStdioServer } from "../mcp/transports/stdio.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
-const USAGE = "nightshift mcp [--http] [--port <n>] [--token <t>]";
+const USAGE = "nightqueue mcp [--http] [--port <n>] [--token <t>]";
 
 // The port the http transport binds, where `0` asks the operating system for a free one.
 function requirePort(raw) {
@@ -21,7 +21,7 @@ function resolveToken(values, env) {
     if (values.token === "") throw new UserError(`\`--token\` cannot be empty; usage: ${USAGE}`);
     return { token: values.token, generated: false };
   }
-  const fromEnv = env.NIGHTSHIFT_MCP_TOKEN;
+  const fromEnv = env.NIGHTQUEUE_MCP_TOKEN;
   if (typeof fromEnv === "string" && fromEnv !== "") return { token: fromEnv, generated: false };
   return { token: randomBytes(24).toString("hex"), generated: true };
 }
@@ -35,7 +35,7 @@ async function startHttp(values, ctx) {
   ctx.out(`mcp http listening on ${url}`);
 }
 
-// Runs `nightshift mcp`: the stdio server by default, writing nothing but the protocol to stdout.
+// Runs `nightqueue mcp`: the stdio server by default, writing nothing but the protocol to stdout.
 export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, {
     http: { type: "boolean" },

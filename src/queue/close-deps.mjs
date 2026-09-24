@@ -6,7 +6,7 @@ import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge } from "../host/gh.mjs
 import { runGitAsync } from "../host/git.mjs";
 import { runNpmAsync } from "../host/npm.mjs";
 
-export const CLOSE_WORKER_ENV = "NIGHTSHIFT_CLOSE_WORKER";
+export const CLOSE_WORKER_ENV = "NIGHTQUEUE_CLOSE_WORKER";
 
 // Runs git with the close's abort signal wired into the child, never rejecting.
 function runGitSignalled(args, { cwd, timeoutMs, signal, env }) {

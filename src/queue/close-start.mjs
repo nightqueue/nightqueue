@@ -24,7 +24,7 @@ export { CLOSE_LEASE_SLACK_S, CLOSE_WORKER_ENV };
 function refuseCloseInsideJob(env) {
   const own = callerJobId(env);
   if (own === null) return;
-  throw new UserError(`refusing to close from inside job \`${own}\`: an unattended run never closes; ask the operator to run nightshift queue close <id>`);
+  throw new UserError(`refusing to close from inside job \`${own}\`: an unattended run never closes; ask the operator to run nightqueue queue close <id>`);
 }
 
 // The hard timeout of one close attempt, from the configuration of this home.
@@ -45,7 +45,7 @@ export function closeWorkerId() {
 // The registered checkout of a job's project, refusing an unregistered project or a checkout that is gone.
 function projectCheckout(job, env) {
   const project = projectByName(loadConfig(env), job.project);
-  if (!project) throw new UserError(`job \`${job.id}\` belongs to project \`${job.project}\`, which is not registered; run \`nightshift project list\``);
+  if (!project) throw new UserError(`job \`${job.id}\` belongs to project \`${job.project}\`, which is not registered; run \`nightqueue project list\``);
   if (!existsSync(project.path)) throw new UserError(`the checkout of project \`${job.project}\` is missing: ${project.path}`);
   return project.path;
 }
@@ -65,7 +65,7 @@ async function acquireOrRefuse({ store, id, worker, force, env }) {
   const row = await store.jobs.acquireClose(id, { worker, leaseS: closeLeaseSeconds(env), force });
   if (row) return row;
   const refusal = closeRefusal(id, await store.jobs.getJob(id), { force });
-  throw new UserError(refusal ?? `job \`${id}\` could not take the close lease; run nightshift queue status ${id}`);
+  throw new UserError(refusal ?? `job \`${id}\` could not take the close lease; run nightqueue queue status ${id}`);
 }
 
 // Validates the target and takes its lease: the part of a start that writes, run only after every refusal had its say.
@@ -80,7 +80,7 @@ async function claimClose({ store, id, force, env }) {
 // Arguments of the detached close: `--foreground` is what makes the child run the steps instead of detaching again, and the `--decisions` choice is handed down.
 function detachedCloseArgs({ id, force, runtimeDir, decisions }) {
   const flags = [...(force ? ["--force"] : []), ...(decisions ? ["--decisions", decisions] : [])];
-  return [join(runtimeDir, "bin", "nightshift.mjs"), "queue", "close", String(id), "--foreground", ...flags];
+  return [join(runtimeDir, "bin", "nightqueue.mjs"), "queue", "close", String(id), "--foreground", ...flags];
 }
 
 // Records an asynchronous spawn failure in the close log, the file the started line already points at.
@@ -146,7 +146,7 @@ export async function startCloseDetached({ store, id, force = false, env = proce
     return { started: true, jobId: id, pid: started.pid, logPath: started.logPath, worker: claimed.worker, forced: claimed.forced, status: claimed.job.status };
   } catch (err) {
     await failCloseStart({ store, id, worker: claimed.worker, row: claimed.row });
-    throw new UserError(`could not start the close of job #${id}: ${err?.message ?? String(err)}; run again with: nightshift queue close ${id}`);
+    throw new UserError(`could not start the close of job #${id}: ${err?.message ?? String(err)}; run again with: nightqueue queue close ${id}`);
   }
 }
 
@@ -165,7 +165,7 @@ async function registerForegroundClose({ id, env, killImpl }) {
 async function adoptParentLease({ store, id, force, env }) {
   const worker = env[CLOSE_WORKER_ENV].trim();
   const adopted = await store.jobs.adoptClose(id, { worker, leaseS: closeLeaseSeconds(env) });
-  if (!adopted) throw new UserError(`the close lease of job #${id} is not held by this process any more; run nightshift queue status ${id}`);
+  if (!adopted) throw new UserError(`the close lease of job #${id} is not held by this process any more; run nightqueue queue status ${id}`);
   const job = await store.jobs.getJob(id);
   return { job, worker, forced: force === true, row: job };
 }

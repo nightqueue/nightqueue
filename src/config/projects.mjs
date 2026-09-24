@@ -108,7 +108,7 @@ export function registrationOffer(config, cwd) {
   if (root === null) return null;
   const name = suggestName(config, root);
   if (name === null) {
-    throw new UserError(`cannot derive a free project name for ${root}; register it with \`nightshift project add ${root} --name <name>\``);
+    throw new UserError(`cannot derive a free project name for ${root}; register it with \`nightqueue project add ${root} --name <name>\``);
   }
   return { path: root, name, org: config.defaultOrg };
 }
@@ -126,7 +126,7 @@ export function addProject(config, { path, name, org } = {}) {
       return { config, status: "unchanged", project: { name: existingName, path: entry.path, org: entry.org } };
     }
     throw new UserError(
-      `${abs} is already registered as \`${existingName}\` in org \`${entry.org}\`; use \`nightshift project move ${existingName} ${orgName}\``,
+      `${abs} is already registered as \`${existingName}\` in org \`${entry.org}\`; use \`nightqueue project move ${existingName} ${orgName}\``,
     );
   }
   const taken = config.projects[projectName];

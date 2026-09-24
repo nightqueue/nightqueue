@@ -6,6 +6,15 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Breaking
+
+- **nightshift is now nightqueue.** The package is `nightqueue` on npm (unscoped; `@maykonv/nightshift`
+  is deprecated and will not be updated), the command is `nightqueue`, the Claude Code plugin is
+  `nightqueue` (`/nightqueue:queue`, `/nightqueue:resolve`), the MCP server is `nightqueue`, the home is
+  `~/.nightqueue` and every environment variable is `NIGHTQUEUE_*`. There is no alias for the old
+  names: move the home yourself (`mv ~/.nightshift ~/.nightqueue`), run `npx nightqueue init` and
+  remove the old plugin from Claude Code. The repository moved to `nightqueue/nightqueue`.
+
 ### Changed
 
 - The repository is public. It gained `CONTRIBUTING.md`, `SECURITY.md`, issue and pull
@@ -16,8 +25,8 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ### Breaking
 
 - `closed` means the job's pull request was merged through the closing pipeline, and
-  `nightshift queue close <id>` is that pipeline. `nightshift queue ship` and the MCP tool
-  `queue_ship`, released in 0.3.0, are removed without an alias - nightshift is a local
+  `nightqueue queue close <id>` is that pipeline. `nightqueue queue ship` and the MCP tool
+  `queue_ship`, released in 0.3.0, are removed without an alias - nightqueue is a local
   product with no external user to migrate: `queue ship` now answers the unknown-subcommand
   error. `queue close <id> [--force] [--foreground] [--decisions accept|reject|keep] [--json]`
   runs the four steps (preflight, conflict, merge, settle) on one `done` job with a pull
@@ -35,7 +44,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   <sha7> on <date>`; the STATUS cell reads `done · closing`, `done · close failed at <step>`,
   `done · close stalled` or `closed`; `queue_status`, `queue status --json` and doctor carry
   `closes` in place of `ships`; the close runs as a runner of mode `close`, logs to
-  `close-<id>-<stamp>.log` and reads `NIGHTSHIFT_CLOSE_WORKER`.
+  `close-<id>-<stamp>.log` and reads `NIGHTQUEUE_CLOSE_WORKER`.
 - `closed` requires a merge recorded by the pipeline: a `CHECK` of the `jobs` table refuses a
   `closed` row without a `pr_url`, with a `close_status`, or whose `close` checklist does not
   record `data.merged: true`, and `queue repair`, the witness reconciliation and every other
@@ -57,7 +66,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - A pull request closed without merge cancels the job (`pull request closed without merge`)
   and releases its worktree, instead of stopping the close; one merged by hand is recorded as
   `merged outside a close` with `mergedBy: "operator"`, and the pipeline's own merge as
-  `mergedBy: "nightshift"`.
+  `mergedBy: "nightqueue"`.
 - `queue cancel` and the MCP `queue_cancel` also accept a `done` or `failed` job, release its
   worktree, answer `{ job, worktree }` and refuse a job being closed under a live lease, or one
   whose close was interrupted (resume it with `queue close <id>`, so a merge is never lost).
@@ -80,14 +89,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   (the close, with the merge sha), with `refs` read from the job's row (pull request, branch, merge sha, the files the
   implementation listed, the decision the job proposed). A move back from `in_review`/`done`
   leaves `reopened`. The new `roadmap_comment` tool adds a `note`, `roadmap_get` with `id` alone
-  reads one item untruncated with its thread, and `nightshift roadmap show <id>` prints it;
+  reads one item untruncated with its thread, and `nightqueue roadmap show <id>` prints it;
   inside a job both reach only an item of the job's project or its org.
 - `roadmap_search` finds at most five roadmap items an owner sees, by `query` (title, detail and
   comment thread, over two new FTS5 mirrors built once for the existing rows) and by `file` (a
   path a job recorded, exact or a directory above it, file matches first); inside a job it reads only the
   job's own project. The triager's phase context gains a `## Related roadmap items` block from
   the same search. 27 MCP tools.
-- `nightshift run pr` of a job queued from a roadmap item publishes the body with a last
+- `nightqueue run pr` of a job queued from a roadmap item publishes the body with a last
   `Roadmap: <owner>#<id>` line (a copy in the run directory; the agent's file is untouched).
 - `node scripts/roadmap-backfill.mjs [--dry-run]` synthesizes, once and idempotently, the
   `queued`/`pr`/`closed` comments of items linked to a job before comments existed.
@@ -100,10 +109,10 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `closed_at` while `done`), and its `priority` is 1-9, default 5, 1 first like a job's; the
   position orders an item inside its priority group. The migration maps `open`+`now` to
   `todo`, `open`+`next`/`later` to `backlog`, `queued` to `in_progress`, `dropped` to
-  `cancelled`, `done` to `done` (with `closed_at`), gives every item priority 5 and nightshift
+  `cancelled`, `done` to `done` (with `closed_at`), gives every item priority 5 and nightqueue
   items #9 and #36 priority 3. A linked item now follows its job through one table-driven
   reconciler at the store: queued or retried → `in_progress`, job `done` → `in_review`, job
-  closed (its pull request merged through `nightshift queue close`) → `done`, job failed or
+  closed (its pull request merged through `nightqueue queue close`) → `done`, job failed or
   cancelled → `todo`; the store follows the close's own `settleClose` and `cancelOnClosedPr`
   writes, and a close that finds the pull request closed without merge cancels the job. Gate
   answer A of job 67 (a closed job maps to `done` only when it delivered) is now enforced by
@@ -111,13 +120,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   roadmap rebuild runs after the v16 close migration. `run_outcome` no longer closes the item. `roadmap_save`/`roadmap_update` take
   `priority` and refuse `horizon` by name, `in_progress` is set only by a job, and moving an
   item back from `in_review`/`done` by hand is allowed. `roadmap_get` answers one `items`
-  list in workflow order with optional `status`/`priority` filters, and `nightshift roadmap`
-  prints it grouped by status, p1 first, with `--status`/`--priority`. `nightshift doctor`
+  list in workflow order with optional `status`/`priority` filters, and `nightqueue roadmap`
+  prints it grouped by status, p1 first, with `--status`/`--priority`. `nightqueue doctor`
   gains a `roadmap workflow` row that warns about an item left behind its job; the next claim
   cycle re-syncs it.
-- An org roadmap item is executed per project: `queue_add` (and `nightshift queue add --roadmap
+- An org roadmap item is executed per project: `queue_add` (and `nightqueue queue add --roadmap
   <id> --project <name|all>`) needs an explicit project of the org or `all`, never the current
-  directory (`nightshift project add` now refuses `all` as a project name), and queues one job per project, each linked to its own `roadmap_item_projects`
+  directory (`nightqueue project add` now refuses `all` as a project name), and queues one job per project, each linked to its own `roadmap_item_projects`
   row; a project whose row still holds a live job is skipped and reported, and the answer
   lists `jobs` and `skipped`. The org item carries no job itself, and its status is now
   derived from its rows in the same transaction as each row change (`in_progress` while any
@@ -126,7 +135,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `project`, a row's job publishes `Roadmap: <org>#<id>`, and closing the item by hand cancels
   every open row with one `closed` comment each. A project reads only its own row
   (`project_status`) and its own comments of an org item; `roadmap_get` by `org` and
-  `nightshift roadmap --org` show the item × project matrix. `nightshift doctor` also flags an
+  `nightqueue roadmap --org` show the item × project matrix. `nightqueue doctor` also flags an
   org item whose persisted status disagrees with what its rows derive.
 
 ### Fixed
@@ -136,14 +145,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   created, in the run's repository AND on the run's own branch (its recorded name or the
   `<type>/<slug>` name `run pr` publishes it under); a publication that names no branch
   loses to the pull request the runtime recorded, one on another branch never wins, and
-  every publication dropped this way is named on one line of the job's notice. `nightshift
+  every publication dropped this way is named on one line of the job's notice. `nightqueue
   run pr` now records the branch it pushed as the run's branch, so resume and `jobs.branch`
   name the branch that exists. `queue ship <id>` stops at `✗ preflight
   pr-not-the-job-branch` when the pull request's head is not the job's branch - also for a
   pull request already merged - and `--force` now overrides this check too, recording the
   override in the step note. The pipeline and QA instructions carry two hard rules: a
-  verification never unsets or works around a nightshift guard or its variables
-  (`NIGHTSHIFT_JOB_ID` ...), and a real pull request is only ever created, merged or closed
+  verification never unsets or works around a nightqueue guard or its variables
+  (`NIGHTQUEUE_JOB_ID` ...), and a real pull request is only ever created, merged or closed
   in the operator's nstest-demo checkout. Two operator-run scripts, not published:
   `scripts/ship-qa-demo.mjs` (the real ship acceptance on nstest-demo, refused inside a
   job) and `scripts/repair-job-pr-attribution.mjs` (a dry-run-first, read-guarded fix of
@@ -151,14 +160,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the table and under `--follow`, reads `shipping` alone while a ship is in progress and
   `closed` alone once shipped, in place of `done · shipping` and `closed · shipped`;
   `· ship stalled` and `· ship failed` are unchanged, and `--json`/MCP `ship_status` too.
-- `nightshift roadmap | head` no longer crashes with an uncaught `write EPIPE` once the output
+- `nightqueue roadmap | head` no longer crashes with an uncaught `write EPIPE` once the output
   outgrows the pipe buffer: the CLI stops writing when its reader closes the pipe.
 
 ## 0.3.0 - 2026-09-21
 
 ### Added
 
-- `nightshift queue ship <id> [--force] [--foreground] [--json]` and the MCP tool `queue_ship`
+- `nightqueue queue ship <id> [--force] [--foreground] [--json]` and the MCP tool `queue_ship`
   take a `done` job's pull request from open to merged and close the job, through a code
   pipeline of four steps run by the command's own process - preflight (fetch, pull request
   state, green checks, uncommitted files the pull would touch), conflict (a rebase in a
@@ -177,11 +186,11 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   needs reaches it as a handoff file under the run directory or a subagent return of at
   most 10 lines (verdict, the file written, open items - never file contents, never a
   diff), in every tier. Its channels are the run's handoff files, the plugin's own files,
-  the `nightshift` MCP tools, the `Agent` tool and a closed Bash list.
+  the `nightqueue` MCP tools, the `Agent` tool and a closed Bash list.
 - Phase 6.5 is a runtime lane: the verifier in `Mode: RUNTIME` runs the API / browser /
   emulator / acceptance cases, writes `06-runtime.md` (`## Runtime verdict`:
   `CONFIRMED | NOT-MET | SYMPTOM-PERSISTS | NEEDS-DEVICE | UNAVAILABLE`, plus
-  `Diff applies plan:` on a bug) and its evidence files; `nightshift run check 06.5`
+  `Diff applies plan:` on a bug) and its evidence files; `nightqueue run check 06.5`
   gates it. The same lane measures main for Phase 0.6 (`00-main-measure.md`). The runner
   creates the run directory before the session starts.
 - The coder writes `04-implementation.md` in every tier (`## Modified files`, `## Done`,
@@ -193,14 +202,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   and `Bash` only for the closed list (`git rev-parse|worktree|status --short|add|commit|push|fetch|
   branch --show-current|diff --stat…` - never `commit --amend`, a forced, deleting or mirroring
   push, a global flag such as `-C`/`-c`/`--git-dir` nor a path to the binary -, `gh pr
-  view|list|status|checks|create`, `nightshift run check|log|index-save|commit|pr`). Anything else is denied with a reason that says to
+  view|list|status|checks|create`, `nightqueue run check|log|index-save|commit|pr`). Anything else is denied with a reason that says to
   hand the work to the phase's subagent. Subagents and sessions outside a job are
   untouched, and the check fails open.
 - Each job records what its orchestrator did (schema v14): `orch_turns`, `orch_reads`
   (reads outside the allowed roots), `orch_bash`, `orch_bash_explore` (Bash outside the
   closed list) and `orch_ctx_last` (the last turn's context), counted from the stream and
   summed over attempts. `queue status <id>` (human, `--json`, MCP) shows all five, zero
-  included, and `nightshift doctor` sums them over the last 20 finished jobs in an
+  included, and `nightqueue doctor` sums them over the last 20 finished jobs in an
   `orchestrator` row that warns when a read or an exploration Bash shows up.
 - An unattended job now runs isolated from the operator's own environment by default:
   `--strict-mcp-config --setting-sources project,local` plus a `--settings` payload
@@ -210,7 +219,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   own MCP servers, plugins, skills, agents or user hooks (measured on the real spawn
   path: 39 MCP servers, 95 skills, 20 agents and a ~114k first turn before; 1, 21, 11
   and ~68k after). `queue.inheritUserEnvironment: true`
-  restores the old, unfenced behaviour; `nightshift doctor` reports which mode is in
+  restores the old, unfenced behaviour; `nightqueue doctor` reports which mode is in
   effect in a new `job environment` row.
 - Each job records `baseline_ctx` (schema v13): the input, cache-read and
   cache-creation tokens the orchestrator's FIRST turn already carried before the run
@@ -227,21 +236,21 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   notice and the runner log get one warning line.
 - Each job records `bash_timeouts`, `tasks_backgrounded` and `tasks_killed` (schema v12),
   shown by `queue status <id>` (human, `--json`, MCP) only when not zero, and
-  `nightshift doctor` sums them over the last 20 finished jobs in a `host commands` row.
+  `nightqueue doctor` sums them over the last 20 finished jobs in a `host commands` row.
 - A long-lived MCP server that runs a superseded runtime says so in the hints of
   `queue_status`, `queue_run` and `queue_add`.
 - A detached runner is launched from the installed current runtime, never from the tree
   of the process that started it, and its registration names that tree.
 - `npm test` runs with `--test-timeout=60000`, so a hung test fails in 60 s by name.
 
-- `nightshift queue status <id>` (CLI, human and `--json`, and the MCP tool
+- `nightqueue queue status <id>` (CLI, human and `--json`, and the MCP tool
   `queue_status` with `job_id`) now also answers `run_notice` whenever the
   run's own `## Notice` - read fresh from the log the row's `result.logPath`
   names - differs from the row's `notice_md`: both are shown, the row's under
   `notice` and the run's whole own, never truncated, under `run_notice`. A
   pure read: no write, no network, and a missing or unreadable log simply
   leaves the field absent.
-- `nightshift queue run --watch --from HH:MM --until HH:MM` works the queue inside
+- `nightqueue queue run --watch --from HH:MM --until HH:MM` works the queue inside
   one local wall-clock window and exits at its end. `--from` defaults to now;
   `--until` is always the next occurrence of that time after `from`, so a window
   that crosses midnight (`--from 22:00 --until 04:00`) needs no special syntax.
@@ -252,7 +261,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   left. `queue status` shows the window on the runner line
   (`watch every 60 s · window 22:00-04:00 · opens in 3h12` / `· closes in 5h40`),
   and `queue status --json` and the MCP `queue_status` carry
-  `window: { from, until }` as ISO instants. The window is one-shot: nightshift
+  `window: { from, until }` as ISO instants. The window is one-shot: nightqueue
   starts no scheduler and no runner ever starts another runner, so a recurring
   overnight run is an OS-level job (`launchd`, `systemd`) the operator sets up.
 
@@ -264,10 +273,10 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   platform, and a missing or failing `caffeinate` only warns once and never fails
   a runner or a job. The display can still sleep and nothing here wakes an
   already-sleeping machine, so a windowed night run needs the lid open (or an
-  external display). `nightshift doctor` reports the mode, whether `caffeinate`
+  external display). `nightqueue doctor` reports the mode, whether `caffeinate`
   was found, and this same limitation.
 
-- `nightshift decision update <number> --status accepted|rejected|superseded
+- `nightqueue decision update <number> --status accepted|rejected|superseded
   [--superseded-by <n>]` settles a proposal a closed job left behind, or
   changes a decision's status by hand, from the terminal - the same write the
   MCP tool `decision_update` does. `superseded` requires `--superseded-by
@@ -275,7 +284,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   other status refuses that flag. It prints the updated decision the way
   `decision show` does.
 
-- `nightshift queue session <id>` and the MCP tool `queue_session` open the
+- `nightqueue queue session <id>` and the MCP tool `queue_session` open the
   `claude` session of a job's LAST attempt - `last_session_id` when the job
   recorded one, else its first `session_id` - and resume it with `claude
   --resume <session>` in the cwd the run itself used: the run's worktree while
@@ -287,9 +296,9 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `{ jobId, attempt, session, cwd, worktreeReleased, command }`; the MCP tool
   only ever reads and never resumes or executes anything itself.
 
-- `nightshift decision export <number> [--dir <path>] [--force]` writes one
+- `nightqueue decision export <number> [--dir <path>] [--force]` writes one
   decision as `<dir>/<nnnn>-<slug>.md` (default `docs/decisions/`), reading
-  the database read-only like `show`. `nightshift decision import <file.md>
+  the database read-only like `show`. `nightqueue decision import <file.md>
   [--status <status>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated
   <n,...>]` reads that shape - or a hand-written ADR of the same one - back
   through the same review `decision_save` uses, prints `imported as <label>`
@@ -310,7 +319,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the first is still `proposed` is refused too, and the saved row is stamped
   with the job's `job_id`.
 
-- `nightshift queue close <id>...` and `nightshift queue close --merged` now
+- `nightqueue queue close <id>...` and `nightqueue queue close --merged` now
   settle the decisions the jobs they close proposed and never settled: on a
   TTY, without `--decisions`, each open proposal is asked `accept / reject /
   keep` (default `keep`); `--decisions accept|reject|keep` answers every one
@@ -319,14 +328,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   (proposed)` line, and `--json` carries them under `decisions`. The MCP
   `queue_close` still only closes the job and leaves its proposals alone.
 
-- `nightshift doctor` gains two more `warn` checks. `worktree <project>/<dir>
+- `nightqueue doctor` gains two more `warn` checks. `worktree <project>/<dir>
   left over` names, for every registered project with a `.claude/worktrees/`
   directory, each directory there that no open job still owns, with the exact
   command that cleans it (`git worktree remove`, `git worktree unlock && ...
   remove`, or `rm -rf` for one orphaned from git) - it never runs that command
   itself. `decision proposals` names every decision a queue job proposed and
   nobody settled before its job was closed, by number and job, with the hint
-  to settle it with `decision_update` or, next time, with `nightshift queue
+  to settle it with `decision_update` or, next time, with `nightqueue queue
   close <id> --decisions accept|reject`.
 
 - The block the `SessionStart` hook injects now carries the title of EVERY
@@ -338,18 +347,18 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   budget so the lessons always keep a floor, giving way to an omission line
   first.
 
-- `nightshift run pr` checks the body against the target repository's own pull
+- `nightqueue run pr` checks the body against the target repository's own pull
   request template first. It resolves the run's checkout, then takes the first
   of `.github/PULL_REQUEST_TEMPLATE.md`, `.github/pull_request_template.md`,
   `docs/PR_TEMPLATE.md`, or a pull request section of `CONTRIBUTING.md` or
   `CLAUDE.md` (the first fenced markdown block of that section carrying
   headings); it prints `TEMPLATE:` and `HEADINGS:` and records them as a
   top-level `prTemplate` in `state.json`. A body must carry every heading of that
-  template in its order, and no nightshift heading the template does not have.
-  `nightshift run pr --template` prints and records the template alone, reads no
+  template in its order, and no nightqueue heading the template does not have.
+  `nightqueue run pr --template` prints and records the template alone, reads no
   body and pushes nothing, so Phase 7 reads it instead of deciding.
 
-- `nightshift queue close <id>` and the MCP tool `queue_close` (twenty-four tools
+- `nightqueue queue close <id>` and the MCP tool `queue_close` (twenty-four tools
   now): the operator's act that takes a delivered job from `done` to `closed`.
   Any other status is refused by name and nothing is written; `pr_url` is kept.
   A runner's witness can never close a job.
@@ -359,7 +368,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the CLI waits for every background task the run still has open instead of
   killing one after ten minutes and exiting `0`; the job timeout and the idle
   timeout already bound the attempt. A new `PreToolUse` hook,
-  `nightshift hook agent-foreground`, closes the other half: inside a job it
+  `nightqueue hook agent-foreground`, closes the other half: inside a job it
   rewrites every `Agent`/`Task` launch to `run_in_background: false`, whether the
   call asked for the background or simply left the field out. It normalises the
   call and never blocks it, and `setup` and `doctor` now register and check four
@@ -376,7 +385,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   a gate needs `queue_retry`, a block clears itself the moment the drain
   claims the job again, once the operator fixes the cause.
 
-- `nightshift run` is the family the pipeline calls from inside a job, each
+- `nightqueue run` is the family the pipeline calls from inside a job, each
   subcommand acting on the run of the job it was called from: `run check <NN>`
   is the artifact gate of a phase (`OK`, `MISSING: <sections>`, or `GENERATED`
   when it derives `## Modified files` from the changes of the worktree),
@@ -401,7 +410,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the lessons and the memories it already carried.
 
 - The mechanical work the pipeline's subagents used to describe in prose is now
-  three runtime commands. `nightshift verify [--scope touched|full|+poc]
+  three runtime commands. `nightqueue verify [--scope touched|full|+poc]
   [--files <list>]` detects the project's own checks from its lockfile and
   manifests and runs them in the fixed order typecheck, lint, build, test, poc,
   diff-hygiene, printing one `PASSED|FAILED|SKIPPED <check> <duration_s>s` line
@@ -409,29 +418,29 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   members declare, each in its own package, and a run that detected nothing says
   so instead of reading as a clean pass; it never installs anything, never writes
   the repository under test, and spawns every check against a throwaway
-  `NIGHTSHIFT_HOME` and `CLAUDE_CONFIG_DIR`. `nightshift libs <name>...` prints
+  `NIGHTQUEUE_HOME` and `CLAUDE_CONFIG_DIR`. `nightqueue libs <name>...` prints
   the version of each lib actually installed, read from the lockfile, never the
-  range. `nightshift run` also holds two steps the subagents call: `index-save <artifact>` persists the
+  range. `nightqueue run` also holds two steps the subagents call: `index-save <artifact>` persists the
   `## File map` and `## Third-party libraries` of an explore artifact into the
   project index, and `secrets-sweep --files <list>` reports the log calls whose
   arguments - or the lines those arguments are built from - may carry a secret.
   A job spawned by the queue now also carries an `Open pull requests matching
   this job:` block, looked up once before the spawn without blocking the dispatch
   of the other jobs, with a 5 s timeout and skipped entirely under
-  `NIGHTSHIFT_NO_PR_CHECK=1`; the titles and branches it carries are framed as
+  `NIGHTQUEUE_NO_PR_CHECK=1`; the titles and branches it carries are framed as
   untrusted data and capped, since whoever opened the pull request wrote them. The six agent files stopped
   doing all of that by hand, so what they do is now testable from `test/`
   instead of only observable in a run. Documented in `docs/cli.md`.
 
-- `nightshift sandbox <command> [args...]` runs one command, its arguments
-  forwarded verbatim, against a throwaway `NIGHTSHIFT_HOME` and
+- `nightqueue sandbox <command> [args...]` runs one command, its arguments
+  forwarded verbatim, against a throwaway `NIGHTQUEUE_HOME` and
   `CLAUDE_CONFIG_DIR` created before the spawn and removed once it exits,
   whatever the exit code - the same isolation `verify` gives its own checks,
-  now available for a `nightshift` command typed by hand. Stdin, stdout,
+  now available for a `nightqueue` command typed by hand. Stdin, stdout,
   stderr, the rest of the environment and the current directory are inherited
   unchanged, and the exit code is the child's own.
 
-- `nightshift queue repair <id>` re-derives the outcome of a job left in `gate`
+- `nightqueue queue repair <id>` re-derives the outcome of a job left in `gate`
   or `failed` from its own log and its own `state.json`, and writes the
   corrected row and witness. It is the way to settle a job that really opened a
   pull request but was recorded without it, with no hand-edited database. It
@@ -467,7 +476,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   comparison now sets those aside first (job #52, whose `## Requires user
   confirmation` gate printed the same block twice).
 
-- `nightshift queue status --follow` redraws the table over itself on a
+- `nightqueue queue status --follow` redraws the table over itself on a
   terminal instead of clearing the screen every tick, which piled one copy of
   the table per tick in the scrollback of iTerm2 and Terminal.app. The frame
   is cut to the width and the height of the terminal (`… +N more lines` when
@@ -494,7 +503,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   out of the prompt instead of re-deriving a decision it could get wrong.
 
 - The roadmap item of a job is closed by every path that lands its row on
-  `done`, not only by the live finalize: `nightshift queue repair`, the
+  `done`, not only by the live finalize: `nightqueue queue repair`, the
   reconciliation from the witness and `run_outcome` all go through the same
   closure in the store, so a job that really delivered never leaves its item
   queued.
@@ -513,7 +522,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   agent recorded is no longer erased by a fact the runner recorded at the same
   moment.
 
-- `nightshift run commit` refuses `.claude/`, `tmp/` and the lockfiles whatever
+- `nightqueue run commit` refuses `.claude/`, `tmp/` and the lockfiles whatever
   the case of the path: on a filesystem that resolves `.Claude/hook.js` to
   `.claude/hook.js`, the refusal used to be walked past by spelling the
   directory differently, in the list of the implementation and in `--extra`.
@@ -525,12 +534,12 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `state.json` keeps ruling the status (the pull request URL now comes first from the
   `code_change_published` event, see below), and its summary
   stays the fallback for a run that printed no `## Notice`, with the whole final
-  text of the orchestrator as the last resort. `nightshift queue repair <id>`
+  text of the orchestrator as the last resort. `nightqueue queue repair <id>`
   now also writes a correction that is only a notice - it compared the status
   and the pull request URL alone, answered that there was nothing to correct and
   dropped the text it had just re-derived - and it leaves the witness of the run
   untouched when nothing but the notice moved. `queue log` and the refusal of
-  `queue retry` say where the whole notice is read (`nightshift queue status
+  `queue retry` say where the whole notice is read (`nightqueue queue status
   <id>`) when they had to cut it, which `queue status <id>` never does: a gate
   is answerable again from the detail of the job.
 
@@ -556,7 +565,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   request URL: a run that describes its own result in different words is no
   longer misread. The text stays the fallback.
 
-- `nightshift queue status --follow` and the MCP `queue_status` tool read the
+- `nightqueue queue status --follow` and the MCP `queue_status` tool read the
   queue on a read-only connection opened for that poll alone, instead of the one
   connection cached for the whole life of the process. A job another process
   finished, merged or repaired is rendered on the next poll, where a session
@@ -574,8 +583,8 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - The `PreToolUse` hook matcher is now `Agent|Task|Bash|Read|Grep|Glob`. An existing
-  install picks it up only after `nightshift update` or `nightshift setup`;
-  `nightshift doctor` warns (`registered with an older tool matcher`) meanwhile. Known
+  install picks it up only after `nightqueue update` or `nightqueue setup`;
+  `nightqueue doctor` warns (`registered with an older tool matcher`) meanwhile. Known
   limits: the hook enforces `Read`/`Grep`/`Glob`/`Bash` only - an orchestrator
   `Write`/`Edit` into the repository is forbidden by the skill but not denied at runtime;
   and every `Read`/`Grep`/`Glob` of every session on a machine with the hook installed
@@ -594,8 +603,8 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   should have kept it in the foreground.
 
 - Schema v11: `decisions.job_id` stamps the job that proposed a decision, read
-  by the new `decision proposals` check of `nightshift doctor` and by the
-  settlement `nightshift queue close` runs on every job it closes.
+  by the new `decision proposals` check of `nightqueue doctor` and by the
+  settlement `nightqueue queue close` runs on every job it closes.
 
 - A gate's notice is now the `## Requires user confirmation` block of the
   plan, verbatim, plus the answer line - no length cap, no summary. A notice
@@ -611,13 +620,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 - A job's worktree now lives as long as the job. `finalize` removes it once a
   `done` run is clean and its branch is pushed (or a pull request is
-  recorded); `nightshift queue close`, `queue close --merged` and the MCP
+  recorded); `nightqueue queue close`, `queue close --merged` and the MCP
   `queue_close` apply the same rule to every job they close. A dirty,
   unpushed or locked worktree is kept instead, and a `Worktree kept: <path> -
   <reason>` line is appended to the job's existing notice rather than
   replacing it.
 
-- The nightshift pull request template is now only the fallback, and its shape
+- The nightqueue pull request template is now only the fallback, and its shape
   changed: `## Report`, `## Cause`, `## Changes`, `## QA`, where `## QA` is a
   `| Method | Executed | Result |` table with one row per method that really ran
   (Automated, API, Browser, Android / iOS emulator or device, never `N/A`)
@@ -636,7 +645,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   is shown as a derived `pr_state` (`merged` > `closed` > `conflicted` > `draft`
   > `unknown` > `open`) from a process-local cache that gh refreshes outside the
   frame, never stored; a merged pull request on a `done` job adds the suggestion
-  `#<id> PR merged - close it with nightshift queue close <id>` instead of
+  `#<id> PR merged - close it with nightqueue queue close <id>` instead of
   rewriting the row. Repair and prune are maintenance, owned by the runner cycle,
   the one-shot `queue status` and a 60 s timer of the MCP server; `--follow`
   never writes. The follow sleeps what is left of its interval and its footer
@@ -673,7 +682,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - `state.json` is written by the runtime alone. Every key of the run - the
   phases, the termination, the outcome, the type, the tier and its raise, the
   branch, the worktree, the QA stage A marker and the resume count - goes
-  through one writer, called by the `run_*` tools, by `nightshift run pr` and by
+  through one writer, called by the `run_*` tools, by `nightqueue run pr` and by
   the runner itself; the pipeline no longer writes the file, no longer stamps a
   time and no longer counts its own resumes. An `updatedAt` an older plugin
   hand-writes is overwritten by the runtime's clock instead of being trusted.
@@ -721,12 +730,12 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- `nightshift org rename` records its intent before touching either store, so a
+- `nightqueue org rename` records its intent before touching either store, so a
   rename interrupted between the database and the config no longer hides the
-  org's decisions and roadmap items with nothing pointing at them. `nightshift
+  org's decisions and roadmap items with nothing pointing at them. `nightqueue
   org repair` settles the interrupted rename in the direction the config already
   committed (forward or back, idempotent), and moves rows that point to an org
-  the config does not know under the org named with `--to`. `nightshift doctor`
+  the config does not know under the org named with `--to`. `nightqueue doctor`
   gains an `org rows` line that fails on either state, and `org rename` and `org
   remove` refuse to run while a rename is still in flight.
 - The output of `npm pack --json` is read in both shapes npm prints: the array
@@ -748,9 +757,9 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   org's, org rows first and each carrying its `scope` and its `owner`, while a
   read by `org` answers that org's rows alone and no other org's. Phase 0 of
   `/resolve` injects both levels in the same single `decision_recall`,
-  `nightshift decision list --org <name>`, `nightshift decision show <number>
-  --org <name>` and `nightshift roadmap --org <name>` read an org from the
-  terminal, and `nightshift org rename` carries the rows of the org with it while
+  `nightqueue decision list --org <name>`, `nightqueue decision show <number>
+  --org <name>` and `nightqueue roadmap --org <name>` read an org from the
+  terminal, and `nightqueue org rename` carries the rows of the org with it while
   `org remove` refuses an org that still owns any. An org roadmap item becomes a
   job with an explicit `--project <name>` (`project` in `queue_add`) of that org,
   or the project of the current directory: it stays `open` and unlinked, so the
@@ -758,8 +767,8 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   it. The schema migrates by itself to v6 - every existing row reads as
   `scope='project'` and keeps its number, with no manual step.
 - Versioned runtime: an install writes a new
-  `~/.nightshift/runtime/versions/<version>-<stamp>/` and publishes it by
-  renaming a symlink onto `~/.nightshift/runtime/current`, in one step, so no
+  `~/.nightqueue/runtime/versions/<version>-<stamp>/` and publishes it by
+  renaming a symlink onto `~/.nightqueue/runtime/current`, in one step, so no
   instant leaves the host without a runtime and a failed install never touches
   the link. The shims, the MCP server, the hooks, the Claude Desktop entry and
   the plugin marketplace all resolve through `current`, a process that is
@@ -777,7 +786,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the write-ahead log is checkpointed afterwards. The same shape guards the
   `pipeline_log` insert. The runner then writes `terminal { status, prUrl,
   finishedAt, writtenBy, pid }` into the `state.json` of the run, and
-  `nightshift queue status`, every runner cycle and the MCP `queue_status`
+  `nightqueue queue status`, every runner cycle and the MCP `queue_status`
   restore any job whose row still says `running` or `pending` while that witness
   says how it ended, marking the result `repairedFrom: "state.json"`. A job
   under a live lease is never touched, and a retry clears the witness so the
@@ -796,17 +805,17 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   once per job every five minutes, never inside an unattended job session and
   never in a hook. It fails open and in silence - with `gh` missing, logged out
   or offline nothing is written, nothing is printed and the command still exits
-  `0` - and `NIGHTSHIFT_NO_PR_CHECK=1` switches it off. `queue cancel` and
+  `0` - and `NIGHTQUEUE_NO_PR_CHECK=1` switches it off. `queue cancel` and
   `queue retry` refuse a `merged` job, and `queue retry` still accepts only
   `failed`, `cancelled` and `gate`.
 
 - The operator sets the risk tier of a job, and the pipeline runs the track of
-  that tier: `nightshift queue add --tier trivial|simple|complex` and the `tier`
+  that tier: `nightqueue queue add --tier trivial|simple|complex` and the `tier`
   parameter of `queue_add` store it in a new nullable column of `jobs` (one
-  migration, schema v5), `nightshift queue status <id>` and the `--json` of the
+  migration, schema v5), `nightqueue queue status <id>` and the `--json` of the
   list and the detail show it, and the unattended prompt carries the line
   `Tier: <tier> (set by the operator - the pipeline may only raise it, with
-  evidence, never lower it)` into the run. The `/nightshift:queue` skill proposes
+  evidence, never lower it)` into the run. The `/nightqueue:queue` skill proposes
   a tier, names it in the single confirmation it already asks and lets the user
   override it in that same answer. `/resolve` gained three tracks: `trivial`
   (coder plus a verifier on tsc, lint and the tests of the touched files, under 5
@@ -825,15 +834,15 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `accepted`, `superseded` and `rejected`) and a `now`/`next`/`later` roadmap,
   both reachable through seven new MCP tools and never written into the
   repository. `queue_add` with `roadmap_item_id`, and its CLI twin
-  `nightshift queue add --roadmap <id>`, build the job prompt from a roadmap
+  `nightqueue queue add --roadmap <id>`, build the job prompt from a roadmap
   item, its linked decision and the accepted decisions around it instead of
   asking for it again, mark the item `queued` and close it as `done` when the
   job finishes. `/resolve` recalls the accepted decisions as the
   `## Standing decisions` of its Brief, passes them to the architect as binding
   constraints, and records the decision a plan takes as `proposed` for the
   operator to accept on the pull request. Three read-only commands print all of
-  it in a terminal: `nightshift decision list`,
-  `nightshift decision show <number>` and `nightshift roadmap`, each resolving
+  it in a terminal: `nightqueue decision list`,
+  `nightqueue decision show <number>` and `nightqueue roadmap`, each resolving
   the project from the current directory when `--project` is omitted, opening
   the database read-only - they never create it, and a home where nothing was
   saved reads as an empty one. Inside an unattended run, `decision_update` and
@@ -846,24 +855,24 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   section of the version. A second workflow runs the suite on Node 22 and Node
   24 for every pull request and every push to `main`, and `docs/RELEASING.md`
   documents the flow plus the one-time trusted publisher setup on npmjs.com.
-- Passive update notice: `nightshift queue status` and the session-start context
+- Passive update notice: `nightqueue queue status` and the session-start context
   block close with one line when a newer version is published. The registry is
   asked at most once every 24 hours and the answer is cached in
-  `$NIGHTSHIFT_HOME/update-check.json`; the check is fail-open, so a registry
+  `$NIGHTQUEUE_HOME/update-check.json`; the check is fail-open, so a registry
   that does not answer costs nothing and prints nothing. `--json` output and
-  unattended jobs never carry the line, and `NIGHTSHIFT_NO_UPDATE_CHECK=1` turns
+  unattended jobs never carry the line, and `NIGHTQUEUE_NO_UPDATE_CHECK=1` turns
   the check off entirely.
-- `nightshift update` refuses while a job holds a live lease or a watcher is
-  registered, pointing at `nightshift queue run --stop`; a job left behind by a
+- `nightqueue update` refuses while a job holds a live lease or a watcher is
+  registered, pointing at `nightqueue queue run --stop`; a job left behind by a
   crash never blocks it, and `--force` overrides both refusals.
 
 ### Changed
 
-- `nightshift doctor` and `nightshift memory stats` size their name column by the
+- `nightqueue doctor` and `nightqueue memory stats` size their name column by the
   longest name of the report, so a long project name no longer runs into the text
   next to it.
 - Any number of runners now work the queue together. A runner registers as
-  `~/.nightshift/runners/<pid>.json`, one file per live process, carrying `pid`,
+  `~/.nightqueue/runners/<pid>.json`, one file per live process, carrying `pid`,
   `startedAt`, `mode`, `jobId`, `intervalS`, `detached`, `logPath`, `runtimeDir`
   and `uptimeS`; no start is ever refused because another runner is live.
   `queue status` prints one `runner:` line per live runner and prunes the
@@ -896,11 +905,11 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - A drain that meets the concurrency ceiling now waits 15 s and passes again
   instead of exiting: the set of reasons it waits on named `concurrency-cap`, a
   string the claim never produces, and now names `cap-reached`.
-- The refusal `nightshift update` already had is now shared by `nightshift
-  setup`, `setup --from` and `nightshift init`: while a runner is registered
+- The refusal `nightqueue update` already had is now shared by `nightqueue
+  setup`, `setup --from` and `nightqueue init`: while a runner is registered
   alive or a job holds a live lease, all four exit 1 with `a runner is active
   (pid P / job #N) - the runtime cannot be replaced while it runs; stop it with
-  nightshift queue run --stop or wait for the queue to drain` and install
+  nightqueue queue run --stop or wait for the queue to drain` and install
   nothing. `--force` installs anyway and warns on stderr, naming the tree it is
   replacing.
 - `npm run release:check` also refuses a working tree with uncommitted changes,
@@ -909,7 +918,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Deprecated
 
-- The singular `runner` key of `nightshift queue status --json` and of the MCP
+- The singular `runner` key of `nightqueue queue status --json` and of the MCP
   `queue_status` answer. It is now the first entry of `runners` (and the same
   all-null object as before when no runner is live), kept for one release and
   removed in the next minor - read `runners`. `runnerAnswer.runner`, which
@@ -922,8 +931,8 @@ First public release.
 
 ### Added
 
-- Unattended queue (`nightshift queue`): enqueue a request, run it through
-  `/nightshift:resolve` and get a pull request back. The runner starts detached
+- Unattended queue (`nightqueue queue`): enqueue a request, run it through
+  `/nightqueue:resolve` and get a pull request back. The runner starts detached
   by default, `--foreground` keeps it in the terminal, `queue run --watch`
   registers a pidfile and `queue run --stop` ends it. `queue retry` sends a
   gated, failed or cancelled job back to the queue, and `queue log --follow`
@@ -931,19 +940,19 @@ First public release.
 - Hybrid memory on `node:sqlite`: BM25 keyword recall always, semantic recall
   once the opt-in embedding library is installed into its own prefix, plus the
   lessons, the memories, the repository index and the pipeline log.
-- MCP server (`nightshift mcp`): the eleven stdio tools of the memory and of the
+- MCP server (`nightqueue mcp`): the eleven stdio tools of the memory and of the
   queue, over the official SDK.
-- Claude Code plugin: the `/nightshift:resolve` pipeline, `/nightshift:qa-guardian`
+- Claude Code plugin: the `/nightqueue:resolve` pipeline, `/nightqueue:qa-guardian`
   and the six subagents, distributed through the marketplace of this package.
-- Configuration CLI: `nightshift init` and `nightshift setup` install the runtime
-  into `~/.nightshift` and register the MCP server, the three hooks and the
-  plugin in the host, idempotently and reversibly; `nightshift update` reinstalls
-  the runtime from the registry; `nightshift doctor` diagnoses the host and the
+- Configuration CLI: `nightqueue init` and `nightqueue setup` install the runtime
+  into `~/.nightqueue` and register the MCP server, the three hooks and the
+  plugin in the host, idempotently and reversibly; `nightqueue update` reinstalls
+  the runtime from the registry; `nightqueue doctor` diagnoses the host and the
   home without ever writing to them, and asks the registry for the newest
   published version only behind `--check-updates`.
 - Orgs, projects and connections: named scopes for the memory and for the queue,
   with the secrets kept in a file only the owner can read.
-- Published to npm as `@maykonv/nightshift`; the command it installs is `nightshift`.
+- Published to npm as `@maykonv/nightshift`; the command it installed was `nightshift`.
 
-[0.2.0]: https://github.com/maykonVinicius/nightshift/releases/tag/v0.2.0
-[0.1.0]: https://github.com/maykonVinicius/nightshift/releases/tag/v0.1.0
+[0.2.0]: https://github.com/nightqueue/nightqueue/releases/tag/v0.2.0
+[0.1.0]: https://github.com/nightqueue/nightqueue/releases/tag/v0.1.0

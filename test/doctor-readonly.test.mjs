@@ -18,7 +18,7 @@ async function diagnose(env) {
 
 // Builds a database that predates the current schema version: base tables only, no evolving
 // columns, no indexes, no FTS mirrors and user_version left at SQLite's default (0). This is the
-// realistic shape of a nightshift.db carried over from an older install.
+// realistic shape of a nightqueue.db carried over from an older install.
 function writeLegacyDatabase(path) {
   const db = new DatabaseSync(path);
   db.exec(`
@@ -45,7 +45,7 @@ function writeLegacyDatabase(path) {
   db.close();
 }
 
-test("nightshift doctor must not migrate an existing database it only diagnoses", async (t) => {
+test("nightqueue doctor must not migrate an existing database it only diagnoses", async (t) => {
   const host = makeHostEnv(t, "doctor-readonly-db");
   const path = dbPath(host.env);
   ensureHome(host.env);
@@ -67,7 +67,7 @@ test("nightshift doctor must not migrate an existing database it only diagnoses"
     userVersion: new DatabaseSync(path, { readOnly: true }).prepare("PRAGMA user_version").get().user_version,
   };
 
-  assert.equal(after.userVersion, before.userVersion, "`nightshift doctor` bumped PRAGMA user_version of a database it should only read");
-  assert.deepEqual(after.bytes, before.bytes, "`nightshift doctor` rewrote the bytes of a database it should only read");
-  assert.equal(existsSync(`${path}-wal`), false, "`nightshift doctor` left a -wal file behind a diagnosis run");
+  assert.equal(after.userVersion, before.userVersion, "`nightqueue doctor` bumped PRAGMA user_version of a database it should only read");
+  assert.deepEqual(after.bytes, before.bytes, "`nightqueue doctor` rewrote the bytes of a database it should only read");
+  assert.equal(existsSync(`${path}-wal`), false, "`nightqueue doctor` left a -wal file behind a diagnosis run");
 });

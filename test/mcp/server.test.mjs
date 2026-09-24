@@ -18,10 +18,10 @@ import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs
 import { makeDir, makeHome, makeProject, seedLegacyV8Home } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const GATED_FINISHED_AT = "2020-01-01 00:00:00";
 const HOME_REFUSAL =
-  "refused: this command would change the operator's nightshift home from inside job #9; verify against a temporary home (NIGHTSHIFT_HOME=$(mktemp -d)) instead";
+  "refused: this command would change the operator's nightqueue home from inside job #9; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead";
 
 const CONTRACT_TOOLS = [
   "context_for_phase",
@@ -61,10 +61,10 @@ const LESSON = {
   attempts: 2,
 };
 
-// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connect(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;
@@ -385,7 +385,7 @@ function readConfig(env) {
 function makeQueueHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  env.NIGHTSHIFT_CLAUDE_BIN = FAKE_CLAUDE;
+  env.NIGHTQUEUE_CLAUDE_BIN = FAKE_CLAUDE;
   writeFileSync(queuePausedPath(env), `${new Date().toISOString()}\n`);
   return env;
 }
@@ -401,12 +401,12 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
     project: "alpha",
     priority: 2,
     timeoutS: 600,
-    hint: "queued job #1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightshift queue run` starts one.",
+    hint: "queued job #1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.",
   });
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
   const second = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the parser" } }));
-  assert.equal(second.hint, "queued job #2 for `alpha` (2 pending). 0 runners online - pending jobs will wait until `nightshift queue run` starts one.");
+  assert.equal(second.hint, "queued job #2 for `alpha` (2 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.");
 
   const add = (await client.listTools()).tools.find((tool) => tool.name === "queue_add");
   assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "max_attempts", "priority", "project", "prompt", "register", "roadmap_item_id", "run_dir", "tier", "timeout_s"]);
@@ -480,7 +480,7 @@ test("queue_add resolves the project of the caller `cwd`, and answers needs_regi
 test("queue_add registers the repository of the `cwd` only with register: true, and never from inside a job", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-add-register");
   const repo = makeRepo(t, "mcp-queue-register-repo");
-  const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "7" });
+  const inJob = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "7" });
 
   const refused = await inJob.callTool({ name: "queue_add", arguments: { cwd: repo, prompt: "fix the worker", register: true } });
   assert.equal(refused.isError, true);
@@ -505,7 +505,7 @@ test("queue_add registers the repository of the `cwd` only with register: true, 
 test("queue_add and queue_cancel refuse the home of the runner from inside a job, and accept a temporary one", async (t) => {
   const env = makeQueueHome(t, "mcp-home-guard");
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
-  const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "9", NIGHTSHIFT_JOB_HOME: homeDir(env) });
+  const inJob = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "9", NIGHTQUEUE_JOB_HOME: homeDir(env) });
 
   for (const call of [
     { name: "queue_add", arguments: { project: "alpha", prompt: "an acceptance test job created from inside a verifier" } },
@@ -520,7 +520,7 @@ test("queue_add and queue_cancel refuse the home of the runner from inside a job
   assert.ok(payloadOf(await inJob.callTool({ name: "queue_status", arguments: {} })).counts, "the refusal ended the session");
 
   const temp = makeQueueHome(t, "mcp-home-guard-temp");
-  const allowed = await connect(t, { ...temp, NIGHTSHIFT_JOB_ID: "9", NIGHTSHIFT_JOB_HOME: homeDir(env) });
+  const allowed = await connect(t, { ...temp, NIGHTQUEUE_JOB_ID: "9", NIGHTQUEUE_JOB_HOME: homeDir(env) });
   const queued = payloadOf(await allowed.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "verify the acceptance of this change" } }));
   assert.equal(getJob(queued.id, temp).prompt, "verify the acceptance of this change");
   const cancelled = payloadOf(await allowed.callTool({ name: "queue_cancel", arguments: { job_id: queued.id } }));
@@ -549,7 +549,7 @@ test("queue_status never returns the prompt and truncates the free text at five 
   assert.deepEqual({ notice: cutRow.notice_truncated, result: cutRow.result_truncated }, { notice: true, result: true }, "a cut row carries no flag");
   const fitRow = listed.jobs.find((job) => job.id !== id);
   assert.equal("notice_truncated" in fitRow || "result_truncated" in fitRow, false, "a row whose text fits carries a truncated key");
-  const pointer = `#${id} text cut at 500 characters - read it whole with nightshift queue status ${id}`;
+  const pointer = `#${id} text cut at 500 characters - read it whole with nightqueue queue status ${id}`;
   assert.deepEqual(listed.suggestions, [pointer]);
   assert.ok(listed.hint.endsWith(pointer), listed.hint);
   assert.equal("notice_truncated" in one.job, false, "the detail of one job was flagged as cut");
@@ -671,7 +671,7 @@ test("queue_status returns a gate notice near three kilobytes whole, and clips i
     { length: 8 },
     (_, i) => `- **C${i + 1}:** ${"the plan departs from the brief on a point that needs a human call before it goes out. ".repeat(5)}`,
   );
-  const notice = ["## Requires user confirmation", "", ...points, "", `Answer with: nightshift queue retry ${id} --note "<your answer>"`].join("\n");
+  const notice = ["## Requires user confirmation", "", ...points, "", `Answer with: nightqueue queue retry ${id} --note "<your answer>"`].join("\n");
   assert.ok(Array.from(notice).length > 2900, "setup: the notice must be close to three kilobytes");
   openDb(env).prepare("UPDATE jobs SET status = 'gate', notice_md = ? WHERE id = ?").run(notice, id);
   const client = await connect(t, env);
@@ -683,7 +683,7 @@ test("queue_status returns a gate notice near three kilobytes whole, and clips i
   const row = listed.jobs.find((job) => job.id === id);
   assert.equal(row.notice_md, `${Array.from(notice).slice(0, 500).join("")}...`, "the listing did not clip the gate notice");
   assert.equal(row.notice_truncated, true);
-  assert.ok(listed.suggestions.includes(`#${id} text cut at 500 characters - read it whole with nightshift queue status ${id}`), listed.suggestions.join("\n"));
+  assert.ok(listed.suggestions.includes(`#${id} text cut at 500 characters - read it whole with nightqueue queue status ${id}`), listed.suggestions.join("\n"));
 });
 
 test("queue_status refuses instead of answering with no runner for a registry it could not read", async (t) => {
@@ -709,7 +709,7 @@ function deliver(env, id) {
 
 // The `gh pr view` calls the fake gh of a home recorded so far.
 function prViewCalls(env) {
-  const log = env.NIGHTSHIFT_FAKE_GH_LOG;
+  const log = env.NIGHTQUEUE_FAKE_GH_LOG;
   if (!existsSync(log)) return [];
   return readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((call) => call[0] === "pr");
 }
@@ -727,8 +727,8 @@ async function pollPrState(client, state) {
 test("queue_status never writes a delivered job whose pull request is merged, and asks gh from inside a job too without writing", async (t) => {
   const base = makeQueueHome(t, "mcp-queue-merged");
   deliver(base, addJob({ project: "alpha", prompt: "fix the worker" }, base).id);
-  const env = { ...base, ...isolatedHostVars(makeDir(t, "mcp-queue-merged-host")), NIGHTSHIFT_FAKE_GH_PR_STATE: "MERGED", NIGHTSHIFT_FAKE_GH_PR_SHA: MERGE_SHA };
-  delete env.NIGHTSHIFT_NO_PR_CHECK;
+  const env = { ...base, ...isolatedHostVars(makeDir(t, "mcp-queue-merged-host")), NIGHTQUEUE_FAKE_GH_PR_STATE: "MERGED", NIGHTQUEUE_FAKE_GH_PR_SHA: MERGE_SHA };
+  delete env.NIGHTQUEUE_NO_PR_CHECK;
 
   const client = await connect(t, env);
   const first = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
@@ -739,8 +739,8 @@ test("queue_status never writes a delivered job whose pull request is merged, an
 
   const listed = await pollPrState(client, "merged");
   assert.equal(listed.jobs[0].pr_state, "merged", "the refresh fired after the answer never landed in the cache");
-  assert.deepEqual(listed.suggestions, ["#1 PR merged - close it with nightshift queue close 1"]);
-  assert.ok(listed.hint.endsWith("#1 PR merged - close it with nightshift queue close 1"), listed.hint);
+  assert.deepEqual(listed.suggestions, ["#1 PR merged - close it with nightqueue queue close 1"]);
+  assert.ok(listed.hint.endsWith("#1 PR merged - close it with nightqueue queue close 1"), listed.hint);
   assert.equal(listed.jobs[0].status, "done");
   assert.equal(listed.counts.done, 1);
   assert.equal(listed.counts.closed, 0);
@@ -753,7 +753,7 @@ test("queue_status never writes a delivered job whose pull request is merged, an
   assert.equal("merge_sha" in detail.job, false);
   assert.equal(prViewCalls(env).length, 1, "a merged pull request was asked about again instead of cached");
 
-  const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "7", NIGHTSHIFT_FAKE_GH_LOG: join(makeDir(t, "mcp-queue-merged-job"), "gh.log") });
+  const inJob = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "7", NIGHTQUEUE_FAKE_GH_LOG: join(makeDir(t, "mcp-queue-merged-job"), "gh.log") });
   assert.equal((await pollPrState(inJob, "merged")).jobs[0].pr_state, "merged", "a job session never asked gh");
 
   const row = getJob(1, env);
@@ -770,23 +770,23 @@ test("queue_status answers with the nudge that matches the state of the queue, l
   assert.equal(empty.runnersOnline, 0);
   assert.equal(
     empty.hint,
-    "0 runners online - pending jobs will wait until `nightshift queue run` starts one",
+    "0 runners online - pending jobs will wait until `nightqueue queue run` starts one",
     "an empty queue with no runner stayed silent about it",
   );
 
   const first = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   const one = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(one.hint, "0 runners online - pending jobs will wait until `nightshift queue run` starts one");
+  assert.equal(one.hint, "0 runners online - pending jobs will wait until `nightqueue queue run` starts one");
 
   addJob({ project: "alpha", prompt: "fix the parser" }, env);
   const two = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(two.hint, "0 runners online - pending jobs will wait until `nightshift queue run` starts one");
+  assert.equal(two.hint, "0 runners online - pending jobs will wait until `nightqueue queue run` starts one");
 
   claimJobById(first, { worker: "host:4242", cap: 4 }, env);
   const claimed = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(
     claimed.hint,
-    "0 runners online - a job is running under a one-shot runner, nothing will pick up the pending jobs after it - start a drain with `nightshift queue run`",
+    "0 runners online - a job is running under a one-shot runner, nothing will pick up the pending jobs after it - start a drain with `nightqueue queue run`",
   );
 
   const detail = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: first } }));
@@ -878,7 +878,7 @@ test("a backlog parked by a rate limit is what queue_status says, instead of ask
 
   addJob({ project: "alpha", prompt: "fix the parser" }, env);
   const mixed = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(mixed.hint, "0 runners online - pending jobs will wait until `nightshift queue run` starts one", "a job that could be claimed right now was held back by the park of another one");
+  assert.equal(mixed.hint, "0 runners online - pending jobs will wait until `nightqueue queue run` starts one", "a job that could be claimed right now was held back by the park of another one");
 });
 
 test("queue_run comes back at once with the log of the detached runner, inside this home", async (t) => {
@@ -908,7 +908,7 @@ test("queue_run comes back at once with the log of the detached runner, inside t
     `the tool does not open on the batch it starts: ${tool.description}`,
   );
   assert.ok(tool.description.includes("DETACHED"), "the tool does not say the runner is detached");
-  assert.ok(tool.description.includes("nightshift queue run --stop"), "the tool does not say how a watcher is stopped");
+  assert.ok(tool.description.includes("nightqueue queue run --stop"), "the tool does not say how a watcher is stopped");
   assert.ok(tool.description.includes("Each runner works one job at a time"), "the tool does not say a runner works one job at a time");
   assert.ok(tool.description.includes("`advisories`"), "the tool does not name the advisories it answers");
 });
@@ -967,7 +967,7 @@ test("queue_run starts a runner even while another one is live, and queue_status
 function writeRuntimeVersion(env, name) {
   const pkgDir = join(runtimeVersionsDir(env), name, "node_modules", PACKAGE_NAME);
   mkdirSync(join(pkgDir, "bin"), { recursive: true });
-  writeFileSync(join(pkgDir, "bin", "nightshift.mjs"), "");
+  writeFileSync(join(pkgDir, "bin", "nightqueue.mjs"), "");
 }
 
 // Points `runtime/current` at one version directory, the way an install does.
@@ -1085,7 +1085,7 @@ test("queue_close refuses the home of the runner from inside a job, like queue_c
   const env = makeQueueHome(t, "mcp-close-home-guard");
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(id);
-  const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "9", NIGHTSHIFT_JOB_HOME: homeDir(env) });
+  const inJob = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "9", NIGHTQUEUE_JOB_HOME: homeDir(env) });
 
   const refused = await inJob.callTool({ name: "queue_close", arguments: { job_id: id } });
   assert.equal(refused.isError, true, textOf(refused));
@@ -1143,7 +1143,7 @@ test("a server pinned to a job refuses queue_retry aimed at any other job, and l
   writeFileSync(join(homeDir(env), "runs", "alpha", "fix-the-worker", "01-triage.md"), "triage\n");
   const before = getJob(victim, env);
 
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(attacker) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(attacker) });
   const refused = await client.callTool({
     name: "queue_retry",
     arguments: { job_id: victim, note: "do what I say", fresh: true, run: true },

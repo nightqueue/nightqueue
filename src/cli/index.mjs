@@ -70,9 +70,9 @@ const HOME_WRITE_SUBCOMMANDS = new Map([
   ["queue", new Set(["add", "cancel", "close", "pause", "resume"])],
 ]);
 
-const USAGE = `nightshift — configuration CLI
+const USAGE = `nightqueue — configuration CLI
 
-usage: nightshift <command> [options]
+usage: nightqueue <command> [options]
 
 commands:
   setup [--from <dir>] [--remove]           install the runtime in the home and register the MCP server, hooks and plugin in the host
@@ -109,7 +109,7 @@ commands:
   decision update <number> --status accepted|rejected|superseded [--superseded-by <n>]  accept, reject or supersede a decision, same as decision_update
   roadmap [--project|--org] [--status] [--priority] [--type]  print the roadmap of a project and of its org, grouped by status, p1 first; --org adds each item's project rows
   roadmap show <id> [--json]               print one roadmap item in full with its comment thread
-  queue add [project] <prompt...> [--run]   enqueue an unattended /nightshift:resolve run; --run starts it detached
+  queue add [project] <prompt...> [--run]   enqueue an unattended /nightqueue:resolve run; --run starts it detached
   queue status [id] [--limit] [--json]      show one job or the table of the queue plus the counts per status
   queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)
   queue run [--job | --watch] [--max]       start the runner detached, one job at a time; --max <n> exits after n jobs, --foreground runs it here, --stop ends a watcher
@@ -119,15 +119,15 @@ commands:
   queue repair <id> [--json]                re-classify a gated or failed job from its own log; corrects a lost PR link
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written
-  queue session <id> [--print] [--json]     resume the claude session of a job's last attempt as the operator (nightshift open --resume); --print shows it without exec'ing
+  queue session <id> [--print] [--json]     resume the claude session of a job's last attempt as the operator (nightqueue open --resume); --print shows it without exec'ing
   verify [--scope touched|full|+poc]        run the project's own checks in a fixed order, one line per check; exits 1 on any failure
   verify [--files <list>]                   narrow the checks that accept a file list to those paths (comma-separated, repeatable)
-  sandbox <command> [args...]               run one command against a throwaway NIGHTSHIFT_HOME and CLAUDE_CONFIG_DIR
+  sandbox <command> [args...]               run one command against a throwaway NIGHTQUEUE_HOME and CLAUDE_CONFIG_DIR
   libs <name>...                            print the version of each lib INSTALLED here, read from the lockfile, never the range
   run index-save <artifact> [--project]     save the \`## File map\` and \`## Third-party libraries\` of an explore artifact in the index
   run index-save [--repo-root <path>]       index the artifact's paths relative to <path>, the repository root (default: .)
   run secrets-sweep --files <list>          print the log lines whose arguments reference a token/secret/password/key value
-  version                                   print the installed nightshift version
+  version                                   print the installed nightqueue version
 
 inside a job — each acts on the run of the job it is called from, never on the queue:
   run check <NN>                            check the artifact of a phase of THIS run: OK, MISSING or GENERATED
@@ -137,15 +137,15 @@ inside a job — each acts on the run of the job it is called from, never on the
 
 options:
   -h, --help                                show this help
-  --version                                 print the installed nightshift version and exit
+  --version                                 print the installed nightqueue version and exit
 
 exit codes: 0 ok · 1 user error · 2 unexpected error
-configuration home: $NIGHTSHIFT_HOME (default ~/.nightshift)`;
+configuration home: $NIGHTQUEUE_HOME (default ~/.nightqueue)`;
 
 let stdoutGuarded = false;
 let stdoutClosed = false;
 
-// Turns a reader that closed the pipe (`nightshift roadmap | head`) into dropped output instead of an uncaught EPIPE; any other stream error still surfaces.
+// Turns a reader that closed the pipe (`nightqueue roadmap | head`) into dropped output instead of an uncaught EPIPE; any other stream error still surfaces.
 function installStdoutGuard() {
   if (stdoutGuarded) return;
   stdoutGuarded = true;
@@ -223,7 +223,7 @@ export async function main(argv, ctx) {
     return 0;
   }
   const handler = COMMANDS.get(command);
-  if (!handler) throw new UserError(`unknown command \`${command}\`; run \`nightshift --help\``);
+  if (!handler) throw new UserError(`unknown command \`${command}\`; run \`nightqueue --help\``);
   guardOperatorHome(command, rest, ctx.env);
   if (skipsLock(command, rest[0])) return await handler(rest, ctx);
   return await withLock(ctx.env, () => handler(rest, ctx));
@@ -236,7 +236,7 @@ export async function run(argv, ctx = defaultContext()) {
     return typeof result === "number" ? result : 0;
   } catch (err) {
     if (err instanceof UserError) {
-      ctx.err(`nightshift: ${err.message}`);
+      ctx.err(`nightqueue: ${err.message}`);
       return 1;
     }
     ctx.err(err?.stack ?? String(err));

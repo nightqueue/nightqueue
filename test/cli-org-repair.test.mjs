@@ -10,7 +10,7 @@ import { saveDecision } from "../src/memory/decisions.mjs";
 import { saveRoadmapItem } from "../src/memory/roadmap.mjs";
 import { makeHome, makeProject } from "../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 
 function runCli(env, args, { cwd } = {}) {
   return spawnSync(process.execPath, [CLI, ...args], { env, cwd, encoding: "utf8" });
@@ -57,7 +57,7 @@ test("a rename that died after the rows moved and before the config did is rolle
 
   const refused = runCli(env, ["org", "rename", "acme", "other"], { cwd });
   assert.notEqual(refused.status, 0);
-  assert.match(refused.stderr, /interrupted; run `nightshift org repair`/);
+  assert.match(refused.stderr, /interrupted; run `nightqueue org repair`/);
 
   const repair = runCli(env, ["org", "repair"], { cwd });
   assert.equal(repair.status, 0, repair.stderr);
@@ -97,7 +97,7 @@ test("orphan rows with no rename record are reported by doctor and moved only wh
 
   const undirected = runCli(env, ["org", "repair"], { cwd });
   assert.notEqual(undirected.status, 0);
-  assert.match(undirected.stderr, /2 row\(s\) point to unknown org `ghost`; move them with `nightshift org repair --to <org>`/);
+  assert.match(undirected.stderr, /2 row\(s\) point to unknown org `ghost`; move them with `nightqueue org repair --to <org>`/);
 
   const unknownTarget = runCli(env, ["org", "repair", "--to", "nope"], { cwd });
   assert.notEqual(unknownTarget.status, 0);

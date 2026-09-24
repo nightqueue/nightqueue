@@ -64,7 +64,7 @@ test("a row whose status is outside the job status enum renders marked, with one
   }
   assert.deepEqual(
     out.filter((line) => line.includes("unknown status")),
-    ["2 jobs carry the unknown status 'merged'; run nightshift doctor"],
+    ["2 jobs carry the unknown status 'merged'; run nightqueue doctor"],
     "the advisory did not fold both rows into one line",
   );
 });
@@ -119,5 +119,5 @@ test("a single job with an unknown status is worded in the singular", async (t) 
   seedJob(env, "weird");
 
   const { out } = await statusLines(env);
-  assert.deepEqual(out.filter((line) => line.includes("unknown status")), ["1 job carries the unknown status 'weird'; run nightshift doctor"]);
+  assert.deepEqual(out.filter((line) => line.includes("unknown status")), ["1 job carries the unknown status 'weird'; run nightqueue doctor"]);
 });

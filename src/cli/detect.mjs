@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { UserError } from "../config/errors.mjs";
 
-// The checks `nightshift verify` reports, in the order it runs them; `diff-hygiene` is the runtime's own and is never detected.
+// The checks `nightqueue verify` reports, in the order it runs them; `diff-hygiene` is the runtime's own and is never detected.
 export const CHECK_ORDER = ["typecheck", "lint", "build", "test", "poc", "diff-hygiene"];
 
 const LOCKFILES = [

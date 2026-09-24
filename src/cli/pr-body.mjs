@@ -1,7 +1,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
-import { NIGHTSHIFT_SECTIONS } from "./pr-template.mjs";
+import { NIGHTQUEUE_SECTIONS } from "./pr-template.mjs";
 
 // What a placeholder left over from the template looks like: the double curly braces and the `<...>` examples.
 const PLACEHOLDERS = [/\{\{[^}\n]*\}\}/, /<[A-Za-z][A-Za-z0-9 _./'-]*>/];
@@ -15,7 +15,7 @@ const REFERENCE_LINE = /^(Fixes|Closes)\b/;
 // A heading line of the body, matched on the trimmed line.
 const HEADING = /^#{1,6}\s+\S/;
 
-// The exact header of the `## QA` table of the nightshift template.
+// The exact header of the `## QA` table of the nightqueue template.
 const QA_HEADER = ["Method", "Executed", "Result"];
 
 // One cell of the separator line under a table header.
@@ -80,32 +80,32 @@ function repoOrderProblems(found, { headings, label }) {
   return problems;
 }
 
-// The nightshift headings the body carries that the repository template does not have.
+// The nightqueue headings the body carries that the repository template does not have.
 function foreignHeadingProblems(found, { headings, label }) {
-  return NIGHTSHIFT_SECTIONS.filter((heading) => !headings.includes(heading) && found.some((entry) => entry.line === heading)).map((heading) =>
-    rejected(`the body carries the nightshift heading \`${heading}\`, which the repository template (${label}) does not have`),
+  return NIGHTQUEUE_SECTIONS.filter((heading) => !headings.includes(heading) && found.some((entry) => entry.line === heading)).map((heading) =>
+    rejected(`the body carries the nightqueue heading \`${heading}\`, which the repository template (${label}) does not have`),
   );
 }
 
-// Why a body cannot be published against a repository template: its headings, in its order, and no nightshift heading of its own.
+// Why a body cannot be published against a repository template: its headings, in its order, and no nightqueue heading of its own.
 function repoTemplateProblems(lines, template) {
   const found = bodyHeadings(lines);
   return [...repoOrderProblems(found, template), ...foreignHeadingProblems(found, template)];
 }
 
-// The line of each nightshift section in the body, -1 for a section it does not carry.
+// The line of each nightqueue section in the body, -1 for a section it does not carry.
 function sectionLines(found) {
-  return NIGHTSHIFT_SECTIONS.map((heading) => ({ heading, at: found.find((entry) => entry.line === heading)?.index ?? -1 }));
+  return NIGHTQUEUE_SECTIONS.map((heading) => ({ heading, at: found.find((entry) => entry.line === heading)?.index ?? -1 }));
 }
 
-// The nightshift sections the body misses, carries out of order, or outnumbers with a fifth `## ` section.
+// The nightqueue sections the body misses, carries out of order, or outnumbers with a fifth `## ` section.
 function sectionProblems(found, sections) {
   const absent = sections.filter((section) => section.at < 0).map((section) => missing(section.heading));
   const misplaced = sections
     .filter((section, index) => section.at >= 0 && sections.slice(index + 1).some((later) => later.at >= 0 && later.at < section.at))
-    .map((section) => missing(`${section.heading} in its place: the order is ${NIGHTSHIFT_SECTIONS.join(", ")}`));
+    .map((section) => missing(`${section.heading} in its place: the order is ${NIGHTQUEUE_SECTIONS.join(", ")}`));
   const extra = found
-    .filter((entry) => entry.line.startsWith("## ") && !NIGHTSHIFT_SECTIONS.includes(entry.line))
+    .filter((entry) => entry.line.startsWith("## ") && !NIGHTQUEUE_SECTIONS.includes(entry.line))
     .map((entry) => rejected(`the body carries a fifth section \`${entry.line}\`; the four sections are the whole body`));
   return [...absent, ...misplaced, ...extra];
 }
@@ -201,8 +201,8 @@ function evidenceProblems(rows, evidenceDir) {
     .map(({ method }) => missing(`evidence for QA row ${method}`));
 }
 
-// Why a body cannot be published against the nightshift template: its four sections in order, its QA table, its `Not tested:` line and the evidence of every row.
-function nightshiftTemplateProblems(lines, evidenceDir) {
+// Why a body cannot be published against the nightqueue template: its four sections in order, its QA table, its `Not tested:` line and the evidence of every row.
+function nightqueueTemplateProblems(lines, evidenceDir) {
   const found = bodyHeadings(lines);
   const sections = sectionLines(found);
   const qaAt = sections.at(-1).at;
@@ -215,6 +215,6 @@ function nightshiftTemplateProblems(lines, evidenceDir) {
 // Every reason the body cannot be published against the template in effect, as `{ missing }` or `{ rejected }` entries; none means publishable.
 export function bodyProblems({ body, template, evidenceDir }) {
   const lines = body.split("\n");
-  const structure = template.source === "repo" ? repoTemplateProblems(lines, template) : nightshiftTemplateProblems(lines, evidenceDir);
+  const structure = template.source === "repo" ? repoTemplateProblems(lines, template) : nightqueueTemplateProblems(lines, evidenceDir);
   return [...structure, ...bareReferenceProblems(lines), ...placeholderProblems(body)];
 }

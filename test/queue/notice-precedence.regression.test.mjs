@@ -10,7 +10,7 @@ import { addJob, claimJobById, finishJob, getJob } from "../../src/memory/jobs.m
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 import { GATE_MARKER, noticeText, resultEvent, slugEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const WORKER = "host:1000";
 const CAP = 4;
 const SLUG = "fix-the-worker";
@@ -36,7 +36,7 @@ const LONG_NOTICE = [
   "",
   ...STILL_OPEN_LINES,
   "",
-  'None of these block the tests from passing locally, but each one changes production behavior in a way the pipeline should not decide alone. Please pick a direction for each item and reply with `nightshift queue retry <id> --note "..."` so the run can continue with the chosen path once the team has settled all three open questions listed above, in any order that works for the on-call reviewer, and please keep the reply short enough to fit a single retry note without needing a follow-up round of questions from this side.',
+  'None of these block the tests from passing locally, but each one changes production behavior in a way the pipeline should not decide alone. Please pick a direction for each item and reply with `nightqueue queue retry <id> --note "..."` so the run can continue with the chosen path once the team has settled all three open questions listed above, in any order that works for the on-call reviewer, and please keep the reply short enough to fit a single retry note without needing a follow-up round of questions from this side.',
 ].join("\n");
 
 // A home with one registered project and the queue table ready.

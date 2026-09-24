@@ -251,7 +251,7 @@ function noticeClipped(notice) {
 export function noticeNarration(notice, { jobId = null } = {}) {
   const body = `notice\n${noticeBody(notice)}`;
   if (jobId === null || !noticeClipped(notice)) return body;
-  return `${body}\n    read the whole notice with: nightshift queue status ${jobId}`;
+  return `${body}\n    read the whole notice with: nightqueue queue status ${jobId}`;
 }
 
 // Emits a marker only when its VALUE changed, because the slug and the pull request echo in many events.

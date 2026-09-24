@@ -7,7 +7,7 @@ const args = process.argv.slice(2);
 
 // Records the call in the argv log the test reads back.
 function logCall() {
-  const path = process.env.NIGHTSHIFT_FAKE_CLAUDE_LOG;
+  const path = process.env.NIGHTQUEUE_FAKE_CLAUDE_LOG;
   if (!path) return;
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `${JSON.stringify(args)}\n`);
@@ -131,8 +131,8 @@ function fail(message, code = 1) {
 // Applies the call, emulating only the subcommands the setup uses.
 function main() {
   logCall();
-  const exitCode = Number.parseInt(process.env.NIGHTSHIFT_FAKE_CLAUDE_EXIT ?? "0", 10) || 0;
-  if (exitCode) fail(`refusing to run (NIGHTSHIFT_FAKE_CLAUDE_EXIT=${exitCode})`, exitCode);
+  const exitCode = Number.parseInt(process.env.NIGHTQUEUE_FAKE_CLAUDE_EXIT ?? "0", 10) || 0;
+  if (exitCode) fail(`refusing to run (NIGHTQUEUE_FAKE_CLAUDE_EXIT=${exitCode})`, exitCode);
   const [command, ...rest] = args;
   if (command === "--version" || command === "-v") return process.stdout.write(`${VERSION}\n`);
   if (command === "--help") return process.stdout.write("Options:\n  --agent <agent>  Agent for the current session\n");

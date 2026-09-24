@@ -4,7 +4,7 @@ import { backupPath, modeOf, writeFileAtomic } from "../config/store.mjs";
 import { readJsonStrict } from "./json.mjs";
 import { claudeConfigDir, claudeSettingsPath, cliEntryPath } from "./paths.mjs";
 
-const OWN_COMMAND_MARKS = ["bin/nightshift.mjs hook", "bin/shift.mjs hook"];
+const OWN_COMMAND_MARKS = ["bin/nightqueue.mjs hook", "bin/shift.mjs hook"];
 
 const HOOK_EVENTS = [
   { event: "SessionStart", hook: "session-start", timeout: 10 },
@@ -21,7 +21,7 @@ export function hookCommand(hook, env = process.env) {
 // Warning for a package path that carries a space, the only case where the unquoted hook command breaks; null when it is safe.
 export function spacedRootWarning(root) {
   if (typeof root !== "string" || !root.includes(" ")) return null;
-  return `nightshift: warning: the package path contains a space (${root}); the host may fail to run the hook command`;
+  return `nightqueue: warning: the package path contains a space (${root}); the host may fail to run the hook command`;
 }
 
 // The four hook entries this package wants in the host settings, each with the timeout its work needs and, when it applies, the matcher restricting it.

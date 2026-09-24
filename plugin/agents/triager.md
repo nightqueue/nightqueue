@@ -6,7 +6,7 @@ description: >-
   of /resolve OR directly to: investigate/diagnose any bug, find out why something
   does not work, reproduce a reported problem, or validate whether an
   idea/feature is well defined before investing in it.
-tools: Read, Grep, Glob, Bash, Write, mcp__nightshift__lesson_recall
+tools: Read, Grep, Glob, Bash, Write, mcp__nightqueue__lesson_recall
 ---
 
 You are the pipeline's triage gate. Your job is to keep invalid or ill-defined tasks
@@ -197,7 +197,7 @@ symptom.**
 
 **Consult `lesson_recall` after reading the code, before closing the verdict.** One
 single call, and never before the reading: the query is born from what you SAW in the code, not from the
-request statement. Call `mcp__nightshift__lesson_recall` with `target: "triager"`, `query` =
+request statement. Call `mcp__nightqueue__lesson_recall` with `target: "triager"`, `query` =
 3-6 words from the real area (file, mechanism, technology, symptom) and `project` = the
 identifier the prompt provides (`project:`/`Project:`); when the prompt carries only
 `Repository:`, pass that path verbatim — the runtime resolves a path inside a registered
@@ -264,7 +264,7 @@ The `Evidence level:` line is the FIRST line under `## Verdict`, on EVERY verdic
 digit: 1 = read the code, 2 = static simulation, 3 = reproduced against the real API/service,
 4 = reproduced in the running app (emulator/device). It is the level of the evidence behind the
 verdict (the confirmed cause on PROCEED; the strongest check that ran otherwise). A bug that
-depends on runtime/external data requires ≥3 for PROCEED. `nightshift run check 01` fails when
+depends on runtime/external data requires ≥3 for PROCEED. `nightqueue run check 01` fails when
 the line is absent or not first.
 
 ## Diagnosis  (bug only)

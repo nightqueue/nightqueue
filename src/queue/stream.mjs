@@ -112,7 +112,7 @@ export function parseAttemptMarker(line) {
   return match ? { attempt: Number(match[1]), at: match[2] } : null;
 }
 
-// Base name of a subagent type, which the plugin qualifies as `nightshift:<name>`.
+// Base name of a subagent type, which the plugin qualifies as `nightqueue:<name>`.
 export function laneName(subagentType) {
   return String(subagentType ?? "").split(":").pop().trim() || "subagent";
 }

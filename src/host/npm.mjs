@@ -7,7 +7,7 @@ const REGISTRY_TIMEOUT_MS = 15000;
 
 // Path of the npm CLI, injectable so a test never reaches the real package manager.
 export function npmBin(env = process.env) {
-  const raw = typeof env?.NIGHTSHIFT_NPM_BIN === "string" ? env.NIGHTSHIFT_NPM_BIN.trim() : "";
+  const raw = typeof env?.NIGHTQUEUE_NPM_BIN === "string" ? env.NIGHTQUEUE_NPM_BIN.trim() : "";
   return raw || "npm";
 }
 

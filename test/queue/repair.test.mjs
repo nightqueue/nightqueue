@@ -27,7 +27,7 @@ import {
   toNdjson,
 } from "../../test-support/streams.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const WORKER = "host:1000";
 const CAP = 4;
 const SLUG = "fix-the-worker";
@@ -248,7 +248,7 @@ test("`queue repair` says it re-read the notice from the log, and `queue status`
   const repaired = runCli(env, ["queue", "repair", String(id)]);
   assert.equal(repaired.status, 0, repaired.stderr);
   assert.ok(
-    repaired.stdout.includes(`job #${id} is still \`gate\`; its notice was re-read from the log. Read it with: nightshift queue status ${id}`),
+    repaired.stdout.includes(`job #${id} is still \`gate\`; its notice was re-read from the log. Read it with: nightqueue queue status ${id}`),
     repaired.stdout,
   );
   assert.equal(readFileSync(statePath, "utf8"), before, "a notice-only repair rewrote the witness of the run");

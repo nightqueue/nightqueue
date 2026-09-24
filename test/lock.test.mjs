@@ -10,18 +10,18 @@ import { UserError } from "../src/config/errors.mjs";
 import { lockPath, withLock } from "../src/config/lock.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../test-support/host.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const RACE_ATTEMPTS = 8;
-const HOST_DIR = mkdtempSync(join(tmpdir(), "nightshift-lock-host-"));
+const HOST_DIR = mkdtempSync(join(tmpdir(), "nightqueue-lock-host-"));
 const HOST_VARS = isolatedHostVars(HOST_DIR);
 
 after(() => rmSync(HOST_DIR, { recursive: true, force: true }));
 
 // Creates an isolated temporary home and removes it at the end of the test.
 function makeEnv(t) {
-  const base = mkdtempSync(join(tmpdir(), "nightshift-lock-"));
+  const base = mkdtempSync(join(tmpdir(), "nightqueue-lock-"));
   t.after(() => rmSync(base, { recursive: true, force: true }));
-  return { NIGHTSHIFT_HOME: join(base, "home") };
+  return { NIGHTQUEUE_HOME: join(base, "home") };
 }
 
 // Builds a CLI context that captures the output instead of writing to the terminal.
@@ -35,7 +35,7 @@ function makeContext(env) {
 function shiftAsync(home, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI, ...args], {
-      env: assertIsolatedEnv({ ...process.env, ...HOST_VARS, NIGHTSHIFT_HOME: home }),
+      env: assertIsolatedEnv({ ...process.env, ...HOST_VARS, NIGHTQUEUE_HOME: home }),
       stdio: ["ignore", "ignore", "pipe"],
     });
     let stderr = "";
@@ -50,9 +50,9 @@ function shiftAsync(home, args) {
 
 // Runs one round of two concurrent `org add` and reports what survived in config.json.
 async function runRace(t) {
-  const home = makeEnv(t).NIGHTSHIFT_HOME;
+  const home = makeEnv(t).NIGHTQUEUE_HOME;
   const setup = spawnSync(process.execPath, [CLI, "setup"], {
-    env: assertIsolatedEnv({ ...process.env, ...HOST_VARS, NIGHTSHIFT_HOME: home }),
+    env: assertIsolatedEnv({ ...process.env, ...HOST_VARS, NIGHTQUEUE_HOME: home }),
     encoding: "utf8",
   });
   assert.equal(setup.status, 0, `setup failed (stderr: ${setup.stderr})`);
@@ -67,7 +67,7 @@ test("withLock excludes a second holder and releases the lock even when the acti
     withLock(env, async () => {
       await assert.rejects(withLock(env, async () => "never", { timeoutMs: 100 }), (err) => {
         assert.ok(err instanceof UserError);
-        assert.match(err.message, /another nightshift command is writing to the configuration home/);
+        assert.match(err.message, /another nightqueue command is writing to the configuration home/);
         assert.match(err.message, /remove `.*home\.lock`/);
         return true;
       });
@@ -96,10 +96,10 @@ test("a read-only command runs while another process holds the write lock", asyn
   assert.equal(await run(["project", "list"], ctx), 0);
   assert.deepEqual(out, ["no projects registered"]);
   assert.equal(await run(["--help"], ctx), 0);
-  assert.equal(existsSync(join(env.NIGHTSHIFT_HOME, "config.json")), false);
+  assert.equal(existsSync(join(env.NIGHTQUEUE_HOME, "config.json")), false);
 });
 
-test("two concurrent `nightshift org add` processes both keep their write", async (t) => {
+test("two concurrent `nightqueue org add` processes both keep their write", async (t) => {
   for (let attempt = 1; attempt <= RACE_ATTEMPTS; attempt += 1) {
     const { a, b, hasA, hasB } = await runRace(t);
     assert.equal(a.code, 0, `attempt ${attempt}: process A exited ${a.code} (stderr: ${a.stderr})`);

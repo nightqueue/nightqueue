@@ -5,8 +5,8 @@ import { claudeConfigDir } from "../host/paths.mjs";
 import { callerJobId } from "./retry.mjs";
 
 // The home and the Claude configuration directory the runner itself uses, pinned on every unattended child so a job can tell them from a temporary one.
-export const JOB_HOME_ENV = "NIGHTSHIFT_JOB_HOME";
-export const JOB_CLAUDE_DIR_ENV = "NIGHTSHIFT_JOB_CLAUDE_DIR";
+export const JOB_HOME_ENV = "NIGHTQUEUE_JOB_HOME";
+export const JOB_CLAUDE_DIR_ENV = "NIGHTQUEUE_JOB_CLAUDE_DIR";
 
 // One path the runner pinned on this child, resolved, or an empty string when it pinned none.
 function pinnedPath(env, key) {
@@ -18,7 +18,7 @@ function pinnedPath(env, key) {
 function writesRunnerHome(env) {
   const pinned = pinnedPath(env, JOB_HOME_ENV);
   if (pinned) return pinned === homeDir(env);
-  const asked = typeof env?.NIGHTSHIFT_HOME === "string" ? env.NIGHTSHIFT_HOME.trim() : "";
+  const asked = typeof env?.NIGHTQUEUE_HOME === "string" ? env.NIGHTQUEUE_HOME.trim() : "";
   return asked === "";
 }
 
@@ -34,7 +34,7 @@ export function refuseHomeWriteInsideJob(env, { host = false } = {}) {
   if (own === null) return;
   if (writesRunnerHome(env)) {
     throw new UserError(
-      `refused: this command would change the operator's nightshift home from inside job #${own}; verify against a temporary home (NIGHTSHIFT_HOME=$(mktemp -d)) instead`,
+      `refused: this command would change the operator's nightqueue home from inside job #${own}; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead`,
     );
   }
   if (host === true && writesRunnerHost(env)) {

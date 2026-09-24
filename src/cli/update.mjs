@@ -6,7 +6,7 @@ import { setupRuntime } from "./install-steps.mjs";
 import { makeReport } from "./report.mjs";
 import { finish, registerHost } from "./setup.mjs";
 
-const USAGE = "nightshift update [<version>] [--from <dir>] [--force]";
+const USAGE = "nightqueue update [<version>] [--from <dir>] [--force]";
 
 const VERSION_SHAPE = /^[A-Za-z0-9][A-Za-z0-9.+-]*$/;
 
@@ -21,7 +21,7 @@ function wantedVersion(positionals, from) {
   return asked;
 }
 
-// Runs `nightshift update`: reinstalls the runtime and re-points the host at it, never touching config, secrets or database; a runtime that could not be reinstalled is the whole job of this command, so it is an exit code.
+// Runs `nightqueue update`: reinstalls the runtime and re-points the host at it, never touching config, secrets or database; a runtime that could not be reinstalled is the whole job of this command, so it is an exit code.
 export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { from: { type: "string" }, force: { type: "boolean" } });
   checkArgs(positionals, { max: 1, usage: USAGE });

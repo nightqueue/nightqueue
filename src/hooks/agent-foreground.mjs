@@ -32,13 +32,13 @@ const DENY_REASON_SUFFIX =
 
 // Tells whether this process runs inside a queued job, where the CLI wait ceiling can kill a background subagent.
 function insideJob(env) {
-  return typeof env?.NIGHTSHIFT_JOB_ID === "string" && env.NIGHTSHIFT_JOB_ID.trim() !== "";
+  return typeof env?.NIGHTQUEUE_JOB_ID === "string" && env.NIGHTQUEUE_JOB_ID.trim() !== "";
 }
 
-// The guard this process runs under: a queued job first, then the operator of `nightshift open`, else none.
+// The guard this process runs under: a queued job first, then the operator of `nightqueue open`, else none.
 function guardMode(env) {
   if (insideJob(env)) return "job";
-  const mode = typeof env?.NIGHTSHIFT_MODE === "string" ? env.NIGHTSHIFT_MODE.trim() : "";
+  const mode = typeof env?.NIGHTQUEUE_MODE === "string" ? env.NIGHTQUEUE_MODE.trim() : "";
   return mode === "operator" ? "operator" : null;
 }
 
@@ -169,7 +169,7 @@ function guardOperatorBash(toolInput) {
   return denied ? denyAnswer(rootScanReason(denied)) : "";
 }
 
-// Normalises a subagent launch to the foreground, and a Bash call likewise, denying one that scans from the root or the home, and keeps the orchestrator's own reads and Bash inside its run; inside an unattended run, so `claude -p` never kills a background one at its wait ceiling, and for the operator of `nightshift open`, scope and scan denial only.
+// Normalises a subagent launch to the foreground, and a Bash call likewise, denying one that scans from the root or the home, and keeps the orchestrator's own reads and Bash inside its run; inside an unattended run, so `claude -p` never kills a background one at its wait ceiling, and for the operator of `nightqueue open`, scope and scan denial only.
 export function runAgentForeground({ input, env = process.env }) {
   const mode = guardMode(env);
   if (mode === null) return "";

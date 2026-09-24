@@ -16,10 +16,10 @@
 
 Intent note: none in the brief. Depth note: none (feature).
 
-Measured on the real rows (evidence level 3). Method: a `sqlite3 -readonly … ".backup"` copy of `~/.nightshift/nightshift.db` plus `config.json`, placed in a throw-away `tmp/scratch-home` inside the worktree and deleted afterwards. Nothing was written to the operator's home (decision #7). The measurement scripts are the source of the lexical numbers in Stage 2. The semantic measurement used title-only embedding and was NOT redone for title+decision: this revision may not touch `~/.nightshift`. There are 24 `nightshift` rows that are `accepted` or `proposed`. Number → id: #8 → 8, #9 → 19, #10 → 20, #12 → 22, #23 → 35.
+Measured on the real rows (evidence level 3). Method: a `sqlite3 -readonly … ".backup"` copy of `~/.nightqueue/nightqueue.db` plus `config.json`, placed in a throw-away `tmp/scratch-home` inside the worktree and deleted afterwards. Nothing was written to the operator's home (decision #7). The measurement scripts are the source of the lexical numbers in Stage 2. The semantic measurement used title-only embedding and was NOT redone for title+decision: this revision may not touch `~/.nightqueue`. There are 24 `nightqueue` rows that are `accepted` or `proposed`. Number → id: #8 → 8, #9 → 19, #10 → 20, #12 → 22, #23 → 35.
 
 ---
 
 ## Implementation plan
 
-Paths are absolute under `R = ~/nightshift/.claude/worktrees/feat+decisions-adr-log`. Each stage ends green on its own.
+Paths are absolute under `R = ~/nightqueue/.claude/worktrees/feat+decisions-adr-log`. Each stage ends green on its own.

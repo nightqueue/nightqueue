@@ -14,7 +14,7 @@ const MAX_OUTPUT = 9000;
 const LESSONS_FLOOR = 3500;
 const PROPOSED_BUDGET = 1000;
 const OMISSION_RESERVE = 80;
-const HEADER = "# Nightshift context";
+const HEADER = "# Nightqueue context";
 const FOOTER = "Call `lesson_save` as soon as an error costs a second attempt, and `lesson_recall` before acting.";
 const DECISIONS_ROOM = MAX_OUTPUT - HEADER.length - FOOTER.length - 4 - LESSONS_FLOOR;
 
@@ -101,7 +101,7 @@ async function stampInjection(store, sessionId, lessons, env) {
 
 // Builds the context block injected at the start of a session: top lessons plus the project memories.
 export async function runSessionStart({ input, env = process.env, fetchImpl = null }) {
-  if (env?.NIGHTSHIFT_REFLECT === "1") return "";
+  if (env?.NIGHTQUEUE_REFLECT === "1") return "";
   const cwd = typeof input?.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
   const sessionId = typeof input?.session_id === "string" ? input.session_id : "unknown";
   const project = projectFromCwd(cwd, env);

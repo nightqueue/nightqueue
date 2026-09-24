@@ -18,10 +18,10 @@ function gitVars() {
   return {
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_SYSTEM: "/dev/null",
-    GIT_AUTHOR_NAME: "nightshift",
-    GIT_AUTHOR_EMAIL: "nightshift@example.invalid",
-    GIT_COMMITTER_NAME: "nightshift",
-    GIT_COMMITTER_EMAIL: "nightshift@example.invalid",
+    GIT_AUTHOR_NAME: "nightqueue",
+    GIT_AUTHOR_EMAIL: "nightqueue@example.invalid",
+    GIT_COMMITTER_NAME: "nightqueue",
+    GIT_COMMITTER_EMAIL: "nightqueue@example.invalid",
   };
 }
 
@@ -46,7 +46,7 @@ async function runCli(env, argv, { jobId }) {
   const out = [];
   const err = [];
   const code = await run(argv, {
-    env: { ...env, NIGHTSHIFT_JOB_ID: String(jobId) },
+    env: { ...env, NIGHTQUEUE_JOB_ID: String(jobId) },
     out: (line) => out.push(line),
     err: (line) => err.push(line),
     stdout: { write: () => {} },

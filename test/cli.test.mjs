@@ -12,16 +12,16 @@ import { closeDb } from "../src/memory/db.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../test-support/host.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const SENTINEL = "s3cr3t-sentinel-do-not-print";
-const HOST_DIR = mkdtempSync(join(tmpdir(), "nightshift-cli-host-"));
+const HOST_DIR = mkdtempSync(join(tmpdir(), "nightqueue-cli-host-"));
 const HOST_VARS = isolatedHostVars(HOST_DIR);
 
 after(() => rmSync(HOST_DIR, { recursive: true, force: true }));
 
 // Creates a temporary directory removed at the end of the test.
 function makeDir(t, name) {
-  const dir = mkdtempSync(join(tmpdir(), `nightshift-${name}-`));
+  const dir = mkdtempSync(join(tmpdir(), `nightqueue-${name}-`));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
@@ -36,7 +36,7 @@ function makeRepo(t, name) {
 // Runs the CLI in its own process, with an isolated configuration home.
 function runCli(home, args, { input = "", cwd } = {}) {
   return spawnSync(process.execPath, [CLI, ...args], {
-    env: assertIsolatedEnv({ ...process.env, ...HOST_VARS, NIGHTSHIFT_HOME: home }),
+    env: assertIsolatedEnv({ ...process.env, ...HOST_VARS, NIGHTQUEUE_HOME: home }),
     input,
     cwd,
     encoding: "utf8",
@@ -49,7 +49,7 @@ function makeContext(home, overrides = {}) {
   const err = [];
   const ctx = {
     ...defaultContext(),
-    env: assertIsolatedEnv({ ...HOST_VARS, NIGHTSHIFT_HOME: home }),
+    env: assertIsolatedEnv({ ...HOST_VARS, NIGHTQUEUE_HOME: home }),
     out: (line) => out.push(line),
     err: (line) => err.push(line),
     stdout: { write: () => {} },
@@ -196,7 +196,7 @@ test("connection add warns when the org slot is already taken", (t) => {
   runCli(home, ["connection", "add", "gh", "--type", "github"], { input: "one\n" });
   const second = runCli(home, ["connection", "add", "gh2", "--type", "github"], { input: "two\n" });
   assert.equal(second.status, 0);
-  assert.match(second.stderr, /already uses `gh` for github; run `nightshift connection bind gh2 --org default` to switch/);
+  assert.match(second.stderr, /already uses `gh` for github; run `nightqueue connection bind gh2 --org default` to switch/);
   const bound = runCli(home, ["connection", "bind", "gh2", "--org", "default"]);
   assert.match(bound.stdout, /bound `gh2` to org `default` \(github\) \(replaced `gh`\)/);
 });
@@ -247,7 +247,7 @@ test("an unexpected failure exits 2 with a stack", () => {
   const result = runCli("/dev/null/nested", ["setup"]);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /at /);
-  assert.doesNotMatch(result.stderr, /^nightshift: /m);
+  assert.doesNotMatch(result.stderr, /^nightqueue: /m);
 });
 
 test("connection test reports login and scopes, and fails as a user error", async (t) => {
@@ -266,7 +266,7 @@ test("connection test reports login and scopes, and fails as a user error", asyn
     fetchImpl: async () => ({ status: 401, headers: new Headers(), json: async () => ({}) }),
   });
   assert.equal(await run(["connection", "test", "gh"], denied.ctx), 1);
-  assert.deepEqual(denied.err, ["nightshift: gh (github): failed — HTTP 401"]);
+  assert.deepEqual(denied.err, ["nightqueue: gh (github): failed — HTTP 401"]);
   assert.equal(JSON.stringify([ok.out, ok.err, denied.out, denied.err]).includes(SENTINEL), false);
 });
 
@@ -280,7 +280,7 @@ test("a failed config write after the secret write points at the recovery comman
   });
   assert.equal(await run(["connection", "add", "gh", "--type", "github"], ctx), 2);
   assert.match(err.join("\n"), /secret stored for `gh`, but the config write failed: disk on fire/);
-  assert.match(err.join("\n"), /run `nightshift connection bind gh --org default`/);
+  assert.match(err.join("\n"), /run `nightqueue connection bind gh --org default`/);
   assert.equal(readFileSync(join(home, "secrets.json"), "utf8").includes(SENTINEL), true);
   assert.equal(statSync(join(home, "config.json"), { throwIfNoEntry: false }), undefined);
 });
@@ -296,7 +296,7 @@ test("a failed secret write after the config write points at the recovery comman
   });
   assert.equal(await run(["connection", "remove", "gh"], ctx), 2);
   assert.match(err.join("\n"), /unbound `gh` from all orgs, but the secret file write failed: disk on fire/);
-  assert.match(err.join("\n"), /run `nightshift connection remove gh` again/);
+  assert.match(err.join("\n"), /run `nightqueue connection remove gh` again/);
   const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
   assert.equal(config.orgs.default.connections.github, null);
   assert.equal(readFileSync(join(home, "secrets.json"), "utf8").includes(SENTINEL), true);
@@ -344,7 +344,7 @@ test("the session start hook prints the lessons already stored for the repositor
   const home = makeDir(t, "hook-home");
   const repo = makeRepo(t, "hook-repo");
   assert.equal(runCli(home, ["init", repo, "--name", "api", "--no-gh"]).status, 0);
-  const env = { NIGHTSHIFT_HOME: home };
+  const env = { NIGHTQUEUE_HOME: home };
   t.after(() => closeDb(env));
   const { id } = saveLesson(
     {

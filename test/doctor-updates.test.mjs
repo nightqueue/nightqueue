@@ -49,32 +49,32 @@ test("--check-updates compares the installed runtime with the newest published v
     detail: `v${VERSION} is the newest published`,
     hint: null,
   });
-  assert.deepEqual(viewCalls(host), [["view", "@maykonv/nightshift@latest", "version", "--json"]]);
+  assert.deepEqual(viewCalls(host), [["view", "nightqueue@latest", "version", "--json"]]);
 });
 
 test("a newer published version is a warning pointing at update, never a failure", async (t) => {
   const host = await setupHost(t, "doctor-updates-behind");
   const offline = await diagnose(host.env, []);
-  host.env.NIGHTSHIFT_FAKE_NPM_LATEST = "9.9.9";
+  host.env.NIGHTQUEUE_FAKE_NPM_LATEST = "9.9.9";
 
   const { code, report } = await diagnose(host.env, ["--check-updates"]);
   const check = registryCheck(report);
   assert.equal(check.status, "warn");
   assert.equal(check.detail, `v9.9.9 published, v${VERSION} installed`);
-  assert.equal(check.hint, "run `nightshift update`");
+  assert.equal(check.hint, "run `nightqueue update`");
   assert.equal(code, offline.code, "the registry check changed the exit code of the diagnosis");
 });
 
 test("a registry that does not answer is a warning carrying the message of npm, and the exit code stays local", async (t) => {
   const host = await setupHost(t, "doctor-updates-offline-registry");
   const offline = await diagnose(host.env, []);
-  host.env.NIGHTSHIFT_FAKE_NPM_EXIT = "1";
+  host.env.NIGHTQUEUE_FAKE_NPM_EXIT = "1";
 
   const { code, report } = await diagnose(host.env, ["--check-updates"]);
   const check = registryCheck(report);
   assert.equal(check.status, "warn");
-  assert.match(check.detail, /NIGHTSHIFT_FAKE_NPM_EXIT=1/);
-  assert.match(check.hint, /view @maykonv\/nightshift@latest version --json$/);
+  assert.match(check.detail, /NIGHTQUEUE_FAKE_NPM_EXIT=1/);
+  assert.match(check.hint, /view nightqueue@latest version --json$/);
   assert.equal(code, offline.code, "a registry that is down turned a local diagnosis into another exit code");
   assert.deepEqual(report.checks.filter((entry) => entry.name === "registry" && entry.status === "fail"), []);
 });

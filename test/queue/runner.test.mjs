@@ -253,9 +253,9 @@ test("the durations and the models of the telemetry come from the stream, and th
     systemInitEvent(),
     assistantEvent("## Brief\nTier: simple\nTier raised: simple -> complex: a stack trace in the claim path", { timestamp: at(1) }),
     slugEvent(SLUG),
-    agentToolUseEvent({ id: "toolu_t", subagentType: "nightshift:triager", model: "haiku", timestamp: at(2) }),
+    agentToolUseEvent({ id: "toolu_t", subagentType: "nightqueue:triager", model: "haiku", timestamp: at(2) }),
     taskNotificationEvent({ toolUseId: "toolu_t", durationMs: 61000 }),
-    agentToolUseEvent({ id: "toolu_c", subagentType: "nightshift:coder", model: "opus", timestamp: at(63) }),
+    agentToolUseEvent({ id: "toolu_c", subagentType: "nightqueue:coder", model: "opus", timestamp: at(63) }),
     taskNotificationEvent({ toolUseId: "toolu_c", durationMs: 420000 }),
     assistantEvent(noticeText(), { timestamp: at(65) }),
     resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
@@ -883,14 +883,14 @@ test("a finish the database refused to commit still leaves the witness, is repor
   const { env } = makeRunnerHome(t, "runner-finish-refused", [{ stdout: doneStream(), exitCode: 0 }]);
   const id = enqueue(env);
   const refused = () => {
-    throw new Error("the nightshift database is still locked by another process after 24 attempts");
+    throw new Error("the nightqueue database is still locked by another process after 24 attempts");
   };
 
   const cycle = await runJobCycle(env, id, { finishJobImpl: refused });
 
-  assert.deepEqual(cycle.processed, [{ id, status: "unrecorded", prUrl: PR_URL, attempts: 1, error: "the nightshift database is still locked by another process after 24 attempts" }]);
+  assert.deepEqual(cycle.processed, [{ id, status: "unrecorded", prUrl: PR_URL, attempts: 1, error: "the nightqueue database is still locked by another process after 24 attempts" }]);
   assert.equal(getJob(id, env).status, "running", "the row kept the state the refused commit left it in");
-  assert.match(readFileSync(jobLogPath(id, env), "utf8"), /finish verification failed\nthe finish of job #\d+ did not commit: the nightshift database is still locked/);
+  assert.match(readFileSync(jobLogPath(id, env), "utf8"), /finish verification failed\nthe finish of job #\d+ did not commit: the nightqueue database is still locked/);
   const state = JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"));
   assert.deepEqual({ status: state.terminal.status, prUrl: state.terminal.prUrl }, { status: "done", prUrl: PR_URL }, "the witness was not written from the outcome in memory");
 

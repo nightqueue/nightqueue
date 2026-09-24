@@ -29,20 +29,20 @@ function trackedFiles() {
   return files.length ? files : null;
 }
 
-test("`nightshift` is the only command name npm installs and the embedding library is not a dependency", () => {
+test("`nightqueue` is the only command name npm installs and the embedding library is not a dependency", () => {
   // npm strips a bin path that starts with `./` at publish time ("script name was invalid and removed"),
   // which would publish a package with no command at all: the path stays bare.
-  assert.equal(MANIFEST.name, "@maykonv/nightshift");
-  assert.deepEqual(MANIFEST.bin, { nightshift: "bin/nightshift.mjs" });
+  assert.equal(MANIFEST.name, "nightqueue");
+  assert.deepEqual(MANIFEST.bin, { nightqueue: "bin/nightqueue.mjs" });
   assert.equal(MANIFEST.optionalDependencies, undefined);
   assert.equal(Object.hasOwn(MANIFEST.dependencies, "@huggingface/transformers"), false);
   assert.deepEqual(MANIFEST.files, [".claude-plugin", "bin", "plugin", "src", "README.md", "LICENSE", "CHANGELOG.md"]);
 });
 
 test("the manifest carries the metadata a published package needs, and the engine and the dependencies it always had", () => {
-  assert.equal(MANIFEST.homepage, "https://github.com/maykonVinicius/nightshift#readme");
-  assert.deepEqual(MANIFEST.repository, { type: "git", url: "git+https://github.com/maykonVinicius/nightshift.git" });
-  assert.deepEqual(MANIFEST.bugs, { url: "https://github.com/maykonVinicius/nightshift/issues" });
+  assert.equal(MANIFEST.homepage, "https://github.com/nightqueue/nightqueue#readme");
+  assert.deepEqual(MANIFEST.repository, { type: "git", url: "git+https://github.com/nightqueue/nightqueue.git" });
+  assert.deepEqual(MANIFEST.bugs, { url: "https://github.com/nightqueue/nightqueue/issues" });
   assert.deepEqual(MANIFEST.publishConfig, { access: "public" });
   assert.ok(MANIFEST.keywords.includes("claude-code"), MANIFEST.keywords.join(", "));
   assert.deepEqual(MANIFEST.engines, { node: ">=22" });
@@ -57,7 +57,7 @@ test("the tarball carries the CLI, the plugin and the manifest, and no test at a
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
-    "bin/nightshift.mjs",
+    "bin/nightqueue.mjs",
     "src/cli/index.mjs",
     ".claude-plugin/marketplace.json",
     "plugin/.claude-plugin/plugin.json",

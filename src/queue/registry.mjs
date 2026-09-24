@@ -310,7 +310,7 @@ function signalStop(pid, killImpl) {
 // Refuses to signal a pid of another owner: a runner this operator started would never answer `EPERM` to them.
 function refuseForeignRecord(record) {
   throw new UserError(
-    `the registration of pid ${record.info.pid} names a process of another user; nightshift will not signal it - check that pid and remove ${record.path} by hand`,
+    `the registration of pid ${record.info.pid} names a process of another user; nightqueue will not signal it - check that pid and remove ${record.path} by hand`,
   );
 }
 

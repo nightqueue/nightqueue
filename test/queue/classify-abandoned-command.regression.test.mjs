@@ -19,7 +19,7 @@ test("job #49's real attempt-1 tail: a kill that did not end the run stays done,
   const outcome = classifyJobResult({ log, exitCode: 0 });
 
   assert.equal(outcome.status, "done");
-  assert.equal(outcome.prUrl, "https://github.com/maykonVinicius/nightshift/pull/65");
+  assert.equal(outcome.prUrl, "https://github.com/nightqueue/nightqueue/pull/65");
   assert.ok(outcome.noticeMd.startsWith(runNotice), "the run's own whole notice was not kept in front of the abandoned-command line");
   assert.ok(
     outcome.noticeMd.endsWith("⚠️ a command was abandoned mid-run: node --test test/queue/window-run.test.mjs 2>&1 | tail -150"),

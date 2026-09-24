@@ -58,7 +58,7 @@ function fakeSpawn(calls) {
   };
 }
 
-// Runs `nightshift queue close ...` in this process over a merged pull request, with the stdin/stdout the test gives, capturing out and err.
+// Runs `nightqueue queue close ...` in this process over a merged pull request, with the stdin/stdout the test gives, capturing out and err.
 async function runQueueClose(env, argv, { stdin = { isTTY: false }, stdout = new PassThrough(), calls = [] } = {}) {
   const out = [];
   const err = [];
@@ -145,8 +145,8 @@ test("a detached close settles nothing itself and hands its --decisions choice t
   assert.equal(started.code, 0, started.err.join("\n"));
   assert.deepEqual(calls[0].args.slice(1), ["queue", "close", String(job), "--foreground", "--decisions", "accept"]);
   assert.equal(statusOf(env, first.id), "proposed", "the parent of a detached close settled a proposal");
-  const token = calls[0].options.env.NIGHTSHIFT_CLOSE_WORKER;
-  const child = await runQueueClose({ ...env, NIGHTSHIFT_CLOSE_WORKER: token }, calls[0].args.slice(1));
+  const token = calls[0].options.env.NIGHTQUEUE_CLOSE_WORKER;
+  const child = await runQueueClose({ ...env, NIGHTQUEUE_CLOSE_WORKER: token }, calls[0].args.slice(1));
   assert.equal(child.code, 0, child.err.join("\n"));
   assert.equal(getJob(job, env).status, "closed");
   assert.equal(statusOf(env, first.id), "accepted");
@@ -160,8 +160,8 @@ test("a detached close without --decisions keeps the proposals: its child has no
 
   await runQueueClose(env, ["queue", "close", String(job)], { calls });
   assert.deepEqual(calls[0].args.slice(1), ["queue", "close", String(job), "--foreground"]);
-  const token = calls[0].options.env.NIGHTSHIFT_CLOSE_WORKER;
-  const child = await runQueueClose({ ...env, NIGHTSHIFT_CLOSE_WORKER: token }, calls[0].args.slice(1));
+  const token = calls[0].options.env.NIGHTQUEUE_CLOSE_WORKER;
+  const child = await runQueueClose({ ...env, NIGHTQUEUE_CLOSE_WORKER: token }, calls[0].args.slice(1));
 
   assert.equal(child.code, 0, child.err.join("\n"));
   assert.equal(getJob(job, env).status, "closed");

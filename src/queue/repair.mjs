@@ -90,7 +90,7 @@ export async function reclassifyFromLog({ id, env = process.env } = {}) {
   const notice = noticeDiffers(row, outcome);
   if (!witness && !notice) return { id, from: row.status, to: row.status, prUrl: row.pr_url ?? null, changed: false, noticeOnly: false };
   const written = await jobs.reclassifyJob(id, { status: outcome.status, prUrl: outcome.prUrl, noticeMd: outcome.noticeMd });
-  if (!written) throw new UserError(`job \`${id}\` changed while it was being re-classified; read it again with \`nightshift queue status ${id}\``);
+  if (!written) throw new UserError(`job \`${id}\` changed while it was being re-classified; read it again with \`nightqueue queue status ${id}\``);
   if (witness) mirrorWitness(row, outcome, env);
   return { id, from: row.status, to: outcome.status, prUrl: outcome.prUrl ?? row.pr_url ?? null, changed: true, noticeOnly: !witness };
 }

@@ -45,7 +45,7 @@ test("the backfill refuses to run before the weights are on disk, and never fetc
   const ctx = { env, out: () => {}, err: () => {} };
   await assert.rejects(embedCommand(["backfill"], ctx), (err) => {
     assert.ok(err instanceof UserError);
-    assert.match(err.message, /no model weight in .*models; run `nightshift embed download` first/);
+    assert.match(err.message, /no model weight in .*models; run `nightqueue embed download` first/);
     return true;
   });
   assert.equal(existsSync(modelsDir(env)), false);

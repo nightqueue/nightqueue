@@ -23,7 +23,7 @@ export function promptBody(prompt) {
 
 // Embedding deadline of the prompt hook, adjustable on a slow machine.
 function embedDeadline(env) {
-  const raw = Number(env?.NIGHTSHIFT_EMBED_DEADLINE_MS);
+  const raw = Number(env?.NIGHTQUEUE_EMBED_DEADLINE_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : EMBED_DEADLINE_MS;
 }
 
@@ -57,7 +57,7 @@ async function relevantMemories({ store, body, project, seen }) {
 
 // Builds the context block injected on every prompt: lessons and memories relevant to the prompt text.
 export async function runPromptContext({ input, env = process.env }) {
-  if (env?.NIGHTSHIFT_REFLECT === "1") return "";
+  if (env?.NIGHTQUEUE_REFLECT === "1") return "";
   const body = promptBody(input?.prompt);
   if (body.length < MIN_PROMPT) return "";
   const cwd = typeof input?.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();

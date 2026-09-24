@@ -8,7 +8,7 @@ import { addJob } from "../../src/memory/jobs.mjs";
 import { getRoadmapItem, getRoadmapItemDetail, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
 const SCHEMAS = {
   decision_save: {
@@ -42,10 +42,10 @@ const DECISION = {
   consequences: "a large plan becomes one job with numbered stages",
 };
 
-// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connect(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;
@@ -244,7 +244,7 @@ function makeTwoProjectHome(t, name) {
 
 test("inside a job, decision_update and roadmap_update refuse a row of another project and change nothing", async (t) => {
   const { env, own, foreign, foreignItem, job } = makeTwoProjectHome(t, "mcp-decisions-cross-project");
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const decision = await client.callTool({ name: "decision_update", arguments: { id: foreign.id, status: "rejected" } });
   assert.equal(decision.isError, true);
@@ -297,7 +297,7 @@ test("an overlapping decision_save answers needs_review, writes nothing, and sav
 test("inside a job decision_save stamps job_id, refuses supersedes, and refuses a second proposal", async (t) => {
   const env = makeDecisionHome(t, "mcp-decisions-job-proposal");
   const job = addJob({ project: "alpha", prompt: "rewrite the runner" }, env);
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const first = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, status: "proposed" } }));
   assert.equal(first.job_id, job.id);
@@ -322,7 +322,7 @@ test("inside a job decision_save stamps job_id, refuses supersedes, and refuses 
 test("inside a job roadmap_comment and roadmap_get by id refuse another project's item and sign the job's own comments", async (t) => {
   const { env, foreignItem, job } = makeTwoProjectHome(t, "mcp-roadmap-comment-job");
   const own = saveRoadmapItem({ type: "bug", project: "alpha", title: "alpha crashes" }, env);
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const refused = await client.callTool({ name: "roadmap_comment", arguments: { id: foreignItem.id, body: "leak" } });
   assert.equal(refused.isError, true);

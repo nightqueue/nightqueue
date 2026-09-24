@@ -5,14 +5,14 @@ import { fileURLToPath } from "node:url";
 import { addRoadmapComment, queueRoadmapItem, saveRoadmapItem } from "../src/memory/roadmap.mjs";
 import { makeHome, makeProject } from "../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 
 // Runs the real CLI in its own process, with the isolated home of the test.
 function runCli(env, args, cwd) {
   return spawnSync(process.execPath, [CLI, ...args], { env, cwd, encoding: "utf8" });
 }
 
-test("`nightshift roadmap show <id>` prints the item in full and its thread in order", async (t) => {
+test("`nightqueue roadmap show <id>` prints the item in full and its thread in order", async (t) => {
   const env = makeHome(t, "cli-roadmap-show");
   const cwd = makeProject(t, env, "alpha");
   const detail = `line one\n${"x".repeat(700)}`;
@@ -39,5 +39,5 @@ test("`nightshift roadmap show <id>` prints the item in full and its thread in o
   assert.match(unknown.stderr, /unknown roadmap item `404`/);
   const malformed = runCli(env, ["roadmap", "show", "one"], cwd);
   assert.equal(malformed.status, 1);
-  assert.match(malformed.stderr, /invalid roadmap item id `one`; usage: nightshift roadmap show <id>/);
+  assert.match(malformed.stderr, /invalid roadmap item id `one`; usage: nightqueue roadmap show <id>/);
 });

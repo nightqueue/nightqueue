@@ -62,9 +62,9 @@ import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.m
 import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons } from "./phase-context.mjs";
 import { readVersion } from "../cli/version.mjs";
 
-const SERVER_NAME = "nightshift";
+const SERVER_NAME = "nightqueue";
 const SERVER_INSTRUCTIONS = [
-  "nightshift is a backlog of unattended coding jobs, not a synchronous executor: `queue_add` records work, it never runs it.",
+  "nightqueue is a backlog of unattended coding jobs, not a synchronous executor: `queue_add` records work, it never runs it.",
   "Queue every task or plan the moment it comes up - one job is one self-contained deliverable, and a large plan is ONE job with numbered stages written in the prompt, never several jobs that depend on each other.",
   "Do not start jobs as they are queued: the whole batch starts with `queue_run` without `job_id`, when the user is about to step away.",
   "Start a single job now, with `queue_run` and its `job_id`, only when the user asks for that one job now.",
@@ -114,7 +114,7 @@ function requireProjectName(name, env) {
   const project = projectByName(loadConfig(env, { warn: () => {} }), name);
   if (project) return project.name;
   throw new UserError(
-    `unknown project \`${name}\`: pass the registered project NAME, not a path; list them with \`nightshift project list\``,
+    `unknown project \`${name}\`: pass the registered project NAME, not a path; list them with \`nightqueue project list\``,
   );
 }
 
@@ -124,7 +124,7 @@ function refuseRegistrationInsideJob(cwd, env) {
   if (own === null) return;
   throw new UserError(
     `refusing to register ${cwd} from inside job \`${own}\`: an unattended run never registers a project; ` +
-      "ask the operator to run `nightshift init` there",
+      "ask the operator to run `nightqueue init` there",
   );
 }
 
@@ -332,7 +332,7 @@ function resolveQueueTarget({ project, cwd }, env) {
   const offer = registrationOffer(config, path);
   if (!offer) {
     throw new UserError(
-      `no project registered for ${path}, and it is not inside a git repository; pass the registered project NAME (\`nightshift project list\`)`,
+      `no project registered for ${path}, and it is not inside a git repository; pass the registered project NAME (\`nightqueue project list\`)`,
     );
   }
   return { cwd: path, offer };
@@ -533,7 +533,7 @@ function queueHint({ activeJobs, counts, runners: registered, jobs = [] }) {
   }
   if (runners.length > 0) return `${runnersOnline(runners.length)} - ${counts.pending} pending after this one`;
   if (activeJobs > 0) {
-    return `${runnersOnline(0)} - a job is running under a one-shot runner, nothing will pick up the pending jobs after it - start a drain with \`nightshift queue run\``;
+    return `${runnersOnline(0)} - a job is running under a one-shot runner, nothing will pick up the pending jobs after it - start a drain with \`nightqueue queue run\``;
   }
   const parked = parkedBacklogLine({ jobs, pending: counts.pending });
   if (parked) return `${runnersOnline(0)} - ${pendingJobs(counts.pending)} waiting — ${parked}.`;
@@ -788,8 +788,8 @@ function toolDefinitions(env) {
       guardsHome: true,
       config: {
         description:
-          "Enqueues an unattended /nightshift:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
-          "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. The hint reports how many runners are live right now, and a job queued with none online waits until `nightshift queue run` starts one. " +
+          "Enqueues an unattended /nightqueue:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
+          "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. The hint reports how many runners are live right now, and a job queued with none online waits until `nightqueue queue run` starts one. " +
           "With `project` omitted, `cwd` (the absolute working directory of the caller) resolves the project. When no project is registered for it, the answer is `needs_registration`: ask the user to confirm, then call again with the same `cwd` and `register: true`. Registration never happens without `register: true`. " +
           "With `roadmap_item_id` and no `prompt`, the job prompt is built from that roadmap item, its linked decision and the accepted decisions related to it; a project item moves to `in_progress` and then follows its job: `in_review` once the job is done, `done` once the job is closed - its pull request merged through `queue_close` - and back to `todo` when the job fails or is cancelled (a close that finds the pull request closed without merge cancels the job)." +
           "An ORG roadmap item needs an explicit `project` of that org, or `all` for every project of the org, because a job is always one project's: each project gets its own row linked to its own job (a project whose row still has a live job is skipped and reported in `skipped`; the answer lists every job in `jobs`), and the item's status is derived from its rows - `in_progress` while any row is, `done` once every row is done or cancelled, otherwise the lowest open row status. Closing it by hand cancels its open rows.",
@@ -826,7 +826,7 @@ function toolDefinitions(env) {
             .nullable()
             .optional()
             .describe(
-              "The RUN_DIR of an operator run (`~/.nightshift/runs/<project>/<slug>`, absolute or `~/`) this job continues: the job writes into that run, and the runtime places the `## PRIOR RUN (operator)` block right after the prompt's `## Brief` section. Never write that block yourself. A run already bound to an open job is refused; `queue_retry --fresh` of the job discards the run.",
+              "The RUN_DIR of an operator run (`~/.nightqueue/runs/<project>/<slug>`, absolute or `~/`) this job continues: the job writes into that run, and the runtime places the `## PRIOR RUN (operator)` block right after the prompt's `## Brief` section. Never write that block yourself. A run already bound to an open job is refused; `queue_retry --fresh` of the job discards the run.",
             ),
         },
       },
@@ -864,7 +864,7 @@ function toolDefinitions(env) {
       name: "queue_status",
       config: {
         description:
-          "State of the queue: one job by id, or the most recent ones plus the counts per status and every live runner in `runners` (`runner` is the first of them, kept for one release; `runnersOnline` is the count of `runners`). The `hint` leads with the live-runner count, and says that a job queued with none online waits until `nightshift queue run` starts one. " +
+          "State of the queue: one job by id, or the most recent ones plus the counts per status and every live runner in `runners` (`runner` is the first of them, kept for one release; `runnersOnline` is the count of `runners`). The `hint` leads with the live-runner count, and says that a job queued with none online waits until `nightqueue queue run` starts one. " +
           "The `hint` ends with the advisory lines when they apply - a five-hour window close to its limit while runners are live, or two or more runners on one repository - also listed under `advisories`; they never block anything. Never returns the prompt. " +
           "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`. " +
           "The listing cuts `notice_md` and `result` at 500 characters and marks a cut row with `notice_truncated: true` or `result_truncated: true` (the key is absent when the text fits); call again with that `job_id` for the whole text. " +
@@ -890,7 +890,7 @@ function toolDefinitions(env) {
           "starts a detached runner that drains the queue: every pending job, in priority order, until nothing is pending - the runner registers itself, so queue_status shows it. Pass job_id only to start a single job. " +
           "The batch runs DETACHED, with its output going to a log file, and this tool returns immediately with that path. Any number of runners may be live at once: a start is never refused because another one is. " +
           "A single job that cannot be claimed right now answers `started: false` with `waiting` and starts nothing. " +
-          "The runner exits by itself once the queue is empty; `nightshift queue run --stop` ends every runner, `--stop <pid>` ends one. " +
+          "The runner exits by itself once the queue is empty; `nightqueue queue run --stop` ends every runner, `--stop <pid>` ends one. " +
           "Each runner works one job at a time; parallel jobs come from starting more runners. `advisories` warns, from the provider's real five-hour utilization and the live leases, when another runner would likely hit the rate limit or fight over one repository - it never blocks a start.",
         inputSchema: { job_id: z.number().int().min(1).nullable().optional() },
       },
@@ -906,7 +906,7 @@ function toolDefinitions(env) {
       config: {
         description:
           "The claude session of a job's last attempt: its attempt number, session id and the cwd it ran in (the run's worktree, or the project's checkout when that worktree was already released, with `worktree_released: true`). " +
-          "Never resumes it - this tool only reads; resume it yourself with `nightshift open --resume <session>` in `cwd`, or run `nightshift queue session <job_id>` in a terminal (the same operator launch). " +
+          "Never resumes it - this tool only reads; resume it yourself with `nightqueue open --resume <session>` in `cwd`, or run `nightqueue queue session <job_id>` in a terminal (the same operator launch). " +
           "`pending` and `running` are refused by name: a live runner owns a running job, and a pending one has not run yet. A job that never reached the agent has no session to answer with, and is refused too.",
         inputSchema: { job_id: z.number().int().min(1) },
       },
@@ -943,7 +943,7 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const started = await startCloseDetached({ store: openStore(env), id: args.job_id, force: args.force === true, env });
-        return { ok: true, started: true, job_id: args.job_id, pid: started.pid, logPath: started.logPath, follow: `nightshift queue status ${args.job_id}` };
+        return { ok: true, started: true, job_id: args.job_id, pid: started.pid, logPath: started.logPath, follow: `nightqueue queue status ${args.job_id}` };
       },
     },
     {

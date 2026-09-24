@@ -42,7 +42,7 @@ test("job #42's real attempt-1 result: a gate whose notice does not carry the qu
 test("a gate notice that carries the plan's confirmation block verbatim, plus the answer line, is a real gate", () => {
   const plan = readFileSync(PLAN_FIXTURE, "utf8");
   const block = confirmationSection(plan);
-  const notice = `${block}\n\nAnswer with: nightshift queue retry 42 --note "approve C1-C8"`;
+  const notice = `${block}\n\nAnswer with: nightqueue queue retry 42 --note "approve C1-C8"`;
   const log = toNdjson([systemInitEvent(), resultEvent({ text: noticeText(notice) })]);
 
   const outcome = classifyJobResult({ log, exitCode: 0, planPath: PLAN_FIXTURE });

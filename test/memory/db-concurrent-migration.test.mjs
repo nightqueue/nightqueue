@@ -70,7 +70,7 @@ function raceOnce(env, workerPath, count) {
 }
 
 test(`${RACERS} processes racing to migrate the SAME v9 database converge on the current schema, ${ITERATIONS} times over`, async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "nightshift-db-race-"));
+  const dir = mkdtempSync(join(tmpdir(), "nightqueue-db-race-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const workerPath = join(dir, "racer.mjs");
   writeFileSync(workerPath, racerSource());

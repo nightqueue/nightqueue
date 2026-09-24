@@ -9,7 +9,7 @@ import { addJob } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const NOTICE = "nightshift 0.4.0 is available (installed 0.1.0) - run `nightshift update`";
+const NOTICE = "nightqueue 0.4.0 is available (installed 0.1.0) - run `nightqueue update`";
 
 // A fetch double that records every call and always answers with a newer version, so a silent
 // notice in these tests can only mean the opt-out worked, never that the network went unreached.
@@ -42,15 +42,15 @@ async function runCli(env, argv, fetchImpl) {
 function installRuntime(env, version = "0.1.0") {
   const dir = runtimePackageDir(env);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "package.json"), `${JSON.stringify({ name: "@maykonv/nightshift", version }, null, 2)}\n`);
+  writeFileSync(join(dir, "package.json"), `${JSON.stringify({ name: "nightqueue", version }, null, 2)}\n`);
 }
 
 test("makeHome bakes the update-check opt-out every literal-output fixture in this suite relies on", (t) => {
   const env = makeHome(t, "regression-optout-present");
   assert.equal(
-    env.NIGHTSHIFT_NO_UPDATE_CHECK,
+    env.NIGHTQUEUE_NO_UPDATE_CHECK,
     "1",
-    "makeHome stopped setting NIGHTSHIFT_NO_UPDATE_CHECK: the literal outputs pinned in " +
+    "makeHome stopped setting NIGHTQUEUE_NO_UPDATE_CHECK: the literal outputs pinned in " +
       "test/queue/detached.test.mjs, test/queue/cli.test.mjs and test/hooks/session-start.test.mjs " +
       "now race the update-notice network path instead of running against a closed door",
   );
@@ -63,7 +63,7 @@ test("check off: queue status keeps its exact pre-existing text on every branch,
   const calls = [];
 
   const empty = await runCli(env, ["queue", "status"], fakeFetch(calls));
-  assert.deepEqual(empty.out, ["0 runners online - pending jobs will wait until `nightshift queue run` starts one", "no jobs in the queue"]);
+  assert.deepEqual(empty.out, ["0 runners online - pending jobs will wait until `nightqueue queue run` starts one", "no jobs in the queue"]);
 
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   const table = await runCli(env, ["queue", "status"], fakeFetch(calls));
@@ -92,13 +92,13 @@ test("check off: queue status --json stays byte-identical to the pre-existing sh
 
 test("check on: the notice is appended exactly once, as the last line, byte for byte, on every text branch", async (t) => {
   const env = makeHome(t, "regression-on-text");
-  delete env.NIGHTSHIFT_NO_UPDATE_CHECK;
+  delete env.NIGHTQUEUE_NO_UPDATE_CHECK;
   installRuntime(env);
   makeProject(t, env, "alpha");
   const calls = [];
 
   const empty = await runCli(env, ["queue", "status"], fakeFetch(calls));
-  assert.deepEqual(empty.out, ["0 runners online - pending jobs will wait until `nightshift queue run` starts one", "no jobs in the queue", NOTICE]);
+  assert.deepEqual(empty.out, ["0 runners online - pending jobs will wait until `nightqueue queue run` starts one", "no jobs in the queue", NOTICE]);
 
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   const table = await runCli(env, ["queue", "status"], fakeFetch(calls));
@@ -112,7 +112,7 @@ test("check on: the notice is appended exactly once, as the last line, byte for 
 
 test("check on: queue status --json never carries the notice either", async (t) => {
   const env = makeHome(t, "regression-on-json");
-  delete env.NIGHTSHIFT_NO_UPDATE_CHECK;
+  delete env.NIGHTQUEUE_NO_UPDATE_CHECK;
   installRuntime(env);
   makeProject(t, env, "alpha");
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
@@ -132,7 +132,7 @@ test("the session block never carries a notice as its only content, whether the 
   assert.equal(await runSessionStart({ input: { session_id: "s1", cwd: offRepo }, env: off }), "");
 
   const on = makeHome(t, "regression-hook-on");
-  delete on.NIGHTSHIFT_NO_UPDATE_CHECK;
+  delete on.NIGHTQUEUE_NO_UPDATE_CHECK;
   installRuntime(on);
   const onRepo = makeProject(t, on, "alpha");
   const calls = [];
@@ -145,7 +145,7 @@ test("the session block never carries a notice as its only content, whether the 
 
 test("the 9000-character clip still holds once the notice is appended", async (t) => {
   const env = makeHome(t, "regression-hook-clip");
-  delete env.NIGHTSHIFT_NO_UPDATE_CHECK;
+  delete env.NIGHTQUEUE_NO_UPDATE_CHECK;
   installRuntime(env);
   const repo = makeProject(t, env, "alpha");
   for (let i = 0; i < 12; i += 1) {

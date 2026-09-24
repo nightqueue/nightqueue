@@ -69,7 +69,7 @@ function warnToStderr(line) {
 function warnOnOpenMode(filePath, warn) {
   const mode = modeOf(filePath);
   if (!isOpenToOthers(mode)) return;
-  warn(`nightshift: warning: ${filePath} is mode 0${mode.toString(8).padStart(3, "0")}, expected 0600`);
+  warn(`nightqueue: warning: ${filePath} is mode 0${mode.toString(8).padStart(3, "0")}, expected 0600`);
 }
 
 // Loads config.json, warning about inconsistency in the file without rewriting it.

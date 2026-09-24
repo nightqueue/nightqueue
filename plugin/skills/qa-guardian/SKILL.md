@@ -31,10 +31,10 @@ to break it.
 - Every reported break needs proof: an executable PoC (runtime) or a quoted
   file:line excerpt (static). Without proof, it does not become a fix item.
 
-**Real pull requests and nightshift guards — hard rules.**
+**Real pull requests and nightqueue guards — hard rules.**
 
-- **(a)** Never unset, stub, override or work around a nightshift guard or its environment variables (`NIGHTSHIFT_JOB_ID`, `NIGHTSHIFT_JOB_HOME`, `NIGHTSHIFT_JOB_CLAUDE_DIR`, or any refusal nightshift prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
-- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightshift run pr`.
+- **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
+- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightqueue run pr`.
 
 ## Flow (run in this order)
 

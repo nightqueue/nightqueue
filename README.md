@@ -1,10 +1,10 @@
-# nightshift
+# nightqueue
 
 **An autonomous queue of coding agents with its own memory.**
 
-[![npm](https://img.shields.io/npm/v/%40maykonv%2Fnightshift?label=npm)](https://www.npmjs.com/package/@maykonv/nightshift)
-[![ci](https://github.com/maykonVinicius/nightshift/actions/workflows/ci.yml/badge.svg)](https://github.com/maykonVinicius/nightshift/actions/workflows/ci.yml)
-[![node](https://img.shields.io/node/v/%40maykonv%2Fnightshift)](package.json)
+[![npm](https://img.shields.io/npm/v/nightqueue?label=npm)](https://www.npmjs.com/package/nightqueue)
+[![ci](https://github.com/nightqueue/nightqueue/actions/workflows/ci.yml/badge.svg)](https://github.com/nightqueue/nightqueue/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/nightqueue)](package.json)
 [![license: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue)](LICENSE)
 
 Queue the work during the day. Start the batch when you step away. Come back to
@@ -25,7 +25,7 @@ pull requests — and to an agent that remembers what it learned last night.
 
 ## What it is
 
-nightshift turns a coding request into a full pipeline run instead of a chat
+nightqueue turns a coding request into a full pipeline run instead of a chat
 session. Every request is triaged against real evidence, explored, planned,
 implemented, attacked by an adversarial QA and verified against the checks your
 project already defines — then it opens the pull request. Every phase hands off
@@ -36,8 +36,8 @@ Nothing leaves it.
 
 ## What it does
 
-- **A backlog, not a chat.** `nightshift queue add` records a deliverable;
-  `nightshift queue run` works through the whole backlog unattended and comes
+- **A backlog, not a chat.** `nightqueue queue add` records a deliverable;
+  `nightqueue queue run` works through the whole backlog unattended and comes
   back with one pull request per job.
 - **An 8-phase pipeline.** Triage, exploration, architecture, implementation,
   adversarial QA, verification, runtime validation, commit and report — each
@@ -65,12 +65,12 @@ Each phase is a dedicated subagent with its own instructions (`plugin/agents/`),
 running inside a git worktree of your repository, in a job environment it cannot
 leave. What it learns — lessons, decisions, structural indexes of the codebase —
 is written to a local SQLite home and recalled by the next job through the
-nightshift MCP server. The full promise between the pipeline and the runner is
+nightqueue MCP server. The full promise between the pipeline and the runner is
 written down in [docs/runtime-contract.md](docs/runtime-contract.md).
 
-## Why nightshift
+## Why nightqueue
 
-| | A chat session | nightshift |
+| | A chat session | nightqueue |
 |---|---|---|
 | Who drives | you, prompt by prompt | the pipeline, phase by phase |
 | Memory | gone when the window closes | lessons and decisions persist per org |
@@ -87,20 +87,20 @@ free and is never degraded to push it.
 Requirements: [Claude Code](https://claude.com/claude-code) and Node >= 22.
 
 ```sh
-npx @maykonv/nightshift init                           # install the runtime and set Claude Code up
-# open a new terminal so `nightshift` resolves
-nightshift doctor                                      # check the host and the home
+npx nightqueue init                           # install the runtime and set Claude Code up
+# open a new terminal so `nightqueue` resolves
+nightqueue doctor                                      # check the host and the home
 
-nightshift queue add "fix the flaky worker"            # queue one deliverable
-nightshift queue add "add the retry to the uploader"   # and the next one
-nightshift queue run                                   # start the batch, detached, when you step away
+nightqueue queue add "fix the flaky worker"            # queue one deliverable
+nightqueue queue add "add the retry to the uploader"   # and the next one
+nightqueue queue run                                   # start the batch, detached, when you step away
 
-nightshift queue status                                # the next morning: what each job became
-nightshift queue retry 7 --note "rename the column"    # answer a gate and send the job back
+nightqueue queue status                                # the next morning: what each job became
+nightqueue queue retry 7 --note "rename the column"    # answer a gate and send the job back
 ```
 
-Inside Claude Code, `/nightshift:queue` turns the plan under discussion into a
-job, and `/nightshift:resolve <request>` runs the pipeline on the spot.
+Inside Claude Code, `/nightqueue:queue` turns the plan under discussion into a
+job, and `/nightqueue:resolve <request>` runs the pipeline on the spot.
 
 ## Commands
 
@@ -108,31 +108,31 @@ The full reference is in [docs/cli.md](docs/cli.md); this is the daily set.
 
 ```sh
 # queue
-nightshift queue add [project] "<request>" [--tier trivial|simple|complex] [--priority 1-9] [--run]
-nightshift queue run [--watch [s] [--from HH:MM] --until HH:MM] [--job <id>] [--stop]
-nightshift queue status [<id>] [--follow] [--json]
-nightshift queue log <id> [--follow]
-nightshift queue session <id> [--print]
-nightshift queue retry <id> --note "<answer>"
-nightshift queue cancel <id> --reason "<why>"
-nightshift queue close <id> [--force] [--foreground] [--decisions accept|reject|keep] [--json]
-nightshift queue close --merged [--decisions accept|reject|keep] [--json]
-nightshift queue pause | resume
+nightqueue queue add [project] "<request>" [--tier trivial|simple|complex] [--priority 1-9] [--run]
+nightqueue queue run [--watch [s] [--from HH:MM] --until HH:MM] [--job <id>] [--stop]
+nightqueue queue status [<id>] [--follow] [--json]
+nightqueue queue log <id> [--follow]
+nightqueue queue session <id> [--print]
+nightqueue queue retry <id> --note "<answer>"
+nightqueue queue cancel <id> --reason "<why>"
+nightqueue queue close <id> [--force] [--foreground] [--decisions accept|reject|keep] [--json]
+nightqueue queue close --merged [--decisions accept|reject|keep] [--json]
+nightqueue queue pause | resume
 
 # memory
-nightshift memory stats
-nightshift decision list | show <number>     [--project <name> | --org <name>]
-nightshift decision export <number> [--dir <path>] [--force]
-nightshift decision import <file.md> [--status <s>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]
-nightshift decision update <number> --status accepted|rejected|superseded [--superseded-by <n>]
-nightshift roadmap                            [--project <name> | --org <name>]
+nightqueue memory stats
+nightqueue decision list | show <number>     [--project <name> | --org <name>]
+nightqueue decision export <number> [--dir <path>] [--force]
+nightqueue decision import <file.md> [--status <s>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]
+nightqueue decision update <number> --status accepted|rejected|superseded [--superseded-by <n>]
+nightqueue roadmap                            [--project <name> | --org <name>]
 
 # home
-nightshift org add|list|rename|remove|repair
-nightshift project list|move|remove
-nightshift connection bind|test|list|remove
-nightshift doctor
-nightshift update [<version>]
+nightqueue org add|list|rename|remove|repair
+nightqueue project list|move|remove
+nightqueue connection bind|test|list|remove
+nightqueue doctor
+nightqueue update [<version>]
 ```
 
 **Writing a job.** One job is one self-contained deliverable that can be
@@ -141,13 +141,13 @@ the prompt (`Stages: 1) ... 2) ...`), never several jobs that depend on each
 other. See [Writing a job](docs/queue.md#writing-a-job).
 
 **Closing a job.** A job ends `done` with an open pull request, and becomes `closed`
-only when `nightshift queue close <id>` merges that pull request through a recorded
+only when `nightqueue queue close <id>` merges that pull request through a recorded
 pipeline - preflight, conflict, merge, settle - that resumes where it stopped.
 `--force` skips the pull request checks and the rebase suite, never the job's status,
 its attribution or a real conflict. A job you give up on is `queue cancel`-ed instead,
 which also releases its worktree. See [Closing a job](docs/queue.md#closing-a-job).
 
-**Running the queue overnight.** `nightshift queue run --watch --from 22:00 --until
+**Running the queue overnight.** `nightqueue queue run --watch --from 22:00 --until
 04:00` works the queue only inside that local time window, then exits - a
 midnight-crossing window needs no special syntax. It is one-shot: nothing brings it
 back once it closes, so a nightly schedule is an OS-level job (`launchd`, `systemd`)
@@ -158,11 +158,11 @@ queue](docs/queue.md#running-the-queue).
 
 ## Status
 
-nightshift is pre-1.0 and used daily on real repositories. The CLI, the MCP tools
+nightqueue is pre-1.0 and used daily on real repositories. The CLI, the MCP tools
 and the on-disk formats can still change between minor versions; every change a
 user would notice is in [CHANGELOG.md](CHANGELOG.md), and a breaking one is
 marked as such. Bugs and ideas go to the
-[issues](https://github.com/maykonVinicius/nightshift/issues); see
+[issues](https://github.com/nightqueue/nightqueue/issues); see
 [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and
 [SECURITY.md](SECURITY.md) for anything a guard should have caught. Everyone here
 follows the [code of conduct](CODE_OF_CONDUCT.md).

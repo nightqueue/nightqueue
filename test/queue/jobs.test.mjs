@@ -432,14 +432,14 @@ test("cancel refuses a done job under a live close lease, naming the closer, and
   openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/4", id);
   acquireClose(id, { worker: "close:test:1:aaaa", leaseS: 660 }, env);
   const before = getJob(id, env);
-  assert.throws(() => cancelJob(id, {}, env), new RegExp(`job \`${id}\` is being closed by \`close:test:1:aaaa\` until .*; wait for it or follow it with nightshift queue status ${id}`));
+  assert.throws(() => cancelJob(id, {}, env), new RegExp(`job \`${id}\` is being closed by \`close:test:1:aaaa\` until .*; wait for it or follow it with nightqueue queue status ${id}`));
   assert.deepEqual(getJob(id, env), before, "the refused cancel wrote to a job being closed");
 
   openDb(env).prepare("UPDATE jobs SET close_lease_until = datetime('now', '-5 seconds') WHERE id = ?").run(id);
   const interrupted = getJob(id, env);
   assert.throws(
     () => cancelJob(id, {}, env),
-    new RegExp(`job \`${id}\` has an interrupted close whose merge may already have happened; resume it with nightshift queue close ${id} - `),
+    new RegExp(`job \`${id}\` has an interrupted close whose merge may already have happened; resume it with nightqueue queue close ${id} - `),
   );
   assert.deepEqual(getJob(id, env), interrupted, "the refused cancel wrote to a job whose close was interrupted");
 });
@@ -727,7 +727,7 @@ test("acquireClose refuses a live lease and reclaims a dead one", (t) => {
   assert.ok(acquireClose(id, { worker: CLOSE_WORKER, leaseS: 660 }, env));
   assert.equal(acquireClose(id, { worker: OTHER_CLOSE_WORKER, leaseS: 660 }, env), null, "a live lease must refuse a second close");
   assert.equal(getJob(id, env).close_worker, CLOSE_WORKER, "a refusal writes nothing");
-  assert.match(closeRefusal(id, getJob(id, env)), /is already being closed by `close:host:1:aaaa` until .*; follow it with nightshift queue status \d+/);
+  assert.match(closeRefusal(id, getJob(id, env)), /is already being closed by `close:host:1:aaaa` until .*; follow it with nightqueue queue status \d+/);
 
   moveCloseLease(env, id, -5);
   const reclaimed = acquireClose(id, { worker: OTHER_CLOSE_WORKER, leaseS: 660 }, env);
@@ -761,11 +761,11 @@ test("closeRefusal phrases the refusal of every status by name and answers null 
     [phrase("closed"), /^job `1` is already closed$/],
     [phrase("running"), /^job `1` is running with a live lease on worker `host:1000`; stop that runner first$/],
     [phrase("pending"), /^job `1` is pending; it has not produced a pull request yet$/],
-    [phrase("gate"), /^job `1` is waiting at a gate; answer it with nightshift queue retry 1 --note "…", or cancel it$/],
+    [phrase("gate"), /^job `1` is waiting at a gate; answer it with nightqueue queue retry 1 --note "…", or cancel it$/],
     [phrase("failed"), /^job `1` failed; retry it or cancel it - only a done job is closed$/],
     [phrase("cancelled"), /^job `1` is cancelled; retry it before closing$/],
     [phrase("done", { pr_url: null }), /^nothing to close: the job has no pull request$/],
-    [phrase("done", { close_status: "closing", close_worker: "w", close_lease_until: "2999-01-01 00:00:00" }), /^job `1` is already being closed by `w` until 2999-01-01T00:00:00Z; follow it with nightshift queue status 1$/],
+    [phrase("done", { close_status: "closing", close_worker: "w", close_lease_until: "2999-01-01 00:00:00" }), /^job `1` is already being closed by `w` until 2999-01-01T00:00:00Z; follow it with nightqueue queue status 1$/],
   ];
   for (const [answer, expected] of cases) assert.match(answer, expected);
   assert.equal(phrase("done"), null);

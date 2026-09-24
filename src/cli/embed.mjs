@@ -10,9 +10,9 @@ import { makeReport } from "./report.mjs";
 const BATCH_SIZE = 100;
 const MAX_BATCHES = 200;
 
-// Runs `nightshift embed install`: puts the embedding library in its own prefix and downloads the weights.
+// Runs `nightqueue embed install`: puts the embedding library in its own prefix and downloads the weights.
 async function runInstall(argv, ctx) {
-  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "nightshift embed install" });
+  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "nightqueue embed install" });
   await setupEmbedding(ctx, makeReport(ctx), { embedding: true });
 }
 
@@ -36,9 +36,9 @@ const CORPORA = [
   },
 ];
 
-// Runs `nightshift embed download`: the only command of the CLI that opens the network.
+// Runs `nightqueue embed download`: the only command of the CLI that opens the network.
 async function runDownload(argv, ctx) {
-  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "nightshift embed download" });
+  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "nightqueue embed download" });
   const result = await warmupModel({ allowDownload: true }, ctx.env);
   ctx.out(
     result.downloaded
@@ -72,11 +72,11 @@ async function backfillCorpus(corpus, store, env) {
   return filled;
 }
 
-// Runs `nightshift embed backfill`: computes the missing embeddings from the weights already on disk.
+// Runs `nightqueue embed backfill`: computes the missing embeddings from the weights already on disk.
 async function runBackfill(argv, ctx) {
-  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "nightshift embed backfill" });
+  checkArgs(parseCommand(argv).positionals, { max: 0, usage: "nightqueue embed backfill" });
   if (!isModelCached(ctx.env)) {
-    throw new UserError(`no model weight in ${modelsDir(ctx.env)}; run \`nightshift embed download\` first`);
+    throw new UserError(`no model weight in ${modelsDir(ctx.env)}; run \`nightqueue embed download\` first`);
   }
   const store = openStore(ctx.env);
   for (const corpus of CORPORA) {
@@ -90,7 +90,7 @@ const SUBCOMMANDS = new Map([
   ["backfill", runBackfill],
 ]);
 
-// Dispatches the subcommands of `nightshift embed`.
+// Dispatches the subcommands of `nightqueue embed`.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);

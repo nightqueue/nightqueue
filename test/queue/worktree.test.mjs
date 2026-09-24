@@ -21,20 +21,20 @@ const ENV = { ...process.env, ...gitVars() };
 
 // The porcelain the triage read from a real checkout: the main worktree, a plain linked one and one Claude Code locked.
 const TRIAGE_PORCELAIN = [
-  "worktree /Users/me/nightshift",
+  "worktree /Users/me/nightqueue",
   "HEAD 8aee1a84ddb9e5c72a8bd65ac61e2db57304b6f0",
   "branch refs/heads/main",
   "",
-  "worktree /Users/me/nightshift/.claude/worktrees/feat+login",
+  "worktree /Users/me/nightqueue/.claude/worktrees/feat+login",
   "HEAD 8aee1a84ddb9e5c72a8bd65ac61e2db57304b6f0",
   "branch refs/heads/worktree-feat+login",
   "",
-  "worktree /Users/me/nightshift/.claude/worktrees/bug+parser",
+  "worktree /Users/me/nightqueue/.claude/worktrees/bug+parser",
   "HEAD 1234abcd1234abcd1234abcd1234abcd1234abcd",
   "branch refs/heads/worktree-bug+parser",
   "locked claude agent agent-a1b2 (pid 48213)",
   "",
-  "worktree /Users/me/nightshift/.claude/worktrees/manual",
+  "worktree /Users/me/nightqueue/.claude/worktrees/manual",
   "HEAD 1234abcd1234abcd1234abcd1234abcd1234abcd",
   "detached",
   "locked",
@@ -46,10 +46,10 @@ const KEPT_LINE = "Worktree kept: /tmp/wt/feat+x - it has uncommitted changes.";
 
 test("parseWorktreeList reads the porcelain of the triage, newline or NUL separated, with the lock reason as written", () => {
   const expected = [
-    { path: "/Users/me/nightshift", branch: "refs/heads/main", locked: null },
-    { path: "/Users/me/nightshift/.claude/worktrees/feat+login", branch: "refs/heads/worktree-feat+login", locked: null },
-    { path: "/Users/me/nightshift/.claude/worktrees/bug+parser", branch: "refs/heads/worktree-bug+parser", locked: "claude agent agent-a1b2 (pid 48213)" },
-    { path: "/Users/me/nightshift/.claude/worktrees/manual", branch: null, locked: "" },
+    { path: "/Users/me/nightqueue", branch: "refs/heads/main", locked: null },
+    { path: "/Users/me/nightqueue/.claude/worktrees/feat+login", branch: "refs/heads/worktree-feat+login", locked: null },
+    { path: "/Users/me/nightqueue/.claude/worktrees/bug+parser", branch: "refs/heads/worktree-bug+parser", locked: "claude agent agent-a1b2 (pid 48213)" },
+    { path: "/Users/me/nightqueue/.claude/worktrees/manual", branch: null, locked: "" },
   ];
   assert.deepEqual(parseWorktreeList(TRIAGE_PORCELAIN), expected);
   assert.deepEqual(parseWorktreeList(TRIAGE_PORCELAIN.replaceAll("\n", "\0")), expected);

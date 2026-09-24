@@ -29,7 +29,7 @@ function hasDeclaredDependencies(nodeModulesDir) {
 
 // Copies bin/ and src/ into a throwaway directory and links a real, verified node_modules tree, so the real entry point runs without touching the checkout.
 function makeSandbox(t) {
-  const dir = mkdtempSync(join(tmpdir(), "nightshift-import-failure-"));
+  const dir = mkdtempSync(join(tmpdir(), "nightqueue-import-failure-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   cpSync(join(REPO_ROOT, "bin"), join(dir, "bin"), { recursive: true });
   cpSync(join(REPO_ROOT, "src"), join(dir, "src"), { recursive: true });
@@ -44,7 +44,7 @@ function makeSandbox(t) {
 
 // Runs the sandboxed entry point with the given argv, capturing exit code, stdout and stderr.
 function runEntry(dir, args, { input } = {}) {
-  return spawnSync("node", [join(dir, "bin", "nightshift.mjs"), ...args], { encoding: "utf8", timeout: SPAWN_TIMEOUT_MS, input });
+  return spawnSync("node", [join(dir, "bin", "nightqueue.mjs"), ...args], { encoding: "utf8", timeout: SPAWN_TIMEOUT_MS, input });
 }
 
 test("H1a/H1b/H1c: a missing package.json makes the CLI, the hook and the MCP entry points fail identically, non-zero and with the reinstall message in stderr", (t) => {
@@ -62,8 +62,8 @@ test("H1a/H1b/H1c: a missing package.json makes the CLI, the hook and the MCP en
   ]) {
     assert.equal(result.status, 1, `${name}: expected exit code 1, got ${result.status} (stderr: ${result.stderr})`);
     assert.equal(result.stdout, "", `${name}: stdout must stay empty, the failure must never look like success`);
-    assert.match(result.stderr, /this installation of nightshift is incomplete, reinstall it/, `${name}: stderr must carry the actionable message`);
-    assert.match(result.stderr, /npm i -g @maykonv\/nightshift/, `${name}: stderr must name the exact remedy`);
+    assert.match(result.stderr, /this installation of nightqueue is incomplete, reinstall it/, `${name}: stderr must carry the actionable message`);
+    assert.match(result.stderr, /npm i -g nightqueue/, `${name}: stderr must name the exact remedy`);
   }
 
   assert.equal(hook.stderr, cli.stderr, "the hook invocation crashes with the exact same message as the CLI: the throw happens at import, before argv is ever read");
@@ -78,7 +78,7 @@ test("H1a: an empty declared name also produces the actionable message instead o
 
   assert.equal(result.status, 1);
   assert.equal(result.stdout, "");
-  assert.match(result.stderr, /declares no name; this installation of nightshift is incomplete, reinstall it/);
+  assert.match(result.stderr, /declares no name; this installation of nightqueue is incomplete, reinstall it/);
 });
 
 test("control: an intact package.json lets the CLI print its usage and exit 0", (t) => {
@@ -88,7 +88,7 @@ test("control: an intact package.json lets the CLI print its usage and exit 0", 
   const result = runEntry(dir, ["--help"]);
 
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /usage: nightshift <command>/);
+  assert.match(result.stdout, /usage: nightqueue <command>/);
   assert.equal(result.stderr, "");
 });
 

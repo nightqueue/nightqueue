@@ -76,21 +76,21 @@ function checkClaude(ctx) {
   const result = runCommand(ctx, bin, ["--version"]);
   return result.ok
     ? check("claude", "ok", `${bin} ${result.stdout.trim().split("\n")[0]}`.trim())
-    : check("claude", "fail", `${bin} did not answer`, "install the claude CLI or point NIGHTSHIFT_CLAUDE_BIN at it");
+    : check("claude", "fail", `${bin} did not answer`, "install the claude CLI or point NIGHTQUEUE_CLAUDE_BIN at it");
 }
 
-// Checks how `nightshift open` will load the operator: as the main-thread agent, or through the documented fallback.
+// Checks how `nightqueue open` will load the operator: as the main-thread agent, or through the documented fallback.
 function checkOperator(ctx) {
-  if (!existsSync(operatorAgentPath())) return check("operator", "fail", "plugin/agents/operator.md missing", "reinstall with `nightshift update`");
+  if (!existsSync(operatorAgentPath())) return check("operator", "fail", "plugin/agents/operator.md missing", "reinstall with `nightqueue update`");
   const probe = probeOperatorLaunch({ bin: claudeBin(ctx.env), ctx });
-  if (!probe.answered) return check("operator", "warn", "claude did not answer; `nightshift open` cannot probe `--agent`", "install the claude CLI or point NIGHTSHIFT_CLAUDE_BIN at it");
+  if (!probe.answered) return check("operator", "warn", "claude did not answer; `nightqueue open` cannot probe `--agent`", "install the claude CLI or point NIGHTQUEUE_CLAUDE_BIN at it");
   if (probe.mode === OPERATOR_MODE_AGENT) {
-    return check("operator", "ok", `\`nightshift open\` runs the operator as the main thread (\`--agent ${OPERATOR_AGENT}\`)`);
+    return check("operator", "ok", `\`nightqueue open\` runs the operator as the main thread (\`--agent ${OPERATOR_AGENT}\`)`);
   }
   return check(
     "operator",
     "warn",
-    "claude does not list `--agent`: `nightshift open` appends the agent body with `--append-system-prompt`; the agent's tool restriction does not apply",
+    "claude does not list `--agent`: `nightqueue open` appends the agent body with `--append-system-prompt`; the agent's tool restriction does not apply",
     "update Claude Code",
   );
 }
@@ -106,7 +106,7 @@ function checkGh(ctx) {
 // Checks that config.json is there and readable.
 function checkConfig(ctx) {
   const path = configPath(ctx.env);
-  if (!existsSync(path)) return check("config", "fail", "config.json not found", "run `nightshift setup`");
+  if (!existsSync(path)) return check("config", "fail", "config.json not found", "run `nightqueue setup`");
   try {
     loadConfig(ctx.env, { warn: () => {} });
     return check("config", "ok", path);
@@ -119,7 +119,7 @@ function checkConfig(ctx) {
 function checkSecrets(ctx) {
   const path = secretsPath(ctx.env);
   const stats = statSync(path, { throwIfNoEntry: false });
-  if (!stats) return check("secrets", "fail", "secrets.json not found", "run `nightshift setup`");
+  if (!stats) return check("secrets", "fail", "secrets.json not found", "run `nightqueue setup`");
   const mode = stats.mode & 0o777;
   return (mode & 0o077) === 0
     ? check("secrets", "ok", "mode 0600")
@@ -129,21 +129,21 @@ function checkSecrets(ctx) {
 // Checks that the host starts the MCP server from this very package.
 function checkMcp(ctx) {
   const entry = readRegisteredServer(ctx.env);
-  if (!entry) return check("mcp", "fail", `\`${MCP_SERVER_NAME}\` not registered`, "run `nightshift setup`");
+  if (!entry) return check("mcp", "fail", `\`${MCP_SERVER_NAME}\` not registered`, "run `nightqueue setup`");
   return serverIsCurrent(entry, ctx.env)
     ? check("mcp", "ok", `\`${MCP_SERVER_NAME}\` at user scope`)
-    : check("mcp", "fail", "registered from another path", "run `nightshift setup` to point it at this package");
+    : check("mcp", "fail", "registered from another path", "run `nightqueue setup` to point it at this package");
 }
 
 // Checks the registration in the Claude Desktop app, an optional client: an app that is not installed is never a failure.
 function checkDesktopMcp(ctx) {
   const state = desktopState(ctx.env);
   if (!state.installed) return check(DESKTOP_LABEL, "ok", "Claude Desktop not installed");
-  if (state.error) return check(DESKTOP_LABEL, "warn", state.error, `fix ${state.path} and run \`nightshift setup\``);
-  if (!state.entry) return check(DESKTOP_LABEL, "warn", `\`${MCP_SERVER_NAME}\` not registered`, "run `nightshift setup`");
+  if (state.error) return check(DESKTOP_LABEL, "warn", state.error, `fix ${state.path} and run \`nightqueue setup\``);
+  if (!state.entry) return check(DESKTOP_LABEL, "warn", `\`${MCP_SERVER_NAME}\` not registered`, "run `nightqueue setup`");
   return serverIsCurrent(state.entry, ctx.env)
     ? check(DESKTOP_LABEL, "ok", `\`${MCP_SERVER_NAME}\` at ${state.path}`)
-    : check(DESKTOP_LABEL, "warn", "registered from another path", "run `nightshift setup`");
+    : check(DESKTOP_LABEL, "warn", "registered from another path", "run `nightqueue setup`");
 }
 
 // Checks the four hook entries of this package in the host settings.
@@ -156,9 +156,9 @@ function checkHooks(ctx) {
   }
   return hookStatus(settings.data, ctx.env).map(({ event, expected, current, matcherCurrent }) => {
     const name = `hook ${event}`;
-    if (!current) return check(name, "fail", "not registered", "run `nightshift setup`");
-    if (current !== expected) return check(name, "fail", "registered from another path", "run `nightshift setup`");
-    if (matcherCurrent === false) return check(name, "warn", "registered with an older tool matcher", "run `nightshift setup`");
+    if (!current) return check(name, "fail", "not registered", "run `nightqueue setup`");
+    if (current !== expected) return check(name, "fail", "registered from another path", "run `nightqueue setup`");
+    if (matcherCurrent === false) return check(name, "warn", "registered with an older tool matcher", "run `nightqueue setup`");
     return check(name, "ok", "registered");
   });
 }
@@ -173,18 +173,18 @@ function checkPlugin(ctx) {
   if (installed.state === "installed") {
     if (fromThisPackage) return check("plugin", "ok", `${pluginRef()} installed`);
     const detail = `${pluginRef()} installed from a marketplace that is not this package`;
-    return check("plugin", "warn", detail, "run `nightshift setup` to register this package as the marketplace");
+    return check("plugin", "warn", detail, "run `nightqueue setup` to register this package as the marketplace");
   }
   return fromThisPackage
-    ? check("plugin", "warn", "marketplace registered, plugin not installed", "run `nightshift setup`")
-    : check("plugin", "fail", "no marketplace of this package registered and no plugin installed", "run `nightshift setup`");
+    ? check("plugin", "warn", "marketplace registered, plugin not installed", "run `nightqueue setup`")
+    : check("plugin", "fail", "no marketplace of this package registered and no plugin installed", "run `nightqueue setup`");
 }
 
 // Checks whether the embedding weights are already on disk.
 function checkModel(ctx) {
   return isModelCached(ctx.env)
     ? check("model", "ok", EMBEDDING_MODEL_TAG)
-    : check("model", "warn", "no weight on disk", "run `nightshift embed download`");
+    : check("model", "warn", "no weight on disk", "run `nightqueue embed download`");
 }
 
 // Checks that the runtime is installed, names the version directory `current` resolves to and holds the version this process runs.
@@ -192,18 +192,18 @@ function checkRuntime(ctx) {
   const location = runtimeLocation(ctx.env);
   const installed = runtimeVersion(ctx.env);
   const running = packageVersion();
-  if (!installed) return check("runtime", "fail", `no runtime in ${location}`, "run `nightshift setup`");
+  if (!installed) return check("runtime", "fail", `no runtime in ${location}`, "run `nightqueue setup`");
   if (installed !== running) {
     const detail = `v${installed} installed at ${location}, running v${running}`;
-    return check("runtime", "warn", detail, "run `nightshift update`");
+    return check("runtime", "warn", detail, "run `nightqueue update`");
   }
   return check("runtime", "ok", `v${installed} at ${location}`);
 }
 
 // Hint for a command name that is not on disk: only an installation that already has the canonical shim can have turned the shortcuts off.
 function missingShimHint(env, canonical) {
-  if (canonical || !shimState(env).present) return "run `nightshift setup`";
-  return "run `nightshift setup` without `--no-shortcuts` to write it";
+  if (canonical || !shimState(env).present) return "run `nightqueue setup`";
+  return "run `nightqueue setup` without `--no-shortcuts` to write it";
 }
 
 // Checks one shim: the canonical name has to be there, a shortcut only earns a warning when it is missing.
@@ -216,7 +216,7 @@ function checkShim(ctx, name) {
     return check(label, canonical ? "fail" : "warn", `no shim at ${state.path}`, hint);
   }
   if (!state.executable) return check(label, "fail", `${state.path} is not executable`, `run \`chmod +x ${state.path}\``);
-  if (!state.current) return check(label, "warn", `${state.path} points elsewhere`, "run `nightshift setup`");
+  if (!state.current) return check(label, "warn", `${state.path} points elsewhere`, "run `nightqueue setup`");
   return check(label, "ok", state.path);
 }
 
@@ -229,23 +229,23 @@ function checkShims(ctx) {
 function checkLegacyShim(ctx) {
   const state = legacyShimState(ctx.env);
   if (!state.present) return [];
-  const hint = state.own ? "run `nightshift setup` to remove it" : `remove ${state.path} by hand`;
+  const hint = state.own ? "run `nightqueue setup` to remove it" : `remove ${state.path} by hand`;
   return [check("legacy shim", "warn", `${state.path} is left over from the \`shift\` command`, hint)];
 }
 
-// Checks whether the shim directory is on the PATH, which is what makes `nightshift` resolve at all.
+// Checks whether the shim directory is on the PATH, which is what makes `nightqueue` resolve at all.
 function checkPath(ctx) {
   const dir = binDir(ctx.env);
   return binDirInPath(ctx.env)
     ? check("path", "ok", `${dir} on PATH`)
-    : check("path", "warn", `${dir} not on PATH`, `run \`nightshift setup --path\` to add the guarded \`${PATH_MARK}\` block to ${rcFilePath(ctx.env)}`);
+    : check("path", "warn", `${dir} not on PATH`, `run \`nightqueue setup --path\` to add the guarded \`${PATH_MARK}\` block to ${rcFilePath(ctx.env)}`);
 }
 
 // Checks the embedding library in its own prefix, resolving it without ever loading it.
 function checkEmbedding(ctx) {
   return embeddingLibraryEntry(ctx.env)
     ? check("embedding", "ok", embeddingDir(ctx.env))
-    : check("embedding", "warn", "not installed - keyword-only recall", "run `nightshift embed install`");
+    : check("embedding", "warn", "not installed - keyword-only recall", "run `nightqueue embed install`");
 }
 
 // Total of the advisories one `npm audit --json` report declares, or null when the report is unreadable.
@@ -258,7 +258,7 @@ function auditTotal(stdout) {
   }
 }
 
-// Audits the embedding prefix, informative only: those advisories sit in code nightshift never executes.
+// Audits the embedding prefix, informative only: those advisories sit in code nightqueue never executes.
 function checkEmbeddingAudit(ctx) {
   const dir = embeddingDir(ctx.env);
   const result = runCommand(ctx, npmBin(ctx.env), ["audit", "--prefix", dir, "--json"]);
@@ -266,7 +266,7 @@ function checkEmbeddingAudit(ctx) {
   if (total === null) return check("embedding audit", "warn", "audit did not answer", `run \`npm audit --prefix ${dir}\``);
   if (total === 0) return check("embedding audit", "ok", "no advisory");
   const detail = `${total} advisories in the embedding prefix`;
-  return check("embedding audit", "warn", detail, "they sit in parts of the library that nightshift never executes");
+  return check("embedding audit", "warn", detail, "they sit in parts of the library that nightqueue never executes");
 }
 
 // Checks the embedding prefix: the library always, its audit only once the prefix is there.
@@ -279,8 +279,8 @@ function checkEmbeddingPrefix(ctx) {
 // Hint for a database whose schema version is not the one this build knows.
 function schemaVersionHint(version) {
   return version < DB_USER_VERSION
-    ? "run `nightshift queue status` once to migrate it"
-    : "upgrade nightshift to the version that wrote this schema";
+    ? "run `nightqueue queue status` once to migrate it"
+    : "upgrade nightqueue to the version that wrote this schema";
 }
 
 // Checks the memory database, opening it read-only so the diagnosis never creates nor migrates it.
@@ -301,7 +301,7 @@ async function checkDatabase(ctx) {
   }
 }
 
-const ORG_REPAIR_HINT = "run `nightshift org repair`";
+const ORG_REPAIR_HINT = "run `nightqueue org repair`";
 
 // Checks that every org row has its org: no rename left in flight, no row pointing to a name the config does not know.
 async function checkOrgRows(ctx) {
@@ -341,7 +341,7 @@ function roadmapDriftDetail(rows) {
 // What to do about the drift: the claim cycle re-syncs what is behind a job; an org item is re-derived at its next row change or set by hand.
 function roadmapDriftHint(rows) {
   const hints = [];
-  if (rows.some((row) => row.job_id !== null)) hints.push("the next `nightshift queue run` claim cycle re-syncs the ones behind a job");
+  if (rows.some((row) => row.job_id !== null)) hints.push("the next `nightqueue queue run` claim cycle re-syncs the ones behind a job");
   if (rows.some((row) => row.job_id === null)) {
     hints.push("an org item is re-derived at its next project row change, or set its status with `roadmap_update`");
   }
@@ -371,9 +371,9 @@ async function checkDatabaseAndRows(ctx) {
 
 const ORPHAN_PREFIXES = [".fuse_hidden", ".nfs"];
 const SHM_HINT =
-  "the shared-memory index of the WAL was replaced while a connection was still attached to it, which loses writes; stop the runner, run `nightshift doctor` again, and move NIGHTSHIFT_HOME to local disk";
+  "the shared-memory index of the WAL was replaced while a connection was still attached to it, which loses writes; stop the runner, run `nightqueue doctor` again, and move NIGHTQUEUE_HOME to local disk";
 const MOUNT_LIMITATION = "only the mount in effect right now";
-const MOUNT_HINT = `NIGHTSHIFT_HOME must be on local disk: ${RISKY_FS_TYPES.join(", ")} and any fuse filesystem are known to drop the POSIX advisory locks SQLite's WAL depends on`;
+const MOUNT_HINT = `NIGHTQUEUE_HOME must be on local disk: ${RISKY_FS_TYPES.join(", ")} and any fuse filesystem are known to drop the POSIX advisory locks SQLite's WAL depends on`;
 
 // Names of the hidden orphans a filesystem leaves in the home when it renames a file another process still holds instead of unlinking it.
 function orphanArtifacts(env) {
@@ -440,7 +440,7 @@ function runMountCommand(ctx) {
   return absolute.missing ? runCommand(ctx, "mount", []) : absolute;
 }
 
-// Checks the filesystem NIGHTSHIFT_HOME sits on, because SQLite's WAL is only correct where the operating system really enforces POSIX advisory locks.
+// Checks the filesystem NIGHTQUEUE_HOME sits on, because SQLite's WAL is only correct where the operating system really enforces POSIX advisory locks.
 function checkHomeMount(ctx) {
   const name = "home mount";
   const path = homeDir(ctx.env);
@@ -453,7 +453,7 @@ function checkHomeMount(ctx) {
 // Checks whether the operator left the queue paused, which is a sentinel file and not a config key.
 function checkQueuePause(ctx) {
   return existsSync(queuePausedPath(ctx.env))
-    ? check("queue", "warn", "paused", "run `nightshift queue resume`")
+    ? check("queue", "warn", "paused", "run `nightqueue queue resume`")
     : check("queue", "ok", "not paused");
 }
 
@@ -471,7 +471,7 @@ function checkKeepAwake(ctx) {
       "keep awake",
       "warn",
       `queue.keepAwake: ${mode}, caffeinate not found - ${KEEP_AWAKE_LID_NOTE}`,
-      "install the Xcode command line tools or set NIGHTSHIFT_CAFFEINATE_BIN to its absolute path",
+      "install the Xcode command line tools or set NIGHTQUEUE_CAFFEINATE_BIN to its absolute path",
     );
   }
   return check("keep awake", "ok", `queue.keepAwake: ${mode}, ${bin} - ${KEEP_AWAKE_LID_NOTE}`);
@@ -495,7 +495,7 @@ function checkJobEnvironment(ctx) {
   );
 }
 
-const QUEUE_JOBS_MIGRATE_HINT = "run `nightshift memory stats` once to let the runtime migrate the database";
+const QUEUE_JOBS_MIGRATE_HINT = "run `nightqueue memory stats` once to let the runtime migrate the database";
 
 // Counts the jobs left `running` by a runner that died, reading the database read-only.
 async function checkQueueJobs(ctx) {
@@ -504,7 +504,7 @@ async function checkQueueJobs(ctx) {
     const { orphanJobs, errors } = await store.health();
     if (errors.orphanJobs !== null) return check("queue jobs", "warn", errors.orphanJobs, QUEUE_JOBS_MIGRATE_HINT);
     return orphanJobs > 0
-      ? check("queue jobs", "warn", `${orphanJobs} orphaned`, "run `nightshift queue run` to recycle them, or `nightshift queue cancel <id>`")
+      ? check("queue jobs", "warn", `${orphanJobs} orphaned`, "run `nightqueue queue run` to recycle them, or `nightqueue queue cancel <id>`")
       : check("queue jobs", "ok", "no orphan");
   } catch (err) {
     return check("queue jobs", "warn", err?.message ?? String(err), QUEUE_JOBS_MIGRATE_HINT);
@@ -530,7 +530,7 @@ async function checkDecisionProposals(ctx) {
       "decision proposals",
       "warn",
       staleProposalsDetail(rows),
-      "accept or reject each with `decision_update` (`status: accepted|rejected`) or `nightshift decision update <number> --status accepted|rejected`; next time settle them with `nightshift queue close <id> --decisions accept|reject`",
+      "accept or reject each with `decision_update` (`status: accepted|rejected`) or `nightqueue decision update <number> --status accepted|rejected`; next time settle them with `nightqueue queue close <id> --decisions accept|reject`",
     );
   } catch (err) {
     return check("decision proposals", "warn", err?.message ?? String(err), QUEUE_JOBS_MIGRATE_HINT);
@@ -557,7 +557,7 @@ function liveRunnerDetail(info, env) {
 function liveRunnerCheck(name, info, env) {
   const detail = liveRunnerDetail(info, env);
   if (typeof info.runtimeDir === "string" && info.runtimeDir && !existsSync(info.runtimeDir)) {
-    return check(name, "warn", `${detail}: the runtime directory of this runner is gone (${info.runtimeDir})`, "start a new runner with `nightshift queue run` once it exits");
+    return check(name, "warn", `${detail}: the runtime directory of this runner is gone (${info.runtimeDir})`, "start a new runner with `nightqueue queue run` once it exits");
   }
   return check(name, "ok", detail);
 }
@@ -575,7 +575,7 @@ function checkRunnerRecord(record, env) {
   }
   if (record.status === "alive") return liveRunnerCheck(name, record.info, env);
   if (record.status === "stale") {
-    return check(name, "warn", `stale (pid ${record.info.pid} is gone)`, "run `nightshift queue run --stop` to clear it");
+    return check(name, "warn", `stale (pid ${record.info.pid} is gone)`, "run `nightqueue queue run --stop` to clear it");
   }
   if (record.status === "foreign") {
     return check(name, "warn", `pid ${record.info.pid} belongs to another user, so it is not the runner`, `remove ${record.path}`);
@@ -590,7 +590,7 @@ function checkRunners(ctx) {
   return records.map((record) => checkRunnerRecord(record, ctx.env));
 }
 
-// Sums the host-command counters over the sample `nightshift doctor` reports; a database or a column not there yet
+// Sums the host-command counters over the sample `nightqueue doctor` reports; a database or a column not there yet
 // answers zero exactly like a build that has not migrated - a pure read, never a write and never a failure of its own.
 async function hostCommandTotals(ctx) {
   const zero = { backgrounded: 0, killed: 0, timedOut: 0 };
@@ -634,7 +634,7 @@ function addOrchestratorRow(totals, row) {
   };
 }
 
-// Sums the orchestrator counters over the sample `nightshift doctor` reports; a database or a column not there yet
+// Sums the orchestrator counters over the sample `nightqueue doctor` reports; a database or a column not there yet
 // answers zero - a pure read, never a write and never a failure of its own.
 async function orchestratorTotals(ctx) {
   const zero = { measured: 0, turns: 0, reads: 0, bash: 0, explore: 0, context: 0 };
@@ -682,7 +682,7 @@ async function checkCloses(ctx) {
     const { runners } = liveRunnersReport(ctx.env, ctx.killImpl);
     const summary = closesSummary(await store.jobs.listCloses(), runners);
     const stuck = summary.failed.length + summary.stalled.length > 0;
-    return stuck ? check("closes", "warn", closesDetail(summary), "run again with: nightshift queue close <id>") : check("closes", "ok", closesDetail(summary));
+    return stuck ? check("closes", "warn", closesDetail(summary), "run again with: nightqueue queue close <id>") : check("closes", "ok", closesDetail(summary));
   } catch (err) {
     return check("closes", "warn", err?.message ?? String(err), QUEUE_JOBS_MIGRATE_HINT);
   } finally {
@@ -701,7 +701,7 @@ async function checkQueue(ctx) {
 // Checks one registered project: its path and the state of its worktree.
 function checkProject(ctx, project) {
   const name = `project ${project.name}`;
-  if (!project.exists) return check(name, "fail", `${project.path} no longer exists`, `run \`nightshift project remove ${project.name}\``);
+  if (!project.exists) return check(name, "fail", `${project.path} no longer exists`, `run \`nightqueue project remove ${project.name}\``);
   const result = runCommand(ctx, "git", ["status", "--porcelain"], { cwd: project.path });
   if (!result.ok) return check(name, "warn", "git did not answer", `inspect ${project.path}`);
   return result.stdout.trim()
@@ -717,7 +717,7 @@ function checkProjects(ctx) {
   } catch {
     return [];
   }
-  if (!projects.length) return [check("projects", "warn", "no project registered", "run `nightshift init`")];
+  if (!projects.length) return [check("projects", "warn", "no project registered", "run `nightqueue init`")];
   return projects.map((project) => checkProject(ctx, project));
 }
 
@@ -813,7 +813,7 @@ function checkRegistry(ctx) {
   const installed = runtimeVersion(ctx.env);
   if (result.version === installed) return check("registry", "ok", `v${installed} is the newest published`);
   const detail = `v${result.version} published, v${installed ?? "none"} installed`;
-  return check("registry", "warn", detail, "run `nightshift update`");
+  return check("registry", "warn", detail, "run `nightqueue update`");
 }
 
 // Asks the registry only when the user opted in, which is what keeps the diagnosis offline by default.
@@ -861,11 +861,11 @@ export function reportLine({ status, name, detail, hint }, width = 22) {
   return `${status.padEnd(6)}${name.padEnd(width)}${tail}`;
 }
 
-// Runs `nightshift doctor`: reads the state of the host and of the home, writes nothing, and exits 1 on any failure.
+// Runs `nightqueue doctor`: reads the state of the host and of the home, writes nothing, and exits 1 on any failure.
 export async function run(argv, ctx) {
   const options = { json: { type: "boolean" }, "check-updates": { type: "boolean" } };
   const { values, positionals } = parseCommand(argv, options);
-  checkArgs(positionals, { max: 0, usage: "nightshift doctor [--json] [--check-updates]" });
+  checkArgs(positionals, { max: 0, usage: "nightqueue doctor [--json] [--check-updates]" });
   const checks = await collect(ctx, values);
   const ok = !checks.some((entry) => entry.status === "fail");
   if (values.json === true) ctx.out(JSON.stringify({ ok, checks }));

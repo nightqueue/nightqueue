@@ -88,7 +88,7 @@ test("a working directory outside every registered project leaks nothing into th
 });
 
 test("the reflection process gets no prompt block", async (t) => {
-  const env = { ...makeHome(t, "hook-prompt-reflect"), NIGHTSHIFT_REFLECT: "1" };
+  const env = { ...makeHome(t, "hook-prompt-reflect"), NIGHTQUEUE_REFLECT: "1" };
   assert.equal(await runPromptContext({ input: { session_id: "s1", prompt: LEAK_PROMPT }, env }), "");
 });
 

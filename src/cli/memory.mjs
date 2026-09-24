@@ -23,10 +23,10 @@ function formatRow(row, width) {
   return [name.padEnd(width), ...COLUMNS.map((key) => String(row[key] ?? 0).padStart(COUNT_WIDTH))].join("");
 }
 
-// Runs `nightshift memory stats`, which never fails on an empty or missing database.
+// Runs `nightqueue memory stats`, which never fails on an empty or missing database.
 async function runStats(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
-  checkArgs(positionals, { max: 0, usage: "nightshift memory stats [--json]" });
+  checkArgs(positionals, { max: 0, usage: "nightqueue memory stats [--json]" });
   const projects = await openStore(ctx.env).lessons.memoryStats();
   if (values.json) {
     ctx.out(JSON.stringify({ projects }));
@@ -40,7 +40,7 @@ async function runStats(argv, ctx) {
 
 const SUBCOMMANDS = new Map([["stats", runStats]]);
 
-// Dispatches the subcommands of `nightshift memory`.
+// Dispatches the subcommands of `nightqueue memory`.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);

@@ -1,6 +1,6 @@
-# Contributing to nightshift
+# Contributing to nightqueue
 
-Thanks for looking under the hood. nightshift is a small, opinionated codebase
+Thanks for looking under the hood. nightqueue is a small, opinionated codebase
 with a large test suite; most contributions are bug reports with a reproduction,
 fixes with a test, and documentation that says what the code actually does.
 
@@ -12,7 +12,7 @@ fixes with a test, and documentation that says what the code actually does.
 - **One pull request, one deliverable.** A fix, a feature or a refactor — never
   two of them in one branch.
 - **Every behaviour change carries a test.** The suite is hermetic (no network,
-  no `~/.nightshift`, no global git configuration) and must stay that way.
+  no `~/.nightqueue`, no global git configuration) and must stay that way.
   `npm test` runs it; `npm run release:check` runs it the way the release does.
 - **Plain JavaScript, ESM, Node >= 22, no build step.** No TypeScript, no
   transpiler, no new runtime dependency without a reason in the pull request.
@@ -21,8 +21,8 @@ fixes with a test, and documentation that says what the code actually does.
 ## Setting up
 
 ```sh
-git clone https://github.com/maykonVinicius/nightshift.git
-cd nightshift
+git clone https://github.com/nightqueue/nightqueue.git
+cd nightqueue
 npm ci
 npm test
 ```

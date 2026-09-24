@@ -64,7 +64,7 @@ test("every subagent prompt takes its context from one context_for_phase block",
 
 test("the per-phase section hands the project, the exclusion and its retry to the server", () => {
   assert.ok(SKILL.includes("### Context per phase (applies to every phase with a subagent)"), SKILL);
-  assert.ok(SKILL.includes("call `context_for_phase` (MCP `nightshift`)\nONCE with `target` = the target phase"), SKILL);
+  assert.ok(SKILL.includes("call `context_for_phase` (MCP `nightqueue`)\nONCE with `target` = the target phase"), SKILL);
   assert.ok(SKILL.includes('For `target: "explore"`, also pass\n`repo_root` = the pipeline\'s CWD'), SKILL);
   assert.ok(SKILL.includes("excludes by itself the lessons already\ninjected in earlier phases of this session"), SKILL);
   assert.equal(/Also pass `exclude_ids`/.test(SKILL), false, "the agent is still told to rebuild exclude_ids by hand");
@@ -183,12 +183,12 @@ test("the agent no longer writes state.json, anywhere and by any means", () => {
   );
 });
 
-test("every artifact gate of the skill is one `nightshift run check` call the CLI really answers", () => {
+test("every artifact gate of the skill is one `nightqueue run check` call the CLI really answers", () => {
   const gate = passageAt("**Artifact gate (apply after every phase that expects a Write):**");
-  assert.ok(gate.includes("`nightshift run check <NN>`"), "the gate is no longer a single command");
+  assert.ok(gate.includes("`nightqueue run check <NN>`"), "the gate is no longer a single command");
   assert.ok(gate.includes("Never check an artifact with `ls`"), "the gate no longer forbids checking an artifact by hand");
   for (const phase of ["01", "02", "03", "04", "05a", "05", "06", "06.5"]) {
-    assert.ok(`${SKILL}${QA_PHASE}`.includes(`nightshift run check ${phase}`), `the gate of phase ${phase} is not a \`run check\` call`);
+    assert.ok(`${SKILL}${QA_PHASE}`.includes(`nightqueue run check ${phase}`), `the gate of phase ${phase} is not a \`run check\` call`);
     assert.ok(CLI_RUN.includes(`["${phase}", {`), `the skill calls \`run check ${phase}\`, a phase the CLI does not know`);
   }
   assert.equal(/existence gate \(step 5\.2\)/.test(SKILL), false, "a phase still applies the gate by hand");
@@ -301,10 +301,10 @@ test("the agent measures no time: no clock, no arithmetic, no timestamp", () => 
 
 test("the Time column of Phase 8 is read from the command the CLI really offers", () => {
   const table = passageAt("**The Time column is read, never computed.**");
-  assert.ok(table.includes("`nightshift run log`"), "the Phase 8 table no longer reads the runtime's measurement");
-  assert.ok(table.includes("`nightshift run log --json`"), "the report lost the `at` stamps of the phases");
-  assert.ok(SKILL.includes("**Total:** ⏱️ the `total` line of `nightshift run log`"), "the Total is assembled by the agent again");
-  assert.ok(CLI_RUN.includes("nightshift run log [--json]"), "the CLI no longer offers the command the skill pastes from");
+  assert.ok(table.includes("`nightqueue run log`"), "the Phase 8 table no longer reads the runtime's measurement");
+  assert.ok(table.includes("`nightqueue run log --json`"), "the report lost the `at` stamps of the phases");
+  assert.ok(SKILL.includes("**Total:** ⏱️ the `total` line of `nightqueue run log`"), "the Total is assembled by the agent again");
+  assert.ok(CLI_RUN.includes("nightqueue run log [--json]"), "the CLI no longer offers the command the skill pastes from");
   assert.ok(CLI_RUN.includes("total\\t"), "the CLI no longer prints the `total` line the skill pastes into the Total");
 });
 
@@ -316,16 +316,16 @@ function commitPhase() {
   return SKILL.slice(start, end);
 }
 
-test("Phase 7 is the two `nightshift run` calls the CLI really offers, and no git or gh is run by hand", () => {
+test("Phase 7 is the two `nightqueue run` calls the CLI really offers, and no git or gh is run by hand", () => {
   const phase = commitPhase();
-  assert.ok(phase.includes("`nightshift run commit --message-file <RUN_DIR>/commit-message.txt`"), "the commit is no longer the command's");
-  assert.ok(phase.includes("`nightshift run pr --body-file <RUN_DIR>/pr-body.md`"), "the pull request is no longer the command's");
-  assert.ok(CLI_RUN.includes("nightshift run commit --message-file <path>"), "the CLI no longer offers the command Phase 7 calls");
-  assert.ok(CLI_RUN.includes("nightshift run pr --body-file <path>"), "the CLI no longer offers the command Phase 7 calls");
+  assert.ok(phase.includes("`nightqueue run commit --message-file <RUN_DIR>/commit-message.txt`"), "the commit is no longer the command's");
+  assert.ok(phase.includes("`nightqueue run pr --body-file <RUN_DIR>/pr-body.md`"), "the pull request is no longer the command's");
+  assert.ok(CLI_RUN.includes("nightqueue run commit --message-file <path>"), "the CLI no longer offers the command Phase 7 calls");
+  assert.ok(CLI_RUN.includes("nightqueue run pr --body-file <path>"), "the CLI no longer offers the command Phase 7 calls");
   for (const flag of ["--extra <pathspec>", "--message-file", "--body-file"]) {
     assert.ok(CLI_RUN.includes(flag), `Phase 7 passes \`${flag}\`, which the CLI does not accept`);
   }
-  assert.ok(phase.includes("`nightshift run pr --template`"), "Phase 7 no longer asks the runtime which template the body follows");
+  assert.ok(phase.includes("`nightqueue run pr --template`"), "Phase 7 no longer asks the runtime which template the body follows");
   assert.ok(CLI_RUN.includes("| --template"), "the CLI no longer offers the template query Phase 7 calls");
   assert.ok(phase.includes("`MISSING: evidence for QA row <method>`"), "Phase 7 no longer reads the evidence refusal");
   for (const answer of ["CONVENTION:", "COMMITTED:", "REFUSED:", "REJECTED:", "MISSING:", "TEMPLATE:", "BRANCH:", "WORKTREE:"]) {
@@ -335,7 +335,7 @@ test("Phase 7 is the two `nightshift run` calls the CLI really offers, and no gi
   for (const dead of [/git branch -m <current-name>/, /git push -u origin/, /Only after the user confirms/, /If Phase 0 did not create a worktree/]) {
     assert.equal(dead.test(SKILL), false, `Phase 7 still runs by hand what the runtime owns: ${dead}`);
   }
-  assert.ok(phase.includes("`NIGHTSHIFT_JOB_ID` is unset"), "the push confirmation is asked for in an unattended run again");
+  assert.ok(phase.includes("`NIGHTQUEUE_JOB_ID` is unset"), "the push confirmation is asked for in an unattended run again");
   assert.ok(phase.includes("Inside a queued job"), "Phase 7 no longer says who goes straight to the pull request");
   assert.ok(phase.includes("`ExitWorktree`"), "Phase 7 stopped closing the worktree, which only the session can do");
   assert.equal(phase.includes("--remove-worktree"), false, "the command is told to remove the worktree the session is inside");

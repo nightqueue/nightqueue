@@ -55,7 +55,7 @@ function formatOrg(org) {
 // Runs `org add`.
 async function runAdd(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { "display-name": { type: "string" } });
-  checkArgs(positionals, { min: 1, usage: 'nightshift org add <name> [--display-name "..."]' });
+  checkArgs(positionals, { min: 1, usage: 'nightqueue org add <name> [--display-name "..."]' });
   const name = positionals[0];
   const config = addOrg(loadConfig(ctx.env, { warn: ctx.err }), name, { displayName: values["display-name"] });
   ctx.saveConfig(config, ctx.env);
@@ -65,7 +65,7 @@ async function runAdd(argv, ctx) {
 // Runs `org list`.
 async function runList(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
-  checkArgs(positionals, { max: 0, usage: "nightshift org list [--json]" });
+  checkArgs(positionals, { max: 0, usage: "nightqueue org list [--json]" });
   const config = loadConfig(ctx.env, { warn: ctx.err });
   const orgs = listOrgs(config);
   if (values.json) {
@@ -80,7 +80,7 @@ function refuseWhilePending(env) {
   const pending = readPendingRename(env);
   if (!pending) return;
   const which = pending.from ? `from \`${pending.from}\` to \`${pending.to}\`` : "of unknown names";
-  throw new UserError(`an org rename ${which} was interrupted; run \`nightshift org repair\` before changing the orgs`);
+  throw new UserError(`an org rename ${which} was interrupted; run \`nightqueue org repair\` before changing the orgs`);
 }
 
 // Runs `org rename` in three steps with the intent recorded first: the rows move, then the config write commits the new
@@ -88,7 +88,7 @@ function refuseWhilePending(env) {
 // a database write that fails leaves nothing changed, so the record goes at once.
 async function runRename(argv, ctx) {
   const { positionals } = parseCommand(argv);
-  checkArgs(positionals, { min: 2, usage: "nightshift org rename <old> <new>" });
+  checkArgs(positionals, { min: 2, usage: "nightqueue org rename <old> <new>" });
   const [oldName, newName] = positionals;
   refuseWhilePending(ctx.env);
   const config = renameOrg(loadConfig(ctx.env, { warn: ctx.err }), oldName, newName);
@@ -109,7 +109,7 @@ async function runRename(argv, ctx) {
 async function settlePendingRename(ctx, pending) {
   const config = loadConfig(ctx.env, { warn: ctx.err });
   if (pending.from === null) {
-    throw new UserError(`the rename record at ${orgRenamePendingPath(ctx.env)} is unreadable; fix or remove it by hand, then run \`nightshift org repair\` again`);
+    throw new UserError(`the rename record at ${orgRenamePendingPath(ctx.env)} is unreadable; fix or remove it by hand, then run \`nightqueue org repair\` again`);
   }
   if (getOrg(config, pending.to)) {
     await openStore(ctx.env).orgs.rename(pending.from, pending.to);
@@ -121,13 +121,13 @@ async function settlePendingRename(ctx, pending) {
     clearPendingRename(ctx.env);
     return `rolled back the rename of org \`${pending.from}\` to \`${pending.to}\`; the org is still \`${pending.from}\``;
   }
-  throw new UserError(`neither \`${pending.from}\` nor \`${pending.to}\` exists in the config; add one of them back with \`nightshift org add\`, then run \`nightshift org repair\` again`);
+  throw new UserError(`neither \`${pending.from}\` nor \`${pending.to}\` exists in the config; add one of them back with \`nightqueue org add\`, then run \`nightqueue org repair\` again`);
 }
 
 // Moves every orphan org row under one existing org, the only repair that needs the operator to name a destination.
 async function adoptOrphans(ctx, orphans, target) {
   const config = loadConfig(ctx.env, { warn: ctx.err });
-  if (!getOrg(config, target)) throw new UserError(`unknown org \`${target}\`; create it first with \`nightshift org add ${target}\``);
+  if (!getOrg(config, target)) throw new UserError(`unknown org \`${target}\`; create it first with \`nightqueue org add ${target}\``);
   const store = openStore(ctx.env);
   for (const orphan of orphans) await store.orgs.rename(orphan.org, target);
   return `moved ${orphans.map((o) => `${o.total} row(s) of \`${o.org}\``).join(", ")} to org \`${target}\``;
@@ -136,7 +136,7 @@ async function adoptOrphans(ctx, orphans, target) {
 // Runs `org repair`: settles an interrupted rename by itself, and moves orphan rows only where `--to` says.
 async function runRepair(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { to: { type: "string" } });
-  checkArgs(positionals, { max: 0, usage: "nightshift org repair [--to <org>]" });
+  checkArgs(positionals, { max: 0, usage: "nightqueue org repair [--to <org>]" });
   const pending = readPendingRename(ctx.env);
   if (pending) ctx.out(await settlePendingRename(ctx, pending));
   const orphans = await orphanOrgRows(ctx.env, loadConfig(ctx.env, { warn: ctx.err }));
@@ -146,7 +146,7 @@ async function runRepair(argv, ctx) {
   }
   if (typeof values.to !== "string" || !values.to) {
     const detail = orphans.map((o) => `${o.total} row(s) point to unknown org \`${o.org}\``).join("; ");
-    throw new UserError(`${detail}; move them with \`nightshift org repair --to <org>\` or recreate the org with \`nightshift org add <name>\``);
+    throw new UserError(`${detail}; move them with \`nightqueue org repair --to <org>\` or recreate the org with \`nightqueue org add <name>\``);
   }
   ctx.out(await adoptOrphans(ctx, orphans, values.to));
 }
@@ -154,7 +154,7 @@ async function runRepair(argv, ctx) {
 // Runs `org remove`.
 async function runRemove(argv, ctx) {
   const { positionals } = parseCommand(argv);
-  checkArgs(positionals, { min: 1, usage: "nightshift org remove <name>" });
+  checkArgs(positionals, { min: 1, usage: "nightqueue org remove <name>" });
   const name = positionals[0];
   refuseWhilePending(ctx.env);
   const config = removeOrg(loadConfig(ctx.env, { warn: ctx.err }), name);
@@ -175,7 +175,7 @@ const SUBCOMMANDS = new Map([
   ["repair", runRepair],
 ]);
 
-// Dispatches the subcommands of `nightshift org`.
+// Dispatches the subcommands of `nightqueue org`.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);

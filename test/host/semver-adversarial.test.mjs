@@ -13,10 +13,10 @@ const NOW = Date.parse("2026-09-10T12:00:00.000Z");
 // A home whose update check is on, with a runtime that declares the given installed version.
 function makeNoticeHome(t, name, installed) {
   const env = makeHome(t, name);
-  delete env.NIGHTSHIFT_NO_UPDATE_CHECK;
+  delete env.NIGHTQUEUE_NO_UPDATE_CHECK;
   const dir = runtimePackageDir(env);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "package.json"), `${JSON.stringify({ name: "@maykonv/nightshift", version: installed }, null, 2)}\n`);
+  writeFileSync(join(dir, "package.json"), `${JSON.stringify({ name: "nightqueue", version: installed }, null, 2)}\n`);
   return env;
 }
 
@@ -39,7 +39,7 @@ async function assertNotice(t, name, { installed, latest, expectNotice }) {
   const env = cachePublished(makeNoticeHome(t, name, installed), latest);
   const line = await updateNoticeLine({ env, fetchImpl: forbiddenFetch(), now: () => NOW });
   if (expectNotice) {
-    assert.equal(line, `nightshift ${latest} is available (installed ${installed}) - run \`nightshift update\``, `installed=${installed} latest=${latest}`);
+    assert.equal(line, `nightqueue ${latest} is available (installed ${installed}) - run \`nightqueue update\``, `installed=${installed} latest=${latest}`);
   } else {
     assert.equal(line, null, `installed=${installed} latest=${latest}`);
   }

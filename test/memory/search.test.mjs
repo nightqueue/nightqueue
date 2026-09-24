@@ -137,7 +137,7 @@ test("an embedder that throws does not cost the lexical result", async (t) => {
   assert.deepEqual(idsOf(rows), [id]);
 });
 
-test("NIGHTSHIFT_EMBED_DISABLED skips the semantic path entirely", async (t) => {
+test("NIGHTQUEUE_EMBED_DISABLED skips the semantic path entirely", async (t) => {
   const env = makeHome(t, "search-disabled");
   makeProject(t, env, "alpha");
   const id = addLesson(env, { project: "alpha", title: "the worker leaks a file descriptor on failure" });

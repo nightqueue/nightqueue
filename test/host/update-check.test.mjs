@@ -11,7 +11,7 @@ const NOW = Date.parse("2026-09-10T12:00:00.000Z");
 // A home whose update check is switched on, unlike every other test of the suite.
 function makeCheckHome(t, name) {
   const env = makeHome(t, name);
-  delete env.NIGHTSHIFT_NO_UPDATE_CHECK;
+  delete env.NIGHTQUEUE_NO_UPDATE_CHECK;
   return env;
 }
 
@@ -112,12 +112,12 @@ test("a home with no cache and a registry that fails answers null and never thro
   assert.deepEqual(readCache(env), { checkedAt: new Date(NOW).toISOString(), latest: null });
 });
 
-test("NIGHTSHIFT_NO_UPDATE_CHECK=1 reads nothing, asks nothing and writes nothing", async (t) => {
+test("NIGHTQUEUE_NO_UPDATE_CHECK=1 reads nothing, asks nothing and writes nothing", async (t) => {
   const env = makeCheckHome(t, "update-check-off");
   writeCache(env, { checkedAt: new Date(NOW - UPDATE_CHECK_TTL_MS - 1000).toISOString(), latest: "0.3.0" });
   const calls = [];
 
-  const off = { ...env, NIGHTSHIFT_NO_UPDATE_CHECK: "1" };
+  const off = { ...env, NIGHTQUEUE_NO_UPDATE_CHECK: "1" };
   assert.equal(await latestVersion({ env: off, fetchImpl: fakeFetch(calls, "0.4.0"), now: () => NOW }), null);
   assert.deepEqual(calls, []);
   assert.deepEqual(readCache(env), { checkedAt: new Date(NOW - UPDATE_CHECK_TTL_MS - 1000).toISOString(), latest: "0.3.0" });
@@ -142,6 +142,6 @@ test("a cache file that is broken, or a home that cannot be written, costs no er
   assert.equal(await latestVersion({ env, fetchImpl: fakeFetch(calls, "0.4.0"), now: () => NOW }), "0.4.0");
   assert.equal(calls.length, 1, "a broken cache was treated as fresh");
 
-  const unwritable = { ...makeCheckHome(t, "update-check-unwritable"), NIGHTSHIFT_HOME: "/dev/null/home" };
+  const unwritable = { ...makeCheckHome(t, "update-check-unwritable"), NIGHTQUEUE_HOME: "/dev/null/home" };
   assert.equal(await latestVersion({ env: unwritable, fetchImpl: fakeFetch(calls, "0.4.0"), now: () => NOW }), "0.4.0");
 });

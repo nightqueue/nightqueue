@@ -10,7 +10,7 @@ import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream } from "../../test-support/streams.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
 // Runs the real CLI in its own process, with the isolated home of the test.
 function runCli(env, args) {

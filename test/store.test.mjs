@@ -10,9 +10,9 @@ import { ensureHome, loadConfig, loadSecrets, saveConfig, saveSecrets, writeFile
 
 // Creates an isolated temporary home and removes it at the end of the test.
 function makeEnv(t, { nested = false } = {}) {
-  const base = mkdtempSync(join(tmpdir(), "nightshift-store-"));
+  const base = mkdtempSync(join(tmpdir(), "nightqueue-store-"));
   t.after(() => rmSync(base, { recursive: true, force: true }));
-  return { NIGHTSHIFT_HOME: nested ? join(base, "home") : base };
+  return { NIGHTQUEUE_HOME: nested ? join(base, "home") : base };
 }
 
 // Returns the permission bits of a file or directory.
@@ -24,7 +24,7 @@ test("ensureHome creates the configuration home with mode 0700", (t) => {
   const env = makeEnv(t, { nested: true });
   const first = ensureHome(env);
   assert.equal(first.created, true);
-  assert.equal(first.path, env.NIGHTSHIFT_HOME);
+  assert.equal(first.path, env.NIGHTQUEUE_HOME);
   assert.equal(modeOf(first.path), 0o700);
   assert.equal(ensureHome(env).created, false);
 });
@@ -33,18 +33,18 @@ test("ensureHome tightens a configuration home that already exists with an open 
   const env = makeEnv(t, { nested: true });
   ensureHome(env);
   for (const open of [0o755, 0o777, 0o750]) {
-    chmodSync(env.NIGHTSHIFT_HOME, open);
+    chmodSync(env.NIGHTQUEUE_HOME, open);
     const result = ensureHome(env);
     assert.equal(result.created, false, open.toString(8));
-    assert.equal(modeOf(env.NIGHTSHIFT_HOME), 0o700, open.toString(8));
+    assert.equal(modeOf(env.NIGHTQUEUE_HOME), 0o700, open.toString(8));
   }
 });
 
 test("a write on an existing open home tightens the directory before writing", (t) => {
   const env = makeEnv(t);
-  chmodSync(env.NIGHTSHIFT_HOME, 0o755);
+  chmodSync(env.NIGHTQUEUE_HOME, 0o755);
   saveConfig(emptyConfig(), env);
-  assert.equal(modeOf(env.NIGHTSHIFT_HOME), 0o700);
+  assert.equal(modeOf(env.NIGHTQUEUE_HOME), 0o700);
 });
 
 test("saveSecrets writes 0600 under any umask", (t) => {
@@ -63,9 +63,9 @@ test("saveSecrets writes 0600 under any umask", (t) => {
 test("writeFileAtomic leaves no temporary file behind on failure", (t) => {
   const env = makeEnv(t);
   ensureHome(env);
-  const target = join(env.NIGHTSHIFT_HOME, "missing-dir", "file.json");
+  const target = join(env.NIGHTQUEUE_HOME, "missing-dir", "file.json");
   assert.throws(() => writeFileAtomic(target, "{}"));
-  assert.deepEqual(statSync(env.NIGHTSHIFT_HOME).isDirectory(), true);
+  assert.deepEqual(statSync(env.NIGHTQUEUE_HOME).isDirectory(), true);
 });
 
 test("missing files load as valid empty structures", (t) => {
@@ -102,21 +102,21 @@ test("saveConfig round-trips through loadConfig", (t) => {
   const config = emptyConfig();
   config.projects.api = { path: "/tmp/api", org: "default" };
   saveConfig(config, env);
-  assert.equal(modeOf(env.NIGHTSHIFT_HOME), 0o700);
+  assert.equal(modeOf(env.NIGHTQUEUE_HOME), 0o700);
   assert.deepEqual(loadConfig(env), config);
 });
 
 test("the configuration home is resolved on every call", () => {
-  const previous = process.env.NIGHTSHIFT_HOME;
+  const previous = process.env.NIGHTQUEUE_HOME;
   try {
-    process.env.NIGHTSHIFT_HOME = join(tmpdir(), "one");
+    process.env.NIGHTQUEUE_HOME = join(tmpdir(), "one");
     assert.equal(configPath(), join(tmpdir(), "one", "config.json"));
-    process.env.NIGHTSHIFT_HOME = join(tmpdir(), "two");
+    process.env.NIGHTQUEUE_HOME = join(tmpdir(), "two");
     assert.equal(configPath(), join(tmpdir(), "two", "config.json"));
-    delete process.env.NIGHTSHIFT_HOME;
-    assert.equal(homeDir(), join(homedir(), ".nightshift"));
+    delete process.env.NIGHTQUEUE_HOME;
+    assert.equal(homeDir(), join(homedir(), ".nightqueue"));
   } finally {
-    if (previous === undefined) delete process.env.NIGHTSHIFT_HOME;
-    else process.env.NIGHTSHIFT_HOME = previous;
+    if (previous === undefined) delete process.env.NIGHTQUEUE_HOME;
+    else process.env.NIGHTQUEUE_HOME = previous;
   }
 });

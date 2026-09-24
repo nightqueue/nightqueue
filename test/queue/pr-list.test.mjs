@@ -38,10 +38,10 @@ function makePrHome(t, name, { prCheck = false } = {}) {
   const env = makeHome(t, name);
   const vars = isolatedHostVars(makeDir(t, `${name}-host`));
   Object.assign(env, vars);
-  if (prCheck) delete env.NIGHTSHIFT_NO_PR_CHECK;
+  if (prCheck) delete env.NIGHTQUEUE_NO_PR_CHECK;
   makeProject(t, env, "alpha");
   const planPath = useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout: doneStream(), exitCode: 0 }]);
-  return { env, planPath, ghLog: vars.NIGHTSHIFT_FAKE_GH_LOG };
+  return { env, planPath, ghLog: vars.NIGHTQUEUE_FAKE_GH_LOG };
 }
 
 // A git double for the preflight: a clean checkout of the default branch.
@@ -115,12 +115,12 @@ test("gh pr list answers without ever blocking the event loop, so a slow gh cann
 
 test("gh pr list reads the list the fake gh binary prints, without touching the network", async (t) => {
   const dir = makeDir(t, "pr-list-fake-gh");
-  const env = { ...process.env, ...isolatedHostVars(dir), NIGHTSHIFT_FAKE_GH_PR_LIST: JSON.stringify([{ title: "Fix the worker", url: "https://github.com/acme/app/pull/7", headRefName: "fix/worker" }]) };
+  const env = { ...process.env, ...isolatedHostVars(dir), NIGHTQUEUE_FAKE_GH_PR_LIST: JSON.stringify([{ title: "Fix the worker", url: "https://github.com/acme/app/pull/7", headRefName: "fix/worker" }]) };
 
   const found = await ghPrList("fix the worker", { env });
 
   assert.deepEqual(found, [PRS[0]]);
-  assert.deepEqual(JSON.parse(readFileSync(env.NIGHTSHIFT_FAKE_GH_LOG, "utf8").trim()), [
+  assert.deepEqual(JSON.parse(readFileSync(env.NIGHTQUEUE_FAKE_GH_LOG, "utf8").trim()), [
     "pr",
     "list",
     "--search",
@@ -182,7 +182,7 @@ test("the pre-spawn check is skipped with no subprocess at all when it is disabl
     return PRS;
   };
 
-  assert.equal(await openPrsForJob(JOB, { env: { NIGHTSHIFT_NO_PR_CHECK: "1" }, deps: { prListImpl } }), undefined);
+  assert.equal(await openPrsForJob(JOB, { env: { NIGHTQUEUE_NO_PR_CHECK: "1" }, deps: { prListImpl } }), undefined);
   assert.equal(await openPrsForJob({ id: 8, prompt: "   " }, { env: {}, deps: { prListImpl } }), undefined);
   assert.deepEqual(calls, []);
 });

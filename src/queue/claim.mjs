@@ -155,7 +155,7 @@ function pickupLine(env) {
 
 // What the operator reads instead of a start that never happened: the blocker, and what clears it.
 export function blockerLines(blocker, env = process.env) {
-  if (blocker.reason === "paused") return ["the queue is paused - nothing will be claimed; resume with: nightshift queue resume"];
+  if (blocker.reason === "paused") return ["the queue is paused - nothing will be claimed; resume with: nightqueue queue resume"];
   if (blocker.reason === "not-pending") return [`job #${blocker.jobId} is ${blocker.status}, not pending - it will not be picked up`];
   return [
     `job #${blocker.jobId} waiting: concurrency cap reached`,

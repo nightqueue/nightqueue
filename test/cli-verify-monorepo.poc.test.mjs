@@ -7,13 +7,13 @@ import { fileURLToPath } from "node:url";
 import { initGitRepo } from "../test-support/git.mjs";
 import { makeDir, makeHome } from "../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const STATUS_LINE_RE = /^(PASSED|FAILED|SKIPPED) (\S+) (\d+\.\d+)s$/;
 const GIT_IDENTITY = {
-  GIT_AUTHOR_NAME: "nightshift",
-  GIT_AUTHOR_EMAIL: "nightshift@example.invalid",
-  GIT_COMMITTER_NAME: "nightshift",
-  GIT_COMMITTER_EMAIL: "nightshift@example.invalid",
+  GIT_AUTHOR_NAME: "nightqueue",
+  GIT_AUTHOR_EMAIL: "nightqueue@example.invalid",
+  GIT_COMMITTER_NAME: "nightqueue",
+  GIT_COMMITTER_EMAIL: "nightqueue@example.invalid",
 };
 
 // Commits everything the fixture wrote, so the working tree the checks see is clean.
@@ -40,7 +40,7 @@ function makeMonorepoFixture(t) {
   return cwd;
 }
 
-// Runs `nightshift verify` in the fixture as a real subprocess, with no fake package manager on PATH (the break needs none: detectChecks never even tries the workspace member).
+// Runs `nightqueue verify` in the fixture as a real subprocess, with no fake package manager on PATH (the break needs none: detectChecks never even tries the workspace member).
 function runVerify(t, cwd) {
   const env = makeHome(t, "verify-monorepo-caller");
   const result = spawnSync(process.execPath, [CLI, "verify"], { cwd, env, encoding: "utf8" });

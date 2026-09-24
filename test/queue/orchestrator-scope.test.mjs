@@ -56,7 +56,7 @@ const BASH_TABLE = [
   ["git fetch --upload-pack=x /other/repo", false],
   ["/usr/bin/git fetch origin", false],
   ["./git fetch origin", false],
-  ["/opt/bin/nightshift run check 04", false],
+  ["/opt/bin/nightqueue run check 04", false],
   ["git -C /p status --short", false],
   ["git -C /other/repo push --force", false],
   ["git -C /p log", false],
@@ -89,14 +89,14 @@ const BASH_TABLE = [
   ["gh pr checkout 3", false],
   ["gh pr", false],
   ["gh api repos/x", false],
-  ["nightshift run check 04", true],
-  ["nightshift run log", true],
-  ["nightshift run index-save", true],
-  ["nightshift run commit", true],
-  ["nightshift run pr", true],
-  ["nightshift run secrets-sweep", false],
-  ["nightshift queue status", false],
-  ["nightshift", false],
+  ["nightqueue run check 04", true],
+  ["nightqueue run log", true],
+  ["nightqueue run index-save", true],
+  ["nightqueue run commit", true],
+  ["nightqueue run pr", true],
+  ["nightqueue run secrets-sweep", false],
+  ["nightqueue queue status", false],
+  ["nightqueue", false],
   ["cat x", false],
   ["grep -rn foo src", false],
   ["ls", false],
@@ -130,17 +130,17 @@ test("the closed list is frozen data, and its rendering names every rule", () =>
   for (const { argv } of ORCHESTRATOR_BASH_RULES) assert.ok(rendered.includes(argv.join(" ")), `${argv.join(" ")} missing from ${rendered}`);
 });
 
-test("every `nightshift run <sub>` the skill names is allowed and is a real run subcommand", () => {
+test("every `nightqueue run <sub>` the skill names is allowed and is a real run subcommand", () => {
   const skill = readFileSync(join(packageRoot(), "plugin", "skills", "resolve", "SKILL.md"), "utf8");
-  const named = new Set([...skill.matchAll(/nightshift run ([a-z0-9-]+)/g)].map((match) => match[1]));
+  const named = new Set([...skill.matchAll(/nightqueue run ([a-z0-9-]+)/g)].map((match) => match[1]));
   const runSource = readFileSync(join(packageRoot(), "src", "cli", "run.mjs"), "utf8");
   const subcommandsBlock = runSource.match(/const SUBCOMMANDS = new Map\(\[([\s\S]*?)\]\);/);
   assert.ok(subcommandsBlock, "src/cli/run.mjs no longer declares SUBCOMMANDS");
   const real = new Set([...subcommandsBlock[1].matchAll(/\["([a-z0-9-]+)",/g)].map((match) => match[1]));
-  assert.ok(named.size > 0, "the skill names no `nightshift run` subcommand");
+  assert.ok(named.size > 0, "the skill names no `nightqueue run` subcommand");
   for (const sub of named) {
-    assert.ok(real.has(sub), `the skill names \`nightshift run ${sub}\`, which src/cli/run.mjs does not have`);
-    assert.equal(orchestratorBashAllowed(`nightshift run ${sub}`), true, `the closed list refuses \`nightshift run ${sub}\``);
+    assert.ok(real.has(sub), `the skill names \`nightqueue run ${sub}\`, which src/cli/run.mjs does not have`);
+    assert.equal(orchestratorBashAllowed(`nightqueue run ${sub}`), true, `the closed list refuses \`nightqueue run ${sub}\``);
   }
 });
 
@@ -156,12 +156,12 @@ const SKILL_PRESCRIBED = [
   ["gh pr list\n   --head <branch>", "gh pr list --head feat/slug"],
   ["gh pr view|list|status|checks|create", "gh pr view 3"],
   ["gh pr create", "gh pr create --title t --body-file /runs/p/s/pr-body.md"],
-  ["nightshift run check <NN>", "nightshift run check 06.5"],
-  ["nightshift run log --json", "nightshift run log --json"],
-  ["nightshift run index-save <RUN_DIR>/02-explore.md --project <PROJECT> --repo-root <CWD>", "nightshift run index-save /runs/p/s/02-explore.md --project p --repo-root /work/wt"],
-  ["nightshift run commit --message-file <RUN_DIR>/commit-message.txt", "nightshift run commit --message-file /runs/p/s/commit-message.txt"],
-  ["nightshift run pr --template", "nightshift run pr --template"],
-  ["nightshift run pr --body-file <RUN_DIR>/pr-body.md", "nightshift run pr --body-file /runs/p/s/pr-body.md"],
+  ["nightqueue run check <NN>", "nightqueue run check 06.5"],
+  ["nightqueue run log --json", "nightqueue run log --json"],
+  ["nightqueue run index-save <RUN_DIR>/02-explore.md --project <PROJECT> --repo-root <CWD>", "nightqueue run index-save /runs/p/s/02-explore.md --project p --repo-root /work/wt"],
+  ["nightqueue run commit --message-file <RUN_DIR>/commit-message.txt", "nightqueue run commit --message-file /runs/p/s/commit-message.txt"],
+  ["nightqueue run pr --template", "nightqueue run pr --template"],
+  ["nightqueue run pr --body-file <RUN_DIR>/pr-body.md", "nightqueue run pr --body-file /runs/p/s/pr-body.md"],
 ];
 
 test("every command the skill prescribes to the orchestrator passes the closed list", () => {
@@ -183,8 +183,8 @@ test("the skill's closed list names every rule and every guard of the data", () 
 });
 
 test("the job home variable is the one the runtime pins on the child", () => {
-  assert.equal(JOB_HOME_ENV, "NIGHTSHIFT_JOB_HOME");
-  assert.equal(PLUGIN_DIR_ENV, "NIGHTSHIFT_PLUGIN_DIR");
+  assert.equal(JOB_HOME_ENV, "NIGHTQUEUE_JOB_HOME");
+  assert.equal(PLUGIN_DIR_ENV, "NIGHTQUEUE_PLUGIN_DIR");
 });
 
 test("the read target of each tool, relative paths resolved against the cwd", () => {
@@ -236,7 +236,7 @@ test("the roots are the job's runs and every copy of the plugin, canonical and w
   const plugin = join(base, "plugin");
   mkdirSync(plugin);
   const env = {
-    NIGHTSHIFT_HOME: join(base, "other-home"),
+    NIGHTQUEUE_HOME: join(base, "other-home"),
     [JOB_HOME_ENV]: join(base, "home"),
     [PLUGIN_DIR_ENV]: plugin,
     HOME: base,
@@ -247,7 +247,7 @@ test("the roots are the job's runs and every copy of the plugin, canonical and w
   assert.ok(roots.includes(plugin), roots.join("\n"));
   assert.ok(roots.includes(join(realpathSync(packageRoot()), "plugin")), roots.join("\n"));
   assert.ok(roots.includes(join(base, "claude-config", "plugins")), roots.join("\n"));
-  assert.equal(roots.some((root) => root.startsWith(join(base, "other-home", "runs"))), false, "the runs of the job home lost to NIGHTSHIFT_HOME");
+  assert.equal(roots.some((root) => root.startsWith(join(base, "other-home", "runs"))), false, "the runs of the job home lost to NIGHTQUEUE_HOME");
   assert.equal(new Set(roots).size, roots.length);
 
   const { [JOB_HOME_ENV]: _pinned, [PLUGIN_DIR_ENV]: _plugin, ...unpinned } = env;
@@ -326,8 +326,8 @@ const OPERATOR_ALLOWED = [
   "gh pr checks 3",
   "gh pr view 3",
   "adb devices",
-  "nightshift run check 01 --project p --slug s",
-  "nightshift run log --project p --slug s",
+  "nightqueue run check 01 --project p --slug s",
+  "nightqueue run log --project p --slug s",
   "git status --short",
   "git rev-parse HEAD",
   "git branch --show-current",
@@ -344,8 +344,8 @@ const OPERATOR_DENIED = [
   "gh pr create",
   "gh pr merge 3",
   "gh issue close 12",
-  "nightshift run commit",
-  "nightshift run pr",
+  "nightqueue run commit",
+  "nightqueue run pr",
   "git -C /x worktree add .claude/worktrees/operator-qa-x HEAD",
   "git worktree add --force .claude/worktrees/operator-qa-x HEAD",
   "git worktree add -f .claude/worktrees/operator-qa-x HEAD",
@@ -409,7 +409,7 @@ for (const command of OPERATOR_DENIED) {
 test("the operator's list leaves the job's list untouched: the orchestrator still adds any worktree, commits and pushes", () => {
   assert.equal(orchestratorBashAllowed("git worktree add /tmp/x"), true);
   assert.equal(orchestratorBashAllowed("git commit -m x"), true);
-  assert.equal(orchestratorBashAllowed("nightshift run pr"), true);
+  assert.equal(orchestratorBashAllowed("nightqueue run pr"), true);
   assert.equal(orchestratorBashAllowed("gh issue list"), false);
   assert.equal(orchestratorBashAllowed("adb devices"), false);
 });
@@ -422,7 +422,7 @@ test("the operator's list is frozen data, and its rendering names the QA worktre
   assert.match(rendered, /git worktree add \.claude\/worktrees\/operator-qa-<slug> <commit-ish>/);
   assert.match(rendered, /git worktree remove \[--force\] \.claude\/worktrees\/operator-qa-<slug>/);
   assert.match(rendered, /gh issue list\|view/);
-  assert.match(rendered, /nightshift run check\|log\|index-save(,|$)/);
+  assert.match(rendered, /nightqueue run check\|log\|index-save(,|$)/);
   for (const write of ["git add", "git commit", "git push", "git fetch", "create", "commit|", "|pr"]) {
     assert.equal(rendered.includes(write), false, `${write} is in ${rendered}`);
   }

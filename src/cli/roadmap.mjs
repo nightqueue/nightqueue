@@ -6,8 +6,8 @@ import { checkArgs, parseCommand } from "./args.mjs";
 import { readOnlyQuery, resolveReadTarget } from "./decision.mjs";
 
 const USAGE = {
-  list: "nightshift roadmap [--project <name> | --org <name>] [--status <s>]... [--priority <n>]... [--type <t>]... [--json]",
-  show: "nightshift roadmap show <id> [--json]",
+  list: "nightqueue roadmap [--project <name> | --org <name>] [--status <s>]... [--priority <n>]... [--type <t>]... [--json]",
+  show: "nightqueue roadmap show <id> [--json]",
 };
 
 // Collapses the whitespace of operator free text, so a multi-line title never breaks the listing.
@@ -85,7 +85,7 @@ function detailLines(item) {
   return item.comments.length ? [...lines, ...item.comments.flatMap(commentLines)] : [...lines, "  (none)"];
 }
 
-// Runs `nightshift roadmap show <id>`, which reads one item and its thread and never writes.
+// Runs `nightqueue roadmap show <id>`, which reads one item and its thread and never writes.
 async function runShow(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.show });
@@ -99,7 +99,7 @@ async function runShow(argv, ctx) {
   for (const line of detailLines(item)) ctx.out(line);
 }
 
-// Runs `nightshift roadmap`, which reads the database and never writes to it; `show <id>` reads one item in full.
+// Runs `nightqueue roadmap`, which reads the database and never writes to it; `show <id>` reads one item in full.
 export async function run(argv, ctx) {
   if (argv[0] === "show") return await runShow(argv.slice(1), ctx);
   const { values, positionals } = parseCommand(argv, {

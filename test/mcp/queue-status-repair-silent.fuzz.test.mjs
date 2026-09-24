@@ -8,7 +8,7 @@ import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { writeRunTerminal } from "../../src/queue/resume.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const WORKER = "host:1000";
 const CAP = 4;
 const SLUG = "fix-worker";
@@ -23,10 +23,10 @@ function makeQueue(t, name) {
   return env;
 }
 
-// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connectMcp(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;

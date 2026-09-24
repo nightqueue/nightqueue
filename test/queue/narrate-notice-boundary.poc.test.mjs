@@ -19,14 +19,14 @@ test("a notice of exactly 400 code points is narrated whole, with no pointer and
 test("a notice of 401 code points is cut at exactly 400, with the pointer attached", () => {
   const notice = "a".repeat(401);
   const result = noticeNarration(notice, { jobId: 7 });
-  assert.equal(result, `notice\n    ${"a".repeat(400)}...\n    read the whole notice with: nightshift queue status 7`);
+  assert.equal(result, `notice\n    ${"a".repeat(400)}...\n    read the whole notice with: nightqueue queue status 7`);
 });
 
 test("a 401-code-point notice built from astral pairs is cut without corrupting a surrogate", () => {
   const emoji = "\u{1F600}";
   const notice = emoji.repeat(401);
   const result = noticeNarration(notice, { jobId: 7 });
-  assert.equal(result, `notice\n    ${emoji.repeat(400)}...\n    read the whole notice with: nightshift queue status 7`);
+  assert.equal(result, `notice\n    ${emoji.repeat(400)}...\n    read the whole notice with: nightqueue queue status 7`);
   assert.equal(result.includes("�"), false, "a lone surrogate half surfaced as a replacement character");
 });
 
@@ -39,5 +39,5 @@ test("a whitespace-only notice narrates as an empty body, never crashes, no poin
 test("a job id of 0 still gets its pointer, because the guard is `jobId === null`, not falsy", () => {
   const notice = "a".repeat(401);
   const result = noticeNarration(notice, { jobId: 0 });
-  assert.equal(result.endsWith("read the whole notice with: nightshift queue status 0"), true, result);
+  assert.equal(result.endsWith("read the whole notice with: nightqueue queue status 0"), true, result);
 });

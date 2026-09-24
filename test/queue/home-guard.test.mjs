@@ -15,7 +15,7 @@ const JOB = 9;
 
 // The refusal the operator's own home always answers with from inside a job.
 function homeRefusal(id) {
-  return `refused: this command would change the operator's nightshift home from inside job #${id}; verify against a temporary home (NIGHTSHIFT_HOME=$(mktemp -d)) instead`;
+  return `refused: this command would change the operator's nightqueue home from inside job #${id}; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead`;
 }
 
 // The refusal the operator's own Claude settings answer with from inside a job.
@@ -48,7 +48,7 @@ function makeRepo(t, name) {
 
 // Environment of a child the runner spawned: the job it runs plus the home and the host that are the operator's.
 function insideJob(env, { home, configDir }) {
-  return { ...env, NIGHTSHIFT_JOB_ID: String(JOB), [JOB_HOME_ENV]: home, [JOB_CLAUDE_DIR_ENV]: configDir };
+  return { ...env, NIGHTQUEUE_JOB_ID: String(JOB), [JOB_HOME_ENV]: home, [JOB_CLAUDE_DIR_ENV]: configDir };
 }
 
 const GUARDED = [
@@ -71,7 +71,7 @@ test("every command that writes the home is refused from inside the job that pin
   for (const argv of GUARDED) {
     const { ctx, out, err } = makeCtx(env);
     assert.equal(await run(argv, ctx), 1, argv.join(" "));
-    assert.deepEqual(err, [`nightshift: ${homeRefusal(JOB)}`], argv.join(" "));
+    assert.deepEqual(err, [`nightqueue: ${homeRefusal(JOB)}`], argv.join(" "));
     assert.deepEqual(out, [], argv.join(" "));
   }
 
@@ -81,7 +81,7 @@ test("every command that writes the home is refused from inside the job that pin
 
 test("a reading command and a help flag are never refused, and neither is a session with no job", async (t) => {
   const home = makeHome(t, "home-guard-reads");
-  const env = { ...home, NIGHTSHIFT_JOB_ID: String(JOB), [JOB_HOME_ENV]: homeDir(home) };
+  const env = { ...home, NIGHTQUEUE_JOB_ID: String(JOB), [JOB_HOME_ENV]: homeDir(home) };
 
   for (const argv of [["queue", "status"], ["project", "list"], ["queue", "add", "--help"]]) {
     const { ctx, err } = makeCtx(env);
@@ -105,7 +105,7 @@ test("a help flag the command would read as free text never carries a write past
   for (const argv of HELP_DECOYS) {
     const { ctx, out, err } = makeCtx(env);
     assert.equal(await run(argv, ctx), 1, argv.join(" "));
-    assert.deepEqual(err, [`nightshift: ${homeRefusal(JOB)}`], argv.join(" "));
+    assert.deepEqual(err, [`nightqueue: ${homeRefusal(JOB)}`], argv.join(" "));
     assert.deepEqual(out, [], argv.join(" "));
   }
 
@@ -116,12 +116,12 @@ test("a temporary home is allowed inside the same job, and init only runs once t
   const host = makeHostEnv(t, "home-guard-temp");
   const repo = makeRepo(t, "home-guard-temp-repo");
   const tempHome = join(makeDir(t, "home-guard-temp-home"), "home");
-  const onHostOfTheOperator = { ...insideJob(host.env, { home: host.home, configDir: host.configDir }), NIGHTSHIFT_HOME: tempHome };
+  const onHostOfTheOperator = { ...insideJob(host.env, { home: host.home, configDir: host.configDir }), NIGHTQUEUE_HOME: tempHome };
   t.after(() => closeDb(onHostOfTheOperator));
 
   const refused = makeCtx(onHostOfTheOperator);
   assert.equal(await run(["init", "--no-path", repo, "--no-gh"], refused.ctx), 1);
-  assert.deepEqual(refused.err, [`nightshift: ${hostRefusal(JOB)}`]);
+  assert.deepEqual(refused.err, [`nightqueue: ${hostRefusal(JOB)}`]);
   assert.equal(existsSync(tempHome), false, "a refused init still created the temporary home");
 
   const isolated = { ...onHostOfTheOperator, CLAUDE_CONFIG_DIR: makeDir(t, "home-guard-temp-config") };
@@ -136,13 +136,13 @@ test("a temporary home is allowed inside the same job, and init only runs once t
 });
 
 test("a job spawned by a runner that pinned nothing is refused whenever it aims at the default home", (t) => {
-  const legacy = { NIGHTSHIFT_JOB_ID: "7" };
+  const legacy = { NIGHTQUEUE_JOB_ID: "7" };
   assert.throws(() => refuseHomeWriteInsideJob(legacy), new RegExp(`from inside job #7`));
-  assert.throws(() => refuseHomeWriteInsideJob({ ...legacy, NIGHTSHIFT_HOME: "   " }), /verify against a temporary home/);
+  assert.throws(() => refuseHomeWriteInsideJob({ ...legacy, NIGHTQUEUE_HOME: "   " }), /verify against a temporary home/);
 
-  const temporary = { ...legacy, NIGHTSHIFT_HOME: makeDir(t, "home-guard-legacy") };
+  const temporary = { ...legacy, NIGHTQUEUE_HOME: makeDir(t, "home-guard-legacy") };
   assert.equal(refuseHomeWriteInsideJob(temporary), undefined);
-  assert.equal(refuseHomeWriteInsideJob({ NIGHTSHIFT_HOME: temporary.NIGHTSHIFT_HOME }), undefined);
+  assert.equal(refuseHomeWriteInsideJob({ NIGHTQUEUE_HOME: temporary.NIGHTQUEUE_HOME }), undefined);
 });
 
 test("a job answering its own gate against the home of the runner is never refused", async (t) => {
@@ -150,7 +150,7 @@ test("a job answering its own gate against the home of the runner is never refus
   makeProject(t, home, "alpha");
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, home).id;
   openDb(home).prepare("UPDATE jobs SET status = 'gate', notice_md = ? WHERE id = ?").run("why it stopped", id);
-  const env = { ...home, NIGHTSHIFT_JOB_ID: String(id), [JOB_HOME_ENV]: homeDir(home) };
+  const env = { ...home, NIGHTQUEUE_JOB_ID: String(id), [JOB_HOME_ENV]: homeDir(home) };
 
   const own = makeCtx(env);
   assert.equal(await run(["queue", "retry", String(id), "--note", "go on"], own.ctx), 0, own.err.join("\n"));

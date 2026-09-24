@@ -6,9 +6,9 @@ import { test } from "node:test";
 import { STRAY_PR_PREFIX, classifyJobResult } from "../../src/queue/classify.mjs";
 import { codeChangePublishedEvent, GATE_NOTICE, gateStream, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
-const REPO = "maykonVinicius/nightshift";
-const QA_PR = "https://github.com/maykonVinicius/nightshift/pull/71";
-const OWN_PR = "https://github.com/maykonVinicius/nightshift/pull/72";
+const REPO = "nightqueue/nightqueue";
+const QA_PR = "https://github.com/nightqueue/nightqueue/pull/71";
+const OWN_PR = "https://github.com/nightqueue/nightqueue/pull/72";
 const QA_BRANCH = "scratch/close-qa-20260921201325";
 const RUN_BRANCH = "worktree-feat+queue-close";
 const FINAL_TEXT = "Phase 7 done.";
@@ -53,7 +53,7 @@ test("a publication naming no branch still loses to the runtime record, and is f
 });
 
 test("a publication on the run's own branch, under its published name, still wins over the record without a flag", () => {
-  const published = "https://github.com/maykonVinicius/nightshift/pull/73";
+  const published = "https://github.com/nightqueue/nightqueue/pull/73";
   const outcome = classifyJobResult({ log: logWith(qaPublication({ branch: "feat/queue-close", url: published })), exitCode: 0, state: runState() });
 
   assert.equal(outcome.prUrl, published, "the host's word about the run's own delivery lost to the record");

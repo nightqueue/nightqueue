@@ -1,6 +1,6 @@
 # Security policy
 
-nightshift runs coding agents on your machine, with your Claude Code
+nightqueue runs coding agents on your machine, with your Claude Code
 subscription, and opens pull requests on your repositories. A bug in its guards
 can therefore run commands, write files or publish code where it should not.
 Reports of that kind are taken seriously and handled privately.
@@ -9,7 +9,7 @@ Reports of that kind are taken seriously and handled privately.
 
 Use GitHub's private vulnerability reporting on this repository
 (**Security → Report a vulnerability**). Please include the version
-(`nightshift --version` or the `package.json` of the runtime), the host
+(`nightqueue --version` or the `package.json` of the runtime), the host
 (macOS/Linux, Node version) and a reproduction or a description of the path.
 
 You will get an acknowledgement within a few days. Fixes ship as a patch release
@@ -28,7 +28,7 @@ Only the latest published version on npm receives fixes.
   plugin (real pull requests only on the designated demo repository, the job
   environment variables never unset).
 - The MCP server exposing more than it documents.
-- Secrets handled by `nightshift connection` reaching a log, a prompt or a file
+- Secrets handled by `nightqueue connection` reaching a log, a prompt or a file
   they should not.
 
 ## Out of scope

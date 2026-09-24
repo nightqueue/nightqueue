@@ -59,7 +59,7 @@ async function runRound(t, round) {
   writeFileSync(join(dirA, "state.json"), JSON.stringify({ marker: "A", schemaVersion: 1, slug: fromA, phases: [] }));
   writeFileSync(join(dirB, "state.json"), JSON.stringify({ marker: "B", schemaVersion: 1, slug: fromB, phases: [] }));
 
-  const barrierDir = mkdtempSync(join(tmpdir(), "nightshift-rename-race-"));
+  const barrierDir = mkdtempSync(join(tmpdir(), "nightqueue-rename-race-"));
   const barrierPath = join(barrierDir, "go");
   t.after(() => rmSync(barrierDir, { recursive: true, force: true }));
 

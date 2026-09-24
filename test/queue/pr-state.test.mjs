@@ -152,9 +152,9 @@ test("a failed read is held back for 30s, is asked again after, and keeps the la
   assert.equal(fresh.cache.stateOf(PR), "unknown", "a key that never answered is not `unknown`");
 });
 
-test("NIGHTSHIFT_NO_PR_CHECK=1 makes no read at all", async () => {
+test("NIGHTQUEUE_NO_PR_CHECK=1 makes no read at all", async () => {
   const { view, cache } = makeCache(openView());
-  await cache.refresh([PR], { NIGHTSHIFT_NO_PR_CHECK: "1" });
+  await cache.refresh([PR], { NIGHTQUEUE_NO_PR_CHECK: "1" });
   assert.equal(view.calls.length, 0);
   assert.equal(cache.stateOf(PR), "unknown");
 });
@@ -260,13 +260,13 @@ function fakeGhEnv(t, name, fields = {}) {
 
 // The argv of every call the fake gh recorded.
 function ghCalls(env) {
-  const log = env.NIGHTSHIFT_FAKE_GH_LOG;
+  const log = env.NIGHTQUEUE_FAKE_GH_LOG;
   if (!existsSync(log)) return [];
   return readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
 test("ghPrViewAsync asks the real fake gh for exactly the five fields and parses them", async (t) => {
-  const env = fakeGhEnv(t, "pr-view-merged", { NIGHTSHIFT_FAKE_GH_PR_STATE: "MERGED", NIGHTSHIFT_FAKE_GH_PR_SHA: MERGE_SHA });
+  const env = fakeGhEnv(t, "pr-view-merged", { NIGHTQUEUE_FAKE_GH_PR_STATE: "MERGED", NIGHTQUEUE_FAKE_GH_PR_SHA: MERGE_SHA });
   assert.deepEqual(await ghPrViewAsync(PR, { env }), {
     ok: true,
     state: "MERGED",
@@ -277,9 +277,9 @@ test("ghPrViewAsync asks the real fake gh for exactly the five fields and parses
   });
   assert.deepEqual(ghCalls(env), [["pr", "view", PR, "--json", PR_FIELDS]]);
 
-  const conflicted = fakeGhEnv(t, "pr-view-conflicted", { NIGHTSHIFT_FAKE_GH_PR_STATE: "OPEN", NIGHTSHIFT_FAKE_GH_PR_MERGEABLE: "CONFLICTING" });
+  const conflicted = fakeGhEnv(t, "pr-view-conflicted", { NIGHTQUEUE_FAKE_GH_PR_STATE: "OPEN", NIGHTQUEUE_FAKE_GH_PR_MERGEABLE: "CONFLICTING" });
   assert.equal(flattenPrState(await ghPrViewAsync(PR, { env: conflicted })), "conflicted");
-  const draft = fakeGhEnv(t, "pr-view-draft", { NIGHTSHIFT_FAKE_GH_PR_STATE: "OPEN", NIGHTSHIFT_FAKE_GH_PR_DRAFT: "1" });
+  const draft = fakeGhEnv(t, "pr-view-draft", { NIGHTQUEUE_FAKE_GH_PR_STATE: "OPEN", NIGHTQUEUE_FAKE_GH_PR_DRAFT: "1" });
   assert.deepEqual(await ghPrViewAsync(PR, { env: draft }), {
     ok: true,
     state: "OPEN",
@@ -294,8 +294,8 @@ test("ghPrViewAsync asks the real fake gh for exactly the five fields and parses
 });
 
 test("dispose kills a gh that is still hanging, so the refresh settles at once instead of after the sleep", async (t) => {
-  const env = fakeGhEnv(t, "pr-view-dispose", { NIGHTSHIFT_FAKE_GH_PR_STATE: "OPEN", NIGHTSHIFT_FAKE_GH_SLEEP_MS: "4000" });
-  delete env.NIGHTSHIFT_NO_PR_CHECK;
+  const env = fakeGhEnv(t, "pr-view-dispose", { NIGHTQUEUE_FAKE_GH_PR_STATE: "OPEN", NIGHTQUEUE_FAKE_GH_SLEEP_MS: "4000" });
+  delete env.NIGHTQUEUE_NO_PR_CHECK;
   const cache = createPrStateCache();
   const startedAt = Date.now();
   const pending = cache.refresh([PR], env);

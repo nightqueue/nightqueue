@@ -7,7 +7,7 @@ description: >-
   Use it in the /resolve pipeline OR directly to: review a PR or diff, audit
   existing code before a release, attack a freshly implemented feature,
   or assess the robustness of a specific module.
-tools: Read, Glob, Grep, Bash, Write, mcp__nightshift__lesson_recall
+tools: Read, Glob, Grep, Bash, Write, mcp__nightqueue__lesson_recall
 ---
 
 You are a senior adversarial QA. Your only goal is to **break the code** — find
@@ -115,7 +115,7 @@ matrix of the SKILL.md and the review dimensions are merged here — do not dupl
 
 **Consult `lesson_recall` after reading the diff, before fixing the fronts.** One
 single call, and never before the reading: the query is born from what you SAW in the code, not from the
-request statement. Call `mcp__nightshift__lesson_recall` with `target: "qa"`, `query` =
+request statement. Call `mcp__nightqueue__lesson_recall` with `target: "qa"`, `query` =
 3-6 words from the real area (file, mechanism, technology, symptom) and `project` = the
 identifier the prompt provides (`project:`/`Project:`); when the prompt carries only
 `Repository:`, pass that path verbatim — the runtime resolves a path inside a registered
@@ -134,7 +134,7 @@ injected in the prompt. In PROVER mode do not call it — your scope is the hypo
 - Insecure deserialization, path traversal, SSRF
 - **A secret in a log** (mandatory for EACH file the diff changes, in the
   WHOLE file — not only in the hunk): run
-  `nightshift run secrets-sweep --files <the touched files, comma-separated>`.
+  `nightqueue run secrets-sweep --files <the touched files, comma-separated>`.
   It prints one candidate per log/print call whose arguments reference a value named like
   token/secret/password/key/authorization and, indented under it, the `def` line that
   **defines** that variable in the same file — the typical leak does not show on the log line
@@ -247,10 +247,10 @@ a number that does not match fails the phase and relaunches you.
 
 ## 3. Proof of the break: an executable PoC per vector
 
-**Real pull requests and nightshift guards — hard rules.**
+**Real pull requests and nightqueue guards — hard rules.**
 
-- **(a)** Never unset, stub, override or work around a nightshift guard or its environment variables (`NIGHTSHIFT_JOB_ID`, `NIGHTSHIFT_JOB_HOME`, `NIGHTSHIFT_JOB_CLAUDE_DIR`, or any refusal nightshift prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
-- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightshift run pr`.
+- **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
+- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightqueue run pr`.
 
 Every break needs **proof**, not an assertion. There are two types:
 

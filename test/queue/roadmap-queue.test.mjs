@@ -25,7 +25,7 @@ import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, SLUG } from "../../test-support/streams.mjs";
 import { runDir } from "../../src/config/paths.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const PR_URL = "https://github.com/acme/alpha/pull/7";
 
 const LINKED = {
@@ -70,10 +70,10 @@ Consequences: a lost lease kills the child
 Context: a slow disk timed the lease out
 Decision: read the heartbeat interval from the configuration`;
 
-// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connect(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;
@@ -223,7 +223,7 @@ test("a job that ends done moves an item the operator cancelled while it ran, an
   assert.equal(row.job_id, queued.id, "the link is history and survives a manual status change");
 });
 
-test("nightshift queue add --roadmap builds the same prompt as the tool, from anywhere", async (t) => {
+test("nightqueue queue add --roadmap builds the same prompt as the tool, from anywhere", async (t) => {
   const { env, item } = makeRoadmapHome(t, "roadmap-queue-cli");
   const elsewhere = makeDir(t, "roadmap-queue-cli-cwd");
 

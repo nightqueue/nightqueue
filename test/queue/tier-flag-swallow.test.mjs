@@ -7,7 +7,7 @@ import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { getJob } from "../../src/memory/jobs.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
 // Runs the real CLI in its own process, with the isolated home of the test.
 function runCli(env, args, { cwd } = {}) {
@@ -38,7 +38,7 @@ test("`queue add --tier --run \"...\"` refuses instead of swallowing `--run` as 
   const result = runCli(env, ["queue", "add", "--tier", "--run", "fix thing"], { cwd: repo });
 
   assert.equal(result.status, 1, `expected a refusal, got: ${result.stdout}`);
-  assert.match(result.stderr, /nightshift: Option '--tier' argument is ambiguous\./);
+  assert.match(result.stderr, /nightqueue: Option '--tier' argument is ambiguous\./);
   assert.match(result.stderr, /Did you forget to specify the option argument for '--tier'\?/);
   assert.equal(getJob(1, env), null, "an ambiguous `--tier` still queued a job");
 });

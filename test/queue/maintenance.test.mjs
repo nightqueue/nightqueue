@@ -74,7 +74,7 @@ test("the timer never overlaps a pass that is still running", async (t) => {
 });
 
 test("inside a job the timer is never started: the runner owns the maintenance there", async (t) => {
-  const env = { ...makeMaintainedHome(t, "maintenance-in-job"), NIGHTSHIFT_JOB_ID: "7" };
+  const env = { ...makeMaintainedHome(t, "maintenance-in-job"), NIGHTQUEUE_JOB_ID: "7" };
   const { calls, run } = countingRun();
 
   assert.equal(startMaintenance(env, { intervalMs: 20, run }), false);

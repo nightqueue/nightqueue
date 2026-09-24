@@ -9,10 +9,10 @@ export function gitVars() {
   return {
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_SYSTEM: "/dev/null",
-    GIT_AUTHOR_NAME: "nightshift",
-    GIT_AUTHOR_EMAIL: "nightshift@example.invalid",
-    GIT_COMMITTER_NAME: "nightshift",
-    GIT_COMMITTER_EMAIL: "nightshift@example.invalid",
+    GIT_AUTHOR_NAME: "nightqueue",
+    GIT_AUTHOR_EMAIL: "nightqueue@example.invalid",
+    GIT_COMMITTER_NAME: "nightqueue",
+    GIT_COMMITTER_EMAIL: "nightqueue@example.invalid",
   };
 }
 

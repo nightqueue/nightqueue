@@ -8,25 +8,25 @@ const VERIFIER = readFileSync(new URL("../plugin/agents/verifier.md", import.met
 const QA_AGENT = readFileSync(new URL("../plugin/agents/qa-guardian.md", import.meta.url), "utf8");
 const QA_SKILL = readFileSync(new URL("../plugin/skills/qa-guardian/SKILL.md", import.meta.url), "utf8");
 
-const INVARIANTS = ["nightshift sandbox <cmd>", "not verifiable here"];
+const INVARIANTS = ["nightqueue sandbox <cmd>", "not verifiable here"];
 
 const GUARD_RULES_BLOCK = [
-  "**Real pull requests and nightshift guards — hard rules.**",
+  "**Real pull requests and nightqueue guards — hard rules.**",
   "",
-  "- **(a)** Never unset, stub, override or work around a nightshift guard or its environment variables (`NIGHTSHIFT_JOB_ID`, `NIGHTSHIFT_JOB_HOME`, `NIGHTSHIFT_JOB_CLAUDE_DIR`, or any refusal nightshift prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.",
-  "- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightshift run pr`.",
+  "- **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.",
+  "- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightqueue run pr`.",
 ].join("\n");
 
 const GUARD_RULE_FILES = { "resolve skill": RESOLVE, "verifier agent": VERIFIER, "qa-guardian agent": QA_AGENT, "qa-guardian skill": QA_SKILL };
 
 test("the four pipeline and QA instruction files carry the real pull request and guard rules, byte-identical", () => {
   for (const [name, text] of Object.entries(GUARD_RULE_FILES)) {
-    assert.ok(text.includes(GUARD_RULES_BLOCK), `the ${name} lost or changed the hard rules on real pull requests and nightshift guards`);
+    assert.ok(text.includes(GUARD_RULES_BLOCK), `the ${name} lost or changed the hard rules on real pull requests and nightqueue guards`);
   }
 });
 
 test("the verifier agent states the guard rules as Step 2.10, after Step 2.9 and before the report", () => {
-  const step = VERIFIER.indexOf("### Step 2.10 — Real pull requests and nightshift guards in verification");
+  const step = VERIFIER.indexOf("### Step 2.10 — Real pull requests and nightqueue guards in verification");
   assert.notEqual(step, -1, "the verifier agent has no Step 2.10");
   assert.ok(step > VERIFIER.indexOf("### Step 2.9 —"), "Step 2.10 sits before Step 2.9");
   assert.ok(step < VERIFIER.indexOf(GUARD_RULES_BLOCK), "the rules are not under Step 2.10");

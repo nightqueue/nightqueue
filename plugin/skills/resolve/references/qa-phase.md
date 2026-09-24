@@ -122,7 +122,7 @@ FUZZ_TEMPLATE: [PLUGIN_ROOT]/skills/qa-guardian/references/fuzz-template.md
 ```
 
 **Stage A — Analyst (complex):** launch 1 qa-guardian
-(subagent_type="nightshift:qa-guardian", `model: "sonnet"`), header
+(subagent_type="nightqueue:qa-guardian", `model: "sonnet"`), header
 `🛡️ QA-GUARDIAN · complex · ANALYST · ...`:
 
 ```
@@ -167,7 +167,7 @@ RISK_MATRIX: [PLUGIN_ROOT]/skills/qa-guardian/references/risk-matrix.md
 FUZZ_TEMPLATE: [PLUGIN_ROOT]/skills/qa-guardian/references/fuzz-template.md
 ```
 
-**Stage A gate:** run `nightshift run check 05a` (the artifact gate, step 5.2) over
+**Stage A gate:** run `nightqueue run check 05a` (the artifact gate, step 5.2) over
 `05a-qa-analyst.md`, which must carry `## Break hypotheses` and `## Test recipe` — on
 `MISSING`, relaunch the analyst (🔁) once; if it persists, terminate and inform the user. Zero
 runtime hypotheses → skip stage B and go straight to the consolidation.
@@ -178,7 +178,7 @@ never by writing the file: this is what makes a resume skip the analyst if the p
 halfway.
 
 **Stage B — Provers (complex):** launch **N qa-guardian in parallel, all in a single message**
-(subagent_type="nightshift:qa-guardian", `model: "sonnet"`, `mode: "bypassPermissions"`) — one
+(subagent_type="nightqueue:qa-guardian", `model: "sonnet"`, `mode: "bypassPermissions"`) — one
 per root group of the hypotheses (never one per symptom). The `description` of each prover's Agent call MUST start with
 `H<N> (group: <group>): ` — the cockpit identifies each prover lane and its verdict by that
 prefix. Single header of the phase: `🛡️ QA-GUARDIAN · complex · PROVERS ×N · ...`. On a resume
@@ -229,5 +229,5 @@ contract that Phase 6 consumes:
 - Record 5.1: one line per agent — `🛡️ QA-Guardian (analyst)`, `🛡️ QA-Guardian (prover
   <group>)`.
 
-Write the consolidated report to `05-qa.md` via Write and run `nightshift run check 05`
+Write the consolidated report to `05-qa.md` via Write and run `nightqueue run check 05`
 (the artifact gate, step 5.2) — the artifact Phase 6 and Phase 8 re-read via Read.

@@ -5,10 +5,10 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { makeHome } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const TEST_TOKEN = "s3cret-token";
 
-// Spawns `nightshift mcp --http` on an ephemeral port and resolves once it is listening.
+// Spawns `nightqueue mcp --http` on an ephemeral port and resolves once it is listening.
 function startHttp(t, env) {
   const child = spawn(process.execPath, [CLI, "mcp", "--http", "--port", "0", "--token", TEST_TOKEN], {
     env,

@@ -2,7 +2,7 @@ import { statSync } from "node:fs";
 import { dbShmPath } from "../src/config/paths.mjs";
 import { openDb } from "../src/memory/db.mjs";
 
-// Opens the database of NIGHTSHIFT_HOME, says which shared-memory file it is attached to and keeps the connection open until this process is killed.
+// Opens the database of NIGHTQUEUE_HOME, says which shared-memory file it is attached to and keeps the connection open until this process is killed.
 function main() {
   const db = openDb(process.env);
   db.prepare("SELECT COUNT(*) AS n FROM jobs").get();

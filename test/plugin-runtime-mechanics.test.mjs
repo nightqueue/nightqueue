@@ -11,10 +11,10 @@ const QA_PHASE = join(ROOT, "plugin/skills/resolve/references/qa-phase.md");
 const REPOSITORY_LINE = "Repository: [CWD PATH]";
 const PROJECT_LINE = "Project: [PROJECT — the same identifier used in RUN_DIR]";
 const RUNTIME_WORK = {
-  verifier: "nightshift verify",
-  explore: "nightshift libs",
-  architect: "nightshift libs",
-  "qa-guardian": "nightshift run secrets-sweep",
+  verifier: "nightqueue verify",
+  explore: "nightqueue libs",
+  architect: "nightqueue libs",
+  "qa-guardian": "nightqueue run secrets-sweep",
   triager: "Open pull requests matching this job:",
 };
 
@@ -45,7 +45,7 @@ test("each agent names the runtime work that replaced its prose", () => {
     assert.ok(readAgent(agent).includes(mention), `${agent} does not name \`${mention}\``);
   }
   assert.equal(
-    readAgent("explore").includes("nightshift run index-save"),
+    readAgent("explore").includes("nightqueue run index-save"),
     true,
     "explore does not say the runtime persists the index from its artifact",
   );
@@ -54,7 +54,7 @@ test("each agent names the runtime work that replaced its prose", () => {
 // The verifier reads the scale of the diff off the block instead of running its own git commands.
 test("the verifier reads the diff-hygiene line instead of running git itself", () => {
   const agent = readAgent("verifier");
-  assert.ok(agent.includes("The `diff-hygiene` line of the `nightshift verify` block"), "the verifier lost the diff-hygiene pointer");
+  assert.ok(agent.includes("The `diff-hygiene` line of the `nightqueue verify` block"), "the verifier lost the diff-hygiene pointer");
   assert.ok(agent.includes("the summary of `git diff --stat`"), "the verifier does not report the scale of the change");
 });
 
@@ -79,7 +79,7 @@ test("each Repository template of the skill carries a Project line", () => {
 test("the qa-guardian calls the sweep and still resolves its own plugin paths", () => {
   const agent = readAgent("qa-guardian");
   const skill = readFileSync(QA_PHASE, "utf8");
-  assert.ok(agent.includes("nightshift run secrets-sweep --files"), "qa-guardian does not call the sweep command");
+  assert.ok(agent.includes("nightqueue run secrets-sweep --files"), "qa-guardian does not call the sweep command");
   assert.equal(agent.includes("grep -niE"), false, "qa-guardian still runs the greps the command replaced");
   assert.ok(
     agent.includes("fall back to `Glob` for `**/skills/qa-guardian/SKILL.md`"),

@@ -68,17 +68,17 @@ import { choose, confirm } from "./prompt.mjs";
 import { runtimeLabel } from "./runtime-versions.mjs";
 
 export const USAGE = {
-  add: "nightshift queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id> [--project <name|all>]]",
-  status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
-  run: "nightshift queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
-  cancel: "nightshift queue cancel <id> [--reason <text>] [--json]",
-  close: "nightshift queue close <id> [--force] [--foreground] [--decisions accept|reject|keep] [--json], or nightshift queue close --merged [--decisions accept|reject|keep] [--json]",
-  retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
-  repair: "nightshift queue repair <id> [--json]",
-  pause: "nightshift queue pause",
-  resume: "nightshift queue resume",
-  log: "nightshift queue log <id> [--follow] [--raw] [--all]",
-  session: "nightshift queue session <id> [--print] [--json]",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id> [--project <name|all>]]",
+  status: "nightqueue queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
+  run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
+  cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
+  close: "nightqueue queue close <id> [--force] [--foreground] [--decisions accept|reject|keep] [--json], or nightqueue queue close --merged [--decisions accept|reject|keep] [--json]",
+  retry: "nightqueue queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
+  repair: "nightqueue queue repair <id> [--json]",
+  pause: "nightqueue queue pause",
+  resume: "nightqueue queue resume",
+  log: "nightqueue queue log <id> [--follow] [--raw] [--all]",
+  session: "nightqueue queue session <id> [--print] [--json]",
 };
 
 const ADD_HELP_FLAGS = new Set(["--help", "-h"]);
@@ -93,7 +93,7 @@ another job's pull request merged first is cut wrong: fold it into that job. Ind
 parallel and merge in any order.
 
 example:
-  nightshift queue add "Self-contained install. Stages: 1) runtime under ~/.nightshift; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."`;
+  nightqueue queue add "Self-contained install. Stages: 1) runtime under ~/.nightqueue; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."`;
 
 // Waits the given number of milliseconds.
 function sleep(ms) {
@@ -122,7 +122,7 @@ function normalizeWatchArgv(argv) {
 
 // The error `queue add` ends on whenever the current directory resolves to no project and nothing is registered for it.
 function unregisteredError(cwd) {
-  return new UserError(`no project registered for ${cwd}; run \`nightshift init\` here, or pass the project NAME (\`nightshift project list\`)`);
+  return new UserError(`no project registered for ${cwd}; run \`nightqueue init\` here, or pass the project NAME (\`nightqueue project list\`)`);
 }
 
 // The question `queue add` asks before it registers the repository of the current directory.
@@ -147,7 +147,7 @@ function refuseRegistrationInsideJob(cwd, env) {
   if (own === null) return;
   throw new UserError(
     `refusing to register ${cwd} from inside job \`${own}\`: an unattended run never registers a project; ` +
-      "pass the registered project NAME (`nightshift project list`), or ask the operator to run `nightshift init` there",
+      "pass the registered project NAME (`nightqueue project list`), or ask the operator to run `nightqueue init` there",
   );
 }
 
@@ -168,7 +168,7 @@ function flaggedProject(config, positionals, values) {
   if (projectByName(config, positionals[0])) throw new UserError(PROJECT_NAMED_TWICE);
   const named = projectByName(config, values.project);
   if (named) return named;
-  throw new UserError(`unknown project \`${values.project}\`; run \`nightshift project list\``);
+  throw new UserError(`unknown project \`${values.project}\`; run \`nightqueue project list\``);
 }
 
 // Chooses the project of the job: `--project`, the first positional when it is a registered NAME, otherwise the project of the current directory.
@@ -197,9 +197,9 @@ async function reportWaiting(blocker, ctx) {
 
 // The line that tells the operator what started and how to follow it or stop it.
 function startedLine({ jobId, pid, watchIntervalS, logPath }) {
-  if (watchIntervalS !== null) return `runner started (pid ${pid}, every ${watchIntervalS} s) - stop with: nightshift queue run --stop`;
-  if (jobId !== null) return `job #${jobId} started (pid ${pid}) - follow with: nightshift queue log ${jobId} --follow`;
-  return `runner started (pid ${pid}) - draining the queue until nothing is pending; follow with: nightshift queue status --follow (log: ${logPath})`;
+  if (watchIntervalS !== null) return `runner started (pid ${pid}, every ${watchIntervalS} s) - stop with: nightqueue queue run --stop`;
+  if (jobId !== null) return `job #${jobId} started (pid ${pid}) - follow with: nightqueue queue log ${jobId} --follow`;
+  return `runner started (pid ${pid}) - draining the queue until nothing is pending; follow with: nightqueue queue status --follow (log: ${logPath})`;
 }
 
 // Starts the runner detached, with the prune and the registration inside one hold of the home lock, and says what happened.
@@ -242,7 +242,7 @@ async function notStartedLines(job, cycle, ctx) {
 
 // Runs one job here and turns its outcome into the exit code: 0 only when it finished as `done`.
 async function runJobHere(job, ctx) {
-  ctx.out(`running job #${job.id} in the foreground; follow the stream with \`nightshift queue log ${job.id} --follow\``);
+  ctx.out(`running job #${job.id} in the foreground; follow the stream with \`nightqueue queue log ${job.id} --follow\``);
   const cycle = await runCycle({ jobId: job.id, max: 1, env: ctx.env });
   const processed = cycle.processed.find((entry) => entry.id === job.id);
   if (!processed) {
@@ -274,7 +274,7 @@ function checkForegroundNeedsRun(values, usage) {
 // The closing sentence of `queue add` when the job is not about to run: what happens to it given who is online right now.
 function queuedRunnerLine(ctx) {
   const { runners, error } = liveRunnersReport(ctx.env, ctx.killImpl);
-  if (error !== null) return "Start the batch: nightshift queue run";
+  if (error !== null) return "Start the batch: nightqueue queue run";
   const workers = queueWorkers(runners);
   if (workers.length === 0) return `${noRunnerWait()}.`;
   return `${runnersOnline(workers.length)} - it will be picked up.`;
@@ -310,7 +310,7 @@ async function addFromPrompt(positionals, values, ctx) {
 // Refuses `--run` for an org item queued for `all`, because it starts one job and `all` fathers one per project.
 function refuseRunForAll(values) {
   if (values.run === true && values.project === ALL_PROJECTS) {
-    throw new UserError(`\`--run\` starts one job, and \`--project ${ALL_PROJECTS}\` queues one per project; queue them, then start the batch with \`nightshift queue run\``);
+    throw new UserError(`\`--run\` starts one job, and \`--project ${ALL_PROJECTS}\` queues one per project; queue them, then start the batch with \`nightqueue queue run\``);
   }
 }
 
@@ -593,7 +593,7 @@ function formatTable(jobs, ctx) {
 function formatNotice(job) {
   if (!job.notice_md) return [];
   const body = String(job.notice_md).split("\n").map((line) => `  ${line}`);
-  const answer = job.status === "gate" ? [`retry it with: nightshift queue retry ${job.id} --note "<your answer>"`] : [];
+  const answer = job.status === "gate" ? [`retry it with: nightqueue queue retry ${job.id} --note "<your answer>"`] : [];
   return ["notice", ...body, ...answer];
 }
 
@@ -657,7 +657,7 @@ function formatRunner(runner, env = process.env) {
 function formatRunners(runners, activeJobs = 0, env = process.env) {
   if (runners.length) return [runnersOnline(runners.length), ...runners.map((runner) => formatRunner(runner, env))];
   if (activeJobs > 0) {
-    return [`${runnersOnline(0)} - ${pendingJobs(activeJobs).replace("pending", "running")} under a one-shot runner - nothing will pick up the pending jobs after it (start a drain with: nightshift queue run)`];
+    return [`${runnersOnline(0)} - ${pendingJobs(activeJobs).replace("pending", "running")} under a one-shot runner - nothing will pick up the pending jobs after it (start a drain with: nightqueue queue run)`];
   }
   return [noRunnerWait()];
 }
@@ -676,7 +676,7 @@ function backlogLine({ activeJobs, counts, runners, jobs = [] }) {
   if (!isQueueIdle({ activeJobs, runners: queueWorkers(runners) })) return null;
   const parked = parkedBacklogLine({ jobs, pending: counts.pending });
   if (parked) return `${pendingJobs(counts.pending)} waiting - ${parked}`;
-  return `${pendingJobs(counts.pending)} waiting - start the batch: nightshift queue run`;
+  return `${pendingJobs(counts.pending)} waiting - start the batch: nightqueue queue run`;
 }
 
 const STATUS_OPTIONS = {
@@ -696,7 +696,7 @@ function normalizeFollowArgv(argv) {
 
 // The `runner:` line of a home whose registry could not be listed: nothing is known about the runners, least of all that none is live.
 function unreadableRegistryLine(error) {
-  return `runner: unknown - the runner registry cannot be listed (${error}), a runner may be live; run \`nightshift doctor\``;
+  return `runner: unknown - the runner registry cannot be listed (${error}), a runner may be live; run \`nightqueue doctor\``;
 }
 
 // The counts-by-status line, breaking out how many of the pending jobs a preflight block is holding back.
@@ -1035,7 +1035,7 @@ function stopReport({ outcome, pid, path }) {
   if (outcome === "stale") return { line: "runner was not running (stale registration removed)", code: 0 };
   if (outcome === "stopped") return { line: `runner stopped (pid ${pid})`, code: 0 };
   if (outcome === "foreign") {
-    return { line: `runner (pid ${pid}) belongs to another user; nightshift will not signal it - check that pid and remove ${path} by hand`, code: 1 };
+    return { line: `runner (pid ${pid}) belongs to another user; nightqueue will not signal it - check that pid and remove ${path} by hand`, code: 1 };
   }
   const seconds = STOP_TIMEOUT_MS / 1000;
   return { line: `runner (pid ${pid}) did not stop within ${seconds}s; it finishes the job it is running and exits by itself`, code: 1 };
@@ -1197,7 +1197,7 @@ function closeMergedLines({ closed, refused, undetermined, worktrees, decisions 
     ...decisions.map(proposalLine),
   ];
   const unchecked = undetermined.filter(isUnchecked);
-  if (unchecked.length) lines.push(`${unchecked.length} job${unchecked.length === 1 ? "" : "s"} left unchecked; run nightshift queue close --merged again`);
+  if (unchecked.length) lines.push(`${unchecked.length} job${unchecked.length === 1 ? "" : "s"} left unchecked; run nightqueue queue close --merged again`);
   return lines;
 }
 
@@ -1243,8 +1243,8 @@ function closeOutcomeLine(id, { outcome, job }) {
   const worktree = outcome.worktree ? `; ${worktreeLine(outcome.worktree)}` : "";
   if (outcome.status === "closed") return `job #${id} closed: PR #${prNumberOf(job)} merged as ${String(outcome.mergeSha ?? "").slice(0, 7)}${worktree}`;
   if (outcome.status === "cancelled") return `job #${id} cancelled: PR #${prNumberOf(job)} was closed without being merged; nothing to close${worktree}`;
-  if (outcome.status === "lost") return `job #${id}: the close lease was taken over by another process; follow it with nightshift queue status ${id}`;
-  return closeStoppedLine(jobView(job)) ?? `⛔ close stopped at ${outcome.step}: ${outcome.reason} - run again with: nightshift queue close ${id}`;
+  if (outcome.status === "lost") return `job #${id}: the close lease was taken over by another process; follow it with nightqueue queue status ${id}`;
+  return closeStoppedLine(jobView(job)) ?? `⛔ close stopped at ${outcome.step}: ${outcome.reason} - run again with: nightqueue queue close ${id}`;
 }
 
 // Runs the close of a job in this process, printing each settled step, and answers its outcome with the job as it ended.
@@ -1299,7 +1299,7 @@ async function runCloseDetached(id, values, ctx) {
     return 0;
   }
   if (started.forced) ctx.out(forcedCloseLine(id));
-  ctx.out(`close of job #${id} started (pid ${started.pid}) - follow with: tail -f ${started.logPath} (log: ${started.logPath}), or nightshift queue status ${id}`);
+  ctx.out(`close of job #${id} started (pid ${started.pid}) - follow with: tail -f ${started.logPath} (log: ${started.logPath}), or nightqueue queue status ${id}`);
   return 0;
 }
 
@@ -1348,7 +1348,7 @@ async function runRetry(argv, ctx) {
 // What a re-classification answers the operator: the outcome it corrected, or that there was nothing to correct.
 function repairLine(outcome) {
   if (!outcome.changed) return `job #${outcome.id} is still \`${outcome.from}\`; there is nothing to correct`;
-  if (outcome.noticeOnly) return `job #${outcome.id} is still \`${outcome.from}\`; its notice was re-read from the log. Read it with: nightshift queue status ${outcome.id}`;
+  if (outcome.noticeOnly) return `job #${outcome.id} is still \`${outcome.from}\`; its notice was re-read from the log. Read it with: nightqueue queue status ${outcome.id}`;
   return `job #${outcome.id} re-classified from \`${outcome.from}\` to \`${outcome.to}\`${outcome.prUrl ? ` (${outcome.prUrl})` : ""}`;
 }
 
@@ -1425,7 +1425,7 @@ function watchOutputClosed(ctx) {
 
 // Traces every poll of the follow on stderr, the hook that captures a stream that went quiet in the wild.
 function pollTracer(ctx) {
-  if (ctx.env?.NIGHTSHIFT_FOLLOW_DEBUG !== "1") return null;
+  if (ctx.env?.NIGHTQUEUE_FOLLOW_DEBUG !== "1") return null;
   return (notice) => ctx.err(`follow: t=${notice.at} size=${notice.size} offset=${notice.offset} lines=${notice.lines}`);
 }
 
@@ -1532,10 +1532,10 @@ function sessionLine(resolved) {
 // The shell command `--print` answers: the operator resuming the session, run from its cwd.
 function sessionCommand(resolved) {
   const cwd = `'${resolved.cwd.replaceAll("'", "'\\''")}'`;
-  return `cd ${cwd} && nightshift open --resume ${resolved.session}`;
+  return `cd ${cwd} && nightqueue open --resume ${resolved.session}`;
 }
 
-// Runs `nightshift queue session`, which resumes the session of a job's last attempt through the operator launcher, in the run's worktree or, when that is gone, the project's checkout.
+// Runs `nightqueue queue session`, which resumes the session of a job's last attempt through the operator launcher, in the run's worktree or, when that is gone, the project's checkout.
 async function runSession(argv, ctx) {
   const { values, positionals } = parseCommand(argv, SESSION_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.session });
@@ -1567,7 +1567,7 @@ const SUBCOMMANDS = new Map([
   ["session", runSession],
 ]);
 
-// Dispatches the subcommands of `nightshift queue`, returning the exit code the subcommand decided.
+// Dispatches the subcommands of `nightqueue queue`, returning the exit code the subcommand decided.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);

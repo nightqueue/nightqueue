@@ -1,4 +1,4 @@
-# Releasing nightshift
+# Releasing nightqueue
 
 A release is a pushed tag. Nothing is published from a laptop: `.github/workflows/release.yml`
 runs on every tag matching `v*`, publishes to npm with OIDC trusted publishing and opens the
@@ -8,7 +8,7 @@ workflow, not commented out.
 ## The flow
 
 1. **Decide the next version and put it in the three files that declare it.** Edit `CHANGELOG.md`
-   (turn `## Unreleased` into `## <version> - YYYY-MM-DD`) and the `Licensed Work:        nightshift <version>`
+   (turn `## Unreleased` into `## <version> - YYYY-MM-DD`) and the `Licensed Work:        nightqueue <version>`
    line of `LICENSE`, then commit. This step is easy to miss and blocks everything after it:
    `release:check` compares `package.json`, `CHANGELOG.md` and `LICENSE`, and `npm version` refuses
    to run on a dirty tree.
@@ -31,10 +31,10 @@ before pushing.
 Trusted publishing has to be granted once, by a maintainer of the package, before the first tag is
 pushed. Until this is done, the workflow fails at `npm publish` with an authentication error.
 
-- [ ] Sign in to npmjs.com as a maintainer of `@maykonv/nightshift`.
+- [ ] Sign in to npmjs.com as a maintainer of `nightqueue`.
 - [ ] Open the package settings → **Publishing access**.
 - [ ] Add a trusted publisher: provider **GitHub Actions**.
-- [ ] Repository: `maykonVinicius/nightshift`.
+- [ ] Repository: `nightqueue/nightqueue`.
 - [ ] Workflow filename: `release.yml`.
 - [ ] Environment: leave it empty (the workflow declares no environment).
 - [ ] Save, then push the tag.

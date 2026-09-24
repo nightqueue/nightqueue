@@ -38,8 +38,8 @@ function writeHoldingClaude(t) {
     "function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }",
     "",
     "async function main() {",
-    '  const holdMs = Number(process.env.NIGHTSHIFT_TEST_HOLD_MS ?? "0");',
-    "  const markerPath = process.env.NIGHTSHIFT_TEST_MARKER;",
+    '  const holdMs = Number(process.env.NIGHTQUEUE_TEST_HOLD_MS ?? "0");',
+    "  const markerPath = process.env.NIGHTQUEUE_TEST_MARKER;",
     "  if (markerPath) writeFileSync(markerPath, JSON.stringify({ pid: process.pid, start: Date.now() }));",
     "  await sleep(holdMs);",
     "}",
@@ -108,7 +108,7 @@ function killerOf(t) {
 
 // Environment of one real runner process, with its own hold and its own marker file.
 function runnerEnv(env, bin, { holdMs, marker }) {
-  return { ...env, NIGHTSHIFT_CLAUDE_BIN: bin, NIGHTSHIFT_TEST_HOLD_MS: String(holdMs), NIGHTSHIFT_TEST_MARKER: marker };
+  return { ...env, NIGHTQUEUE_CLAUDE_BIN: bin, NIGHTQUEUE_TEST_HOLD_MS: String(holdMs), NIGHTQUEUE_TEST_MARKER: marker };
 }
 
 // Moves the lease of a job to a given number of seconds in the past.

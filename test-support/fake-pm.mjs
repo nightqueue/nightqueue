@@ -7,14 +7,14 @@ const manager = basename(process.argv[1] ?? "pm");
 
 // Records the call, with the environment the caller handed it, in the log the test reads back.
 function logCall() {
-  const path = process.env.NIGHTSHIFT_FAKE_PM_LOG;
+  const path = process.env.NIGHTQUEUE_FAKE_PM_LOG;
   if (!path) return;
   mkdirSync(dirname(path), { recursive: true });
   const entry = {
     manager,
     args,
     cwd: process.cwd(),
-    home: process.env.NIGHTSHIFT_HOME ?? null,
+    home: process.env.NIGHTQUEUE_HOME ?? null,
     claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null,
   };
   appendFileSync(path, `${JSON.stringify(entry)}\n`);
@@ -28,12 +28,12 @@ function fail(message, code = 1) {
 
 // Outcomes the test declared per script name; without them the fake refuses to guess whether a check passes.
 function declaredScripts() {
-  const raw = process.env.NIGHTSHIFT_FAKE_PM_SCRIPTS;
-  if (!raw) return fail("NIGHTSHIFT_FAKE_PM_SCRIPTS is not set; refusing to guess the outcome of a check", 2);
+  const raw = process.env.NIGHTQUEUE_FAKE_PM_SCRIPTS;
+  if (!raw) return fail("NIGHTQUEUE_FAKE_PM_SCRIPTS is not set; refusing to guess the outcome of a check", 2);
   try {
     return JSON.parse(raw);
   } catch {
-    return fail("NIGHTSHIFT_FAKE_PM_SCRIPTS is not valid JSON", 2);
+    return fail("NIGHTQUEUE_FAKE_PM_SCRIPTS is not valid JSON", 2);
   }
 }
 

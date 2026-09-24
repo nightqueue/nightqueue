@@ -69,7 +69,7 @@ export function statusLabel(job, nowMs = Date.now()) {
 // The line that tells the operator a close stopped and how to resume it, or null when the job's close did not fail.
 export function closeStoppedLine(job) {
   if (job?.close_status !== "failed") return null;
-  return `⛔ close stopped at ${currentCloseStep(job.close)}: ${failedReason(job.close)} - run again with: nightshift queue close ${job.id}`;
+  return `⛔ close stopped at ${currentCloseStep(job.close)}: ${failedReason(job.close)} - run again with: nightqueue queue close ${job.id}`;
 }
 
 // What SLUG/LAST says about a job's close, or null when the close has nothing to say there.
@@ -77,7 +77,7 @@ export function closeLastCell(job, nowMs = Date.now()) {
   const state = closeState(job, nowMs);
   if (state === "failed") return `⛔ close stopped at ${currentCloseStep(job.close)}: ${failedReason(job.close)}`;
   if (state === "closing") return `closing: ${currentCloseStep(job.close)}`;
-  if (state === "stalled") return `close lease expired at ${leaseIso(job.close_lease_until)} - run again with: nightshift queue close ${job.id}`;
+  if (state === "stalled") return `close lease expired at ${leaseIso(job.close_lease_until)} - run again with: nightqueue queue close ${job.id}`;
   return null;
 }
 
@@ -138,11 +138,11 @@ export function closesSummary(rows, runners = [], nowMs = Date.now()) {
 export function closeLines(summary) {
   const inFlight = (summary?.inFlight ?? []).map(({ id, step, pid }) => {
     const owner = pid === null ? "" : ` (pid ${pid})`;
-    return `close in flight: #${id} at ${step}${owner} - follow with: nightshift queue status ${id}`;
+    return `close in flight: #${id} at ${step}${owner} - follow with: nightqueue queue status ${id}`;
   });
-  const failed = (summary?.failed ?? []).map(({ id, step, reason }) => `⛔ close stopped at ${step}: ${reason} - run again with: nightshift queue close ${id}`);
+  const failed = (summary?.failed ?? []).map(({ id, step, reason }) => `⛔ close stopped at ${step}: ${reason} - run again with: nightqueue queue close ${id}`);
   const stalled = (summary?.stalled ?? []).map(
-    ({ id, leaseUntil }) => `close of #${id} stalled: its lease expired at ${leaseUntil} - run again with: nightshift queue close ${id}`,
+    ({ id, leaseUntil }) => `close of #${id} stalled: its lease expired at ${leaseUntil} - run again with: nightqueue queue close ${id}`,
   );
   return [...inFlight, ...failed, ...stalled];
 }

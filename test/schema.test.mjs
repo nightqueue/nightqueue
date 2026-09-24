@@ -194,16 +194,16 @@ test("a `__proto__` connection in secrets.json stays inert data instead of answe
   assert.deepEqual(Object.keys(secrets.connections), ["__proto__"]);
 });
 
-test("a file written by a newer nightshift is refused instead of silently downgraded", () => {
+test("a file written by a newer nightqueue is refused instead of silently downgraded", () => {
   assert.throws(() => normalizeConfig({ version: 2, orgs: {} }), (err) => {
     assert.ok(err instanceof UserError);
-    assert.match(err.message, /config\.json was written by a newer nightshift \(version 2\)/);
+    assert.match(err.message, /config\.json was written by a newer nightqueue \(version 2\)/);
     assert.match(err.message, /supports version 1/);
     return true;
   });
   assert.throws(() => normalizeSecrets({ version: 5, connections: {} }), (err) => {
     assert.ok(err instanceof UserError);
-    assert.match(err.message, /secrets\.json was written by a newer nightshift \(version 5\)/);
+    assert.match(err.message, /secrets\.json was written by a newer nightqueue \(version 5\)/);
     return true;
   });
   assert.equal(normalizeConfig({ version: 1, orgs: {} }).version, 1);
@@ -215,7 +215,7 @@ test("a project pointing at an unknown org is reported, not rewritten", () => {
   const config = normalizeConfig(raw, { warn: (line) => warnings.push(line) });
   assert.equal(config.projects.api.org, "ghost");
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /^nightshift: warning: project `api` points to unknown org `ghost`/);
-  assert.match(warnings[0], /run `nightshift project move api <org>`/);
+  assert.match(warnings[0], /^nightqueue: warning: project `api` points to unknown org `ghost`/);
+  assert.match(warnings[0], /run `nightqueue project move api <org>`/);
   assert.deepEqual(normalizeConfig(raw).projects.api, { path: "/tmp/api", org: "ghost" });
 });

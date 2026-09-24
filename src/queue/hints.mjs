@@ -27,7 +27,7 @@ export function runnersOnline(count) {
 
 // The sentence every hint closes with when no runner is live: pending jobs wait for a drain.
 export function noRunnerWait() {
-  return `${runnersOnline(0)} - pending jobs will wait until \`nightshift queue run\` starts one`;
+  return `${runnersOnline(0)} - pending jobs will wait until \`nightqueue queue run\` starts one`;
 }
 
 // The warning for a five-hour window close to its limit while runners are live, or null when it does not apply.

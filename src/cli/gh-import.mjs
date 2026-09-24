@@ -9,7 +9,7 @@ const TYPE = "github";
 
 // Line that tells the operator how to store the token by hand, the fallback of every branch that imports nothing.
 function manualHint() {
-  return `store a token with \`echo "$GITHUB_TOKEN" | nightshift connection add ${NAME} --type ${TYPE}\``;
+  return `store a token with \`echo "$GITHUB_TOKEN" | nightqueue connection add ${NAME} --type ${TYPE}\``;
 }
 
 // The question asked before touching the token, with the account the GitHub CLI reports.
@@ -22,7 +22,7 @@ function storedBlocker(config, secrets, org) {
   const occupiedBy = connectionFor(config, org, TYPE);
   if (occupiedBy) return `org \`${org}\` already uses \`${occupiedBy}\` for ${TYPE}; nothing to import`;
   if (hasConnection(secrets, NAME)) {
-    return `connection \`${NAME}\` already exists; run \`nightshift connection bind ${NAME} --org ${org}\``;
+    return `connection \`${NAME}\` already exists; run \`nightqueue connection bind ${NAME} --org ${org}\``;
   }
   return null;
 }
@@ -30,7 +30,7 @@ function storedBlocker(config, secrets, org) {
 // Tells why the GitHub CLI cannot provide a token, or null when it is installed and authenticated.
 function cliBlocker(status) {
   if (status.missing) return `GitHub CLI not found; ${manualHint()}`;
-  if (!status.authenticated) return `GitHub CLI is not authenticated; run \`gh auth login\` and then \`nightshift init --gh\``;
+  if (!status.authenticated) return `GitHub CLI is not authenticated; run \`gh auth login\` and then \`nightqueue init --gh\``;
   return null;
 }
 
@@ -38,7 +38,7 @@ function cliBlocker(status) {
 async function wantsImport(ctx, { mode, login }) {
   if (mode === "always") return true;
   if (!ctx.stdin?.isTTY) {
-    ctx.out(`GitHub CLI is authenticated as ${login ?? "an unknown account"}; run \`nightshift init --gh\` to import its token as connection \`${NAME}\``);
+    ctx.out(`GitHub CLI is authenticated as ${login ?? "an unknown account"}; run \`nightqueue init --gh\` to import its token as connection \`${NAME}\``);
     return false;
   }
   return await confirm({ stdin: ctx.stdin, stdout: ctx.stdout, question: importQuestion(login) });

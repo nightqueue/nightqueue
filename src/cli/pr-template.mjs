@@ -2,8 +2,8 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 
-// The sections of nightshift's own pull request template, in the order it fixes them; it applies only when the repository declares none.
-export const NIGHTSHIFT_SECTIONS = ["## Report", "## Cause", "## Changes", "## QA"];
+// The sections of nightqueue's own pull request template, in the order it fixes them; it applies only when the repository declares none.
+export const NIGHTQUEUE_SECTIONS = ["## Report", "## Cause", "## Changes", "## QA"];
 
 // An ATX heading line, matched on the trimmed line.
 const HEADING = /^(#{1,6})\s+(\S.*)$/;
@@ -24,7 +24,7 @@ const CANDIDATES = [
 ];
 
 // The template in effect when the repository declares none.
-const NIGHTSHIFT_TEMPLATE = { source: "nightshift", path: null, label: "fallback", headings: NIGHTSHIFT_SECTIONS };
+const NIGHTQUEUE_TEMPLATE = { source: "nightqueue", path: null, label: "fallback", headings: NIGHTQUEUE_SECTIONS };
 
 // A heading line with its level and text, or null when the line is not a heading.
 function headingOf(line) {
@@ -149,11 +149,11 @@ function candidateTemplate(checkout, { path, embedded }) {
   return found ? { source: "repo", path, ...found } : null;
 }
 
-// The pull request template in effect for a checkout: the repository's own, first match wins, or nightshift's when it declares none.
+// The pull request template in effect for a checkout: the repository's own, first match wins, or nightqueue's when it declares none.
 export function findPrTemplate(checkout) {
   for (const candidate of CANDIDATES) {
     const template = candidateTemplate(checkout, candidate);
     if (template) return template;
   }
-  return NIGHTSHIFT_TEMPLATE;
+  return NIGHTQUEUE_TEMPLATE;
 }

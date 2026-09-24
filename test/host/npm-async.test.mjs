@@ -23,7 +23,7 @@ test("runNpmAsync keeps the tail of the output, echoes it, and answers the exit 
   const calls = [];
   const echoed = [];
   const big = "x".repeat(9000);
-  const result = await runNpmAsync(["test"], { cwd: "/work", env: { NIGHTSHIFT_NPM_BIN: "fake-npm" }, spawnImpl: fakeSpawn({ chunks: [big, "\nnot ok 1"], code: 1, calls }), echo: (text) => echoed.push(text) });
+  const result = await runNpmAsync(["test"], { cwd: "/work", env: { NIGHTQUEUE_NPM_BIN: "fake-npm" }, spawnImpl: fakeSpawn({ chunks: [big, "\nnot ok 1"], code: 1, calls }), echo: (text) => echoed.push(text) });
   assert.equal(result.ok, false);
   assert.equal(result.status, 1);
   assert.equal(result.timedOut, false);

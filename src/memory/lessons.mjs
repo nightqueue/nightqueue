@@ -170,7 +170,7 @@ export function findByNormalizedTitle({ project, title }, env = process.env) {
   return rows.find((row) => normalizeTitle(row.title) === wanted) ?? null;
 }
 
-// Counts of every memory table grouped by project, for `nightshift memory stats`.
+// Counts of every memory table grouped by project, for `nightqueue memory stats`.
 export function memoryStats(env = process.env) {
   const db = openDb(env);
   const totals = new Map();

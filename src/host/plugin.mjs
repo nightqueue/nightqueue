@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { readJsonOrNull } from "./json.mjs";
 import { hostPackageRoot, installedPluginsPath, knownMarketplacesPath, marketplaceManifestPath } from "./paths.mjs";
 
-const DEFAULT_NAME = "nightshift";
+const DEFAULT_NAME = "nightqueue";
 
 // Reads the marketplace manifest bundled with the package, or null when the package does not carry it.
 export function readManifest() {

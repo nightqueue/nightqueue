@@ -13,7 +13,7 @@ import {
   spacedRootWarning,
 } from "../../src/host/settings.mjs";
 
-const ENV = { NIGHTSHIFT_HOME: join(tmpdir(), "nightshift-settings-fixture") };
+const ENV = { NIGHTQUEUE_HOME: join(tmpdir(), "nightqueue-settings-fixture") };
 const [SESSION_START, PROMPT, SESSION_END, AGENT_FOREGROUND] = desiredHooks(ENV);
 const LEGACY_SESSION_START = `node ${join(hostPackageRoot(ENV), "bin", "shift.mjs")} hook session-start`;
 
@@ -75,7 +75,7 @@ test("a second merge changes nothing and reports every event as already present"
 
 test("a stale command is repaired in place, keeping the matcher and the neighbours", () => {
   const data = thirdPartySettings();
-  data.hooks.SessionStart[0].hooks.push({ type: "command", command: "node /old/bin/nightshift.mjs hook session-start" });
+  data.hooks.SessionStart[0].hooks.push({ type: "command", command: "node /old/bin/nightqueue.mjs hook session-start" });
   const [first] = mergeHooks(data, ENV);
   assert.equal(first.status, "updated");
   assert.equal(data.hooks.SessionStart.length, 1);
@@ -127,13 +127,13 @@ test("the removal drops the event key only when nothing else is left in it", () 
 
 test("the status of the hooks compares the registered command with the wanted one", () => {
   const data = thirdPartySettings();
-  data.hooks.SessionEnd[0].hooks.push({ type: "command", command: "node /old/bin/nightshift.mjs hook reflect" });
+  data.hooks.SessionEnd[0].hooks.push({ type: "command", command: "node /old/bin/nightqueue.mjs hook reflect" });
   const status = hookStatus(data, ENV);
   assert.deepEqual(status[0], { event: "SessionStart", expected: SESSION_START.command, current: null, matcherCurrent: true });
   assert.deepEqual(status[2], {
     event: "SessionEnd",
     expected: SESSION_END.command,
-    current: "node /old/bin/nightshift.mjs hook reflect",
+    current: "node /old/bin/nightqueue.mjs hook reflect",
     matcherCurrent: true,
   });
   assert.deepEqual(status[3], { event: "PreToolUse", expected: AGENT_FOREGROUND.command, current: null, matcherCurrent: true });
@@ -143,21 +143,21 @@ test("the status of the hooks compares the registered command with the wanted on
 });
 
 test("a package path with a space is reported, because the hook command is not quoted", () => {
-  const warning = spacedRootWarning("/Users/someone/My Tools/nightshift");
-  assert.match(warning, /^nightshift: warning: the package path contains a space/);
-  assert.ok(warning.includes("/Users/someone/My Tools/nightshift"), warning);
+  const warning = spacedRootWarning("/Users/someone/My Tools/nightqueue");
+  assert.match(warning, /^nightqueue: warning: the package path contains a space/);
+  assert.ok(warning.includes("/Users/someone/My Tools/nightqueue"), warning);
   assert.match(warning, /hook command/);
 });
 
 test("a runtime path without a space is silent, and so is a root nobody passed", () => {
-  assert.equal(spacedRootWarning("/Users/someone/tools/nightshift"), null);
+  assert.equal(spacedRootWarning("/Users/someone/tools/nightqueue"), null);
   assert.equal(spacedRootWarning(hostPackageRoot(ENV)), null);
   assert.equal(spacedRootWarning(), null);
 });
 
 test("the hooks of the host point at the runtime of the home, never at the checkout that ran the setup", () => {
   assert.equal(SESSION_START.command.includes(hostPackageRoot(ENV)), true, SESSION_START.command);
-  assert.ok(SESSION_START.command.endsWith(`${RUNTIME_PACKAGE_TRAIL}/bin/nightshift.mjs hook session-start`), SESSION_START.command);
+  assert.ok(SESSION_START.command.endsWith(`${RUNTIME_PACKAGE_TRAIL}/bin/nightqueue.mjs hook session-start`), SESSION_START.command);
 });
 
 test("an event holding something that is not an array is rebuilt without touching the others", () => {

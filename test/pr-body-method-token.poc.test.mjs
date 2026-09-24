@@ -3,12 +3,12 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { bodyProblems } from "../src/cli/pr-body.mjs";
-import { NIGHTSHIFT_SECTIONS } from "../src/cli/pr-template.mjs";
+import { NIGHTQUEUE_SECTIONS } from "../src/cli/pr-template.mjs";
 import { makeDir } from "../test-support/memory.mjs";
 
-const TEMPLATE = { source: "nightshift", headings: NIGHTSHIFT_SECTIONS };
+const TEMPLATE = { source: "nightqueue", headings: NIGHTQUEUE_SECTIONS };
 
-// A nightshift-shaped body whose QA table has exactly one row, built from a QA cell's text.
+// A nightqueue-shaped body whose QA table has exactly one row, built from a QA cell's text.
 function bodyWithQaRow(cell) {
   return `## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\n| Method | Executed | Result |\n| --- | --- | --- |\n| ${cell} | ran it | it passed |\nNot tested: nothing\n`;
 }

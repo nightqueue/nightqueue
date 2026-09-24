@@ -13,7 +13,7 @@ const DB_MODULE = fileURLToPath(new URL("../../src/memory/db.mjs", import.meta.u
 // The write-ahead log and its index, as the home has them on disk.
 function sidecars(env) {
   return readdirSync(dirname(dbPath(env)))
-    .filter((name) => name.startsWith("nightshift.db-"))
+    .filter((name) => name.startsWith("nightqueue.db-"))
     .sort();
 }
 
@@ -33,7 +33,7 @@ test("a process that exits leaves the write-ahead log and its index behind", (t)
 
   writeInChildAndExit(env);
 
-  assert.deepEqual(sidecars(env), ["nightshift.db-shm", "nightshift.db-wal"]);
+  assert.deepEqual(sidecars(env), ["nightqueue.db-shm", "nightqueue.db-wal"]);
 });
 
 test("the sidecars survive a process that opened the home many times", (t) => {
@@ -41,7 +41,7 @@ test("the sidecars survive a process that opened the home many times", (t) => {
 
   writeInChildAndExit(env, 'openDb(process.env).exec("INSERT INTO probe VALUES (2)");\n');
 
-  assert.deepEqual(sidecars(env), ["nightshift.db-shm", "nightshift.db-wal"]);
+  assert.deepEqual(sidecars(env), ["nightqueue.db-shm", "nightqueue.db-wal"]);
 });
 
 test("everything a process committed is readable by the next one", (t) => {
@@ -61,5 +61,5 @@ test("closing a home releases its pin, so the next open of it pins the file it r
   reopened.exec("INSERT INTO probe VALUES (1)");
 
   assert.equal(reopened.prepare("SELECT COUNT(*) AS n FROM probe").get().n, 1);
-  assert.deepEqual(sidecars(env), ["nightshift.db-shm", "nightshift.db-wal"]);
+  assert.deepEqual(sidecars(env), ["nightqueue.db-shm", "nightqueue.db-wal"]);
 });

@@ -1,38 +1,38 @@
 # CLI, configuration and doctor
 
-`bin/nightshift.mjs` is the CLI: it manages orgs, projects and the connections (and
+`bin/nightqueue.mjs` is the CLI: it manages orgs, projects and the connections (and
 their secrets), and it drives the memory runtime.
 
-- `nightshift --help` lists every command: `setup`, `doctor`, `init`, `org`,
+- `nightqueue --help` lists every command: `setup`, `doctor`, `init`, `org`,
   `project`, `update`, `connection`, `mcp`, `hook`, `reflect`, `embed`,
   `memory`, `queue`, `open`, `verify`, `sandbox`, `libs`, `run` and `version`.
-- `nightshift --version` (same as `nightshift version`) prints the installed version
+- `nightqueue --version` (same as `nightqueue version`) prints the installed version
   and exits `0`.
 - Exit codes: `0` ok, `1` user error (a single line on stderr), `2` unexpected
-  error (a stack on stderr). `nightshift doctor` and `nightshift verify` also
+  error (a stack on stderr). `nightqueue doctor` and `nightqueue verify` also
   exit `1` when a check fails.
 - Every `list` accepts `--json`; on `--json`, stdout is either valid JSON or
   empty, because warnings and errors always go to stderr.
 
-The queue lives in `nightshift queue` (see [Queue](queue.md)); the scheduler that would
+The queue lives in `nightqueue queue` (see [Queue](queue.md)); the scheduler that would
 start it by itself lands in a future version, published as the npm package
-`nightshift`, of which this plugin is the pipeline half.
+`nightqueue`, of which this plugin is the pipeline half.
 
-## The run of a job (`nightshift run`)
+## The run of a job (`nightqueue run`)
 
-`nightshift run` is the family the pipeline calls from *inside* a job: each
+`nightqueue run` is the family the pipeline calls from *inside* a job: each
 subcommand acts on the run of the job it is called from, which it resolves from
-`NIGHTSHIFT_JOB_ID` and that job's own row. It is not `nightshift queue run`,
+`NIGHTQUEUE_JOB_ID` and that job's own row. It is not `nightqueue queue run`,
 which starts the runner over the whole queue. Naming another run from inside a
 job is refused; outside one, `--project <name> --slug <slug>` is required.
 
 ```sh
-nightshift run check 03       # is the plan there, with the sections the pipeline reads?
-nightshift run log            # one line per phase of this run, plus the total
-nightshift run log --json     # the same table as the only thing on stdout
-nightshift run commit --message-file msg.txt   # stage what the implementation listed, and commit it
-nightshift run pr --template                   # print and record the PR template in effect
-nightshift run pr --body-file body.md          # check the body, push and open the pull request
+nightqueue run check 03       # is the plan there, with the sections the pipeline reads?
+nightqueue run log            # one line per phase of this run, plus the total
+nightqueue run log --json     # the same table as the only thing on stdout
+nightqueue run commit --message-file msg.txt   # stage what the implementation listed, and commit it
+nightqueue run pr --template                   # print and record the PR template in effect
+nightqueue run pr --body-file body.md          # check the body, push and open the pull request
 ```
 
 `run check <NN>` is the artifact gate of a phase: it reads
@@ -77,13 +77,13 @@ in effect there, first match wins: `.github/PULL_REQUEST_TEMPLATE.md`,
 `.github/pull_request_template.md`, `docs/PR_TEMPLATE.md`, then a pull request
 section of `CONTRIBUTING.md` or of `CLAUDE.md` (the first fenced markdown block of
 that section carrying headings). It prints `TEMPLATE: repo (<path>)` or
-`TEMPLATE: nightshift (fallback)` and `HEADINGS: <headings>`, and records them as
+`TEMPLATE: nightqueue (fallback)` and `HEADINGS: <headings>`, and records them as
 `prTemplate` in `state.json`; `--template` stops there, reads no body and pushes
 nothing. Then it checks the body BEFORE anything leaves the machine, with the
 rules of `references/pr-template.md`. Against a repository template: every heading
-of it present and in its order, and no nightshift heading (`## Report`,
+of it present and in its order, and no nightqueue heading (`## Report`,
 `## Cause`, `## Changes`, `## QA`) the template does not have. Against the
-nightshift fallback: `## Report`, `## Cause`, `## Changes` and `## QA` in that
+nightqueue fallback: `## Report`, `## Cause`, `## Changes` and `## QA` in that
 order with no fifth `## `, a `## QA` table with the header
 `| Method | Executed | Result |` and at least one row (none marked `N/A`), a
 `Not tested:` line after it, and a non-empty file under
@@ -104,25 +104,25 @@ command recorded (see [Runtime contract](runtime-contract.md)). It closes with `
 removes the worktree only when asked with `--remove-worktree`, because the
 session that called it still lives in that directory. That default is unchanged:
 in a queue job the runner itself removes a clean, pushed worktree once the run ends
-`done`, `nightshift queue close` removes it once the job's pull request is merged, and
-`nightshift queue cancel` removes it for a `done` or `failed` job the operator gives up on
+`done`, `nightqueue queue close` removes it once the job's pull request is merged, and
+`nightqueue queue cancel` removes it for a `done` or `failed` job the operator gives up on
 (see [Queue](queue.md)).
 
 ## Configuration
 
-`NIGHTSHIFT_HOME` (default `~/.nightshift`) is a single directory that holds
+`NIGHTQUEUE_HOME` (default `~/.nightqueue`) is a single directory that holds
 both the configuration at its root and the run artifacts under `runs/` (see
 [Runtime contract](runtime-contract.md)) - one home, two kinds of content, not two environment
 variables:
 
 ```
-$NIGHTSHIFT_HOME/          # 0700
+$NIGHTQUEUE_HOME/          # 0700
   config.json              # orgs, projects, queue settings
   secrets.json             # 0600, connection secrets
-  nightshift.db            # the memory database (see [Memory](memory.md))
+  nightqueue.db            # the memory database (see [Memory](memory.md))
   runtime/versions/        # one directory per installed version, the last two kept
   runtime/current          # symlink into versions/, what the host is registered against
-  bin/                     # the shims: nightshift, nshift and nsft
+  bin/                     # the shims: nightqueue, nshift and nsft
   embedding/               # npm prefix of the embedding library, opt-in
   models/                  # embedding weights, downloaded on demand
   state/                   # per-session hook state
@@ -132,95 +132,95 @@ $NIGHTSHIFT_HOME/          # 0700
   runners/<pid>.json       # one registration per live runner, any number of them
 ```
 
-`NIGHTSHIFT_HOME` must sit on local disk. The memory database is SQLite in WAL
+`NIGHTQUEUE_HOME` must sit on local disk. The memory database is SQLite in WAL
 mode, and WAL correctness depends on the operating system really enforcing POSIX
 advisory locks - in particular the connection-lifetime "dead man's switch" lock
 that tells a connection being closed whether it is the last one still attached to
 the database. Network and FUSE mounts (`nfs`, `nfs3`, `nfs4`, `smbfs`, `cifs`,
 `afpfs`, `webdav`, `9p`, and anything carrying `fuse`) are known to drop those
 locks or to emulate them incorrectly. When that happens the shared-memory index of
-the WAL (`nightshift.db-shm`) is unlinked and recreated while another process is
+the WAL (`nightqueue.db-shm`) is unlinked and recreated while another process is
 still attached to the old one: that process keeps reading and writing an index the
 rest of the system has already abandoned, which loses finish commits and reverts
-leases. `nightshift doctor` reports both halves of this - see [Doctor](cli.md#doctor).
+leases. `nightqueue doctor` reports both halves of this - see [Doctor](cli.md#doctor).
 
 Secrets are kept in a `0600` file rather than in the operating system
 credential store, because the runtime is meant to run unattended, with nobody
 there to unlock anything.
 
-A command that writes holds the directory `$NIGHTSHIFT_HOME.lock` while it
-runs, so two `nightshift` processes never overwrite each other's changes; read-only
+A command that writes holds the directory `$NIGHTQUEUE_HOME.lock` while it
+runs, so two `nightqueue` processes never overwrite each other's changes; read-only
 commands such as `list` never take it. The memory and queue commands (`mcp`,
 `hook`, `reflect`, `embed`, `memory`, `queue`) never take it either: they rely
 on SQLite for concurrency, so a running server - or a runner that works all
-night - never blocks a `nightshift init`. The one exception is the registration
-`nightshift queue add` (and `queue_add`) offers inside an unregistered
+night - never blocks a `nightqueue init`. The one exception is the registration
+`nightqueue queue add` (and `queue_add`) offers inside an unregistered
 repository: that single write of `config.json` takes the lock by itself, so it
-never races a `nightshift project add`.
+never races a `nightqueue project add`.
 
 ```sh
-nightshift setup                                   # install the runtime and register everything in the host
-nightshift setup --remove --purge                  # undo the registrations, or delete the home as well
-nightshift update                                  # reinstall the runtime and re-point the host at it
-nightshift update 0.2.0                            # ...at one exact version from the registry
-nightshift doctor --json                           # check the host and the home, exit 1 on any failure
-nightshift doctor --check-updates                  # ...and ask the registry for the newest version
-nightshift init                                    # set the host up and register the current repository
-nightshift init ~/code/api --org acme --name api   # ...or an explicit path, org and name
-nightshift init --no-embedding --no-path --no-gh   # ...answering every question up front
+nightqueue setup                                   # install the runtime and register everything in the host
+nightqueue setup --remove --purge                  # undo the registrations, or delete the home as well
+nightqueue update                                  # reinstall the runtime and re-point the host at it
+nightqueue update 0.2.0                            # ...at one exact version from the registry
+nightqueue doctor --json                           # check the host and the home, exit 1 on any failure
+nightqueue doctor --check-updates                  # ...and ask the registry for the newest version
+nightqueue init                                    # set the host up and register the current repository
+nightqueue init ~/code/api --org acme --name api   # ...or an explicit path, org and name
+nightqueue init --no-embedding --no-path --no-gh   # ...answering every question up front
 
-nightshift org add acme --display-name "Acme"      # create an org
-nightshift org list --json                         # orgs, connection slots, project counts
-nightshift org rename acme acme-inc                # rewrites every project pointing at it
-nightshift org remove acme-inc                     # refused while projects still point at it
-nightshift org repair [--to <org>]                 # settle an interrupted rename; adopt orphan rows
+nightqueue org add acme --display-name "Acme"      # create an org
+nightqueue org list --json                         # orgs, connection slots, project counts
+nightqueue org rename acme acme-inc                # rewrites every project pointing at it
+nightqueue org remove acme-inc                     # refused while projects still point at it
+nightqueue org repair [--to <org>]                 # settle an interrupted rename; adopt orphan rows
 
-nightshift project list                            # name, path, org, whether the path still exists
-nightshift project move api acme                   # move a project to another org
-nightshift project remove api
+nightqueue project list                            # name, path, org, whether the path still exists
+nightqueue project move api acme                   # move a project to another org
+nightqueue project remove api
 
-echo "$GITHUB_TOKEN" | nightshift connection add gh --type github
-nightshift connection bind gh --org acme           # bind (or rebind) an org slot
-nightshift connection test gh                      # prints login and scopes, never the token
-nightshift connection list --json
-nightshift connection remove gh                    # unbinds from every org, then deletes the secret
+echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github
+nightqueue connection bind gh --org acme           # bind (or rebind) an org slot
+nightqueue connection test gh                      # prints login and scopes, never the token
+nightqueue connection list --json
+nightqueue connection remove gh                    # unbinds from every org, then deletes the secret
 ```
 
 The secret is read from stdin when stdin is not a terminal, and asked for in a
 hidden prompt otherwise. It is never accepted as a command-line argument, and
 never printed back - not by `list`, not by `--json`, not by an error message.
 
-A path that starts with `-` has to come after `--` (`nightshift init -- -weird-dir`),
+A path that starts with `-` has to come after `--` (`nightqueue init -- -weird-dir`),
 otherwise it is parsed as an unknown option and rejected.
 
 ## Queue
 
-The full reference of `nightshift queue` is [Queue](queue.md); these subcommands are
+The full reference of `nightqueue queue` is [Queue](queue.md); these subcommands are
 recent enough that this is their first mention here.
 
 ```sh
-nightshift queue session 42                          # resume the session of a job's last attempt
-nightshift queue session 42 --print                   # print the resume command instead of running it
-nightshift queue session 42 --json                    # session, attempt and cwd, as the only thing on stdout
+nightqueue queue session 42                          # resume the session of a job's last attempt
+nightqueue queue session 42 --print                   # print the resume command instead of running it
+nightqueue queue session 42 --json                    # session, attempt and cwd, as the only thing on stdout
 
-nightshift queue close 42                             # merge a done job's pull request and close the job, detached
-nightshift queue close 42 --foreground                # run the four steps in this process, one line per step
-nightshift queue close 42 --decisions keep --json     # keep the job's open proposals; JSON on stdout
-nightshift queue close --merged --decisions accept    # close every done job gh confirms merged, accepting each proposal
-nightshift queue close 42 --force                     # skip the pull request checks and the rebase suite, nothing else
-nightshift queue cancel 42 --reason "abandoned"       # cancel a done or failed job and release its worktree
+nightqueue queue close 42                             # merge a done job's pull request and close the job, detached
+nightqueue queue close 42 --foreground                # run the four steps in this process, one line per step
+nightqueue queue close 42 --decisions keep --json     # keep the job's open proposals; JSON on stdout
+nightqueue queue close --merged --decisions accept    # close every done job gh confirms merged, accepting each proposal
+nightqueue queue close 42 --force                     # skip the pull request checks and the rebase suite, nothing else
+nightqueue queue cancel 42 --reason "abandoned"       # cancel a done or failed job and release its worktree
 
-nightshift queue run --watch --from 22:00 --until 04:00   # watch only inside that window, local wall clock, then exit
-nightshift queue run --watch --until 04:00                # `--from` defaults to now
+nightqueue queue run --watch --from 22:00 --until 04:00   # watch only inside that window, local wall clock, then exit
+nightqueue queue run --watch --until 04:00                # `--from` defaults to now
 ```
 
 `queue session <id>` opens the `claude` session of a job's LAST attempt - `last_session_id`
-when the job carries one, else its first `session_id` - by resuming it with `nightshift open
+when the job carries one, else its first `session_id` - by resuming it with `nightqueue open
 --resume <session>` (the operator launch, see [Open](#open)) in the cwd the run itself used: the run's worktree when it is still on disk, or the
 project's checkout with a warning line (`(worktree released, using the checkout)`) once the
 worktree was already released. A `pending` or a `running` job is refused by name - a live
 runner owns a running job's session, a pending one has none yet - and so is a job that never
-reached the agent at all. `--print` stops there and prints the equivalent `cd '<cwd>' && nightshift
+reached the agent at all. `--print` stops there and prints the equivalent `cd '<cwd>' && nightqueue
 open --resume <session>` line instead of running it, and `--json` prints `{ jobId, attempt, session,
 cwd, worktreeReleased, command }` as the only thing on stdout; without either flag the exit
 code is the resumed session's own. The MCP tool `queue_session` resolves the same session but
@@ -233,7 +233,7 @@ and releases the job's worktree once it is closed, printing `worktree removed: <
 `worktree kept: <path> - <reason>`. `queue close --merged` runs the same pipeline, in this
 process, on every `done` job whose pull request `gh` itself confirms merged, prints `closed job
 #<id>` or `job #<id> not closed: <reason>` for each, and reports `<n> jobs left unchecked; run
-nightshift queue close --merged again` when some could not be checked within the call's own
+nightqueue queue close --merged again` when some could not be checked within the call's own
 deadline. A `failed`, `gate` or `cancelled` job is never closed, whatever its pull request
 says: retry it, or cancel it.
 
@@ -245,14 +245,14 @@ terminal (or `--json`) leaves every proposal `kept (proposed)`, so a script's be
 changes underneath it. Each settled proposal prints `decision <label> <title>:
 accepted|rejected|kept (proposed)`, and `--json` carries them under `decisions`. A detached
 close has no terminal to ask on: it hands `--decisions` to its child when given, and otherwise
-keeps every proposal `proposed` for `nightshift doctor` to list.
+keeps every proposal `proposed` for `nightqueue doctor` to list.
 
 `queue cancel <id>` accepts a `pending`, gated, orphaned, `done` or `failed` job. For a `done`
 or `failed` one it also releases the job's worktree, printing `worktree removed: <path>` or
 `worktree kept: <path> - <reason>` after `cancelled job #<id>`; `--json` prints `{ job,
 worktree }`. A job running under a live lease, or being closed under one, is refused by name
 with nothing written. So is a `done` job whose close was interrupted (its lease died mid-close,
-possibly after the merge): resume it with `nightshift queue close <id>`, which records a merged
+possibly after the merge): resume it with `nightqueue queue close <id>`, which records a merged
 pull request as closed and cancels the job when the pull request was closed without merge.
 
 `queue close <id>` takes a `done` job's pull request from open to merged and closes the job,
@@ -264,7 +264,7 @@ job and append `Closed: PR #<n> merged as <sha7> on <date>` to its notice). It s
 and prints the pid and its log, `<home>/logs/close-<id>-<stamp>.log`; `--foreground` runs it here
 and exits `0` only when the job closed; `--json` prints `{ started, jobId, pid, logPath }`
 detached, or one `{ job, outcome, decisions }` object in the foreground. A close that stops prints `⛔ close stopped at <step>:
-<reason> - run again with: nightshift queue close <id>`, leaves the job `done`, and running it
+<reason> - run again with: nightqueue queue close <id>`, leaves the job `done`, and running it
 again resumes at that step - never merging twice. A pull request closed without merge cancels
 the job instead (`job #<id> cancelled: PR #<n> was closed without being merged; nothing to
 close`), and one merged by hand is recorded as `merged outside a close`. `--force` skips the
@@ -290,19 +290,19 @@ the Bash timeouts of the `claude` a job runs: `default` is what a command gets w
 `queue.inheritUserEnvironment` (`false` default) isolates a job from the operator's
 own MCP servers, plugins, skills, agents and user hooks; only a literal `true` opts a
 job back into inheriting them. See [Queue](queue.md) for what an isolated job's
-environment is and is not, and for the `job environment` row of `nightshift doctor`.
+environment is and is not, and for the `job environment` row of `nightqueue doctor`.
 
 ## Decisions
 
 ```sh
-nightshift decision list                                                 # the log of the current project, plus its org's
-nightshift decision list --org acme --status accepted                    # one org's accepted decisions only
-nightshift decision show 7                                               # one decision, in full
-nightshift decision export 7 --dir docs/decisions                        # write it as a markdown file
-nightshift decision import docs/decisions/0007-foo.md                    # save a markdown decision file
-nightshift decision import docs/decisions/0007-foo.md --supersedes 3,4   # ...replacing #3 and #4 whole
-nightshift decision update 7 --status accepted                           # accept a proposed decision
-nightshift decision update 7 --status superseded --superseded-by 9       # supersede #7 with #9
+nightqueue decision list                                                 # the log of the current project, plus its org's
+nightqueue decision list --org acme --status accepted                    # one org's accepted decisions only
+nightqueue decision show 7                                               # one decision, in full
+nightqueue decision export 7 --dir docs/decisions                        # write it as a markdown file
+nightqueue decision import docs/decisions/0007-foo.md                    # save a markdown decision file
+nightqueue decision import docs/decisions/0007-foo.md --supersedes 3,4   # ...replacing #3 and #4 whole
+nightqueue decision update 7 --status accepted                           # accept a proposed decision
+nightqueue decision update 7 --status superseded --superseded-by 9       # supersede #7 with #9
 ```
 
 `decision list`, `show <number>`, `export <number>` and `import <file.md>` each resolve the
@@ -339,12 +339,12 @@ again, naming it once more.
 ## Doctor
 
 ```sh
-nightshift doctor                  # one line per check: ok, warn or fail
-nightshift doctor --json           # the same report, as the only thing on stdout
-nightshift doctor --check-updates  # ...plus the newest version published in the registry
+nightqueue doctor                  # one line per check: ok, warn or fail
+nightqueue doctor --json           # the same report, as the only thing on stdout
+nightqueue doctor --check-updates  # ...plus the newest version published in the registry
 ```
 
-`nightshift doctor` reads the host and the home and writes nothing: it never creates
+`nightqueue doctor` reads the host and the home and writes nothing: it never creates
 the database, never touches `settings.json` and never asks `claude` about
 anything but its version. It checks the Node version, the `claude` and `gh`
 CLIs, `config.json`, the mode of `secrets.json`, each of the three shims (a
@@ -374,7 +374,7 @@ Two of the checks are about the storage under the home (see [Configuration](cli.
 - `db shm` warns when the shared-memory index of the WAL was replaced under a
   connection still attached to it: hidden orphans left beside the database
   (`.fuse_hidden*`, `.nfs*`, which survive a restart and are the only trace a
-  past split leaves), or a live runner whose registered `nightshift.db-shm` is
+  past split leaves), or a live runner whose registered `nightqueue.db-shm` is
   gone or is no longer the file on disk. A runner registered by an older version
   carries no witness, and the check then says so instead of passing.
 - `home mount` names the filesystem the home sits on - read from
@@ -386,8 +386,8 @@ Two of the checks are about the storage under the home (see [Configuration](cli.
   line states an unknown rather than a pass.
 
 The `database` check compares the schema version on disk with the one this build expects: a
-database one version behind is a `warn` (`run nightshift queue status once to let it migrate`),
-and a database written by a NEWER version is a `fail` (upgrade nightshift to the version that
+database one version behind is a `warn` (`run nightqueue queue status once to let it migrate`),
+and a database written by a NEWER version is a `fail` (upgrade nightqueue to the version that
 wrote it).
 
 For every registered project that has a `.claude/worktrees/` directory, one `warn` row
@@ -401,33 +401,33 @@ it, and deletes nothing:
 - not registered in git (orphaned): `rm -rf '<dir>'`.
 
 A directory a live session holds locked, and the worktree of an open job (its cleanup is
-`nightshift queue close`, or `nightshift queue cancel` for a `done` or `failed` job), are not reported. When the queue cannot be read, one `worktrees`
+`nightqueue queue close`, or `nightqueue queue cancel` for a `done` or `failed` job), are not reported. When the queue cannot be read, one `worktrees`
 row says the owner is unknown and nothing is listed; when git cannot list the worktrees of a
 checkout, one `worktrees <project>` row says so. The owners are read through a read-only store.
 
 One more `warn` row, `decision proposals`, names every decision a queue job proposed and nobody
 settled before its job was closed, by number and job - settle it with `decision_update`
-(`status: accepted|rejected`) or `nightshift decision update <number> --status
-accepted|rejected`, or, next time, settle it in the same call with `nightshift queue
+(`status: accepted|rejected`) or `nightqueue decision update <number> --status
+accepted|rejected`, or, next time, settle it in the same call with `nightqueue queue
 close <id> --decisions accept|reject`.
 
 On a database at the current schema, the `roadmap workflow` row names every roadmap item or org
 project row whose status disagrees with what its linked job's row means (for example `#12
 in_progress (job 40 done, expected in_review)`, or `#7 row api ...` for an org item's row): a job
-write whose roadmap follow failed. The next `nightshift queue run` claim cycle re-syncs those on its
+write whose roadmap follow failed. The next `nightqueue queue run` claim cycle re-syncs those on its
 own. It also names every org item whose persisted status disagrees with what its project rows derive
 (for example `acme#7 todo (derived from its project rows: in_progress)`), re-derived at its next row
 change or set by hand with `roadmap_update`. It is a `warn`, never a failure.
 
-`nightshift roadmap [--project <name> | --org <name>] [--status <s>]... [--priority <n>]...
+`nightqueue roadmap [--project <name> | --org <name>] [--status <s>]... [--priority <n>]...
 [--type <t>]... [--json]` prints the roadmap grouped by status in workflow order (`backlog`, `todo`,
 `in_progress`, `in_review`, `done`, `cancelled`), one `p<priority> #<id> <title>` line per item (an
 org item carries its org before the `#`), p1 first. `--status`, `--priority` and `--type` repeat to keep several values. Read by a
 project, an org item shows the status of that project's own row in parentheses; read with `--org`,
 each org item lists its project rows under it (`<project>: <status> job #<id> (<job status>)`), the
 item × project matrix. It survives a reader
-that closes the pipe early (`nightshift roadmap | head`): the CLI stops writing instead of
-crashing with `EPIPE`. `nightshift roadmap show <id> [--json]` prints one item in full - its
+that closes the pipe early (`nightqueue roadmap | head`): the CLI stops writing instead of
+crashing with `EPIPE`. `nightqueue roadmap show <id> [--json]` prints one item in full - its
 `<owner>#<id>`, type, status and priority, its untruncated title and detail, an org item's project
 rows under `projects:` - and then its comment thread in chronological order, one `<when> <author> <kind>` line per comment with its body
 indented under it. Both read the database and never write to it.
@@ -442,12 +442,12 @@ about this host and must not turn a local diagnosis into a failing exit code.
 ## Verify
 
 ```sh
-nightshift verify                                  # every detected check, one line each, exit 1 on any failure
-nightshift verify --scope touched --files a.ts,b.ts  # narrow the checks that accept a file list to those paths
-nightshift verify --scope +poc                     # the same block plus the PoC check
+nightqueue verify                                  # every detected check, one line each, exit 1 on any failure
+nightqueue verify --scope touched --files a.ts,b.ts  # narrow the checks that accept a file list to those paths
+nightqueue verify --scope +poc                     # the same block plus the PoC check
 ```
 
-`nightshift verify` runs the checks the repository under the current directory
+`nightqueue verify` runs the checks the repository under the current directory
 declares, always in the same order - `typecheck`, `lint`, `build`, `test`, `poc`,
 `diff-hygiene` - and prints one line per check:
 
@@ -457,7 +457,7 @@ PASSED|FAILED|SKIPPED <check> <duration_s>s
 
 Under a `FAILED` line come at most twenty indented lines of that check's own
 output. It exits `1` when any line is `FAILED` and `0` otherwise: a `SKIPPED`
-never fails the run, the same rule `nightshift doctor` follows for a `warn`.
+never fails the run, the same rule `nightqueue doctor` follows for a `warn`.
 
 The checks are detected, never guessed. The package manager comes from the
 lockfile alone (`bun.lockb`/`bun.lock` → bun, `pnpm-lock.yaml` → pnpm,
@@ -496,7 +496,7 @@ consumes `--files`: under `full` or `+poc` the flag is ignored and the run says
 so on stderr, naming the scope, so a narrowing that never happened is never
 discarded in silence.
 
-`nightshift verify` **never installs anything** and never opens the network on
+`nightqueue verify` **never installs anything** and never opens the network on
 its own account: no `install`, no `ci`, no `--frozen-lockfile`. A missing
 dependency is not guessed from the filesystem either - in a git worktree Node
 resolves the parent checkout's `node_modules`, so an absent directory proves
@@ -505,7 +505,7 @@ itself finding no binary (`ENOENT`), or a line the runtime wrote for itself -
 `Error: Cannot find module …`, `ERR_MODULE_NOT_FOUND`, a shell line ending in
 `: command not found`, Windows' `is not recognized as an internal or external
 command`, `executable file not found in $PATH`. Such a check is `FAILED` with
-`dependencies not installed — nightshift verify never installs` as its first
+`dependencies not installed — nightqueue verify never installs` as its first
 snippet line. The match is anchored to those lines: a check that legitimately
 fails and happens to quote one of the phrases inside its own message keeps its
 real reason. A declared check that could not
@@ -515,12 +515,12 @@ project's own checks are still the project's own - a `go build` or a test that
 calls a service may reach the network; that is the repository's business, not
 this command's.)
 
-Every check is spawned against a throwaway `NIGHTSHIFT_HOME` and
+Every check is spawned against a throwaway `NIGHTQUEUE_HOME` and
 `CLAUDE_CONFIG_DIR`, created under the system temp directory and removed when the
-command exits, so a check that itself runs `nightshift` never touches the
+command exits, so a check that itself runs `nightqueue` never touches the
 operator's home. That covers the checks `verify` spawns and nothing else: a
-`nightshift` command typed by hand still needs its own throwaway home, which
-`nightshift sandbox` provides.
+`nightqueue` command typed by hand still needs its own throwaway home, which
+`nightqueue sandbox` provides.
 
 The last check, `diff-hygiene`, needs no script. It reads `git status --short
 --untracked-files=all` and `git diff --stat` in the current directory: the first
@@ -533,16 +533,16 @@ intruding paths listed under the summary. Outside a git repository the check is
 ## Sandbox
 
 ```sh
-nightshift sandbox node --version   # runs `node --version` against a throwaway home
+nightqueue sandbox node --version   # runs `node --version` against a throwaway home
 ```
 
-`nightshift sandbox <command> [args...]` runs exactly one command with a
-throwaway `NIGHTSHIFT_HOME` and `CLAUDE_CONFIG_DIR`, both created before the
+`nightqueue sandbox <command> [args...]` runs exactly one command with a
+throwaway `NIGHTQUEUE_HOME` and `CLAUDE_CONFIG_DIR`, both created before the
 command starts and removed once it exits, whatever the exit code — the same
-isolation `verify` gives its own checks, offered for a `nightshift` command
+isolation `verify` gives its own checks, offered for a `nightqueue` command
 typed by hand. The rest of the environment and the current directory are
 inherited unchanged, and the command's own arguments are never parsed by
-`nightshift`: everything after `sandbox` is forwarded verbatim, so a flag like
+`nightqueue`: everything after `sandbox` is forwarded verbatim, so a flag like
 `--version` reaches the wrapped command instead of the CLI. Stdin, stdout and
 stderr are inherited, and the exit code is the child's own — 128 plus the
 signal number when the child was killed by one, or `127` with a message on
@@ -552,28 +552,28 @@ binary).
 ## Open
 
 ```sh
-nightshift open                          # the operator session of the project registered for this checkout
-nightshift open my-app                   # the same for a registered project by name, from any directory
-nightshift open --resume <session>       # resume an operator (or job) session
+nightqueue open                          # the operator session of the project registered for this checkout
+nightqueue open my-app                   # the same for a registered project by name, from any directory
+nightqueue open --resume <session>       # resume an operator (or job) session
 ```
 
-`nightshift open [project] [--resume <session>]` starts an interactive `claude` with the
-`nightshift:nightshift-operator` agent as the main thread (`--append-system-prompt` with the
-agent's body when `claude --help` does not list `--agent`; `nightshift doctor` reports which),
-the job settings, `--setting-sources project,local`, the plugin and the nightshift MCP server,
-and `NIGHTSHIFT_MODE=operator`, which puts the guard hook in operator mode: reads only under
+`nightqueue open [project] [--resume <session>]` starts an interactive `claude` with the
+`nightqueue:nightqueue-operator` agent as the main thread (`--append-system-prompt` with the
+agent's body when `claude --help` does not list `--agent`; `nightqueue doctor` reports which),
+the job settings, `--setting-sources project,local`, the plugin and the nightqueue MCP server,
+and `NIGHTQUEUE_MODE=operator`, which puts the guard hook in operator mode: reads only under
 the runs, plugin and spill roots, and a closed read-only Bash list. `git worktree prune` runs
 first. The cwd is the registered checkout, or with `--resume` the current directory when it
 lies inside that checkout. An unregistered directory is refused with one line naming
-`nightshift setup`. It never holds the config lock.
+`nightqueue setup`. It never holds the config lock.
 
 ## Libs
 
 ```sh
-nightshift libs zod express        # the INSTALLED version of each name, one line each
+nightqueue libs zod express        # the INSTALLED version of each name, one line each
 ```
 
-`nightshift libs <name>...` prints one `<lib> <version>` line per argument, in
+`nightqueue libs <name>...` prints one `<lib> <version>` line per argument, in
 the order the arguments were given, read from the lockfiles of the current
 directory. It reports the version that is **installed**, never the range the
 manifest declares. A name no lockfile carries prints `<lib> not-found` rather
@@ -599,14 +599,14 @@ read or parsed is a user error (exit `1`) naming the file, instead of a silent
 ## Run
 
 ```sh
-nightshift run --help                                      # the steps, one usage line each
-nightshift run index-save <RUN_DIR>/02-explore.md          # persist an explore artifact into the project index
-nightshift run index-save <artifact> --repo-root ~/code/api --project api
-nightshift run secrets-sweep --files src/a.js,src/b.js     # log calls that may print a secret
+nightqueue run --help                                      # the steps, one usage line each
+nightqueue run index-save <RUN_DIR>/02-explore.md          # persist an explore artifact into the project index
+nightqueue run index-save <artifact> --repo-root ~/code/api --project api
+nightqueue run secrets-sweep --files src/a.js,src/b.js     # log calls that may print a secret
 ```
 
-`nightshift run <step>` holds the mechanical steps the pipeline's agents used to
-perform by hand. It has exactly two steps, and `nightshift run` with no step (or
+`nightqueue run <step>` holds the mechanical steps the pipeline's agents used to
+perform by hand. It has exactly two steps, and `nightqueue run` with no step (or
 `--help`) prints them.
 
 **`index-save <artifact> [--project <name>] [--repo-root <path>]`** reads the

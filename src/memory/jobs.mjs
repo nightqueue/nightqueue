@@ -110,7 +110,7 @@ function requireStatus(status) {
 
 // Requires a status a generic writer may set: `closed` belongs to the closing pipeline alone.
 function requireWritableStatus(status) {
-  if (status === "closed") throw new UserError("status `closed` is written only by the closing pipeline; run nightshift queue close <id>");
+  if (status === "closed") throw new UserError("status `closed` is written only by the closing pipeline; run nightqueue queue close <id>");
   return requireStatus(status);
 }
 
@@ -603,10 +603,10 @@ function cancelRefusal(id, row) {
   if (!row) return `unknown job \`${id}\``;
   if (row.status === "running") return `job \`${id}\` is running with a live lease on worker \`${row.worker}\`; stop that runner first`;
   if (row.close_status === "closing" && closeLeaseLooksLive(row, Date.now())) {
-    return `job \`${id}\` is being closed by \`${row.close_worker}\` until ${sqliteToIso(row.close_lease_until)}; wait for it or follow it with nightshift queue status ${id}`;
+    return `job \`${id}\` is being closed by \`${row.close_worker}\` until ${sqliteToIso(row.close_lease_until)}; wait for it or follow it with nightqueue queue status ${id}`;
   }
   if (row.close_status === "closing") {
-    return `job \`${id}\` has an interrupted close whose merge may already have happened; resume it with nightshift queue close ${id} - a merged pull request is recorded as closed, and one closed without merge cancels the job, so to cancel it close the pull request first`;
+    return `job \`${id}\` has an interrupted close whose merge may already have happened; resume it with nightqueue queue close ${id} - a merged pull request is recorded as closed, and one closed without merge cancels the job, so to cancel it close the pull request first`;
   }
   return `job \`${id}\` is already finished with status \`${row.status}\``;
 }
@@ -642,7 +642,7 @@ function retryRefusal(id, row, { note } = {}) {
   if (row.status === "pending") return `job \`${id}\` is already pending; there is nothing to retry`;
   if (row.status === "gate" && !note) {
     const reason = jobView(row).notice_md;
-    const whole = reason && reason !== row.notice_md ? `Read the whole notice with: nightshift queue status ${id}.` : null;
+    const whole = reason && reason !== row.notice_md ? `Read the whole notice with: nightqueue queue status ${id}.` : null;
     return [reason, whole, 'This job is waiting for a decision. Re-run with --note "<your answer>".'].filter(Boolean).join("\n");
   }
   return `job \`${id}\` cannot be retried from status \`${row.status}\``;
@@ -710,7 +710,7 @@ function statusRefusal(id, row) {
   if (row.status === "closed") return `job \`${id}\` is already closed`;
   if (row.status === "running") return `job \`${id}\` is running with a live lease on worker \`${row.worker}\`; stop that runner first`;
   if (row.status === "pending") return `job \`${id}\` is pending; it has not produced a pull request yet`;
-  if (row.status === "gate") return `job \`${id}\` is waiting at a gate; answer it with nightshift queue retry ${id} --note "…", or cancel it`;
+  if (row.status === "gate") return `job \`${id}\` is waiting at a gate; answer it with nightqueue queue retry ${id} --note "…", or cancel it`;
   if (row.status === "failed") return `job \`${id}\` failed; retry it or cancel it - only a done job is closed`;
   if (row.status === "cancelled") return `job \`${id}\` is cancelled; retry it before closing`;
   return `job \`${id}\` cannot be closed from status \`${row.status}\``;
@@ -723,7 +723,7 @@ export function closeRefusal(id, row, { nowMs = Date.now() } = {}) {
   if (refusal) return refusal;
   if (!row.pr_url) return "nothing to close: the job has no pull request";
   if (closeLeaseLooksLive(row, nowMs)) {
-    return `job \`${id}\` is already being closed by \`${row.close_worker}\` until ${sqliteToIso(row.close_lease_until)}; follow it with nightshift queue status ${id}`;
+    return `job \`${id}\` is already being closed by \`${row.close_worker}\` until ${sqliteToIso(row.close_lease_until)}; follow it with nightqueue queue status ${id}`;
   }
   return null;
 }
@@ -901,7 +901,7 @@ export function listJobsWithSlug(env = process.env, db = openDb(env)) {
   return db.prepare("SELECT id, project, slug FROM jobs WHERE status IN ('running', 'pending') AND slug IS NOT NULL").all();
 }
 
-// Every job that is not closed and already named its run, the owners `nightshift doctor` checks a worktree against.
+// Every job that is not closed and already named its run, the owners `nightqueue doctor` checks a worktree against.
 export function listOpenJobs(env = process.env, db = openDb(env)) {
   return db.prepare("SELECT id, project, slug, status FROM jobs WHERE status <> 'closed' AND slug IS NOT NULL").all();
 }
@@ -917,12 +917,12 @@ export function countOrphanJobs(db) {
   return db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE ${ORPHAN_PREDICATE}`).get().n;
 }
 
-// The terminal statuses `nightshift doctor` samples the host-command counters from; a job still `pending` or `running` has none to report yet.
+// The terminal statuses `nightqueue doctor` samples the host-command counters from; a job still `pending` or `running` has none to report yet.
 const TERMINAL_STATUSES = JOB_STATUSES.filter((status) => status !== "pending" && status !== "running");
 const TERMINAL_PLACEHOLDERS = TERMINAL_STATUSES.map(() => "?").join(", ");
 export const HOST_COMMANDS_SAMPLE_SIZE = 20;
 
-// The host-command counters of the most recently finished jobs, the sample `nightshift doctor` sums; a diagnosis never creates nor migrates the database it inspects.
+// The host-command counters of the most recently finished jobs, the sample `nightqueue doctor` sums; a diagnosis never creates nor migrates the database it inspects.
 export function recentHostCommandCounts(env = process.env, db = openDb(env)) {
   return db
     .prepare(
@@ -933,7 +933,7 @@ export function recentHostCommandCounts(env = process.env, db = openDb(env)) {
     .all(...TERMINAL_STATUSES);
 }
 
-// The orchestrator counters of the most recently finished jobs, the sample `nightshift doctor` sums; a diagnosis never creates nor migrates the database it inspects.
+// The orchestrator counters of the most recently finished jobs, the sample `nightqueue doctor` sums; a diagnosis never creates nor migrates the database it inspects.
 export function recentOrchestratorCounts(env = process.env, db = openDb(env)) {
   return db
     .prepare(

@@ -18,7 +18,7 @@ const FAKE_CLAUDE = fileURLToPath(new URL("../test-support/fake-claude-open.mjs"
 // A temp home whose project `alpha` is a real git checkout, with a temp HOME, Claude config dir and the fake interactive claude.
 function openHome(t, name) {
   const env = makeHome(t, name);
-  delete env.NIGHTSHIFT_MODE;
+  delete env.NIGHTQUEUE_MODE;
   const base = realpathSync(makeDir(t, `${name}-host`));
   const checkout = initGitRepo(join(base, "checkout"));
   for (const dir of ["user-home", "claude-config"]) mkdirSync(join(base, dir));
@@ -28,14 +28,14 @@ function openHome(t, name) {
   Object.assign(env, {
     HOME: join(base, "user-home"),
     CLAUDE_CONFIG_DIR: join(base, "claude-config"),
-    NIGHTSHIFT_CLAUDE_BIN: bin,
-    NIGHTSHIFT_FAKE_CALLS: join(base, "calls.jsonl"),
+    NIGHTQUEUE_CLAUDE_BIN: bin,
+    NIGHTQUEUE_FAKE_CALLS: join(base, "calls.jsonl"),
   });
   saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
-  return { env, base, checkout, callsPath: env.NIGHTSHIFT_FAKE_CALLS };
+  return { env, base, checkout, callsPath: env.NIGHTQUEUE_FAKE_CALLS };
 }
 
-// Runs `nightshift open ...` in this process from a directory, capturing stdout and stderr.
+// Runs `nightqueue open ...` in this process from a directory, capturing stdout and stderr.
 async function runOpen(env, argv, cwd) {
   const out = [];
   const err = [];
@@ -55,7 +55,7 @@ function argValue(argv, flag) {
   return index === -1 ? undefined : argv[index + 1];
 }
 
-test("`nightshift open` in the checkout starts claude with the operator as the main thread, under the jobs' hooks and the operator mode", async (t) => {
+test("`nightqueue open` in the checkout starts claude with the operator as the main thread, under the jobs' hooks and the operator mode", async (t) => {
   const home = openHome(t, "open-checkout");
 
   const result = await runOpen(home.env, [], home.checkout);
@@ -64,11 +64,11 @@ test("`nightshift open` in the checkout starts claude with the operator as the m
   const calls = launches(home.callsPath);
   assert.equal(calls.length, 1);
   const [{ argv, cwd, mode, pluginDirEnv, jobId }] = calls;
-  assert.equal(argValue(argv, "--agent"), "nightshift:nightshift-operator");
+  assert.equal(argValue(argv, "--agent"), "nightqueue:nightqueue-operator");
   assert.equal(argValue(argv, "--setting-sources"), "project,local");
   assert.deepEqual(JSON.parse(argValue(argv, "--settings")), jobSettings(home.env));
   assert.equal(argValue(argv, "--plugin-dir"), pluginDir());
-  assert.ok(JSON.parse(argValue(argv, "--mcp-config")).mcpServers.nightshift, "the nightshift MCP server is not configured");
+  assert.ok(JSON.parse(argValue(argv, "--mcp-config")).mcpServers.nightqueue, "the nightqueue MCP server is not configured");
   for (const absent of ["-p", "--print", "--strict-mcp-config", "--resume", "--append-system-prompt", "--permission-mode"]) {
     assert.equal(argv.includes(absent), false, `${absent} was passed`);
   }
@@ -79,7 +79,7 @@ test("`nightshift open` in the checkout starts claude with the operator as the m
   assert.deepEqual(result.out, [`operator · ${home.checkout} · agent ${OPERATOR_AGENT}`]);
 });
 
-test("`nightshift open <project>` from an unrelated directory runs in that project's checkout", async (t) => {
+test("`nightqueue open <project>` from an unrelated directory runs in that project's checkout", async (t) => {
   const home = openHome(t, "open-by-name");
   const elsewhere = realpathSync(makeDir(t, "open-elsewhere"));
 
@@ -89,7 +89,7 @@ test("`nightshift open <project>` from an unrelated directory runs in that proje
   assert.equal(launches(home.callsPath)[0].cwd, home.checkout);
 });
 
-test("an unregistered directory gets one line pointing at `nightshift setup`, exit 1, and no claude", async (t) => {
+test("an unregistered directory gets one line pointing at `nightqueue setup`, exit 1, and no claude", async (t) => {
   const home = openHome(t, "open-unregistered");
   const elsewhere = realpathSync(makeDir(t, "open-unregistered-cwd"));
 
@@ -97,12 +97,12 @@ test("an unregistered directory gets one line pointing at `nightshift setup`, ex
 
   assert.equal(result.code, 1);
   assert.equal(result.err.length, 1, result.err.join("\n"));
-  assert.match(result.err[0], /no project is registered for .*; run `nightshift setup` there first/);
+  assert.match(result.err[0], /no project is registered for .*; run `nightqueue setup` there first/);
   assert.equal(existsSync(home.callsPath), false);
 
   const unknown = await runOpen(home.env, ["beta"], elsewhere);
   assert.equal(unknown.code, 1);
-  assert.match(unknown.err.join("\n"), /unknown project `beta`.*nightshift project list/);
+  assert.match(unknown.err.join("\n"), /unknown project `beta`.*nightqueue project list/);
   assert.equal(existsSync(home.callsPath), false);
 });
 
@@ -124,7 +124,7 @@ test("`--resume <session>` is passed through, and an unsafe session id is refuse
 
 test("a claude without `--agent` gets the operator body through `--append-system-prompt`, frontmatter removed", async (t) => {
   const home = openHome(t, "open-fallback");
-  home.env.NIGHTSHIFT_FAKE_NO_AGENT = "1";
+  home.env.NIGHTQUEUE_FAKE_NO_AGENT = "1";
 
   const result = await runOpen(home.env, [], home.checkout);
 
@@ -134,13 +134,13 @@ test("a claude without `--agent` gets the operator body through `--append-system
   const source = readFileSync(join(pluginDir(), "agents", "operator.md"), "utf8");
   const body = argValue(argv, "--append-system-prompt");
   assert.equal(body, source.replace(/^---\n[\s\S]*?\n---\n/, ""));
-  assert.ok(body.includes("# Operator — the front door of nightshift"));
-  assert.equal(body.includes("name: nightshift-operator"), false);
+  assert.ok(body.includes("# Operator — the front door of nightqueue"));
+  assert.equal(body.includes("name: nightqueue-operator"), false);
   assert.equal(mode, "operator");
   assert.deepEqual(result.out, [`operator · ${home.checkout} · fallback --append-system-prompt`]);
 });
 
-test("`nightshift open` prunes a worktree whose directory a closed terminal left behind", async (t) => {
+test("`nightqueue open` prunes a worktree whose directory a closed terminal left behind", async (t) => {
   const home = openHome(t, "open-prune");
   const stale = join(home.checkout, ".claude", "worktrees", "operator-qa-stale");
   execFileSync("git", ["-C", home.checkout, "worktree", "add", "-q", "--detach", stale, "HEAD"]);

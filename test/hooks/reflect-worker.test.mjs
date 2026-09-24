@@ -334,11 +334,11 @@ test("reflect-worker sanitizes lesson items through the shared sanitizeLesson, w
 test("the default runner explains a missing claude binary and costs no lesson", async (t) => {
   const env = makeHome(t, "worker-no-claude");
   const repo = makeProject(t, env, "alpha");
-  const previous = process.env.NIGHTSHIFT_CLAUDE_BIN;
-  process.env.NIGHTSHIFT_CLAUDE_BIN = join(makeDir(t, "worker-bin"), "claude-that-does-not-exist");
+  const previous = process.env.NIGHTQUEUE_CLAUDE_BIN;
+  process.env.NIGHTQUEUE_CLAUDE_BIN = join(makeDir(t, "worker-bin"), "claude-that-does-not-exist");
   t.after(() => {
-    if (previous === undefined) delete process.env.NIGHTSHIFT_CLAUDE_BIN;
-    else process.env.NIGHTSHIFT_CLAUDE_BIN = previous;
+    if (previous === undefined) delete process.env.NIGHTQUEUE_CLAUDE_BIN;
+    else process.env.NIGHTQUEUE_CLAUDE_BIN = previous;
   });
 
   assert.throws(

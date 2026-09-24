@@ -13,15 +13,15 @@ import { getRoadmapItem, linkRoadmapItemJob, saveRoadmapItem } from "../../src/m
 import { decideResume } from "../../src/queue/resume.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const WORKER = "host:4242";
 const SLUG = "fix-the-worker";
 const UTC_ISO = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/;
 
-// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connect(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;
@@ -55,7 +55,7 @@ function makeRunningJob(t, name, { slug = SLUG, sessionId = null } = {}) {
 
 test("inside a job the run tools resolve the run from the job's own row", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-run-tools-inside");
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const done = payloadOf(
     await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", artifact: "01-triage.md", verdict: "CONFIRMED" } }),
@@ -81,7 +81,7 @@ test("inside a job the run tools resolve the run from the job's own row", async 
 
 test("inside a job a run named from the outside is refused, and nothing is written for it", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-run-tools-foreign");
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const refused = await client.callTool({
     name: "run_phase_done",
@@ -97,7 +97,7 @@ test("inside a job a run named from the outside is refused, and nothing is writt
 
 test("a job whose row has no run slug yet is told to print it instead of getting a guessed run directory", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-run-tools-no-slug", { slug: null });
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const refused = await client.callTool({ name: "run_terminate", arguments: { phase: "triage", reason: "not reproducible" } });
   assert.equal(refused.isError, true);
@@ -132,7 +132,7 @@ test("`run_outcome` never moves the roadmap item the job came from: only the job
   const { env, job } = makeRunningJob(t, "mcp-run-tools-roadmap");
   const item = saveRoadmapItem({ type: "improvement", project: "alpha", title: "deliver the thing" }, env);
   assert.equal(linkRoadmapItemJob(item.id, job.id, env), true, "setup: the item was not linked to its job");
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   payloadOf(await client.callTool({ name: "run_outcome", arguments: { status: "gate", notice: "the operator has to choose" } }));
   assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
@@ -145,7 +145,7 @@ test("`run_outcome` never moves the roadmap item the job came from: only the job
 
 test("`run_set` records the QA stage A marker, and the resume decision reads it back as the stage B re-entry", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-run-tools-qa-stage-a");
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
   for (const phase of ["triage", "explore", "architecture", "implementation"]) {
     payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase, artifact: `0-${phase}.md`, verdict: "ok" } }));
   }
@@ -169,7 +169,7 @@ test("`run_set` records the QA stage A marker, and the resume decision reads it 
 
 test("inside a job `pipeline_log` records the run of its own row and the fields the run already recorded", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-pipeline-log-inside");
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   payloadOf(
     await client.callTool({
@@ -205,7 +205,7 @@ test("outside a job `pipeline_log` records the operator's outcomes, and inside a
     assert.deepEqual({ slug: row.slug, outcome: row.outcome }, { slug: `hunt-${outcome}`, outcome });
   }
 
-  const inside = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const inside = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
   const refused = await inside.callTool({ name: "pipeline_log", arguments: { tier: "complex", outcome: "investigated" } });
   assert.equal(refused.isError, true);
   assert.match(textOf(refused), /outcome `investigated` is the operator's/);
@@ -228,7 +228,7 @@ test("outside a job `run_set` records the operator fields, the evidence level as
 
 test("a phase, a status or a call with nothing to record is refused with the accepted contract", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-run-tools-enums");
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const phase = await client.callTool({ name: "run_phase_done", arguments: { phase: "triagem", artifact: "01-triagem.md" } });
   assert.equal(phase.isError, true);
@@ -260,7 +260,7 @@ test("inside a job the recall drops what the run already saw, and gives it back 
       env,
     );
   }
-  const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
   const idsOf = (block) => [...block.matchAll(/\[L(\d+)\]/g)].map((match) => Number(match[1]));
 
   const context = payloadOf(

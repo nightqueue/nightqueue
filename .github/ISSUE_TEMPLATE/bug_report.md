@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Something nightshift did, or refused to do, that does not match the docs
+about: Something nightqueue did, or refused to do, that does not match the docs
 title: ''
 labels: bug
 assignees: ''
@@ -14,11 +14,11 @@ assignees: ''
 
 ## Environment
 
-- nightshift version (`nightshift --version`):
+- nightqueue version (`nightqueue --version`):
 - Claude Code version (`claude --version`):
 - OS and Node (`node -v`):
-- `nightshift doctor` output:
+- `nightqueue doctor` output:
 
 ## Job log, if a job is involved
 
-<!-- `nightshift queue log <id>`; trim anything private. -->
+<!-- `nightqueue queue log <id>`; trim anything private. -->

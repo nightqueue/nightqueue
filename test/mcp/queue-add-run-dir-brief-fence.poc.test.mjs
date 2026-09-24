@@ -16,7 +16,7 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 // inside a fenced code block (e.g. documenting/describing it, never actually carrying a real
 // prior-run block) trips the same false "already carries a block" refusal a real duplicate would.
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const SLUG = "hunt-the-notice";
 
 // The Brief quotes the block heading inside a fenced code block — documentation, not a real duplicate block.
@@ -37,17 +37,17 @@ const PROMPT = [
 // A temp home whose HOME and CLAUDE_CONFIG_DIR are temp too, with the project `alpha` and an operator run recorded into it.
 function makeOperatorRun(t, name) {
   const base = makeHome(t, name);
-  const env = { ...base, HOME: dirname(base.NIGHTSHIFT_HOME), CLAUDE_CONFIG_DIR: join(dirname(base.NIGHTSHIFT_HOME), ".claude") };
+  const env = { ...base, HOME: dirname(base.NIGHTQUEUE_HOME), CLAUDE_CONFIG_DIR: join(dirname(base.NIGHTQUEUE_HOME), ".claude") };
   makeProject(t, env, "alpha");
   recordRunFields({ project: "alpha", slug: SLUG, fields: { origin: "operator", type: "bug/error", evidenceLevel: 3 }, env });
   recordPhaseDone({ project: "alpha", slug: SLUG, phase: "triage", artifact: "01-triage.md", verdict: "PROCEED", env });
   return env;
 }
 
-// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connect(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;

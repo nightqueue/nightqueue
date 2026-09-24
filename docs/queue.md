@@ -1,40 +1,40 @@
 # Queue
 
-The queue is what makes the runtime unattended: `nightshift queue add` records a
-request against a registered project, `nightshift queue run` claims it and spawns
-`claude -p /nightshift:resolve <request>` with the plugin of this package and
+The queue is what makes the runtime unattended: `nightqueue queue add` records a
+request against a registered project, `nightqueue queue run` claims it and spawns
+`claude -p /nightqueue:resolve <request>` with the plugin of this package and
 this same MCP server attached, and the pipeline itself opens the pull request at
 the end. The runner reads the stream of the run and stores what
 [Runtime contract](runtime-contract.md) defines: the slug, the session id, the pull request URL,
 the `## Notice` and the token usage.
 
 ```sh
-nightshift queue add api "fix the flaky worker" --priority 2   # enqueue a job
-nightshift queue add "fix the flaky worker"                    # same, for the project of the current directory
-nightshift queue add fix the flaky worker --run                # enqueue and start the runner on it, detached
-nightshift queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
-nightshift queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
-nightshift queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
-nightshift queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
-nightshift queue status --blocked                              # only the pending jobs a preflight block is holding back
-nightshift queue status 7 [--json]                             # one job, never with its prompt
-nightshift queue run [--job 7] [--max 2] [--dry]               # start the runner detached; --max 2 exits after two jobs; --dry only reports
-nightshift queue run --watch [30]                              # start a watcher, one pass every N seconds
-nightshift queue run --watch --from 22:00 --until 04:00        # watch only inside that window, then exit
-nightshift queue run --stop [4242]                             # end every registered runner, or only the one with that pid
-nightshift queue run --foreground [--job 7]                    # run it in this process instead, for a script or CI
-nightshift queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
-nightshift queue session 7 [--print]                           # resume the claude session of the job's last attempt
-nightshift queue cancel 7 --reason "not needed"                # cancel a pending, gated, orphaned, done or failed job
-nightshift queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue
-nightshift queue repair 7 [--json]                             # re-classify a gated or failed job from its own log
-nightshift queue close 7 [--force] [--foreground] [--json]      # merge a done job's pull request and close the job, detached
-nightshift queue close --merged [--json]                         # close every done job whose pull request is already merged
-nightshift queue pause | nightshift queue resume                    # stop claiming new jobs, or claim again
+nightqueue queue add api "fix the flaky worker" --priority 2   # enqueue a job
+nightqueue queue add "fix the flaky worker"                    # same, for the project of the current directory
+nightqueue queue add fix the flaky worker --run                # enqueue and start the runner on it, detached
+nightqueue queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
+nightqueue queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
+nightqueue queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
+nightqueue queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
+nightqueue queue status --blocked                              # only the pending jobs a preflight block is holding back
+nightqueue queue status 7 [--json]                             # one job, never with its prompt
+nightqueue queue run [--job 7] [--max 2] [--dry]               # start the runner detached; --max 2 exits after two jobs; --dry only reports
+nightqueue queue run --watch [30]                              # start a watcher, one pass every N seconds
+nightqueue queue run --watch --from 22:00 --until 04:00        # watch only inside that window, then exit
+nightqueue queue run --stop [4242]                             # end every registered runner, or only the one with that pid
+nightqueue queue run --foreground [--job 7]                    # run it in this process instead, for a script or CI
+nightqueue queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
+nightqueue queue session 7 [--print]                           # resume the claude session of the job's last attempt
+nightqueue queue cancel 7 --reason "not needed"                # cancel a pending, gated, orphaned, done or failed job
+nightqueue queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue
+nightqueue queue repair 7 [--json]                             # re-classify a gated or failed job from its own log
+nightqueue queue close 7 [--force] [--foreground] [--json]      # merge a done job's pull request and close the job, detached
+nightqueue queue close --merged [--json]                         # close every done job whose pull request is already merged
+nightqueue queue pause | nightqueue queue resume                    # stop claiming new jobs, or claim again
 ```
 
 **The project is optional, the prompt is variadic.** Omitted, the project is the
-one whose registered path contains the current directory (`nightshift init` is what
+one whose registered path contains the current directory (`nightqueue init` is what
 registers it), and the command says which one it picked. Given, the first word
 is the project only when it is a registered NAME; anything else is already part
 of the prompt, so the words of the request need no quotes.
@@ -49,15 +49,15 @@ fails exactly as it did before and registers nothing.
 
 **Options are read only at the two edges of the command line**, before the first
 word of the request and after the last one. Everything between them is the
-prompt, kept exactly as it was typed: `nightshift queue add explain the --run flag to
+prompt, kept exactly as it was typed: `nightqueue queue add explain the --run flag to
 the team` queues those seven words and starts nothing. A prompt that begins or
 ends with a flag is the ambiguous case, and goes after `--`:
-`nightshift queue add -- explain --run to me`. An option that does not exist is still
+`nightqueue queue add -- explain --run to me`. An option that does not exist is still
 a usage error at either edge, never a silent word of the prompt.
 
 **`--run` starts the runner on the job right away**, detached, instead of leaving
-it for the next `nightshift queue run`. It prints the job id first, then the line
-`job #<id> started (pid <pid>) - follow with: nightshift queue log <id> --follow`,
+it for the next `nightqueue queue run`. It prints the job id first, then the line
+`job #<id> started (pid <pid>) - follow with: nightqueue queue log <id> --follow`,
 and exits `0` as soon as the child is up: the exit code answers for the start, not
 for the outcome of the job, which is read with `queue status` or `queue log`. Add
 `--foreground` to get the old behaviour back - the job runs in this very process,
@@ -87,20 +87,20 @@ the raise into the Brief as `Tier raised: <from> -> <to>: <evidence>`. It never 
 one, and it never raises on the shape of the change. A value that is not one of the
 three is a usage error naming the three accepted values, and nothing is queued.
 A job with no tier keeps the pipeline's
-own classification. The tier shows up in `nightshift queue status <id>` and in the
+own classification. The tier shows up in `nightqueue queue status <id>` and in the
 `--json` of both the list and the detail; a job with no tier simply has no `tier` line.
 
 ### Running the queue
 
-**The runner is detached by default.** `nightshift queue add --run`,
-`nightshift queue retry --run` and `nightshift queue run` all spawn a child that runs
+**The runner is detached by default.** `nightqueue queue add --run`,
+`nightqueue queue retry --run` and `nightqueue queue run` all spawn a child that runs
 the queue on its own and return as soon as that child is up, with exit code `0`.
-The child is this same CLI started as `nightshift queue run --foreground ...`, so
+The child is this same CLI started as `nightqueue queue run --foreground ...`, so
 `--foreground` is both the flag you type for a blocking run and the flag that tells
 the child it is the worker. A start that cannot spawn exits `1` with the reason and
 never falls back to running the job in the foreground behind your back.
 
-**`nightshift queue run` with no other option drains the queue**: the child runs
+**`nightqueue queue run` with no other option drains the queue**: the child runs
 cycle after cycle until nothing is pending, waiting 15 s between passes while the
 pending jobs are held back by a preflight block or the ceiling the operator set in
 `queue.maxConcurrent`, and exits by itself when the queue is empty. `--max <n>` is a budget
@@ -109,19 +109,19 @@ for the run: the runner processes at most n jobs that reach the agent and exits,
 dirty checkout, a missing `claude` binary) spends none of it, so the drain keeps waiting on
 that job with its budget intact. The budget applies to `--watch` and to a single foreground
 cycle too; without it the drain runs until nothing is pending. The command that starts it registers it in
-`$NIGHTSHIFT_HOME/runners/<pid>.json` with `mode: "drain"` for as long as it lives, so
+`$NIGHTQUEUE_HOME/runners/<pid>.json` with `mode: "drain"` for as long as it lives, so
 `queue status` shows `runner: running (pid <pid>, drain, runtime <version>, since <iso>)`
 the instant the start returns, and `--stop` ends it. Its output
-goes to `$NIGHTSHIFT_HOME/logs/runner-<stamp>.log`; the start prints
+goes to `$NIGHTQUEUE_HOME/logs/runner-<stamp>.log`; the start prints
 `runner started (pid <pid>) - draining the queue until nothing is pending; follow with:
-nightshift queue status --follow`. When the start is aimed at a single job the child
+nightqueue queue status --follow`. When the start is aimed at a single job the child
 runs that job alone and the line points at its narrated stream instead:
-`job #<id> started (pid <pid>) - follow with: nightshift queue log <id> --follow`; that
+`job #<id> started (pid <pid>) - follow with: nightqueue queue log <id> --follow`; that
 one registers too, as `once, job #<id>`. A job running with no registered runner at all
 (a runner that died without clearing its registration) is still visible: the opening
 line says `0 runners online - 1 running job under a one-shot runner - nothing will pick
-up the pending jobs after it (start a drain with: nightshift queue run)` instead of
-``0 runners online - pending jobs will wait until `nightshift queue run` starts one``.
+up the pending jobs after it (start a drain with: nightqueue queue run)` instead of
+``0 runners online - pending jobs will wait until `nightqueue queue run` starts one``.
 
 **`--foreground` is the mode for a script or for CI**: it runs the cycle in the very
 process you started, prints one line per processed job and answers with an exit code
@@ -130,9 +130,9 @@ either: it is a read-only report of what a cycle would do, including `cap` (`non
 ceiling) and `max` (`none` without a budget).
 
 **`--watch [seconds]` is the daemon**, one pass every `N` seconds (30 by default).
-It is registered in `$NIGHTSHIFT_HOME/runners/<pid>.json` with `pid`, `startedAt`, `mode`,
+It is registered in `$NIGHTQUEUE_HOME/runners/<pid>.json` with `pid`, `startedAt`, `mode`,
 `jobId`, `intervalS`, `detached`, `logPath` and `runtimeDir`, and prints
-`runner started (pid <pid>, every <n> s) - stop with: nightshift queue run --stop`.
+`runner started (pid <pid>, every <n> s) - stop with: nightqueue queue run --stop`.
 `--job` and `--watch` are refused together: running one job and watching the whole
 queue are opposite intents.
 
@@ -155,7 +155,7 @@ the last line says so: `window closed at 04:00 - 3 jobs still pending`. Only
 `--job` are all refused by usage, naming the reason. A drain, `--job` and the MCP
 `queue_run` are unchanged.
 
-Started detached (the default: `nightshift queue run --watch --from 22:00 --until
+Started detached (the default: `nightqueue queue run --watch --from 22:00 --until
 04:00`) it returns at once, forwarding the flags to the child; `--foreground` holds
 the terminal for the whole window instead. `queue status` shows it on the runner
 line - `watch every 60 s · window 22:00-04:00 · opens in 3h12` before it opens,
@@ -166,7 +166,7 @@ its window (opens 22:00)` instead of promising a pending job gets picked up.
 
 **The window is one-shot.** When it closes the process ends and nothing brings it
 back. Running it every night is an OS-level job (`launchd` on macOS, `systemd` on
-Linux) the operator sets up themselves - nightshift bundles no installer for that
+Linux) the operator sets up themselves - nightqueue bundles no installer for that
 today, and no runner ever starts another runner.
 
 **`queue.keepAwake` keeps the machine from sleeping while a runner or a job needs
@@ -182,12 +182,12 @@ failing `caffeinate` never fails a runner or a job, just one warning line. **The
 limits are real:** the display is allowed to sleep (`-d` is never used), a closed
 lid with no external display still sleeps, and nothing here wakes a machine that is
 already asleep - a windowed night run needs the lid open (or an external display)
-to survive to `until`. `nightshift doctor` reports the mode, whether `caffeinate`
+to survive to `until`. `nightqueue doctor` reports the mode, whether `caffeinate`
 was found (macOS only) and this same limitation.
 
 **One job per runner.** A runner claims a job, runs it to the end and only then claims the
 next one, in queue order (priority, then age). Jobs run at the same time only because several
-runners are live - start another with `nightshift queue run`; a single runner never runs two.
+runners are live - start another with `nightqueue queue run`; a single runner never runs two.
 
 **Any number of runners, whatever started them.** A watcher, a drain and a single-job
 runner are all registered the same way, one file per pid, and every start path - `queue run`,
@@ -239,14 +239,14 @@ them again into the runner log. Over MCP, `queue_status` ends its `hint` with th
 under `advisories`, and `queue_run` and a `queue_retry` with `run: true` answer `advisories` too. A read that fails
 answers no advice.
 
-**`nightshift queue run --stop [pid]` ends the registered runners**: without a pid it ends
+**`nightqueue queue run --stop [pid]` ends the registered runners**: without a pid it ends
 every one of them, signalling all of them first and then polling once, so N runners cost one
 ten-second timeout and not N; with a pid it ends exactly that one and leaves the others
 registered. It prints one line per runner - `runner stopped (pid <pid>)`,
 `runner was not running (stale registration removed)` or `runner is not running` - and exits
 `0` in those cases; it exits `1` when a process is still there after those ten seconds, saying
 that the runner finishes the job it is running and exits by itself. A registration owned by
-another user is reported as `runner (pid <pid>) belongs to another user; nightshift will not
+another user is reported as `runner (pid <pid>) belongs to another user; nightqueue will not
 signal it` and never takes the stop of the healthy runners down with it, while `--stop <pid>`
 aimed AT that registration refuses, because there the refusal is the answer. An unknown pid
 fails with `no runner is registered with pid <pid>`. `--stop` takes no other option. Known
@@ -276,7 +276,7 @@ listing a job whose stream is already hundreds of kilobytes costs nothing; a job
 with no log yet and a log that cannot be read both show `-`, the table is always
 printed in full and the exit code stays `0`. The columns adapt to the width of
 the terminal and `SLUG/LAST` is cut with an ellipsis, never wrapped; on a pipe there
-is no color and no cursor movement. `nightshift queue status --follow [seconds]`
+is no color and no cursor movement. `nightqueue queue status --follow [seconds]`
 (default 2) redraws the table in place until Ctrl-C - the terminal equivalent of
 a queue panel - and `--until-idle` makes it exit by itself once nothing is
 running or pending. `--follow` refuses `--json` and a single job id. Each frame starts on
@@ -295,7 +295,7 @@ answers with the same fields as before plus `suggestions` and `sections` - one
 `N runner(s) online` - followed by ONE line per live runner -
 `runner: running (pid <pid>, watch every <n> s[, foreground][, runtime <version>], since <iso>)`
 - or, when none is registered, ``0 runners online - pending jobs will wait until
-`nightshift queue run` starts one`` in place of the per-runner lines. The advisory lines, when
+`nightqueue queue run` starts one`` in place of the per-runner lines. The advisory lines, when
 they apply, follow the runner lines. `--json` carries
 `runnersOnline` (the count) next to the whole list under `runners`, `advisories`, plus the singular
 `runner`: it is `runners[0]` (or the same all-null object as before when the list is
@@ -307,10 +307,10 @@ empty), kept for one release and removed in the next minor - read `runners`.
 characters. A row whose text was cut carries `notice_truncated: true` or
 `result_truncated: true`; the key is absent when the text fits, so a listing where
 everything fits is the same as before. The listing then adds one line to `suggestions` -
-`#12 text cut at 500 characters - read it whole with nightshift queue status 12` for
+`#12 text cut at 500 characters - read it whole with nightqueue queue status 12` for
 exactly one job, `3 jobs have text cut at 500 characters (#12, #9, #7) - read each whole
-with nightshift queue status <id>` for several - which the table prints under the counts
-and the MCP `hint` ends with. `nightshift queue status <id>` (and `queue_status` with
+with nightqueue queue status <id>` for several - which the table prints under the counts
+and the MCP `hint` ends with. `nightqueue queue status <id>` (and `queue_status` with
 `job_id`) is never cut.
 
 **`queue status <id>` can show two notices.** The single-job view (CLI human, CLI `--json`
@@ -341,7 +341,7 @@ repairs it. A job under a live lease is never touched, and neither is one an ope
 retried: the retry records that it reopened the row in the very write that sends it back
 to the queue, so the witness of the attempt before it can never close it again.
 
-**The log is narrated by default.** `nightshift queue log <id>` prints one line per
+**The log is narrated by default.** `nightqueue queue log <id>` prints one line per
 relevant event of the stream, timed relative to the `=== attempt N ===` marker
 that opens each attempt: `»` what the orchestrator said, `·` each tool with its
 file or command, `▶`/`◀` each subagent lane with its phase and what it reported
@@ -364,7 +364,7 @@ job runs and the stream has nothing to narrate, it ticks `· still running` ever
 read is treated as a glitch first: the failure is reported on stderr, the follow
 keeps polling and only gives up after five failures in a row, and the closing
 reason always says that the log became unreadable instead of claiming a complete
-narration - the exit code stays `0` and a stack trace is never printed. `NIGHTSHIFT_FOLLOW_DEBUG=1`
+narration - the exit code stays `0` and a stack trace is never printed. `NIGHTQUEUE_FOLLOW_DEBUG=1`
 traces every poll on stderr (`follow: t=<iso> size=<n> offset=<n> lines=<n>`),
 which is what to turn on if the output ever stalls again.
 
@@ -386,9 +386,9 @@ orchestrator when there is none, and a run that ended saying nothing at all is
 **`closed` means merged, and the schema says so.** A row is `closed` only when it carries a
 `pr_url`, an empty `close_status` and a `close` checklist whose `data.merged` is `true` - a
 `CHECK` of the `jobs` table refuses every other write, whoever makes it. Only the settle step
-of the closing pipeline writes `closed`: `nightshift queue close <id>`, `queue close --merged`
+of the closing pipeline writes `closed`: `nightqueue queue close <id>`, `queue close --merged`
 and the MCP `queue_close`. `queue repair`, the witness reconciliation and every other writer
-refuse it by name (``status `closed` is written only by the closing pipeline; run nightshift
+refuse it by name (``status `closed` is written only by the closing pipeline; run nightqueue
 queue close <id>``), so a job is never closed by hand, by a flip of its status or by an agent.
 
 **A run that produced nothing is `cancelled`, not `failed`.** When an attempt exits cleanly
@@ -431,10 +431,10 @@ the last state it had. A pull request nobody asked about yet reads `unknown`. Th
 cell shows it next to the URL (`https://github.com/acme/api/pull/42 (merged)`), and
 `--json` carries `jobs[].pr_state` plus `suggestions`. A `done` job whose pull request is
 merged is never changed by a read: the
-listing adds one aggregated line - `#12 PR merged - close it with nightshift queue
+listing adds one aggregated line - `#12 PR merged - close it with nightqueue queue
 close 12` for exactly one, `3 jobs have a merged PR (#12, #9, #7) - close them with
-nightshift queue close --merged` for several - and closing it is the operator's act,
-either by id or in one call with `nightshift queue close --merged`. `--merged` looks at
+nightqueue queue close --merged` for several - and closing it is the operator's act,
+either by id or in one call with `nightqueue queue close --merged`. `--merged` looks at
 `done` jobs with a pull request only, and queries gh only for what its own cache cannot
 already confirm, bounded to 10 pull requests and one 20 s deadline per call; each job it
 confirms merged then goes through the same closing pipeline, one after the other in this
@@ -449,7 +449,7 @@ closed job that had a worktree, `status` `removed` or `kept`) next to `closed`, 
 `queue status` asks it before it prints and waits one overall 5 s deadline at most -
 what has not answered by then prints `unknown`, and the gh still running is stopped; `--follow` never waits for gh - it asks after drawing a
 frame and picks the answer up on a later one - and the MCP `queue_status` answers from
-its cache and asks gh after answering. `NIGHTSHIFT_NO_PR_CHECK=1` switches every gh call
+its cache and asks gh after answering. `NIGHTQUEUE_NO_PR_CHECK=1` switches every gh call
 of this off.
 
 `queue cancel` moves a job into `cancelled` (from `pending`, `gate`, an orphan, `done` or
@@ -460,10 +460,10 @@ kept: <path> - <reason>` after `cancelled job #N`, and `--json` and the MCP `que
 answer `{ job, worktree }` (`{ path, status, reason? }`, or `null`); a pending, gated or
 orphaned cancel leaves the worktree where it is. The job's `close` checklist, when it has one,
 is kept as history. A `done` job that a close holds under a live lease is refused (``job `N`
-is being closed by `W` until T; wait for it or follow it with nightshift queue status N``) and
+is being closed by `W` until T; wait for it or follow it with nightqueue queue status N``) and
 nothing is written. So is a `done` job whose close was interrupted - still `closing` on record
 with its lease dead, possibly after the merge already happened (``job `N` has an interrupted
-close whose merge may already have happened; resume it with nightshift queue close N - …``):
+close whose merge may already have happened; resume it with nightqueue queue close N - …``):
 the resumed close reads the pull request, records a merge as `closed` and cancels the job for
 one closed without merge, so a merge is never lost from the record by a cancel. A `closed` job is terminal for both: `queue cancel`
 refuses it as already finished, and `queue retry` still takes `failed`,
@@ -519,8 +519,8 @@ runner removes the worktree its run recorded (`state.json` `worktree`) with a pl
 empty) or a pull request is recorded. A lock left by a session whose pid is gone is lifted
 first; a lock held by a live pid, or one with no pid, keeps the worktree. A run that ends
 `gate` or `failed` keeps its worktree for the resume and for the session that attaches to it;
-`nightshift queue close` (once the job is `done` and its pull request merged) or `nightshift queue
-cancel` (of a `done` or `failed` job) removes it later under the same rule. A worktree nightshift would refuse
+`nightqueue queue close` (once the job is `done` and its pull request merged) or `nightqueue queue
+cancel` (of a `done` or `failed` job) removes it later under the same rule. A worktree nightqueue would refuse
 to remove - dirty, never pushed, ahead of its upstream, locked or unreadable - is named whatever
 the ending: the line `Worktree kept: <path> - <reason>.` is appended after a blank line to the
 notice that exists (the run's own, its fallback, or the notice the row already held when the
@@ -528,7 +528,7 @@ run produced none), never replacing it, and a resumed run replaces its own earli
 of stacking it. A clean, published worktree kept only because the run stopped at `gate` or
 `failed` is not named. Nothing is ever forced, no branch is deleted and nothing on the remote is
 touched; ignored files inside a removed worktree (a local `.env`, build output) go with it.
-`nightshift doctor` lists what is left under `.claude/worktrees/` with the command that cleans it
+`nightqueue doctor` lists what is left under `.claude/worktrees/` with the command that cleans it
 (see [Doctor](cli.md#doctor)).
 
 **Ownership and orphans.** A claim is one atomic `UPDATE` inside SQLite, so two
@@ -567,13 +567,13 @@ the pipeline, because a sentence in a prompt covers only the wording it happens
 to forbid and is lost the moment the platform underneath changes.
 
 **The orchestrator of a job only coordinates, and the same hook enforces it.** Its
-matcher is `Agent|Task|Bash|Read|Grep|Glob`; `nightshift doctor` warns (`registered
-with an older tool matcher`) until `nightshift setup` rewrites an older one. For a call
+matcher is `Agent|Task|Bash|Read|Grep|Glob`; `nightqueue doctor` warns (`registered
+with an older tool matcher`) until `nightqueue setup` rewrites an older one. For a call
 of the orchestrator's own main thread - a payload with no `agent_id`; a subagent's call
-carries one - inside a job (`NIGHTSHIFT_JOB_ID` set):
+carries one - inside a job (`NIGHTQUEUE_JOB_ID` set):
 
 - `Read`, `Grep` and `Glob` are allowed only under the runs of the job home
-  (`<home>/runs`) and a copy of the plugin (`NIGHTSHIFT_PLUGIN_DIR`, which the runtime
+  (`<home>/runs`) and a copy of the plugin (`NIGHTQUEUE_PLUGIN_DIR`, which the runtime
   pins on the child, the plugin of the running package and of the installed runtime, and
   the host's `plugins` directory), plus the file where the host spills a tool result too
   large for the context and tells the model to read it - of the calling session only:
@@ -591,7 +591,7 @@ carries one - inside a job (`NIGHTSHIFT_JOB_ID` set):
   short-flag cluster carrying one, the abbreviation git accepts, nor a `+`/`:` refspec),
   `git fetch` (never `--upload-pack`), `git branch --show-current`,
   `git diff --stat|--shortstat|--name-only|--name-status` (never with `-p`/`-u`/`--patch`),
-  `gh pr view|list|status|checks|create` and `nightshift run check|log|index-save|commit|pr`.
+  `gh pr view|list|status|checks|create` and `nightqueue run check|log|index-save|commit|pr`.
   Each is the bare program name followed by its subcommand: a path to the binary or a
   global flag before the subcommand (`git -C <dir>`, `-c`, `--git-dir`, `--work-tree`) is
   refused. A command carrying a newline or any of ``; & | ` < > $`` is refused: the skill
@@ -625,7 +625,7 @@ disabled - the CLI may have dropped CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`.
 each job records `bash_timeouts` (tool results saying a command timed out),
 `tasks_backgrounded` and `tasks_killed` (distinct tasks the CLI backgrounded or killed),
 summed over its attempts. `queue status <id>` (human, `--json` and the MCP
-`queue_status`) shows each only when it is not zero, and `nightshift doctor` sums them
+`queue_status`) shows each only when it is not zero, and `nightqueue doctor` sums them
 over the last 20 finished jobs, warning when anything was backgrounded or killed.
 
 **Every job counts what its orchestrator did itself.** From the same stream, reading
@@ -644,7 +644,7 @@ A call is counted on the `tool_use` itself, so one the hook denied still counts:
 regression shows even while it is blocked. Tool calls are deduped by id and a line
 quoted inside a code fence is never read as an event. `queue status <id>` (human,
 `--json` and the MCP `queue_status`) shows all five, zero included - only a job finished
-before the counters existed leaves them out. `nightshift doctor` prints one
+before the counters existed leaves them out. `nightqueue doctor` prints one
 `orchestrator` row summed over the last 20 finished jobs (with the average last context
 and how many of them were measured), warning when `orch_reads` or `orch_bash_explore` is
 above zero. Baseline measured on 2026-09-21, before the contract: 49 turns, 4 reads,
@@ -661,7 +661,7 @@ orchestrator's first turn went from ~114k to ~68k tokens, paid again on every tu
 carrying this package's own four hooks and a `claudeMdExcludes` entry that removes it.
 `queue.inheritUserEnvironment: true` is the escape hatch back to the old, unfenced
 behaviour, for an operator who wants a job to see everything a foreground session
-sees; there is no per-server allowlist - it is all or nothing. `nightshift doctor`
+sees; there is no per-server allowlist - it is all or nothing. `nightqueue doctor`
 reports which mode is in effect: `job environment` is `ok` when isolated, and warns,
 naming the config key, when a job inherits the operator's own environment.
 
@@ -718,7 +718,7 @@ spawning anything, and hands the result over in the prompt as one block:
 
 ```
 RESUME CANDIDATE (slug `fix-the-worker`)
-RUN_DIR: /Users/me/.nightshift/runs/api/fix-the-worker
+RUN_DIR: /Users/me/.nightqueue/runs/api/fix-the-worker
 Branch: fix/the-worker
 Worktree: /Users/me/code/api/.claude/worktrees/fix-the-worker
 Last completed phase: triage
@@ -739,7 +739,7 @@ session of its own. The default is `false`.
 
 **What the runner requires of the checkout.** Before spawning anything it
 checks, in this order: the project is registered by NAME, its checkout exists
-and has a `.git`, the `claude` CLI resolves (`NIGHTSHIFT_CLAUDE_BIN`, then
+and has a `.git`, the `claude` CLI resolves (`NIGHTQUEUE_CLAUDE_BIN`, then
 `PATH`), the checkout is clean (`git status --porcelain` empty) and it sits on
 the default branch. A block is not a failure: the job goes back to `pending`
 without spending an attempt and the reason is stored in `result` (the operator
@@ -757,7 +757,7 @@ no retry, no operator call. The claim clears `blocked_code` the instant it
 picks the job back up.
 
 **What it does NOT do in v1.** The runner never merges anything and never closes the
-cycle after the pull request on its own - that is `nightshift queue close`, an operator
+cycle after the pull request on its own - that is `nightqueue queue close`, an operator
 command (see *Closing a job* below). It keeps no token budget, installs no launchd (or any other)
 scheduler, sends no notification and has no cockpit. It also never changes the
 state of a git repository: the only git commands it runs are reads of the
@@ -766,7 +766,7 @@ checkout, and every branch and worktree is created by the pipeline itself.
 ### Closing a job
 
 **A close takes a `done` job's pull request from open to merged and closes the job - and it
-is the only way a job becomes `closed`.** `nightshift queue close <id>`, `queue close
+is the only way a job becomes `closed`.** `nightqueue queue close <id>`, `queue close
 --merged` and the MCP `queue_close` all run the same code pipeline of four steps - never an
 agent, never a second job, never queue work:
 
@@ -786,7 +786,7 @@ agent, never a second job, never queue work:
    and nothing else is checked. Otherwise the checks must be
    green - a red or a pending check stops the close naming it, and it never waits for one.
    Uncommitted files in the checkout only stop it when the pull that follows the merge
-   would touch them (`checkout-dirty` names up to ten): nightshift never stashes, so they are
+   would touch them (`checkout-dirty` names up to ten): nightqueue never stashes, so they are
    yours to commit or stash.
 2. **conflict** - skipped when GitHub reports the pull request mergeable. When it conflicts,
    the head branch is rebased onto the base in a throwaway worktree (its own temporary
@@ -800,7 +800,7 @@ agent, never a second job, never queue work:
 3. **merge** - `gh pr merge --squash --match-head-commit <the verified head>`, never
    `--delete-branch`, `--admin` or `--auto`. gh's exit code is never the evidence: the pull
    request is re-read until GitHub reports it merged with its merge commit, and that
-   commit is what is recorded, with `data.mergedBy: "nightshift"`. When the pull request was
+   commit is what is recorded, with `data.mergedBy: "nightqueue"`. When the pull request was
    already merged by hand, the step merges nothing: it confirms the merge commit the same way
    and is `skipped` with the note `merged outside a close as <sha7>; ...`. Afterwards the
    checkout is fast-forwarded with `git pull --ff-only` only when it sits on the base branch;
@@ -838,9 +838,9 @@ it closed, a stopped close adds ` · close failed at <step>` or ` · close stall
 checklist under the status line; `--json` and the MCP `queue_status` carry `close_status`,
 `close_worker`, `close_lease_until` and `close`. A close that stops prints, in the listing, the
 detail and the queue's hint lines,
-`⛔ close stopped at <step>: <reason> - run again with: nightshift queue close <id>`, and a close
-in flight adds `close in flight: #<id> at <step> (pid <pid>) - follow with: nightshift queue
-status <id>`. `nightshift doctor` has a `closes` row that warns on a failed close or one whose
+`⛔ close stopped at <step>: <reason> - run again with: nightqueue queue close <id>`, and a close
+in flight adds `close in flight: #<id> at <step> (pid <pid>) - follow with: nightqueue queue
+status <id>`. `nightqueue doctor` has a `closes` row that warns on a failed close or one whose
 lease expired.
 
 **Running it again resumes it at the step that failed.** A step already `done` is not run
@@ -856,9 +856,9 @@ and is renewed on every checklist write; a lease that expired (the process died 
 its timeout) shows as `close stalled` and is taken over by the next `queue close`. The close
 claims nothing: it holds no job lease and never changes what a runner may pick up.
 
-**Detached by default.** `nightshift queue close <id>` starts a child and returns at once
+**Detached by default.** `nightqueue queue close <id>` starts a child and returns at once
 with `close of job #<id> started (pid <pid>) - follow with: tail -f <log> (log: <log>), or
-nightshift queue status <id>`; the log is `<home>/logs/close-<id>-<stamp>.log`, and `--json`
+nightqueue queue status <id>`; the log is `<home>/logs/close-<id>-<stamp>.log`, and `--json`
 prints `{ started, jobId, pid, logPath }`. The child registers as a runner of mode `close`, so
 `queue status`, doctor and the install guard see it live, but a pending job is never
 promised to it. `--foreground` runs the steps in this process, prints one line per step and
@@ -874,7 +874,7 @@ it settles the decisions the job proposed and nobody settled: on a terminal it a
 reject / keep for each, `--decisions accept|reject|keep` answers all of them without asking,
 and `--json` or no terminal keeps them `proposed`. A detached close has no terminal: it hands
 `--decisions` to its child when you give it, and otherwise keeps every proposal `proposed` -
-`nightshift doctor` lists them afterwards. The MCP `queue_close` never settles a proposal.
+`nightqueue doctor` lists them afterwards. The MCP `queue_close` never settles a proposal.
 
 **What `--force` does.** `--force` (`force: true` over MCP) means "do not hold me back for
 tests", nothing more: preflight notes the pull request's red, pending or unreadable checks
@@ -892,7 +892,7 @@ whose checkout exists. Everything else is refused by name, and nothing is writte
 - `closed` - ``job `N` is already closed``; running `queue close` again on a closed job is how
   you confirm it, and it never starts a child;
 - `running`, `pending` (it has not produced a pull request yet), `gate` (answer it with
-  `nightshift queue retry N --note "..."`, or cancel it), `failed` (retry it or cancel it) and
+  `nightqueue queue retry N --note "..."`, or cancel it), `failed` (retry it or cancel it) and
   `cancelled` (retry it before closing);
 - a `done` job without a pull request - `nothing to close: the job has no pull request`;
 - a job another close holds under a live lease, named with its worker and until when.
@@ -916,7 +916,7 @@ request merged first is cut wrong: fold it into that job. Independent jobs may
 run in parallel and merge in any order.
 
 ```sh
-nightshift queue add "Self-contained install. Stages: 1) runtime under ~/.nightshift; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."
+nightqueue queue add "Self-contained install. Stages: 1) runtime under ~/.nightqueue; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."
 ```
 
 Run it from inside the repository the job is about: when that repository is not
@@ -937,5 +937,5 @@ run. Until then, the answer to "this depends on that" is one job with stages.
 the run executes the track of that tier. The criteria of each one, their time targets
 and what raises a tier are in [Queue](queue.md).
 
-`nightshift queue add --help` prints this rule and the example.
+`nightqueue queue add --help` prints this rule and the example.
 

@@ -151,7 +151,7 @@ test("preflight stops at checkout-dirty when a local change is in a file the pul
   const result = await preflightStep({ ctx: ctxFor(), deps: fake.deps });
   assert.equal(result.status, "failed");
   assert.equal(result.reason, "checkout-dirty");
-  assert.match(result.note, /the pull would touch: src\/a\.mjs; commit or stash them yourself; nightshift never stashes/);
+  assert.match(result.note, /the pull would touch: src\/a\.mjs; commit or stash them yourself; nightqueue never stashes/);
   assertCanonicalUntouched(fake.log, "/work/alpha");
 
   const unreadable = fakeCloseDeps({ git: { "status --porcelain -z": gitOk(" M src/a.mjs\0") }, diffNames: { ok: false, files: [] } });
@@ -376,7 +376,7 @@ test("merge squashes at the verified head, re-reads the merge commit from GitHub
   const fake = fakeCloseDeps();
   const result = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA, baseBranch: "main" }), deps: fake.deps });
   assert.equal(result.status, "done");
-  assert.deepEqual(result.data, { merged: true, mergeSha: MERGE_SHA, mergedAt: "2026-09-21T10:00:00Z", mergedBy: "nightshift" });
+  assert.deepEqual(result.data, { merged: true, mergeSha: MERGE_SHA, mergedAt: "2026-09-21T10:00:00Z", mergedBy: "nightqueue" });
   assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: HEAD_SHA }]);
   assert.match(result.note, /squash-merged as abc1234; canonical checkout fast-forwarded on main/);
   assert.ok(gitLines(fake.log, "/work/alpha").includes("pull --ff-only"));
@@ -443,7 +443,7 @@ test("a merge the operator made outside a close is confirmed and skipped as `mer
   for (const fake of [recorded, reread]) assert.equal(fake.log.merges.length, 0, "a merge made outside a close was merged again");
 });
 
-test("conflict and merge record a pull request they read already merged as the operator's, and nightshift's own merge as nightshift's", async () => {
+test("conflict and merge record a pull request they read already merged as the operator's, and nightqueue's own merge as nightqueue's", async () => {
   const atConflict = await conflictStep({ ctx: ctxFor(), deps: fakeCloseDeps({ pr: mergedPr() }).deps });
   assert.equal(atConflict.data.mergedBy, "operator");
 
@@ -454,7 +454,7 @@ test("conflict and merge record a pull request they read already merged as the o
   assert.match(found.note, /^merged outside a close as abc1234; /);
   assert.equal(atMerge.log.merges.length, 0);
 
-  const own = await mergeStep({ ctx: ctxFor({ merged: true, mergedBy: "nightshift", mergeSha: MERGE_SHA }), deps: fakeCloseDeps().deps });
+  const own = await mergeStep({ ctx: ctxFor({ merged: true, mergedBy: "nightqueue", mergeSha: MERGE_SHA }), deps: fakeCloseDeps().deps });
   assert.equal(own.status, "done");
   assert.match(own.note, /^already merged as abc1234; /);
 
@@ -464,7 +464,7 @@ test("conflict and merge record a pull request they read already merged as the o
       return { ok: false, stderr: "exit 1" };
     },
   });
-  assert.equal((await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: racedGh.deps })).data.mergedBy, "nightshift");
+  assert.equal((await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: racedGh.deps })).data.mergedBy, "nightqueue");
 });
 
 test("merge refuses a head that moved and a pull request that conflicts again, reopening the steps to check", async () => {

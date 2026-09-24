@@ -16,7 +16,7 @@ import { makeDir, makeHome, seedClosedJob } from "../../test-support/memory.mjs"
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { assistantEvent, doneStream, GATE_MARKER, GATE_NOTICE, gateStream, PR_URL, SLUG } from "../../test-support/streams.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
 // Runs the real CLI in its own process, with the isolated home of the test.
 function runCli(env, args, { cwd } = {}) {
@@ -74,11 +74,11 @@ test("queue add --help prints the job-cutting rule and the example, and enqueues
   for (const flag of ["--help", "-h"]) {
     const helped = runCli(env, ["queue", "add", flag]);
     assert.equal(helped.status, 0, helped.stderr);
-    assert.ok(helped.stdout.includes("nightshift queue add [project] <prompt...>"), `\`${flag}\` did not print the usage line`);
+    assert.ok(helped.stdout.includes("nightqueue queue add [project] <prompt...>"), `\`${flag}\` did not print the usage line`);
     assert.ok(helped.stdout.includes("self-contained deliverable"), `\`${flag}\` did not print the rule`);
     assert.ok(helped.stdout.includes("numbered stages"), `\`${flag}\` did not print the rule`);
     assert.ok(
-      helped.stdout.includes('nightshift queue add "Self-contained install. Stages: 1) runtime under ~/.nightshift;'),
+      helped.stdout.includes('nightqueue queue add "Self-contained install. Stages: 1) runtime under ~/.nightqueue;'),
       `\`${flag}\` did not print the example`,
     );
   }
@@ -96,7 +96,7 @@ test("queue add takes the registered NAME and reports the job it queued", (t) =>
   assert.equal(queued.status, 0, queued.stderr);
   assert.match(
     queued.stdout,
-    /queued job #1 for `alpha` \(1 pending\)\. 0 runners online - pending jobs will wait until `nightshift queue run` starts one\./,
+    /queued job #1 for `alpha` \(1 pending\)\. 0 runners online - pending jobs will wait until `nightqueue queue run` starts one\./,
   );
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
@@ -112,11 +112,11 @@ test("queue add takes the registered NAME and reports the job it queued", (t) =>
 
   const byPath = runCli(env, ["queue", "add", "/tmp/alpha", "fix the worker"], { cwd: outside });
   assert.equal(byPath.status, 1);
-  assert.match(byPath.stderr, /no project registered for .*; run `nightshift init` here, or pass the project NAME/);
+  assert.match(byPath.stderr, /no project registered for .*; run `nightqueue init` here, or pass the project NAME/);
 
   assert.equal(runCli(env, ["queue", "add", "ghost", "fix it"], { cwd: outside }).status, 1);
   assert.match(runCli(env, ["queue", "add", "alpha", "fix it", "--priority", "0"]).stderr, /`--priority` expects a positive integer/);
-  assert.match(runCli(env, ["queue", "add", "alpha"]).stderr, /missing argument; usage: nightshift queue add/);
+  assert.match(runCli(env, ["queue", "add", "alpha"]).stderr, /missing argument; usage: nightqueue queue add/);
 });
 
 test("queue add without a project takes the one of the current directory and joins the words of the prompt", (t) => {
@@ -127,7 +127,7 @@ test("queue add without a project takes the one of the current directory and joi
   assert.match(queued.stdout, /project `alpha` resolved from the current directory/);
   assert.match(
     queued.stdout,
-    /queued job #1 for `alpha` \(1 pending\)\. 0 runners online - pending jobs will wait until `nightshift queue run` starts one\./,
+    /queued job #1 for `alpha` \(1 pending\)\. 0 runners online - pending jobs will wait until `nightqueue queue run` starts one\./,
   );
   assert.equal(getJob(1, env).prompt, "fix the flaky worker");
 
@@ -147,7 +147,7 @@ test("queue add --run --foreground runs the job here and answers with its outcom
   );
   assert.match(ran.stdout, /queued job #1 for project `alpha` \(priority \d+, timeout \d+s\)/);
   assert.equal(ran.stdout.includes("Start the batch"), false, "a job that is about to run still nudged for a batch");
-  assert.match(ran.stdout, /running job #1 in the foreground; follow the stream with `nightshift queue log 1 --follow`/);
+  assert.match(ran.stdout, /running job #1 in the foreground; follow the stream with `nightqueue queue log 1 --follow`/);
   assert.match(ran.stdout, /job #1 done https:\/\/github\.com\/acme\/api\/pull\/42/);
   assert.equal(getJob(1, env).status, "done");
 });
@@ -206,13 +206,13 @@ function deliver(env, id, prUrl = "https://github.com/acme/api/pull/42") {
 
 // The same home with the fake `gh` in place of the real one and the pull request checks switched back on.
 function withFakeGh(t, env, { state = "MERGED", sha = MERGE_SHA, mergeable } = {}) {
-  const checked = { ...env, ...isolatedHostVars(makeDir(t, "cli-gh")), NIGHTSHIFT_FAKE_GH_PR_STATE: state, NIGHTSHIFT_FAKE_GH_PR_SHA: sha };
-  if (mergeable) checked.NIGHTSHIFT_FAKE_GH_PR_MERGEABLE = mergeable;
-  delete checked.NIGHTSHIFT_NO_PR_CHECK;
+  const checked = { ...env, ...isolatedHostVars(makeDir(t, "cli-gh")), NIGHTQUEUE_FAKE_GH_PR_STATE: state, NIGHTQUEUE_FAKE_GH_PR_SHA: sha };
+  if (mergeable) checked.NIGHTQUEUE_FAKE_GH_PR_MERGEABLE = mergeable;
+  delete checked.NIGHTQUEUE_NO_PR_CHECK;
   return checked;
 }
 
-const CLOSE_SUGGESTION = "#1 PR merged - close it with nightshift queue close 1";
+const CLOSE_SUGGESTION = "#1 PR merged - close it with nightqueue queue close 1";
 
 test("queue status never writes a delivered job whose pull request is merged: the row stays `done`, and it suggests the close", (t) => {
   const base = makeCliHome(t, "cli-status-merged");
@@ -249,7 +249,7 @@ test("queue status never writes a delivered job whose pull request is merged: th
 test("a one-shot queue status behind a gh that hangs waits one overall deadline, prints `unknown` and exits", (t) => {
   const base = makeCliHome(t, "cli-status-gh-hangs");
   for (let n = 1; n <= 6; n += 1) deliver(base, enqueue(base, `job ${n}`), `https://github.com/acme/api/pull/${n}`);
-  const env = { ...withFakeGh(t, base, { state: "OPEN" }), NIGHTSHIFT_FAKE_GH_SLEEP_MS: "8000" };
+  const env = { ...withFakeGh(t, base, { state: "OPEN" }), NIGHTQUEUE_FAKE_GH_SLEEP_MS: "8000" };
 
   const startedAt = Date.now();
   const table = runCli(env, ["queue", "status"]);
@@ -277,7 +277,7 @@ test("a gh that cannot answer leaves the job delivered and still exits 0", (t) =
   const base = makeCliHome(t, "cli-status-merged-fail-open");
   deliver(base, enqueue(base));
   const env = withFakeGh(t, base, { state: "" });
-  env.NIGHTSHIFT_GH_BIN = join(makeDir(t, "cli-gh-missing"), "gh");
+  env.NIGHTQUEUE_GH_BIN = join(makeDir(t, "cli-gh-missing"), "gh");
 
   const table = runCli(env, ["queue", "status"]);
   assert.equal(table.status, 0, table.stderr);
@@ -336,7 +336,7 @@ test("queue close takes one id and refuses every job that is not done with a pul
       if (before) assert.deepEqual(getJob(id, env), before, `the refused close wrote to job ${id}`);
     }
   }
-  assert.match(runCli(env, ["queue", "close"]).stderr, /missing argument; usage: nightshift queue close <id>/);
+  assert.match(runCli(env, ["queue", "close"]).stderr, /missing argument; usage: nightqueue queue close <id>/);
   assert.match(runCli(env, ["queue", "close", String(pending), String(noPr)]).stderr, /unexpected argument/);
 });
 
@@ -379,11 +379,11 @@ test("queue status closes with the backlog nudge only when pending jobs sit with
   const first = enqueue(env, "fix the worker");
   const one = runCli(env, ["queue", "status"]);
   assert.equal(one.status, 0, one.stderr);
-  assert.equal(lastLine(one.stdout), "1 pending job waiting - start the batch: nightshift queue run");
+  assert.equal(lastLine(one.stdout), "1 pending job waiting - start the batch: nightqueue queue run");
 
   enqueue(env, "fix the parser");
   const two = runCli(env, ["queue", "status"]);
-  assert.equal(lastLine(two.stdout), "2 pending jobs waiting - start the batch: nightshift queue run");
+  assert.equal(lastLine(two.stdout), "2 pending jobs waiting - start the batch: nightqueue queue run");
   assert.ok(
     two.stdout.indexOf("pending=2") < two.stdout.indexOf("2 pending jobs waiting"),
     "the nudge has to come after the counts",
@@ -419,7 +419,7 @@ test("a backlog parked by a rate limit says when it becomes claimable, instead o
   const status = runCli(env, ["queue", "status"]);
 
   assert.equal(status.status, 0, status.stderr);
-  assert.equal(status.stdout.split("\n")[0], "0 runners online - pending jobs will wait until `nightshift queue run` starts one", "the fixture left a live runner behind, so the nudge is not the one under test");
+  assert.equal(status.stdout.split("\n")[0], "0 runners online - pending jobs will wait until `nightqueue queue run` starts one", "the fixture left a live runner behind, so the nudge is not the one under test");
   assert.equal(
     lastLine(status.stdout),
     `1 pending job waiting - the rate limit resets at ${clockLabel(Date.parse(notBefore))} (in 1h00); a batch started now claims nothing before that`,
@@ -430,7 +430,7 @@ test("a backlog parked by a rate limit says when it becomes claimable, instead o
   const mixed = runCli(env, ["queue", "status"]);
   assert.equal(
     lastLine(mixed.stdout),
-    "2 pending jobs waiting - start the batch: nightshift queue run",
+    "2 pending jobs waiting - start the batch: nightqueue queue run",
     "a job that could be claimed right now was held back by the park of another one",
   );
 });
@@ -539,7 +539,7 @@ test("a log that is there but cannot be read is a message and an exit code of 1,
   for (const args of [["queue", "log", "1"], ["queue", "log", "1", "--raw"]]) {
     const result = runCli(env, args);
     assert.equal(result.status, 1, `\`${args.join(" ")}\` did not exit 1: ${result.stderr}`);
-    assert.match(result.stderr, /nightshift: could not read the log at /);
+    assert.match(result.stderr, /nightqueue: could not read the log at /);
     assert.equal(result.stderr.includes("\n    at "), false, `\`${args.join(" ")}\` printed a stack trace`);
   }
 });
@@ -561,7 +561,7 @@ test("queue run --dry only reports, and pause stops the claiming until resume", 
 
   assert.equal(runCli(env, ["queue", "pause"]).status, 0);
   assert.equal(existsSync(queuePausedPath(env)), true);
-  assert.match(runCli(env, ["queue", "run", "--foreground"]).stdout, /the queue is paused - nothing will be claimed; resume with: nightshift queue resume/);
+  assert.match(runCli(env, ["queue", "run", "--foreground"]).stdout, /the queue is paused - nothing will be claimed; resume with: nightqueue queue resume/);
   assert.equal(getJob(id, env).status, "pending");
 
   assert.equal(runCli(env, ["queue", "resume"]).status, 0);
@@ -721,7 +721,7 @@ test("queue status of a gated job spells the reason out and says how to answer i
   assert.match(status.stdout, /status\s+gate/);
   assert.match(status.stdout, /^notice$/m);
   assert.match(status.stdout, /^ {2}## Requires user confirmation$/m);
-  assert.match(status.stdout, /retry it with: nightshift queue retry 1 --note "<your answer>"/);
+  assert.match(status.stdout, /retry it with: nightqueue queue retry 1 --note "<your answer>"/);
   assert.equal(status.stdout.includes("notice_md       "), false, "the notice was dumped as a field of the generic block");
 
   const json = runCli(env, ["queue", "status", "1", "--json"]);
@@ -841,7 +841,7 @@ test("queue log says where the whole notice is read when it had to cut it", (t) 
   assert.equal(log.status, 0, log.stderr);
   assert.match(log.stdout, /ℹ notice/);
   assert.ok(log.stdout.includes(`    ${Array.from(LONG_NOTICE).slice(0, NARRATED_NOTICE_LIMIT).join("")}...`), log.stdout);
-  assert.match(log.stdout, new RegExp(`^ {4}read the whole notice with: nightshift queue status ${id}$`, "m"));
+  assert.match(log.stdout, new RegExp(`^ {4}read the whole notice with: nightqueue queue status ${id}$`, "m"));
 });
 
 test("a notice between the two limits is cut once, by the narration, and only then points at the detail", (t) => {
@@ -853,7 +853,7 @@ test("a notice between the two limits is cut once, by the narration, and only th
   assert.equal(log.status, 0, log.stderr);
   assert.ok(log.stdout.includes(`    ${"b".repeat(NARRATED_NOTICE_LIMIT)}...`), log.stdout);
   assert.equal(log.stdout.includes("b".repeat(NARRATED_NOTICE_LIMIT + 1)), false, "the notice was cut somewhere other than the narration");
-  assert.match(log.stdout, new RegExp(`^ {4}read the whole notice with: nightshift queue status ${id}$`, "m"));
+  assert.match(log.stdout, new RegExp(`^ {4}read the whole notice with: nightqueue queue status ${id}$`, "m"));
 });
 
 test("a notice short enough to be narrated whole is never followed by a pointer", (t) => {
@@ -961,7 +961,7 @@ function bigGateNotice(id) {
     { length: 8 },
     (_, i) => `- **C${i + 1}:** ${"the plan departs from the brief on a point that needs a human call before it goes out. ".repeat(5)}`,
   );
-  return [GATE_MARKER, "", ...points, "", `Answer with: nightshift queue retry ${id} --note "<your answer>"`].join("\n");
+  return [GATE_MARKER, "", ...points, "", `Answer with: nightqueue queue retry ${id} --note "<your answer>"`].join("\n");
 }
 
 test("a gate notice near three kilobytes is returned whole by `queue status <id>`, and clipped with a pointer in the list", (t) => {
@@ -974,7 +974,7 @@ test("a gate notice near three kilobytes is returned whole by `queue status <id>
   const status = runCli(env, ["queue", "status", String(id)]);
   assert.equal(status.status, 0, status.stderr);
   assert.ok(status.stdout.includes(`  ${GATE_MARKER}`), status.stdout);
-  assert.ok(status.stdout.includes(`  Answer with: nightshift queue retry ${id} --note "<your answer>"`), status.stdout);
+  assert.ok(status.stdout.includes(`  Answer with: nightqueue queue retry ${id} --note "<your answer>"`), status.stdout);
   assert.equal(status.stdout.includes("..."), false, "the single-job detail cut a gate notice that has no length cap");
 
   const json = runCli(env, ["queue", "status", String(id), "--json"]);
@@ -989,7 +989,7 @@ test("a gate notice near three kilobytes is returned whole by `queue status <id>
   assert.equal(listedJson.status, 0, listedJson.stderr);
   assert.deepEqual(
     JSON.parse(listedJson.stdout).suggestions,
-    [`#${id} text cut at 500 characters - read it whole with nightshift queue status ${id}`],
+    [`#${id} text cut at 500 characters - read it whole with nightqueue queue status ${id}`],
   );
 });
 
@@ -1000,7 +1000,7 @@ test("queue retry says where the whole notice is read when the refusal had to cu
   const refused = runCli(env, ["queue", "retry", String(id)]);
   assert.equal(refused.status, 1);
   assert.ok(refused.stderr.includes(`${Array.from(LONG_NOTICE).slice(0, 500).join("")}...`), refused.stderr);
-  assert.match(refused.stderr, new RegExp(`^Read the whole notice with: nightshift queue status ${id}\\.$`, "m"));
+  assert.match(refused.stderr, new RegExp(`^Read the whole notice with: nightqueue queue status ${id}\\.$`, "m"));
   assert.match(refused.stderr, /This job is waiting for a decision\. Re-run with --note "<your answer>"\./);
   assert.equal(getJob(id, env).status, "gate", "the refused retry moved the job anyway");
 });

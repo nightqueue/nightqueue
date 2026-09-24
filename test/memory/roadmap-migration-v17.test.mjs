@@ -33,10 +33,10 @@ CREATE INDEX IF NOT EXISTS decisions_job_idx ON decisions(job_id) WHERE job_id I
 const JOBS = [
   { id: 1, project: "alpha", status: "pending" },
   { id: 2, project: "alpha", status: "failed" },
-  { id: 3, project: "nightshift", status: "running" },
+  { id: 3, project: "nightqueue", status: "running" },
 ];
 
-// Every legacy status x horizon for a project, org rows, and the nightshift items #9 and #36 the migration bumps.
+// Every legacy status x horizon for a project, org rows, and the nightqueue items #9 and #36 the migration bumps.
 const ITEMS = [
   { id: 1, project: "alpha", horizon: "now", status: "open", position: 1 },
   { id: 2, project: "alpha", horizon: "next", status: "open", position: 1 },
@@ -46,10 +46,10 @@ const ITEMS = [
   { id: 6, project: "alpha", horizon: "later", status: "done", position: 2 },
   { id: 7, project: "alpha", horizon: "now", status: "dropped", position: 3 },
   { id: 8, org: "acme", horizon: "next", status: "open", position: 1 },
-  { id: 9, project: "nightshift", horizon: "later", status: "open", position: 1 },
-  { id: 10, project: "nightshift", horizon: "now", status: "open", position: 1 },
+  { id: 9, project: "nightqueue", horizon: "later", status: "open", position: 1 },
+  { id: 10, project: "nightqueue", horizon: "now", status: "open", position: 1 },
   { id: 12, org: "acme", horizon: "now", status: "done", position: 1 },
-  { id: 36, project: "nightshift", horizon: "now", status: "queued", position: 2, job_id: 3 },
+  { id: 36, project: "nightqueue", horizon: "now", status: "queued", position: 2, job_id: 3 },
 ];
 
 const EXPECTED = {
@@ -71,7 +71,7 @@ const EXPECTED = {
 function legacyHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  makeProject(t, env, "nightshift");
+  makeProject(t, env, "nightqueue");
   makeOrg(env, "acme");
   seedLegacyV16Roadmap(env, { items: ITEMS, jobs: JOBS });
   return env;
@@ -99,7 +99,7 @@ function indexColumns(db, name) {
   return db.prepare(`PRAGMA index_info(${name})`).all().map((column) => column.name);
 }
 
-test("the v17 migration maps every legacy status and horizon, bumps nightshift #9 and #36, and drops the horizon", (t) => {
+test("the v17 migration maps every legacy status and horizon, bumps nightqueue #9 and #36, and drops the horizon", (t) => {
   const env = legacyHome(t, "roadmap-v17-map");
   const db = openDb(env);
 
@@ -209,7 +209,7 @@ function diskVersion(env) {
   }
 }
 
-// Runs `nightshift doctor --json` in process, with `gh` answered by a double, and answers the parsed report.
+// Runs `nightqueue doctor --json` in process, with `gh` answered by a double, and answers the parsed report.
 async function doctorReport(env) {
   const out = [];
   const fakeGh = () => ({ status: 0, stdout: "Logged in", stderr: "" });

@@ -25,7 +25,7 @@ const SHIM_TRAILS = [RUNTIME_PACKAGE_TRAIL, LEGACY_RUNTIME_PACKAGE_TRAIL].map(es
 
 // Shape every shim this package ever wrote has: the CLI of a runtime prefix under some configuration home, the only proof that a file under the previous name is ours to delete.
 const SHIM_SHAPE = new RegExp(
-  `^#!/bin/sh\\nexec node "/.+/(?:${SHIM_TRAILS})/bin/(?:nightshift|shift)\\.mjs" "\\$@"\\n$`,
+  `^#!/bin/sh\\nexec node "/.+/(?:${SHIM_TRAILS})/bin/(?:nightqueue|shift)\\.mjs" "\\$@"\\n$`,
 );
 
 // Version declared by one package.json, or null when the file is missing or unreadable.
@@ -58,14 +58,14 @@ export function runtimeReady(env = process.env) {
   return existsSync(join(runtimePackageDir(env), "package.json"));
 }
 
-// Specifier of the package in the registry, the source of `nightshift update` alone.
+// Specifier of the package in the registry, the source of `nightqueue update` alone.
 export function registrySpec(version = "latest") {
   return `${PACKAGE_NAME}@${version || "latest"}`;
 }
 
 // Content of the shim: a POSIX script that starts the CLI of the runtime, quoted so a space in the path survives.
 export function shimContent(env = process.env) {
-  return `#!/bin/sh\nexec node "${join(hostPackageRoot(env), "bin", "nightshift.mjs")}" "$@"\n`;
+  return `#!/bin/sh\nexec node "${join(hostPackageRoot(env), "bin", "nightqueue.mjs")}" "$@"\n`;
 }
 
 // Content of one file on disk, empty when it cannot be read.

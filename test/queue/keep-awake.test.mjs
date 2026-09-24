@@ -59,8 +59,8 @@ function fakeCaffeinateDir(t) {
 test("resolveCaffeinateBin: an operator override that resolves, one that does not, and a PATH lookup", (t) => {
   const { dir, bin } = fakeCaffeinateDir(t);
 
-  assert.equal(resolveCaffeinateBin({ NIGHTSHIFT_CAFFEINATE_BIN: bin }), bin);
-  assert.equal(resolveCaffeinateBin({ NIGHTSHIFT_CAFFEINATE_BIN: join(dir, "does-not-exist") }), null);
+  assert.equal(resolveCaffeinateBin({ NIGHTQUEUE_CAFFEINATE_BIN: bin }), bin);
+  assert.equal(resolveCaffeinateBin({ NIGHTQUEUE_CAFFEINATE_BIN: join(dir, "does-not-exist") }), null);
   assert.equal(resolveCaffeinateBin({ PATH: dir }), bin);
   assert.equal(resolveCaffeinateBin({ PATH: "/does/not/exist/at/all" }), null);
   assert.equal(resolveCaffeinateBin({}), null);

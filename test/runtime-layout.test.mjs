@@ -24,12 +24,12 @@ function offlineNpmEnv(dir) {
 
 // Minimal package that declares the name of this one and no dependency at all, so installing it never needs the network.
 function writeFixturePackage(dir) {
-  const entry = join(dir, "bin", "nightshift.mjs");
+  const entry = join(dir, "bin", "nightqueue.mjs");
   mkdirSync(join(dir, "bin"), { recursive: true });
   writeFileSync(entry, "#!/usr/bin/env node\n", { mode: 0o755 });
   writeFileSync(
     join(dir, "package.json"),
-    `${JSON.stringify({ name: PACKAGE_NAME, version: "0.0.0", bin: { nightshift: "bin/nightshift.mjs" } }, null, 2)}\n`,
+    `${JSON.stringify({ name: PACKAGE_NAME, version: "0.0.0", bin: { nightqueue: "bin/nightqueue.mjs" } }, null, 2)}\n`,
   );
   return dir;
 }
@@ -49,7 +49,7 @@ test("npm installs this package under the directory the path resolution derives 
   assert.ok(entry, `npm pack printed an output this build cannot read:\n${packed.stdout}`);
   assert.equal(entry.name, PACKAGE_NAME, "npm packed a name this package does not declare");
 
-  const home = { NIGHTSHIFT_HOME: join(base, "home") };
+  const home = { NIGHTQUEUE_HOME: join(base, "home") };
   const stamp = versionStamp();
   const staging = stageInstall(home, stamp);
   const installed = spawnSync(
@@ -78,8 +78,8 @@ test("npm installs this package under the directory the path resolution derives 
   assert.equal(realpathSync(runtimeCurrentLink(home)), realpathSync(versionDir), "`current` does not name the version directory npm installed into");
   assert.equal(readlinkSync(runtimeCurrentLink(home)), join("versions", basename(versionDir)), "`current` is not a relative link, so a moved home stops resolving");
   assert.equal(
-    existsSync(join(versionDir, "node_modules", "nightshift")),
-    false,
-    "npm installed the unscoped layout, so a path resolution went back to the hardcoded name",
+    realpathSync(runtimePackageDir(home)),
+    realpathSync(join(versionDir, "node_modules", PACKAGE_NAME)),
+    "the path resolution and npm disagree on where the declared package name lands",
   );
 });

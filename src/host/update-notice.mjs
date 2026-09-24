@@ -10,7 +10,7 @@ export async function updateNoticeLine({ env = process.env, fetchImpl = null, no
     const latest = await latestVersion({ env, fetchImpl, now });
     const current = runtimeVersion(env);
     if (!latest || !current || !isNewerVersion(latest, current)) return null;
-    return `nightshift ${latest} is available (installed ${current}) - run \`nightshift update\``;
+    return `nightqueue ${latest} is available (installed ${current}) - run \`nightqueue update\``;
   } catch {
     return null;
   }

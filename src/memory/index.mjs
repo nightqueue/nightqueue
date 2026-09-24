@@ -32,7 +32,7 @@ function asList(value) {
 export function saveProjectIndex({ project, repoRoot, files = [], libs = [] }, env = process.env) {
   const projectName = resolveProjectName(project, env);
   if (!projectName) {
-    throw new UserError(`project \`${project}\` is not registered; run \`nightshift init\` in the repository first`);
+    throw new UserError(`project \`${project}\` is not registered; run \`nightqueue init\` in the repository first`);
   }
   const db = openDb(env);
   const fileStmt = db.prepare(

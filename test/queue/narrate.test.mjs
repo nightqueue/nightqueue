@@ -65,7 +65,7 @@ function noticeLineOf(log, options = {}) {
 test("a notice the narration had to cut says where the whole text is read, with the real job id", () => {
   const line = noticeLineOf(narrationStream({ notice: LONG_NOTICE }), { jobId: 7 });
   assert.ok(line.includes("..."), line);
-  assert.ok(line.endsWith("\n    read the whole notice with: nightshift queue status 7"), line);
+  assert.ok(line.endsWith("\n    read the whole notice with: nightqueue queue status 7"), line);
 });
 
 test("a narration with no job id never points at a job nobody named", () => {
@@ -110,8 +110,8 @@ test("nothing sensitive of an event ever reaches a narrated line, with or withou
     taskStartedEvent({ prompt: CANARY }),
     toolUseEvent({ id: "toolu_w", name: "Write", input: { file_path: "/repo/notes.md", content: CANARY }, parentToolUseId: "toolu_agent1", timestamp: secondsIntoAttempt(2) }),
     toolResultEvent({ toolUseId: "toolu_w", content: CANARY, parentToolUseId: "toolu_agent1", timestamp: secondsIntoAttempt(3) }),
-    toolUseEvent({ id: "toolu_q", name: "mcp__nightshift__queue_add", input: { prompt: CANARY, project: "nightshift" }, parentToolUseId: "toolu_agent1", timestamp: secondsIntoAttempt(4) }),
-    toolUseEvent({ id: "toolu_l", name: "mcp__nightshift__lesson_save", input: { title: CANARY, root_cause: CANARY }, parentToolUseId: "toolu_agent1", timestamp: secondsIntoAttempt(5) }),
+    toolUseEvent({ id: "toolu_q", name: "mcp__nightqueue__queue_add", input: { prompt: CANARY, project: "nightqueue" }, parentToolUseId: "toolu_agent1", timestamp: secondsIntoAttempt(4) }),
+    toolUseEvent({ id: "toolu_l", name: "mcp__nightqueue__lesson_save", input: { title: CANARY, root_cause: CANARY }, parentToolUseId: "toolu_agent1", timestamp: secondsIntoAttempt(5) }),
     taskNotificationEvent({ summary: CANARY, toolUses: 1 }),
     resultEvent({ text: "Done." }),
   ]);
@@ -119,7 +119,7 @@ test("nothing sensitive of an event ever reaches a narrated line, with or withou
     const printed = narrate(log, options).join("\n");
     assert.equal(printed.includes(CANARY), false, `the narration leaked the canary with ${JSON.stringify(options)}`);
     assert.ok(printed.includes("· Write notes.md"), printed);
-    assert.ok(printed.includes("· queue_add nightshift"), printed);
+    assert.ok(printed.includes("· queue_add nightqueue"), printed);
     assert.ok(printed.includes("· lesson_save"), printed);
   }
 });
@@ -155,8 +155,8 @@ test("the lane opens from `task_started` when the tool call that spawned it was 
 test("the lane label carries the model of the `tool_use` that launched it, the only event of the stream that says it", () => {
   const lines = narrate(
     attemptLog([
-      agentToolUseEvent({ id: "toolu_o", subagentType: "nightshift:coder", model: "opus", description: "apply the plan", timestamp: secondsIntoAttempt(1) }),
-      taskStartedEvent({ toolUseId: "toolu_o", subagentType: "nightshift:coder" }),
+      agentToolUseEvent({ id: "toolu_o", subagentType: "nightqueue:coder", model: "opus", description: "apply the plan", timestamp: secondsIntoAttempt(1) }),
+      taskStartedEvent({ toolUseId: "toolu_o", subagentType: "nightqueue:coder" }),
       taskNotificationEvent({ toolUseId: "toolu_o", toolUses: 3, durationMs: 4000 }),
     ]),
   );
@@ -167,8 +167,8 @@ test("the lane label carries the model of the `tool_use` that launched it, the o
 test("parallel lanes label every indented line, and a single lane does not", () => {
   const lines = narrate(
     attemptLog([
-      agentToolUseEvent({ id: "toolu_a", subagentType: "nightshift:qa-guardian", description: "review the diff", timestamp: secondsIntoAttempt(1) }),
-      agentToolUseEvent({ id: "toolu_b", subagentType: "nightshift:coder", description: "apply the plan", timestamp: secondsIntoAttempt(2) }),
+      agentToolUseEvent({ id: "toolu_a", subagentType: "nightqueue:qa-guardian", description: "review the diff", timestamp: secondsIntoAttempt(1) }),
+      agentToolUseEvent({ id: "toolu_b", subagentType: "nightqueue:coder", description: "apply the plan", timestamp: secondsIntoAttempt(2) }),
       toolUseEvent({ id: "toolu_r1", name: "Read", input: { file_path: "/repo/a.mjs" }, parentToolUseId: "toolu_a", timestamp: secondsIntoAttempt(3) }),
       toolUseEvent({ id: "toolu_r2", name: "Read", input: { file_path: "/repo/b.mjs" }, parentToolUseId: "toolu_b", timestamp: secondsIntoAttempt(4) }),
     ]),
@@ -210,12 +210,12 @@ test("what is not JSON is either the text the runner wrote or a line counted as 
     attemptMarker(1),
     JSON.stringify(assistantEvent("working", { timestamp: secondsIntoAttempt(1) })),
     '{"type":"assistant","message":{"content":[{"type":"text","tex',
-    "claude: command not found; install it and run `nightshift doctor`",
+    "claude: command not found; install it and run `nightqueue doctor`",
     `=== ownership lost @ ${secondsIntoAttempt(20)} ===`,
     "",
   ].join("\n");
   const lines = narrate(log);
-  assert.ok(lines.includes("00:01  ℹ claude: command not found; install it and run `nightshift doctor`"), lines.join("\n"));
+  assert.ok(lines.includes("00:01  ℹ claude: command not found; install it and run `nightqueue doctor`"), lines.join("\n"));
   assert.ok(lines.includes("00:20  ⚠ ownership lost"), lines.join("\n"));
   assert.ok(lines.includes("00:20  ℹ 1 unreadable log lines skipped"), lines.join("\n"));
 });

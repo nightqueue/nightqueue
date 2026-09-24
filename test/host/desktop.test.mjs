@@ -19,7 +19,7 @@ import { makeDir } from "../../test-support/memory.mjs";
 // Environment of a temporary user home, the only one these tests are ever allowed to reach.
 function makeEnv(t, name) {
   const home = makeDir(t, name);
-  return { HOME: home, NIGHTSHIFT_HOME: join(home, "nightshift") };
+  return { HOME: home, NIGHTQUEUE_HOME: join(home, "nightqueue") };
 }
 
 // Creates the configuration directory of the app, with the given file content when there is one.
@@ -68,35 +68,35 @@ test("the merge adds our server, keeps every other key and stays idempotent", (t
   const data = { theme: "dark", mcpServers: { other: third } };
 
   assert.equal(mergeDesktopServer(data, env), "created");
-  assert.deepEqual(data.mcpServers.nightshift, ownEntry(env));
+  assert.deepEqual(data.mcpServers.nightqueue, ownEntry(env));
   assert.deepEqual(data.mcpServers.other, third);
   assert.equal(data.theme, "dark");
   assert.equal(mergeDesktopServer(data, env), "already present");
 
-  data.mcpServers.nightshift = { command: "node", args: ["/old/pkg/bin/nightshift.mjs", "mcp"] };
+  data.mcpServers.nightqueue = { command: "node", args: ["/old/pkg/bin/nightqueue.mjs", "mcp"] };
   assert.equal(mergeDesktopServer(data, env), "updated");
-  assert.deepEqual(data.mcpServers.nightshift, ownEntry(env));
+  assert.deepEqual(data.mcpServers.nightqueue, ownEntry(env));
 });
 
 test("an entry of ours carrying extra fields of the user is left exactly as it is", (t) => {
   const env = makeEnv(t, "desktop-extra-fields");
   const entry = { type: "stdio", command: "node", args: [cliEntryPath(env), "mcp"], env: { DEBUG: "1" } };
-  const data = { mcpServers: { nightshift: entry } };
+  const data = { mcpServers: { nightqueue: entry } };
 
   assert.equal(mergeDesktopServer(data, env), "already present");
-  assert.deepEqual(data.mcpServers.nightshift, entry);
+  assert.deepEqual(data.mcpServers.nightqueue, entry);
 });
 
 test("the removal takes the exact key and never a neighbour whose name only starts like ours", (t) => {
   const env = makeEnv(t, "desktop-remove");
   const extra = { command: "node", args: ["extra.mjs"] };
   const other = { command: "other", args: [] };
-  const data = { mcpServers: { nightshift: ownEntry(env), "nightshift-extra": extra, other } };
+  const data = { mcpServers: { nightqueue: ownEntry(env), "nightqueue-extra": extra, other } };
 
   assert.equal(removeDesktopServer(data), "removed");
-  assert.deepEqual(data.mcpServers, { "nightshift-extra": extra, other });
+  assert.deepEqual(data.mcpServers, { "nightqueue-extra": extra, other });
   assert.equal(removeDesktopServer(data), "not present");
-  assert.deepEqual(data.mcpServers, { "nightshift-extra": extra, other }, "the second removal touched the servers of others");
+  assert.deepEqual(data.mcpServers, { "nightqueue-extra": extra, other }, "the second removal touched the servers of others");
 });
 
 test("a configuration carrying a prototype-poisoning key is named, not merged", (t) => {
@@ -136,7 +136,7 @@ test("the write keeps a backup and the permission bits, and a file it creates is
   assert.ok(backup?.includes(".bak-"), `the rewrite left no backup behind: ${backup}`);
   assert.equal(existsSync(backup), true);
   assert.equal(fileMode(again.path), 0o644, "the rewrite dropped the permission bits the user had set");
-  assert.deepEqual(JSON.parse(readFileSync(again.path, "utf8")).mcpServers.nightshift, ownEntry(env));
+  assert.deepEqual(JSON.parse(readFileSync(again.path, "utf8")).mcpServers.nightqueue, ownEntry(env));
 });
 
 test("the state of a diagnosis answers the five situations it can find, and never throws", (t) => {
@@ -158,11 +158,11 @@ test("the state of a diagnosis answers the five situations it can find, and neve
   assert.match(desktopState(broken).error, /does not hold a JSON object/);
 
   const current = makeEnv(t, "desktop-state-current");
-  installApp(current, JSON.stringify({ mcpServers: { nightshift: ownEntry(current) } }));
+  installApp(current, JSON.stringify({ mcpServers: { nightqueue: ownEntry(current) } }));
   assert.deepEqual(desktopState(current).entry, ownEntry(current));
 
   const elsewhere = makeEnv(t, "desktop-state-elsewhere");
-  const stale = { command: "node", args: ["/old/pkg/bin/nightshift.mjs", "mcp"] };
-  installApp(elsewhere, JSON.stringify({ mcpServers: { nightshift: stale } }));
+  const stale = { command: "node", args: ["/old/pkg/bin/nightqueue.mjs", "mcp"] };
+  installApp(elsewhere, JSON.stringify({ mcpServers: { nightqueue: stale } }));
   assert.deepEqual(desktopState(elsewhere).entry, stale);
 });

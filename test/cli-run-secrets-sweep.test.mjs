@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { makeDir, makeHome } from "../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 
 // A file whose leak is INDIRECT: the log call names a variable, and only the line that builds it carries the header.
 const INDIRECT = `const apiToken = process.env.API_TOKEN;
@@ -38,7 +38,7 @@ function makeFixtures(t, name, files) {
   return dir;
 }
 
-// Runs `nightshift run secrets-sweep` as a real subprocess, the way the QA agent calls it.
+// Runs `nightqueue run secrets-sweep` as a real subprocess, the way the QA agent calls it.
 function sweep(env, cwd, args) {
   const result = spawnSync(process.execPath, [CLI, "run", "secrets-sweep", ...args], { cwd, env, encoding: "utf8" });
   assert.equal(result.error, undefined, `the CLI failed to spawn: ${result.error}`);
@@ -144,7 +144,7 @@ test("an empty --files list sweeps nothing and says so, and a missing --files is
   assert.match(empty.stderr, /the `--files` list is empty/);
   assert.deepEqual(empty.lines, ["secrets-sweep: 0 candidates in 0 files"]);
   assert.equal(missing.code, 1);
-  assert.match(missing.stderr, /missing `--files`; usage: nightshift run secrets-sweep --files <list>/);
+  assert.match(missing.stderr, /missing `--files`; usage: nightqueue run secrets-sweep --files <list>/);
 });
 
 test("the sweep never writes the files it reads", (t) => {
@@ -174,7 +174,7 @@ test("a file outside the working directory is refused, whichever way it points t
   assert.equal(throughLink.stdout, "", "a symlinked component must be resolved before the boundary is checked, not after");
 });
 
-test("`nightshift run` lists exactly the two steps it dispatches", (t) => {
+test("`nightqueue run` lists exactly the two steps it dispatches", (t) => {
   const env = makeHome(t, "sweep-help");
   const dir = makeDir(t, "sweep-help-cwd");
 
@@ -182,9 +182,9 @@ test("`nightshift run` lists exactly the two steps it dispatches", (t) => {
   const unknown = spawnSync(process.execPath, [CLI, "run", "nope"], { cwd: dir, env, encoding: "utf8" });
 
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /nightshift run index-save <artifact>/);
-  assert.match(help.stdout, /nightshift run secrets-sweep --files <list>/);
-  assert.equal(help.stdout.split("\n").filter((line) => line.startsWith("  nightshift run ")).length, 6);
+  assert.match(help.stdout, /nightqueue run index-save <artifact>/);
+  assert.match(help.stdout, /nightqueue run secrets-sweep --files <list>/);
+  assert.equal(help.stdout.split("\n").filter((line) => line.startsWith("  nightqueue run ")).length, 6);
   assert.equal(unknown.status, 1);
   assert.match(unknown.stderr, /unknown run subcommand `nope`; use: check, commit, log, pr, index-save, secrets-sweep/);
 });

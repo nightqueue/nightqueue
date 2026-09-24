@@ -10,7 +10,7 @@ import { makeDir } from "../../test-support/memory.mjs";
 // Environment of an isolated user home plus an isolated configuration home, same shape as shell.test.mjs.
 function makeEnv(t, name, { shell = "/bin/zsh", path = "" } = {}) {
   const base = makeDir(t, name);
-  return { HOME: base, NIGHTSHIFT_HOME: join(base, "nightshift"), SHELL: shell, PATH: path };
+  return { HOME: base, NIGHTQUEUE_HOME: join(base, "nightqueue"), SHELL: shell, PATH: path };
 }
 
 // Report that captures every step/degrade line instead of printing it.

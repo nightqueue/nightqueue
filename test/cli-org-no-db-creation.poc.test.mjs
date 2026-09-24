@@ -9,7 +9,7 @@ import { makeHome } from "../test-support/memory.mjs";
 
 // H1A: `org rename` / `org repair` / `org remove` reach `store.orgs.*` through `openStore(env)`
 // (src/cli/org.mjs:97,115,120,161), and `createLocalStore`'s eager `openDb(env)` (src/store/local.mjs:200)
-// now creates `nightshift.db` before `renameOrgRows`'s own `existsSync(dbPath(env))` guard
+// now creates `nightqueue.db` before `renameOrgRows`'s own `existsSync(dbPath(env))` guard
 // (src/memory/orgs.mjs:19) ever runs - a home that never had a database gets one anyway. Pre-refactor, that
 // guard lived first and made the call a safe no-op.
 
@@ -20,17 +20,17 @@ function runCli(env, argv) {
   return run(argv, ctx).then((code) => ({ code, out, err }));
 }
 
-test("`nightshift org rename` leaves no database behind on a home that never had one", async (t) => {
+test("`nightqueue org rename` leaves no database behind on a home that never had one", async (t) => {
   const env = makeHome(t, "org-rename-no-db");
   assert.equal(existsSync(dbPath(env)), false, "the home already had a database before the command under test ran");
 
   const result = await runCli(env, ["org", "rename", "default", "widgets"]);
 
   assert.equal(result.code, 0, result.err.join("\n"));
-  assert.equal(existsSync(dbPath(env)), false, "`org rename` created nightshift.db on a home that never had one");
+  assert.equal(existsSync(dbPath(env)), false, "`org rename` created nightqueue.db on a home that never had one");
 });
 
-test("`nightshift org remove` leaves no database behind on a home that never had one", async (t) => {
+test("`nightqueue org remove` leaves no database behind on a home that never had one", async (t) => {
   const env = makeHome(t, "org-remove-no-db");
   saveConfig(addOrg(loadConfig(env, { warn: () => {} }), "widgets"), env);
   assert.equal(existsSync(dbPath(env)), false, "the home already had a database before the command under test ran");
@@ -38,10 +38,10 @@ test("`nightshift org remove` leaves no database behind on a home that never had
   const result = await runCli(env, ["org", "remove", "widgets"]);
 
   assert.equal(result.code, 0, result.err.join("\n"));
-  assert.equal(existsSync(dbPath(env)), false, "`org remove` created nightshift.db on a home that never had one");
+  assert.equal(existsSync(dbPath(env)), false, "`org remove` created nightqueue.db on a home that never had one");
 });
 
-test("`nightshift org repair` settling a pending rename leaves no database behind on a home that never had one", async (t) => {
+test("`nightqueue org repair` settling a pending rename leaves no database behind on a home that never had one", async (t) => {
   const env = makeHome(t, "org-repair-no-db");
   saveConfig(addOrg(loadConfig(env, { warn: () => {} }), "widgets"), env);
   writeFileSync(orgRenamePendingPath(env), `${JSON.stringify({ from: "default", to: "widgets", at: new Date().toISOString() })}\n`);
@@ -50,5 +50,5 @@ test("`nightshift org repair` settling a pending rename leaves no database behin
   const result = await runCli(env, ["org", "repair"]);
 
   assert.equal(result.code, 0, result.err.join("\n"));
-  assert.equal(existsSync(dbPath(env)), false, "`org repair` created nightshift.db on a home that never had one");
+  assert.equal(existsSync(dbPath(env)), false, "`org repair` created nightqueue.db on a home that never had one");
 });

@@ -36,7 +36,7 @@ function spawnWorker(payload, env, spawnImpl) {
       const child = spawnImpl(process.execPath, [WORKER_PATH, payload], {
         detached: true,
         stdio: ["ignore", logFd, logFd],
-        env: { ...env, NIGHTSHIFT_REFLECT: "1" },
+        env: { ...env, NIGHTQUEUE_REFLECT: "1" },
       });
       child?.on?.("error", (err) => recordWorkerFailure(logPath, err));
       child?.unref?.();
@@ -51,10 +51,10 @@ function spawnWorker(payload, env, spawnImpl) {
 
 // Answers the SessionEnd hook immediately and leaves the reflection worker running detached.
 export function runReflect({ input, env = process.env, spawnImpl = spawn }) {
-  if (env?.NIGHTSHIFT_REFLECT === "1") return EMPTY_ANSWER;
+  if (env?.NIGHTQUEUE_REFLECT === "1") return EMPTY_ANSWER;
   const payload = workerPayload(input);
   if (payload && !spawnWorker(payload, env, spawnImpl)) {
-    process.stderr.write("nightshift: the reflection worker could not be started\n");
+    process.stderr.write("nightqueue: the reflection worker could not be started\n");
   }
   return EMPTY_ANSWER;
 }

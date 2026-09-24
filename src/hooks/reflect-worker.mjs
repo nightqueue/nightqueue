@@ -232,7 +232,7 @@ function isTimeout(err) {
 
 // Runs the claude CLI with no tools at all, because a reflector must never act on the repository.
 export function defaultRunClaude({ prompt, model, input = "", timeoutMs }) {
-  const bin = process.env.NIGHTSHIFT_CLAUDE_BIN || "claude";
+  const bin = process.env.NIGHTQUEUE_CLAUDE_BIN || "claude";
   try {
     return execFileSync(
       bin,
@@ -242,7 +242,7 @@ export function defaultRunClaude({ prompt, model, input = "", timeoutMs }) {
         input,
         timeout: timeoutMs,
         maxBuffer: 1024 * 1024,
-        env: { ...process.env, NIGHTSHIFT_REFLECT: "1" },
+        env: { ...process.env, NIGHTQUEUE_REFLECT: "1" },
       },
     );
   } catch (err) {
@@ -325,7 +325,7 @@ async function reflect({ transcriptPath, cwd, sessionId }, { env, runClaude, jud
   writeReflectState(sessions, env);
   const project = projectFromCwd(cwd || process.cwd(), env);
   if (!project) return skipped("project not registered");
-  const model = env?.NIGHTSHIFT_REFLECT_MODEL || DEFAULT_MODEL;
+  const model = env?.NIGHTQUEUE_REFLECT_MODEL || DEFAULT_MODEL;
   const store = openStore(env);
   const injected = await injectedLessons(store, id, env);
   const items = await extractItems({ digest, model, injected, runClaude, log });

@@ -20,7 +20,7 @@ function makeRunningJob(t, name, { sessionId = SESSION } = {}) {
   const job = addJob({ project: "alpha", prompt: "rewrite the runner" }, env);
   claimJobById(job.id, { worker: WORKER, cap: 4 }, env);
   persistRunFacts(job.id, { worker: WORKER, slug: "rewrite-the-runner", sessionId }, env);
-  return { env: { ...env, NIGHTSHIFT_JOB_ID: String(job.id) }, home: env, repo };
+  return { env: { ...env, NIGHTQUEUE_JOB_ID: String(job.id) }, home: env, repo };
 }
 
 // Stores one lesson of the project.

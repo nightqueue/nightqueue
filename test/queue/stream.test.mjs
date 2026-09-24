@@ -186,14 +186,14 @@ test("the gate block the skill prescribes opens a gate and carries the way to an
     "",
     "Renaming the column drops the old one; keeping both costs a migration. I need a decision.",
     "",
-    'Answer with: nightshift queue retry 7 --note "<your answer>"',
+    'Answer with: nightqueue queue retry 7 --note "<your answer>"',
   ].join("\n");
   const log = toNdjson([systemInitEvent(), resultEvent({ text: block })]);
 
   assert.equal(hasGateMarker(block), true, "the block did not keep the job at the gate");
   const notice = extractNoticeFromStream(log);
   assert.equal(hasGateMarker(notice), true, "the `## Notice` body must itself carry the confirmation heading");
-  assert.ok(notice.includes("nightshift queue retry"), notice);
+  assert.ok(notice.includes("nightqueue queue retry"), notice);
   assert.equal(notice.endsWith('--note "<your answer>"'), true, notice);
   assert.equal(classifyJobResult({ log, exitCode: 0 }).status, "gate");
   assert.equal(classifyJobResult({ log, exitCode: 0 }).noticeMd, notice);
@@ -588,8 +588,8 @@ function orchestratorStream() {
   const usage = (input, read, created) => ({ input_tokens: input, output_tokens: 50, cache_read_input_tokens: read, cache_creation_input_tokens: created });
   return [
     line(systemInitEvent()),
-    line(orchAssistant({ id: "msg_1", tools: [["toolu_a", "Read", { file_path: `${ORCH_RUNS}/nightshift/s/01-triage.md` }]], usage: usage(10, 1000, 100) })),
-    line(orchAssistant({ id: "msg_1", tools: [["toolu_a", "Read", { file_path: `${ORCH_RUNS}/nightshift/s/01-triage.md` }]], usage: usage(10, 1000, 100) })),
+    line(orchAssistant({ id: "msg_1", tools: [["toolu_a", "Read", { file_path: `${ORCH_RUNS}/nightqueue/s/01-triage.md` }]], usage: usage(10, 1000, 100) })),
+    line(orchAssistant({ id: "msg_1", tools: [["toolu_a", "Read", { file_path: `${ORCH_RUNS}/nightqueue/s/01-triage.md` }]], usage: usage(10, 1000, 100) })),
     line(orchAssistant({ id: "msg_2", tools: [["toolu_b", "Read", { file_path: `${ORCH_WORKTREE}/src/a.mjs` }]] })),
     line(orchAssistant({ id: "msg_3", tools: [["toolu_c", "Grep", { pattern: "foo" }]] })),
     line(orchAssistant({ id: "msg_4", tools: [["toolu_d", "Bash", { command: "git status --short" }], ["toolu_e", "Bash", { command: "git log --oneline" }]] })),
@@ -598,7 +598,7 @@ function orchestratorStream() {
         id: "msg_5",
         tools: [["toolu_f", "Read", { file_path: `${ORCH_WORKTREE}/src/b.mjs` }], ["toolu_g", "Bash", { command: "grep -rn x src" }]],
         parent: "toolu_agent",
-        subagentType: "nightshift:coder",
+        subagentType: "nightqueue:coder",
       }),
     ),
     "```",
@@ -626,7 +626,7 @@ test("the orchestrator counts are zero on an empty stream, and a stream with no 
 });
 
 test("an orchestrator Read of its own session's spilled tool result is never counted, another session's always is", () => {
-  const env = { NIGHTSHIFT_JOB_HOME: "/ns-orchestrator-test-home", HOME: "/ns-orchestrator-test-user", CLAUDE_CONFIG_DIR: "/ns-orchestrator-test-claude" };
+  const env = { NIGHTQUEUE_JOB_HOME: "/ns-orchestrator-test-home", HOME: "/ns-orchestrator-test-user", CLAUDE_CONFIG_DIR: "/ns-orchestrator-test-claude" };
   const project = "/ns-orchestrator-test-claude/projects/-ns-orchestrator-test-repo";
   const log = toNdjson([
     orchAssistant({ id: "msg_1", tools: [["toolu_a", "Read", { file_path: `${project}/${ORCH_SESSION}/tool-results/toolu_big.txt` }]] }),

@@ -22,7 +22,7 @@ function seedJob57(env, { prUrl = FROM_URL, notice = NOTICE_BEFORE } = {}) {
   openDb(env)
     .prepare(
       `INSERT INTO jobs (id, project, prompt, status, pr_url, notice_md, close, branch, slug)
-       VALUES (?, 'nightshift', 'close a done job', 'closed', ?, ?, ?, 'worktree-feat+queue-close', 'queue-close')`,
+       VALUES (?, 'nightqueue', 'close a done job', 'closed', ?, ?, ?, 'worktree-feat+queue-close', 'queue-close')`,
     )
     .run(JOB_ID, prUrl, notice, CLOSE_COLUMN);
 }
@@ -95,7 +95,7 @@ test("a second --apply is a no-op that says there is nothing to do", async (t) =
 
 test("a row that is not the incident's is refused, printed and left untouched", async (t) => {
   const cases = [
-    { name: "another pr_url", prUrl: "https://github.com/maykonVinicius/nightshift/pull/70" },
+    { name: "another pr_url", prUrl: "https://github.com/nightqueue/nightqueue/pull/70" },
     { name: "no Closed line", notice: "Delivered the close command.\n" },
     { name: "the line twice", notice: `${FROM_LINE}\n\n${FROM_LINE}\n` },
     { name: "the line inside another line", notice: `note: ${FROM_LINE} (quoted)\n` },

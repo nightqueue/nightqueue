@@ -36,7 +36,7 @@ test("stopRunner sends a real SIGTERM to a pid whose registration comes from an 
   assert.equal(
     sentRealSignal,
     false,
-    "stopRunner sent a real SIGTERM to a pid whose identity was never confirmed as the nightshift runner",
+    "stopRunner sent a real SIGTERM to a pid whose identity was never confirmed as the nightqueue runner",
   );
 });
 
@@ -59,6 +59,6 @@ test("stopRunner still attempts SIGTERM against a pid it can only probe via EPER
   assert.equal(
     sentRealSignal,
     false,
-    "stopRunner attempted a real SIGTERM against a pid confirmed only via EPERM, never verified as the nightshift runner",
+    "stopRunner attempted a real SIGTERM against a pid confirmed only via EPERM, never verified as the nightqueue runner",
   );
 });

@@ -11,7 +11,7 @@ import { assertIsolatedEnv, makeHostEnv } from "../test-support/host.mjs";
 import { makeProject } from "../test-support/memory.mjs";
 
 const REFUSAL_TAIL =
-  "the runtime cannot be replaced while it runs; stop it with nightshift queue run --stop or wait for the queue to drain";
+  "the runtime cannot be replaced while it runs; stop it with nightqueue queue run --stop or wait for the queue to drain";
 const WATCHER_PID = 4242;
 const WORKER = "host:4242";
 
@@ -73,7 +73,7 @@ test("update refuses while a watcher is registered, and touches nothing on the w
 
   const { ctx, err } = makeCtx(host.env, alive);
   assert.equal(await run(["update"], ctx), 1);
-  assert.deepEqual(err, [`nightshift: ${refusal(`pid ${WATCHER_PID}`)}`]);
+  assert.deepEqual(err, [`nightqueue: ${refusal(`pid ${WATCHER_PID}`)}`]);
   assert.deepEqual(host.npmCalls(), [], "a refused update still reinstalled the runtime");
 });
 
@@ -83,7 +83,7 @@ test("update refuses while a job holds a live lease", async (t) => {
 
   const { ctx, err } = makeCtx(host.env);
   assert.equal(await run(["update"], ctx), 1);
-  assert.deepEqual(err, [`nightshift: ${refusal(`job #${id}`)}`]);
+  assert.deepEqual(err, [`nightqueue: ${refusal(`job #${id}`)}`]);
   assert.deepEqual(host.npmCalls(), []);
 });
 
@@ -94,7 +94,7 @@ test("a runner holding a job is refused by pid and by job at once", async (t) =>
 
   const { ctx, err } = makeCtx(host.env, alive);
   assert.equal(await run(["update"], ctx), 1);
-  assert.deepEqual(err, [`nightshift: ${refusal(`pid ${WATCHER_PID} / job #${id}`)}`]);
+  assert.deepEqual(err, [`nightqueue: ${refusal(`pid ${WATCHER_PID} / job #${id}`)}`]);
   assert.deepEqual(host.npmCalls(), []);
 });
 

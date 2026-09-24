@@ -249,7 +249,7 @@ export function searchLessonsSemantic(
 
 // Resolves the pair (embedder, model tag): injected in tests, loaded on demand in production.
 export async function resolveEmbedder(embedder, env = process.env) {
-  if (env?.NIGHTSHIFT_EMBED_DISABLED === "1") return null;
+  if (env?.NIGHTQUEUE_EMBED_DISABLED === "1") return null;
   if (typeof embedder?.embedText === "function") {
     const model = typeof embedder.model === "string" ? embedder.model : "";
     return model ? { embedText: embedder.embedText, model } : null;

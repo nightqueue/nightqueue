@@ -9,12 +9,12 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 import { fakeCloseDeps, openPr } from "../../test-support/close.mjs";
 import { codeChangePublishedEvent, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
-// Job 57's real values (github.com/maykonVinicius/nightshift): the runtime QA opened its own
+// Job 57's real values (github.com/nightqueue/nightqueue): the runtime QA opened its own
 // scratch pull request #71 on a scratch branch of the SAME repository while job 57's own run
 // was still going, and #71 got merged onto job 57 by `queue close` before this fix.
-const REPO = "maykonVinicius/nightshift";
-const QA_PR = "https://github.com/maykonVinicius/nightshift/pull/71";
-const OWN_PR = "https://github.com/maykonVinicius/nightshift/pull/72";
+const REPO = "nightqueue/nightqueue";
+const QA_PR = "https://github.com/nightqueue/nightqueue/pull/71";
+const OWN_PR = "https://github.com/nightqueue/nightqueue/pull/72";
 const QA_BRANCH = "scratch/close-qa-20260921201325";
 const RUN_BRANCH = "worktree-feat+queue-close";
 const FINAL_TEXT = "Phase 7 done.";
@@ -36,8 +36,8 @@ test("job 57, scenario A: the runtime QA's own scratch pull request on another b
 
 test("job 57, scenario B: closing the job's own recorded pull request never merges the QA's foreign pull request onto it", async (t) => {
   const env = makeHome(t, "job57-regression");
-  const checkout = makeProject(t, env, "nightshift");
-  const id = addJob({ project: "nightshift", prompt: "fix queue close follow-ups" }, env).id;
+  const checkout = makeProject(t, env, "nightqueue");
+  const id = addJob({ project: "nightqueue", prompt: "fix queue close follow-ups" }, env).id;
   // Job 57's row as it stood right before the incident: `pr_url` still points at the QA's
   // scratch pull request #71 (the wrong record scenario A above guards against), and the job
   // ran on its own real worktree branch.

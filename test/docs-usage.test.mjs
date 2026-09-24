@@ -7,14 +7,14 @@ import { USAGE as QUEUE_USAGE } from "../src/cli/queue.mjs";
 
 const USAGE_BY_GROUP = { queue: QUEUE_USAGE, decision: DECISION_USAGE };
 
-// Every `nightshift queue`/`nightshift decision` line of a fenced `sh` block of a doc, comment stripped.
+// Every `nightqueue queue`/`nightqueue decision` line of a fenced `sh` block of a doc, comment stripped.
 function commandLinesOf(path) {
   const text = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
   const blocks = [...text.matchAll(/```sh\n([\s\S]*?)```/g)].map((match) => match[1]);
   return blocks
     .flatMap((block) => block.split("\n"))
     .map((line) => line.replace(/\s+#.*$/, "").trim())
-    .filter((line) => line.startsWith("nightshift queue ") || line.startsWith("nightshift decision "));
+    .filter((line) => line.startsWith("nightqueue queue ") || line.startsWith("nightqueue decision "));
 }
 
 // The subcommand names a doc line points at: the word right after the group, plus every `| word` chained after it.
@@ -40,7 +40,7 @@ function checkLine(line) {
   assert.ok(usage, `unknown command group in doc line: ${line}`);
   const subcommands = subcommandsOf(words);
   for (const name of subcommands) {
-    assert.ok(usage[name], `\`${words[1]} ${name}\` is not a subcommand of \`nightshift ${words[1]}\`; doc line: ${line}`);
+    assert.ok(usage[name], `\`${words[1]} ${name}\` is not a subcommand of \`nightqueue ${words[1]}\`; doc line: ${line}`);
   }
   const usageTexts = subcommands.map((name) => usage[name]).filter(Boolean);
   for (const flag of flagsOf(line)) {
@@ -52,9 +52,9 @@ function checkLine(line) {
 }
 
 for (const path of ["../docs/cli.md", "../README.md"]) {
-  test(`every nightshift queue/decision line of ${path} matches its USAGE`, () => {
+  test(`every nightqueue queue/decision line of ${path} matches its USAGE`, () => {
     const lines = commandLinesOf(path);
-    assert.ok(lines.length > 0, `no nightshift queue/decision lines found in ${path}`);
+    assert.ok(lines.length > 0, `no nightqueue queue/decision lines found in ${path}`);
     for (const line of lines) checkLine(line);
   });
 }

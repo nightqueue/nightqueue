@@ -67,7 +67,7 @@ test("the number of live runners is written in the singular for a single runner"
 
 test("the zero-runner wait sentence leads with the count and names the way to start one", () => {
   assert.match(noRunnerWait(), /^0 runners online/);
-  assert.match(noRunnerWait(), /nightshift queue run/);
+  assert.match(noRunnerWait(), /nightqueue queue run/);
 });
 
 const WINDOW_TAIL = "another runner will likely hit the limit before finishing";

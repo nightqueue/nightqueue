@@ -13,19 +13,19 @@ import { firstLine, makeReport } from "./report.mjs";
 import { INSTALL_OPTIONS, finish, installOptions, registerHostServices, setupHome } from "./setup.mjs";
 
 const USAGE =
-  "nightshift init [path] [--org <name>] [--name <name>] [--from <dir>] [--force] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--gh|--no-gh] [--verbose]";
+  "nightqueue init [path] [--org <name>] [--name <name>] [--from <dir>] [--force] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--gh|--no-gh] [--verbose]";
 
-const SOURCE_HINT = "Open a new terminal or run `source ~/.zshrc` (or your shell's rc) to use `nightshift`.";
+const SOURCE_HINT = "Open a new terminal or run `source ~/.zshrc` (or your shell's rc) to use `nightqueue`.";
 
 const FIRST_STEP_REGISTERED =
-  'In Claude Code, plan as usual, then say "queue this for tonight" or run /nightshift:queue.';
+  'In Claude Code, plan as usual, then say "queue this for tonight" or run /nightqueue:queue.';
 
 const FIRST_STEP_UNREGISTERED =
-  'cd into a repository and run `nightshift queue add "<task>"` - it offers to register the project on the spot. In Claude Code, plan as usual and say "queue this for tonight" or run /nightshift:queue.';
+  'cd into a repository and run `nightqueue queue add "<task>"` - it offers to register the project on the spot. In Claude Code, plan as usual and say "queue this for tonight" or run /nightqueue:queue.';
 
 const NEXT_STEPS = [
-  'When you leave, say "run the queue" or run `nightshift queue run` - every queued job runs unattended and opens a pull request.',
-  'Come back to `nightshift queue status` and review the PRs; a job waiting at the gate is answered with `nightshift queue retry <id> --note "..."`.',
+  'When you leave, say "run the queue" or run `nightqueue queue run` - every queued job runs unattended and opens a pull request.',
+  'Come back to `nightqueue queue status` and review the PRs; a job waiting at the gate is answered with `nightqueue queue retry <id> --note "..."`.',
 ];
 
 // Turns the two GitHub CLI flags into the single mode the import understands, refusing the contradictory pair.
@@ -46,7 +46,7 @@ function projectPath(positionals, ctx) {
 // Stops the whole init the moment a step the installation cannot work without has failed.
 function requireStep(ok, label) {
   if (ok === true) return;
-  throw new UserError(`the \`${label}\` step failed; fix it and run \`nightshift init\` again`);
+  throw new UserError(`the \`${label}\` step failed; fix it and run \`nightqueue init\` again`);
 }
 
 // Creates the configuration home, turning an I/O failure into a failed step instead of a stack trace.
@@ -83,9 +83,9 @@ function rcCarriesBlock(env) {
   }
 }
 
-// Prints what the installation left on disk and what the user still has to do to type `nightshift`.
+// Prints what the installation left on disk and what the user still has to do to type `nightqueue`.
 function printInstalled(ctx, report, { shortcuts }) {
-  report.note(`installed nightshift v${packageVersion()} in ${resolvedRuntimeDir(ctx.env) ?? runtimeDir(ctx.env)}`);
+  report.note(`installed nightqueue v${packageVersion()} in ${resolvedRuntimeDir(ctx.env) ?? runtimeDir(ctx.env)}`);
   report.note(`commands: ${shimNames({ shortcuts }).map((name) => shimPath(ctx.env, name)).join(", ")}`);
   if (!rcCarriesBlock(ctx.env)) return;
   report.note(`PATH block written to ${rcFilePath(ctx.env)}:`);
@@ -100,7 +100,7 @@ function printNextSteps(ctx, { registered } = {}) {
   for (const [index, step] of steps.entries()) ctx.out(`  ${index + 1}. ${step}`);
 }
 
-// Runs the steps of `nightshift init` in order: every step the runtime cannot work without stops the command, and the PATH is only written once the shim has proven itself.
+// Runs the steps of `nightqueue init` in order: every step the runtime cannot work without stops the command, and the PATH is only written once the shim has proven itself.
 async function runInstallSteps(ctx, report, { embedding, path, from, force, shortcuts, desktop } = {}) {
   await guardIdleRuntime(ctx, { force });
   requireStep(createHome(ctx, report), "home");
@@ -115,7 +115,7 @@ async function runInstallSteps(ctx, report, { embedding, path, from, force, shor
   return finish(ctx, report);
 }
 
-// Installs the host for `nightshift init`: a step that fails, however it fails, still prints every step held back so far as the diagnosis.
+// Installs the host for `nightqueue init`: a step that fails, however it fails, still prints every step held back so far as the diagnosis.
 async function installForInit(ctx, { verbose, ...options } = {}) {
   const report = makeReport(ctx, { collapse: verbose !== true });
   try {
@@ -132,7 +132,7 @@ async function registerHere(ctx, { path, name, org, mode }) {
   await importGhConnection(ctx, { mode, org: project.org });
 }
 
-// Runs `nightshift init`: installs the runtime, registers it in the host and, inside a repository, registers the project too.
+// Runs `nightqueue init`: installs the runtime, registers it in the host and, inside a repository, registers the project too.
 export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, {
     ...INSTALL_OPTIONS,

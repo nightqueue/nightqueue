@@ -16,7 +16,7 @@ const VERIFIER_JOB_ID = 42;
 
 // The refusal the operator's own home always answers with from inside a job.
 function homeRefusal(id) {
-  return `refused: this command would change the operator's nightshift home from inside job #${id}; verify against a temporary home (NIGHTSHIFT_HOME=$(mktemp -d)) instead`;
+  return `refused: this command would change the operator's nightqueue home from inside job #${id}; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead`;
 }
 
 // Context that captures the output and never asks a terminal anything.
@@ -36,7 +36,7 @@ function makeCtx(env) {
 
 // Environment of the unattended child the runner itself spawned, pinned to the operator's real home.
 function insideJob(env, { home, configDir }) {
-  return { ...env, NIGHTSHIFT_JOB_ID: String(VERIFIER_JOB_ID), [JOB_HOME_ENV]: home, [JOB_CLAUDE_DIR_ENV]: configDir };
+  return { ...env, NIGHTQUEUE_JOB_ID: String(VERIFIER_JOB_ID), [JOB_HOME_ENV]: home, [JOB_CLAUDE_DIR_ENV]: configDir };
 }
 
 test("an unattended job never adds or cancels work in the operator's own home, even against already-registered projects", async (t) => {
@@ -63,7 +63,7 @@ test("an unattended job never adds or cancels work in the operator's own home, e
     1,
     "queue add from inside the verifier job must be refused",
   );
-  assert.deepEqual(added.err, [`nightshift: ${homeRefusal(VERIFIER_JOB_ID)}`]);
+  assert.deepEqual(added.err, [`nightqueue: ${homeRefusal(VERIFIER_JOB_ID)}`]);
   assert.deepEqual(added.out, []);
   assert.deepEqual(countsByStatus(host.env), before, "a refused queue add must not create a job row");
 
@@ -73,7 +73,7 @@ test("an unattended job never adds or cancels work in the operator's own home, e
     1,
     "queue cancel from inside the verifier job must be refused",
   );
-  assert.deepEqual(cancelled.err, [`nightshift: ${homeRefusal(VERIFIER_JOB_ID)}`]);
+  assert.deepEqual(cancelled.err, [`nightqueue: ${homeRefusal(VERIFIER_JOB_ID)}`]);
   assert.deepEqual(cancelled.out, []);
   assert.equal(getJob(jobId, host.env).status, "pending", "a refused queue cancel must not change the job's status");
   assert.deepEqual(countsByStatus(host.env), before, "a refused queue cancel must not change any job counts");

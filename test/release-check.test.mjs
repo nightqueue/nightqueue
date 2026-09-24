@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { changelogSection, changelogVersion, licenseVersion, pluginVersion, unreleasedContent, versionMismatches } from "../scripts/versions.mjs";
 
 const CHANGELOG = ["# Changelog", "", "## 0.1.0 - 2026-09-09", "", "### Added", "- the first release", ""].join("\n");
-const LICENSE = ["Parameters", "", "Licensor:             Maykon Vinicius", "Licensed Work:        nightshift 0.1.0", ""].join("\n");
+const LICENSE = ["Parameters", "", "Licensor:             Maykon Vinicius", "Licensed Work:        nightqueue 0.1.0", ""].join("\n");
 
 test("the top entry of the changelog is the first heading with a version and a date", () => {
   assert.equal(changelogVersion(CHANGELOG), "0.1.0");
@@ -38,7 +38,7 @@ test("a version that could not be parsed is a divergence carrying the expected f
   const problems = versionMismatches({ manifest: "0.1.0", changelog: "# Changelog\n", license: "Parameters\n" });
   assert.equal(problems.length, 2);
   assert.match(problems[0], /^CHANGELOG\.md declares no version; expected a line `## <version> - YYYY-MM-DD`$/);
-  assert.match(problems[1], /^LICENSE declares no version; expected a line `Licensed Work: {8}nightshift <version>`$/);
+  assert.match(problems[1], /^LICENSE declares no version; expected a line `Licensed Work: {8}nightqueue <version>`$/);
 });
 
 const FULL_CHANGELOG = [
@@ -87,9 +87,9 @@ test("the unreleased content is what sits under `## Unreleased`, and nothing whe
 });
 
 test("the plugin manifest is checked in lockstep with the package when it is given", () => {
-  assert.equal(pluginVersion('{"name":"nightshift","version":"0.1.0"}'), "0.1.0");
+  assert.equal(pluginVersion('{"name":"nightqueue","version":"0.1.0"}'), "0.1.0");
   assert.equal(pluginVersion("{not json"), null);
-  assert.equal(pluginVersion('{"name":"nightshift"}'), null);
+  assert.equal(pluginVersion('{"name":"nightqueue"}'), null);
   assert.deepEqual(versionMismatches({ manifest: "0.1.0", changelog: CHANGELOG, license: LICENSE, plugin: '{"version":"0.1.0"}' }), []);
   const problems = versionMismatches({ manifest: "0.1.0", changelog: CHANGELOG, license: LICENSE, plugin: '{"version":"0.0.9"}' });
   assert.equal(problems.length, 1);

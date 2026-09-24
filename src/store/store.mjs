@@ -48,9 +48,9 @@
  * @property {() => Promise<boolean>} hasClaimablePending
  * @property {() => Promise<object|null>} peekNextJob
  * @property {() => Promise<object[]>} listWithSlug unfinished jobs that already have a run directory
- * @property {() => Promise<object[]>} listOpenJobs every job that is not closed and already named its run, the owners of the worktrees `nightshift doctor` reports
- * @property {() => Promise<object[]>} recentHostCommandCounts the host-command counters of the most recently finished jobs, the sample `nightshift doctor` sums
- * @property {() => Promise<object[]>} recentOrchestratorCounts the orchestrator counters of the most recently finished jobs, the sample `nightshift doctor` sums
+ * @property {() => Promise<object[]>} listOpenJobs every job that is not closed and already named its run, the owners of the worktrees `nightqueue doctor` reports
+ * @property {() => Promise<object[]>} recentHostCommandCounts the host-command counters of the most recently finished jobs, the sample `nightqueue doctor` sums
+ * @property {() => Promise<object[]>} recentOrchestratorCounts the orchestrator counters of the most recently finished jobs, the sample `nightqueue doctor` sums
  * @property {(id: number) => Promise<string|null>} status the status column of one job, or null when the row is gone
  * @property {(id: number, spec: object) => Promise<object|null>} acquireClose takes the close lease of a job in one compare-and-swap and re-arms its checklist; null means refused, nothing written
  * @property {(id: number, spec: object) => Promise<boolean>} adoptClose confirms the close lease is this worker's and renews it
@@ -147,7 +147,7 @@
  */
 
 /**
- * The raw numbers `nightshift doctor` diagnoses with. It never throws: each field is resolved in its
+ * The raw numbers `nightqueue doctor` diagnoses with. It never throws: each field is resolved in its
  * own `try` and its failure is reported in `errors`, so one broken check never poisons the other.
  * @typedef {object} StoreHealth
  * @property {number|null} schemaVersion

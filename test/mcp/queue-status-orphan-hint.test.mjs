@@ -10,21 +10,21 @@ import { addJob, claimJobById, LEASE_GRACE_S } from "../../src/memory/jobs.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
 // A home whose queue is paused, so a detached runner started by a test never claims anything.
 function makeQueueHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  env.NIGHTSHIFT_CLAUDE_BIN = FAKE_CLAUDE;
+  env.NIGHTQUEUE_CLAUDE_BIN = FAKE_CLAUDE;
   writeFileSync(queuePausedPath(env), `${new Date().toISOString()}\n`);
   return env;
 }
 
-// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connect(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;
@@ -55,7 +55,7 @@ test("queue_status does not call an orphaned running job (dead lease, no watcher
   assert.equal(status.counts.running, 1, "the fixture did not land the orphaned job in `running`");
   assert.equal(
     status.hint,
-    "0 runners online - pending jobs will wait until `nightshift queue run` starts one",
+    "0 runners online - pending jobs will wait until `nightqueue queue run` starts one",
     `queue_status claimed a runner is active over a lease dead for ${LEASE_GRACE_S * 2}s: ${status.hint}`,
   );
 });

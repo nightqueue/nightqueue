@@ -10,7 +10,7 @@ import { addJob } from "../../src/memory/jobs.mjs";
 import { stampRunnerDbWitness, writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const HOLDER = fileURLToPath(new URL("../../test-support/db-holder.mjs", import.meta.url));
 const QUEUE_SRC = fileURLToPath(new URL("../../src/cli/queue.mjs", import.meta.url));
 
@@ -52,7 +52,7 @@ async function runFollow(env, onTick) {
   return { code, out, err };
 }
 
-// Runs `nightshift doctor --json` in this process, through the real entry point, with the host commands stubbed away so only the home's own state matters.
+// Runs `nightqueue doctor --json` in this process, through the real entry point, with the host commands stubbed away so only the home's own state matters.
 async function diagnose(env) {
   const out = [];
   const ctx = {

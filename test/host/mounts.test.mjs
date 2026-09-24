@@ -39,26 +39,26 @@ test("a macOS mount table parses, keeps a mount point with spaces and never matc
   assert.deepEqual(entries[0], { point: "/", type: "apfs" });
   assert.deepEqual(entries[3], { point: "/Volumes/My Disk", type: "smbfs" });
   assert.deepEqual(longestMountMatch(entries, "/Volumes/My Disk/homes/ci"), { point: "/Volumes/My Disk", type: "smbfs" });
-  assert.deepEqual(longestMountMatch(entries, "/Users/foo/.nightshift"), { point: "/", type: "apfs" }, "`/Users/foo` was matched against the mount at `/Users/foobar`");
+  assert.deepEqual(longestMountMatch(entries, "/Users/foo/.nightqueue"), { point: "/", type: "apfs" }, "`/Users/foo` was matched against the mount at `/Users/foobar`");
 });
 
 test("a Linux mount table parses in both formats the kernel publishes, with the octal escape of a space undone", () => {
   const mounts = parseMountEntries(LINUX_PROC_MOUNTS, "linux");
-  assert.deepEqual(longestMountMatch(mounts, "/root/.nightshift"), { point: "/", type: "ext4" });
-  assert.deepEqual(longestMountMatch(mounts, "/home/ci/.nightshift"), { point: "/home/ci", type: "nfs4" });
+  assert.deepEqual(longestMountMatch(mounts, "/root/.nightqueue"), { point: "/", type: "ext4" });
+  assert.deepEqual(longestMountMatch(mounts, "/home/ci/.nightqueue"), { point: "/home/ci", type: "nfs4" });
   assert.deepEqual(longestMountMatch(mounts, "/mnt/My Share/home"), { point: "/mnt/My Share", type: "fuse.sshfs" });
   const info = parseMountEntries(LINUX_MOUNTINFO, "linux");
-  assert.deepEqual(longestMountMatch(info, "/home/ci/.nightshift"), { point: "/home/ci", type: "nfs4" });
+  assert.deepEqual(longestMountMatch(info, "/home/ci/.nightqueue"), { point: "/home/ci", type: "nfs4" });
 });
 
 test("the mount of a path is read from the source of the platform, and is an unknown whenever no source answers", () => {
   const darwin = mountOfPath("/Volumes/My Disk/home", { platform: "darwin", runMount: fakeMount(DARWIN_MOUNT) });
   assert.deepEqual(darwin, { point: "/Volumes/My Disk", type: "smbfs", source: "mount" });
 
-  const linux = mountOfPath("/home/ci/.nightshift", { platform: "linux", readFileImpl: (path) => (path === "/proc/mounts" ? LINUX_PROC_MOUNTS : "") });
+  const linux = mountOfPath("/home/ci/.nightqueue", { platform: "linux", readFileImpl: (path) => (path === "/proc/mounts" ? LINUX_PROC_MOUNTS : "") });
   assert.deepEqual(linux, { point: "/home/ci", type: "nfs4", source: "/proc/mounts" });
 
-  const fallback = mountOfPath("/home/ci/.nightshift", {
+  const fallback = mountOfPath("/home/ci/.nightqueue", {
     platform: "linux",
     readFileImpl: (path) => {
       if (path === "/proc/mounts") throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });

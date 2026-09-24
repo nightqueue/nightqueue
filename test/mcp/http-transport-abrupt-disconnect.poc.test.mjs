@@ -7,10 +7,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { makeHome } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const TEST_TOKEN = "s3cret-token";
 
-// Spawns `nightshift mcp --http` on an ephemeral port and resolves once it printed the listening line.
+// Spawns `nightqueue mcp --http` on an ephemeral port and resolves once it printed the listening line.
 function startHttp(t, env) {
   const args = [CLI, "mcp", "--http", "--port", "0", "--token", TEST_TOKEN];
   const child = spawn(process.execPath, args, { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -62,7 +62,7 @@ async function freshRequestStillWorks(t, url) {
   const transport = new StreamableHTTPClientTransport(new URL(url), {
     requestInit: { headers: { authorization: `Bearer ${TEST_TOKEN}` } },
   });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   const tools = await client.listTools();

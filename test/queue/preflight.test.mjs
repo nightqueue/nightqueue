@@ -78,7 +78,7 @@ test("a missing `claude` binary is blocked with the message that names the overr
   const env = makeQueue(t, "preflight-claude");
   const result = check(env, { bin: fakeBin(false) });
   assert.deepEqual({ ok: result.ok, code: result.code }, { ok: false, code: BLOCK_CODES.CLAUDE_MISSING });
-  assert.match(result.message, /NIGHTSHIFT_CLAUDE_BIN/);
+  assert.match(result.message, /NIGHTQUEUE_CLAUDE_BIN/);
 });
 
 test("uncommitted changes in the canonical checkout block the job", (t) => {

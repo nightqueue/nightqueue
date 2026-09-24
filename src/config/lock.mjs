@@ -10,7 +10,7 @@ const STALE_AFTER_MS = 300000;
 // A synchronous holder keeps the lock for a single read and write, so it is asked for again almost immediately.
 const SYNC_RETRY_INTERVAL_MS = 1;
 
-// Path of the directory that acts as the write lock of NIGHTSHIFT_HOME.
+// Path of the directory that acts as the write lock of NIGHTQUEUE_HOME.
 export function lockPath(env = process.env) {
   return `${homeDir(env)}.lock`;
 }
@@ -48,7 +48,7 @@ function takeOnce(path, staleAfterMs, state) {
   return tryCreate(path);
 }
 
-// Acquires the lock, failing with a usage error when another nightshift holds it past the timeout.
+// Acquires the lock, failing with a usage error when another nightqueue holds it past the timeout.
 async function acquire(path, { timeoutMs, staleAfterMs }) {
   const deadline = Date.now() + timeoutMs;
   const state = { staleDropped: false };
@@ -56,7 +56,7 @@ async function acquire(path, { timeoutMs, staleAfterMs }) {
     if (takeOnce(path, staleAfterMs, state)) return;
     if (Date.now() >= deadline) {
       throw new UserError(
-        `another nightshift command is writing to the configuration home; try again in a moment, or remove \`${path}\` if no other nightshift is running`,
+        `another nightqueue command is writing to the configuration home; try again in a moment, or remove \`${path}\` if no other nightqueue is running`,
       );
     }
     await delay(RETRY_INTERVAL_MS);
@@ -79,7 +79,7 @@ function acquireSync(path, { timeoutMs, staleAfterMs }) {
   }
 }
 
-// Runs the action with exclusion between processes over the same NIGHTSHIFT_HOME.
+// Runs the action with exclusion between processes over the same NIGHTQUEUE_HOME.
 export async function withLock(env, action, { timeoutMs = ACQUIRE_TIMEOUT_MS, staleAfterMs = STALE_AFTER_MS } = {}) {
   const path = lockPath(env);
   await acquire(path, { timeoutMs, staleAfterMs });
@@ -93,7 +93,7 @@ export async function withLock(env, action, { timeoutMs = ACQUIRE_TIMEOUT_MS, st
 // Runs a SYNCHRONOUS action with exclusion between processes over one lock path, for a read-modify-write that cannot be awaited.
 export function withLockSync(path, action, { timeoutMs = ACQUIRE_TIMEOUT_MS, staleAfterMs = STALE_AFTER_MS } = {}) {
   if (!acquireSync(path, { timeoutMs, staleAfterMs })) {
-    throw new UserError(`another nightshift process is holding \`${path}\`; try again in a moment, or remove it if no other nightshift is running`);
+    throw new UserError(`another nightqueue process is holding \`${path}\`; try again in a moment, or remove it if no other nightqueue is running`);
   }
   try {
     return action();

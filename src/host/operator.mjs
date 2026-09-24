@@ -7,7 +7,7 @@ import { isSessionIdSafe } from "../queue/stream.mjs";
 import { childExitCode } from "./child-exit.mjs";
 import { jobSettings } from "./settings.mjs";
 
-export const OPERATOR_AGENT = "nightshift:nightshift-operator";
+export const OPERATOR_AGENT = "nightqueue:nightqueue-operator";
 export const OPERATOR_MODE_AGENT = "agent";
 export const OPERATOR_MODE_FALLBACK = "append-system-prompt";
 
@@ -42,7 +42,7 @@ export function probeOperatorLaunch({ bin, ctx }) {
   }
 }
 
-// The argv that makes the operator the main thread: the agent (or its body as a fallback), the plugin, the nightshift MCP server and the jobs' own hooks.
+// The argv that makes the operator the main thread: the agent (or its body as a fallback), the plugin, the nightqueue MCP server and the jobs' own hooks.
 export function operatorArgs({ env, mode, resumeSession = null }) {
   const agent = mode === OPERATOR_MODE_AGENT ? ["--agent", OPERATOR_AGENT] : ["--append-system-prompt", operatorAgentBody()];
   return [
@@ -61,7 +61,7 @@ export function operatorArgs({ env, mode, resumeSession = null }) {
 
 // Environment of the operator session: the mode the guard reads, and the plugin copy its reads are scoped to.
 export function operatorEnv(env) {
-  return { ...env, NIGHTSHIFT_MODE: "operator", [PLUGIN_DIR_ENV]: pluginDir() };
+  return { ...env, NIGHTQUEUE_MODE: "operator", [PLUGIN_DIR_ENV]: pluginDir() };
 }
 
 // Drops the admin entries of worktrees whose directory is gone (a QA hunt a closed terminal left behind); a failure only warns.
@@ -70,9 +70,9 @@ function pruneWorktrees({ cwd, ctx }) {
     const result = ctx.spawnSyncImpl("git", ["worktree", "prune"], { cwd, encoding: "utf8", env: ctx.env });
     if (!result?.error && result?.status === 0) return;
     const detail = result?.error?.message ?? String(result?.stderr ?? "").trim().split("\n")[0];
-    ctx.err(`nightshift open: warning: \`git worktree prune\` failed in ${cwd}${detail ? `: ${detail}` : ""}`);
+    ctx.err(`nightqueue open: warning: \`git worktree prune\` failed in ${cwd}${detail ? `: ${detail}` : ""}`);
   } catch (err) {
-    ctx.err(`nightshift open: warning: \`git worktree prune\` failed in ${cwd}: ${err.message}`);
+    ctx.err(`nightqueue open: warning: \`git worktree prune\` failed in ${cwd}: ${err.message}`);
   }
 }
 

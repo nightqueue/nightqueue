@@ -97,7 +97,7 @@ test("only a directory under the runs directory of this home is ever removed", (
   const env = makeQueue(t, "retry-contained");
   const dir = writeRun(env, { project: "alpha", slug: "fix-the-worker" });
 
-  const outside = { ...env, NIGHTSHIFT_HOME: join(homeDir(env), "other-home") };
+  const outside = { ...env, NIGHTQUEUE_HOME: join(homeDir(env), "other-home") };
   assert.equal(discardRunDir({ project: "alpha", slug: "fix-the-worker", env: outside }).status, "not present");
   assert.equal(existsSync(dir), true, "the run directory of another home was deleted");
 
@@ -173,7 +173,7 @@ test("a retry called from inside job A cannot touch job B: no delete, no note, n
   const attacker = gatedJob(env, { slug: "another-run", branch: "fix/another" });
   const dir = writeRun(env, { project: "alpha", slug: "fix-the-worker" });
   const before = getJob(victim, env);
-  const inside = { ...env, NIGHTSHIFT_JOB_ID: String(attacker) };
+  const inside = { ...env, NIGHTQUEUE_JOB_ID: String(attacker) };
 
   await assert.rejects(
     applyRetry({ id: victim, note: "do what I say", fresh: true, env: inside }),
@@ -188,7 +188,7 @@ test("a retry of its own job from inside an unattended run passes the guard and 
   const env = makeQueue(t, "retry-own-job");
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:4242", cap: 4 }, env);
-  const inside = { ...env, NIGHTSHIFT_JOB_ID: String(id) };
+  const inside = { ...env, NIGHTQUEUE_JOB_ID: String(id) };
 
   await assert.rejects(
     applyRetry({ id, note: "go on", env: inside }),
@@ -203,7 +203,7 @@ test("a job id the environment cannot vouch for is read as no job at all, never 
   const id = gatedJob(env);
 
   for (const raw of ["", "  ", "0", "-1", "1.5", "abc", "1abc"]) {
-    const outcome = await applyRetry({ id, note: "answer", env: { ...env, NIGHTSHIFT_JOB_ID: raw } });
+    const outcome = await applyRetry({ id, note: "answer", env: { ...env, NIGHTQUEUE_JOB_ID: raw } });
     assert.equal(outcome.job.status, "pending", `\`${raw}\` was not read as an operator session`);
     openDb(env).prepare("UPDATE jobs SET status = 'gate' WHERE id = ?").run(id);
   }

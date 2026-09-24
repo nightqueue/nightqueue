@@ -57,7 +57,7 @@ function statOrNull(path) {
 
 // Packs one directory into a tarball of its own temporary directory, so the install never links a checkout into the runtime.
 function packDirectory(ctx, report, dir) {
-  const destDir = mkdtempSync(join(tmpdir(), "nightshift-pack-"));
+  const destDir = mkdtempSync(join(tmpdir(), "nightqueue-pack-"));
   const cleanup = () => rmSync(destDir, { recursive: true, force: true });
   const result = npmPack({ dir, destDir, env: ctx.env, spawnSyncImpl: ctx.spawnSyncImpl });
   if (result.ok) return { ok: true, spec: result.file, cleanup };
@@ -160,11 +160,11 @@ export function dropLegacyShim(ctx, report) {
     const { path, status } = removeLegacyShim(ctx.env);
     if (status === "not present") return;
     if (status === "kept") {
-      report.step(LEGACY_SHIM_LABEL, status, `${path} was not written by nightshift`);
+      report.step(LEGACY_SHIM_LABEL, status, `${path} was not written by nightqueue`);
       return;
     }
     report.step(LEGACY_SHIM_LABEL, status, path);
-    ctx.out("the `shift` command was renamed to `nightshift`; use `nightshift`, `nshift` or `nsft` from now on");
+    ctx.out("the `shift` command was renamed to `nightqueue`; use `nightqueue`, `nshift` or `nsft` from now on");
   });
 }
 
@@ -238,7 +238,7 @@ async function downloadModel(ctx, report) {
     const result = await warmup({ allowDownload: true }, ctx.env);
     report.step("model", result.downloaded ? "created" : "already present", result.model);
   } catch (err) {
-    report.degrade("model", firstLine(err?.message ?? String(err)), "nightshift embed download");
+    report.degrade("model", firstLine(err?.message ?? String(err)), "nightqueue embed download");
   }
 }
 
@@ -278,14 +278,14 @@ function recordDecline(ctx) {
     if (config.embedding === "declined") return;
     ctx.saveConfig({ ...config, embedding: "declined" }, ctx.env);
   } catch (err) {
-    ctx.err(`nightshift: the answer to the semantic recall could not be recorded: ${firstLine(err?.message ?? String(err))}`);
+    ctx.err(`nightqueue: the answer to the semantic recall could not be recorded: ${firstLine(err?.message ?? String(err))}`);
   }
 }
 
 // Offers the semantic recall, which is opt-in and never brings the installation down when it fails; the question is asked once and never again.
 export async function setupEmbedding(ctx, report, { embedding } = {}) {
-  if (ctx.env?.NIGHTSHIFT_EMBED_DISABLED === "1") {
-    report.step(EMBEDDING_LABEL, "skipped", "NIGHTSHIFT_EMBED_DISABLED");
+  if (ctx.env?.NIGHTQUEUE_EMBED_DISABLED === "1") {
+    report.step(EMBEDDING_LABEL, "skipped", "NIGHTQUEUE_EMBED_DISABLED");
     return;
   }
   if (embedding !== true && embeddingLibraryEntry(ctx.env)) {
@@ -305,7 +305,7 @@ export async function setupEmbedding(ctx, report, { embedding } = {}) {
   if (wanted !== true) {
     if (wanted === false) recordDecline(ctx);
     report.step(EMBEDDING_LABEL, "skipped", wanted === false ? "declined" : "no terminal");
-    report.note("semantic recall skipped; run `nightshift embed install` to enable it");
+    report.note("semantic recall skipped; run `nightqueue embed install` to enable it");
     return;
   }
   await installEmbedding(ctx, report);
@@ -313,9 +313,9 @@ export async function setupEmbedding(ctx, report, { embedding } = {}) {
 
 // Deletes every shim, and only the ones whose content on disk is what this package wrote.
 export function removeShimStep(ctx, report) {
-  guarded(report, SHIM_LABEL, `rm -f ${binDir(ctx.env)}/nightshift`, () => {
+  guarded(report, SHIM_LABEL, `rm -f ${binDir(ctx.env)}/nightqueue`, () => {
     for (const { name, path, status } of removeShims(ctx.env)) {
-      const detail = status === "kept" ? `${path} was not written by nightshift` : path;
+      const detail = status === "kept" ? `${path} was not written by nightqueue` : path;
       report.step(`${SHIM_LABEL} ${name}`, status, detail);
     }
   });

@@ -1,13 +1,13 @@
 # Memory
 
 Everything the runtime remembers lives in one SQLite file,
-`$NIGHTSHIFT_HOME/nightshift.db`, opened in WAL with a five second busy timeout.
+`$NIGHTQUEUE_HOME/nightqueue.db`, opened in WAL with a five second busy timeout.
 Several processes write to it at the same time - the MCP server, the hooks and
 the reflection worker - so every write is retried while the lock is held by
 someone else, and every transaction starts as `BEGIN IMMEDIATE` instead of being
 promoted from a read. A write that is still refused after the retries comes back
 as a message asking to run the command again, never as a raw SQLite error.
-Only the `nightshift` runtime opens it: the plugin talks to the MCP tools, never to
+Only the `nightqueue` runtime opens it: the plugin talks to the MCP tools, never to
 the file. The schema is created and migrated on first use, and reopening an
 existing database is a no-op.
 
@@ -45,20 +45,20 @@ rest. When a query matched nothing, the same recent list comes back marked
 
 **Hooks.** Three, all reading the event JSON from stdin:
 
-- `nightshift hook session-start` prints the block injected at the start of a
+- `nightqueue hook session-start` prints the block injected at the start of a
   session: the standing decisions of the project (the accepted ones, its own and
   its org's, one line each), then the top lessons and its memories, and it records
   what it injected in `state/<session>.json` and in the corpus.
-- `nightshift hook prompt-context` prints the lessons and memories relevant to the
+- `nightqueue hook prompt-context` prints the lessons and memories relevant to the
   prompt that was just submitted, skipping what this session already saw, and
   ignoring prompts too short to carry a request.
-- `nightshift hook reflect` answers `{}` immediately and leaves a detached worker
+- `nightqueue hook reflect` answers `{}` immediately and leaves a detached worker
   reading the transcript.
 
-`nightshift setup` registers the three of them at user scope, and `nightshift setup
+`nightqueue setup` registers the three of them at user scope, and `nightqueue setup
 --remove` takes them out again (see [Install](install.md)). The two that inject context
 answer with nothing when the working directory is outside a project registered
-with `nightshift init`.
+with `nightqueue init`.
 
 **Reflection.** The detached worker reads only the bytes appended to the
 transcript since its last run, and only when 60 seconds have passed since the
@@ -67,7 +67,7 @@ previous run of that session and the readable digest of that slice is at least
 session taught (retried once with a shorter digest if it times out) and, only
 when a fresh lesson looks like a stored one, one more call to judge it. Both run
 with no tools at all. That costs tokens from your own subscription, so:
-`NIGHTSHIFT_REFLECT=1` in the environment disables the reflection (and every
+`NIGHTQUEUE_REFLECT=1` in the environment disables the reflection (and every
 other hook) for that process, and simply not registering the `SessionEnd` hook
 disables it entirely. The read offset only advances after the lessons are
 persisted, so a failed run reprocesses the same slice instead of losing it.
@@ -75,35 +75,35 @@ persisted, so a failed run reprocesses the same slice instead of losing it.
 **Commands.**
 
 ```sh
-nightshift mcp                     # start the stdio MCP server with the twenty-seven tools
-nightshift mcp --http --port 4747 --token <t>   # serve the same tools over Streamable HTTP on 127.0.0.1
-nightshift hook session-start      # run a hook, reading the event JSON from stdin
-nightshift reflect --transcript <path>   # reflect on a transcript now, in the foreground
-nightshift embed download          # download the embedding weights (the only network path)
-nightshift embed backfill          # embed the lessons and the decisions that still have no vector
-nightshift memory stats [--json]   # counts per project
-nightshift decision list [--project <name> | --org <name>] [--status <status>]   # the decisions log
-nightshift decision show <number> [--project <name> | --org <name>]              # one decision, in full
-nightshift decision export <number> [--dir <path>] [--force]                     # one decision as a markdown file
-nightshift decision import <file.md> [--status <s>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]   # save a markdown decision file
-nightshift roadmap [--project <name> | --org <name>] [--status <s>]... [--priority <n>]... [--type <t>]...  # the roadmap, grouped by status, p1 first
-nightshift roadmap show <id> [--json]   # one roadmap item in full, with its comment thread
+nightqueue mcp                     # start the stdio MCP server with the twenty-seven tools
+nightqueue mcp --http --port 4747 --token <t>   # serve the same tools over Streamable HTTP on 127.0.0.1
+nightqueue hook session-start      # run a hook, reading the event JSON from stdin
+nightqueue reflect --transcript <path>   # reflect on a transcript now, in the foreground
+nightqueue embed download          # download the embedding weights (the only network path)
+nightqueue embed backfill          # embed the lessons and the decisions that still have no vector
+nightqueue memory stats [--json]   # counts per project
+nightqueue decision list [--project <name> | --org <name>] [--status <status>]   # the decisions log
+nightqueue decision show <number> [--project <name> | --org <name>]              # one decision, in full
+nightqueue decision export <number> [--dir <path>] [--force]                     # one decision as a markdown file
+nightqueue decision import <file.md> [--status <s>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]   # save a markdown decision file
+nightqueue roadmap [--project <name> | --org <name>] [--status <s>]... [--priority <n>]... [--type <t>]...  # the roadmap, grouped by status, p1 first
+nightqueue roadmap show <id> [--json]   # one roadmap item in full, with its comment thread
 ```
 
 **Environment variables.**
 
 | variable | effect |
 |---|---|
-| `NIGHTSHIFT_HOME` | home of the runtime, default `~/.nightshift` |
-| `NIGHTSHIFT_EMBED_DISABLED` | `1` turns the semantic side off; the recall stays BM25 only |
-| `NIGHTSHIFT_EMBED_DEADLINE_MS` | deadline of the embedding in the prompt hook, default `800` |
-| `NIGHTSHIFT_REFLECT_MODEL` | model of the reflection, default `haiku` |
-| `NIGHTSHIFT_CLAUDE_BIN` | path of the `claude` CLI used by the reflection, by the queue runner, by `nightshift setup` and by `nightshift doctor` |
-| `NIGHTSHIFT_NPM_BIN` | path of the `npm` CLI that installs the runtime and the embedding prefix |
-| `NIGHTSHIFT_JOB_ID` | set by the runner in the environment of the job it spawns, never read from outside |
-| `CLAUDE_CONFIG_DIR` | configuration directory of the host that `nightshift setup` and `nightshift doctor` read and write, default `~/.claude` |
-| `NIGHTSHIFT_REFLECT` | `1` marks a process as the reflection itself: no context block and no new reflection |
-| `NIGHTSHIFT_MODEL`, `NIGHTSHIFT_SESSION_ID` | recorded in `pipeline_runs` by the server process |
+| `NIGHTQUEUE_HOME` | home of the runtime, default `~/.nightqueue` |
+| `NIGHTQUEUE_EMBED_DISABLED` | `1` turns the semantic side off; the recall stays BM25 only |
+| `NIGHTQUEUE_EMBED_DEADLINE_MS` | deadline of the embedding in the prompt hook, default `800` |
+| `NIGHTQUEUE_REFLECT_MODEL` | model of the reflection, default `haiku` |
+| `NIGHTQUEUE_CLAUDE_BIN` | path of the `claude` CLI used by the reflection, by the queue runner, by `nightqueue setup` and by `nightqueue doctor` |
+| `NIGHTQUEUE_NPM_BIN` | path of the `npm` CLI that installs the runtime and the embedding prefix |
+| `NIGHTQUEUE_JOB_ID` | set by the runner in the environment of the job it spawns, never read from outside |
+| `CLAUDE_CONFIG_DIR` | configuration directory of the host that `nightqueue setup` and `nightqueue doctor` read and write, default `~/.claude` |
+| `NIGHTQUEUE_REFLECT` | `1` marks a process as the reflection itself: no context block and no new reflection |
+| `NIGHTQUEUE_MODEL`, `NIGHTQUEUE_SESSION_ID` | recorded in `pipeline_runs` by the server process |
 
 **Honest numbers.** Measured in this repository, on macOS arm64 with Node
 24.14.1:
@@ -111,16 +111,16 @@ nightshift roadmap show <id> [--json]   # one roadmap item in full, with its com
 | number | measured |
 |---|---|
 | `node_modules` of the package itself | 26 MB (94 packages) |
-| the embedding prefix `$NIGHTSHIFT_HOME/embedding` | 380 MB |
+| the embedding prefix `$NIGHTQUEUE_HOME/embedding` | 380 MB |
 | of which `onnxruntime-node` plus `onnxruntime-web` | 340 MB |
-| embedding weights in `$NIGHTSHIFT_HOME/models` | 23 MB |
+| embedding weights in `$NIGHTQUEUE_HOME/models` | 23 MB |
 | one prompt hook, weights cached, semantic side on | 191 ms (median of 5 cold processes) |
-| the same hook with `NIGHTSHIFT_EMBED_DISABLED=1` | 84 ms, so the semantic side costs about 107 ms |
-| peak RSS of `nightshift embed backfill` with the model loaded | 227 MB, against 76 MB for `nightshift memory stats` |
+| the same hook with `NIGHTQUEUE_EMBED_DISABLED=1` | 84 ms, so the semantic side costs about 107 ms |
+| peak RSS of `nightqueue embed backfill` with the model loaded | 227 MB, against 76 MB for `nightqueue memory stats` |
 
 That weight is exactly why the embedding library is not a dependency of the
-package: `nightshift embed install` (or a yes during `nightshift init`) puts it in
-`~/.nightshift/embedding` on demand, so the published package stays small and
+package: `nightqueue embed install` (or a yes during `nightqueue init`) puts it in
+`~/.nightqueue/embedding` on demand, so the published package stays small and
 audits clean. Without it every recall still answers through BM25 and the whole
 test suite still passes.
 
@@ -149,7 +149,7 @@ org under `## Standing decisions`, org rows first, followed by
 A `proposed` decision reaches a prompt by its title only, under a separate
 `## Proposed (not binding)` section, because nobody accepted it yet and it binds
 nothing. The other two statuses are read with `decision_list`,
-`nightshift decision list` and `nightshift decision show`, and never reach a
+`nightqueue decision list` and `nightqueue decision show`, and never reach a
 prompt.
 
 The **roadmap** is where "what next" lives: one line per intent, with a
@@ -161,7 +161,7 @@ decision that motivated it, and, once queued, to the job built from it. By hand
 every status may be set but `in_progress`, which only a job sets, and moving back
 from `in_review` or `done` is allowed. A linked item follows its job: queued or
 retried → `in_progress`, job `done` → `in_review`, job closed (its pull request
-merged through `nightshift queue close`) → `done` with `closed_at`, job failed or
+merged through `nightqueue queue close`) → `done` with `closed_at`, job failed or
 cancelled → `todo` (a close that finds the pull request closed without merge
 cancels the job).
 
@@ -178,7 +178,7 @@ decision the job proposed; an operator's move back from `in_review` or `done`
 leaves `reopened`, and `roadmap_comment` adds a `note`. A one-off
 `node scripts/roadmap-backfill.mjs [--dry-run]` synthesizes the `queued`, `pr`
 and `closed` comments of items linked before comments existed, in the
-home `NIGHTSHIFT_HOME` names; it is idempotent, and an item closed by hand gets
+home `NIGHTQUEUE_HOME` names; it is idempotent, and an item closed by hand gets
 nothing.
 
 An **org item** follows its jobs through one **project row** per project it was
@@ -190,7 +190,7 @@ row change - `in_progress` while any row is, `done` once every row is `done` or
 leaves an org-level comment. Closing an org item by hand (`done` or `cancelled`)
 cancels every open row, with one `closed` comment per row. A project reads only
 its own row and its own comments of an org item, never a sibling project's; the
-org reads the whole matrix. `nightshift doctor` flags an org item whose persisted
+org reads the whole matrix. `nightqueue doctor` flags an org item whose persisted
 status disagrees with what its rows derive.
 
 **Search.** `roadmap_search` finds at most five items an owner sees: `query`
@@ -205,28 +205,28 @@ Schema v17 replaced the horizons: an `open` item of `now` became `todo`, one of
 `next` or `later` became `backlog`, `queued` became `in_progress`, `dropped`
 became `cancelled`, and every item got priority 5.
 
-**Private by design.** Both live only in `$NIGHTSHIFT_HOME/nightshift.db`, the
+**Private by design.** Both live only in `$NIGHTQUEUE_HOME/nightqueue.db`, the
 same file as the rest of the memory. The runtime writes nothing into the
 repository and publishes nothing; the one thing it puts in a pull request is the
 last `Roadmap: <owner>#<id>` line of the body of a job queued from a roadmap
-item: no `docs/adr/` tree, no `ROADMAP.md`; only an explicit `nightshift decision export`
+item: no `docs/adr/` tree, no `ROADMAP.md`; only an explicit `nightqueue decision export`
 writes a file. The only ways in are the MCP tools below and the one deliberate
-terminal write, `nightshift decision import` (see below), and the only ways to
+terminal write, `nightqueue decision import` (see below), and the only ways to
 read them from a terminal are the four read-only commands
-(`nightshift decision list`, `nightshift decision show <number>`,
-`nightshift roadmap` and `nightshift roadmap show <id>`), which resolve the project from the current directory when
+(`nightqueue decision list`, `nightqueue decision show <number>`,
+`nightqueue roadmap` and `nightqueue roadmap show <id>`), which resolve the project from the current directory when
 `--project` is omitted, read one org alone with `--org <name>` instead, never
 write, and never register a project. Read-only
 means the database too: the four open it read-only, so they never create it and
 never migrate it, and a home where nothing was ever saved reads as an empty one
 (`no decisions for <project>`, an `(empty)` roadmap) instead of a SQLite error.
 
-**One source, moved on purpose.** `nightshift decision export <number>` writes
+**One source, moved on purpose.** `nightqueue decision export <number>` writes
 one decision as a markdown file, `<dir>/<nnnn>-<slug>.md` (default
 `docs/decisions/` of the current directory; `--force` replaces an existing
 file). It reads the database read-only like `show`, so it never creates nor
 writes it; publishing that file stays a deliberate pull request of the operator.
-`nightshift decision import <file.md>` is the one deliberate decision write from
+`nightqueue decision import <file.md>` is the one deliberate decision write from
 a terminal: it reads an exported file or a hand-written ADR of the same shape
 (`# <title>`, a `Status:` line with its date, `## Context`, `## Decision`,
 `## Consequences`; any other `##` section stays inside the field it follows),
@@ -266,18 +266,18 @@ job's project, and a thread read from a job leaves out the comments of a sibling
 project. Outside a job the restriction does not exist, and the operator updates
 any project from anywhere.
 
-Renaming an org carries its rows with it (`nightshift org rename` rewrites the
+Renaming an org carries its rows with it (`nightqueue org rename` rewrites the
 `org` of every decision and roadmap item), and an org that still owns rows
 cannot be removed: the removal is refused naming how many. The rename records
-its intent in `~/.nightshift/org-rename.pending.json` before it touches either
+its intent in `~/.nightqueue/org-rename.pending.json` before it touches either
 store; a rename interrupted halfway shows up as a failed `org rows` line of
-`nightshift doctor`, and `nightshift org repair` settles it in the direction
+`nightqueue doctor`, and `nightqueue org repair` settles it in the direction
 the config already committed. Rows pointing to an org the config does not know
-are the other thing that line reports; `nightshift org repair --to <org>` moves
+are the other thing that line reports; `nightqueue org repair --to <org>` moves
 them under an existing org.
 
 **Queueing from the roadmap.** `queue_add` with `roadmap_item_id` and no
-`prompt` (or `nightshift queue add --roadmap <id>`) builds the prompt from the
+`prompt` (or `nightqueue queue add --roadmap <id>`) builds the prompt from the
 item instead of asking for it again: `## Task` with the title and the detail,
 `## Roadmap item` with `Roadmap: <owner>#<id>`, its `Type:` and the `Commit type:`
 the job uses, `## Linked decision` when the item links one, `## Standing decisions` with the
@@ -323,7 +323,7 @@ report lists it among the open items for the operator to accept or reject with
 continues without the section and records it as an open item.
 
 **A proposal ends when its job is closed.** The proposal a job saved carries
-that job's id. `nightshift queue close <id>` and `nightshift queue close --merged`
+that job's id. `nightqueue queue close <id>` and `nightqueue queue close --merged`
 list the open proposals of every job they closed and, on a terminal, ask
 `accept / reject / keep` for each; `--decisions accept|reject|keep` answers for
 all of them without asking, and without the flag and without a terminal (or
@@ -331,6 +331,6 @@ under `--json`) every proposal is kept, so scripts do not change. Each one
 prints a `decision #n <title>: accepted|rejected|kept (proposed)` line, and
 `--json` carries them in `decisions`. The MCP `queue_close` closes the job and
 leaves its proposals alone. A proposal still open on a closed job is a warning
-of the `decision proposals` line of `nightshift doctor`, which names each by
+of the `decision proposals` line of `nightqueue doctor`, which names each by
 number and job.
 

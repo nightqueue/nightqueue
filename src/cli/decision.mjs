@@ -14,13 +14,13 @@ import { openStore, openStoreReadOnly } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
 export const USAGE = {
-  list: "nightshift decision list [--project <name> | --org <name>] [--status <status>] [--json]",
-  show: "nightshift decision show <number> [--project <name> | --org <name>]",
-  export: "nightshift decision export <number> [--project <name> | --org <name>] [--dir <path>] [--force]",
+  list: "nightqueue decision list [--project <name> | --org <name>] [--status <status>] [--json]",
+  show: "nightqueue decision show <number> [--project <name> | --org <name>]",
+  export: "nightqueue decision export <number> [--project <name> | --org <name>] [--dir <path>] [--force]",
   import:
-    "nightshift decision import <file.md> [--project <name> | --org <name>] [--status <status>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]",
+    "nightqueue decision import <file.md> [--project <name> | --org <name>] [--status <status>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]",
   update:
-    "nightshift decision update <number> --status accepted|rejected|superseded [--superseded-by <n>] [--project <name> | --org <name>]",
+    "nightqueue decision update <number> --status accepted|rejected|superseded [--superseded-by <n>] [--project <name> | --org <name>]",
 };
 
 const OWNER_OPTIONS = {
@@ -77,12 +77,12 @@ export function resolveReadTarget(values, ctx) {
   if (values.project !== undefined) {
     const named = projectByName(config, values.project);
     if (named) return projectTarget(named);
-    throw new UserError(`unknown project \`${values.project}\`; run \`nightshift project list\``);
+    throw new UserError(`unknown project \`${values.project}\`; run \`nightqueue project list\``);
   }
   const cwd = ctx.cwd ?? process.cwd();
   const resolved = resolveProject(config, { cwd });
   if (resolved) return projectTarget(resolved);
-  throw new UserError(`no project registered for ${cwd}; run \`nightshift init\` here, or pass --project <name>`);
+  throw new UserError(`no project registered for ${cwd}; run \`nightqueue init\` here, or pass --project <name>`);
 }
 
 // Reads the database on a connection that can never write a decision nor a roadmap item; a home with no database yet reads as an empty one, and one written by an older build is brought to this schema first.
@@ -157,7 +157,7 @@ function formatRow(row) {
   ].join("");
 }
 
-// Runs `nightshift decision list`, which reads the database and never writes to it.
+// Runs `nightqueue decision list`, which reads the database and never writes to it.
 async function runList(argv, ctx) {
   const { values, positionals } = parseCommand(argv, READ_OPTIONS);
   checkArgs(positionals, { max: 0, usage: USAGE.list });
@@ -184,7 +184,7 @@ function printDecision(ctx, target, row) {
   ctx.out(`${target.scope}: ${ownerOf(target)} · updated: ${sqliteToIso(row.updated_at)}`);
 }
 
-// Runs `nightshift decision show <number>`, printing the decision in full and untruncated.
+// Runs `nightqueue decision show <number>`, printing the decision in full and untruncated.
 async function runShow(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { project: { type: "string" }, org: { type: "string" } });
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.show });
@@ -218,7 +218,7 @@ function writeExportedFile(path, text, force) {
   }
 }
 
-// Runs `nightshift decision export <number>`, which writes one markdown file and never the database.
+// Runs `nightqueue decision export <number>`, which writes one markdown file and never the database.
 async function runExport(argv, ctx) {
   const { values, positionals } = parseCommand(argv, EXPORT_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.export });
@@ -290,7 +290,7 @@ function stampImportedFile(ctx, path, saved) {
   }
 }
 
-// Runs `nightshift decision import <file.md>`, the one deliberate decision write of the terminal, reviewed like `decision_save`.
+// Runs `nightqueue decision import <file.md>`, the one deliberate decision write of the terminal, reviewed like `decision_save`.
 async function runImport(argv, ctx) {
   const { values, positionals } = parseCommand(argv, IMPORT_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.import });
@@ -344,7 +344,7 @@ async function resolveSuccessorId(store, target, successorNumber) {
   return successor.id;
 }
 
-// Runs `nightshift decision update <number>`, the terminal's way to accept, reject or supersede a decision, same as `decision_update`.
+// Runs `nightqueue decision update <number>`, the terminal's way to accept, reject or supersede a decision, same as `decision_update`.
 async function runUpdate(argv, ctx) {
   const { values, positionals } = parseCommand(argv, UPDATE_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.update });
@@ -367,7 +367,7 @@ const SUBCOMMANDS = new Map([
   ["update", runUpdate],
 ]);
 
-// Dispatches the subcommands of `nightshift decision`.
+// Dispatches the subcommands of `nightqueue decision`.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);

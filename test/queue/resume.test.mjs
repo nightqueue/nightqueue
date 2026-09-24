@@ -202,7 +202,7 @@ function operatorState({ phases = ["triage"], resumeCount = 0, ...extra } = {}) 
 // The prompt the runner builds for a job resumed from the given state.
 function resumePrompt(recorded) {
   const job = { id: 7, project: "alpha", slug: "fix-the-worker", prompt: "p" };
-  const handoff = resumeHandoff({ job, resume: decideResume({ state: recorded }), state: recorded, env: { NIGHTSHIFT_HOME: "/tmp/ns" } });
+  const handoff = resumeHandoff({ job, resume: decideResume({ state: recorded }), state: recorded, env: { NIGHTQUEUE_HOME: "/tmp/ns" } });
   return buildPrompt({ job, handoff });
 }
 

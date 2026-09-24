@@ -55,7 +55,7 @@ test("the hook answers immediately and starts the worker detached", (t) => {
   assert.equal(started[0].command, process.execPath);
   assert.match(started[0].args[0], /reflect-worker\.mjs$/);
   assert.equal(started[0].options.detached, true);
-  assert.equal(started[0].options.env.NIGHTSHIFT_REFLECT, "1");
+  assert.equal(started[0].options.env.NIGHTQUEUE_REFLECT, "1");
   assert.deepEqual(payloadOf(started[0]), {
     transcript_path: transcriptPath,
     cwd: "/tmp/repo",
@@ -72,7 +72,7 @@ test("an event without a transcript starts nothing", (t) => {
 });
 
 test("the reflection process never starts another reflection", (t) => {
-  const env = { ...makeHome(t, "hook-reflect-guard"), NIGHTSHIFT_REFLECT: "1" };
+  const env = { ...makeHome(t, "hook-reflect-guard"), NIGHTQUEUE_REFLECT: "1" };
   const spawn = fakeSpawn();
   const answer = runReflect({
     input: { session_id: "s1", cwd: "/tmp/repo", transcript_path: "/tmp/session.jsonl" },

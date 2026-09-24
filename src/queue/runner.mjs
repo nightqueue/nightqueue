@@ -622,11 +622,11 @@ export function prSearchKey(job) {
   return (words ?? []).slice(0, PR_SEARCH_WORDS).join(" ").slice(0, PR_SEARCH_MAX_CHARS);
 }
 
-// Open pull requests to attach to the prompt of this job: disabled by NIGHTSHIFT_NO_PR_CHECK with no subprocess at all, and
+// Open pull requests to attach to the prompt of this job: disabled by NIGHTQUEUE_NO_PR_CHECK with no subprocess at all, and
 // undetermined whenever gh could not answer. The lookup is awaited, never run synchronously: it is the only network call of a
 // run, and a blocking one here would stall the dispatch loop and the I/O of every job already in flight.
 export async function openPrsForJob(job, { env = process.env, deps = {} } = {}) {
-  if (env?.NIGHTSHIFT_NO_PR_CHECK === "1") return undefined;
+  if (env?.NIGHTQUEUE_NO_PR_CHECK === "1") return undefined;
   const key = prSearchKey(job);
   if (!key) return undefined;
   const lookup = typeof deps.prListImpl === "function" ? deps.prListImpl : ghPrList;
@@ -681,7 +681,7 @@ function ownRuntimeDir(env) {
 // Warns, once, that the tree this runner runs from is gone; the detached runner writes its stderr straight into its own log.
 function warnRuntimeGone(dir) {
   process.stderr.write(
-    `runtime directory ${dir} is gone - this runner finishes the job it is running and exits; start a new runner with: nightshift queue run\n`,
+    `runtime directory ${dir} is gone - this runner finishes the job it is running and exits; start a new runner with: nightqueue queue run\n`,
   );
 }
 
@@ -990,7 +990,7 @@ export function compactStamp() {
 // runtime, never this process's own tree, so a long-lived caller can never hand the child a superseded one.
 function detachedArgs({ jobId, max, watchIntervalS, from = null, until = null, runtimeDir }) {
   return [
-    join(runtimeDir, "bin", "nightshift.mjs"),
+    join(runtimeDir, "bin", "nightqueue.mjs"),
     "queue",
     "run",
     "--foreground",
@@ -1018,7 +1018,7 @@ function spawnRunner({ args, fd, logPath, runtimeDir, env, spawnImpl }) {
   return { pid: child?.pid ?? null, logPath, runtimeDir };
 }
 
-// Starts `nightshift queue run` detached, with its output going to a log file, and returns right away; the
+// Starts `nightqueue queue run` detached, with its output going to a log file, and returns right away; the
 // `runtimeDir` it answers with is the same tree the child's argv points into, so the caller registers what the
 // child really loads instead of guessing it a second time.
 export function launchDetachedRunner({ jobId = null, max = null, watchIntervalS = null, from = null, until = null, env = process.env, spawnImpl = spawn } = {}) {

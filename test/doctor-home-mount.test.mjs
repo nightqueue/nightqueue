@@ -63,7 +63,7 @@ test("the home mount check warns on a network or fuse mount and says what has to
     const line = await diagnose(host.env, fakeMount([`/dev/disk3s5 on / (apfs, local)`, `nas:/export on ${home} (${type}, nodev)`]));
     assert.equal(line.status, "warn", `a home on ${type} was reported as ${line.status}`);
     assert.match(line.detail, new RegExp(`^${type.replace(".", "\\.")} at ${home} `));
-    assert.match(line.hint, /NIGHTSHIFT_HOME must be on local disk/);
+    assert.match(line.hint, /NIGHTQUEUE_HOME must be on local disk/);
   }
 });
 

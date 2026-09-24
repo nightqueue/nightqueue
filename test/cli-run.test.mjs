@@ -28,7 +28,7 @@ function makeQueue(t, name) {
   return env;
 }
 
-// A claimed job already bound to its run slug, the row `nightshift run` resolves the run from.
+// A claimed job already bound to its run slug, the row `nightqueue run` resolves the run from.
 function boundJob(env, { slug = SLUG } = {}) {
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   if (slug !== null) openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(slug, id);
@@ -39,7 +39,7 @@ function boundJob(env, { slug = SLUG } = {}) {
 async function runCli(env, argv, { jobId = null } = {}) {
   const out = [];
   const err = [];
-  const callerEnv = jobId === null ? { ...env } : { ...env, NIGHTSHIFT_JOB_ID: String(jobId) };
+  const callerEnv = jobId === null ? { ...env } : { ...env, NIGHTQUEUE_JOB_ID: String(jobId) };
   const code = await run(argv, {
     env: callerEnv,
     out: (line) => out.push(line),
@@ -66,8 +66,8 @@ function lane({ id, subagentType, model, durationMs, seconds }) {
 // The stream of a run that went through triage and implementation, and ended 15 minutes after it started.
 function pipelineLog() {
   return [
-    ...lane({ id: "toolu_a", subagentType: "nightshift:triager", model: "haiku", durationMs: 61_000, seconds: 5 }),
-    ...lane({ id: "toolu_b", subagentType: "nightshift:coder", model: "opus", durationMs: 420_000, seconds: 120 }),
+    ...lane({ id: "toolu_a", subagentType: "nightqueue:triager", model: "haiku", durationMs: 61_000, seconds: 5 }),
+    ...lane({ id: "toolu_b", subagentType: "nightqueue:coder", model: "opus", durationMs: 420_000, seconds: 120 }),
     assistantEvent("Done.", { timestamp: secondsIntoAttempt(900) }),
   ];
 }
@@ -78,7 +78,7 @@ function recordPhases(env, { slug = SLUG } = {}) {
   recordPhaseDone({ project: "alpha", slug, phase: "implementation", artifact: "04-implementation.md", env });
 }
 
-test("`nightshift run` refuses a missing and an unknown subcommand, and says it is not `queue run`", async (t) => {
+test("`nightqueue run` refuses a missing and an unknown subcommand, and says it is not `queue run`", async (t) => {
   const env = makeQueue(t, "cli-run-dispatch");
 
   const empty = await runCli(env, ["run"]);
@@ -89,7 +89,7 @@ test("`nightshift run` refuses a missing and an unknown subcommand, and says it 
   assert.equal(unknown.code, 1);
   assert.match(unknown.err.join("\n"), /unknown run subcommand `logs`/);
   assert.match(unknown.err.join("\n"), /acts on the run of the job it is called from/);
-  assert.match(unknown.err.join("\n"), /nightshift queue run/);
+  assert.match(unknown.err.join("\n"), /nightqueue queue run/);
 });
 
 test("`run log` inside a job resolves the run from its own row and prints the phases with the measured model and duration", async (t) => {
@@ -306,7 +306,7 @@ test("`run check` refuses a phase it does not know and a missing argument, and e
 
   const missing = await runCli(env, ["run", "check"], { jobId: id });
   assert.equal(missing.code, 1);
-  assert.match(missing.err.join("\n"), /missing argument; usage: nightshift run check <NN>/);
+  assert.match(missing.err.join("\n"), /missing argument; usage: nightqueue run check <NN>/);
 
   const absent = await runCli(env, ["run", "check", "06"], { jobId: id });
   assert.equal(absent.code, 0);

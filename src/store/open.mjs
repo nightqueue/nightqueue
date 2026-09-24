@@ -15,12 +15,12 @@ function cachedStore(cache, env, readOnly) {
   return store;
 }
 
-// The store of this NIGHTSHIFT_HOME, opening and migrating the database on first use.
+// The store of this NIGHTQUEUE_HOME, opening and migrating the database on first use.
 export function openStore(env = process.env) {
   return cachedStore(readWriteStores, env, false);
 }
 
-// The store of this NIGHTSHIFT_HOME for a caller that must never create nor migrate it: it opens nothing until a read needs it, and refuses every write; its connection is cached until `close()`, so a process that polls for hours takes `withReadOnlyStore` instead.
+// The store of this NIGHTQUEUE_HOME for a caller that must never create nor migrate it: it opens nothing until a read needs it, and refuses every write; its connection is cached until `close()`, so a process that polls for hours takes `withReadOnlyStore` instead.
 export function openStoreReadOnly(env = process.env) {
   return cachedStore(readOnlyStores, env, true);
 }

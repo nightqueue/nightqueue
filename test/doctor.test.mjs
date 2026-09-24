@@ -20,7 +20,7 @@ import { makeHostEnv, readSettingsFile, writeLegacyShim, writeSettingsFixture } 
 import { makeDir, makeProject, seedClosedJob, seedLegacyV8Home } from "../test-support/memory.mjs";
 import { addWorktree, deadPid, lockWorktree, publishedCheckout } from "../test-support/worktrees.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const SETUP = ["setup", "--no-path", "--no-embedding"];
 const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -84,7 +84,7 @@ test("a host that went through setup has no failing check", async (t) => {
   assert.equal(statusOf(report, "projects"), "warn");
   assert.equal(statusOf(report, "database"), "warn");
   assert.equal(statusOf(report, "runtime"), "ok");
-  assert.equal(statusOf(report, "shim nightshift"), "ok");
+  assert.equal(statusOf(report, "shim nightqueue"), "ok");
   assert.equal(statusOf(report, "path"), "warn");
   assert.equal(statusOf(report, "embedding"), "warn");
   assert.equal(report.checks.some((check) => check.name === "embedding audit"), false, "the audit ran on an absent prefix");
@@ -101,7 +101,7 @@ test("a PreToolUse hook registered with an older tool matcher warns, pointing at
   const row = report.checks.find((check) => check.name === "hook PreToolUse");
   assert.deepEqual(
     { status: row.status, detail: row.detail, hint: row.hint },
-    { status: "warn", detail: "registered with an older tool matcher", hint: "run `nightshift setup`" },
+    { status: "warn", detail: "registered with an older tool matcher", hint: "run `nightqueue setup`" },
   );
   assert.equal(code, 0, "a stale matcher must never fail the diagnosis");
 });
@@ -110,19 +110,19 @@ test("runtime, shim, path and embedding are checked, and the audit only once the
   const host = makeHostEnv(t, "doctor-install");
   const virgin = await diagnose(host.env);
   assert.equal(statusOf(virgin.report, "runtime"), "fail");
-  assert.equal(statusOf(virgin.report, "shim nightshift"), "fail");
+  assert.equal(statusOf(virgin.report, "shim nightqueue"), "fail");
   assert.match(virgin.report.checks.find((check) => check.name === "runtime").detail, /no runtime in .*runtime$/);
 
   await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
-  writeFileSync(join(host.runtimePackage, "package.json"), `${JSON.stringify({ name: "nightshift", version: "0.0.1" })}\n`);
+  writeFileSync(join(host.runtimePackage, "package.json"), `${JSON.stringify({ name: "nightqueue", version: "0.0.1" })}\n`);
   mkdirSync(host.embeddingDir, { recursive: true });
 
   const { report } = await diagnose(host.env, { spawnSyncImpl: spawnSync });
   assert.equal(statusOf(report, "runtime"), "warn");
-  assert.match(report.checks.find((check) => check.name === "runtime").hint, /nightshift update/);
+  assert.match(report.checks.find((check) => check.name === "runtime").hint, /nightqueue update/);
   assert.equal(statusOf(report, "embedding audit"), "ok");
 
-  host.env.NIGHTSHIFT_FAKE_NPM_AUDIT = "3";
+  host.env.NIGHTQUEUE_FAKE_NPM_AUDIT = "3";
   const { report: risky } = await diagnose(host.env, { spawnSyncImpl: spawnSync });
   assert.equal(statusOf(risky, "embedding audit"), "warn");
   assert.equal(risky.checks.find((check) => check.name === "embedding audit").detail, "3 advisories in the embedding prefix");
@@ -135,20 +135,20 @@ test("a shim left without the execute bit fails with the command that repairs it
 
   const { code, report } = await diagnose(host.env);
   assert.equal(code, 1);
-  assert.equal(statusOf(report, "shim nightshift"), "fail");
-  assert.match(report.checks.find((check) => check.name === "shim nightshift").hint, /chmod \+x /);
+  assert.equal(statusOf(report, "shim nightqueue"), "fail");
+  assert.match(report.checks.find((check) => check.name === "shim nightqueue").hint, /chmod \+x /);
 });
 
 test("the three command names are checked, and a missing shortcut only warns", async (t) => {
   const host = makeHostEnv(t, "doctor-shortcuts");
   await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
   const full = await diagnose(host.env);
-  for (const name of ["nightshift", "nshift", "nsft"]) assert.equal(statusOf(full.report, `shim ${name}`), "ok");
+  for (const name of ["nightqueue", "nshift", "nsft"]) assert.equal(statusOf(full.report, `shim ${name}`), "ok");
 
   const lean = makeHostEnv(t, "doctor-no-shortcuts");
   await run([...SETUP, "--no-shortcuts"], { ...defaultContext(), env: lean.env, out: () => {}, err: () => {} });
   const { code, report } = await diagnose(lean.env);
-  assert.equal(statusOf(report, "shim nightshift"), "ok");
+  assert.equal(statusOf(report, "shim nightqueue"), "ok");
   assert.equal(statusOf(report, "shim nshift"), "warn");
   assert.equal(statusOf(report, "shim nsft"), "warn");
   assert.match(report.checks.find((check) => check.name === "shim nshift").hint, /--no-shortcuts/);
@@ -163,7 +163,7 @@ test("a shim left over from the previous command name warns, with a hint that de
   writeLegacyShim(host);
   const ours = await diagnose(host.env);
   assert.equal(statusOf(ours.report, "legacy shim"), "warn");
-  assert.match(ours.report.checks.find((check) => check.name === "legacy shim").hint, /nightshift setup/);
+  assert.match(ours.report.checks.find((check) => check.name === "legacy shim").hint, /nightqueue setup/);
 
   writeLegacyShim(host, "#!/bin/sh\necho other-tool\n");
   const foreign = await diagnose(host.env);
@@ -189,7 +189,7 @@ test("a home that never went through setup fails and exits 1", async (t) => {
   assert.equal(statusOf(report, "gh"), "warn");
   for (const name of ["nshift", "nsft"]) {
     const hint = report.checks.find((check) => check.name === `shim ${name}`).hint;
-    assert.equal(hint, "run `nightshift setup`", "a home with no shim at all must never be sent to turn a flag off");
+    assert.equal(hint, "run `nightqueue setup`", "a home with no shim at all must never be sent to turn a flag off");
   }
   for (const check of report.checks) {
     if (check.status !== "ok") assert.ok(check.hint, `check ${check.name} has no hint`);
@@ -214,14 +214,14 @@ function withClaudeHelp(listsAgent) {
   };
 }
 
-test("the operator row says how `nightshift open` loads the agent, and a fallback only warns", async (t) => {
+test("the operator row says how `nightqueue open` loads the agent, and a fallback only warns", async (t) => {
   const host = makeHostEnv(t, "doctor-operator");
   await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
 
   const agent = await diagnose(host.env, { spawnSyncImpl: withClaudeHelp(true) });
   const agentRow = agent.report.checks.find((check) => check.name === "operator");
   assert.equal(agentRow.status, "ok");
-  assert.match(agentRow.detail, /--agent nightshift:nightshift-operator/);
+  assert.match(agentRow.detail, /--agent nightqueue:nightqueue-operator/);
 
   const fallback = await diagnose(host.env, { spawnSyncImpl: withClaudeHelp(false) });
   const fallbackRow = fallback.report.checks.find((check) => check.name === "operator");
@@ -239,12 +239,12 @@ test("the operator row says how `nightshift open` loads the agent, and a fallbac
 test("a claude CLI that cannot run is the only failure of an otherwise clean host", async (t) => {
   const host = makeHostEnv(t, "doctor-no-claude");
   await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
-  host.env.NIGHTSHIFT_CLAUDE_BIN = join(host.configDir, "does-not-exist");
+  host.env.NIGHTQUEUE_CLAUDE_BIN = join(host.configDir, "does-not-exist");
 
   const { code, report } = await diagnose(host.env);
   assert.equal(code, 1);
   assert.equal(statusOf(report, "claude"), "fail");
-  assert.match(report.checks.find((check) => check.name === "claude").hint, /NIGHTSHIFT_CLAUDE_BIN/);
+  assert.match(report.checks.find((check) => check.name === "claude").hint, /NIGHTQUEUE_CLAUDE_BIN/);
 });
 
 test("secrets more open than 0600 and a project that moved away are reported as failures", async (t) => {
@@ -291,8 +291,8 @@ test("the database check warns about a v8 home and points at the command that mi
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
   assert.match(database.detail, /schema v8, expected v17/);
-  assert.match(database.hint, /run `nightshift queue status` once to migrate it/);
-  assert.doesNotMatch(database.hint, /nightshift memory stats/);
+  assert.match(database.hint, /run `nightqueue queue status` once to migrate it/);
+  assert.doesNotMatch(database.hint, /nightqueue memory stats/);
 });
 
 test("the roadmap workflow check is ok when every linked item follows its job and warns about one left behind", async (t) => {
@@ -311,7 +311,7 @@ test("the roadmap workflow check is ok when every linked item follows its job an
   const check = report.checks.find((entry) => entry.name === "roadmap workflow");
   assert.equal(check.status, "warn");
   assert.equal(check.detail, `1 roadmap status out of step: #1 in_progress (job ${job.id} done, expected in_review)`);
-  assert.match(check.hint, /next `nightshift queue run` claim cycle re-syncs the ones behind a job/);
+  assert.match(check.hint, /next `nightqueue queue run` claim cycle re-syncs the ones behind a job/);
 });
 
 test("the roadmap workflow check flags an org item whose status disagrees with its project rows", async (t) => {
@@ -342,7 +342,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
   assert.match(database.detail, /schema v99, expected v17/);
-  assert.match(database.hint, /upgrade nightshift/);
+  assert.match(database.hint, /upgrade nightqueue/);
 });
 
 test("the keep awake check is a plain no-op outside macOS, whatever the configured mode", async (t) => {
@@ -366,7 +366,7 @@ test("the keep awake check on macOS: off is fine, found is ok, and a missing caf
   ensureHome(host.env);
   const config = loadConfig(host.env, { warn: () => {} });
   saveConfig({ ...config, queue: { ...config.queue, keepAwake: "off" } }, host.env);
-  host.env.NIGHTSHIFT_CAFFEINATE_BIN = missingBin;
+  host.env.NIGHTQUEUE_CAFFEINATE_BIN = missingBin;
   const { report: off } = await diagnose(host.env, overrides);
   assert.equal(checkOf(off, "keep awake").status, "ok");
   assert.match(checkOf(off, "keep awake").detail, /queue\.keepAwake: off/);
@@ -377,9 +377,9 @@ test("the keep awake check on macOS: off is fine, found is ok, and a missing caf
   const missingRow = checkOf(missing, "keep awake");
   assert.equal(missingRow.status, "warn");
   assert.match(missingRow.detail, /caffeinate not found/);
-  assert.match(missingRow.hint, /NIGHTSHIFT_CAFFEINATE_BIN/);
+  assert.match(missingRow.hint, /NIGHTQUEUE_CAFFEINATE_BIN/);
 
-  host.env.NIGHTSHIFT_CAFFEINATE_BIN = found;
+  host.env.NIGHTQUEUE_CAFFEINATE_BIN = found;
   const { report: ok } = await diagnose(host.env, overrides);
   assert.equal(checkOf(ok, "keep awake").status, "ok");
   assert.match(checkOf(ok, "keep awake").detail, new RegExp(found.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -413,7 +413,7 @@ test("the queue check reads the pause sentinel of the home, and a paused queue i
   assert.equal(statusOf(paused, "queue"), "warn");
   const check = paused.checks.find((entry) => entry.name === "queue");
   assert.equal(check.detail, "paused");
-  assert.match(check.hint, /nightshift queue resume/);
+  assert.match(check.hint, /nightqueue queue resume/);
 });
 
 // The check of the report by name, for the assertions that read more than its status.
@@ -444,7 +444,7 @@ test("the runner registry check reads the four states it can find, one row per r
   const { report: stale } = await diagnose(host.env, { killImpl: gone });
   assert.equal(statusOf(stale, row), "warn");
   assert.equal(checkOf(stale, row).detail, `stale (pid ${pid} is gone)`);
-  assert.match(checkOf(stale, row).hint, /nightshift queue run --stop/);
+  assert.match(checkOf(stale, row).hint, /nightqueue queue run --stop/);
   assert.equal(existsSync(runnerRegistryPath(pid, host.env)), true, "the diagnosis removed the registration it only had to read");
 
   const { report: foreign } = await diagnose(host.env, { killImpl: anotherUser });
@@ -532,7 +532,7 @@ test("the closes check reports closes in flight, failed and on a dead lease, and
     status: "warn",
     detail: `1 in flight (#${ids[0]} at preflight), 1 failed (#${ids[1]} at merge: merge-without-sha), 1 with a dead lease (#${ids[2]})`,
   });
-  assert.equal(report.checks.find((entry) => entry.name === "closes").hint, "run again with: nightshift queue close <id>");
+  assert.equal(report.checks.find((entry) => entry.name === "closes").hint, "run again with: nightqueue queue close <id>");
 });
 
 test("the closes check warns with the migrate hint on a database without the close columns, and leaves it as it was", async (t) => {
@@ -546,7 +546,7 @@ test("the closes check warns with the migrate hint on a database without the clo
   const { report } = await diagnose(host.env);
   const row = report.checks.find((entry) => entry.name === "closes");
   assert.equal(row.status, "warn");
-  assert.match(row.hint, /nightshift memory stats/);
+  assert.match(row.hint, /nightqueue memory stats/);
   const raw = new DatabaseSync(dbPath(host.env), { readOnly: true });
   t.after(() => raw.close());
   assert.equal(raw.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "close_status"), false, "the doctor migrated the database");
@@ -688,7 +688,7 @@ test("the decision proposals check warns on a proposal of a closed job, never on
   const { report: one } = await diagnose(host.env);
   assert.equal(proposalsCheck(one).status, "warn");
   assert.equal(proposalsCheck(one).detail, `1 proposed decision of closed jobs: #${first.number} (job ${closed})`);
-  assert.match(proposalsCheck(one).hint, /nightshift queue close <id> --decisions accept\|reject/);
+  assert.match(proposalsCheck(one).hint, /nightqueue queue close <id> --decisions accept\|reject/);
 
   const second = proposedByJob(host.env, { title: "and a second one from it", jobId: closed });
   closeDb(host.env);
@@ -708,7 +708,7 @@ test("the decision proposals check warns with the migrate hint on a database wit
   const { report } = await diagnose(host.env);
 
   assert.equal(proposalsCheck(report).status, "warn");
-  assert.match(proposalsCheck(report).hint, /nightshift memory stats/);
+  assert.match(proposalsCheck(report).hint, /nightqueue memory stats/);
   const raw = new DatabaseSync(dbPath(host.env), { readOnly: true });
   t.after(() => raw.close());
   const columns = raw.prepare("SELECT name FROM pragma_table_info('decisions')").all().map((row) => row.name);
@@ -723,11 +723,11 @@ test("--json is the only thing on stdout of the real process, and the exit code 
     ...process.env,
     HOME: userHome,
     APPDATA: join(userHome, "AppData", "Roaming"),
-    NIGHTSHIFT_HOME: home,
+    NIGHTQUEUE_HOME: home,
     CLAUDE_CONFIG_DIR: configDir,
     PATH: "",
   };
-  delete env.NIGHTSHIFT_CLAUDE_BIN;
+  delete env.NIGHTQUEUE_CLAUDE_BIN;
 
   const json = spawnSync(process.execPath, [CLI, "doctor", "--json"], { env, encoding: "utf8" });
   assert.equal(json.status, 1);

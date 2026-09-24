@@ -106,7 +106,7 @@ test("queue add answered with `n` keeps today's error, registers nothing and que
 
   assert.equal(await run(["queue", "add", "fix the worker"], ctx), 1);
   assert.equal(asked(), question(repo, derivedName(repo)));
-  assert.match(err.join("\n"), /no project registered for .*; run `nightshift init` here, or pass the project NAME/);
+  assert.match(err.join("\n"), /no project registered for .*; run `nightqueue init` here, or pass the project NAME/);
   assert.deepEqual(registeredNames(env), []);
   assert.equal(getJob(1, env), null);
 });
@@ -132,12 +132,12 @@ test("`--yes` registers with no question, and no terminal without it keeps today
   const escaped = makeCtx(env, { cwd: third });
   assert.equal(await run(["queue", "add", "--", "explain", "--yes", "to", "me"], escaped.ctx), 1, "`--yes` inside the prompt registered a project");
   assert.equal(escaped.asked(), "");
-  assert.match(escaped.err.join("\n"), /no project registered for .*; run `nightshift init` here/);
+  assert.match(escaped.err.join("\n"), /no project registered for .*; run `nightqueue init` here/);
 
   const silent = makeCtx(env, { cwd: third });
   assert.equal(await run(["queue", "add", "fix the linter"], silent.ctx), 1);
   assert.equal(silent.asked(), "");
-  assert.match(silent.err.join("\n"), /no project registered for .*; run `nightshift init` here/);
+  assert.match(silent.err.join("\n"), /no project registered for .*; run `nightqueue init` here/);
   assert.deepEqual(registeredNames(env), [name, derivedName(other)].sort());
   assert.equal(getJob(3, env), null);
 });
@@ -150,7 +150,7 @@ test("queue add outside any repository asks nothing and keeps today's error", as
     const { ctx, err, asked } = makeCtx(env, { cwd: bare, answer: "\n" });
     assert.equal(await run(argv, ctx), 1, argv.join(" "));
     assert.equal(asked(), "", argv.join(" "));
-    assert.match(err.join("\n"), /no project registered for .*; run `nightshift init` here/);
+    assert.match(err.join("\n"), /no project registered for .*; run `nightqueue init` here/);
   }
   assert.deepEqual(registeredNames(env), []);
   assert.equal(getJob(1, env), null);
@@ -177,7 +177,7 @@ test("queue add offers the next free name when the derived one is already taken"
 
 test("queue add inside an unattended job refuses to register, and still queues against a registered project", async (t) => {
   const env = makeHome(t, "register-inside-job");
-  env.NIGHTSHIFT_JOB_ID = "7";
+  env.NIGHTQUEUE_JOB_ID = "7";
   const repo = makeRepo(t, "register-inside-job-repo");
 
   for (const argv of [["queue", "add", "fix the worker", "--yes"], ["queue", "add", "fix the worker"]]) {

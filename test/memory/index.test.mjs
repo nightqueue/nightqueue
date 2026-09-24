@@ -140,7 +140,7 @@ test("an unregistered project cannot be indexed and recalls nothing", (t) => {
       ),
     (err) => {
       assert.ok(err instanceof UserError);
-      assert.match(err.message, /project `ghost` is not registered; run `nightshift init`/);
+      assert.match(err.message, /project `ghost` is not registered; run `nightqueue init`/);
       return true;
     },
   );

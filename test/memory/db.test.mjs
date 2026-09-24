@@ -546,8 +546,8 @@ test("migrateIfOutdated names the fix that actually works when the migration its
   t.after(() => chmodSync(dbPath(env), 0o644));
 
   assert.throws(() => migrateIfOutdated(env), (err) => {
-    assert.match(err.message, /make the database writable and run `nightshift queue status` again/);
-    assert.doesNotMatch(err.message, /nightshift doctor/);
+    assert.match(err.message, /make the database writable and run `nightqueue queue status` again/);
+    assert.doesNotMatch(err.message, /nightqueue doctor/);
     return true;
   });
 });
@@ -715,7 +715,7 @@ test("a project reference resolves by name, by path inside it, and never guesses
   assert.equal(resolveProjectName("alpha", env), "alpha");
   assert.equal(resolveProjectName(repo, env), "alpha");
   assert.equal(resolveProjectName(deep, env), "alpha");
-  assert.equal(resolveProjectName("nightshift-unknown-project", env), null);
+  assert.equal(resolveProjectName("nightqueue-unknown-project", env), null);
   assert.equal(resolveProjectName("", env), null);
   assert.equal(resolveProjectName(undefined, env), null);
 });

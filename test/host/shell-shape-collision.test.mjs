@@ -8,7 +8,7 @@ import { makeDir } from "../../test-support/memory.mjs";
 // Environment of an isolated user home, mirroring test/host/shell.test.mjs::makeEnv.
 function makeEnv(t, name, { shell = "/bin/zsh" } = {}) {
   const base = makeDir(t, name);
-  return { HOME: base, NIGHTSHIFT_HOME: join(base, "nightshift"), SHELL: shell, PATH: "" };
+  return { HOME: base, NIGHTQUEUE_HOME: join(base, "nightqueue"), SHELL: shell, PATH: "" };
 }
 
 // Content of the rc file, or an empty string when the file was never created.
@@ -19,7 +19,7 @@ function readRc(env) {
 
 test("vector A: a user comment that merely says the mark, followed by an unrelated fish_add_path line, survives addPathLine and removePathLine intact", (t) => {
   const env = makeEnv(t, "shell-shape-collision-fish", { shell: "/opt/homebrew/bin/fish" });
-  const userLines = ["# nightshift", "fish_add_path /usr/local/go/bin", ""];
+  const userLines = ["# nightqueue", "fish_add_path /usr/local/go/bin", ""];
   mkdirSync(dirname(rcFilePath(env)), { recursive: true });
   writeFileSync(rcFilePath(env), userLines.join("\n"));
 
@@ -27,7 +27,7 @@ test("vector A: a user comment that merely says the mark, followed by an unrelat
   assert.deepEqual(
     readRc(env).split("\n"),
     [...userLines.slice(0, -1), ...pathBlock(env).split("\n"), ""],
-    "the user's fish_add_path line, unrelated to nightshift, must survive addPathLine untouched",
+    "the user's fish_add_path line, unrelated to nightqueue, must survive addPathLine untouched",
   );
 
   removePathLine(env);
@@ -41,7 +41,7 @@ test("vector A: a user comment that merely says the mark, followed by an unrelat
 test("vector A: a user comment that merely says the mark, followed by an unrelated POSIX case block, survives addPathLine and removePathLine intact", (t) => {
   const env = makeEnv(t, "shell-shape-collision-case");
   const userLines = [
-    "# nightshift",
+    "# nightqueue",
     'case ":$PATH:" in',
     '  *":/opt/other-tool/bin:"*) ;;',
     '  *) export PATH="/opt/other-tool/bin:$PATH" ;;',
@@ -67,7 +67,7 @@ test("vector A: a user comment that merely says the mark, followed by an unrelat
 
 test("vector B: a legacy single-line install saved with CRLF line endings is migrated away, not left orphaned next to a new block", (t) => {
   const env = makeEnv(t, "shell-shape-collision-crlf");
-  const legacy = `export PATH="/old/home/bin:$PATH" # nightshift\r`;
+  const legacy = `export PATH="/old/home/bin:$PATH" # nightqueue\r`;
   writeFileSync(rcFilePath(env), `third-party-line\r\n${legacy}\n`);
 
   const result = addPathLine(env);

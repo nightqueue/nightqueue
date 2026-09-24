@@ -14,7 +14,7 @@ import { fakeCloseDeps, mergedPr, openPr } from "../../test-support/close.mjs";
 function makeCloseHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  delete env.NIGHTSHIFT_NO_PR_CHECK;
+  delete env.NIGHTQUEUE_NO_PR_CHECK;
   return env;
 }
 
@@ -25,7 +25,7 @@ function terminalJob(env, { status = "done", prUrl, prompt = "fix the worker" } 
   return id;
 }
 
-// Runs `nightshift queue close ...` in this process, with the pull request cache, the deadline and the closing pipeline's doubles the test injects.
+// Runs `nightqueue queue close ...` in this process, with the pull request cache, the deadline and the closing pipeline's doubles the test injects.
 async function runQueueClose(env, argv, { prStates, closeMergedDeadlineMs, closeDeps = fakeCloseDeps({ pr: mergedPr() }).deps } = {}) {
   const out = [];
   const err = [];
@@ -133,7 +133,7 @@ test("a candidate already cached as merged is closed with zero gh calls", async 
   const merged = terminalJob(env, { prUrl });
   const view = tableView({ [prUrl]: { ok: true, state: "MERGED", mergedAt: "2026-09-11T15:54:01Z" } });
   const prStates = createPrStateCache({ viewImpl: view.impl });
-  await prStates.refresh([prUrl], { ...env, NIGHTSHIFT_NO_PR_CHECK: undefined });
+  await prStates.refresh([prUrl], { ...env, NIGHTQUEUE_NO_PR_CHECK: undefined });
   view.calls.length = 0;
 
   const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates });
@@ -151,7 +151,7 @@ test("a running job with a merged pull request is never closed", async (t) => {
   openDb(env).prepare("UPDATE jobs SET pr_url = ? WHERE id = ?").run(prUrl, id);
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   const prStates = createPrStateCache({ viewImpl: async () => ({ ok: true, state: "MERGED", mergedAt: "2026-09-11T15:54:01Z" }) });
-  await prStates.refresh([prUrl], { ...env, NIGHTSHIFT_NO_PR_CHECK: undefined });
+  await prStates.refresh([prUrl], { ...env, NIGHTQUEUE_NO_PR_CHECK: undefined });
 
   const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates });
 
@@ -170,7 +170,7 @@ function proposal(env, { jobId, title }) {
 // A pull request cache that already knows the url as merged, so the close asks gh nothing.
 async function mergedCache(env, prUrl) {
   const prStates = createPrStateCache({ viewImpl: async () => ({ ok: true, state: "MERGED", mergedAt: "2026-09-11T15:54:01Z" }) });
-  await prStates.refresh([prUrl], { ...env, NIGHTSHIFT_NO_PR_CHECK: undefined });
+  await prStates.refresh([prUrl], { ...env, NIGHTQUEUE_NO_PR_CHECK: undefined });
   return prStates;
 }
 
@@ -274,7 +274,7 @@ test("close --merged cancels a candidate whose pull request gh reads closed with
 test("close --merged refuses a candidate whose project checkout is gone, by name, and closes nothing", async (t) => {
   const env = makeHome(t, "close-merged-no-checkout");
   const checkout = makeProject(t, env, "alpha");
-  delete env.NIGHTSHIFT_NO_PR_CHECK;
+  delete env.NIGHTQUEUE_NO_PR_CHECK;
   const prUrl = "https://github.com/acme/api/pull/1";
   const id = terminalJob(env, { prUrl });
   rmSync(checkout, { recursive: true, force: true });

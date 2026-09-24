@@ -43,7 +43,7 @@ function tty(answer) {
 // Host whose embedding step is offered instead of being disabled by the environment.
 function makeEmbeddingHost(t, name) {
   const host = makeHostEnv(t, name);
-  delete host.env.NIGHTSHIFT_EMBED_DISABLED;
+  delete host.env.NIGHTQUEUE_EMBED_DISABLED;
   return host;
 }
 
@@ -79,7 +79,7 @@ test("init outside a repository installs the whole host and only skips the proje
   assert.ok(readSettingsFile(host.configDir).hooks.SessionStart.length, "the hooks were not merged into the host");
   assert.equal(out.some((line) => line.startsWith("no git repository in")), false, out.join("\n"));
   assert.ok(
-    out.includes('  1. cd into a repository and run `nightshift queue add "<task>"` - it offers to register the project on the spot. In Claude Code, plan as usual and say "queue this for tonight" or run /nightshift:queue.'),
+    out.includes('  1. cd into a repository and run `nightqueue queue add "<task>"` - it offers to register the project on the spot. In Claude Code, plan as usual and say "queue this for tonight" or run /nightqueue:queue.'),
     out.join("\n"),
   );
   assert.deepEqual(JSON.parse(readFileSync(join(host.home, "config.json"), "utf8")).projects, {});
@@ -115,7 +115,7 @@ test("--no-shortcuts writes the canonical shim alone, on setup and on init", asy
   const { ctx, out } = makeCtx(host.env);
 
   assert.equal(await run(["setup", "--no-path", "--no-embedding", "--no-shortcuts"], ctx), 0);
-  assert.equal(existsSync(host.shims.nightshift), true);
+  assert.equal(existsSync(host.shims.nightqueue), true);
   assert.equal(existsSync(host.shims.nshift), false);
   assert.equal(existsSync(host.shims.nsft), false);
   assert.ok(out.includes("shim shortcuts: skipped (--no-shortcuts)"), out.join("\n"));
@@ -123,7 +123,7 @@ test("--no-shortcuts writes the canonical shim alone, on setup and on init", asy
   const other = makeHostEnv(t, "init-no-shortcuts");
   const init = makeCtx(other.env, { cwd: makeDir(t, "init-no-shortcuts-cwd") });
   assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh", "--no-shortcuts"], init.ctx), 0);
-  assert.equal(existsSync(other.shims.nightshift), true);
+  assert.equal(existsSync(other.shims.nightqueue), true);
   assert.equal(existsSync(other.shims.nshift), false);
   assert.equal(existsSync(other.shims.nsft), false);
 });
@@ -134,7 +134,7 @@ test("--shortcuts together with --no-shortcuts is refused before anything is ins
 
   assert.equal(await run(["setup", "--shortcuts", "--no-shortcuts"], ctx), 1);
   assert.match(err.join("\n"), /`--shortcuts` and `--no-shortcuts` cannot be used together/);
-  assert.equal(existsSync(host.shims.nightshift), false);
+  assert.equal(existsSync(host.shims.nightqueue), false);
 });
 
 test("a setup over the shim of the previous command name removes it and says why", async (t) => {
@@ -146,10 +146,10 @@ test("a setup over the shim of the previous command name removes it and says why
   assert.equal(existsSync(host.legacyShim), false);
   assert.ok(out.includes(`legacy shim: removed (${host.legacyShim})`), out.join("\n"));
   assert.ok(
-    out.some((line) => line.includes("the `shift` command was renamed to `nightshift`")),
+    out.some((line) => line.includes("the `shift` command was renamed to `nightqueue`")),
     out.join("\n"),
   );
-  assert.equal(existsSync(host.shims.nightshift), true);
+  assert.equal(existsSync(host.shims.nightqueue), true);
 });
 
 test("a file of another tool under the previous command name is kept, never deleted", async (t) => {
@@ -160,7 +160,7 @@ test("a file of another tool under the previous command name is kept, never dele
 
   assert.equal(await run(["setup", "--no-path", "--no-embedding"], ctx), 0);
   assert.equal(readFileSync(host.legacyShim, "utf8"), foreign);
-  assert.ok(out.includes(`legacy shim: kept (${host.legacyShim} was not written by nightshift)`), out.join("\n"));
+  assert.ok(out.includes(`legacy shim: kept (${host.legacyShim} was not written by nightqueue)`), out.join("\n"));
 });
 
 test("the PATH step asks on a terminal, writes one marked line and never asks again once the directory is there", async (t) => {
@@ -238,7 +238,7 @@ test("--embedding installs the library into its own prefix and then downloads th
 
 test("a semantic recall that was turned down is recorded once, never asked again and still installable on demand", async (t) => {
   const host = makeEmbeddingHost(t, "install-embedding-declined");
-  const embedded = (env) => JSON.parse(readFileSync(join(env.NIGHTSHIFT_HOME, "config.json"), "utf8")).embedding;
+  const embedded = (env) => JSON.parse(readFileSync(join(env.NIGHTQUEUE_HOME, "config.json"), "utf8")).embedding;
 
   const declined = makeCtx(host.env);
   assert.equal(await run(["setup", "--no-path", "--no-embedding"], declined.ctx), 0);
@@ -264,11 +264,11 @@ test("update reinstalls the runtime, re-points a host left on another path and k
   const first = makeCtx(host.env);
   assert.equal(await run(["setup", "--no-path", "--no-embedding", "--no-shortcuts"], first.ctx), 0);
   writeLegacyShim(host);
-  writeFileSync(join(host.home, "nightshift.db"), "database bytes");
-  const before = ["config.json", "secrets.json", "nightshift.db"].map((file) => readFileSync(join(host.home, file), "utf8"));
+  writeFileSync(join(host.home, "nightqueue.db"), "database bytes");
+  const before = ["config.json", "secrets.json", "nightqueue.db"].map((file) => readFileSync(join(host.home, file), "utf8"));
 
   const stale = readSettingsFile(host.configDir);
-  stale.hooks.SessionStart[0].hooks[0].command = "node /old/checkout/bin/nightshift.mjs hook session-start";
+  stale.hooks.SessionStart[0].hooks[0].command = "node /old/checkout/bin/nightqueue.mjs hook session-start";
   writeFileSync(host.settingsPath, `${JSON.stringify(stale, null, 2)}\n`);
 
   const { ctx, out } = makeCtx(host.env);
@@ -276,7 +276,7 @@ test("update reinstalls the runtime, re-points a host left on another path and k
   const specs = specsInto(host, host.runtimeDir);
   assert.equal(specs.length, 2);
   assert.equal(specs[0].endsWith(".tgz"), true, "the setup installed from the registry instead of packing this package");
-  assert.equal(specs[1], "@maykonv/nightshift@latest", "update is the only command allowed to fall back to the registry");
+  assert.equal(specs[1], "nightqueue@latest", "update is the only command allowed to fall back to the registry");
   assert.equal(packedDirs(host).length, 1, "update packed this package instead of asking the registry");
   assert.equal(
     readSettingsFile(host.configDir).hooks.SessionStart[0].hooks[0].command,
@@ -286,7 +286,7 @@ test("update reinstalls the runtime, re-points a host left on another path and k
   for (const path of Object.values(host.shims)) assert.equal(existsSync(path), true, `update left ${path} behind`);
   assert.equal(existsSync(host.legacyShim), false, "update kept the shim of the previous command name");
   assert.deepEqual(
-    ["config.json", "secrets.json", "nightshift.db"].map((file) => readFileSync(join(host.home, file), "utf8")),
+    ["config.json", "secrets.json", "nightqueue.db"].map((file) => readFileSync(join(host.home, file), "utf8")),
     before,
   );
 });
@@ -297,7 +297,7 @@ test("update <version> asks the registry for that exact version and the runtime 
 
   const { ctx, out } = makeCtx(host.env);
   assert.equal(await run(["update", "0.2.0"], ctx), 0);
-  assert.equal(specsInto(host, host.runtimeDir).at(-1), "@maykonv/nightshift@0.2.0");
+  assert.equal(specsInto(host, host.runtimeDir).at(-1), "nightqueue@0.2.0");
   const installed = `${host.runtimeCurrent} -> ${resolvedRuntimeDir(host.env)}`;
   assert.ok(out.includes(`runtime: updated (v${VERSION} -> v0.2.0 at ${installed})`), out.join("\n"));
   assert.equal(basename(resolvedRuntimeDir(host.env)).startsWith("0.2.0-"), true, "the new version did not get a version directory of its own");
@@ -308,7 +308,7 @@ test("a version npm would read as another package or as a flag never reaches it"
   for (const argv of [["update", "evil@1.0.0"], ["update", "--force-real"], ["update", "0.2.0", "--from", host.home]]) {
     const { ctx, err } = makeCtx(host.env);
     assert.equal(await run(argv, ctx), 1, argv.join(" "));
-    assert.ok(err.some((line) => line.startsWith("nightshift: ")), err.join("\n"));
+    assert.ok(err.some((line) => line.startsWith("nightqueue: ")), err.join("\n"));
   }
   assert.deepEqual(host.npmCalls(), [], "a refused update still reached npm");
 });
@@ -356,8 +356,8 @@ test("a home whose runtime directory is missing installs it again on the next se
 
 test("--from a tarball installs it as it is, without packing anything", async (t) => {
   const host = makeHostEnv(t, "install-from-tarball");
-  const tarball = join(makeDir(t, "install-from-tarball-src"), `nightshift-${VERSION}.tgz`);
-  writeFileSync(tarball, `${JSON.stringify({ name: "nightshift", version: VERSION })}\n`);
+  const tarball = join(makeDir(t, "install-from-tarball-src"), `nightqueue-${VERSION}.tgz`);
+  writeFileSync(tarball, `${JSON.stringify({ name: "nightqueue", version: VERSION })}\n`);
   const { ctx } = makeCtx(host.env);
 
   assert.equal(await run(["setup", "--from", tarball, "--no-path", "--no-embedding"], ctx), 0);
@@ -392,10 +392,10 @@ test("no installation ever asks for a global prefix, and never for sudo", async 
 test("an update whose runtime npm could not reinstall exits 1 and prints the command to finish by hand", async (t) => {
   const host = makeHostEnv(t, "install-update-failed");
   assert.equal(await run(["setup", "--no-path", "--no-embedding"], makeCtx(host.env).ctx), 0);
-  host.env.NIGHTSHIFT_FAKE_NPM_EXIT = "1";
+  host.env.NIGHTQUEUE_FAKE_NPM_EXIT = "1";
   const { ctx, out, err } = makeCtx(host.env);
 
   assert.equal(await run(["update"], ctx), 1);
   assert.ok(out.some((line) => line.startsWith("runtime: failed")), out.join("\n"));
-  assert.ok(err.some((line) => line.includes("@maykonv/nightshift@latest")), err.join("\n"));
+  assert.ok(err.some((line) => line.includes("nightqueue@latest")), err.join("\n"));
 });

@@ -6,7 +6,7 @@ import { defaultContext, run } from "../../src/cli/index.mjs";
 import { marketplaceIsCurrent } from "../../src/host/plugin.mjs";
 import { makeHostEnv } from "../../test-support/host.mjs";
 
-// Marketplace entry of a third-party package that happens to share the "nightshift" name, with no local path at all.
+// Marketplace entry of a third-party package that happens to share the "nightqueue" name, with no local path at all.
 const ALIEN_ENTRY = {
   source: "https://github.com/someone-else/tool",
   installLocation: "https://github.com/someone-else/tool",
@@ -25,7 +25,7 @@ function writeAlienMarketplace(configDir) {
   const dir = join(configDir, "plugins");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "known_marketplaces.json");
-  writeFileSync(path, `${JSON.stringify({ nightshift: ALIEN_ENTRY }, null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify({ nightqueue: ALIEN_ENTRY }, null, 2)}\n`);
   return path;
 }
 
@@ -50,7 +50,7 @@ test("setup must fix a marketplace registered under our name but pointing elsewh
 
   // Correct behavior: once fixed, the known_marketplaces.json entry points at this package, not at the alien source.
   const after = JSON.parse(readFileSync(marketplacePath, "utf8"));
-  assert.equal(after.nightshift.source, host.runtimePackage);
+  assert.equal(after.nightqueue.source, host.runtimePackage);
 
   assert.equal(out.includes(`plugin marketplace: already present`), false, out.join("\n"));
 });

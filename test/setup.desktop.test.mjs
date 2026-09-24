@@ -14,7 +14,7 @@ const THIRD_PARTY = {
   theme: "dark",
   mcpServers: {
     other: { command: "other", args: ["--serve"] },
-    "nightshift-extra": { command: "node", args: ["/opt/extra.mjs"] },
+    "nightqueue-extra": { command: "node", args: ["/opt/extra.mjs"] },
   },
 };
 
@@ -56,9 +56,9 @@ test("setup registers the server in an installed Claude Desktop and leaves every
 
   assert.equal(await run(SETUP, ctx), 0);
   const config = readApp(host.env);
-  assert.deepEqual(config.mcpServers.nightshift, ownEntry(host));
+  assert.deepEqual(config.mcpServers.nightqueue, ownEntry(host));
   assert.deepEqual(config.mcpServers.other, THIRD_PARTY.mcpServers.other);
-  assert.deepEqual(config.mcpServers["nightshift-extra"], THIRD_PARTY.mcpServers["nightshift-extra"]);
+  assert.deepEqual(config.mcpServers["nightqueue-extra"], THIRD_PARTY.mcpServers["nightqueue-extra"]);
   assert.equal(config.globalShortcut, THIRD_PARTY.globalShortcut);
   assert.equal(config.theme, THIRD_PARTY.theme);
   assert.ok(out.includes("claude desktop mcp: created"), out.join("\n"));
@@ -121,8 +121,8 @@ test("--remove takes out our entry only, and leaves the server whose name merely
   const { ctx, out } = makeCtx(host.env);
   assert.equal(await run(["setup", "--remove"], ctx), 0);
   const config = readApp(host.env);
-  assert.equal(Object.hasOwn(config.mcpServers, "nightshift"), false);
-  assert.deepEqual(config.mcpServers["nightshift-extra"], THIRD_PARTY.mcpServers["nightshift-extra"]);
+  assert.equal(Object.hasOwn(config.mcpServers, "nightqueue"), false);
+  assert.deepEqual(config.mcpServers["nightqueue-extra"], THIRD_PARTY.mcpServers["nightqueue-extra"]);
   assert.deepEqual(config.mcpServers.other, THIRD_PARTY.mcpServers.other);
   assert.equal(config.globalShortcut, THIRD_PARTY.globalShortcut);
   assert.ok(out.includes("claude desktop mcp: removed"), out.join("\n"));
@@ -161,7 +161,7 @@ test("a configuration the setup creates is closed to group and others", async (t
 
 test("a runtime that could not be installed skips the step instead of pointing the app at nothing", async (t) => {
   const host = makeHostEnv(t, "desktop-no-runtime");
-  host.env.NIGHTSHIFT_FAKE_NPM_EXIT = "1";
+  host.env.NIGHTQUEUE_FAKE_NPM_EXIT = "1";
   const path = installApp(host.env);
   const { ctx, out } = makeCtx(host.env);
 
@@ -185,7 +185,7 @@ test("the diagnosis reads the three states of the registration and never fails o
   await run(["doctor", "--json"], doctorCtx(idle.env));
   const notRegistered = JSON.parse(report[0]).checks.find((entry) => entry.name === "claude desktop mcp");
   assert.equal(notRegistered.status, "warn");
-  assert.match(notRegistered.hint, /nightshift setup/);
+  assert.match(notRegistered.hint, /nightqueue setup/);
 
   const ready = makeHostEnv(t, "desktop-doctor-ok");
   installApp(ready.env);
@@ -203,7 +203,7 @@ test("a registration pointing at another runtime warns instead of failing the di
   await run(SETUP, makeCtx(host.env).ctx);
   writeFileSync(
     claudeDesktopConfigPath(host.env),
-    JSON.stringify({ mcpServers: { nightshift: { command: "node", args: [join("/old", "bin", "nightshift.mjs"), "mcp"] } } }),
+    JSON.stringify({ mcpServers: { nightqueue: { command: "node", args: [join("/old", "bin", "nightqueue.mjs"), "mcp"] } } }),
   );
 
   const report = [];

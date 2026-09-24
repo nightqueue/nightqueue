@@ -87,7 +87,7 @@ test("checkpointWal folds the log into the database and answers false instead of
   const env = makeQueue(t, "checkpoint");
   claimed(env);
   assert.equal(checkpointWal(env), true);
-  assert.equal(checkpointWal({ ...env, NIGHTSHIFT_HOME: "/dev/null/nowhere" }), false);
+  assert.equal(checkpointWal({ ...env, NIGHTQUEUE_HOME: "/dev/null/nowhere" }), false);
 });
 
 test("a finish that does not read back is reported and repaired by the single retry", (t) => {

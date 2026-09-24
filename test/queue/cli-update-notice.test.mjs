@@ -7,7 +7,7 @@ import { runtimePackageDir } from "../../src/config/paths.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const NOTICE = "nightshift 0.4.0 is available (installed 0.1.0) - run `nightshift update`";
+const NOTICE = "nightqueue 0.4.0 is available (installed 0.1.0) - run `nightqueue update`";
 
 // A fetch double that records every call and answers the registry with a newer version.
 function fakeFetch(calls, latest = "0.4.0") {
@@ -20,11 +20,11 @@ function fakeFetch(calls, latest = "0.4.0") {
 // A queue home whose update check is on, with a runtime that declares the installed version.
 function makeNoticeHome(t, name) {
   const env = makeHome(t, name);
-  delete env.NIGHTSHIFT_NO_UPDATE_CHECK;
+  delete env.NIGHTQUEUE_NO_UPDATE_CHECK;
   makeProject(t, env, "alpha");
   const dir = runtimePackageDir(env);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "package.json"), `${JSON.stringify({ name: "@maykonv/nightshift", version: "0.1.0" }, null, 2)}\n`);
+  writeFileSync(join(dir, "package.json"), `${JSON.stringify({ name: "nightqueue", version: "0.1.0" }, null, 2)}\n`);
   return env;
 }
 
@@ -62,7 +62,7 @@ test("queue status closes its text output with the update notice, once per invoc
   assert.equal(calls.length, 1, "the cached check asked the registry a second time");
 
   const empty = await runCli(makeNoticeHome(t, "notice-status-empty"), ["queue", "status"], calls);
-  assert.deepEqual(empty.out, ["0 runners online - pending jobs will wait until `nightshift queue run` starts one", "no jobs in the queue", NOTICE]);
+  assert.deepEqual(empty.out, ["0 runners online - pending jobs will wait until `nightqueue queue run` starts one", "no jobs in the queue", NOTICE]);
 });
 
 test("queue status --json never carries the notice, on any of its branches", async (t) => {
@@ -89,10 +89,10 @@ test("a home with the check off, or a session inside a job, gets the plain outpu
   addJob({ project: "alpha", prompt: "fix the worker" }, env);
   const calls = [];
 
-  const off = await runCli({ ...env, NIGHTSHIFT_NO_UPDATE_CHECK: "1" }, ["queue", "status"], calls);
+  const off = await runCli({ ...env, NIGHTQUEUE_NO_UPDATE_CHECK: "1" }, ["queue", "status"], calls);
   assert.equal(off.out.join("\n").includes("is available"), false, off.out.join("\n"));
 
-  const inJob = await runCli({ ...env, NIGHTSHIFT_JOB_ID: "7" }, ["queue", "status"], calls);
+  const inJob = await runCli({ ...env, NIGHTQUEUE_JOB_ID: "7" }, ["queue", "status"], calls);
   assert.equal(inJob.out.join("\n").includes("is available"), false, inJob.out.join("\n"));
   assert.deepEqual(calls, [], "a silenced notice still reached the registry");
 });

@@ -9,10 +9,10 @@
 // succeeds and wipes `close_status`/`close_worker`. Only then does A call `recordCloseStep` with
 // the merge it already produced.
 //
-// From the operator's point of view: the PR really is merged on GitHub, but the row nightshift
+// From the operator's point of view: the PR really is merged on GitHub, but the row nightqueue
 // can show is `cancelled`, its `close` column never records the merge - a real, already-happened
 // external state (merged) is invisible on `queue status`. That is the break: not "cancel fails",
-// but "a done job vanishes from the merged-checklist record after nightshift itself already saw
+// but "a done job vanishes from the merged-checklist record after nightqueue itself already saw
 // the merge succeed".
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -55,7 +55,7 @@ test("a merge A already produced is not silently lost when cancel races a dying 
   assert.equal(recorded, true, "A is still the recorded closer, so its merge is recorded");
 
   // The break: the merge that genuinely happened on GitHub must still be visible on the job
-  // nightshift can show - it must not silently vanish because the persist lost a race with cancel.
+  // nightqueue can show - it must not silently vanish because the persist lost a race with cancel.
   const finalRow = getJob(id, env);
   const finalClose = JSON.parse(finalRow.close ?? "{}");
   assert.equal(

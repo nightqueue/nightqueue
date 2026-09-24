@@ -13,7 +13,7 @@ const LOGIN_RE = /\blogged in to \S+ (?:account|as) ([A-Za-z0-9][A-Za-z0-9-]*)/i
 
 // Path of the GitHub CLI, the resolver every call of this module goes through.
 export function ghBin(env = process.env) {
-  const raw = typeof env?.NIGHTSHIFT_GH_BIN === "string" ? env.NIGHTSHIFT_GH_BIN.trim() : "";
+  const raw = typeof env?.NIGHTQUEUE_GH_BIN === "string" ? env.NIGHTQUEUE_GH_BIN.trim() : "";
   return raw || "gh";
 }
 

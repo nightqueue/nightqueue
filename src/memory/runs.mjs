@@ -231,8 +231,8 @@ export function logPipelineRun(
     run.outcome,
     run.gateStop,
     optionalSeconds(durationS),
-    optionalText(env?.NIGHTSHIFT_MODEL),
-    optionalText(env?.NIGHTSHIFT_SESSION_ID),
+    optionalText(env?.NIGHTQUEUE_MODEL),
+    optionalText(env?.NIGHTQUEUE_SESSION_ID),
   ];
   const db = openDb(env);
   const write = { db, run, projectName, values };

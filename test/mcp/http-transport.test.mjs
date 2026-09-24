@@ -10,7 +10,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const TEST_TOKEN = "s3cret-token";
 
 const LESSON = {
@@ -21,16 +21,16 @@ const LESSON = {
   attempts: 2,
 };
 
-// Connects a real stdio client to `nightshift mcp`, closed at the end of the test.
+// Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connectStdio(t, env) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;
 }
 
-// Spawns `nightshift mcp --http` on an ephemeral port and resolves what it printed once it is listening.
+// Spawns `nightqueue mcp --http` on an ephemeral port and resolves what it printed once it is listening.
 function startHttp(t, env, { token = TEST_TOKEN, port = "0", withToken = true } = {}) {
   const args = [CLI, "mcp", "--http", "--port", port, ...(withToken ? ["--token", token] : [])];
   const child = spawn(process.execPath, args, { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -57,7 +57,7 @@ async function connectHttp(t, url, token) {
   const transport = new StreamableHTTPClientTransport(new URL(url), {
     requestInit: { headers: { authorization: `Bearer ${token}` } },
   });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
   return client;

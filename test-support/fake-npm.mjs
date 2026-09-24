@@ -6,7 +6,7 @@ const args = process.argv.slice(2);
 
 // Records the call in the argv log the test reads back.
 function logCall() {
-  const path = process.env.NIGHTSHIFT_FAKE_NPM_LOG;
+  const path = process.env.NIGHTQUEUE_FAKE_NPM_LOG;
   if (!path) return;
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `${JSON.stringify(args)}\n`);
@@ -20,8 +20,8 @@ function fail(message, code = 1) {
 
 // Checkout this fake copies the package metadata from; without it the fake refuses to run.
 function sourceRoot() {
-  const dir = process.env.NIGHTSHIFT_FAKE_NPM_SOURCE;
-  if (!dir) fail("NIGHTSHIFT_FAKE_NPM_SOURCE is not set; refusing to install anything", 2);
+  const dir = process.env.NIGHTQUEUE_FAKE_NPM_SOURCE;
+  if (!dir) fail("NIGHTQUEUE_FAKE_NPM_SOURCE is not set; refusing to install anything", 2);
   return dir;
 }
 
@@ -93,16 +93,16 @@ function packageNameAt(dir) {
 }
 
 // Materializes the package inside the prefix, nesting the scope the way npm does, with a bin that runs the CLI of the source checkout.
-function installNightshift(prefix, version) {
+function installNightqueue(prefix, version) {
   const source = sourceRoot();
   const name = packageNameAt(source);
   const dir = join(prefix, "node_modules", ...name.split("/"));
   writeJson(join(dir, "package.json"), {
     name,
     version,
-    bin: { nightshift: "./bin/nightshift.mjs" },
+    bin: { nightqueue: "./bin/nightqueue.mjs" },
   });
-  const entry = join(dir, "bin", "nightshift.mjs");
+  const entry = join(dir, "bin", "nightqueue.mjs");
   mkdirSync(dirname(entry), { recursive: true });
   writeFileSync(
     entry,
@@ -124,7 +124,7 @@ function runInstall(rest) {
   if (!prefix || !spec) return fail(`unsupported install call \`${rest.join(" ")}\``);
   const version = versionOf(spec);
   if (spec.includes("@huggingface/transformers")) return installEmbedding(prefix, version);
-  return installNightshift(prefix, version);
+  return installNightqueue(prefix, version);
 }
 
 // Tarball name npm writes for one package: the scope flattened into the file name, never a directory of its own.
@@ -149,13 +149,13 @@ function runPack(rest) {
 function runView(rest) {
   const spec = operands(rest, [])[0] ?? null;
   if (!spec) return fail(`unsupported view call \`${rest.join(" ")}\``);
-  const version = process.env.NIGHTSHIFT_FAKE_NPM_LATEST || versionOf(spec);
+  const version = process.env.NIGHTQUEUE_FAKE_NPM_LATEST || versionOf(spec);
   process.stdout.write(`${JSON.stringify(version)}\n`);
 }
 
 // Emulates `npm audit --json`, which prints a valid report even when it exits 1.
 function runAudit() {
-  const total = Number.parseInt(process.env.NIGHTSHIFT_FAKE_NPM_AUDIT ?? "0", 10) || 0;
+  const total = Number.parseInt(process.env.NIGHTQUEUE_FAKE_NPM_AUDIT ?? "0", 10) || 0;
   const vulnerabilities = { info: 0, low: 0, moderate: total, high: 0, critical: 0, total };
   process.stdout.write(`${JSON.stringify({ metadata: { vulnerabilities } })}\n`);
   if (total > 0) process.exit(1);
@@ -164,8 +164,8 @@ function runAudit() {
 // Applies the call, emulating only the subcommands the installation uses.
 function main() {
   logCall();
-  const exitCode = Number.parseInt(process.env.NIGHTSHIFT_FAKE_NPM_EXIT ?? "0", 10) || 0;
-  if (exitCode) fail(`refusing to run (NIGHTSHIFT_FAKE_NPM_EXIT=${exitCode})`, exitCode);
+  const exitCode = Number.parseInt(process.env.NIGHTQUEUE_FAKE_NPM_EXIT ?? "0", 10) || 0;
+  if (exitCode) fail(`refusing to run (NIGHTQUEUE_FAKE_NPM_EXIT=${exitCode})`, exitCode);
   const [command, ...rest] = args;
   if (command === "--version" || command === "-v") return process.stdout.write("10.9.0\n");
   if (command === "install") return runInstall(rest);

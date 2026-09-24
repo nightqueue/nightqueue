@@ -10,8 +10,8 @@ const RUN_LOCK = { timeoutMs: 5000, staleAfterMs: 15000 };
 // The only two outcomes the pipeline may record in `state.json`; how the process ended stays the runtime's call.
 export const RUN_OUTCOME_STATUSES = ["done", "gate"];
 
-// Where the pull request template of a run came from: the repository's own, or nightshift's fallback.
-const PR_TEMPLATE_SOURCES = ["repo", "nightshift"];
+// Where the pull request template of a run came from: the repository's own, or nightqueue's fallback.
+const PR_TEMPLATE_SOURCES = ["repo", "nightqueue"];
 
 // The only sub-phase of the pipeline with a record of its own: a top-level marker, never an entry of `phases`.
 const QA_STAGE_A = "qaStageA";

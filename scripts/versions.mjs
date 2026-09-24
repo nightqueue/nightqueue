@@ -1,5 +1,5 @@
 const CHANGELOG_ENTRY = /^## (\d+\.\d+\.\d+) - \d{4}-\d{2}-\d{2}$/m;
-const LICENSE_PARAMETER = /^Licensed Work:\s+nightshift (\S+)\s*$/m;
+const LICENSE_PARAMETER = /^Licensed Work:\s+nightqueue (\S+)\s*$/m;
 
 export const CHANGELOG_FORMAT = "## <version> - YYYY-MM-DD";
 export const PLUGIN_FORMAT = '"version": "<version>" in plugin/.claude-plugin/plugin.json';
@@ -13,7 +13,7 @@ export function pluginVersion(text) {
     return null;
   }
 }
-export const LICENSE_FORMAT = "Licensed Work:        nightshift <version>";
+export const LICENSE_FORMAT = "Licensed Work:        nightqueue <version>";
 
 // Version of the top entry of the changelog, or null when no heading has the required shape.
 export function changelogVersion(text) {

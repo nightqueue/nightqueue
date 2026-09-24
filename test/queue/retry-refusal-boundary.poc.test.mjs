@@ -50,7 +50,7 @@ test("a notice of 501 code points is cut at exactly 500, with the exact pointer 
   const message = refusalMessage(id, env);
   const expected = [
     `${"a".repeat(500)}...`,
-    `Read the whole notice with: nightshift queue status ${id}.`,
+    `Read the whole notice with: nightqueue queue status ${id}.`,
     'This job is waiting for a decision. Re-run with --note "<your answer>".',
   ].join("\n");
   assert.equal(message, expected);
@@ -79,7 +79,7 @@ test("a 500-code-point astral notice is quoted whole, and a 501-code-point one i
   const overMessage = refusalMessage(idOver, env);
   const expectedOver = [
     `${emoji.repeat(500)}...`,
-    `Read the whole notice with: nightshift queue status ${idOver}.`,
+    `Read the whole notice with: nightqueue queue status ${idOver}.`,
     'This job is waiting for a decision. Re-run with --note "<your answer>".',
   ].join("\n");
   assert.equal(overMessage, expectedOver);

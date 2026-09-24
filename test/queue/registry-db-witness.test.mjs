@@ -9,7 +9,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { findRunnerRecord, runnerView, stampRunnerDbWitness, writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const WITNESS_TIMEOUT_MS = 15000;
 
 // Identity of the shared-memory file of the home, in the decimal strings the witness carries.

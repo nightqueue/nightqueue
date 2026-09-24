@@ -32,7 +32,7 @@ function jobWithWorktree(home, { slug, status, prUrl = null, dirty = false }) {
   return { id, ...worktree };
 }
 
-// Runs `nightshift queue close ...` in this process over a merged pull request, capturing stdout and stderr.
+// Runs `nightqueue queue close ...` in this process over a merged pull request, capturing stdout and stderr.
 async function runQueueClose(env, argv, { prStates } = {}) {
   const out = [];
   const err = [];
@@ -91,7 +91,7 @@ test("queue close --merged removes the worktree of the job it closes and reports
   const home = makeCloseHome(t, "close-wt-merged");
   const merged = jobWithWorktree(home, { slug: "merged-run", status: "done", prUrl: MERGED_PR });
   const prStates = createPrStateCache({ viewImpl: async () => ({ ok: true, state: "MERGED", mergedAt: "2026-09-11T15:54:01Z" }) });
-  await prStates.refresh([MERGED_PR], { ...home.env, NIGHTSHIFT_NO_PR_CHECK: undefined });
+  await prStates.refresh([MERGED_PR], { ...home.env, NIGHTQUEUE_NO_PR_CHECK: undefined });
 
   const text = await runQueueClose(home.env, ["queue", "close", "--merged"], { prStates });
   assert.equal(text.code, 0, text.err.join("\n"));

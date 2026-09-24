@@ -42,10 +42,10 @@ function writeRealGitClaude(t, { holdMs = 300 } = {}) {
     "function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }",
     "",
     "async function main() {",
-    '  const jobId = process.env.NIGHTSHIFT_JOB_ID ?? "unknown";',
+    '  const jobId = process.env.NIGHTQUEUE_JOB_ID ?? "unknown";',
     `  const logPath = ${JSON.stringify(logPath)};`,
     `  const worktreeRoot = ${JSON.stringify(worktreeRoot)};`,
-    "  const branch = `nightshift/job-${jobId}`;",
+    "  const branch = `nightqueue/job-${jobId}`;",
     "  const dir = join(worktreeRoot, `worktree-${jobId}`);",
     "  const start = Date.now();",
     "  let result;",
@@ -182,7 +182,7 @@ test("two jobs of the SAME project never overlap inside ONE runner, and do acros
   const serialEnv = makeHome(t, "parallel-same-project-one-runner");
   makeRealGitProject(t, serialEnv, "alpha");
   const serial = writeRealGitClaude(t);
-  serialEnv.NIGHTSHIFT_CLAUDE_BIN = serial.bin;
+  serialEnv.NIGHTQUEUE_CLAUDE_BIN = serial.bin;
   const serialIds = [
     addJob({ project: "alpha", prompt: "fix the worker", priority: 1, timeoutS: 120 }, serialEnv).id,
     addJob({ project: "alpha", prompt: "fix the parser", priority: 2, timeoutS: 120 }, serialEnv).id,
@@ -192,7 +192,7 @@ test("two jobs of the SAME project never overlap inside ONE runner, and do acros
   const parallelEnv = makeHome(t, "parallel-same-project-two-runners");
   makeRealGitProject(t, parallelEnv, "alpha");
   const parallel = writeRealGitClaude(t, { holdMs: CROSS_PROCESS_HOLD_MS });
-  parallelEnv.NIGHTSHIFT_CLAUDE_BIN = parallel.bin;
+  parallelEnv.NIGHTQUEUE_CLAUDE_BIN = parallel.bin;
   const parallelIds = [
     addJob({ project: "alpha", prompt: "fix the worker", timeoutS: 120 }, parallelEnv).id,
     addJob({ project: "alpha", prompt: "fix the parser", timeoutS: 120 }, parallelEnv).id,
@@ -205,7 +205,7 @@ test("a job of ANOTHER project never runs beside another inside ONE runner, and 
   makeRealGitProject(t, serialEnv, "alpha");
   makeRealGitProject(t, serialEnv, "beta");
   const serial = writeRealGitClaude(t);
-  serialEnv.NIGHTSHIFT_CLAUDE_BIN = serial.bin;
+  serialEnv.NIGHTQUEUE_CLAUDE_BIN = serial.bin;
   saveConfig({ ...loadConfig(serialEnv, { warn: () => {} }), queue: { maxConcurrent: 3 } }, serialEnv);
   const serialIds = [
     addJob({ project: "alpha", prompt: "fix the worker", priority: 1, timeoutS: 120 }, serialEnv).id,
@@ -217,7 +217,7 @@ test("a job of ANOTHER project never runs beside another inside ONE runner, and 
   makeRealGitProject(t, parallelEnv, "alpha");
   makeRealGitProject(t, parallelEnv, "beta");
   const parallel = writeRealGitClaude(t, { holdMs: CROSS_PROCESS_HOLD_MS });
-  parallelEnv.NIGHTSHIFT_CLAUDE_BIN = parallel.bin;
+  parallelEnv.NIGHTQUEUE_CLAUDE_BIN = parallel.bin;
   const parallelIds = [
     addJob({ project: "alpha", prompt: "fix the worker", timeoutS: 120 }, parallelEnv).id,
     addJob({ project: "beta", prompt: "fix the linter", timeoutS: 120 }, parallelEnv).id,
@@ -229,10 +229,10 @@ test("a same-project job whose canonical checkout another job dirtied is blocked
   const env = makeHome(t, "parallel-dirty-checkout");
   const project = makeRealGitProject(t, env, "alpha");
   const { bin } = writeRealGitClaude(t);
-  env.NIGHTSHIFT_CLAUDE_BIN = bin;
+  env.NIGHTQUEUE_CLAUDE_BIN = bin;
   // What a project that does NOT ignore the pipeline's worktree directory looks like while a first job runs:
   // the worktree of that job sits inside the canonical checkout the next job would branch from.
-  execFileSync("git", ["-C", project, "worktree", "add", "-b", "nightshift/job-in-flight", join(project, "worktree-in-flight")], { stdio: "ignore" });
+  execFileSync("git", ["-C", project, "worktree", "add", "-b", "nightqueue/job-in-flight", join(project, "worktree-in-flight")], { stdio: "ignore" });
   const id = addJob({ project: "alpha", prompt: "fix the parser", timeoutS: 120 }, env).id;
 
   const cycle = await runCycle({ jobId: id, env });

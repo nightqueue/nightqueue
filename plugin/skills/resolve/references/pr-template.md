@@ -1,6 +1,6 @@
 # Pull request template
 
-Standard for the pull request that `/nightshift:resolve` opens at the end of Phase 7.
+Standard for the pull request that `/nightqueue:resolve` opens at the end of Phase 7.
 The title and the body are filled with the artifacts of the run that is closing.
 Nothing is invented.
 
@@ -10,7 +10,7 @@ and in the report of Phase 8.
 
 ## Which template applies
 
-The repository's own template comes first; nightshift's is only the fallback. The
+The repository's own template comes first; nightqueue's is only the fallback. The
 runtime looks for it at the root of the run's checkout, in this order, and the first
 match wins:
 
@@ -26,9 +26,9 @@ and HTML comments. A pull request section is a heading whose text carries the wo
 first fenced block of that section whose info string is empty, `markdown` or `md` and
 that carries at least one heading — its headings are the template. A section with no such
 block is no template, and the search moves to the next candidate. No candidate matched:
-the nightshift template below applies.
+the nightqueue template below applies.
 
-Run `nightshift run pr --template` first; the `TEMPLATE:`/`HEADINGS:` lines it prints
+Run `nightqueue run pr --template` first; the `TEMPLATE:`/`HEADINGS:` lines it prints
 (also recorded as `prTemplate` in `state.json`) decide which template you write. Never
 decide it yourself.
 
@@ -36,7 +36,7 @@ decide it yourself.
 
 - Write every heading of it, in its order, each filled with this run's facts.
 - Never add `## Report`, `## Cause`, `## QA` (or `## Changes`) unless that heading is
-  the repository's own: `nightshift run pr` rejects a nightshift heading the repository
+  the repository's own: `nightqueue run pr` rejects a nightqueue heading the repository
   template does not have.
 - The repository template's own test section is written in its own format; no evidence
   check applies to it.
@@ -48,7 +48,7 @@ One line, the subject of the commit created in Phase 7:
 name of an agent, a model or a vendor. The scope is optional and follows the commit
 convention detected in step 1 of Phase 7.
 
-## The nightshift template (fallback)
+## The nightqueue template (fallback)
 
 Four sections, mandatory, in this order:
 
@@ -72,7 +72,7 @@ The fence delimits the MODEL in this document; the real body is emitted without 
 | Automated | `<command>` | PASSED |
 Not tested: <what was left out and the risk>
 
-Opened by nightshift · run <slug>
+Opened by nightqueue · run <slug>
 ```
 
 The `## QA` table starts with exactly the header `| Method | Executed | Result |` and
@@ -93,7 +93,7 @@ Every row of the `## QA` table is backed by a non-empty file under
 | Android / iOS emulator or device | `emulator` | the screenshot or the log of the build or OTA exercised in Phase 6.5 |
 
 Extensions: `.log`, `.md`, `.txt`, `.png`, `.jpg`. A method with no evidence file has no
-row — never a row without a file. `nightshift run pr` answers
+row — never a row without a file. `nightqueue run pr` answers
 `MISSING: evidence for QA row <method>` for a row whose file is absent or empty.
 
 ## Where each section comes from
@@ -111,8 +111,8 @@ report, where the operator decides whether it deserves a ticket.
 ## The closing line
 
 One line, not a section, as the last line of the body:
-`Opened by nightshift · run <slug>`, with `<slug>` taken from `state.json`. When the
-environment variable `NIGHTSHIFT_JOB_ID` is set (an unattended run out of the queue),
+`Opened by nightqueue · run <slug>`, with `<slug>` taken from `state.json`. When the
+environment variable `NIGHTQUEUE_JOB_ID` is set (an unattended run out of the queue),
 the line ends with ` · job <id>` — the number bare, never `#<id>`. Without the
 variable the suffix does not exist.
 
@@ -126,17 +126,17 @@ variable the suffix does not exist.
 
 - **A bare `#<number>` anywhere.** GitHub reads it as a reference to an issue or a
   pull request OF THIS REPOSITORY: it opens a cross-reference in an unrelated thread
-  and notifies it. A queue job id, a decision number or any nightshift-internal number
+  and notifies it. A queue job id, a decision number or any nightqueue-internal number
   is written without the `#` (`job 24`, `decision 1`) or inside a code span
   (`` `#24` ``). The only `#<number>` allowed is a real reference to an issue of this
   repository in the `Fixes`/`Closes` line.
-- In the nightshift template, a fifth `## ` section: the four above are the whole body.
+- In the nightqueue template, a fifth `## ` section: the four above are the whole body.
   A repository template has no such limit.
 - A QA row marked `N/A`: a method that did not run has no row.
 - The execution record of the run: phases, models, statuses, durations, `Lessons
   saved`, `Tier`, `Slug` as a field. It belongs to the telemetry of Phase 8, not here.
 - The name of an agent, a model or a vendor. To identify the automation, use the
-  nickname `nightshift`.
+  nickname `nightqueue`.
 - A `Co-Authored-By` trailer.
 - Any placeholder in double curly braces, and any `<...>` example left over from the
   model above.
@@ -149,15 +149,15 @@ The body fits on one screen — past that it stops being read. `## Changes` at m
 bullets of one line; the `## QA` table one row per method. Write it already fitting; do
 not write long expecting someone to cut it.
 
-## Before `nightshift run pr`
+## Before `nightqueue run pr`
 
 Read the assembled body — the file the command reads, not this document — and confirm,
 item by item:
 
-1. The template is the one `nightshift run pr --template` printed.
-2. Repository template: every heading of it present, in its order, and no nightshift
+1. The template is the one `nightqueue run pr --template` printed.
+2. Repository template: every heading of it present, in its order, and no nightqueue
    heading it does not have.
-3. Nightshift template: `## Report`, `## Cause`, `## Changes`, `## QA` present, in this
+3. Nightqueue template: `## Report`, `## Cause`, `## Changes`, `## QA` present, in this
    order, and no fifth `## `; the `## QA` table with the exact header, at least one row,
    no `N/A` row, and the `Not tested:` line after it; every row backed by its file under
    `<RUN_DIR>/evidence/`.

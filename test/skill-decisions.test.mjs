@@ -12,10 +12,10 @@ const SERVER = read("src/mcp/tools.mjs");
 const REFLECT_FILES = ["src/hooks/reflect.mjs", "src/hooks/reflect-worker.mjs", "src/cli/reflect.mjs", "src/memory/dedup.mjs"];
 
 test("the Phase 0 preflight pings only lesson_recall and takes the decisions from the session block", () => {
-  assert.ok(SKILL.includes("Call `lesson_recall` (MCP\n   `nightshift`) ONCE, with `project` = the current project"), SKILL);
-  assert.ok(SKILL.includes("`nightshift memory unavailable: run nightshift setup and retry`"), SKILL);
+  assert.ok(SKILL.includes("Call `lesson_recall` (MCP\n   `nightqueue`) ONCE, with `project` = the current project"), SKILL);
+  assert.ok(SKILL.includes("`nightqueue memory unavailable: run nightqueue setup and retry`"), SKILL);
   assert.ok(
-    SKILL.includes("the `## Standing decisions`\n     section of the `# Nightshift context` block injected at the start of the session carries\n     them"),
+    SKILL.includes("the `## Standing decisions`\n     section of the `# Nightqueue context` block injected at the start of the session carries\n     them"),
     "step 0.1 does not say where the standing decisions already are",
   );
   assert.ok(SKILL.includes("them: EVERY accepted title of the project and of its org, org rows first"), SKILL);
@@ -45,7 +45,7 @@ test("the Brief carries every accepted title plus the 8 closest decisions in ful
   assert.equal(SKILL.includes("Take at most 5"), false, "the Brief still caps the standing decisions at five");
   assert.ok(SKILL.includes('ONE `decision_list` with `status: "accepted"` gives the titles.'), SKILL);
   assert.ok(
-    SKILL.includes("The source is the `## Standing decisions`\n   section of the `# Nightshift context` block you already received"),
+    SKILL.includes("The source is the `## Standing decisions`\n   section of the `# Nightqueue context` block you already received"),
     "the Brief paragraph does not name the session block as the source",
   );
   assert.ok(SKILL.includes("`query` = the `**Affected area:**` plus the `**Objective:**` of the Brief."), SKILL);
@@ -75,7 +75,7 @@ test("the architect prompt receives standing decisions as binding constraints, n
 });
 
 test("a proposed decision is saved right after the Phase 3 gate, fail-open, and only when the block exists", () => {
-  assert.ok(SKILL.includes("if\n`03-plan.md` contains a `## Proposed decision` block, call `decision_save` (MCP `nightshift`)"), SKILL);
+  assert.ok(SKILL.includes("if\n`03-plan.md` contains a `## Proposed decision` block, call `decision_save` (MCP `nightqueue`)"), SKILL);
   assert.ok(SKILL.includes('`status: "proposed"`'), SKILL);
   assert.ok(SKILL.includes("A failed `decision_save` NEVER blocks the run —"), SKILL);
   assert.ok(
@@ -123,7 +123,7 @@ test("the architect's Proposed decision block may name the standing decisions it
 
 test("the architect may read decisions but never writes one", () => {
   const [, frontmatter] = ARCHITECT.split("---");
-  assert.ok(frontmatter.includes("mcp__nightshift__decision_recall"), frontmatter);
+  assert.ok(frontmatter.includes("mcp__nightqueue__decision_recall"), frontmatter);
   assert.equal(frontmatter.includes("decision_save"), false, "the architect must not be granted `decision_save`");
   assert.ok(ARCHITECT.includes("**Standing decisions are binding.**"), ARCHITECT);
   assert.ok(ARCHITECT.includes("naming the decision's number"), ARCHITECT);

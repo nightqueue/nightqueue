@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { runAgentForeground } from "../../src/hooks/agent-foreground.mjs";
 
-const ENV = { NIGHTSHIFT_JOB_ID: "7" };
+const ENV = { NIGHTQUEUE_JOB_ID: "7" };
 const REASON = "the unattended run keeps subagents in the foreground so the CLI never kills one at its wait ceiling";
 
 // Event JSON the host sends for a PreToolUse call of the orchestrator's main thread, with the given tool and its input.
@@ -101,7 +101,7 @@ const DENY_TABLE = [
   ["rg x $HOME", "rg"],
   ["ls -R /", "ls -R"],
   [
-    'find ~/nightshift/.claude/worktrees/feat+decisions-adr-log -path "*agents/explore.md" 2>/dev/null; find / -path "*plugin/agents/explore.md" 2>/dev/null | head -5',
+    'find ~/nightqueue/.claude/worktrees/feat+decisions-adr-log -path "*agents/explore.md" 2>/dev/null; find / -path "*plugin/agents/explore.md" 2>/dev/null | head -5',
     "find /",
   ],
 ];
@@ -117,7 +117,7 @@ for (const [command, ruleName] of DENY_TABLE) {
 }
 
 const PASS_TABLE = [
-  'find ~/nightshift/.claude/worktrees/feat+bash-foreground-root-scan-deny -path "*agents/explore.md"',
+  'find ~/nightqueue/.claude/worktrees/feat+bash-foreground-root-scan-deny -path "*agents/explore.md"',
   "find . -name x",
   "grep -r foo src/",
   "ls -R plugin",
@@ -183,10 +183,10 @@ function jobFixture(t) {
   writeFileSync(join(runDir, "03-plan.md"), "## Plan\n");
   writeFileSync(join(worktree, "src", "app.mjs"), "export {};\n");
   const env = {
-    NIGHTSHIFT_JOB_ID: "7",
-    NIGHTSHIFT_HOME: home,
-    NIGHTSHIFT_JOB_HOME: home,
-    NIGHTSHIFT_PLUGIN_DIR: plugin,
+    NIGHTQUEUE_JOB_ID: "7",
+    NIGHTQUEUE_HOME: home,
+    NIGHTQUEUE_JOB_HOME: home,
+    NIGHTQUEUE_PLUGIN_DIR: plugin,
     HOME: base,
     CLAUDE_CONFIG_DIR: join(base, "claude-config"),
   };
@@ -263,11 +263,11 @@ test("a subagent's read of the worktree is never scoped: the payload carries age
 
 test("a session outside a job is never scoped, the same orchestrator payload answering nothing", (t) => {
   const { env, worktree } = jobFixture(t);
-  const { NIGHTSHIFT_JOB_ID, ...interactive } = env;
-  assert.equal(NIGHTSHIFT_JOB_ID, "7");
+  const { NIGHTQUEUE_JOB_ID, ...interactive } = env;
+  assert.equal(NIGHTQUEUE_JOB_ID, "7");
   assert.equal(runAgentForeground({ input: mainCall("Read", { file_path: join(worktree, "src", "app.mjs") }, worktree), env: interactive }), "");
   assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "git log -5" }, worktree), env: interactive }), "");
-  assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "git log" }, worktree), env: { ...env, NIGHTSHIFT_JOB_ID: "  " } }), "");
+  assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "git log" }, worktree), env: { ...env, NIGHTQUEUE_JOB_ID: "  " } }), "");
 });
 
 test("the orchestrator's Bash outside the closed list is denied with the list and the way out", (t) => {
@@ -286,14 +286,14 @@ test("the orchestrator's Bash outside the closed list is denied with the list an
   for (const command of commands) {
     const reason = denyReasonOf(runAgentForeground({ input: mainCall("Bash", { command }, worktree), env }));
     assert.ok(reason.startsWith(ORCHESTRATOR_REDIRECT), reason);
-    assert.match(reason, /closed command list \(git rev-parse, .*nightshift run check\|log\|index-save\|commit\|pr\), each as the bare program name/);
+    assert.match(reason, /closed command list \(git rev-parse, .*nightqueue run check\|log\|index-save\|commit\|pr\), each as the bare program name/);
     assert.match(reason, /or use `git diff --stat`$/);
   }
 });
 
 test("the orchestrator's allowed Bash keeps today's answers: nothing, or the foreground rewrite", (t) => {
   const { env, worktree } = jobFixture(t);
-  assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "nightshift run check 04" }, worktree), env }), "");
+  assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "nightqueue run check 04" }, worktree), env }), "");
   assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "git diff --stat" }, worktree), env }), "");
   const answer = runAgentForeground({ input: mainCall("Bash", { command: "git status --short", run_in_background: true }, worktree), env });
   assert.deepEqual(JSON.parse(answer), {
@@ -343,10 +343,10 @@ const OPERATOR_BASH_REASON = "the operator does not run this command";
 // The operator's env of the same fixture: no job id, the operator mode, and the home its runs live in.
 function operatorFixture(t) {
   const { env, ...fixture } = jobFixture(t);
-  const { NIGHTSHIFT_JOB_ID, NIGHTSHIFT_JOB_HOME, ...rest } = env;
-  assert.equal(NIGHTSHIFT_JOB_ID, "7");
-  assert.equal(NIGHTSHIFT_JOB_HOME, env.NIGHTSHIFT_HOME);
-  return { ...fixture, env: { ...rest, NIGHTSHIFT_MODE: "operator" } };
+  const { NIGHTQUEUE_JOB_ID, NIGHTQUEUE_JOB_HOME, ...rest } = env;
+  assert.equal(NIGHTQUEUE_JOB_ID, "7");
+  assert.equal(NIGHTQUEUE_JOB_HOME, env.NIGHTQUEUE_HOME);
+  return { ...fixture, env: { ...rest, NIGHTQUEUE_MODE: "operator" } };
 }
 
 test("the operator reads its run's handoff files and the plugin, never the repository", (t) => {
@@ -366,7 +366,7 @@ test("the operator reads its run's handoff files and the plugin, never the repos
 
 test("the operator's Bash outside its closed list is denied with the operator's reason, and its own list passes untouched", (t) => {
   const { env, worktree } = operatorFixture(t);
-  for (const command of ["git commit -m x", "git push", "git fetch origin", "nightshift run commit", "gh pr create", "git worktree add /tmp/x HEAD", "npm test"]) {
+  for (const command of ["git commit -m x", "git push", "git fetch origin", "nightqueue run commit", "gh pr create", "git worktree add /tmp/x HEAD", "npm test"]) {
     const reason = denyReasonOf(runAgentForeground({ input: mainCall("Bash", { command }, worktree), env }));
     assert.ok(reason.startsWith(OPERATOR_BASH_REASON), reason);
     assert.match(reason, /no commit, no push, no write to the repository$/);
@@ -396,12 +396,12 @@ test("the operator's subagents are never moved to the foreground, and only a roo
 
 test("no job id and no operator mode answers nothing; a job id wins over the operator mode", (t) => {
   const { env, worktree } = operatorFixture(t);
-  for (const bare of [{}, { NIGHTSHIFT_MODE: "  " }, { NIGHTSHIFT_MODE: "interactive" }]) {
+  for (const bare of [{}, { NIGHTQUEUE_MODE: "  " }, { NIGHTQUEUE_MODE: "interactive" }]) {
     assert.equal(runAgentForeground({ input: mainCall("Read", { file_path: join(worktree, "src", "app.mjs") }, worktree), env: bare }), "");
     assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "git commit -m x" }, worktree), env: bare }), "");
     assert.equal(runAgentForeground({ input: mainCall("Agent", { prompt: "p", run_in_background: true }, worktree), env: bare }), "");
   }
-  const both = { ...env, NIGHTSHIFT_JOB_ID: "7", NIGHTSHIFT_MODE: "operator" };
+  const both = { ...env, NIGHTQUEUE_JOB_ID: "7", NIGHTQUEUE_MODE: "operator" };
   assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "git commit -m x" }, worktree), env: both }), "");
   const agent = JSON.parse(runAgentForeground({ input: mainCall("Agent", { prompt: "p", run_in_background: true }, worktree), env: both }));
   assert.equal(agent.hookSpecificOutput.updatedInput.run_in_background, false);

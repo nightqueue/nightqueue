@@ -9,6 +9,6 @@ are not tolerated, in issues, pull requests, reviews or anywhere else this
 project is discussed.
 
 Reports go to the maintainer through
-[GitHub's private reporting](https://github.com/maykonVinicius/nightshift/security/advisories/new)
+[GitHub's private reporting](https://github.com/nightqueue/nightqueue/security/advisories/new)
 or by e-mail to maykon.vos@gmail.com. Every report is read, kept confidential
 and answered.

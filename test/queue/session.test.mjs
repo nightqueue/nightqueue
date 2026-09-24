@@ -13,7 +13,7 @@ import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 import { addWorktree, gitVars, publishedCheckout } from "../../test-support/worktrees.mjs";
 
-const CLI = fileURLToPath(new URL("../../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
 // A home whose project `alpha` is a real published checkout.
 function makeSessionHome(t, name) {
@@ -34,7 +34,7 @@ function jobWithSession(home, { slug, status, session, attempt, worktree = null 
   return id;
 }
 
-// Runs `nightshift queue session ...` in this process, capturing stdout and stderr.
+// Runs `nightqueue queue session ...` in this process, capturing stdout and stderr.
 async function runQueueSession(env, argv, extraCtx = {}) {
   const out = [];
   const err = [];
@@ -52,7 +52,7 @@ test("`queue session --print` on a job with three attempts opens the third attem
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.deepEqual(result.out, [
     `job ${id} · attempt 3 · session sess-attempt-3 · cwd ${worktree.path}`,
-    `cd '${worktree.path}' && nightshift open --resume sess-attempt-3`,
+    `cd '${worktree.path}' && nightqueue open --resume sess-attempt-3`,
   ]);
 });
 
@@ -67,7 +67,7 @@ test("`queue session` falls back to the checkout and says so when the run's work
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.deepEqual(result.out, [
     `job ${id} · attempt 1 · session sess-released · cwd ${realpathSync(home.checkout)} (worktree released, using the checkout)`,
-    `cd '${realpathSync(home.checkout)}' && nightshift open --resume sess-released`,
+    `cd '${realpathSync(home.checkout)}' && nightqueue open --resume sess-released`,
   ]);
 });
 
@@ -115,9 +115,9 @@ test("`queue session` resumes through the operator launcher in the resolved cwd,
   assert.equal(session.length, 1);
   const [claude] = session;
   assert.equal(claude.bin, "/opt/claude/claude");
-  assert.equal(claude.args[claude.args.indexOf("--agent") + 1], "nightshift:nightshift-operator");
+  assert.equal(claude.args[claude.args.indexOf("--agent") + 1], "nightqueue:nightqueue-operator");
   assert.equal(claude.args[claude.args.indexOf("--resume") + 1], "sess-exec");
-  assert.equal(claude.options.env.NIGHTSHIFT_MODE, "operator");
+  assert.equal(claude.options.env.NIGHTQUEUE_MODE, "operator");
   assert.equal(claude.options.cwd, worktree.path);
   assert.equal(claude.options.stdio, "inherit");
   assert.ok(calls.some((call) => call.bin === "git" && call.args.join(" ") === "worktree prune"), "git worktree prune did not run first");
@@ -128,7 +128,7 @@ test("MCP queue_session returns the attempt, session and cwd of the last attempt
   const worktree = addWorktree(home.checkout, "feat+mcp-session");
   const id = jobWithSession(home, { slug: "mcp-session", status: "done", session: "sess-mcp", attempt: 2, worktree: worktree.path });
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env: home.env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
 
@@ -143,7 +143,7 @@ test("MCP queue_session refuses a running job by name, with no session field lea
   const home = makeSessionHome(t, "session-mcp-refusal");
   const id = jobWithSession(home, { slug: "mcp-running", status: "running", session: "sess-mcp-running", attempt: 1 });
   const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env: home.env, stderr: "pipe" });
-  const client = new Client({ name: "nightshift-tests", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests", version: "0.0.0" });
   await client.connect(transport);
   t.after(() => client.close());
 

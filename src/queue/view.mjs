@@ -40,8 +40,8 @@ function suggestionIdList(ids) {
 export function closeSuggestion(jobs) {
   const ids = (Array.isArray(jobs) ? jobs : []).filter(qualifiesForClose).map((job) => job.id);
   if (ids.length === 0) return null;
-  if (ids.length === 1) return `#${ids[0]} PR merged - close it with nightshift queue close ${ids[0]}`;
-  return `${ids.length} jobs have a merged PR (${suggestionIdList(ids)}) - close them with nightshift queue close --merged`;
+  if (ids.length === 1) return `#${ids[0]} PR merged - close it with nightqueue queue close ${ids[0]}`;
+  return `${ids.length} jobs have a merged PR (${suggestionIdList(ids)}) - close them with nightqueue queue close --merged`;
 }
 
 // Whether the listing cut the notice or the result of a job.
@@ -53,8 +53,8 @@ function wasTruncated(job) {
 export function truncationSuggestion(jobs) {
   const ids = (Array.isArray(jobs) ? jobs : []).filter(wasTruncated).map((job) => job.id);
   if (ids.length === 0) return null;
-  if (ids.length === 1) return `#${ids[0]} text cut at ${VIEW_TEXT_LIMIT} characters - read it whole with nightshift queue status ${ids[0]}`;
-  return `${ids.length} jobs have text cut at ${VIEW_TEXT_LIMIT} characters (${suggestionIdList(ids)}) - read each whole with nightshift queue status <id>`;
+  if (ids.length === 1) return `#${ids[0]} text cut at ${VIEW_TEXT_LIMIT} characters - read it whole with nightqueue queue status ${ids[0]}`;
+  return `${ids.length} jobs have text cut at ${VIEW_TEXT_LIMIT} characters (${suggestionIdList(ids)}) - read each whole with nightqueue queue status <id>`;
 }
 
 // One advisory line per distinct status outside the job status enum, naming it and how many rows carry it.
@@ -65,7 +65,7 @@ function unknownStatusAdvisories(jobs) {
     counts.set(job.status, (counts.get(job.status) ?? 0) + 1);
   }
   return [...counts.entries()].map(
-    ([status, count]) => `${count} job${count === 1 ? "" : "s"} carr${count === 1 ? "ies" : "y"} the unknown status '${status}'; run nightshift doctor`,
+    ([status, count]) => `${count} job${count === 1 ? "" : "s"} carr${count === 1 ? "ies" : "y"} the unknown status '${status}'; run nightqueue doctor`,
   );
 }
 

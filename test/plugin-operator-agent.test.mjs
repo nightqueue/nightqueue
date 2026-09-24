@@ -16,30 +16,30 @@ function frontmatterValue(text, key) {
   return line ? line.slice(key.length + 1).trim() : null;
 }
 
-test("the operator agent is `nightshift-operator`, and `nightshift open` addresses it by its plugin-scoped name", () => {
+test("the operator agent is `nightqueue-operator`, and `nightqueue open` addresses it by its plugin-scoped name", () => {
   const name = frontmatterValue(OPERATOR, "name");
-  assert.equal(name, "nightshift-operator");
-  assert.equal(OPERATOR_AGENT, `nightshift:${name}`);
+  assert.equal(name, "nightqueue-operator");
+  assert.equal(OPERATOR_AGENT, `nightqueue:${name}`);
 });
 
 test("the operator's tools carry no Edit nor Write: it coordinates and never edits", () => {
   const tools = frontmatterValue(OPERATOR, "tools").split(",").map((tool) => tool.trim());
-  assert.deepEqual(tools, ["Agent", "Read", "Bash", "TodoWrite", "SendMessage", "mcp__nightshift__*"]);
+  assert.deepEqual(tools, ["Agent", "Read", "Bash", "TodoWrite", "SendMessage", "mcp__nightqueue__*"]);
   for (const writer of ["Edit", "Write", "NotebookEdit", "MultiEdit"]) assert.equal(tools.includes(writer), false, writer);
 });
 
 test("the operator's text names only commands its guard allows: no fetch, no run commit, the QA worktree by its relative path", () => {
   assert.equal(OPERATOR.includes("git fetch"), false);
-  assert.equal(OPERATOR.includes("nightshift run commit"), false);
-  assert.equal(OPERATOR.includes("nightshift run pr"), false);
+  assert.equal(OPERATOR.includes("nightqueue run commit"), false);
+  assert.equal(OPERATOR.includes("nightqueue run pr"), false);
   for (const named of ["gh issue list|view", "adb devices", "gh pr list|view|status|checks", "git log --oneline -n <N>", ".claude/worktrees/operator-qa-<slug>"]) {
     assert.ok(OPERATOR.includes(named), `operator.md does not name ${named}`);
   }
   assert.ok(OPERATOR_BASH_RULES.some(({ argv }) => argv.join(" ") === "adb devices"));
 });
 
-test("every `nightshift run check` the operator runs names its run, the only way the check resolves outside a job", () => {
-  const checks = [...OPERATOR.matchAll(/nightshift run check ([0-9.a]+)([^`]*)`/g)];
+test("every `nightqueue run check` the operator runs names its run, the only way the check resolves outside a job", () => {
+  const checks = [...OPERATOR.matchAll(/nightqueue run check ([0-9.a]+)([^`]*)`/g)];
   assert.ok(checks.length >= 5, `only ${checks.length} checks found`);
   for (const [whole, , rest] of checks) assert.match(rest, /--project <project> --slug <slug>/, whole);
 });

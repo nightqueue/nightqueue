@@ -12,16 +12,16 @@ import { makeDir, makeHome } from "../test-support/memory.mjs";
 // phrase "command not found" gets mislabeled "dependencies not installed"
 // instead of reporting its real failure reason.
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const FAKE_PM = fileURLToPath(new URL("../test-support/fake-pm.mjs", import.meta.url));
-const NEVER_INSTALLS = "dependencies not installed — nightshift verify never installs";
+const NEVER_INSTALLS = "dependencies not installed — nightqueue verify never installs";
 const REAL_FAILURE = 'FAIL: expected "command not found" in error output';
 const STATUS_LINE_RE = /^(PASSED|FAILED|SKIPPED) (\S+) (\d+\.\d+)s$/;
 const GIT_IDENTITY = {
-  GIT_AUTHOR_NAME: "nightshift",
-  GIT_AUTHOR_EMAIL: "nightshift@example.invalid",
-  GIT_COMMITTER_NAME: "nightshift",
-  GIT_COMMITTER_EMAIL: "nightshift@example.invalid",
+  GIT_AUTHOR_NAME: "nightqueue",
+  GIT_AUTHOR_EMAIL: "nightqueue@example.invalid",
+  GIT_COMMITTER_NAME: "nightqueue",
+  GIT_COMMITTER_EMAIL: "nightqueue@example.invalid",
 };
 
 // Commits everything the fixture wrote, so the working tree the checks see is clean.
@@ -54,13 +54,13 @@ function readCalls(log) {
   return readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
-// Runs `nightshift verify` in the fixture as a real subprocess, with the fake package manager first on PATH.
+// Runs `nightqueue verify` in the fixture as a real subprocess, with the fake package manager first on PATH.
 function runVerify(t, cwd, { outcomes = {}, args = [] } = {}) {
   const pm = installFakePm(t);
   const env = { ...makeHome(t, "verify-caller") };
   env.PATH = `${pm.dir}:${env.PATH ?? ""}`;
-  env.NIGHTSHIFT_FAKE_PM_LOG = pm.log;
-  env.NIGHTSHIFT_FAKE_PM_SCRIPTS = JSON.stringify(outcomes);
+  env.NIGHTQUEUE_FAKE_PM_LOG = pm.log;
+  env.NIGHTQUEUE_FAKE_PM_SCRIPTS = JSON.stringify(outcomes);
   const result = spawnSync(process.execPath, [CLI, "verify", ...args], { cwd, env, encoding: "utf8" });
   assert.equal(result.error, undefined, `the CLI failed to spawn: ${result.error}`);
   return { code: result.status, stdout: result.stdout, stderr: result.stderr, env, calls: readCalls(pm.log) };

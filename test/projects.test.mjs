@@ -23,7 +23,7 @@ import { emptyConfig } from "../src/config/schema.mjs";
 
 // Creates a temporary directory removed at the end of the test.
 function makeDir(t, name) {
-  const dir = mkdtempSync(join(tmpdir(), `nightshift-${name}-`));
+  const dir = mkdtempSync(join(tmpdir(), `nightqueue-${name}-`));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
@@ -103,7 +103,7 @@ test("the same path is a no-op in the same org and an error in another org", (t)
   addProject(config, { path: repo, name: "api" });
   assert.equal(addProject(config, { path: repo, name: "api" }).status, "unchanged");
   assert.throws(() => addProject(config, { path: repo, name: "api", org: "acme" }), (err) => {
-    assert.match(err.message, /is already registered as `api` in org `default`; use `nightshift project move api acme`/);
+    assert.match(err.message, /is already registered as `api` in org `default`; use `nightqueue project move api acme`/);
     return true;
   });
 });

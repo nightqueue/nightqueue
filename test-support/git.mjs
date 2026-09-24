@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 
-const NAME = "nightshift";
-const EMAIL = "nightshift@example.invalid";
+const NAME = "nightqueue";
+const EMAIL = "nightqueue@example.invalid";
 
 // Environment of a commit that depends on nothing of the machine: the identity always wins over the one of the host.
 function commitEnv() {

@@ -48,7 +48,7 @@ import { firstLine, makeReport } from "./report.mjs";
 
 const MARKETPLACE_LABEL = "plugin marketplace";
 const USAGE =
-  "nightshift setup [--from <dir>] [--force] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--remove [--purge]]";
+  "nightqueue setup [--from <dir>] [--force] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--remove [--purge]]";
 
 // Flags every command that installs the host shares.
 export const INSTALL_OPTIONS = {
@@ -285,11 +285,11 @@ function removePlugin(ctx, report) {
 
 // Closes the run, pointing at the diagnosis when a step degraded; a degraded step is never an exit code.
 export function finish(ctx, report) {
-  if (report.count()) ctx.out(`setup finished with ${report.count()} step(s) degraded - run \`nightshift doctor\``);
+  if (report.count()) ctx.out(`setup finished with ${report.count()} step(s) degraded - run \`nightqueue doctor\``);
   return 0;
 }
 
-// Installs everything the host needs to run nightshift, one idempotent step at a time; `force` only ever overrides the refusal to install under a live runner.
+// Installs everything the host needs to run nightqueue, one idempotent step at a time; `force` only ever overrides the refusal to install under a live runner.
 export async function install(ctx, { embedding, path, from, force, shortcuts, desktop } = {}) {
   await guardIdleRuntime(ctx, { force });
   const report = makeReport(ctx);
@@ -315,7 +315,7 @@ async function uninstall(ctx, { purge }) {
   return finish(ctx, report);
 }
 
-// Runs `nightshift setup`: installs the runtime and registers it in the host, or removes both with `--remove`.
+// Runs `nightqueue setup`: installs the runtime and registers it in the host, or removes both with `--remove`.
 export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, {
     ...INSTALL_OPTIONS,

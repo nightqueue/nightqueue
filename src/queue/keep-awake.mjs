@@ -17,7 +17,7 @@ function isRunnable(path) {
 // executed to find out - only the filesystem is asked.
 export function resolveCaffeinateBin(env = process.env) {
   try {
-    const override = String(env?.NIGHTSHIFT_CAFFEINATE_BIN ?? "").trim();
+    const override = String(env?.NIGHTQUEUE_CAFFEINATE_BIN ?? "").trim();
     if (override) return isRunnable(override) ? override : null;
     for (const dir of String(env?.PATH ?? "").split(delimiter)) {
       if (!dir) continue;
@@ -63,7 +63,7 @@ export function keepAwakeArgs({ platform, mode, kind, pid }) {
 // Warns once, on stderr, that the machine could not be kept awake; a detached runner's stderr is its own log file,
 // and this never costs the runner nor the job it was protecting.
 function warnKeepAwakeFailure(reason) {
-  process.stderr.write(`nightshift: could not keep the machine awake (${reason}); continuing without it\n`);
+  process.stderr.write(`nightqueue: could not keep the machine awake (${reason}); continuing without it\n`);
 }
 
 // Spawns one caffeinate hold tied to the life of the given pid (`-w` makes it exit on its own, nothing to clean up),

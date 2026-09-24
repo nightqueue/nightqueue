@@ -4,7 +4,7 @@ import { clearRunTerminal, discardRunDir } from "./resume.mjs";
 
 // Job this process is running inside, when the queue spawned it; null in a session of the operator.
 export function callerJobId(env) {
-  const raw = typeof env?.NIGHTSHIFT_JOB_ID === "string" ? env.NIGHTSHIFT_JOB_ID.trim() : "";
+  const raw = typeof env?.NIGHTQUEUE_JOB_ID === "string" ? env.NIGHTQUEUE_JOB_ID.trim() : "";
   return /^[1-9]\d*$/.test(raw) ? Number(raw) : null;
 }
 
@@ -14,7 +14,7 @@ function requireOwnJob(id, env) {
   if (own === null || own === Number(id)) return;
   throw new UserError(
     `refusing to retry job \`${id}\` from inside job \`${own}\`: an unattended run may only retry itself; ` +
-      `ask the operator to run \`nightshift queue retry ${id}\` outside the queue`,
+      `ask the operator to run \`nightqueue queue retry ${id}\` outside the queue`,
   );
 }
 

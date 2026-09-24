@@ -11,7 +11,7 @@ import { makeHome } from "../test-support/memory.mjs";
 // a real `PRAGMA wal_checkpoint(TRUNCATE)` from a third process), turned into a committed, deterministic test.
 // It never existed as anything but the untracked scratch script `tmp/inode-stability.mjs`.
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const DB_MODULE_URL = pathToFileURL(fileURLToPath(new URL("../src/memory/db.mjs", import.meta.url))).href;
 const WITNESS_TIMEOUT_MS = 15000;
 
@@ -36,7 +36,7 @@ async function waitForWitness(env, child) {
   throw new Error(`no witness in ${runnerRegistryPath(child.pid, env)} after ${WITNESS_TIMEOUT_MS} ms: ${JSON.stringify(readRecord(env, child.pid))}`);
 }
 
-// Runs a real `nightshift doctor --json` as its own process against the given home, and returns the `db shm` check.
+// Runs a real `nightqueue doctor --json` as its own process against the given home, and returns the `db shm` check.
 function realDoctorDbShmLine(env) {
   const result = spawnSync(process.execPath, [CLI, "doctor", "--json"], { env, encoding: "utf8", timeout: 10000 });
   assert.equal(result.error, undefined, `doctor did not run: ${result.error}`);
@@ -46,7 +46,7 @@ function realDoctorDbShmLine(env) {
   return line;
 }
 
-// Runs a real `PRAGMA wal_checkpoint(TRUNCATE)` from a short-lived third process, exactly as a second `nightshift`
+// Runs a real `PRAGMA wal_checkpoint(TRUNCATE)` from a short-lived third process, exactly as a second `nightqueue`
 // invocation touching the same home would.
 function realThirdPartyCheckpoint(env) {
   const code = `import(${JSON.stringify(DB_MODULE_URL)}).then(({ openDb }) => { openDb(process.env).prepare("PRAGMA wal_checkpoint(TRUNCATE)").get(); process.exit(0); }).catch((err) => { console.error(err); process.exit(1); });`;

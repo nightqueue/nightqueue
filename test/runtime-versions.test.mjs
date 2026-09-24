@@ -63,8 +63,8 @@ function writeOldVersion(host, name) {
 function writeLegacyRuntime(host, version) {
   const dir = join(host.home, LEGACY_RUNTIME_PACKAGE_TRAIL);
   mkdirSync(join(dir, "bin"), { recursive: true });
-  writeFileSync(join(dir, "package.json"), `${JSON.stringify({ name: "@maykonv/nightshift", version })}\n`);
-  writeFileSync(join(dir, "bin", "nightshift.mjs"), "#!/usr/bin/env node\n", { mode: 0o755 });
+  writeFileSync(join(dir, "package.json"), `${JSON.stringify({ name: "nightqueue", version })}\n`);
+  writeFileSync(join(dir, "bin", "nightqueue.mjs"), "#!/usr/bin/env node\n", { mode: 0o755 });
   return dir;
 }
 
@@ -95,7 +95,7 @@ test("every host entry point resolves through `current`, never through a version
     `node ${host.entry} hook session-start`,
   );
   const registered = JSON.parse(readFileSync(join(host.configDir, ".claude.json"), "utf8"));
-  assert.deepEqual(registered.mcpServers.nightshift.args, [host.entry, "mcp"]);
+  assert.deepEqual(registered.mcpServers.nightqueue.args, [host.entry, "mcp"]);
   assert.equal(existsSync(hostManifestPath(host.env)), true, "the marketplace manifest is not reachable through `current`");
 });
 
@@ -195,7 +195,7 @@ test("an install npm could not finish leaves `current` where it was and no stagi
   assert.equal(await run(SETUP, makeCtx(host.env).ctx), 0);
   const before = resolvedRuntimeDir(host.env);
 
-  host.env.NIGHTSHIFT_FAKE_NPM_EXIT = "1";
+  host.env.NIGHTQUEUE_FAKE_NPM_EXIT = "1";
   const { ctx, out } = makeCtx(host.env);
   assert.equal(await run(["update"], ctx), 1);
   assert.ok(out.some((line) => line.startsWith("runtime: failed")), out.join("\n"));
@@ -206,7 +206,7 @@ test("an install npm could not finish leaves `current` where it was and no stagi
 test("a runtime still at the path of an older installation keeps resolving, and an install moves the host onto `current`", async (t) => {
   const host = makeHostEnv(t, "runtime-versions-legacy");
   const legacy = writeLegacyRuntime(host, "0.0.9");
-  const legacyEntry = join(legacy, "bin", "nightshift.mjs");
+  const legacyEntry = join(legacy, "bin", "nightqueue.mjs");
 
   assert.equal(runtimePackageDir(host.env), legacy);
   assert.equal(runtimeReady(host.env), true);

@@ -83,7 +83,7 @@ function prData(pr) {
   return { prNumber: pr.number, title: pr.title, headBranch: pr.headRefName, baseBranch: pr.baseRefName, headSha: pr.headRefOid };
 }
 
-// The data that records a merged pull request, as GitHub reports it, and who merged it: `nightshift` or the `operator` outside a close.
+// The data that records a merged pull request, as GitHub reports it, and who merged it: `nightqueue` or the `operator` outside a close.
 function mergedData(pr, mergedBy) {
   return { merged: true, mergeSha: pr.mergeSha ?? null, mergedAt: pr.mergedAt ?? null, mergedBy };
 }
@@ -145,17 +145,17 @@ async function incomingFiles(ctx, deps, base) {
   return new Set([...prFiles.files, ...linesOf(baseDiff.stdout)]);
 }
 
-// Tells whether local changes in the canonical checkout would stop the pull after the merge; nightshift never stashes them.
+// Tells whether local changes in the canonical checkout would stop the pull after the merge; nightqueue never stashes them.
 async function checkoutVerdict(ctx, deps, base) {
   const status = await git(ctx, deps, ["status", "--porcelain", "-z"]);
   if (!status.ok) return { problem: failed("checkout-dirty", `git status failed in ${ctx.checkout} (${firstLine(status.stderr)})`) };
   const dirty = porcelainPaths(status.stdout);
   if (!dirty.length) return { note: "canonical checkout clean" };
   const incoming = await incomingFiles(ctx, deps, base);
-  if (!incoming) return { problem: failed("checkout-dirty", `${dirty.length} local changes in ${ctx.checkout} and nightshift cannot tell which files the pull would bring`) };
+  if (!incoming) return { problem: failed("checkout-dirty", `${dirty.length} local changes in ${ctx.checkout} and nightqueue cannot tell which files the pull would bring`) };
   const touched = dirty.filter((path) => incoming.has(path));
   if (touched.length) {
-    return { problem: failed("checkout-dirty", `local changes in ${ctx.checkout} the pull would touch: ${namesNote(touched)}; commit or stash them yourself; nightshift never stashes`) };
+    return { problem: failed("checkout-dirty", `local changes in ${ctx.checkout} the pull would touch: ${namesNote(touched)}; commit or stash them yourself; nightqueue never stashes`) };
   }
   return { note: `${dirty.length} local changes the pull does not touch` };
 }
@@ -219,7 +219,7 @@ async function conflictStep({ ctx, deps }) {
 async function addThrowaway(ctx, deps, head) {
   let dir = null;
   try {
-    dir = deps.fs.makeTempDir(`nightshift-close-${ctx.jobId}-`);
+    dir = deps.fs.makeTempDir(`nightqueue-close-${ctx.jobId}-`);
   } catch (err) {
     return { problem: failed("worktree-failed", `could not create a temporary directory: ${err?.message ?? String(err)}`) };
   }
@@ -340,7 +340,7 @@ async function mergedResult(ctx, deps, { pr, note, mergedBy }) {
   return { status: "done", note: `${note} as ${sha7(data.mergeSha)}; ${pulled}`, data };
 }
 
-// The result of a merge the step finds already made: skipped as `merged outside a close` when the operator made it, done when nightshift did.
+// The result of a merge the step finds already made: skipped as `merged outside a close` when the operator made it, done when nightqueue did.
 async function madeMergeResult(ctx, deps, { pr, mergedBy }) {
   if (mergedBy !== "operator") return await mergedResult(ctx, deps, { pr, note: "already merged", mergedBy });
   const result = await mergedResult(ctx, deps, { pr, note: "merged outside a close", mergedBy });
@@ -349,16 +349,16 @@ async function madeMergeResult(ctx, deps, { pr, mergedBy }) {
 
 // The failure of a merge GitHub does not show with a merge commit; a merged state is still recorded, so no re-run merges again.
 function mergeWithoutSha({ pr, call }) {
-  const mergedBy = call ? { mergedBy: "nightshift" } : {};
+  const mergedBy = call ? { mergedBy: "nightqueue" } : {};
   const data = pr?.ok && pr.state === "MERGED" ? { merged: true, mergedAt: pr.mergedAt ?? null, ...mergedBy } : {};
   const said = call ? `gh pr merge ${call.ok ? "exited 0" : `failed (${firstLine(call.stderr)})`}; ` : "";
   const state = pr?.ok ? pr.state : "unreadable";
   return failed("merge-without-sha", `${said}the pull request reads ${state} with no merge commit`, { data });
 }
 
-// Finishes a merge already recorded, by nightshift or by the operator: re-read only for a missing merge commit, never merge again.
+// Finishes a merge already recorded, by nightqueue or by the operator: re-read only for a missing merge commit, never merge again.
 async function confirmRecordedMerge(ctx, deps) {
-  const mergedBy = ctx.data.mergedBy ?? "nightshift";
+  const mergedBy = ctx.data.mergedBy ?? "nightqueue";
   if (ctx.data.mergeSha) return await madeMergeResult(ctx, deps, { pr: { mergeSha: ctx.data.mergeSha, mergedAt: ctx.data.mergedAt }, mergedBy });
   const pr = await readPr(ctx, deps);
   if (pr?.ok && pr.state === "MERGED" && pr.mergeSha) return await madeMergeResult(ctx, deps, { pr, mergedBy });
@@ -381,7 +381,7 @@ async function mergeStep({ ctx, deps }) {
   const call = await deps.gh.prMerge(ctx.prUrl, { matchHeadCommit: ctx.data.headSha, ...bounded(ctx, MERGE_TIMEOUT_MS) });
   const reread = await rereadMerge(ctx, deps);
   if (!reread?.mergeSha || reread.state !== "MERGED") return mergeWithoutSha({ pr: reread, call });
-  return await mergedResult(ctx, deps, { pr: reread, note: "squash-merged", mergedBy: "nightshift" });
+  return await mergedResult(ctx, deps, { pr: reread, note: "squash-merged", mergedBy: "nightqueue" });
 }
 
 // Prepares the close: the merge must be recorded with its commit, and the notice line is written from it.

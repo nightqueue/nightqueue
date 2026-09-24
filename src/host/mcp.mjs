@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { readJsonOrNull } from "./json.mjs";
 import { claudeUserConfigPath, cliEntryPath } from "./paths.mjs";
 
-export const MCP_SERVER_NAME = "nightshift";
+export const MCP_SERVER_NAME = "nightqueue";
 
 // Server entry this package wants registered at user scope, always starting the CLI from the runtime.
 export function desiredServer(env = process.env) {

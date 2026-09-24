@@ -54,17 +54,17 @@ async function safeRun({ handler, fallback }, input, ctx) {
   try {
     return await handler({ input, env: ctx.env, fetchImpl: ctx.fetchImpl });
   } catch (err) {
-    ctx.err(`nightshift hook: ${err?.message ?? String(err)}`);
+    ctx.err(`nightqueue hook: ${err?.message ?? String(err)}`);
     return fallback;
   }
 }
 
-// Dispatches the subcommands of `nightshift hook`, reading the event JSON from stdin.
+// Dispatches the subcommands of `nightqueue hook`, reading the event JSON from stdin.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const hook = HOOKS.get(sub);
   if (!hook) throw new UserError(`unknown hook \`${sub ?? ""}\`; use: ${[...HOOKS.keys()].join(", ")}`);
-  checkArgs(parseCommand(rest).positionals, { max: 0, usage: `nightshift hook ${sub}` });
+  checkArgs(parseCommand(rest).positionals, { max: 0, usage: `nightqueue hook ${sub}` });
   const input = await readStdinJson(ctx.stdin);
   const output = await safeRun(hook, input, ctx);
   if (output) ctx.out(output);

@@ -7,13 +7,13 @@ import { fileURLToPath } from "node:url";
 import { initGitRepo } from "../test-support/git.mjs";
 import { makeDir, makeHome } from "../test-support/memory.mjs";
 
-const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const FAKE_PM = fileURLToPath(new URL("../test-support/fake-pm.mjs", import.meta.url));
 const GIT_IDENTITY = {
-  GIT_AUTHOR_NAME: "nightshift",
-  GIT_AUTHOR_EMAIL: "nightshift@example.invalid",
-  GIT_COMMITTER_NAME: "nightshift",
-  GIT_COMMITTER_EMAIL: "nightshift@example.invalid",
+  GIT_AUTHOR_NAME: "nightqueue",
+  GIT_AUTHOR_EMAIL: "nightqueue@example.invalid",
+  GIT_COMMITTER_NAME: "nightqueue",
+  GIT_COMMITTER_EMAIL: "nightqueue@example.invalid",
 };
 
 // Commits everything the fixture wrote, so the working tree the checks see is clean.
@@ -22,7 +22,7 @@ function commitAll(cwd) {
   execFileSync("git", ["-C", cwd, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "fixture"], { env: { ...process.env, ...GIT_IDENTITY } });
 }
 
-// A fixture repository declaring a `lint` check, the one check `nightshift verify` narrows to `--files` when it can.
+// A fixture repository declaring a `lint` check, the one check `nightqueue verify` narrows to `--files` when it can.
 function makeFixture(t) {
   const cwd = makeDir(t, "verify-files-ignored");
   initGitRepo(cwd);
@@ -46,13 +46,13 @@ function readCalls(log) {
   return readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
-// Runs `nightshift verify` in the fixture as a real subprocess, with the fake package manager first on PATH.
+// Runs `nightqueue verify` in the fixture as a real subprocess, with the fake package manager first on PATH.
 function runVerify(t, cwd, args) {
   const pm = installFakePm(t);
   const env = makeHome(t, "verify-files-ignored-caller");
   env.PATH = `${pm.dir}:${env.PATH ?? ""}`;
-  env.NIGHTSHIFT_FAKE_PM_LOG = pm.log;
-  env.NIGHTSHIFT_FAKE_PM_SCRIPTS = JSON.stringify({ lint: { exit: 0 } });
+  env.NIGHTQUEUE_FAKE_PM_LOG = pm.log;
+  env.NIGHTQUEUE_FAKE_PM_SCRIPTS = JSON.stringify({ lint: { exit: 0 } });
   const result = spawnSync(process.execPath, [CLI, "verify", ...args], { cwd, env, encoding: "utf8" });
   assert.equal(result.error, undefined, `the CLI failed to spawn: ${result.error}`);
   return { code: result.status, stdout: result.stdout, stderr: result.stderr, calls: readCalls(pm.log) };
@@ -78,6 +78,6 @@ test("`--scope full --files <path>` either refuses the combination or says the f
   const refused = withFiles.code !== 0;
   assert.ok(
     flaggedIgnored || refused,
-    "nightshift verify must tell the caller --files was discarded under --scope full (stderr note) or refuse the combination (non-zero exit); it currently does neither and silently runs the full, unnarrowed scope",
+    "nightqueue verify must tell the caller --files was discarded under --scope full (stderr note) or refuse the combination (non-zero exit); it currently does neither and silently runs the full, unnarrowed scope",
   );
 });

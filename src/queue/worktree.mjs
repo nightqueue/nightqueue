@@ -69,7 +69,7 @@ function gitRead(args, cwd, env) {
   return runGitAsync({ args, cwd, env, timeoutMs: WORKTREE_READ_TIMEOUT_MS });
 }
 
-// A worktree nightshift keeps, with the reason it would refuse to remove it.
+// A worktree nightqueue keeps, with the reason it would refuse to remove it.
 function kept(path, reason) {
   return { path, removable: false, reason };
 }
@@ -157,7 +157,7 @@ function unremovedVerdict(path, reason) {
   return isWorktreeGone(path) ? { path, status: "removed" } : { path, status: "kept", reason };
 }
 
-// The notice line that names a worktree nightshift kept, and why.
+// The notice line that names a worktree nightqueue kept, and why.
 export function keptWorktreeLine({ path, reason }) {
   return `${KEPT_PREFIX}${path} - ${reason}.`;
 }

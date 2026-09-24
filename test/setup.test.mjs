@@ -51,7 +51,7 @@ function hookCommandOf(host, hook) {
 // Entries of one event that belong to this package.
 function ownEntries(settings, event) {
   return (settings.hooks?.[event] ?? []).flatMap((group) =>
-    (group.hooks ?? []).filter((entry) => entry.command.includes("bin/nightshift.mjs hook")),
+    (group.hooks ?? []).filter((entry) => entry.command.includes("bin/nightqueue.mjs hook")),
   );
 }
 
@@ -135,7 +135,7 @@ test("a package path that changed updates only the entry of this package", async
           matcher: "startup|resume|clear",
           hooks: [
             { type: "command", command: "other-tool session", timeout: 20 },
-            { type: "command", command: "node /old/pkg/bin/nightshift.mjs hook session-start", timeout: 3 },
+            { type: "command", command: "node /old/pkg/bin/nightqueue.mjs hook session-start", timeout: 3 },
           ],
         },
       ],
@@ -213,24 +213,24 @@ test("the MCP server is registered at user scope with the absolute entry path", 
 
   assert.equal(await run(SETUP, ctx), 0);
   assert.deepEqual(callsMatching(host.calls(), ["mcp", "add"]), [
-    ["mcp", "add", "--scope", "user", "nightshift", "--", "node", host.entry, "mcp"],
+    ["mcp", "add", "--scope", "user", "nightqueue", "--", "node", host.entry, "mcp"],
   ]);
   const registered = JSON.parse(readFileSync(join(host.configDir, ".claude.json"), "utf8"));
-  assert.deepEqual(registered.mcpServers.nightshift.args, [host.entry, "mcp"]);
-  assert.ok(out.includes("mcp nightshift: created"), out.join("\n"));
+  assert.deepEqual(registered.mcpServers.nightqueue.args, [host.entry, "mcp"]);
+  assert.ok(out.includes("mcp nightqueue: created"), out.join("\n"));
 });
 
 test("an MCP server already registered with the same command is not registered again", async (t) => {
   const host = makeHostEnv(t, "setup-mcp-present");
   writeFileSync(
     join(host.configDir, ".claude.json"),
-    JSON.stringify({ mcpServers: { nightshift: { type: "stdio", command: "node", args: [host.entry, "mcp"], env: {} } } }),
+    JSON.stringify({ mcpServers: { nightqueue: { type: "stdio", command: "node", args: [host.entry, "mcp"], env: {} } } }),
   );
   const { ctx, out } = makeCtx(host.env);
 
   assert.equal(await run(SETUP, ctx), 0);
   assert.deepEqual(callsMatching(host.calls(), ["mcp"]), []);
-  assert.ok(out.includes("mcp nightshift: already present"), out.join("\n"));
+  assert.ok(out.includes("mcp nightqueue: already present"), out.join("\n"));
 });
 
 test("a setup over an installation of the previous command name updates it in place, without a duplicate", async (t) => {
@@ -246,7 +246,7 @@ test("a setup over an installation of the previous command name updates it in pl
   });
   writeFileSync(
     join(host.configDir, ".claude.json"),
-    JSON.stringify({ mcpServers: { nightshift: { type: "stdio", command: "node", args: [legacyEntry, "mcp"], env: {} } } }),
+    JSON.stringify({ mcpServers: { nightqueue: { type: "stdio", command: "node", args: [legacyEntry, "mcp"], env: {} } } }),
   );
   const { ctx, out } = makeCtx(host.env);
 
@@ -261,7 +261,7 @@ test("a setup over an installation of the previous command name updates it in pl
   }
   assert.deepEqual(callsMatching(host.calls(), ["mcp"]).map((call) => call[1]), ["remove", "add"]);
   assert.deepEqual(
-    JSON.parse(readFileSync(join(host.configDir, ".claude.json"), "utf8")).mcpServers.nightshift.args,
+    JSON.parse(readFileSync(join(host.configDir, ".claude.json"), "utf8")).mcpServers.nightqueue.args,
     [host.entry, "mcp"],
   );
   assert.equal(existsSync(host.legacyShim), false);
@@ -270,11 +270,11 @@ test("a setup over an installation of the previous command name updates it in pl
 });
 
 test("the marketplace manifest is valid and the setup registers and installs the plugin", async (t) => {
-  assert.equal(MANIFEST.name, "nightshift");
+  assert.equal(MANIFEST.name, "nightqueue");
   assert.equal(typeof MANIFEST.owner.name, "string");
   assert.deepEqual(
     MANIFEST.plugins.map((plugin) => plugin.name),
-    ["nightshift"],
+    ["nightqueue"],
   );
   assert.equal(MANIFEST.plugins[0].source, "./plugin");
   assert.ok(MANIFEST.plugins[0].description.length > 0);
@@ -286,10 +286,10 @@ test("the marketplace manifest is valid and the setup registers and installs the
     ["plugin", "marketplace", "add", host.runtimePackage],
   ]);
   assert.deepEqual(callsMatching(host.calls(), ["plugin", "install"]), [
-    ["plugin", "install", "nightshift@nightshift", "-y", "--scope", "user"],
+    ["plugin", "install", "nightqueue@nightqueue", "-y", "--scope", "user"],
   ]);
   assert.ok(out.includes("plugin marketplace: created"), out.join("\n"));
-  assert.ok(out.includes("plugin nightshift@nightshift: created"), out.join("\n"));
+  assert.ok(out.includes("plugin nightqueue@nightqueue: created"), out.join("\n"));
 });
 
 test("--remove takes out only the entries of this package and keeps the home", async (t) => {
@@ -300,16 +300,16 @@ test("--remove takes out only the entries of this package and keeps the home", a
   const { ctx, out } = makeCtx(host.env);
   assert.equal(await run(["setup", "--remove"], ctx), 0);
   const settings = readSettingsFile(host.configDir);
-  assert.equal(JSON.stringify(settings).includes("bin/nightshift.mjs hook"), false);
+  assert.equal(JSON.stringify(settings).includes("bin/nightqueue.mjs hook"), false);
   assert.deepEqual(settings.hooks.SessionStart, THIRD_PARTY_SETTINGS.hooks.SessionStart);
   assert.deepEqual(settings.hooks.PostToolUse, THIRD_PARTY_SETTINGS.hooks.PostToolUse);
   assert.deepEqual(settings.hooks.Stop, THIRD_PARTY_SETTINGS.hooks.Stop);
-  assert.deepEqual(callsMatching(host.calls(), ["mcp", "remove"]), [["mcp", "remove", "--scope", "user", "nightshift"]]);
+  assert.deepEqual(callsMatching(host.calls(), ["mcp", "remove"]), [["mcp", "remove", "--scope", "user", "nightqueue"]]);
   assert.deepEqual(callsMatching(host.calls(), ["plugin", "uninstall"]), [
-    ["plugin", "uninstall", "nightshift@nightshift", "-y", "--scope", "user"],
+    ["plugin", "uninstall", "nightqueue@nightqueue", "-y", "--scope", "user"],
   ]);
   assert.deepEqual(callsMatching(host.calls(), ["plugin", "marketplace", "remove"]), [
-    ["plugin", "marketplace", "remove", "nightshift"],
+    ["plugin", "marketplace", "remove", "nightqueue"],
   ]);
   assert.equal(existsSync(join(host.home, "config.json")), true);
   assert.equal(existsSync(join(host.home, "secrets.json")), true);
@@ -357,7 +357,7 @@ test("the runtime is packed from this package, installed once and registered in 
   assert.equal(dirname(install[2]), host.runtimeVersions, `the install wrote outside the versions directory: ${install[2]}`);
   assert.match(basename(install[2]), /^\.staging-\d{8}T\d{6}Z$/, `the install wrote into a final version directory: ${install[2]}`);
   assert.equal(install.at(-1).endsWith(".tgz"), true, `the install did not take the packed tarball: ${install.join(" ")}`);
-  assert.equal(install.some((arg) => arg.includes("nightshift@")), false, "setup asked the registry for the runtime");
+  assert.equal(install.some((arg) => arg.includes("nightqueue@")), false, "setup asked the registry for the runtime");
   assert.equal(existsSync(join(host.runtimePackage, "package.json")), true);
   assert.equal(readSettingsFile(host.configDir).hooks.SessionStart[0].hooks[0].command, hookCommandOf(host, "session-start"));
 
@@ -370,7 +370,7 @@ test("the runtime is packed from this package, installed once and registered in 
 
 test("a runtime that npm could not install leaves the host untouched instead of pointing it at nothing", async (t) => {
   const host = makeHostEnv(t, "setup-runtime-failed");
-  host.env.NIGHTSHIFT_FAKE_NPM_EXIT = "1";
+  host.env.NIGHTQUEUE_FAKE_NPM_EXIT = "1";
   const { ctx, out } = makeCtx(host.env);
 
   assert.equal(await run(SETUP, ctx), 0);
@@ -379,34 +379,34 @@ test("a runtime that npm could not install leaves the host untouched instead of 
   assert.equal(existsSync(host.shim), false, "a failed runtime still wrote a shim pointing at nothing");
   assert.deepEqual(callsMatching(host.calls(), ["mcp", "add"]), []);
   assert.ok(out.some((line) => line.startsWith("runtime: failed")), out.join("\n"));
-  assert.ok(out.includes("shim nightshift: skipped (runtime missing)"), out.join("\n"));
+  assert.ok(out.includes("shim nightqueue: skipped (runtime missing)"), out.join("\n"));
   assert.ok(out.includes("hook SessionStart: skipped (runtime missing)"), out.join("\n"));
 });
 
 test("a runtime whose npm exits non-zero is a failure even when an older install is still on disk", async (t) => {
   const host = makeHostEnv(t, "setup-runtime-stale");
   assert.equal(await run(SETUP, makeCtx(host.env).ctx), 0);
-  writeFileSync(join(host.runtimePackage, "package.json"), `${JSON.stringify({ name: "nightshift", version: "0.0.1" })}\n`);
-  host.env.NIGHTSHIFT_FAKE_NPM_EXIT = "1";
+  writeFileSync(join(host.runtimePackage, "package.json"), `${JSON.stringify({ name: "nightqueue", version: "0.0.1" })}\n`);
+  host.env.NIGHTQUEUE_FAKE_NPM_EXIT = "1";
   const { ctx, out } = makeCtx(host.env);
 
   assert.equal(await run(SETUP, ctx), 0);
   assert.ok(out.some((line) => line.startsWith("runtime: failed")), out.join("\n"));
   assert.equal(out.some((line) => line.startsWith("runtime: updated")), false, out.join("\n"));
-  assert.ok(out.includes("shim nightshift: skipped (runtime missing)"), out.join("\n"));
+  assert.ok(out.includes("shim nightqueue: skipped (runtime missing)"), out.join("\n"));
 });
 
 test("a claude CLI that cannot run degrades the steps that need it, never the hooks", async (t) => {
   const host = makeHostEnv(t, "setup-degraded");
-  host.env.NIGHTSHIFT_CLAUDE_BIN = join(host.configDir, "does-not-exist");
+  host.env.NIGHTQUEUE_CLAUDE_BIN = join(host.configDir, "does-not-exist");
   const { ctx, out, err } = makeCtx(host.env);
 
   assert.equal(await run(SETUP, ctx), 0);
   const settings = readSettingsFile(host.configDir);
   assert.equal(ownEntries(settings, "SessionStart").length, 1);
-  assert.ok(out.includes("mcp nightshift: failed (claude CLI not found)"), out.join("\n"));
+  assert.ok(out.includes("mcp nightqueue: failed (claude CLI not found)"), out.join("\n"));
   assert.ok(out.some((line) => line.startsWith("setup finished with")), out.join("\n"));
-  assert.ok(err.some((line) => line.includes("mcp add --scope user nightshift")), err.join("\n"));
+  assert.ok(err.some((line) => line.includes("mcp add --scope user nightqueue")), err.join("\n"));
 });
 
 test("a broken settings.json is a user error, and the file is left alone", async (t) => {

@@ -3,7 +3,7 @@ import { UserError } from "../config/errors.mjs";
 import { checkArgs, fileList, parseCommand } from "./args.mjs";
 import { pathUnder } from "./paths.mjs";
 
-export const SECRETS_SWEEP_USAGE = "nightshift run secrets-sweep --files <list>";
+export const SECRETS_SWEEP_USAGE = "nightqueue run secrets-sweep --files <list>";
 
 const TERMS = new Set([
   "token", "bearer", "authorization", "auth", "password", "passwd", "pwd",
@@ -191,13 +191,13 @@ export function runSecretsSweep(argv, ctx) {
   checkArgs(positionals, { max: 0, usage: SECRETS_SWEEP_USAGE });
   if (values.files === undefined) throw new UserError(`missing \`--files\`; usage: ${SECRETS_SWEEP_USAGE}`);
   const files = fileList(values);
-  if (!files.length) ctx.err("nightshift run secrets-sweep: the `--files` list is empty; nothing to sweep");
+  if (!files.length) ctx.err("nightqueue run secrets-sweep: the `--files` list is empty; nothing to sweep");
   let candidates = 0;
   let scanned = 0;
   for (const file of files) {
-    const source = readSource(pathUnder(ctx.cwd, file, { command: "nightshift run secrets-sweep", flag: "--files" }));
+    const source = readSource(pathUnder(ctx.cwd, file, { command: "nightqueue run secrets-sweep", flag: "--files" }));
     if (source.error) {
-      ctx.err(`nightshift run secrets-sweep: ${source.error}`);
+      ctx.err(`nightqueue run secrets-sweep: ${source.error}`);
       continue;
     }
     scanned += 1;

@@ -8,8 +8,8 @@ export const FAKE_CLAUDE = fileURLToPath(new URL("./fake-claude-stream.mjs", imp
 export function useFakeClaude(env, dir, attempts) {
   const planPath = join(dir, "fake-claude-plan.json");
   writeFileSync(planPath, JSON.stringify({ attempts }));
-  env.NIGHTSHIFT_CLAUDE_BIN = FAKE_CLAUDE;
-  env.NIGHTSHIFT_FAKE_PLAN = planPath;
+  env.NIGHTQUEUE_CLAUDE_BIN = FAKE_CLAUDE;
+  env.NIGHTQUEUE_FAKE_PLAN = planPath;
   return planPath;
 }
 

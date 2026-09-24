@@ -37,7 +37,7 @@ export function makeReport(ctx, { collapse = false } = {}) {
       degraded += 1;
       flush();
       write(stepLine(label, "failed", reason));
-      if (command) ctx.err(`nightshift: finish this step by hand: ${command}`);
+      if (command) ctx.err(`nightqueue: finish this step by hand: ${command}`);
     },
     note: (line) => {
       flush();

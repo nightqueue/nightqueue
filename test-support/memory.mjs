@@ -8,20 +8,20 @@ import { closeDb, openDb } from "../src/memory/db.mjs";
 import { acquireClose, addJob, claimJobById, finishJob, persistRunFacts, settleClose } from "../src/memory/jobs.mjs";
 
 const OWN_ENV_KEYS = [
-  "NIGHTSHIFT_HOME",
-  "NIGHTSHIFT_EMBED_DISABLED",
-  "NIGHTSHIFT_EMBED_DEADLINE_MS",
-  "NIGHTSHIFT_REFLECT",
-  "NIGHTSHIFT_REFLECT_MODEL",
-  "NIGHTSHIFT_CLAUDE_BIN",
-  "NIGHTSHIFT_MODEL",
-  "NIGHTSHIFT_SESSION_ID",
-  "NIGHTSHIFT_JOB_ID",
-  "NIGHTSHIFT_CLOSE_WORKER",
-  "NIGHTSHIFT_JOB_HOME",
-  "NIGHTSHIFT_JOB_CLAUDE_DIR",
-  "NIGHTSHIFT_NO_UPDATE_CHECK",
-  "NIGHTSHIFT_NO_PR_CHECK",
+  "NIGHTQUEUE_HOME",
+  "NIGHTQUEUE_EMBED_DISABLED",
+  "NIGHTQUEUE_EMBED_DEADLINE_MS",
+  "NIGHTQUEUE_REFLECT",
+  "NIGHTQUEUE_REFLECT_MODEL",
+  "NIGHTQUEUE_CLAUDE_BIN",
+  "NIGHTQUEUE_MODEL",
+  "NIGHTQUEUE_SESSION_ID",
+  "NIGHTQUEUE_JOB_ID",
+  "NIGHTQUEUE_CLOSE_WORKER",
+  "NIGHTQUEUE_JOB_HOME",
+  "NIGHTQUEUE_JOB_CLAUDE_DIR",
+  "NIGHTQUEUE_NO_UPDATE_CHECK",
+  "NIGHTQUEUE_NO_PR_CHECK",
 ];
 
 const finishedDirs = new Set();
@@ -37,7 +37,7 @@ process.on("exit", flushFinishedDirs);
 // Creates a temporary directory removed once the test ended, so a cleanup hook the test registers later still finds its files.
 export function makeDir(t, name) {
   flushFinishedDirs();
-  const dir = mkdtempSync(join(tmpdir(), `nightshift-${name}-`));
+  const dir = mkdtempSync(join(tmpdir(), `nightqueue-${name}-`));
   t.after(() => finishedDirs.add(dir));
   return dir;
 }
@@ -47,10 +47,10 @@ export function makeHome(t, name, { embed = false } = {}) {
   const home = join(makeDir(t, name), "home");
   const env = { ...process.env };
   for (const key of OWN_ENV_KEYS) delete env[key];
-  env.NIGHTSHIFT_HOME = home;
-  env.NIGHTSHIFT_NO_UPDATE_CHECK = "1";
-  env.NIGHTSHIFT_NO_PR_CHECK = "1";
-  if (!embed) env.NIGHTSHIFT_EMBED_DISABLED = "1";
+  env.NIGHTQUEUE_HOME = home;
+  env.NIGHTQUEUE_NO_UPDATE_CHECK = "1";
+  env.NIGHTQUEUE_NO_PR_CHECK = "1";
+  if (!embed) env.NIGHTQUEUE_EMBED_DISABLED = "1";
   t.after(() => closeDb(env));
   return env;
 }

@@ -24,11 +24,11 @@ import { findPrTemplate } from "./pr-template.mjs";
 import { SECRETS_SWEEP_USAGE, runSecretsSweep } from "./secrets-sweep.mjs";
 
 const USAGE = {
-  check: "nightshift run check <NN> [--project <name> --slug <slug>]",
-  commit: "nightshift run commit --message-file <path> [--files-from <path>] [--extra <pathspec>]",
-  log: "nightshift run log [--json] [--project <name> --slug <slug>]",
-  pr: "nightshift run pr --body-file <path> [--title <text>] [--remove-worktree] | --template",
-  "index-save": "nightshift run index-save <artifact> [--project <name>] [--repo-root <path>]",
+  check: "nightqueue run check <NN> [--project <name> --slug <slug>]",
+  commit: "nightqueue run commit --message-file <path> [--files-from <path>] [--extra <pathspec>]",
+  log: "nightqueue run log [--json] [--project <name> --slug <slug>]",
+  pr: "nightqueue run pr --body-file <path> [--title <text>] [--remove-worktree] | --template",
+  "index-save": "nightqueue run index-save <artifact> [--project <name>] [--repo-root <path>]",
   "secrets-sweep": SECRETS_SWEEP_USAGE,
 };
 
@@ -42,7 +42,7 @@ const NOTHING_TO_PRINT = "no phase recorded yet";
 // Refuses to read another run from inside a job: the run of a job is the one its own row names, never one the prompt spelled out.
 function refuseNamedRun(own) {
   throw new UserError(
-    `refusing to name a run from inside job \`${own}\`: \`nightshift run\` acts on the run of the job it is called from; ` +
+    `refusing to name a run from inside job \`${own}\`: \`nightqueue run\` acts on the run of the job it is called from; ` +
       "drop `--project`/`--slug`, or run the command outside the queue",
   );
 }
@@ -77,12 +77,12 @@ function operatorRun(values, env) {
   }
   const registered = projectByName(loadConfig(env, { warn: () => {} }), project);
   if (!registered) {
-    throw new UserError(`unknown project \`${project}\`: pass the registered project NAME; list them with \`nightshift project list\``);
+    throw new UserError(`unknown project \`${project}\`: pass the registered project NAME; list them with \`nightqueue project list\``);
   }
   return { jobId: null, project: registered.name, slug };
 }
 
-// The run every `nightshift run` subcommand acts on: the caller's own job run inside the queue, the one an operator named outside it.
+// The run every `nightqueue run` subcommand acts on: the caller's own job run inside the queue, the one an operator named outside it.
 async function resolveRun(values, ctx) {
   const own = callerJobId(ctx.env);
   const run = own === null ? operatorRun(values, ctx.env) : await jobRun(own, values, ctx.env);
@@ -533,10 +533,10 @@ function checkPrMode(values) {
 // Prints the pull request template in effect for the run and records it in state.json, so Phase 7 reads it instead of deciding.
 function announceTemplate(run, cwd, ctx) {
   const template = findPrTemplate(cwd);
-  ctx.out(template.source === "repo" ? `TEMPLATE: repo (${template.label})` : "TEMPLATE: nightshift (fallback)");
+  ctx.out(template.source === "repo" ? `TEMPLATE: repo (${template.label})` : "TEMPLATE: nightqueue (fallback)");
   ctx.out(`HEADINGS: ${template.headings.length > 0 ? template.headings.join(" · ") : "none"}`);
   const recorded = recordPrTemplate({ project: run.project, slug: run.slug, template, env: ctx.env });
-  if (recorded.status !== "written") ctx.err(`nightshift: the pull request template was not recorded on the run: ${recorded.reason}`);
+  if (recorded.status !== "written") ctx.err(`nightqueue: the pull request template was not recorded on the run: ${recorded.reason}`);
   return template;
 }
 
@@ -555,7 +555,7 @@ async function runPr(argv, ctx) {
   const problems = bodyProblems({ body, template, evidenceDir: join(run.runDir, "evidence") });
   if (problems.length > 0) {
     for (const problem of problems) ctx.out(problemLine(problem));
-    ctx.out("nothing was pushed and no pull request was opened: fix the body and call `nightshift run pr` again");
+    ctx.out("nothing was pushed and no pull request was opened: fix the body and call `nightqueue run pr` again");
     return 1;
   }
   const state = readRunState({ project: run.project, slug: run.slug, env: ctx.env });
@@ -565,9 +565,9 @@ async function runPr(argv, ctx) {
   const { url, recorded, prRecorded, branchRecorded } = publishBranch({ run, cwd, branch, title: prTitle(values.title, body), bodyFile: published, env: ctx.env });
   ctx.out(`BRANCH: ${branch}${branch === current ? "" : ` (renamed from ${current})`}`);
   ctx.out(`PR: ${url ?? "opened"}`);
-  if (recorded.status !== "written") ctx.err(`nightshift: the run was not recorded as done: ${recorded.reason}`);
-  if (prRecorded.status !== "written") ctx.err(`nightshift: the pull request was not recorded on the run: ${prRecorded.reason}`);
-  if (branchRecorded.status !== "written") ctx.err(`nightshift: the published branch was not recorded on the run: ${branchRecorded.reason}`);
+  if (recorded.status !== "written") ctx.err(`nightqueue: the run was not recorded as done: ${recorded.reason}`);
+  if (prRecorded.status !== "written") ctx.err(`nightqueue: the pull request was not recorded on the run: ${prRecorded.reason}`);
+  if (branchRecorded.status !== "written") ctx.err(`nightqueue: the published branch was not recorded on the run: ${branchRecorded.reason}`);
   ctx.out(`WORKTREE: ${cwd}`);
   if (values["remove-worktree"] === true) ctx.out(worktreeRemoval(run, cwd, ctx.env));
   return 0;
@@ -623,9 +623,9 @@ async function runIndexSave(argv, ctx) {
   const repoRoot = repoRootPath(ctx.cwd, values["repo-root"]);
   const project = values.project ?? repoRoot;
   const parsed = parseExploreArtifact(readNamedArtifact(artifactPath(ctx.cwd, artifact)));
-  if (!parsed.libsSection) ctx.err("nightshift run index-save: no `## Third-party libraries` section; no lib was saved");
+  if (!parsed.libsSection) ctx.err("nightqueue run index-save: no `## Third-party libraries` section; no lib was saved");
   for (const line of parsed.ignoredLibs) {
-    ctx.err(`nightshift run index-save: not a \`<lib>@<version>\` entry, skipped: ${line}`);
+    ctx.err(`nightqueue run index-save: not a \`<lib>@<version>\` entry, skipped: ${line}`);
   }
   const saved = await openStore(ctx.env).index.saveProjectIndex({
     project,
@@ -646,12 +646,12 @@ const SUBCOMMANDS = new Map([
   ["secrets-sweep", runSecretsSweep],
 ]);
 
-const HELP = `usage: nightshift run <subcommand> [options]
+const HELP = `usage: nightqueue run <subcommand> [options]
 
 subcommands:
 ${Object.values(USAGE).map((line) => `  ${line}`).join("\n")}`;
 
-// Dispatches the subcommands of `nightshift run`, returning the exit code the subcommand decided.
+// Dispatches the subcommands of `nightqueue run`, returning the exit code the subcommand decided.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   if (HELP_FLAGS.has(sub)) {
@@ -662,7 +662,7 @@ export async function run(argv, ctx) {
   if (!handler) {
     throw new UserError(
       `unknown run subcommand \`${sub ?? ""}\`; use: ${[...SUBCOMMANDS.keys()].join(", ")}. ` +
-        "`nightshift run` acts on the run of the job it is called from; to work the queue itself, use `nightshift queue run`",
+        "`nightqueue run` acts on the run of the job it is called from; to work the queue itself, use `nightqueue queue run`",
     );
   }
   return await handler(rest, ctx);

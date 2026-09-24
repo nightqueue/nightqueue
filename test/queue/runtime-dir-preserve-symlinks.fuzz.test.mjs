@@ -8,7 +8,7 @@ import { makeDir } from "../../test-support/memory.mjs";
 
 const HOST_PATHS_SOURCE = fileURLToPath(new URL("../../src/host/paths.mjs", import.meta.url));
 const CONFIG_PATHS_SOURCE = fileURLToPath(new URL("../../src/config/paths.mjs", import.meta.url));
-const PACKAGE_NAME = "@maykonv/nightshift";
+const PACKAGE_NAME = "nightqueue";
 
 const ENTRY_SOURCE = [
   'import { packageRoot } from "../src/host/paths.mjs";',

@@ -24,11 +24,11 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 const SLUG = "hunt-the-notice";
 const PROMPT = "## Brief\nqueue status shows the same notice twice\n\n## Stages\n1) fix it\n";
 
-// A temp home (standing decision #7: never the real `~/.nightshift`) with the project `alpha` and
+// A temp home (standing decision #7: never the real `~/.nightqueue`) with the project `alpha` and
 // an operator run recorded into it, eligible to seed a job via `run_dir`.
 function makeOperatorRun(t, name) {
   const base = makeHome(t, name);
-  const env = { ...base, HOME: dirname(base.NIGHTSHIFT_HOME), CLAUDE_CONFIG_DIR: join(dirname(base.NIGHTSHIFT_HOME), ".claude") };
+  const env = { ...base, HOME: dirname(base.NIGHTQUEUE_HOME), CLAUDE_CONFIG_DIR: join(dirname(base.NIGHTQUEUE_HOME), ".claude") };
   makeProject(t, env, "alpha");
   recordRunFields({ project: "alpha", slug: SLUG, fields: { origin: "operator", type: "bug/error", evidenceLevel: 3 }, env });
   recordPhaseDone({ project: "alpha", slug: SLUG, phase: "triage", artifact: "01-triage.md", verdict: "PROCEED", env });
@@ -40,7 +40,7 @@ function makeOperatorRun(t, name) {
 async function connectInProcess(t, env) {
   const server = createServer(env);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "nightshift-tests-race", version: "0.0.0" });
+  const client = new Client({ name: "nightqueue-tests-race", version: "0.0.0" });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   t.after(async () => {
     await client.close();

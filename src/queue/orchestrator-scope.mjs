@@ -3,8 +3,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homeDir } from "../config/paths.mjs";
 import { claudeConfigDir, claudePluginsDir, hostPackageRoot, packageRoot } from "../host/paths.mjs";
 
-export const PLUGIN_DIR_ENV = "NIGHTSHIFT_PLUGIN_DIR";
-const JOB_HOME_ENV = "NIGHTSHIFT_JOB_HOME";
+export const PLUGIN_DIR_ENV = "NIGHTQUEUE_PLUGIN_DIR";
+const JOB_HOME_ENV = "NIGHTQUEUE_JOB_HOME";
 const SPILL_DIR = "tool-results";
 
 // Freezes one rule of a closed list, with its argv.
@@ -30,7 +30,7 @@ export const ORCHESTRATOR_BASH_RULES = Object.freeze(
     { argv: ["git", "branch"], anyOf: ["--show-current"] },
     { argv: ["git", "diff"], anyOf: ["--stat", "--shortstat", "--name-only", "--name-status"], noneOf: ["-p", "-u", "--patch"] },
     { argv: ["gh", "pr"], next: ["view", "list", "status", "checks", "create"] },
-    { argv: ["nightshift", "run"], next: ["check", "log", "index-save", "commit", "pr"] },
+    { argv: ["nightqueue", "run"], next: ["check", "log", "index-save", "commit", "pr"] },
   ].map(freezeRule),
 );
 
@@ -39,7 +39,7 @@ const OPERATOR_QA_WORKTREE = /^\.claude\/worktrees\/operator-qa-[A-Za-z0-9][A-Za
 const COMMIT_ISH = /^[A-Za-z0-9][A-Za-z0-9._/~^-]{0,199}$/;
 const QA_WORKTREE_SHOWN = ".claude/worktrees/operator-qa-<slug>";
 
-// The closed list of commands the operator of `nightshift open` may run: read-only git, its own QA worktree, and nothing that commits, pushes or fetches.
+// The closed list of commands the operator of `nightqueue open` may run: read-only git, its own QA worktree, and nothing that commits, pushes or fetches.
 export const OPERATOR_BASH_RULES = Object.freeze(
   [
     { argv: ["git", "rev-parse"] },
@@ -70,7 +70,7 @@ export const OPERATOR_BASH_RULES = Object.freeze(
     { argv: ["gh", "pr"], next: ["view", "list", "status", "checks"] },
     { argv: ["gh", "issue"], next: ["list", "view"] },
     { argv: ["adb", "devices"], exact: [] },
-    { argv: ["nightshift", "run"], next: ["check", "log", "index-save"] },
+    { argv: ["nightqueue", "run"], next: ["check", "log", "index-save"] },
   ].map(freezeRule),
 );
 
@@ -146,7 +146,7 @@ export function orchestratorBashAllowed(command) {
   return bashAllowed(ORCHESTRATOR_BASH_RULES, command);
 }
 
-// Tells whether a Bash command is one of the closed list the operator of `nightshift open` may run.
+// Tells whether a Bash command is one of the closed list the operator of `nightqueue open` may run.
 export function operatorBashAllowed(command) {
   return bashAllowed(OPERATOR_BASH_RULES, command);
 }

@@ -27,13 +27,13 @@ export async function addFromArgs(argv, ctx, usage) {
 
 // Runs `project add`.
 async function runAdd(argv, ctx) {
-  await addFromArgs(argv, ctx, "nightshift project add <path> [--org <name>] [--name <name>]");
+  await addFromArgs(argv, ctx, "nightqueue project add <path> [--org <name>] [--name <name>]");
 }
 
 // Runs `project list`.
 async function runList(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
-  checkArgs(positionals, { max: 0, usage: "nightshift project list [--json]" });
+  checkArgs(positionals, { max: 0, usage: "nightqueue project list [--json]" });
   const projects = listProjects(loadConfig(ctx.env, { warn: ctx.err }));
   if (values.json) {
     ctx.out(JSON.stringify({ projects }));
@@ -51,7 +51,7 @@ async function runList(argv, ctx) {
 // Runs `project remove`.
 async function runRemove(argv, ctx) {
   const { positionals } = parseCommand(argv);
-  checkArgs(positionals, { min: 1, usage: "nightshift project remove <name>" });
+  checkArgs(positionals, { min: 1, usage: "nightqueue project remove <name>" });
   const name = positionals[0];
   ctx.saveConfig(removeProject(loadConfig(ctx.env, { warn: ctx.err }), name), ctx.env);
   ctx.out(`removed project \`${name}\``);
@@ -60,7 +60,7 @@ async function runRemove(argv, ctx) {
 // Runs `project move`.
 async function runMove(argv, ctx) {
   const { positionals } = parseCommand(argv);
-  checkArgs(positionals, { min: 2, usage: "nightshift project move <name> <org>" });
+  checkArgs(positionals, { min: 2, usage: "nightqueue project move <name> <org>" });
   const [name, org] = positionals;
   const result = moveProject(loadConfig(ctx.env, { warn: ctx.err }), name, org);
   if (result.status === "unchanged") {
@@ -78,7 +78,7 @@ const SUBCOMMANDS = new Map([
   ["move", runMove],
 ]);
 
-// Dispatches the subcommands of `nightshift project`.
+// Dispatches the subcommands of `nightqueue project`.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);

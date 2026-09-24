@@ -17,7 +17,7 @@ const NEWER_VERSION = "0.2.0-20260921T142701Z";
 function writeVersion(env, name) {
   const pkgDir = join(runtimeVersionsDir(env), name, "node_modules", PACKAGE_NAME);
   mkdirSync(join(pkgDir, "bin"), { recursive: true });
-  writeFileSync(join(pkgDir, "bin", "nightshift.mjs"), "");
+  writeFileSync(join(pkgDir, "bin", "nightqueue.mjs"), "");
   return pkgDir;
 }
 
@@ -50,7 +50,7 @@ test("with no runtime installed, a detached runner is born from the caller's own
 
   const calls = [];
   const started = await startQueueRunner({ env, spawnImpl: fakeSpawn(calls), killImpl: () => true });
-  assert.equal(calls[0].args[0], join(packageRoot(), "bin", "nightshift.mjs"));
+  assert.equal(calls[0].args[0], join(packageRoot(), "bin", "nightqueue.mjs"));
   assert.equal(registration(started.pid, env).runtimeDir, packageRoot());
 
   assert.equal(staleRuntimeHint(env), null, "no runtime installed must never read as stale");
@@ -67,7 +67,7 @@ test("with a current link installed, a detached runner is born from it even when
 
   const calls = [];
   const launched = launchDetachedRunner({ env, spawnImpl: fakeSpawn(calls) });
-  assert.equal(calls[0].args[0], join(newerPkgDir, "bin", "nightshift.mjs"), "the detached argv did not point at the current installed runtime");
+  assert.equal(calls[0].args[0], join(newerPkgDir, "bin", "nightqueue.mjs"), "the detached argv did not point at the current installed runtime");
   assert.equal(launched.runtimeDir, newerPkgDir);
 
   const registerCalls = [];

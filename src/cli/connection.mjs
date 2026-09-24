@@ -27,7 +27,7 @@ export function saveConfigAfterSecret({ config, ctx, name, org }) {
     ctx.saveConfig(config, ctx.env);
   } catch (err) {
     throw new Error(
-      `secret stored for \`${name}\`, but the config write failed: ${err?.message ?? String(err)}; run \`nightshift connection bind ${name} --org ${org}\``,
+      `secret stored for \`${name}\`, but the config write failed: ${err?.message ?? String(err)}; run \`nightqueue connection bind ${name} --org ${org}\``,
     );
   }
 }
@@ -38,14 +38,14 @@ function saveSecretsAfterConfig({ secrets, ctx, name }) {
     ctx.saveSecrets(secrets, ctx.env);
   } catch (err) {
     throw new Error(
-      `unbound \`${name}\` from all orgs, but the secret file write failed: ${err?.message ?? String(err)}; run \`nightshift connection remove ${name}\` again`,
+      `unbound \`${name}\` from all orgs, but the secret file write failed: ${err?.message ?? String(err)}; run \`nightqueue connection remove ${name}\` again`,
     );
   }
 }
 
 // Runs `connection add`, reading the secret from stdin and never from argv.
 async function runAdd(argv, ctx) {
-  const usage = "nightshift connection add <name> --type <type> [--org <name>]";
+  const usage = "nightqueue connection add <name> --type <type> [--org <name>]";
   const { values, positionals } = parseCommand(argv, { type: { type: "string" }, org: { type: "string" } });
   checkArgs(positionals, { min: 1, usage });
   const name = positionals[0];
@@ -71,13 +71,13 @@ async function runAdd(argv, ctx) {
   }
   ctx.out(`stored connection \`${name}\` (${values.type})`);
   ctx.err(
-    `nightshift: warning: org \`${org}\` already uses \`${result.occupiedBy}\` for ${values.type}; run \`nightshift connection bind ${name} --org ${org}\` to switch`,
+    `nightqueue: warning: org \`${org}\` already uses \`${result.occupiedBy}\` for ${values.type}; run \`nightqueue connection bind ${name} --org ${org}\` to switch`,
   );
 }
 
 // Runs `connection bind`.
 async function runBind(argv, ctx) {
-  const usage = "nightshift connection bind <name> --org <name>";
+  const usage = "nightqueue connection bind <name> --org <name>";
   const { values, positionals } = parseCommand(argv, { org: { type: "string" } });
   checkArgs(positionals, { min: 1, usage });
   const name = positionals[0];
@@ -96,7 +96,7 @@ async function runBind(argv, ctx) {
 // Runs `connection list`.
 async function runList(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
-  checkArgs(positionals, { max: 0, usage: "nightshift connection list [--json]" });
+  checkArgs(positionals, { max: 0, usage: "nightqueue connection list [--json]" });
   const connections = listConnections(loadConfig(ctx.env, { warn: ctx.err }), loadSecrets(ctx.env, { warn: ctx.err }));
   if (values.json) {
     ctx.out(JSON.stringify({ connections }));
@@ -112,7 +112,7 @@ async function runList(argv, ctx) {
 // Runs `connection test`.
 async function runTest(argv, ctx) {
   const { positionals } = parseCommand(argv);
-  checkArgs(positionals, { min: 1, usage: "nightshift connection test <name>" });
+  checkArgs(positionals, { min: 1, usage: "nightqueue connection test <name>" });
   const name = positionals[0];
   const result = await testConnection({
     name,
@@ -126,7 +126,7 @@ async function runTest(argv, ctx) {
 // Runs `connection remove`.
 async function runRemove(argv, ctx) {
   const { positionals } = parseCommand(argv);
-  checkArgs(positionals, { min: 1, usage: "nightshift connection remove <name>" });
+  checkArgs(positionals, { min: 1, usage: "nightqueue connection remove <name>" });
   const name = positionals[0];
   const result = removeConnection({
     config: loadConfig(ctx.env, { warn: ctx.err }),
@@ -147,7 +147,7 @@ const SUBCOMMANDS = new Map([
   ["remove", runRemove],
 ]);
 
-// Dispatches the subcommands of `nightshift connection`.
+// Dispatches the subcommands of `nightqueue connection`.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;
   const handler = SUBCOMMANDS.get(sub);

@@ -4,7 +4,7 @@ const CALL_TIMEOUT_MS = 20000;
 
 // Path of the claude CLI, the same resolver the reflection uses.
 export function claudeBin(env = process.env) {
-  const raw = typeof env?.NIGHTSHIFT_CLAUDE_BIN === "string" ? env.NIGHTSHIFT_CLAUDE_BIN.trim() : "";
+  const raw = typeof env?.NIGHTQUEUE_CLAUDE_BIN === "string" ? env.NIGHTQUEUE_CLAUDE_BIN.trim() : "";
   return raw || "claude";
 }
 
