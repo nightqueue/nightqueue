@@ -31,7 +31,7 @@ before pushing.
 Trusted publishing has to be granted once, by a maintainer of the package, before the first tag is
 pushed. Until this is done, the workflow fails at `npm publish` with an authentication error.
 
-- [ ] Sign in to npmjs.com as a maintainer of `nightqueue`.
+- [ ] Sign in to npmjs.com as a maintainer of `@nightqueue/nq`.
 - [ ] Open the package settings → **Publishing access**.
 - [ ] Add a trusted publisher: provider **GitHub Actions**.
 - [ ] Repository: `nightqueue/nightqueue`.

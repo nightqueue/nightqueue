@@ -8,11 +8,12 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
-- **nightshift is now nightqueue.** The package is `nightqueue` on npm (unscoped; `@maykonv/nightshift`
-  is deprecated and will not be updated), the command is `nightqueue`, the Claude Code plugin is
+- **nightshift is now nightqueue.** The package is `@nightqueue/nq` on npm (`@maykonv/nightshift`
+  is deprecated and will not be updated; the unscoped name is refused by the registry as too close
+  to an unrelated `night-queue`), the command is `nightqueue`, the Claude Code plugin is
   `nightqueue` (`/nightqueue:queue`, `/nightqueue:resolve`), the MCP server is `nightqueue`, the home is
   `~/.nightqueue` and every environment variable is `NIGHTQUEUE_*`. There is no alias for the old
-  names: move the home yourself (`mv ~/.nightshift ~/.nightqueue`), run `npx nightqueue init` and
+  names: move the home yourself (`mv ~/.nightshift ~/.nightqueue`), run `npx @nightqueue/nq init` and
   remove the old plugin from Claude Code. The repository moved to `nightqueue/nightqueue`.
 - The shortcut shims are gone with the name: `nshift` and `nsft` are replaced by one, `nq`.
   Because `nq` is also a Unix job queue (`brew install nq`), `nightqueue doctor` warns when another

@@ -4,7 +4,7 @@ One command installs everything; the rest is the daily flow, from anywhere, on a
 machine that has nothing installed yet:
 
 ```sh
-npx nightqueue init                           # install the runtime and set the host up
+npx @nightqueue/nq init                       # install the runtime and set the host up
 # then open a new terminal, or source your rc file, so `nightqueue` resolves
 nightqueue doctor                                      # check the host and the home
 nightqueue queue add "fix the flaky worker"            # queue one deliverable
@@ -28,7 +28,7 @@ the basename of its root and queue the job — and does both in the same run.
 `--yes` answers it for a script; with no terminal and no `--yes` the command
 keeps failing as before, without registering anything.
 
-`npx nightqueue init` is the whole installation. It puts the package
+`npx @nightqueue/nq init` is the whole installation. It puts the package
 in `~/.nightqueue/runtime`, writes the shims `~/.nightqueue/bin/nightqueue`,
 and `nq` (`--no-shortcuts` writes only `nightqueue`), offers to
 put that directory on your PATH, registers the MCP server, the hooks and the
@@ -120,7 +120,7 @@ Restart Claude Code and the pipeline answers as `/nightqueue:resolve`. To check
 the result of all of it at any point, run `nightqueue doctor`.
 
 **The manual flow**, still supported one step at a time, on top of a global
-install (`npm install -g nightqueue`) or a clone (`npm install` plus
+install (`npm install -g @nightqueue/nq`) or a clone (`npm install` plus
 `npm link`):
 
 ```sh

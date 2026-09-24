@@ -49,7 +49,7 @@ test("--check-updates compares the installed runtime with the newest published v
     detail: `v${VERSION} is the newest published`,
     hint: null,
   });
-  assert.deepEqual(viewCalls(host), [["view", "nightqueue@latest", "version", "--json"]]);
+  assert.deepEqual(viewCalls(host), [["view", "@nightqueue/nq@latest", "version", "--json"]]);
 });
 
 test("a newer published version is a warning pointing at update, never a failure", async (t) => {
@@ -74,7 +74,7 @@ test("a registry that does not answer is a warning carrying the message of npm, 
   const check = registryCheck(report);
   assert.equal(check.status, "warn");
   assert.match(check.detail, /NIGHTQUEUE_FAKE_NPM_EXIT=1/);
-  assert.match(check.hint, /view nightqueue@latest version --json$/);
+  assert.match(check.hint, /view @nightqueue\/nq@latest version --json$/);
   assert.equal(code, offline.code, "a registry that is down turned a local diagnosis into another exit code");
   assert.deepEqual(report.checks.filter((entry) => entry.name === "registry" && entry.status === "fail"), []);
 });

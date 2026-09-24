@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { npmPack, parsePackOutput } from "../src/host/npm.mjs";
 
-const ENTRY = { id: "nightqueue@0.2.0", name: "nightqueue", version: "0.2.0", filename: "nightqueue-0.2.0.tgz", unpackedSize: 960989, files: [] };
+const ENTRY = { id: "@nightqueue/nq@0.2.0", name: "@nightqueue/nq", version: "0.2.0", filename: "nightqueue-nq-0.2.0.tgz", unpackedSize: 960989, files: [] };
 
 test("the pack output is read in the array shape of npm 10/11 and in the keyed-object shape of npm 12", () => {
   assert.deepEqual(parsePackOutput(JSON.stringify([ENTRY])), ENTRY);
@@ -27,7 +27,7 @@ test("npmPack resolves the tarball path from either shape, and declares a failur
   assert.equal(array.ok, true);
   assert.equal(keyed.ok, true);
   assert.equal(array.file, keyed.file);
-  assert.match(array.file, /nightqueue-0\.2\.0\.tgz$/);
+  assert.match(array.file, /nightqueue-nq-0\.2\.0\.tgz$/);
   const none = npmPack({ dir: "/src", destDir: "/dest", spawnSyncImpl: spawnWith("{}") });
   assert.equal(none.ok, false);
   assert.equal(none.file, null);

@@ -63,7 +63,7 @@ test("H1a/H1b/H1c: a missing package.json makes the CLI, the hook and the MCP en
     assert.equal(result.status, 1, `${name}: expected exit code 1, got ${result.status} (stderr: ${result.stderr})`);
     assert.equal(result.stdout, "", `${name}: stdout must stay empty, the failure must never look like success`);
     assert.match(result.stderr, /this installation of nightqueue is incomplete, reinstall it/, `${name}: stderr must carry the actionable message`);
-    assert.match(result.stderr, /npm i -g nightqueue/, `${name}: stderr must name the exact remedy`);
+    assert.match(result.stderr, /npm i -g @nightqueue\/nq/, `${name}: stderr must name the exact remedy`);
   }
 
   assert.equal(hook.stderr, cli.stderr, "the hook invocation crashes with the exact same message as the CLI: the throw happens at import, before argv is ever read");

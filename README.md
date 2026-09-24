@@ -2,9 +2,9 @@
 
 **An autonomous queue of coding agents with its own memory.**
 
-[![npm](https://img.shields.io/npm/v/nightqueue?label=npm)](https://www.npmjs.com/package/nightqueue)
+[![npm](https://img.shields.io/npm/v/%40nightqueue%2Fnq?label=npm)](https://www.npmjs.com/package/@nightqueue/nq)
 [![ci](https://github.com/nightqueue/nightqueue/actions/workflows/ci.yml/badge.svg)](https://github.com/nightqueue/nightqueue/actions/workflows/ci.yml)
-[![node](https://img.shields.io/node/v/nightqueue)](package.json)
+[![node](https://img.shields.io/node/v/%40nightqueue%2Fnq)](package.json)
 [![license: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue)](LICENSE)
 
 Queue the work during the day. Start the batch when you step away. Come back to
@@ -87,7 +87,7 @@ free and is never degraded to push it.
 Requirements: [Claude Code](https://claude.com/claude-code) and Node >= 22.
 
 ```sh
-npx nightqueue init                           # install the runtime and set Claude Code up
+npx @nightqueue/nq init                       # install the runtime and set Claude Code up
 # open a new terminal so `nightqueue` (and its shortcut `nq`) resolves
 nightqueue doctor                                      # check the host and the home
 
