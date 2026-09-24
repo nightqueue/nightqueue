@@ -32,7 +32,7 @@ function trackedFiles() {
 test("`nightqueue` is the only command name npm installs and the embedding library is not a dependency", () => {
   // npm strips a bin path that starts with `./` at publish time ("script name was invalid and removed"),
   // which would publish a package with no command at all: the path stays bare.
-  assert.equal(MANIFEST.name, "nightqueue");
+  assert.equal(MANIFEST.name, "@nightqueue/nq");
   assert.deepEqual(MANIFEST.bin, { nightqueue: "bin/nightqueue.mjs" });
   assert.equal(MANIFEST.optionalDependencies, undefined);
   assert.equal(Object.hasOwn(MANIFEST.dependencies, "@huggingface/transformers"), false);
