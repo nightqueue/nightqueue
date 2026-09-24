@@ -228,7 +228,7 @@ function makeTwoProjectHome(t, name) {
   makeProject(t, env, "beta");
   const own = saveDecision({ ...DECISION, project: "alpha", status: "accepted" }, env);
   const foreign = saveDecision({ ...DECISION, project: "beta", title: "beta keeps its own log", status: "accepted" }, env);
-  const foreignItem = saveRoadmapItem({ project: "beta", horizon: "now", title: "beta ships its dashboard" }, env);
+  const foreignItem = saveRoadmapItem({ project: "beta", horizon: "now", title: "beta delivers its dashboard" }, env);
   const job = addJob({ project: "alpha", prompt: "rewrite the runner" }, env);
   return { env, own, foreign, foreignItem, job };
 }

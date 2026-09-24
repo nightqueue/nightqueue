@@ -130,7 +130,7 @@ test("outside a job the project and the slug are both required, and a registered
 
 test("`run_outcome` done closes the roadmap item the job came from, and a gate leaves it open", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-run-tools-roadmap");
-  const item = saveRoadmapItem({ project: "alpha", horizon: "now", title: "ship the thing" }, env);
+  const item = saveRoadmapItem({ project: "alpha", horizon: "now", title: "deliver the thing" }, env);
   assert.equal(markRoadmapItemQueued(item.id, job.id, env), true, "setup: the item was not linked to its job");
   const client = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: String(job.id) });
 

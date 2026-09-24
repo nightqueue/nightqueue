@@ -36,12 +36,11 @@ import {
 import { blockerLines, claimBlocker } from "../queue/claim.mjs";
 import {
   PROPOSAL_CHOICES,
-  closeJobAndWorktree,
   requireProposalChoice,
   settleJobProposals,
-  worktreeEntry,
-  worktreeLine,
-} from "../queue/close.mjs";
+} from "../queue/proposals.mjs";
+import { worktreeLine } from "../queue/close.mjs";
+import { cancelJobAndWorktree } from "../queue/cancel.mjs";
 import { closeMerged, CLOSE_MERGED_DEADLINE_MS } from "../queue/close-merged.mjs";
 import { runMaintenance } from "../queue/maintenance.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
@@ -59,8 +58,8 @@ import { reclassifyFromLog } from "../queue/repair.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
-import { runShipHere, startShipDetached } from "../queue/ship-start.mjs";
-import { queueWorkers, shipChecklistLines, shipLastCell, shipStoppedLine, statusLabel } from "../queue/ship-view.mjs";
+import { runCloseHere, startCloseDetached } from "../queue/close-start.mjs";
+import { closeChecklistLines, closeLastCell, closeStoppedLine, queueWorkers, statusLabel } from "../queue/close-view.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -72,10 +71,9 @@ export const USAGE = {
   add: "nightshift queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id>]",
   status: "nightshift queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightshift queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
-  cancel: "nightshift queue cancel <id> [--reason <text>]",
-  close: "nightshift queue close <id>... [--decisions accept|reject|keep] [--json], or nightshift queue close --merged [--decisions accept|reject|keep] [--json]",
+  cancel: "nightshift queue cancel <id> [--reason <text>] [--json]",
+  close: "nightshift queue close <id> [--force] [--foreground] [--decisions accept|reject|keep] [--json], or nightshift queue close --merged [--decisions accept|reject|keep] [--json]",
   retry: "nightshift queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
-  ship: "nightshift queue ship <id> [--force] [--foreground] [--json]",
   repair: "nightshift queue repair <id> [--json]",
   pause: "nightshift queue pause",
   resume: "nightshift queue resume",
@@ -468,7 +466,7 @@ function columnsFor(jobs, nowMs) {
   return COLUMNS.map((column) => (column.key === "status" ? { ...column, width: Math.max(column.width, statusCell) } : column));
 }
 
-// The STATUS cell of a job: the icon of its status and the label the ship view gives it.
+// The STATUS cell of a job: the icon of its status and the label the close view gives it.
 function statusCellOf(job, nowMs) {
   return `${statusStyleOf(job.status).icon} ${statusLabel(job, nowMs)}`;
 }
@@ -543,8 +541,8 @@ function blockedOf(job) {
 // back, which reset it waits for when a rate limit parked it, its slug otherwise.
 function lastCell(job, env) {
   if (job.status === "running") return lastNarration(job.id, env);
-  const ship = shipLastCell(job);
-  if (ship) return ship;
+  const close = closeLastCell(job);
+  if (close) return close;
   if (job.status === "gate" || job.status === "failed") return firstNoticeLine(job) ?? job.slug ?? "-";
   const blocked = blockedOf(job);
   if (blocked) return blocked.message ? `⛔ ${blocked.code}: ${blocked.message}` : `⛔ ${blocked.code}`;
@@ -611,7 +609,7 @@ function formatBlocked(job) {
 }
 
 // The fields the detail view prints as blocks of their own instead of one key/value line.
-const DETAIL_BLOCK_KEYS = new Set(["notice_md", "run_notice", "ship"]);
+const DETAIL_BLOCK_KEYS = new Set(["notice_md", "run_notice", "close"]);
 
 // Detail block of a single job, one field per line, with the reason it stopped spelled out instead of dumped on one line.
 function formatDetail(job) {
@@ -621,7 +619,7 @@ function formatDetail(job) {
   const at = fields.findIndex((line) => line.startsWith("status".padEnd(16)));
   const suggestion = closeSuggestion([job]);
   const extra = [
-    ...shipChecklistLines(job),
+    ...closeChecklistLines(job),
     ...formatBlocked(job),
     ...(suggestion ? [suggestion] : []),
     ...formatNotice(job),
@@ -637,7 +635,7 @@ function runnerCadence(runner) {
     return `watch every ${runner.intervalS} s${window ? ` · ${window}` : ""}`;
   }
   if (runner.mode === "once") return runner.jobId === null ? "once" : `once, job #${runner.jobId}`;
-  if (runner.mode === "ship") return `ship, job #${runner.jobId}`;
+  if (runner.mode === "close") return `close, job #${runner.jobId}`;
   return `${runner.mode ?? "runner"}`;
 }
 
@@ -1113,15 +1111,21 @@ async function runRun(argv, ctx) {
   return await runGuardedHere({ jobId, json, ctx, run: () => runCycleHere({ jobId, max, json }, ctx) });
 }
 
-// Runs `queue cancel`, which refuses without writing when the job is running under a live lease.
+// Runs `queue cancel`, which refuses without writing when the job is running or being closed under a live lease, and releases the worktree of a done or failed job.
 async function runCancel(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { reason: { type: "string" }, json: { type: "boolean" } });
   checkArgs(positionals, { min: 1, usage: USAGE.cancel });
-  const job = await openStore(ctx.env).jobs.cancelJob(requireInt("id", positionals[0]), { reason: values.reason });
-  ctx.out(values.json ? JSON.stringify({ job }) : `cancelled job #${job.id}`);
+  const store = openStore(ctx.env);
+  const { job, worktree } = await cancelJobAndWorktree({ store, id: requireInt("id", positionals[0]), reason: values.reason, env: ctx.env, killImpl: ctx.killImpl });
+  if (values.json) {
+    ctx.out(JSON.stringify({ job, worktree }));
+    return;
+  }
+  ctx.out(`cancelled job #${job.id}`);
+  if (worktree) ctx.out(worktreeLine(worktree));
 }
 
-const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" }, decisions: { type: "string" } };
+const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" }, decisions: { type: "string" }, force: { type: "boolean" }, foreground: { type: "boolean" } };
 
 // The question a terminal is asked for one open proposal of a job it just closed.
 function proposalQuestion(row) {
@@ -1159,50 +1163,12 @@ function proposalLine(entry) {
   return `decision ${entry.label} ${entry.title}: ${outcome}`;
 }
 
-// Closes each id on its own store call, so one refusal never stops the ids that come after it; each closed job's worktree is released after its row closed.
-async function closeByIds(ids, store, ctx) {
-  const closed = [];
-  const refused = [];
-  const worktrees = [];
-  for (const id of ids) {
-    try {
-      const { job, worktree } = await closeJobAndWorktree({ store, id, env: ctx.env });
-      closed.push(job);
-      if (worktree) worktrees.push(worktreeEntry(job, worktree));
-    } catch (err) {
-      refused.push({ id, reason: err?.message ?? String(err) });
-    }
-  }
-  return { closed, refused, worktrees };
-}
-
 // One `closed job #N` line per closed job, each followed by the line of the worktree it released, when it had one.
 function closedJobLines(closed, worktrees = []) {
   return closed.flatMap((job) => {
     const entry = worktrees.find((candidate) => candidate.id === job.id);
     return entry ? [`closed job #${job.id}`, worktreeLine(entry)] : [`closed job #${job.id}`];
   });
-}
-
-// Text lines of a multi-id close: one per id, closed or not, plus the worktree of each closed one and one per proposal it settled.
-function closeByIdsLines({ closed, refused, worktrees, decisions }) {
-  return [
-    ...closedJobLines(closed, worktrees),
-    ...refused.map(({ id, reason }) => `job #${id} not closed: ${reason}`),
-    ...decisions.map(proposalLine),
-  ];
-}
-
-// Runs `queue close <id>...`, which takes every job it can from a terminal status to `closed`, settles their proposals and reports the rest by name.
-async function runCloseByIds(positionals, values, ctx, chooser) {
-  const ids = positionals.map((token) => requireInt("id", token));
-  const store = openStore(ctx.env);
-  const closedResult = await closeByIds(ids, store, ctx);
-  const decisions = await settleClosedJobs({ store, closed: closedResult.closed, choose: chooser, ctx });
-  const result = { ...closedResult, decisions };
-  if (values.json) ctx.out(JSON.stringify(result));
-  else for (const line of closeByIdsLines(result)) ctx.out(line);
-  if (result.closed.length === 0) throw new UserError(result.refused.map(({ reason }) => reason).join("; "));
 }
 
 // The line `queue close --merged` prints before it asks gh, on stdout in text mode and never on the stdout of `--json`.
@@ -1231,13 +1197,14 @@ function closeMergedLines({ closed, refused, undetermined, worktrees, decisions 
   return lines;
 }
 
-// Runs `queue close --merged`, which closes every terminal job the cache and, for the gap, gh itself confirm merged, then settles their proposals; it never fails because one pull request could not be read.
+// Runs `queue close --merged`, which closes every done job the cache and, for the gap, gh itself confirm merged, then settles their proposals; it never fails because one pull request could not be read.
 async function runCloseMerged(values, ctx, chooser) {
   const prStates = ctx.prStates ?? createPrStateCache();
   try {
     const store = openStore(ctx.env);
     const deadlineMs = ctx.closeMergedDeadlineMs ?? CLOSE_MERGED_DEADLINE_MS;
-    const merged = await closeMerged({ store, prStates, env: ctx.env, deadlineMs, onChecking: (n) => reportChecking(n, values, ctx) });
+    const deps = ctx.closeDeps ?? null;
+    const merged = await closeMerged({ store, prStates, env: ctx.env, deps, deadlineMs, onChecking: (n) => reportChecking(n, values, ctx) });
     const decisions = await settleClosedJobs({ store, closed: merged.closed, choose: chooser, ctx });
     const result = { ...merged, decisions };
     if (values.json) ctx.out(JSON.stringify(result));
@@ -1247,16 +1214,102 @@ async function runCloseMerged(values, ctx, chooser) {
   }
 }
 
-// Runs `queue close`: every id it was given, independently, or `--merged` for every terminal job the pull request state confirms merged.
+const CLOSE_STEP_ICONS = { done: "✓", skipped: "-", failed: "✗" };
+
+// The line a forced close prints first, so what `--force` skips, and what it never skips, is always said out loud.
+function forcedCloseLine(id) {
+  return `job #${id}: --force: pull request checks and the rebase suite are skipped; conflicts, attribution and status still stop the close`;
+}
+
+// One settled step of a foreground close, as the operator reads it.
+function closeStepLine({ name, status, note, earlier = false }) {
+  const icon = CLOSE_STEP_ICONS[status] ?? "·";
+  return `${icon} ${String(name).padEnd(10)} ${note ?? ""}${earlier ? " (earlier attempt)" : ""}`.trimEnd();
+}
+
+// The number of a pull request, from the close's own data or its URL.
+function prNumberOf(job) {
+  const recorded = jobView(job)?.close?.data?.prNumber;
+  if (Number.isInteger(recorded)) return recorded;
+  return /\/pull\/(\d+)/.exec(String(job?.pr_url ?? ""))?.[1] ?? "?";
+}
+
+// The last line of a foreground close: what it merged and how the job ended, or where it stopped and how to resume.
+function closeOutcomeLine(id, { outcome, job }) {
+  const worktree = outcome.worktree ? `; ${worktreeLine(outcome.worktree)}` : "";
+  if (outcome.status === "closed") return `job #${id} closed: PR #${prNumberOf(job)} merged as ${String(outcome.mergeSha ?? "").slice(0, 7)}${worktree}`;
+  if (outcome.status === "cancelled") return `job #${id} cancelled: PR #${prNumberOf(job)} was closed without being merged; nothing to close${worktree}`;
+  if (outcome.status === "lost") return `job #${id}: the close lease was taken over by another process; follow it with nightshift queue status ${id}`;
+  return closeStoppedLine(jobView(job)) ?? `⛔ close stopped at ${outcome.step}: ${outcome.reason} - run again with: nightshift queue close ${id}`;
+}
+
+// Runs the close of a job in this process, printing each settled step, and answers its outcome with the job as it ended.
+async function closeInThisProcess(id, values, ctx) {
+  const say = values.json === true ? ctx.err : ctx.out;
+  return await runCloseHere({
+    store: openStore(ctx.env),
+    id,
+    force: values.force === true,
+    env: ctx.env,
+    deps: ctx.closeDeps ?? null,
+    killImpl: ctx.killImpl,
+    onStart: (lease) => lease.forced && say(forcedCloseLine(id)),
+    onStep: (step) => say(closeStepLine(step)),
+  });
+}
+
+// Prints how a foreground close ended, plus the proposals it settled, and answers 0 only when it closed the job.
+function reportCloseOutcome(id, result, values, ctx, decisions) {
+  const { status, step = null, reason = null, mergeSha = null } = result.outcome;
+  if (values.json) {
+    ctx.out(JSON.stringify({ job: jobView(result.job, { full: true }), outcome: { status, step, reason, mergeSha }, decisions }));
+  } else {
+    ctx.out(closeOutcomeLine(id, result));
+    for (const entry of decisions) ctx.out(proposalLine(entry));
+  }
+  return status === "closed" ? 0 : 1;
+}
+
+// Runs the closing pipeline of one job in this process and, once it closed, settles the job's proposals.
+async function runCloseForeground(id, values, ctx) {
+  const chooser = chooserFor(values, ctx);
+  const result = await closeInThisProcess(id, values, ctx);
+  const closed = result.outcome.status === "closed" ? [jobView(result.job)] : [];
+  const decisions = await settleClosedJobs({ store: openStore(ctx.env), closed, choose: chooser, ctx });
+  return reportCloseOutcome(id, result, values, ctx, decisions);
+}
+
+// Starts the close of a job detached, handing the child the `--decisions` choice when one was given, and says how to follow it.
+async function runCloseDetached(id, values, ctx) {
+  const started = await startCloseDetached({
+    store: openStore(ctx.env),
+    id,
+    force: values.force === true,
+    env: ctx.env,
+    spawnImpl: ctx.spawnImpl,
+    killImpl: ctx.killImpl,
+    decisions: values.decisions === undefined ? null : requireProposalChoice(values.decisions),
+  });
+  if (values.json) {
+    ctx.out(JSON.stringify({ started: true, jobId: id, pid: started.pid, logPath: started.logPath }));
+    return 0;
+  }
+  if (started.forced) ctx.out(forcedCloseLine(id));
+  ctx.out(`close of job #${id} started (pid ${started.pid}) - follow with: tail -f ${started.logPath} (log: ${started.logPath}), or nightshift queue status ${id}`);
+  return 0;
+}
+
+// Runs `queue close`: the closing pipeline on one done job with a pull request, detached unless --foreground, or `--merged` for every done job the pull request state confirms merged.
 async function runClose(argv, ctx) {
   const { values, positionals } = parseCommand(argv, CLOSE_OPTIONS);
-  const chooser = chooserFor(values, ctx);
   if (values.merged === true) {
     checkArgs(positionals, { max: 0, usage: USAGE.close });
-    return await runCloseMerged(values, ctx, chooser);
+    return await runCloseMerged(values, ctx, chooserFor(values, ctx));
   }
-  checkArgs(positionals, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.close });
-  return await runCloseByIds(positionals, values, ctx, chooser);
+  checkArgs(positionals, { min: 1, max: 1, usage: USAGE.close });
+  const id = requireInt("id", positionals[0]);
+  if (values.foreground === true) return await runCloseForeground(id, values, ctx);
+  return await runCloseDetached(id, values, ctx);
 }
 
 // Reports what happened to the run directory of a `--fresh` retry: a directory that was kept says why, and never brings the retry down.
@@ -1286,77 +1339,6 @@ async function runRetry(argv, ctx) {
   else ctx.out(`job #${job.id} is pending again${values.fresh === true ? ", starting from phase 0" : ""}`);
   reportRunDir(runDir, ctx);
   return values.run === true ? await runNow(job, values, ctx) : 0;
-}
-
-const SHIP_OPTIONS = { force: { type: "boolean" }, foreground: { type: "boolean" }, json: { type: "boolean" } };
-const SHIP_STEP_ICONS = { done: "✓", skipped: "-", failed: "✗" };
-
-// The line a forced ship prints first, so shipping a job that did not end `done` is always said out loud.
-function forcedShipLine(id, status) {
-  return `job #${id} is \`${status}\`; shipping its pull request anyway (--force)`;
-}
-
-// One settled step of a foreground ship, as the operator reads it.
-function shipStepLine({ name, status, note, earlier = false }) {
-  const icon = SHIP_STEP_ICONS[status] ?? "·";
-  return `${icon} ${String(name).padEnd(10)} ${note ?? ""}${earlier ? " (earlier attempt)" : ""}`.trimEnd();
-}
-
-// The number of a pull request, from the ship's own data or its URL.
-function prNumberOf(job) {
-  const recorded = jobView(job)?.ship?.data?.prNumber;
-  if (Number.isInteger(recorded)) return recorded;
-  return /\/pull\/(\d+)/.exec(String(job?.pr_url ?? ""))?.[1] ?? "?";
-}
-
-// The last line of a foreground ship: what it merged and how the job ended, or where it stopped and how to resume.
-function shipOutcomeLine(id, { outcome, job }) {
-  if (outcome.status === "shipped") {
-    const worktree = outcome.worktree ? ` (${worktreeLine(outcome.worktree)})` : "";
-    return `job #${id} shipped: PR #${prNumberOf(job)} merged as ${String(outcome.mergeSha ?? "").slice(0, 7)}; job closed${worktree}`;
-  }
-  if (outcome.status === "lost") return `job #${id}: the ship lease was taken over by another process; follow it with nightshift queue status ${id}`;
-  return shipStoppedLine(jobView(job)) ?? `⛔ ship stopped at ${outcome.step}: ${outcome.reason} - run again with: nightshift queue ship ${id}`;
-}
-
-// Runs the ship of a job in this process, printing each settled step, and exits 0 only when it shipped.
-async function runShipForeground(id, values, ctx) {
-  const json = values.json === true;
-  const say = json ? ctx.err : ctx.out;
-  const result = await runShipHere({
-    store: openStore(ctx.env),
-    id,
-    force: values.force === true,
-    env: ctx.env,
-    deps: ctx.shipDeps ?? null,
-    killImpl: ctx.killImpl,
-    onStart: (lease) => lease.forced && say(forcedShipLine(id, lease.job.status)),
-    onStep: (step) => say(shipStepLine(step)),
-  });
-  const { status, step = null, reason = null, mergeSha = null } = result.outcome;
-  if (json) ctx.out(JSON.stringify({ job: jobView(result.job, { full: true }), outcome: { status, step, reason, mergeSha } }));
-  else ctx.out(shipOutcomeLine(id, result));
-  return status === "shipped" ? 0 : 1;
-}
-
-// Starts the ship of a job detached and says how to follow it.
-async function runShipDetached(id, values, ctx) {
-  const started = await startShipDetached({ store: openStore(ctx.env), id, force: values.force === true, env: ctx.env, spawnImpl: ctx.spawnImpl, killImpl: ctx.killImpl });
-  if (values.json) {
-    ctx.out(JSON.stringify({ started: true, jobId: id, pid: started.pid, logPath: started.logPath }));
-    return 0;
-  }
-  if (started.forced) ctx.out(forcedShipLine(id, started.status));
-  ctx.out(`ship of job #${id} started (pid ${started.pid}) - follow with: tail -f ${started.logPath} (log: ${started.logPath}), or nightshift queue status ${id}`);
-  return 0;
-}
-
-// Runs `queue ship`, which takes a job's pull request from open to merged and closes the job: detached unless --foreground.
-async function runShipCommand(argv, ctx) {
-  const { values, positionals } = parseCommand(argv, SHIP_OPTIONS);
-  checkArgs(positionals, { min: 1, max: 1, usage: USAGE.ship });
-  const id = requireInt("id", positionals[0]);
-  return values.foreground === true ? await runShipForeground(id, values, ctx) : await runShipDetached(id, values, ctx);
 }
 
 // What a re-classification answers the operator: the outcome it corrected, or that there was nothing to correct.
@@ -1574,7 +1556,6 @@ const SUBCOMMANDS = new Map([
   ["cancel", runCancel],
   ["close", runClose],
   ["retry", runRetry],
-  ["ship", runShipCommand],
   ["repair", runRepair],
   ["pause", runPause],
   ["resume", runResume],

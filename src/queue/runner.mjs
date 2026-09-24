@@ -316,6 +316,16 @@ function attemptTotals(tally) {
   };
 }
 
+// The outcome this attempt's own pipeline run recorded, or null when it recorded none or it cannot be read.
+async function attemptRunOutcome(job, slug, { since, store }) {
+  if (!isSafeSegment(slug)) return null;
+  try {
+    return (await store.runs.latestRunOutcome({ project: job.project, slug, since })) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // Runs the attempts of a job, re-arming the lease before each one and backing off between retries.
 async function runAttempts(job, ctx) {
   const { env, deps } = ctx;
@@ -338,6 +348,7 @@ async function runAttempts(job, ctx) {
     if (!(await renew(job, env))) return { lost: true, facts, attempt, ...attemptTotals(tally), outcome: null, result: null };
     if (isSafeSegment(facts.slug)) clearRunOutcome({ project: job.project, slug: facts.slug, env });
     const resumeSessionId = resumeForced ? facts.sessionId : null;
+    const attemptStartedAt = new Date().toISOString();
     const result = await spawnClaude({
       prompt: ctx.prompt,
       cwd: ctx.cwd,
@@ -365,7 +376,8 @@ async function runAttempts(job, ctx) {
     if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, ...totals, outcome: null, result };
     const planPath = isSafeSegment(facts.slug) ? join(runDir(job.project, facts.slug, env), "03-plan.md") : null;
     const state = readRunState({ project: job.project, slug: facts.slug, env });
-    const outcome = classifyJobResult({ ...result, state, planPath });
+    const runOutcome = await attemptRunOutcome(job, facts.slug, { since: attemptStartedAt, store: ctx.store });
+    const outcome = classifyJobResult({ ...result, state, planPath, runOutcome });
     if (!isRetryable(job, attempt, result, outcome, state)) {
       return { lost: false, facts, attempt, ...totals, outcome, result };
     }

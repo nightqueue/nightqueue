@@ -9,8 +9,8 @@ import { codeChangePublishedEvent, GATE_NOTICE, gateStream, resultEvent, systemI
 const REPO = "maykonVinicius/nightshift";
 const QA_PR = "https://github.com/maykonVinicius/nightshift/pull/71";
 const OWN_PR = "https://github.com/maykonVinicius/nightshift/pull/72";
-const QA_BRANCH = "scratch/ship-qa-20260921201325";
-const RUN_BRANCH = "worktree-feat+queue-ship";
+const QA_BRANCH = "scratch/close-qa-20260921201325";
+const RUN_BRANCH = "worktree-feat+queue-close";
 const FINAL_TEXT = "Phase 7 done.";
 
 // The job 57 publication: the runtime QA's own scratch pull request, opened in the run's repository; `branch: null` is a host that names none.
@@ -25,7 +25,7 @@ function logWith(publication) {
 
 // A state.json of a run on the given branch, with the pull request `run pr` recorded (or none), or no outcome at all.
 function runState({ branch = RUN_BRANCH, prUrl = OWN_PR, recorded = true } = {}) {
-  const base = { schemaVersion: 1, slug: "queue-ship", type: "feature/refactor", branch, phases: [] };
+  const base = { schemaVersion: 1, slug: "queue-close", type: "feature/refactor", branch, phases: [] };
   if (!recorded) return base;
   return { ...base, outcome: prUrl ? { status: "done", prUrl } : { status: "done" } };
 }
@@ -54,7 +54,7 @@ test("a publication naming no branch still loses to the runtime record, and is f
 
 test("a publication on the run's own branch, under its published name, still wins over the record without a flag", () => {
   const published = "https://github.com/maykonVinicius/nightshift/pull/73";
-  const outcome = classifyJobResult({ log: logWith(qaPublication({ branch: "feat/queue-ship", url: published })), exitCode: 0, state: runState() });
+  const outcome = classifyJobResult({ log: logWith(qaPublication({ branch: "feat/queue-close", url: published })), exitCode: 0, state: runState() });
 
   assert.equal(outcome.prUrl, published, "the host's word about the run's own delivery lost to the record");
   assert.equal(outcome.noticeMd.includes(STRAY_PR_PREFIX), false, outcome.noticeMd);

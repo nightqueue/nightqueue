@@ -36,7 +36,7 @@ function lostFinish(env) {
 
 // A job delivered with a pull request, the row a merge sweep used to rewrite.
 function delivered(env) {
-  const id = addJob({ project: "alpha", prompt: "ship it" }, env).id;
+  const id = addJob({ project: "alpha", prompt: "deliver it" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/8", id);
   return id;
 }

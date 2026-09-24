@@ -8,11 +8,11 @@ import { ABANDONED_COMMAND_PREFIX } from "../../src/queue/classify.mjs";
 import { createPrStateCache } from "../../src/queue/pr-state.mjs";
 import { pruneDeadRunners, writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "../../src/queue/runner.mjs";
-import { shippedLine } from "../../src/queue/ship-view.mjs";
+import { closedLine } from "../../src/queue/close-view.mjs";
 import { closeSuggestion, failedCoreSection, jobDetailView, prUrlsOf, queueView, truncationSuggestion } from "../../src/queue/view.mjs";
 import { KEPT_PREFIX } from "../../src/queue/worktree.mjs";
 import { withReadOnlyStore } from "../../src/store/open.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
 import { doneStream } from "../../test-support/streams.mjs";
 
 const DEAD_PID = 999_999;
@@ -27,6 +27,10 @@ function seedHome(t, name, jobs) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   for (const { status, prUrl = null } of jobs) {
+    if (status === "closed") {
+      seedClosedJob(env, { prUrl });
+      continue;
+    }
     const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
     openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ? WHERE id = ?").run(status, prUrl, id);
   }
@@ -96,7 +100,10 @@ test("closeSuggestion aggregates every qualifying job into one line, and null an
   assert.equal(closeSuggestion([]), null);
   assert.equal(closeSuggestion([terminal(1, "done", "open")]), null, "an open pull request qualified");
   assert.equal(closeSuggestion([terminal(1, "running", "merged")]), null, "a running job with a merged pull request qualified");
-  assert.equal(closeSuggestion([terminal(1, "failed", "merged")]), "#1 PR merged - close it with nightshift queue close 1", "a failed job with a merged pull request did not qualify");
+  for (const status of ["failed", "gate", "cancelled", "closed"]) {
+    assert.equal(closeSuggestion([terminal(1, status, "merged")]), null, `a ${status} job with a merged pull request qualified`);
+  }
+  assert.equal(closeSuggestion([terminal(1, "done", "merged")]), "#1 PR merged - close it with nightshift queue close 1", "a done job with a merged pull request did not qualify");
 
   const ten = Array.from({ length: 10 }, (_, index) => terminal(index + 1, "done", "merged")).reverse();
   assert.equal(
@@ -174,10 +181,10 @@ test("queueView on a read-only store never prunes: a dead runner's registration 
   assert.equal(existsSync(pidfile), false);
 });
 
-test("sections name jobs, counts, runners, advisories and ships, each read with an integer elapsed time", async (t) => {
+test("sections name jobs, counts, runners, advisories and closes, each read with an integer elapsed time", async (t) => {
   const env = seedHome(t, "view-sections", [{ status: "pending" }]);
   const view = await withReadOnlyStore(env, (store) => queueView(store, { env, killImpl: deadKill }));
-  assert.deepEqual(view.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories", "ships"]);
+  assert.deepEqual(view.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories", "closes"]);
   for (const section of view.sections) {
     assert.equal(section.ok, true, `${section.name}: ${section.error}`);
     assert.equal(section.error, null);
@@ -246,14 +253,14 @@ test("jobDetailView hides run_notice when the row's notice differs from the run'
   assert.equal("run_notice" in detail, false, "the abandoned-command line the runtime appended made the notices look different");
 });
 
-test("jobDetailView hides run_notice when the row's notice differs from the run's only by the Shipped line a ship appended", async (t) => {
+test("jobDetailView hides run_notice when the row's notice differs from the run's only by the Closed line a close appended", async (t) => {
   const runNotice = "the run's real notice, kept whole";
-  const rowNotice = `${runNotice}\n\n${shippedLine({ number: 7, sha: "abc1234def", at: "2026-09-21T10:00:00Z" })}`;
-  const { env, id } = seedJobWithRunLog(t, "view-run-notice-shipped", { runNotice, rowNotice });
+  const rowNotice = `${runNotice}\n\n${closedLine({ number: 7, sha: "abc1234def", at: "2026-09-21T10:00:00Z" })}`;
+  const { env, id } = seedJobWithRunLog(t, "view-run-notice-closed", { runNotice, rowNotice });
 
   const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
-  assert.equal(detail.notice_md, `${runNotice}\n\nShipped: PR #7 merged as abc1234 on 2026-09-21`);
-  assert.equal("run_notice" in detail, false, "the Shipped line a ship appended made the notices look different");
+  assert.equal(detail.notice_md, `${runNotice}\n\nClosed: PR #7 merged as abc1234 on 2026-09-21`);
+  assert.equal("run_notice" in detail, false, "the Closed line a close appended made the notices look different");
 });
 
 test("jobDetailView hides run_notice when the row's notice carries every line the runtime appends, in a row", async (t) => {

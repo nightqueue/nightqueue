@@ -9,7 +9,7 @@ import { defaultContext, run } from "../src/cli/index.mjs";
 import { dbPath, queuePausedPath, resolvedRuntimeDir, runnerRegistryPath, secretsPath } from "../src/config/paths.mjs";
 import { ensureHome } from "../src/config/store.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
-import { acquireShip, addJob, claimJobById, failShip } from "../src/memory/jobs.mjs";
+import { acquireClose, addJob, claimJobById, failClose } from "../src/memory/jobs.mjs";
 import { saveDecision } from "../src/memory/decisions.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
@@ -17,7 +17,7 @@ import { recordRunFields } from "../src/queue/run-state.mjs";
 import { addProject } from "../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { makeHostEnv, readSettingsFile, writeLegacyShim, writeSettingsFixture } from "../test-support/host.mjs";
-import { makeDir, makeProject, seedLegacyV8Home } from "../test-support/memory.mjs";
+import { makeDir, makeProject, seedClosedJob, seedLegacyV8Home } from "../test-support/memory.mjs";
 import { addWorktree, deadPid, lockWorktree, publishedCheckout } from "../test-support/worktrees.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightshift.mjs", import.meta.url));
@@ -280,7 +280,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v15/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v16/);
 });
 
 test("the database check warns about a v8 home and points at the command that migrates it", async (t) => {
@@ -290,7 +290,7 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, expected v15/);
+  assert.match(database.detail, /schema v8, expected v16/);
   assert.match(database.hint, /run `nightshift queue status` once to migrate it/);
   assert.doesNotMatch(database.hint, /nightshift memory stats/);
 });
@@ -303,7 +303,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, expected v15/);
+  assert.match(database.detail, /schema v99, expected v16/);
   assert.match(database.hint, /upgrade nightshift/);
 });
 
@@ -463,55 +463,55 @@ test("the queue jobs check counts the jobs whose runner died, and only once the 
   assert.deepEqual(orphaned.checks.filter((entry) => entry.name.startsWith("queue") && entry.status === "fail"), []);
 });
 
-// The status and detail of the ships row of a report.
-function shipsCheck(report) {
-  const row = report.checks.find((entry) => entry.name === "ships");
+// The status and detail of the closes row of a report.
+function closesCheck(report) {
+  const row = report.checks.find((entry) => entry.name === "closes");
   return row ? { status: row.status, detail: row.detail } : null;
 }
 
-test("the ships check reports ships in flight, failed and on a dead lease, and only once the database exists", async (t) => {
-  const host = makeHostEnv(t, "doctor-ships");
-  assert.equal(shipsCheck((await diagnose(host.env)).report), null, "the check ran without a database");
+test("the closes check reports closes in flight, failed and on a dead lease, and only once the database exists", async (t) => {
+  const host = makeHostEnv(t, "doctor-closes");
+  assert.equal(closesCheck((await diagnose(host.env)).report), null, "the check ran without a database");
 
   makeProject(t, host.env, "alpha");
   const ids = [1, 2, 3].map(() => addJob({ project: "alpha", prompt: "fix the worker" }, host.env).id);
   const db = openDb(host.env);
   for (const id of ids) db.prepare("UPDATE jobs SET status = 'done', pr_url = 'https://github.com/acme/api/pull/7' WHERE id = ?").run(id);
   closeDb(host.env);
-  assert.deepEqual(shipsCheck((await diagnose(host.env)).report), { status: "ok", detail: "no ship in flight, failed or stalled" });
+  assert.deepEqual(closesCheck((await diagnose(host.env)).report), { status: "ok", detail: "no close in flight, failed or stalled" });
 
-  acquireShip(ids[0], { worker: "ship:host:1:aaaa", leaseS: 660 }, host.env);
+  acquireClose(ids[0], { worker: "close:host:1:aaaa", leaseS: 660 }, host.env);
   closeDb(host.env);
-  assert.deepEqual(shipsCheck((await diagnose(host.env)).report), { status: "ok", detail: `1 in flight (#${ids[0]} at preflight)` });
+  assert.deepEqual(closesCheck((await diagnose(host.env)).report), { status: "ok", detail: `1 in flight (#${ids[0]} at preflight)` });
 
-  acquireShip(ids[1], { worker: "ship:host:1:bbbb", leaseS: 660 }, host.env);
-  failShip(ids[1], { worker: "ship:host:1:bbbb", ship: { attempts: 1, steps: {}, data: {}, failed: { step: "merge", reason: "merge-without-sha" } } }, host.env);
-  acquireShip(ids[2], { worker: "ship:host:1:cccc", leaseS: 660 }, host.env);
-  openDb(host.env).prepare("UPDATE jobs SET ship_lease_until = datetime('now', '-5 seconds') WHERE id = ?").run(ids[2]);
+  acquireClose(ids[1], { worker: "close:host:1:bbbb", leaseS: 660 }, host.env);
+  failClose(ids[1], { worker: "close:host:1:bbbb", close: { attempts: 1, steps: {}, data: {}, failed: { step: "merge", reason: "merge-without-sha" } } }, host.env);
+  acquireClose(ids[2], { worker: "close:host:1:cccc", leaseS: 660 }, host.env);
+  openDb(host.env).prepare("UPDATE jobs SET close_lease_until = datetime('now', '-5 seconds') WHERE id = ?").run(ids[2]);
   closeDb(host.env);
   const { report } = await diagnose(host.env);
-  assert.deepEqual(shipsCheck(report), {
+  assert.deepEqual(closesCheck(report), {
     status: "warn",
     detail: `1 in flight (#${ids[0]} at preflight), 1 failed (#${ids[1]} at merge: merge-without-sha), 1 with a dead lease (#${ids[2]})`,
   });
-  assert.equal(report.checks.find((entry) => entry.name === "ships").hint, "run again with: nightshift queue ship <id>");
+  assert.equal(report.checks.find((entry) => entry.name === "closes").hint, "run again with: nightshift queue close <id>");
 });
 
-test("the ships check warns with the migrate hint on a database without the ship columns, and leaves it as it was", async (t) => {
-  const host = makeHostEnv(t, "doctor-ships-old-db");
+test("the closes check warns with the migrate hint on a database without the close columns, and leaves it as it was", async (t) => {
+  const host = makeHostEnv(t, "doctor-closes-old-db");
   makeProject(t, host.env, "alpha");
   addJob({ project: "alpha", prompt: "old row" }, host.env);
   const db = openDb(host.env);
-  for (const column of ["ship_status", "ship", "ship_worker", "ship_lease_until"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
+  for (const column of ["close_worker", "close_status", "close", "close_lease_until"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
   closeDb(host.env);
 
   const { report } = await diagnose(host.env);
-  const row = report.checks.find((entry) => entry.name === "ships");
+  const row = report.checks.find((entry) => entry.name === "closes");
   assert.equal(row.status, "warn");
   assert.match(row.hint, /nightshift memory stats/);
   const raw = new DatabaseSync(dbPath(host.env), { readOnly: true });
   t.after(() => raw.close());
-  assert.equal(raw.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "ship_status"), false, "the doctor migrated the database");
+  assert.equal(raw.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "close_status"), false, "the doctor migrated the database");
 });
 
 // The report row of the host commands check.
@@ -644,8 +644,7 @@ test("the decision proposals check warns on a proposal of a closed job, never on
     { status: "ok", detail: "no proposal left open on a closed job" },
   );
 
-  const closed = addJob({ project: "alpha", prompt: "closed one" }, host.env).id;
-  openDb(host.env).prepare("UPDATE jobs SET status = 'closed' WHERE id = ?").run(closed);
+  const closed = seedClosedJob(host.env, { project: "alpha", prompt: "closed one" });
   const first = proposedByJob(host.env, { title: "the closed job proposes this", jobId: closed });
   closeDb(host.env);
   const { report: one } = await diagnose(host.env);
@@ -724,9 +723,10 @@ test("doctor names each leftover under .claude/worktrees with its cleanup comman
   lockWorktree(checkout, liveLocked.path, process.pid);
   const gated = addWorktree(checkout, "gated");
   const closed = addWorktree(checkout, "closed");
-  for (const [slug, status, path] of [["gated-run", "gate", gated.path], ["closed-run", "closed", closed.path]]) {
-    const { id } = addJob({ project: "alpha", prompt: `work of ${slug}` }, host.env);
-    openDb(host.env).prepare("UPDATE jobs SET status = ?, slug = ? WHERE id = ?").run(status, slug, id);
+  const { id: gatedId } = addJob({ project: "alpha", prompt: "work of gated-run" }, host.env);
+  openDb(host.env).prepare("UPDATE jobs SET status = 'gate', slug = 'gated-run' WHERE id = ?").run(gatedId);
+  seedClosedJob(host.env, { project: "alpha", prompt: "work of closed-run", slug: "closed-run" });
+  for (const [slug, path] of [["gated-run", gated.path], ["closed-run", closed.path]]) {
     recordRunFields({ project: "alpha", slug, fields: { worktree: path }, env: host.env });
   }
   closeDb(host.env);

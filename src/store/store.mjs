@@ -30,8 +30,7 @@
  * @property {(jobId: number, ref: object) => Promise<number>} linkPipelineRun
  * @property {(id: number, outcome: object) => Promise<boolean>} finishJob
  * @property {(id: number, options?: object) => Promise<object>} cancelJob
- * @property {(id: number) => Promise<object>} closeJob takes a job from any terminal status (done, failed, gate, cancelled) to `closed`, and refuses `pending` and `running` by name
- * @property {() => Promise<object[]>} listCloseCandidates terminal jobs that still carry a pull request url, the candidates `queue close --merged` may confirm and close
+ * @property {() => Promise<object[]>} listCloseCandidates done jobs that carry a pull request url, the candidates `queue close --merged` may confirm and close
  * @property {(id: number, options?: object) => Promise<object>} retryJob
  * @property {(id: number) => Promise<object|null>} getJob
  * @property {(options?: object) => Promise<object[]>} listJobs
@@ -51,18 +50,20 @@
  * @property {() => Promise<object[]>} recentHostCommandCounts the host-command counters of the most recently finished jobs, the sample `nightshift doctor` sums
  * @property {() => Promise<object[]>} recentOrchestratorCounts the orchestrator counters of the most recently finished jobs, the sample `nightshift doctor` sums
  * @property {(id: number) => Promise<string|null>} status the status column of one job, or null when the row is gone
- * @property {(id: number, spec: object) => Promise<object|null>} acquireShip takes the ship lease of a job in one compare-and-swap and re-arms its checklist; null means refused, nothing written
- * @property {(id: number, spec: object) => Promise<boolean>} adoptShip confirms the ship lease is this worker's and renews it
- * @property {(id: number, spec: object) => Promise<boolean>} recordShipStep writes the checklist after a step and renews the ship lease, witnessed on disk
- * @property {(id: number, spec: object) => Promise<boolean>} failShip stops a ship as failed, keeping its checklist and releasing the lease, witnessed on disk
- * @property {(id: number, spec: object) => Promise<object|null>} settleShip closes the shipped job, marks it shipped, releases the lease and appends the shipped line to its notice, witnessed on disk
- * @property {(id: number, spec: object) => Promise<boolean>} noteShipWorktree records where the settled ship left the job's worktree, best effort
- * @property {() => Promise<object[]>} listShips the ships in flight, failed or stalled, with the liveness of each lease
+ * @property {(id: number, spec: object) => Promise<object|null>} acquireClose takes the close lease of a job in one compare-and-swap and re-arms its checklist; null means refused, nothing written
+ * @property {(id: number, spec: object) => Promise<boolean>} adoptClose confirms the close lease is this worker's and renews it
+ * @property {(id: number, spec: object) => Promise<boolean>} recordCloseStep writes the checklist after a step and renews the close lease, witnessed on disk
+ * @property {(id: number, spec: object) => Promise<boolean>} failClose stops a close as failed, keeping its checklist and releasing the lease, witnessed on disk
+ * @property {(id: number, spec: object) => Promise<object|null>} settleClose closes a done job whose checklist records the merge, releases the lease and appends the settled line to its notice, witnessed on disk
+ * @property {(id: number, spec: object) => Promise<object|null>} cancelOnClosedPr cancels a done job whose pull request a close step read closed without merge, keeping the checklist and releasing the lease, witnessed on disk
+ * @property {(id: number, spec: object) => Promise<boolean>} noteCloseWorktree records where the settled close left the job's worktree, best effort
+ * @property {() => Promise<object[]>} listCloses the closes in flight, failed or stalled, with the liveness of each lease
  */
 
 /**
  * @typedef {object} RunsDomain
  * @property {(run: object) => Promise<object>} logPipelineRun
+ * @property {(spec: object) => Promise<string|null>} latestRunOutcome the outcome of the latest run recorded for a project and slug at or after an instant, or null when there is none
  * @property {(telemetry: object) => Promise<object>} updateRunTelemetry fills the durations and the models the RUNTIME measured in the stream over the row the agent recorded: the measured value wins, the agent's survives only where there is none, and a run the agent never recorded is never inserted
  */
 
@@ -181,7 +182,6 @@ export const STORE_CONTRACT = Object.freeze({
     "linkPipelineRun",
     "finishJob",
     "cancelJob",
-    "closeJob",
     "listCloseCandidates",
     "retryJob",
     "getJob",
@@ -202,15 +202,16 @@ export const STORE_CONTRACT = Object.freeze({
     "recentHostCommandCounts",
     "recentOrchestratorCounts",
     "status",
-    "acquireShip",
-    "adoptShip",
-    "recordShipStep",
-    "failShip",
-    "settleShip",
-    "noteShipWorktree",
-    "listShips",
+    "acquireClose",
+    "adoptClose",
+    "recordCloseStep",
+    "failClose",
+    "settleClose",
+    "cancelOnClosedPr",
+    "noteCloseWorktree",
+    "listCloses",
   ],
-  runs: ["logPipelineRun", "updateRunTelemetry"],
+  runs: ["logPipelineRun", "updateRunTelemetry", "latestRunOutcome"],
   lessons: [
     "saveLesson",
     "getLesson",
@@ -278,7 +279,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.countActiveJobsByProject",
   "jobs.recentHostCommandCounts",
   "jobs.recentOrchestratorCounts",
-  "jobs.listShips",
+  "jobs.listCloses",
   "decisions.listDecisions",
   "decisions.decisionTitles",
   "decisions.proposalsOfJob",

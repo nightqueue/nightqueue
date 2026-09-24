@@ -104,7 +104,8 @@ command recorded (see [Runtime contract](runtime-contract.md)). It closes with `
 removes the worktree only when asked with `--remove-worktree`, because the
 session that called it still lives in that directory. That default is unchanged:
 in a queue job the runner itself removes a clean, pushed worktree once the run ends
-`done`, and `nightshift queue close` removes it for a job that stopped anywhere else
+`done`, `nightshift queue close` removes it once the job's pull request is merged, and
+`nightshift queue cancel` removes it for a `done` or `failed` job the operator gives up on
 (see [Queue](queue.md)).
 
 ## Configuration
@@ -202,15 +203,15 @@ nightshift queue session 42                          # resume the session of a j
 nightshift queue session 42 --print                   # print the resume command instead of running it
 nightshift queue session 42 --json                    # session, attempt and cwd, as the only thing on stdout
 
-nightshift queue close 42 43 --decisions keep          # take terminal jobs to `closed`, keeping their open proposals
-nightshift queue close --merged --decisions accept     # close every terminal job gh confirms merged, accepting each proposal
+nightshift queue close 42                             # merge a done job's pull request and close the job, detached
+nightshift queue close 42 --foreground                # run the four steps in this process, one line per step
+nightshift queue close 42 --decisions keep --json     # keep the job's open proposals; JSON on stdout
+nightshift queue close --merged --decisions accept    # close every done job gh confirms merged, accepting each proposal
+nightshift queue close 42 --force                     # skip the pull request checks and the rebase suite, nothing else
+nightshift queue cancel 42 --reason "abandoned"       # cancel a done or failed job and release its worktree
 
 nightshift queue run --watch --from 22:00 --until 04:00   # watch only inside that window, local wall clock, then exit
 nightshift queue run --watch --until 04:00                # `--from` defaults to now
-
-nightshift queue ship 42                              # merge a done job's pull request and close the job, detached
-nightshift queue ship 42 --foreground                 # run the four steps in this process, one line per step
-nightshift queue ship 42 --force --json               # ship a failed or gated job's pull request anyway; JSON on stdout
 ```
 
 `queue session <id>` opens the `claude` session of a job's LAST attempt - `last_session_id`
@@ -226,37 +227,53 @@ code is the resumed session's own. The MCP tool `queue_session` resolves the sam
 only ever reads it - it answers `job_id`, `attempt`, `session`, `cwd` and `worktree_released`,
 and never resumes or executes anything itself.
 
-`queue close <id>...` is the operator's act that takes one or more jobs from any terminal
-status (`done`, `failed`, `gate` or `cancelled`) to `closed`; each id is closed on its own store
-call, so one refusal never stops the ids that come after it, and closing releases the job's
-worktree once its branch is pushed or a pull request is recorded - printing `worktree removed:
-<path>` or `worktree kept: <path> - <reason>` under each `closed job #<id>` line. `queue close
---merged` instead closes every terminal job whose pull request `gh` itself confirms merged, and
-reports `<n> jobs left unchecked; run nightshift queue close --merged again` when some could not
-be checked within the call's own deadline.
+`queue close <id>` is the operator's act that takes one `done` job with a pull request to
+`closed` through the closing pipeline described below - the only way any job becomes `closed` -
+and releases the job's worktree once it is closed, printing `worktree removed: <path>` or
+`worktree kept: <path> - <reason>`. `queue close --merged` runs the same pipeline, in this
+process, on every `done` job whose pull request `gh` itself confirms merged, prints `closed job
+#<id>` or `job #<id> not closed: <reason>` for each, and reports `<n> jobs left unchecked; run
+nightshift queue close --merged again` when some could not be checked within the call's own
+deadline. A `failed`, `gate` or `cancelled` job is never closed, whatever its pull request
+says: retry it, or cancel it.
 
-Either form then settles the decisions the closed jobs proposed and never settled: on a TTY,
-without `--decisions`, it asks `decision <owner> "<title>" of job #<id>: accept / reject / keep?
-[keep]` for each open proposal in turn; `--decisions accept|reject|keep` answers every one of
-them without asking, and no terminal (or `--json`) leaves every proposal `kept (proposed)`, so a
-script's behaviour never changes underneath it. Each settled proposal prints `decision <label>
-<title>: accepted|rejected|kept (proposed)`, and `--json` carries them under `decisions`.
+Once a job closed in this process (`--foreground`, or `--merged`), the command settles the
+decisions the job proposed and never settled: on a TTY, without `--decisions`, it asks
+`decision <owner> "<title>" of job #<id>: accept / reject / keep? [keep]` for each open proposal
+in turn; `--decisions accept|reject|keep` answers every one of them without asking, and no
+terminal (or `--json`) leaves every proposal `kept (proposed)`, so a script's behaviour never
+changes underneath it. Each settled proposal prints `decision <label> <title>:
+accepted|rejected|kept (proposed)`, and `--json` carries them under `decisions`. A detached
+close has no terminal to ask on: it hands `--decisions` to its child when given, and otherwise
+keeps every proposal `proposed` for `nightshift doctor` to list.
 
-`queue ship <id>` takes a `done` job's pull request from open to merged and closes the job,
+`queue cancel <id>` accepts a `pending`, gated, orphaned, `done` or `failed` job. For a `done`
+or `failed` one it also releases the job's worktree, printing `worktree removed: <path>` or
+`worktree kept: <path> - <reason>` after `cancelled job #<id>`; `--json` prints `{ job,
+worktree }`. A job running under a live lease, or being closed under one, is refused by name
+with nothing written. So is a `done` job whose close was interrupted (its lease died mid-close,
+possibly after the merge): resume it with `nightshift queue close <id>`, which records a merged
+pull request as closed and cancels the job when the pull request was closed without merge.
+
+`queue close <id>` takes a `done` job's pull request from open to merged and closes the job,
 through four steps recorded on the job - preflight (fetch, pull request state, green checks,
 uncommitted files the pull would touch), conflict (a rebase in a throwaway worktree, the
 project's `npm test`, a `--force-with-lease` push; skipped when GitHub reports it mergeable),
 merge (`gh pr merge --squash`, confirmed by re-reading the merge commit) and settle (close the
-job and append `Shipped: PR #<n> merged as <sha7> on <date>` to its notice). It starts detached
-and prints the pid and its log, `<home>/logs/ship-<id>-<stamp>.log`; `--foreground` runs it here
-and exits `0` only when the job shipped; `--json` prints `{ started, jobId, pid, logPath }`
-detached, or one `{ job, outcome }` object in the foreground. `--force` ships a `failed` or
-`gate` job that carries a pull request. A ship that stops prints `⛔ ship stopped at <step>:
-<reason> - run again with: nightshift queue ship <id>`, leaves the job `done`, and running it
-again resumes at that step - never merging twice. `queue.shipTimeoutS` (default `600`, range
-`60..3600`) bounds the whole ship. The MCP tool `queue_ship` (`job_id`, `force?`) starts the
-same detached ship. See [Queue](queue.md#shipping-a-job) for the steps, the lease and what a
-ship never does.
+job and append `Closed: PR #<n> merged as <sha7> on <date>` to its notice). It starts detached
+and prints the pid and its log, `<home>/logs/close-<id>-<stamp>.log`; `--foreground` runs it here
+and exits `0` only when the job closed; `--json` prints `{ started, jobId, pid, logPath }`
+detached, or one `{ job, outcome, decisions }` object in the foreground. A close that stops prints `⛔ close stopped at <step>:
+<reason> - run again with: nightshift queue close <id>`, leaves the job `done`, and running it
+again resumes at that step - never merging twice. A pull request closed without merge cancels
+the job instead (`job #<id> cancelled: PR #<n> was closed without being merged; nothing to
+close`), and one merged by hand is recorded as `merged outside a close`. `--force` skips the
+pull request checks and the rebase suite and nothing else: status, attribution
+(`pr-not-the-job-branch`) and real conflicts still stop the close. A second close of a closed
+job answers ``job `<id>` is already closed``. `queue.closeTimeoutS` (default `600`, range
+`60..3600`) bounds the whole close. The MCP tool `queue_close` (`job_id`, `force?`) starts the
+same detached close. See [Queue](queue.md#closing-a-job) for the steps, the lease and what a
+close never does.
 
 `queue run --watch --from HH:MM --until HH:MM` bounds a watcher to one local
 wall-clock window and exits at its end; see [Queue](queue.md#running-the-queue) for
@@ -384,7 +401,7 @@ it, and deletes nothing:
 - not registered in git (orphaned): `rm -rf '<dir>'`.
 
 A directory a live session holds locked, and the worktree of an open job (its cleanup is
-`nightshift queue close`), are not reported. When the queue cannot be read, one `worktrees`
+`nightshift queue close`, or `nightshift queue cancel` for a `done` or `failed` job), are not reported. When the queue cannot be read, one `worktrees`
 row says the owner is unknown and nothing is listed; when git cannot list the worktrees of a
 checkout, one `worktrees <project>` row says so. The owners are read through a read-only store.
 

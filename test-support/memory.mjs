@@ -5,6 +5,7 @@ import { addOrg, getOrg } from "../src/config/orgs.mjs";
 import { addProject } from "../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
+import { acquireClose, addJob, claimJobById, finishJob, persistRunFacts, settleClose } from "../src/memory/jobs.mjs";
 
 const OWN_ENV_KEYS = [
   "NIGHTSHIFT_HOME",
@@ -16,7 +17,7 @@ const OWN_ENV_KEYS = [
   "NIGHTSHIFT_MODEL",
   "NIGHTSHIFT_SESSION_ID",
   "NIGHTSHIFT_JOB_ID",
-  "NIGHTSHIFT_SHIP_WORKER",
+  "NIGHTSHIFT_CLOSE_WORKER",
   "NIGHTSHIFT_JOB_HOME",
   "NIGHTSHIFT_JOB_CLAUDE_DIR",
   "NIGHTSHIFT_NO_UPDATE_CHECK",
@@ -91,11 +92,45 @@ export function seedLegacyV8Home(env, { rows = 1, project = "alpha" } = {}) {
   if (!db.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "pr_checked_at")) {
     db.exec("ALTER TABLE jobs ADD COLUMN pr_checked_at TEXT");
   }
-  const insert = db.prepare("INSERT INTO jobs (project, prompt, status) VALUES (?, ?, 'merged')");
-  const ids = Array.from({ length: rows }, (_, index) => Number(insert.run(project, `legacy job ${index + 1}`).lastInsertRowid));
+  const insert = db.prepare("INSERT INTO jobs (project, prompt, status, pr_url) VALUES (?, ?, 'merged', ?)");
+  const legacyRow = (index) => insert.run(project, `legacy job ${index + 1}`, `https://github.com/acme/api/pull/${index + 1}`);
+  const ids = Array.from({ length: rows }, (_, index) => Number(legacyRow(index).lastInsertRowid));
   db.exec("PRAGMA user_version = 8");
   closeDb(env);
   return ids;
+}
+
+const SEED_WORKER = "test:seed";
+const SEED_MERGE_SHA = "abc1234def567890";
+
+// A merged close checklist, the one a settled close leaves on the job.
+export function mergedChecklist(prNumber = 7) {
+  const at = "2026-09-21T10:00:00Z";
+  return {
+    attempts: 1,
+    steps: { preflight: { status: "done", note: "seeded", at }, merge: { status: "done", note: "seeded", at }, settle: { status: "done", note: "seeded", at } },
+    data: { prNumber, merged: true, mergeSha: SEED_MERGE_SHA, noticeLine: `Closed: PR #${prNumber} merged as abc1234 on 2026-09-21` },
+  };
+}
+
+// Seeds a job that ended `done` with a pull request, through the real store writes, and answers its id.
+export function seedDoneJob(env, { project = "alpha", prompt = "seeded job", prUrl = "https://github.com/acme/api/pull/7", slug = null } = {}) {
+  const { id } = addJob({ project, prompt }, env);
+  claimJobById(id, { worker: SEED_WORKER, cap: null }, env);
+  if (slug) persistRunFacts(id, { worker: SEED_WORKER, slug }, env);
+  if (!finishJob(id, { worker: SEED_WORKER, status: "done", prUrl }, env)) throw new Error(`seedDoneJob: job #${id} could not be finished`);
+  return id;
+}
+
+// Seeds a job closed through the real close writes - lease, then settle with a merged checklist - never through raw SQL, and answers its id.
+export function seedClosedJob(env, options = {}) {
+  const id = seedDoneJob(env, options);
+  if (!acquireClose(id, { worker: SEED_WORKER, leaseS: 600 }, env)) throw new Error(`seedClosedJob: job #${id} refused the close lease`);
+  const checklist = mergedChecklist();
+  if (!settleClose(id, { worker: SEED_WORKER, close: checklist, noticeLine: checklist.data.noticeLine }, env)) {
+    throw new Error(`seedClosedJob: job #${id} refused the settle`);
+  }
+  return id;
 }
 
 // Embedder double with a fixed vector, so the hybrid recall never depends on the real model.

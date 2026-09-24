@@ -17,7 +17,7 @@ export const REFUSAL_EXIT = 2;
 
 const CLI = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "bin", "nightshift.mjs");
 const PROJECT = "nstest-demo";
-const SEED_WORKER = "ship-qa-demo:seed";
+const SEED_WORKER = "close-qa-demo:seed";
 const READY_POLLS = 10;
 const READY_POLL_MS = 3000;
 const CHECKS_TIMEOUT_MS = 600000;
@@ -26,14 +26,14 @@ const CHECKS_TIMEOUT_MS = 600000;
 export function jobIdentityRefusal(env) {
   const present = JOB_IDENTITY_VARS.filter((name) => typeof env?.[name] === "string" && env[name].trim() !== "");
   if (!present.length) return null;
-  return `ship-qa-demo refuses to start inside a nightshift job (${present.join(", ")} set): operator-run acceptance: run it from your own terminal. It never unsets a nightshift variable.`;
+  return `close-qa-demo refuses to start inside a nightshift job (${present.join(", ")} set): operator-run acceptance: run it from your own terminal. It never unsets a nightshift variable.`;
 }
 
 // The refusal of a checkout whose origin is not the nstest-demo remote, or null when it is.
 export function demoOriginRefusal(repoPath, options = {}) {
   const slug = repoSlugOf({ path: repoPath }, options);
   if (slug === DEMO_REMOTE.toLowerCase()) return null;
-  return `ship-qa-demo refuses to run against ${repoPath}: its origin is ${slug ?? "unreadable"}, not ${DEMO_REMOTE}; real pull request QA runs only on nstest-demo.`;
+  return `close-qa-demo refuses to run against ${repoPath}: its origin is ${slug ?? "unreadable"}, not ${DEMO_REMOTE}; real pull request QA runs only on nstest-demo.`;
 }
 
 // The options of the script: the demo checkout and its base branch.
@@ -66,13 +66,13 @@ function nightshift(ctx, args) {
 
 // Commits one scratch file on a new branch from the base in a throwaway worktree and pushes it.
 function pushScratchBranch(ctx, branch) {
-  const dir = mkdtempSync(join(tmpdir(), "ship-qa-author-"));
+  const dir = mkdtempSync(join(tmpdir(), "close-qa-author-"));
   try {
     must("git", ["-C", ctx.repo, "worktree", "add", "-b", branch, dir, `origin/${ctx.base}`]);
     ctx.branches.push(branch);
-    writeFileSync(join(dir, `ship-qa-${branch.replaceAll("/", "-")}.txt`), `${branch}\n`);
+    writeFileSync(join(dir, `close-qa-${branch.replaceAll("/", "-")}.txt`), `${branch}\n`);
     must("git", ["-C", dir, "add", "-A"]);
-    must("git", ["-C", dir, "commit", "-m", `ship QA: ${branch}`]);
+    must("git", ["-C", dir, "commit", "-m", `close QA: ${branch}`]);
     must("git", ["-C", dir, "push", "-u", "origin", branch]);
   } finally {
     exec("git", ["-C", ctx.repo, "worktree", "remove", "--force", dir]);
@@ -90,11 +90,11 @@ async function waitUntilReady(url) {
   }
 }
 
-// Opens a scratch pull request on nstest-demo from a new branch and answers its URL once it is ready to ship.
+// Opens a scratch pull request on nstest-demo from a new branch and answers its URL once it is ready to close.
 async function openScratchPr(ctx, branch) {
   pushScratchBranch(ctx, branch);
-  const body = "Scratch pull request of nightshift's scripts/ship-qa-demo.mjs; merged or closed by the script.";
-  const created = must("gh", ["pr", "create", "--repo", DEMO_REMOTE, "--head", branch, "--base", ctx.base, "--title", `ship QA ${branch}`, "--body", body]);
+  const body = "Scratch pull request of nightshift's scripts/close-qa-demo.mjs; merged or closed by the script.";
+  const created = must("gh", ["pr", "create", "--repo", DEMO_REMOTE, "--head", branch, "--base", ctx.base, "--title", `close QA ${branch}`, "--body", body]);
   const url = created.stdout.trim().split("\n").pop();
   ctx.prs.push(url);
   console.log(`opened ${url} on ${branch}`);
@@ -105,10 +105,10 @@ async function openScratchPr(ctx, branch) {
 // Seeds a `done` job of nstest-demo carrying a pull request and a recorded branch, through the store only.
 async function seedDoneJob(ctx, { prUrl, branch }) {
   const jobs = ctx.store.jobs;
-  const { id } = await jobs.addJob({ project: PROJECT, prompt: `ship QA of ${prUrl}` });
+  const { id } = await jobs.addJob({ project: PROJECT, prompt: `close QA of ${prUrl}` });
   if (!(await jobs.claimJobById(id, { worker: SEED_WORKER, cap: null }))) throw new Error(`could not claim the seeded job ${id}`);
-  await jobs.persistRunFacts(id, { worker: SEED_WORKER, slug: `ship-qa-${id}`, branch });
-  const finished = await jobs.finishJob(id, { worker: SEED_WORKER, status: "done", prUrl, noticeMd: `Seeded by ship-qa-demo for ${prUrl}` });
+  await jobs.persistRunFacts(id, { worker: SEED_WORKER, slug: `close-qa-${id}`, branch });
+  const finished = await jobs.finishJob(id, { worker: SEED_WORKER, status: "done", prUrl, noticeMd: `Seeded by close-qa-demo for ${prUrl}` });
   if (!finished) throw new Error(`could not finish the seeded job ${id} as done`);
   return id;
 }
@@ -118,10 +118,10 @@ function prState(url) {
   return exec("gh", ["pr", "view", url, "--json", "state", "-q", ".state"]).stdout.trim();
 }
 
-// The note a step left in a job's ship checklist.
+// The note a step left in a job's close checklist.
 async function stepNote(ctx, id, step) {
   const row = await ctx.store.jobs.getJob(id);
-  return JSON.parse(row?.ship ?? "{}")?.steps?.[step]?.note ?? "no note";
+  return JSON.parse(row?.close ?? "{}")?.steps?.[step]?.note ?? "no note";
 }
 
 // A scenario result.
@@ -129,34 +129,34 @@ function outcome(name, pass, detail) {
   return { name, pass: Boolean(pass), detail };
 }
 
-// Scenario (i): a job's own pull request is squash-merged and the job closes with its Shipped line.
+// Scenario (i): a job's own pull request is squash-merged and the job closes with its Closed line.
 async function realMerge(ctx) {
-  const branch = `qa/ship-merge-${ctx.stamp}`;
+  const branch = `qa/close-merge-${ctx.stamp}`;
   const id = await seedDoneJob(ctx, { prUrl: await openScratchPr(ctx, branch), branch });
-  const ran = nightshift(ctx, ["queue", "ship", String(id), "--foreground"]);
+  const ran = nightshift(ctx, ["queue", "close", String(id), "--foreground"]);
   const row = await ctx.store.jobs.getJob(id);
-  const pass = ran.code === 0 && row.status === "closed" && /Shipped: PR #\d+ merged as/.test(row.notice_md ?? "");
-  if (pass) ctx.shippedJob = id;
+  const pass = ran.code === 0 && row.status === "closed" && /Closed: PR #\d+ merged as/.test(row.notice_md ?? "");
+  if (pass) ctx.closedJob = id;
   return outcome("(i) real merge", pass, `exit ${ran.code}, job ${row.status}`);
 }
 
 // Scenario (ii): the base moves ahead after the pull request opened; records which path the conflict step took.
 async function trivialRebase(ctx) {
-  const branch = `qa/ship-rebase-${ctx.stamp}`;
+  const branch = `qa/close-rebase-${ctx.stamp}`;
   const prUrl = await openScratchPr(ctx, branch);
-  const advance = await openScratchPr(ctx, `qa/ship-advance-${ctx.stamp}`);
+  const advance = await openScratchPr(ctx, `qa/close-advance-${ctx.stamp}`);
   must("gh", ["pr", "merge", advance, "--squash"]);
   await waitUntilReady(prUrl);
   const id = await seedDoneJob(ctx, { prUrl, branch });
-  const ran = nightshift(ctx, ["queue", "ship", String(id), "--foreground"]);
+  const ran = nightshift(ctx, ["queue", "close", String(id), "--foreground"]);
   return outcome("(ii) trivial rebase", ran.code === 0, `exit ${ran.code}; conflict step: ${await stepNote(ctx, id, "conflict")}`);
 }
 
-// Runs a foreground ship and interrupts it with SIGINT as soon as its preflight step is recorded done.
-function shipInterruptedAfterPreflight(ctx, id) {
-  console.log(`\n$ nightshift queue ship ${id} --foreground   (SIGINT after preflight)`);
+// Runs a foreground close and interrupts it with SIGINT as soon as its preflight step is recorded done.
+function closeInterruptedAfterPreflight(ctx, id) {
+  console.log(`\n$ nightshift queue close ${id} --foreground   (SIGINT after preflight)`);
   return new Promise((done) => {
-    const child = spawn(process.execPath, [CLI, "queue", "ship", String(id), "--foreground"], { cwd: ctx.repo, env: ctx.env });
+    const child = spawn(process.execPath, [CLI, "queue", "close", String(id), "--foreground"], { cwd: ctx.repo, env: ctx.env });
     const state = { output: "", interrupted: false };
     const onData = (chunk) => {
       state.output += chunk;
@@ -172,33 +172,45 @@ function shipInterruptedAfterPreflight(ctx, id) {
   });
 }
 
-// Scenario (iii): an interrupted ship resumes from its checklist, the preflight step not redone.
+// Scenario (iii): an interrupted close resumes from its checklist, the preflight step not redone.
 async function resumeAfterInterrupt(ctx) {
-  const branch = `qa/ship-resume-${ctx.stamp}`;
+  const branch = `qa/close-resume-${ctx.stamp}`;
   const id = await seedDoneJob(ctx, { prUrl: await openScratchPr(ctx, branch), branch });
-  const first = await shipInterruptedAfterPreflight(ctx, id);
-  const second = nightshift(ctx, ["queue", "ship", String(id), "--foreground"]);
+  const first = await closeInterruptedAfterPreflight(ctx, id);
+  const second = nightshift(ctx, ["queue", "close", String(id), "--foreground"]);
   const resumed = /^✓ preflight\s.*\(earlier attempt\)$/m.test(second.output);
   const pass = first.interrupted && first.code !== 0 && second.code === 0 && resumed;
   return outcome("(iii) resume after interrupt", pass, `first exit ${first.code} (interrupted: ${first.interrupted}), second exit ${second.code}, preflight resumed: ${resumed}`);
 }
 
-// Scenario (iv): a second ship of a shipped job is refused.
-async function secondShipRefused(ctx) {
-  if (!ctx.shippedJob) return outcome("(iv) second ship refused", false, "scenario (i) shipped no job");
-  const ran = nightshift(ctx, ["queue", "ship", String(ctx.shippedJob), "--foreground"]);
-  return outcome("(iv) second ship refused", ran.code !== 0 && /already shipped and closed/.test(ran.output), `exit ${ran.code}`);
+// Scenario (iv): a second close of a closed job is refused.
+async function secondCloseRefused(ctx) {
+  if (!ctx.closedJob) return outcome("(iv) second close refused", false, "scenario (i) closed no job");
+  const ran = nightshift(ctx, ["queue", "close", String(ctx.closedJob), "--foreground"]);
+  return outcome("(iv) second close refused", ran.code !== 0 && /already closed/.test(ran.output), `exit ${ran.code}`);
 }
 
-// Scenario (v): a pull request on another branch than the job's is refused, then shipped with --force.
+// Scenario (v): a pull request on another branch than the job's is refused, and still refused with --force.
 async function foreignBranchGuard(ctx) {
-  const prUrl = await openScratchPr(ctx, `qa/ship-foreign-${ctx.stamp}`);
-  const id = await seedDoneJob(ctx, { prUrl, branch: `worktree-feat+ship-qa-own-${ctx.stamp}` });
-  const refused = nightshift(ctx, ["queue", "ship", String(id), "--foreground"]);
+  const prUrl = await openScratchPr(ctx, `qa/close-foreign-${ctx.stamp}`);
+  const id = await seedDoneJob(ctx, { prUrl, branch: `worktree-feat+close-qa-own-${ctx.stamp}` });
+  const refused = nightshift(ctx, ["queue", "close", String(id), "--foreground"]);
+  const forced = nightshift(ctx, ["queue", "close", String(id), "--foreground", "--force"]);
   const stillOpen = prState(prUrl) === "OPEN";
-  const forced = nightshift(ctx, ["queue", "ship", String(id), "--foreground", "--force"]);
-  const pass = refused.code !== 0 && /pr-not-the-job-branch/.test(refused.output) && stillOpen && forced.code === 0 && /attribution overridden with --force/.test(forced.output);
-  return outcome("(v) PR not the job's branch, then --force", pass, `refused exit ${refused.code} (PR still open: ${stillOpen}), forced exit ${forced.code}`);
+  const pass = refused.code !== 0 && forced.code !== 0 && [refused, forced].every((ran) => /pr-not-the-job-branch/.test(ran.output)) && stillOpen;
+  return outcome("(v) PR not the job's branch, even with --force", pass, `refused exit ${refused.code}, forced exit ${forced.code} (PR still open: ${stillOpen})`);
+}
+
+// Scenario (vi): a pull request closed without merge cancels the job, and nothing is merged.
+async function closedPrCancels(ctx) {
+  const branch = `qa/close-abandoned-${ctx.stamp}`;
+  const prUrl = await openScratchPr(ctx, branch);
+  const id = await seedDoneJob(ctx, { prUrl, branch });
+  must("gh", ["pr", "close", prUrl]);
+  const ran = nightshift(ctx, ["queue", "close", String(id), "--foreground"]);
+  const row = await ctx.store.jobs.getJob(id);
+  const pass = ran.code !== 0 && /was closed without being merged; nothing to close/.test(ran.output) && row.status === "cancelled" && prState(prUrl) === "CLOSED";
+  return outcome("(vi) PR closed without merge cancels", pass, `exit ${ran.code}, job ${row.status}`);
 }
 
 // Runs one scenario, turning a throw into a failed result.
@@ -230,8 +242,8 @@ function registerDemo(ctx) {
 
 // Builds the throwaway home with nstest-demo registered and answers the context every scenario reads; a failed build removes the home.
 function prepare(options, env) {
-  const home = makeThrowawayHome("nightshift-ship-qa-");
-  const ctx = { ...options, home, env: { ...env, ...home.env }, stamp: new Date().toISOString().replace(/\D/g, "").slice(0, 14), branches: [], prs: [], shippedJob: null };
+  const home = makeThrowawayHome("nightshift-close-qa-");
+  const ctx = { ...options, home, env: { ...env, ...home.env }, stamp: new Date().toISOString().replace(/\D/g, "").slice(0, 14), branches: [], prs: [], closedJob: null };
   try {
     registerDemo(ctx);
     return ctx;
@@ -241,7 +253,7 @@ function prepare(options, env) {
   }
 }
 
-// Runs the five scenarios in a throwaway home and always cleans up after them.
+// Runs the six scenarios in a throwaway home and always cleans up after them.
 async function runScenarios(options, env) {
   const ctx = prepare(options, env);
   try {
@@ -249,8 +261,9 @@ async function runScenarios(options, env) {
       await attempt("(i) real merge", realMerge, ctx),
       await attempt("(ii) trivial rebase", trivialRebase, ctx),
       await attempt("(iii) resume after interrupt", resumeAfterInterrupt, ctx),
-      await attempt("(iv) second ship refused", secondShipRefused, ctx),
-      await attempt("(v) PR not the job's branch, then --force", foreignBranchGuard, ctx),
+      await attempt("(iv) second close refused", secondCloseRefused, ctx),
+      await attempt("(v) PR not the job's branch, even with --force", foreignBranchGuard, ctx),
+      await attempt("(vi) PR closed without merge cancels", closedPrCancels, ctx),
     ];
   } finally {
     cleanUp(ctx);
@@ -289,7 +302,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       process.exitCode = code;
     },
     (err) => {
-      console.error(`ship-qa-demo: ${err?.message ?? String(err)}`);
+      console.error(`close-qa-demo: ${err?.message ?? String(err)}`);
       process.exitCode = 1;
     },
   );

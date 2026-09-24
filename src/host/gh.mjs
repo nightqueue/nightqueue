@@ -109,7 +109,7 @@ function textOrNull(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-// Parses the json of the detail read a ship makes, keeping only the fields it asked for; an unknown state is undetermined.
+// Parses the json of the detail read the close pipeline makes, keeping only the fields it asked for; an unknown state is undetermined.
 function parsePrDetail(text) {
   const payload = parseJson(text);
   if (!PR_STATES.includes(payload?.state)) return { ok: false, error: "gh answered an unreadable pull request" };
@@ -129,7 +129,7 @@ function parsePrDetail(text) {
   };
 }
 
-// Everything a ship reads about one pull request, never rejecting: `ok: false` means nobody could tell.
+// Everything the close pipeline reads about one pull request, never rejecting: `ok: false` means nobody could tell.
 export async function ghPrDetail(url, { env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
   const args = ["pr", "view", String(url ?? ""), "--json", PR_DETAIL_FIELDS];
   const result = await runGhAsync(args, { env, execFileImpl, timeoutMs, signal });

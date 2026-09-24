@@ -92,13 +92,13 @@ test("a `None ...` prose bullet of the libs section never becomes a lib", async 
 test("a libs bullet that is neither `<lib>@<version>` nor a `None` note is skipped and named on stderr", (t) => {
   const env = makeHome(t, "index-save-skipped");
   const repo = makeRepo(t, env, "alpha");
-  const text = exploreArtifact(repo).replace("- zod@4.5.4 (", "- lodash, whichever version ships (");
+  const text = exploreArtifact(repo).replace("- zod@4.5.4 (", "- lodash, whichever version is installed (");
   const artifact = writeArtifact(t, "skipped", text);
 
   const result = runIndexSave(env, repo, [artifact]);
 
   assert.equal(result.stdout, "index saved: 3 files, 1 libs");
-  assert.match(result.stderr, /not a `<lib>@<version>` entry, skipped: lodash, whichever version ships/);
+  assert.match(result.stderr, /not a `<lib>@<version>` entry, skipped: lodash, whichever version is installed/);
 });
 
 test("--repo-root and --project index the artifact from any working directory", async (t) => {

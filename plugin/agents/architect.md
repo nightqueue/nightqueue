@@ -70,7 +70,7 @@ three axes each need their own answer.
 pre-qualifies the level ("prefer to mitigate", "additive fix", "smallest diff") or points out where the
 solution should go (file/function/line), treat it as CONTEXT, not as an order: the level and
 the mechanism are your decision in this step, by the evidence. Binding is only a DELIVERY
-constraint (e.g. must ship over-the-air; must not touch native/build/migrations). If the evidence
+constraint (e.g. must deliver over-the-air; must not touch native/build/migrations). If the evidence
 contradicts the pre-qualification you received, design the right thing and record the divergence in the plan.
 
 **Axis 1 — depth (root × symptom).**
@@ -87,7 +87,7 @@ not the root. Decide the LEVEL of the fix before designing:
      whole family WITHOUT enumerating it (e.g. discriminate by `code`/structural origin
      instead of by text; handle it at the common source). A sign you got it right: the solution does NOT
      need a list of variants. Prefer it whenever the root is under your control
-     and the risk fits the scope/delivery constraint (e.g. must ship over-the-air).
+     and the risk fits the scope/delivery constraint (e.g. must deliver over-the-air).
    - **Mitigate the symptom (only when the root is untouchable):** when the root is out
      of your control (third-party SDK, backend, native) or fixing it becomes another
      scope/refactor, it is legitimate to treat the symptom — but **declare it explicitly**
@@ -96,7 +96,7 @@ not the root. Decide the LEVEL of the fix before designing:
 
 **Stopping criterion (do not descend forever):** the actionable root is the deepest node
 that (a) you control, (b) dissolves the family, (c) fits the acceptable risk/delivery
-constraint (e.g. shipping over-the-air) — it is not rewriting the SDK/backend. When in doubt between root and symptom with relevant risk,
+constraint (e.g. delivering over-the-air) — it is not rewriting the SDK/backend. When in doubt between root and symptom with relevant risk,
 emit `## Requires user confirmation` with both options and the trade-off.
 
 **Axis 2 — coverage (how many triggers of the SAME symptom the fix catches).**
@@ -365,7 +365,7 @@ or when the note does not hold.
 ## Requires user confirmation  (when the Intent note holds OR there is ambiguity)
 
 > Emit this section also when: (a) Step 1.5 chooses between fixing at the root and
-> mitigating the symptom and the trade-off (risk, scope, delivery constraint — e.g. must ship
+> mitigating the symptom and the trade-off (risk, scope, delivery constraint — e.g. must deliver
 > over-the-air) deserves a decision from the user; (b) Step 3.5 finds 2+ plausible readings of the
 > request/symptom; (c) Step 3.2 identifies a behavior/runtime/deploy change from an upgrade;
 > (d) Step 1.5 (axis 2) leaves a vector of the SAME symptom not-covered — the decision to

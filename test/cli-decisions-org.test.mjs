@@ -25,7 +25,7 @@ function makeOrgHome(t, name) {
   saveDecision({ project: "acme-mobile-app", title: "the app owns its cache", context: "c", decision: "d", status: "accepted" }, env);
   saveDecision({ org: "acme", title: "one queue per product", context: "c", decision: "d", status: "accepted" }, env);
   saveDecision({ org: "orbit", title: "orbit decides alone", context: "c", decision: "d", status: "accepted" }, env);
-  saveRoadmapItem({ project: "acme-mobile-app", horizon: "now", title: "ship the app cache" }, env);
+  saveRoadmapItem({ project: "acme-mobile-app", horizon: "now", title: "deliver the app cache" }, env);
   saveRoadmapItem({ org: "acme", horizon: "now", title: "raise the node version" }, env);
   return { env, cwd };
 }
@@ -73,7 +73,7 @@ test("the read commands migrate a database written before the owner scope, with 
   assert.equal(roadmap.status, 0, roadmap.stderr);
   assert.ok(roadmap.stdout.includes("  1. legacy roadmap item  [open]"), roadmap.stdout);
 
-  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v15/);
+  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v16/);
 });
 
 test("a v5 database that cannot be migrated answers with the schema, never with a raw missing column", (t) => {
@@ -84,7 +84,7 @@ test("a v5 database that cannot be migrated answers with the schema, never with 
 
   const listed = runCli(env, ["decision", "list", "--project", "alpha"], { cwd });
   assert.equal(listed.status, 1, listed.stdout);
-  assert.match(listed.stderr, /schema v5 and this build needs v15/);
+  assert.match(listed.stderr, /schema v5 and this build needs v16/);
   assert.equal(listed.stderr.includes("no such column"), false, listed.stderr);
 });
 
@@ -123,12 +123,12 @@ test("roadmap prints the org items with their owner, and --org reads that org al
   const result = runCli(env, ["roadmap"], { cwd });
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.includes("  acme 1. raise the node version  [open]"), result.stdout);
-  assert.ok(result.stdout.includes("  1. ship the app cache  [open]"), result.stdout);
+  assert.ok(result.stdout.includes("  1. deliver the app cache  [open]"), result.stdout);
 
   const org = runCli(env, ["roadmap", "--org", "acme"], { cwd });
   assert.equal(org.status, 0, org.stderr);
   assert.ok(org.stdout.includes("  acme 1. raise the node version  [open]"));
-  assert.equal(org.stdout.includes("ship the app cache"), false, "a project item reached an org roadmap");
+  assert.equal(org.stdout.includes("deliver the app cache"), false, "a project item reached an org roadmap");
 });
 
 test("a short org name stays in the NUMBER column and a long one is never glued to the status", (t) => {

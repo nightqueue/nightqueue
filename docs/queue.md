@@ -25,10 +25,11 @@ nightshift queue run --stop [4242]                             # end every regis
 nightshift queue run --foreground [--job 7]                    # run it in this process instead, for a script or CI
 nightshift queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
 nightshift queue session 7 [--print]                           # resume the claude session of the job's last attempt
-nightshift queue cancel 7 --reason "not needed"                # cancel a pending, gated or orphaned job
+nightshift queue cancel 7 --reason "not needed"                # cancel a pending, gated, orphaned, done or failed job
 nightshift queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue
 nightshift queue repair 7 [--json]                             # re-classify a gated or failed job from its own log
-nightshift queue ship 7 [--force] [--foreground] [--json]      # merge a done job's pull request and close the job, detached
+nightshift queue close 7 [--force] [--foreground] [--json]      # merge a done job's pull request and close the job, detached
+nightshift queue close --merged [--json]                         # close every done job whose pull request is already merged
 nightshift queue pause | nightshift queue resume                    # stop claiming new jobs, or claim again
 ```
 
@@ -165,7 +166,7 @@ its window (opens 22:00)` instead of promising a pending job gets picked up.
 
 **The window is one-shot.** When it closes the process ends and nothing brings it
 back. Running it every night is an OS-level job (`launchd` on macOS, `systemd` on
-Linux) the operator sets up themselves - nightshift ships no installer for that
+Linux) the operator sets up themselves - nightshift bundles no installer for that
 today, and no runner ever starts another runner.
 
 **`queue.keepAwake` keeps the machine from sleeping while a runner or a job needs
@@ -192,9 +193,9 @@ runners are live - start another with `nightshift queue run`; a single runner ne
 runner are all registered the same way, one file per pid, and every start path - `queue run`,
 `--watch`, `--job`, `queue add --run`, `queue retry --run`, their `--foreground` forms and the
 `queue_run` and `queue_retry` MCP tools - registers its runner under the home lock, in the
-same critical section as the prune of the dead registrations. `queue ship` and the
-`queue_ship` MCP tool register theirs the same way, as a runner of mode `ship` that claims
-no job (see *Shipping a job*).
+same critical section as the prune of the dead registrations. `queue close` and the
+`queue_close` MCP tool register theirs the same way, as a runner of mode `close` that claims
+no job (see *Closing a job*).
 **No start is ever refused because another runner is live**: the claim is one atomic `UPDATE`
 inside SQLite, so a second runner costs nothing and takes nothing away. `queue.maxConcurrent` is an opt-in ceiling over
 the whole home, with no default: there is no ceiling until the operator sets a positive
@@ -263,8 +264,8 @@ another runner.
 **`queue status` is a table, and `--follow` keeps it live.** One row per job with
 the columns of the cockpit: `ID STATUS DURATION TOKENS PROJECT SLUG/LAST PR`.
 `STATUS` carries an icon (`● running`, `✓ done`, `■ closed`, `⚑ gate`, `✗ failed`,
-`⊘ cancelled`, `○ pending`) and a color on a terminal; a job whose ship is in progress
-reads `✓ shipping` alone, and a shipped one `■ closed` alone. `DURATION` is how long a
+`⊘ cancelled`, `○ pending`) and a color on a terminal; a job whose close is in progress
+reads `✓ done · closing`, and a closed one `■ closed` alone. `DURATION` is how long a
 running job has been up (from its own `started_at`) or how long a finished one
 took; `TOKENS` is what it spent so far (`374k`, `1.2M`). `SLUG/LAST` is the last
 thing the orchestrator said in its log while the job runs (`» ...`), the first
@@ -369,18 +370,49 @@ which is what to turn on if the output ever stalls again.
 
 **The seven states.** A job is `pending` while it waits, `running` while a runner
 owns it under a lease, and then one of five final states: `done` (the run
-delivered a pull request URL), `closed` (the operator closed a job out of any
-terminal status - `done`, `failed`, `gate` or `cancelled` - with `nightshift
-queue close <id>...` or `--merged`), `gate` (the pipeline stopped asking for a human decision - a recorded
+delivered a pull request URL), `closed` (the job's pull request was merged
+through the closing pipeline - see *Closing a job* below), `gate` (the pipeline stopped asking for a human decision - a recorded
 `outcome.status: "gate"` in `state.json`, or the `## Requires user
 confirmation` marker in the stream), `failed` (a non-zero exit, a timeout, an
 orphan that had already spent its attempts, or a clean exit that ended with
 nothing to deliver and never asked for a decision) and `cancelled` (cancelled
-by the operator, or stopped while running). A job in `gate` ALWAYS carries the
+by the operator, stopped while running, a pull request closed without being merged,
+or a clean exit whose attempt recorded `no_commit`). A job in `gate` ALWAYS carries the
 reason it stopped in `notice_md`: without a `## Notice` the reason is the
 summary the pipeline recorded in `state.json`, and the whole final text of the
 orchestrator when there is none, and a run that ended saying nothing at all is
 `failed` with a fixed warning instead of a gate nobody can read.
+
+**`closed` means merged, and the schema says so.** A row is `closed` only when it carries a
+`pr_url`, an empty `close_status` and a `close` checklist whose `data.merged` is `true` - a
+`CHECK` of the `jobs` table refuses every other write, whoever makes it. Only the settle step
+of the closing pipeline writes `closed`: `nightshift queue close <id>`, `queue close --merged`
+and the MCP `queue_close`. `queue repair`, the witness reconciliation and every other writer
+refuse it by name (``status `closed` is written only by the closing pipeline; run nightshift
+queue close <id>``), so a job is never closed by hand, by a flip of its status or by an agent.
+
+**A run that produced nothing is `cancelled`, not `failed`.** When an attempt exits cleanly
+with no pull request and no gate, and the run logged `no_commit` for THIS attempt (a
+`pipeline_runs` row of the job's project and slug written after the attempt started), the job
+ends `cancelled` and its notice gains `nothing to close: the run produced no pull request`,
+as its own paragraph after the run's reason. A run that logged `local_commit`, or that logged
+nothing, stays `failed` as before; the worktree of a `cancelled` finish is kept or named by
+the same rule as a `failed` one.
+
+**Rows closed before the closing pipeline existed.** The schema v16 migration runs once, on
+the first open after an upgrade, in one transaction, and leaves every row satisfying the
+`CHECK`: a closed row whose checklist already recorded a merge stays `closed`; a closed row
+with a pull request but no recorded merge (closed by hand, or a close that had failed) stays
+`closed` and gains a synthetic record - `merge` `skipped` with the note `merged outside a
+close`, `data.mergedBy: "operator"` and `migrated.from` holding its old close status - with
+its existing checklist kept and extended, never replaced; a closed row without a pull
+request becomes `cancelled`, with `operator_note` `migrated: closed without a pull request`
+and its old status and note kept in `result`. `data.mergeSha` is absent only on these
+migrated rows: a merge the pipeline recorded always carries its commit. Job 65, closed by
+hand while its only close attempt had stopped at a red `preflight`, stays `closed` with that
+failed preflight kept as history and `migrated.from: "failed"`. The merge line the old
+pipeline appended to a notice, under its former name, is rewritten to `Closed: PR #<n> ...`
+only where the notice holds exactly the line its checklist recorded.
 
 A `pending` job the preflight refused to start also carries a reason, in its own
 `blocked_code` column - it answers a different question than `status`: not where
@@ -397,28 +429,43 @@ request is never asked about again, an open, conflicted or draft one after 60 s,
 `unknown` one after 8 s, and a read gh could not answer is held back for 30 s and keeps
 the last state it had. A pull request nobody asked about yet reads `unknown`. The `PR`
 cell shows it next to the URL (`https://github.com/acme/api/pull/42 (merged)`), and
-`--json` carries `jobs[].pr_state` plus `suggestions`. A terminal job (`done`, `failed`,
-`gate` or `cancelled`) whose pull request is merged is never changed by a read: the
+`--json` carries `jobs[].pr_state` plus `suggestions`. A `done` job whose pull request is
+merged is never changed by a read: the
 listing adds one aggregated line - `#12 PR merged - close it with nightshift queue
 close 12` for exactly one, `3 jobs have a merged PR (#12, #9, #7) - close them with
 nightshift queue close --merged` for several - and closing it is the operator's act,
-either by id or in one call with `nightshift queue close --merged`, which queries gh
-only for what its own cache cannot already confirm, bounded to 10 pull requests and
-one 20 s deadline per call. Closing a job, by id, with `--merged` or through the MCP
-`queue_close`, also releases its worktree once the row is closed (see *Worktrees* below): the
+either by id or in one call with `nightshift queue close --merged`. `--merged` looks at
+`done` jobs with a pull request only, and queries gh only for what its own cache cannot
+already confirm, bounded to 10 pull requests and one 20 s deadline per call; each job it
+confirms merged then goes through the same closing pipeline, one after the other in this
+process, so a job whose pipeline stops is reported `job #N not closed: <step>: <reason>` and
+stays `done`. A `failed`, `gate` or `cancelled` job is never suggested and never closed, even
+when its pull request is merged: retry it or cancel it. Closing a job also releases its
+worktree once the row is closed (see *Worktrees* below): the
 text output adds `worktree removed: <path>` or `worktree kept: <path> - <reason>` right after
-`closed job #N`, `--json` carries `worktrees` (`[{ id, path, status, reason? }]`, one entry per
-closed job that had a worktree, `status` `removed` or `kept`), and `queue_close` answers
-`worktree` (`{ path, status, reason? }`, or `null`). A kept worktree never fails the close. gh is never asked about more than four pull requests at once. A one-shot
+the closed line, `--merged --json` carries `worktrees` (`[{ id, path, status, reason? }]`, one entry per
+closed job that had a worktree, `status` `removed` or `kept`) next to `closed`, `refused`,
+`undetermined` and `decisions`. A kept worktree never fails the close. gh is never asked about more than four pull requests at once. A one-shot
 `queue status` asks it before it prints and waits one overall 5 s deadline at most -
 what has not answered by then prints `unknown`, and the gh still running is stopped; `--follow` never waits for gh - it asks after drawing a
 frame and picks the answer up on a later one - and the MCP `queue_status` answers from
 its cache and asks gh after answering. `NIGHTSHIFT_NO_PR_CHECK=1` switches every gh call
 of this off.
 
-`queue cancel` moves a job out of a final state into `cancelled` (from `pending`,
-`gate` or an orphan), and `queue retry` moves it back to `pending` (from `gate`,
-`failed` or `cancelled`). A `closed` job is terminal for both: `queue cancel`
+`queue cancel` moves a job into `cancelled` (from `pending`, `gate`, an orphan, `done` or
+`failed`), and `queue retry` moves it back to `pending` (from `gate`,
+`failed` or `cancelled`). Cancelling a `done` or `failed` job also releases its worktree by
+the rule of *Worktrees* below - the text output adds `worktree removed: <path>` or `worktree
+kept: <path> - <reason>` after `cancelled job #N`, and `--json` and the MCP `queue_cancel`
+answer `{ job, worktree }` (`{ path, status, reason? }`, or `null`); a pending, gated or
+orphaned cancel leaves the worktree where it is. The job's `close` checklist, when it has one,
+is kept as history. A `done` job that a close holds under a live lease is refused (``job `N`
+is being closed by `W` until T; wait for it or follow it with nightshift queue status N``) and
+nothing is written. So is a `done` job whose close was interrupted - still `closing` on record
+with its lease dead, possibly after the merge already happened (``job `N` has an interrupted
+close whose merge may already have happened; resume it with nightshift queue close N - …``):
+the resumed close reads the pull request, records a merge as `closed` and cancels the job for
+one closed without merge, so a merge is never lost from the record by a cancel. A `closed` job is terminal for both: `queue cancel`
 refuses it as already finished, and `queue retry` still takes `failed`,
 `cancelled` and `gate` and nothing else. A gated job only moves with `--note`, and that note is
 the only thing that ever reaches the prompt of the run, in a block labelled
@@ -472,7 +519,8 @@ runner removes the worktree its run recorded (`state.json` `worktree`) with a pl
 empty) or a pull request is recorded. A lock left by a session whose pid is gone is lifted
 first; a lock held by a live pid, or one with no pid, keeps the worktree. A run that ends
 `gate` or `failed` keeps its worktree for the resume and for the session that attaches to it;
-`nightshift queue close` removes it later under the same rule. A worktree nightshift would refuse
+`nightshift queue close` (once the job is `done` and its pull request merged) or `nightshift queue
+cancel` (of a `done` or `failed` job) removes it later under the same rule. A worktree nightshift would refuse
 to remove - dirty, never pushed, ahead of its upstream, locked or unreadable - is named whatever
 the ending: the line `Worktree kept: <path> - <reason>.` is appended after a blank line to the
 notice that exists (the run's own, its fallback, or the notice the row already held when the
@@ -709,29 +757,34 @@ no retry, no operator call. The claim clears `blocked_code` the instant it
 picks the job back up.
 
 **What it does NOT do in v1.** The runner never merges anything and never closes the
-cycle after the pull request on its own - that is `nightshift queue ship`, an operator
-command (see *Shipping a job* below). It keeps no token budget, ships no launchd (or any other)
+cycle after the pull request on its own - that is `nightshift queue close`, an operator
+command (see *Closing a job* below). It keeps no token budget, installs no launchd (or any other)
 scheduler, sends no notification and has no cockpit. It also never changes the
 state of a git repository: the only git commands it runs are reads of the
 checkout, and every branch and worktree is created by the pipeline itself.
 
-### Shipping a job
+### Closing a job
 
-**A ship takes a `done` job's pull request from open to merged and closes the job.**
-`nightshift queue ship <id>` (and the MCP `queue_ship`) runs a code pipeline of four
-steps in the command's own process - never an agent, never a second job, never queue work:
+**A close takes a `done` job's pull request from open to merged and closes the job - and it
+is the only way a job becomes `closed`.** `nightshift queue close <id>`, `queue close
+--merged` and the MCP `queue_close` all run the same code pipeline of four steps - never an
+agent, never a second job, never queue work:
 
 1. **preflight** - `git fetch origin` in the project's checkout (a failed fetch is not a
    stop: `WARNING: git fetch origin failed (...)` is prefixed to every later step note),
    then the pull request is read with gh. First, the pull request must be the job's own: when
    its head branch is not the job's recorded branch (or the published `<type>/<slug>` name of
-   its `worktree-<type>+<slug>` branch), the ship stops with `pr-not-the-job-branch`, naming
+   its `worktree-<type>+<slug>` branch), the close stops with `pr-not-the-job-branch`, naming
    both branches, before anything is merged or settled - even when the pull request is already
-   merged, so a foreign merge is never written onto the job. A job that recorded no branch
-   is shipped with `branch not recorded; attribution not checked` in the step note. A closed
-   pull request stops the ship; one that is already
-   merged is recorded as merged and nothing else is checked. Otherwise the checks must be
-   green - a red or a pending check stops the ship naming it, and it never waits for one.
+   merged, so a foreign merge is never written onto the job. `--force` never lifts this check:
+   when the recorded pull request is really not the job's, fix the job's `pr_url` first (the
+   operator-run, dry-run-first `scripts/repair-job-pr-attribution.mjs` is how job 57's was
+   fixed). A job that
+   recorded no branch is closed with `branch not recorded; attribution not checked` in the
+   step note. A pull request closed without being merged cancels the job (see *A closed pull
+   request cancels* below); one that is already merged is recorded as merged by the operator
+   and nothing else is checked. Otherwise the checks must be
+   green - a red or a pending check stops the close naming it, and it never waits for one.
    Uncommitted files in the checkout only stop it when the pull that follows the merge
    would touch them (`checkout-dirty` names up to ten): nightshift never stashes, so they are
    yours to commit or stash.
@@ -739,77 +792,119 @@ steps in the command's own process - never an agent, never a second job, never q
    the head branch is rebased onto the base in a throwaway worktree (its own temporary
    directory, with the checkout's `node_modules` linked in), the project's `npm test` must
    pass there, and only then the rebased head is pushed with
-   `--force-with-lease` against the head the ship read. A rebase that stops on real
-   conflicts is aborted and the ship stops with `real-conflict` and the conflicted files -
-   a ship never resolves a real conflict. The throwaway worktree is removed whatever
+   `--force-with-lease` against the head the close read (with `--force`, the push follows the
+   rebase without running the suite). A rebase that stops on real
+   conflicts is aborted and the close stops with `real-conflict` and the conflicted files -
+   a close never resolves a real conflict. The throwaway worktree is removed whatever
    happens.
 3. **merge** - `gh pr merge --squash --match-head-commit <the verified head>`, never
    `--delete-branch`, `--admin` or `--auto`. gh's exit code is never the evidence: the pull
    request is re-read until GitHub reports it merged with its merge commit, and that
-   commit is what is recorded. Afterwards the checkout is fast-forwarded with `git pull
-   --ff-only` only when it sits on the base branch; the result is noted, never a failure.
-4. **settle** - closes the job and appends `Shipped: PR #<n> merged as <sha7> on
-   <YYYY-MM-DD>` to its notice (after a blank line, never replacing it), in one write; the
-   job's worktree is then released by the same rule as `queue close` (see *Worktrees*).
+   commit is what is recorded, with `data.mergedBy: "nightshift"`. When the pull request was
+   already merged by hand, the step merges nothing: it confirms the merge commit the same way
+   and is `skipped` with the note `merged outside a close as <sha7>; ...`. Afterwards the
+   checkout is fast-forwarded with `git pull --ff-only` only when it sits on the base branch;
+   the result is noted, never a failure.
+4. **settle** - closes the job and appends `Closed: PR #<n> merged as <sha7> on
+   <YYYY-MM-DD>` to its notice (after a blank line, never replacing it), in one write that the
+   schema refuses unless the checklist records the merge; the job's worktree is then released
+   by the rule of *Worktrees*.
 
-The job's status is untouched until settle: a ship that stops leaves it `done`.
+The job's status is untouched until settle: a close that stops leaves it `done`, except for a
+pull request closed without merge, which cancels it.
+
+**A closed pull request cancels.** When any step reads the pull request `CLOSED` without a
+merge, the close does not stop at `failed`: the job becomes `cancelled` in one write, with
+`operator_note` `pull request closed without merge`, the checklist kept with `failed: { step,
+reason: "pr-closed" }` and the lease released; its worktree is then released as for a cancel
+of a `done` job. The line is `job #<id> cancelled: PR #<n> was closed without being merged;
+nothing to close`, and the exit code is `1`. The decision comes from the step's own read of the
+pull request, never from the job's status, and a close whose lease another process took over
+cancels nothing.
+
+**A pull request merged by hand.** Merging on GitHub yourself is allowed: the next `queue close`
+of the job reads it `MERGED`, records `data.mergedBy: "operator"` and the merge commit, marks
+the merge step `skipped` (`merged outside a close as <sha7>`) and settles the job as usual -
+the attribution check above still runs first. `queue close --merged` is the way to do this for
+every such job at once.
 
 **The checklist lives on the job.** Each step writes its result to the job row as soon as it
-settles: `ship_status` (`shipping`, `shipped` or `failed`) and `ship`, a checklist with the
+settles: `close_status` (`closing` or `failed`, cleared once the job is `closed`) and `close`, a checklist with the
 attempt count, one entry per step (`done`, `skipped` or `failed`, a note and the time) and
-the data the steps read (pull request number, head, merge commit). `queue status` shows it:
-the STATUS cell reads `shipping` alone while a ship is in progress and `closed` alone once
-it shipped, a stopped ship adds ` · ship failed` or ` · ship stalled` to the job's status,
+the data the steps read (pull request number, head, merge commit, who merged it). `queue status` shows it:
+the STATUS cell reads `done · closing` while a close is in progress and `closed` alone once
+it closed, a stopped close adds ` · close failed at <step>` or ` · close stalled` to the job's status,
 `SLUG/LAST` names the current step or the stop, and `queue status <id>` prints the whole
-checklist under the status line; `--json` and the MCP `queue_status` carry `ship_status`,
-`ship_worker`, `ship_lease_until` and `ship`. A ship that stops prints, in the listing, the
+checklist under the status line; `--json` and the MCP `queue_status` carry `close_status`,
+`close_worker`, `close_lease_until` and `close`. A close that stops prints, in the listing, the
 detail and the queue's hint lines,
-`⛔ ship stopped at <step>: <reason> - run again with: nightshift queue ship <id>`, and a ship
-in flight adds `ship in flight: #<id> at <step> (pid <pid>) - follow with: nightshift queue
-status <id>`. `nightshift doctor` has a `ships` row that warns on a failed ship or one whose
+`⛔ close stopped at <step>: <reason> - run again with: nightshift queue close <id>`, and a close
+in flight adds `close in flight: #<id> at <step> (pid <pid>) - follow with: nightshift queue
+status <id>`. `nightshift doctor` has a `closes` row that warns on a failed close or one whose
 lease expired.
 
 **Running it again resumes it at the step that failed.** A step already `done` is not run
 again, and whether the merge happened is decided by the merge commit recorded from GitHub -
-never by a step status - so a ship that stopped after the merge never merges twice. A merge
+never by a step status - so a close that stopped after the merge never merges twice. A merge
 that finds the pull request conflicted again, or its head moved, reopens the earlier steps
 it depends on.
 
-**The lease is only a mutex.** Starting a ship takes a lease on the job, in one atomic
-update, so two ships of the same job never run together: a second start is refused
-naming the ship that holds it and until when. The lease lasts the ship's timeout plus 60 s
+**The lease is only a mutex.** Starting a close takes a lease on the job, in one atomic
+update, so two closes of the same job never run together: a second start is refused
+naming the close that holds it and until when. The lease lasts the close's timeout plus 60 s
 and is renewed on every checklist write; a lease that expired (the process died or passed
-its timeout) shows as `ship stalled` and is taken over by the next `queue ship`. The ship
+its timeout) shows as `close stalled` and is taken over by the next `queue close`. The close
 claims nothing: it holds no job lease and never changes what a runner may pick up.
 
-**Detached by default.** `nightshift queue ship <id>` starts a child and returns at once
-with `ship of job #<id> started (pid <pid>) - follow with: tail -f <log> (log: <log>), or
-nightshift queue status <id>`; the log is `<home>/logs/ship-<id>-<stamp>.log`, and `--json`
-prints `{ started, jobId, pid, logPath }`. The child registers as a runner of mode `ship`, so
+**Detached by default.** `nightshift queue close <id>` starts a child and returns at once
+with `close of job #<id> started (pid <pid>) - follow with: tail -f <log> (log: <log>), or
+nightshift queue status <id>`; the log is `<home>/logs/close-<id>-<stamp>.log`, and `--json`
+prints `{ started, jobId, pid, logPath }`. The child registers as a runner of mode `close`, so
 `queue status`, doctor and the install guard see it live, but a pending job is never
 promised to it. `--foreground` runs the steps in this process, prints one line per step and
-a final `job #<id> shipped: PR #<n> merged as <sha7>; job closed` (plus what happened to
-the worktree) or the `⛔ ship stopped ...` line, and exits `0` only when the job shipped;
-with `--json` it prints one `{ job, outcome }` object and nothing else on stdout.
-`queue.shipTimeoutS` (default `600`, accepted range `60..3600` seconds) is the hard
-timeout of the whole ship; a ship that passes it, or that `queue run --stop` ends, stops
+a final `job #<id> closed: PR #<n> merged as <sha7>` (plus what happened to
+the worktree) or the `⛔ close stopped ...` line, and exits `0` only when the job closed;
+with `--json` it prints one `{ job, outcome, decisions }` object and nothing else on stdout.
+`queue.closeTimeoutS` (default `600`, accepted range `60..3600` seconds) is the hard
+timeout of the whole close; a close that passes it, or that `queue run --stop` ends, stops
 with `timeout` or `interrupted` and resumes on the next run.
 
-**What it ships.** Only a `done` job with a GitHub pull request URL of a registered project
-whose checkout exists. `--force` (`force: true` over MCP) ships a `failed` or `gate` job
-that carries a pull request, and says so first; it also overrides the
-`pr-not-the-job-branch` refusal, recording `attribution overridden with --force (PR on
-<head>, job on <branch>)` in the preflight note - fix the job's `pr_url` instead when the
-pull request is really not the job's. `closed`, `running`, `pending`,
-`cancelled`, a job without a pull request and a job another ship holds under a live lease
-are refused by name, and nothing is written. An unattended run never ships: inside a job
-the command and the tool are refused.
+**Decisions the job proposed.** Once a close in the foreground (or `--merged`) closed the job,
+it settles the decisions the job proposed and nobody settled: on a terminal it asks accept /
+reject / keep for each, `--decisions accept|reject|keep` answers all of them without asking,
+and `--json` or no terminal keeps them `proposed`. A detached close has no terminal: it hands
+`--decisions` to its child when you give it, and otherwise keeps every proposal `proposed` -
+`nightshift doctor` lists them afterwards. The MCP `queue_close` never settles a proposal.
+
+**What `--force` does.** `--force` (`force: true` over MCP) means "do not hold me back for
+tests", nothing more: preflight notes the pull request's red, pending or unreadable checks
+(`checks ignored with --force: failing: a, b; pending: c`) instead of stopping, and the
+conflict step rebases and pushes without running the project's `npm test` (`suite skipped with
+--force`). A forced close prints first `job #<id>: --force: pull request checks and the rebase
+suite are skipped; conflicts, attribution and status still stop the close`, and the checklist
+records `forced: true` for good. It never opens another status, never lifts
+`pr-not-the-job-branch`, a real conflict, leftover conflict markers, uncommitted files the pull
+would touch, a missing checkout or a closed pull request.
+
+**What it closes.** Only a `done` job with a GitHub pull request URL of a registered project
+whose checkout exists. Everything else is refused by name, and nothing is written:
+
+- `closed` - ``job `N` is already closed``; running `queue close` again on a closed job is how
+  you confirm it, and it never starts a child;
+- `running`, `pending` (it has not produced a pull request yet), `gate` (answer it with
+  `nightshift queue retry N --note "..."`, or cancel it), `failed` (retry it or cancel it) and
+  `cancelled` (retry it before closing);
+- a `done` job without a pull request - `nothing to close: the job has no pull request`;
+- a job another close holds under a live lease, named with its worker and until when.
+
+An unattended run never closes: inside a job the command and the tool are refused (``refusing
+to close from inside job `N` ...``); the operator runs the close.
 
 **What it never does.** It never stashes, never deletes a branch (`--delete-branch`),
 never resolves a real conflict, never retries the run that produced the pull request and
-never ships on its own - the operator decides when to ship. Ships of one project share its
+never closes on its own - the operator decides when to close. Closes of one project share its
 checkout (the fetch, the throwaway worktrees, the pull), so they are best run one after
-the other; a collision fails the ship safely (`fetch-failed`, `worktree-failed`) and it
+the other; a collision fails the close safely (`fetch-failed`, `worktree-failed`) and it
 resumes on the next run.
 
 ## Writing a job

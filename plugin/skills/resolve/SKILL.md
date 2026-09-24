@@ -885,7 +885,7 @@ your Step 1.5. Declare `**Diff axis:**` and `**Always-gate class:**`, and produc
 `## Usage coverage` when the conditions of your Step 5 match.
 
 Delivery constraints (the limit of what may be delivered — NEVER design; omit the line if there is none):
-[e.g. it must ship over-the-air; it must not touch native/build code]
+[e.g. it must deliver over-the-air; it must not touch native/build code]
 
 Project conventions: read `<CWD>/CLAUDE.md` yourself via Read if it exists (the orchestrator no longer reads repository files).
 
@@ -1522,8 +1522,8 @@ confirmation` block verbatim, followed by the answer line, with NO length cap.
   `03-plan.md` has a `not-covered` vector in `## Symptom coverage` or the acceptance
   gate of Phase 6.5 has a `NOT MET` line; with none of those signals use the
   `✅` family — `✅ Fixed and live` when the fix is in production at the
-  moment of the notice, `✅ Fixed — ships in the next release` when it is still going to
-  ship, `✅ Delivered — <what changed>` when the task is not a bug fix. Do not
+  moment of the notice, `✅ Fixed — goes out in the next release` when it is still going
+  out, `✅ Delivered — <what changed>` when the task is not a bug fix. Do not
   let the reader infer the outcome from the support line down in the middle of the text.
 - **What the writing checks (a closed enum).** The writing refuses the notice as a
   whole — the same mechanism as the character cap, nothing is written and the closing

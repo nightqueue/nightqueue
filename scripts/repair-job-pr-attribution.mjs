@@ -3,14 +3,14 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { dbPath } from "../src/config/paths.mjs";
-import { SHIPPED_PREFIX, parseShipChecklist } from "../src/queue/ship-view.mjs";
+import { CLOSED_PREFIX, parseCloseChecklist } from "../src/queue/close-view.mjs";
 import { openStore, withReadOnlyStore } from "../src/store/open.mjs";
 
 export const JOB_ID = 57;
 export const FROM_URL = "https://github.com/maykonVinicius/nightshift/pull/71";
 export const TO_URL = "https://github.com/maykonVinicius/nightshift/pull/72";
-export const FROM_LINE = "Shipped: PR #71 merged as c1fe093 on 2026-09-22";
-export const TO_LINE = "Shipped: PR #72 merged as 1b62622 on 2026-09-22";
+export const FROM_LINE = "Closed: PR #71 merged as c1fe093 on 2026-09-22";
+export const TO_LINE = "Closed: PR #72 merged as 1b62622 on 2026-09-22";
 export const REFUSAL_EXIT = 2;
 
 const USAGE = "usage: node scripts/repair-job-pr-attribution.mjs --job 57 [--apply]";
@@ -36,26 +36,26 @@ export function attributionState(row) {
   return "unexpected";
 }
 
-// The lines of the notice that record a ship, joined, or a placeholder.
-function shippedLines(row) {
+// The lines of the notice that record a close, joined, or a placeholder.
+function closedLines(row) {
   const notice = typeof row?.notice_md === "string" ? row.notice_md : "";
-  const lines = notice.split("\n").filter((line) => line.startsWith(SHIPPED_PREFIX));
+  const lines = notice.split("\n").filter((line) => line.startsWith(CLOSED_PREFIX));
   return lines.length > 0 ? lines.join(" | ") : "(none)";
 }
 
-// A value of the ship checklist as printed, or a placeholder.
+// A value of the close checklist as printed, or a placeholder.
 function shown(value) {
   return value === undefined || value === null || value === "" ? "(none)" : String(value);
 }
 
-// The row as the operator reads it before anything is written, the ship column included and never altered.
+// The row as the operator reads it before anything is written, the close column included and never altered.
 export function describeRow(row, env) {
-  const data = parseShipChecklist(row?.ship)?.data ?? {};
+  const data = parseCloseChecklist(row?.close)?.data ?? {};
   return [
     `job ${JOB_ID} in ${dbPath(env)}`,
     `  pr_url: ${shown(row?.pr_url)}`,
-    `  Shipped line: ${shippedLines(row)}`,
-    "  ship column (the true log of what the ship merged; printed, never written):",
+    `  Closed line: ${closedLines(row)}`,
+    "  close column (the true log of what the close merged; printed, never written):",
     `    prNumber: ${shown(data.prNumber)}`,
     `    headBranch: ${shown(data.headBranch)}`,
     `    noticeLine: ${shown(data.noticeLine)}`,
@@ -95,7 +95,7 @@ async function applyRepair(env, io) {
       io.error(`refusing: job ${JOB_ID} changed while it was being repaired; nothing written`);
       return REFUSAL_EXIT;
     }
-    io.log(`applied: pr_url and the one notice line written; the ship column is untouched.`);
+    io.log(`applied: pr_url and the one notice line written; the close column is untouched.`);
     return 0;
   } finally {
     await store.close();

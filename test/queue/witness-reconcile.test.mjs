@@ -170,7 +170,7 @@ test("a job the database lost is restored from its witness, with repairedFrom in
 test("the reconciliation closes the roadmap item of a job its witness says delivered, and leaves open the one of a failed witness", async (t) => {
   const env = makeQueue(t, "reconcile-roadmap");
   const delivered = lostFinish(env);
-  const deliveredItem = linkedItem(env, delivered, "ship the delivery");
+  const deliveredItem = linkedItem(env, delivered, "deliver the delivery");
 
   const failedSlug = "never-delivered";
   const failed = lostFinish(env, { slug: failedSlug, status: "failed", prUrl: null });

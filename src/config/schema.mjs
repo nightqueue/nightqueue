@@ -16,9 +16,9 @@ export const KEEP_AWAKE_DEFAULT = "auto";
 // Ceilings of `queue.bashTimeoutS`, handed to every `claude` child as BASH_DEFAULT_TIMEOUT_MS/BASH_MAX_TIMEOUT_MS.
 export const BASH_TIMEOUT_DEFAULT = Object.freeze({ default: 900, max: 3600 });
 
-// Hard timeout of one `queue ship` attempt, in seconds.
-export const SHIP_TIMEOUT_DEFAULT_S = 600;
-export const SHIP_TIMEOUT_RANGE = { min: 60, max: 3600 };
+// Hard timeout of one `queue close` attempt, in seconds.
+export const CLOSE_TIMEOUT_DEFAULT_S = 600;
+export const CLOSE_TIMEOUT_RANGE = { min: 60, max: 3600 };
 
 // Tells whether the value is a plain object usable as a map.
 function isPlainObject(value) {
@@ -53,7 +53,7 @@ export function emptyConfig() {
       keepAwake: KEEP_AWAKE_DEFAULT,
       bashTimeoutS: { ...BASH_TIMEOUT_DEFAULT },
       inheritUserEnvironment: false,
-      shipTimeoutS: SHIP_TIMEOUT_DEFAULT_S,
+      closeTimeoutS: CLOSE_TIMEOUT_DEFAULT_S,
     },
     embedding: null,
   };
@@ -169,10 +169,10 @@ function normalizeBashTimeout(value) {
   return isValid ? { default: source.default, max: source.max } : { ...BASH_TIMEOUT_DEFAULT };
 }
 
-// Hard timeout of a ship attempt; anything but an integer inside the documented range falls back to the default.
-function normalizeShipTimeout(value) {
-  const inRange = Number.isInteger(value) && value >= SHIP_TIMEOUT_RANGE.min && value <= SHIP_TIMEOUT_RANGE.max;
-  return inRange ? value : SHIP_TIMEOUT_DEFAULT_S;
+// Hard timeout of a close attempt; anything but an integer inside the documented range falls back to the default.
+function normalizeCloseTimeout(value) {
+  const inRange = Number.isInteger(value) && value >= CLOSE_TIMEOUT_RANGE.min && value <= CLOSE_TIMEOUT_RANGE.max;
+  return inRange ? value : CLOSE_TIMEOUT_DEFAULT_S;
 }
 
 // Fills defaults over a config read from disk or edited by hand.
@@ -196,7 +196,7 @@ export function normalizeConfig(raw, { warn = () => {} } = {}) {
       keepAwake: normalizeKeepAwake(raw.queue?.keepAwake),
       bashTimeoutS: normalizeBashTimeout(raw.queue?.bashTimeoutS),
       inheritUserEnvironment: raw.queue?.inheritUserEnvironment === true,
-      shipTimeoutS: normalizeShipTimeout(raw.queue?.shipTimeoutS),
+      closeTimeoutS: normalizeCloseTimeout(raw.queue?.closeTimeoutS),
     },
     embedding: normalizeEmbedding(raw.embedding),
   };

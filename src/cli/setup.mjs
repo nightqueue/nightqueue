@@ -214,7 +214,7 @@ function setupMarketplace(ctx, report) {
   return true;
 }
 
-// Installs the plugin shipped by the runtime at user scope.
+// Installs the plugin bundled with the runtime at user scope.
 function setupPlugin(ctx, report) {
   if (!existsSync(hostManifestPath(ctx.env))) {
     report.degrade(MARKETPLACE_LABEL, "no .claude-plugin/marketplace.json in the runtime");

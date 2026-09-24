@@ -121,8 +121,8 @@ async function queuedItem(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const store = createLocalStore(env);
-  const item = await store.roadmap.saveRoadmapItem({ project: "alpha", horizon: "now", title: "ship the thing" });
-  const job = await store.jobs.addJob({ project: "alpha", prompt: "ship the thing" });
+  const item = await store.roadmap.saveRoadmapItem({ project: "alpha", horizon: "now", title: "deliver the thing" });
+  const job = await store.jobs.addJob({ project: "alpha", prompt: "deliver the thing" });
   assert.equal(await store.roadmap.markRoadmapItemQueued(item.id, job.id), true, "setup: the item was not linked to its job");
   return { store, item, job };
 }

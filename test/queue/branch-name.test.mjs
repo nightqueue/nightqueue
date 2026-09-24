@@ -12,8 +12,8 @@ function legacyFinalBranch(current, { type, slug }) {
 }
 
 const RENAMES = [
-  { current: "worktree-feat+queue-ship", type: "feature", slug: "queue-ship" },
-  { current: "worktree-fix+queue-ship-follow-ups", type: "bug/error", slug: "queue-ship-follow-ups" },
+  { current: "worktree-feat+queue-close", type: "feature", slug: "queue-close" },
+  { current: "worktree-fix+queue-close-follow-ups", type: "bug/error", slug: "queue-close-follow-ups" },
   { current: "worktree-login", type: "bug/error", slug: "login" },
   { current: "worktree-login", type: "feature", slug: "login" },
   { current: "worktree-+odd", type: undefined, slug: "odd" },
@@ -29,15 +29,15 @@ test("the published name of a branch is the rename run pr always applied", () =>
 });
 
 test("a worktree branch and its published name are the same branch, both ways", () => {
-  assert.ok(sameBranch("worktree-feat+queue-ship", "feat/queue-ship"));
-  assert.ok(sameBranch("feat/queue-ship", "worktree-feat+queue-ship"));
+  assert.ok(sameBranch("worktree-feat+queue-close", "feat/queue-close"));
+  assert.ok(sameBranch("feat/queue-close", "worktree-feat+queue-close"));
   assert.ok(sameBranch("worktree-login", "fix/login", { type: "bug/error", slug: "login" }));
   assert.ok(sameBranch("fix/login", "worktree-login", { type: "bug/error", slug: "login" }));
   assert.ok(sameBranch(" feat/x ", "feat/x"), "surrounding blanks made the same name another branch");
 });
 
 test("different branches, and absent names, are never the same branch", () => {
-  assert.equal(sameBranch("worktree-feat+queue-ship", "scratch/ship-qa-20260921201325"), false);
+  assert.equal(sameBranch("worktree-feat+queue-close", "scratch/close-qa-20260921201325"), false);
   assert.equal(sameBranch("worktree-login", "feat/login", { type: "bug/error", slug: "login" }), false);
   assert.equal(sameBranch("main", "develop"), false);
   assert.ok(sameBranch("main", "main"), "a plain name is itself");

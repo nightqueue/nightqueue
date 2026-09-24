@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { JOB_STATUSES, VIEW_TEXT_LIMIT, jobView } from "../memory/jobs.mjs";
 import { advisoryLinesFor } from "./advisory.mjs";
-import { ABANDONED_COMMAND_PREFIX } from "./classify.mjs";
+import { ABANDONED_COMMAND_PREFIX, NOTHING_TO_CLOSE_LINE } from "./classify.mjs";
 import { isQueueIdle } from "./hints.mjs";
 import { prStateKey } from "./pr-state.mjs";
 import { liveRunnersReport } from "./registry.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./runner.mjs";
-import { SHIPPED_PREFIX, shipLines, shipState, shipsSummary } from "./ship-view.mjs";
+import { CLOSED_PREFIX, closeLines, closeState, closesSummary } from "./close-view.mjs";
 import { extractNoticeFromStream } from "./stream.mjs";
 import { KEPT_PREFIX } from "./worktree.mjs";
 
@@ -21,12 +21,12 @@ function withPrState(job, prStates) {
   return { ...job, pr_state: prStateOf(job.pr_url, prStates) };
 }
 
-const CLOSEABLE_STATUSES = new Set(["done", "failed", "gate", "cancelled"]);
+const CLOSEABLE_STATUSES = new Set(["done"]);
 const SUGGESTION_ID_LIMIT = 5;
 
-// Whether a job qualifies for a close suggestion: a terminal status whose cached pull request state is merged, and no ship already closing it.
+// Whether a job qualifies for a close suggestion: a done job whose cached pull request state is merged, and no close already in flight on it.
 function qualifiesForClose(job) {
-  return CLOSEABLE_STATUSES.has(job?.status) && job?.pr_state === "merged" && shipState(job) !== "shipping";
+  return CLOSEABLE_STATUSES.has(job?.status) && job?.pr_state === "merged" && closeState(job) !== "closing";
 }
 
 // The ids a suggestion line names, at most five, with the rest folded into a count.
@@ -36,7 +36,7 @@ function suggestionIdList(ids) {
   return extra > 0 ? `${shown} and ${extra} more` : shown;
 }
 
-// One aggregated line suggesting the close of every terminal job whose pull request is merged, or null when none qualifies.
+// One aggregated line suggesting the close of every done job whose pull request is merged, or null when none qualifies.
 export function closeSuggestion(jobs) {
   const ids = (Array.isArray(jobs) ? jobs : []).filter(qualifiesForClose).map((job) => job.id);
   if (ids.length === 0) return null;
@@ -122,15 +122,15 @@ export async function queueView(readStore, { env = process.env, limit, blockedOn
   const runners = runnersPart.value ?? [];
   const registryError = runnersPart.ok ? null : runnersPart.error;
   const advisoriesPart = await timedSection("advisories", async () => (runnersPart.ok ? await advisoryLinesFor({ store: readStore, runners, env, killImpl }) : []), now);
-  const shipsPart = await timedSection("ships", async () => shipsSummary(await readStore.jobs.listShips(), runners), now);
+  const closesPart = await timedSection("closes", async () => closesSummary(await readStore.jobs.listCloses(), runners), now);
   const jobs = (jobsPart.value ?? []).map((job) => withPrState(job, prStates));
   const { counts, blockedPending, activeJobs } = countsPart.value ?? { counts: zeroCounts(), blockedPending: 0, activeJobs: 0 };
-  const sections = [jobsPart, countsPart, runnersPart, advisoriesPart, shipsPart].map(({ name, ok, ms, error }) => ({ name, ok, ms, error }));
+  const sections = [jobsPart, countsPart, runnersPart, advisoriesPart, closesPart].map(({ name, ok, ms, error }) => ({ name, ok, ms, error }));
   const advisories = advisoriesPart.value ?? [];
-  const ships = shipsPart.value ?? { inFlight: [], failed: [], stalled: [] };
-  const suggestions = [closeSuggestion(jobs), truncationSuggestion(jobs), ...unknownStatusAdvisories(jobs), ...shipLines(ships)].filter(Boolean);
+  const closes = closesPart.value ?? { inFlight: [], failed: [], stalled: [] };
+  const suggestions = [closeSuggestion(jobs), truncationSuggestion(jobs), ...unknownStatusAdvisories(jobs), ...closeLines(closes)].filter(Boolean);
   const idle = isViewIdle({ jobs, counts, activeJobs, runners, registryError, readable: jobsPart.ok && countsPart.ok });
-  return { jobs, counts, blockedPending, activeJobs, runners, registryError, advisories, suggestions, ships, idle, sections };
+  return { jobs, counts, blockedPending, activeJobs, runners, registryError, advisories, suggestions, closes, idle, sections };
 }
 
 // The first failed section among the ones a listing cannot do without (jobs, counts), or null when both were read.
@@ -160,7 +160,7 @@ function runNoticeOf(job) {
 }
 
 // The lines the runtime itself appends to a row's notice after a run finishes, never text a run wrote.
-const RUNTIME_APPENDED_LINE_PREFIXES = [KEPT_PREFIX, ABANDONED_COMMAND_PREFIX, DISABLED_BACKGROUND_ESCAPE_LINE, SHIPPED_PREFIX];
+const RUNTIME_APPENDED_LINE_PREFIXES = [KEPT_PREFIX, ABANDONED_COMMAND_PREFIX, DISABLED_BACKGROUND_ESCAPE_LINE, CLOSED_PREFIX, NOTHING_TO_CLOSE_LINE];
 
 // Whether a trailing paragraph is one the runtime itself appends to a row's notice.
 function isRuntimeAppendedLine(paragraph) {

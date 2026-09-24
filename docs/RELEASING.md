@@ -53,4 +53,4 @@ before publishing.
 - **the tag step fails** — the tag does not match the version in `package.json`. Delete the tag,
   fix the version, tag again.
 - **`release:check` fails on the tree** — something is uncommitted in the checkout; that check
-  exists because a publish ships what is on disk, not what is committed.
+  exists because a publish uploads what is on disk, not what is committed.

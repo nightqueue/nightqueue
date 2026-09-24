@@ -45,7 +45,6 @@ function jobsDomain(env, db) {
     linkPipelineRun: async (jobId, ref) => jobs.linkPipelineRun(jobId, ref, env),
     finishJob: async (id, outcome) => writeJobStatus({ id, status: outcome?.status, write: () => jobs.finishJob(id, outcome, env), env }),
     cancelJob: async (id, options) => jobs.cancelJob(id, options, env),
-    closeJob: async (id) => jobs.closeJob(id, env),
     listCloseCandidates: async () => jobs.listCloseCandidates(env, db()),
     retryJob: async (id, options) => jobs.retryJob(id, options, env),
     getJob: async (id) => jobs.getJob(id, env, db()),
@@ -67,13 +66,14 @@ function jobsDomain(env, db) {
     recentHostCommandCounts: async () => jobs.recentHostCommandCounts(env, db()),
     recentOrchestratorCounts: async () => jobs.recentOrchestratorCounts(env, db()),
     status: async (id) => jobs.jobStatus(id, env, db()),
-    acquireShip: async (id, spec) => jobs.acquireShip(id, spec, env),
-    adoptShip: async (id, spec) => jobs.adoptShip(id, spec, env),
-    recordShipStep: async (id, spec) => jobs.recordShipStep(id, spec, env),
-    failShip: async (id, spec) => jobs.failShip(id, spec, env),
-    settleShip: async (id, spec) => jobs.settleShip(id, spec, env),
-    noteShipWorktree: async (id, spec) => jobs.noteShipWorktree(id, spec, env),
-    listShips: async () => jobs.listShips(env, db()),
+    acquireClose: async (id, spec) => jobs.acquireClose(id, spec, env),
+    adoptClose: async (id, spec) => jobs.adoptClose(id, spec, env),
+    recordCloseStep: async (id, spec) => jobs.recordCloseStep(id, spec, env),
+    failClose: async (id, spec) => jobs.failClose(id, spec, env),
+    settleClose: async (id, spec) => jobs.settleClose(id, spec, env),
+    cancelOnClosedPr: async (id, spec) => jobs.cancelOnClosedPr(id, spec, env),
+    noteCloseWorktree: async (id, spec) => jobs.noteCloseWorktree(id, spec, env),
+    listCloses: async () => jobs.listCloses(env, db()),
   };
 }
 
@@ -82,6 +82,7 @@ function runsDomain(env) {
   return {
     logPipelineRun: async (run) => runs.logPipelineRun(run, env),
     updateRunTelemetry: async (telemetry) => runs.updateRunTelemetry(telemetry, env),
+    latestRunOutcome: async (spec) => runs.latestRunOutcome(spec, env),
   };
 }
 

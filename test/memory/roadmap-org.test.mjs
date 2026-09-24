@@ -60,16 +60,16 @@ test("positions are counted inside one owner: two orgs and a project share a hor
 
 test("a project roadmap shows its org's items first and never another org's", (t) => {
   const env = makeTwoOrgHome(t, "roadmap-org-union");
-  addItem(env, { project: "acme-mobile-app", title: "ship the app cache" });
-  addItem(env, { org: "acme", title: "every repo ships the cache" });
-  addItem(env, { org: "orbit", title: "orbit ships nothing" });
+  addItem(env, { project: "acme-mobile-app", title: "deliver the app cache" });
+  addItem(env, { org: "acme", title: "every repo delivers the cache" });
+  addItem(env, { org: "orbit", title: "orbit delivers nothing" });
 
   assert.deepEqual(titlesOf(listRoadmap("acme-mobile-app", env), "now"), [
-    "every repo ships the cache",
-    "ship the app cache",
+    "every repo delivers the cache",
+    "deliver the app cache",
   ]);
-  assert.deepEqual(titlesOf(listRoadmap("orbit-app", env), "now"), ["orbit ships nothing"]);
-  assert.deepEqual(titlesOf(listRoadmap({ org: "acme" }, env), "now"), ["every repo ships the cache"]);
+  assert.deepEqual(titlesOf(listRoadmap("orbit-app", env), "now"), ["orbit delivers nothing"]);
+  assert.deepEqual(titlesOf(listRoadmap({ org: "acme" }, env), "now"), ["every repo delivers the cache"]);
 });
 
 test("an item links a decision its owner sees: its own, or its org's for a project item, never a sibling project's", (t) => {
@@ -117,7 +117,7 @@ test("an org item queues one job per named project, stays open and unlinked, and
 
 test("a project item keeps its own queue path: it is linked, and a project that is not its own is still refused", async (t) => {
   const env = makeTwoOrgHome(t, "roadmap-org-project-item");
-  const item = addItem(env, { project: "acme-mobile-app", title: "ship the app cache" });
+  const item = addItem(env, { project: "acme-mobile-app", title: "deliver the app cache" });
 
   await assert.rejects(
     () => queueRoadmapItem({ id: item.id, project: "acme-api" }, env),

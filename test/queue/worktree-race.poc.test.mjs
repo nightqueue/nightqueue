@@ -5,11 +5,11 @@ import { addProject } from "../../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { closeJobAndWorktree } from "../../src/queue/close.mjs";
+import { settleClosedJob } from "../../src/queue/close.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { removeRunWorktree } from "../../src/queue/worktree.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeHome } from "../../test-support/memory.mjs";
+import { makeHome, mergedChecklist } from "../../test-support/memory.mjs";
 import { addWorktree, gitVars, publishedCheckout } from "../../test-support/worktrees.mjs";
 
 // A home whose project `alpha` is a real published checkout.
@@ -24,7 +24,7 @@ function makeRaceHome(t, name) {
 function doneJobWithWorktree(home, slug) {
   const worktree = addWorktree(home.checkout, `feat+${slug}`);
   const id = addJob({ project: "alpha", prompt: `work of ${slug}` }, home.env).id;
-  openDb(home.env).prepare("UPDATE jobs SET status = 'done', slug = ? WHERE id = ?").run(slug, id);
+  openDb(home.env).prepare("UPDATE jobs SET status = 'done', slug = ?, pr_url = 'https://github.com/acme/api/pull/7' WHERE id = ?").run(slug, id);
   recordRunFields({ project: "alpha", slug, fields: { worktree: worktree.path }, env: home.env });
   return { id, ...worktree };
 }
@@ -34,13 +34,16 @@ test("an operator's close racing finalize's own post-commit removal never report
   const job = doneJobWithWorktree(home, "race-run");
   const store = openStore(home.env);
   t.after(() => store.close());
+  const worker = "close:host:1:race";
+  await store.jobs.acquireClose(job.id, { worker, leaseS: 660 });
+  const checklist = mergedChecklist();
 
   // The row is already `status = done` (finish.written already committed by the time dropRunWorktree runs, runner.mjs:432-433),
-  // so an operator's `queue close <id>` (closeJobAndWorktree, close.mjs:4-8) is already free to land on the SAME id while
+  // so an operator's `queue close <id>` (its settle step, settleClosedJob in close.mjs) is already free to land on the SAME id while
   // finalize's own dropRunWorktree (runner.mjs:394, a plain removeRunWorktree on the worktree it inspected pre-commit) is
   // still removing the worktree on disk. Fire both at once, exactly as the runner and an operator's call would overlap.
   const [{ job: closedJob, worktree: closeResult }, finalizeRemoval] = await Promise.all([
-    closeJobAndWorktree({ store, id: job.id, env: home.env }),
+    settleClosedJob({ store, id: job.id, worker, close: checklist, noticeLine: checklist.data.noticeLine, env: home.env }),
     removeRunWorktree({ checkout: home.checkout, path: job.path, env: home.env }),
   ]);
 

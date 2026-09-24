@@ -5,7 +5,7 @@ import { hostPackageRoot, installedPluginsPath, knownMarketplacesPath, marketpla
 
 const DEFAULT_NAME = "nightshift";
 
-// Reads the marketplace manifest shipped with the package, or null when the package does not carry it.
+// Reads the marketplace manifest bundled with the package, or null when the package does not carry it.
 export function readManifest() {
   return readJsonOrNull(marketplaceManifestPath());
 }

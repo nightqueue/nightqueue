@@ -82,7 +82,7 @@ function linkedItem(env, id, title) {
 test("`queue repair` closes the roadmap item of a job it turns into done, and leaves the item of one that stays failed open", async (t) => {
   const env = makeQueue(t, "repair-roadmap");
   const delivered = finishedJob(env);
-  const deliveredItem = linkedItem(env, delivered, "ship the delivery");
+  const deliveredItem = linkedItem(env, delivered, "deliver the delivery");
   writeRunState(env);
 
   const repaired = runCli(env, ["queue", "repair", String(delivered)]);
@@ -281,7 +281,7 @@ test("`queue repair` of a job whose QA published another branch's pull request r
   const log = toNdjson([
     systemInitEvent(),
     slugEvent(SLUG),
-    codeChangePublishedEvent({ url: qaUrl, identifier: "71", branch: "scratch/ship-qa" }),
+    codeChangePublishedEvent({ url: qaUrl, identifier: "71", branch: "scratch/close-qa" }),
     resultEvent({ text: noticeText(NOTICE) }),
   ]);
   const id = finishedJob(env, { status: "failed", result: { ...CLEAN_ENDING, status: "failed", prUrl: qaUrl }, log });

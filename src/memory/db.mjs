@@ -2,6 +2,8 @@ import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { dbPath } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
+import { closeMigrationPending, migrateCloseColumns } from "./close-migration.mjs";
+import { addColumnIfMissing, dropColumnIfPresent } from "./columns.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
 
 export { DB_USER_VERSION, isoToSqlite, sqliteToIso } from "./schema.mjs";
@@ -171,10 +173,6 @@ const EVOLVING_COLUMNS = [
   ["jobs", "orch_bash", "INTEGER"],
   ["jobs", "orch_bash_explore", "INTEGER"],
   ["jobs", "orch_ctx_last", "INTEGER"],
-  ["jobs", "ship_status", "TEXT CHECK(ship_status IN ('shipping','shipped','failed'))"],
-  ["jobs", "ship", "TEXT"],
-  ["jobs", "ship_worker", "TEXT"],
-  ["jobs", "ship_lease_until", "TEXT"],
   ["pipeline_runs", "tier_operator", "TEXT"],
   ["pipeline_runs", "tier_raise_reason", "TEXT"],
   ["decisions", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],
@@ -331,34 +329,6 @@ function enableWal(db, path) {
   console.warn(`nightshift: warning: could not enable WAL on ${path} (journal_mode=${mode})`);
 }
 
-// Adds a column when it is missing, tolerating a concurrent process that added it first.
-function addColumnIfMissing(db, table, column, definition) {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-  if (columns.some((c) => c.name === column)) return;
-  try {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  } catch (err) {
-    if (!String(err?.message ?? "").includes("duplicate column name")) throw err;
-  }
-}
-
-// Drops a column when it is present, tolerating a concurrent process that dropped it first.
-function dropColumnIfPresent(db, table, column) {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-  if (!columns.some((c) => c.name === column)) return;
-  try {
-    db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
-  } catch (err) {
-    if (!/no such column/i.test(String(err?.message ?? ""))) throw err;
-  }
-}
-
-// Turns every row still carrying the retired `merged` status into `closed`, writing only when such a row exists.
-function retireMergedStatus(db) {
-  if (!db.prepare("SELECT 1 FROM jobs WHERE status = 'merged' LIMIT 1").get()) return;
-  db.exec("UPDATE jobs SET status = 'closed' WHERE status = 'merged'");
-}
-
 // Creates the base tables of the memory runtime.
 function createSchema(db) {
   db.exec(SCHEMA);
@@ -370,7 +340,7 @@ function migrate(db) {
   dropColumnIfPresent(db, "jobs", "pr_checked_at");
   dropColumnIfPresent(db, "jobs", "merged_at");
   dropColumnIfPresent(db, "jobs", "merge_sha");
-  retireMergedStatus(db);
+  if (closeMigrationPending(db)) inTransaction(db, () => migrateCloseColumns(db));
   db.exec(INDEXES);
   db.exec(FTS);
   const version = db.prepare("PRAGMA user_version").get().user_version;

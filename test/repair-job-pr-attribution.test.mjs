@@ -10,21 +10,21 @@ import { FROM_LINE, FROM_URL, JOB_ID, REFUSAL_EXIT, TO_LINE, TO_URL, main } from
 import { makeHome } from "../test-support/memory.mjs";
 
 const SCRIPT = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "scripts", "repair-job-pr-attribution.mjs");
-const NOTICE_BEFORE = "Delivered the ship command.\n\nPR: " + FROM_URL + "\n\n" + FROM_LINE + "\n";
-const SHIP_COLUMN = JSON.stringify({
+const NOTICE_BEFORE = "Delivered the close command.\n\nPR: " + FROM_URL + "\n\n" + FROM_LINE + "\n";
+const CLOSE_COLUMN = JSON.stringify({
   attempts: 1,
   steps: { preflight: { status: "done", note: "PR #71 is open" }, settle: { status: "done", note: `closing the job: ${FROM_LINE}` } },
-  data: { prNumber: 71, headBranch: "scratch/ship-qa-20260921201325", noticeLine: FROM_LINE },
+  data: { prNumber: 71, headBranch: "scratch/close-qa-20260921201325", noticeLine: FROM_LINE, merged: true, mergeSha: "0a1b2c3d4e5f" },
 });
 
 // Seeds a job-57-shaped row straight into a throwaway home, the shape the incident left behind.
 function seedJob57(env, { prUrl = FROM_URL, notice = NOTICE_BEFORE } = {}) {
   openDb(env)
     .prepare(
-      `INSERT INTO jobs (id, project, prompt, status, pr_url, notice_md, ship_status, ship, branch, slug)
-       VALUES (?, 'nightshift', 'ship a done job', 'closed', ?, ?, 'shipped', ?, 'worktree-feat+queue-ship', 'queue-ship')`,
+      `INSERT INTO jobs (id, project, prompt, status, pr_url, notice_md, close, branch, slug)
+       VALUES (?, 'nightshift', 'close a done job', 'closed', ?, ?, ?, 'worktree-feat+queue-close', 'queue-close')`,
     )
-    .run(JOB_ID, prUrl, notice, SHIP_COLUMN);
+    .run(JOB_ID, prUrl, notice, CLOSE_COLUMN);
 }
 
 // The raw row of job 57, every column.
@@ -44,10 +44,10 @@ function expectedHeader(env) {
   return [
     `job 57 in ${dbPath(env)}`,
     `  pr_url: ${FROM_URL}`,
-    `  Shipped line: ${FROM_LINE}`,
-    "  ship column (the true log of what the ship merged; printed, never written):",
+    `  Closed line: ${FROM_LINE}`,
+    "  close column (the true log of what the close merged; printed, never written):",
     "    prNumber: 71",
-    "    headBranch: scratch/ship-qa-20260921201325",
+    "    headBranch: scratch/close-qa-20260921201325",
     `    noticeLine: ${FROM_LINE}`,
     "changes:",
     `  pr_url: ${FROM_URL} -> ${TO_URL}`,
@@ -55,7 +55,7 @@ function expectedHeader(env) {
   ];
 }
 
-test("a dry run prints the row, the ship column and the two changes, and writes nothing", async (t) => {
+test("a dry run prints the row, the close column and the two changes, and writes nothing", async (t) => {
   const env = makeHome(t, "repair-attr-dry");
   seedJob57(env);
   const before = rowOf(env);
@@ -66,18 +66,18 @@ test("a dry run prints the row, the ship column and the two changes, and writes 
   assert.deepEqual(rowOf(env), before);
 });
 
-test("--apply changes exactly pr_url and the one Shipped line, and leaves the ship column byte-identical", async (t) => {
+test("--apply changes exactly pr_url and the one Closed line, and leaves the close column byte-identical", async (t) => {
   const env = makeHome(t, "repair-attr-apply");
   seedJob57(env);
   const before = rowOf(env);
   const { out, io } = capture();
   assert.equal(await main(["--job", "57", "--apply"], env, io), 0);
-  assert.deepEqual(out, [...expectedHeader(env), "applied: pr_url and the one notice line written; the ship column is untouched."]);
+  assert.deepEqual(out, [...expectedHeader(env), "applied: pr_url and the one notice line written; the close column is untouched."]);
   const after = rowOf(env);
   assert.equal(after.pr_url, TO_URL);
   assert.equal(after.notice_md, before.notice_md.replace(FROM_LINE, () => TO_LINE));
-  assert.equal(after.notice_md, "Delivered the ship command.\n\nPR: " + FROM_URL + "\n\n" + TO_LINE + "\n");
-  assert.equal(after.ship, before.ship);
+  assert.equal(after.notice_md, "Delivered the close command.\n\nPR: " + FROM_URL + "\n\n" + TO_LINE + "\n");
+  assert.equal(after.close, before.close);
   assert.deepEqual({ ...after, pr_url: before.pr_url, notice_md: before.notice_md }, before);
 });
 
@@ -96,7 +96,7 @@ test("a second --apply is a no-op that says there is nothing to do", async (t) =
 test("a row that is not the incident's is refused, printed and left untouched", async (t) => {
   const cases = [
     { name: "another pr_url", prUrl: "https://github.com/maykonVinicius/nightshift/pull/70" },
-    { name: "no Shipped line", notice: "Delivered the ship command.\n" },
+    { name: "no Closed line", notice: "Delivered the close command.\n" },
     { name: "the line twice", notice: `${FROM_LINE}\n\n${FROM_LINE}\n` },
     { name: "the line inside another line", notice: `note: ${FROM_LINE} (quoted)\n` },
   ];
@@ -131,7 +131,7 @@ test("the store's compare-and-swap refuses a moved URL, a missing line and a dou
   const spec = { fromUrl: FROM_URL, toUrl: TO_URL, fromLine: FROM_LINE, toLine: TO_LINE };
   const cases = [
     { name: "moved url", seed: { prUrl: TO_URL } },
-    { name: "missing line", seed: { notice: "nothing shipped\n" } },
+    { name: "missing line", seed: { notice: "nothing closed\n" } },
     { name: "doubled line", seed: { notice: `${FROM_LINE}\n${FROM_LINE}\n` } },
   ];
   for (const { name, seed } of cases) {
@@ -147,7 +147,7 @@ test("a dry run on a database an older build wrote never migrates it", async (t)
   const env = makeHome(t, "repair-attr-older");
   seedJob57(env);
   const db = openDb(env);
-  for (const column of ["ship_status", "ship", "ship_worker", "ship_lease_until"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
+  for (const column of ["close_worker", "close_status", "close", "close_lease_until"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
   db.exec("PRAGMA user_version = 14");
   closeDb(env);
   const { out, io } = capture();
@@ -158,7 +158,7 @@ test("a dry run on a database an older build wrote never migrates it", async (t)
   t.after(() => readOnly.close());
   assert.equal(schemaVersionOn(readOnly), 14);
   const columns = readOnly.prepare("PRAGMA table_info(jobs)").all().map((column) => column.name);
-  assert.equal(columns.includes("ship_status"), false);
+  assert.equal(columns.includes("close_status"), false);
 });
 
 test("the command line an operator types runs the dry run", (t) => {

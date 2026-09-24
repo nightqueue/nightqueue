@@ -93,8 +93,8 @@ nightshift queue log <id> [--follow]
 nightshift queue session <id> [--print]
 nightshift queue retry <id> --note "<answer>"
 nightshift queue cancel <id> --reason "<why>"
-nightshift queue close <id>... | --merged [--decisions accept|reject|keep]
-nightshift queue ship <id> [--force] [--foreground] [--json]
+nightshift queue close <id> [--force] [--foreground] [--decisions accept|reject|keep] [--json]
+nightshift queue close --merged [--decisions accept|reject|keep] [--json]
 nightshift queue pause | resume
 
 # memory
@@ -117,6 +117,13 @@ nightshift update [<version>]
 reviewed and merged on its own. Large work is ONE job with numbered stages in
 the prompt (`Stages: 1) ... 2) ...`), never several jobs that depend on each
 other. See [Writing a job](docs/queue.md#writing-a-job).
+
+**Closing a job.** A job ends `done` with an open pull request, and becomes `closed`
+only when `nightshift queue close <id>` merges that pull request through a recorded
+pipeline - preflight, conflict, merge, settle - that resumes where it stopped.
+`--force` skips the pull request checks and the rebase suite, never the job's status,
+its attribution or a real conflict. A job you give up on is `queue cancel`-ed instead,
+which also releases its worktree. See [Closing a job](docs/queue.md#closing-a-job).
 
 **Running the queue overnight.** `nightshift queue run --watch --from 22:00 --until
 04:00` works the queue only inside that local time window, then exits - a

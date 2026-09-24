@@ -166,7 +166,7 @@ default. `queue_status` answers `runners` with every live runner, and keeps `run
 alias of the first for one release. `queue_status`, `queue_run` and `queue_retry` also answer
 `advisories`, the advisory lines described in [Queue](queue.md); they never block a start.
 
-The twenty-six MCP tools, with the parameters `nightshift mcp` actually accepts:
+The twenty-five MCP tools, with the parameters `nightshift mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -182,9 +182,8 @@ The twenty-six MCP tools, with the parameters `nightshift mcp` actually accepts:
 | `queue_run` | `job_id?` |
 | `queue_session` | `job_id` |
 | `queue_cancel` | `job_id`, `reason?` |
-| `queue_close` | `job_id` |
+| `queue_close` | `job_id`, `force?` |
 | `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` |
-| `queue_ship` | `job_id`, `force?` |
 | `decision_save` | `project`, `title`, `context`, `decision`, `consequences?`, `status?` (`proposed`, `accepted`, `superseded`, `rejected`; default `accepted`) |
 | `decision_update` | `id`, `title?`, `context?`, `decision?`, `consequences?`, `status?`, `superseded_by?` |
 | `decision_list` | `project`, `status?` |
@@ -245,18 +244,24 @@ characters in a listing; a row whose text was cut carries `notice_truncated: tru
 that never repairs nor prunes on call, and reports the last repair warning of the server's
 maintenance (once at start, then every 60 s, never inside a job) as `warning`. `queue_run`
 starts the runner detached and answers right away with the path of its log,
-`queue_cancel` refuses a job running under a live lease without writing anything,
-`queue_close` takes a job from any terminal status (`done`, `failed`, `gate` or
-`cancelled`) to `closed`, and refuses `pending` and `running` by name without writing
-anything - the CLI also offers `nightshift queue close --merged`, which closes every
-such job whose pull request is merged in one call, and `queue_retry` sends a gated, failed or cancelled job back to the queue - its
+`queue_cancel` cancels a `pending`, `gate`, orphaned, `done` or `failed` job and answers `{ ok,
+job, worktree }` - `worktree` is `{ path, status, reason? }` when cancelling a `done` or `failed`
+job released (`removed`) or kept (`kept`, with the reason) its worktree, and `null` otherwise; it
+refuses a job running under a live lease, or one whose close is in flight or was interrupted, without
+writing anything (an interrupted close is resumed with `queue_close`, never cancelled blind).
+`queue_close` starts the same DETACHED closing pipeline as `nightshift queue close <id>` (the CLI
+also offers `nightshift queue close --merged`, which closes every `done` job whose pull request is
+merged in one call), and `queue_retry` sends a gated, failed or cancelled job back to the queue - its
 `run` starts a DETACHED runner, the same one the `--run` of the CLI starts unless
-it is asked for `--foreground`. `queue_ship` starts the same DETACHED ship as
-`nightshift queue ship <id>` and answers `{ ok, started, job_id, pid, logPath, follow }` without
-waiting for the merge: a `done` job only, a `failed` or `gate` one with `force: true`, and every
-other status, a job without a pull request or one already under a live ship lease refused by
-name with nothing written; calling it again resumes a ship that stopped at the step that
-failed (see [Queue](queue.md#shipping-a-job)).
+it is asked for `--foreground`. `queue_close` answers `{ ok, started, job_id, pid, logPath, follow }` without
+waiting for the merge: a `done` job with a pull request only, and every
+other status (``job `N` is already closed`` for a closed one), a job without a pull request or one
+already under a live close lease refused by name with nothing written; calling it again resumes a
+close that stopped at the step that failed. `force: true` skips the pull request checks and the
+rebase suite only - status, attribution and real conflicts still stop the close. A pull request
+closed without merge ends the close by cancelling the job, one merged by hand is recorded as
+`merged outside a close`, and the tool never settles the job's proposed decisions. Inside a job
+it is refused, like the CLI (see [Queue](queue.md#closing-a-job)).
 
 Inside a job, a tool that takes a free id only reaches its own: `queue_retry`
 retries the job it is running, and `decision_update` and `roadmap_update` accept

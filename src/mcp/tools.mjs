@@ -27,7 +27,6 @@ import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { noRunnerWait, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline, staleRuntimeHint, windowWaitingLine } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { blockerLines } from "../queue/claim.mjs";
-import { closeJobAndWorktree } from "../queue/close.mjs";
 import { lastMaintenance } from "../queue/maintenance.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
 import { liveRunnersReport, STOPPED_RUNNER, unreadableRegistry } from "../queue/registry.mjs";
@@ -36,8 +35,9 @@ import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { priorRunBlock, resolveOperatorRunDir, withPriorRun } from "../queue/operator-run.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
-import { startShipDetached } from "../queue/ship-start.mjs";
-import { queueWorkers } from "../queue/ship-view.mjs";
+import { startCloseDetached } from "../queue/close-start.mjs";
+import { cancelJobAndWorktree } from "../queue/cancel.mjs";
+import { queueWorkers } from "../queue/close-view.mjs";
 import {
   recordOutcome,
   recordPhaseDone,
@@ -510,7 +510,7 @@ async function queueStatusAnswer(args, { store, warning, env }) {
   const unread = failedCoreSection(view);
   if (unread) throw new UserError(`the queue cannot be read: ${unread.error}`);
   if (view.registryError !== null) throw unreadableRegistry(view.registryError, env);
-  const { runners, advisories, jobs, counts, suggestions, ships, activeJobs, sections } = view;
+  const { runners, advisories, jobs, counts, suggestions, closes, activeJobs, sections } = view;
   const stale = staleRuntimeHint(env);
   const advisoriesWithStale = stale ? [...advisories, stale] : advisories;
   return {
@@ -521,7 +521,7 @@ async function queueStatusAnswer(args, { store, warning, env }) {
     jobs,
     counts,
     suggestions,
-    ships,
+    closes,
     sections,
     hint: [queueHint({ activeJobs, counts, runners, jobs }), ...advisoriesWithStale, ...suggestions].join(" "),
     ...warningAnswer(warning),
@@ -533,7 +533,7 @@ function answeredPrUrls(answer) {
   return prUrlsOf(answer.job ? [answer.job] : answer.jobs);
 }
 
-// The twenty-six tools of the plugin contract, with the parameter names the plugin actually sends.
+// The twenty-five tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env) {
   return [
     {
@@ -807,7 +807,7 @@ function toolDefinitions(env) {
           "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`. " +
           "The listing cuts `notice_md` and `result` at 500 characters and marks a cut row with `notice_truncated: true` or `result_truncated: true` (the key is absent when the text fits); call again with that `job_id` for the whole text. " +
           "`sections` carries each part of the read with `ok`, `error` and elapsed `ms`, and `pr_state` of each job comes from a cache refreshed outside the answer (`unknown` until gh answered); " +
-          "a merged pull request on a terminal job (`done`, `failed`, `gate` or `cancelled`) is listed in `suggestions`, and closing it is `queue_close`.",
+          "a merged pull request on a `done` job is listed in `suggestions`, and closing it is `queue_close`. `closes` groups the closes in flight, failed and stalled.",
         inputSchema: {
           job_id: z.number().int().min(1).nullable().optional(),
           limit: z.number().int().min(JOB_LIST_LIMIT.min).max(JOB_LIST_LIMIT.max).nullable().optional(),
@@ -860,22 +860,29 @@ function toolDefinitions(env) {
       guardsHome: true,
       config: {
         description:
-          "Cancels a pending, gated or orphaned job. A job running under a live lease is refused, with the exact reason and no write.",
+          "Cancels a pending, gated, done, failed or orphaned job. A job running under a live lease, a done job being closed under a live close lease, and a done job whose close was interrupted (resume that one with queue_close), are refused with the exact reason and no write; `closed` and `cancelled` jobs are refused as already finished. " +
+          "Cancelling a `done` or `failed` job also releases its worktree: removed when clean and published, otherwise kept with the reason. The answer carries `worktree` (`{ path, status, reason? }`, or null when nothing was released).",
         inputSchema: { job_id: z.number().int().min(1), reason: optionalText },
       },
-      handler: async (args) => ({ ok: true, job: await openStore(env).jobs.cancelJob(args.job_id, { reason: args.reason }) }),
+      handler: async (args) => ({ ok: true, ...(await cancelJobAndWorktree({ store: openStore(env), id: args.job_id, reason: args.reason, env })) }),
     },
     {
       name: "queue_close",
       guardsHome: true,
       config: {
         description:
-          "Closes a job from any terminal status (`done`, `failed`, `gate` or `cancelled`) to `closed`: the operator's act that ends a job's life. `pending` and `running` are refused by name and nothing is written. " +
-          "Closing never happens by observing a pull request; `queue_status` only suggests it when the pull request of a terminal job is merged. The CLI also offers `nightshift queue close --merged`, which closes every such job in one call. " +
-          "Closing also removes the job's worktree when it is clean and its branch is pushed or a pull request is recorded: `worktree.status` is then `removed`; otherwise it is `kept` with the `reason`, and the close still succeeds. `worktree` is null when the job has none.",
-        inputSchema: { job_id: z.number().int().min(1) },
+          "Closes a job: takes its open pull request to merged and the job to `closed`, through the code pipeline preflight, conflict, merge, settle - never an agent. `closed` always means the pull request was merged through this pipeline. " +
+          "It starts DETACHED and returns immediately with the pid and the log path; it never waits for the merge. Follow it with `queue_status` and the job id. " +
+          "Only a `done` job with a pull request is closed. `closed`, `running`, `pending`, `gate`, `failed`, `cancelled`, a `done` job with no pull request and a job already being closed under a live lease are refused by name, and nothing is written. Refused inside an unattended run. " +
+          "A close that stopped keeps its checklist and its reason on the job (`close`, `close_status: failed`); calling this tool again resumes it at the step that failed. " +
+          "`force` skips the pull request checks and the rebase test suite only; conflicts, a pull request that is not the job's own and the job's status still stop the close. " +
+          "A pull request closed without merge cancels the job and releases its worktree; one merged by hand is recorded as `merged outside a close`.",
+        inputSchema: { job_id: z.number().int().min(1), force: z.boolean().nullable().optional() },
       },
-      handler: async (args) => ({ ok: true, ...(await closeJobAndWorktree({ store: openStore(env), id: args.job_id, env })) }),
+      handler: async (args) => {
+        const started = await startCloseDetached({ store: openStore(env), id: args.job_id, force: args.force === true, env });
+        return { ok: true, started: true, job_id: args.job_id, pid: started.pid, logPath: started.logPath, follow: `nightshift queue status ${args.job_id}` };
+      },
     },
     {
       name: "queue_retry",
@@ -896,22 +903,6 @@ function toolDefinitions(env) {
         const { job, runDir } = await applyRetry({ id: args.job_id, note: args.note, fresh: args.fresh === true, env });
         const started = args.run === true ? await startQueueRunner({ jobId: job.id, env }) : null;
         return { ok: true, job, runDir, ...(started ? runnerAnswer(started, env, await startAdvisoryLines({ env })) : { runner: null }) };
-      },
-    },
-    {
-      name: "queue_ship",
-      guardsHome: true,
-      config: {
-        description:
-          "Ships a job: takes its open pull request to merged and closes the job, through the code pipeline preflight, conflict, merge, settle - never an agent, never a second job. " +
-          "It starts DETACHED and returns immediately with the pid and the log path; it never waits for the merge. Follow it with `queue_status` and the job id. " +
-          "Only a `done` job is shipped; a `failed` or `gate` job that carries a pull request needs `force`. `closed`, `running`, `pending`, `cancelled` and a job another ship is already shipping under a live lease are refused by name, and nothing is written. " +
-          "A ship that stopped keeps its checklist and its reason on the job (`ship`, `ship_status: failed`); calling this tool again resumes it at the step that failed.",
-        inputSchema: { job_id: z.number().int().min(1), force: z.boolean().nullable().optional() },
-      },
-      handler: async (args) => {
-        const started = await startShipDetached({ store: openStore(env), id: args.job_id, force: args.force === true, env });
-        return { ok: true, started: true, job_id: args.job_id, pid: started.pid, logPath: started.logPath, follow: `nightshift queue status ${args.job_id}` };
       },
     },
     {
@@ -1176,7 +1167,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the twenty-six tools of the plugin contract.
+// Builds the MCP server with the twenty-five tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer({ name: SERVER_NAME, version: readVersion() }, { instructions: SERVER_INSTRUCTIONS });
   const schemas = new Map();

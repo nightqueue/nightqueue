@@ -12,7 +12,7 @@ import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
-import { makeDir, makeHome } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, seedClosedJob } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { assistantEvent, doneStream, GATE_MARKER, GATE_NOTICE, gateStream, PR_URL, SLUG } from "../../test-support/streams.mjs";
 
@@ -184,7 +184,7 @@ test("queue status --json answers with the jobs and the counts, and never with t
   assert.equal(payload.jobs[0].pr_state, null, "a job without a pull request carries a pull request state");
   assert.equal(payload.counts.merged, undefined, "the retired merged status is still counted");
   assert.deepEqual(payload.suggestions, []);
-  assert.deepEqual(payload.sections.map((section) => [section.name, section.ok]), [["jobs", true], ["counts", true], ["runners", true], ["advisories", true], ["ships", true]]);
+  assert.deepEqual(payload.sections.map((section) => [section.name, section.ok]), [["jobs", true], ["counts", true], ["runners", true], ["advisories", true], ["closes", true]]);
 
   const one = JSON.parse(runCli(env, ["queue", "status", String(first), "--json"]).stdout);
   assert.deepEqual({ id: one.job.id, status: one.job.status, project: one.job.project }, { id: first, status: "pending", project: "alpha" });
@@ -287,10 +287,10 @@ test("a gh that cannot answer leaves the job delivered and still exits 0", (t) =
   assert.equal(getJob(1, env).status, "done");
 });
 
-test("a closed job is terminal for cancel and for retry, and retry still takes a failed one", (t) => {
+test("a closed job is terminal for cancel, for retry and for close, and retry still takes a failed one", (t) => {
   const env = makeCliHome(t, "cli-closed-terminal");
-  const closed = deliver(env, enqueue(env));
-  assert.equal(runCli(env, ["queue", "close", String(closed)]).status, 0);
+  const closed = seedClosedJob(env);
+  const before = getJob(closed, env);
 
   const cancelled = runCli(env, ["queue", "cancel", String(closed)]);
   assert.equal(cancelled.status, 1);
@@ -299,7 +299,11 @@ test("a closed job is terminal for cancel and for retry, and retry still takes a
   const retried = runCli(env, ["queue", "retry", String(closed)]);
   assert.equal(retried.status, 1);
   assert.match(retried.stderr, /cannot be retried from status `closed`/);
-  assert.equal(getJob(closed, env).status, "closed");
+
+  const reclosed = runCli(env, ["queue", "close", String(closed), "--foreground"]);
+  assert.equal(reclosed.status, 1);
+  assert.match(reclosed.stderr, new RegExp(`job \`${closed}\` is already closed`));
+  assert.deepEqual(getJob(closed, env), before, "a refused command wrote to the closed job");
 
   const failed = enqueue(env, "fix the parser");
   openDb(env).prepare("UPDATE jobs SET status = 'failed' WHERE id = ?").run(failed);
@@ -307,58 +311,33 @@ test("a closed job is terminal for cancel and for retry, and retry still takes a
   assert.equal(getJob(failed, env).status, "pending");
 });
 
-test("queue close closes a done job, prints it, answers --json, and refuses a pending one naming its status (exit 1)", (t) => {
+test("queue close takes one id and refuses every job that is not done with a pull request, by name, writing nothing (exit 1)", (t) => {
   const env = makeCliHome(t, "cli-close");
-  const first = deliver(env, enqueue(env));
-  const second = deliver(env, enqueue(env, "fix the parser"), "https://github.com/acme/api/pull/43");
   const pending = enqueue(env, "fix the runner");
-
-  const closed = runCli(env, ["queue", "close", String(first)]);
-  assert.equal(closed.status, 0, closed.stderr);
-  assert.match(closed.stdout, new RegExp(`closed job #${first}`));
-  assert.equal(getJob(first, env).status, "closed");
-  assert.equal(getJob(first, env).pr_url, "https://github.com/acme/api/pull/42");
-
-  const json = runCli(env, ["queue", "close", String(second), "--json"]);
-  assert.equal(json.status, 0, json.stderr);
-  const payload = JSON.parse(json.stdout);
-  assert.equal(payload.refused.length, 0);
-  const [job] = payload.closed;
-  assert.deepEqual({ id: job.id, status: job.status, pr_url: job.pr_url }, { id: second, status: "closed", pr_url: "https://github.com/acme/api/pull/43" });
-
-  const refused = runCli(env, ["queue", "close", String(pending)]);
-  assert.equal(refused.status, 1);
-  assert.match(refused.stderr, /is pending; the queue still owes work for it/);
-  assert.equal(getJob(pending, env).status, "pending");
+  const noPr = enqueue(env, "fix the parser");
+  openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(noPr);
+  const failed = enqueue(env, "fix the queue");
+  openDb(env).prepare("UPDATE jobs SET status = 'failed', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/43", failed);
+  const gated = enqueue(env, "fix the gate");
+  openDb(env).prepare("UPDATE jobs SET status = 'gate', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/44", gated);
+  const cases = [
+    [pending, new RegExp(`job \`${pending}\` is pending; it has not produced a pull request yet`)],
+    [noPr, /nothing to close: the job has no pull request/],
+    [failed, new RegExp(`job \`${failed}\` failed; retry it or cancel it - only a done job is closed`)],
+    [gated, new RegExp(`job \`${gated}\` is waiting at a gate`)],
+    [99, /unknown job `99`/],
+  ];
+  for (const [id, reason] of cases) {
+    for (const flags of [[], ["--foreground"], ["--force", "--foreground"]]) {
+      const before = id === 99 ? null : getJob(id, env);
+      const refused = runCli(env, ["queue", "close", String(id), ...flags]);
+      assert.equal(refused.status, 1, `${id} ${flags.join(" ")}: ${refused.stdout}`);
+      assert.match(refused.stderr, reason);
+      if (before) assert.deepEqual(getJob(id, env), before, `the refused close wrote to job ${id}`);
+    }
+  }
   assert.match(runCli(env, ["queue", "close"]).stderr, /missing argument; usage: nightshift queue close <id>/);
-});
-
-test("queue close takes several ids, closes what it can and reports the rest, in text and in --json", (t) => {
-  const env = makeCliHome(t, "cli-close-many");
-  const first = deliver(env, enqueue(env));
-  const second = deliver(env, enqueue(env, "fix the parser"), "https://github.com/acme/api/pull/43");
-  const pending = enqueue(env, "fix the runner");
-
-  const text = runCli(env, ["queue", "close", String(first), String(second), String(pending), "99"]);
-  assert.equal(text.status, 0, text.stderr);
-  assert.match(text.stdout, new RegExp(`closed job #${first}`));
-  assert.match(text.stdout, new RegExp(`closed job #${second}`));
-  assert.match(text.stdout, new RegExp(`job #${pending} not closed: job \`${pending}\` is pending; the queue still owes work for it`));
-  assert.match(text.stdout, /job #99 not closed: unknown job `99`/);
-  assert.equal(getJob(first, env).status, "closed");
-  assert.equal(getJob(second, env).status, "closed");
-
-  const third = deliver(env, enqueue(env, "fix the runner"), "https://github.com/acme/api/pull/44");
-  const stillPending = enqueue(env, "fix the queue");
-  const json = runCli(env, ["queue", "close", String(third), String(stillPending), "--json"]);
-  assert.equal(json.status, 0, json.stderr);
-  const payload = JSON.parse(json.stdout);
-  assert.deepEqual(payload.closed.map((job) => job.id), [third]);
-  assert.deepEqual(payload.refused, [{ id: stillPending, reason: `job \`${stillPending}\` is pending; the queue still owes work for it` }]);
-
-  const everyRefused = runCli(env, ["queue", "close", String(stillPending)]);
-  assert.equal(everyRefused.status, 1, "closing nothing must still fail like a refused command");
-  assert.match(everyRefused.stderr, /is pending; the queue still owes work for it/);
+  assert.match(runCli(env, ["queue", "close", String(pending), String(noPr)]).stderr, /unexpected argument/);
 });
 
 test("`queue add --tier` records the tier, `queue status` shows it, and an unknown value queues nothing", (t) => {
@@ -980,7 +959,7 @@ test("queue status of a job shows baseline_ctx the same way it shows bash_timeou
 function bigGateNotice(id) {
   const points = Array.from(
     { length: 8 },
-    (_, i) => `- **C${i + 1}:** ${"the plan departs from the brief on a point that needs a human call before it ships. ".repeat(5)}`,
+    (_, i) => `- **C${i + 1}:** ${"the plan departs from the brief on a point that needs a human call before it goes out. ".repeat(5)}`,
   );
   return [GATE_MARKER, "", ...points, "", `Answer with: nightshift queue retry ${id} --note "<your answer>"`].join("\n");
 }
@@ -1050,7 +1029,7 @@ test("an unrecognized token is always an error, and never falls through to runni
 
   const cases = [
     [["queue"], /unknown queue subcommand ``/],
-    [["queue", "bogus"], /unknown queue subcommand `bogus`/],
+    [["queue", "bogus"], /unknown queue subcommand `bogus`; use: add, status, run, cancel, close, retry, repair, pause, resume, log, session$/m],
     [["queue", "run", "--bogus"], /--bogus/],
     [["queue", "run", "--job", "abc"], /`--job` expects a positive integer/],
     [["queue", "run", "1"], /unexpected argument `1`/],

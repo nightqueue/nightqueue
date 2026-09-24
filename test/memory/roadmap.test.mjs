@@ -98,10 +98,10 @@ test("moving an item across horizons leaves both groups contiguous", (t) => {
 test("an update writes the fields present in the patch and refuses the queued status by hand", (t) => {
   const env = makeHome(t, "roadmap-update");
   makeProject(t, env, "alpha");
-  const item = addItem(env, { title: "ship the roadmap", detail: "with the three horizons" });
+  const item = addItem(env, { title: "deliver the roadmap", detail: "with the three horizons" });
 
-  const updated = updateRoadmapItem(item.id, { title: "ship the roadmap CLI", detail: null }, env);
-  assert.equal(updated.title, "ship the roadmap CLI");
+  const updated = updateRoadmapItem(item.id, { title: "deliver the roadmap CLI", detail: null }, env);
+  assert.equal(updated.title, "deliver the roadmap CLI");
   assert.equal(updated.detail, "with the three horizons");
   assert.equal(updateRoadmapItem(item.id, { status: "dropped" }, env).status, "dropped");
   assert.equal(updateRoadmapItem(item.id, { status: "open" }, env).status, "open");
@@ -117,7 +117,7 @@ test("the linked decision must exist and belong to the project of the item", (t)
   const decision = saveDecision({ project: "alpha", title: "one worktree per job", context: "races", decision: "split" }, env);
   const foreign = saveDecision({ project: "beta", title: "beta decision", context: "c", decision: "d" }, env);
 
-  const item = addItem(env, { title: "ship it", decision_id: decision.id });
+  const item = addItem(env, { title: "deliver it", decision_id: decision.id });
   assert.equal(getRoadmapItem(item.id, env).decision_id, decision.id);
   assert.equal(listRoadmap("alpha", env).horizons[0].items[0].decision_number, decision.number);
   assert.throws(() => addItem(env, { title: "bad", decision_id: foreign.id }), /belongs to project `beta`/);
@@ -129,8 +129,8 @@ test("updateRoadmapItem answers the linked decision number and live job status t
   makeProject(t, env, "alpha");
   const decision = saveDecision({ project: "alpha", title: "one worktree per job", context: "races", decision: "split" }, env);
   const other = saveDecision({ project: "alpha", title: "second decision", context: "c", decision: "d" }, env);
-  const item = addItem(env, { title: "ship it", decision_id: decision.id });
-  const job = addJob({ project: "alpha", prompt: "ship it" }, env);
+  const item = addItem(env, { title: "deliver it", decision_id: decision.id });
+  const job = addJob({ project: "alpha", prompt: "deliver it" }, env);
   markRoadmapItemQueued(item.id, job.id, env);
 
   const statusOnly = updateRoadmapItem(item.id, { status: "open" }, env);
@@ -148,8 +148,8 @@ test("updateRoadmapItem answers the linked decision number and live job status t
 test("an item is queued once, refused while its job is live, and closed when that job finishes", (t) => {
   const env = makeHome(t, "roadmap-queue-link");
   makeProject(t, env, "alpha");
-  const item = addItem(env, { title: "ship the roadmap" });
-  const job = addJob({ project: "alpha", prompt: "ship the roadmap" }, env);
+  const item = addItem(env, { title: "deliver the roadmap" });
+  const job = addJob({ project: "alpha", prompt: "deliver the roadmap" }, env);
 
   assert.equal(queueableRoadmapItem(item.id, env).id, item.id);
   assert.equal(markRoadmapItemQueued(item.id, job.id, env), true);

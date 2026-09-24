@@ -2,7 +2,7 @@ import { openStore } from "../store/open.mjs";
 import { advisoryLines } from "./hints.mjs";
 import { liveFiveHourUtilization } from "./rate-limit.mjs";
 import { liveRunnersReport } from "./registry.mjs";
-import { queueWorkers } from "./ship-view.mjs";
+import { queueWorkers } from "./close-view.mjs";
 
 // The advisory lines of this home read through the store it is given, counting only the runners that work the queue; a read that fails answers no advice, because a warning never blocks anything.
 export async function advisoryLinesFor({ store, runners, env = process.env, killImpl } = {}) {

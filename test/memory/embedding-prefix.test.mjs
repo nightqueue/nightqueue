@@ -49,7 +49,7 @@ test("a prefix whose copy is broken resolves to nothing, never to a copy living 
   assert.equal(entry, null, `a broken prefix answered ${entry}, which can only come from outside the prefix`);
 });
 
-test("the library is resolved from the prefix and loaded whether it ships ESM or CommonJS", async (t) => {
+test("the library is resolved from the prefix and loaded whether it publishes ESM or CommonJS", async (t) => {
   const esm = makeEnv(t, "embedding-prefix-esm");
   const esmDir = installFixture(esm, { file: "index.mjs", content: ESM_FIXTURE, type: "module" });
   assert.equal(embeddingLibraryEntry(esm), join(realpathSync(esmDir), "index.mjs"));

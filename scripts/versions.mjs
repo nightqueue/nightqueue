@@ -42,7 +42,7 @@ export function versionMismatches({ manifest, changelog, license, plugin }) {
 }
 
 // What the `## Unreleased` section still holds, or null when the changelog has no such section or it is empty: a publish
-// with content there ships changes the released entry does not describe.
+// with content there carries changes the released entry does not describe.
 export function unreleasedContent(text) {
   const section = changelogSection(text, "Unreleased");
   return section ? section : null;

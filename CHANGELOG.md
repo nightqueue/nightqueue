@@ -6,6 +6,60 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Breaking
+
+- `closed` means the job's pull request was merged through the closing pipeline, and
+  `nightshift queue close <id>` is that pipeline. `nightshift queue ship` and the MCP tool
+  `queue_ship`, released in 0.3.0, are removed without an alias - nightshift is a local
+  product with no external user to migrate: `queue ship` now answers the unknown-subcommand
+  error. `queue close <id> [--force] [--foreground] [--decisions accept|reject|keep] [--json]`
+  runs the four steps (preflight, conflict, merge, settle) on one `done` job with a pull
+  request, detached unless `--foreground`, and refuses every other status by name (``job `N`
+  is already closed`` for a closed one); the old status flip of any number of ids from `done`,
+  `failed`, `gate` or `cancelled` is gone. `queue close --merged` runs the same pipeline on
+  every `done` job gh confirms merged, and on nothing else. The MCP `queue_close` takes
+  `job_id, force?` and answers `{ ok, started, job_id, pid, logPath, follow }` like a detached
+  start. A detached close settles the job's proposed decisions only with `--decisions`, and
+  keeps them `proposed` otherwise.
+- Vocabulary: the `ship_status`, `ship`, `ship_worker` and `ship_lease_until` columns become
+  `close_status` (`closing` or `failed`, empty once closed), `close`, `close_worker` and
+  `close_lease_until` (schema v16); `queue.shipTimeoutS` becomes `queue.closeTimeoutS` (same
+  default and range, the old key is not read); the notice line is `Closed: PR #<n> merged as
+  <sha7> on <date>`; the STATUS cell reads `done · closing`, `done · close failed at <step>`,
+  `done · close stalled` or `closed`; `queue_status`, `queue status --json` and doctor carry
+  `closes` in place of `ships`; the close runs as a runner of mode `close`, logs to
+  `close-<id>-<stamp>.log` and reads `NIGHTSHIFT_CLOSE_WORKER`.
+- `closed` requires a merge recorded by the pipeline: a `CHECK` of the `jobs` table refuses a
+  `closed` row without a `pr_url`, with a `close_status`, or whose `close` checklist does not
+  record `data.merged: true`, and `queue repair`, the witness reconciliation and every other
+  writer refuse `closed` by name.
+- The v16 migration runs once, in one transaction, on the first open after upgrading: a
+  closed row whose merge was recorded stays `closed`; a closed row with a pull request but no
+  recorded merge (closed by hand, or after a failed close - job 65) stays `closed` with a
+  synthetic `merge: skipped "merged outside a close"`, `mergedBy: "operator"` and
+  `migrated.from`, its existing checklist kept and extended, and no `mergeSha`; a closed row
+  without a pull request becomes `cancelled`, its old status and note kept in `result`; a
+  `done` row mid-close keeps its close state and lease; legacy `merged` rows follow the same
+  rules; the old merge line of a notice is rewritten to `Closed:` only where it is the line
+  the checklist recorded.
+- `--force` is narrowed to "do not hold me back for tests": it ignores the pull request's
+  red, pending or unreadable checks and skips the rebase suite, and nothing else. It no longer
+  closes a `failed` or `gate` job and no longer overrides `pr-not-the-job-branch` (the override
+  listed under Fixed below is withdrawn); a real conflict, leftover markers, uncommitted files
+  the pull would touch and a missing checkout still stop it.
+- A pull request closed without merge cancels the job (`pull request closed without merge`)
+  and releases its worktree, instead of stopping the close; one merged by hand is recorded as
+  `merged outside a close` with `mergedBy: "operator"`, and the pipeline's own merge as
+  `mergedBy: "nightshift"`.
+- `queue cancel` and the MCP `queue_cancel` also accept a `done` or `failed` job, release its
+  worktree, answer `{ job, worktree }` and refuse a job being closed under a live lease, or one
+  whose close was interrupted (resume it with `queue close <id>`, so a merge is never lost).
+- A run that exits cleanly with no pull request and no gate, whose attempt logged `no_commit`,
+  ends `cancelled` with `nothing to close: the run produced no pull request`, instead of
+  `failed`; `local_commit` and a run with no log stay `failed`.
+- After upgrading, restart every MCP server process started before it (an open Claude Code
+  session keeps its own): an old process still reads the removed columns and fails.
+
 ### Fixed
 
 - A job records its own pull request, and `queue ship` only ships that one. The run's pull

@@ -36,7 +36,7 @@ function seedDecisions(env) {
     },
     env,
   );
-  saveDecision({ project: "alpha", title: "Ship a daemon", context: "polling is slow", decision: "run a resident process", status: "rejected" }, env);
+  saveDecision({ project: "alpha", title: "Deliver a daemon", context: "polling is slow", decision: "run a resident process", status: "rejected" }, env);
   return accepted;
 }
 
@@ -54,7 +54,7 @@ test("decision list prints the number, the status and the title of every decisio
   assert.equal(result.status, 0);
   assert.match(result.stdout, /^NUMBER\s+STATUS\s+UPDATED\s+TITLE$/m);
   assert.match(result.stdout, /^#1\s+accepted\s+\d{4}-\d{2}-\d{2}\s+Store everything in one SQLite file$/m);
-  assert.match(result.stdout, /^#2\s+rejected\s+\d{4}-\d{2}-\d{2}\s+Ship a daemon$/m);
+  assert.match(result.stdout, /^#2\s+rejected\s+\d{4}-\d{2}-\d{2}\s+Deliver a daemon$/m);
 });
 
 test("decision list --status keeps only that status and refuses one outside the enum", (t) => {
@@ -62,7 +62,7 @@ test("decision list --status keeps only that status and refuses one outside the 
   seedDecisions(env);
   const filtered = runCli(env, ["decision", "list", "--status", "rejected"], { cwd });
   assert.equal(filtered.status, 0);
-  assert.ok(filtered.stdout.includes("Ship a daemon"));
+  assert.ok(filtered.stdout.includes("Deliver a daemon"));
   assert.ok(!filtered.stdout.includes("Store everything in one SQLite file"));
   const wrong = runCli(env, ["decision", "list", "--status", "maybe"], { cwd });
   assert.equal(wrong.status, 1);
@@ -90,15 +90,15 @@ test("decision show prints the decision in full and refuses an unknown number", 
 test("roadmap prints the three horizons in order, with the position, the linked decision and the job", (t) => {
   const { env, cwd } = makeCliHome(t, "roadmap-list");
   const decision = seedDecisions(env);
-  const queued = saveRoadmapItem({ project: "alpha", horizon: "now", title: "Ship the queue", decision_id: decision.id }, env);
+  const queued = saveRoadmapItem({ project: "alpha", horizon: "now", title: "Deliver the queue", decision_id: decision.id }, env);
   saveRoadmapItem({ project: "alpha", horizon: "later", title: "Write the dashboard" }, env);
-  const job = addJob({ project: "alpha", prompt: "ship the queue" }, env);
+  const job = addJob({ project: "alpha", prompt: "deliver the queue" }, env);
   assert.equal(markRoadmapItemQueued(queued.id, job.id, env), true);
   const result = runCli(env, ["roadmap"], { cwd });
   assert.equal(result.status, 0);
   assert.ok(result.stdout.indexOf("now:") < result.stdout.indexOf("next:"), "the horizons are out of order");
   assert.ok(result.stdout.indexOf("next:") < result.stdout.indexOf("later:"), "the horizons are out of order");
-  assert.ok(result.stdout.includes("  1. Ship the queue  [queued]"));
+  assert.ok(result.stdout.includes("  1. Deliver the queue  [queued]"));
   assert.ok(result.stdout.includes(`     decision #${decision.number}`));
   assert.ok(result.stdout.includes(`     job #${job.id} (pending)`));
   assert.ok(result.stdout.includes("  1. Write the dashboard  [open]"));
@@ -212,7 +212,7 @@ test("export then import then export is byte-identical, and the imported row kee
 });
 
 test("a round trip without consequences stays byte-identical and imports no consequences", (t) => {
-  const seed = { title: "Ship without a daemon", context: "polling is enough", decision: "poll every minute" };
+  const seed = { title: "Deliver without a daemon", context: "polling is enough", decision: "poll every minute" };
   const { b, firstText, secondText } = roundTrip(t, "round-trip-bare", seed);
   assert.equal(secondText, firstText);
   assert.ok(!firstText.includes("## Consequences"));
@@ -307,7 +307,7 @@ test("export never creates the database nor a file when the home has none", (t) 
 test("decision update accepts or rejects a proposed decision, printing it like show", (t) => {
   const { env, cwd } = makeCliHome(t, "decision-update");
   saveDecision({ project: "alpha", title: "Store everything in one SQLite file", context: "c", decision: "d", status: "proposed" }, env);
-  saveDecision({ project: "alpha", title: "Ship a daemon", context: "c", decision: "d", status: "proposed" }, env);
+  saveDecision({ project: "alpha", title: "Deliver a daemon", context: "c", decision: "d", status: "proposed" }, env);
 
   const accepted = runCli(env, ["decision", "update", "1", "--status", "accepted"], { cwd });
   assert.equal(accepted.status, 0, accepted.stderr);
@@ -317,7 +317,7 @@ test("decision update accepts or rejects a proposed decision, printing it like s
 
   const rejected = runCli(env, ["decision", "update", "2", "--status", "rejected"], { cwd });
   assert.equal(rejected.status, 0, rejected.stderr);
-  assert.ok(rejected.stdout.includes("#2 Ship a daemon (rejected)"));
+  assert.ok(rejected.stdout.includes("#2 Deliver a daemon (rejected)"));
   assert.equal(getDecisionByNumber({ project: "alpha", number: 2 }, env).status, "rejected");
 });
 

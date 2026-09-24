@@ -6,9 +6,9 @@ import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge } from "../host/gh.mjs
 import { runGitAsync } from "../host/git.mjs";
 import { runNpmAsync } from "../host/npm.mjs";
 
-export const SHIP_WORKER_ENV = "NIGHTSHIFT_SHIP_WORKER";
+export const CLOSE_WORKER_ENV = "NIGHTSHIFT_CLOSE_WORKER";
 
-// Runs git with the ship's abort signal wired into the child, never rejecting.
+// Runs git with the close's abort signal wired into the child, never rejecting.
 function runGitSignalled(args, { cwd, timeoutMs, signal, env }) {
   const execFileImpl = (file, argv, options, callback) => execFile(file, argv, { ...options, signal }, callback);
   return runGitAsync({ args, cwd, env, timeoutMs, execFileImpl: signal ? execFileImpl : execFile });
@@ -47,15 +47,15 @@ function linkNodeModules(checkout, dir) {
   return true;
 }
 
-// The environment the ship's test suite runs in: the ship's own, without the lease token.
+// The environment the close's test suite runs in: the close's own, without the lease token.
 function testEnv(env) {
   const own = { ...env };
-  delete own[SHIP_WORKER_ENV];
+  delete own[CLOSE_WORKER_ENV];
   return own;
 }
 
-// The real gh, git, npm and filesystem a ship works through; the only place a ship spawns anything.
-export function defaultShipDeps(env = process.env) {
+// The real gh, git, npm and filesystem a close works through; the only place a close spawns anything.
+export function defaultCloseDeps(env = process.env) {
   return {
     git: (args, options = {}) => runGitSignalled(args, { ...options, env }),
     gh: {

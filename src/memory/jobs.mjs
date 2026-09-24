@@ -10,6 +10,7 @@ import {
   withFullSync,
   withWriteRetry,
 } from "./db.mjs";
+import { RESULT_OBJECT_BASE } from "./schema.mjs";
 import { isSafeSegment } from "../queue/resume.mjs";
 import { PIPELINE_TIERS } from "./runs.mjs";
 
@@ -33,12 +34,6 @@ export const ACTIVE_JOB_PREDICATE = activeFor("slot");
 export const ORPHAN_PREDICATE =
   `status = 'running' AND (lease_until IS NULL
      OR datetime(lease_until) < datetime('now', '-${LEASE_GRACE_S} seconds'))`;
-
-// The `result` a cancel or a retry grafts its own field onto: the JSON object already there, or a new one keeping what was.
-const RESULT_OBJECT_BASE = `CASE
-              WHEN result IS NULL THEN '{}'
-              WHEN json_valid(result) AND json_type(result) = 'object' THEN result
-              ELSE json_object('previousResult', result) END`;
 
 const LEASE_EXPRESSION = `datetime('now', '+' || (timeout_s + ${LEASE_SLACK_S}) || ' seconds')`;
 const HARD_CEILING_OPEN = `datetime(started_at, '+' || (timeout_s + ${LEASE_SLACK_S}) || ' seconds') > datetime('now')`;
@@ -73,10 +68,10 @@ const JOB_VIEW_COLUMNS = [
   "orch_bash",
   "orch_bash_explore",
   "orch_ctx_last",
-  "ship_status",
-  "ship_worker",
+  "close_status",
+  "close_worker",
 ];
-const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "not_before", "ship_lease_until"];
+const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "not_before", "close_lease_until"];
 const JOB_VIEW_TRUNCATED = ["notice_md", "result"];
 const TRUNCATION_FLAGS = { notice_md: "notice_truncated", result: "result_truncated" };
 // Host-command counters the view omits at zero, the same way a null one is left out: a regression shows only once there is one to show.
@@ -111,6 +106,12 @@ function optionalRangedInt(field, value, range) {
 function requireStatus(status) {
   if (JOB_STATUSES.includes(status)) return status;
   throw new UserError(`invalid job \`status\`: \`${String(status)}\`; expected one of ${JOB_STATUSES.join("|")}`);
+}
+
+// Requires a status a generic writer may set: `closed` belongs to the closing pipeline alone.
+function requireWritableStatus(status) {
+  if (status === "closed") throw new UserError("status `closed` is written only by the closing pipeline; run nightshift queue close <id>");
+  return requireStatus(status);
 }
 
 // Requires the operator's tier when one was informed; nothing informed stays null.
@@ -187,12 +188,12 @@ export function jobView(row, { full = false } = {}) {
     view[column] = full ? whole : truncateByCodePoint(whole, VIEW_TEXT_LIMIT);
     if (view[column] !== whole) view[TRUNCATION_FLAGS[column]] = true;
   }
-  view.ship = parseShipColumn(row.ship);
+  view.close = parseCloseColumn(row.close);
   return view;
 }
 
-// The ship checklist of a row as an object, or null when there is none or it is not a JSON object.
-export function parseShipColumn(text) {
+// The close checklist of a row as an object, or null when there is none or it is not a JSON object.
+export function parseCloseColumn(text) {
   if (typeof text !== "string" || !text) return null;
   try {
     const parsed = JSON.parse(text);
@@ -564,7 +565,7 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
       RETURNING project, slug, status, pr_url, finished_at`,
   );
   const values = [
-    requireStatus(status),
+    requireWritableStatus(status),
     toJsonText(result),
     optionalText(prUrl),
     optionalText(noticeMd),
@@ -601,10 +602,16 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
 function cancelRefusal(id, row) {
   if (!row) return `unknown job \`${id}\``;
   if (row.status === "running") return `job \`${id}\` is running with a live lease on worker \`${row.worker}\`; stop that runner first`;
+  if (row.close_status === "closing" && closeLeaseLooksLive(row, Date.now())) {
+    return `job \`${id}\` is being closed by \`${row.close_worker}\` until ${sqliteToIso(row.close_lease_until)}; wait for it or follow it with nightshift queue status ${id}`;
+  }
+  if (row.close_status === "closing") {
+    return `job \`${id}\` has an interrupted close whose merge may already have happened; resume it with nightshift queue close ${id} - a merged pull request is recorded as closed, and one closed without merge cancels the job, so to cancel it close the pull request first`;
+  }
   return `job \`${id}\` is already finished with status \`${row.status}\``;
 }
 
-// Cancels a pending, gated or orphaned job; the decision is in the WHERE and a refusal writes nothing.
+// Cancels a pending, gated, done, failed or orphaned job, never one whose recorded close is in flight or interrupted; the decision is in the WHERE and a refusal writes nothing.
 export function cancelJob(id, { reason } = {}, env = process.env) {
   const db = openDb(env);
   const statement = db.prepare(
@@ -614,36 +621,18 @@ export function cancelJob(id, { reason } = {}, env = process.env) {
             finished_at = COALESCE(finished_at, datetime('now')),
             operator_note = COALESCE(?, operator_note),
             worker = NULL,
-            lease_until = NULL
-      WHERE id = ? AND (status IN ('pending', 'gate') OR (${ORPHAN_PREDICATE}))
-      RETURNING *`,
+            lease_until = NULL,
+            close_status = NULL,
+            close_worker = NULL,
+            close_lease_until = NULL
+      WHERE id = ? AND (status IN ('pending', 'gate', 'done', 'failed') OR (${ORPHAN_PREDICATE}))
+        AND close_status IS NOT 'closing'
+      RETURNING *, json_extract(result, '$.cancelledFrom') AS cancelled_from`,
   );
   const jobId = requireId(id);
   const row = withWriteRetry(() => statement.get(optionalText(reason), jobId));
-  if (row) return jobView(row);
+  if (row) return { ...jobView(row), cancelled_from: row.cancelled_from ?? null };
   throw new UserError(cancelRefusal(jobId, getJob(jobId, env)));
-}
-
-// The terminal statuses a close may leave from; the same list the WHERE of the close and the candidates of `--merged` both filter by.
-const CLOSABLE_STATUSES = ["done", "failed", "gate", "cancelled"];
-const CLOSABLE_PLACEHOLDERS = CLOSABLE_STATUSES.map(() => "?").join(", ");
-
-// Explains, from the current row, why a close was refused; it never decides anything, only phrases it.
-function closeRefusal(id, row) {
-  if (!row) return `unknown job \`${id}\``;
-  if (row.status === "closed") return `job \`${id}\` is already closed`;
-  if (row.status === "running") return `job \`${id}\` is running with a live lease on worker \`${row.worker}\`; stop that runner first`;
-  if (row.status === "pending") return `job \`${id}\` is pending; the queue still owes work for it`;
-  return `job \`${id}\` cannot be closed from status \`${row.status}\``;
-}
-
-// Closes a job from any terminal status (done, failed, gate, cancelled), the operator's act that ends its life; the decision is in the WHERE and a refusal writes nothing.
-export function closeJob(id, env = process.env) {
-  const statement = openDb(env).prepare(`UPDATE jobs SET status = 'closed' WHERE id = ? AND status IN (${CLOSABLE_PLACEHOLDERS}) RETURNING *`);
-  const jobId = requireId(id);
-  const row = withWriteRetry(() => statement.get(jobId, ...CLOSABLE_STATUSES));
-  if (row) return jobView(row);
-  throw new UserError(closeRefusal(jobId, getJob(jobId, env)));
 }
 
 // Explains, from the current row, why a retry was refused; it never decides anything, only phrases it.
@@ -685,158 +674,189 @@ export function retryJob(id, { note, fresh } = {}, env = process.env) {
   throw new UserError(retryRefusal(jobId, getJob(jobId, env), { note: answer }));
 }
 
-// A ship lease is live while its ship is `shipping` and the lease has not passed yet, both sides compared on SQLite's own clock.
-const SHIP_LEASE_LIVE = `ship_status = 'shipping' AND ship_lease_until IS NOT NULL AND datetime(ship_lease_until) >= datetime('now')`;
-const SHIP_LEASE_EXPRESSION = `datetime('now', '+' || ? || ' seconds')`;
-// The checklist a new ship attempt re-arms: the JSON object already there, so the steps and data of an earlier attempt survive, or a fresh one.
-const SHIP_OBJECT_BASE = `CASE
-              WHEN ship IS NOT NULL AND json_valid(ship) AND json_type(ship) = 'object' THEN ship
+// A close lease is live while its close is `closing` and the lease has not passed yet, both sides compared on SQLite's own clock.
+const CLOSE_LEASE_LIVE = `close_status = 'closing' AND close_lease_until IS NOT NULL AND datetime(close_lease_until) >= datetime('now')`;
+const CLOSE_LEASE_EXPRESSION = `datetime('now', '+' || ? || ' seconds')`;
+// The checklist a new close attempt re-arms: the JSON object already there, so the steps and data of an earlier attempt survive, or a fresh one.
+const CLOSE_OBJECT_BASE = `CASE
+              WHEN close IS NOT NULL AND json_valid(close) AND json_type(close) = 'object' THEN close
               ELSE '{"attempts":0,"steps":{},"data":{}}' END`;
-const SHIP_WITNESS_COLUMNS = ["ship_status", "ship", "ship_worker", "ship_lease_until"];
-const SETTLE_WITNESS_COLUMNS = [...SHIP_WITNESS_COLUMNS, "status"];
-const SHIP_LEASE_RANGE = { min: 60, max: 7200 };
+const CLOSE_WITNESS_COLUMNS = ["close_status", "close", "close_worker", "close_lease_until"];
+const TERMINAL_CLOSE_WITNESS_COLUMNS = [...CLOSE_WITNESS_COLUMNS, "status"];
+const CLOSE_LEASE_RANGE = { min: 60, max: 7200 };
 
 // Requires a lease length in seconds inside the accepted range, so a lease can never be written already expired or endless.
 function requireLeaseSeconds(value) {
-  if (Number.isInteger(value) && value >= SHIP_LEASE_RANGE.min && value <= SHIP_LEASE_RANGE.max) return value;
-  throw new UserError(`invalid ship lease \`${String(value)}\`; expected an integer between ${SHIP_LEASE_RANGE.min} and ${SHIP_LEASE_RANGE.max} seconds`);
+  if (Number.isInteger(value) && value >= CLOSE_LEASE_RANGE.min && value <= CLOSE_LEASE_RANGE.max) return value;
+  throw new UserError(`invalid close lease \`${String(value)}\`; expected an integer between ${CLOSE_LEASE_RANGE.min} and ${CLOSE_LEASE_RANGE.max} seconds`);
 }
 
-// Serializes a ship checklist, refusing anything that is not a plain object so a broken checklist is never stored.
-function requireShipText(ship) {
-  if (!ship || typeof ship !== "object" || Array.isArray(ship)) throw new UserError("a ship checklist must be a JSON object");
-  return JSON.stringify(ship);
+// Serializes a close checklist, refusing anything that is not a plain object so a broken checklist is never stored.
+function requireCloseText(close) {
+  if (!close || typeof close !== "object" || Array.isArray(close)) throw new UserError("a close checklist must be a JSON object");
+  return JSON.stringify(close);
 }
 
-// Tells whether a stored ship lease is still in the future, for phrasing a refusal only; the lease decision itself is always the WHERE of a write.
-function shipLeaseLooksLive(row, nowMs) {
-  if (row?.ship_status !== "shipping" || !row.ship_lease_until) return false;
-  const until = Date.parse(sqliteToIso(row.ship_lease_until));
+// Tells whether a stored close lease is still in the future, for phrasing a refusal only; the lease decision itself is always the WHERE of a write.
+function closeLeaseLooksLive(row, nowMs) {
+  if (row?.close_status !== "closing" || !row.close_lease_until) return false;
+  const until = Date.parse(sqliteToIso(row.close_lease_until));
   return Number.isFinite(until) && Number.isFinite(nowMs) && until >= nowMs;
 }
 
-// Explains, from the current row, why a ship would be refused, or null when nothing refuses it; the lease itself is decided by `acquireShip`.
-export function shipRefusal(id, row, { force = false, nowMs = Date.now() } = {}) {
-  if (!row) return `unknown job \`${id}\``;
-  if (row.status === "closed") return row.ship_status === "shipped" ? `job \`${id}\` is already shipped and closed` : `job \`${id}\` is already closed`;
+// The refusal of a job whose status is not `done`, or null for a done one; only a done job with a pull request is closed.
+function statusRefusal(id, row) {
+  if (row.status === "done") return null;
+  if (row.status === "closed") return `job \`${id}\` is already closed`;
   if (row.status === "running") return `job \`${id}\` is running with a live lease on worker \`${row.worker}\`; stop that runner first`;
   if (row.status === "pending") return `job \`${id}\` is pending; it has not produced a pull request yet`;
-  if (row.status === "cancelled") return `job \`${id}\` is cancelled; retry it before shipping`;
-  if (!row.pr_url) return `job \`${id}\` has no pull request to ship`;
-  if (shipLeaseLooksLive(row, nowMs)) {
-    return `job \`${id}\` is already being shipped by \`${row.ship_worker}\` until ${sqliteToIso(row.ship_lease_until)}; follow it with nightshift queue status ${id}`;
+  if (row.status === "gate") return `job \`${id}\` is waiting at a gate; answer it with nightshift queue retry ${id} --note "…", or cancel it`;
+  if (row.status === "failed") return `job \`${id}\` failed; retry it or cancel it - only a done job is closed`;
+  if (row.status === "cancelled") return `job \`${id}\` is cancelled; retry it before closing`;
+  return `job \`${id}\` cannot be closed from status \`${row.status}\``;
+}
+
+// Explains, from the current row, why a close would be refused, or null when nothing refuses it; the lease itself is decided by `acquireClose`.
+export function closeRefusal(id, row, { nowMs = Date.now() } = {}) {
+  if (!row) return `unknown job \`${id}\``;
+  const refusal = statusRefusal(id, row);
+  if (refusal) return refusal;
+  if (!row.pr_url) return "nothing to close: the job has no pull request";
+  if (closeLeaseLooksLive(row, nowMs)) {
+    return `job \`${id}\` is already being closed by \`${row.close_worker}\` until ${sqliteToIso(row.close_lease_until)}; follow it with nightshift queue status ${id}`;
   }
-  if (row.status !== "done" && !force) return `job \`${id}\` is \`${row.status}\`; pass --force to ship its pull request anyway (${row.pr_url})`;
-  if (!["done", "failed", "gate"].includes(row.status)) return `job \`${id}\` cannot be shipped from status \`${row.status}\``;
   return null;
 }
 
-// Takes the ship lease of a job in one compare-and-swap and re-arms its checklist for a new attempt; null means the WHERE refused and nothing was written.
-export function acquireShip(id, { worker, leaseS, force = false } = {}, env = process.env) {
-  const statement = openDb(env).prepare(
-    `UPDATE jobs
-        SET ship_status = 'shipping',
-            ship_worker = ?,
-            ship_lease_until = ${SHIP_LEASE_EXPRESSION},
-            ship = json_set(${SHIP_OBJECT_BASE},
-              '$.attempts', COALESCE(json_extract(${SHIP_OBJECT_BASE}, '$.attempts'), 0) + 1,
+// The checklist of a new close attempt: the stored one with its attempt counted and its last ending cleared.
+const CLOSE_REARMED = `json_set(${CLOSE_OBJECT_BASE},
+              '$.attempts', COALESCE(json_extract(${CLOSE_OBJECT_BASE}, '$.attempts'), 0) + 1,
               '$.startedAt', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
               '$.finishedAt', json('null'),
-              '$.failed', json('null'))
+              '$.failed', json('null'))`;
+
+// Takes the close lease of a done job in one compare-and-swap and re-arms its checklist for a new attempt, marking it `forced` for good once `--force` was passed; null means the WHERE refused and nothing was written.
+export function acquireClose(id, { worker, leaseS, force = false } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET close_status = 'closing',
+            close_worker = ?,
+            close_lease_until = ${CLOSE_LEASE_EXPRESSION},
+            close = CASE WHEN ? = 1 THEN json_set(${CLOSE_REARMED}, '$.forced', json('true')) ELSE ${CLOSE_REARMED} END
       WHERE id = ?
         AND pr_url IS NOT NULL
-        AND (status = 'done' OR (? = 1 AND status IN ('failed', 'gate')))
-        AND (ship_status IS NULL OR ship_status = 'failed' OR (ship_status = 'shipping' AND NOT (${SHIP_LEASE_LIVE})))
+        AND status = 'done'
+        AND (close_status IS NULL OR close_status = 'failed' OR (close_status = 'closing' AND NOT (${CLOSE_LEASE_LIVE})))
       RETURNING *`,
   );
-  const values = [requireText("worker", worker), requireLeaseSeconds(leaseS), requireId(id), force === true ? 1 : 0];
+  const values = [requireText("worker", worker), requireLeaseSeconds(leaseS), force === true ? 1 : 0, requireId(id)];
   return withWriteRetry(() => statement.get(...values)) ?? null;
 }
 
-// Confirms that the ship lease of a job is held by this worker and renews it; false means the lease is not this worker's any more.
-export function adoptShip(id, { worker, leaseS } = {}, env = process.env) {
+// Confirms that the close lease of a job is held by this worker and renews it; false means the lease is not this worker's any more.
+export function adoptClose(id, { worker, leaseS } = {}, env = process.env) {
   const statement = openDb(env).prepare(
-    `UPDATE jobs SET ship_lease_until = ${SHIP_LEASE_EXPRESSION} WHERE id = ? AND ship_status = 'shipping' AND ship_worker = ?`,
+    `UPDATE jobs SET close_lease_until = ${CLOSE_LEASE_EXPRESSION} WHERE id = ? AND close_status = 'closing' AND close_worker = ?`,
   );
   const values = [requireLeaseSeconds(leaseS), requireId(id), requireText("worker", worker)];
   return withWriteRetry(() => statement.run(...values)).changes === 1;
 }
 
-// Writes the witnessed ship columns again, by id, only while no other worker took the ship over in between.
-function reapplyShipColumns(id, written, columns, worker, env) {
+// Writes the witnessed close columns again, by id, only while no other worker took the close over in between.
+function reapplyCloseColumns(id, written, columns, worker, env) {
   const statement = openDb(env).prepare(
     `UPDATE jobs SET ${columns.map((column) => `${column} = ?`).join(", ")}
-      WHERE id = ? AND (ship_worker IS NULL OR ship_worker = ?)`,
+      WHERE id = ? AND (close_worker IS NULL OR close_worker = ?)`,
   );
   withWriteRetry(() => statement.run(...columns.map((column) => written[column] ?? null), id, worker));
 }
 
-// The witness of a ship write: the columns a fresh connection must read back and the re-apply that repairs them once.
-function shipWitness(columns, worker) {
-  return { columns, reapply: (id, written, env) => reapplyShipColumns(id, written, columns, worker, env) };
+// The witness of a close write: the columns a fresh connection must read back and the re-apply that repairs them once.
+function closeWitness(columns, worker) {
+  return { columns, reapply: (id, written, env) => reapplyCloseColumns(id, written, columns, worker, env) };
 }
 
-// Runs one ship write fully synced inside a transaction and confirms it on disk; null means the WHERE refused it.
-function writeShipDurably({ id, statement, values, witness, env }) {
+// Runs one close write fully synced inside a transaction and confirms it on disk; null means the WHERE refused it.
+function writeCloseDurably({ id, statement, values, witness, env }) {
   const db = openDb(env);
   const written = withFullSync(db, () => inTransaction(db, () => statement.get(...values) ?? null));
   if (written) ensureDurable(id, written, witness, env);
   return written;
 }
 
-// Records the checklist after a step and renews the ship lease, in one statement; false means the lease is not this worker's any more.
-export function recordShipStep(id, { worker, ship, leaseS } = {}, env = process.env) {
+// Records the checklist after a step and renews the close lease, in one statement; false means the lease is not this worker's any more.
+export function recordCloseStep(id, { worker, close, leaseS } = {}, env = process.env) {
   const statement = openDb(env).prepare(
-    `UPDATE jobs SET ship = ?, ship_lease_until = ${SHIP_LEASE_EXPRESSION}
-      WHERE id = ? AND ship_status = 'shipping' AND ship_worker = ?
-      RETURNING ${SHIP_WITNESS_COLUMNS.join(", ")}`,
+    `UPDATE jobs SET close = ?, close_lease_until = ${CLOSE_LEASE_EXPRESSION}
+      WHERE id = ? AND close_status = 'closing' AND close_worker = ?
+      RETURNING ${CLOSE_WITNESS_COLUMNS.join(", ")}`,
   );
   const owner = requireText("worker", worker);
-  const values = [requireShipText(ship), requireLeaseSeconds(leaseS), requireId(id), owner];
-  return writeShipDurably({ id, statement, values, witness: shipWitness(SHIP_WITNESS_COLUMNS, owner), env }) !== null;
+  const values = [requireCloseText(close), requireLeaseSeconds(leaseS), requireId(id), owner];
+  return writeCloseDurably({ id, statement, values, witness: closeWitness(CLOSE_WITNESS_COLUMNS, owner), env }) !== null;
 }
 
-// Stops a ship as failed, keeping its checklist and releasing the lease; false means the lease is not this worker's any more.
-export function failShip(id, { worker, ship } = {}, env = process.env) {
+// Stops a close as failed, keeping its checklist and releasing the lease; false means the lease is not this worker's any more.
+export function failClose(id, { worker, close } = {}, env = process.env) {
   const statement = openDb(env).prepare(
-    `UPDATE jobs SET ship_status = 'failed', ship = ?, ship_worker = NULL, ship_lease_until = NULL
-      WHERE id = ? AND ship_status = 'shipping' AND ship_worker = ?
-      RETURNING ${SHIP_WITNESS_COLUMNS.join(", ")}`,
+    `UPDATE jobs SET close_status = 'failed', close = ?, close_worker = NULL, close_lease_until = NULL
+      WHERE id = ? AND close_status = 'closing' AND close_worker = ?
+      RETURNING ${CLOSE_WITNESS_COLUMNS.join(", ")}`,
   );
   const owner = requireText("worker", worker);
-  const values = [requireShipText(ship), requireId(id), owner];
-  return writeShipDurably({ id, statement, values, witness: shipWitness(SHIP_WITNESS_COLUMNS, owner), env }) !== null;
+  const values = [requireCloseText(close), requireId(id), owner];
+  return writeCloseDurably({ id, statement, values, witness: closeWitness(CLOSE_WITNESS_COLUMNS, owner), env }) !== null;
 }
 
-// Closes a shipped job, marks it shipped, releases the lease and appends the shipped line to its notice, in one statement; null means the WHERE refused it.
-export function settleShip(id, { worker, ship, noticeLine } = {}, env = process.env) {
+// Closes a done job whose merge its checklist records, releases the lease and appends the settled line to its notice, in one statement; null means the WHERE refused it, and the schema refuses a checklist with no merge.
+export function settleClose(id, { worker, close, noticeLine } = {}, env = process.env) {
   const statement = openDb(env).prepare(
     `UPDATE jobs
         SET status = 'closed',
-            ship_status = 'shipped',
-            ship = ?,
-            ship_worker = NULL,
-            ship_lease_until = NULL,
+            close_status = NULL,
+            close = ?,
+            close_worker = NULL,
+            close_lease_until = NULL,
             notice_md = CASE
               WHEN notice_md IS NULL OR trim(notice_md) = '' THEN ?
               ELSE rtrim(notice_md, ' ' || char(10)) || char(10) || char(10) || ? END
-      WHERE id = ? AND ship_status = 'shipping' AND ship_worker = ?
-        AND status IN ('done', 'failed', 'gate', 'cancelled', 'closed')
+      WHERE id = ? AND close_status = 'closing' AND close_worker = ? AND status = 'done'
       RETURNING *`,
   );
   const owner = requireText("worker", worker);
   const line = requireText("noticeLine", noticeLine);
-  const values = [requireShipText(ship), line, line, requireId(id), owner];
-  const row = writeShipDurably({ id, statement, values, witness: shipWitness(SETTLE_WITNESS_COLUMNS, owner), env });
+  const values = [requireCloseText(close), line, line, requireId(id), owner];
+  const row = writeCloseDurably({ id, statement, values, witness: closeWitness(TERMINAL_CLOSE_WITNESS_COLUMNS, owner), env });
   return row ? jobView(row, { full: true }) : null;
 }
 
-// Records where the settled ship left the job's worktree; best effort, a failure never costs the ship that already happened.
-export function noteShipWorktree(id, { worktree } = {}, env = process.env) {
+// Cancels a done job whose pull request a close step read closed without merge, keeping the checklist and releasing the lease, in one statement; null means the lease is not this worker's any more.
+export function cancelOnClosedPr(id, { worker, close, note } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET result = json_set(${RESULT_OBJECT_BASE}, '$.cancelledFrom', status),
+            status = 'cancelled',
+            operator_note = ?,
+            finished_at = COALESCE(finished_at, datetime('now')),
+            close = ?,
+            close_status = NULL,
+            close_worker = NULL,
+            close_lease_until = NULL
+      WHERE id = ? AND status = 'done' AND close_status = 'closing' AND close_worker = ?
+      RETURNING *`,
+  );
+  const owner = requireText("worker", worker);
+  const values = [requireText("note", note), requireCloseText(close), requireId(id), owner];
+  const row = writeCloseDurably({ id, statement, values, witness: closeWitness(TERMINAL_CLOSE_WITNESS_COLUMNS, owner), env });
+  return row ? jobView(row, { full: true }) : null;
+}
+
+// Records where the settled close left the job's worktree; best effort, a failure never costs the close that already happened.
+export function noteCloseWorktree(id, { worktree } = {}, env = process.env) {
   try {
     const statement = openDb(env).prepare(
-      `UPDATE jobs SET ship = json_set(ship, '$.steps.settle.worktree', json(?))
-        WHERE id = ? AND ship_status = 'shipped' AND json_valid(ship) AND json_type(ship, '$.steps.settle') = 'object'`,
+      `UPDATE jobs SET close = json_set(close, '$.steps.settle.worktree', json(?))
+        WHERE id = ? AND status = 'closed' AND json_valid(close) AND json_type(close, '$.steps.settle') = 'object'`,
     );
     return withWriteRetry(() => statement.run(JSON.stringify(worktree ?? null), requireId(id))).changes === 1;
   } catch {
@@ -844,14 +864,14 @@ export function noteShipWorktree(id, { worktree } = {}, env = process.env) {
   }
 }
 
-// The ships in flight, failed or stalled, newest first, with the liveness of each lease read on SQLite's own clock.
-export function listShips(env = process.env, db = openDb(env)) {
+// The closes in flight, failed or stalled, newest first, with the liveness of each lease read on SQLite's own clock.
+export function listCloses(env = process.env, db = openDb(env)) {
   return db
     .prepare(
-      `SELECT id, project, status, pr_url, ship_status, ship_worker, ship_lease_until, ship,
-              CASE WHEN ${SHIP_LEASE_LIVE} THEN 1 ELSE 0 END AS ship_lease_live
+      `SELECT id, project, status, pr_url, close_status, close_worker, close_lease_until, close,
+              CASE WHEN ${CLOSE_LEASE_LIVE} THEN 1 ELSE 0 END AS close_lease_live
          FROM jobs
-        WHERE ship_status IN ('shipping', 'failed') AND (status <> 'closed' OR ship_status = 'shipping')
+        WHERE close_status IN ('closing', 'failed')
         ORDER BY id DESC LIMIT 50`,
     )
     .all();
@@ -871,11 +891,9 @@ export function listJobs({ limit, blockedOnly } = {}, env = process.env, db = op
   return db.prepare(`SELECT * FROM jobs ${where}ORDER BY id DESC LIMIT ?`).all(clamped);
 }
 
-// Terminal jobs that still carry a pull request url, the candidates `queue close --merged` may confirm and close.
+// Done jobs that carry a pull request url, the candidates `queue close --merged` may confirm and close.
 export function listCloseCandidates(env = process.env, db = openDb(env)) {
-  return db
-    .prepare(`SELECT * FROM jobs WHERE status IN (${CLOSABLE_PLACEHOLDERS}) AND pr_url IS NOT NULL ORDER BY id DESC`)
-    .all(...CLOSABLE_STATUSES);
+  return db.prepare("SELECT * FROM jobs WHERE status = 'done' AND pr_url IS NOT NULL ORDER BY id DESC").all();
 }
 
 // Unfinished jobs that already have a run directory; a job with no slug never ran, so no witness can speak for it.
@@ -983,7 +1001,7 @@ export function repairJobFromWitness(id, terminal, env = process.env) {
       WHERE id = ? AND (status = 'running' OR (status = 'pending' AND ${NEVER_REOPENED_BY_RETRY}))`,
   );
   const values = [
-    requireStatus(terminal?.status),
+    requireWritableStatus(terminal?.status),
     optionalText(terminal?.prUrl),
     isoToSqlite(terminal?.finishedAt),
     requireId(id),
@@ -1001,7 +1019,7 @@ export function reclassifyJob(id, { status, prUrl, noticeMd } = {}, env = proces
             notice_md = COALESCE(?, notice_md)
       WHERE id = ? AND status IN ('gate', 'failed')`,
   );
-  const values = [requireStatus(status), optionalText(prUrl), optionalText(noticeMd), requireId(id)];
+  const values = [requireWritableStatus(status), optionalText(prUrl), optionalText(noticeMd), requireId(id)];
   return withWriteRetry(() => statement.run(...values)).changes === 1;
 }
 

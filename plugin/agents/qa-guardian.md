@@ -74,7 +74,7 @@ The skill states the mode in the prompt. With no indication, assume COMPLETE.
   folder. With no verifier after you: **RUN the PoCs you create yourself** and
   include the result (it failed = a proven break) in the report. The report goes
   straight back to the user — include in the verdict what needs to happen before
-  merging/shipping.
+  merging/delivering.
 
 ## Break criterion on a bug (critical rule)
 

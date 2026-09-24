@@ -15,7 +15,7 @@ const HELP_TIMEOUT_MS = 5000;
 const AGENT_FLAG_LINE = /^\s*--agent <agent>/m;
 const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n/;
 
-// Path of the operator agent inside the plugin this package ships.
+// Path of the operator agent inside the plugin this package carries.
 export function operatorAgentPath() {
   return join(pluginDir(), "agents", "operator.md");
 }

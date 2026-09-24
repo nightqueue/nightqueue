@@ -299,7 +299,7 @@ test("the agent measures no time: no clock, no arithmetic, no timestamp", () => 
   assert.ok(SKILL.includes("Never compute a duration and never write a timestamp"), "Phase 8 lost the rule about the times");
 });
 
-test("the Time column of Phase 8 is read from the command the CLI really ships", () => {
+test("the Time column of Phase 8 is read from the command the CLI really offers", () => {
   const table = passageAt("**The Time column is read, never computed.**");
   assert.ok(table.includes("`nightshift run log`"), "the Phase 8 table no longer reads the runtime's measurement");
   assert.ok(table.includes("`nightshift run log --json`"), "the report lost the `at` stamps of the phases");
@@ -316,17 +316,17 @@ function commitPhase() {
   return SKILL.slice(start, end);
 }
 
-test("Phase 7 is the two `nightshift run` calls the CLI really ships, and no git or gh is run by hand", () => {
+test("Phase 7 is the two `nightshift run` calls the CLI really offers, and no git or gh is run by hand", () => {
   const phase = commitPhase();
   assert.ok(phase.includes("`nightshift run commit --message-file <RUN_DIR>/commit-message.txt`"), "the commit is no longer the command's");
   assert.ok(phase.includes("`nightshift run pr --body-file <RUN_DIR>/pr-body.md`"), "the pull request is no longer the command's");
-  assert.ok(CLI_RUN.includes("nightshift run commit --message-file <path>"), "the CLI no longer ships the command Phase 7 calls");
-  assert.ok(CLI_RUN.includes("nightshift run pr --body-file <path>"), "the CLI no longer ships the command Phase 7 calls");
+  assert.ok(CLI_RUN.includes("nightshift run commit --message-file <path>"), "the CLI no longer offers the command Phase 7 calls");
+  assert.ok(CLI_RUN.includes("nightshift run pr --body-file <path>"), "the CLI no longer offers the command Phase 7 calls");
   for (const flag of ["--extra <pathspec>", "--message-file", "--body-file"]) {
     assert.ok(CLI_RUN.includes(flag), `Phase 7 passes \`${flag}\`, which the CLI does not accept`);
   }
   assert.ok(phase.includes("`nightshift run pr --template`"), "Phase 7 no longer asks the runtime which template the body follows");
-  assert.ok(CLI_RUN.includes("| --template"), "the CLI no longer ships the template query Phase 7 calls");
+  assert.ok(CLI_RUN.includes("| --template"), "the CLI no longer offers the template query Phase 7 calls");
   assert.ok(phase.includes("`MISSING: evidence for QA row <method>`"), "Phase 7 no longer reads the evidence refusal");
   for (const answer of ["CONVENTION:", "COMMITTED:", "REFUSED:", "REJECTED:", "MISSING:", "TEMPLATE:", "BRANCH:", "WORKTREE:"]) {
     assert.ok(phase.includes(answer), `Phase 7 never reads the \`${answer}\` line the command prints`);

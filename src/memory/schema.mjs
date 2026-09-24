@@ -1,4 +1,14 @@
-export const DB_USER_VERSION = 15;
+export const DB_USER_VERSION = 16;
+
+// The invariant of a closed job: it carries a pull request and a close checklist recording the merge, with no close in flight.
+export const CLOSED_REQUIRES_MERGE = `CHECK (status <> 'closed' OR (pr_url IS NOT NULL AND trim(pr_url) <> '' AND close_status IS NULL
+  AND (CASE WHEN json_valid(close) THEN json_extract(close, '$.data.merged') END) IS 1))`;
+
+// The `result` a cancel or a retry grafts its own field onto: the JSON object already there, or a new one keeping what was.
+export const RESULT_OBJECT_BASE = `CASE
+              WHEN result IS NULL THEN '{}'
+              WHEN json_valid(result) AND json_type(result) = 'object' THEN result
+              ELSE json_object('previousResult', result) END`;
 
 // Timestamp of SQLite ("YYYY-MM-DD HH:MM:SS", UTC) as ISO 8601.
 export function sqliteToIso(ts) {

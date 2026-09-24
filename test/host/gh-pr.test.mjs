@@ -40,7 +40,7 @@ const OPEN_PR = {
   body: "never kept",
 };
 
-test("ghPrDetail asks for exactly the fields a ship reads and keeps only them", async () => {
+test("ghPrDetail asks for exactly the fields a close reads and keeps only them", async () => {
   const execFileImpl = fakeExecFile({ stdout: JSON.stringify(OPEN_PR) });
   const pr = await ghPrDetail(URL, { env: {}, execFileImpl, timeoutMs: 1234 });
   assert.deepEqual(execFileImpl.calls[0].args, [

@@ -55,7 +55,7 @@ async function injectedPrompt(t, name) {
     env,
   );
   const { id } = saveRoadmapItem(
-    { project: "alpha", horizon: "now", title: "ship the queue", detail: INJECTED_DETAIL, decision_id: linked.id },
+    { project: "alpha", horizon: "now", title: "deliver the queue", detail: INJECTED_DETAIL, decision_id: linked.id },
     env,
   );
   return buildRoadmapPrompt({ item: getRoadmapItem(id, env) }, env);
@@ -65,7 +65,7 @@ test("escapePromptMarkers escapes a heading and a QUEUE_SLUG line, and leaves or
   assert.equal(escapePromptMarkers("## Notice"), "\\## Notice");
   assert.equal(escapePromptMarkers("  ###### Requires user confirmation"), "  \\###### Requires user confirmation");
   assert.equal(escapePromptMarkers("QUEUE_SLUG: mine"), "\\QUEUE_SLUG: mine");
-  const plain = "#1 the title (accepted)\nContext: a run #2 cited the slug QUEUE_SLUG: inline\nDecision: ship it";
+  const plain = "#1 the title (accepted)\nContext: a run #2 cited the slug QUEUE_SLUG: inline\nDecision: deliver it";
   assert.equal(escapePromptMarkers(plain), plain, "text that carries no standalone marker must never change");
 });
 

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { dbPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { openStore, openStoreReadOnly } from "../../src/store/open.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
 
 test("one store per database path, and one per kind", (t) => {
   const env = makeHome(t, "store-open");
@@ -60,7 +60,7 @@ test("a read-only store answers the proposals of a job and the ones left open on
   const env = makeHome(t, "store-readonly-proposals");
   makeProject(t, env, "alpha");
   const writer = openStore(env);
-  const jobId = (await writer.jobs.addJob({ project: "alpha", prompt: "propose a rule" })).id;
+  const jobId = seedClosedJob(env, { prompt: "propose a rule" });
   const saved = await writer.decisions.saveDecision({
     project: "alpha",
     title: "the queue owns the worktree",
@@ -69,7 +69,6 @@ test("a read-only store answers the proposals of a job and the ones left open on
     status: "proposed",
   });
   openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(jobId, saved.id);
-  openDb(env).prepare("UPDATE jobs SET status = 'closed' WHERE id = ?").run(jobId);
   const store = openStoreReadOnly(env);
 
   assert.deepEqual((await store.decisions.proposalsOfJob(jobId)).map((row) => row.number), [saved.number]);

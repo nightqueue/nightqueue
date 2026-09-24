@@ -41,7 +41,6 @@ const CONTRACT_TOOLS = [
   "queue_retry",
   "queue_run",
   "queue_session",
-  "queue_ship",
   "queue_status",
   "roadmap_get",
   "roadmap_save",
@@ -80,12 +79,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the twenty-six tools of the contract", async (t) => {
+test("the server exposes exactly the twenty-five tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 26, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 25, "the contract list and the server disagree on how many tools there are");
 });
 
 test("the server migrates a v8 home to v9 once at boot, before it answers any tool", async (t) => {
@@ -527,21 +526,6 @@ test("queue_add and queue_cancel refuse the home of the runner from inside a job
   assert.equal(getJob(id + 1, env), null, "a call isolated in a temporary home reached the home of the operator");
 });
 
-test("queue_ship refuses the home of the runner from inside a job, and refuses a pending job by name without writing", async (t) => {
-  const env = makeQueueHome(t, "mcp-ship-refusals");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
-  const inJob = await connect(t, { ...env, NIGHTSHIFT_JOB_ID: "9", NIGHTSHIFT_JOB_HOME: homeDir(env) });
-  const guarded = await inJob.callTool({ name: "queue_ship", arguments: { job_id: id } });
-  assert.equal(guarded.isError, true, textOf(guarded));
-  assert.ok(textOf(guarded).includes(HOME_REFUSAL), textOf(guarded));
-
-  const client = await connect(t, env);
-  const refused = await client.callTool({ name: "queue_ship", arguments: { job_id: id, force: true } });
-  assert.equal(refused.isError, true, textOf(refused));
-  assert.match(textOf(refused), /queue_ship: job `\d+` is pending; it has not produced a pull request yet/);
-  assert.equal(getJob(id, env).ship_status, null, "a refused ship wrote to the job");
-});
-
 test("queue_status never returns the prompt and truncates the free text at five hundred code points", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-status");
   const id = addJob({ project: "alpha", prompt: "a prompt no tool may ever return" }, env).id;
@@ -683,7 +667,7 @@ test("queue_status returns a gate notice near three kilobytes whole, and clips i
   const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
   const points = Array.from(
     { length: 8 },
-    (_, i) => `- **C${i + 1}:** ${"the plan departs from the brief on a point that needs a human call before it ships. ".repeat(5)}`,
+    (_, i) => `- **C${i + 1}:** ${"the plan departs from the brief on a point that needs a human call before it goes out. ".repeat(5)}`,
   );
   const notice = ["## Requires user confirmation", "", ...points, "", `Answer with: nightshift queue retry ${id} --note "<your answer>"`].join("\n");
   assert.ok(Array.from(notice).length > 2900, "setup: the notice must be close to three kilobytes");
@@ -748,7 +732,7 @@ test("queue_status never writes a delivered job whose pull request is merged, an
   const first = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(first.jobs[0].pr_state, "unknown", "the first answer waited for gh instead of answering from the cache");
   assert.deepEqual(first.suggestions, []);
-  assert.deepEqual(first.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories", "ships"]);
+  assert.deepEqual(first.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories", "closes"]);
   assert.ok(first.sections.every((section) => section.ok && Number.isInteger(section.ms)), JSON.stringify(first.sections));
 
   const listed = await pollPrState(client, "merged");
@@ -1069,36 +1053,30 @@ test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a
   assert.deepEqual(JSON.parse(gatedRow.result), { status: "gate", prUrl: null, cancelledFrom: "gate" });
 });
 
-test("queue_close closes a failed job and refuses a pending and a running one by name", async (t) => {
+test("queue_close runs only on a done job with a pull request, refusing every other job by name without writing", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-close");
-  const done = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
-  openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/42", done);
+  const noPr = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(noPr);
   const failed = addJob({ project: "alpha", prompt: "fix the parser" }, env).id;
-  openDb(env).prepare("UPDATE jobs SET status = 'failed', finished_at = ? WHERE id = ?").run(GATED_FINISHED_AT, failed);
+  openDb(env).prepare("UPDATE jobs SET status = 'failed', pr_url = ?, finished_at = ? WHERE id = ?").run("https://github.com/acme/api/pull/42", GATED_FINISHED_AT, failed);
   const pending = addJob({ project: "alpha", prompt: "wait for a human" }, env).id;
   const running = addJob({ project: "alpha", prompt: "keep running" }, env).id;
   claimJobById(running, { worker: "host:1", cap: 4 }, env);
   const client = await connect(t, env);
 
-  const closed = payloadOf(await client.callTool({ name: "queue_close", arguments: { job_id: done } }));
-  assert.equal(closed.ok, true);
-  assert.deepEqual({ status: closed.job.status, pr_url: closed.job.pr_url }, { status: "closed", pr_url: "https://github.com/acme/api/pull/42" });
-  assert.equal(getJob(done, env).status, "closed");
-
-  const closedFailed = payloadOf(await client.callTool({ name: "queue_close", arguments: { job_id: failed } }));
-  assert.equal(closedFailed.job.status, "closed", "a failed job was refused");
-
-  const beforePending = getJob(pending, env);
-  const refusedPending = await client.callTool({ name: "queue_close", arguments: { job_id: pending } });
-  assert.equal(refusedPending.isError, true);
-  assert.match(textOf(refusedPending), /is pending; the queue still owes work for it/);
-  assert.deepEqual(getJob(pending, env), beforePending, "the refused close wrote to the pending row");
-
-  const beforeRunning = getJob(running, env);
-  const refusedRunning = await client.callTool({ name: "queue_close", arguments: { job_id: running } });
-  assert.equal(refusedRunning.isError, true);
-  assert.match(textOf(refusedRunning), /is running with a live lease on worker/);
-  assert.deepEqual(getJob(running, env), beforeRunning, "the refused close wrote to the running row");
+  const cases = [
+    [noPr, /nothing to close: the job has no pull request/],
+    [failed, /failed; retry it or cancel it - only a done job is closed/],
+    [pending, /is pending; it has not produced a pull request yet/],
+    [running, /is running with a live lease on worker/],
+  ];
+  for (const [id, reason] of cases) {
+    const before = getJob(id, env);
+    const refused = await client.callTool({ name: "queue_close", arguments: { job_id: id, force: true } });
+    assert.equal(refused.isError, true, textOf(refused));
+    assert.match(textOf(refused), reason);
+    assert.deepEqual(getJob(id, env), before, `the refused close wrote to job ${id}`);
+  }
 });
 
 test("queue_close refuses the home of the runner from inside a job, like queue_cancel", async (t) => {

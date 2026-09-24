@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
+import { rmSync } from "node:fs";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
-import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
+import { addJob, claimJobById, getJob, jobView } from "../../src/memory/jobs.mjs";
 import { CLOSE_MERGED_QUERY_LIMIT } from "../../src/queue/close-merged.mjs";
 import { createPrStateCache } from "../../src/queue/pr-state.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { fakeCloseDeps, mergedPr, openPr } from "../../test-support/close.mjs";
 
 // A home with the pull request checks switched back on, the default `makeHome` turns off.
 function makeCloseHome(t, name) {
@@ -16,18 +18,18 @@ function makeCloseHome(t, name) {
   return env;
 }
 
-// Enqueues a job straight in the database, already in a terminal status with a pull request url.
+// Enqueues a job straight in the database, already in the given status with a pull request url.
 function terminalJob(env, { status = "done", prUrl, prompt = "fix the worker" } = {}) {
   const id = addJob({ project: "alpha", prompt }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ? WHERE id = ?").run(status, prUrl, id);
   return id;
 }
 
-// Runs `nightshift queue close ...` in this process, with the pull request cache and the deadline the test injects.
-async function runQueueClose(env, argv, { prStates, closeMergedDeadlineMs } = {}) {
+// Runs `nightshift queue close ...` in this process, with the pull request cache, the deadline and the closing pipeline's doubles the test injects.
+async function runQueueClose(env, argv, { prStates, closeMergedDeadlineMs, closeDeps = fakeCloseDeps({ pr: mergedPr() }).deps } = {}) {
   const out = [];
   const err = [];
-  const ctx = { ...defaultContext(), env, stdin: { isTTY: false }, out: (line) => out.push(line), err: (line) => err.push(line), prStates, closeMergedDeadlineMs };
+  const ctx = { ...defaultContext(), env, stdin: { isTTY: false }, out: (line) => out.push(line), err: (line) => err.push(line), prStates, closeMergedDeadlineMs, closeDeps };
   const code = await run(argv, ctx);
   return { code, out, err };
 }
@@ -54,8 +56,8 @@ function tableView(answers) {
 test("close --merged on a cold cache queries gh, closes the confirmed merges and reports the rest as undetermined with a reason", async (t) => {
   const env = makeCloseHome(t, "close-merged-cold");
   const merged = terminalJob(env, { prUrl: "https://github.com/acme/api/pull/1" });
-  const open = terminalJob(env, { status: "failed", prUrl: "https://github.com/acme/api/pull/2" });
-  const notGithub = terminalJob(env, { status: "cancelled", prUrl: "https://gitlab.com/acme/api/merge_requests/3" });
+  const open = terminalJob(env, { prUrl: "https://github.com/acme/api/pull/2" });
+  const notGithub = terminalJob(env, { prUrl: "https://gitlab.com/acme/api/merge_requests/3" });
   const view = tableView({
     "https://github.com/acme/api/pull/1": { ok: true, state: "MERGED", mergedAt: "2026-09-11T15:54:01Z" },
     "https://github.com/acme/api/pull/2": { ok: true, state: "OPEN", mergeable: "MERGEABLE", isDraft: false },
@@ -67,6 +69,8 @@ test("close --merged on a cold cache queries gh, closes the confirmed merges and
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.ok(result.out.some((line) => line === "checking 2 pull requests on GitHub..."), result.out.join("\n"));
   assert.ok(result.out.includes(`closed job #${merged}`), result.out.join("\n"));
+  assert.equal(getJob(merged, env).status, "closed");
+  assert.equal(jobView(getJob(merged, env)).close.data.merged, true, "the close did not record the merge through the pipeline");
   assert.ok(result.out.some((line) => line === `job #${open} not closed: pull request is open`), result.out.join("\n"));
   assert.ok(result.out.some((line) => line === `job #${notGithub} not closed: no GitHub pull request url`), result.out.join("\n"));
 });
@@ -89,7 +93,7 @@ test("close --merged --json answers one parseable document, and the checking lin
 test("an injected gh that never answers, with a small deadline, closes nothing, exits successfully and names every id as undetermined", async (t) => {
   const env = makeCloseHome(t, "close-merged-hang");
   const first = terminalJob(env, { prUrl: "https://github.com/acme/api/pull/1" });
-  const second = terminalJob(env, { status: "gate", prUrl: "https://github.com/acme/api/pull/2" });
+  const second = terminalJob(env, { prUrl: "https://github.com/acme/api/pull/2" });
   const prStates = createPrStateCache({ viewImpl: () => new Promise(() => {}) });
 
   const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates, closeMergedDeadlineMs: 50 });
@@ -224,4 +228,61 @@ test("`--merged` cannot be combined with ids", async (t) => {
 
   assert.equal(result.code, 1);
   assert.match(result.err.join("\n"), /unexpected argument/);
+});
+
+test("close --merged runs only over done jobs: a failed, gated or cancelled job with a merged pull request is never a candidate", async (t) => {
+  const env = makeCloseHome(t, "close-merged-done-only");
+  const prUrl = "https://github.com/acme/api/pull/1";
+  const others = ["failed", "gate", "cancelled"].map((status) => terminalJob(env, { status, prUrl, prompt: status }));
+  const before = others.map((id) => getJob(id, env));
+
+  const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates: await mergedCache(env, prUrl) });
+
+  assert.equal(result.code, 0, result.err.join("\n"));
+  assert.deepEqual(result.out, ["nothing to close"]);
+  assert.deepEqual(others.map((id) => getJob(id, env)), before, "a job that is not done was touched");
+});
+
+test("close --merged reports a candidate whose pipeline stops as not closed, naming the step and the reason, and leaves it done", async (t) => {
+  const env = makeCloseHome(t, "close-merged-stopped");
+  const prUrl = "https://github.com/acme/api/pull/1";
+  const id = terminalJob(env, { prUrl });
+
+  const closeDeps = fakeCloseDeps({ pr: { ok: false, error: "offline" } }).deps;
+  const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates: await mergedCache(env, prUrl), closeDeps });
+
+  assert.equal(result.code, 0, result.err.join("\n"));
+  assert.deepEqual(result.out, [`job #${id} not closed: preflight: pr-unreadable`]);
+  assert.equal(getJob(id, env).status, "done");
+  assert.equal(getJob(id, env).close_status, "failed");
+});
+
+test("close --merged cancels a candidate whose pull request gh reads closed without merge, and reports it not closed", async (t) => {
+  const env = makeCloseHome(t, "close-merged-pr-closed");
+  const prUrl = "https://github.com/acme/api/pull/1";
+  const id = terminalJob(env, { prUrl });
+
+  const closeDeps = fakeCloseDeps({ pr: openPr({ state: "CLOSED" }) }).deps;
+  const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates: await mergedCache(env, prUrl), closeDeps });
+
+  assert.equal(result.code, 0, result.err.join("\n"));
+  assert.deepEqual(result.out, [`job #${id} not closed: preflight: pr-closed`]);
+  assert.equal(getJob(id, env).status, "cancelled");
+  assert.equal(getJob(id, env).close_status, null);
+});
+
+test("close --merged refuses a candidate whose project checkout is gone, by name, and closes nothing", async (t) => {
+  const env = makeHome(t, "close-merged-no-checkout");
+  const checkout = makeProject(t, env, "alpha");
+  delete env.NIGHTSHIFT_NO_PR_CHECK;
+  const prUrl = "https://github.com/acme/api/pull/1";
+  const id = terminalJob(env, { prUrl });
+  rmSync(checkout, { recursive: true, force: true });
+
+  const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates: await mergedCache(env, prUrl) });
+
+  assert.equal(result.code, 0, result.err.join("\n"));
+  assert.equal(result.out.length, 1, result.out.join("\n"));
+  assert.match(result.out[0], new RegExp(`^job #${id} not closed: the checkout of project \`alpha\` is missing`));
+  assert.equal(getJob(id, env).status, "done");
 });

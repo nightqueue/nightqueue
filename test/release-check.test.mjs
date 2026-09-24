@@ -46,7 +46,7 @@ const FULL_CHANGELOG = [
   "",
   "## Unreleased",
   "",
-  "- something that has not shipped",
+  "- something that has not been released",
   "",
   "## 0.2.0 - 2026-10-01",
   "",
@@ -67,8 +67,8 @@ test("the section of a version is the text under its heading, stopping at the ne
 });
 
 test("an `## Unreleased` heading is a section of its own and never leaks into the one below it", () => {
-  assert.equal(changelogSection(FULL_CHANGELOG, "Unreleased"), "- something that has not shipped");
-  assert.equal(changelogSection(FULL_CHANGELOG, "0.2.0").includes("has not shipped"), false);
+  assert.equal(changelogSection(FULL_CHANGELOG, "Unreleased"), "- something that has not been released");
+  assert.equal(changelogSection(FULL_CHANGELOG, "0.2.0").includes("has not been released"), false);
 });
 
 test("a version the changelog does not carry has no section at all", () => {
@@ -80,7 +80,7 @@ test("a version the changelog does not carry has no section at all", () => {
 });
 
 test("the unreleased content is what sits under `## Unreleased`, and nothing when that section is absent or empty", () => {
-  assert.equal(unreleasedContent(FULL_CHANGELOG), "- something that has not shipped");
+  assert.equal(unreleasedContent(FULL_CHANGELOG), "- something that has not been released");
   assert.equal(unreleasedContent(CHANGELOG), null);
   assert.equal(unreleasedContent(["# Changelog", "", "## Unreleased", "", "## 0.1.0 - 2026-09-09", "- x", ""].join("\n")), null);
   assert.equal(unreleasedContent(null), null);

@@ -7,7 +7,7 @@ import { defaultContext, run } from "../../src/cli/index.mjs";
 import { dbPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, mergedChecklist } from "../../test-support/memory.mjs";
 
 // These tests guard the READ PATH of a long-lived follow: every poll reads on a connection opened for that
 // poll alone. They cannot reproduce the `-shm` split that makes a long-held connection actually answer stale
@@ -106,7 +106,7 @@ test("a job closed by another connection during a running follow renders closed 
     ticks += 1;
     if (ticks !== 1) return;
     writeThroughOwnConnection(env, [
-      ["UPDATE jobs SET status = 'closed' WHERE id = ?", delivered],
+      ["UPDATE jobs SET status = 'closed', close = ? WHERE id = ?", JSON.stringify(mergedChecklist()), delivered],
       ["UPDATE jobs SET status = 'cancelled', finished_at = ? WHERE id = ?", "2026-01-01 00:00:00", waiting],
     ]);
   });

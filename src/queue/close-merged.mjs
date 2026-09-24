@@ -1,5 +1,7 @@
-import { closeJobAndWorktree, worktreeEntry } from "./close.mjs";
+import { jobView } from "../memory/jobs.mjs";
+import { worktreeEntry } from "./close.mjs";
 import { prStateKey } from "./pr-state.mjs";
+import { closeInProcess } from "./close-start.mjs";
 
 // At most this many pull requests are asked about in one invocation, whatever the size of the backlog.
 export const CLOSE_MERGED_QUERY_LIMIT = 10;
@@ -63,18 +65,20 @@ function queriedOutcome(job, prStates) {
   return state === "merged" ? { merged: true, job } : { merged: false, id: job.id, reason: undeterminedReason(state) };
 }
 
-// Closes one candidate and releases its worktree, turning a race with another close into a refusal instead of a thrown error.
-async function attemptClose(job, store, env) {
+// Runs the closing pipeline on one candidate in this process, turning a refusal or a stopped step into a refused entry instead of a thrown error.
+async function attemptClose(job, store, env, deps) {
   try {
-    const closed = await closeJobAndWorktree({ store, id: job.id, env });
-    return { ok: true, job: closed.job, worktree: worktreeEntry(closed.job, closed.worktree) };
+    const outcome = await closeInProcess({ store, id: job.id, env, deps });
+    if (outcome.status !== "closed") return { ok: false, id: job.id, reason: `${outcome.step}: ${outcome.reason}` };
+    const closed = jobView(await store.jobs.getJob(job.id));
+    return { ok: true, job: closed, worktree: worktreeEntry(closed, outcome.worktree) };
   } catch (err) {
     return { ok: false, id: job.id, reason: err?.message ?? String(err) };
   }
 }
 
-// Closes every terminal job whose pull request the cache confirms merged, and releases its worktree, querying gh only for the gap and never past the bound; only a confirmed merge closes anything.
-export async function closeMerged({ store, prStates, env, limit = CLOSE_MERGED_QUERY_LIMIT, deadlineMs = CLOSE_MERGED_DEADLINE_MS, onChecking } = {}) {
+// Closes every done job whose pull request the cache confirms merged through the closing pipeline, querying gh only for the gap and never past the bound; only a confirmed merge is closed.
+export async function closeMerged({ store, prStates, env, deps = null, limit = CLOSE_MERGED_QUERY_LIMIT, deadlineMs = CLOSE_MERGED_DEADLINE_MS, onChecking } = {}) {
   const candidates = await store.jobs.listCloseCandidates();
   const { confirmed, toQuery, undetermined } = triageCandidates(candidates, prStates, limit);
   if (toQuery.length) {
@@ -89,7 +93,7 @@ export async function closeMerged({ store, prStates, env, limit = CLOSE_MERGED_Q
   const refused = [];
   const worktrees = [];
   for (const job of toClose) {
-    const result = await attemptClose(job, store, env);
+    const result = await attemptClose(job, store, env, deps);
     if (result.ok) closed.push(result.job);
     else refused.push({ id: result.id, reason: result.reason });
     if (result.worktree) worktrees.push(result.worktree);

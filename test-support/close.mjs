@@ -1,4 +1,4 @@
-export const SHIP_PR_URL = "https://github.com/acme/api/pull/7";
+export const CLOSE_PR_URL = "https://github.com/acme/api/pull/7";
 export const HEAD_SHA = "1111111aaaaaaaaa";
 export const PUSHED_SHA = "2222222bbbbbbbbb";
 export const MERGE_SHA = "abc1234def567890";
@@ -52,8 +52,8 @@ function gitAnswer(script, args) {
   return typeof answer === "function" ? answer(args) : answer;
 }
 
-// In-process gh, git, npm and filesystem doubles for a ship, scripted by a mutable world and logging every call; nothing is spawned.
-export function fakeShipDeps(changes = {}) {
+// In-process gh, git, npm and filesystem doubles for a close, scripted by a mutable world and logging every call; nothing is spawned.
+export function fakeCloseDeps(changes = {}) {
   const world = {
     pr: openPr(),
     reads: [],
@@ -112,7 +112,7 @@ export function fakeShipDeps(changes = {}) {
   return { deps, world, log };
 }
 
-// The git command lines a fake ship ran, optionally only those run in one directory.
+// The git command lines a fake close ran, optionally only those run in one directory.
 export function gitLines(log, cwd) {
   return log.git.filter((call) => cwd === undefined || call.cwd === cwd).map((call) => call.args.join(" "));
 }

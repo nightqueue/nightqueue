@@ -1,7 +1,7 @@
 {
   "name": "@maykonv/nightshift",
   "version": "0.3.0",
-  "description": "Autonomous queue of coding agents with its own memory. Ships the Claude Code plugin and the nightshift configuration CLI.",
+  "description": "Autonomous queue of coding agents with its own memory. Bundles the Claude Code plugin and the nightshift configuration CLI.",
   "license": "BUSL-1.1",
   "private": false,
   "homepage": "https://github.com/maykonVinicius/nightshift#readme",

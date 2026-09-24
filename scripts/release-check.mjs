@@ -40,7 +40,7 @@ function packedTarball(stdout) {
   return entry;
 }
 
-// Checks that the working tree has nothing uncommitted, because a publish ships what is on disk, not what is committed.
+// Checks that the working tree has nothing uncommitted, because a publish uploads what is on disk, not what is committed.
 // A git that does not answer is its own failure, never reported as a clean or as a dirty tree.
 function checkTree() {
   const result = spawnSync("git", ["status", "--porcelain"], { cwd: ROOT, encoding: "utf8" });
@@ -72,7 +72,7 @@ function checkVersions() {
 
 // Checks that npm can still build the tarball without correcting the manifest, and returns its name and its unpacked size.
 // A "was invalid and removed" warning means npm publishes a manifest that differs from the one in the repository -
-// for `bin` that ships a package with no command at all - so any such warning fails the check.
+// for `bin` that publishes a package with no command at all - so any such warning fails the check.
 function checkPack() {
   const result = runNpm(PACK_ARGS, { env: process.env });
   if (!result.ok) throw new Error(`${result.stderr.trim() || `exit ${result.status}`}\nrun \`${npmCommandLine(PACK_ARGS)}\` by hand`);

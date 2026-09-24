@@ -4,7 +4,7 @@ description: >-
   Universal QA for software projects. Use it WHENEVER the user asks to
   "review", "find bugs", "validate", "look for errors", "harden", "test
   scenarios", "find edge cases", "QA", "audit code", "prevent bugs", "validate
-  an API", "validate input", or before shipping code (PR, merge, deploy). Maps
+  an API", "validate input", or before delivering code (PR, merge, deploy). Maps
   the project rules, builds the risk scenario matrix for API data and user
   input, proves every break with an executable PoC and proposes prevention. It
   does NOT fix — it hands the breaks back to whoever implements. Optimized for

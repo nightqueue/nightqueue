@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
 
 // A job written straight into the table with the given status.
 function seedJob(env, status) {
@@ -28,7 +28,7 @@ function tableLine(out, id) {
 test("a closed job is painted 38;5;91 on a terminal, and carries no escape when colour is off", async (t) => {
   const env = makeHome(t, "status-render-closed");
   makeProject(t, env, "alpha");
-  const id = seedJob(env, "closed");
+  const id = seedClosedJob(env);
 
   const withColor = await statusLines(env);
   assert.equal(withColor.code, 0, withColor.out.join("\n"));
@@ -38,19 +38,18 @@ test("a closed job is painted 38;5;91 on a terminal, and carries no escape when 
   assert.equal(/\u001b\[/.test(tableLine(withoutColor.out, id)), false, "a non-terminal output carried colour");
 });
 
-test("a job under a live ship is painted as its status but labelled `shipping` alone, and a shipped one `closed` alone", async (t) => {
-  const env = makeHome(t, "status-render-ship");
+test("a job under a live close is painted as its status and labelled `done · closing`, and a closed one `closed` alone", async (t) => {
+  const env = makeHome(t, "status-render-close");
   makeProject(t, env, "alpha");
-  const shipping = seedJob(env, "done");
-  const shipped = seedJob(env, "closed");
+  const closing = seedJob(env, "done");
+  const closed = seedClosedJob(env);
   const db = openDb(env);
-  db.prepare("UPDATE jobs SET ship_status = 'shipping', ship_worker = 'ship:host:1:aaaa', ship_lease_until = datetime('now', '+10 minutes') WHERE id = ?").run(shipping);
-  db.prepare("UPDATE jobs SET ship_status = 'shipped' WHERE id = ?").run(shipped);
+  db.prepare("UPDATE jobs SET close_status = 'closing', close_worker = 'close:host:1:aaaa', close_lease_until = datetime('now', '+10 minutes') WHERE id = ?").run(closing);
 
   const { code, out } = await statusLines(env);
   assert.equal(code, 0, out.join("\n"));
-  assert.match(tableLine(out, shipping), /\u001b\[32m✓ shipping\s*\u001b\[0m/);
-  assert.match(tableLine(out, shipped), /\u001b\[38;5;91m■ closed\s*\u001b\[0m/);
+  assert.match(tableLine(out, closing), /\u001b\[32m✓ done · closing\s*\u001b\[0m/);
+  assert.match(tableLine(out, closed), /\u001b\[38;5;91m■ closed\s*\u001b\[0m/);
 });
 
 test("a row whose status is outside the job status enum renders marked, with one advisory naming it and the row count", async (t) => {

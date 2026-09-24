@@ -112,10 +112,9 @@ commands:
   queue status [id] [--limit] [--json]      show one job or the table of the queue plus the counts per status
   queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)
   queue run [--job | --watch] [--max]       start the runner detached, one job at a time; --max <n> exits after n jobs, --foreground runs it here, --stop ends a watcher
-  queue cancel <id> [--reason "..."]        cancel a pending, gated or orphaned job
-  queue close <id>... | --merged            close one or more terminal jobs, or every one whose pull request is merged; --decisions accept|reject|keep settles the decisions they proposed (default keep, asked on a terminal)
+  queue cancel <id> [--reason "..."]        cancel a pending, gated, done, failed or orphaned job; a done or failed one also releases its worktree
+  queue close <id> | --merged               merge a done job's pull request and close the job: preflight, conflict, merge, settle; detached unless --foreground; --merged closes every done job whose pull request is merged; --decisions accept|reject|keep settles the decisions they proposed
   queue retry <id> [--note] [--fresh]       send a gated, failed or cancelled job back to the queue; --run starts it detached
-  queue ship <id> [--force]                 merge a done job's pull request and close the job: preflight, conflict, merge, settle; detached unless --foreground
   queue repair <id> [--json]                re-classify a gated or failed job from its own log; corrects a lost PR link
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written

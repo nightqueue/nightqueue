@@ -1,6 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 import {
   finishVerificationReport,
+  isoToSqlite,
   openDb,
   openDbReadOnly,
   resolveProjectName,
@@ -199,6 +200,18 @@ export function updateRunTelemetry({ project, slug, durationS, phases = [] }, en
   const matched = matchPhases(stored, Array.isArray(phases) ? phases : []);
   const written = withFullSync(db, () => withWriteRetry(() => updateTelemetry(db, { runId, durationS: optionalSeconds(durationS), phases: matched })));
   return { ...written, project: projectName };
+}
+
+// The outcome of the latest run recorded for a project and slug at or after an instant, or null when no run was recorded since then.
+export function latestRunOutcome({ project, slug, since } = {}, env = process.env, db = openDb(env)) {
+  const cleanProject = optionalText(project);
+  const cleanSlug = optionalText(slug);
+  const from = isoToSqlite(since);
+  if (!cleanProject || !cleanSlug || !from) throw new UserError("latestRunOutcome needs a project, a slug and a valid `since` instant");
+  const row = db
+    .prepare("SELECT outcome FROM pipeline_runs WHERE project = ? AND slug = ? AND datetime(created_at) >= datetime(?) ORDER BY id DESC LIMIT 1")
+    .get(cleanProject, cleanSlug, from);
+  return row?.outcome ?? null;
 }
 
 // Persists the telemetry of one pipeline run: the run and its phases in a single transaction.

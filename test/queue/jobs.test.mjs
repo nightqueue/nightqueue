@@ -2,19 +2,18 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
 import {
-  acquireShip,
+  acquireClose,
   addJob,
-  adoptShip,
+  adoptClose,
   cancelJob,
-  failShip,
-  listShips,
-  noteShipWorktree,
-  recordShipStep,
-  settleShip,
-  shipRefusal,
+  failClose,
+  listCloses,
+  noteCloseWorktree,
+  recordCloseStep,
+  settleClose,
+  closeRefusal,
   claimJobById,
   claimNextJob,
-  closeJob,
   countAttempt,
   countActiveJobs,
   countActiveJobsByProject,
@@ -34,7 +33,7 @@ import {
   retryJob,
 } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
 
 const WORKER = "host:1000";
 const OTHER_WORKER = "host:2000";
@@ -376,15 +375,88 @@ test("cancel accepts a gated job, keeps its original finished_at and records whe
   assert.deepEqual(JSON.parse(getJob(freeText, env).result), { previousResult: "nothing to deliver", cancelledFrom: "gate" });
 });
 
-test("cancel refuses a job in every terminal state without touching the row", (t) => {
+test("cancel refuses a closed and a cancelled job without touching the row", (t) => {
   const env = makeQueue(t, "jobs-cancel-terminal");
-  for (const status of ["done", "failed", "cancelled"]) {
-    const id = enqueue(env);
-    openDb(env).prepare("UPDATE jobs SET status = ?, finished_at = datetime('now') WHERE id = ?").run(status, id);
+  const cancelled = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'cancelled', finished_at = datetime('now') WHERE id = ?").run(cancelled);
+  const closed = seedClosedJob(env, { prUrl: "https://github.com/acme/api/pull/9" });
+  for (const [id, status] of [[cancelled, "cancelled"], [closed, "closed"]]) {
     const before = getJob(id, env);
     assert.throws(() => cancelJob(id, { reason: "too late" }, env), new RegExp(`already finished with status \`${status}\``));
     assert.deepEqual(getJob(id, env), before, `the refused cancel wrote to a ${status} job`);
   }
+});
+
+test("cancel accepts a done and a failed job, keeps the close checklist as history and says where each came from", (t) => {
+  const env = makeQueue(t, "jobs-cancel-done-failed");
+  const failed = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'failed', finished_at = datetime('now') WHERE id = ?").run(failed);
+  const done = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ?, finished_at = datetime('now') WHERE id = ?").run("https://github.com/acme/api/pull/3", done);
+  acquireClose(done, { worker: "close:test:1:aaaa", leaseS: 660 }, env);
+  failClose(done, { worker: "close:test:1:aaaa", close: { attempts: 1, steps: {}, data: {}, failed: { step: "preflight", reason: "checks-red" } } }, env);
+
+  const fromFailed = cancelJob(failed, { reason: "abandoned" }, env);
+  assert.equal(fromFailed.status, "cancelled");
+  assert.equal(fromFailed.cancelled_from, "failed");
+  const fromDone = cancelJob(done, {}, env);
+  assert.equal(fromDone.cancelled_from, "done");
+  const row = getJob(done, env);
+  assert.equal(row.status, "cancelled");
+  assert.equal(row.close_status, null, "a cancelled job still reads as a failed close");
+  assert.deepEqual(JSON.parse(row.close).failed, { step: "preflight", reason: "checks-red" }, "the close checklist was dropped");
+
+  const pending = enqueue(env);
+  assert.equal(cancelJob(pending, {}, env).cancelled_from, "pending");
+});
+
+test("a close acquired with force marks its checklist `forced`, and the mark stays on the attempts after it", (t) => {
+  const env = makeQueue(t, "jobs-close-forced");
+  const id = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/5", id);
+  acquireClose(id, { worker: "close:test:1:aaaa", leaseS: 660 }, env);
+  assert.equal(JSON.parse(getJob(id, env).close).forced, undefined, "an unforced close was marked forced");
+  failClose(id, { worker: "close:test:1:aaaa", close: JSON.parse(getJob(id, env).close) }, env);
+  acquireClose(id, { worker: "close:test:2:bbbb", leaseS: 660, force: true }, env);
+  assert.equal(JSON.parse(getJob(id, env).close).forced, true);
+  failClose(id, { worker: "close:test:2:bbbb", close: JSON.parse(getJob(id, env).close) }, env);
+  acquireClose(id, { worker: "close:test:3:cccc", leaseS: 660 }, env);
+  const checklist = JSON.parse(getJob(id, env).close);
+  assert.equal(checklist.forced, true, "a later attempt dropped the forced mark");
+  assert.equal(checklist.attempts, 3);
+});
+
+test("cancel refuses a done job under a live close lease, naming the closer, and an interrupted close, pointing at the resume", (t) => {
+  const env = makeQueue(t, "jobs-cancel-closing");
+  const id = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/4", id);
+  acquireClose(id, { worker: "close:test:1:aaaa", leaseS: 660 }, env);
+  const before = getJob(id, env);
+  assert.throws(() => cancelJob(id, {}, env), new RegExp(`job \`${id}\` is being closed by \`close:test:1:aaaa\` until .*; wait for it or follow it with nightshift queue status ${id}`));
+  assert.deepEqual(getJob(id, env), before, "the refused cancel wrote to a job being closed");
+
+  openDb(env).prepare("UPDATE jobs SET close_lease_until = datetime('now', '-5 seconds') WHERE id = ?").run(id);
+  const interrupted = getJob(id, env);
+  assert.throws(
+    () => cancelJob(id, {}, env),
+    new RegExp(`job \`${id}\` has an interrupted close whose merge may already have happened; resume it with nightshift queue close ${id} - `),
+  );
+  assert.deepEqual(getJob(id, env), interrupted, "the refused cancel wrote to a job whose close was interrupted");
+});
+
+test("cancel takes a done job whose close stopped as failed, clearing the close columns so the old closer can never settle it", (t) => {
+  const env = makeQueue(t, "jobs-cancel-close-failed");
+  const id = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/4", id);
+  acquireClose(id, { worker: "close:test:1:aaaa", leaseS: 660 }, env);
+  assert.equal(failClose(id, { worker: "close:test:1:aaaa", close: { steps: {}, data: {} } }, env), true);
+
+  assert.equal(cancelJob(id, {}, env).status, "cancelled");
+  const row = getJob(id, env);
+  assert.equal(row.close_status, null);
+  assert.equal(row.close_worker, null);
+  assert.equal(row.close_lease_until, null);
+  assert.equal(settleClose(id, { worker: "close:test:1:aaaa", close: { steps: {}, data: { merged: true, mergeSha: "abc" } }, noticeLine: "Closed: PR #4" }, env), null, "the old closer settled a cancelled job");
 });
 
 test("retry takes a gated job back to pending, keeping what makes the pipeline resume from where it stopped", (t) => {
@@ -573,56 +645,24 @@ test("the listing is newest first with a clamped limit, and the counts cover eve
   assert.equal("merged" in countsByStatus(env), false, "the retired merged status is still counted");
 });
 
-test("close takes any terminal job to closed, keeps pr_url and finished_at, and refuses pending and running by name without writing", (t) => {
-  const env = makeQueue(t, "jobs-close");
-  const delivered = enqueue(env);
-  openDb(env)
-    .prepare("UPDATE jobs SET status = 'done', pr_url = ?, finished_at = ? WHERE id = ?")
-    .run("https://github.com/acme/api/pull/7", GATED_FINISHED_AT, delivered);
-  const closed = closeJob(delivered, env);
-  assert.equal(closed.status, "closed");
-  assert.equal(closed.pr_url, "https://github.com/acme/api/pull/7");
-  assert.equal(getJob(delivered, env).finished_at, GATED_FINISHED_AT, "the close rewrote finished_at");
-  assert.equal("merged_at" in closed, false, "the view still carries the dropped merged_at column");
-  assert.equal("merge_sha" in closed, false, "the view still carries the dropped merge_sha column");
-
-  for (const status of ["failed", "gate", "cancelled"]) {
-    const id = enqueue(env);
-    openDb(env).prepare("UPDATE jobs SET status = ? WHERE id = ?").run(status, id);
-    assert.equal(closeJob(id, env).status, "closed", `close refused a ${status} job`);
-  }
-
-  const pending = enqueue(env);
-  assert.throws(() => closeJob(pending, env), /job `\d+` is pending; the queue still owes work for it/);
-  assert.equal(getJob(pending, env).status, "pending", "the refused close wrote to a pending job");
-
-  const running = enqueue(env);
-  claimJobById(running, { worker: WORKER, cap: CAP }, env);
-  const before = getJob(running, env);
-  assert.throws(() => closeJob(running, env), /is running with a live lease on worker/);
-  assert.deepEqual(getJob(running, env), before, "the refused close wrote to a running job");
-
-  const beforeClosed = getJob(delivered, env);
-  assert.throws(() => closeJob(delivered, env), /job `\d+` is already closed/);
-  assert.deepEqual(getJob(delivered, env), beforeClosed, "the refused close wrote to a closed job");
-  assert.throws(() => closeJob(9999, env), /unknown job `9999`/);
-  assert.throws(() => closeJob(0, env), /positive integer job id/);
-});
-
-test("listCloseCandidates lists every terminal job with a pull request url, newest first, and never a running or pending one", (t) => {
+test("listCloseCandidates lists only done jobs with a pull request url, newest first", (t) => {
   const env = makeQueue(t, "jobs-close-candidates");
   const done = enqueue(env);
   openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/1", done);
   const failed = enqueue(env);
   openDb(env).prepare("UPDATE jobs SET status = 'failed', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/2", failed);
+  const gated = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'gate', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/3", gated);
   const doneNoPr = enqueue(env);
   openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(doneNoPr);
+  const done2 = enqueue(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/4", done2);
   const pending = enqueue(env);
   const running = enqueue(env);
   claimJobById(running, { worker: WORKER, cap: CAP }, env);
 
-  assert.deepEqual(listCloseCandidates(env).map((row) => row.id), [failed, done]);
-  assert.equal(listCloseCandidates(env).some((row) => [doneNoPr, pending, running].includes(row.id)), false);
+  assert.deepEqual(listCloseCandidates(env).map((row) => row.id), [done2, done]);
+  assert.equal(listCloseCandidates(env).some((row) => [failed, gated, doneNoPr, pending, running].includes(row.id)), false);
 });
 
 test("the blocked-pending count and listing only ever see a pending job with a block code, never a running or done one", (t) => {
@@ -641,137 +681,146 @@ test("the blocked-pending count and listing only ever see a pending job with a b
   assert.deepEqual(listJobs({ blockedOnly: true }, env), []);
 });
 
-const SHIP_WORKER = "ship:host:1:aaaa";
-const OTHER_SHIP_WORKER = "ship:host:2:bbbb";
+const CLOSE_WORKER = "close:host:1:aaaa";
+const OTHER_CLOSE_WORKER = "close:host:2:bbbb";
 const PR_URL = "https://github.com/acme/api/pull/7";
 
-// A job in the given terminal status carrying a pull request, the target a ship starts from.
-function shippableJob(env, { status = "done", prUrl = PR_URL } = {}) {
+// A job in the given status carrying a pull request, the target a close starts from.
+function closableJob(env, { status = "done", prUrl = PR_URL } = {}) {
   const id = enqueue(env);
   openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ? WHERE id = ?").run(status, prUrl, id);
   return id;
 }
 
-// Moves the ship lease of a job relative to SQLite's own clock, which is how a ship that died looks from the outside.
-function moveShipLease(env, id, seconds) {
-  openDb(env).prepare("UPDATE jobs SET ship_lease_until = datetime('now', ? || ' seconds') WHERE id = ?").run(String(seconds), id);
+// Moves the close lease of a job relative to SQLite's own clock, which is how a close that died looks from the outside.
+function moveCloseLease(env, id, seconds) {
+  openDb(env).prepare("UPDATE jobs SET close_lease_until = datetime('now', ? || ' seconds') WHERE id = ?").run(String(seconds), id);
 }
 
-test("acquireShip takes the lease of a done job from NULL and re-arms a failed one, keeping its checklist", (t) => {
-  const env = makeQueue(t, "jobs-ship-acquire");
-  const id = shippableJob(env);
-  const first = acquireShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env);
-  assert.equal(first.ship_status, "shipping");
-  assert.equal(first.ship_worker, SHIP_WORKER);
-  assert.equal(first.status, "done", "a ship never moves the job status before settle");
-  assert.equal(JSON.parse(first.ship).attempts, 1);
-  assert.deepEqual(JSON.parse(first.ship).steps, {});
+test("acquireClose takes the lease of a done job from NULL and re-arms a failed one, keeping its checklist", (t) => {
+  const env = makeQueue(t, "jobs-close-acquire");
+  const id = closableJob(env);
+  const first = acquireClose(id, { worker: CLOSE_WORKER, leaseS: 660 }, env);
+  assert.equal(first.close_status, "closing");
+  assert.equal(first.close_worker, CLOSE_WORKER);
+  assert.equal(first.status, "done", "a close never moves the job status before settle");
+  assert.equal(JSON.parse(first.close).attempts, 1);
+  assert.deepEqual(JSON.parse(first.close).steps, {});
 
-  const checklist = { ...JSON.parse(first.ship), steps: { preflight: { status: "done", note: "ok", at: "x" } }, failed: { step: "conflict", reason: "suite-red" } };
-  assert.equal(failShip(id, { worker: SHIP_WORKER, ship: checklist }, env), true);
+  const checklist = { ...JSON.parse(first.close), steps: { preflight: { status: "done", note: "ok", at: "x" } }, failed: { step: "conflict", reason: "suite-red" } };
+  assert.equal(failClose(id, { worker: CLOSE_WORKER, close: checklist }, env), true);
   const failed = getJob(id, env);
-  assert.equal(failed.ship_status, "failed");
-  assert.equal(failed.ship_worker, null);
-  assert.equal(failed.ship_lease_until, null);
+  assert.equal(failed.close_status, "failed");
+  assert.equal(failed.close_worker, null);
+  assert.equal(failed.close_lease_until, null);
 
-  const second = acquireShip(id, { worker: OTHER_SHIP_WORKER, leaseS: 660 }, env);
-  const rearmed = JSON.parse(second.ship);
+  const second = acquireClose(id, { worker: OTHER_CLOSE_WORKER, leaseS: 660 }, env);
+  const rearmed = JSON.parse(second.close);
   assert.equal(rearmed.attempts, 2);
   assert.equal(rearmed.failed, null);
   assert.equal(rearmed.steps.preflight.status, "done", "the steps of an earlier attempt survive the re-arm");
 });
 
-test("acquireShip refuses a live lease and reclaims a dead one", (t) => {
-  const env = makeQueue(t, "jobs-ship-lease");
-  const id = shippableJob(env);
-  assert.ok(acquireShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env));
-  assert.equal(acquireShip(id, { worker: OTHER_SHIP_WORKER, leaseS: 660 }, env), null, "a live lease must refuse a second ship");
-  assert.equal(getJob(id, env).ship_worker, SHIP_WORKER, "a refusal writes nothing");
-  assert.match(shipRefusal(id, getJob(id, env)), /already being shipped by `ship:host:1:aaaa`/);
+test("acquireClose refuses a live lease and reclaims a dead one", (t) => {
+  const env = makeQueue(t, "jobs-close-lease");
+  const id = closableJob(env);
+  assert.ok(acquireClose(id, { worker: CLOSE_WORKER, leaseS: 660 }, env));
+  assert.equal(acquireClose(id, { worker: OTHER_CLOSE_WORKER, leaseS: 660 }, env), null, "a live lease must refuse a second close");
+  assert.equal(getJob(id, env).close_worker, CLOSE_WORKER, "a refusal writes nothing");
+  assert.match(closeRefusal(id, getJob(id, env)), /is already being closed by `close:host:1:aaaa` until .*; follow it with nightshift queue status \d+/);
 
-  moveShipLease(env, id, -5);
-  const reclaimed = acquireShip(id, { worker: OTHER_SHIP_WORKER, leaseS: 660 }, env);
-  assert.equal(reclaimed.ship_worker, OTHER_SHIP_WORKER);
-  assert.equal(JSON.parse(reclaimed.ship).attempts, 2);
+  moveCloseLease(env, id, -5);
+  const reclaimed = acquireClose(id, { worker: OTHER_CLOSE_WORKER, leaseS: 660 }, env);
+  assert.equal(reclaimed.close_worker, OTHER_CLOSE_WORKER);
+  assert.equal(JSON.parse(reclaimed.close).attempts, 2);
 });
 
-test("acquireShip refuses every status but done unless forced, and forced only from failed or gate with a pull request", (t) => {
-  const env = makeQueue(t, "jobs-ship-status");
-  for (const status of ["pending", "running", "cancelled", "closed", "failed", "gate"]) {
-    const id = shippableJob(env, { status });
-    assert.equal(acquireShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env), null, status);
-    assert.equal(getJob(id, env).ship_status, null, `${status}: a refusal writes nothing`);
+test("acquireClose refuses every status but done, even with force, and a done job without a pull request", (t) => {
+  const env = makeQueue(t, "jobs-close-status");
+  for (const status of ["pending", "running", "cancelled", "failed", "gate"]) {
+    const id = closableJob(env, { status });
+    for (const force of [false, true]) {
+      assert.equal(acquireClose(id, { worker: CLOSE_WORKER, leaseS: 660, force }, env), null, `${status} (force ${force})`);
+      assert.equal(getJob(id, env).close_status, null, `${status}: a refusal writes nothing`);
+    }
   }
-  for (const status of ["failed", "gate"]) {
-    const id = shippableJob(env, { status });
-    assert.equal(acquireShip(id, { worker: SHIP_WORKER, leaseS: 660, force: true }, env).ship_status, "shipping", status);
-  }
-  const noPr = shippableJob(env, { prUrl: null });
-  assert.equal(acquireShip(noPr, { worker: SHIP_WORKER, leaseS: 660, force: true }, env), null);
-  assert.throws(() => acquireShip(noPr, { worker: SHIP_WORKER, leaseS: 5 }, env), /invalid ship lease/);
+  const closed = seedClosedJob(env);
+  const before = getJob(closed, env);
+  assert.equal(acquireClose(closed, { worker: CLOSE_WORKER, leaseS: 660, force: true }, env), null, "closed");
+  assert.deepEqual(getJob(closed, env), before, "closed: a refusal writes nothing");
+  const noPr = closableJob(env, { prUrl: null });
+  assert.equal(acquireClose(noPr, { worker: CLOSE_WORKER, leaseS: 660, force: true }, env), null);
+  assert.throws(() => acquireClose(noPr, { worker: CLOSE_WORKER, leaseS: 5 }, env), /invalid close lease/);
 });
 
-test("shipRefusal phrases every refusal and answers null for a shippable job", (t) => {
-  const env = makeQueue(t, "jobs-ship-refusal");
-  assert.match(shipRefusal(99, null), /unknown job `99`/);
-  const phrase = (status, options) => shipRefusal(1, { status, pr_url: PR_URL, worker: WORKER }, options);
-  assert.match(phrase("closed"), /already closed/);
-  assert.match(shipRefusal(1, { status: "closed", ship_status: "shipped" }), /already shipped/);
-  assert.match(phrase("running"), /running with a live lease/);
-  assert.match(phrase("pending"), /has not produced a pull request yet/);
-  assert.match(phrase("cancelled"), /cancelled/);
-  assert.match(phrase("failed"), /pass --force to ship its pull request anyway \(https:\/\/github.com\/acme\/api\/pull\/7\)/);
-  assert.match(shipRefusal(1, { status: "done", pr_url: null }), /no pull request/);
+test("closeRefusal phrases the refusal of every status by name and answers null for a done job with a pull request", (t) => {
+  const env = makeQueue(t, "jobs-close-refusal");
+  const phrase = (status, extra = {}) => closeRefusal(1, { status, pr_url: PR_URL, worker: WORKER, ...extra }, { force: true });
+  const cases = [
+    [closeRefusal(99, null), /^unknown job `99`$/],
+    [phrase("closed"), /^job `1` is already closed$/],
+    [phrase("running"), /^job `1` is running with a live lease on worker `host:1000`; stop that runner first$/],
+    [phrase("pending"), /^job `1` is pending; it has not produced a pull request yet$/],
+    [phrase("gate"), /^job `1` is waiting at a gate; answer it with nightshift queue retry 1 --note "…", or cancel it$/],
+    [phrase("failed"), /^job `1` failed; retry it or cancel it - only a done job is closed$/],
+    [phrase("cancelled"), /^job `1` is cancelled; retry it before closing$/],
+    [phrase("done", { pr_url: null }), /^nothing to close: the job has no pull request$/],
+    [phrase("done", { close_status: "closing", close_worker: "w", close_lease_until: "2999-01-01 00:00:00" }), /^job `1` is already being closed by `w` until 2999-01-01T00:00:00Z; follow it with nightshift queue status 1$/],
+  ];
+  for (const [answer, expected] of cases) assert.match(answer, expected);
   assert.equal(phrase("done"), null);
-  assert.equal(phrase("gate", { force: true }), null);
-  assert.equal(shipRefusal(shippableJob(env), getJob(1, env)), null);
+  assert.equal(phrase("done", { close_status: "closing", close_worker: "w", close_lease_until: "2000-01-01 00:00:00" }), null, "a dead lease refuses nothing");
+  assert.equal(closeRefusal(closableJob(env), getJob(1, env)), null);
 });
 
-test("adoptShip and recordShipStep hold only for the worker that owns the lease", (t) => {
-  const env = makeQueue(t, "jobs-ship-adopt");
-  const id = shippableJob(env);
-  const row = acquireShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env);
-  assert.equal(adoptShip(id, { worker: OTHER_SHIP_WORKER, leaseS: 660 }, env), false);
-  assert.equal(adoptShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env), true);
-  const checklist = { ...JSON.parse(row.ship), steps: { preflight: { status: "done", note: "green", at: "now" } } };
-  assert.equal(recordShipStep(id, { worker: OTHER_SHIP_WORKER, ship: checklist, leaseS: 660 }, env), false);
-  assert.equal(recordShipStep(id, { worker: SHIP_WORKER, ship: checklist, leaseS: 660 }, env), true);
-  assert.deepEqual(jobView(getJob(id, env)).ship.steps, checklist.steps);
-  assert.equal(failShip(id, { worker: OTHER_SHIP_WORKER, ship: checklist }, env), false);
+test("adoptClose and recordCloseStep hold only for the worker that owns the lease", (t) => {
+  const env = makeQueue(t, "jobs-close-adopt");
+  const id = closableJob(env);
+  const row = acquireClose(id, { worker: CLOSE_WORKER, leaseS: 660 }, env);
+  assert.equal(adoptClose(id, { worker: OTHER_CLOSE_WORKER, leaseS: 660 }, env), false);
+  assert.equal(adoptClose(id, { worker: CLOSE_WORKER, leaseS: 660 }, env), true);
+  const checklist = { ...JSON.parse(row.close), steps: { preflight: { status: "done", note: "green", at: "now" } } };
+  assert.equal(recordCloseStep(id, { worker: OTHER_CLOSE_WORKER, close: checklist, leaseS: 660 }, env), false);
+  assert.equal(recordCloseStep(id, { worker: CLOSE_WORKER, close: checklist, leaseS: 660 }, env), true);
+  assert.deepEqual(jobView(getJob(id, env)).close.steps, checklist.steps);
+  assert.equal(failClose(id, { worker: OTHER_CLOSE_WORKER, close: checklist }, env), false);
 });
 
-test("settleShip closes, marks shipped, clears the lease and appends the shipped line to the notice", (t) => {
-  const env = makeQueue(t, "jobs-ship-settle");
-  const id = shippableJob(env);
+test("settleClose closes a merged job, clears the close columns and appends the settled line to the notice", (t) => {
+  const env = makeQueue(t, "jobs-close-settle");
+  const id = closableJob(env);
   openDb(env).prepare("UPDATE jobs SET notice_md = 'A\n' WHERE id = ?").run(id);
-  const row = acquireShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env);
-  const line = "Shipped: PR #7 merged as abc1234 on 2026-09-21";
-  assert.equal(settleShip(id, { worker: OTHER_SHIP_WORKER, ship: JSON.parse(row.ship), noticeLine: line }, env), null);
-  const settled = settleShip(id, { worker: SHIP_WORKER, ship: JSON.parse(row.ship), noticeLine: line }, env);
+  const row = acquireClose(id, { worker: CLOSE_WORKER, leaseS: 660 }, env);
+  const merged = { ...JSON.parse(row.close), data: { merged: true, mergeSha: "abc1234def" } };
+  const line = "Closed: PR #7 merged as abc1234 on 2026-09-21";
+  assert.equal(settleClose(id, { worker: OTHER_CLOSE_WORKER, close: merged, noticeLine: line }, env), null);
+  const settled = settleClose(id, { worker: CLOSE_WORKER, close: merged, noticeLine: line }, env);
   assert.equal(settled.status, "closed");
-  assert.equal(settled.ship_status, "shipped");
-  assert.equal(settled.ship_worker, null);
-  assert.equal(settled.ship_lease_until, null);
+  assert.equal(settled.close_status, null);
+  assert.equal(settled.close_worker, null);
+  assert.equal(settled.close_lease_until, null);
+  assert.equal(settled.close.data.merged, true);
   assert.equal(getJob(id, env).notice_md, `A\n\n${line}`);
-  assert.equal(noteShipWorktree(id, { worktree: { removed: "/tmp/wt" } }, env), false, "a checklist without a settle step is left alone");
+  assert.equal(noteCloseWorktree(id, { worktree: { removed: "/tmp/wt" } }, env), false, "a checklist without a settle step is left alone");
 });
 
-test("listShips answers the ships in flight, failed or stalled with the liveness of each lease", (t) => {
-  const env = makeQueue(t, "jobs-ship-list");
-  const live = shippableJob(env);
-  const stalled = shippableJob(env);
-  const failed = shippableJob(env);
-  shippableJob(env);
-  for (const id of [live, stalled, failed]) acquireShip(id, { worker: SHIP_WORKER, leaseS: 660 }, env);
-  moveShipLease(env, stalled, -5);
-  failShip(failed, { worker: SHIP_WORKER, ship: { attempts: 1, steps: {}, data: {}, failed: { step: "merge", reason: "merge-without-sha" } } }, env);
-  const rows = listShips(env);
+test("listCloses answers the closes in flight, failed or stalled with the liveness of each lease", (t) => {
+  const env = makeQueue(t, "jobs-close-list");
+  const live = closableJob(env);
+  const stalled = closableJob(env);
+  const failed = closableJob(env);
+  closableJob(env);
+  seedClosedJob(env);
+  for (const id of [live, stalled, failed]) acquireClose(id, { worker: CLOSE_WORKER, leaseS: 660 }, env);
+  moveCloseLease(env, stalled, -5);
+  failClose(failed, { worker: CLOSE_WORKER, close: { attempts: 1, steps: {}, data: {}, failed: { step: "merge", reason: "merge-without-sha" } } }, env);
+  const rows = listCloses(env);
   assert.deepEqual(
-    rows.map((row) => [row.id, row.ship_status, row.ship_lease_live]),
+    rows.map((row) => [row.id, row.close_status, row.close_lease_live]),
     [
       [failed, "failed", 0],
-      [stalled, "shipping", 0],
-      [live, "shipping", 1],
+      [stalled, "closing", 0],
+      [live, "closing", 1],
     ],
   );
 });

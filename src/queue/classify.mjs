@@ -26,15 +26,23 @@ const RUN_IN_BACKGROUND_HINT =
 const AUTO_BACKGROUNDED_HINT = "the Bash tool had moved this foreground command to the background after its own timeout";
 
 export const SILENT_STOP_NOTICE = "Pipeline stopped without a PR and without explanation (exit 0). See the log.";
+export const NOTHING_TO_CLOSE_LINE = "nothing to close: the run produced no pull request";
 
 // Explicit precedence of the outcome: a stop wins over a timeout, a timeout is never a retryable failure, and a clean exit only
-// waits at the gate when the run itself asked for a decision (the `gate` boolean) AND said why (a `reason`) — either missing is a failure.
-function decideStatus({ exitCode, timedOut, idleTimedOut, stopped, prUrl, gate, reason }) {
+// waits at the gate when the run itself asked for a decision (the `gate` boolean) AND said why (a `reason`) — either missing is a failure,
+// unless this attempt's own telemetry recorded that it committed nothing, which leaves nothing to close.
+function decideStatus({ exitCode, timedOut, idleTimedOut, stopped, prUrl, gate, reason, runOutcome }) {
   if (stopped) return "cancelled";
   if (timedOut || idleTimedOut) return "failed";
   if (exitCode !== 0) return "failed";
   if (prUrl && !gate) return "done";
-  return gate && reason ? "gate" : "failed";
+  if (gate && reason) return "gate";
+  return !gate && runOutcome === "no_commit" ? "cancelled" : "failed";
+}
+
+// The notice of a run that committed nothing: its own reason, when it gave one, followed by the nothing-to-close line.
+function nothingToCloseNotice(reason) {
+  return reason ? `${reason}\n\n${NOTHING_TO_CLOSE_LINE}` : NOTHING_TO_CLOSE_LINE;
 }
 
 // Why the run stopped: state.json is the machine record of the outcome and the `## Notice` is the explanation for the operator — the pipeline had been summarizing the second inside the first, so the notice the run wrote wins, the summary the pipeline recorded is the fallback, and the whole final text is the last resort.
@@ -151,19 +159,20 @@ function resolvePrUrl(log, { state, record }) {
 }
 
 // Classifies the run's own ending, exactly as if a runtime kill never happened: the gate, the pull request and the notice rules.
-function classifyEnding({ record, resultText, log, ending, prUrl, planPath }) {
+function classifyEnding({ record, resultText, log, ending, prUrl, planPath, runOutcome }) {
   const gate = record?.status ? record.status === "gate" : hasGateMarker(resultText) || hasGateMarkerInStream(log);
   const reason = gateReason(log, resultText, record?.notice ?? null);
-  const status = decideStatus({ ...ending, prUrl, gate, reason });
+  const status = decideStatus({ ...ending, prUrl, gate, reason, runOutcome });
   if (status === "gate" && isBrokenGateNotice(reason, planPath)) {
     return { status: "failed", noticeMd: brokenGateNotice(planPath) };
   }
+  if (status === "cancelled" && !ending.stopped) return { status, noticeMd: nothingToCloseNotice(reason) };
   const silentStop = status === "failed" && !reason && endedCleanly(ending);
   return { status, noticeMd: silentStop ? SILENT_STOP_NOTICE : reason };
 }
 
-// Classifies one attempt of a job from what the pipeline recorded, its stream, how the process ended and the run's plan.
-export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null, planPath = null } = {}) {
+// Classifies one attempt of a job from what the pipeline recorded, its stream, how the process ended, the run's plan and the outcome its own telemetry recorded.
+export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null, planPath = null, runOutcome = null } = {}) {
   const resultText = extractResultText(log) ?? "";
   const record = pipelineOutcome(state);
   const { prUrl, stray } = resolvePrUrl(log, { state, record });
@@ -172,7 +181,7 @@ export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOu
     return { status: "failed", prUrl, noticeMd: withStrayPr(runtimeKillNotice(kill), stray, prUrl), resultText };
   }
   const ending = { exitCode, timedOut, idleTimedOut, stopped };
-  const base = classifyEnding({ record, resultText, log, ending, prUrl, planPath });
+  const base = classifyEnding({ record, resultText, log, ending, prUrl, planPath, runOutcome });
   const noticeMd = kill ? withAbandonedCommand(base.noticeMd, kill.description) : base.noticeMd;
   return { ...base, prUrl, noticeMd: withStrayPr(noticeMd, stray, prUrl), resultText };
 }

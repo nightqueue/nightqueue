@@ -82,7 +82,7 @@ export function installedPluginsPath(env = process.env) {
   return join(claudePluginsDir(env), "installed_plugins.json");
 }
 
-// Path of the marketplace manifest shipped with the package.
+// Path of the marketplace manifest bundled with the package.
 export function marketplaceManifestPath() {
   return join(packageRoot(), ".claude-plugin", "marketplace.json");
 }

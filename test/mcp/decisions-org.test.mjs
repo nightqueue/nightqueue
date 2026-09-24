@@ -86,7 +86,7 @@ test("decision_list, decision_recall and roadmap_get answer the union for a proj
   );
   payloadOf(await client.callTool({ name: "roadmap_save", arguments: { org: "acme", horizon: "now", title: "raise node" } }));
   payloadOf(
-    await client.callTool({ name: "roadmap_save", arguments: { project: "acme-mobile-app", horizon: "now", title: "ship the cache" } }),
+    await client.callTool({ name: "roadmap_save", arguments: { project: "acme-mobile-app", horizon: "now", title: "deliver the cache" } }),
   );
 
   const listed = payloadOf(await client.callTool({ name: "decision_list", arguments: { project: "acme-mobile-app" } }));
@@ -110,7 +110,7 @@ test("decision_list, decision_recall and roadmap_get answer the union for a proj
     roadmap.horizons[0].items.map((item) => [item.scope, item.owner, item.title]),
     [
       ["org", "acme", "raise node"],
-      ["project", "acme-mobile-app", "ship the cache"],
+      ["project", "acme-mobile-app", "deliver the cache"],
     ],
   );
 

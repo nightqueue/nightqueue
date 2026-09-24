@@ -83,7 +83,7 @@ test(`${RACERS} processes racing to migrate the SAME v9 database converge on the
       .run("alpha", "fix the worker", "https://github.com/acme/api/pull/42");
     seed
       .prepare("INSERT INTO jobs (project, prompt, status, pr_url) VALUES (?, ?, 'merged', ?)")
-      .run("alpha", "ship the api", "https://github.com/acme/api/pull/43");
+      .run("alpha", "deliver the api", "https://github.com/acme/api/pull/43");
     seed.exec(SEED_AT_V9_WITH_DROPPED_COLUMNS);
     assert.equal(seed.prepare("PRAGMA user_version").get().user_version, 9, `pass ${pass}: seed did not reach v9`);
     closeDb(env);

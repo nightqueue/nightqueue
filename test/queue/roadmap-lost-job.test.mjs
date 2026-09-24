@@ -19,7 +19,7 @@ function fakeGit() {
 function makeItemHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  const item = saveRoadmapItem({ project: "alpha", horizon: "now", title: "ship the thing" }, env);
+  const item = saveRoadmapItem({ project: "alpha", horizon: "now", title: "deliver the thing" }, env);
   return { env, item };
 }
 
