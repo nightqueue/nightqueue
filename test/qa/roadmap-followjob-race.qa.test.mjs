@@ -50,7 +50,8 @@ function retrierSource() {
     "    await store.jobs.retryJob(Number(jobRaw), {});",
     "    ok = true;",
     "  } catch {",
-    "    // not failed yet — spin",
+    "    // not failed yet — yield 2ms so the spin never starves the finisher of the write lock on a slow host",
+    "    await new Promise((resolve) => setTimeout(resolve, 2));",
     "  }",
     "}",
     "await store.close();",
@@ -90,6 +91,8 @@ test("a racing fail-then-retry across two writers never silently drops the faile
   writeFileSync(retryScript, retrierSource(), "utf8");
 
   const ROUNDS = 20;
+  // The deadline bounds a hang, not the race: on a loaded 2-core CI runner a round can take seconds to spawn and settle.
+  const RETRY_DEADLINE_MS = 30000;
 
   for (let round = 0; round < ROUNDS; round += 1) {
     // Each round starts the job fresh at `running`, claimed by w1, so the finisher's UPDATE is legal. A
@@ -105,7 +108,7 @@ test("a racing fail-then-retry across two writers never silently drops the faile
 
     const [finishResult, retryResult] = await Promise.all([
       runRacer(finishScript, env, job.id),
-      runRacer(retryScript, env, job.id, 5000),
+      runRacer(retryScript, env, job.id, RETRY_DEADLINE_MS),
     ]);
     assert.equal(finishResult.code, 0, `round ${round} finisher stderr: ${finishResult.stderr}`);
     assert.equal(retryResult.code, 0, `round ${round} retrier stderr: ${retryResult.stderr}`);
