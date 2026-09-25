@@ -42,7 +42,18 @@ export function probeOperatorLaunch({ bin, ctx }) {
   }
 }
 
-// The argv that makes the operator the main thread: the agent (or its body as a fallback), the plugin, the nightqueue MCP server and the jobs' own hooks.
+// The tools the operator session may call without asking: the nightqueue MCP server is its own product, every prompt would be noise.
+export const OPERATOR_ALLOWED_TOOLS = ["mcp__nightqueue__*"];
+
+// The prompt that opens a fresh operator session: the agent answers with its opening message (its contract says what it holds).
+export const OPERATOR_OPENING_PROMPT = "The session just opened. Give your opening message.";
+
+// Settings of the operator session: the jobs' hooks and CLAUDE.md exclusions, plus the nightqueue tools pre-approved.
+export function operatorSettings(env) {
+  return { ...jobSettings(env), permissions: { allow: [...OPERATOR_ALLOWED_TOOLS] } };
+}
+
+// The argv that makes the operator the main thread: the agent (or its body as a fallback), the plugin, the nightqueue MCP server, the jobs' own hooks, and — on a fresh session — the opening prompt.
 export function operatorArgs({ env, mode, resumeSession = null }) {
   const agent = mode === OPERATOR_MODE_AGENT ? ["--agent", OPERATOR_AGENT] : ["--append-system-prompt", operatorAgentBody()];
   return [
@@ -54,8 +65,8 @@ export function operatorArgs({ env, mode, resumeSession = null }) {
     "--setting-sources",
     "project,local",
     "--settings",
-    JSON.stringify(jobSettings(env)),
-    ...(resumeSession === null ? [] : ["--resume", resumeSession]),
+    JSON.stringify(operatorSettings(env)),
+    ...(resumeSession === null ? [OPERATOR_OPENING_PROMPT] : ["--resume", resumeSession]),
   ];
 }
 

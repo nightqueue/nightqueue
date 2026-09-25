@@ -567,6 +567,13 @@ first. The cwd is the registered checkout, or with `--resume` the current direct
 lies inside that checkout. An unregistered directory is refused with one line naming
 `nightqueue setup`. It never holds the config lock.
 
+A fresh session opens with the operator's greeting: who it is (the nightqueue operator of
+the project), what it does, what it never does, and where to start - in the language the
+repository suggests. A resumed session is not greeted again. The `nightqueue` MCP tools are
+pre-approved for the session (`permissions.allow: ["mcp__nightqueue__*"]` in the settings it
+is started with), so the operator never asks before reading the queue, the roadmap or the
+memory; every other tool keeps Claude Code's own prompts.
+
 ## Libs
 
 ```sh
