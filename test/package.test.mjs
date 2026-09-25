@@ -40,7 +40,7 @@ test("`nightqueue` is the only command name npm installs and the embedding libra
 });
 
 test("the manifest carries the metadata a published package needs, and the engine and the dependencies it always had", () => {
-  assert.equal(MANIFEST.homepage, "https://github.com/nightqueue/nightqueue#readme");
+  assert.equal(MANIFEST.homepage, "https://nightqueue.github.io");
   assert.deepEqual(MANIFEST.repository, { type: "git", url: "git+https://github.com/nightqueue/nightqueue.git" });
   assert.deepEqual(MANIFEST.bugs, { url: "https://github.com/nightqueue/nightqueue/issues" });
   assert.deepEqual(MANIFEST.publishConfig, { access: "public" });
