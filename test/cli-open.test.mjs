@@ -7,8 +7,7 @@ import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
 import { addProject } from "../src/config/projects.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
-import { OPERATOR_AGENT } from "../src/host/operator.mjs";
-import { jobSettings } from "../src/host/settings.mjs";
+import { OPERATOR_AGENT, OPERATOR_OPENING_PROMPT, operatorSettings } from "../src/host/operator.mjs";
 import { pluginDir } from "../src/queue/spawn.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
 import { makeDir, makeHome } from "../test-support/memory.mjs";
@@ -66,7 +65,9 @@ test("`nightqueue open` in the checkout starts claude with the operator as the m
   const [{ argv, cwd, mode, pluginDirEnv, jobId }] = calls;
   assert.equal(argValue(argv, "--agent"), "nightqueue:nightqueue-operator");
   assert.equal(argValue(argv, "--setting-sources"), "project,local");
-  assert.deepEqual(JSON.parse(argValue(argv, "--settings")), jobSettings(home.env));
+  assert.deepEqual(JSON.parse(argValue(argv, "--settings")), operatorSettings(home.env));
+  assert.deepEqual(JSON.parse(argValue(argv, "--settings")).permissions, { allow: ["mcp__nightqueue__*"] }, "the nightqueue tools are not pre-approved");
+  assert.equal(argv.at(-1), OPERATOR_OPENING_PROMPT, "a fresh session does not open with the greeting prompt");
   assert.equal(argValue(argv, "--plugin-dir"), pluginDir());
   assert.ok(JSON.parse(argValue(argv, "--mcp-config")).mcpServers.nightqueue, "the nightqueue MCP server is not configured");
   for (const absent of ["-p", "--print", "--strict-mcp-config", "--resume", "--append-system-prompt", "--permission-mode"]) {
@@ -112,6 +113,7 @@ test("`--resume <session>` is passed through, and an unsafe session id is refuse
   const resumed = await runOpen(home.env, ["--resume", "abc-12345"], home.checkout);
   assert.equal(resumed.code, 0, resumed.err.join("\n"));
   assert.equal(argValue(launches(home.callsPath)[0].argv, "--resume"), "abc-12345");
+  assert.equal(launches(home.callsPath)[0].argv.includes(OPERATOR_OPENING_PROMPT), false, "a resumed session must not be greeted again");
 
   for (const unsafe of ["a;b", "--help", "../x", "abc"]) {
     rmSync(home.callsPath, { force: true });

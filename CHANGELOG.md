@@ -4,6 +4,18 @@ Every notable change of this project is recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- `nightqueue open` greets: a fresh operator session opens with the operator introducing
+  itself as the nightqueue operator of the project - what it does, what it never does, where
+  to start - in the language the repository suggests; a resumed session is not greeted again.
+- The operator session pre-approves the `nightqueue` MCP tools (`permissions.allow:
+  ["mcp__nightqueue__*"]`), so reading the queue, the roadmap or the memory never asks first.
+  Every other tool keeps Claude Code's own prompts.
+- The package homepage is the website, https://nightqueue.github.io.
+
 ## 0.4.0 - 2026-09-24
 
 ### Breaking
