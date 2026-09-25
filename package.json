@@ -1,6 +1,6 @@
 {
-  "name": "nightqueue",
-  "version": "0.3.0",
+  "name": "@nightqueue/nq",
+  "version": "0.4.0",
   "description": "Autonomous queue of coding agents with its own memory. Bundles the Claude Code plugin and the nightqueue configuration CLI.",
   "license": "BUSL-1.1",
   "author": {
@@ -51,6 +51,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "zod": "^4.5.4"
+    "zod": "^4.6.5"
   }
 }

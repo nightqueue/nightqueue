@@ -1,5 +1,5 @@
 {
   "name": "nightqueue",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Autonomous coding pipeline: triage, exploration, architecture, implementation, adversarial QA and functional verification, run by a team of subagents."
 }

@@ -12,6 +12,7 @@ import { closeDb, openDb } from "../src/memory/db.mjs";
 import { acquireClose, addJob, claimJobById, failClose } from "../src/memory/jobs.mjs";
 import { saveDecision } from "../src/memory/decisions.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
+import { shimContent } from "../src/host/runtime.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
 import { addProject } from "../src/config/projects.mjs";
@@ -169,6 +170,15 @@ test("a shortcut shadowed by another executable earlier on PATH warns and names 
 
   const ahead = { ...host.env, PATH: [join(host.env.NIGHTQUEUE_HOME, "bin"), foreign, host.env.PATH].join(delimiter) };
   assert.equal(statusOf((await diagnose(ahead)).report, "shim nq"), "ok", "the shim directory first on PATH wins");
+
+  const ours = join(host.env.NIGHTQUEUE_HOME, "other-home-bin");
+  mkdirSync(ours, { recursive: true });
+  writeFileSync(join(ours, "nq"), shimContent({ ...host.env, NIGHTQUEUE_HOME: join(host.env.NIGHTQUEUE_HOME, "other-home") }), { mode: 0o755 });
+  const sibling = { ...host.env, PATH: [ours, join(host.env.NIGHTQUEUE_HOME, "bin"), host.env.PATH].join(delimiter) };
+  assert.equal(statusOf((await diagnose(sibling)).report, "shim nq"), "ok", "a shim of another nightqueue home is ours, never another tool");
+
+  writeFileSync(join(ours, "nq"), '#!/bin/sh\nexec node "/Users/someone/.nightqueue/runtime/current/node_modules/nightqueue/bin/nightqueue.mjs" "$@"\n', { mode: 0o755 });
+  assert.equal(statusOf((await diagnose(sibling)).report, "shim nq"), "ok", "a shim written under the previous package name is ours too");
 });
 
 test("a shim left over from the previous command name warns, with a hint that depends on who wrote it", async (t) => {

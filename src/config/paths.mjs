@@ -62,7 +62,7 @@ function declaredPackageName() {
     name = JSON.parse(readFileSync(path, "utf8"))?.name;
   } catch (err) {
     throw new Error(
-      `cannot read ${path}: ${err?.message ?? String(err)}; this installation of nightqueue is incomplete, reinstall it with \`npm i -g nightqueue\``,
+      `cannot read ${path}: ${err?.message ?? String(err)}; this installation of nightqueue is incomplete, reinstall it with \`npm i -g @nightqueue/nq\``,
     );
   }
   if (typeof name !== "string" || !name.trim()) throw new Error(`${path} declares no name; this installation of nightqueue is incomplete, reinstall it`);

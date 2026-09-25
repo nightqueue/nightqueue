@@ -4,15 +4,16 @@ Every notable change of this project is recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.4.0 - 2026-09-24
 
 ### Breaking
 
-- **nightshift is now nightqueue.** The package is `nightqueue` on npm (unscoped; `@maykonv/nightshift`
-  is deprecated and will not be updated), the command is `nightqueue`, the Claude Code plugin is
+- **nightshift is now nightqueue.** The package is `@nightqueue/nq` on npm (`@maykonv/nightshift`
+  is deprecated and will not be updated; the unscoped name is refused by the registry as too close
+  to an unrelated `night-queue`), the command is `nightqueue`, the Claude Code plugin is
   `nightqueue` (`/nightqueue:queue`, `/nightqueue:resolve`), the MCP server is `nightqueue`, the home is
   `~/.nightqueue` and every environment variable is `NIGHTQUEUE_*`. There is no alias for the old
-  names: move the home yourself (`mv ~/.nightshift ~/.nightqueue`), run `npx nightqueue init` and
+  names: move the home yourself (`mv ~/.nightshift ~/.nightqueue`), run `npx @nightqueue/nq init` and
   remove the old plugin from Claude Code. The repository moved to `nightqueue/nightqueue`.
 - The shortcut shims are gone with the name: `nshift` and `nsft` are replaced by one, `nq`.
   Because `nq` is also a Unix job queue (`brew install nq`), `nightqueue doctor` warns when another
@@ -20,6 +21,9 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `nightqueue doctor` no longer reports the `nq` shortcut as shadowed by a shim of another
+  nightqueue home (a file of our own shape is never another tool); only a foreign `nq`
+  earlier on PATH warns.
 - The test suite no longer fails on a slow CI runner because one large test file crossed the
   60-second `--test-timeout`, which Node applies to a whole file as well as to each test:
   the limit is 4 minutes, and every CI job carries a 30-minute `timeout-minutes` so a hang

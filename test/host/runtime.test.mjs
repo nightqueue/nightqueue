@@ -59,9 +59,9 @@ test("a runtime whose package.json is broken reads as absent instead of throwing
 });
 
 test("the registry specifier names the package and the version asked for, defaulting to the newest one", () => {
-  assert.equal(registrySpec("1.2.3"), "nightqueue@1.2.3");
-  assert.equal(registrySpec(), "nightqueue@latest");
-  assert.equal(registrySpec(""), "nightqueue@latest");
+  assert.equal(registrySpec("1.2.3"), "@nightqueue/nq@1.2.3");
+  assert.equal(registrySpec(), "@nightqueue/nq@latest");
+  assert.equal(registrySpec(""), "@nightqueue/nq@latest");
 });
 
 test("the shim is executable, points at the runtime and survives a space in the path", (t) => {
