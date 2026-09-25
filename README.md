@@ -11,6 +11,7 @@ Queue the work during the day. Start the batch when you step away. Come back to
 pull requests — and to an agent that remembers what it learned last night.
 
 <p>
+  <a href="https://nightqueue.github.io">Website</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="docs/install.md">Install</a> ·
   <a href="docs/queue.md">Queue</a> ·
