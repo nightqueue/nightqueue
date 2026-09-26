@@ -222,6 +222,13 @@ export function readRunState({ project, slug, env = process.env } = {}) {
   }
 }
 
+// Reads the state.json of a job's run, or null when its terminal witness was stamped by another job and so never speaks for this one.
+export function ownRunState({ project, slug, jobId, env = process.env } = {}) {
+  const state = readRunState({ project, slug, env });
+  const stamp = isStateObject(state) && isStateObject(state.terminal) ? state.terminal.jobId : undefined;
+  return Number.isInteger(stamp) && stamp !== Number(jobId) ? null : state;
+}
+
 // Tells whether a parsed state.json is an object the witness can be merged into.
 export function isStateObject(state) {
   return Boolean(state) && typeof state === "object" && !Array.isArray(state);

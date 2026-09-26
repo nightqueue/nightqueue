@@ -419,6 +419,7 @@ export function sweepOrphans(env = process.env, { liveWorkerImpl = neverLive } =
 
 // Records a fact discovered while the job runs (slug, first session or branch, each written only once) or the session and
 // attempt of the run's latest attempt (`lastSessionId`/`lastSessionAttempt`), overwritten every time a new one opens.
+// A slug another row of the project already holds writes nothing at all: two jobs never share one run directory.
 export function persistRunFacts(id, { worker, slug, sessionId, branch, lastSessionId, lastSessionAttempt } = {}, env = process.env) {
   const statement = openDb(env).prepare(
     `UPDATE jobs
@@ -427,20 +428,53 @@ export function persistRunFacts(id, { worker, slug, sessionId, branch, lastSessi
             branch = COALESCE(?, branch),
             last_session_id = COALESCE(?, last_session_id),
             last_session_attempt = COALESCE(?, last_session_attempt)
-      WHERE id = ? AND worker = ?`,
+      WHERE id = ? AND worker = ?
+        AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS other WHERE other.project = jobs.project AND other.slug = ? AND other.id <> jobs.id))`,
   );
+  const runSlug = optionalText(slug);
   const changed = withWriteRetry(() =>
     statement.run(
-      optionalText(slug),
+      runSlug,
       optionalText(sessionId),
       optionalText(branch),
       optionalText(lastSessionId),
       optionalNumber(lastSessionAttempt),
       requireId(id),
       requireText("worker", worker),
+      runSlug,
+      runSlug,
     ),
   );
   return changed.changes === 1;
+}
+
+// The id of another job of the project already bound to this slug, or null when none is, whatever its status.
+function slugHolder(db, { project, slug, id }) {
+  const row = db.prepare("SELECT id FROM jobs WHERE project = ? AND slug = ? AND id <> ? LIMIT 1").get(project, slug, id);
+  return row ? Number(row.id) : null;
+}
+
+// Binds the running job to the first candidate slug no other job of its project holds, checked and written in one transaction.
+export function bindRunSlug(id, { worker, candidates } = {}, env = process.env) {
+  const jobId = requireId(id);
+  const owner = requireText("worker", worker);
+  const slugs = (Array.isArray(candidates) ? candidates : []).map(optionalRunSlug).filter(Boolean);
+  if (slugs.length === 0) throw new UserError("`candidates` must carry at least one safe run slug");
+  const db = openDb(env);
+  return inTransaction(db, () => {
+    const row = db.prepare("SELECT project, worker FROM jobs WHERE id = ?").get(jobId);
+    if (!row || row.worker !== owner) return { status: "lost" };
+    let heldBy = null;
+    for (const slug of slugs) {
+      const holder = slugHolder(db, { project: row.project, slug, id: jobId });
+      if (holder === null) {
+        db.prepare("UPDATE jobs SET slug = ? WHERE id = ? AND worker = ?").run(slug, jobId, owner);
+        return { status: "bound", slug };
+      }
+      heldBy ??= holder;
+    }
+    return { status: "taken", heldBy };
+  });
 }
 
 // Points the pipeline run of this project and slug at the job that produced it.

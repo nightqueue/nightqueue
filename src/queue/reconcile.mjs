@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { jobLogPath, logsDir } from "../config/paths.mjs";
 import { openStore } from "../store/open.mjs";
-import { readRunState } from "./resume.mjs";
+import { ownRunState } from "./resume.mjs";
 
 export const REPAIR_FAILED_PREFIX = "could not repair a job from state.json";
 
@@ -10,7 +10,7 @@ const WITNESS_STATUSES = new Set(["done", "gate", "failed", "cancelled"]);
 
 // The terminal section a runner wrote next to the run, or null when there is none worth trusting.
 function readWitness(row, env) {
-  const terminal = readRunState({ project: row.project, slug: row.slug, env })?.terminal;
+  const terminal = ownRunState({ project: row.project, slug: row.slug, jobId: row.id, env })?.terminal;
   if (!terminal || typeof terminal !== "object" || Array.isArray(terminal)) return null;
   return WITNESS_STATUSES.has(terminal.status) ? terminal : null;
 }
