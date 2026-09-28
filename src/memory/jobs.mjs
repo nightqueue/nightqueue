@@ -241,7 +241,7 @@ function insertRunJob(db, { values, project }, env) {
   const slug = values[6];
   return inTransaction(db, () => {
     const bound = openJobForRun(db, { projectId: project.id, slug });
-    if (bound) throw new UserError(`job #${bound.id} already runs from ${runDir(project.name, slug, env)}`);
+    if (bound) throw new UserError(`job #${bound.id} already runs from ${runDir(project.id, slug, env)}`);
     return runInsert(db.prepare(INSERT_JOB), values);
   });
 }

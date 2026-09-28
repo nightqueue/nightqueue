@@ -49,7 +49,7 @@ function jobWithWorktree(home, { status, slug, prUrl = null }) {
   openDb(home.env)
     .prepare(`UPDATE jobs SET status = ?, slug = ?, pr_url = ?, worker = 'host:1', lease_until = ${lease} WHERE id = ?`)
     .run(status, slug, prUrl, id);
-  recordRunFields({ project: "alpha", slug, fields: { worktree: worktree.path }, env: home.env });
+  recordRunFields({ projectId: ensureProject(home.env, "alpha"), slug, fields: { worktree: worktree.path }, env: home.env });
   return { id, path: worktree.path };
 }
 

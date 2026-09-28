@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { decideResume, resumeHandoff } from "../../src/queue/resume.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
+import { FIXED_PROJECT_ID } from "../../test-support/memory.mjs";
 
 // A state.json an operator session recorded: no branch nor worktree, and `origin: operator`.
 // Mirrors test/queue/resume.test.mjs's own `operatorState` helper so the fixture shape matches
@@ -50,7 +51,7 @@ test("a double-trap operator state.json resumes at triage without an unearned ar
   );
 
   // The handoff prompt actually shown to the resuming agent must not carry the unearned line.
-  const job = { id: 7, project: "alpha", slug: "fix-the-worker", prompt: "p" };
+  const job = { id: 7, project: "alpha", project_id: FIXED_PROJECT_ID, slug: "fix-the-worker", prompt: "p" };
   const handoff = resumeHandoff({ job, resume: decision, state: recorded, env: { NIGHTQUEUE_HOME: "/tmp/ns" } });
   const prompt = buildPrompt({ job, handoff });
   assert.ok(prompt.includes("Re-run: triage"), prompt);

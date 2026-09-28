@@ -37,7 +37,7 @@ function boundRun(t, env) {
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
   const repo = initGitRepo(makeDir(t, "worktree"));
-  recordRunFields({ project: "alpha", slug: SLUG, fields: { worktree: repo }, env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { worktree: repo }, env });
   return { id, repo };
 }
 
@@ -63,7 +63,7 @@ function writeIn(repo, path, body = "content\n") {
 
 // Writes the implementation artifact of the run, which is the only list `run commit` stages from.
 function writeImplementation(env, files) {
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "04-implementation.md"), `# Implementation\n\n## Modified files\n${files.join("\n")}\n`);
 }

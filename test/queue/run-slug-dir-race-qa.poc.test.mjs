@@ -37,7 +37,7 @@ test("Group B: a run directory already on disk before the job's exclusive mkdir 
   // directory that already exists when the job's mkdir runs. Every `bindRunSlug` call is recorded with whether its
   // directory was there and empty, which is what a directory the job created itself looks like at bind time.
   const racedSlug = provisionalSlug(getJob(jobId, env));
-  const racedDir = runDir("alpha", racedSlug, env);
+  const racedDir = runDir(ensureProject(env, "alpha"), racedSlug, env);
   mkdirSync(racedDir, { recursive: true });
   const poisonPath = join(racedDir, "poison-from-a-concurrent-writer.txt");
   const poison = "written by a party outside the runtime, before the job's mkdir ran\n";
@@ -46,7 +46,7 @@ test("Group B: a run directory already on disk before the job's exclusive mkdir 
   const realBindRunSlug = store.jobs.bindRunSlug;
   const binds = [];
   store.jobs.bindRunSlug = async (id, spec) => {
-    const dir = runDir("alpha", spec.candidates[0], env);
+    const dir = runDir(ensureProject(env, "alpha"), spec.candidates[0], env);
     binds.push({ slug: spec.candidates[0], freshlyCreated: existsSync(dir) && readdirSync(dir).length === 0 });
     return realBindRunSlug(id, spec);
   };
@@ -57,10 +57,10 @@ test("Group B: a run directory already on disk before the job's exclusive mkdir 
   assert.notEqual(row.slug, racedSlug, "the job bound the slug whose directory existed before its mkdir");
   assert.equal(binds.some((bind) => bind.slug === racedSlug), false, "the job tried to bind the slug whose directory was already on disk");
   assert.deepEqual(binds[0], { slug: row.slug, freshlyCreated: true }, "the job's run dir was not a directory it had just created itself");
-  assert.notEqual(runDir("alpha", row.slug, env), racedDir, "the job's run dir is the planted directory");
+  assert.notEqual(runDir(ensureProject(env, "alpha"), row.slug, env), racedDir, "the job's run dir is the planted directory");
   assert.equal(readFileSync(poisonPath, "utf8"), poison, "the foreign file was modified");
   assert.deepEqual(readdirSync(racedDir), ["poison-from-a-concurrent-writer.txt"], "the job wrote into the planted directory");
-  assert.equal(existsSync(join(runDir("alpha", row.slug, env), "poison-from-a-concurrent-writer.txt")), false, "the foreign file appears in the job's own run dir");
+  assert.equal(existsSync(join(runDir(ensureProject(env, "alpha"), row.slug, env), "poison-from-a-concurrent-writer.txt")), false, "the foreign file appears in the job's own run dir");
   assert.match(
     readFileSync(jobLogPath(jobId, env), "utf8"),
     new RegExp(`the run directory \`${racedSlug}\` already exists on disk and was not created by this run: the job does not take it`),

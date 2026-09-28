@@ -1190,8 +1190,8 @@ test("a server pinned to a job refuses queue_retry aimed at any other job, and l
   openDb(env)
     .prepare("UPDATE jobs SET status = 'gate', slug = ?, finished_at = ?, notice_md = ? WHERE id = ?")
     .run("fix-the-worker", GATED_FINISHED_AT, "Rename the column or keep both?", victim);
-  mkdirSync(join(homeDir(env), "runs", "alpha", "fix-the-worker"), { recursive: true });
-  writeFileSync(join(homeDir(env), "runs", "alpha", "fix-the-worker", "01-triage.md"), "triage\n");
+  mkdirSync(join(homeDir(env), "runs", ensureProject(env, "alpha"), "fix-the-worker"), { recursive: true });
+  writeFileSync(join(homeDir(env), "runs", ensureProject(env, "alpha"), "fix-the-worker", "01-triage.md"), "triage\n");
   const before = getJob(victim, env);
 
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(attacker) });
@@ -1205,7 +1205,7 @@ test("a server pinned to a job refuses queue_retry aimed at any other job, and l
   assert.match(textOf(refused), /an unattended run may only retry itself/);
   assert.deepEqual(getJob(victim, env), before, "the refused tool call still wrote to the row of the other job");
   assert.equal(
-    existsSync(join(homeDir(env), "runs", "alpha", "fix-the-worker", "01-triage.md")),
+    existsSync(join(homeDir(env), "runs", ensureProject(env, "alpha"), "fix-the-worker", "01-triage.md")),
     true,
     "the refused tool call still deleted the run directory of the other job",
   );

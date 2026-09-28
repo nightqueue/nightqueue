@@ -243,5 +243,5 @@ test("`nightqueue run` lists its subcommands and refuses an unknown one", (t) =>
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /subcommands:\n(?:.*\n)*? {2}nightqueue run index-save <artifact>/);
   assert.equal(unknown.status, 1);
-  assert.match(unknown.stderr, /unknown run subcommand `secrets-swep`; use: check, commit, log, pr, index-save/);
+  assert.match(unknown.stderr, /unknown run subcommand `secrets-swep`; use: check, commit, dir, log, pr, index-save/);
 });

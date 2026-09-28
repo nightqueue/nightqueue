@@ -190,7 +190,7 @@ export async function releaseJobWorktree({ job, env = process.env, killImpl = ki
   let path = null;
   try {
     if (typeof job?.project !== "string" || !job.project || typeof job?.slug !== "string" || !job.slug) return null;
-    const state = readRunState({ project: job.project, slug: job.slug, env });
+    const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
     path = typeof state?.worktree === "string" && state.worktree.trim() ? state.worktree.trim() : null;
     if (!path) return null;
     const checkout = checkoutOfJob(job, env);

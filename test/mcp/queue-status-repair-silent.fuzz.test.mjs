@@ -53,7 +53,7 @@ function expireLease(env, id) {
 // Writes the witness a runner leaves next to the run once it has finished the job.
 function witness(env, { slug = SLUG, status = "done", prUrl = PR_URL } = {}) {
   return writeRunTerminal({
-    project: "alpha",
+    projectId: ensureProject(env, "alpha"),
     slug,
     terminal: { status, prUrl, finishedAt: FINISHED_AT, writtenBy: WRITTEN_BY, pid: 4242 },
     env,

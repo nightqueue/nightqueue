@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { homeDir, runDir } from "../config/paths.mjs";
-import { NAME_RE } from "../config/schema.mjs";
+import { isId } from "../config/ids.mjs";
+import { runDir, runsDir } from "../config/paths.mjs";
 import { writeFileAtomic } from "../config/store.mjs";
 
 // Canonical phase order written by the plugin into state.json; "next phase" derives from the highest one completed.
@@ -193,11 +193,11 @@ function fixedField(value) {
 // Everything the agent needs to resume a run - where it lives, what it kept and which phase comes next - or null when the decision refuses it.
 export function resumeHandoff({ job, resume, state, env = process.env } = {}) {
   const slug = job?.slug;
-  if (resume?.resume !== true || !isSafeSegment(slug) || !NAME_RE.test(String(job?.project ?? ""))) return null;
+  if (resume?.resume !== true || !isRunPath(job?.project_id, slug)) return null;
   const parsed = isStateObject(state) ? state : {};
   return {
     slug,
-    runDir: runDir(job.project, slug, env),
+    runDir: runDir(job.project_id, slug, env),
     branch: fixedField(parsed.branch),
     worktree: fixedField(parsed.worktree),
     lastPhase: fixedField(resume.lastPhase),
@@ -207,24 +207,24 @@ export function resumeHandoff({ job, resume, state, env = process.env } = {}) {
   };
 }
 
-// Tells whether a run can be addressed on disk at all: a project that is a name and a slug that is one safe segment.
-export function isRunPath(project, slug) {
-  return NAME_RE.test(String(project ?? "")) && isSafeSegment(slug);
+// Tells whether a run can be addressed on disk at all: a project that is an id and a slug that is one safe segment.
+export function isRunPath(projectId, slug) {
+  return isId(projectId) && isSafeSegment(slug);
 }
 
 // Reads the state.json of a run; an unsafe segment, a missing file or broken JSON all return null.
-export function readRunState({ project, slug, env = process.env } = {}) {
-  if (!isRunPath(project, slug)) return null;
+export function readRunState({ projectId, slug, env = process.env } = {}) {
+  if (!isRunPath(projectId, slug)) return null;
   try {
-    return JSON.parse(readFileSync(join(runDir(project, slug, env), "state.json"), "utf8"));
+    return JSON.parse(readFileSync(join(runDir(projectId, slug, env), "state.json"), "utf8"));
   } catch {
     return null;
   }
 }
 
 // Reads the state.json of a job's run, or null when its terminal witness was stamped by another job and so never speaks for this one.
-export function ownRunState({ project, slug, jobId, env = process.env } = {}) {
-  const state = readRunState({ project, slug, env });
+export function ownRunState({ projectId, slug, jobId, env = process.env } = {}) {
+  const state = readRunState({ projectId, slug, env });
   const stamp = isStateObject(state) && isStateObject(state.terminal) ? state.terminal.jobId : undefined;
   return Number.isInteger(stamp) && stamp !== Number(jobId) ? null : state;
 }
@@ -235,13 +235,13 @@ export function isStateObject(state) {
 }
 
 // Writes the state.json of a run atomically, creating its directory; an unsafe project or slug writes nothing.
-export function saveRunState({ project, slug, env, state }) {
-  if (!isRunPath(project, slug)) {
+export function saveRunState({ projectId, slug, env, state }) {
+  if (!isRunPath(projectId, slug)) {
     return { status: "kept", path: null, reason: "unsafe project or slug" };
   }
-  const path = join(runDir(project, slug, env), "state.json");
+  const path = join(runDir(projectId, slug, env), "state.json");
   try {
-    mkdirSync(runDir(project, slug, env), { recursive: true });
+    mkdirSync(runDir(projectId, slug, env), { recursive: true });
     writeFileAtomic(path, `${JSON.stringify(state, null, 2)}\n`);
     return { status: "written", path, reason: null };
   } catch (err) {
@@ -250,36 +250,36 @@ export function saveRunState({ project, slug, env, state }) {
 }
 
 // Writes the terminal section of a run: the witness of the outcome, durable and independent of the database.
-export function writeRunTerminal({ project, slug, terminal, env = process.env } = {}) {
-  const state = readRunState({ project, slug, env });
-  return saveRunState({ project, slug, env, state: { ...(isStateObject(state) ? state : {}), terminal } });
+export function writeRunTerminal({ projectId, slug, terminal, env = process.env } = {}) {
+  const state = readRunState({ projectId, slug, env });
+  return saveRunState({ projectId, slug, env, state: { ...(isStateObject(state) ? state : {}), terminal } });
 }
 
 // Drops the terminal section of a run, so the witness of the previous attempt never speaks for the next one.
-export function clearRunTerminal({ project, slug, env = process.env } = {}) {
-  const state = readRunState({ project, slug, env });
+export function clearRunTerminal({ projectId, slug, env = process.env } = {}) {
+  const state = readRunState({ projectId, slug, env });
   if (!isStateObject(state) || state.terminal === undefined) return { status: "absent", path: null, reason: null };
   const { terminal, ...rest } = state;
-  return saveRunState({ project, slug, env, state: rest });
+  return saveRunState({ projectId, slug, env, state: rest });
 }
 
 // Drops the outcome the pipeline recorded, so the record of the previous attempt never speaks for the next one.
-export function clearRunOutcome({ project, slug, env = process.env } = {}) {
-  const state = readRunState({ project, slug, env });
+export function clearRunOutcome({ projectId, slug, env = process.env } = {}) {
+  const state = readRunState({ projectId, slug, env });
   if (!isStateObject(state) || state.outcome === undefined) return { status: "absent", path: null, reason: null };
   const { outcome, ...rest } = state;
-  return saveRunState({ project, slug, env, state: rest });
+  return saveRunState({ projectId, slug, env, state: rest });
 }
 
 // Moves the run directory of a project onto another slug, which is how the pipeline renames the run the runtime opened for it.
 // A name another run already took is REFUSED instead of merged into: the run that asked keeps the slug it was given.
-export function renameRunDir({ project, from, to, env = process.env } = {}) {
-  if (!NAME_RE.test(String(project ?? "")) || !isSafeSegment(from) || !isSafeSegment(to)) {
+export function renameRunDir({ projectId, from, to, env = process.env } = {}) {
+  if (!isId(projectId) || !isSafeSegment(from) || !isSafeSegment(to)) {
     return { status: "kept", dir: null, reason: "unsafe project or slug" };
   }
-  const target = runDir(project, to, env);
-  if (existsSync(target)) return { status: "kept", dir: target, reason: `runs/${project}/${to} already exists` };
-  const source = runDir(project, from, env);
+  const target = runDir(projectId, to, env);
+  if (existsSync(target)) return { status: "kept", dir: target, reason: `runs/${projectId}/${to} already exists` };
+  const source = runDir(projectId, from, env);
   if (!existsSync(source)) return { status: "absent", dir: target, reason: null };
   try {
     renameSync(source, target);
@@ -313,13 +313,13 @@ function keptRunDir(dir, reason) {
 }
 
 // Deletes the run directory of a job, and only when the segments are safe, no component of the path was redirected by a link and what is there is a plain directory.
-export function discardRunDir({ project, slug, env = process.env } = {}) {
-  if (!NAME_RE.test(String(project ?? "")) || !isSafeSegment(slug)) return keptRunDir(null, "unsafe project or slug");
-  const dir = resolve(runDir(project, slug, env));
-  const runsRoot = realPathOrNull(join(homeDir(env), "runs"));
-  const projectDir = realPathOrNull(join(homeDir(env), "runs", project));
+export function discardRunDir({ projectId, slug, env = process.env } = {}) {
+  if (!isRunPath(projectId, slug)) return keptRunDir(null, "unsafe project or slug");
+  const dir = resolve(runDir(projectId, slug, env));
+  const runsRoot = realPathOrNull(runsDir(env));
+  const projectDir = realPathOrNull(join(runsDir(env), projectId));
   if (!runsRoot || !projectDir) return { dir, status: "not present", reason: null };
-  if (projectDir !== join(runsRoot, project)) return keptRunDir(dir, `runs/${project} resolves outside the runs directory`);
+  if (projectDir !== join(runsRoot, projectId)) return keptRunDir(dir, `runs/${projectId} resolves outside the runs directory`);
   const leaf = join(projectDir, slug);
   const stats = lstatOrNull(leaf);
   if (!stats) return { dir, status: "not present", reason: null };

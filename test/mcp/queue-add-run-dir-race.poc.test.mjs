@@ -19,7 +19,7 @@ import { runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { createServer } from "../../src/mcp/tools.mjs";
 import { recordPhaseDone, recordRunFields } from "../../src/queue/run-state.mjs";
-import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf, ensureProject } from "../../test-support/memory.mjs";
 
 const SLUG = "hunt-the-notice";
 const PROMPT = "## Brief\nqueue status shows the same notice twice\n\n## Stages\n1) fix it\n";
@@ -30,8 +30,8 @@ function makeOperatorRun(t, name) {
   const base = makeHome(t, name);
   const env = { ...base, HOME: dirname(base.NIGHTQUEUE_HOME), CLAUDE_CONFIG_DIR: join(dirname(base.NIGHTQUEUE_HOME), ".claude") };
   makeProject(t, env, "alpha");
-  recordRunFields({ project: "alpha", slug: SLUG, fields: { origin: "operator", type: "bug/error", evidenceLevel: 3 }, env });
-  recordPhaseDone({ project: "alpha", slug: SLUG, phase: "triage", artifact: "01-triage.md", verdict: "PROCEED", env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { origin: "operator", type: "bug/error", evidenceLevel: 3 }, env });
+  recordPhaseDone({ projectId: ensureProject(env, "alpha"), slug: SLUG, phase: "triage", artifact: "01-triage.md", verdict: "PROCEED", env });
   return env;
 }
 
@@ -59,7 +59,7 @@ function boundJobs(env) {
 test("two concurrent queue_add(run_dir) calls for the same run must not both bind a job to it", async (t) => {
   const env = makeOperatorRun(t, "queue-add-run-dir-race");
   const client = await connectInProcess(t, env);
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
 
   // Fired WITHOUT awaiting the first call before starting the second: both requests land on the
   // server before either's `operatorRunSeed` resolves its `await jobs.openJobForRun(...)`, so both

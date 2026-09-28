@@ -28,7 +28,7 @@ function jobWithWorktree(home, { slug, status, prUrl = null, dirty = false }) {
   if (dirty) makeDirty(worktree.path);
   const id = addJob({ projectId: ensureProject(home.env, "alpha"), prompt: `work of ${slug}` }, home.env).id;
   openDb(home.env).prepare("UPDATE jobs SET status = ?, slug = ?, pr_url = ? WHERE id = ?").run(status, slug, prUrl, id);
-  recordRunFields({ project: "alpha", slug, fields: { worktree: worktree.path }, env: home.env });
+  recordRunFields({ projectId: ensureProject(home.env, "alpha"), slug, fields: { worktree: worktree.path }, env: home.env });
   return { id, ...worktree };
 }
 

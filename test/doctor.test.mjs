@@ -794,7 +794,7 @@ test("doctor names each leftover under .claude/worktrees with its cleanup comman
   openDb(host.env).prepare("UPDATE jobs SET status = 'gate', slug = 'gated-run' WHERE id = ?").run(gatedId);
   seedClosedJob(host.env, { project: "alpha", prompt: "work of closed-run", slug: "closed-run" });
   for (const [slug, path] of [["gated-run", gated.path], ["closed-run", closed.path]]) {
-    recordRunFields({ project: "alpha", slug, fields: { worktree: path }, env: host.env });
+    recordRunFields({ projectId: ensureProject(host.env, "alpha"), slug, fields: { worktree: path }, env: host.env });
   }
   closeDb(host.env);
 

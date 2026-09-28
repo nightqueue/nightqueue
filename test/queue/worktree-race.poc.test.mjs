@@ -25,7 +25,8 @@ function doneJobWithWorktree(home, slug) {
   const worktree = addWorktree(home.checkout, `feat+${slug}`);
   const id = addJob({ projectId: ensureProject(home.env, "alpha"), prompt: `work of ${slug}` }, home.env).id;
   openDb(home.env).prepare("UPDATE jobs SET status = 'done', slug = ?, pr_url = 'https://github.com/acme/api/pull/7' WHERE id = ?").run(slug, id);
-  recordRunFields({ project: "alpha", slug, fields: { worktree: worktree.path }, env: home.env });
+  const recorded = recordRunFields({ projectId: ensureProject(home.env, "alpha"), slug, fields: { worktree: worktree.path }, env: home.env });
+  if (recorded.status !== "written") throw new Error(`setup: the worktree was not recorded on the run: ${recorded.reason}`);
   return { id, ...worktree };
 }
 

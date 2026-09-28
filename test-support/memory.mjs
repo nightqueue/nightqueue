@@ -82,6 +82,9 @@ export function orgIdOf(env, name) {
   return registry.orgByName(openDb(env), name)?.id ?? null;
 }
 
+// A well-formed project id no home registered, for the tests of run paths that never open a database.
+export const FIXED_PROJECT_ID = "01J9Z00000000000000000000A";
+
 // The id of a project of the home, by name.
 export function projectIdOf(env, name) {
   return registry.projectByName(openDb(env), name)?.id ?? null;

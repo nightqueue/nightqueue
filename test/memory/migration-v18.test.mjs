@@ -1,20 +1,21 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { isId } from "../../src/config/ids.mjs";
-import { configPath, dbPath, preV18BackupPath } from "../../src/config/paths.mjs";
+import { configPath, dbPath, homeDir, preV18BackupPath, runDir, runsIdMarkerPath } from "../../src/config/paths.mjs";
 import { closeDb, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { listDecisions, saveDecision } from "../../src/memory/decisions.mjs";
-import { addJob, getJob } from "../../src/memory/jobs.mjs";
+import { addJob, claimJobById, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
 import { getRoadmapItemDetail, listRoadmap, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recentMemories } from "../../src/memory/memory.mjs";
-import { migrateToV18 } from "../../src/memory/migration/v18.mjs";
+import { finishV18, migrateToV18 } from "../../src/memory/migration/v18.mjs";
 import * as registry from "../../src/memory/registry.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { sharedSlugPending } from "../../src/memory/shared-slug-migration.mjs";
+import { decideResume, ownRunState, resumeHandoff } from "../../src/queue/resume.mjs";
 import { buildLegacyHome, legacyConfig } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 
@@ -42,11 +43,11 @@ function seedNamedRows(db) {
 }
 
 // A v17 home: a config with an org bound to a GitHub connection and a hand-added key, and the named rows above.
-function v17Home(t, name, { seed = seedNamedRows } = {}) {
+function v17Home(t, name, { seed = seedNamedRows, runs = {} } = {}) {
   const env = makeHome(t, name);
   const api = checkout(t, "api");
   const config = legacyConfig({ orgs: { acme: "gh" }, projects: { api: { path: api, org: "acme" } }, extra: { handAdded: { keep: true } } });
-  buildLegacyHome(env, { config, seed });
+  buildLegacyHome(env, { config, seed, runs });
   return { env, api, fixture: readFileSync(dbPath(env)) };
 }
 
@@ -256,13 +257,15 @@ test("a migration killed in the middle of the transaction, right after it rebuil
   assert.equal(Object.hasOwn(JSON.parse(readFileSync(configPath(env), "utf8")), "projects"), false);
 });
 
-test("a crash right after the commit leaves v18 with the config still by name, and the next open finishes it", async (t) => {
-  const { env } = v17Home(t, "v18-crash-after-commit", { seed: seedJobRows });
+test("a crash right after the commit leaves v18 with the config and the run directories still by name, and the next open finishes both", async (t) => {
+  const { env } = v17Home(t, "v18-crash-after-commit", { seed: seedJobRows, runs: { api: ["run-a"] } });
   const crashed = await crashMigration(t, env, ["afterCommit"]);
   assert.equal(crashed.signal, "SIGKILL", `the migrator was not killed: ${crashed.stdout}`);
   assert.equal(diskVersion(env), 18);
   const stale = JSON.parse(readFileSync(configPath(env), "utf8"));
   assert.ok(Object.hasOwn(stale, "projects") && Object.hasOwn(stale, "orgs"), "the config was stripped before the crash");
+  assert.ok(existsSync(join(homeDir(env), "runs", "api", "run-a")), "the run directories moved before the crash");
+  assert.equal(existsSync(runsIdMarkerPath(env)), false);
 
   const db = openDb(env);
   const config = JSON.parse(readFileSync(configPath(env), "utf8"));
@@ -270,6 +273,70 @@ test("a crash right after the commit leaves v18 with the config still by name, a
   assert.equal(Object.hasOwn(config, "orgs"), false);
   assert.deepEqual(config.orgConnections, { [registry.orgByName(db, "acme").id]: { github: "gh" } });
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM jobs").get().n, 7);
+  assert.ok(existsSync(runDir(registry.projectByName(db, "api").id, "run-a", env)), "the run directory did not move to the project id");
+  assert.equal(existsSync(join(homeDir(env), "runs", "api")), false, "the name directory stayed behind");
+  assert.equal(existsSync(runsIdMarkerPath(env)), true);
+});
+
+// Writes one file of a run directory, creating the directory.
+function writeRunFile(dir, file, text) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, file), text);
+}
+
+test("the runs move merges a name directory into an id directory entry by entry, never overwrites a run already there, and runs once", (t) => {
+  const { env } = v17Home(t, "v18-runs-merge");
+  const db = openDb(env);
+  const apiId = registry.projectByName(db, "api").id;
+  const byName = join(homeDir(env), "runs", "api");
+  rmSync(runsIdMarkerPath(env), { force: true });
+  writeRunFile(join(byName, "new-run"), "state.json", "moved\n");
+  writeRunFile(join(byName, "taken"), "state.json", "by name\n");
+  writeRunFile(runDir(apiId, "taken", env), "state.json", "by id\n");
+  writeRunFile(join(homeDir(env), "runs", "unknown-project", "a-run"), "state.json", "nobody's\n");
+
+  const warnings = [];
+  finishV18(db, env, { warn: (line) => warnings.push(line) });
+
+  assert.equal(readFileSync(join(runDir(apiId, "new-run", env), "state.json"), "utf8"), "moved\n");
+  assert.equal(readFileSync(join(runDir(apiId, "taken", env), "state.json"), "utf8"), "by id\n", "the move overwrote a run already keyed by the id");
+  assert.equal(readFileSync(join(byName, "taken", "state.json"), "utf8"), "by name\n", "the conflicting run was lost");
+  assert.equal(existsSync(join(byName, "new-run")), false);
+  assert.equal(warnings.length, 1, warnings.join("\n"));
+  assert.match(warnings[0], /kept .*runs\/api\/taken where it is: .*already exists/);
+  assert.ok(existsSync(join(homeDir(env), "runs", "unknown-project", "a-run")), "a directory no project is named after was moved");
+  assert.ok(existsSync(runsIdMarkerPath(env)));
+
+  const again = [];
+  finishV18(db, env, { warn: (line) => again.push(line) });
+  assert.deepEqual(again, [], "the marked move ran again");
+  assert.equal(readFileSync(join(byName, "taken", "state.json"), "utf8"), "by name\n");
+});
+
+test("a job whose runner died before the upgrade is reclaimed after the migration and resumes from runs/<project id>/<slug>", (t) => {
+  const died = (db) => {
+    db.prepare(
+      "INSERT INTO jobs (project, prompt, status, slug, worker, lease_until, started_at, attempts, max_attempts) VALUES ('api', 'fix the worker', 'running', 'run-a', 'host:1', '2000-01-01 00:00:00', '2000-01-01 00:00:00', 1, 3)",
+    ).run();
+  };
+  const { env } = v17Home(t, "v18-expired-lease-resume", { seed: died, runs: { api: ["run-a"] } });
+  const state = { schemaVersion: 1, project: "api", slug: "run-a", resumeCount: 0, branch: "fix/run-a", phases: [{ phase: "triage" }, { phase: "explore" }] };
+  writeFileSync(join(homeDir(env), "runs", "api", "run-a", "state.json"), JSON.stringify(state));
+
+  const db = openDb(env);
+  const apiId = registry.projectByName(db, "api").id;
+  assert.equal(getJob(1, env).status, "running", "the migration changed the job of the dead runner");
+  sweepOrphans(env);
+  const job = claimJobById(1, { worker: "host:2", cap: 4 }, env);
+  assert.equal(job?.status, "running", "the job of the dead runner was not reclaimed");
+  assert.equal(job.project_id, apiId);
+
+  const recorded = ownRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, env });
+  assert.deepEqual(recorded, state, "the run did not follow its job to the project id");
+  const handoff = resumeHandoff({ job, resume: decideResume({ state: recorded }), state: recorded, env });
+  assert.equal(handoff.runDir, runDir(apiId, "run-a", env));
+  assert.equal(handoff.fromPhase, "architecture");
+  assert.equal(handoff.branch, "fix/run-a");
 });
 
 const PROJECT_TABLES = ["lessons", "memory", "project_index", "project_libs", "pipeline_runs"];
@@ -382,6 +449,15 @@ function ownerNamedRows(db, table) {
   }));
 }
 
+// One run directory per project with a checkout or a history (a case-only pair would share one directory on a case-insensitive disk).
+const ACCEPTANCE_RUNS = { api: ["fix-worker"], web: ["web-run"], history: ["old-run"], "Bad Name!": ["odd-run"] };
+const ACCEPTANCE_STATE = '{"schemaVersion":1,"project":"api","slug":"fix-worker","phases":[{"phase":"triage"}]}\n';
+
+// The entries of the runs directory, dotfiles included, sorted.
+function runEntries(env) {
+  return readdirSync(join(homeDir(env), "runs")).sort();
+}
+
 // A v17 home holding the whole acceptance fixture: two config projects of `acme` (one bound to GitHub), a hand-added key, and every table seeded.
 function acceptanceHome(t, name) {
   const env = makeHome(t, name);
@@ -390,7 +466,8 @@ function acceptanceHome(t, name) {
     projects: { api: { path: checkout(t, "api"), org: "acme" }, web: { path: checkout(t, "web"), org: "acme" } },
     extra: { handAdded: { keep: true } },
   });
-  buildLegacyHome(env, { config, seed: seedAcceptanceRows, runs: { api: ["fix-worker"], history: ["old-run"] } });
+  buildLegacyHome(env, { config, seed: seedAcceptanceRows, runs: ACCEPTANCE_RUNS });
+  writeFileSync(join(homeDir(env), "runs", "api", "fix-worker", "state.json"), ACCEPTANCE_STATE);
   return { env, config, fixture: readFileSync(dbPath(env)) };
 }
 
@@ -455,13 +532,24 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
     orgConnections: { [registry.orgByName(db, "acme").id]: { github: "gh" } },
   });
 
+  for (const [name, slugs] of Object.entries(ACCEPTANCE_RUNS)) {
+    assert.equal(existsSync(join(homeDir(env), "runs", name)), false, `runs/${name} is still keyed by the name`);
+    for (const slug of slugs) assert.ok(existsSync(runDir(projects[name].id, slug, env)), `runs/<id of ${name}>/${slug} is missing`);
+  }
+  assert.equal(readFileSync(join(runDir(api.id, "fix-worker", env), "state.json"), "utf8"), ACCEPTANCE_STATE, "a run lost its content in the move");
+  assert.deepEqual(runEntries(env), [".by-id", ...Object.keys(ACCEPTANCE_RUNS).map((name) => projects[name].id)].sort());
+
   const copyStat = statSync(preV18BackupPath(env));
+  const markerStat = statSync(runsIdMarkerPath(env));
+  const runs = runEntries(env);
   const schema = db.prepare("SELECT sql FROM sqlite_master ORDER BY name").all();
   const configText = readFileSync(configPath(env), "utf8");
   closeDb(env);
   const again = openDb(env);
   assert.equal(again.prepare("PRAGMA user_version").get().user_version, 18);
   assert.equal(again.prepare("SELECT total_changes() AS n").get().n, 0, "a second open wrote to the database");
+  assert.deepEqual(runEntries(env), runs, "a second open moved the run directories again");
+  assert.equal(statSync(runsIdMarkerPath(env)).mtimeMs, markerStat.mtimeMs, "a second open rewrote the marker");
   assert.deepEqual(again.prepare("SELECT sql FROM sqlite_master ORDER BY name").all(), schema);
   assert.equal(statSync(preV18BackupPath(env)).mtimeMs, copyStat.mtimeMs, "a second open took another copy");
   assert.ok(readFileSync(preV18BackupPath(env)).equals(fixture));

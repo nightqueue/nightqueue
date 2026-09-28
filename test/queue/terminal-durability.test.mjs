@@ -83,7 +83,7 @@ test("a finish written by a runtime replaced under it survives a second process 
 
   const finisher = runChild(
     join(oldRuntime, FINISHER_TRAIL),
-    [String(id), WORKER, "alpha", SLUG, String(Date.now() + BARRIER_MS)],
+    [String(id), WORKER, ensureProject(env, "alpha"), SLUG, String(Date.now() + BARRIER_MS)],
     env,
     { onFirstLine: () => rmSync(oldRuntime, { recursive: true, force: true }) },
   );
@@ -105,7 +105,7 @@ test("a finish written by a runtime replaced under it survives a second process 
   assert.equal(row.worker, null);
   assert.equal(row.lease_until, null);
 
-  const terminal = readRunState({ project: "alpha", slug: SLUG, env })?.terminal;
+  const terminal = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env })?.terminal;
   assert.deepEqual(Object.keys(terminal ?? {}), ["status", "prUrl", "finishedAt", "writtenBy", "pid"]);
   assert.deepEqual(terminal, {
     status: "done",

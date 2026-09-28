@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runAgentForeground } from "../../src/hooks/agent-foreground.mjs";
+import { FIXED_PROJECT_ID } from "../../test-support/memory.mjs";
 
 const ENV = { NIGHTQUEUE_JOB_ID: "7" };
 const REASON = "the unattended run keeps subagents in the foreground so the CLI never kills one at its wait ceiling";
@@ -176,7 +177,7 @@ function jobFixture(t) {
   const base = mkdtempSync(join(tmpdir(), "ns-orchestrator-scope-"));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const home = join(base, "home");
-  const runDir = join(home, "runs", "demo", "slug");
+  const runDir = join(home, "runs", FIXED_PROJECT_ID, "slug");
   const plugin = join(base, "plugin");
   const worktree = join(base, "worktree");
   for (const dir of [runDir, join(plugin, "skills"), join(worktree, "src")]) mkdirSync(dir, { recursive: true });
@@ -286,7 +287,7 @@ test("the orchestrator's Bash outside the closed list is denied with the list an
   for (const command of commands) {
     const reason = denyReasonOf(runAgentForeground({ input: mainCall("Bash", { command }, worktree), env }));
     assert.ok(reason.startsWith(ORCHESTRATOR_REDIRECT), reason);
-    assert.match(reason, /closed command list \(git rev-parse, .*nightqueue run check\|log\|index-save\|commit\|pr\), each as the bare program name/);
+    assert.match(reason, /closed command list \(git rev-parse, .*nightqueue run check\|dir\|log\|index-save\|commit\|pr\), each as the bare program name/);
     assert.match(reason, /or use `git diff --stat`$/);
   }
 });

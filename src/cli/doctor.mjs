@@ -752,7 +752,7 @@ async function ownedWorktrees(ctx) {
   const store = openStoreReadOnly(ctx.env);
   try {
     const jobs = await store.jobs.listOpenJobs();
-    const recorded = jobs.map((job) => readRunState({ project: job.project, slug: job.slug, env: ctx.env })?.worktree);
+    const recorded = jobs.map((job) => readRunState({ projectId: job.project_id, slug: job.slug, env: ctx.env })?.worktree);
     return { paths: new Set(recorded.filter((path) => typeof path === "string" && path.trim()).map((path) => canonicalPath(path.trim()))), error: null };
   } catch (err) {
     return { paths: null, error: err?.message ?? String(err) };

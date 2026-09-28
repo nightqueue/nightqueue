@@ -20,7 +20,7 @@ import {
 import { openDb } from "../../src/memory/db.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { fakeEmbedder, makeDir, makeHome, makeProject, mergedChecklist, projectIdOf, settleThroughStore } from "../../test-support/memory.mjs";
+import { fakeEmbedder, makeDir, makeHome, makeProject, mergedChecklist, projectIdOf, settleThroughStore, ensureProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, SLUG } from "../../test-support/streams.mjs";
 import { runDir } from "../../src/config/paths.mjs";
@@ -194,7 +194,7 @@ test("the runner records the files the implementation artifact lists, and the pr
   useFakeClaude(env, makeDir(t, "roadmap-queue-files-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
   const client = await connect(t, env);
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
-  const artifactDir = runDir("alpha", SLUG, env);
+  const artifactDir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(artifactDir, { recursive: true });
   writeFileSync(join(artifactDir, "04-implementation.md"), "## Modified files\n- `src/runner.mjs`\n```\nsrc/example.mjs\n```\n\n## Done\n");
 

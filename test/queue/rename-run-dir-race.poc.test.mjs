@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runDir } from "../../src/config/paths.mjs";
-import { makeHome } from "../../test-support/memory.mjs";
+import { FIXED_PROJECT_ID, makeHome } from "../../test-support/memory.mjs";
 
 // H2: `renameRunDir` (src/queue/resume.mjs) checks `existsSync(target)` and only then calls `renameSync` -
 // a check-then-act gap. Its real callers are two DIFFERENT runner processes, each adopting the slug ITS
@@ -16,7 +16,7 @@ import { makeHome } from "../../test-support/memory.mjs";
 // simultaneously as two independent OS processes can get - never a hand-interleaved call inside one process.
 
 const WORKER = fileURLToPath(new URL("./fixtures/rename-run-dir-race-worker.mjs", import.meta.url));
-const PROJECT = "alpha";
+const PROJECT = FIXED_PROJECT_ID;
 const ROUNDS = 20;
 
 // Spawns one real OS process running the worker script; resolves with its stdout lines and exit code once it prints "ready".

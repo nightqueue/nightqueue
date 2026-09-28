@@ -146,7 +146,7 @@ function slugRefusal(bound) {
 
 // Records the branch the state of a run registered, once the job is bound to that run.
 async function persistBranch(job, slug, { store, env }) {
-  const branch = readRunState({ project: job.project, slug, env })?.branch ?? null;
+  const branch = readRunState({ projectId: job.project_id, slug, env })?.branch ?? null;
   if (branch) await store.jobs.persistRunFacts(job.id, { worker: job.worker, branch });
 }
 
@@ -163,7 +163,7 @@ async function adoptSlug(job, facts, slug, { store, env }) {
   const keep = (reason) => appendJobLog(job.id, `the run keeps the slug \`${facts.slug}\`: it could not be renamed to \`${slug}\` (${reason})`, env);
   const claimed = await store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] });
   if (claimed.status !== "bound") return keep(slugRefusal(claimed));
-  const renamed = renameRunDir({ project: job.project, from: facts.slug, to: slug, env });
+  const renamed = renameRunDir({ projectId: job.project_id, from: facts.slug, to: slug, env });
   if (renamed.status === "kept") {
     await revertSlugClaim(job, facts.slug, { store, env });
     return keep(renamed.reason);
@@ -174,7 +174,7 @@ async function adoptSlug(job, facts, slug, { store, env }) {
 
 // Records the task type the pipeline declared with its slug; a state that refuses the write is said out loud and never costs the run.
 function persistRunType(job, type, slug, env) {
-  const written = recordRunFields({ project: job.project, slug, fields: { type }, env });
+  const written = recordRunFields({ projectId: job.project_id, slug, fields: { type }, env });
   if (written.status !== "written") appendJobLog(job.id, `the task type could not be recorded in the state of the run: ${written.reason}`, env);
 }
 
@@ -190,7 +190,7 @@ async function captureSlugOverride(job, facts, line, ctx) {
 
 // Records the tier a raise announced in the Brief moved the run to, with the evidence that justified it; a state that refuses the write is said out loud and never costs the run.
 function persistTierRaise(job, raise, slug, env) {
-  const written = recordRunFields({ project: job.project, slug, fields: { tier: raise.to, tierRaiseReason: raise.reason }, env });
+  const written = recordRunFields({ projectId: job.project_id, slug, fields: { tier: raise.to, tierRaiseReason: raise.reason }, env });
   if (written.status !== "written") appendJobLog(job.id, `the tier raise could not be recorded in the state of the run: ${written.reason}`, env);
 }
 
@@ -372,7 +372,7 @@ async function runAttempts(job, ctx) {
   let attempt = job.attempts;
   while (true) {
     if (!(await renew(job, env))) return { lost: true, facts, attempt, ...attemptTotals(tally), outcome: null, result: null };
-    if (isSafeSegment(facts.slug)) clearRunOutcome({ project: job.project, slug: facts.slug, env });
+    if (isSafeSegment(facts.slug)) clearRunOutcome({ projectId: job.project_id, slug: facts.slug, env });
     const resumeSessionId = resumeForced ? facts.sessionId : null;
     const attemptStartedAt = new Date().toISOString();
     const result = await spawnClaude({
@@ -400,8 +400,8 @@ async function runAttempts(job, ctx) {
     const totals = attemptTotals(tally);
     const notBefore = rateLimitExit(result, facts);
     if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, ...totals, outcome: null, result };
-    const planPath = isSafeSegment(facts.slug) ? join(runDir(job.project, facts.slug, env), "03-plan.md") : null;
-    const state = readRunState({ project: job.project, slug: facts.slug, env });
+    const planPath = isRunPath(job.project_id, facts.slug) ? join(runDir(job.project_id, facts.slug, env), "03-plan.md") : null;
+    const state = readRunState({ projectId: job.project_id, slug: facts.slug, env });
     const runOutcome = await attemptRunOutcome(job, facts.slug, { since: attemptStartedAt, store: ctx.store });
     const outcome = classifyJobResult({ ...result, state, planPath, runOutcome });
     if (!isRetryable(job, attempt, result, outcome, state)) {
@@ -437,7 +437,7 @@ async function writeWitness(job, { outcome, runSlug }, { store, env }) {
       return;
     }
     const written = writeRunTerminal({
-      project: row?.project ?? job.project,
+      projectId: row?.project_id ?? job.project_id,
       slug,
       terminal: {
         status: outcome.status,
@@ -473,7 +473,7 @@ async function tryFinish(job, outcome, env) {
 function persistPrUrl(job, run, state, env) {
   const prUrl = run.outcome?.prUrl ?? null;
   if (!prUrl || isPrUrl(state?.outcome?.prUrl) || !isSafeSegment(run.facts.slug)) return;
-  const written = recordPrUrl({ project: job.project, slug: run.facts.slug, prUrl, env });
+  const written = recordPrUrl({ projectId: job.project_id, slug: run.facts.slug, prUrl, env });
   if (written.status !== "written") appendJobLog(job.id, `the pull request could not be recorded in the state of the run: ${written.reason}`, env);
 }
 
@@ -539,9 +539,9 @@ function repoPath(path, worktree) {
 
 // The files the run's implementation artifact lists, for the roadmap's trail; a missing or unreadable artifact lists none.
 function implementedFiles(job, run, state, env) {
-  if (!isSafeSegment(run.facts.slug)) return [];
+  if (!isRunPath(job.project_id, run.facts.slug)) return [];
   try {
-    const text = readFileSync(join(runDir(job.project, run.facts.slug, env), "04-implementation.md"), "utf8");
+    const text = readFileSync(join(runDir(job.project_id, run.facts.slug, env), "04-implementation.md"), "utf8");
     const worktree = typeof state?.worktree === "string" ? state.worktree.trim() : "";
     return recordedFiles(text).map((path) => repoPath(path, worktree));
   } catch {
@@ -553,7 +553,7 @@ function implementedFiles(job, run, state, env) {
 async function finalize(job, run, ctx) {
   const { env, store } = ctx;
   const finishJobImpl = ctx.deps.finishJobImpl ?? ((id, outcome) => store.jobs.finishJob(id, outcome));
-  const state = readRunState({ project: job.project, slug: run.facts.slug, env });
+  const state = readRunState({ projectId: job.project_id, slug: run.facts.slug, env });
   persistPrUrl(job, run, state, env);
   await persistTelemetry(job, run, ctx);
   if (state?.branch) await store.jobs.persistRunFacts(job.id, { worker: job.worker, branch: state.branch });
@@ -612,7 +612,7 @@ async function parkRun(job, run, ctx) {
 
 // Counts this resume in the state of the run, so the cap bites on the next retry; a state that refuses the write is said out loud and never costs the run.
 function persistResume(job, resumeCount, env) {
-  const written = recordResume({ project: job.project, slug: job.slug, resumeCount, env });
+  const written = recordResume({ projectId: job.project_id, slug: job.slug, resumeCount, env });
   if (written.status !== "written") appendJobLog(job.id, `the resume could not be counted in the state of the run: ${written.reason}`, env);
 }
 
@@ -649,8 +649,8 @@ async function claimFreshRunSlug(job, candidates, ctx) {
 
 // Creates the leaf of a candidate run directory only when nothing is there yet, so its creation proves the run is this job's; an existing one is logged and skipped.
 function claimRunDir(job, slug, env) {
-  const dir = runDir(job.project, slug, env);
   try {
+    const dir = runDir(job.project_id, slug, env);
     mkdirSync(dirname(dir), { recursive: true });
     mkdirSync(dir);
     return "created";
@@ -667,7 +667,7 @@ function claimRunDir(job, slug, env) {
 // Gives back the empty run directory of a candidate the job created but could not bind; one somebody already wrote into stays where it is.
 function releaseRunDir(job, slug, env) {
   try {
-    rmdirSync(runDir(job.project, slug, env));
+    rmdirSync(runDir(job.project_id, slug, env));
   } catch (err) {
     appendJobLog(job.id, `the run directory \`${slug}\` could not be given back after its slug was refused: ${err?.message ?? String(err)}`, env);
   }
@@ -675,9 +675,9 @@ function releaseRunDir(job, slug, env) {
 
 // Creates the run directory before the spawn, so the session never runs `mkdir` itself; a failure is logged and never costs the job.
 function ensureRunDir(job, env) {
-  if (!isRunPath(job.project, job.slug)) return;
+  if (!isRunPath(job.project_id, job.slug)) return;
   try {
-    mkdirSync(runDir(job.project, job.slug, env), { recursive: true });
+    mkdirSync(runDir(job.project_id, job.slug, env), { recursive: true });
   } catch (err) {
     appendJobLog(job.id, `the run directory could not be created before the session: ${err?.message ?? String(err)}`, env);
   }
@@ -720,7 +720,7 @@ async function runJob(claimed, ctx) {
   const openPrs = await openPrsForJob(claimed, { env, deps });
   const job = await withRunSlug(claimed, ctx);
   ensureRunDir(job, env);
-  const state = ownRunState({ project: job.project, slug: job.slug, jobId: job.id, env });
+  const state = ownRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, env });
   const resume = decideResume({ state });
   const handoff = resumeHandoff({ job, resume, state, env });
   if (handoff) persistResume(job, resume.resumeCount, env);

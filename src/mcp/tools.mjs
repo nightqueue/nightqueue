@@ -117,11 +117,6 @@ const phaseSchema = z.object({
   note: z.string().nullable().optional(),
 });
 
-// Requires the project of a job to be a registered NAME, because a path never resolves to a project; an unknown one names the known projects.
-async function requireProjectName(name, env) {
-  return (await requireProject(openStore(env), name)).name;
-}
-
 // The registered project a lesson, memory, index or run call scopes to: a name, or an absolute path inside a checkout; null (global) for
 // a path inside none, and an unknown name refused, so nothing is ever written under a project that does not exist.
 async function memoryProject(ref, env) {
@@ -194,7 +189,7 @@ async function jobRun(own, args, env) {
   if (named.length > 0) refuseNamedRun(named.map(([name, value]) => [name, value.trim()]), own);
   const row = await openStore(env).jobs.getJob(own);
   if (!isSafeSegment(row?.slug)) refuseMissingRunSlug(own);
-  return { project: row.project, slug: row.slug };
+  return { project: row.project, projectId: row.project_id, slug: row.slug };
 }
 
 // The run an operator names from outside a job, where nothing else can tell which one it is.
@@ -203,13 +198,14 @@ async function operatorRun(args, env) {
   const slug = typeof args.slug === "string" ? args.slug.trim() : "";
   if (!project || !slug) {
     throw new UserError(
-      "outside a job, `project` (the registered NAME) and `slug` (the `<slug>` of runs/<project>/<slug>) are both required",
+      "outside a job, `project` (the registered NAME) and `slug` (the `<slug>` of runs/<project_id>/<slug>) are both required",
     );
   }
   if (!isSafeSegment(slug)) {
     throw new UserError(`invalid slug \`${slug}\`: a run slug is one path segment of letters, digits and \`. _ + -\``);
   }
-  return { project: await requireProjectName(project, env), slug };
+  const registered = await requireProject(openStore(env), project);
+  return { project: registered.name, projectId: registered.id, slug };
 }
 
 // The run every `run_*` tool writes into: the caller's own job run, or the one an operator named.
@@ -226,7 +222,7 @@ async function pipelineLogRun(args, env) {
   const slug = typeof args.slug === "string" ? args.slug.trim() : "";
   if (!slug) {
     throw new UserError(
-      "this run cannot be identified: send `project` (the registered NAME) and `slug` (the `<slug>` of runs/<project>/<slug>); " +
+      "this run cannot be identified: send `project` (the registered NAME) and `slug` (the `<slug>` of runs/<project_id>/<slug>); " +
         "only a call from inside a job, whose row already carries them, may omit the pair",
     );
   }
@@ -235,8 +231,8 @@ async function pipelineLogRun(args, env) {
 }
 
 // What the RUN already recorded about itself, the source of every field a `pipeline_log` call may now omit.
-function runFacts({ project, slug }, env) {
-  const state = readRunState({ project, slug, env });
+function runFacts({ projectId, slug }, env) {
+  const state = readRunState({ projectId, slug, env });
   return { tier: state?.tier ?? null, taskType: state?.type ?? null, tierRaiseReason: state?.tierRaiseReason ?? null };
 }
 
@@ -371,8 +367,9 @@ function hasRunDir(args) {
 
 // The prompt and the run slug of a job queued from an operator run: the run is checked and its block is built by the runtime; `addJob` refuses a run already bound.
 function operatorRunSeed({ args, project, env }) {
-  const run = resolveOperatorRunDir({ runDir: args.run_dir, project, env });
-  return { prompt: withPriorRun(args.prompt, priorRunBlock({ project, slug: run.slug, state: run.state, env })), slug: run.slug };
+  const run = resolveOperatorRunDir({ runDir: args.run_dir, project: project.name, projectId: project.id, env });
+  const block = priorRunBlock({ projectId: project.id, slug: run.slug, state: run.state, env });
+  return { prompt: withPriorRun(args.prompt, block), slug: run.slug };
 }
 
 // Requires exactly one source for the prompt of a job: the text itself, or the roadmap item that builds it.
@@ -829,7 +826,7 @@ function toolDefinitions(env) {
             .nullable()
             .optional()
             .describe(
-              "The RUN_DIR of an operator run (`~/.nightqueue/runs/<project>/<slug>`, absolute or `~/`) this job continues: the job writes into that run, and the runtime places the `## PRIOR RUN (operator)` block right after the prompt's `## Brief` section. Never write that block yourself. A run already bound to an open job is refused; `queue_retry --fresh` of the job discards the run.",
+              "The RUN_DIR of an operator run (`~/.nightqueue/runs/<project_id>/<slug>`, as `nightqueue run dir` prints it, absolute or `~/`) this job continues: the job writes into that run, and the runtime places the `## PRIOR RUN (operator)` block right after the prompt's `## Brief` section. Never write that block yourself. A run already bound to an open job is refused; `queue_retry --fresh` of the job discards the run.",
             ),
         },
       },
@@ -851,7 +848,7 @@ function toolDefinitions(env) {
         if (target.offer && args.register !== true) return needsRegistration(target);
         const registered = target.offer ? await registerOffer(target.offer, env) : null;
         const project = registered ?? target.project;
-        const seeded = hasRunDir(args) ? operatorRunSeed({ args, project: project.name, env }) : { prompt: args.prompt, slug: null };
+        const seeded = hasRunDir(args) ? operatorRunSeed({ args, project, env }) : { prompt: args.prompt, slug: null };
         const job = await openStore(env).jobs.addJob({
           projectId: project.id,
           prompt: seeded.prompt,

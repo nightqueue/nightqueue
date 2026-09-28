@@ -30,7 +30,7 @@ function lostFinish(env) {
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ?, lease_until = datetime('now', '-120 seconds') WHERE id = ?").run(SLUG, id);
   const terminal = { status: "done", prUrl: "https://github.com/acme/api/pull/7", finishedAt: "2026-09-11T03:15:00Z", writtenBy: "/tmp/runtime", pid: 4242 };
-  assert.equal(writeRunTerminal({ project: "alpha", slug: SLUG, terminal, env }).status, "written", "setup: the witness was not written");
+  assert.equal(writeRunTerminal({ projectId: ensureProject(env, "alpha"), slug: SLUG, terminal, env }).status, "written", "setup: the witness was not written");
   return id;
 }
 

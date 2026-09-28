@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { registerCheckout } from "../../test-support/memory.mjs";
+import { registerCheckout, ensureProject } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { decideResume, readRunState, resumeHandoff } from "../../src/queue/resume.mjs";
 import { recordPhaseDone, recordRunFields } from "../../src/queue/run-state.mjs";
@@ -22,17 +22,17 @@ function publishedRun(t, name) {
   const worktree = addWorktree(checkout, `feat+${SLUG}`, { push: false });
   git(["-C", worktree.path, "branch", "-m", worktree.branch, PUBLISHED]);
   git(["-C", worktree.path, "push", "-q", "-u", "origin", PUBLISHED]);
-  const fields = recordRunFields({ project: "alpha", slug: SLUG, fields: { worktree: worktree.path, branch: PUBLISHED, type: "feature/refactor" }, env });
+  const fields = recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { worktree: worktree.path, branch: PUBLISHED, type: "feature/refactor" }, env });
   assert.equal(fields.status, "written", `setup: ${fields.reason}`);
-  const phase = recordPhaseDone({ project: "alpha", slug: SLUG, phase: "triage", artifact: "01-triage.md", verdict: "ok", env });
+  const phase = recordPhaseDone({ projectId: ensureProject(env, "alpha"), slug: SLUG, phase: "triage", artifact: "01-triage.md", verdict: "ok", env });
   assert.equal(phase.status, "written", `setup: ${phase.reason}`);
   return { env, worktree: worktree.path };
 }
 
 test("a run whose branch was recorded under its published name still resumes in its worktree, and the handoff names the real branch", (t) => {
   const { env, worktree } = publishedRun(t, "resume-branch-handoff");
-  const job = { id: 7, project: "alpha", slug: SLUG, prompt: "do the thing" };
-  const state = readRunState({ project: "alpha", slug: SLUG, env });
+  const job = { id: 7, project: "alpha", project_id: ensureProject(env, "alpha"), slug: SLUG, prompt: "do the thing" };
+  const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
   const resume = decideResume({ state });
 
   assert.equal(resume.reuseWorktree, true);

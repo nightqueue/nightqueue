@@ -131,7 +131,8 @@ commands:
 
 inside a job — each acts on the run of the job it is called from, never on the queue:
   run check <NN>                            check the artifact of a phase of THIS run: OK, MISSING or GENERATED
-  run log [--json]                          one line per phase of THIS run: model, status and duration
+  run dir                                   print the absolute directory of THIS run: runs/<project_id>/<slug>
+  run log [--json]                         one line per phase of THIS run: model, status and duration
   run commit --message-file <path>          stage what 04-implementation.md listed and commit it; --extra adds a pathspec
   run pr --body-file <path>                 check the body, push THIS run's branch under its final name and open the PR
 

@@ -55,7 +55,7 @@ function writeJobLog(env, id, log) {
 
 // Writes the state.json of the run, with the witness the runner left: the same wrong outcome the row carries.
 function writeRunState(env, { slug = SLUG, terminal = { status: "gate", prUrl: null, finishedAt: "2026-09-14T21:00:00Z" } } = {}) {
-  const dir = runDir("alpha", slug, env);
+  const dir = runDir(ensureProject(env, "alpha"), slug, env);
   mkdirSync(dir, { recursive: true });
   const state = { schemaVersion: 1, slug, project: "alpha", resumeCount: 0, phases: [{ phase: "triage", artifact: "01-triage.md", verdict: "ok" }], terminal };
   writeFileSync(join(dir, "state.json"), `${JSON.stringify(state, null, 2)}\n`);
@@ -115,8 +115,8 @@ test("`queue repair` turns a job that really opened a pull request into done, an
   assert.equal(row.status, "done");
   assert.equal(row.pr_url, PR_URL);
   assert.equal(JSON.parse(row.result).reclassifiedFrom, "gate");
-  assert.deepEqual(readRunState({ project: "alpha", slug: SLUG, env }).terminal.status, "done");
-  assert.deepEqual(readRunState({ project: "alpha", slug: SLUG, env }).terminal.prUrl, PR_URL);
+  assert.deepEqual(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).terminal.status, "done");
+  assert.deepEqual(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).terminal.prUrl, PR_URL);
 
   const after = readFileSync(statePath, "utf8");
   const again = runCli(env, ["queue", "repair", String(id)]);
@@ -134,13 +134,13 @@ test("the repaired row survives the automatic reconciliation: the file and the r
   assert.equal((await reclassifyFromLog({ id, env })).to, "done");
   assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "a finished job was repaired again by the sweep");
   assert.equal(getJob(id, env).status, "done");
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).terminal.status, "done");
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).terminal.status, "done");
 });
 
 test("the outcome the pipeline recorded in state.json is what the repair believes, even against the stream", async (t) => {
   const env = makeQueue(t, "repair-record");
   const id = finishedJob(env, { log: gateStream({ slug: SLUG }) });
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "state.json"),
@@ -214,7 +214,7 @@ function gateWithNotice(body) {
 
 // Writes the state.json of a run whose pipeline recorded a summary of its own notice, the shape the whole fix is about.
 function writeSummarizedOutcome(env) {
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "state.json");
   const state = { schemaVersion: 1, slug: SLUG, phases: [], outcome: { status: "gate", notice: "Short summary the pipeline wrote.", updatedAt: "2026-09-14T21:00:00Z" } };
@@ -285,7 +285,7 @@ test("`queue repair` of a job whose QA published another branch's pull request r
     resultEvent({ text: noticeText(NOTICE) }),
   ]);
   const id = finishedJob(env, { status: "failed", result: { ...CLEAN_ENDING, status: "failed", prUrl: qaUrl }, log });
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
   const state = {
     schemaVersion: 1,

@@ -76,7 +76,7 @@ test("a pull request closed without merge releases the job's worktree, the same 
   const worktree = addWorktree(checkout, "feat+abandoned");
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done', slug = 'abandoned', pr_url = ? WHERE id = ?").run(CLOSE_PR_URL, id);
-  recordRunFields({ project: "alpha", slug: "abandoned", fields: { worktree: worktree.path }, env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: "abandoned", fields: { worktree: worktree.path }, env });
   acquireClose(id, { worker: "close:test:1:aaaa", leaseS: 660 }, env);
   const home = { env, checkout, id, worker: "close:test:1:aaaa", store: openStore(env) };
 
@@ -521,7 +521,7 @@ test("settle closes the job, releases its worktree, appends the Closed line to t
   openDb(env)
     .prepare("UPDATE jobs SET status = 'done', slug = 'closed', pr_url = ?, notice_md = ?, result = ? WHERE id = ?")
     .run(CLOSE_PR_URL, "the run's notice", JSON.stringify({ logPath: jobLogPath(id, env) }), id);
-  recordRunFields({ project: "alpha", slug: "closed", fields: { worktree: worktree.path }, env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: "closed", fields: { worktree: worktree.path }, env });
   acquireClose(id, { worker: "close:test:1:aaaa", leaseS: 660 }, env);
   const home = { env, checkout, id, worker: "close:test:1:aaaa", store: openStore(env) };
 

@@ -38,9 +38,9 @@ function payloadOf(result) {
   return JSON.parse(textOf(result));
 }
 
-// The state.json of a run as it is on disk right now.
+// The state.json of a run of a project named by the test, as it is on disk right now.
 function readState(env, project, slug) {
-  return JSON.parse(readFileSync(join(runDir(project, slug, env), "state.json"), "utf8"));
+  return JSON.parse(readFileSync(join(runDir(projectIdOf(env, project), slug, env), "state.json"), "utf8"));
 }
 
 // A home with the project `alpha` and one claimed job, with the run slug already bound to its row unless asked otherwise.
@@ -61,15 +61,15 @@ test("inside a job the run tools resolve the run from the job's own row", async 
     await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", artifact: "01-triage.md", verdict: "CONFIRMED" } }),
   );
   assert.deepEqual({ ok: done.ok, project: done.project, slug: done.slug }, { ok: true, project: "alpha", slug: SLUG });
-  assert.equal(done.path, join(runDir("alpha", SLUG, env), "state.json"));
+  assert.equal(done.path, join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"));
 
   payloadOf(await client.callTool({ name: "run_set", arguments: { tier: "complex", tier_raise_reason: "a native SDK is involved" } }));
   payloadOf(await client.callTool({ name: "run_outcome", arguments: { status: "gate", notice: "the operator has to choose" } }));
 
   const state = readState(env, "alpha", SLUG);
   assert.deepEqual(
-    { schemaVersion: state.schemaVersion, project: state.project, slug: state.slug, resumeCount: state.resumeCount },
-    { schemaVersion: 1, project: "alpha", slug: SLUG, resumeCount: 0 },
+    { schemaVersion: state.schemaVersion, projectId: state.projectId, slug: state.slug, resumeCount: state.resumeCount },
+    { schemaVersion: 1, projectId: projectIdOf(env, "alpha"), slug: SLUG, resumeCount: 0 },
   );
   assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage"]);
   assert.equal(state.tier, "complex");
@@ -91,8 +91,8 @@ test("inside a job a run named from the outside is refused, and nothing is writt
   assert.match(textOf(refused), /refusing to act on project `beta` and slug `another-run` from inside job `\d+`/);
   assert.match(textOf(refused), /resolved from its own row/);
 
-  assert.equal(existsSync(join(runDir("beta", "another-run", env), "state.json")), false, "the refused call wrote another run");
-  assert.equal(existsSync(join(runDir("alpha", SLUG, env), "state.json")), false, "the refused call wrote its own run");
+  assert.equal(existsSync(join(runDir(ensureProject(env, "beta"), "another-run", env), "state.json")), false, "the refused call wrote another run");
+  assert.equal(existsSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json")), false, "the refused call wrote its own run");
 });
 
 test("a job whose row has no run slug yet is told to print it instead of getting a guessed run directory", async (t) => {
@@ -243,7 +243,7 @@ test("a phase, a status or a call with nothing to record is refused with the acc
   assert.equal(empty.isError, true);
   assert.match(textOf(empty), /nothing was recorded in the state.json of `alpha\/fix-the-worker`: no field to record/);
 
-  assert.equal(existsSync(join(runDir("alpha", SLUG, env), "state.json")), false, "a refused call created the file");
+  assert.equal(existsSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json")), false, "a refused call created the file");
 });
 
 test("inside a job the recall drops what the run already saw, and gives it back when it is all there is", async (t) => {

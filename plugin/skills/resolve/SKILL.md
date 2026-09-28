@@ -430,8 +430,10 @@ The runtime waits for every subagent and background task of an unattended run; l
    — `<slug>` is the kebab slug, `<type>` is the `**Type:**` of the Brief (step 1), `bug/error`
    or `feature/refactor`. The runtime renames the run directory, binds the slug to the job and
    records the type. The FIRST declaration wins: a second one is ignored, and a name another
-   run of the project already took is refused. No `RUN_DIR:` line in the prompt → derive
-   `RUN_DIR` from `<project>/<slug>` as before and print `QUEUE_SLUG: <slug>` once.
+   run of the project already took is refused. No `RUN_DIR:` line in the prompt → never
+   derive it from the project name (run directories are keyed by the project's id): run
+   `nightqueue run dir --project <project> --slug <slug>` and use the path it prints as
+   `RUN_DIR`, then print `QUEUE_SLUG: <slug>` once.
 
    Artifact map (author via Write → readers via Read):
 

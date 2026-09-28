@@ -20,7 +20,7 @@ function sessionRefusal(job) {
 
 // The cwd a session resumes in: the run's worktree when it is still on disk, else the project's checkout, with whether it fell back.
 function resumeCwd(job, env) {
-  const state = readRunState({ project: job.project, slug: job.slug, env });
+  const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
   const worktree = typeof state?.worktree === "string" ? state.worktree.trim() : "";
   if (worktree && existsSync(worktree)) return { cwd: worktree, worktreeReleased: false };
   const checkout = checkoutOfJob(job, env);

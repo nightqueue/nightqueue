@@ -10,7 +10,7 @@ const WITNESS_STATUSES = new Set(["done", "gate", "failed", "cancelled"]);
 
 // The terminal section a runner wrote next to the run, or null when there is none worth trusting.
 function readWitness(row, env) {
-  const terminal = ownRunState({ project: row.project, slug: row.slug, jobId: row.id, env })?.terminal;
+  const terminal = ownRunState({ projectId: row.project_id, slug: row.slug, jobId: row.id, env })?.terminal;
   if (!terminal || typeof terminal !== "object" || Array.isArray(terminal)) return null;
   return WITNESS_STATUSES.has(terminal.status) ? terminal : null;
 }

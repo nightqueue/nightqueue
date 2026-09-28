@@ -137,9 +137,19 @@ export function stateDir(env = process.env) {
   return join(homeDir(env), "state");
 }
 
-// Directory where the pipeline writes the artifacts and the state.json of one run.
-export function runDir(project, slug, env = process.env) {
-  return join(homeDir(env), "runs", project, slug);
+// Directory holding every run directory, one sub-directory per project id.
+export function runsDir(env = process.env) {
+  return join(homeDir(env), "runs");
+}
+
+// Directory where the pipeline writes the artifacts and the state.json of one run, keyed by the project's id.
+export function runDir(projectId, slug, env = process.env) {
+  return join(runsDir(env), projectId, slug);
+}
+
+// Path of the marker saying the run directories were moved from project names to project ids.
+export function runsIdMarkerPath(env = process.env) {
+  return join(runsDir(env), ".by-id");
 }
 
 // Directory of the queue logs: one file per job plus one per detached runner.

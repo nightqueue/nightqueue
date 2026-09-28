@@ -64,7 +64,7 @@ function writeJobLog(env, id) {
 
 // Writes the state.json the pipeline itself recorded: the outcome carries the SAME short summary the row got, job #28's exact shape.
 function writeSummarizedOutcome(env) {
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "state.json");
   const state = {

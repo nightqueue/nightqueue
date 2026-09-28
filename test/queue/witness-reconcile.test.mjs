@@ -81,7 +81,7 @@ function expireLease(env, id) {
 // Writes the witness a runner leaves next to the run once it has finished the job.
 function witness(env, { slug = SLUG, status = "done", prUrl = PR_URL } = {}) {
   return writeRunTerminal({
-    project: "alpha",
+    projectId: ensureProject(env, "alpha"),
     slug,
     terminal: { status, prUrl, finishedAt: FINISHED_AT, writtenBy: WRITTEN_BY, pid: 4242 },
     env,
@@ -105,43 +105,43 @@ function lostFinish(env, options = {}) {
 
 test("the witness is merged into what the pipeline wrote, leaves no temporary file, and refuses an unsafe slug", (t) => {
   const env = makeQueue(t, "witness-write");
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "state.json"), JSON.stringify({ schemaVersion: 1, slug: SLUG, branch: "ns/fix", phases: [] }));
 
   const written = witness(env);
   assert.equal(written.status, "written");
-  const state = readRunState({ project: "alpha", slug: SLUG, env });
+  const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
   assert.equal(state.branch, "ns/fix", "the witness overwrote what the pipeline had written");
   assert.deepEqual(Object.keys(state.terminal), ["status", "prUrl", "finishedAt", "writtenBy", "pid"]);
   assert.deepEqual(state.terminal, { status: "done", prUrl: PR_URL, finishedAt: FINISHED_AT, writtenBy: WRITTEN_BY, pid: 4242 });
   assert.deepEqual(readdirSync(dir).filter((name) => name.includes(".tmp")), [], "a temporary file was left in the run directory");
 
-  const unsafe = writeRunTerminal({ project: "alpha", slug: "../escape", terminal: { status: "done" }, env });
+  const unsafe = writeRunTerminal({ projectId: ensureProject(env, "alpha"), slug: "../escape", terminal: { status: "done" }, env });
   assert.equal(unsafe.status, "kept");
   assert.equal(unsafe.reason, "unsafe project or slug");
 });
 
 test("clearRunTerminal drops the witness and keeps the rest of the state, and creates nothing when there is no state", (t) => {
   const env = makeQueue(t, "witness-clear");
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "state.json"), JSON.stringify({ schemaVersion: 1, slug: SLUG, phases: [] }));
   witness(env);
 
-  assert.equal(clearRunTerminal({ project: "alpha", slug: SLUG, env }).status, "written");
-  const state = readRunState({ project: "alpha", slug: SLUG, env });
+  assert.equal(clearRunTerminal({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).status, "written");
+  const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
   assert.equal(state.terminal, undefined, "the witness survived the clear");
   assert.equal(state.schemaVersion, 1, "clearing the witness threw away the state of the pipeline");
 
-  assert.equal(clearRunTerminal({ project: "alpha", slug: "never-ran", env }).status, "absent");
-  assert.equal(existsSync(join(runDir("alpha", "never-ran", env), "state.json")), false, "the clear created a state.json");
+  assert.equal(clearRunTerminal({ projectId: ensureProject(env, "alpha"), slug: "never-ran", env }).status, "absent");
+  assert.equal(existsSync(join(runDir(ensureProject(env, "alpha"), "never-ran", env), "state.json")), false, "the clear created a state.json");
 });
 
 test("a job the database lost is restored from its witness, with repairedFrom in the result and one line in its log", async (t) => {
   const env = makeQueue(t, "reconcile-repair");
   const id = lostFinish(env);
-  const before = readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8");
+  const before = readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8");
 
   assert.deepEqual(await reconcileFromWitness(env), { repaired: [id], error: null });
 
@@ -153,7 +153,7 @@ test("a job the database lost is restored from its witness, with repairedFrom in
   assert.equal(row.lease_until, null);
   assert.equal(JSON.parse(row.result).repairedFrom, "state.json");
   assert.equal(
-    readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"),
+    readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8"),
     before,
     "the reconciliation wrote the run directory: the witness must never be overwritten by the database",
   );
@@ -237,7 +237,7 @@ test("a retried job is never closed again by the witness of its previous attempt
 
   await applyRetry({ id, note: null, env });
   assert.equal(getJob(id, env).status, "pending");
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env })?.terminal, undefined, "the retry kept the stale witness");
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env })?.terminal, undefined, "the retry kept the stale witness");
 
   assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "the witness of the previous attempt finished the fresh one");
   assert.equal(getJob(id, env).status, "pending");
@@ -297,7 +297,7 @@ function storedNow(env) {
 function lostFinishAt(env, { slug, finishedAt }) {
   const id = runningJob(env, { slug });
   expireLease(env, id);
-  writeRunTerminal({ project: "alpha", slug, terminal: { status: "done", prUrl: PR_URL, finishedAt, writtenBy: WRITTEN_BY, pid: 4242 }, env });
+  writeRunTerminal({ projectId: ensureProject(env, "alpha"), slug, terminal: { status: "done", prUrl: PR_URL, finishedAt, writtenBy: WRITTEN_BY, pid: 4242 }, env });
   return id;
 }
 

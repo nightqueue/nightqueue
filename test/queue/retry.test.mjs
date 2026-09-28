@@ -20,8 +20,8 @@ function makeQueue(t, name) {
 }
 
 // Materializes the run directory of a project and slug, with one artifact inside it.
-function writeRun(env, { project, slug }) {
-  const dir = runDir(project, slug, env);
+function writeRun(env, { projectId, slug }) {
+  const dir = runDir(projectId, slug, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "01-triage.md"), "triage\n");
   return dir;
@@ -40,22 +40,24 @@ function gatedJob(env, { slug = "fix-the-worker", branch = "fix/the-worker", not
 
 test("a project or slug that is not a safe segment is never turned into a path to delete", (t) => {
   const env = makeQueue(t, "retry-unsafe-segments");
-  const victim = join(homeDir(env), "runs", "alpha", "keep-me");
+  const alpha = ensureProject(env, "alpha");
+  const victim = join(homeDir(env), "runs", alpha, "keep-me");
   mkdirSync(victim, { recursive: true });
 
   for (const [project, slug] of [
-    ["alpha", ".."],
-    ["alpha", "../keep-me"],
-    ["alpha", "sub/dir"],
-    ["alpha", "/etc"],
-    ["alpha", ""],
-    ["alpha", null],
+    [alpha, ".."],
+    [alpha, "../keep-me"],
+    [alpha, "sub/dir"],
+    [alpha, "/etc"],
+    [alpha, ""],
+    [alpha, null],
+    ["alpha", "keep-me"],
     ["..", "keep-me"],
     ["../alpha", "keep-me"],
     ["", "keep-me"],
     [null, "keep-me"],
   ]) {
-    const result = discardRunDir({ project, slug, env });
+    const result = discardRunDir({ projectId: project, slug, env });
     assert.equal(result.status, "kept", `${project}/${slug} was accepted as a path`);
     assert.equal(result.reason, "unsafe project or slug");
   }
@@ -67,11 +69,11 @@ test("a run directory that is a symlink to somebody else's tree is refused, neve
   const foreign = join(homeDir(env), "somebody-else");
   mkdirSync(foreign, { recursive: true });
   writeFileSync(join(foreign, "important.txt"), "do not delete me\n");
-  const link = runDir("alpha", "fix-the-worker", env);
-  mkdirSync(join(homeDir(env), "runs", "alpha"), { recursive: true });
+  const link = runDir(ensureProject(env, "alpha"), "fix-the-worker", env);
+  mkdirSync(join(homeDir(env), "runs", ensureProject(env, "alpha")), { recursive: true });
   symlinkSync(foreign, link);
 
-  const result = discardRunDir({ project: "alpha", slug: "fix-the-worker", env });
+  const result = discardRunDir({ projectId: ensureProject(env, "alpha"), slug: "fix-the-worker", env });
   assert.equal(result.status, "kept");
   assert.equal(result.reason, "the run directory is not a plain directory");
   assert.equal(existsSync(join(foreign, "important.txt")), true, "the link was followed and the target was deleted");
@@ -80,28 +82,28 @@ test("a run directory that is a symlink to somebody else's tree is refused, neve
 
 test("a run directory that is a file, or is not there at all, is never deleted", (t) => {
   const env = makeQueue(t, "retry-not-a-dir");
-  mkdirSync(join(homeDir(env), "runs", "alpha"), { recursive: true });
-  const file = runDir("alpha", "a-file", env);
+  mkdirSync(join(homeDir(env), "runs", ensureProject(env, "alpha")), { recursive: true });
+  const file = runDir(ensureProject(env, "alpha"), "a-file", env);
   writeFileSync(file, "not a directory\n");
 
-  assert.deepEqual(discardRunDir({ project: "alpha", slug: "a-file", env }), {
+  assert.deepEqual(discardRunDir({ projectId: ensureProject(env, "alpha"), slug: "a-file", env }), {
     dir: file,
     status: "kept",
     reason: "the run directory is not a plain directory",
   });
   assert.equal(existsSync(file), true);
-  assert.equal(discardRunDir({ project: "alpha", slug: "never-ran", env }).status, "not present");
+  assert.equal(discardRunDir({ projectId: ensureProject(env, "alpha"), slug: "never-ran", env }).status, "not present");
 });
 
 test("only a directory under the runs directory of this home is ever removed", (t) => {
   const env = makeQueue(t, "retry-contained");
-  const dir = writeRun(env, { project: "alpha", slug: "fix-the-worker" });
+  const dir = writeRun(env, { projectId: ensureProject(env, "alpha"), slug: "fix-the-worker" });
 
   const outside = { ...env, NIGHTQUEUE_HOME: join(homeDir(env), "other-home") };
-  assert.equal(discardRunDir({ project: "alpha", slug: "fix-the-worker", env: outside }).status, "not present");
+  assert.equal(discardRunDir({ projectId: ensureProject(env, "alpha"), slug: "fix-the-worker", env: outside }).status, "not present");
   assert.equal(existsSync(dir), true, "the run directory of another home was deleted");
 
-  const removed = discardRunDir({ project: "alpha", slug: "fix-the-worker", env });
+  const removed = discardRunDir({ projectId: ensureProject(env, "alpha"), slug: "fix-the-worker", env });
   assert.equal(removed.status, "removed");
   assert.equal(removed.dir, dir);
   assert.equal(existsSync(dir), false);
@@ -110,7 +112,7 @@ test("only a directory under the runs directory of this home is ever removed", (
 test("--fresh clears the slug, the branch and the session, and only then drops the run directory", async (t) => {
   const env = makeQueue(t, "retry-fresh");
   const id = gatedJob(env);
-  const dir = writeRun(env, { project: "alpha", slug: "fix-the-worker" });
+  const dir = writeRun(env, { projectId: ensureProject(env, "alpha"), slug: "fix-the-worker" });
 
   const { job, runDir: discarded } = await applyRetry({ id, note: "start over", fresh: true, env });
   assert.equal(job.status, "pending");
@@ -124,7 +126,7 @@ test("--fresh clears the slug, the branch and the session, and only then drops t
 test("a retry without --fresh keeps the slug, the branch, the session and the run directory", async (t) => {
   const env = makeQueue(t, "retry-resume");
   const id = gatedJob(env);
-  const dir = writeRun(env, { project: "alpha", slug: "fix-the-worker" });
+  const dir = writeRun(env, { projectId: ensureProject(env, "alpha"), slug: "fix-the-worker" });
 
   const { job, runDir: discarded } = await applyRetry({ id, note: "keep going", env });
   assert.equal(job.status, "pending");
@@ -138,7 +140,7 @@ test("a retry without --fresh keeps the slug, the branch, the session and the ru
 test("a refused retry never reaches the run directory", async (t) => {
   const env = makeQueue(t, "retry-refused-keeps-dir");
   const id = gatedJob(env);
-  const dir = writeRun(env, { project: "alpha", slug: "fix-the-worker" });
+  const dir = writeRun(env, { projectId: ensureProject(env, "alpha"), slug: "fix-the-worker" });
 
   await assert.rejects(applyRetry({ id, fresh: true, env }), /waiting for a decision/);
   assert.equal(existsSync(dir), true, "a refused retry deleted the run directory anyway");
@@ -171,7 +173,7 @@ test("a retry called from inside job A cannot touch job B: no delete, no note, n
   const env = makeQueue(t, "retry-cross-job");
   const victim = gatedJob(env, { slug: "fix-the-worker", note: "why B stopped" });
   const attacker = gatedJob(env, { slug: "another-run", branch: "fix/another" });
-  const dir = writeRun(env, { project: "alpha", slug: "fix-the-worker" });
+  const dir = writeRun(env, { projectId: ensureProject(env, "alpha"), slug: "fix-the-worker" });
   const before = getJob(victim, env);
   const inside = { ...env, NIGHTQUEUE_JOB_ID: String(attacker) };
 
@@ -212,9 +214,9 @@ test("a job id the environment cannot vouch for is read as no job at all, never 
 test("the run directory of a job in another project is never touched by a retry", async (t) => {
   const env = makeQueue(t, "retry-other-project");
   makeProject(t, env, "beta");
-  const other = writeRun(env, { project: "beta", slug: "fix-the-worker" });
+  const other = writeRun(env, { projectId: ensureProject(env, "beta"), slug: "fix-the-worker" });
   const id = gatedJob(env);
-  writeRun(env, { project: "alpha", slug: "fix-the-worker" });
+  writeRun(env, { projectId: ensureProject(env, "alpha"), slug: "fix-the-worker" });
 
   await applyRetry({ id, note: "start over", fresh: true, env });
   assert.equal(existsSync(other), true, "the retry deleted the run of another project with the same slug");

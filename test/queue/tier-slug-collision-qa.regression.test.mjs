@@ -57,7 +57,7 @@ test("a second tiered job left running under a dead worker, after losing the sam
   const rowA = getJob(a, env);
   assert.equal(rowA.slug, "shared-run", "setup: job A did not bind the run name it declared");
   assert.equal(rowA.pr_url, PR_URL, "setup: job A did not finish with its pull request recorded");
-  const stateAPath = join(runDir("alpha", rowA.slug, env), "state.json");
+  const stateAPath = join(runDir(ensureProject(env, "alpha"), rowA.slug, env), "state.json");
   const bytesBefore = readFileSync(stateAPath, "utf8");
 
   // B is picked up by a second worker and, before it ever writes anything of its own, tries to name its run

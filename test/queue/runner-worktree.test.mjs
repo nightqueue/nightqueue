@@ -29,7 +29,7 @@ function makeWorktreeRun(t, name, { stdout, dirty = false, rowNotice = null }) {
   useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout, exitCode: 0 }]);
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET slug = ?, notice_md = ? WHERE id = ?").run(SLUG, rowNotice, id);
-  recordRunFields({ project: "alpha", slug: SLUG, fields: { worktree: worktree.path }, env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { worktree: worktree.path }, env });
   return { env, id, checkout, ...worktree };
 }
 

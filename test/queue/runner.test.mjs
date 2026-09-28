@@ -119,7 +119,7 @@ function orchestratorToolsEvent(messageId, tools, usage) {
 test("a finished run persists what its orchestrator did: turns, reads outside the run, Bash, exploration Bash and the last context", async (t) => {
   const env = makeHome(t, "runner-orchestrator-counts");
   const repo = makeProject(t, env, "alpha");
-  const triage = join(runDir("alpha", SLUG, env), "01-triage.md");
+  const triage = join(runDir(ensureProject(env, "alpha"), SLUG, env), "01-triage.md");
   env.CLAUDE_CONFIG_DIR = makeDir(t, "runner-orchestrator-counts-claude");
   const hostProject = join(env.CLAUDE_CONFIG_DIR, "projects", "-repo-alpha");
   mkdirSync(hostProject, { recursive: true });
@@ -219,7 +219,7 @@ test("the runner leaves the witness of the outcome next to the run, with its six
 
   await runJobCycle(env, id);
 
-  const state = JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"));
+  const state = JSON.parse(readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8"));
   assert.deepEqual(Object.keys(state.terminal), ["status", "prUrl", "finishedAt", "writtenBy", "pid", "jobId"]);
   assert.deepEqual(
     { status: state.terminal.status, prUrl: state.terminal.prUrl, writtenBy: state.terminal.writtenBy, pid: state.terminal.pid, jobId: state.terminal.jobId },
@@ -242,7 +242,7 @@ test("the runtime records in the state of the run the pull request the host publ
 
   assert.deepEqual(cycle.processed, [{ id, status: "done", prUrl: PR_URL, attempts: 1 }]);
   assert.equal(getJob(id, env).pr_url, PR_URL);
-  const state = JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"));
+  const state = JSON.parse(readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8"));
   assert.equal(state.outcome.prUrl, PR_URL, "the pull request of the host never reached the record of the run");
   assert.equal(state.schemaVersion, 1);
   assert.equal(state.terminal.prUrl, PR_URL, "the witness lost the pull request the same write recorded");
@@ -295,7 +295,7 @@ test("the durations and the models of the telemetry come from the stream, and th
     ],
   );
 
-  const state = JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"));
+  const state = JSON.parse(readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8"));
   assert.deepEqual({ tier: state.tier, reason: state.tierRaiseReason }, { tier: "complex", reason: "a stack trace in the claim path" });
 });
 
@@ -511,8 +511,8 @@ test("the slug and the session id are stored while the run is still going, not a
 test("the branch of the run comes from the state file the pipeline wrote", async (t) => {
   const { env } = makeRunnerHome(t, "runner-branch", [{ stdout: doneStream(), exitCode: 0 }]);
   const id = enqueue(env);
-  mkdirSync(runDir("alpha", SLUG, env), { recursive: true });
-  writeFileSync(join(runDir("alpha", SLUG, env), "state.json"), JSON.stringify({ schemaVersion: 1, slug: SLUG, branch: "fix/the-worker", phases: [] }));
+  mkdirSync(runDir(ensureProject(env, "alpha"), SLUG, env), { recursive: true });
+  writeFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), JSON.stringify({ schemaVersion: 1, slug: SLUG, branch: "fix/the-worker", phases: [] }));
 
   await runJobCycle(env, id);
 
@@ -522,9 +522,9 @@ test("the branch of the run comes from the state file the pipeline wrote", async
 test("a retried job resumes on its own slug and run directory, and the runtime counts the resume in the state", async (t) => {
   const { env, planPath } = makeRunnerHome(t, "runner-resume-handoff", [{ stdout: "", exitCode: 0 }]);
   const id = enqueue(env);
-  mkdirSync(runDir("alpha", SLUG, env), { recursive: true });
+  mkdirSync(runDir(ensureProject(env, "alpha"), SLUG, env), { recursive: true });
   writeFileSync(
-    join(runDir("alpha", SLUG, env), "state.json"),
+    join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"),
     JSON.stringify({
       schemaVersion: 1,
       slug: SLUG,
@@ -541,12 +541,12 @@ test("a retried job resumes on its own slug and run directory, and the runtime c
 
   const prompt = argValue(fakeCalls(planPath)[0].argv, "-p");
   assert.ok(prompt.includes(`RESUME CANDIDATE (slug \`${SLUG}\`)`), prompt);
-  assert.ok(prompt.includes(`RUN_DIR: ${runDir("alpha", SLUG, env)}`), prompt);
+  assert.ok(prompt.includes(`RUN_DIR: ${runDir(ensureProject(env, "alpha"), SLUG, env)}`), prompt);
   assert.ok(prompt.includes("Branch: fix/the-worker"), prompt);
   assert.ok(prompt.includes("Resume from phase: explore"), prompt);
   assert.equal(getJob(id, env).slug, SLUG, "the retry lost the slug of the run it was resuming");
-  assert.deepEqual(readdirSync(dirname(runDir("alpha", SLUG, env))), [SLUG], "the retry opened a second run directory");
-  const state = JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"));
+  assert.deepEqual(readdirSync(dirname(runDir(ensureProject(env, "alpha"), SLUG, env))), [SLUG], "the retry opened a second run directory");
+  const state = JSON.parse(readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8"));
   assert.equal(state.resumeCount, 1, "the resume was not counted in the state of the run");
   assert.equal(state.phases.length, 1, "counting the resume rewrote the run instead of merging into it");
 });
@@ -554,9 +554,9 @@ test("a retried job resumes on its own slug and run directory, and the runtime c
 test("a job queued from an operator run whose bug triage stayed below level 3 re-runs it, and says so in its prompt and its log", async (t) => {
   const { env, planPath } = makeRunnerHome(t, "runner-operator-rerun", [{ stdout: "", exitCode: 0 }]);
   const id = enqueue(env);
-  mkdirSync(runDir("alpha", SLUG, env), { recursive: true });
+  mkdirSync(runDir(ensureProject(env, "alpha"), SLUG, env), { recursive: true });
   writeFileSync(
-    join(runDir("alpha", SLUG, env), "state.json"),
+    join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"),
     JSON.stringify({
       schemaVersion: 1,
       slug: SLUG,
@@ -780,7 +780,7 @@ test("the run is opened before the spawn, and the ONE declaration of the pipelin
   ]);
   const { env, planPath } = makeRunnerHome(t, "runner-slug-override", [{ stdout, exitCode: 0 }]);
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: PROMPT, slug: SLUG }, env).id;
-  const provisional = runDir("alpha", SLUG, env);
+  const provisional = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(provisional, { recursive: true });
   writeFileSync(join(provisional, "01-triage.md"), "the artifact of the provisional run\n");
 
@@ -792,16 +792,16 @@ test("the run is opened before the spawn, and the ONE declaration of the pipelin
 
   assert.equal(getJob(id, env).slug, "the-real-name", "the row kept a slug the pipeline had renamed");
   assert.equal(existsSync(provisional), false, "the provisional run directory was left behind");
-  const renamed = runDir("alpha", "the-real-name", env);
+  const renamed = runDir(ensureProject(env, "alpha"), "the-real-name", env);
   assert.equal(readFileSync(join(renamed, "01-triage.md"), "utf8"), "the artifact of the provisional run\n");
   assert.equal(JSON.parse(readFileSync(join(renamed, "state.json"), "utf8")).type, "bug/error");
-  assert.equal(existsSync(runDir("alpha", "a-later-name", env)), false, "a second `SLUG:` line renamed the run again");
+  assert.equal(existsSync(runDir(ensureProject(env, "alpha"), "a-later-name", env)), false, "a second `SLUG:` line renamed the run again");
 });
 
 test("the runtime creates the run directory before the spawn, so the session never runs mkdir itself", async (t) => {
   const { env, planPath } = makeRunnerHome(t, "runner-run-dir", [{ stdout: doneStream(), exitCode: 0 }]);
   const id = enqueue(env);
-  const provisional = runDir("alpha", SLUG, env);
+  const provisional = runDir(ensureProject(env, "alpha"), SLUG, env);
   const plan = JSON.parse(readFileSync(planPath, "utf8"));
   writeFileSync(planPath, JSON.stringify({ ...plan, probePath: provisional }));
   assert.equal(existsSync(provisional), false, "the test home already had the run directory");
@@ -822,14 +822,14 @@ test("a slug another run of the project already took is refused, and the job kee
   const { env } = makeRunnerHome(t, "runner-slug-collision", [{ stdout, exitCode: 0 }]);
   const id = enqueue(env);
   const other = `{"schemaVersion":1,"slug":"${taken}","phases":[]}\n`;
-  mkdirSync(runDir("alpha", taken, env), { recursive: true });
-  writeFileSync(join(runDir("alpha", taken, env), "state.json"), other);
+  mkdirSync(runDir(ensureProject(env, "alpha"), taken, env), { recursive: true });
+  writeFileSync(join(runDir(ensureProject(env, "alpha"), taken, env), "state.json"), other);
 
   await runJobCycle(env, id);
 
   assert.equal(getJob(id, env).slug, SLUG, "the job took over the run directory of another run");
-  assert.equal(readFileSync(join(runDir("alpha", taken, env), "state.json"), "utf8"), other, "the run of the other job was written into");
-  assert.equal(JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8")).type, "bug/error");
+  assert.equal(readFileSync(join(runDir(ensureProject(env, "alpha"), taken, env), "state.json"), "utf8"), other, "the run of the other job was written into");
+  assert.equal(JSON.parse(readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8")).type, "bug/error");
   assert.match(readFileSync(jobLogPath(id, env), "utf8"), /the run keeps the slug `fix-the-worker`: it could not be renamed to `fix-the-worker-of-the-queue`/);
 });
 
@@ -839,8 +839,8 @@ test("a rename that is kept and whose revert bind is refused is said out loud, a
   const { env } = makeRunnerHome(t, "runner-slug-revert-refused", [{ stdout, exitCode: 0 }]);
   const id = enqueue(env);
   const other = `{"schemaVersion":1,"slug":"${taken}","phases":[]}\n`;
-  mkdirSync(runDir("alpha", taken, env), { recursive: true });
-  writeFileSync(join(runDir("alpha", taken, env), "state.json"), other);
+  mkdirSync(runDir(ensureProject(env, "alpha"), taken, env), { recursive: true });
+  writeFileSync(join(runDir(ensureProject(env, "alpha"), taken, env), "state.json"), other);
   const jobs = openStore(env).jobs;
   const realBind = jobs.bindRunSlug;
   jobs.bindRunSlug = async (jobId, spec) => {
@@ -854,19 +854,19 @@ test("a rename that is kept and whose revert bind is refused is said out loud, a
   assert.equal(getJob(id, env).slug, taken, "setup failed: the refused revert should leave the row on the declared slug");
   assert.match(log, new RegExp(`WARNING: the row could not be bound back to \`${SLUG}\` \\(job #999 holds it\\)`));
   assert.match(log, new RegExp(`could not write the terminal witness: the row names the run \`${taken}\` but this run lives in \`${SLUG}\``));
-  assert.equal(readFileSync(join(runDir("alpha", taken, env), "state.json"), "utf8"), other, "the witness was stamped into a directory this run never wrote");
+  assert.equal(readFileSync(join(runDir(ensureProject(env, "alpha"), taken, env), "state.json"), "utf8"), other, "the witness was stamped into a directory this run never wrote");
 });
 
 test("a fresh job creates its run directory before binding its slug, and skips a directory already on disk with a line in its log", async (t) => {
   const stdout = toNdjson([systemInitEvent(), assistantEvent(noticeText(), { messageId: "msg_notice" }), resultEvent({ text: `Done. Pull request: ${PR_URL}` })]);
   const { env } = makeRunnerHome(t, "runner-run-dir-claim", [{ stdout, exitCode: 0 }]);
   const id = enqueue(env);
-  mkdirSync(runDir("alpha", SLUG, env), { recursive: true });
+  mkdirSync(runDir(ensureProject(env, "alpha"), SLUG, env), { recursive: true });
   const jobs = openStore(env).jobs;
   const realBind = jobs.bindRunSlug;
   const seen = [];
   jobs.bindRunSlug = async (jobId, spec) => {
-    const dir = runDir("alpha", spec.candidates[0], env);
+    const dir = runDir(ensureProject(env, "alpha"), spec.candidates[0], env);
     seen.push({ slug: spec.candidates[0], created: existsSync(dir) && readdirSync(dir).length === 0 });
     return realBind(jobId, spec);
   };
@@ -875,7 +875,7 @@ test("a fresh job creates its run directory before binding its slug, and skips a
 
   assert.deepEqual(seen[0], { slug: `${SLUG}-2`, created: true }, "the slug was bound before this job created its run directory, or onto the one already on disk");
   assert.match(readFileSync(jobLogPath(id, env), "utf8"), new RegExp(`the run directory \`${SLUG}\` already exists on disk and was not created by this run`));
-  assert.deepEqual(readdirSync(runDir("alpha", SLUG, env)), [], "the job wrote into a directory it did not create");
+  assert.deepEqual(readdirSync(runDir(ensureProject(env, "alpha"), SLUG, env)), [], "the job wrote into a directory it did not create");
 });
 
 test("a slug another JOB holds is refused even when its run directory is gone, and the job keeps the one the runtime gave it", async (t) => {
@@ -884,13 +884,13 @@ test("a slug another JOB holds is refused even when its run directory is gone, a
   const { env } = makeRunnerHome(t, "runner-slug-row-collision", [{ stdout, exitCode: 0 }]);
   const holder = addJob({ projectId: ensureProject(env, "alpha"), prompt: "another job", slug: taken }, env).id;
   const id = enqueue(env);
-  assert.equal(existsSync(runDir("alpha", taken, env)), false, "the test home already had the run directory of the other job");
+  assert.equal(existsSync(runDir(ensureProject(env, "alpha"), taken, env)), false, "the test home already had the run directory of the other job");
 
   await runJobCycle(env, id);
 
   assert.equal(getJob(id, env).slug, SLUG, "the job took over the run of another job");
   assert.equal(getJob(holder, env).slug, taken);
-  assert.equal(existsSync(runDir("alpha", taken, env)), false, "the run was renamed onto the slug another job holds");
+  assert.equal(existsSync(runDir(ensureProject(env, "alpha"), taken, env)), false, "the run was renamed onto the slug another job holds");
   assert.match(readFileSync(jobLogPath(id, env), "utf8"), new RegExp(`the run keeps the slug \`${SLUG}\`: it could not be renamed to \`${taken}\` \\(job #${holder} holds it\\)`));
 });
 
@@ -952,7 +952,7 @@ test("a finish the database refused to commit still leaves the witness, is repor
   assert.deepEqual(cycle.processed, [{ id, status: "unrecorded", prUrl: PR_URL, attempts: 1, error: "the nightqueue database is still locked by another process after 24 attempts" }]);
   assert.equal(getJob(id, env).status, "running", "the row kept the state the refused commit left it in");
   assert.match(readFileSync(jobLogPath(id, env), "utf8"), /finish verification failed\nthe finish of job #\d+ did not commit: the nightqueue database is still locked/);
-  const state = JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"));
+  const state = JSON.parse(readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8"));
   assert.deepEqual({ status: state.terminal.status, prUrl: state.terminal.prUrl }, { status: "done", prUrl: PR_URL }, "the witness was not written from the outcome in memory");
 
   openDb(env).prepare("UPDATE jobs SET lease_until = datetime('now', '-1 hour') WHERE id = ?").run(id);

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { runDir } from "../../src/config/paths.mjs";
 import { clearRunOutcome, decideResume, isSafeSegment, readRunState, RESUME_PHASE_ORDER, resumeHandoff } from "../../src/queue/resume.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
-import { makeHome } from "../../test-support/memory.mjs";
+import { FIXED_PROJECT_ID as ALPHA_ID, makeHome } from "../../test-support/memory.mjs";
 
 // A state.json in the shape the plugin writes it, with the canonical ENGLISH keys and phase names.
 function state({ phases = ["triage", "explore"], resumeCount = 0, ...extra } = {}) {
@@ -25,8 +25,8 @@ function state({ phases = ["triage", "explore"], resumeCount = 0, ...extra } = {
 }
 
 // Writes a state.json in the run directory of a project and slug.
-function writeState(env, { project, slug, content }) {
-  const dir = runDir(project, slug, env);
+function writeState(env, { projectId, slug, content }) {
+  const dir = runDir(projectId, slug, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "state.json"), typeof content === "string" ? content : JSON.stringify(content));
   return join(dir, "state.json");
@@ -122,35 +122,35 @@ test("clearRunOutcome drops the record of the previous attempt and keeps everyth
   const env = makeHome(t, "resume-clear-outcome");
   const terminal = { status: "gate", prUrl: null, finishedAt: "2026-09-14T00:00:00Z" };
   writeState(env, {
-    project: "alpha",
+    projectId: ALPHA_ID,
     slug: "fix-the-worker",
     content: state({ outcome: { status: "done", prUrl: "https://github.com/acme/api/pull/42" }, terminal }),
   });
 
-  assert.equal(clearRunOutcome({ project: "alpha", slug: "fix-the-worker", env }).status, "written");
-  const cleared = readRunState({ project: "alpha", slug: "fix-the-worker", env });
+  assert.equal(clearRunOutcome({ projectId: ALPHA_ID, slug: "fix-the-worker", env }).status, "written");
+  const cleared = readRunState({ projectId: ALPHA_ID, slug: "fix-the-worker", env });
   assert.equal(cleared.outcome, undefined, "the record of the previous attempt survived the clear");
   assert.deepEqual(cleared.terminal, terminal, "clearing the record threw away the witness");
   assert.equal(cleared.schemaVersion, 1);
   assert.equal(cleared.phases.length, 2);
   assert.equal(decideResume({ state: cleared }).fromPhase, "architecture", "the resume decision changed with the clear");
 
-  assert.equal(clearRunOutcome({ project: "alpha", slug: "fix-the-worker", env }).status, "absent", "a state with no record was rewritten");
-  assert.equal(clearRunOutcome({ project: "alpha", slug: "never-ran", env }).status, "absent");
-  assert.equal(existsSync(join(runDir("alpha", "never-ran", env), "state.json")), false, "the clear created a state.json");
-  assert.equal(clearRunOutcome({ project: "alpha", slug: "../../escape", env }).status, "absent");
+  assert.equal(clearRunOutcome({ projectId: ALPHA_ID, slug: "fix-the-worker", env }).status, "absent", "a state with no record was rewritten");
+  assert.equal(clearRunOutcome({ projectId: ALPHA_ID, slug: "never-ran", env }).status, "absent");
+  assert.equal(existsSync(join(runDir(ALPHA_ID, "never-ran", env), "state.json")), false, "the clear created a state.json");
+  assert.equal(clearRunOutcome({ projectId: ALPHA_ID, slug: "../../escape", env }).status, "absent");
 });
 
 test("the handoff tells the agent where the run lives, what it kept and which phase comes next", (t) => {
   const env = makeHome(t, "resume-handoff");
-  const job = { id: 7, project: "alpha", slug: "fix-the-worker" };
+  const job = { id: 7, project: "alpha", project_id: ALPHA_ID, slug: "fix-the-worker" };
   const written = state({ phases: ["triage", "explore", "architecture", "implementation"], qaStageA: { artifact: "05a-qa-analyst.md" } });
-  writeState(env, { project: "alpha", slug: job.slug, content: written });
-  const stored = readRunState({ project: "alpha", slug: job.slug, env });
+  writeState(env, { projectId: ALPHA_ID, slug: job.slug, content: written });
+  const stored = readRunState({ projectId: ALPHA_ID, slug: job.slug, env });
 
   assert.deepEqual(resumeHandoff({ job, resume: decideResume({ state: stored }), state: stored, env }), {
     slug: "fix-the-worker",
-    runDir: runDir("alpha", "fix-the-worker", env),
+    runDir: runDir(ALPHA_ID, "fix-the-worker", env),
     branch: "fix/the-worker",
     worktree: "/tmp/worktrees/fix-the-worker",
     lastPhase: "implementation",
@@ -163,34 +163,36 @@ test("the handoff tells the agent where the run lives, what it kept and which ph
   assert.deepEqual({ branch: plain.branch, worktree: plain.worktree, fromStage: plain.fromStage }, { branch: null, worktree: null, fromStage: null });
 });
 
-test("there is no handoff when the decision refuses, when the job has no safe slug or when the project is not a name", (t) => {
+test("there is no handoff when the decision refuses, when the job has no safe slug or when the project is not an id", (t) => {
   const env = makeHome(t, "resume-handoff-refused");
-  const job = { id: 7, project: "alpha", slug: "fix-the-worker" };
+  const job = { id: 7, project: "alpha", project_id: ALPHA_ID, slug: "fix-the-worker" };
   const resume = decideResume({ state: state() });
 
   assert.equal(resumeHandoff({ job, resume: decideResume({ state: null }), state: null, env }), null);
   assert.equal(resumeHandoff({ job, resume: decideResume({ state: state({ resumeCount: 1 }) }), state: state(), env }), null);
   assert.equal(resumeHandoff({ job: { ...job, slug: "../../escape" }, resume, state: state(), env }), null);
   assert.equal(resumeHandoff({ job: { ...job, slug: null }, resume, state: state(), env }), null);
-  assert.equal(resumeHandoff({ job: { ...job, project: "../../etc" }, resume, state: state(), env }), null);
+  assert.equal(resumeHandoff({ job: { ...job, project_id: "../../etc" }, resume, state: state(), env }), null);
+  assert.equal(resumeHandoff({ job: { ...job, project_id: "alpha" }, resume, state: state(), env }), null, "a project name was taken for an id");
   assert.equal(resumeHandoff({}), null);
   assert.equal(resumeHandoff({ job, resume, state: "not an object", env }).branch, null, "a broken state stopped the handoff instead of degrading it");
 });
 
 test("the state file is read from the run directory, and an unsafe segment never becomes a path", (t) => {
   const env = makeHome(t, "resume-read");
-  writeState(env, { project: "alpha", slug: "fix-the-worker", content: state() });
-  assert.equal(readRunState({ project: "alpha", slug: "fix-the-worker", env }).branch, "fix/the-worker");
+  writeState(env, { projectId: ALPHA_ID, slug: "fix-the-worker", content: state() });
+  assert.equal(readRunState({ projectId: ALPHA_ID, slug: "fix-the-worker", env }).branch, "fix/the-worker");
 
-  assert.equal(readRunState({ project: "alpha", slug: "missing-run", env }), null);
-  assert.equal(readRunState({ project: "alpha", slug: null, env }), null);
-  assert.equal(readRunState({ project: "alpha", slug: "../../escape", env }), null);
-  assert.equal(readRunState({ project: "../../etc", slug: "fix-the-worker", env }), null);
+  assert.equal(readRunState({ projectId: ALPHA_ID, slug: "missing-run", env }), null);
+  assert.equal(readRunState({ projectId: ALPHA_ID, slug: null, env }), null);
+  assert.equal(readRunState({ projectId: ALPHA_ID, slug: "../../escape", env }), null);
+  assert.equal(readRunState({ projectId: "../../etc", slug: "fix-the-worker", env }), null);
+  assert.equal(readRunState({ projectId: "alpha", slug: "fix-the-worker", env }), null);
   assert.equal(isSafeSegment("../../escape"), false);
   assert.equal(isSafeSegment("fix-the-worker"), true);
 
-  writeState(env, { project: "alpha", slug: "broken-run", content: "{ not json" });
-  assert.equal(readRunState({ project: "alpha", slug: "broken-run", env }), null);
+  writeState(env, { projectId: ALPHA_ID, slug: "broken-run", content: "{ not json" });
+  assert.equal(readRunState({ projectId: ALPHA_ID, slug: "broken-run", env }), null);
 });
 
 // A state.json an operator session recorded: no branch nor worktree, and `origin: operator`.
@@ -201,7 +203,7 @@ function operatorState({ phases = ["triage"], resumeCount = 0, ...extra } = {}) 
 
 // The prompt the runner builds for a job resumed from the given state.
 function resumePrompt(recorded) {
-  const job = { id: 7, project: "alpha", slug: "fix-the-worker", prompt: "p" };
+  const job = { id: 7, project: "alpha", project_id: ALPHA_ID, slug: "fix-the-worker", prompt: "p" };
   const handoff = resumeHandoff({ job, resume: decideResume({ state: recorded }), state: recorded, env: { NIGHTQUEUE_HOME: "/tmp/ns" } });
   return buildPrompt({ job, handoff });
 }

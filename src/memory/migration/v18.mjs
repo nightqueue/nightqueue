@@ -27,6 +27,7 @@ import { ACTIVE_JOB_PREDICATE } from "../schema.mjs";
 import { isBusyError, rollbackQuietly, sleepSync, withWriteRetry } from "../tx.mjs";
 import { importLegacyRegistry, stripLegacyConfig } from "./legacy-config.mjs";
 import { bringToV17, keepSequence, sequenceOf } from "./legacy.mjs";
+import { moveRunsToIds } from "./runs-by-id.mjs";
 
 export { hasLegacyRegistry, importLegacyRegistry, readV17Registry } from "./legacy-config.mjs";
 
@@ -311,5 +312,10 @@ export function finishV18(db, env, { warn = (line) => process.stderr.write(`${li
     stripLegacyConfig(db, env, { warn });
   } catch (err) {
     warn(`nightqueue: warning: could not finish the v18 migration of config.json: ${err?.message ?? err}`);
+  }
+  try {
+    moveRunsToIds(db, env, { warn });
+  } catch (err) {
+    warn(`nightqueue: warning: could not move the run directories to project ids: ${err?.message ?? err}`);
   }
 }

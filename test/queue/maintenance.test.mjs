@@ -100,7 +100,7 @@ test("runMaintenance prunes a dead registration and repairs a lost finish, and n
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ?, lease_until = datetime('now', '-120 seconds') WHERE id = ?").run(SLUG, id);
   const terminal = { status: "done", prUrl: "https://github.com/acme/api/pull/7", finishedAt: "2026-09-11T03:15:00Z", writtenBy: "/tmp/runtime", pid: 4242 };
-  writeRunTerminal({ project: "alpha", slug: SLUG, terminal, env });
+  writeRunTerminal({ projectId: ensureProject(env, "alpha"), slug: SLUG, terminal, env });
   writeRunnerRecord({ pid: DEAD_PID, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/dead.log" }, env);
   const pidfile = runnerRegistryPath(DEAD_PID, env);
 

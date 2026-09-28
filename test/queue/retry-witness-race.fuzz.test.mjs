@@ -35,7 +35,7 @@ function expireLease(env, id) {
 // Writes the witness a runner leaves next to the run once it has finished the job.
 function witness(env, { slug = SLUG, status = "failed", prUrl = null } = {}) {
   return writeRunTerminal({
-    project: "alpha",
+    projectId: ensureProject(env, "alpha"),
     slug,
     terminal: { status, prUrl, finishedAt: FINISHED_AT, writtenBy: WRITTEN_BY, pid: 4242 },
     env,
@@ -66,7 +66,7 @@ test("a reconciliation landing between retryJob and clearRunTerminal must not re
   retryJob(id, { note: null, fresh: false }, env);
   assert.equal(getJob(id, env).status, "pending", "retryJob itself did not flip the row to pending");
   assert.notEqual(
-    readRunState({ project: "alpha", slug: SLUG, env })?.terminal,
+    readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env })?.terminal,
     undefined,
     "setup: the witness of the previous attempt was already cleared before retryJob committed — the race window does not exist in this build",
   );

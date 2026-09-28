@@ -48,8 +48,8 @@ test("a job whose own run dir survives --fresh as an unremovable symlink moves t
   const foreign = join(homeDir(env), "somebody-else");
   mkdirSync(foreign, { recursive: true });
   writeFileSync(join(foreign, "important.txt"), "do not delete me\n");
-  mkdirSync(join(homeDir(env), "runs", "alpha"), { recursive: true });
-  const link = runDir("alpha", "fix-the-worker", env);
+  mkdirSync(join(homeDir(env), "runs", ensureProject(env, "alpha")), { recursive: true });
+  const link = runDir(ensureProject(env, "alpha"), "fix-the-worker", env);
   symlinkSync(foreign, link);
 
   const { runDir: discarded } = await applyRetry({ id, note: "start over", fresh: true, env });

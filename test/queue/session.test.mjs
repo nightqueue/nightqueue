@@ -30,7 +30,7 @@ function jobWithSession(home, { slug, status, session, attempt, worktree = null 
   openDb(home.env)
     .prepare("UPDATE jobs SET status = ?, slug = ?, attempts = ?, last_session_id = ?, last_session_attempt = ? WHERE id = ?")
     .run(status, slug, attempt, session, attempt, id);
-  if (worktree) recordRunFields({ project: "alpha", slug, fields: { worktree }, env: home.env });
+  if (worktree) recordRunFields({ projectId: ensureProject(home.env, "alpha"), slug, fields: { worktree }, env: home.env });
   return id;
 }
 

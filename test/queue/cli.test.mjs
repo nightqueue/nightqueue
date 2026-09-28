@@ -781,7 +781,7 @@ test("queue retry answers the gate, sends the job back to the queue and keeps wh
 test("queue retry --fresh starts from phase 0 and drops the run directory of the previous attempt", (t) => {
   const env = makeCliHome(t, "cli-retry-fresh", [{ stdout: gateStream(), exitCode: 0 }]);
   assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 1);
-  const dir = runDir("alpha", getJob(1, env).slug, env);
+  const dir = runDir(ensureProject(env, "alpha"), getJob(1, env).slug, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(`${dir}/01-triage.md`, "triage\n");
 

@@ -6,7 +6,7 @@ import { packageRoot } from "../host/paths.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore } from "../store/open.mjs";
 import { classifyJobResult } from "./classify.mjs";
-import { isSafeSegment, ownRunState, readRunState, writeRunTerminal } from "./resume.mjs";
+import { isRunPath, ownRunState, readRunState, writeRunTerminal } from "./resume.mjs";
 import { lastAttemptStream } from "./stream.mjs";
 
 // Statuses a re-classification may correct: a row that ended badly, never one the queue still owes work for.
@@ -63,7 +63,7 @@ function noticeDiffers(row, outcome) {
 // Rewrites the witness next to the run, so the file and the row agree once the repair has written both.
 function mirrorWitness(row, outcome, env) {
   return writeRunTerminal({
-    project: row.project,
+    projectId: row.project_id,
     slug: row.slug,
     terminal: {
       status: outcome.status,
@@ -79,9 +79,9 @@ function mirrorWitness(row, outcome, env) {
 
 // The state and plan of the job's own run; a run whose witness another job stamped is foreign and lends the repair nothing.
 function ownRun(row, env) {
-  const state = ownRunState({ project: row.project, slug: row.slug, jobId: row.id, env });
-  const foreign = state === null && readRunState({ project: row.project, slug: row.slug, env }) !== null;
-  const planPath = isSafeSegment(row.slug) && !foreign ? join(runDir(row.project, row.slug, env), "03-plan.md") : null;
+  const state = ownRunState({ projectId: row.project_id, slug: row.slug, jobId: row.id, env });
+  const foreign = state === null && readRunState({ projectId: row.project_id, slug: row.slug, env }) !== null;
+  const planPath = isRunPath(row.project_id, row.slug) && !foreign ? join(runDir(row.project_id, row.slug, env), "03-plan.md") : null;
   return { state, planPath, foreign };
 }
 

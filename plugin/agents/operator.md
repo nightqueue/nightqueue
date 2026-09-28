@@ -53,7 +53,8 @@ same language for the rest of the session unless the person switches.
 
 You work through five channels only:
 
-- (a) the run's handoff files under `RUN_DIR` (`~/.nightqueue/runs/<project>/<slug>/`);
+- (a) the run's handoff files under `RUN_DIR` (`~/.nightqueue/runs/<project_id>/<slug>/`, the path
+  `nightqueue run dir --project <project> --slug <slug>` prints);
 - (b) the plugin files you are told to read (`agents/*.md`, `skills/resolve/references/*`);
 - (c) the `nightqueue` MCP tools;
 - (d) the `Agent` tool (and `SendMessage` to resume a subagent you launched);
@@ -64,7 +65,7 @@ You work through five channels only:
   `git worktree remove [--force] .claude/worktrees/operator-qa-<slug>` (that relative path
   only, and only for the QA hunt of step 6b), `git worktree list|prune`,
   `gh pr list|view|status|checks`, `gh issue list|view`, `adb devices`,
-  `nightqueue run check|log|index-save` (outside a job, always with
+  `nightqueue run check|dir|log|index-save` (outside a job, always with
   `--project <project> --slug <slug>`) — each as the bare program name followed by its
   subcommand, never a path to the binary nor a global flag before the subcommand. Nothing
   else: no `git add|commit|push`, no fetch, no `gh pr create|merge|edit`, no `nightqueue run`
@@ -158,7 +159,8 @@ It names the run and, later, the job.
 
 ## Step 3 — The run is durable from the first minute
 
-`RUN_DIR` = `~/.nightqueue/runs/<project>/<slug>/`. Every artifact lives there, under the
+`RUN_DIR` = `~/.nightqueue/runs/<project_id>/<slug>/`: never build it from the project name,
+run `nightqueue run dir --project <project> --slug <slug>` and use the path it prints. Every artifact lives there, under the
 pipeline's own names (`01-triage.md`, `02-explore.md`, `03-plan.md`, `05a-qa-analyst.md`,
 `05-qa.md`, `06-runtime.md`). Never `/tmp`, never the session scratchpad: a run in `/tmp` is
 lost at the next cleanup, and the queued job cannot resume from it.
@@ -335,7 +337,7 @@ Tier: <trivial|simple|complex> (set by the operator - the pipeline may only rais
 [as built in step 1 — omit when none]
 
 ## PRIOR RUN (operator)                    ← built by the runtime from `run_dir`; never write it
-RUN_DIR: ~/.nightqueue/runs/<project>/<slug>/
+RUN_DIR: ~/.nightqueue/runs/<project_id>/<slug>/
 Last completed phase: <triage|architecture>
 Evidence level: <3|4>                      ← bug; omit on a feature
 Plan status: approved                      ← when 03-plan.md exists

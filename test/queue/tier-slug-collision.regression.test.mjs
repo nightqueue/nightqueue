@@ -55,7 +55,7 @@ function runJobCycle(env, jobId) {
 
 // Writes the state.json of a run with the terminal witness a runner left in it, and answers its bytes.
 function writeTerminal(env, slug, terminal) {
-  const dir = runDir("alpha", slug, env);
+  const dir = runDir(ensureProject(env, "alpha"), slug, env);
   mkdirSync(dir, { recursive: true });
   const text = `${JSON.stringify({ schemaVersion: 1, slug, project: "alpha", resumeCount: 0, phases: [], terminal }, null, 2)}\n`;
   writeFileSync(join(dir, "state.json"), text);
@@ -78,9 +78,9 @@ test("two jobs queued with --tier complex get distinct slugs from their own brie
   assert.equal(slugA, "rename-the-lease-column-of-the");
   assert.equal(slugB, "drop-the-retired-ship-columns-after");
   for (const slug of [slugA, slugB]) assert.equal(slug.startsWith("tier-"), false, `\`${slug}\` was derived from the runtime header`);
-  assert.notEqual(runDir("alpha", slugA, env), runDir("alpha", slugB, env));
-  assert.equal(existsSync(runDir("alpha", slugA, env)), true);
-  assert.equal(existsSync(runDir("alpha", slugB, env)), true);
+  assert.notEqual(runDir(ensureProject(env, "alpha"), slugA, env), runDir(ensureProject(env, "alpha"), slugB, env));
+  assert.equal(existsSync(runDir(ensureProject(env, "alpha"), slugA, env)), true);
+  assert.equal(existsSync(runDir(ensureProject(env, "alpha"), slugB, env)), true);
 });
 
 test("two tiered jobs whose briefs share their first six words get the base slug and its -2 variant", async (t) => {
@@ -96,7 +96,7 @@ test("two tiered jobs whose briefs share their first six words get the base slug
 
   assert.equal(getJob(a, env).slug, "fix-the-worker-of-the-queue");
   assert.equal(getJob(b, env).slug, "fix-the-worker-of-the-queue-2");
-  assert.equal(existsSync(runDir("alpha", "fix-the-worker-of-the-queue-2", env)), true);
+  assert.equal(existsSync(runDir(ensureProject(env, "alpha"), "fix-the-worker-of-the-queue-2", env)), true);
 });
 
 test("the repair of one tiered job never reads the state.json of another one, even when its pipeline names the same run", async (t) => {
@@ -108,7 +108,7 @@ test("the repair of one tiered job never reads the state.json of another one, ev
   const b = queueTiered(env, "Drop the retired ship columns after the close migration");
 
   await runJobCycle(env, a);
-  const stateA = join(runDir("alpha", "shared-run", env), "state.json");
+  const stateA = join(runDir(ensureProject(env, "alpha"), "shared-run", env), "state.json");
   const bytesA = readFileSync(stateA, "utf8");
   await runJobCycle(env, b);
   await reconcileFromWitness(env);
@@ -143,7 +143,7 @@ test("a legacy job still sharing a run slug ignores the witness another job stam
   assert.equal(rowB.status, "running");
   assert.equal(rowB.pr_url, null);
   assert.equal(rowB.finished_at, null);
-  assert.equal(readFileSync(join(runDir("alpha", shared, env), "state.json"), "utf8"), bytes);
+  assert.equal(readFileSync(join(runDir(ensureProject(env, "alpha"), shared, env), "state.json"), "utf8"), bytes);
 });
 
 test("a legacy gated job re-classified from its log ignores the witness another job stamped in the run it shares", async (t) => {
@@ -165,5 +165,5 @@ test("a legacy gated job re-classified from its log ignores the witness another 
   const rowB = getJob(b, env);
   assert.equal(rowB.status, "gate");
   assert.equal(rowB.pr_url, null, "the re-classification took the pull request of the other job");
-  assert.equal(readFileSync(join(runDir("alpha", shared, env), "state.json"), "utf8"), bytes);
+  assert.equal(readFileSync(join(runDir(ensureProject(env, "alpha"), shared, env), "state.json"), "utf8"), bytes);
 });

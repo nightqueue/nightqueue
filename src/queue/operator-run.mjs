@@ -2,6 +2,7 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
+import { isId } from "../config/ids.mjs";
 import { runDir } from "../config/paths.mjs";
 import { decideResume, isSafeSegment, isStateObject, readRunState, rerunLines } from "./resume.mjs";
 
@@ -29,16 +30,22 @@ function canonicalPath(path) {
   }
 }
 
+// Tells whether a state.json belongs to the project: a state written before project ids carries none and is not refused for it.
+function stateOfProject(state, projectId) {
+  return state.projectId === undefined || state.projectId === projectId;
+}
+
 // The operator run a `run_dir` names: its slug and its state, refused unless it is an operator run of this project under this home.
-export function resolveOperatorRunDir({ runDir: raw, project, env = process.env } = {}) {
+export function resolveOperatorRunDir({ runDir: raw, project, projectId, env = process.env } = {}) {
+  if (!isId(projectId)) throw new UserError(`project \`${project}\` has no valid id; its runs cannot be addressed`);
   const path = expandRunDir(raw, env);
   const slug = basename(path);
-  const expected = isSafeSegment(slug) ? runDir(project, slug, env) : null;
+  const expected = isSafeSegment(slug) ? runDir(projectId, slug, env) : null;
   if (!expected || canonicalPath(path) !== canonicalPath(expected)) {
-    throw new UserError(`\`run_dir\` must be \`${expected ?? runDir(project, "<slug>", env)}\`: a run of project \`${project}\` under this home`);
+    throw new UserError(`\`run_dir\` must be \`${expected ?? runDir(projectId, "<slug>", env)}\`: a run of project \`${project}\` under this home`);
   }
-  const state = readRunState({ project, slug, env });
-  if (!isStateObject(state) || state.origin !== "operator" || state.project !== project) {
+  const state = readRunState({ projectId, slug, env });
+  if (!isStateObject(state) || state.origin !== "operator" || !stateOfProject(state, projectId)) {
     throw new UserError(`\`${expected}\` is not an operator run: its state.json does not carry \`origin: operator\` for project \`${project}\``);
   }
   return { slug, state, dir: expected };
@@ -52,8 +59,8 @@ function evidenceLines(state) {
 }
 
 // The block the runtime writes into a job queued from an operator run, from the same resume decision the runner will take.
-export function priorRunBlock({ project, slug, state, env = process.env } = {}) {
-  const dir = runDir(project, slug, env);
+export function priorRunBlock({ projectId, slug, state, env = process.env } = {}) {
+  const dir = runDir(projectId, slug, env);
   const decision = decideResume({ state });
   if (!decision.resume && decision.reason !== "no-completed-phase") {
     throw new UserError(`the operator run \`${dir}\` cannot seed a job: its resume is refused (${decision.reason})`);

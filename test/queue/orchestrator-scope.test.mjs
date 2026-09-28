@@ -422,7 +422,7 @@ test("the operator's list is frozen data, and its rendering names the QA worktre
   assert.match(rendered, /git worktree add \.claude\/worktrees\/operator-qa-<slug> <commit-ish>/);
   assert.match(rendered, /git worktree remove \[--force\] \.claude\/worktrees\/operator-qa-<slug>/);
   assert.match(rendered, /gh issue list\|view/);
-  assert.match(rendered, /nightqueue run check\|log\|index-save(,|$)/);
+  assert.match(rendered, /nightqueue run check\|dir\|log\|index-save(,|$)/);
   for (const write of ["git add", "git commit", "git push", "git fetch", "create", "commit|", "|pr"]) {
     assert.equal(rendered.includes(write), false, `${write} is in ${rendered}`);
   }

@@ -9,7 +9,7 @@ import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { recordPhaseDone, recordRunFields } from "../src/queue/run-state.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
-import { ensureProject, makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
 import {
   agentToolUseEvent,
   assistantEvent,
@@ -74,8 +74,8 @@ function pipelineLog() {
 
 // Records the two phases the run completed, through the only writer of state.json.
 function recordPhases(env, { slug = SLUG } = {}) {
-  recordPhaseDone({ project: "alpha", slug, phase: "triage", artifact: "01-triage.md", verdict: "ok", env });
-  recordPhaseDone({ project: "alpha", slug, phase: "implementation", artifact: "04-implementation.md", env });
+  recordPhaseDone({ projectId: ensureProject(env, "alpha"), slug, phase: "triage", artifact: "01-triage.md", verdict: "ok", env });
+  recordPhaseDone({ projectId: ensureProject(env, "alpha"), slug, phase: "implementation", artifact: "04-implementation.md", env });
 }
 
 test("`nightqueue run` refuses a missing and an unknown subcommand, and says it is not `queue run`", async (t) => {
@@ -85,7 +85,7 @@ test("`nightqueue run` refuses a missing and an unknown subcommand, and says it 
   const unknown = await runCli(env, ["run", "logs"]);
 
   assert.equal(empty.code, 1);
-  assert.match(empty.err.join("\n"), /unknown run subcommand ``; use: check, commit, log, pr/);
+  assert.match(empty.err.join("\n"), /unknown run subcommand ``; use: check, commit, dir, log, pr/);
   assert.equal(unknown.code, 1);
   assert.match(unknown.err.join("\n"), /unknown run subcommand `logs`/);
   assert.match(unknown.err.join("\n"), /acts on the run of the job it is called from/);
@@ -115,7 +115,13 @@ test("`run log --json` answers the whole table, with the run it resolved and the
 
   assert.equal(code, 0);
   assert.equal(out.length, 1);
-  assert.deepEqual(report.run, { jobId: id, project: "alpha", slug: SLUG, runDir: runDir("alpha", SLUG, env) });
+  assert.deepEqual(report.run, {
+    jobId: id,
+    project: "alpha",
+    projectId: projectIdOf(env, "alpha"),
+    slug: SLUG,
+    runDir: runDir(projectIdOf(env, "alpha"), SLUG, env),
+  });
   assert.equal(report.durationS, 900);
   assert.deepEqual(
     report.phases.map(({ phase, model, status, durationS }) => ({ phase, model, status, durationS })),
@@ -130,14 +136,14 @@ test("`run log --json` answers the whole table, with the run it resolved and the
 test("a phase the runtime measured no lane for still prints, and a run with no phase says so instead of an empty table", async (t) => {
   const env = makeQueue(t, "cli-run-log-unmeasured");
   const id = boundJob(env);
-  recordPhaseDone({ project: "alpha", slug: SLUG, phase: "qa", verdict: "REJECTED", env });
+  recordPhaseDone({ projectId: ensureProject(env, "alpha"), slug: SLUG, phase: "qa", verdict: "REJECTED", env });
 
   const { code, out } = await runCli(env, ["run", "log"], { jobId: id });
   assert.equal(code, 0);
   assert.deepEqual(out, ["qa\t-\tREJECTED\t-", "total\t-"]);
 
   const other = boundJob(env, { slug: "another-run" });
-  recordRunFields({ project: "alpha", slug: "another-run", fields: { branch: "fix/the-worker" }, env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: "another-run", fields: { branch: "fix/the-worker" }, env });
   writeJobLog(env, other, []);
   const empty = await runCli(env, ["run", "log"], { jobId: other });
   assert.deepEqual(empty.out, ["no phase recorded yet", "total\t-"]);
@@ -180,9 +186,36 @@ test("outside a job `run log` requires the run to be named, with a registered pr
   assert.deepEqual(named.out, ["triage\t-\tok\t-", "implementation\t-\tok\t-", "total\t-"]);
 });
 
+test("`run dir` prints the absolute run directory keyed by the project id: the job's own inside a job, the named one outside", async (t) => {
+  const env = makeQueue(t, "cli-run-dir");
+  const id = boundJob(env);
+  const expected = join(env.NIGHTQUEUE_HOME, "runs", projectIdOf(env, "alpha"), SLUG);
+
+  const inside = await runCli(env, ["run", "dir"], { jobId: id });
+  assert.equal(inside.code, 0);
+  assert.deepEqual(inside.out, [expected]);
+
+  const outside = await runCli(env, ["run", "dir", "--project", "alpha", "--slug", SLUG]);
+  assert.equal(outside.code, 0);
+  assert.deepEqual(outside.out, [expected]);
+  assert.equal(outside.out[0].includes("/runs/alpha/"), false, "the run directory is still keyed by the project name");
+
+  const missing = await runCli(env, ["run", "dir"]);
+  assert.equal(missing.code, 1);
+  assert.match(missing.err.join("\n"), /`--project`.*and `--slug`.*are both required/);
+
+  const unknown = await runCli(env, ["run", "dir", "--project", "beta", "--slug", SLUG]);
+  assert.equal(unknown.code, 1);
+  assert.match(unknown.err.join("\n"), /unknown project `beta`/);
+
+  const named = await runCli(env, ["run", "dir", "--project", "alpha", "--slug", SLUG], { jobId: id });
+  assert.equal(named.code, 1);
+  assert.match(named.err.join("\n"), /refusing to name a run from inside job/);
+});
+
 // Writes an artifact of the run where the artifact gate looks for it.
 function writeArtifact(env, file, body, { slug = SLUG } = {}) {
-  const dir = runDir("alpha", slug, env);
+  const dir = runDir(ensureProject(env, "alpha"), slug, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, file), body);
   return join(dir, file);
@@ -191,7 +224,7 @@ function writeArtifact(env, file, body, { slug = SLUG } = {}) {
 // A real git worktree bound to the run, the only source of the file list `check 04` derives.
 function boundWorktree(t, env, { slug = SLUG } = {}) {
   const repo = initGitRepo(makeDir(t, "worktree"));
-  recordRunFields({ project: "alpha", slug, fields: { worktree: repo }, env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug, fields: { worktree: repo }, env });
   return repo;
 }
 
@@ -251,7 +284,7 @@ test("`run check 01` requires `Evidence level: <1-4>` as the first line under ##
 test("`run check 05a` outside a job answers for an operator run named by project and slug", async (t) => {
   const env = makeQueue(t, "cli-run-check-operator-05a");
   const slug = "hunt-the-notice";
-  recordRunFields({ project: "alpha", slug, fields: { origin: "operator" }, env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug, fields: { origin: "operator" }, env });
   writeArtifact(env, "05a-qa-analyst.md", "# QA\n\n## Break hypotheses\n\n- H1\n\n## Test recipe\n\nnode --test\n", { slug });
   const qa = await runCli(env, ["run", "check", "05a", "--project", "alpha", "--slug", slug]);
   assert.equal(qa.code, 0);
@@ -270,7 +303,7 @@ test("`run check 04` generates the file list from the worktree when the coder le
 
   assert.equal(code, 0);
   assert.deepEqual(out, ["GENERATED"]);
-  const artifact = readFileSync(join(runDir("alpha", SLUG, env), "04-implementation.md"), "utf8");
+  const artifact = readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "04-implementation.md"), "utf8");
   assert.match(artifact, /## Modified files\n/);
   assert.deepEqual(artifact.split("## Modified files\n")[1].trim().split("\n"), [join(repo, "tracked.mjs"), join(repo, "untracked.md")]);
 
@@ -282,7 +315,7 @@ test("`run check 04` on a clean worktree reports the empty list and writes no ar
   const env = makeQueue(t, "cli-run-check-clean");
   const id = boundJob(env);
   boundWorktree(t, env);
-  const artifact = join(runDir("alpha", SLUG, env), "04-implementation.md");
+  const artifact = join(runDir(ensureProject(env, "alpha"), SLUG, env), "04-implementation.md");
 
   const { code, out } = await runCli(env, ["run", "check", "04"], { jobId: id });
 
@@ -321,6 +354,7 @@ test("the top-level help lists `run` under its own heading, saying it acts on th
   assert.equal(code, 0);
   assert.match(text, /inside a job — each acts on the run of the job it is called from, never on the queue:/);
   assert.match(text, /\n {2}run check <NN> +check the artifact of a phase of THIS run/);
+  assert.match(text, /\n {2}run dir +print the absolute directory of THIS run: runs\/<project_id>\/<slug>/);
   assert.match(text, /\n {2}run log \[--json\] +one line per phase of THIS run/);
   assert.match(text, /\n {2}run commit --message-file <path> +stage what 04-implementation\.md listed/);
   assert.match(text, /\n {2}run pr --body-file <path> +check the body, push THIS run's branch/);
