@@ -15,7 +15,7 @@ import { saveLesson } from "../src/memory/lessons.mjs";
 import { shimContent } from "../src/host/runtime.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
-import { addProject } from "../src/config/projects.mjs";
+import { registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { makeHostEnv, readSettingsFile, writeLegacyShim, writeSettingsFixture } from "../test-support/host.mjs";
 import { makeDir, makeProject, seedClosedJob, seedLegacyV8Home } from "../test-support/memory.mjs";
@@ -306,7 +306,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v17/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v18/);
 });
 
 test("the database check warns about a v8 home and points at the command that migrates it", async (t) => {
@@ -316,7 +316,7 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, expected v17/);
+  assert.match(database.detail, /schema v8, expected v18/);
   assert.match(database.hint, /run `nightqueue queue status` once to migrate it/);
   assert.doesNotMatch(database.hint, /nightqueue memory stats/);
 });
@@ -367,7 +367,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, expected v17/);
+  assert.match(database.detail, /schema v99, expected v18/);
   assert.match(database.hint, /upgrade nightqueue/);
 });
 
@@ -770,7 +770,7 @@ test("--json is the only thing on stdout of the real process, and the exit code 
 // Registers a real published checkout as project `alpha` of the home, returning the resolved path the config records.
 function registerRealCheckout(t, env, name) {
   const checkout = realpathSync(publishedCheckout(t, name).checkout);
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: checkout, name: "alpha" });
   return checkout;
 }
 
@@ -825,11 +825,13 @@ test("doctor says so when the owner of a worktree cannot be known, or git cannot
   const checkout = registerRealCheckout(t, unreadable.env, "doctor-worktrees-unreadable");
   addWorktree(checkout, "some-run");
   ensureHome(unreadable.env);
+  closeDb(unreadable.env);
+  for (const sidecar of ["-wal", "-shm"]) rmSync(`${dbPath(unreadable.env)}${sidecar}`, { force: true });
   writeFileSync(dbPath(unreadable.env), "this is not a database");
   const { report } = await diagnose(unreadable.env);
-  const row = checkOf(report, "worktrees");
+  const row = checkOf(report, "projects");
   assert.equal(row.status, "warn");
-  assert.match(row.detail, /^the queue cannot be read \(.+\), so the owner of a worktree is unknown$/);
+  assert.match(row.detail, /^the registry cannot be read \(.+\)$/);
   assert.equal(report.checks.some((entry) => entry.name.startsWith("worktree ")), false, "a worktree was reported with an unknown owner");
 
   const noGit = makeHostEnv(t, "doctor-worktrees-no-git");

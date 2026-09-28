@@ -80,15 +80,14 @@ commands:
   init [path] [--gh|--no-gh]                install the runtime and register the git repository at [path] (default: .) as a project
   open [project] [--resume <session>]       open the operator in a terminal: it investigates, plans and queues jobs, and never edits the code
   update [<version>] [--from] [--force]     reinstall the runtime at the newest version (or at <version>) and re-point the host at it
-  org add <name> [--display-name "..."]     create an org
+  org add <name>                            create an org
   org list [--json]                         list orgs, their connection slots and project counts
-  org rename <old> <new>                    rename an org and every project pointing at it
+  org rename <old> <new>                    rename an org (one row: its projects and bindings follow)
   org remove <name>                         remove an empty, non-default org
-  org repair [--to <org>]                   settle an interrupted rename; move orphan org rows under --to
   project add <path> [--org] [--name]       register a project (same behaviour as init)
   project list [--json]                     list projects, their org and whether the path still exists
-  project remove <name>                     unregister a project
-  project move <name> <org>                 move a project to another org
+  project remove <name>                     unregister a project that owns no rows
+  project move <name> [<org>] [--path <p>]  move a project to another org and/or give it a new checkout
   connection add <name> --type <type>       store a secret read from stdin and bind it to a free org slot
   connection bind <name> --org <name>       bind (or rebind) a stored connection to an org slot
   connection test <name>                    check a stored connection against its service

@@ -82,7 +82,7 @@ test("init outside a repository installs the whole host and only skips the proje
     out.includes('  1. cd into a repository and run `nightqueue queue add "<task>"` - it offers to register the project on the spot. In Claude Code, plan as usual and say "queue this for tonight" or run /nightqueue:queue.'),
     out.join("\n"),
   );
-  assert.deepEqual(JSON.parse(readFileSync(join(host.home, "config.json"), "utf8")).projects, {});
+  assert.equal(existsSync(join(host.home, "nightqueue.db")), false, "init outside a repository registered something");
 });
 
 test("--from packs the given checkout and reinstalls even when the version already matches", async (t) => {

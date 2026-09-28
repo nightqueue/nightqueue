@@ -9,6 +9,8 @@ import { run } from "../src/cli/index.mjs";
 import { UserError } from "../src/config/errors.mjs";
 import { lockPath, withLock } from "../src/config/lock.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../test-support/host.mjs";
+import { openDb } from "../src/memory/db.mjs";
+import { orgByName } from "../src/memory/registry.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const RACE_ATTEMPTS = 8;
@@ -57,8 +59,8 @@ async function runRace(t) {
   });
   assert.equal(setup.status, 0, `setup failed (stderr: ${setup.stderr})`);
   const [a, b] = await Promise.all([shiftAsync(home, ["org", "add", "proc-a"]), shiftAsync(home, ["org", "add", "proc-b"])]);
-  const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
-  return { a, b, hasA: Object.hasOwn(config.orgs, "proc-a"), hasB: Object.hasOwn(config.orgs, "proc-b") };
+  const db = openDb({ ...process.env, NIGHTQUEUE_HOME: home });
+  return { a, b, hasA: Boolean(orgByName(db, "proc-a")), hasB: Boolean(orgByName(db, "proc-b")) };
 }
 
 test("withLock excludes a second holder and releases the lock even when the action throws", async (t) => {

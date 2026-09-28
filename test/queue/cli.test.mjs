@@ -5,14 +5,14 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { jobLogPath, queuePausedPath, queueResumePath, runDir } from "../../src/config/paths.mjs";
-import { addProject } from "../../src/config/projects.mjs";
+import { registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
-import { makeDir, makeHome, seedClosedJob } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, projectPathOf, seedClosedJob } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { assistantEvent, doneStream, GATE_MARKER, GATE_NOTICE, gateStream, PR_URL, SLUG } from "../../test-support/streams.mjs";
 
@@ -27,7 +27,7 @@ function runCli(env, args, { cwd } = {}) {
 function makeGitProject(t, env, name) {
   const path = makeDir(t, `repo-${name}`);
   execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q", path]);
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path, name }).config, env);
+  registerCheckout(env, { path, name });
   return path;
 }
 
@@ -52,7 +52,7 @@ function makeCliHome(t, name, attempts = [{ stdout: doneStream(), exitCode: 0 }]
 
 // Path of the registered project of a home, the directory a `queue add` without project runs from.
 function projectPath(env) {
-  return loadConfig(env, { warn: () => {} }).projects.alpha.path;
+  return projectPathOf(env, "alpha");
 }
 
 // Enqueues one job of the test project straight in the database.

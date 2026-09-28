@@ -24,6 +24,11 @@ export function dbPath(env = process.env) {
   return join(homeDir(env), "nightqueue.db");
 }
 
+// Path of the copy of the database taken right before its one-shot migration to schema v18.
+export function preV18BackupPath(env = process.env) {
+  return `${dbPath(env)}.pre-v18`;
+}
+
 // Path of the shared-memory index of the WAL, the file every open connection of the database maps.
 export function dbShmPath(env = process.env) {
   return `${dbPath(env)}-shm`;
@@ -157,10 +162,6 @@ export function queueResumePath(env = process.env) {
   return join(homeDir(env), "queue.resume");
 }
 
-// Path of the intent record of an org rename in flight: written before the first store changes, removed after the last one did.
-export function orgRenamePendingPath(env = process.env) {
-  return join(homeDir(env), "org-rename.pending.json");
-}
 
 // Directory of the runner registry: one file per live runner, the way any number of them coexist.
 export function runnersDir(env = process.env) {

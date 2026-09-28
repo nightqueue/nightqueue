@@ -1,4 +1,5 @@
-import { blobToVector, dotProduct, openDb, resolveProjectName, toQueryVector } from "./db.mjs";
+import { blobToVector, dotProduct, openDb, toQueryVector } from "./db.mjs";
+import { resolveProjectName } from "./project-name.mjs";
 import { recentMemories, searchMemories } from "./memory.mjs";
 
 const MAX_TOKENS = 16;

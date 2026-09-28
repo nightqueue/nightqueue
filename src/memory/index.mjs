@@ -1,7 +1,8 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
-import { openDb, resolveProjectName, withWriteRetry } from "./db.mjs";
+import { openDb, withWriteRetry } from "./db.mjs";
+import { resolveProjectName } from "./project-name.mjs";
 import { queryTokens } from "./search.mjs";
 
 const RESPONSIBILITY_MAX = 200;

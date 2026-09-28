@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { UserError } from "./errors.mjs";
-import { requireOrg } from "./orgs.mjs";
+import { defaultOrg, requireOrg } from "./orgs.mjs";
 import { NAME_RE, assertName, normalizeName } from "./schema.mjs";
 
 const REMOTE_RE = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^/@]+@)?[^/:]+[/:]([^/]+)\/([^/]+)$/i;
@@ -22,34 +22,6 @@ function requireUnreservedName(name) {
 export function normalizePath(p) {
   const abs = resolve(p ?? ".");
   return existsSync(abs) ? realpathSync(abs) : abs;
-}
-
-// Returns the project entry with the given name.
-export function projectByName(config, name) {
-  const entry = config?.projects?.[name];
-  return entry ? { name, path: entry.path, org: entry.org } : null;
-}
-
-// Returns the org of a project entry.
-export function orgOf(project) {
-  return project?.org ?? null;
-}
-
-// Names of the projects registered under an org, in config order.
-export function projectsOfOrg(config, org) {
-  return Object.entries(config?.projects ?? {})
-    .filter(([, entry]) => entry.org === org)
-    .map(([name]) => name);
-}
-
-// Lists the registered projects, marking whether the path still exists.
-export function listProjects(config) {
-  return Object.entries(config.projects).map(([name, entry]) => ({
-    name,
-    path: entry.path,
-    org: entry.org,
-    exists: existsSync(entry.path),
-  }));
 }
 
 // Derives the project name from the basename of the path, or null when the basename carries no valid name.
@@ -91,85 +63,96 @@ export function gitRootOrNull(path) {
   }
 }
 
-// First project name free in the config for this path: the derived basename, then `-2`, `-3` ...; null when none is valid and free.
-export function suggestName(config, path) {
-  const base = deriveNameOrNull(normalizePath(path));
-  if (base === null) return null;
-  for (let suffix = 1; suffix <= NAME_SUGGESTION_LIMIT; suffix += 1) {
-    const candidate = suffix === 1 ? base : `${base}-${suffix}`;
-    if (config.projects[candidate] === undefined && NAME_RE.test(candidate) && candidate !== ALL_PROJECTS) return candidate;
-  }
-  return null;
-}
-
-// Repository the directory belongs to, with the free name and the org it would be registered under; null when the directory is inside no repository.
-export function registrationOffer(config, cwd) {
-  const root = gitRootOrNull(cwd);
-  if (root === null) return null;
-  const name = suggestName(config, root);
-  if (name === null) {
-    throw new UserError(`cannot derive a free project name for ${root}; register it with \`nightqueue project add ${root} --name <name>\``);
-  }
-  return { path: root, name, org: config.defaultOrg };
-}
-
-// Registers a git repository as a project of an org.
-export function addProject(config, { path, name, org } = {}) {
-  const abs = requireGitPath(path);
-  const orgName = org ?? config.defaultOrg;
-  requireOrg(config, orgName);
-  const projectName = requireUnreservedName(name === undefined ? deriveName(abs) : assertName("project", name));
-  const registered = Object.entries(config.projects).find(([, entry]) => entry.path === abs);
-  if (registered) {
-    const [existingName, entry] = registered;
-    if (entry.org === orgName) {
-      return { config, status: "unchanged", project: { name: existingName, path: entry.path, org: entry.org } };
-    }
-    throw new UserError(
-      `${abs} is already registered as \`${existingName}\` in org \`${entry.org}\`; use \`nightqueue project move ${existingName} ${orgName}\``,
-    );
-  }
-  const taken = config.projects[projectName];
-  if (taken) throw new UserError(`project name \`${projectName}\` is already registered for ${taken.path}`);
-  config.projects[projectName] = { path: abs, org: orgName };
-  return { config, status: "created", project: { name: projectName, path: abs, org: orgName } };
-}
-
-// Removes a registered project.
-export function removeProject(config, name) {
-  if (!config.projects[name]) throw new UserError(`unknown project \`${name}\``);
-  delete config.projects[name];
-  return config;
-}
-
-// Moves a project to another existing org.
-export function moveProject(config, name, org) {
-  const entry = config.projects[name];
-  if (!entry) throw new UserError(`unknown project \`${name}\``);
-  requireOrg(config, org);
-  if (entry.org === org) return { config, status: "unchanged" };
-  entry.org = org;
-  return { config, status: "moved" };
-}
-
 // Tells whether a directory is the registered path itself or lies inside it.
 function contains(path, target) {
   if (target === path) return true;
   return target.startsWith(path.endsWith(sep) ? path : `${path}${sep}`);
 }
 
-// Resolves the project containing the given directory, choosing the longest prefix.
-export function resolveProject(config, { cwd } = {}) {
+// The project whose checkout contains the directory, the longest path winning; a project without a path contains nothing.
+export function projectContaining(projects, cwd) {
   const target = normalizePath(cwd ?? ".");
   let best = null;
   let bestLength = -1;
-  for (const [name, entry] of Object.entries(config.projects)) {
-    const path = normalizePath(entry.path);
+  for (const project of Array.isArray(projects) ? projects : []) {
+    if (typeof project?.path !== "string" || !project.path) continue;
+    const path = normalizePath(project.path);
     if (!contains(path, target) || path.length <= bestLength) continue;
-    best = { name, path: entry.path, org: entry.org };
+    best = project;
     bestLength = path.length;
   }
   return best;
+}
+
+// First project name free for this path: the derived basename, then `-2`, `-3` ...; null when none is valid and free.
+export function suggestName(takenNames, path) {
+  const taken = new Set(takenNames);
+  const base = deriveNameOrNull(normalizePath(path));
+  if (base === null) return null;
+  for (let suffix = 1; suffix <= NAME_SUGGESTION_LIMIT; suffix += 1) {
+    const candidate = suffix === 1 ? base : `${base}-${suffix}`;
+    if (!taken.has(candidate) && NAME_RE.test(candidate) && candidate !== ALL_PROJECTS) return candidate;
+  }
+  return null;
+}
+
+// The names of the registered projects, for a refusal that lists them.
+async function knownProjects(store) {
+  const names = (await store.projects.list()).map((project) => project.name);
+  return names.length ? names.join(", ") : "(none)";
+}
+
+// The registered project with that name; an unknown one is refused, naming the known projects.
+export async function requireProject(store, name) {
+  const found = typeof name === "string" && name ? await store.projects.byName(name) : null;
+  if (found) return found;
+  throw new UserError(`unknown project \`${name ?? ""}\`; known projects: ${await knownProjects(store)}`);
+}
+
+// Resolves a project reference: a registered name, or an absolute path inside a checkout, null (global) when it is inside none.
+export async function resolveProjectRef(store, ref) {
+  const raw = typeof ref === "string" ? ref.trim() : "";
+  if (!raw) return null;
+  const named = await store.projects.byName(raw);
+  if (named) return named;
+  if (isAbsolute(raw)) return await store.projects.at(raw);
+  return await requireProject(store, raw);
+}
+
+// Repository the directory belongs to, with the free name and the org it would be registered under; null when the directory is inside no repository.
+export async function registrationOffer(store, config, cwd) {
+  const root = gitRootOrNull(cwd);
+  if (root === null) return null;
+  const name = suggestName((await store.projects.list()).map((project) => project.name), root);
+  if (name === null) {
+    throw new UserError(`cannot derive a free project name for ${root}; register it with \`nightqueue project add ${root} --name <name>\``);
+  }
+  return { path: root, name, org: (await defaultOrg(store, config)).name };
+}
+
+// The refusal of a name another project already holds, pointing a path-less one at `project move --path`.
+function takenNameError(taken, abs) {
+  if (taken.path) return new UserError(`project name \`${taken.name}\` is already registered for ${taken.path}`);
+  return new UserError(
+    `project name \`${taken.name}\` is already known without a checkout; give it this one with \`nightqueue project move ${taken.name} --path ${abs}\``,
+  );
+}
+
+// Registers a git repository as a project of an org (the default org when none is named) and answers what happened.
+export async function registerProject(store, config, { path, name, org } = {}) {
+  const abs = requireGitPath(path);
+  const target = typeof org === "string" && org ? await requireOrg(store, org) : await defaultOrg(store, config);
+  const projectName = requireUnreservedName(name === undefined ? deriveName(abs) : assertName("project", name));
+  const registered = (await store.projects.list()).find((project) => project.path === abs);
+  if (registered) {
+    if (registered.org_id === target.id) return { status: "unchanged", project: registered };
+    throw new UserError(
+      `${abs} is already registered as \`${registered.name}\` in org \`${registered.org}\`; use \`nightqueue project move ${registered.name} ${target.name}\``,
+    );
+  }
+  const taken = await store.projects.byName(projectName);
+  if (taken) throw takenNameError(taken, abs);
+  return { status: "created", project: await store.projects.add({ name: projectName, path: abs, orgId: target.id }) };
 }
 
 // Extracts lowercase `owner/repo` from a git remote URL.

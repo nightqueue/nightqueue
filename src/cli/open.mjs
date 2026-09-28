@@ -1,25 +1,25 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 import { UserError } from "../config/errors.mjs";
-import { normalizePath, projectByName, resolveProject } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
+import { normalizePath } from "../config/projects.mjs";
 import { launchOperator } from "../host/operator.mjs";
 import { isSessionIdSafe } from "../queue/stream.mjs";
+import { openRegistryReader } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
 const USAGE = "nightqueue open [project] [--resume <session>]";
 const OPTIONS = { resume: { type: "string" } };
 
 // The project the session opens: the one named, else the one registered for the current directory.
-function openProject(name, ctx) {
-  const config = loadConfig(ctx.env, { warn: ctx.err });
+async function openProject(name, ctx) {
+  const store = await openRegistryReader(ctx.env);
   if (name !== undefined) {
-    const named = projectByName(config, name);
-    if (!named) throw new UserError(`unknown project \`${name}\`; run \`nightqueue project list\` to see the registered ones`);
+    const named = store ? await store.projects.byName(name) : null;
+    if (!named?.path) throw new UserError(`unknown project \`${name}\`; run \`nightqueue project list\` to see the registered ones`);
     return named;
   }
   const cwd = normalizePath(ctx.cwd);
-  const found = resolveProject(config, { cwd });
+  const found = store ? await store.projects.at(cwd) : null;
   if (!found) throw new UserError(`no project is registered for ${cwd}; run \`nightqueue setup\` there first`);
   return found;
 }
@@ -37,14 +37,14 @@ function sessionCwd({ checkout, resumeSession, cwd }) {
 }
 
 // Runs `nightqueue open`: the operator of the project as the main thread of an interactive `claude`, under the operator guard.
-export function run(argv, ctx) {
+export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, OPTIONS);
   checkArgs(positionals, { max: 1, usage: USAGE });
   const resumeSession = values.resume ?? null;
   if (resumeSession !== null && !isSessionIdSafe(resumeSession)) {
     throw new UserError(`\`--resume ${resumeSession}\` is not a session id; usage: ${USAGE}`);
   }
-  const project = openProject(positionals[0], ctx);
+  const project = await openProject(positionals[0], ctx);
   const checkout = normalizePath(project.path);
   if (!existsSync(checkout)) throw new UserError(`the checkout of \`${project.name}\` is gone (${checkout}); run \`nightqueue project list\``);
   return launchOperator({ cwd: sessionCwd({ checkout, resumeSession, cwd: ctx.cwd }), resumeSession, ctx });

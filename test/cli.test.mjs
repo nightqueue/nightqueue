@@ -129,8 +129,8 @@ test("init registers the repository in the default org", (t) => {
     "the project was registered before the host was set up",
   );
   assert.match(result.stdout, /^registered project `api` \(.+\)$/m);
-  const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
-  assert.equal(config.projects.api.org, "default");
+  const listed = JSON.parse(runCli(home, ["project", "list", "--json"]).stdout).projects;
+  assert.deepEqual(listed.map((project) => [project.name, project.org]), [["api", "default"]]);
   const again = runCli(home, ["init", repo, "--name", "api", "--no-gh"]);
   assert.equal(again.status, 0);
   assert.match(again.stdout, /^home: already present/m);
@@ -142,7 +142,8 @@ test("a write command works on a home that never went through setup", (t) => {
   const result = runCli(home, ["org", "add", "acme"]);
   assert.equal(result.status, 0);
   assert.equal(statSync(home).mode & 0o777, 0o700);
-  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).orgs), ["default", "acme"]);
+  const orgs = JSON.parse(runCli(home, ["org", "list", "--json"]).stdout).orgs;
+  assert.deepEqual(orgs.map((org) => org.name), ["default", "acme"]);
 });
 
 test("the secret never shows up in any output, in any format", (t) => {
@@ -227,7 +228,8 @@ test("unknown options are rejected instead of silently accepted", (t) => {
   const forced = runCli(home, ["org", "remove", "acme", "--force"]);
   assert.equal(forced.status, 1);
   assert.match(forced.stderr, /Unknown option '--force'/);
-  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(home, "config.json"), "utf8")).orgs), ["default", "acme"]);
+  const orgs = JSON.parse(runCli(home, ["org", "list", "--json"]).stdout).orgs;
+  assert.deepEqual(orgs.map((org) => org.name), ["default", "acme"]);
 });
 
 test("a positional path that starts with a dash needs the -- separator", (t) => {
@@ -298,7 +300,7 @@ test("a failed secret write after the config write points at the recovery comman
   assert.match(err.join("\n"), /unbound `gh` from all orgs, but the secret file write failed: disk on fire/);
   assert.match(err.join("\n"), /run `nightqueue connection remove gh` again/);
   const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
-  assert.equal(config.orgs.default.connections.github, null);
+  assert.deepEqual(Object.values(config.orgConnections).map((slots) => slots.github), [null]);
   assert.equal(readFileSync(join(home, "secrets.json"), "utf8").includes(SENTINEL), true);
 });
 

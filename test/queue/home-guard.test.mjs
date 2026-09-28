@@ -10,6 +10,7 @@ import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV, refuseHomeWriteInsideJob } from "../../src/queue/home-guard.mjs";
 import { makeHostEnv } from "../../test-support/host.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { projectByName } from "../../src/memory/registry.mjs";
 
 const JOB = 9;
 
@@ -127,7 +128,7 @@ test("a temporary home is allowed inside the same job, and init only runs once t
   const isolated = { ...onHostOfTheOperator, CLAUDE_CONFIG_DIR: makeDir(t, "home-guard-temp-config") };
   const installed = makeCtx(isolated);
   assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--no-gh"], installed.ctx), 0, installed.err.join("\n"));
-  assert.equal(JSON.parse(readFileSync(join(tempHome, "config.json"), "utf8")).projects.api.org, "default");
+  assert.equal(projectByName(openDb({ ...isolated, NIGHTQUEUE_HOME: tempHome }), "api")?.org, "default");
 
   const queued = makeCtx(isolated);
   assert.equal(await run(["queue", "add", "api", "verify the acceptance of this change"], queued.ctx), 0, queued.err.join("\n"));

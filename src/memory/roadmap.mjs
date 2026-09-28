@@ -1,7 +1,7 @@
 import { UserError } from "../config/errors.mjs";
-import { ALL_PROJECTS, projectByName, projectsOfOrg } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
+import { ALL_PROJECTS } from "../config/projects.mjs";
 import { inTransaction, openDb, sqliteToIso, withWriteRetry } from "./db.mjs";
+import { checkoutProjectsOfOrg, registeredProject } from "./project-name.mjs";
 import {
   PROPOSED_HEADING,
   STANDING_HEADING,
@@ -692,12 +692,11 @@ function requireItemProject(item, project) {
 
 // The projects an org item is queued for: one registered project of its org, or every one of them for `all`; a job is always a project's.
 function orgTargets(item, project, env) {
-  const config = loadConfig(env, { warn: () => {} });
-  const members = projectsOfOrg(config, item.org);
+  const members = checkoutProjectsOfOrg(item.org, env).map((member) => member.name);
   const named = typeof project === "string" ? project.trim() : "";
   if (named === ALL_PROJECTS && members.length) return members;
-  const found = named && named !== ALL_PROJECTS ? projectByName(config, named) : null;
-  if (found && found.org === item.org) return [found.name];
+  const found = named && named !== ALL_PROJECTS ? registeredProject(named, env) : null;
+  if (found?.path && found.org === item.org) return [found.name];
   throw new UserError(
     `roadmap item \`${item.id}\` belongs to org \`${item.org}\`: name the project its job goes to, or \`${ALL_PROJECTS}\` for every ` +
       `project of the org, with \`--project <name|${ALL_PROJECTS}>\` (\`project\` in queue_add); projects of \`${item.org}\`: ` +

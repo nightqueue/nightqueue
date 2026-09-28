@@ -17,6 +17,7 @@ import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome, makeProject, seedLegacyV8Home } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
+import * as registry from "../../src/memory/registry.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const GATED_FINISHED_AT = "2020-01-01 00:00:00";
@@ -171,6 +172,30 @@ test("a lesson saved through the server comes back in the recall, without its em
     arguments: { project: "alpha", target: null, exclude_ids: [1, "2", null, {}] },
   });
   assert.notEqual(tolerant.isError, true, textOf(tolerant));
+});
+
+test("the lesson and memory tools refuse an unknown project NAME, naming the known ones, and write nothing; a path outside every checkout is global", async (t) => {
+  const env = makeHome(t, "mcp-lesson-unknown");
+  const alpha = makeProject(t, env, "alpha");
+  const client = await connect(t, env);
+  const lessons = () => openDb(env).prepare("SELECT COUNT(*) AS n FROM lessons").get().n;
+
+  for (const [name, args] of [
+    ["lesson_save", { ...LESSON, project: "ghost" }],
+    ["lesson_recall", { project: "ghost" }],
+    ["memory_recall", { project: "ghost" }],
+  ]) {
+    const refused = await client.callTool({ name, arguments: args });
+    assert.equal(refused.isError, true, name);
+    assert.match(textOf(refused), /unknown project `ghost`; known projects: alpha/, name);
+  }
+  assert.equal(lessons(), 0, "a refused lesson_save wrote a row");
+
+  mkdirSync(join(alpha, "src"));
+  const inside = payloadOf(await client.callTool({ name: "lesson_save", arguments: { ...LESSON, project: join(alpha, "src") } }));
+  assert.equal(inside.project, "alpha");
+  const outside = payloadOf(await client.callTool({ name: "lesson_save", arguments: { ...LESSON, title: "a global lesson", project: makeDir(t, "mcp-outside") } }));
+  assert.equal(outside.project, null);
 });
 
 test("lesson_save with attempts: 1 is accepted and stored as null, never rejected", async (t) => {
@@ -376,9 +401,14 @@ function makeRepo(t, name) {
   return dir;
 }
 
-// Parsed config.json of a home.
-function readConfig(env) {
-  return JSON.parse(readFileSync(join(homeDir(env), "config.json"), "utf8"));
+// The registry row of a project of a home, or undefined when the registry holds none.
+function registeredProject(env, name) {
+  return registry.projectByName(openDb(env), name) ?? undefined;
+}
+
+// The names of the registered projects of a home.
+function registeredNames(env) {
+  return registry.listProjects(openDb(env)).map((project) => project.name);
 }
 
 // A home whose queue is paused, so a detached runner started by a test never claims anything.
@@ -414,7 +444,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
 
   const byPath = await client.callTool({ name: "queue_add", arguments: { project: "/tmp/alpha", prompt: "fix the worker" } });
   assert.equal(byPath.isError, true);
-  assert.match(textOf(byPath), /pass the registered project NAME, not a path/);
+  assert.match(textOf(byPath), /unknown project `\/tmp\/alpha`; known projects: alpha/);
 
   const unknown = await client.callTool({ name: "queue_add", arguments: { project: "ghost", prompt: "fix the worker" } });
   assert.equal(unknown.isError, true);
@@ -447,7 +477,7 @@ test("queue_add carries the operator's tier, echoes it only when there is one, a
 
 test("queue_add resolves the project of the caller `cwd`, and answers needs_registration for a repository nobody registered", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-add-cwd");
-  const registered = readConfig(env).projects.alpha.path;
+  const registered = registeredProject(env, "alpha").path;
   const repo = makeRepo(t, "mcp-queue-add-repo");
   const client = await connect(t, env);
 
@@ -462,7 +492,7 @@ test("queue_add resolves the project of the caller `cwd`, and answers needs_regi
   assert.equal(offered.org, "default");
   assert.ok(offered.hint.includes("call queue_add again with the same `cwd` and `register: true`"), offered.hint);
   assert.equal(getJob(2, env), null, "the offer queued a job");
-  assert.equal(readConfig(env).projects[offered.suggested_name], undefined, "the offer registered the repository");
+  assert.equal(registeredProject(env, offered.suggested_name), undefined, "the offer registered the repository");
 
   const missing = await client.callTool({ name: "queue_add", arguments: { prompt: "fix the worker" } });
   assert.equal(missing.isError, true);
@@ -486,13 +516,13 @@ test("queue_add registers the repository of the `cwd` only with register: true, 
   assert.equal(refused.isError, true);
   assert.match(textOf(refused), /refusing to register .* from inside job `7`: an unattended run never registers a project/);
   assert.equal(getJob(1, env), null, "an unattended run queued a job through the registration branch");
-  assert.deepEqual(Object.keys(readConfig(env).projects), ["alpha"], "an unattended run registered a project");
+  assert.deepEqual(registeredNames(env), ["alpha"], "an unattended run registered a project");
 
   const client = await connect(t, env);
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { cwd: repo, prompt: "fix the worker", register: true } }));
   const name = queued.project;
-  const entry = readConfig(env).projects[name];
-  assert.ok(entry, `\`${name}\` is missing from the config`);
+  const entry = registeredProject(env, name);
+  assert.ok(entry, `\`${name}\` is missing from the registry`);
   assert.equal(entry.org, "default");
   assert.equal(getJob(queued.id, env).prompt, "fix the worker");
   assert.ok(queued.hint.startsWith(`registered project \`${name}\` (${entry.path}). queued job #${queued.id}`), queued.hint);

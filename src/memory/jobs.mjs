@@ -10,7 +10,8 @@ import {
   withFullSync,
   withWriteRetry,
 } from "./db.mjs";
-import { RESULT_OBJECT_BASE } from "./schema.mjs";
+import * as registry from "./registry.mjs";
+import { ACTIVE_JOB_PREDICATE, LEASE_GRACE_S, RESULT_OBJECT_BASE } from "./schema.mjs";
 import { isSafeSegment } from "../queue/resume.mjs";
 import { PIPELINE_TIERS } from "./runs.mjs";
 
@@ -19,16 +20,7 @@ export const PRIORITY_RANGE = { min: 1, max: 9, fallback: 5 };
 export const MAX_ATTEMPTS_RANGE = { min: 1, max: 10, fallback: 1 };
 export const TIMEOUT_RANGE = { min: 60, max: 86400, fallback: 14400 };
 export const LEASE_SLACK_S = 600;
-export const LEASE_GRACE_S = 60;
-
-// Predicate of an active job for one alias: running under a lease still inside the grace window of its owner.
-function activeFor(alias) {
-  return `${alias}.status = 'running' AND ${alias}.lease_until IS NOT NULL
-      AND datetime(${alias}.lease_until) > datetime('now', '-${LEASE_GRACE_S} seconds')`;
-}
-
-// A job is active while it is running under a lease inside the grace window: the ceiling counts these.
-export const ACTIVE_JOB_PREDICATE = activeFor("slot");
+export { ACTIVE_JOB_PREDICATE, LEASE_GRACE_S };
 
 // A job is orphaned once its lease has been gone for longer than the grace window: its runner died.
 export const ORPHAN_PREDICATE =
@@ -41,6 +33,8 @@ const HARD_CEILING_OPEN = `datetime(started_at, '+' || (timeout_s + ${LEASE_SLAC
 const JOB_VIEW_COLUMNS = [
   "id",
   "project",
+  "project_id",
+  "project_path",
   "status",
   "priority",
   "tier",
@@ -275,7 +269,8 @@ const CAP_CONDITION = `(SELECT COUNT(*) FROM jobs AS slot WHERE ${ACTIVE_JOB_PRE
 // Claims the highest priority pending job: the whole decision lives in the WHERE, bounded only by the ceiling when one is set.
 export function claimNextJob({ worker, cap } = {}, env = process.env) {
   const ceiling = capClause(cap);
-  const statement = openDb(env).prepare(
+  const db = openDb(env);
+  const statement = db.prepare(
     `UPDATE jobs
         ${CLAIM_ASSIGNMENT}
       WHERE id = (${CANDIDATE_QUERY})
@@ -283,13 +278,14 @@ export function claimNextJob({ worker, cap } = {}, env = process.env) {
         ${ceiling.sql}
       RETURNING *`,
   );
-  return withWriteRetry(() => statement.get(requireText("worker", worker), ...ceiling.values)) ?? null;
+  return withProjectFacts(db, withWriteRetry(() => statement.get(requireText("worker", worker), ...ceiling.values)) ?? null);
 }
 
 // Claims one specific job, refusing in the same WHERE when it is not pending or the ceiling is full.
 export function claimJobById(id, { worker, cap } = {}, env = process.env) {
   const ceiling = capClause(cap);
-  const statement = openDb(env).prepare(
+  const db = openDb(env);
+  const statement = db.prepare(
     `UPDATE jobs
         ${CLAIM_ASSIGNMENT}
       WHERE id = ?
@@ -297,7 +293,7 @@ export function claimJobById(id, { worker, cap } = {}, env = process.env) {
         ${ceiling.sql}
       RETURNING *`,
   );
-  return withWriteRetry(() => statement.get(requireText("worker", worker), requireId(id), ...ceiling.values)) ?? null;
+  return withProjectFacts(db, withWriteRetry(() => statement.get(requireText("worker", worker), requireId(id), ...ceiling.values)) ?? null);
 }
 
 // The ceiling clause of a claim and the value it binds; a claim with no ceiling carries no clause and binds nothing.
@@ -665,7 +661,7 @@ export function cancelJob(id, { reason } = {}, env = process.env) {
   );
   const jobId = requireId(id);
   const row = withWriteRetry(() => statement.get(optionalText(reason), jobId));
-  if (row) return { ...jobView(row), cancelled_from: row.cancelled_from ?? null };
+  if (row) return { ...jobView(withProjectFacts(openDb(env), row)), cancelled_from: row.cancelled_from ?? null };
   throw new UserError(cancelRefusal(jobId, getJob(jobId, env)));
 }
 
@@ -704,7 +700,7 @@ export function retryJob(id, { note, fresh } = {}, env = process.env) {
   const jobId = requireId(id);
   const answer = optionalText(note);
   const row = withWriteRetry(() => statement.get(answer, jobId, answer));
-  if (row) return jobView(row);
+  if (row) return jobView(withProjectFacts(openDb(env), row));
   throw new UserError(retryRefusal(jobId, getJob(jobId, env), { note: answer }));
 }
 
@@ -784,7 +780,7 @@ export function acquireClose(id, { worker, leaseS, force = false } = {}, env = p
       RETURNING *`,
   );
   const values = [requireText("worker", worker), requireLeaseSeconds(leaseS), force === true ? 1 : 0, requireId(id)];
-  return withWriteRetry(() => statement.get(...values)) ?? null;
+  return withProjectFacts(openDb(env), withWriteRetry(() => statement.get(...values)) ?? null);
 }
 
 // Confirms that the close lease of a job is held by this worker and renews it; false means the lease is not this worker's any more.
@@ -861,7 +857,7 @@ export function settleClose(id, { worker, close, noticeLine } = {}, env = proces
   const line = requireText("noticeLine", noticeLine);
   const values = [requireCloseText(close), line, line, requireId(id), owner];
   const row = writeCloseDurably({ id, statement, values, witness: closeWitness(TERMINAL_CLOSE_WITNESS_COLUMNS, owner), env });
-  return row ? jobView(row, { full: true }) : null;
+  return row ? jobView(withProjectFacts(openDb(env), row), { full: true }) : null;
 }
 
 // Cancels a done job whose pull request a close step read closed without merge, keeping the checklist and releasing the lease, in one statement; null means the lease is not this worker's any more.
@@ -882,7 +878,7 @@ export function cancelOnClosedPr(id, { worker, close, note } = {}, env = process
   const owner = requireText("worker", worker);
   const values = [requireText("note", note), requireCloseText(close), requireId(id), owner];
   const row = writeCloseDurably({ id, statement, values, witness: closeWitness(TERMINAL_CLOSE_WITNESS_COLUMNS, owner), env });
-  return row ? jobView(row, { full: true }) : null;
+  return row ? jobView(withProjectFacts(openDb(env), row), { full: true }) : null;
 }
 
 // Records where the settled close left the job's worktree; best effort, a failure never costs the close that already happened.
@@ -911,9 +907,23 @@ export function listCloses(env = process.env, db = openDb(env)) {
     .all();
 }
 
-// Returns the raw row of a job, or null.
+// Sets the `project_id` and checkout `project_path` of a job row from the registry, found by the project name the row still holds.
+function withProjectFacts(db, row) {
+  if (!row) return row;
+  let project = null;
+  try {
+    project = registry.projectByName(db, row.project);
+  } catch (err) {
+    if (!/no such table/i.test(String(err?.message ?? ""))) throw err;
+  }
+  row.project_id = project?.id ?? null;
+  row.project_path = project?.path ?? null;
+  return row;
+}
+
+// Returns the raw row of a job with its project facts, or null.
 export function getJob(id, env = process.env, db = openDb(env)) {
-  return db.prepare("SELECT * FROM jobs WHERE id = ?").get(requireId(id)) ?? null;
+  return withProjectFacts(db, db.prepare("SELECT * FROM jobs WHERE id = ?").get(requireId(id)) ?? null);
 }
 
 const BLOCKED_PENDING_PREDICATE = "status = 'pending' AND blocked_code IS NOT NULL";
@@ -922,12 +932,15 @@ const BLOCKED_PENDING_PREDICATE = "status = 'pending' AND blocked_code IS NOT NU
 export function listJobs({ limit, blockedOnly } = {}, env = process.env, db = openDb(env)) {
   const clamped = optionalRangedInt("limit", limit, LIST_LIMIT_RANGE);
   const where = blockedOnly === true ? `WHERE ${BLOCKED_PENDING_PREDICATE} ` : "";
-  return db.prepare(`SELECT * FROM jobs ${where}ORDER BY id DESC LIMIT ?`).all(clamped);
+  return db.prepare(`SELECT * FROM jobs ${where}ORDER BY id DESC LIMIT ?`).all(clamped).map((row) => withProjectFacts(db, row));
 }
 
 // Done jobs that carry a pull request url, the candidates `queue close --merged` may confirm and close.
 export function listCloseCandidates(env = process.env, db = openDb(env)) {
-  return db.prepare("SELECT * FROM jobs WHERE status = 'done' AND pr_url IS NOT NULL ORDER BY id DESC").all();
+  return db
+    .prepare("SELECT * FROM jobs WHERE status = 'done' AND pr_url IS NOT NULL ORDER BY id DESC")
+    .all()
+    .map((row) => withProjectFacts(db, row));
 }
 
 // Unfinished jobs that already have a run directory; a job with no slug never ran, so no witness can speak for it.

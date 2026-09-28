@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
-import { addProject } from "../src/config/projects.mjs";
+import { registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { OPERATOR_AGENT, OPERATOR_OPENING_PROMPT, operatorSettings } from "../src/host/operator.mjs";
 import { pluginDir } from "../src/queue/spawn.mjs";
@@ -30,7 +30,7 @@ function openHome(t, name) {
     NIGHTQUEUE_CLAUDE_BIN: bin,
     NIGHTQUEUE_FAKE_CALLS: join(base, "calls.jsonl"),
   });
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: checkout, name: "alpha" });
   return { env, base, checkout, callsPath: env.NIGHTQUEUE_FAKE_CALLS };
 }
 

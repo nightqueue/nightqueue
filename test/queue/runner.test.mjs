@@ -14,7 +14,7 @@ import { agentRuns, DRAIN_INTERVAL_S, runCycle, runDrain, runWatch, WATCH_INTERV
 import { provisionalSlug } from "../../src/queue/spawn.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, unregisterProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { agentToolUseEvent, assistantEvent, codeChangePublishedEvent, doneStream, failureStream, gateStream, noticeText, PR_URL, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, slugTypeEvent, systemInitEvent, taskNotificationEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
 
@@ -482,8 +482,7 @@ test("a job blocked by the preflight is never claimed twice in the same cycle", 
 test("an unknown project blocks the job with the code that names it", async (t) => {
   const { env } = makeRunnerHome(t, "runner-block-project", [{ stdout: doneStream(), exitCode: 0 }]);
   const id = enqueue(env);
-  const config = loadConfig(env, { warn: () => {} });
-  saveConfig({ ...config, projects: {} }, env);
+  unregisterProject(env, "alpha");
 
   const cycle = await runJobCycle(env, id);
 

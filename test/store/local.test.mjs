@@ -96,7 +96,11 @@ test("every domain of the store writes and reads back on a real home", async (t)
   );
   assert.deepEqual(await store.roadmap.roadmapDrift(), []);
 
-  assert.deepEqual(await store.orgs.usage("acme"), []);
+  const acme = await store.orgs.add("acme");
+  assert.equal((await store.orgs.byName("acme")).id, acme.id);
+  assert.equal((await store.projects.byName("alpha")).org, "default");
+  await store.orgs.remove(acme.id);
+  assert.equal(await store.orgs.byId(acme.id), null);
 });
 
 test("listWithSlug answers the jobs a witness could speak for", async (t) => {

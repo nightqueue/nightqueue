@@ -38,12 +38,12 @@ test("normalizeName rescues names derived from a directory basename", () => {
 });
 
 test("normalizeConfig fills defaults over a partial, hand-edited file", () => {
-  const config = normalizeConfig({ defaultOrg: "acme", orgs: { acme: {} }, projects: { api: { path: "/tmp/api" } } });
+  const config = normalizeConfig({ defaultOrg: "01J0000000000000000000ACME", orgConnections: { "01J0000000000000000000ACME": {} } });
   assert.equal(config.version, 1);
-  assert.equal(config.defaultOrg, "acme");
-  assert.equal(config.orgs.acme.displayName, "acme");
-  assert.deepEqual({ ...config.orgs.acme.connections }, { github: null });
-  assert.deepEqual(config.projects.api, { path: "/tmp/api", org: "acme" });
+  assert.equal(config.defaultOrg, "01J0000000000000000000ACME");
+  assert.deepEqual({ ...config.orgConnections["01J0000000000000000000ACME"] }, { github: null });
+  assert.equal(emptyConfig().defaultOrg, null);
+  assert.deepEqual({ ...emptyConfig().orgConnections }, {});
   assert.deepEqual(config.queue, {
     maxConcurrent: null,
     resumeSession: false,
@@ -155,11 +155,13 @@ test("queue.closeTimeoutS accepts an integer between 60 and 3600, otherwise fall
   assert.equal(emptyConfig().queue.closeTimeoutS, 600);
 });
 
-test("normalizeConfig recreates the default org and drops broken project entries", () => {
-  const config = normalizeConfig({ orgs: null, projects: { api: { org: "default" }, web: { path: "/tmp/web" } } });
-  assert.deepEqual(Object.keys(config.orgs), ["default"]);
-  assert.equal(config.orgs.default.displayName, "Default");
-  assert.deepEqual(Object.keys(config.projects), ["web"]);
+test("normalizeConfig keeps every top-level key it does not own verbatim, the v17 registry included", () => {
+  const raw = { projects: { api: { path: "/tmp/api", org: "acme" } }, orgs: { acme: { displayName: "Acme" } }, handAdded: { keep: [1, 2] } };
+  const config = normalizeConfig(raw);
+  assert.deepEqual(config.projects, raw.projects);
+  assert.deepEqual(config.orgs, raw.orgs);
+  assert.deepEqual(config.handAdded, { keep: [1, 2] });
+  assert.equal(config.defaultOrg, null);
   assert.deepEqual(normalizeConfig("nonsense"), emptyConfig());
 });
 
@@ -170,19 +172,13 @@ test("normalizeSecrets keeps only well-formed connection entries", () => {
 });
 
 test("a `__proto__` key in a hand-edited file never reaches the prototype of the built maps", () => {
-  const raw = JSON.parse(
-    '{"orgs":{"__proto__":{"displayName":"ghost","connections":{"github":"gh"}}},"projects":{"__proto__":{"path":"/tmp/ghost"}}}',
-  );
+  const raw = JSON.parse('{"orgConnections":{"__proto__":{"github":"gh"},"01J0000000000000000000ACME":{"__proto__":"x","github":"gh"}}}');
   const config = normalizeConfig(raw);
-  assert.equal(config.orgs.displayName, undefined);
-  assert.equal(config.orgs.connections, undefined);
-  assert.equal(config.orgs.ghost, undefined);
-  assert.equal(config.projects.path, undefined);
-  assert.equal(Object.getPrototypeOf(config.orgs), null);
-  assert.equal(Object.getPrototypeOf(config.projects), null);
-  assert.equal(Object.getPrototypeOf(config.orgs.default.connections), null);
-  assert.equal({}.displayName, undefined);
-  assert.equal(JSON.stringify(config.orgs.default), '{"displayName":"Default","connections":{"github":null}}');
+  assert.equal(config.orgConnections.github, undefined);
+  assert.equal(Object.getPrototypeOf(config.orgConnections), null);
+  assert.equal(Object.getPrototypeOf(config.orgConnections["01J0000000000000000000ACME"]), null);
+  assert.equal(config.orgConnections["01J0000000000000000000ACME"].github, "gh");
+  assert.equal({}.github, undefined);
 });
 
 test("a `__proto__` connection in secrets.json stays inert data instead of answering lookups", () => {
@@ -207,15 +203,4 @@ test("a file written by a newer nightqueue is refused instead of silently downgr
     return true;
   });
   assert.equal(normalizeConfig({ version: 1, orgs: {} }).version, 1);
-});
-
-test("a project pointing at an unknown org is reported, not rewritten", () => {
-  const warnings = [];
-  const raw = { orgs: { acme: {} }, defaultOrg: "acme", projects: { api: { path: "/tmp/api", org: "ghost" } } };
-  const config = normalizeConfig(raw, { warn: (line) => warnings.push(line) });
-  assert.equal(config.projects.api.org, "ghost");
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /^nightqueue: warning: project `api` points to unknown org `ghost`/);
-  assert.match(warnings[0], /run `nightqueue project move api <org>`/);
-  assert.deepEqual(normalizeConfig(raw).projects.api, { path: "/tmp/api", org: "ghost" });
 });

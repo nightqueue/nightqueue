@@ -227,7 +227,7 @@ test("the roadmap tools order a project by status and priority, refuse in_progre
 
   const unknownProject = await client.callTool({ name: "roadmap_get", arguments: { project: "ghost" } });
   assert.equal(unknownProject.isError, true);
-  assert.match(textOf(unknownProject), /pass the registered project NAME/);
+  assert.match(textOf(unknownProject), /unknown project `ghost`; known projects: /);
 });
 
 // A home with two projects, each carrying one decision and one roadmap item, plus a job of the first one.

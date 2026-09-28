@@ -1,4 +1,4 @@
-import { resolveProjectName } from "./db.mjs";
+import { resolveProjectName } from "./project-name.mjs";
 import {
   backfillEmptyLessonFields,
   bumpAttempts,

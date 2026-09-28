@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { UserError } from "../src/config/errors.mjs";
 import { configPath, homeDir, secretsPath } from "../src/config/paths.mjs";
-import { emptyConfig, emptySecrets } from "../src/config/schema.mjs";
+import { emptyConfig, emptySecrets, emptySlots } from "../src/config/schema.mjs";
 import { ensureHome, loadConfig, loadSecrets, saveConfig, saveSecrets, writeFileAtomic } from "../src/config/store.mjs";
 
 // Creates an isolated temporary home and removes it at the end of the test.
@@ -100,7 +100,7 @@ test("loading secrets warns about an open mode without refusing", (t) => {
 test("saveConfig round-trips through loadConfig", (t) => {
   const env = makeEnv(t, { nested: true });
   const config = emptyConfig();
-  config.projects.api = { path: "/tmp/api", org: "default" };
+  config.orgConnections["01J0000000000000000000ACME"] = Object.assign(emptySlots(), { github: "gh" });
   saveConfig(config, env);
   assert.equal(modeOf(env.NIGHTQUEUE_HOME), 0o700);
   assert.deepEqual(loadConfig(env), config);

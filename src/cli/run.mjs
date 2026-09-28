@@ -2,9 +2,8 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, runDir } from "../config/paths.mjs";
-import { projectByName } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
 import { ghPrCreate } from "../host/gh.mjs";
+import { registeredProject } from "../memory/project-name.mjs";
 import { runGit } from "../host/git.mjs";
 import { publishedBranchName } from "../queue/branch-name.mjs";
 import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
@@ -75,7 +74,7 @@ function operatorRun(values, env) {
   if (!isSafeSegment(slug)) {
     throw new UserError(`invalid slug \`${slug}\`: a run slug is one path segment of letters, digits and \`. _ + -\``);
   }
-  const registered = projectByName(loadConfig(env, { warn: () => {} }), project);
+  const registered = registeredProject(project, env);
   if (!registered) {
     throw new UserError(`unknown project \`${project}\`: pass the registered project NAME; list them with \`nightqueue project list\``);
   }
@@ -249,8 +248,8 @@ function changedFiles(cwd, gitImpl) {
 
 // The checkout of the project of a run: the directory its worktrees were created from, and the only one that may remove them.
 function projectCheckout(project, env) {
-  const registered = projectByName(loadConfig(env, { warn: () => {} }), project);
-  if (!registered) throw new UserError(`unknown project \`${project}\`: it is no longer registered, so its checkout cannot be read`);
+  const registered = registeredProject(project, env);
+  if (!registered?.path) throw new UserError(`unknown project \`${project}\`: it is no longer registered, so its checkout cannot be read`);
   return registered.path;
 }
 

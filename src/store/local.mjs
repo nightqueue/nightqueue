@@ -6,7 +6,7 @@ import * as index from "../memory/index.mjs";
 import * as jobs from "../memory/jobs.mjs";
 import * as lessons from "../memory/lessons.mjs";
 import * as memory from "../memory/memory.mjs";
-import * as orgs from "../memory/orgs.mjs";
+import * as registry from "../memory/registry.mjs";
 import * as roadmap from "../memory/roadmap.mjs";
 import * as roadmapBackfill from "../memory/roadmap-backfill.mjs";
 import * as roadmapSearch from "../memory/roadmap-search.mjs";
@@ -226,12 +226,29 @@ function roadmapDomain(env, db) {
   };
 }
 
-// The rows the orgs own; the rename is one transaction and this method inserts no `await` inside it.
-function orgsDomain(env, db) {
+// The registry of orgs; the rename is one transaction and this method inserts no `await` inside it.
+function orgsDomain(db) {
   return {
-    rename: async (from, to) => orgs.renameOrgRows(env, from, to),
-    usage: async (name) => orgs.orgRowCounts(env, name),
-    rowCountsByOrg: async () => orgs.orgRowCountsByOrg(db()),
+    list: async () => registry.listOrgs(db()),
+    byName: async (name) => registry.orgByName(db(), name),
+    byId: async (id) => registry.orgById(db(), id),
+    add: async (name) => registry.insertOrg(db(), name),
+    rename: async (id, name) => registry.renameOrg(db(), { id, name }),
+    remove: async (id) => registry.removeOrg(db(), id),
+  };
+}
+
+// The registry of projects.
+function projectsDomain(db) {
+  return {
+    list: async () => registry.listProjects(db()),
+    byName: async (name) => registry.projectByName(db(), name),
+    byId: async (id) => registry.projectById(db(), id),
+    at: async (cwd) => registry.projectAt(db(), cwd),
+    ofOrg: async (orgId) => registry.projectsOfOrg(db(), orgId),
+    add: async (spec) => registry.insertProject(db(), spec),
+    move: async (id, spec) => registry.moveProject(db(), { ...spec, id }),
+    remove: async (id) => registry.removeProject(db(), id),
   };
 }
 
@@ -309,7 +326,8 @@ export function createLocalStore(env = process.env, { readOnly = false, onClose 
     index: indexDomain(env),
     decisions: decisionsDomain(env, db),
     roadmap: roadmapDomain(env, db),
-    orgs: orgsDomain(env, db),
+    orgs: orgsDomain(db),
+    projects: projectsDomain(db),
     health: async () => readHealth(db),
     connect: async () => {
       db();

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { addProject } from "../../src/config/projects.mjs";
+import { registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { decideResume, readRunState, resumeHandoff } from "../../src/queue/resume.mjs";
 import { recordPhaseDone, recordRunFields } from "../../src/queue/run-state.mjs";
@@ -18,7 +18,7 @@ const PR = "https://github.com/acme/api/pull/42";
 function publishedRun(t, name) {
   const { checkout } = publishedCheckout(t, name);
   const env = { ...makeHome(t, name), ...gitVars() };
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: checkout, name: "alpha" });
   const worktree = addWorktree(checkout, `feat+${SLUG}`, { push: false });
   git(["-C", worktree.path, "branch", "-m", worktree.branch, PUBLISHED]);
   git(["-C", worktree.path, "push", "-q", "-u", "origin", PUBLISHED]);

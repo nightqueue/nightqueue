@@ -1,5 +1,6 @@
 import { UserError } from "../config/errors.mjs";
-import { openDb, resolveProjectName, sqliteToIso, withWriteRetry } from "./db.mjs";
+import { openDb, sqliteToIso, withWriteRetry } from "./db.mjs";
+import { resolveProjectName } from "./project-name.mjs";
 import { ftsMatch } from "./search.mjs";
 
 // Requires a non-empty text field, because the column is NOT NULL and a raw SQLite error helps nobody.

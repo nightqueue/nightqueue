@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { defaultContext, run } from "../../src/cli/index.mjs";
-import { addProject } from "../../src/config/projects.mjs";
+import { registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById } from "../../src/memory/jobs.mjs";
@@ -19,7 +19,7 @@ const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 function makeSessionHome(t, name) {
   const { checkout } = publishedCheckout(t, name);
   const env = { ...makeHome(t, name), ...gitVars() };
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: checkout, name: "alpha" });
   return { env, checkout };
 }
 

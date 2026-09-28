@@ -56,7 +56,7 @@ function readJsonFile(filePath, missing) {
 }
 
 // Serializes a configuration structure for disk.
-function serialize(value) {
+export function serialize(value) {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
@@ -76,6 +76,11 @@ function warnOnOpenMode(filePath, warn) {
 export function loadConfig(env = process.env, { warn = warnToStderr } = {}) {
   const raw = readJsonFile(configPath(env), null);
   return raw === null ? emptyConfig() : normalizeConfig(raw, { warn });
+}
+
+// The JSON of config.json exactly as it is on disk, or null when there is none; only a migration reads it this way.
+export function loadRawConfig(env = process.env) {
+  return readJsonFile(configPath(env), null);
 }
 
 // Writes config.json atomically, creating the home directory when it is missing.

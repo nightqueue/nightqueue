@@ -7,7 +7,7 @@ import { dbPath } from "../src/config/paths.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
 import { saveDecision } from "../src/memory/decisions.mjs";
 import { saveRoadmapItem } from "../src/memory/roadmap.mjs";
-import { DOWNGRADE_TO_V5, makeHome, makeOrg, makeProject } from "../test-support/memory.mjs";
+import { DOWNGRADE_TO_V5, makeDir, makeHome, makeOrg, makeProject } from "../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const LONG_ORG = "acme-platform-group";
@@ -73,7 +73,7 @@ test("the read commands migrate a database written before the owner scope, with 
   assert.equal(roadmap.status, 0, roadmap.stderr);
   assert.ok(roadmap.stdout.includes("todo:\n  p5 #1 legacy roadmap item"), roadmap.stdout);
 
-  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v17/);
+  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v18/);
 });
 
 test("a v5 database that cannot be migrated answers with the schema, never with a raw missing column", (t) => {
@@ -84,7 +84,7 @@ test("a v5 database that cannot be migrated answers with the schema, never with 
 
   const listed = runCli(env, ["decision", "list", "--project", "alpha"], { cwd });
   assert.equal(listed.status, 1, listed.stdout);
-  assert.match(listed.stderr, /schema v5 and this build needs v17/);
+  assert.match(listed.stderr, /schema v5 and this build needs v18/);
   assert.equal(listed.stderr.includes("no such column"), false, listed.stderr);
 });
 
@@ -146,19 +146,31 @@ test("a short org name stays in the NUMBER column and a long one is never glued 
   assert.match(result.stdout, new RegExp(`^${LONG_ORG}#1 accepted\\s+\\d{4}-\\d{2}-\\d{2}\\s+one queue per product$`, "m"));
 });
 
-test("the org read commands never create the database, and a home with none reads as empty", (t) => {
+test("the org read commands never create the database: a home with none has no org to read", (t) => {
   const env = makeHome(t, "decision-org-no-database");
-  makeOrg(env, "acme");
-  const cwd = makeProject(t, env, "alpha", { org: "acme" });
+  const cwd = makeDir(t, "decision-org-no-database-cwd");
   assert.equal(existsSync(dbPath(env)), false, "this home must start with no database at all");
 
+  const listed = runCli(env, ["decision", "list", "--org", "acme"], { cwd });
+  assert.equal(listed.status, 1, listed.stdout);
+  assert.match(listed.stderr, /unknown org `acme`; existing orgs: \(none\)/);
+  const roadmap = runCli(env, ["roadmap", "--org", "acme"], { cwd });
+  assert.equal(roadmap.status, 1, roadmap.stdout);
+  assert.match(roadmap.stderr, /unknown org `acme`/);
+  assert.equal(existsSync(dbPath(env)), false, "a read-only command created the database");
+});
+
+test("the org read commands of a home with a database read an empty org without opening it for writing", (t) => {
+  const env = makeHome(t, "decision-org-empty");
+  makeOrg(env, "acme");
+  const cwd = makeProject(t, env, "alpha", { org: "acme" });
+  closeDb(env);
   const listed = runCli(env, ["decision", "list", "--org", "acme"], { cwd });
   assert.equal(listed.status, 0, listed.stderr);
   assert.equal(listed.stdout.trim(), "no decisions for org `acme`");
   const roadmap = runCli(env, ["roadmap", "--org", "acme"], { cwd });
   assert.equal(roadmap.status, 0, roadmap.stderr);
   assert.equal(roadmap.stdout, "(empty)\n");
-  assert.equal(existsSync(dbPath(env)), false, "a read-only command created the database");
 });
 
 test("org rename carries the decisions and the roadmap items of the org with it", (t) => {

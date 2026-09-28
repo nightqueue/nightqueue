@@ -4,11 +4,18 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFi
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { configPath, dbPath } from "../src/config/paths.mjs";
+import { dbPath } from "../src/config/paths.mjs";
+import { closeDb, openDb } from "../src/memory/db.mjs";
 import { getDecisionByNumber, saveDecision } from "../src/memory/decisions.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
+import { listProjects } from "../src/memory/registry.mjs";
 import { linkRoadmapItemJob, saveRoadmapItem } from "../src/memory/roadmap.mjs";
 import { makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
+
+// The names of the projects the registry of a home holds.
+function registeredNames(env) {
+  return listProjects(openDb(env)).map((project) => project.name);
+}
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 
@@ -126,18 +133,19 @@ test("--project names the project, the current directory resolves it, and neithe
   assert.equal(named.status, 0);
   assert.ok(named.stdout.includes("Store everything in one SQLite file"));
   assert.equal(runCli(env, ["decision", "list", "--project", "ghost"], { cwd }).status, 1);
-  const before = readFileSync(configPath(env), "utf8");
+  const projectsBefore = registeredNames(env);
   const databaseBefore = readFileSync(dbPath(env));
   const unresolved = runCli(env, ["roadmap"], { cwd: outside });
   assert.equal(unresolved.status, 1);
   assert.match(unresolved.stderr, /no project registered for .*; run `nightqueue init` here, or pass --project <name>/);
-  assert.equal(readFileSync(configPath(env), "utf8"), before, "a read-only command registered a project");
+  assert.deepEqual(registeredNames(env), projectsBefore, "a read-only command registered a project");
   assert.deepEqual(readFileSync(dbPath(env)), databaseBefore, "a read-only command wrote to the database");
 });
 
-test("the three commands never create the database, and a home that has none reads as an empty one", (t) => {
+test("the three commands never write the database, and a project with nothing saved reads as an empty one", (t) => {
   const { env, cwd } = makeCliHome(t, "decision-no-database");
-  assert.equal(existsSync(dbPath(env)), false, "this home must start with no database at all");
+  closeDb(env);
+  const databaseBefore = readFileSync(dbPath(env));
 
   const list = runCli(env, ["decision", "list"], { cwd });
   assert.equal(list.status, 0, list.stderr);
@@ -156,6 +164,18 @@ test("the three commands never create the database, and a home that has none rea
   assert.match(show.stderr, /unknown decision #1 for `alpha`/);
   assert.equal(show.stderr.includes("SQLITE"), false, `a raw SQLite error reached the operator: ${show.stderr}`);
 
+  assert.deepEqual(readFileSync(dbPath(env)), databaseBefore, "a read-only command wrote to the database");
+});
+
+test("a home with no database has no project to read, and the read commands never create one", (t) => {
+  const env = makeHome(t, "decision-no-database-at-all");
+  const cwd = makeDir(t, "decision-no-database-cwd");
+  mkdirSync(join(cwd, ".git"));
+  for (const argv of [["decision", "list"], ["roadmap"], ["decision", "show", "1"]]) {
+    const result = runCli(env, argv, { cwd });
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /no project registered for /);
+  }
   assert.equal(existsSync(dbPath(env)), false, "a read-only command created the database");
 });
 
@@ -299,13 +319,15 @@ test("export refuses an existing file unless --force, and defaults to docs/decis
   assert.equal(runCli(env, ["decision", "export", "1", "--force"], { cwd }).status, 0);
 });
 
-test("export never creates the database nor a file when the home has none", (t) => {
+test("export never writes the database nor a file when the decision is not there", (t) => {
   const { env, cwd } = makeCliHome(t, "export-no-database");
+  closeDb(env);
+  const databaseBefore = readFileSync(dbPath(env));
   const dir = makeDir(t, "export-no-database-dir");
   const result = runCli(env, ["decision", "export", "1", "--dir", dir], { cwd });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /unknown decision #1 for `alpha`/);
-  assert.equal(existsSync(dbPath(env)), false, "export created the database");
+  assert.deepEqual(readFileSync(dbPath(env)), databaseBefore, "export wrote to the database");
   assert.deepEqual(readdirSync(dir), []);
 });
 

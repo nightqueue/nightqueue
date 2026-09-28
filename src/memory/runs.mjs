@@ -4,10 +4,10 @@ import {
   isoToSqlite,
   openDb,
   openDbReadOnly,
-  resolveProjectName,
   withFullSync,
   withWriteRetry,
 } from "./db.mjs";
+import { resolveProjectName } from "./project-name.mjs";
 
 export const PIPELINE_TIERS = ["trivial", "simple", "complex"];
 export const PIPELINE_TASK_TYPES = ["bug/error", "feature/refactor"];

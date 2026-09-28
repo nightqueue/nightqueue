@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { addProject } from "../../src/config/projects.mjs";
+import { registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, LEASE_GRACE_S } from "../../src/memory/jobs.mjs";
@@ -21,7 +21,7 @@ function runCli(env, args) {
 function makeGitProject(t, env, name) {
   const path = makeDir(t, `repo-${name}`);
   execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q", path]);
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path, name }).config, env);
+  registerCheckout(env, { path, name });
   return path;
 }
 

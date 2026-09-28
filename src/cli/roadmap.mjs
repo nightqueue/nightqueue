@@ -111,7 +111,7 @@ export async function run(argv, ctx) {
     json: { type: "boolean" },
   });
   checkArgs(positionals, { max: 0, usage: USAGE.list });
-  const owner = ownerRef(resolveReadTarget(values, ctx));
+  const owner = ownerRef(await resolveReadTarget(values, ctx));
   const filters = { status: values.status, priority: priorityFilter(values.priority), type: values.type };
   const roadmap = await readOnlyQuery(ctx, (store) => store.roadmap.listRoadmap(owner, filters), emptyRoadmap(owner));
   if (values.json) {

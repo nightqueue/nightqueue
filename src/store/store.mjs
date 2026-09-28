@@ -9,8 +9,8 @@
  * MCP server - takes its store from `withReadOnlyStore(env, fn)` and never from `openStore(env)`.
  *
  * A method's name is the exported name of the `src/memory/` function it delegates to, verbatim.
- * The only exceptions are the names the contract fixes: `jobs.listWithSlug`, `jobs.status`,
- * `orgs.rename`, `orgs.usage`, `health` and `close`.
+ * The only exceptions are the names the contract fixes: `jobs.listWithSlug`, `jobs.status`, the
+ * `orgs` and `projects` registry domains, `health` and `close`.
  */
 
 /**
@@ -141,10 +141,27 @@
  */
 
 /**
+ * The registry of orgs: an org is a row with an id and a renamable name.
  * @typedef {object} OrgsDomain
- * @property {(from: string, to: string) => Promise<void>} rename both tables in one transaction
- * @property {(name: string) => Promise<{table: string, total: number}[]>} usage what the org still owns
- * @property {() => Promise<{org: string, total: number}[]>} rowCountsByOrg raw counts, no config filtering
+ * @property {() => Promise<object[]>} list every org, earliest first
+ * @property {(name: string) => Promise<object|null>} byName
+ * @property {(id: string) => Promise<object|null>} byId
+ * @property {(name: string) => Promise<object>} add
+ * @property {(id: string, name: string) => Promise<object>} rename one row, in one transaction with the rows that still hold org names
+ * @property {(id: string) => Promise<object>} remove refused while a project or a row still belongs to it
+ */
+
+/**
+ * The registry of projects: a project is a row with an id, a renamable name, an org and an optional checkout path.
+ * @typedef {object} ProjectsDomain
+ * @property {() => Promise<object[]>} list every project, path-less ones included, with its org name
+ * @property {(name: string) => Promise<object|null>} byName
+ * @property {(id: string) => Promise<object|null>} byId
+ * @property {(cwd: string) => Promise<object|null>} at the project whose checkout contains the directory
+ * @property {(orgId: string) => Promise<object[]>} ofOrg
+ * @property {(spec: {name: string, path: string|null, orgId: string}) => Promise<object>} add
+ * @property {(id: string, spec: {orgId?: string, path?: string|null}) => Promise<object>} move
+ * @property {(id: string) => Promise<object>} remove refused while a row still belongs to it
  */
 
 /**
@@ -166,6 +183,7 @@
  * @property {DecisionsDomain} decisions
  * @property {RoadmapDomain} roadmap
  * @property {OrgsDomain} orgs
+ * @property {ProjectsDomain} projects
  * @property {() => Promise<StoreHealth>} health
  * @property {() => Promise<void>} connect opens the connection now, for the caller that needs it to exist before it reads anything
  * @property {() => Promise<void>} close releases this instance; a read-write one never closes the shared connection
@@ -273,7 +291,8 @@ export const STORE_CONTRACT = Object.freeze({
     "buildRoadmapPrompt",
     "queueRoadmapItem",
   ],
-  orgs: ["rename", "usage", "rowCountsByOrg"],
+  orgs: ["list", "byName", "byId", "add", "rename", "remove"],
+  projects: ["list", "byName", "byId", "at", "ofOrg", "add", "move", "remove"],
   "": ["health", "connect", "close", "checkpoint", "migrateIfOutdated"],
 });
 
@@ -305,7 +324,14 @@ export const READ_ONLY_METHODS = Object.freeze([
   "roadmap.getRoadmapItemDetail",
   "roadmap.roadmapDrift",
   "roadmap.searchRoadmap",
-  "orgs.rowCountsByOrg",
+  "orgs.list",
+  "orgs.byName",
+  "orgs.byId",
+  "projects.list",
+  "projects.byName",
+  "projects.byId",
+  "projects.at",
+  "projects.ofOrg",
   "health",
   "close",
   "migrateIfOutdated",

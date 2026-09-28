@@ -4,10 +4,11 @@ import { basename, join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
-import { homeDir } from "../../src/config/paths.mjs";
-import { addProject } from "../../src/config/projects.mjs";
-import { loadConfig, saveConfig } from "../../src/config/store.mjs";
+import { dbPath, homeDir } from "../../src/config/paths.mjs";
+import { registerCheckout } from "../../test-support/memory.mjs";
+import { openDb } from "../../src/memory/db.mjs";
 import { getJob } from "../../src/memory/jobs.mjs";
+import * as registry from "../../src/memory/registry.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // The question `queue add` asks before it registers the repository of the current directory.
@@ -60,20 +61,22 @@ function makeCtx(env, { cwd, answer = null } = {}) {
   return { ctx, out, err, asked: () => tty.written.join("") };
 }
 
-// Parsed config.json of a home, the file a registration has to have written.
-function readConfig(env) {
-  return JSON.parse(readFileSync(join(homeDir(env), "config.json"), "utf8"));
+// The checkout path the registry holds for a project of a home, or undefined when it holds none.
+function registeredPath(env, name) {
+  if (!existsSync(dbPath(env))) return undefined;
+  return registry.projectByName(openDb(env), name)?.path ?? undefined;
 }
 
 // Names of the registered projects of a home, whether or not it was ever written to.
 function registeredNames(env) {
-  return Object.keys(loadConfig(env, { warn: () => {} }).projects).sort();
+  if (!existsSync(dbPath(env))) return [];
+  return registry.listProjects(openDb(env)).map((project) => project.name).sort();
 }
 
 // Registers a repository under the given name, so the derivation of another one collides with it.
 function preregister(t, env, name) {
   const path = makeRepo(t, `taken-${name}`);
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path, name }).config, env);
+  registerCheckout(env, { path, name });
   return path;
 }
 
@@ -85,8 +88,8 @@ test("queue add registers the repository of the current directory after one ques
   const first = makeCtx(env, { cwd: repo, answer: "\n" });
   assert.equal(await run(["queue", "add", "fix", "the", "worker"], first.ctx), 0, first.err.join("\n"));
   assert.equal(first.asked(), question(repo, name));
-  const path = readConfig(env).projects[name]?.path;
-  assert.ok(path, `\`${name}\` is missing from the config`);
+  const path = registeredPath(env, name);
+  assert.ok(path, `\`${name}\` is missing from the registry`);
   assert.ok(first.out.includes(`registered project \`${name}\` (${path})`), first.out.join("\n"));
   assert.equal(first.out.some((line) => line.includes("resolved from the current directory")), false, first.out.join("\n"));
   assert.equal(getJob(1, env).prompt, "fix the worker");
@@ -166,7 +169,7 @@ test("queue add offers the next free name when the derived one is already taken"
   assert.equal(await run(["queue", "add", "fix the worker"], second.ctx), 0, second.err.join("\n"));
   assert.equal(second.asked(), question(repo, `${name}-2`));
   assert.equal(getJob(1, env).project, `${name}-2`);
-  assert.equal(basename(readConfig(env).projects[name].path), basename(taken), "the entry that was already there moved");
+  assert.equal(basename(registeredPath(env, name)), basename(taken), "the entry that was already there moved");
 
   const third = makeCtx(env, { cwd: makeRepoNamed(t, name), answer: "\n" });
   assert.equal(await run(["queue", "add", "fix the parser"], third.ctx), 0, third.err.join("\n"));
@@ -211,7 +214,7 @@ test("queue add registers the repository root when the current directory is insi
 
   assert.equal(await run(["queue", "add", "fix the worker"], ctx), 0, err.join("\n"));
   assert.equal(asked(), question(inside, name));
-  const path = readConfig(env).projects[name].path;
+  const path = registeredPath(env, name);
   assert.equal(basename(path), basename(repo), `the registered path is not the repository root: ${path}`);
   assert.ok(out.includes(`registered project \`${name}\` (${path})`), out.join("\n"));
   assert.equal(getJob(1, env).project, name);

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { run } from "../src/cli/index.mjs";
 import { runDir } from "../src/config/paths.mjs";
-import { addProject } from "../src/config/projects.mjs";
+import { registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { ghBin } from "../src/host/gh.mjs";
 import { openDb } from "../src/memory/db.mjs";
@@ -114,7 +114,7 @@ function publishedRepo(t, name, { branch = BRANCH } = {}) {
 function makeRun(t, name, { branch = BRANCH, type = "feature/refactor" } = {}) {
   const repo = publishedRepo(t, name, { branch });
   const env = { ...makeHome(t, name), ...isolatedHostVars(makeDir(t, `${name}-host`)), ...gitVars() };
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: repo.checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: repo.checkout, name: "alpha" });
   const id = addJob({ project: "alpha", prompt: "log in with google" }, env).id;
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
   recordRunFields({ project: "alpha", slug: SLUG, fields: { worktree: repo.worktree, type }, env });

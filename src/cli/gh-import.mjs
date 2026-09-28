@@ -19,10 +19,10 @@ function importQuestion(login) {
 
 // Tells why the import cannot go on given what is already stored, or null when the slot is free.
 function storedBlocker(config, secrets, org) {
-  const occupiedBy = connectionFor(config, org, TYPE);
-  if (occupiedBy) return `org \`${org}\` already uses \`${occupiedBy}\` for ${TYPE}; nothing to import`;
+  const occupiedBy = connectionFor(config, org.id, TYPE);
+  if (occupiedBy) return `org \`${org.name}\` already uses \`${occupiedBy}\` for ${TYPE}; nothing to import`;
   if (hasConnection(secrets, NAME)) {
-    return `connection \`${NAME}\` already exists; run \`nightqueue connection bind ${NAME} --org ${org}\``;
+    return `connection \`${NAME}\` already exists; run \`nightqueue connection bind ${NAME} --org ${org.name}\``;
   }
   return null;
 }
@@ -62,14 +62,14 @@ async function storeToken(ctx, { config, secrets, org }) {
     ctx.out(`could not read the token from the GitHub CLI; run \`gh auth login\``);
     return;
   }
-  const result = addConnection({ config, secrets, name: NAME, type: TYPE, org, secret: read.token });
+  const result = addConnection({ config, secrets, name: NAME, type: TYPE, orgId: org.id, secret: read.token });
   ctx.saveSecrets(result.secrets, ctx.env);
-  saveConfigAfterSecret({ config: result.config, ctx, name: NAME, org });
-  ctx.out(`stored connection \`${NAME}\` (${TYPE}) and bound it to org \`${org}\``);
+  saveConfigAfterSecret({ config: result.config, ctx, name: NAME, org: org.name });
+  ctx.out(`stored connection \`${NAME}\` (${TYPE}) and bound it to org \`${org.name}\``);
   await reportTest(ctx, result.secrets);
 }
 
-// Offers the token of the GitHub CLI as the `gh` connection of an org; never throws and never prints the token.
+// Offers the token of the GitHub CLI as the `gh` connection of an org (`{ id, name }`); never throws and never prints the token.
 export async function importGhConnection(ctx, { mode, org } = {}) {
   if (mode === "never") return;
   const config = loadConfig(ctx.env, { warn: ctx.err });

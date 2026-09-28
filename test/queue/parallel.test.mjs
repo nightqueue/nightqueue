@@ -4,7 +4,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { addProject } from "../../src/config/projects.mjs";
+import { registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { addJob, claimJobById, claimNextJob, finishJob, getJob, peekNextJob } from "../../src/memory/jobs.mjs";
 import { acquire } from "../../src/queue/claim.mjs";
@@ -22,7 +22,7 @@ const CROSS_PROCESS_HOLD_MS = 1500;
 // Registers a REAL git repository (not the `.git` directory double of makeProject) as a project.
 function makeRealGitProject(t, env, name) {
   const path = initGitRepo(makeDir(t, `repo-${name}`));
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path, name }).config, env);
+  registerCheckout(env, { path, name });
   return path;
 }
 

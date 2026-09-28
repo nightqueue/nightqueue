@@ -103,7 +103,7 @@ test("the v17 migration maps every legacy status and horizon, bumps nightqueue #
   const env = legacyHome(t, "roadmap-v17-map");
   const db = openDb(env);
 
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 17);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 18);
   const columns = db.prepare("PRAGMA table_info(roadmap_items)").all().map((column) => column.name);
   assert.equal(columns.includes("horizon"), false);
   for (const column of ["priority", "job_status_seen", "closed_at"]) assert.ok(columns.includes(column), column);
@@ -194,7 +194,7 @@ test("two processes opening the same legacy database both succeed and the rows a
   const results = await Promise.all([spawnOpener(env, path), spawnOpener(env, path)]);
   for (const result of results) {
     assert.equal(result.code, 0, result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout), { version: 17, horizon: false, total: ITEMS.length });
+    assert.deepEqual(JSON.parse(result.stdout), { version: 18, horizon: false, total: ITEMS.length });
   }
   assert.deepEqual(migratedRows(openDb(env)), EXPECTED);
 });
@@ -227,7 +227,7 @@ test("a v16 home is diagnosed read-only without a crash, then migrated for a rea
   const report = await doctorReport(env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v16, expected v17/);
+  assert.match(database.detail, /schema v16, expected v18/);
   assert.equal(report.checks.some((check) => check.name === "roadmap workflow"), false);
   assert.equal(diskVersion(env), 16);
 
@@ -237,7 +237,7 @@ test("a v16 home is diagnosed read-only without a crash, then migrated for a rea
     listed.items.map((item) => ({ id: item.id, status: item.status, priority: item.priority })),
     [{ id: 1, status: "todo", priority: 5 }],
   );
-  assert.equal(diskVersion(env), 17);
+  assert.equal(diskVersion(env), 18);
 });
 
 test("a legacy queued item whose job was closed (merged) needs no roadmap step: the sweep closes it with the merge sha", async (t) => {

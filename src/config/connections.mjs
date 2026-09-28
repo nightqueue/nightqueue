@@ -1,6 +1,5 @@
 import { UserError } from "./errors.mjs";
-import { requireOrg } from "./orgs.mjs";
-import { assertName } from "./schema.mjs";
+import { assertName, emptySlots } from "./schema.mjs";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -46,17 +45,24 @@ export function requireType(type) {
   return descriptor;
 }
 
-// Returns the NAME of the connection bound to a type in an org, never the secret.
-export function connectionFor(config, orgName, type) {
-  const name = config?.orgs?.[orgName]?.connections?.[type];
+// Returns the NAME of the connection bound to a type in an org (by org id), never the secret.
+export function connectionFor(config, orgId, type) {
+  const name = config?.orgConnections?.[orgId]?.[type];
   return typeof name === "string" && name ? name : null;
 }
 
-// Lists the orgs pointing at a connection.
+// Lists the ids of the orgs pointing at a connection.
 export function orgsUsingConnection(config, name) {
-  return Object.entries(config.orgs)
-    .filter(([, org]) => Object.values(org.connections).includes(name))
-    .map(([orgName]) => orgName);
+  return Object.entries(config?.orgConnections ?? {})
+    .filter(([, slots]) => Object.values(slots ?? {}).includes(name))
+    .map(([orgId]) => orgId);
+}
+
+// The slot map of an org id, created empty the first time a binding lands on it.
+function slotsFor(config, orgId) {
+  config.orgConnections ??= {};
+  config.orgConnections[orgId] ??= emptySlots();
+  return config.orgConnections[orgId];
 }
 
 // Tells whether a stored secret exists for the connection, without reading its value.
@@ -75,14 +81,14 @@ export function secretOf(secrets, name) {
   return secrets?.connections?.[name] ?? null;
 }
 
-// Lists the connections with type, secret presence and bound orgs, never a secret value.
+// Lists the connections with type, secret presence and the ids of the orgs bound to them, never a secret value.
 export function listConnections(config, secrets) {
   const rows = new Map();
   for (const [name, entry] of Object.entries(secrets.connections)) {
     rows.set(name, { name, type: entry.type, present: true, orgs: orgsUsingConnection(config, name) });
   }
-  for (const org of Object.values(config.orgs)) {
-    for (const [type, name] of Object.entries(org.connections)) {
+  for (const slots of Object.values(config?.orgConnections ?? {})) {
+    for (const [type, name] of Object.entries(slots ?? {})) {
       if (!name || rows.has(name)) continue;
       rows.set(name, { name, type, present: false, orgs: orgsUsingConnection(config, name) });
     }
@@ -90,28 +96,25 @@ export function listConnections(config, secrets) {
   return [...rows.values()];
 }
 
-// Builds config and secrets with the new connection, binding it to the org slot only when that slot is empty.
-export function addConnection({ config, secrets, name, type, org, secret }) {
+// Builds config and secrets with the new connection, binding it to the org's slot only when that slot is empty.
+export function addConnection({ config, secrets, name, type, orgId, secret }) {
   assertName("connection", name);
   const descriptor = requireType(type);
-  const orgName = org ?? config.defaultOrg;
-  requireOrg(config, orgName);
   if (typeof secret !== "string" || !secret) throw new UserError("empty secret; nothing was stored");
   if (hasConnection(secrets, name)) throw new UserError(`connection \`${name}\` already exists; remove it first`);
   secrets.connections[name] = { type, [descriptor.secretFields[0]]: secret };
-  const occupiedBy = connectionFor(config, orgName, type);
-  if (!occupiedBy) config.orgs[orgName].connections[type] = name;
-  return { config, secrets, org: orgName, bound: !occupiedBy, occupiedBy };
+  const occupiedBy = connectionFor(config, orgId, type);
+  if (!occupiedBy) slotsFor(config, orgId)[type] = name;
+  return { config, secrets, orgId, bound: !occupiedBy, occupiedBy };
 }
 
 // Binds (or rebinds) an existing connection to the slot of its type in an org.
-export function bindConnection({ config, secrets, name, org }) {
+export function bindConnection({ config, secrets, name, orgId }) {
   const type = typeOf(secrets, name);
   if (!type) throw new UserError(`unknown connection \`${name}\``);
-  requireOrg(config, org);
   requireType(type);
-  const previous = connectionFor(config, org, type);
-  config.orgs[org].connections[type] = name;
+  const previous = connectionFor(config, orgId, type);
+  slotsFor(config, orgId)[type] = name;
   return { config, type, previous };
 }
 
@@ -119,9 +122,9 @@ export function bindConnection({ config, secrets, name, org }) {
 export function removeConnection({ config, secrets, name }) {
   if (!hasConnection(secrets, name)) throw new UserError(`unknown connection \`${name}\``);
   const unboundFrom = orgsUsingConnection(config, name);
-  for (const org of Object.values(config.orgs)) {
-    for (const [type, bound] of Object.entries(org.connections)) {
-      if (bound === name) org.connections[type] = null;
+  for (const slots of Object.values(config?.orgConnections ?? {})) {
+    for (const [type, bound] of Object.entries(slots ?? {})) {
+      if (bound === name) slots[type] = null;
     }
   }
   delete secrets.connections[name];

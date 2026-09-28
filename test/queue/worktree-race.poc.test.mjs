@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { addProject } from "../../src/config/projects.mjs";
+import { registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
@@ -16,7 +16,7 @@ import { addWorktree, gitVars, publishedCheckout } from "../../test-support/work
 function makeRaceHome(t, name) {
   const { checkout } = publishedCheckout(t, name);
   const env = { ...makeHome(t, name), ...gitVars() };
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: checkout, name: "alpha" });
   return { env, checkout };
 }
 

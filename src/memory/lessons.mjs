@@ -1,5 +1,6 @@
 import { UserError } from "../config/errors.mjs";
-import { openDb, resolveProjectName, sqliteToIso, vectorToBlob, withWriteRetry } from "./db.mjs";
+import { openDb, sqliteToIso, vectorToBlob, withWriteRetry } from "./db.mjs";
+import { resolveProjectName } from "./project-name.mjs";
 import { normalizeExcludeIds as normalizeIds } from "./search.mjs";
 
 export const LESSON_TARGETS = ["triager", "architect", "coder", "qa", "verifier"];

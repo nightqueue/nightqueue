@@ -1,11 +1,8 @@
 import { UserError } from "../config/errors.mjs";
-import { requireOrg } from "../config/orgs.mjs";
-import { projectByName } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
-import { resolveProjectName } from "./db.mjs";
+import { orgExists, orgNames, registeredProject, resolveProjectName } from "./project-name.mjs";
 
 export const SCOPE_CONFLICT = "pass either `project` or `org`, never both: a decision or a roadmap item has one owner";
-export const SCOPE_MISSING = "pass `project` (the registered NAME) or `org` (an org of the config) to name the owner";
+export const SCOPE_MISSING = "pass `project` (the registered NAME) or `org` (a registered org) to name the owner";
 
 // The owner clause every write and every exact read of these two tables shares.
 export const OWNER_CLAUSE = "scope = ? AND project IS ? AND org IS ?";
@@ -15,23 +12,25 @@ function isNamed(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 
-// Configuration of the home, without the warnings a read-only caller has no use for.
-function config(env) {
-  return loadConfig(env, { warn: () => {} });
-}
-
 // Owner triple of a project: its registered NAME and the org whose rows it also reads.
 export function projectScope(project, env = process.env) {
   const name = resolveProjectName(project, env);
-  return { scope: "project", project: name, org: name === null ? null : projectByName(config(env), name)?.org ?? null };
+  return { scope: "project", project: name, org: name === null ? null : (registeredProject(name, env)?.org ?? null) };
 }
 
-// Owner a call names: `project` XOR `org`, with the org validated against the config.
+// Refuses an org the registry does not know, listing the ones it does.
+function requireRegisteredOrg(name, env) {
+  if (orgExists(name, env)) return;
+  const existing = orgNames(env);
+  throw new UserError(`unknown org \`${name}\`; existing orgs: ${existing.length ? existing.join(", ") : "(none)"}`);
+}
+
+// Owner a call names: `project` XOR `org`, with the org validated against the registry.
 export function requireScopeTarget({ project, org } = {}, env = process.env) {
   if (isNamed(project) && isNamed(org)) throw new UserError(SCOPE_CONFLICT);
   if (isNamed(org)) {
     const name = org.trim();
-    requireOrg(config(env), name);
+    requireRegisteredOrg(name, env);
     return { scope: "org", project: null, org: name };
   }
   if (!isNamed(project)) throw new UserError(SCOPE_MISSING);

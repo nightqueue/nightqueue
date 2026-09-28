@@ -3,14 +3,12 @@ import { dirname, join, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { requireOrg } from "../config/orgs.mjs";
 import { dbPath } from "../config/paths.mjs";
-import { projectByName, resolveProject } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
 import { paddedNumber, parseDecisionFile, pointerLine, renderDecisionFile, slugOf, stampPointer } from "../memory/decision-file.mjs";
 import { DECISION_STATUSES, decisionView, renderDecisionText } from "../memory/decisions.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { SCOPE_CONFLICT, ownerLabel, ownerOf, ownerRef } from "../memory/scope.mjs";
 import { callerJobId } from "../queue/retry.mjs";
-import { openStore, openStoreReadOnly } from "../store/open.mjs";
+import { openRegistryReader, openStore, openStoreReadOnly } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
 export const USAGE = {
@@ -67,20 +65,20 @@ function projectTarget(project) {
 }
 
 // Owner a read-only command runs against: `--org`, the `--project` NAME, or the project of the current directory.
-export function resolveReadTarget(values, ctx) {
-  const config = loadConfig(ctx.env, { warn: ctx.err });
+export async function resolveReadTarget(values, ctx) {
   if (values.project !== undefined && values.org !== undefined) throw new UserError(SCOPE_CONFLICT);
+  const store = await openRegistryReader(ctx.env);
   if (values.org !== undefined) {
-    requireOrg(config, values.org);
+    await requireOrg(store, values.org);
     return { scope: "org", project: null, org: values.org, label: `org \`${values.org}\`` };
   }
   if (values.project !== undefined) {
-    const named = projectByName(config, values.project);
+    const named = store ? await store.projects.byName(values.project) : null;
     if (named) return projectTarget(named);
     throw new UserError(`unknown project \`${values.project}\`; run \`nightqueue project list\``);
   }
   const cwd = ctx.cwd ?? process.cwd();
-  const resolved = resolveProject(config, { cwd });
+  const resolved = store ? await store.projects.at(cwd) : null;
   if (resolved) return projectTarget(resolved);
   throw new UserError(`no project registered for ${cwd}; run \`nightqueue init\` here, or pass --project <name>`);
 }
@@ -161,7 +159,7 @@ function formatRow(row) {
 async function runList(argv, ctx) {
   const { values, positionals } = parseCommand(argv, READ_OPTIONS);
   checkArgs(positionals, { max: 0, usage: USAGE.list });
-  const target = resolveReadTarget(values, ctx);
+  const target = await resolveReadTarget(values, ctx);
   const owner = ownerRef(target);
   const status = requireStatusOption(values.status);
   const rows = await readOnlyQuery(ctx, (store) => store.decisions.listDecisions({ ...owner, status }), []);
@@ -188,7 +186,7 @@ function printDecision(ctx, target, row) {
 async function runShow(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { project: { type: "string" }, org: { type: "string" } });
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.show });
-  const target = resolveReadTarget(values, ctx);
+  const target = await resolveReadTarget(values, ctx);
   const number = requireNumber(positionals[0]);
   const row = await readOnlyQuery(ctx, (store) => store.decisions.getDecisionByNumber({ ...ownerRef(target), number }), null);
   if (!row) throw new UserError(`unknown decision #${number} for ${target.label}`);
@@ -222,7 +220,7 @@ function writeExportedFile(path, text, force) {
 async function runExport(argv, ctx) {
   const { values, positionals } = parseCommand(argv, EXPORT_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.export });
-  const target = resolveReadTarget(values, ctx);
+  const target = await resolveReadTarget(values, ctx);
   const number = requireNumber(positionals[0], USAGE.export);
   const row = await readOnlyQuery(ctx, (store) => store.decisions.getDecisionByNumber({ ...ownerRef(target), number }), null);
   if (!row) throw new UserError(`unknown decision #${number} for ${target.label}`);
@@ -294,7 +292,7 @@ function stampImportedFile(ctx, path, saved) {
 async function runImport(argv, ctx) {
   const { values, positionals } = parseCommand(argv, IMPORT_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.import });
-  const target = resolveReadTarget(values, ctx);
+  const target = await resolveReadTarget(values, ctx);
   const path = resolve(ctx.cwd ?? process.cwd(), positionals[0]);
   const parsed = parseDecisionFile(readImportedFile(path), path);
   const { status, supersededBy } = importStatus(values, parsed);
@@ -348,7 +346,7 @@ async function resolveSuccessorId(store, target, successorNumber) {
 async function runUpdate(argv, ctx) {
   const { values, positionals } = parseCommand(argv, UPDATE_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.update });
-  const target = resolveReadTarget(values, ctx);
+  const target = await resolveReadTarget(values, ctx);
   const number = requireNumber(positionals[0], USAGE.update);
   const { status, successorNumber } = requireUpdateTransition(values);
   const store = openStore(ctx.env);
