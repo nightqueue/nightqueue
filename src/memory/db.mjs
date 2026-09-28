@@ -81,6 +81,18 @@ function migrateOrExplain(db) {
   }
 }
 
+// Refuses a database whose user_version is newer than this build knows. It is the first READ of any open - only the
+// busy_timeout pragma, which touches no file, runs before it - and it runs under withWriteRetry like the rest of the open:
+// a user_version read while another process creates or migrates the file is SQLITE_BUSY, not a refusal, so it waits and
+// retries instead of failing the open (test/memory/concurrency.test.mjs, two processes opening one fresh home).
+function assertSchemaNotNewer(db, path) {
+  const version = db.prepare("PRAGMA user_version").get()?.user_version ?? 0;
+  if (version <= DB_USER_VERSION) return;
+  throw new UserError(
+    `the database at ${path} is at schema v${version}, newer than this nightqueue (v${DB_USER_VERSION}): update nightqueue / restart the client that runs the old version`,
+  );
+}
+
 // Applies the pragmas and brings the schema of a freshly opened connection up to date: the one-shot v18 migration first,
 // before WAL is switched on, then the per-open steps.
 function initConnection(db, path, env) {
@@ -149,7 +161,11 @@ export function openDb(env = process.env) {
   ensureHome(env);
   const db = new DatabaseSync(path);
   try {
-    withWriteRetry(() => initConnection(db, path, env));
+    withWriteRetry(() => {
+      db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+      assertSchemaNotNewer(db, path);
+      initConnection(db, path, env);
+    });
   } catch (err) {
     db.close();
     throw err;
@@ -162,7 +178,15 @@ export function openDb(env = process.env) {
 
 // Opens the database read-only and outside the connection cache, for a caller that must never create or migrate it.
 export function openDbReadOnly(env = process.env) {
-  const db = new DatabaseSync(dbPath(env), { readOnly: true });
+  const path = dbPath(env);
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    withWriteRetry(() => assertSchemaNotNewer(db, path));
+  } catch (err) {
+    db.close();
+    throw err;
+  }
   db.exec("PRAGMA foreign_keys = ON");
   return db;
 }
