@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
+import { closeStepPrinter } from "../../src/cli/queue.mjs";
 import { runnerRegistryPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { acquireClose, addJob, getJob } from "../../src/memory/jobs.mjs";
@@ -303,4 +304,23 @@ test("the detached child adopts the lease through its token, and a token that do
   const child = await runCli({ ...env, NIGHTQUEUE_CLOSE_WORKER: token }, ["queue", "close", String(id), "--foreground"]);
   assert.equal(child.code, 1);
   assert.equal(getJob(id, env).close_status, "failed", "the child never adopted the lease its parent took");
+});
+
+test("a running step redraws one live line on a TTY and one line per change elsewhere", () => {
+  const running = (note) => ({ name: "conflict", status: "running", note });
+  const done = { name: "conflict", status: "done", note: "ok" };
+  const tty = { isTTY: true, writes: [], write(text) { this.writes.push(text); } };
+  const said = [];
+  const onTty = closeStepPrinter((line) => said.push(line), tty);
+  onTty(running("waiting for checks on 2222222: 1/3 done"));
+  onTty(running("waiting for checks on 2222222: 2/3 done"));
+  onTty(done);
+  assert.deepEqual(tty.writes, ["\r\x1b[2K· conflict   waiting for checks on 2222222: 1/3 done", "\r\x1b[2K· conflict   waiting for checks on 2222222: 2/3 done", "\r\x1b[2K"]);
+  assert.deepEqual(said, ["✓ conflict   ok"]);
+
+  const plain = [];
+  const onPipe = closeStepPrinter((line) => plain.push(line), { isTTY: false, write: () => assert.fail("wrote to a pipe") });
+  onPipe(running("waiting 1/3"));
+  onPipe(done);
+  assert.deepEqual(plain, ["· conflict   waiting 1/3", "✓ conflict   ok"]);
 });

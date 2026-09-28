@@ -57,6 +57,7 @@ export function fakeCloseDeps(changes = {}) {
   const world = {
     pr: openPr(),
     reads: [],
+    checkReads: [],
     checks: { ok: true, checks: [{ name: "test", bucket: "pass" }], failing: [], pending: [] },
     diffNames: { ok: true, files: ["src/a.mjs"] },
     git: {},
@@ -82,7 +83,7 @@ export function fakeCloseDeps(changes = {}) {
       },
       prChecks: async () => {
         log.checkReads += 1;
-        return world.checks;
+        return world.checkReads.length ? world.checkReads.shift() : world.checks;
       },
       prMerge: async (url, options = {}) => {
         log.merges.push({ url, matchHeadCommit: options.matchHeadCommit ?? null });

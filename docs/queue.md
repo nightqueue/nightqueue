@@ -825,7 +825,16 @@ agent, never a second job, never queue work:
    rebase without running the suite). A rebase that stops on real
    conflicts is aborted and the close stops with `real-conflict` and the conflicted files -
    a close never resolves a real conflict. The throwaway worktree is removed whatever
-   happens.
+   happens. A pull request `BEHIND` its base (mergeable, but GitHub refuses to merge it
+   while it is not up to date) goes through the same rebase, suite and push, records
+   `pushed <old> -> <new>`, and then waits in the same run for the checks of the new head:
+   `gh pr checks` is polled with a growing gap (10 s up to 60 s), the checklist and a
+   foreground close show `waiting for checks on <sha>: 2/3 done`, and the close lease is
+   renewed at each poll. All green goes on to merge; a red check stops with `checks-red`
+   naming it; when `queue.closeTimeoutS` is nearly out it stops with `checks-pending` -
+   `branch updated to <sha>, checks still running - run queue close N again` - and the next
+   run starts at preflight on that head. No other state (`BLOCKED`, `UNSTABLE`) is updated,
+   and with `--force` the wait is skipped.
 3. **merge** - `gh pr merge --squash --match-head-commit <the verified head>`, never
    `--delete-branch`, `--admin` or `--auto`. gh's exit code is never the evidence: the pull
    request is re-read until GitHub reports it merged with its merge commit, and that
