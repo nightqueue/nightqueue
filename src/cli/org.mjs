@@ -1,8 +1,10 @@
 import { UserError } from "../config/errors.mjs";
-import { addOrg, listOrgs, removeOrg, renameOrg } from "../config/orgs.mjs";
+import { addOrg, listOrgs, removeOrg, renameOrg, setOrgKey } from "../config/orgs.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { openRegistryReader, openRegistryWriter, openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
+import { keyOption } from "./project.mjs";
+import { askKey } from "./prompt.mjs";
 
 // Formats the connection slots of an org for the text output.
 function formatSlots(connections) {
@@ -14,15 +16,33 @@ function formatSlots(connections) {
 // Formats one line of `org list`.
 function formatOrg(org) {
   const marker = org.isDefault ? "*" : " ";
-  return `${marker} ${org.name}  ${formatSlots(org.connections)}  projects=${org.projects}`;
+  return `${marker} ${org.name}  ${org.key}  ${formatSlots(org.connections)}  projects=${org.projects}`;
+}
+
+// The key a new org gets: the one `--key` asks for, the one typed at the terminal, or the suggestion.
+async function newOrgKey(store, name, values, ctx) {
+  const asked = keyOption(values);
+  if (asked !== undefined) return asked;
+  return await askKey(ctx, { kind: "org", name, suggested: await store.orgs.suggestKey(name) });
 }
 
 // Runs `org add`.
 async function runAdd(argv, ctx) {
+  const { values, positionals } = parseCommand(argv, { key: { type: "string" } });
+  checkArgs(positionals, { min: 1, usage: "nightqueue org add <name> [--key <KEY>]" });
+  const store = openStore(ctx.env);
+  const name = positionals[0];
+  const org = await addOrg(store, name, await newOrgKey(store, name, values, ctx));
+  ctx.out(`created org \`${org.name}\` with key ${org.key}`);
+}
+
+// Runs `org key`: one registry row and one alias, so the old key keeps resolving and every render shows the new one.
+async function runKey(argv, ctx) {
   const { positionals } = parseCommand(argv);
-  checkArgs(positionals, { min: 1, usage: "nightqueue org add <name>" });
-  const org = await addOrg(openStore(ctx.env), positionals[0]);
-  ctx.out(`created org \`${org.name}\``);
+  checkArgs(positionals, { min: 2, max: 2, usage: "nightqueue org key <name> <KEY>" });
+  const [name, key] = positionals;
+  const { oldKey, key: newKey } = await setOrgKey(openStore(ctx.env), name, key);
+  ctx.out(`changed the key of org \`${name}\` from ${oldKey} to ${newKey}; ${oldKey} refs still resolve`);
 }
 
 // The orgs of the home as `org list` shows them; a home with no database yet has none.
@@ -69,6 +89,7 @@ const SUBCOMMANDS = new Map([
   ["add", runAdd],
   ["list", runList],
   ["rename", runRename],
+  ["key", runKey],
   ["remove", runRemove],
 ]);
 

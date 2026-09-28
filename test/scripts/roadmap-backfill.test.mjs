@@ -12,15 +12,15 @@ const PR_URL = "https://github.com/acme/alpha/pull/3";
 // Seeds a job that ended `failed` through the real store writes, and answers its id.
 function seedFailedJob(env) {
   const { id } = addJob({ projectId: ensureProject(env, "alpha"), prompt: "p" }, env);
-  if (!claimJobById(id, { worker: "w1", cap: null }, env)) throw new Error(`seedFailedJob: job #${id} could not be claimed`);
-  if (!finishJob(id, { worker: "w1", status: "failed" }, env)) throw new Error(`seedFailedJob: job #${id} could not be finished`);
+  if (!claimJobById(id, { worker: "w1", cap: null }, env)) throw new Error(`seedFailedJob: J-${id} could not be claimed`);
+  if (!finishJob(id, { worker: "w1", status: "failed" }, env)) throw new Error(`seedFailedJob: J-${id} could not be finished`);
   return id;
 }
 
 // Inserts an item already linked to a job, the way items were linked before comments existed.
 function insertItem(db, { status, jobId }) {
   return db
-    .prepare("INSERT INTO roadmap_items (project_id, title, status, position, job_id, job_status_seen) VALUES ((SELECT id FROM projects WHERE name = 'alpha'), 't', ?, 1, ?, NULL) RETURNING id")
+    .prepare("INSERT INTO roadmap_items (project_id, number, title, status, position, job_id, job_status_seen) VALUES ((SELECT id FROM projects WHERE name = 'alpha'), (SELECT COALESCE(MAX(number), 0) + 1 FROM roadmap_items), 't', ?, 1, ?, NULL) RETURNING id")
     .get(status, jobId).id;
 }
 
@@ -87,7 +87,7 @@ test("the backfill dates each synthesized comment, gives a hand-closed item noth
   assert.deepEqual(threadOf(env, items.queued), [["queued", datesOf(env, jobs.pending).queued]]);
   const close = getRoadmapItemDetail(items.closed, {}, env).comments.at(-1);
   assert.equal(close.author, `job:${jobs.closed}`);
-  assert.equal(close.body, `job #${jobs.closed} closed`);
+  assert.equal(close.body, `J-${jobs.closed} closed`);
   assert.deepEqual([close.refs.pr, close.refs.sha], [PR_URL, mergedChecklist().data.mergeSha]);
 
   assert.match(await backfill(env, []), /: items=4 written=0 skipped=1$/);

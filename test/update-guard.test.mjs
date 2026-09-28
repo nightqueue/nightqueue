@@ -83,7 +83,7 @@ test("update refuses while a job holds a live lease", async (t) => {
 
   const { ctx, err } = makeCtx(host.env);
   assert.equal(await run(["update"], ctx), 1);
-  assert.deepEqual(err, [`nightqueue: ${refusal(`job #${id}`)}`]);
+  assert.deepEqual(err, [`nightqueue: ${refusal(`J-${id}`)}`]);
   assert.deepEqual(host.npmCalls(), []);
 });
 
@@ -94,7 +94,7 @@ test("a runner holding a job is refused by pid and by job at once", async (t) =>
 
   const { ctx, err } = makeCtx(host.env, alive);
   assert.equal(await run(["update"], ctx), 1);
-  assert.deepEqual(err, [`nightqueue: ${refusal(`pid ${WATCHER_PID} / job #${id}`)}`]);
+  assert.deepEqual(err, [`nightqueue: ${refusal(`pid ${WATCHER_PID} / J-${id}`)}`]);
   assert.deepEqual(host.npmCalls(), []);
 });
 
@@ -130,7 +130,7 @@ test("--force overrides both refusals, warning on stderr that a live runner may 
   assert.equal(runningHost.npmCalls().length > 0, true);
   assert.ok(
     running.err.includes(
-      `warning: --force is replacing the runtime while a runner is active (job #${id}); the job it is running may fail`,
+      `warning: --force is replacing the runtime while a runner is active (J-${id}); the job it is running may fail`,
     ),
     running.err.join("\n"),
   );

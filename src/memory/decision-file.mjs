@@ -1,12 +1,13 @@
 import { UserError } from "../config/errors.mjs";
 import { DECISION_STATUSES } from "./decisions.mjs";
-import { ownerLabel, ownerOf } from "./scope.mjs";
+import { decisionRef, ownerOf } from "./scope.mjs";
 
 const NUMBER_PREFIX = /^\d{4}\s+[-–—]\s+/;
 const STATUS_WORD = /\bStatus\b\W*([A-Za-z]+)/;
 const DATE = /\d{4}-\d{2}-\d{2}/;
-const POINTER = /Decision\s+((?:[\w.-]+)?#\d+)\s+in the\s+(\S+)\s+store/;
-const SUCCESSOR = /Superseded by\s+((?:[\w.-]+)?#\d+)/;
+const LABEL = "((?:[\\w.-]+)?#\\d+|(?:[A-Za-z][A-Za-z0-9]{0,4}\\/)?D-\\d+)";
+const POINTER = new RegExp(`Decision\\s+${LABEL}\\s+in the\\s+(\\S+)\\s+store`);
+const SUCCESSOR = new RegExp(`Superseded by\\s+${LABEL}`);
 const FIELD_HEADING = /^##\s+(\S+)(.*)$/;
 const FIELD_NAMES = new Map([
   ["context", "context"],
@@ -42,7 +43,7 @@ export function pointerLine(label, owner) {
 function statusLine(row, successorLabel) {
   const date = String(row.created_at ?? "").slice(0, 10);
   const successor = row.status === "superseded" && successorLabel ? ` Superseded by ${successorLabel}.` : "";
-  return `Status: ${statusWord(row.status)} (${date}). ${pointerLine(ownerLabel(row), ownerOf(row))}${successor}`;
+  return `Status: ${statusWord(row.status)} (${date}). ${pointerLine(decisionRef(row), ownerOf(row))}${successor}`;
 }
 
 // Markdown of one decision row, in the shape of the published ADR files.
@@ -67,9 +68,15 @@ function headerBounds(lines) {
   return { title, start, end: firstHeading === -1 ? lines.length : firstHeading };
 }
 
-// The number part of a label like `#23` or `acme#3`.
+// The number part of a label: `D-23`, `ACME/D-3`, or the pre-v19 `#23` / `acme#3`.
 function labelNumber(label) {
-  return Number(label.slice(label.lastIndexOf("#") + 1));
+  return Number(label.match(/(\d+)$/)[1]);
+}
+
+// The owner part of a label (`ACME` of `ACME/D-3`, `acme` of `acme#3`), or null when the label names a project decision.
+function labelQualifier(label) {
+  const qualifier = label.match(/^(.+?)(?:\/D-|#)\d+$/)?.[1];
+  return qualifier === undefined ? null : qualifier;
 }
 
 // The text split into alternating parts: outside an HTML comment at even indexes, the comments (an unclosed one runs to the end) at odd ones.
@@ -94,7 +101,9 @@ function parseHeader(zone) {
   return {
     status: DECISION_STATUSES.includes(status) ? status : null,
     date: header.match(DATE)?.[0] ?? null,
-    pointer: pointer ? { label: pointer[1], number: labelNumber(pointer[1]), owner: pointer[2] } : null,
+    pointer: pointer
+      ? { label: pointer[1], number: labelNumber(pointer[1]), qualifier: labelQualifier(pointer[1]), owner: pointer[2] }
+      : null,
     successor: successor ? { label: successor[1], number: labelNumber(successor[1]) } : null,
   };
 }

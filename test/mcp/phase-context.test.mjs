@@ -110,7 +110,7 @@ test("only the triager gets the related roadmap items of its project, in the ref
 
   const triager = await phaseContextBlock({ target: "triager", query: "runner lease" }, env);
   assert.ok(
-    triager.block.includes(`## Related roadmap items\n- [alpha#${item.id}] the runner drops its lease [todo, p2, bug]`),
+    triager.block.includes(`## Related roadmap items\n- [${item.ref}] the runner drops its lease [todo, p2, bug]`),
     triager.block,
   );
   assert.equal(triager.block.includes("unrelated cleanup"), false);

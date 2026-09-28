@@ -26,12 +26,38 @@ a job left `running` by a runner that crashed does
 not block it. The step that gives each job of a project its own run slug still
 runs on every open, now keyed by `project_id`.
 
-Thirteen tables plus five full text mirrors:
+Schema v19 gives every project and every org a **key** and every roadmap item a
+**number** inside its owner. A v18 database migrates the same way, once, in the
+same open as the v18 step when both are pending: a copy `nightqueue.db.pre-v19`
+first, then one transaction that suggests a key for every project (in
+registration order) and every org, numbers the items of each owner `1..n` in the
+order they were created, and rebuilds `orgs`, `projects` and `roadmap_items` to
+the current shape. Decision numbers, comments, notices and prompts are not
+touched - text written before keeps its old spelling. The same live-lease refusal
+applies, naming the job `J-<id>`.
+
+**Keys and refs.** A key is 2 to 5 uppercase letters or digits starting with a
+letter, unique across projects and orgs together; the database refuses a
+repeat with triggers over `projects`, `orgs` and their two alias tables. It is a
+label like a name - identity stays the id - so `nightqueue project key` /
+`org key` change one row and keep the old key in `project_key_aliases` /
+`org_key_aliases`, where it still resolves to the same owner and no other owner
+can take it. Everything is printed by a **ref** built from the current key, and
+every tool and command that takes a job, an item or a decision reads one:
+`J-<id>` for a job (the plain id too), `<KEY>-<n>` for an item (`NQ-12`,
+`DLW-3`), `D-<n>` for a decision of the project in context, `<KEY>/D-<n>` for a
+decision named by its owner (`DLW/D-3`), and `G` for the rows that have no owner
+(`G-4`, `G/D-2`). Items and decisions no longer take an internal id; an integer
+where one of their refs belongs is refused. Every MCP answer that carries a job,
+an item or a decision carries its `ref` next to the existing `id`/`number`.
+
+Fifteen tables plus five full text mirrors:
 
 | table | what it holds |
 |---|---|
-| `orgs` | one row per org: its id (a ULID), its name (unique, renamable) and its creation date |
-| `projects` | one row per project: its id (a ULID), its name (unique, renamable), its checkout path (unique; none for a project known only from history) and the id of its org |
+| `orgs` | one row per org: its id (a ULID), its name (unique, renamable), its key (unique across projects and orgs, renamable) and its creation date |
+| `projects` | one row per project: its id (a ULID), its name (unique, renamable), its key (unique across projects and orgs, renamable), its checkout path (unique; none for a project known only from history) and the id of its org |
+| `project_key_aliases`, `org_key_aliases` | the old keys of a project or an org, which keep resolving to it; never edited, removed with their owner |
 | `lessons` | one lesson per mistake: title, root cause, solution, prevention rule, target phase, how many attempts it cost, how often it was injected and violated, and its embedding |
 | `memory` | project facts and durable decisions, as key and value, per project or global |
 | `project_index` | the file to responsibility map of a project, with the mtime the file had when it was indexed |
@@ -40,7 +66,7 @@ Thirteen tables plus five full text mirrors:
 | `pipeline_phases` | one row per phase of a run: sequence, phase, model, status, retry and duration |
 | `jobs` | one row per queue job: project, prompt, priority, status, attempts, lease, slug, session, branch, pull request, notice, usage and cost |
 | `decisions` | one architecture decision per row: number inside its project, title, context, decision, consequences, status, the decision that superseded it, and its embedding |
-| `roadmap_items` | one intent per row: title, detail, type (`bug`, `feature`, `improvement`, `chore`, `incident`), status (`backlog`, `todo`, `in_progress`, `in_review`, `done`, `cancelled`), priority (1-9, 1 first), position inside its priority group, `closed_at`, the decision that motivated it, the job it was queued as and the job status it last followed |
+| `roadmap_items` | one intent per row: its number inside its owner, title, detail, type (`bug`, `feature`, `improvement`, `chore`, `incident`), status (`backlog`, `todo`, `in_progress`, `in_review`, `done`, `cancelled`), priority (1-9, 1 first), position inside its priority group, `closed_at`, the decision that motivated it, the job it was queued as and the job status it last followed |
 | `roadmap_comments` | the append-only thread of a roadmap item: kind, author (`operator` or `job:<id>`), body, `refs` JSON, the project that owns the comment (none for the item's owner) and its date; triggers refuse every update and delete |
 | `roadmap_item_projects` | one row per project an org item was queued for: its status, `closed_at`, the job it was queued as and the job status it last followed; one row per item and project |
 | `lessons_fts`, `memory_fts`, `decisions_fts` | FTS5 mirrors of the three text tables, kept in sync by triggers on insert, update and delete |
@@ -154,7 +180,7 @@ a read by `org` answers that org's rows alone. A project never sees the rows of
 another org.
 
 A **decision** is one architecture decision of its owner, numbered inside that
-owner (`#1`, `#2`, ... per project; `acme#1`, `acme#2` per org, and the numbering
+owner (`D-1`, `D-2`, ... per project; `DLW/D-1`, `DLW/D-2` per org, and the numbering
 of one owner never touches another's): a title, the `context` that forced the
 choice, the `decision` itself, the `consequences` it costs, and a status among
 `proposed`, `accepted`, `superseded` and `rejected`. A decision that was replaced points at the one that replaced it
@@ -172,6 +198,9 @@ prompt.
 The **roadmap** is where "what next" lives: one line per intent, with a
 `priority` from 1 to 9 (default 5, 1 first, the same direction as a job's) and a
 contiguous position inside its priority group (`1..N`, renumbered on every move).
+An item is numbered inside its owner, like a decision, and that number never
+changes: its ref is `<KEY>-<n>` (`NQ-12` for a project item, `DLW-3` for an org
+item).
 An item carries a status among `backlog`, `todo`, `in_progress`, `in_review`,
 `done` and `cancelled` (plus `closed_at` while it is `done`), may link to the
 decision that motivated it, and, once queued, to the job built from it. By hand
@@ -188,7 +217,7 @@ Every item has a **type** (`bug`, `feature`, `improvement`, `chore`,
 `trivial`; an explicit tier wins) and the commit type the job is told to use
 (`fix`, `feat`, `refactor` or `perf`, `chore`). Every item also has a
 **comment thread**, append-only: each job event leaves one comment signed
-`job:<id>` in the same transaction as the status (`queued`, `gate`, `pr`,
+`job:<id>` (printed `J-<id>`) in the same transaction as the status (`queued`, `gate`, `pr`,
 `failed`, `closed`), with `refs` read from the job's row - the pull
 request, the branch, the merge sha, the files the implementation listed and the
 decision the job proposed; an operator's move back from `in_review` or `done`
@@ -225,13 +254,14 @@ became `cancelled`, and every item got priority 5.
 **Private by design.** Both live only in `$NIGHTQUEUE_HOME/nightqueue.db`, the
 same file as the rest of the memory. The runtime writes nothing into the
 repository and publishes nothing; the one thing it puts in a pull request is the
-last `Roadmap: <owner>#<id>` line of the body of a job queued from a roadmap
-item: no `docs/adr/` tree, no `ROADMAP.md`; only an explicit `nightqueue decision export`
+footer `nightqueue run pr` appends (`Refs <KEY>-<n>` and `Opened by nightqueue ·
+<KEY>-<n>` for a job queued from a roadmap item, `Opened by nightqueue` otherwise),
+and in a commit the `Refs: <KEY>-<n>` trailer `nightqueue run commit` adds: no `docs/adr/` tree, no `ROADMAP.md`; only an explicit `nightqueue decision export`
 writes a file. The only ways in are the MCP tools below and the one deliberate
 terminal write, `nightqueue decision import` (see below), and the only ways to
 read them from a terminal are the four read-only commands
 (`nightqueue decision list`, `nightqueue decision show <number>`,
-`nightqueue roadmap` and `nightqueue roadmap show <id>`), which resolve the project from the current directory when
+`nightqueue roadmap` and `nightqueue roadmap show <ref>`), which resolve the project from the current directory when
 `--project` is omitted, read one org alone with `--org <name>` instead, never
 write, and never register a project. Read-only
 means the database too: the four open it read-only, so they never create it and
@@ -248,11 +278,11 @@ a terminal: it reads an exported file or a hand-written ADR of the same shape
 (`# <title>`, a `Status:` line with its date, `## Context`, `## Decision`,
 `## Consequences`; any other `##` section stays inside the field it follows),
 takes the status from the file unless `--status` overrides it
-(`--superseded-by <n>` imports it `superseded`, pointing at `#n`), and saves it
+(`--superseded-by <n>` imports it `superseded`, pointing at `D-n`), and saves it
 through the same review as `decision_save`: an overlap refuses with the
 candidates until each is named in `--supersedes` or `--unrelated`. On success it
-prints `imported as #n` and stamps `Decision #n in the <owner> store.` into the
-file's header; a file whose header already names an existing row of the owner is
+prints `imported as D-n` and stamps `Decision D-n in the <owner> store.` into the
+file's header (a header written before v19, `Decision #n ...`, is still read); a file whose header already names an existing row of the owner is
 refused, so a re-run imports nothing twice. The runtime itself never reads
 `docs/decisions/`.
 
@@ -260,14 +290,14 @@ refused, so a re-run imports nothing twice. The runtime itself never reads
 
 | tool | what it does |
 |---|---|
-| `decision_save` | records one decision: `project` or `org`, `title`, `context`, `decision`, `consequences?`, `status?` (default `accepted`), `supersedes?`, `unrelated?`; answers the `id`, the `number` and the owner it got. When the title overlaps an accepted or proposed title of the same owner, or the title plus decision is close in meaning to one, nothing is saved and it answers `status: "needs_review"` with the `candidates`; saving again names every candidate by `number`, in `supersedes` (they become `superseded` and point at the new row, in the same transaction) or in `unrelated`. Inside a queue job it stamps `job_id`, refuses `supersedes`, and refuses a second proposal while the first is still `proposed` |
-| `decision_update` | changes a decision by `id`: any of `title`, `context`, `decision`, `consequences`, `status`, `superseded_by` — this is how a `proposed` one is accepted or rejected; `status: "superseded"` requires `superseded_by`, unless the row already names its successor; the row it answers is a compact one, truncated like `decision_list` |
+| `decision_save` | records one decision: `project` or `org`, `title`, `context`, `decision`, `consequences?`, `status?` (default `accepted`), `supersedes?`, `unrelated?`; answers the `id`, the `number`, the `ref` and the owner it got. When the title overlaps an accepted or proposed title of the same owner, or the title plus decision is close in meaning to one, nothing is saved and it answers `status: "needs_review"` with the `candidates`; saving again names every candidate by `number` or `ref` (of the same owner), in `supersedes` (they become `superseded` and point at the new row, in the same transaction) or in `unrelated`. Inside a queue job it stamps `job_id`, refuses `supersedes`, and refuses a second proposal while the first is still `proposed` |
+| `decision_update` | changes a decision by `id`, its ref (`D-7` in `project?` or the running job's project, `DLW/D-3` anywhere): any of `title`, `context`, `decision`, `consequences`, `status`, `superseded_by` — this is how a `proposed` one is accepted or rejected; `status: "superseded"` requires `superseded_by`, unless the row already names its successor; the row it answers is a compact one, truncated like `decision_list` |
 | `decision_list` | the log in numbering order: `project` or `org`, `status?`; compact rows, org rows first |
 | `decision_recall` | the standing constraints: `project` or `org`, `query?`, `limit?`; only `accepted` decisions, hybrid BM25 plus semantic, org rows first, and the text comes back untruncated because it feeds prompts |
-| `roadmap_save` | adds an intent at the end of its priority group: `project` or `org`, `title`, `type`, `detail?`, `priority?` (default 5), `status?` (default `todo`), `decision_id?`; `horizon` is refused by name |
-| `roadmap_update` | changes an item by `id`: `title`, `detail`, `type`, `status`, `priority`, `position`, `decision_id`; `in_progress` is not a status that can be set by hand, a move back from `in_review` or `done` leaves a `reopened` comment, and `horizon` is refused by name |
-| `roadmap_get` | the roadmap of an owner as one list of `items`: `project` or `org`, `status?`, `priority?` and `type?` filters; in workflow order, org items first, then by priority and position, each item with its linked decision, the status of its job and `closed_at`; an org item carries `project_status` (the reading project's own row) or, read by `org`, `projects` (every row). With `id` alone, that one item untruncated with its comment thread in chronological order and, for an org item, its project rows |
-| `roadmap_comment` | appends a `note` to an item's thread by `id`: `body`; signed `operator` outside a job and `job:<id>` inside one |
+| `roadmap_save` | adds an intent at the end of its priority group: `project` or `org`, `title`, `type`, `detail?`, `priority?` (default 5), `status?` (default `todo`), `decision_id?` (a decision ref of the item's owner); `horizon` is refused by name |
+| `roadmap_update` | changes an item by `id`, its ref (`NQ-12`): `title`, `detail`, `type`, `status`, `priority`, `position`, `decision_id`; `in_progress` is not a status that can be set by hand, a move back from `in_review` or `done` leaves a `reopened` comment, and `horizon` is refused by name |
+| `roadmap_get` | the roadmap of an owner as one list of `items`: `project` or `org`, `status?`, `priority?` and `type?` filters; in workflow order, org items first, then by priority and position, each item with its linked decision, the status of its job and `closed_at`; an org item carries `project_status` (the reading project's own row) or, read by `org`, `projects` (every row). With `id` (an item ref) alone, that one item untruncated with its comment thread in chronological order and, for an org item, its project rows |
+| `roadmap_comment` | appends a `note` to an item's thread by `id` (an item ref): `body`; signed `operator` outside a job and `job:<id>` inside one |
 | `roadmap_search` | at most five items an owner sees: `query?` (title, detail, comments), `file?` (a recorded path, exact or a directory above it), `project` or `org`, `limit?` (1-5); inside a job always the job's own project |
 
 As everywhere else in the server, an explicit `null` is treated exactly like an
@@ -277,9 +307,9 @@ included - with `unknown project` and the list of the known ones, and nothing is
 written; only the lesson, memory and index tools also accept a path, which
 means the project whose checkout contains it, or the global scope when no
 checkout does.
-`decision_update` and `roadmap_update` take an `id` and no owner, so inside an
+`decision_update` and `roadmap_update` take a ref and no owner, so inside an
 unattended run they are restricted to the project of the job that is running:
-an `id` belonging to another project is refused, naming both projects, the same
+a ref naming a row of another project is refused, naming both projects, the same
 way `queue_retry` only retries its own job. An org row is refused there too,
 naming its org — a job reads its org's decisions and never rewrites one.
 `roadmap_get` by `id` and `roadmap_comment` inside a job reach an item of the
@@ -297,9 +327,9 @@ owns rows cannot be removed: the database refuses the removal, and the message
 names how many rows of which table it still owns - nothing is removed.
 
 **Queueing from the roadmap.** `queue_add` with `roadmap_item_id` and no
-`prompt` (or `nightqueue queue add --roadmap <id>`) builds the prompt from the
+`prompt` (or `nightqueue queue add --roadmap <ref>`) builds the prompt from the
 item instead of asking for it again: `## Task` with the title and the detail,
-`## Roadmap item` with `Roadmap: <owner>#<id>`, its `Type:` and the `Commit type:`
+`## Roadmap item` with `Roadmap: <KEY>-<n>`, its `Type:` and the `Commit type:`
 the job uses, `## Linked decision` when the item links one, `## Standing decisions` with the
 title of every accepted decision of the item's owner, `## Proposed (not binding)`
 with the title of every proposed one, and `## Related decisions`
@@ -330,7 +360,7 @@ the Brief copies EVERY accepted title from that section (or from one
 `decision_list` with `status: "accepted"` when the section is absent), and adds
 in full the 8 closest to the task, from one `decision_recall` with the affected
 area and the objective as the query - the project's and its org's, in one call,
-org rows first and written `acme#3` when they belong to the org. Both parts become
+org rows first and written `DLW/D-3` when they belong to the org. Both parts become
 the `## Standing decisions` section of the Brief. That section
 is passed to the architect as binding context - a design that contradicts a
 standing decision either follows it or takes the conflict to

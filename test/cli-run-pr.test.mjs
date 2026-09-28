@@ -10,12 +10,13 @@ import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { ghBin } from "../src/host/gh.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
-import { linkRoadmapItemJob, saveRoadmapItem } from "../src/memory/roadmap.mjs";
+import { linkRoadmapItemJob, queueRoadmapItem, saveRoadmapItem } from "../src/memory/roadmap.mjs";
 import { readRunState } from "../src/queue/resume.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
+import { openStore } from "../src/store/open.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
 import { FAKE_GH_PR_URL, isolatedHostVars } from "../test-support/host.mjs";
-import { makeDir, makeHome } from "../test-support/memory.mjs";
+import { makeDir, makeHome, orgIdOf } from "../test-support/memory.mjs";
 
 const SLUG = "login-google";
 const BRANCH = "worktree-feat+login-google";
@@ -45,9 +46,10 @@ const BODY = [
   "",
   "Not tested: the real google consent screen; low risk, the callback is covered by the suite.",
   "",
-  "Opened by nightqueue · run login-google · job 1",
-  "",
 ].join("\n");
+
+// The line of BODY a test line is inserted after, so the inserted line is line 4 of the body.
+const INSERTED_LINE = 4;
 
 // A fictional mobile-app CLAUDE.md excerpt in the shape of a real one: the repository template of the tests.
 const ACME_CLAUDE_MD = readFileSync(new URL("./fixtures/acme-mobile-app-claude-md.md", import.meta.url), "utf8");
@@ -111,10 +113,10 @@ function publishedRepo(t, name, { branch = BRANCH } = {}) {
 }
 
 // A home whose project is the real checkout, with the fake gh installed and the job bound to the run of the worktree.
-function makeRun(t, name, { branch = BRANCH, type = "feature/refactor" } = {}) {
+function makeRun(t, name, { branch = BRANCH, type = "feature/refactor", org } = {}) {
   const repo = publishedRepo(t, name, { branch });
   const env = { ...makeHome(t, name), ...isolatedHostVars(makeDir(t, `${name}-host`)), ...gitVars() };
-  registerCheckout(env, { path: repo.checkout, name: "alpha" });
+  registerCheckout(env, { path: repo.checkout, name: "alpha", org });
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "log in with google" }, env).id;
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
   recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { worktree: repo.worktree, type }, env });
@@ -125,12 +127,12 @@ function makeRun(t, name, { branch = BRANCH, type = "feature/refactor" } = {}) {
   return { ...repo, env, id, evidence };
 }
 
-// Runs the CLI in this process, as the job the run belongs to.
+// Runs the CLI in this process, as the job the run belongs to, or as the operator outside the queue when `jobId` is null.
 async function runCli(env, argv, { jobId }) {
   const out = [];
   const err = [];
   const code = await run(argv, {
-    env: { ...env, NIGHTQUEUE_JOB_ID: String(jobId) },
+    env: jobId === null ? env : { ...env, NIGHTQUEUE_JOB_ID: String(jobId) },
     out: (line) => out.push(line),
     err: (line) => err.push(line),
     stdout: { write: () => {} },
@@ -160,6 +162,21 @@ function ghCalls(env) {
   return readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
+// The copy of the body `run pr` publishes, footer included, under the run directory.
+function publishedPath(env) {
+  return join(runDir(ensureProject(env, "alpha"), SLUG, env), "pr-body.published.md");
+}
+
+// Publishes a body as the given job and answers the text of the body gh was handed.
+async function publishedBody(t, { env, jobId, name, body = BODY, argv = [] }) {
+  const file = writeBody(t, name, body);
+  const { code, text, errText } = await runCli(env, ["run", "pr", "--body-file", file, "--title", "feat(auth): log in with google", ...argv], { jobId });
+  assert.equal(code, 0, `${text}\n${errText}`);
+  assert.deepEqual(ghCalls(env).at(-1).slice(4, 6), ["--body-file", publishedPath(env)]);
+  assert.equal(readFileSync(file, "utf8"), body, "the agent's body file was edited");
+  return readFileSync(publishedPath(env), "utf8");
+}
+
 // The branches the bare remote really carries after the push.
 function remoteBranches(remote) {
   return git(["-C", remote, "for-each-ref", "--format=%(refname:short)", "refs/heads"]).split("\n").filter(Boolean);
@@ -183,8 +200,9 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
   assert.equal(git(["-C", worktree, "rev-parse", "--abbrev-ref", "HEAD"]).trim(), "feat/login-google");
   assert.deepEqual(remoteBranches(remote), ["feat/login-google", "main"]);
   assert.deepEqual(ghCalls(env), [
-    ["pr", "create", "--title", "feat(auth): log in with google", "--body-file", body, "--head", "feat/login-google"],
+    ["pr", "create", "--title", "feat(auth): log in with google", "--body-file", publishedPath(env), "--head", "feat/login-google"],
   ]);
+  assert.equal(readFileSync(publishedPath(env), "utf8"), `${readFileSync(body, "utf8").trimEnd()}\n\nOpened by nightqueue\n`);
   assert.deepEqual(
     { status: readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome.status, prUrl: readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome.prUrl },
     { status: "done", prUrl: FAKE_GH_PR_URL },
@@ -194,21 +212,112 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
   assert.equal(existsSync(worktree), true);
 });
 
-test("`run pr` of a job queued from a roadmap item opens the pull request with a body ending in its Roadmap line", async (t) => {
+test("`run pr` of a job queued from a roadmap item ends the published body with `Refs <ref>` and `Opened by nightqueue · <ref>`", async (t) => {
   const { env, id } = makeRun(t, "run-pr-roadmap");
   const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
   assert.equal(linkRoadmapItemJob(item.id, id, env), true);
-  const body = writeBody(t, "run-pr-roadmap-body", BODY);
 
-  const { code } = await runCli(env, ["run", "pr", "--body-file", body, "--title", "feat(auth): log in with google"], { jobId: id });
+  const published = await publishedBody(t, { env, jobId: id, name: "run-pr-roadmap-body" });
 
-  assert.equal(code, 0);
-  const published = join(runDir(ensureProject(env, "alpha"), SLUG, env), "pr-body.roadmap.md");
-  assert.deepEqual(ghCalls(env), [
-    ["pr", "create", "--title", "feat(auth): log in with google", "--body-file", published, "--head", "feat/login-google"],
-  ]);
-  assert.equal(readFileSync(published, "utf8"), `${BODY.trimEnd()}\n\nRoadmap: alpha#${item.id}\n`);
-  assert.equal(readFileSync(body, "utf8"), BODY, "the agent's body file was edited");
+  assert.equal(published, `${BODY.trimEnd()}\n\nRefs AP-1\n\nOpened by nightqueue · AP-1\n`);
+});
+
+test("`run pr` of a job queued from an org item ends with the org item's ref", async (t) => {
+  const { env, id } = makeRun(t, "run-pr-org-item", { org: "dlweb" });
+  const item = saveRoadmapItem({ type: "chore", orgId: orgIdOf(env, "dlweb"), title: "pin node" }, env);
+  const { jobs } = await queueRoadmapItem({ id: item.id, allProjects: true }, env);
+  assert.equal(jobs.length, 1);
+  const db = openDb(env);
+  db.prepare("UPDATE jobs SET slug = NULL WHERE id = ?").run(id);
+  db.prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, jobs[0].id);
+  const orgKey = db.prepare("SELECT key FROM orgs WHERE name = 'dlweb'").get().key;
+
+  const published = await publishedBody(t, { env, jobId: jobs[0].id, name: "run-pr-org-item-body" });
+
+  assert.equal(item.ref, `${orgKey}-1`);
+  assert.ok(published.endsWith(`\n\nRefs ${orgKey}-1\n\nOpened by nightqueue · ${orgKey}-1\n`), published);
+});
+
+test("`run pr` of a free-prompt job, or outside the queue, ends with only `Opened by nightqueue`", async (t) => {
+  const inside = makeRun(t, "run-pr-free-prompt");
+  const free = await publishedBody(t, { env: inside.env, jobId: inside.id, name: "run-pr-free-prompt-body" });
+  assert.equal(free, `${BODY.trimEnd()}\n\nOpened by nightqueue\n`);
+
+  const outside = makeRun(t, "run-pr-outside");
+  const argv = ["--project", "alpha", "--slug", SLUG];
+  const operator = await publishedBody(t, { env: outside.env, jobId: null, name: "run-pr-outside-body", argv });
+  assert.equal(operator, `${BODY.trimEnd()}\n\nOpened by nightqueue\n`);
+});
+
+test("after `project key` renames the key, the footer carries the new key", async (t) => {
+  const { env, id } = makeRun(t, "run-pr-renamed-key");
+  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
+  assert.equal(linkRoadmapItemJob(item.id, id, env), true);
+  await openStore(env).projects.setKey(projectIdOf(env, "alpha"), "NX");
+
+  const published = await publishedBody(t, { env, jobId: id, name: "run-pr-renamed-key-body" });
+
+  assert.ok(published.endsWith("\n\nRefs NX-1\n\nOpened by nightqueue · NX-1\n"), published);
+});
+
+test("a body carrying the footer, a `Refs` line, a job id or the run slug is REJECTED naming the line, and nothing is pushed", async (t) => {
+  const { env, id, remote } = makeRun(t, "run-pr-traceability");
+  const rejectedFor = async (line, what, index) =>
+    assert.deepEqual(await rejectedProblems(t, { env, id, name: `run-pr-trace-${index}`, body: BODY.replace(REPORT, `${REPORT}\n${line}`) }), [
+      `REJECTED: line ${INSERTED_LINE} carries ${what}, which \`run pr\` appends from the job row: ${line.trim()}`,
+    ]);
+  const cases = [
+    ["Opened by nightqueue · AP-1", "the `Opened by nightqueue` footer"],
+    ["opened by NIGHTQUEUE", "the `Opened by nightqueue` footer"],
+    ["<!-- Opened by nightqueue -->", "the `Opened by nightqueue` footer"],
+    ["Refs AP-1", "a `Refs` line"],
+    ["Refs: AP-1", "a `Refs` line"],
+    ["  refs ap-1, AP-2   ", "a `Refs` line"],
+    ["Refs NQ-1/D-2", "a `Refs` line"],
+    ["this ran as J-3 before", "a job id"],
+    [`this is job ${id} of the queue`, "a job id"],
+    [`this is JOB${id}`, "a job id"],
+    [`the run ${SLUG} did it`, "the run slug"],
+    [`branch feat/${SLUG}`, "the run slug"],
+  ];
+  for (const [index, [line, what]] of cases.entries()) await rejectedFor(line, what, index);
+
+  assert.deepEqual(remoteBranches(remote), ["main"]);
+  assert.deepEqual(ghCalls(env), []);
+});
+
+test("a footer that cannot be written stops `run pr` before the branch is renamed or pushed", async (t) => {
+  const { env, id, remote, worktree } = makeRun(t, "run-pr-footer-unwritable");
+  const body = writeBody(t, "run-pr-footer-unwritable-body", BODY);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
+  chmodSync(dir, 0o555);
+  const { code, errText } = await runCli(env, ["run", "pr", "--body-file", body, "--title", "feat: x"], { jobId: id }).finally(() => chmodSync(dir, 0o755));
+
+  assert.equal(code, 1);
+  assert.match(errText, new RegExp(`could not build the pull request footer from J-${id}: .*; nothing was pushed`));
+  assert.equal(git(["-C", worktree, "rev-parse", "--abbrev-ref", "HEAD"]).trim(), BRANCH);
+  assert.deepEqual(remoteBranches(remote), ["main"]);
+  assert.deepEqual(ghCalls(env), []);
+});
+
+test("decoys of the traceability shapes pass: prose, a fenced block, a code span, `Fixes #12`, another job's number and a longer word", async (t) => {
+  const { env, id } = makeRun(t, "run-pr-decoys");
+  const decoys = [
+    "Refs are resolved at the edge.",
+    "Refs",
+    "```text\nOpened by nightqueue · AP-1\nRefs AP-1\n```",
+    "~~~\nthis ran as J-3\n~~~",
+    "the id `J-3` names a job, and `Opened by nightqueue` is the footer",
+    "Fixes #12",
+    `this is job ${id + 10} of another queue`,
+    `re${SLUG} and ${SLUG}s are other words`,
+    "J-stream is not a ref",
+  ];
+  const body = BODY.replace(REPORT, `${REPORT}\n${decoys.join("\n\n")}`);
+
+  const published = await publishedBody(t, { env, jobId: id, name: "run-pr-decoys-body", body });
+
+  assert.ok(published.endsWith("\n\nOpened by nightqueue\n"), published);
 });
 
 test("a repository template in the worktree is the one the body follows: its headings in its order, and no nightqueue heading it lacks", async (t) => {
@@ -285,14 +394,14 @@ test("`run pr` rejects a placeholder, a missing section and a section out of ord
   assert.equal(withPlaceholder.out[2], "REJECTED: the body still carries the placeholder `{{summary}}`: fill every section with this run's own facts");
   assert.match(withPlaceholder.out[3], /nothing was pushed and no pull request was opened/);
 
-  assert.match((await problems("run-pr-example", BODY.replace("job 1", "job <number>")))[0], /^REJECTED: the body still carries the placeholder `<number>`/);
+  assert.match((await problems("run-pr-example", BODY.replace(REPORT, `${REPORT} see <number>`)))[0], /^REJECTED: the body still carries the placeholder `<number>`/);
   assert.deepEqual(await problems("run-pr-no-qa", BODY.replace("## QA", "### QA")), ["MISSING: ## QA"]);
 
   const swapped = BODY.replace("## Report", "## Swap").replace("## Cause", "## Report").replace("## Swap", "## Cause");
   assert.deepEqual(await problems("run-pr-swapped", swapped), [
     "MISSING: ## Report in its place: the order is ## Report, ## Cause, ## Changes, ## QA",
   ]);
-  assert.deepEqual(await problems("run-pr-fifth", `${BODY}\n## Run\n\njob 1\n`), [
+  assert.deepEqual(await problems("run-pr-fifth", `${BODY}\n## Run\n\nthe details\n`), [
     "REJECTED: the body carries a fifth section `## Run`; the four sections are the whole body",
   ]);
   assert.deepEqual(await problems("run-pr-no-not-tested", BODY.replace("Not tested:", "Untested:")), ["MISSING: Not tested: line after the QA table"]);
@@ -312,7 +421,9 @@ test("`run pr` rejects a placeholder, a missing section and a section out of ord
     "MISSING: QA table header | Method | Executed | Result |",
     "MISSING: Not tested: line after the QA table",
   ]);
-  assert.match((await problems("run-pr-bare", BODY.replace("job 1", "job #1")))[0], /^REJECTED: the body carries a bare `#1` outside a Fixes\/Closes line/);
+  assert.deepEqual(await problems("run-pr-bare", BODY.replace(REPORT, `${REPORT} see #12`)), [
+    "REJECTED: the body carries a bare `#12` outside a Fixes/Closes line: name a decision by its ref (`D-24`), or write the number inside a code span",
+  ]);
 
   assert.deepEqual(remoteBranches(remote), ["main"]);
   assert.equal(git(["-C", worktree, "rev-parse", "--abbrev-ref", "HEAD"]).trim(), BRANCH);
@@ -354,6 +465,7 @@ test("a published branch the run cannot record is reported on stderr, never fata
   const { env, id } = makeRun(t, "run-pr-unrecorded");
   const body = writeBody(t, "run-pr-unrecorded-body", BODY);
   const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
+  writeFileSync(publishedPath(env), "");
   chmodSync(dir, 0o555);
   const { code, out, errText } = await runCli(env, ["run", "pr", "--body-file", body, "--title", "feat: x"], { jobId: id }).finally(() => chmodSync(dir, 0o755));
 

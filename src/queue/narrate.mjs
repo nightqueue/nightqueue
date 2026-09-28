@@ -2,6 +2,7 @@ import { basename } from "node:path";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { clockLabel } from "./hints.mjs";
 import { extractNotice, extractPrUrl, hasGateMarker, laneName, parseEventLine, parseSlugLine } from "./stream.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 const ATTEMPT_LINE_RE = /^=== attempt (\d+) @ (\S+) ===$/;
 const RATE_PAUSE_LINE_RE = /^=== rate limit until (\S+) @ (\S+) ===$/;
@@ -251,7 +252,7 @@ function noticeClipped(notice) {
 export function noticeNarration(notice, { jobId = null } = {}) {
   const body = `notice\n${noticeBody(notice)}`;
   if (jobId === null || !noticeClipped(notice)) return body;
-  return `${body}\n    read the whole notice with: nightqueue queue status ${jobId}`;
+  return `${body}\n    read the whole notice with: nightqueue queue status ${jobRef(jobId)}`;
 }
 
 // Emits a marker only when its VALUE changed, because the slug and the pull request echo in many events.

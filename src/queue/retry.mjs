@@ -1,6 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 import { openStore } from "../store/open.mjs";
 import { clearRunTerminal, discardRunDir } from "./resume.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 // Job this process is running inside, when the queue spawned it; null in a session of the operator.
 export function callerJobId(env) {
@@ -14,7 +15,7 @@ function requireOwnJob(id, env) {
   if (own === null || own === Number(id)) return;
   throw new UserError(
     `refusing to retry job \`${id}\` from inside job \`${own}\`: an unattended run may only retry itself; ` +
-      `ask the operator to run \`nightqueue queue retry ${id}\` outside the queue`,
+      `ask the operator to run \`nightqueue queue retry ${jobRef(id)}\` outside the queue`,
   );
 }
 

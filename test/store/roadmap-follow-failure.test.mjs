@@ -30,7 +30,7 @@ test("a follow that throws never costs the job write, the drift is reported, and
 
   const drift = await withReadOnlyStore(env, (readOnly) => readOnly.roadmap.roadmapDrift());
   assert.deepEqual(drift, [
-    { id: item.id, scope: "project", owner: "alpha", status: "in_progress", expected: "in_review", job_id: job.id, job_status: "done" },
+    { id: item.id, ref: item.ref, scope: "project", owner: "alpha", status: "in_progress", expected: "in_review", job_id: job.id, job_status: "done" },
   ]);
 
   openDb(env).exec("DROP TRIGGER roadmap_follow_boom");
@@ -62,7 +62,7 @@ test("a follow that throws never costs the settleClose, the drift is reported, a
   assert.equal(await store.jobs.status(job.id), "closed");
   assert.equal((await store.roadmap.getRoadmapItem(item.id)).status, "in_review");
   assert.deepEqual(await withReadOnlyStore(env, (readOnly) => readOnly.roadmap.roadmapDrift()), [
-    { id: item.id, scope: "project", owner: "alpha", status: "in_review", expected: "done", job_id: job.id, job_status: "closed" },
+    { id: item.id, ref: item.ref, scope: "project", owner: "alpha", status: "in_review", expected: "done", job_id: job.id, job_status: "closed" },
   ]);
 
   openDb(env).exec("DROP TRIGGER roadmap_follow_boom");

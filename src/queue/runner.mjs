@@ -52,6 +52,7 @@ import {
 import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
 import { resolveWindow, windowPhase } from "./window.mjs";
 import { finishNotice, inspectRunWorktree, keptWorktreeLine, removeRunWorktree } from "./worktree.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 // Interval between two cycles of `queue run --watch` when the operator gives no number.
 export const WATCH_INTERVAL_DEFAULT_S = 30;
@@ -141,7 +142,7 @@ async function captureSlug(job, facts, line, { store, env }) {
 // Why a slug claim was refused, phrased for the job log.
 function slugRefusal(bound) {
   if (bound.status !== "taken") return "the job is no longer ours";
-  return Number.isInteger(bound.heldBy) ? `job #${bound.heldBy} holds it` : "every candidate is already on disk";
+  return Number.isInteger(bound.heldBy) ? `${jobRef(bound.heldBy)} holds it` : "every candidate is already on disk";
 }
 
 // Records the branch the state of a run registered, once the job is bound to that run.
@@ -462,8 +463,8 @@ async function tryFinish(job, outcome, env) {
   } catch (err) {
     const message = err?.message ?? String(err);
     try {
-      appendFileSync(jobLogPath(job.id, env), `finish verification failed\nthe finish of job #${job.id} did not commit: ${message}\n`);
-      process.stderr.write(`job #${job.id}: the finish did not commit: ${message}\n`);
+      appendFileSync(jobLogPath(job.id, env), `finish verification failed\nthe finish of ${jobRef(job.id)} did not commit: ${message}\n`);
+      process.stderr.write(`${jobRef(job.id)}: the finish did not commit: ${message}\n`);
     } catch {}
     return { written: false, error: message };
   }
@@ -527,7 +528,7 @@ async function dropRunWorktree(job, worktree, { env, checkout }) {
   }
   const line = `the worktree ${worktree.path} was kept: ${removed.reason}`;
   appendJobLog(job.id, line, env);
-  process.stderr.write(`job #${job.id}: ${line}\n`);
+  process.stderr.write(`${jobRef(job.id)}: ${line}\n`);
 }
 
 // A path the implementation listed, relative to the run's worktree when it lives under it, the way the repository names it.

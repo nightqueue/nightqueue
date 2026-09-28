@@ -97,6 +97,6 @@ test("H3: MCP queue_status stays silent about a repair the database refused, unl
   assert.equal(getJob(id, env).status, "running", "the repair should have been refused, not silently applied");
   assert.ok(
     surfacesRepairFailure(answer),
-    `MCP queue_status gave no signal that job #${id}'s repair failed, unlike the CLI's stderr warning: ${JSON.stringify(answer)}`,
+    `MCP queue_status gave no signal that J-${id}'s repair failed, unlike the CLI's stderr warning: ${JSON.stringify(answer)}`,
   );
 });

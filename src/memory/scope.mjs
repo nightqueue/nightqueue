@@ -1,6 +1,9 @@
 import { UserError } from "../config/errors.mjs";
 import { isId } from "../config/ids.mjs";
+import { GLOBAL_KEY, decisionRef } from "./refs.mjs";
 import * as registry from "./registry.mjs";
+
+export { decisionRef };
 
 export const SCOPE_CONFLICT = "pass either `project` or `org`, never both: a decision or a roadmap item has one owner";
 export const SCOPE_MISSING = "pass `project` (the registered NAME) or `org` (a registered org) to name the owner";
@@ -21,16 +24,28 @@ function requireOwnerId(kind, value) {
 
 // Target of a registered project row (as the registry answers it): the project and the org whose rows it also reads.
 export function projectTargetOf(project) {
-  return { scope: "project", projectId: project.id, orgId: project.org_id ?? null, project: project.name, org: project.org ?? null };
+  return {
+    scope: "project",
+    projectId: project.id,
+    orgId: project.org_id ?? null,
+    project: project.name,
+    org: project.org ?? null,
+    key: project.key ?? null,
+  };
 }
 
 // Target of a registered org row.
 export function orgTargetOf(org) {
-  return { scope: "org", projectId: null, orgId: org.id, project: null, org: org.name };
+  return { scope: "org", projectId: null, orgId: org.id, project: null, org: org.name, key: org.key ?? null };
 }
 
 // The target of the global project owner: rows that belong to no project.
-const GLOBAL_TARGET = Object.freeze({ scope: "project", projectId: null, orgId: null, project: null, org: null });
+const GLOBAL_TARGET = Object.freeze({ scope: "project", projectId: null, orgId: null, project: null, org: null, key: GLOBAL_KEY });
+
+// The ref of a target's decision number, rendered from the target's current key.
+export function targetDecisionRef(target, number) {
+  return decisionRef({ scope: target.scope, project_id: target.projectId, org_key: target.key, number });
+}
 
 // Target of a project id (null for the global owner), with its org read from the registry.
 export function projectScope(db, projectId) {
@@ -102,16 +117,6 @@ export function ownerOf(row) {
 // How a row names its owner in a refusal: an org row belongs to an org, a project row to a project.
 export function ownerDescription(row) {
   return row?.scope === "org" ? `org \`${ownerOf(row)}\`` : `project \`${ownerOf(row) ?? "global"}\``;
-}
-
-// The number prefix of a decision: only an org decision is owner-qualified, so `#7` never changes spelling.
-export function ownerLabel(row) {
-  return row?.scope === "org" ? `${ownerOf(row)}#${row.number}` : `#${row.number}`;
-}
-
-// The prefix a roadmap item's line carries: the org of an org item, nothing for a project item.
-export function ownerPrefix(row) {
-  return row?.scope === "org" ? `${ownerOf(row)} ` : "";
 }
 
 // Rows a target sees: its own and, for a project, the rows of its org; `prefix` qualifies the columns of a join.

@@ -71,8 +71,6 @@ The fence delimits the MODEL in this document; the real body is emitted without 
 | --- | --- | --- |
 | Automated | `<command>` | PASSED |
 Not tested: <what was left out and the risk>
-
-Opened by nightqueue · run <slug>
 ```
 
 The `## QA` table starts with exactly the header `| Method | Executed | Result |` and
@@ -108,14 +106,6 @@ row — never a row without a file. `nightqueue run pr` answers
 A decision proposed by this run is NOT part of this body: it goes only to the Phase 8
 report, where the operator decides whether it deserves a ticket.
 
-## The closing line
-
-One line, not a section, as the last line of the body:
-`Opened by nightqueue · run <slug>`, with `<slug>` taken from `state.json`. When the
-environment variable `NIGHTQUEUE_JOB_ID` is set (an unattended run out of the queue),
-the line ends with ` · job <id>` — the number bare, never `#<id>`. Without the
-variable the suffix does not exist.
-
 ## Optional lines
 
 - An issue reference (`Fixes <ID>`, `Closes #<n>`) as the last line of `## Report`,
@@ -126,10 +116,12 @@ variable the suffix does not exist.
 
 - **A bare `#<number>` anywhere.** GitHub reads it as a reference to an issue or a
   pull request OF THIS REPOSITORY: it opens a cross-reference in an unrelated thread
-  and notifies it. A queue job id, a decision number or any nightqueue-internal number
-  is written without the `#` (`job 24`, `decision 1`) or inside a code span
-  (`` `#24` ``). The only `#<number>` allowed is a real reference to an issue of this
-  repository in the `Fixes`/`Closes` line.
+  and notifies it. A decision is named by its ref (`D-1`), never `#1`; any other number
+  goes inside a code span (`` `#24` ``). The only `#<number>` allowed is a real
+  reference to an issue of this repository in the `Fixes`/`Closes` line.
+- A job ref (`J-24`), the run slug, a `Refs` line or an `Opened by nightqueue` line:
+  `nightqueue run pr` appends the traceability footer from the job row and refuses a
+  body that carries one.
 - In the nightqueue template, a fifth `## ` section: the four above are the whole body.
   A repository template has no such limit.
 - A QA row marked `N/A`: a method that did not run has no row.

@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { UserError } from "../config/errors.mjs";
+import { requireKey } from "../memory/refs.mjs";
 
 const CTRL_C = 0x03;
 const BACKSPACE = new Set([0x7f, 0x08]);
@@ -73,6 +74,21 @@ export async function confirm({ stdin = process.stdin, stdout = process.stdout, 
     if (answer === null) return false;
     const normalized = answer.trim().toLowerCase();
     return normalized === "" || normalized === "y" || normalized === "yes";
+  } finally {
+    rl.close();
+    stdin.pause?.();
+  }
+}
+
+// Asks the key of a new project or org on a terminal: Enter takes the suggestion, text replaces it; without a terminal the suggestion is taken.
+export async function askKey(ctx, { kind, name, suggested }) {
+  const stdin = ctx?.stdin ?? null;
+  if (!stdin?.isTTY) return suggested;
+  const rl = createInterface({ input: stdin, output: ctx.stdout ?? process.stdout });
+  try {
+    const answer = await askLine(rl, `Key for ${kind} \`${name}\` [${suggested}]: `);
+    const typed = typeof answer === "string" ? answer.trim() : "";
+    return typed === "" ? suggested : requireKey(typed);
   } finally {
     rl.close();
     stdin.pause?.();

@@ -15,6 +15,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { fakeEmbedder, makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
 const FAKE_MODEL = "fake-embedder@v1";
+const PROJECT_ID = "01ALPHA0000000000000000000";
 
 // Saves a decision of a project with the fields every test would otherwise repeat.
 function addDecision(env, { project = "alpha", title, context = "the context", decision = "the decision", consequences, status }) {
@@ -198,7 +199,7 @@ test("the plain text of a decision carries its number, status and fields, and dr
   assert.equal(
     renderDecisionText(getDecision(id, env)),
     [
-      "#1 the queue owns the worktree (accepted)",
+      "D-1 the queue owns the worktree (accepted)",
       "Context: two runners raced",
       "Decision: one worktree per job",
       "Consequences: a job cannot resume another one's tree",
@@ -228,12 +229,12 @@ test("the titles projection answers one status, org rows first, and never a text
     ["the queue runs on postgres"],
   );
   assert.throws(() => decisionTitles({ projectId: projectIdOf(env, "alpha"), status: "open" }, env), /invalid decision `status`/);
-  assert.deepEqual(accepted.map(decisionTitleLine), ["- acme#1 one queue per product", "- #1 the queue owns the worktree"]);
+  assert.deepEqual(accepted.map(decisionTitleLine), ["- AM/D-1 one queue per product", "- D-1 the queue owns the worktree"]);
 });
 
 test("a title line collapses whitespace, clips at two hundred code points and never forges a heading", () => {
-  assert.equal(decisionTitleLine({ scope: "project", number: 3, title: "one\n# two" }), "- #3 one # two");
-  assert.equal(decisionTitleLine({ scope: "project", number: 4, title: "## forged" }), "- #4 \\## forged");
-  const long = decisionTitleLine({ scope: "project", number: 1, title: "é".repeat(250) });
-  assert.equal(long, `- #1 ${"é".repeat(200)}...`);
+  assert.equal(decisionTitleLine({ scope: "project", project_id: PROJECT_ID, number: 3, title: "one\n# two" }), "- D-3 one # two");
+  assert.equal(decisionTitleLine({ scope: "project", project_id: PROJECT_ID, number: 4, title: "## forged" }), "- D-4 \\## forged");
+  const long = decisionTitleLine({ scope: "project", project_id: PROJECT_ID, number: 1, title: "é".repeat(250) });
+  assert.equal(long, `- D-1 ${"é".repeat(200)}...`);
 });

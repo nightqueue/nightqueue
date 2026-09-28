@@ -1,5 +1,5 @@
 import { UserError } from "../../config/errors.mjs";
-import { isId } from "../../config/ids.mjs";
+import { isId, newId } from "../../config/ids.mjs";
 import { lockPath, runIfLockFree } from "../../config/lock.mjs";
 import { configPath } from "../../config/paths.mjs";
 import { loadRawConfig, serialize, writeFileAtomic } from "../../config/store.mjs";
@@ -55,10 +55,37 @@ export function readV17Registry(raw) {
   return { defaultOrg, orgs, projects };
 }
 
+// The id of the org with the given name, or null; a read both the v18 and the current registry shape answer.
+function orgIdByName(db, name) {
+  return db.prepare("SELECT id FROM orgs WHERE name = ?").get(name)?.id ?? null;
+}
+
+// Tells whether a project with the given name is registered; a read both registry shapes answer.
+function hasProjectNamed(db, name) {
+  return Boolean(db.prepare("SELECT 1 FROM projects WHERE name = ?").get(name));
+}
+
+// The registry writes of the import in the shape the database has: keyed (a fresh database) or the v18 shape (inside the v18 migration).
+function registryWriter(db) {
+  if (hasColumn(db, "orgs", "key")) {
+    return {
+      insertOrg: (name) => registry.insertOrg(db, name),
+      insertProject: (spec) => registry.insertProject(db, spec),
+      ensureDefaultOrg: () => registry.ensureDefaultOrg(db),
+    };
+  }
+  return {
+    insertOrg: (name) => db.prepare("INSERT INTO orgs (id, name) VALUES (?, ?)").run(newId(), name),
+    insertProject: ({ name, path, orgId }) => db.prepare("INSERT INTO projects (id, name, path, org_id) VALUES (?, ?, ?, ?)").run(newId(), name, path, orgId),
+    ensureDefaultOrg: () =>
+      db.prepare("INSERT INTO orgs (id, name) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM orgs)").run(newId(), registry.DEFAULT_ORG_NAME),
+  };
+}
+
 // Creates every named org the registry does not know yet, in the order given.
-function insertMissingOrgs(db, names) {
+function insertMissingOrgs(db, writer, names) {
   for (const name of names) {
-    if (!registry.orgByName(db, name)) registry.insertOrg(db, name);
+    if (!orgIdByName(db, name)) writer.insertOrg(name);
   }
 }
 
@@ -89,35 +116,36 @@ function refuseSharedPaths(projects) {
 }
 
 // Registers the projects of a v17 config the registry does not know yet, each with its path and its org.
-function insertConfigProjects(db, projects) {
+function insertConfigProjects(db, writer, projects) {
   refuseSharedPaths(projects);
   for (const project of projects) {
-    if (registry.projectByName(db, project.name)) continue;
-    registry.insertProject(db, { name: project.name, path: project.path, orgId: registry.orgByName(db, project.org).id });
+    if (hasProjectNamed(db, project.name)) continue;
+    writer.insertProject({ name: project.name, path: project.path, orgId: orgIdByName(db, project.org) });
   }
 }
 
-// The default org of the home: the v17 config's, else the one the config names by id or name, else the earliest (created when there is none).
-function homeDefaultOrg(db, raw, legacy) {
-  if (legacy) return registry.orgByName(db, legacy.defaultOrg);
+// The id of the home's default org: the v17 config's, else the one the config names by id or name, else the earliest (created when there is none).
+function homeDefaultOrgId(db, writer, { raw, legacy }) {
+  if (legacy) return orgIdByName(db, legacy.defaultOrg);
   const named = isPlainObject(raw) && typeof raw.defaultOrg === "string" ? raw.defaultOrg : null;
-  const found = named ? (isId(named) ? registry.orgById(db, named) : registry.orgByName(db, named)) : null;
+  const found = named && (isId(named) ? db.prepare("SELECT id FROM orgs WHERE id = ?").get(named)?.id : orgIdByName(db, named));
   if (found) return found;
-  registry.ensureDefaultOrg(db);
-  return registry.earliestOrg(db);
+  writer.ensureDefaultOrg();
+  return db.prepare("SELECT id FROM orgs ORDER BY created_at, id LIMIT 1").get().id;
 }
 
 // Imports the v17 registry into the database, inside the caller's transaction: orgs, config projects, then every project known only from history.
 export function importLegacyRegistry(db, raw) {
+  const writer = registryWriter(db);
   const legacy = hasLegacyRegistry(raw) ? readV17Registry(raw) : null;
   if (legacy) {
-    insertMissingOrgs(db, [legacy.defaultOrg, ...legacy.orgs.keys(), ...legacy.projects.map((project) => project.org)]);
+    insertMissingOrgs(db, writer, [legacy.defaultOrg, ...legacy.orgs.keys(), ...legacy.projects.map((project) => project.org)]);
   }
-  insertMissingOrgs(db, historyOrgNames(db));
-  const home = homeDefaultOrg(db, raw, legacy);
-  if (legacy) insertConfigProjects(db, legacy.projects);
+  insertMissingOrgs(db, writer, historyOrgNames(db));
+  const homeId = homeDefaultOrgId(db, writer, { raw, legacy });
+  if (legacy) insertConfigProjects(db, writer, legacy.projects);
   for (const name of historyProjectNames(db)) {
-    if (!registry.projectByName(db, name)) registry.insertProject(db, { name, path: null, orgId: home.id });
+    if (!hasProjectNamed(db, name)) writer.insertProject({ name, path: null, orgId: homeId });
   }
 }
 

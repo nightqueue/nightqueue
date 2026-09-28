@@ -5,7 +5,7 @@ description: >-
   without running it. Use when the user says "queue this", "queue this for
   tonight", "add this to the queue", "run this later", "leave this for the
   night", or runs /nightqueue:queue. It records the job with the `queue_add`
-  MCP tool and answers with the job id and how many jobs are pending; the batch
+  MCP tool and answers with the job ref (`J-<id>`) and how many jobs are pending; the batch
   itself is started later, by the user, with `nightqueue queue run`.
 ---
 
@@ -71,8 +71,8 @@ runs unattended, with no access to this conversation:
 
 Three short lines, no more:
 
-- the job id `queue_add` returned and the `tier` it was queued as;
+- the job ref (`J-<id>`) `queue_add` returned and the `tier` it was queued as;
 - how many jobs are pending;
 - the one-line hint the tool itself returned in `hint`, reused as it came
-  (``queued job #<id> for <project> (<pending> pending). 0 runners online -
+  (``queued J-<id> for `<project>` (<pending> pending). 0 runners online -
   pending jobs will wait until `nightqueue queue run` starts one.``) — do not rewrite it.

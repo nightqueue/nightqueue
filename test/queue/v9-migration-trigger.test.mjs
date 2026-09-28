@@ -28,7 +28,7 @@ test("a single one-shot `queue status` migrates a v8 home to v9 before it render
 
   assert.equal(code, 0, out.join("\n"));
   assert.deepEqual(schemaState(env), { version: DB_USER_VERSION, hasLegacyColumn: false, statuses: ["closed", "closed"] });
-  assert.match(out.find((line) => line.startsWith("#1 ")) ?? "", /closed/, "the table still showed the retired `merged` status");
+  assert.match(out.find((line) => line.startsWith("J-1 ")) ?? "", /closed/, "the table still showed the retired `merged` status");
 });
 
 test("a single `--follow` frame migrates a v8 home to v9 before it draws the first frame", async (t) => {

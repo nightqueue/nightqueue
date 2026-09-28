@@ -193,7 +193,7 @@ test("a retry issued from another process shows up in the next frame of a runnin
   const seeded = seedHome(t, "cadence-cross-process", [{ status: "failed" }, { status: "done", prUrl: "https://github.com/acme/repo/pull/9" }]);
   const env = withSlowFailingGh(t, seeded.env, "cadence-cross-process");
   const [failed] = seeded.ids;
-  const pendingRow = new RegExp(`^#${failed}\\s+○ pending`, "m");
+  const pendingRow = new RegExp(`^J-${failed}\\s+○ pending`, "m");
 
   const follow = startFollow(env, 1);
   let signalled = false;

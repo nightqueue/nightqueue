@@ -67,7 +67,7 @@ test("the status label, the current step and the stopped line follow the checkli
   assert.equal(statusLabel(closeRow({ status: "closed" }), NOW), "closed");
   assert.equal(currentCloseStep({ steps }), "merge");
   assert.equal(currentCloseStep(JSON.stringify({ steps: {} })), "preflight");
-  assert.equal(closeStoppedLine(failed), "⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close 12");
+  assert.equal(closeStoppedLine(failed), "⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close J-12");
   assert.equal(closeStoppedLine(closeRow({ status: "closed", close: { data: { merged: true } } })), null);
 });
 
@@ -83,7 +83,7 @@ test("the checklist block prints every step in order, with the ones not reached 
     "  - conflict   skipped: mergeable",
     "  ✗ merge      merge-without-sha - still open",
     "  · settle     not reached",
-    "⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close 12",
+    "⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close J-12",
   ]);
   assert.deepEqual(closeChecklistLines(closeRow({}), NOW), []);
 });
@@ -102,9 +102,9 @@ test("the summary names closes in flight with their pid, stopped ones with their
     stalled: [{ id: 4, leaseUntil: EARLIER }],
   });
   assert.deepEqual(closeLines(summary), [
-    "close in flight: #12 at conflict (pid 4242) - follow with: nightqueue queue status 12",
-    "⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close 9",
-    `close of #4 stalled: its lease expired at ${EARLIER} - run again with: nightqueue queue close 4`,
+    "close in flight: J-12 at conflict (pid 4242) - follow with: nightqueue queue status J-12",
+    "⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close J-9",
+    `close of J-4 stalled: its lease expired at ${EARLIER} - run again with: nightqueue queue close J-4`,
   ]);
   assert.deepEqual(queueWorkers(runners).map((runner) => runner.pid), [77], "a close runner was counted as a queue worker");
 });
@@ -121,15 +121,15 @@ test("queue status shows `done · closing` while a close holds the job, `done ·
   acquireClose(id, { worker: WORKER, leaseS: 660 }, env);
   const closing = await runCli(env, ["queue", "status"]);
   assert.match(closing.stdout, /^ID {4}STATUS {11}DURATION/m, "STATUS did not grow to the `done · closing` label");
-  assert.match(closing.stdout, new RegExp(`^#${id} +✓ done · closing +-`, "m"));
+  assert.match(closing.stdout, new RegExp(`^J-${id} +✓ done · closing +-`, "m"));
   assert.match(closing.stdout, /closing: preflight/);
-  assert.ok(closing.out.includes(`close in flight: #${id} at preflight - follow with: nightqueue queue status ${id}`), closing.stdout);
+  assert.ok(closing.out.includes(`close in flight: J-${id} at preflight - follow with: nightqueue queue status J-${id}`), closing.stdout);
 
   failClose(id, { worker: WORKER, close: { attempts: 1, steps: {}, data: {}, failed: { step: "conflict", reason: "suite-red" } } }, env);
   const failed = await runCli(env, ["queue", "status"]);
   assert.match(failed.stdout, /^ID {4}STATUS {28}DURATION/m, "STATUS did not grow to the stopped close's label");
   assert.match(failed.stdout, /✓ done · close failed at conflict /);
-  assert.ok(failed.out.includes(`⛔ close stopped at conflict: suite-red - run again with: nightqueue queue close ${id}`), failed.stdout);
+  assert.ok(failed.out.includes(`⛔ close stopped at conflict: suite-red - run again with: nightqueue queue close J-${id}`), failed.stdout);
 
   const detail = await runCli(env, ["queue", "status", String(id)]);
   assert.ok(detail.out.includes("close           failed, attempt 1"), detail.stdout);
@@ -154,15 +154,15 @@ test("a closed job shows `closed` alone, in the table and in the live view, whil
   acquireClose(id, { worker: WORKER, leaseS: 660 }, env);
   const live = await followOnce(env);
   assert.equal(live.code, 0, live.stdout);
-  assert.match(live.stdout, new RegExp(`^#${id} +✓ done · closing +-`, "m"), "the live view did not show `done · closing`");
+  assert.match(live.stdout, new RegExp(`^J-${id} +✓ done · closing +-`, "m"), "the live view did not show `done · closing`");
 
   settleClose(id, { worker: WORKER, close: { attempts: 1, steps: {}, data: { merged: true, mergeSha: "abc1234def" } }, noticeLine: "Closed: PR #7 merged as abc1234 on 2026-09-21" }, env);
   const table = await runCli(env, ["queue", "status"]);
   assert.match(table.stdout, /^ID {4}STATUS {7}DURATION/m, "a closed job widened STATUS");
-  assert.match(table.stdout, new RegExp(`^#${id} +■ closed +-`, "m"));
+  assert.match(table.stdout, new RegExp(`^J-${id} +■ closed +-`, "m"));
   assert.equal(/· closed/.test(table.stdout), false, "the cell kept the old `· closed` suffix");
   const followed = await followOnce(env);
-  assert.match(followed.stdout, new RegExp(`^#${id} +■ closed +-`, "m"), "the live view did not show `closed` alone");
+  assert.match(followed.stdout, new RegExp(`^J-${id} +■ closed +-`, "m"), "the live view did not show `closed` alone");
   assert.equal(/· closed/.test(followed.stdout), false, "the live view kept the old `· closed` suffix");
 
   const { job } = JSON.parse((await runCli(env, ["queue", "status", String(id), "--json"])).stdout);
@@ -176,7 +176,7 @@ test("a live close runner alone never promises a pending job will be picked up",
   addJob({ projectId: ensureProject(env, "alpha"), prompt: "the next job" }, env);
   writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "close", jobId: id, intervalS: null, detached: false, logPath: null, runtimeDir: null }, env);
   const status = await runCli(env, ["queue", "status"]);
-  assert.match(status.stdout, new RegExp(`runner: running \\(pid ${process.pid}, close, job #${id}`));
+  assert.match(status.stdout, new RegExp(`runner: running \\(pid ${process.pid}, close, J-${id}`));
   assert.ok(status.out.includes("1 pending job waiting - start the batch: nightqueue queue run"), status.stdout);
   const added = await runCli(env, ["queue", "add", "alpha", "one more job"]);
   assert.match(added.stdout, /0 runners online - pending jobs will wait until `nightqueue queue run` starts one\./);

@@ -8,7 +8,7 @@ import { launchOperator } from "../host/operator.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { ALL_PROJECTS, PROMPT_SOURCE_CONFLICT } from "../memory/roadmap.mjs";
-import { ownerLabel } from "../memory/scope.mjs";
+import { decisionRef } from "../memory/scope.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
@@ -43,6 +43,7 @@ import { worktreeLine } from "../queue/close.mjs";
 import { cancelJobAndWorktree } from "../queue/cancel.mjs";
 import { closeMerged, CLOSE_MERGED_DEADLINE_MS } from "../queue/close-merged.mjs";
 import { runMaintenance } from "../queue/maintenance.mjs";
+import { jobIdOfPrUrl } from "../queue/pr-lookup.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
 import { closeSuggestion, failedCoreSection, jobDetailView, prUrlsOf, queueView, truncationSuggestion } from "../queue/view.mjs";
 import {
@@ -61,13 +62,14 @@ import { closeChecklistLines, closeLastCell, closeStoppedLine, queueWorkers, sta
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
-import { registerProject } from "./project.mjs";
+import { keyOption, registerProject } from "./project.mjs";
 import { choose, confirm } from "./prompt.mjs";
 import { runtimeLabel } from "./runtime-versions.mjs";
+import { itemRef, jobRef, parseJobRef } from "../memory/refs.mjs";
 
 export const USAGE = {
-  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--tier <trivial|simple|complex>] [--roadmap <id> [--project <name|all>]]",
-  status: "nightqueue queue status [id] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--roadmap <ref> [--project <name|all>]]",
+  status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
   close: "nightqueue queue close <id> [--force] [--foreground] [--decisions accept|reject|keep] [--json], or nightqueue queue close --merged [--decisions accept|reject|keep] [--json]",
@@ -125,7 +127,7 @@ function unregisteredError(cwd) {
 
 // The question `queue add` asks before it registers the repository of the current directory.
 function registerQuestion(cwd, offer) {
-  return `No project registered for ${cwd}. Register it as \`${offer.name}\` in org \`${offer.org}\` and queue the job? [Y/n] `;
+  return `No project registered for ${cwd}. Register it as \`${offer.name}\` (key ${offer.key}) in org \`${offer.org}\` and queue the job? [Y/n] `;
 }
 
 // Tells whether the operator accepted the registration: `--yes` answers for a script, the terminal answers for a person.
@@ -136,7 +138,7 @@ async function wantsRegistration(offer, cwd, values, ctx) {
 
 // Registers the repository of the current directory, taking the configuration lock `queue` never takes for itself.
 async function registerFromCwd(offer, ctx) {
-  return await withLock(ctx.env, () => registerProject(ctx, { path: offer.path, name: offer.name }));
+  return await withLock(ctx.env, () => registerProject(ctx, { path: offer.path, name: offer.name, key: offer.key }));
 }
 
 // Refuses to register a project from inside an unattended run: there is no user there to confirm it.
@@ -154,8 +156,9 @@ async function offerRegistration({ store, config }, values, ctx) {
   const cwd = ctx.cwd ?? process.cwd();
   refuseRegistrationInsideJob(cwd, ctx.env);
   if (values.yes !== true && !ctx.stdin?.isTTY) throw unregisteredError(cwd);
-  const offer = await registrationOffer(store, config, cwd);
-  if (!offer) throw unregisteredError(cwd);
+  const suggested = await registrationOffer(store, config, cwd);
+  if (!suggested) throw unregisteredError(cwd);
+  const offer = { ...suggested, key: keyOption(values) ?? suggested.key };
   if (!(await wantsRegistration(offer, cwd, values, ctx))) throw unregisteredError(cwd);
   return await registerFromCwd(offer, ctx);
 }
@@ -204,7 +207,7 @@ async function reportWaiting(blocker, ctx) {
 // The line that tells the operator what started and how to follow it or stop it.
 function startedLine({ jobId, pid, watchIntervalS, logPath }) {
   if (watchIntervalS !== null) return `runner started (pid ${pid}, every ${watchIntervalS} s) - stop with: nightqueue queue run --stop`;
-  if (jobId !== null) return `job #${jobId} started (pid ${pid}) - follow with: nightqueue queue log ${jobId} --follow`;
+  if (jobId !== null) return `${jobRef(jobId)} started (pid ${pid}) - follow with: nightqueue queue log ${jobRef(jobId)} --follow`;
   return `runner started (pid ${pid}) - draining the queue until nothing is pending; follow with: nightqueue queue status --follow (log: ${logPath})`;
 }
 
@@ -243,12 +246,12 @@ async function runGuardedHere({ jobId = null, watchIntervalS = null, from = null
 // Why the cycle of a single job claimed nothing, in the same words a detached start would have used.
 async function notStartedLines(job, cycle, ctx) {
   const blocker = await claimBlocker({ jobId: job.id, mode: "once", env: ctx.env });
-  return blocker ? blockerLines(blocker, ctx.env) : [`job #${job.id} did not start (${cycle.reason}); it stays in the queue`];
+  return blocker ? blockerLines(blocker, ctx.env) : [`${jobRef(job.id)} did not start (${cycle.reason}); it stays in the queue`];
 }
 
 // Runs one job here and turns its outcome into the exit code: 0 only when it finished as `done`.
 async function runJobHere(job, ctx) {
-  ctx.out(`running job #${job.id} in the foreground; follow the stream with \`nightqueue queue log ${job.id} --follow\``);
+  ctx.out(`running ${jobRef(job.id)} in the foreground; follow the stream with \`nightqueue queue log ${jobRef(job.id)} --follow\``);
   const cycle = await runCycle({ jobId: job.id, max: 1, env: ctx.env });
   const processed = cycle.processed.find((entry) => entry.id === job.id);
   if (!processed) {
@@ -288,9 +291,9 @@ function queuedRunnerLine(ctx) {
 
 // The line `queue add` answers with: the old confirmation when the job is about to run, the backlog nudge otherwise.
 async function addedLine(job, willRun, ctx) {
-  if (willRun) return `queued job #${job.id} for project \`${job.project}\` (priority ${job.priority}, timeout ${job.timeoutS}s)`;
+  if (willRun) return `queued ${jobRef(job.id)} for project \`${job.project}\` (priority ${job.priority}, timeout ${job.timeoutS}s)`;
   const counts = await openStore(ctx.env).jobs.countsByStatus();
-  return `queued job #${job.id} for \`${job.project}\` (${counts.pending} pending). ${queuedRunnerLine(ctx)}`;
+  return `queued ${jobRef(job.id)} for \`${job.project}\` (${counts.pending} pending). ${queuedRunnerLine(ctx)}`;
 }
 
 // The knobs of a `queue add` that reach the job: priority, attempts, timeout and the operator's tier.
@@ -322,11 +325,11 @@ function refuseRunForAll(values) {
 
 // The lines the roadmap path answers with: a project item is now `in_progress`; an org item names each project row its jobs went to and the ones skipped.
 function roadmapQueuedLines({ item, jobs, skipped }) {
-  if (item.scope !== "org") return [`roadmap item #${item.id} of \`${item.project}\` is now \`in_progress\``];
+  if (item.scope !== "org") return [`roadmap item ${itemRef(item)} of \`${item.project}\` is now \`in_progress\``];
   const lines = [
-    `roadmap item #${item.id} of org \`${item.org}\` queued for ${jobs.map((job) => `\`${job.project}\``).join(", ")}; its status is derived from its project rows`,
+    `roadmap item ${itemRef(item)} of org \`${item.org}\` queued for ${jobs.map((job) => `\`${job.project}\``).join(", ")}; its status is derived from its project rows`,
   ];
-  for (const entry of skipped) lines.push(`skipped \`${entry.project}\`: job #${entry.job_id ?? "?"} (${entry.job_status ?? "unknown"}) still holds it`);
+  for (const entry of skipped) lines.push(`skipped \`${entry.project}\`: ${jobRef(entry.job_id ?? "?")} (${entry.job_status ?? "unknown"}) still holds it`);
   return lines;
 }
 
@@ -334,8 +337,8 @@ function roadmapQueuedLines({ item, jobs, skipped }) {
 async function addFromRoadmap(positionals, values, ctx) {
   if (positionals.length) throw new UserError(PROMPT_SOURCE_CONFLICT);
   refuseRunForAll(values);
-  const id = requireInt("--roadmap", values.roadmap);
   const store = openStore(ctx.env);
+  const id = await store.roadmap.itemIdOfRef(values.roadmap);
   const target = await roadmapQueueTarget(store, values.project);
   const queued = await store.roadmap.queueRoadmapItem({ id, ...target, ...addLimits(values) });
   for (const line of roadmapQueuedLines(queued)) ctx.out(line);
@@ -355,7 +358,7 @@ async function runAdd(argv, ctx) {
       ? [await addFromPrompt(positionals, values, ctx)]
       : await addFromRoadmap(positionals, values, ctx);
   const job = jobs[jobs.length - 1];
-  for (const earlier of jobs.slice(0, -1)) ctx.out(`queued job #${earlier.id} for \`${earlier.project}\``);
+  for (const earlier of jobs.slice(0, -1)) ctx.out(`queued ${jobRef(earlier.id)} for \`${earlier.project}\``);
   ctx.out(await addedLine(job, values.run === true, ctx));
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }
@@ -370,6 +373,7 @@ const ADD_OPTIONS = {
   roadmap: { type: "string" },
   project: { type: "string" },
   tier: { type: "string" },
+  key: { type: "string" },
 };
 
 // Tells whether a token is written as an option, the only shape the edges of `queue add` read as one.
@@ -564,7 +568,7 @@ function lastCell(job, env) {
 // Cells of one row of the table, before any cut or paint.
 function rowCells(job, nowMs, env) {
   return {
-    id: `#${job.id}`,
+    id: jobRef(job.id),
     status: statusCellOf(job, nowMs),
     duration: formatDurationCell(job, nowMs),
     tokens: formatTokens(job),
@@ -601,7 +605,7 @@ function formatTable(jobs, ctx) {
 function formatNotice(job) {
   if (!job.notice_md) return [];
   const body = String(job.notice_md).split("\n").map((line) => `  ${line}`);
-  const answer = job.status === "gate" ? [`retry it with: nightqueue queue retry ${job.id} --note "<your answer>"`] : [];
+  const answer = job.status === "gate" ? [`retry it with: nightqueue queue retry ${jobRef(job.id)} --note "<your answer>"`] : [];
   return ["notice", ...body, ...answer];
 }
 
@@ -646,8 +650,8 @@ function runnerCadence(runner) {
     const window = windowCadenceLabel(runner.window);
     return `watch every ${runner.intervalS} s${window ? ` · ${window}` : ""}`;
   }
-  if (runner.mode === "once") return runner.jobId === null ? "once" : `once, job #${runner.jobId}`;
-  if (runner.mode === "close") return `close, job #${runner.jobId}`;
+  if (runner.mode === "once") return runner.jobId === null ? "once" : `once, ${jobRef(runner.jobId)}`;
+  if (runner.mode === "close") return `close, ${jobRef(runner.jobId)}`;
   return `${runner.mode ?? "runner"}`;
 }
 
@@ -914,6 +918,12 @@ async function printQueueView(values, ctx, prStates) {
   return true;
 }
 
+// The job `queue status <arg>` names: the one that opened a pull request URL, or a job ref or plain id.
+async function statusJobId(arg, ctx) {
+  if (/^https?:\/\//i.test(arg.trim())) return await jobIdOfPrUrl(openStore(ctx.env), arg.trim());
+  return parseJobRef(arg);
+}
+
 // Prints `queue status`, for one job or for the tail of the queue, and tells whether it answered in json.
 async function printStatus(argv, ctx) {
   const { values, positionals } = parseCommand(normalizeFollowArgv(argv), STATUS_OPTIONS);
@@ -926,7 +936,7 @@ async function printStatus(argv, ctx) {
   if (intervalS !== null) return await followStatus(values, intervalS, ctx, prStates);
   try {
     await oneShotMaintenance(ctx);
-    if (positionals.length === 1) return await printJobDetail(requireInt("id", positionals[0]), values, ctx, prStates);
+    if (positionals.length === 1) return await printJobDetail(await statusJobId(positionals[0], ctx), values, ctx, prStates);
     return await printQueueView(values, ctx, prStates);
   } finally {
     prStates.dispose();
@@ -978,7 +988,7 @@ function formatDry(report) {
 // Report line of one processed job, with only the fields the operator may read.
 function formatProcessed(job) {
   const details = [job.code, job.prUrl, job.error].filter(Boolean);
-  return `job #${job.id} ${job.status}${details.map((detail) => ` ${detail}`).join("")}`;
+  return `${jobRef(job.id)} ${job.status}${details.map((detail) => ` ${detail}`).join("")}`;
 }
 
 // One line of report for each job the cycle processed.
@@ -1085,7 +1095,7 @@ async function runRun(argv, ctx) {
   }
   checkJobNotWatched(values);
   checkWindowFlags(values);
-  const jobId = requireInt("--job", values.job) ?? null;
+  const jobId = values.job === undefined ? null : parseJobRef(values.job);
   const max = requireInt("--max", values.max) ?? null;
   if (values.dry) {
     const report = await runCycle({ jobId, max, dry: true, env: ctx.env });
@@ -1110,12 +1120,12 @@ async function runCancel(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { reason: { type: "string" }, json: { type: "boolean" } });
   checkArgs(positionals, { min: 1, usage: USAGE.cancel });
   const store = openStore(ctx.env);
-  const { job, worktree } = await cancelJobAndWorktree({ store, id: requireInt("id", positionals[0]), reason: values.reason, env: ctx.env, killImpl: ctx.killImpl });
+  const { job, worktree } = await cancelJobAndWorktree({ store, id: parseJobRef(positionals[0]), reason: values.reason, env: ctx.env, killImpl: ctx.killImpl });
   if (values.json) {
     ctx.out(JSON.stringify({ job, worktree }));
     return;
   }
-  ctx.out(`cancelled job #${job.id}`);
+  ctx.out(`cancelled ${jobRef(job.id)}`);
   if (worktree) ctx.out(worktreeLine(worktree));
 }
 
@@ -1123,7 +1133,7 @@ const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" }, 
 
 // The question a terminal is asked for one open proposal of a job it just closed.
 function proposalQuestion(row) {
-  return `decision ${ownerLabel(row)} "${row.title}" of job #${row.job_id}: accept / reject / keep? [keep] `;
+  return `decision ${decisionRef(row)} "${row.title}" of ${jobRef(row.job_id)}: accept / reject / keep? [keep] `;
 }
 
 // How each proposal of a closed job is settled: the `--decisions` choice, the terminal outside `--json`, or kept.
@@ -1145,7 +1155,7 @@ async function settleClosedJobs({ store, closed, choose: chooser, ctx }) {
     try {
       decisions.push(...(await settleJobProposals({ store, jobId: job.id, choose: chooser })));
     } catch (err) {
-      ctx.err(`decisions of job #${job.id} not settled: ${err?.message ?? String(err)}`);
+      ctx.err(`decisions of ${jobRef(job.id)} not settled: ${err?.message ?? String(err)}`);
     }
   }
   return decisions;
@@ -1161,7 +1171,7 @@ function proposalLine(entry) {
 function closedJobLines(closed, worktrees = []) {
   return closed.flatMap((job) => {
     const entry = worktrees.find((candidate) => candidate.id === job.id);
-    return entry ? [`closed job #${job.id}`, worktreeLine(entry)] : [`closed job #${job.id}`];
+    return entry ? [`closed ${jobRef(job.id)}`, worktreeLine(entry)] : [`closed ${jobRef(job.id)}`];
   });
 }
 
@@ -1182,8 +1192,8 @@ function closeMergedLines({ closed, refused, undetermined, worktrees, decisions 
   if (closed.length + refused.length + undetermined.length === 0) return ["nothing to close"];
   const lines = [
     ...closedJobLines(closed, worktrees),
-    ...refused.map(({ id, reason }) => `job #${id} not closed: ${reason}`),
-    ...undetermined.map(({ id, reason }) => `job #${id} not closed: ${reason}`),
+    ...refused.map(({ id, reason }) => `${jobRef(id)} not closed: ${reason}`),
+    ...undetermined.map(({ id, reason }) => `${jobRef(id)} not closed: ${reason}`),
     ...decisions.map(proposalLine),
   ];
   const unchecked = undetermined.filter(isUnchecked);
@@ -1212,7 +1222,7 @@ const CLOSE_STEP_ICONS = { done: "✓", skipped: "-", failed: "✗" };
 
 // The line a forced close prints first, so what `--force` skips, and what it never skips, is always said out loud.
 function forcedCloseLine(id) {
-  return `job #${id}: --force: pull request checks and the rebase suite are skipped; conflicts, attribution and status still stop the close`;
+  return `${jobRef(id)}: --force: pull request checks and the rebase suite are skipped; conflicts, attribution and status still stop the close`;
 }
 
 // One settled step of a foreground close, as the operator reads it.
@@ -1231,10 +1241,10 @@ function prNumberOf(job) {
 // The last line of a foreground close: what it merged and how the job ended, or where it stopped and how to resume.
 function closeOutcomeLine(id, { outcome, job }) {
   const worktree = outcome.worktree ? `; ${worktreeLine(outcome.worktree)}` : "";
-  if (outcome.status === "closed") return `job #${id} closed: PR #${prNumberOf(job)} merged as ${String(outcome.mergeSha ?? "").slice(0, 7)}${worktree}`;
-  if (outcome.status === "cancelled") return `job #${id} cancelled: PR #${prNumberOf(job)} was closed without being merged; nothing to close${worktree}`;
-  if (outcome.status === "lost") return `job #${id}: the close lease was taken over by another process; follow it with nightqueue queue status ${id}`;
-  return closeStoppedLine(jobView(job)) ?? `⛔ close stopped at ${outcome.step}: ${outcome.reason} - run again with: nightqueue queue close ${id}`;
+  if (outcome.status === "closed") return `${jobRef(id)} closed: PR #${prNumberOf(job)} merged as ${String(outcome.mergeSha ?? "").slice(0, 7)}${worktree}`;
+  if (outcome.status === "cancelled") return `${jobRef(id)} cancelled: PR #${prNumberOf(job)} was closed without being merged; nothing to close${worktree}`;
+  if (outcome.status === "lost") return `${jobRef(id)}: the close lease was taken over by another process; follow it with nightqueue queue status ${jobRef(id)}`;
+  return closeStoppedLine(jobView(job)) ?? `⛔ close stopped at ${outcome.step}: ${outcome.reason} - run again with: nightqueue queue close ${jobRef(id)}`;
 }
 
 // Runs the close of a job in this process, printing each settled step, and answers its outcome with the job as it ended.
@@ -1289,7 +1299,7 @@ async function runCloseDetached(id, values, ctx) {
     return 0;
   }
   if (started.forced) ctx.out(forcedCloseLine(id));
-  ctx.out(`close of job #${id} started (pid ${started.pid}) - follow with: tail -f ${started.logPath} (log: ${started.logPath}), or nightqueue queue status ${id}`);
+  ctx.out(`close of ${jobRef(id)} started (pid ${started.pid}) - follow with: tail -f ${started.logPath} (log: ${started.logPath}), or nightqueue queue status ${jobRef(id)}`);
   return 0;
 }
 
@@ -1301,7 +1311,7 @@ async function runClose(argv, ctx) {
     return await runCloseMerged(values, ctx, chooserFor(values, ctx));
   }
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.close });
-  const id = requireInt("id", positionals[0]);
+  const id = parseJobRef(positionals[0]);
   if (values.foreground === true) return await runCloseForeground(id, values, ctx);
   return await runCloseDetached(id, values, ctx);
 }
@@ -1324,29 +1334,29 @@ async function runRetry(argv, ctx) {
   checkArgs(positionals, { min: 1, usage: USAGE.retry });
   checkForegroundNeedsRun(values, USAGE.retry);
   const { job, runDir } = await applyRetry({
-    id: requireInt("id", positionals[0]),
+    id: parseJobRef(positionals[0]),
     note: values.note,
     fresh: values.fresh === true,
     env: ctx.env,
   });
   if (values.json) ctx.out(JSON.stringify({ job }));
-  else ctx.out(`job #${job.id} is pending again${values.fresh === true ? ", starting from phase 0" : ""}`);
+  else ctx.out(`${jobRef(job.id)} is pending again${values.fresh === true ? ", starting from phase 0" : ""}`);
   reportRunDir(runDir, ctx);
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }
 
 // What a re-classification answers the operator: the outcome it corrected, or that there was nothing to correct.
 function repairLine(outcome) {
-  if (!outcome.changed) return `job #${outcome.id} is still \`${outcome.from}\`; there is nothing to correct`;
-  if (outcome.noticeOnly) return `job #${outcome.id} is still \`${outcome.from}\`; its notice was re-read from the log. Read it with: nightqueue queue status ${outcome.id}`;
-  return `job #${outcome.id} re-classified from \`${outcome.from}\` to \`${outcome.to}\`${outcome.prUrl ? ` (${outcome.prUrl})` : ""}`;
+  if (!outcome.changed) return `${jobRef(outcome.id)} is still \`${outcome.from}\`; there is nothing to correct`;
+  if (outcome.noticeOnly) return `${jobRef(outcome.id)} is still \`${outcome.from}\`; its notice was re-read from the log. Read it with: nightqueue queue status ${jobRef(outcome.id)}`;
+  return `${jobRef(outcome.id)} re-classified from \`${outcome.from}\` to \`${outcome.to}\`${outcome.prUrl ? ` (${outcome.prUrl})` : ""}`;
 }
 
 // Runs `queue repair`, which re-derives the outcome of a gated or failed job from its own log and state.json.
 async function runRepair(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
   checkArgs(positionals, { min: 1, usage: USAGE.repair });
-  const outcome = await reclassifyFromLog({ id: requireInt("id", positionals[0]), env: ctx.env });
+  const outcome = await reclassifyFromLog({ id: parseJobRef(positionals[0]), env: ctx.env });
   ctx.out(values.json ? JSON.stringify({ repair: outcome }) : repairLine(outcome));
 }
 
@@ -1444,7 +1454,7 @@ async function runLogRaw(path, id, follow, ctx) {
     },
     { quietMs: 0 },
   );
-  if (result.status) ctx.err(`job #${id} ${result.status}`);
+  if (result.status) ctx.err(`${jobRef(id)} ${result.status}`);
   reportStop(result, ctx);
 }
 
@@ -1494,7 +1504,7 @@ async function runLogNarrated(path, id, { follow, all }, ctx) {
   for (const event of narrator.finish()) print(event);
   if (result.logError) print(narrator.note("toolError", `${result.logError}; this narration is missing the tail of the log`));
   await printJobNotice(id, tail, ctx);
-  if (result.status) print(narrator.note("resultEnd", `job #${id} ${result.status}`));
+  if (result.status) print(narrator.note("resultEnd", `${jobRef(id)} ${result.status}`));
   reportStop(result, ctx);
 }
 
@@ -1502,7 +1512,7 @@ async function runLogNarrated(path, id, { follow, all }, ctx) {
 async function runLog(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { follow: { type: "boolean" }, raw: { type: "boolean" }, all: { type: "boolean" } });
   checkArgs(positionals, { min: 1, usage: USAGE.log });
-  const id = requireInt("id", positionals[0]);
+  const id = parseJobRef(positionals[0]);
   if (values.raw && values.all) throw new UserError("`--all` has no meaning with `--raw`; the raw stream already carries every event");
   const path = jobLogPath(id, ctx.env);
   if (!existsSync(path)) throw new UserError(`no log for job \`${id}\`; expected ${path}`);
@@ -1515,7 +1525,7 @@ const SESSION_OPTIONS = { print: { type: "boolean" }, json: { type: "boolean" } 
 
 // The one line printed before a session resumes: the job, attempt, session id and cwd, with a note when the worktree behind it is gone.
 function sessionLine(resolved) {
-  const base = `job ${resolved.jobId} · attempt ${resolved.attempt} · session ${resolved.session} · cwd ${resolved.cwd}`;
+  const base = `${jobRef(resolved.jobId)} · attempt ${resolved.attempt} · session ${resolved.session} · cwd ${resolved.cwd}`;
   return resolved.worktreeReleased ? `${base} (worktree released, using the checkout)` : base;
 }
 
@@ -1529,7 +1539,7 @@ function sessionCommand(resolved) {
 async function runSession(argv, ctx) {
   const { values, positionals } = parseCommand(argv, SESSION_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.session });
-  const id = requireInt("id", positionals[0]);
+  const id = parseJobRef(positionals[0]);
   const job = await openStore(ctx.env).jobs.getJob(id);
   if (!job) throw new UserError(`unknown job \`${id}\``);
   const resolved = resolveJobSession(job, ctx.env);

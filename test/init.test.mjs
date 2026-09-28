@@ -93,7 +93,7 @@ test("init sets the host up, registers the project and stays idempotent", async 
   assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--no-gh"], first.ctx), 0);
   assert.ok(first.out.some((line) => line.startsWith("home: created")), first.out.join("\n"));
   assert.ok(first.out.some((line) => line.startsWith("secrets.json: created")), first.out.join("\n"));
-  assert.match(first.out.join("\n"), /^registered project `api` \(.+\)$/m);
+  assert.match(first.out.join("\n"), /^registered project `api` \(.+\) with key AP$/m);
   assert.equal(statSync(host.home).mode & 0o777, 0o700);
   assert.equal(statSync(join(host.home, "secrets.json")).mode & 0o777, 0o600);
   assert.equal(orgOfProject(host, "api"), "default");
@@ -104,7 +104,7 @@ test("init sets the host up, registers the project and stays idempotent", async 
   const second = makeCtx(host.env, { cwd: repo });
   assert.equal(await run(["init", "--no-path", "--no-gh"], second.ctx), 0);
   assert.equal(second.out[0], `host already installed (v${VERSION}) - nothing to do`, second.out.join("\n"));
-  assert.match(second.out[1], /^registered project `api` \(.+\)$/);
+  assert.match(second.out[1], /^registered project `api` \(.+\) with key AP$/);
   assert.equal(second.out[2], "Next steps:", second.out.join("\n"));
   assert.equal(second.out.some((line) => line.includes("already present")), false, second.out.join("\n"));
   assert.deepEqual(host.ghCalls(), []);
@@ -123,7 +123,7 @@ test("the semantic recall question is asked once and the second init never bring
   const no = tty("n\n");
   const first = makeCtx(host.env, { stdin: no.stdin, stdout: no.stdout });
 
-  assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--no-gh"], first.ctx), 0, first.err.join("\n"));
+  assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--key", "API", "--no-gh"], first.ctx), 0, first.err.join("\n"));
   assert.equal(no.written.join("").includes("Enable semantic recall?"), true, no.written.join(""));
   assert.ok(first.out.includes("embedding: skipped (declined)"), first.out.join("\n"));
   assert.ok(first.out.includes("semantic recall skipped; run `nightqueue embed install` to enable it"), first.out.join("\n"));
@@ -206,7 +206,7 @@ test("on a terminal init asks the exact question and honours the answer", async 
   const accepted = makeAuthenticatedHost(t, "init-gh-yes");
   const yes = tty("y\n");
   const yesRun = makeCtx(accepted.env, { stdin: yes.stdin, stdout: yes.stdout });
-  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-yes-repo"), "--name", "api"], yesRun.ctx), 0);
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-yes-repo"), "--name", "api", "--key", "API"], yesRun.ctx), 0);
   assert.equal(yes.written.join("").includes(QUESTION), true, `the question changed: ${yes.written.join("")}`);
   assert.equal(bindingOf(accepted, "default"), "gh");
   assert.deepEqual(ghSubcommands(accepted), ["auth status", "auth token"]);
@@ -214,7 +214,7 @@ test("on a terminal init asks the exact question and honours the answer", async 
   const refused = makeAuthenticatedHost(t, "init-gh-no");
   const no = tty("n\n");
   const noRun = makeCtx(refused.env, { stdin: no.stdin, stdout: no.stdout });
-  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-no-repo"), "--name", "api"], noRun.ctx), 0);
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-no-repo"), "--name", "api", "--key", "API"], noRun.ctx), 0);
   assert.equal(no.written.join("").includes(QUESTION), true);
   assert.ok(
     noRun.out.includes('store a token with `echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github`'),
@@ -229,7 +229,7 @@ test("an input that ends without an answer is a no, and the command still finish
   const eof = tty("");
   const { ctx, out } = makeCtx(host.env, { stdin: eof.stdin, stdout: eof.stdout });
 
-  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-eof-repo"), "--name", "api"], ctx), 0);
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-eof-repo"), "--name", "api", "--key", "API"], ctx), 0);
   assert.ok(out.some((line) => line.startsWith("store a token with")), out.join("\n"));
   assert.deepEqual(ghSubcommands(host), ["auth status"]);
 });
@@ -270,6 +270,20 @@ test("a path that is not a git repository stops init before it touches the host"
   assert.equal(await run(["init", "--no-path", makeDir(t, "init-bad-path-dir"), "--no-gh"], ctx), 1);
   assert.match(err.join("\n"), /not a git repository \(no \.git\)/);
   assert.equal(existsSync(host.home), false);
+});
+
+test("init --key registers the project under that key, and an invalid one stops init before it touches the host", async (t) => {
+  const refusedHost = makeHostEnv(t, "init-bad-key");
+  const refused = makeCtx(refusedHost.env);
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-bad-key-repo"), "--key", "k", "--no-gh"], refused.ctx), 1);
+  assert.match(refused.err.join("\n"), /key `k` is invalid/);
+  assert.equal(existsSync(refusedHost.home), false);
+
+  const host = makeHostEnv(t, "init-key");
+  const { ctx, out } = makeCtx(host.env);
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-key-repo"), "--name", "api", "--key", "srv", "--no-gh"], ctx), 0);
+  assert.match(out.join("\n"), /^registered project `api` \(.+\) with key SRV$/m);
+  assert.equal(projectByName(openDb(host.env), "api").key, "SRV");
 });
 
 test("a runtime npm could not install stops init before anything else is written", async (t) => {

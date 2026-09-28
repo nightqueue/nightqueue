@@ -96,14 +96,14 @@ test("the session block opens with the standing decisions of the project", async
 
   const block = await runSessionStart({ input: { session_id: "s1", cwd: repo }, env });
   assert.match(block, /## Standing decisions/);
-  assert.match(block, new RegExp(`- #${accepted.number} state.json is written by the runtime: only run-state.mjs writes it`));
+  assert.match(block, new RegExp(`- D-${accepted.number} state.json is written by the runtime: only run-state.mjs writes it`));
   const binding = [...sectionLines(block, "Standing decisions"), ...sectionLines(block, "Standing decisions in detail")];
   assert.equal(
     binding.some((line) => line.includes("the queue runs on postgres")),
     false,
     "a decision that is only proposed is not a standing constraint",
   );
-  assert.deepEqual(sectionLines(block, "Proposed (not binding)"), [`- #${proposed.number} the queue runs on postgres`]);
+  assert.deepEqual(sectionLines(block, "Proposed (not binding)"), [`- D-${proposed.number} the queue runs on postgres`]);
   assert.equal(block.includes("nothing settled yet"), false, "a proposal is listed by title only");
   assert.ok(
     block.indexOf("## Standing decisions in detail") < block.indexOf("## Proposed (not binding)"),
@@ -149,11 +149,11 @@ test("thirty accepted decisions inject thirty title lines and eight detail lines
   const block = await runSessionStart({ input: { session_id: "s1", cwd: repo }, env });
   const titles = sectionLines(block, "Standing decisions");
   const detail = sectionLines(block, "Standing decisions in detail");
-  assert.equal(titles.filter((line) => /^- #\d+ /.test(line)).length, 30, block);
+  assert.equal(titles.filter((line) => /^- D-\d+ /.test(line)).length, 30, block);
   assert.equal(titles.length, 30, block);
-  assert.equal(detail.filter((line) => /^- #\d+ /.test(line)).length, 8, block);
+  assert.equal(detail.filter((line) => /^- D-\d+ /.test(line)).length, 8, block);
   assert.equal(detail.length, 8, block);
-  assert.equal(titles[0], "- #1 rule 0", "the titles come in numbering order");
+  assert.equal(titles[0], "- D-1 rule 0", "the titles come in numbering order");
   assert.equal(block.includes("## Proposed (not binding)"), false, "an empty proposed section was printed");
 });
 
@@ -167,7 +167,7 @@ test("titles beyond their budget end with how many were left out, and the lesson
 
   const block = await runSessionStart({ input: { session_id: "s1", cwd: repo }, env });
   const titles = sectionLines(block, "Standing decisions");
-  const listed = titles.filter((line) => /^- #\d+ /.test(line)).length;
+  const listed = titles.filter((line) => /^- D-\d+ /.test(line)).length;
   const leftOut = 60 - listed;
   assert.ok(leftOut > 0 && listed > 0, block);
   assert.equal(titles.at(-1), `- ${leftOut} more title(s) left out; \`decision_list\` has them all.`);

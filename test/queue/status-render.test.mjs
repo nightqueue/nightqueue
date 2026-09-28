@@ -22,7 +22,7 @@ async function statusLines(env, { color = true } = {}) {
 
 // The line of the table that belongs to a job.
 function tableLine(out, id) {
-  return out.find((line) => line.startsWith(`#${id} `)) ?? "";
+  return out.find((line) => line.startsWith(`J-${id} `)) ?? "";
 }
 
 test("a closed job is painted 38;5;91 on a terminal, and carries no escape when colour is off", async (t) => {
@@ -60,7 +60,7 @@ test("a row whose status is outside the job status enum renders marked, with one
 
   const { out } = await statusLines(env);
   for (const id of [first, second]) {
-    assert.match(tableLine(out, id), /\u001b\[97;41m! merged\s*\u001b\[0m/, `job #${id} did not render marked`);
+    assert.match(tableLine(out, id), /\u001b\[97;41m! merged\s*\u001b\[0m/, `J-${id} did not render marked`);
   }
   assert.deepEqual(
     out.filter((line) => line.includes("unknown status")),

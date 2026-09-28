@@ -50,7 +50,7 @@ test("decision_save and roadmap_save take project XOR org, and refuse both, neit
   const client = await connect(t, env);
 
   const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...ORG_DECISION, status: "accepted" } }));
-  assert.deepEqual(saved, { ok: true, id: 1, number: 1, scope: "org", owner: "acme" });
+  assert.deepEqual(saved, { ok: true, id: 1, number: 1, ref: "AM/D-1", scope: "org", owner: "acme" });
 
   const both = await client.callTool({
     name: "decision_save",
@@ -132,16 +132,16 @@ test("inside a job, an org row is refused by name while the job's own project is
   const job = addJob({ projectId: ensureProject(env, "acme-mobile-app"), prompt: "rewrite the runner" }, env);
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
-  const decision = await client.callTool({ name: "decision_update", arguments: { id: orgDecision.id, status: "rejected" } });
+  const decision = await client.callTool({ name: "decision_update", arguments: { id: orgDecision.ref, status: "rejected" } });
   assert.equal(decision.isError, true);
   assert.match(textOf(decision), /it belongs to org `acme`, not `acme-mobile-app`/);
-  const item = await client.callTool({ name: "roadmap_update", arguments: { id: orgItem.id, status: "cancelled" } });
+  const item = await client.callTool({ name: "roadmap_update", arguments: { id: orgItem.ref, status: "cancelled" } });
   assert.equal(item.isError, true);
   assert.match(textOf(item), /it belongs to org `acme`/);
 
   assert.equal(getDecision(orgDecision.id, env).status, "accepted", "the refused update reached the org decision");
   assert.equal(getRoadmapItem(orgItem.id, env).status, "todo", "the refused update reached the org item");
-  const mine = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: own.id, status: "rejected" } }));
+  const mine = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: own.ref, status: "rejected" } }));
   assert.equal(mine.decision.status, "rejected", "a job must still update its own project");
 
   const recalled = payloadOf(

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { dbPath, homeDir, runDir, runsIdMarkerPath } from "../../src/config/paths.mjs";
 import { finishV18, migrateToV18 } from "../../src/memory/migration/v18.mjs";
-import * as registry from "../../src/memory/registry.mjs";
+import { migrateToV19 } from "../../src/memory/migration/v19.mjs";
 import { buildLegacyHome, legacyConfig } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 
@@ -34,13 +34,14 @@ test("a run directory already present under the target id keeps its own bytes, a
   migrateToV18(raw, env, {
     afterCommit: () => {
       // Registry is populated at this point (COMMIT already ran), but finishV18/moveRunsToIds has not run yet.
-      const apiId = registry.projectByName(raw, "api").id;
+      const apiId = raw.prepare("SELECT id FROM projects WHERE name = 'api'").get().id;
       preexistingTargetDir = runDir(apiId, "taken", env);
       mkdirSync(preexistingTargetDir, { recursive: true });
       writeFileSync(join(preexistingTargetDir, "state.json"), preexistingBytes);
     },
   });
   assert.ok(preexistingTargetDir, "afterCommit hook never fired: the migration path changed under the PoC");
+  migrateToV19(raw, env);
 
   const warnings = [];
   finishV18(raw, env, { warn: (line) => warnings.push(line) });

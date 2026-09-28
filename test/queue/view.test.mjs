@@ -75,7 +75,7 @@ test("queueView reads jobs, counts and idleness, and decorates each job with the
   const view = await withReadOnlyStore(env, (store) => queueView(store, { env, prStates, killImpl: deadKill }));
   const stateById = Object.fromEntries(view.jobs.map((job) => [job.id, job.pr_state]));
   assert.deepEqual(stateById, { 1: "merged", 2: "unknown", 3: "merged", 4: null, 5: null });
-  assert.deepEqual(view.suggestions, ["#1 PR merged - close it with nightqueue queue close 1"], "only a done job with a merged pull request is suggested");
+  assert.deepEqual(view.suggestions, ["J-1 PR merged - close it with nightqueue queue close J-1"], "only a done job with a merged pull request is suggested");
   assert.equal(view.counts.done, 3);
   assert.equal(view.counts.closed, 1);
   assert.equal("merged" in view.counts, false);
@@ -86,7 +86,7 @@ test("queueView reads jobs, counts and idleness, and decorates each job with the
 
   const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, 1, { prStates }));
   assert.equal(detail.pr_state, "merged");
-  assert.equal(closeSuggestion([detail]), "#1 PR merged - close it with nightqueue queue close 1");
+  assert.equal(closeSuggestion([detail]), "J-1 PR merged - close it with nightqueue queue close J-1");
   assert.equal(await withReadOnlyStore(env, (store) => jobDetailView(store, 99, { prStates })), null);
 
   const withoutCache = await withReadOnlyStore(env, (store) => queueView(store, { env, killImpl: deadKill }));
@@ -103,12 +103,12 @@ test("closeSuggestion aggregates every qualifying job into one line, and null an
   for (const status of ["failed", "gate", "cancelled", "closed"]) {
     assert.equal(closeSuggestion([terminal(1, status, "merged")]), null, `a ${status} job with a merged pull request qualified`);
   }
-  assert.equal(closeSuggestion([terminal(1, "done", "merged")]), "#1 PR merged - close it with nightqueue queue close 1", "a done job with a merged pull request did not qualify");
+  assert.equal(closeSuggestion([terminal(1, "done", "merged")]), "J-1 PR merged - close it with nightqueue queue close J-1", "a done job with a merged pull request did not qualify");
 
   const ten = Array.from({ length: 10 }, (_, index) => terminal(index + 1, "done", "merged")).reverse();
   assert.equal(
     closeSuggestion(ten),
-    "10 jobs have a merged PR (#10, #9, #8, #7, #6 and 5 more) - close them with nightqueue queue close --merged",
+    "10 jobs have a merged PR (J-10, J-9, J-8, J-7, J-6 and 5 more) - close them with nightqueue queue close --merged",
   );
 });
 
@@ -118,17 +118,17 @@ test("truncationSuggestion answers null for no cut job, names the one cut job, a
   assert.equal(truncationSuggestion([]), null);
   assert.equal(truncationSuggestion(undefined), null);
   assert.equal(truncationSuggestion([{ id: 1, status: "gate", notice_md: "short" }]), null, "a job whose text fits earned a pointer");
-  assert.equal(truncationSuggestion([cut(4)]), "#4 text cut at 500 characters - read it whole with nightqueue queue status 4");
-  assert.equal(truncationSuggestion([cut(4, "result_truncated")]), "#4 text cut at 500 characters - read it whole with nightqueue queue status 4", "a cut result earned no pointer");
+  assert.equal(truncationSuggestion([cut(4)]), "J-4 text cut at 500 characters - read it whole with nightqueue queue status J-4");
+  assert.equal(truncationSuggestion([cut(4, "result_truncated")]), "J-4 text cut at 500 characters - read it whole with nightqueue queue status J-4", "a cut result earned no pointer");
   assert.equal(
     truncationSuggestion([cut(9), { id: 8, status: "done" }, cut(7, "result_truncated")]),
-    "2 jobs have text cut at 500 characters (#9, #7) - read each whole with nightqueue queue status <id>",
+    "2 jobs have text cut at 500 characters (J-9, J-7) - read each whole with nightqueue queue status <id>",
   );
 
   const seven = Array.from({ length: 7 }, (_, index) => cut(index + 1)).reverse();
   assert.equal(
     truncationSuggestion(seven),
-    "7 jobs have text cut at 500 characters (#7, #6, #5, #4, #3 and 2 more) - read each whole with nightqueue queue status <id>",
+    "7 jobs have text cut at 500 characters (J-7, J-6, J-5, J-4, J-3 and 2 more) - read each whole with nightqueue queue status <id>",
   );
 });
 
@@ -141,8 +141,8 @@ test("queueView lists the truncation pointer after the close suggestion only whe
 
   const view = await withReadOnlyStore(env, (store) => queueView(store, { env, prStates, killImpl: deadKill }));
   assert.deepEqual(view.suggestions, [
-    "#1 PR merged - close it with nightqueue queue close 1",
-    "#2 text cut at 500 characters - read it whole with nightqueue queue status 2",
+    "J-1 PR merged - close it with nightqueue queue close J-1",
+    "J-2 text cut at 500 characters - read it whole with nightqueue queue status J-2",
   ]);
   assert.equal(view.jobs.find((job) => job.id === 2).notice_truncated, true);
   assert.equal("notice_truncated" in view.jobs.find((job) => job.id === 3), false, "a notice that fits carries the flag key");

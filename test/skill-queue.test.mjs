@@ -49,7 +49,7 @@ test("the queue skill proposes a tier the user can override in that same answer,
   }
   assert.ok(SKILL.includes("the pipeline may raise it with evidence, never lower it"), SKILL);
   assert.ok(SKILL.includes("an\n  answer naming another tier queues it with that tier"), SKILL);
-  assert.ok(SKILL.includes("the job id `queue_add` returned and the `tier` it was queued as"), SKILL);
+  assert.ok(SKILL.includes("the job ref (`J-<id>`) `queue_add` returned and the `tier` it was queued as"), SKILL);
 });
 
 test("the queue skill only records the job, never starts it, and knows `queue_add` has no `run` parameter", () => {

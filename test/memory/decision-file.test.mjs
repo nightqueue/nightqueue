@@ -80,6 +80,7 @@ Run sprockets in parallel.
 function row(overrides = {}) {
   return {
     scope: "project",
+    project_id: "01ALPHA0000000000000000000",
     project: "alpha",
     org: null,
     number: 7,
@@ -118,7 +119,7 @@ test("any other level-2 section stays inside the field it follows, heading inclu
 
 test("a pointer inside the status line names the row and its owner", () => {
   const parsed = parseDecisionFile(POINTER_IN_STATUS);
-  assert.deepEqual(parsed.pointer, { label: "#23", number: 23, owner: "gadget" });
+  assert.deepEqual(parsed.pointer, { label: "#23", number: 23, qualifier: null, owner: "gadget" });
   assert.equal(parsed.status, "accepted");
   assert.equal(parsed.consequences, null);
 });
@@ -127,7 +128,7 @@ test("an org pointer and a successor are read with their owner prefix", () => {
   const parsed = parseDecisionFile(
     "# Shared rule\n\nStatus: Superseded (2026-01-01). Decision acme#4 in the acme store. Superseded by acme#9.\n\n## Context\n\nc\n\n## Decision\n\nd\n",
   );
-  assert.deepEqual(parsed.pointer, { label: "acme#4", number: 4, owner: "acme" });
+  assert.deepEqual(parsed.pointer, { label: "acme#4", number: 4, qualifier: "acme", owner: "acme" });
   assert.deepEqual(parsed.successor, { label: "acme#9", number: 9 });
   assert.equal(parsed.status, "superseded");
 });
@@ -146,21 +147,31 @@ test("the rendered file carries status, date, pointer and every field, and parse
   const text = renderDecisionFile(row());
   assert.equal(
     text,
-    "# 0007 - Store everything in one file\n\nStatus: Accepted (2026-05-04). Decision #7 in the alpha store.\n\n## Context\n\nseveral writers\n\n## Decision\n\nopen it in WAL\n\n## Consequences\n\none file to back up\n",
+    "# 0007 - Store everything in one file\n\nStatus: Accepted (2026-05-04). Decision D-7 in the alpha store.\n\n## Context\n\nseveral writers\n\n## Decision\n\nopen it in WAL\n\n## Consequences\n\none file to back up\n",
   );
   const parsed = parseDecisionFile(text);
   assert.equal(parsed.title, "Store everything in one file");
   assert.equal(parsed.status, "accepted");
   assert.equal(parsed.date, "2026-05-04");
-  assert.deepEqual(parsed.pointer, { label: "#7", number: 7, owner: "alpha" });
+  assert.deepEqual(parsed.pointer, { label: "D-7", number: 7, qualifier: null, owner: "alpha" });
   assert.equal(parsed.consequences, "one file to back up");
 });
 
+test("an org decision renders its pointer with the org key, and the ref reads back with its owner", () => {
+  const text = renderDecisionFile(row({ scope: "org", project_id: null, project: null, org: "acme", org_key: "AC" }));
+  assert.ok(text.includes("Status: Accepted (2026-05-04). Decision AC/D-7 in the acme store.\n"), text);
+  assert.deepEqual(parseDecisionFile(text).pointer, { label: "AC/D-7", number: 7, qualifier: "AC", owner: "acme" });
+  const global = parseDecisionFile(text.replace("AC/D-7 in the acme store. ", "G/D-7 in the acme store. ").replace("AC/D-7", "G/D-7"));
+  assert.deepEqual(global.pointer, { label: "G/D-7", number: 7, qualifier: "G", owner: "acme" });
+});
+
 test("a row without consequences omits the section, and a superseded one names its successor", () => {
-  const text = renderDecisionFile(row({ consequences: null, status: "superseded" }), { successorLabel: "#9" });
+  const text = renderDecisionFile(row({ consequences: null, status: "superseded" }), { successorLabel: "D-9" });
   assert.ok(!text.includes("## Consequences"));
-  assert.ok(text.includes("Status: Superseded (2026-05-04). Decision #7 in the alpha store. Superseded by #9.\n"));
-  assert.equal(parseDecisionFile(text).successor.number, 9);
+  assert.ok(text.includes("Status: Superseded (2026-05-04). Decision D-7 in the alpha store. Superseded by D-9.\n"));
+  assert.deepEqual(parseDecisionFile(text).successor, { label: "D-9", number: 9 });
+  const org = parseDecisionFile(text.replace("Superseded by D-9", "Superseded by AC/D-11"));
+  assert.deepEqual(org.successor, { label: "AC/D-11", number: 11 });
 });
 
 test("slugOf strips diacritics, lower-cases, dashes and cuts at a dash within 60 characters", () => {
@@ -173,12 +184,18 @@ test("slugOf strips diacritics, lower-cases, dashes and cuts at a dash within 60
 });
 
 test("stampPointer inserts the line after the title, and replaces it on a second stamp", () => {
-  const stamped = stampPointer(MULTI_LINE_STATUS, "#12", "gadget");
-  assert.ok(stamped.startsWith("# 0003 - One widget per shelf\n\nDecision #12 in the gadget store.\n\nStatus: Accepted (2026-01-05)"));
-  assert.deepEqual(parseDecisionFile(stamped).pointer, { label: "#12", number: 12, owner: "gadget" });
-  const again = stampPointer(stamped, "#13", "gadget");
-  assert.equal(again.match(/Decision #\d+ in the/g).length, 1);
-  assert.ok(again.includes("Decision #13 in the gadget store."));
+  const stamped = stampPointer(MULTI_LINE_STATUS, "D-12", "gadget");
+  assert.ok(stamped.startsWith("# 0003 - One widget per shelf\n\nDecision D-12 in the gadget store.\n\nStatus: Accepted (2026-01-05)"));
+  assert.deepEqual(parseDecisionFile(stamped).pointer, { label: "D-12", number: 12, qualifier: null, owner: "gadget" });
+  const again = stampPointer(stamped, "D-13", "gadget");
+  assert.equal(again.match(/Decision D-\d+ in the/g).length, 1);
+  assert.ok(again.includes("Decision D-13 in the gadget store."));
+});
+
+test("stampPointer replaces a pre-v19 `#<n>` pointer with the new ref, once", () => {
+  const stamped = stampPointer(POINTER_IN_STATUS, "D-2", "alpha");
+  assert.ok(stamped.includes("Status: Accepted (2026-04-12). Decision D-2 in the alpha store.\n"));
+  assert.equal(stamped.match(/Decision (?:D-|#)\d+ in the/g).length, 1);
 });
 
 test("stampPointer replaces a pointer inside the status line and keeps the rest of the line", () => {
@@ -212,7 +229,7 @@ test("HTML comments in the header zone, closed or not, carry no status, pointer 
 test("stampPointer never replaces a pointer that only sits inside an HTML comment", () => {
   const stamped = stampPointer(COMMENTED_HEADER, "#4", "alpha");
   assert.ok(stamped.includes("<!-- Decision #9 in the old store. Superseded by #10. -->"));
-  assert.deepEqual(parseDecisionFile(stamped).pointer, { label: "#4", number: 4, owner: "alpha" });
+  assert.deepEqual(parseDecisionFile(stamped).pointer, { label: "#4", number: 4, qualifier: null, owner: "alpha" });
 });
 
 test("a field heading inside a tilde or backtick fence stays inside the field", () => {

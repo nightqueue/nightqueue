@@ -4,6 +4,7 @@ import { defaultCloseDeps } from "./close-deps.mjs";
 import { closedLine, parseCloseChecklist } from "./close-view.mjs";
 import { releaseJobWorktree } from "./worktree.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 export const CLOSE_LEASE_SLACK_S = 60;
 export const PR_CLOSED_NOTE = "pull request closed without merge";
@@ -165,7 +166,7 @@ function attributionVerdict(ctx, pr) {
   if (!branch) return { note: "branch not recorded; attribution not checked" };
   if (sameBranch(pr.headRefName, branch, { type: ctx.type, slug: ctx.slug })) return { note: null };
   const head = pr.headRefName || "unknown";
-  const note = `PR #${pr.number} is on branch \`${head}\`, but job \`${ctx.jobId}\` ran on \`${branch}\`; it is not this job's pull request. Fix the job's pr_url before closing it`;
+  const note = `PR #${pr.number} is on branch \`${head}\`, but ${jobRef(ctx.jobId)} ran on \`${branch}\`; it is not this job's pull request. Fix the job's pr_url before closing it`;
   return { problem: failed("pr-not-the-job-branch", note) };
 }
 

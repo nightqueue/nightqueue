@@ -139,8 +139,8 @@ test("a lease that expires while its owner is ALIVE never gives a second real ru
   const result2 = await runQueueCli(runnerEnv(env, bin, { holdMs: SECOND_HOLD_MS, marker: marker2 }), jobId);
 
   assert.equal(result2.code, 0, `the second runner failed: ${result2.stderr}`);
-  assert.equal(existsSync(marker2), false, `a SECOND real child started for job #${jobId} while the first one was alive`);
-  assert.match(result2.stdout, /^job #\d+ is running, not pending - it will not be picked up$/m, `the second runner did not refuse: ${result2.stdout}`);
+  assert.equal(existsSync(marker2), false, `a SECOND real child started for J-${jobId} while the first one was alive`);
+  assert.match(result2.stdout, /^J-\d+ is running, not pending - it will not be picked up$/m, `the second runner did not refuse: ${result2.stdout}`);
   assert.deepEqual(
     await acquire({ jobId, cap: CAP, env }),
     { job: null, reason: "not-pending" },

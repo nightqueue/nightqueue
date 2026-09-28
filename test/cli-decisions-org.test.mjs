@@ -69,18 +69,18 @@ test("the read commands migrate a database written before the owner scope, with 
   const listed = runCli(env, ["decision", "list", "--project", "alpha"], { cwd });
   assert.equal(listed.status, 0, listed.stderr);
   for (const number of [1, 2, 3]) {
-    assert.match(listed.stdout, new RegExp(`^#${number}\\s+accepted\\s+\\d{4}-\\d{2}-\\d{2}\\s+legacy decision ${number}$`, "m"));
+    assert.match(listed.stdout, new RegExp(`^D-${number}\\s+accepted\\s+\\d{4}-\\d{2}-\\d{2}\\s+legacy decision ${number}$`, "m"));
   }
 
   const shown = runCli(env, ["decision", "show", "2", "--project", "alpha"], { cwd });
   assert.equal(shown.status, 0, shown.stderr);
-  assert.ok(shown.stdout.includes("#2 legacy decision 2 (accepted)"), shown.stdout);
+  assert.ok(shown.stdout.includes("D-2 legacy decision 2 (accepted)"), shown.stdout);
 
   const roadmap = runCli(env, ["roadmap", "--project", "alpha"], { cwd });
   assert.equal(roadmap.status, 0, roadmap.stderr);
-  assert.ok(roadmap.stdout.includes("todo:\n  p5 #1 legacy roadmap item"), roadmap.stdout);
+  assert.ok(roadmap.stdout.includes("todo:\n  p5 AP-1 legacy roadmap item"), roadmap.stdout);
 
-  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v18/);
+  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v19/);
 });
 
 test("a v5 database that cannot be migrated answers with the schema, never with a raw missing column", (t) => {
@@ -91,7 +91,7 @@ test("a v5 database that cannot be migrated answers with the schema, never with 
 
   const listed = runCli(env, ["decision", "list", "--project", "alpha"], { cwd });
   assert.equal(listed.status, 1, listed.stdout);
-  assert.match(listed.stderr, /schema v5 and this build needs v18/);
+  assert.match(listed.stderr, /schema v5 and this build needs v19/);
   assert.equal(listed.stderr.includes("no such column"), false, listed.stderr);
 });
 
@@ -99,9 +99,9 @@ test("decision list of a project prints its org's rows first, qualified, and nev
   const { env, cwd } = makeOrgHome(t, "decision-org-list");
   const result = runCli(env, ["decision", "list"], { cwd });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /^acme#1\s+accepted\s+\d{4}-\d{2}-\d{2}\s+one queue per product$/m);
-  assert.match(result.stdout, /^#1\s+accepted\s+\d{4}-\d{2}-\d{2}\s+the app owns its cache$/m);
-  assert.ok(result.stdout.indexOf("acme#1") < result.stdout.indexOf("#1  "), "the org row must come first");
+  assert.match(result.stdout, /^AM\/D-1\s+accepted\s+\d{4}-\d{2}-\d{2}\s+one queue per product$/m);
+  assert.match(result.stdout, /^D-1\s+accepted\s+\d{4}-\d{2}-\d{2}\s+the app owns its cache$/m);
+  assert.ok(result.stdout.indexOf("AM/D-1") < result.stdout.indexOf("\nD-1  "), "the org row must come first");
   assert.equal(result.stdout.includes("orbit decides alone"), false, "a orbit decision reached a acme project");
 });
 
@@ -114,7 +114,7 @@ test("decision list --org and decision show --org read one org alone, and --proj
 
   const shown = runCli(env, ["decision", "show", "1", "--org", "acme"], { cwd });
   assert.equal(shown.status, 0, shown.stderr);
-  assert.ok(shown.stdout.includes("acme#1 one queue per product (accepted)"));
+  assert.ok(shown.stdout.includes("AM/D-1 one queue per product (accepted)"));
   assert.ok(shown.stdout.includes("org: acme"));
 
   const both = runCli(env, ["decision", "list", "--project", "acme-mobile-app", "--org", "acme"], { cwd });
@@ -129,12 +129,12 @@ test("roadmap prints the org items with their owner, and --org reads that org al
   const { env, cwd } = makeOrgHome(t, "roadmap-org-list");
   const result = runCli(env, ["roadmap"], { cwd });
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.stdout.includes("  p5 acme #2 raise the node version"), result.stdout);
-  assert.ok(result.stdout.includes("  p5 #1 deliver the app cache"), result.stdout);
+  assert.ok(result.stdout.includes("  p5 AM-1 raise the node version"), result.stdout);
+  assert.ok(result.stdout.includes("  p5 AMA-1 deliver the app cache"), result.stdout);
 
   const org = runCli(env, ["roadmap", "--org", "acme"], { cwd });
   assert.equal(org.status, 0, org.stderr);
-  assert.ok(org.stdout.includes("  p5 acme #2 raise the node version"));
+  assert.ok(org.stdout.includes("  p5 AM-1 raise the node version"));
   assert.equal(org.stdout.includes("deliver the app cache"), false, "a project item reached an org roadmap");
 });
 
@@ -150,7 +150,7 @@ test("a short org name stays in the NUMBER column and a long one is never glued 
   saveDecision({ orgId: orgIdOf(wide, LONG_ORG), title: "one queue per product", context: "c", decision: "d", status: "accepted" }, wide);
   const result = runCli(wide, ["decision", "list"], { cwd: wideCwd });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, new RegExp(`^${LONG_ORG}#1 accepted\\s+\\d{4}-\\d{2}-\\d{2}\\s+one queue per product$`, "m"));
+  assert.match(result.stdout, new RegExp(`^APG\/D-1\\s+accepted\\s+\\d{4}-\\d{2}-\\d{2}\\s+one queue per product$`, "m"));
 });
 
 test("the org read commands never create the database: a home with none has no org to read", (t) => {

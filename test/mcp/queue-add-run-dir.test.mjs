@@ -92,7 +92,7 @@ test("queue_add with run_dir refuses a hand-written block, a prompt with no Brie
 
   const first = await queueAdd(client, { run_dir: dir });
   assert.notEqual(first.isError, true, textOf(first));
-  assertRefused(await queueAdd(client, { run_dir: dir }), /job #\d+ already runs from /);
+  assertRefused(await queueAdd(client, { run_dir: dir }), /J-\d+ already runs from /);
   assert.equal(jobRows(env).length, 1);
 });
 

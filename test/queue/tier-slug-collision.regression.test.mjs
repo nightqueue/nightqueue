@@ -122,7 +122,7 @@ test("the repair of one tiered job never reads the state.json of another one, ev
   assert.equal(rowB.pr_url, null, "the second job took the pull request of the first one");
   assert.equal(JSON.parse(rowB.result ?? "{}").repairedFrom, undefined);
   assert.equal(readFileSync(stateA, "utf8"), bytesA, "the state.json of the first job was rewritten");
-  assert.match(readFileSync(jobLogPath(b, env), "utf8"), /`shared-run` is not free \(job #\d+ holds it\)/);
+  assert.match(readFileSync(jobLogPath(b, env), "utf8"), /`shared-run` is not free \(J-\d+ holds it\)/);
 });
 
 test("a legacy job still sharing a run slug ignores the witness another job stamped there", async (t) => {

@@ -16,12 +16,12 @@ const JOB = 9;
 
 // The refusal the operator's own home always answers with from inside a job.
 function homeRefusal(id) {
-  return `refused: this command would change the operator's nightqueue home from inside job #${id}; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead`;
+  return `refused: this command would change the operator's nightqueue home from inside J-${id}; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead`;
 }
 
 // The refusal the operator's own Claude settings answer with from inside a job.
 function hostRefusal(id) {
-  return `refused: this command would change the operator's Claude settings from inside job #${id}; verify against a temporary host (CLAUDE_CONFIG_DIR=$(mktemp -d)) too`;
+  return `refused: this command would change the operator's Claude settings from inside J-${id}; verify against a temporary host (CLAUDE_CONFIG_DIR=$(mktemp -d)) too`;
 }
 
 // Context that captures the output and never asks a terminal anything.
@@ -138,7 +138,7 @@ test("a temporary home is allowed inside the same job, and init only runs once t
 
 test("a job spawned by a runner that pinned nothing is refused whenever it aims at the default home", (t) => {
   const legacy = { NIGHTQUEUE_JOB_ID: "7" };
-  assert.throws(() => refuseHomeWriteInsideJob(legacy), new RegExp(`from inside job #7`));
+  assert.throws(() => refuseHomeWriteInsideJob(legacy), new RegExp(`from inside J-7`));
   assert.throws(() => refuseHomeWriteInsideJob({ ...legacy, NIGHTQUEUE_HOME: "   " }), /verify against a temporary home/);
 
   const temporary = { ...legacy, NIGHTQUEUE_HOME: makeDir(t, "home-guard-legacy") };

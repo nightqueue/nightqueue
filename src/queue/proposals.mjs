@@ -1,5 +1,5 @@
 import { UserError } from "../config/errors.mjs";
-import { ownerLabel } from "../memory/scope.mjs";
+import { decisionRef } from "../memory/scope.mjs";
 
 export const PROPOSAL_CHOICES = ["accept", "reject", "keep"];
 const SETTLED_STATUS = { accept: "accepted", reject: "rejected" };
@@ -18,7 +18,7 @@ export async function settleJobProposals({ store, jobId, choose }) {
   for (const row of proposals) {
     const choice = requireProposalChoice(await choose(row));
     if (SETTLED_STATUS[choice]) await store.decisions.updateDecision(row.id, { status: SETTLED_STATUS[choice] });
-    settled.push({ job_id: jobId, id: row.id, number: row.number, label: ownerLabel(row), title: row.title, action: REPORTED_ACTION[choice] });
+    settled.push({ job_id: jobId, id: row.id, number: row.number, label: decisionRef(row), ref: decisionRef(row), title: row.title, action: REPORTED_ACTION[choice] });
   }
   return settled;
 }

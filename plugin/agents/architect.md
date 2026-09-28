@@ -304,7 +304,7 @@ If the brief is still not enough to design with confidence, flag it and do not i
 **Standing decisions are binding.** A `## Standing decisions` section in your prompt carries
 the project's architecture decisions, already settled before this task — they are constraints,
 not suggestions. A design that contradicts one either follows the decision or takes the
-conflict to `## Requires user confirmation` naming the decision's number; it never overrides it
+conflict to `## Requires user confirmation` naming the decision's ref (`D-<n>`); it never overrides it
 in silence. The section lists EVERY accepted title plus the 8 closest to the task in full;
 `decision_recall` gives the full text of any title you need. The section only ever brings
 `accepted` decisions, so a `proposed`, a `superseded`
@@ -519,7 +519,7 @@ If there is no risk, write `- None`. Never omit the section.
 - **Context:** [what forced the choice]
 - **Decision:** [what was decided, imperative]
 - **Consequences:** [what this costs and what it closes off]
-- **Unrelated to:** [#n — why this decision leaves it untouched, one line each; omit when no standing decision touches the subject]
+- **Unrelated to:** [D-<n> or <ORGKEY>/D-<n> — why this decision leaves it untouched, one line each; omit when no standing decision touches the subject]
 
 Omit the whole section when every structural choice of this plan is already covered by a
 standing decision. A decision that CHANGES a standing one is not proposed from a run: write

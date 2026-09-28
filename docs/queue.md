@@ -17,7 +17,7 @@ nightqueue queue add "fix the flaky worker" --tier simple      # declare the ris
 nightqueue queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightqueue queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
 nightqueue queue status --blocked                              # only the pending jobs a preflight block is holding back
-nightqueue queue status 7 [--json]                             # one job, never with its prompt
+nightqueue queue status J-7 [--json]                           # one job (J-<id>, the plain id, or its PR URL), never with its prompt
 nightqueue queue run [--job 7] [--max 2] [--dry]               # start the runner detached; --max 2 exits after two jobs; --dry only reports
 nightqueue queue run --watch [30]                              # start a watcher, one pass every N seconds
 nightqueue queue run --watch --from 22:00 --until 04:00        # watch only inside that window, then exit
@@ -57,14 +57,14 @@ a usage error at either edge, never a silent word of the prompt.
 
 **`--run` starts the runner on the job right away**, detached, instead of leaving
 it for the next `nightqueue queue run`. It prints the job id first, then the line
-`job #<id> started (pid <pid>) - follow with: nightqueue queue log <id> --follow`,
+`J-<id> started (pid <pid>) - follow with: nightqueue queue log J-<id> --follow`,
 and exits `0` as soon as the child is up: the exit code answers for the start, not
 for the outcome of the job, which is read with `queue status` or `queue log`. Add
 `--foreground` to get the old behaviour back - the job runs in this very process,
 the stream goes to the log of the job, and the exit code answers only about this
 run: `0` when the job ended as `done`, `1` for any other outcome (`gate`,
 `failed`, `cancelled`, an interrupted run) and `1` when the job never started,
-with the reason on the line `job #<id> did not start (<reason>)` - the job stays
+with the reason on the line `J-<id> did not start (<reason>); it stays in the queue` - the job stays
 in the queue. `--foreground` on a command that was not given `--run` is a usage
 error, never a silent no-op. An explicit job id ignores the pause sentinel, so
 `--run` runs even on a paused queue.
@@ -116,8 +116,8 @@ goes to `$NIGHTQUEUE_HOME/logs/runner-<stamp>.log`; the start prints
 `runner started (pid <pid>) - draining the queue until nothing is pending; follow with:
 nightqueue queue status --follow`. When the start is aimed at a single job the child
 runs that job alone and the line points at its narrated stream instead:
-`job #<id> started (pid <pid>) - follow with: nightqueue queue log <id> --follow`; that
-one registers too, as `once, job #<id>`. A job running with no registered runner at all
+`J-<id> started (pid <pid>) - follow with: nightqueue queue log J-<id> --follow`; that
+one registers too, as `once, J-<id>`. A job running with no registered runner at all
 (a runner that died without clearing its registration) is still visible: the opening
 line says `0 runners online - 1 running job under a one-shot runner - nothing will pick
 up the pending jobs after it (start a drain with: nightqueue queue run)` instead of
@@ -202,10 +202,10 @@ the whole home, with no default: there is no ceiling until the operator sets a p
 integer, and anything else means none. With one set, it counts the jobs under a live lease,
 which is exactly the runners holding a job. What a start does refuse is spawning a child that
 would claim nothing: with a ceiling set, a single-job start against a full ceiling prints
-`job #<id> waiting: concurrency cap reached`, then `<active> of <cap> jobs already running`
+`J-<id> waiting: concurrency cap reached`, then `<active> of <cap> jobs already running`
 and, when a live drain or watcher is registered,
 `a live runner (pid <pid>, <mode>) will pick it up`; it spawns nothing, leaves the row
-`pending` and exits `0`. A job that is not pending answers `job #<id> is <status>, not pending -
+`pending` and exits `0`. A job that is not pending answers `J-<id> is <status>, not pending -
 it will not be picked up`, an unknown id exits `1`, and a drain start on a paused queue says so
 instead of starting a child that would exit on its first cycle. A watcher always starts:
 waiting for the condition to clear is what a watcher is for. A registration whose process is
@@ -314,8 +314,8 @@ empty), kept for one release and removed in the next minor - read `runners`.
 characters. A row whose text was cut carries `notice_truncated: true` or
 `result_truncated: true`; the key is absent when the text fits, so a listing where
 everything fits is the same as before. The listing then adds one line to `suggestions` -
-`#12 text cut at 500 characters - read it whole with nightqueue queue status 12` for
-exactly one job, `3 jobs have text cut at 500 characters (#12, #9, #7) - read each whole
+`J-12 text cut at 500 characters - read it whole with nightqueue queue status J-12` for
+exactly one job, `3 jobs have text cut at 500 characters (J-12, J-9, J-7) - read each whole
 with nightqueue queue status <id>` for several - which the table prints under the counts
 and the MCP `hint` ends with. `nightqueue queue status <id>` (and `queue_status` with
 `job_id`) is never cut.
@@ -364,7 +364,7 @@ nothing, and `--raw --all` together are a usage error.
 
 **`--follow` ends by itself.** It keeps reading the file by offset (no `watch`,
 no missed append), and stops as soon as the job leaves `running`, closing with
-`═ job #<id> <status>`; a job whose row is gone or a status that cannot be read
+`═ J-<id> <status>`; a job whose row is gone or a status that cannot be read
 stops it too, with the reason on stderr and the exit code still `0`. While the
 job runs and the stream has nothing to narrate, it ticks `· still running` every
 30 seconds, so silence never means the follow died. A log file that cannot be
@@ -438,14 +438,14 @@ the last state it had. A pull request nobody asked about yet reads `unknown`. Th
 cell shows it next to the URL (`https://github.com/acme/api/pull/42 (merged)`), and
 `--json` carries `jobs[].pr_state` plus `suggestions`. A `done` job whose pull request is
 merged is never changed by a read: the
-listing adds one aggregated line - `#12 PR merged - close it with nightqueue queue
-close 12` for exactly one, `3 jobs have a merged PR (#12, #9, #7) - close them with
+listing adds one aggregated line - `J-12 PR merged - close it with nightqueue queue
+close J-12` for exactly one, `3 jobs have a merged PR (J-12, J-9, J-7) - close them with
 nightqueue queue close --merged` for several - and closing it is the operator's act,
 either by id or in one call with `nightqueue queue close --merged`. `--merged` looks at
 `done` jobs with a pull request only, and queries gh only for what its own cache cannot
 already confirm, bounded to 10 pull requests and one 20 s deadline per call; each job it
 confirms merged then goes through the same closing pipeline, one after the other in this
-process, so a job whose pipeline stops is reported `job #N not closed: <step>: <reason>` and
+process, so a job whose pipeline stops is reported `J-N not closed: <step>: <reason>` and
 stays `done`. A `failed`, `gate` or `cancelled` job is never suggested and never closed, even
 when its pull request is merged: retry it or cancel it. Closing a job also releases its
 worktree once the row is closed (see *Worktrees* below): the
@@ -463,7 +463,7 @@ of this off.
 `failed`), and `queue retry` moves it back to `pending` (from `gate`,
 `failed` or `cancelled`). Cancelling a `done` or `failed` job also releases its worktree by
 the rule of *Worktrees* below - the text output adds `worktree removed: <path>` or `worktree
-kept: <path> - <reason>` after `cancelled job #N`, and `--json` and the MCP `queue_cancel`
+kept: <path> - <reason>` after `cancelled J-N`, and `--json` and the MCP `queue_cancel`
 answer `{ job, worktree }` (`{ path, status, reason? }`, or `null`); a pending, gated or
 orphaned cancel leaves the worktree where it is. The MCP `queue_cancel` with `stop: true`
 cancels a job running on a runner of this host in one call. It moves the job from `running`
@@ -846,7 +846,7 @@ pull request closed without merge, which cancels it.
 merge, the close does not stop at `failed`: the job becomes `cancelled` in one write, with
 `operator_note` `pull request closed without merge`, the checklist kept with `failed: { step,
 reason: "pr-closed" }` and the lease released; its worktree is then released as for a cancel
-of a `done` job. The line is `job #<id> cancelled: PR #<n> was closed without being merged;
+of a `done` job. The line is `J-<id> cancelled: PR #<n> was closed without being merged;
 nothing to close`, and the exit code is `1`. The decision comes from the step's own read of the
 pull request, never from the job's status, and a close whose lease another process took over
 cancels nothing.
@@ -867,9 +867,9 @@ it closed, a stopped close adds ` · close failed at <step>` or ` · close stall
 checklist under the status line; `--json` and the MCP `queue_status` carry `close_status`,
 `close_worker`, `close_lease_until` and `close`. A close that stops prints, in the listing, the
 detail and the queue's hint lines,
-`⛔ close stopped at <step>: <reason> - run again with: nightqueue queue close <id>`, and a close
-in flight adds `close in flight: #<id> at <step> (pid <pid>) - follow with: nightqueue queue
-status <id>`. `nightqueue doctor` has a `closes` row that warns on a failed close or one whose
+`⛔ close stopped at <step>: <reason> - run again with: nightqueue queue close J-<id>`, and a close
+in flight adds `close in flight: J-<id> at <step> (pid <pid>) - follow with: nightqueue queue
+status J-<id>`. `nightqueue doctor` has a `closes` row that warns on a failed close or one whose
 lease expired.
 
 **Running it again resumes it at the step that failed.** A step already `done` is not run
@@ -886,12 +886,12 @@ its timeout) shows as `close stalled` and is taken over by the next `queue close
 claims nothing: it holds no job lease and never changes what a runner may pick up.
 
 **Detached by default.** `nightqueue queue close <id>` starts a child and returns at once
-with `close of job #<id> started (pid <pid>) - follow with: tail -f <log> (log: <log>), or
-nightqueue queue status <id>`; the log is `<home>/logs/close-<id>-<stamp>.log`, and `--json`
+with `close of J-<id> started (pid <pid>) - follow with: tail -f <log> (log: <log>), or
+nightqueue queue status J-<id>`; the log is `<home>/logs/close-<id>-<stamp>.log`, and `--json`
 prints `{ started, jobId, pid, logPath }`. The child registers as a runner of mode `close`, so
 `queue status`, doctor and the install guard see it live, but a pending job is never
 promised to it. `--foreground` runs the steps in this process, prints one line per step and
-a final `job #<id> closed: PR #<n> merged as <sha7>` (plus what happened to
+a final `J-<id> closed: PR #<n> merged as <sha7>` (plus what happened to
 the worktree) or the `⛔ close stopped ...` line, and exits `0` only when the job closed;
 with `--json` it prints one `{ job, outcome, decisions }` object and nothing else on stdout.
 `queue.closeTimeoutS` (default `600`, accepted range `60..3600` seconds) is the hard
@@ -909,7 +909,7 @@ and `--json` or no terminal keeps them `proposed`. A detached close has no termi
 tests", nothing more: preflight notes the pull request's red, pending or unreadable checks
 (`checks ignored with --force: failing: a, b; pending: c`) instead of stopping, and the
 conflict step rebases and pushes without running the project's `npm test` (`suite skipped with
---force`). A forced close prints first `job #<id>: --force: pull request checks and the rebase
+--force`). A forced close prints first `J-<id>: --force: pull request checks and the rebase
 suite are skipped; conflicts, attribution and status still stop the close`, and the checklist
 records `forced: true` for good. It never opens another status, never lifts
 `pr-not-the-job-branch`, a real conflict, leftover conflict markers, uncommitted files the pull

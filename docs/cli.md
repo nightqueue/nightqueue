@@ -62,7 +62,9 @@ runtime measured no lane for prints `-`.
 Modified files` (`--files-from <path>` reads the list somewhere else) plus every
 file a `--extra <pathspec>` really matches, and commits them with `git commit -F
 <the --message-file>` - the message stays the agent's, and an empty or missing
-one is refused before anything is staged. It prints `COMMITTED: <sha> (<n>
+one is refused before anything is staged. For a job queued from a roadmap item
+it commits a copy of the message with a `Refs: <KEY>-<n>` trailer added from the
+job row; a message that already carries a `Refs:` line is refused. It prints `COMMITTED: <sha> (<n>
 files)`. Anything under
 `.claude/` or `tmp/`, any dependency lockfile and any path outside the run's
 worktree is refused: the command prints `REFUSED: <path> (<reason>)`, stages
@@ -89,8 +91,13 @@ order with no fifth `## `, a `## QA` table with the header
 `| Method | Executed | Result |` and at least one row (none marked `N/A`), a
 `Not tested:` line after it, and a non-empty file under
 `<RUN_DIR>/evidence/<method>-*` (`automated`, `api`, `browser`, `emulator`) for
-every row. Both: no bare `#<number>` outside a `Fixes`/`Closes` line, and no
-`{{placeholder}}` or `<...>` example left over from the template. A body that
+every row. Both: no bare `#<number>` outside a `Fixes`/`Closes` line, no
+`{{placeholder}}` or `<...>` example left over from the template, and none of the
+traceability the runtime appends itself - an `Opened by nightqueue` line, a whole
+`Refs` line, a job ref or the run slug. It then publishes a copy of the body with
+the footer read from the job row (`Refs <KEY>-<n>` and `Opened by nightqueue ·
+<KEY>-<n>` for a roadmap job, `Opened by nightqueue` otherwise; see
+[Runtime contract](runtime-contract.md)). A body that
 fails prints one `REJECTED: <reason>` or `MISSING: <what>` line per violation
 and exits `1` with nothing pushed. Otherwise it renames the branch
 when it still carries the `worktree-` prefix (`worktree-feat+login-google` →
@@ -144,7 +151,10 @@ orgs and projects of `config.json` move into the database, `runs/<project>/` is
 moved to `runs/<project_id>/`, and a copy of the database as it was is left
 beside it as `nightqueue.db.pre-v18`. While a runner holds a live lease on a job
 the migration refuses and asks to stop the runners first
-(`nightqueue queue run --stop`); nothing is written until it succeeds.
+(`nightqueue queue run --stop`); nothing is written until it succeeds. A v18 database
+then goes to v19 the same way, in the same open, with its own copy
+`nightqueue.db.pre-v19`: every project and org gets a key (below), and every roadmap
+item gets its number within its owner, in the order the items were created.
 `nightqueue run dir --project <name> --slug <slug>` prints the directory of a
 run, so nothing has to build the path from a project name.
 
@@ -185,13 +195,18 @@ nightqueue doctor --check-updates                  # ...and ask the registry for
 nightqueue init                                    # set the host up and register the current repository
 nightqueue init ~/code/api --org acme --name api   # ...or an explicit path, org and name
 nightqueue init --no-embedding --no-path --no-gh   # ...answering every question up front
+nightqueue init --key API                          # ...registering it under the key API
 
-nightqueue org add acme                            # create an org
-nightqueue org list --json                         # orgs (with their id), connection slots, project counts
+nightqueue org add acme                            # create an org (its key is suggested, or asked on a TTY)
+nightqueue org add acme --key ACM                  # ...under an explicit key
+nightqueue org key acme AC                         # change its key; the old one keeps resolving
+nightqueue org list --json                         # orgs (with their id, key and old keys), connection slots, project counts
 nightqueue org rename acme acme-inc                # one row: its projects, decisions and bindings follow
 nightqueue org remove acme-inc                     # refused while it still owns projects or rows
 
-nightqueue project list                            # name, path (or "no path"), org, whether the path still exists
+nightqueue project add ~/code/api --key API        # register a repository under an explicit key
+nightqueue project key api AP                      # change its key; API-<n> refs keep resolving
+nightqueue project list                            # name, key, path (or "no path"), org, whether the path still exists
 nightqueue project rename api api-v2               # one row: its jobs, decisions, memory and runs follow
 nightqueue project move api acme                   # move a project to another org
 nightqueue project move api --path ~/code/api      # give it a new checkout (or one it never had)
@@ -211,12 +226,33 @@ never printed back - not by `list`, not by `--json`, not by an error message.
 A path that starts with `-` has to come after `--` (`nightqueue init -- -weird-dir`),
 otherwise it is parsed as an unknown option and rejected.
 
+**Keys and refs.** Every project and every org carries a key: 2 to 5 uppercase letters or
+digits, starting with a letter, unique across projects and orgs together. `init`, `project add`,
+`org add` and the registration `queue add` offers suggest one from the name (`nightqueue` →
+`NQ`, `feat-api-web` → `FAW`, a letter added on a collision: `NQA`); on a terminal the
+question is ``Key for project `<name>` [NQ]:`` - Enter keeps it - and `--key <KEY>` answers it
+up front; without a terminal the suggestion is taken. `project key <name> <KEY>` and `org key
+<name> <KEY>` change a key in one row and keep the old one as an alias of the same owner, so a
+ref written with it still resolves and no other owner can take it. Everything the runtime
+prints names things by ref, and every command and tool that takes one accepts it:
+
+- a job is `J-<id>` (the plain id is still accepted);
+- a roadmap item is `<KEY>-<n>`, numbered within its project or org (`NQ-12`, `DLW-3`);
+- a decision is `D-<n>` inside its project, `<ORGKEY>/D-<n>` for an org decision, and
+  `<KEY>/D-<n>` anywhere else;
+- a row with no owner uses the key `G` (`G-4`, `G/D-2`).
+
+Items and decisions no longer take an internal id anywhere; the decision commands below
+still take a plain per-owner number with `--project`/`--org`.
+
 ## Queue
 
 The full reference of `nightqueue queue` is [Queue](queue.md); these subcommands are
 recent enough that this is their first mention here.
 
 ```sh
+nightqueue queue status J-42                          # one job, by its ref (or its plain id)
+nightqueue queue status https://github.com/acme/api/pull/7   # ...or by the pull request it opened
 nightqueue queue session 42                          # resume the session of a job's last attempt
 nightqueue queue session 42 --print                   # print the resume command instead of running it
 nightqueue queue session 42 --json                    # session, attempt and cwd, as the only thing on stdout
@@ -231,6 +267,12 @@ nightqueue queue cancel 42 --reason "abandoned"       # cancel a done or failed 
 nightqueue queue run --watch --from 22:00 --until 04:00   # watch only inside that window, local wall clock, then exit
 nightqueue queue run --watch --until 04:00                # `--from` defaults to now
 ```
+
+`queue status <PR URL>` (and `queue_status` with `pr_url`) finds the job that opened that
+pull request, whatever the case of the owner, a trailing slash or a `/files` suffix. A URL no
+job opened answers ``no job opened `<url>` ``, one that is not a GitHub pull request is
+refused, and one opened by more than one job is refused with their refs
+(``… was opened by more than one job: J-3, J-9; pass one of them``) - never the latest.
 
 `queue session <id>` opens the `claude` session of a job's LAST attempt - `last_session_id`
 when the job carries one, else its first `session_id` - by resuming it with `nightqueue open
@@ -249,15 +291,15 @@ and never resumes or executes anything itself.
 `closed` through the closing pipeline described below - the only way any job becomes `closed` -
 and releases the job's worktree once it is closed, printing `worktree removed: <path>` or
 `worktree kept: <path> - <reason>`. `queue close --merged` runs the same pipeline, in this
-process, on every `done` job whose pull request `gh` itself confirms merged, prints `closed job
-#<id>` or `job #<id> not closed: <reason>` for each, and reports `<n> jobs left unchecked; run
+process, on every `done` job whose pull request `gh` itself confirms merged, prints `closed
+J-<id>` or `J-<id> not closed: <reason>` for each, and reports `<n> jobs left unchecked; run
 nightqueue queue close --merged again` when some could not be checked within the call's own
 deadline. A `failed`, `gate` or `cancelled` job is never closed, whatever its pull request
 says: retry it, or cancel it.
 
 Once a job closed in this process (`--foreground`, or `--merged`), the command settles the
 decisions the job proposed and never settled: on a TTY, without `--decisions`, it asks
-`decision <owner> "<title>" of job #<id>: accept / reject / keep? [keep]` for each open proposal
+`decision <D-ref> "<title>" of J-<id>: accept / reject / keep? [keep]` for each open proposal
 in turn; `--decisions accept|reject|keep` answers every one of them without asking, and no
 terminal (or `--json`) leaves every proposal `kept (proposed)`, so a script's behaviour never
 changes underneath it. Each settled proposal prints `decision <label> <title>:
@@ -267,7 +309,7 @@ keeps every proposal `proposed` for `nightqueue doctor` to list.
 
 `queue cancel <id>` accepts a `pending`, gated, orphaned, `done` or `failed` job. For a `done`
 or `failed` one it also releases the job's worktree, printing `worktree removed: <path>` or
-`worktree kept: <path> - <reason>` after `cancelled job #<id>`; `--json` prints `{ job,
+`worktree kept: <path> - <reason>` after `cancelled J-<id>`; `--json` prints `{ job,
 worktree }`. A job running under a live lease, or being closed under one, is refused by name
 with nothing written. So is a `done` job whose close was interrupted (its lease died mid-close,
 possibly after the merge): resume it with `nightqueue queue close <id>`, which records a merged
@@ -284,9 +326,9 @@ job and append `Closed: PR #<n> merged as <sha7> on <date>` to its notice). It s
 and prints the pid and its log, `<home>/logs/close-<id>-<stamp>.log`; `--foreground` runs it here
 and exits `0` only when the job closed; `--json` prints `{ started, jobId, pid, logPath }`
 detached, or one `{ job, outcome, decisions }` object in the foreground. A close that stops prints `⛔ close stopped at <step>:
-<reason> - run again with: nightqueue queue close <id>`, leaves the job `done`, and running it
+<reason> - run again with: nightqueue queue close J-<id>`, leaves the job `done`, and running it
 again resumes at that step - never merging twice. A pull request closed without merge cancels
-the job instead (`job #<id> cancelled: PR #<n> was closed without being merged; nothing to
+the job instead (`J-<id> cancelled: PR #<n> was closed without being merged; nothing to
 close`), and one merged by hand is recorded as `merged outside a close`. `--force` skips the
 pull request checks and the rebase suite and nothing else: status, attribution
 (`pr-not-the-job-branch`) and real conflicts still stop the close. A second close of a closed
@@ -320,14 +362,17 @@ nightqueue decision list --org acme --status accepted                    # one o
 nightqueue decision show 7                                               # one decision, in full
 nightqueue decision export 7 --dir docs/decisions                        # write it as a markdown file
 nightqueue decision import docs/decisions/0007-foo.md                    # save a markdown decision file
-nightqueue decision import docs/decisions/0007-foo.md --supersedes 3,4   # ...replacing #3 and #4 whole
+nightqueue decision import docs/decisions/0007-foo.md --supersedes 3,4   # ...replacing D-3 and D-4 whole
 nightqueue decision update 7 --status accepted                           # accept a proposed decision
-nightqueue decision update 7 --status superseded --superseded-by 9       # supersede #7 with #9
+nightqueue decision update 7 --status superseded --superseded-by 9       # supersede D-7 with D-9
 ```
 
 `decision list`, `show <number>`, `export <number>` and `import <file.md>` each resolve the
 owner from `--project <name>` (the registered NAME, never a path), `--org <name>`, or the
-project of the current directory when neither is given - naming both is refused. `list` and
+project of the current directory when neither is given - naming both is refused. `show`,
+`export` and `update` also take a ref: `D-7` is read in that same owner, and `DLW/D-3` names
+its owner by key, needs no flag and is refused next to a flag naming another owner.
+`--superseded-by`, `--supersedes` and `--unrelated` take numbers or refs of the same owner. `list` and
 `show` open the database read-only, so they never create it and never migrate it: a home where
 nothing was ever saved reads as an empty one instead of a SQLite error.
 
@@ -432,23 +477,23 @@ accepted|rejected`, or, next time, settle it in the same call with `nightqueue q
 close <id> --decisions accept|reject`.
 
 On a database at the current schema, the `roadmap workflow` row names every roadmap item or org
-project row whose status disagrees with what its linked job's row means (for example `#12
-in_progress (job 40 done, expected in_review)`, or `#7 row api ...` for an org item's row): a job
+project row whose status disagrees with what its linked job's row means (for example `NQ-12
+in_progress (J-40 done, expected in_review)`, or `DLW-7 row api ...` for an org item's row): a job
 write whose roadmap follow failed. The next `nightqueue queue run` claim cycle re-syncs those on its
 own. It also names every org item whose persisted status disagrees with what its project rows derive
-(for example `acme#7 todo (derived from its project rows: in_progress)`), re-derived at its next row
+(for example `DLW-7 todo (derived from its project rows: in_progress)`), re-derived at its next row
 change or set by hand with `roadmap_update`. It is a `warn`, never a failure.
 
 `nightqueue roadmap [--project <name> | --org <name>] [--status <s>]... [--priority <n>]...
 [--type <t>]... [--json]` prints the roadmap grouped by status in workflow order (`backlog`, `todo`,
-`in_progress`, `in_review`, `done`, `cancelled`), one `p<priority> #<id> <title>` line per item (an
-org item carries its org before the `#`), p1 first. `--status`, `--priority` and `--type` repeat to keep several values. Read by a
+`in_progress`, `in_review`, `done`, `cancelled`), one `p<priority> <REF> <title>` line per item (`NQ-12` for a
+project item, `DLW-7` for an org item: the ref carries its owner's key), p1 first. `--status`, `--priority` and `--type` repeat to keep several values. Read by a
 project, an org item shows the status of that project's own row in parentheses; read with `--org`,
-each org item lists its project rows under it (`<project>: <status> job #<id> (<job status>)`), the
+each org item lists its project rows under it (`<project>: <status> J-<id> (<job status>)`), the
 item × project matrix. It survives a reader
 that closes the pipe early (`nightqueue roadmap | head`): the CLI stops writing instead of
-crashing with `EPIPE`. `nightqueue roadmap show <id> [--json]` prints one item in full - its
-`<owner>#<id>`, type, status and priority, its untruncated title and detail, an org item's project
+crashing with `EPIPE`. `nightqueue roadmap show <ref> [--json]` prints one item in full - its
+ref, type, status and priority, its untruncated title and detail, an org item's project
 rows under `projects:` - and then its comment thread in chronological order, one `<when> <author> <kind>` line per comment with its body
 indented under it. Both read the database and never write to it.
 

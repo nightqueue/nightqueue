@@ -153,7 +153,7 @@ under `runtime/node_modules/`, keeps working and is never deleted by an install.
 
 **`setup`, `setup --from`, `update` and `init` refuse to replace the runtime while it
 is in use.** When ANY registration of the registry is alive or a job holds a live lease,
-they exit `1` with `a runner is active (pid P / pid Q / job #N) - the runtime cannot be
+they exit `1` with `a runner is active (pid P / pid Q / J-N) - the runtime cannot be
 replaced while it runs; stop it with nightqueue queue run --stop or wait for the queue to
 drain`, naming every live pid, and install nothing. `--force` installs anyway and says so on stderr. A runner whose version
 directory disappears anyway - a `--force`, or a hand-deleted tree - stops claiming,
@@ -184,8 +184,8 @@ The twenty-eight MCP tools, with the parameters `nightqueue mcp` actually accept
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |
 | `pipeline_log` | `outcome`, `project?`, `slug?`, `tier?`, `tier_operator?`, `tier_raise_reason?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?}]` |
-| `queue_add` | `project?` (for an org roadmap item: a project of the org, or `all`), `prompt?`, `roadmap_item_id?`, `cwd?`, `register?`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`) |
-| `queue_status` | `job_id?`, `limit?` (1-50) |
+| `queue_add` | `project?` (for an org roadmap item: a project of the org, or `all`), `prompt?`, `roadmap_item_id?` (an item ref), `cwd?`, `register?`, `key?` (with `register`), `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`) |
+| `queue_status` | `job_id?`, `pr_url?` (never with `job_id`), `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_stop` | `pid?` |
 | `queue_session` | `job_id` |
@@ -193,12 +193,12 @@ The twenty-eight MCP tools, with the parameters `nightqueue mcp` actually accept
 | `queue_close` | `job_id`, `force?` |
 | `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` |
 | `decision_save` | `project`, `title`, `context`, `decision`, `consequences?`, `status?` (`proposed`, `accepted`, `superseded`, `rejected`; default `accepted`) |
-| `decision_update` | `id`, `title?`, `context?`, `decision?`, `consequences?`, `status?`, `superseded_by?` |
+| `decision_update` | `id` (a decision ref), `project?` (the owner of a `D-<n>`), `title?`, `context?`, `decision?`, `consequences?`, `status?`, `superseded_by?` (a decision ref) |
 | `decision_list` | `project`, `status?` |
 | `decision_recall` | `project`, `query?`, `limit?` (1-20) |
-| `roadmap_save` | `project`, `title`, `type` (`bug`, `feature`, `improvement`, `chore`, `incident`), `detail?`, `priority?` (1-9, default 5, 1 first), `status?` (default `todo`; `in_progress` is refused), `decision_id?`; `horizon` is refused by name |
-| `roadmap_update` | `id`, `title?`, `detail?`, `type?`, `status?` (`backlog`, `todo`, `in_review`, `done`, `cancelled`; `in_progress` is refused), `priority?`, `position?`, `decision_id?`; `horizon` is refused by name |
-| `roadmap_get` | `project`, `status?` (list), `priority?` (list), `type?` (list); or `id` alone for one item with its comment thread |
+| `roadmap_save` | `project`, `title`, `type` (`bug`, `feature`, `improvement`, `chore`, `incident`), `detail?`, `priority?` (1-9, default 5, 1 first), `status?` (default `todo`; `in_progress` is refused), `decision_id?` (a decision ref); `horizon` is refused by name |
+| `roadmap_update` | `id` (an item ref), `title?`, `detail?`, `type?`, `status?` (`backlog`, `todo`, `in_review`, `done`, `cancelled`; `in_progress` is refused), `priority?`, `position?`, `decision_id?` (a decision ref); `horizon` is refused by name |
+| `roadmap_get` | `project`, `status?` (list), `priority?` (list), `type?` (list); or `id` (an item ref) alone for one item with its comment thread |
 | `roadmap_comment` | `id`, `body` |
 | `roadmap_search` | `query?`, `file?` (a recorded path, exact or a directory above it), `project` or `org` (inside a job: the job's own project), `limit?` (1-5) |
 | `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `project?`, `slug?` |
@@ -251,7 +251,7 @@ the project (see [Decisions and roadmap](memory.md#decisions-and-roadmap)); pass
 characters in a listing; a row whose text was cut carries `notice_truncated: true` or
 `result_truncated: true` (the key is absent when the text fits, and the detail of one job by
 `job_id` is never cut), and `suggestions` plus the `hint` gain one line naming
-`nightqueue queue status <id>`, where the whole text is. It answers with the state of the runner next to the jobs; it is a pure read
+`nightqueue queue status J-<id>`, where the whole text is. It answers with the state of the runner next to the jobs; it is a pure read
 that never repairs nor prunes on call, and reports the last repair warning of the server's
 maintenance (once at start, then every 60 s, never inside a job) as `warning`. `queue_run`
 starts the runner detached and answers right away with the path of its log,
@@ -328,18 +328,37 @@ sha, files: [{path}], decision_id}`, `files` being what the run's
 `04-implementation.md` lists under `## Modified files`, recorded by the runner.
 An operator's move back from `in_review` or `done` appends `reopened`. A job
 queued from a roadmap item gets a `## Roadmap item` block in its prompt
-(`Roadmap: <owner>#<id>`, `Type:`, `Commit type:`), its tier defaults from the
+(`Roadmap: <KEY>-<n>`, `Type:`, `Commit type:`), and its tier defaults from the
 type (`bug`/`improvement`/`incident` → `simple`, `feature` → `complex`, `chore` →
-`trivial`; an explicit tier wins), and `nightqueue run pr` publishes its body with
-a last `Roadmap: <owner>#<id>` line - a copy in the run directory
-(`pr-body.roadmap.md`), the agent's file untouched, and nothing added when the
-body already has a `Roadmap:` line.
+`trivial`; an explicit tier wins).
+
+**Traceability is the runtime's, never the agent's.** `nightqueue run pr`
+publishes a copy of the body, `<RUN_DIR>/pr-body.published.md` (the agent's file
+untouched), ending in a footer read from the job row: `Refs <KEY>-<n>`, a blank
+line and `Opened by nightqueue · <KEY>-<n>` for a job queued from a roadmap item
+(project or org), `Opened by nightqueue` alone for any other job and outside the
+queue. The ref is built from the owner's CURRENT key, so a job published after a
+`project key` carries the new one. A body that already carries an
+`Opened by nightqueue` line, a whole `Refs` line, a job ref (`J-<n>`, or the
+caller's own `job <id>`) or the run slug is rejected naming the line
+(``REJECTED: line <n> carries <what>, which `run pr` appends from the job row:
+<line>``); fenced blocks and code spans (a span wrapped over lines included) are
+not read. A body that ends inside an unclosed fenced block or `<!--` comment is
+rejected naming the line that opens it, since the footer would render inside
+it. A footer that cannot be built pushes nothing. `nightqueue run commit` does the same for a commit of a
+roadmap job: it commits a copy of the message, `<RUN_DIR>/commit-message.md`,
+with a `Refs: <KEY>-<n>` trailer added by `git interpret-trailers --no-divider` (so it joins
+an existing trailer block such as `Co-Authored-By`, even when the message holds a
+`---` line); a free-prompt job and a run
+outside the queue commit the message untouched, and a message that already
+carries a `Refs:` line is refused (``REFUSED: line <n> of the message is a
+`Refs:` trailer, ...``) with nothing staged.
 
 An org item is queued per project (`project` names one project of the org, or
 `all`), each on its own `roadmap_item_projects` row linked to that project's
 job; the item itself carries no job. Each row follows its job exactly as above,
-its comments carry the row's `project`, and a job of a row publishes
-`Roadmap: <org>#<id>`. The org item's status is derived from its rows in the
+its comments carry the row's `project`, and a job of a row publishes the
+footer of the org item's ref (`Refs DLW-<n>`). The org item's status is derived from its rows in the
 same transaction: `in_progress` while any row is, `done` once every row is
 `done` or `cancelled`, otherwise the lowest open status among them. Closing it by
 hand cancels every open row with a `closed` comment each. `nightqueue doctor`

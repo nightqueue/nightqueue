@@ -8,6 +8,7 @@ import { openStore } from "../store/open.mjs";
 import { classifyJobResult } from "./classify.mjs";
 import { isRunPath, ownRunState, readRunState, writeRunTerminal } from "./resume.mjs";
 import { lastAttemptStream } from "./stream.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 // Statuses a re-classification may correct: a row that ended badly, never one the queue still owes work for.
 const REPAIRABLE_STATUSES = new Set(["gate", "failed"]);
@@ -99,7 +100,7 @@ export async function reclassifyFromLog({ id, env = process.env } = {}) {
   const notice = noticeDiffers(row, outcome);
   if (!witness && !notice) return { id, from: row.status, to: row.status, prUrl: row.pr_url ?? null, changed: false, noticeOnly: false };
   const written = await jobs.reclassifyJob(id, { status: outcome.status, prUrl: outcome.prUrl, noticeMd: outcome.noticeMd });
-  if (!written) throw new UserError(`job \`${id}\` changed while it was being re-classified; read it again with \`nightqueue queue status ${id}\``);
+  if (!written) throw new UserError(`job \`${id}\` changed while it was being re-classified; read it again with \`nightqueue queue status ${jobRef(id)}\``);
   if (witness && !foreign) mirrorWitness(row, outcome, env);
   return { id, from: row.status, to: outcome.status, prUrl: outcome.prUrl ?? row.pr_url ?? null, changed: true, noticeOnly: !witness };
 }

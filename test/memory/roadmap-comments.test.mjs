@@ -57,9 +57,9 @@ test("queue, gate, retry, done and close leave queued, gate, queued, pr and clos
   );
   assert.ok(comments.every((comment) => comment.author === `job:${job.id}`));
   assert.match(comments[1].body, /stopped at a gate\n\nwhich base branch\?/);
-  assert.match(comments[2].body, /re-queued by retry of job #\d+\n\nuse main/);
+  assert.match(comments[2].body, /J-\d+ re-queued by retry\n\nuse main/);
   assert.match(comments[3].body, new RegExp(`done: ${PR_URL}`));
-  assert.equal(comments[4].body, `job #${job.id} closed`);
+  assert.equal(comments[4].body, `J-${job.id} closed`);
   assert.deepEqual([comments[4].refs.pr, comments[4].refs.sha], [PR_URL, MERGE_SHA]);
   assert.equal(getRoadmapItemDetail(item.id, {}, env).status, "done");
 });
@@ -83,8 +83,8 @@ test("a cancel leaves `failed` with its reason", async (t) => {
   assert.deepEqual(
     comments.map((comment) => [comment.kind, comment.body]),
     [
-      ["queued", `queued as job #${job.id}`],
-      ["failed", `job #${job.id} cancelled\n\nnot now`],
+      ["queued", `J-${job.id} queued`],
+      ["failed", `J-${job.id} cancelled\n\nnot now`],
     ],
   );
 });
@@ -100,9 +100,9 @@ test("a close that finds its pull request closed without merge leaves `failed` a
   assert.deepEqual(
     thread(env, item).map((comment) => [comment.kind, comment.body]),
     [
-      ["queued", `queued as job #${job.id}`],
-      ["pr", `job #${job.id} done: ${PR_URL}`],
-      ["failed", `job #${job.id} cancelled\n\nPR #7 was closed without merge`],
+      ["queued", `J-${job.id} queued`],
+      ["pr", `J-${job.id} done: ${PR_URL}`],
+      ["failed", `J-${job.id} cancelled\n\nPR #7 was closed without merge`],
     ],
   );
   assert.equal(getRoadmapItemDetail(item.id, {}, env).status, "todo");
@@ -187,7 +187,7 @@ test("the type is required on save, sets the default tier of the job, and an exp
   const bug = saveRoadmapItem({ projectId: projectIdOf(env, "alpha"), title: "an explicit tier", type: "bug" }, env);
   const { job } = await queueRoadmapItem({ id: bug.id, tier: "complex" }, env);
   assert.equal(getJob(job.id, env).tier, "complex");
-  assert.match(getJob(job.id, env).prompt, /## Roadmap item\nRoadmap: alpha#\d+\nType: bug\nCommit type: fix/);
+  assert.match(getJob(job.id, env).prompt, /## Roadmap item\nRoadmap: AP-\d+\nType: bug\nCommit type: fix/);
   assert.equal(updateRoadmapItem(bug.id, { type: "incident" }, env).type, "incident");
 });
 

@@ -12,6 +12,24 @@ const BARE_REFERENCE = /(^|[^`\w&])#\d+\b/;
 // The one line where a `#<number>` is a real reference to an issue of the repository.
 const REFERENCE_LINE = /^(Fixes|Closes)\b/;
 
+// The opener or closer of a fenced code block, matched on the trimmed line.
+const FENCE = /^(`{3,}|~{3,})/;
+
+// An inline code span, whose text is quoted, never the body's own prose.
+const CODE_SPAN = /(`+)[^`]*?\1/g;
+
+// The markers of an HTML comment, erased so a line hidden in one is read like any other.
+const COMMENT_MARKER = /<!--|-->/g;
+
+// The footer `run pr` appends, matched on the trimmed prose of a line.
+const FOOTER_LINE = /^Opened by nightqueue\b/i;
+
+// A whole line of `Refs` followed by refs only, never prose that starts with the word.
+const REFS_LINE = /^Refs:?\s+[\w#/.-]+(\s*,\s*[\w#/.-]+)*$/i;
+
+// A job ref, which `run pr` writes from the job row.
+const JOB_REF = /\bJ-\d+\b/;
+
 // A heading line of the body, matched on the trimmed line.
 const HEADING = /^#{1,6}\s+\S/;
 
@@ -47,7 +65,7 @@ function bareReferenceProblems(lines) {
   const bare = lines.find((line) => !REFERENCE_LINE.test(line.trim()) && !line.trim().startsWith("```") && BARE_REFERENCE.test(line));
   if (!bare) return [];
   const reference = BARE_REFERENCE.exec(bare)[0].trim().replace(/^[^#]/, "");
-  return [rejected(`the body carries a bare \`${reference}\` outside a Fixes/Closes line: write the number bare (job 24) or inside a code span`)];
+  return [rejected(`the body carries a bare \`${reference}\` outside a Fixes/Closes line: name a decision by its ref (\`D-24\`), or write the number inside a code span`)];
 }
 
 // A placeholder left over from a template, which every body is refused for whatever its template.
@@ -212,9 +230,118 @@ function nightqueueTemplateProblems(lines, evidenceDir) {
   return [...sectionProblems(found, sections), ...qaProblems(block, table), ...evidenceProblems(table.rows, evidenceDir)];
 }
 
+// The body lines outside fenced blocks, each with its 1-based number, and the fence left open at the end of the body (null when none).
+function fenceScan(lines) {
+  const outside = [];
+  let fence = null;
+  lines.forEach((line, index) => {
+    const opener = FENCE.exec(line.trim())?.[1] ?? null;
+    if (fence !== null) {
+      if (opener !== null && opener[0] === fence.marker[0] && opener.length >= fence.marker.length) fence = null;
+      return;
+    }
+    if (opener !== null) {
+      fence = { marker: opener, number: index + 1 };
+      return;
+    }
+    outside.push({ number: index + 1, line });
+  });
+  return { outside, openFence: fence };
+}
+
+// Groups numbered lines into paragraphs: runs of consecutive non-blank lines.
+function paragraphs(entries) {
+  const groups = [];
+  let current = [];
+  for (const entry of entries) {
+    const blank = entry.line.trim() === "";
+    if (current.length > 0 && (blank || current.at(-1).number !== entry.number - 1)) {
+      groups.push(current);
+      current = [];
+    }
+    if (!blank) current.push(entry);
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
+// The lines of one paragraph with their code spans blanked out, a span wrapped over several lines included.
+function withoutCodeSpans(paragraph) {
+  const joined = paragraph.map((entry) => entry.line).join("\n");
+  return joined.replace(CODE_SPAN, (span) => span.replace(/[^\n]/g, " ")).split("\n");
+}
+
+// The non-blank body lines outside fences, each with its number, its trimmed raw text and its text with code spans blanked out.
+function spanFreeLines(outside) {
+  return paragraphs(outside).flatMap((paragraph) => {
+    const texts = withoutCodeSpans(paragraph);
+    return paragraph.map((entry, index) => ({ number: entry.number, raw: entry.line.trim(), text: texts[index] }));
+  });
+}
+
+// The body lines as a reader sees their prose, each with its 1-based number: fenced blocks dropped, code spans and HTML comment markers erased.
+function proseLines(lines) {
+  return spanFreeLines(fenceScan(lines).outside).map((line) => ({ ...line, text: line.text.replace(COMMENT_MARKER, " ").trim() }));
+}
+
+// The number of the line whose HTML comment is still open at the end of the body, or null when every comment is closed.
+function openCommentLine(prose) {
+  let openedAt = null;
+  for (const line of prose) {
+    for (const [marker] of line.text.matchAll(COMMENT_MARKER)) {
+      if (marker === "<!--" && openedAt === null) openedAt = line.number;
+      if (marker === "-->") openedAt = null;
+    }
+  }
+  return openedAt;
+}
+
+// A fenced block or an HTML comment the body leaves open at its end, which would swallow the footer `run pr` appends after it.
+function unclosedBlockProblems(lines) {
+  const { outside, openFence } = fenceScan(lines);
+  const problems = [];
+  if (openFence !== null) {
+    problems.push(rejected(`line ${openFence.number} opens a fenced block (${openFence.marker}) that is never closed: close it, or the footer \`run pr\` appends renders as code`));
+  }
+  const commentAt = openCommentLine(spanFreeLines(outside));
+  if (commentAt !== null) {
+    problems.push(rejected(`line ${commentAt} opens an HTML comment (\`<!--\`) that is never closed: close it with \`-->\`, or the footer \`run pr\` appends is hidden`));
+  }
+  return problems;
+}
+
+// The pattern of the run slug as a token of its own, or null when the slug is absent or a single word prose would carry anyway.
+function slugPattern(slug) {
+  if (typeof slug !== "string" || !slug.includes("-")) return null;
+  const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, (char) => `\\${char}`);
+  return new RegExp(`(^|[^a-z0-9-])${escaped}($|[^a-z0-9-])`, "i");
+}
+
+// The pattern of the caller's own job written as prose (`job 7`, `Job #7`), or null outside a job.
+function ownJobPattern(jobId) {
+  return Number.isSafeInteger(jobId) && jobId > 0 ? new RegExp(`\\bjob\\s*#?\\s*${jobId}\\b`, "i") : null;
+}
+
+// What traceability shape a prose line carries, or null when it carries none.
+function traceabilityShape(text, { slug, jobId }) {
+  if (FOOTER_LINE.test(text)) return "the `Opened by nightqueue` footer";
+  if (REFS_LINE.test(text)) return "a `Refs` line";
+  if (JOB_REF.test(text) || ownJobPattern(jobId)?.test(text)) return "a job id";
+  if (slugPattern(slug)?.test(text)) return "the run slug";
+  return null;
+}
+
+// Every body line carrying traceability `run pr` appends itself from the job row: the footer, a `Refs` line, a job id or the run slug.
+function traceabilityProblems(lines, { slug, jobId }) {
+  return proseLines(lines)
+    .map((line) => ({ line, what: traceabilityShape(line.text, { slug, jobId }) }))
+    .filter(({ what }) => what !== null)
+    .map(({ line, what }) => rejected(`line ${line.number} carries ${what}, which \`run pr\` appends from the job row: ${line.raw}`));
+}
+
 // Every reason the body cannot be published against the template in effect, as `{ missing }` or `{ rejected }` entries; none means publishable.
-export function bodyProblems({ body, template, evidenceDir }) {
+export function bodyProblems({ body, template, evidenceDir, slug = null, jobId = null }) {
   const lines = body.split("\n");
   const structure = template.source === "repo" ? repoTemplateProblems(lines, template) : nightqueueTemplateProblems(lines, evidenceDir);
-  return [...structure, ...bareReferenceProblems(lines), ...placeholderProblems(body)];
+  return [...structure, ...bareReferenceProblems(lines), ...placeholderProblems(body), ...traceabilityProblems(lines, { slug, jobId }), ...unclosedBlockProblems(lines)];
 }

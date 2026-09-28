@@ -8,7 +8,8 @@ import {
 } from "./roadmap-workflow.mjs";
 import { CLOSED_REQUIRES_MERGE } from "./schema.mjs";
 
-// The current schema of the memory database: one source for a fresh creation and for the v18 migration.
+// The current (v19) schema of the memory database: one source for a fresh creation and for the v19 migration; the frozen
+// v18 shapes the v18 migration builds live under `migration/`.
 
 const ROADMAP_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ROADMAP_TYPE}' CHECK(type IN (${sqlList(ROADMAP_TYPES)}))`;
 
@@ -86,13 +87,14 @@ CREATE TRIGGER IF NOT EXISTS roadmap_comments_fts_ai AFTER INSERT ON roadmap_com
 END;
 `;
 
-// The `roadmap_items` table under a given name: owned by a project id (NULL for a global item) or by an org id.
+// The `roadmap_items` table under a given name: owned by a project id (NULL for a global item) or by an org id, numbered per owner.
 export function roadmapItemsDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ${SCOPE_COLUMN},
   ${PROJECT_ID},
   ${ORG_ID},
+  number INTEGER NOT NULL CHECK(number > 0),
   title TEXT NOT NULL,
   detail TEXT,
   status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
@@ -132,21 +134,84 @@ export function decisionsDdl(name) {
 );`;
 }
 
-// The registry of orgs and projects: the only place a name lives, every other table owns rows by id.
-export const REGISTRY = `
-CREATE TABLE IF NOT EXISTS orgs (
+// The format rule of an owner key column: 2 to 5 uppercase letters or digits, starting with a letter.
+export function OWNER_KEY_FORMAT(column) {
+  return `length(${column}) BETWEEN 2 AND 5 AND ${column} GLOB '[A-Z]*' AND ${column} NOT GLOB '*[^A-Z0-9]*'`;
+}
+
+// The `orgs` table under a given name: an id, a renamable name and a renamable key.
+export function orgsDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
   id TEXT PRIMARY KEY NOT NULL CHECK(length(id) = 26),
   name TEXT NOT NULL UNIQUE,
+  key TEXT NOT NULL UNIQUE CHECK(${OWNER_KEY_FORMAT("key")}),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS projects (
+);`;
+}
+
+// The `projects` table under a given name: an id, a renamable name and key, an optional checkout path and its org.
+export function projectsDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
   id TEXT PRIMARY KEY NOT NULL CHECK(length(id) = 26),
   name TEXT NOT NULL UNIQUE,
+  key TEXT NOT NULL UNIQUE CHECK(${OWNER_KEY_FORMAT("key")}),
   path TEXT UNIQUE,
   org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE RESTRICT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+);`;
+}
+
+// The registry of orgs and projects: the only place a name or a key lives, every other table owns rows by id.
+export const REGISTRY = `
+${orgsDdl("orgs")}
+${projectsDdl("projects")}
 CREATE INDEX IF NOT EXISTS projects_org_idx ON projects(org_id);
+CREATE TABLE IF NOT EXISTS project_key_aliases (
+  key TEXT PRIMARY KEY NOT NULL CHECK(${OWNER_KEY_FORMAT("key")}),
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS org_key_aliases (
+  key TEXT PRIMARY KEY NOT NULL CHECK(${OWNER_KEY_FORMAT("key")}),
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`;
+
+// Tells, as SQL, whether a key is already held anywhere: a project or org key, or an old key of either.
+function keyHeld(key) {
+  return `(EXISTS (SELECT 1 FROM projects WHERE key = ${key})
+    OR EXISTS (SELECT 1 FROM orgs WHERE key = ${key})
+    OR EXISTS (SELECT 1 FROM project_key_aliases WHERE key = ${key})
+    OR EXISTS (SELECT 1 FROM org_key_aliases WHERE key = ${key}))`;
+}
+
+// The database guarantee that a key lives once across projects, orgs and their old keys; aliases are never edited.
+export const OWNER_KEY_GUARDS = `
+CREATE TRIGGER IF NOT EXISTS projects_key_ai BEFORE INSERT ON projects WHEN ${keyHeld("NEW.key")} BEGIN
+  SELECT RAISE(ABORT, 'owner key taken');
+END;
+CREATE TRIGGER IF NOT EXISTS projects_key_au BEFORE UPDATE OF key ON projects WHEN NEW.key IS NOT OLD.key AND ${keyHeld("NEW.key")} BEGIN
+  SELECT RAISE(ABORT, 'owner key taken');
+END;
+CREATE TRIGGER IF NOT EXISTS orgs_key_ai BEFORE INSERT ON orgs WHEN ${keyHeld("NEW.key")} BEGIN
+  SELECT RAISE(ABORT, 'owner key taken');
+END;
+CREATE TRIGGER IF NOT EXISTS orgs_key_au BEFORE UPDATE OF key ON orgs WHEN NEW.key IS NOT OLD.key AND ${keyHeld("NEW.key")} BEGIN
+  SELECT RAISE(ABORT, 'owner key taken');
+END;
+CREATE TRIGGER IF NOT EXISTS project_key_aliases_ai BEFORE INSERT ON project_key_aliases WHEN ${keyHeld("NEW.key")} BEGIN
+  SELECT RAISE(ABORT, 'owner key taken');
+END;
+CREATE TRIGGER IF NOT EXISTS org_key_aliases_ai BEFORE INSERT ON org_key_aliases WHEN ${keyHeld("NEW.key")} BEGIN
+  SELECT RAISE(ABORT, 'owner key taken');
+END;
+CREATE TRIGGER IF NOT EXISTS project_key_aliases_au BEFORE UPDATE ON project_key_aliases BEGIN
+  SELECT RAISE(ABORT, 'owner key aliases are never edited');
+END;
+CREATE TRIGGER IF NOT EXISTS org_key_aliases_au BEFORE UPDATE ON org_key_aliases BEGIN
+  SELECT RAISE(ABORT, 'owner key aliases are never edited');
+END;
 `;
 
 // The data tables that own rows by project or org, the ones whose presence tells a database that already holds data.
@@ -343,6 +408,13 @@ CREATE INDEX IF NOT EXISTS roadmap_items_org_order_idx ON roadmap_items(org_id, 
 CREATE INDEX IF NOT EXISTS decisions_job_idx ON decisions(job_id) WHERE job_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS roadmap_comments_item_idx ON roadmap_comments(item_id, id);
 CREATE INDEX IF NOT EXISTS roadmap_item_projects_job_idx ON roadmap_item_projects(job_id);
+`;
+
+// The per-owner uniqueness of roadmap item numbers, kept out of INDEXES because the v18 migration builds v18-shaped tables.
+export const ROADMAP_NUMBER_INDEXES = `
+CREATE UNIQUE INDEX IF NOT EXISTS roadmap_items_number_idx ON roadmap_items(project_id, number) WHERE scope = 'project';
+CREATE UNIQUE INDEX IF NOT EXISTS roadmap_items_org_number_idx ON roadmap_items(org_id, number) WHERE scope = 'org';
+CREATE UNIQUE INDEX IF NOT EXISTS roadmap_items_global_number_idx ON roadmap_items(number) WHERE scope = 'project' AND project_id IS NULL;
 `;
 
 export const FTS = `

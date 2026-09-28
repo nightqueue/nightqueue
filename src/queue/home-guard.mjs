@@ -3,6 +3,7 @@ import { UserError } from "../config/errors.mjs";
 import { homeDir } from "../config/paths.mjs";
 import { claudeConfigDir } from "../host/paths.mjs";
 import { callerJobId } from "./retry.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 // The home and the Claude configuration directory the runner itself uses, pinned on every unattended child so a job can tell them from a temporary one.
 export const JOB_HOME_ENV = "NIGHTQUEUE_JOB_HOME";
@@ -34,12 +35,12 @@ export function refuseHomeWriteInsideJob(env, { host = false } = {}) {
   if (own === null) return;
   if (writesRunnerHome(env)) {
     throw new UserError(
-      `refused: this command would change the operator's nightqueue home from inside job #${own}; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead`,
+      `refused: this command would change the operator's nightqueue home from inside ${jobRef(own)}; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead`,
     );
   }
   if (host === true && writesRunnerHost(env)) {
     throw new UserError(
-      `refused: this command would change the operator's Claude settings from inside job #${own}; verify against a temporary host (CLAUDE_CONFIG_DIR=$(mktemp -d)) too`,
+      `refused: this command would change the operator's Claude settings from inside ${jobRef(own)}; verify against a temporary host (CLAUDE_CONFIG_DIR=$(mktemp -d)) too`,
     );
   }
 }

@@ -75,7 +75,7 @@ test("a row naming an unknown project or org id is refused by the foreign key", 
   const ghost = "0".repeat(26);
   assert.throws(() => db.prepare("INSERT INTO decisions (scope, project_id, number, title, context, decision) VALUES ('project', ?, 1, 't', 'c', 'd')").run(ghost), /FOREIGN KEY/);
   assert.throws(() => db.prepare("INSERT INTO decisions (scope, org_id, number, title, context, decision) VALUES ('org', ?, 1, 't', 'c', 'd')").run(ghost), /FOREIGN KEY/);
-  assert.throws(() => db.prepare("INSERT INTO roadmap_items (scope, org_id, title, position) VALUES ('org', ?, 't', 1)").run(ghost), /FOREIGN KEY/);
+  assert.throws(() => db.prepare("INSERT INTO roadmap_items (scope, org_id, number, title, position) VALUES ('org', ?, 1, 't', 1)").run(ghost), /FOREIGN KEY/);
   assert.throws(() => db.prepare("INSERT INTO roadmap_item_projects (item_id, project_id) VALUES (1, ?)").run(ghost), /FOREIGN KEY/);
   assert.throws(() => db.prepare("INSERT INTO roadmap_comments (item_id, kind, author, body, project_id) VALUES (1, 'note', 'operator', 'b', ?)").run(ghost), /FOREIGN KEY/);
   assert.throws(() => db.prepare("INSERT INTO lessons (project_id, title, root_cause, solution, prevention) VALUES (?, 't', 'r', 's', 'p')").run(ghost), /FOREIGN KEY/);
@@ -171,7 +171,7 @@ test("project list prints a project known only from history without a path, and 
   registry.insertProject(db, { name: "legacy", path: null, orgId: registry.earliestOrg(db).id });
   const listed = runCli(env, ["project", "list"]);
   assert.equal(listed.status, 0, listed.stderr);
-  assert.equal(listed.stdout.trim(), "legacy  (no path)  default");
+  assert.equal(listed.stdout.trim(), "legacy  LA  (no path)  default");
   const checkout = makeDir(t, "registry-history-checkout");
   mkdirSync(join(checkout, ".git"));
   const moved = runCli(env, ["project", "move", "legacy", "--path", checkout]);

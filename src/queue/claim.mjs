@@ -6,6 +6,7 @@ import { BASH_TIMEOUT_DEFAULT, LEASE_HEARTBEAT_DEFAULT_S } from "../config/schem
 import { loadConfig } from "../config/store.mjs";
 import { openStore } from "../store/open.mjs";
 import { liveRunnersReport } from "./registry.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 // Identity of this runner process, the value the ownership predicate of every write compares against.
 export function workerId() {
@@ -165,9 +166,9 @@ function pickupLine(env) {
 // What the operator reads instead of a start that never happened: the blocker, and what clears it.
 export function blockerLines(blocker, env = process.env) {
   if (blocker.reason === "paused") return ["the queue is paused - nothing will be claimed; resume with: nightqueue queue resume"];
-  if (blocker.reason === "not-pending") return [`job #${blocker.jobId} is ${blocker.status}, not pending - it will not be picked up`];
+  if (blocker.reason === "not-pending") return [`${jobRef(blocker.jobId)} is ${blocker.status}, not pending - it will not be picked up`];
   return [
-    `job #${blocker.jobId} waiting: concurrency cap reached`,
+    `${jobRef(blocker.jobId)} waiting: concurrency cap reached`,
     `${blocker.active} of ${blocker.cap} jobs already running`,
     ...pickupLine(env),
   ];

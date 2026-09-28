@@ -135,7 +135,7 @@ export async function registrationOffer(store, config, cwd) {
   if (name === null) {
     throw new UserError(`cannot derive a free project name for ${root}; register it with \`nightqueue project add ${root} --name <name>\``);
   }
-  return { path: root, name, org: (await defaultOrg(store, config)).name };
+  return { path: root, name, key: await store.projects.suggestKey(name), org: (await defaultOrg(store, config)).name };
 }
 
 // The refusal of a name another project already holds, pointing a path-less one at `project move --path`.
@@ -146,8 +146,8 @@ function takenNameError(taken, abs) {
   );
 }
 
-// Registers a git repository as a project of an org (the default org when none is named) and answers what happened.
-export async function registerProject(store, config, { path, name, org } = {}) {
+// Registers a git repository as a project of an org (the default org when none is named), under the key asked for, chosen or suggested, and answers what happened.
+export async function registerProject(store, config, { path, name, org, key, chooseKey = null } = {}) {
   const abs = requireGitPath(path);
   const target = typeof org === "string" && org ? await requireOrg(store, org) : await defaultOrg(store, config);
   const projectName = requireUnreservedName(name === undefined ? deriveName(abs) : assertName("project", name));
@@ -160,7 +160,14 @@ export async function registerProject(store, config, { path, name, org } = {}) {
   }
   const taken = await store.projects.byName(projectName);
   if (taken) throw takenNameError(taken, abs);
-  return { status: "created", project: await store.projects.add({ name: projectName, path: abs, orgId: target.id }) };
+  const projectKey = key ?? (chooseKey ? await chooseKey(projectName) : null);
+  return { status: "created", project: await store.projects.add({ name: projectName, path: abs, orgId: target.id, key: projectKey }) };
+}
+
+// Gives a project a new key; its old key keeps resolving to it.
+export async function setProjectKey(store, name, key) {
+  const project = await requireProject(store, name);
+  return await store.projects.setKey(project.id, key);
 }
 
 // Renames a project: one registry row, so every job, decision, roadmap item and memory keyed by its id follows it.

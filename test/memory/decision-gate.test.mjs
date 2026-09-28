@@ -57,12 +57,12 @@ test("a title overlapping three rules of its owner is held back naming exactly t
   assert.deepEqual(
     result.candidates.map((row) => [row.label, row.status, row.via]),
     [
-      ["#3", "accepted", "lexical"],
-      ["#2", "accepted", "lexical"],
-      ["#1", "accepted", "lexical"],
+      ["D-3", "accepted", "lexical"],
+      ["D-2", "accepted", "lexical"],
+      ["D-1", "accepted", "lexical"],
     ],
   );
-  assert.deepEqual(Object.keys(result.candidates[0]).sort(), ["id", "label", "number", "status", "title", "via"]);
+  assert.deepEqual(Object.keys(result.candidates[0]).sort(), ["id", "label", "number", "ref", "status", "title", "via"]);
   assert.equal(rowCount(env), 4);
 });
 
@@ -135,7 +135,7 @@ test("a job proposes at most one decision while the first is still proposed, and
 
   await assert.rejects(
     review(env, { title: "embeddings stay optional", status: "proposed", jobId: 7 }),
-    /job 7 already proposed decision #5; a job proposes at most one decision/,
+    /J-7 already proposed decision D-5; a job proposes at most one decision/,
   );
   assert.equal(rowCount(env), 5);
 
@@ -149,7 +149,7 @@ test("inside a job supersedes is refused before anything is read or written", as
   const env = makeChainHome(t, "gate-job-supersedes");
   await assert.rejects(
     review(env, { title: CHAIN_TITLE, supersedes: [3], unrelated: [1, 2], jobId: 7 }),
-    /inside job 7 `supersedes` is refused: superseding a decision is the operator's call/,
+    /inside J-7 `supersedes` is refused: superseding a decision is the operator's call/,
   );
   assert.equal(getDecision(3, env).status, "accepted");
   assert.equal(rowCount(env), 4);
@@ -167,7 +167,7 @@ test("the named numbers are validated: both lists, an unknown number and a row t
   seed(env, { title: "an old rule", status: "superseded" });
   await assert.rejects(review(env, { title: CHAIN_TITLE, supersedes: [1], unrelated: [1] }), /named in both/);
   await assert.rejects(review(env, { title: CHAIN_TITLE, unrelated: [1, 2, 3, 99] }), /project `alpha` has no decision number 99/);
-  await assert.rejects(review(env, { title: CHAIN_TITLE, supersedes: [5], unrelated: [1, 2, 3] }), /#5 is `superseded`/);
+  await assert.rejects(review(env, { title: CHAIN_TITLE, supersedes: [5], unrelated: [1, 2, 3] }), /decision D-5 is `superseded`/);
   await assert.rejects(review(env, { title: CHAIN_TITLE, unrelated: [0] }), /positive integer decision numbers/);
   await assert.rejects(review(env, { title: CHAIN_TITLE, unrelated: "1" }), /positive integer decision numbers/);
   assert.equal(rowCount(env), 5);

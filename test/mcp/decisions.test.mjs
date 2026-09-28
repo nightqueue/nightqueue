@@ -16,7 +16,7 @@ const SCHEMAS = {
     required: ["context", "decision", "title"],
   },
   decision_update: {
-    properties: ["consequences", "context", "decision", "id", "status", "superseded_by", "title"],
+    properties: ["consequences", "context", "decision", "id", "project", "status", "superseded_by", "title"],
     required: ["id"],
   },
   decision_list: { properties: ["org", "project", "status"], required: [] },
@@ -89,7 +89,7 @@ test("the handshake tells the agent what decisions and the roadmap are for", asy
   const instructions = client.getInstructions();
   for (const line of [
     "decisions are the project's standing constraints - recall them before proposing architecture and save one when the user settles a design question",
-    'the roadmap is where "what next" lives - read it before suggesting work, and queue from it with `roadmap_item_id`',
+    "the roadmap is where \"what next\" lives - read it before suggesting work, and queue from it with `roadmap_item_id` (the item's ref)",
   ]) {
     assert.ok(instructions.includes(line), `\`${line}\` is missing from the instructions:\n${instructions}`);
   }
@@ -100,7 +100,7 @@ test("a decision saved through the server is numbered, listed, updated and recal
   const client = await connect(t, env);
 
   const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, status: "accepted" } }));
-  assert.deepEqual(saved, { ok: true, id: 1, number: 1, scope: "project", owner: "alpha" });
+  assert.deepEqual(saved, { ok: true, id: 1, number: 1, ref: "D-1", scope: "project", owner: "alpha" });
   const second = payloadOf(
     await client.callTool({
       name: "decision_save",
@@ -120,7 +120,7 @@ test("a decision saved through the server is numbered, listed, updated and recal
   );
 
   const updated = payloadOf(
-    await client.callTool({ name: "decision_update", arguments: { id: second.id, status: "accepted", superseded_by: null } }),
+    await client.callTool({ name: "decision_update", arguments: { id: second.ref, project: "alpha", status: "accepted", superseded_by: null } }),
   );
   assert.equal(updated.decision.status, "accepted");
   assert.equal(updated.decision.number, 2);
@@ -177,9 +177,9 @@ test("decision_recall never returns a proposed decision and never truncates, whe
   );
   assert.equal(recalled[0].title, title);
 
-  const updated = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: 1, status: "superseded", superseded_by: 2 } }));
+  const updated = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: "AP/D-1", status: "superseded", superseded_by: "D-2" } }));
   assert.equal(updated.decision.title, `${title.slice(0, 500)}...`, "decision_update is not one of the untruncated surfaces");
-  assert.deepEqual(Object.keys(updated.decision).sort(), ["id", "number", "owner", "scope", "status", "title", "updated_at"]);
+  assert.deepEqual(Object.keys(updated.decision).sort(), ["id", "number", "owner", "ref", "scope", "status", "title", "updated_at"]);
 });
 
 test("the roadmap tools order a project by status and priority, refuse in_progress by hand and the retired horizon by name", async (t) => {
@@ -190,7 +190,7 @@ test("the roadmap tools order a project by status and priority, refuse in_progre
   const first = payloadOf(
     await client.callTool({
       name: "roadmap_save",
-      arguments: { type: "feature", project: "alpha", title: "split the runner", detail: null, decision_id: decision.id },
+      arguments: { type: "feature", project: "alpha", title: "split the runner", detail: null, decision_id: decision.ref },
     }),
   );
   const second = payloadOf(
@@ -198,7 +198,7 @@ test("the roadmap tools order a project by status and priority, refuse in_progre
   );
   assert.deepEqual([first.position, second.position], [1, 2]);
 
-  const moved = payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: second.id, position: 1 } }));
+  const moved = payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: second.ref, position: 1 } }));
   assert.equal(moved.item.position, 1);
 
   const urgent = payloadOf(
@@ -218,7 +218,7 @@ test("the roadmap tools order a project by status and priority, refuse in_progre
   const filtered = payloadOf(await client.callTool({ name: "roadmap_get", arguments: { project: "alpha", priority: [1] } }));
   assert.deepEqual(filtered.items.map((item) => item.title), ["fix the crash"]);
 
-  const refused = await client.callTool({ name: "roadmap_update", arguments: { id: first.id, status: "in_progress" } });
+  const refused = await client.callTool({ name: "roadmap_update", arguments: { id: first.ref, status: "in_progress" } });
   assert.equal(refused.isError, true);
   assert.match(textOf(refused), /`in_progress` is set only by a job/);
   const horizon = await client.callTool({ name: "roadmap_save", arguments: { type: "improvement", project: "alpha", title: "x", horizon: "now" } });
@@ -246,19 +246,19 @@ test("inside a job, decision_update and roadmap_update refuse a row of another p
   const { env, own, foreign, foreignItem, job } = makeTwoProjectHome(t, "mcp-decisions-cross-project");
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
-  const decision = await client.callTool({ name: "decision_update", arguments: { id: foreign.id, status: "rejected" } });
+  const decision = await client.callTool({ name: "decision_update", arguments: { id: "BT/D-1", status: "rejected" } });
   assert.equal(decision.isError, true);
-  assert.match(textOf(decision), new RegExp(`refusing to update decision \`${foreign.id}\` from inside job \`${job.id}\``));
+  assert.match(textOf(decision), new RegExp(`refusing to update decision \`BT/D-1\` from inside job \`${job.id}\``));
   assert.match(textOf(decision), /it belongs to project `beta`, not `alpha`/);
 
-  const item = await client.callTool({ name: "roadmap_update", arguments: { id: foreignItem.id, status: "cancelled" } });
+  const item = await client.callTool({ name: "roadmap_update", arguments: { id: foreignItem.ref, status: "cancelled" } });
   assert.equal(item.isError, true);
-  assert.match(textOf(item), new RegExp(`refusing to update roadmap item \`${foreignItem.id}\` from inside job \`${job.id}\``));
+  assert.match(textOf(item), new RegExp(`refusing to update roadmap item \`BT-1\` from inside job \`${job.id}\``));
 
   assert.equal(getDecision(foreign.id, env).status, "accepted", "the refused update reached the other project's decision");
   assert.equal(getRoadmapItem(foreignItem.id, env).status, "todo", "the refused update reached the other project's item");
 
-  const mine = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: own.id, status: "rejected" } }));
+  const mine = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: "D-1", status: "rejected" } }));
   assert.equal(mine.decision.status, "rejected", "a job must still update its own project");
 });
 
@@ -266,9 +266,9 @@ test("outside a job the ownership guard restricts nothing: the operator updates 
   const { env, foreign, foreignItem } = makeTwoProjectHome(t, "mcp-decisions-operator-scope");
   const client = await connect(t, env);
 
-  const decision = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: foreign.id, status: "rejected" } }));
+  const decision = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: "BT/D-1", status: "rejected" } }));
   assert.equal(decision.decision.status, "rejected");
-  const item = payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: foreignItem.id, status: "cancelled" } }));
+  const item = payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: foreignItem.ref, status: "cancelled" } }));
   assert.equal(item.item.status, "cancelled");
 });
 
@@ -289,7 +289,7 @@ test("an overlapping decision_save answers needs_review, writes nothing, and sav
   assert.equal(getDecision(2, env), null, "a refused save wrote a row");
 
   const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...overlapping, supersedes: [1] } }));
-  assert.deepEqual(saved, { ok: true, id: 2, number: 2, scope: "project", owner: "alpha", superseded: [1] });
+  assert.deepEqual(saved, { ok: true, id: 2, number: 2, ref: "D-2", scope: "project", owner: "alpha", superseded: [1] });
   assert.equal(getDecision(1, env).status, "superseded");
   assert.equal(getDecision(1, env).superseded_by, 2);
 });
@@ -308,14 +308,14 @@ test("inside a job decision_save stamps job_id, refuses supersedes, and refuses 
     arguments: { ...DECISION, title: "embeddings stay optional", status: "proposed" },
   });
   assert.equal(second.isError, true);
-  assert.match(textOf(second), new RegExp(`job ${job.id} already proposed decision #1; a job proposes at most one decision`));
+  assert.match(textOf(second), new RegExp(`J-${job.id} already proposed decision D-1; a job proposes at most one decision`));
 
   const superseding = await client.callTool({
     name: "decision_save",
     arguments: { ...DECISION, title: "embeddings stay optional", status: "accepted", supersedes: [1] },
   });
   assert.equal(superseding.isError, true);
-  assert.ok(textOf(superseding).includes(`inside job ${job.id} \`supersedes\` is refused`), textOf(superseding));
+  assert.ok(textOf(superseding).includes(`inside J-${job.id} \`supersedes\` is refused`), textOf(superseding));
   assert.equal(getDecision(first.id, env).status, "proposed");
 });
 
@@ -324,29 +324,29 @@ test("inside a job roadmap_comment and roadmap_get by id refuse another project'
   const own = saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "alpha crashes" }, env);
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
-  const refused = await client.callTool({ name: "roadmap_comment", arguments: { id: foreignItem.id, body: "leak" } });
+  const refused = await client.callTool({ name: "roadmap_comment", arguments: { id: foreignItem.ref, body: "leak" } });
   assert.equal(refused.isError, true);
   assert.match(textOf(refused), /belongs to project `beta`, not project `alpha`/);
-  const unreadable = await client.callTool({ name: "roadmap_get", arguments: { id: foreignItem.id } });
+  const unreadable = await client.callTool({ name: "roadmap_get", arguments: { id: foreignItem.ref } });
   assert.equal(unreadable.isError, true);
   assert.match(textOf(unreadable), /belongs to project `beta`/);
   assert.equal(getRoadmapItemDetail(foreignItem.id, {}, env).comments.length, 0, "the refused comment was written");
 
-  const written = payloadOf(await client.callTool({ name: "roadmap_comment", arguments: { id: own.id, body: "reproduced" } }));
+  const written = payloadOf(await client.callTool({ name: "roadmap_comment", arguments: { id: own.ref, body: "reproduced" } }));
   assert.deepEqual([written.comment.kind, written.comment.author, written.comment.project], ["note", `job:${job.id}`, "alpha"]);
-  const detail = payloadOf(await client.callTool({ name: "roadmap_get", arguments: { id: own.id } }));
-  assert.deepEqual([detail.ref, detail.type, detail.comments.map((comment) => comment.body)], [`alpha#${own.id}`, "bug", ["reproduced"]]);
+  const detail = payloadOf(await client.callTool({ name: "roadmap_get", arguments: { id: own.ref } }));
+  assert.deepEqual([detail.ref, detail.type, detail.comments.map((comment) => comment.body)], [own.ref, "bug", ["reproduced"]]);
 });
 
 test("outside a job roadmap_comment is signed by the operator, and roadmap_get by id takes no owner beside it", async (t) => {
   const { env, foreignItem } = makeTwoProjectHome(t, "mcp-roadmap-comment-operator");
   const client = await connect(t, env);
 
-  const written = payloadOf(await client.callTool({ name: "roadmap_comment", arguments: { id: foreignItem.id, body: "seen" } }));
+  const written = payloadOf(await client.callTool({ name: "roadmap_comment", arguments: { id: foreignItem.ref, body: "seen" } }));
   assert.deepEqual([written.comment.author, written.comment.project], ["operator", null]);
-  const detail = payloadOf(await client.callTool({ name: "roadmap_get", arguments: { id: foreignItem.id } }));
+  const detail = payloadOf(await client.callTool({ name: "roadmap_get", arguments: { id: foreignItem.ref } }));
   assert.equal(detail.comments.length, 1);
-  const both = await client.callTool({ name: "roadmap_get", arguments: { id: foreignItem.id, project: "beta" } });
+  const both = await client.callTool({ name: "roadmap_get", arguments: { id: foreignItem.ref, project: "beta" } });
   assert.equal(both.isError, true);
   assert.match(textOf(both), /pass `id` alone/);
 });

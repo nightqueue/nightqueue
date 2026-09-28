@@ -3,6 +3,7 @@ import { UserError } from "../config/errors.mjs";
 import { dbPath } from "../config/paths.mjs";
 import { liveRunnersReport } from "../queue/registry.mjs";
 import { openStore } from "../store/open.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 const REFUSAL_TAIL =
   "the runtime cannot be replaced while it runs; stop it with nightqueue queue run --stop or wait for the queue to drain";
@@ -20,7 +21,7 @@ async function activeJobId(env) {
 // How the live runners are named, with whichever facts are known: every registered pid, the job one of them holds, or both.
 function activeLabel({ runners, jobId }) {
   const parts = runners.map((runner) => `pid ${runner.pid}`);
-  if (jobId !== null) parts.push(`job #${jobId}`);
+  if (jobId !== null) parts.push(jobRef(jobId));
   return parts.join(" / ");
 }
 

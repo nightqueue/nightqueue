@@ -31,6 +31,23 @@ Publishing itself is a pushed tag, never a local `npm publish`:
 [RELEASING.md](RELEASING.md) has the four-step flow and the one-time npmjs.com setup that
 the release workflow depends on.
 
+## Schema steps that rewrite tables
+
+A schema change that only adds (a table, an index, a column with a default) goes in
+`src/memory/ddl.mjs` and the per-open `migrate()` of `src/memory/db.mjs`. A change that
+rebuilds tables or has to fill a column row by row is a **one-shot step**: its own module
+under `src/memory/migration/` (`v18.mjs`, `v19.mjs`), built on the shared machinery of
+`migration/one-shot.mjs` - copy the file to `nightqueue.db.pre-v<N>`, re-check under the
+write lock that the step is still pending, refuse while a runner holds a live lease
+(naming the job `J-<id>`), then run the whole step in one transaction and stamp
+`user_version`. A step describes itself as `{ version, backupPath, isPending,
+migrateInside }`; the older shapes it rebuilds FROM are frozen copies under
+`migration/` (`v18-shape.mjs`), never the current DDL. `initConnection` runs the steps
+of `ONE_SHOT_STEPS` in order, each gate read after the previous step, so a v17 home goes
+to v18 and then v19 in one open, leaving both copies. A new step appends to that list,
+freezes the shapes it changes, and adds a test that a migrated database has exactly the
+`sqlite_master` of a fresh one (`test/memory/migration-v19.test.mjs` is the model).
+
 `scripts/` is not part of the published tarball. How to contribute — branches, commits,
 the pull request template, what is off the table — is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
@@ -93,10 +110,10 @@ acceptance runs by hand on the demo, from your own terminal and never inside a j
    `finishJob` with `status: "done"` and the pull request URL) - never by SQL. The branch
    must be the pull request's head, or preflight stops at `pr-not-the-job-branch`.
 4. `nightqueue queue close <id> --foreground` exits `0` after `✓ preflight`, `- conflict`,
-   `✓ merge`, `✓ settle` and `job #<id> closed: PR #<n> merged as <sha7>`. When the checks
+   `✓ merge`, `✓ settle` and `J-<id> closed: PR #<n> merged as <sha7>`. When the checks
    are red it stops at `preflight` with `checks-red`: record that, then run it again with
    `--force`.
-5. `nightqueue queue status <id> --json` shows `status: "closed"`, `close_status: null`,
+5. `nightqueue queue status J-<id> --json` shows `status: "closed"`, `close_status: null`,
    `close.data.merged: true`, and the notice ends with `Closed: PR #<n> ...`.
 6. `nightqueue queue close <id>` and `nightqueue queue close <id> --foreground` both exit
    non-zero with ``job `<id>` is already closed``, and nothing is started.
