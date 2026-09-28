@@ -81,8 +81,10 @@ function migrateOrExplain(db) {
   }
 }
 
-// Refuses a database whose user_version is newer than this build knows: reading it is the first statement any open runs,
-// before any pragma or migration could believe a schema it does not understand is merely "current" and start writing to it.
+// Refuses a database whose user_version is newer than this build knows. It is the first READ of any open - only the
+// busy_timeout pragma, which touches no file, runs before it - and it runs under withWriteRetry like the rest of the open:
+// a user_version read while another process creates or migrates the file is SQLITE_BUSY, not a refusal, so it waits and
+// retries instead of failing the open (test/memory/concurrency.test.mjs, two processes opening one fresh home).
 function assertSchemaNotNewer(db, path) {
   const version = db.prepare("PRAGMA user_version").get()?.user_version ?? 0;
   if (version <= DB_USER_VERSION) return;
@@ -159,8 +161,11 @@ export function openDb(env = process.env) {
   ensureHome(env);
   const db = new DatabaseSync(path);
   try {
-    assertSchemaNotNewer(db, path);
-    withWriteRetry(() => initConnection(db, path, env));
+    withWriteRetry(() => {
+      db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+      assertSchemaNotNewer(db, path);
+      initConnection(db, path, env);
+    });
   } catch (err) {
     db.close();
     throw err;
@@ -176,7 +181,8 @@ export function openDbReadOnly(env = process.env) {
   const path = dbPath(env);
   const db = new DatabaseSync(path, { readOnly: true });
   try {
-    assertSchemaNotNewer(db, path);
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    withWriteRetry(() => assertSchemaNotNewer(db, path));
   } catch (err) {
     db.close();
     throw err;
