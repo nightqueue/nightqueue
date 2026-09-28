@@ -13,6 +13,7 @@ import {
   runnerView,
   stopAllRunners,
   stopRunner,
+  stopRunnerIfRegistered,
   STOPPED_RUNNER,
   STOP_POLL_MS,
   STOP_TIMEOUT_MS,
@@ -283,6 +284,42 @@ test("a stop of every runner reports one line each, ends the live one and never 
     /process of another user/,
     "`--stop <pid>` aimed at a foreign registration must still refuse",
   );
+});
+
+test("stopping a pid only if it is registered answers `absent` for no record, reports a foreign one unsignalled, and stops a live one like `stopRunner`", async (t) => {
+  const env = makeHome(t, "stop-if-registered");
+  writeRunnerRecord({ ...WATCHER, pid: 101 }, env);
+  writeRunnerRecord({ ...WATCHER, pid: 202 }, env);
+  const alive = new Set([101]);
+  const signals = [];
+  const killImpl = (pid, signal) => {
+    signals.push([pid, signal]);
+    if (pid === 202) throw Object.assign(new Error(`kill EPERM ${pid}`), { code: "EPERM" });
+    if (!alive.has(pid)) throw Object.assign(new Error(`kill ESRCH ${pid}`), { code: "ESRCH" });
+    if (signal === "SIGTERM") alive.delete(pid);
+    return true;
+  };
+
+  assert.deepEqual(await stopRunnerIfRegistered({ pid: 999, env, killImpl, sleepImpl: async () => {} }), { outcome: "absent", pid: 999 });
+
+  const foreign = await stopRunnerIfRegistered({ pid: 202, env, killImpl, sleepImpl: async () => {} });
+  assert.deepEqual(foreign, { outcome: "foreign", pid: 202, path: runnerRegistryPath(202, env) });
+  assert.equal(existsSync(runnerRegistryPath(202, env)), true, "the registration of another user was removed");
+
+  assert.deepEqual(await stopRunnerIfRegistered({ pid: 101, env, killImpl, sleepImpl: async () => {} }), { outcome: "stopped", pid: 101 });
+  assert.equal(existsSync(runnerRegistryPath(101, env)), false);
+  assert.deepEqual(
+    signals.filter(([, signal]) => signal === "SIGTERM"),
+    [[101, "SIGTERM"]],
+    "a SIGTERM went to a pid with no registration or to a registration of another user",
+  );
+});
+
+test("stopping a pid only if it is registered refuses a registry that cannot be listed", async (t) => {
+  const env = makeHome(t, "stop-if-registered-unreadable");
+  ensureHome(env);
+  writeFileSync(runnersDir(env), "not a directory");
+  await assert.rejects(() => stopRunnerIfRegistered({ pid: 4242, env, sleepImpl: async () => {} }), /cannot be listed/);
 });
 
 test("a legacy `runner.pid` is listed, stopped and pruned, and no write ever recreates it", async (t) => {

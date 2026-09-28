@@ -49,15 +49,13 @@ import {
   liveRunnersReport,
   removeOwnRunnerRecord,
   stampRunnerDbWitness,
-  stopAllRunners,
-  stopRunner,
   STOPPED_RUNNER,
-  STOP_TIMEOUT_MS,
 } from "../queue/registry.mjs";
 import { reclassifyFromLog } from "../queue/repair.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
+import { stopReport, stopRunners } from "../queue/stop.mjs";
 import { runCloseHere, startCloseDetached } from "../queue/close-start.mjs";
 import { closeChecklistLines, closeLastCell, closeStoppedLine, queueWorkers, statusLabel } from "../queue/close-view.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
@@ -1039,28 +1037,10 @@ function checkWindowFlags(values) {
   }
 }
 
-// What the operator reads after a stop, and the exit code it answers with: only a runner that stays behind fails.
-function stopReport({ outcome, pid, path }) {
-  if (outcome === "absent") return { line: "runner is not running", code: 0 };
-  if (outcome === "stale") return { line: "runner was not running (stale registration removed)", code: 0 };
-  if (outcome === "stopped") return { line: `runner stopped (pid ${pid})`, code: 0 };
-  if (outcome === "foreign") {
-    return { line: `runner (pid ${pid}) belongs to another user; nightqueue will not signal it - check that pid and remove ${path} by hand`, code: 1 };
-  }
-  const seconds = STOP_TIMEOUT_MS / 1000;
-  return { line: `runner (pid ${pid}) did not stop within ${seconds}s; it finishes the job it is running and exits by itself`, code: 1 };
-}
-
-// Ends the runners `--stop` names: every registered one, or the single pid the operator wrote.
-async function stoppedRunners(value, ctx) {
-  const stop = { env: ctx.env, killImpl: ctx.killImpl };
-  if (value === "") return await stopAllRunners(stop);
-  return [await stopRunner({ pid: requireInt("--stop", value), ...stop })];
-}
-
 // Runs `queue run --stop [pid]`, which ends every registered runner or the one the operator named.
 async function runStop(value, ctx) {
-  const reports = (await stoppedRunners(value, ctx)).map(stopReport);
+  const pid = value === "" ? null : requireInt("--stop", value);
+  const reports = (await stopRunners({ pid, env: ctx.env, killImpl: ctx.killImpl })).map(stopReport);
   for (const report of reports) ctx.out(report.line);
   return reports.some((report) => report.code !== 0) ? 1 : 0;
 }

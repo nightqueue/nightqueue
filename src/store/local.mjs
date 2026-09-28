@@ -24,6 +24,7 @@ export const JOB_STATUS_WRITERS = Object.freeze([
   "parkJob",
   "finishJob",
   "cancelJob",
+  "cancelRunningJob",
   "retryJob",
   "repairJobFromWitness",
   "reclassifyJob",
@@ -105,6 +106,7 @@ function jobsMethods(env, db) {
     linkPipelineRun: async (jobId, ref) => jobs.linkPipelineRun(jobId, ref, env),
     finishJob: async (id, outcome) => jobs.finishJob(id, outcome, env),
     cancelJob: async (id, options) => jobs.cancelJob(id, options, env),
+    cancelRunningJob: async (id, spec) => jobs.cancelRunningJob(id, spec, env),
     listCloseCandidates: async () => jobs.listCloseCandidates(env, db()),
     retryJob: async (id, options) =>
       followingPassedStatus({ jobId: id, write: () => jobs.retryJob(id, options, env), fromKey: "retriedFrom" }, env),

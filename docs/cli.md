@@ -272,6 +272,8 @@ worktree }`. A job running under a live lease, or being closed under one, is ref
 with nothing written. So is a `done` job whose close was interrupted (its lease died mid-close,
 possibly after the merge): resume it with `nightqueue queue close <id>`, which records a merged
 pull request as closed and cancels the job when the pull request was closed without merge.
+From an agent session the MCP `queue_cancel` with `stop: true` cancels a running job in one call
+(see [Queue](queue.md)), and `queue_stop` mirrors `queue run --stop [pid]`.
 
 `queue close <id>` takes a `done` job's pull request from open to merged and closes the job,
 through four steps recorded on the job - preflight (fetch, pull request state, green checks,

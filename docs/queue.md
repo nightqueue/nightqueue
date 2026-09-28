@@ -254,6 +254,13 @@ limitation: if a runner died and the system handed its pid number to another pro
 the same boot session, `--stop` trusts the registration and signals that pid; confirming the
 real identity of a process would need `ps`//proc/ and is out of the scope of this command.
 
+**The MCP `queue_stop` is the same stop.** Without `pid` it ends every registered runner, with
+`pid` that one. It answers one `{ outcome, pid, message }` per runner under `runners` -
+`stopped`, `stale`, `absent`, `foreign` or `alive` - with the exact lines above as `message`, and
+`ok: false` when a runner is foreign or still there after the ten seconds; an unknown pid is
+refused with the same text. It is refused inside an unattended job run. To cancel one running
+job, `queue_cancel` with `stop: true` (below) stops only that job's runner.
+
 **A watcher stopped in the middle of a job never corrupts it.** The signal makes the
 runner stop claiming and end the child of the job it was running; that job is released
 back to `pending`, with its lease dropped and its attempt given back, so the next
@@ -458,7 +465,24 @@ of this off.
 the rule of *Worktrees* below - the text output adds `worktree removed: <path>` or `worktree
 kept: <path> - <reason>` after `cancelled job #N`, and `--json` and the MCP `queue_cancel`
 answer `{ job, worktree }` (`{ path, status, reason? }`, or `null`); a pending, gated or
-orphaned cancel leaves the worktree where it is. The job's `close` checklist, when it has one,
+orphaned cancel leaves the worktree where it is. The MCP `queue_cancel` with `stop: true`
+cancels a job running on a runner of this host in one call. It moves the job from `running`
+straight to `cancelled` in one write that only succeeds while that runner still owns it, so no
+other runner can claim the job in between, and it gives the attempt back. Only then does it stop
+that runner alone, as `queue_stop` with its pid does, and its answer adds `runner` (`{ outcome,
+pid, message }`). The stop waits ten seconds, but the runner only notices the signal at its next
+ownership poll, every `queue.leaseHeartbeatS`, so `alive` is an expected answer when that
+heartbeat is long: that runner ends its attempt and exits by itself, and the job is already
+cancelled. With `release_worktree: true` (refused without `stop: true`) the
+job's worktree is then released by the rule of *Worktrees* once the runner is confirmed gone; a
+runner still there, or a stop that failed, leaves the worktree where it is. The runner is
+signalled only when the job's worker names this host and the registry lists that pid as a live
+runner: a worker of another host, a malformed worker, a pid with no live registration (none, stale
+or unreadable) or a registration of another user is refused with the reason, and nothing is
+signalled or written - an abandoned job is cancelled without `stop` once its lease has expired. A
+job that is not running follows the plain rules and `runner` is null, and a job that keeps
+changing hands while it is being stopped is refused after three tries with nothing cancelled.
+The job's `close` checklist, when it has one,
 is kept as history. A `done` job that a close holds under a live lease is refused (``job `N`
 is being closed by `W` until T; wait for it or follow it with nightqueue queue status N``) and
 nothing is written. So is a `done` job whose close was interrupted - still `closing` on record

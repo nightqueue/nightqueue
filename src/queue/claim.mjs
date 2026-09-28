@@ -45,16 +45,25 @@ export function bashTimeoutS(env = process.env) {
   return loadConfig(env, { warn: () => {} }).queue?.bashTimeoutS ?? BASH_TIMEOUT_DEFAULT;
 }
 
-// Tells whether a `<host>:<pid>` worker of THIS host still has a live process; anything unexpected is not alive.
-export function liveLocalWorker(worker) {
+// Reads a `<host>:<pid>` worker: `{ local: true, pid }` on this host, `{ local: false, host }` on another one, null when malformed.
+export function localWorkerPid(worker) {
   const text = typeof worker === "string" ? worker : "";
   const cut = text.lastIndexOf(":");
-  if (cut <= 0) return false;
-  if (text.slice(0, cut) !== hostname()) return false;
-  const pid = Number(text.slice(cut + 1));
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (cut <= 0) return null;
+  const host = text.slice(0, cut);
+  const suffix = text.slice(cut + 1);
+  if (!/^[1-9][0-9]*$/.test(suffix)) return null;
+  const pid = Number(suffix);
+  if (!Number.isSafeInteger(pid)) return null;
+  return host === hostname() ? { local: true, pid } : { local: false, host };
+}
+
+// Tells whether a `<host>:<pid>` worker of THIS host still has a live process; anything unexpected is not alive.
+export function liveLocalWorker(worker) {
+  const owner = localWorkerPid(worker);
+  if (!owner?.local) return false;
   try {
-    process.kill(pid, 0);
+    process.kill(owner.pid, 0);
     return true;
   } catch (err) {
     return err?.code === "EPERM";

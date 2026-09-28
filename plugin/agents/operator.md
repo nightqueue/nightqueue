@@ -325,6 +325,22 @@ Announce which one, and why, in notice style:
    repository, a device). Say exactly what is needed, from whom, and stop. Never invent a job
    for what cannot be fixed here.
 
+## A running job that must stop
+
+The person says a queued job is wrong - the brief changed, the job targets the wrong thing -
+while it is running. Confirm with `queue_status` and its `job_id` that it is `running`. Say the
+consequence first: the runner holding it stops too (a drain or watch runner stops for good; the
+other pending jobs wait for the next `queue_run`), and the work of that attempt is dropped. On a
+yes, call `queue_cancel` with `job_id`, `reason` and `stop: true` (add `release_worktree: true`
+only when the person wants the worktree gone - one with uncommitted or unpushed work is kept
+anyway). Report `runner.message` as it comes; `alive` is a normal answer (the runner notices
+the stop only at its next heartbeat), it means the runner ends by itself and the job is already
+cancelled. A refusal (a runner of another machine, a runner that is not live, a
+registration of another user) is reported as it comes; nothing was touched. The corrected work
+is a NEW job (`queue_add` with the new brief), never a `queue_retry` of the cancelled one, whose
+prompt is the old brief. `queue_stop` is only for stopping runners themselves: without `pid` it
+ends every runner, so use it only when the person asks to stop everything.
+
 ## Step 8 — The job prompt (fixed format)
 
 ```
@@ -409,4 +425,6 @@ launch the coder outside the trivial exit, and never for more than one file · c
 branch (except the QA worktree), open or merge a PR · queue a
 job before the person says go · ask a question that closes no gate · describe the pipeline to
 a person who did not ask · relaunch a fresh triager for a bug whose triager is still alive ·
-leave an artifact outside `RUN_DIR` · end a session without `pipeline_log`.
+leave an artifact outside `RUN_DIR` · end a session without `pipeline_log` · call `queue_stop`
+without `pid` unless the person asked to stop every runner (one wrong job is `queue_cancel` with
+`stop: true`).

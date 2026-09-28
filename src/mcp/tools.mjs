@@ -48,7 +48,8 @@ import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { priorRunBlock, resolveOperatorRunDir, withPriorRun } from "../queue/operator-run.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
 import { startCloseDetached } from "../queue/close-start.mjs";
-import { cancelJobAndWorktree } from "../queue/cancel.mjs";
+import { cancelJobAndWorktree, stopAndCancelJob } from "../queue/cancel.mjs";
+import { stopReport, stopRunners } from "../queue/stop.mjs";
 import { queueWorkers } from "../queue/close-view.mjs";
 import {
   recordOutcome,
@@ -594,7 +595,29 @@ function answeredPrUrls(answer) {
   return prUrlsOf(answer.job ? [answer.job] : answer.jobs);
 }
 
-// The twenty-seven tools of the plugin contract, with the parameter names the plugin actually sends.
+// The answer of `queue_stop`: one `{ outcome, pid, message }` per runner, with the CLI's `--stop` line as the message.
+async function queueStopAnswer(args, env) {
+  const reports = await stopRunners({ pid: Number.isInteger(args.pid) ? args.pid : null, env });
+  const lines = reports.map(stopReport);
+  const runners = reports.map((report, index) => ({
+    outcome: report.outcome,
+    pid: report.pid ?? null,
+    ...(report.path ? { path: report.path } : {}),
+    message: lines[index].line,
+  }));
+  return { ok: lines.every((line) => line.code === 0), runners };
+}
+
+// The answer of `queue_cancel`: the plain cancel, or with `stop: true` the one-call cancel of a running job and the stop of its runner.
+async function queueCancelAnswer(args, env) {
+  const stop = args.stop === true;
+  if (args.release_worktree === true && !stop) throw new UserError("`release_worktree` only has meaning with `stop: true`");
+  const cancel = { store: openStore(env), id: args.job_id, reason: args.reason, env };
+  if (!stop) return { ok: true, ...(await cancelJobAndWorktree(cancel)) };
+  return { ok: true, ...(await stopAndCancelJob({ ...cancel, releaseWorktree: args.release_worktree === true })) };
+}
+
+// The twenty-eight tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env) {
   return [
     {
@@ -891,7 +914,7 @@ function toolDefinitions(env) {
           "starts a detached runner that drains the queue: every pending job, in priority order, until nothing is pending - the runner registers itself, so queue_status shows it. Pass job_id only to start a single job. " +
           "The batch runs DETACHED, with its output going to a log file, and this tool returns immediately with that path. Any number of runners may be live at once: a start is never refused because another one is. " +
           "A single job that cannot be claimed right now answers `started: false` with `waiting` and starts nothing. " +
-          "The runner exits by itself once the queue is empty; `nightqueue queue run --stop` ends every runner, `--stop <pid>` ends one. " +
+          "The runner exits by itself once the queue is empty; `queue_stop` (or `nightqueue queue run --stop`) ends every runner, with a pid only that one. " +
           "Each runner works one job at a time; parallel jobs come from starting more runners. `advisories` warns, from the provider's real five-hour utilization and the live leases, when another runner would likely hit the rate limit or fight over one repository - it never blocks a start.",
         inputSchema: { job_id: z.number().int().min(1).nullable().optional() },
       },
@@ -901,6 +924,20 @@ function toolDefinitions(env) {
         const stale = staleRuntimeHint(env);
         return { ok: true, ...runnerAnswer(started, env, stale ? [...advisories, stale] : advisories) };
       },
+    },
+    {
+      name: "queue_stop",
+      guardsHome: true,
+      config: {
+        description:
+          "Ends queue runners, the MCP mirror of `nightqueue queue run --stop [pid]`: without `pid` it ends EVERY registered runner, with `pid` only that one. " +
+          "Each runner gets SIGTERM, then all of them are polled together for up to 10 s; a runner that was holding a job releases it back to `pending` with its lease dropped and its attempt given back, and its registration is removed. " +
+          "`runners` carries one `{ outcome, pid, message }` per runner: `stopped`, `stale` (registration removed), `absent`, `foreign` (another user's, never signalled) or `alive` (still there after the 10 s wait, expected when its heartbeat is long; it finishes the job it is running and exits by itself). " +
+          "`ok` is false when any of them is `foreign` or `alive`. An unknown `pid` is refused. " +
+          "To cancel one running job, call `queue_cancel` with `stop: true` instead - it stops only that job's runner and no other runner can pick the job up.",
+        inputSchema: { pid: z.number().int().min(1).nullable().optional() },
+      },
+      handler: async (args) => await queueStopAnswer(args, env),
     },
     {
       name: "queue_session",
@@ -924,10 +961,18 @@ function toolDefinitions(env) {
       config: {
         description:
           "Cancels a pending, gated, done, failed or orphaned job. A job running under a live lease, a done job being closed under a live close lease, and a done job whose close was interrupted (resume that one with queue_close), are refused with the exact reason and no write; `closed` and `cancelled` jobs are refused as already finished. " +
-          "Cancelling a `done` or `failed` job also releases its worktree: removed when clean and published, otherwise kept with the reason. The answer carries `worktree` (`{ path, status, reason? }`, or null when nothing was released).",
-        inputSchema: { job_id: z.number().int().min(1), reason: optionalText },
+          "Cancelling a `done` or `failed` job also releases its worktree: removed when clean and published, otherwise kept with the reason. The answer carries `worktree` (`{ path, status, reason? }`, or null when nothing was released). " +
+          "With `stop: true` a job running on a runner of this host is cancelled in one call: the job goes from `running` straight to `cancelled` in one write that only succeeds while that runner still owns it - no other runner can claim it in between - and its attempt is given back; then that runner alone is stopped exactly like `queue_stop` with its pid (SIGTERM, up to 10 s), and `runner` answers `{ outcome, pid, message }`. " +
+          "The runner notices the stop only at its next heartbeat, so `alive` is an expected answer when `queue.leaseHeartbeatS` is long: that runner ends by itself and the job stays cancelled.`release_worktree: true` (only with `stop`) then releases the job's worktree by the same rule as a done or failed cancel, once the runner is gone. " +
+          "A worker of another host, a pid that is not a live registered runner of this home, and a registration of another user are refused with the reason, with nothing signalled or written. A job that is not running is cancelled by the rules above and `runner` is null.",
+        inputSchema: {
+          job_id: z.number().int().min(1),
+          reason: optionalText,
+          stop: z.boolean().nullable().optional(),
+          release_worktree: z.boolean().nullable().optional(),
+        },
       },
-      handler: async (args) => ({ ok: true, ...(await cancelJobAndWorktree({ store: openStore(env), id: args.job_id, reason: args.reason, env })) }),
+      handler: async (args) => await queueCancelAnswer(args, env),
     },
     {
       name: "queue_close",
@@ -1296,7 +1341,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the twenty-seven tools of the plugin contract.
+// Builds the MCP server with the twenty-eight tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer({ name: SERVER_NAME, version: readVersion() }, { instructions: SERVER_INSTRUCTIONS });
   const schemas = new Map();

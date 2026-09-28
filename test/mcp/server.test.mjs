@@ -43,6 +43,7 @@ const CONTRACT_TOOLS = [
   "queue_run",
   "queue_session",
   "queue_status",
+  "queue_stop",
   "roadmap_comment",
   "roadmap_get",
   "roadmap_save",
@@ -82,12 +83,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the twenty-seven tools of the contract", async (t) => {
+test("the server exposes exactly the twenty-eight tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 27, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 28, "the contract list and the server disagree on how many tools there are");
 });
 
 test("the server migrates a v8 home to v9 once at boot, before it answers any tool", async (t) => {
@@ -1083,6 +1084,7 @@ test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a
   const cancelled = payloadOf(await client.callTool({ name: "queue_cancel", arguments: { job_id: pending, reason: "no longer needed" } }));
   assert.equal(cancelled.job.status, "cancelled");
   assert.equal(cancelled.job.operator_note, "no longer needed");
+  assert.equal("runner" in cancelled, false, "the plain cancel grew a runner key");
 
   const twice = await client.callTool({ name: "queue_cancel", arguments: { job_id: pending } });
   assert.equal(twice.isError, true);
@@ -1104,6 +1106,51 @@ test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a
   const gatedRow = getJob(gated, env);
   assert.equal(gatedRow.finished_at, GATED_FINISHED_AT, "the cancel overwrote the finish of the gated run");
   assert.deepEqual(JSON.parse(gatedRow.result), { status: "gate", prUrl: null, cancelledFrom: "gate" });
+});
+
+test("queue_cancel with stop cancels a job that is not running by the plain rules, refuses a runner of another host, and release_worktree needs stop", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-cancel-stop");
+  const pending = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
+  const remote = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env).id;
+  claimJobById(remote, { worker: "other-host:1", cap: 4 }, env);
+  const client = await connect(t, env);
+
+  const cancelled = payloadOf(await client.callTool({ name: "queue_cancel", arguments: { job_id: pending, reason: "brief changed", stop: true } }));
+  assert.equal(cancelled.ok, true);
+  assert.equal(cancelled.job.status, "cancelled");
+  assert.equal(cancelled.runner, null);
+
+  const before = getJob(remote, env);
+  const refused = await client.callTool({ name: "queue_cancel", arguments: { job_id: remote, stop: true } });
+  assert.equal(refused.isError, true, textOf(refused));
+  assert.match(textOf(refused), /is running on worker `other-host:1`, a runner of host `other-host`; nightqueue only stops a runner of this host/);
+  assert.deepEqual(getJob(remote, env), before, "the refused stop wrote to the row");
+
+  const unpaired = await client.callTool({ name: "queue_cancel", arguments: { job_id: remote, release_worktree: true } });
+  assert.equal(unpaired.isError, true, textOf(unpaired));
+  assert.match(textOf(unpaired), /`release_worktree` only has meaning with `stop: true`/);
+  assert.deepEqual(getJob(remote, env), before, "the refused release wrote to the row");
+});
+
+test("queue_stop answers the CLI line per runner, and refuses an unknown pid", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-stop");
+  const client = await connect(t, env);
+
+  const empty = payloadOf(await client.callTool({ name: "queue_stop", arguments: {} }));
+  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }] });
+
+  const unknown = await client.callTool({ name: "queue_stop", arguments: { pid: 999999 } });
+  assert.equal(unknown.isError, true, textOf(unknown));
+  assert.match(textOf(unknown), /no runner is registered with pid 999999/);
+});
+
+test("queue_stop refuses the home of the runner from inside a job, like queue_cancel", async (t) => {
+  const env = makeQueueHome(t, "mcp-stop-home-guard");
+  const inJob = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "9", NIGHTQUEUE_JOB_HOME: homeDir(env) });
+
+  const refused = await inJob.callTool({ name: "queue_stop", arguments: {} });
+  assert.equal(refused.isError, true, textOf(refused));
+  assert.ok(textOf(refused).includes(HOME_REFUSAL), textOf(refused));
 });
 
 test("queue_close runs only on a done job with a pull request, refusing every other job by name without writing", async (t) => {

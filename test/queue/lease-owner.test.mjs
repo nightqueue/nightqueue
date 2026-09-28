@@ -8,7 +8,7 @@ import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, countActiveJobs, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
-import { acquire, liveLocalWorker } from "../../src/queue/claim.mjs";
+import { acquire, liveLocalWorker, localWorkerPid } from "../../src/queue/claim.mjs";
 import { cliEntrypoint } from "../../src/queue/spawn.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
@@ -233,4 +233,12 @@ test("an expired lease of a LIVE owner is protected, and a malformed worker neve
     assert.equal(liveLocalWorker(worker), false, `\`${String(worker)}\` was read as a live local worker`);
   }
   assert.equal(liveLocalWorker(LIVE_WORKER), true);
+});
+
+test("a worker reads as a pid of this host, a host of its own, or nothing at all when malformed", () => {
+  assert.deepEqual(localWorkerPid(`${hostname()}:123`), { local: true, pid: 123 });
+  assert.deepEqual(localWorkerPid("other-host:123"), { local: false, host: "other-host" });
+  for (const worker of ["", "x", ":1", `${hostname()}:0`, `${hostname()}:abc`, "other-host:abc", `${hostname()}:1e3`, `${hostname()}:0x10`, `${hostname()}: 12`, "other-host:1e3", "other-host:0x10", "other-host: 12", null, undefined, 42]) {
+    assert.equal(localWorkerPid(worker), null, `\`${String(worker)}\` was read as a well-formed worker`);
+  }
 });

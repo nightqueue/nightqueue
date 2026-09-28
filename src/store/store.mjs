@@ -33,6 +33,7 @@
  * @property {(jobId: number, ref: object) => Promise<number>} linkPipelineRun
  * @property {(id: number, outcome: object) => Promise<boolean>} finishJob
  * @property {(id: number, options?: object) => Promise<object>} cancelJob
+ * @property {(id: number, spec: {worker: string, reason?: string}) => Promise<object|null>} cancelRunningJob cancels a running job only while that worker still owns it; null when the row moved on
  * @property {() => Promise<object[]>} listCloseCandidates done jobs that carry a pull request url, the candidates `queue close --merged` may confirm and close
  * @property {(id: number, options?: object) => Promise<object>} retryJob
  * @property {(id: number) => Promise<object|null>} getJob
@@ -211,6 +212,7 @@ export const STORE_CONTRACT = Object.freeze({
     "linkPipelineRun",
     "finishJob",
     "cancelJob",
+    "cancelRunningJob",
     "listCloseCandidates",
     "retryJob",
     "getJob",
