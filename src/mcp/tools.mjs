@@ -114,10 +114,10 @@ async function requireProjectName(name, env) {
   return (await requireProject(openStore(env), name)).name;
 }
 
-// The registered NAME a lesson, memory or index call scopes to: a name, or an absolute path inside a checkout; null (global) for a path
-// inside none, and an unknown name refused, so nothing is ever written under a project that does not exist.
+// The registered project a lesson, memory, index or run call scopes to: a name, or an absolute path inside a checkout; null (global) for
+// a path inside none, and an unknown name refused, so nothing is ever written under a project that does not exist.
 async function memoryProject(ref, env) {
-  return (await resolveProjectRef(openStore(env), ref))?.name ?? null;
+  return await resolveProjectRef(openStore(env), ref);
 }
 
 // Refuses to register a project from inside an unattended run: there is no user there to confirm it.
@@ -213,7 +213,7 @@ async function callerRun(args, env) {
 async function pipelineLogRun(args, env) {
   const own = callerJobId(env);
   const row = own === null ? null : await openStore(env).jobs.getJob(own);
-  if (isSafeSegment(row?.slug)) return { project: row.project, slug: row.slug };
+  if (isSafeSegment(row?.slug)) return { project: row.project, projectId: row.project_id ?? null, slug: row.slug };
   const slug = typeof args.slug === "string" ? args.slug.trim() : "";
   if (!slug) {
     throw new UserError(
@@ -221,7 +221,8 @@ async function pipelineLogRun(args, env) {
         "only a call from inside a job, whose row already carries them, may omit the pair",
     );
   }
-  return { project: args.project, slug };
+  const project = await memoryProject(args.project, env);
+  return { project: project?.name ?? args.project, projectId: project?.id ?? null, slug };
 }
 
 // What the RUN already recorded about itself, the source of every field a `pipeline_log` call may now omit.
@@ -619,7 +620,7 @@ function toolDefinitions(env) {
         const rows = await recallFreshLessons(
           {
             query: args.query,
-            project: await memoryProject(args.project, env),
+            projectId: (await memoryProject(args.project, env))?.id ?? null,
             target: args.target,
             excludeIds: args.exclude_ids,
             sessionId,
@@ -673,8 +674,9 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const attempts = Number.isInteger(args.attempts) && args.attempts >= 2 ? args.attempts : null;
+        const project = await memoryProject(args.project, env);
         const saved = await openStore(env).lessons.saveLessonDeduped({
-          project: await memoryProject(args.project, env),
+          projectId: project?.id ?? null,
           title: args.title,
           root_cause: args.root_cause,
           solution: args.solution,
@@ -685,7 +687,7 @@ function toolDefinitions(env) {
         return {
           ok: true,
           id: saved.id,
-          project: saved.project,
+          project: project?.name ?? null,
           deduped: saved.deduped,
           attempts: saved.attempts,
           incomplete: saved.incomplete,
@@ -701,7 +703,7 @@ function toolDefinitions(env) {
       handler: async (args) => {
         const rows = await openStore(env).memory.recallMemories({
           query: args.query,
-          project: await memoryProject(args.project, env),
+          projectId: (await memoryProject(args.project, env))?.id ?? null,
           limit: RECALL_LIMIT,
         });
         return rows.map(memoryView);
@@ -721,7 +723,7 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const saved = await openStore(env).index.saveProjectIndex({
-          project: await memoryProject(args.project, env),
+          projectId: (await memoryProject(args.project, env))?.id ?? null,
           repoRoot: args.repo_root,
           files: args.files,
           libs: args.libs ?? [],
@@ -738,7 +740,7 @@ function toolDefinitions(env) {
       },
       handler: async (args) =>
         openStore(env).index.recallProjectIndex({
-          project: await memoryProject(args.project, env),
+          projectId: (await memoryProject(args.project, env))?.id ?? null,
           repoRoot: args.repo_root,
           query: args.query,
           limit: INDEX_LIMIT,
@@ -771,7 +773,7 @@ function toolDefinitions(env) {
         const run = await pipelineLogRun(args, env);
         const recorded = runFacts(run, env);
         const logged = await openStore(env).runs.logPipelineRun({
-          project: run.project,
+          projectId: run.projectId,
           slug: run.slug,
           tier: requireLogged("tier", args.tier ?? recorded.tier),
           tierOperator: args.tier_operator,
@@ -782,7 +784,7 @@ function toolDefinitions(env) {
           durationS: args.duration_s,
           phases: args.phases ?? [],
         });
-        return { ok: true, runId: logged.runId, project: logged.project, phases: logged.phases };
+        return { ok: true, runId: logged.runId, project: logged.projectId ? run.project : null, phases: logged.phases };
       },
     },
     {

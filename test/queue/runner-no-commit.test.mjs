@@ -7,7 +7,7 @@ import { NOTHING_TO_CLOSE_LINE } from "../../src/queue/classify.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { jobDetailView } from "../../src/queue/view.mjs";
 import { withReadOnlyStore } from "../../src/store/open.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { noticeText, resultEvent, SLUG, slugEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
@@ -31,7 +31,7 @@ function noPrHome(t, name, attempts = [{ stdout: NO_PR, exitCode: 0 }], { maxAtt
 
 // Records a pipeline run of the job's slug with the given outcome, dated the given SQLite offset from now.
 function recordRun(env, outcome, offset) {
-  const { runId } = logPipelineRun({ project: "alpha", slug: SLUG, tier: "simple", outcome, phases: [] }, env);
+  const { runId } = logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: SLUG, tier: "simple", outcome, phases: [] }, env);
   openDb(env).prepare(`UPDATE pipeline_runs SET created_at = datetime('now', ?) WHERE id = ?`).run(offset, runId);
 }
 

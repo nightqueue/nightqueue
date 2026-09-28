@@ -3,7 +3,19 @@ import { closeSync, fsyncSync, openSync, renameSync, rmSync, statSync } from "no
 import { UserError } from "../../config/errors.mjs";
 import { dbPath, preV18BackupPath } from "../../config/paths.mjs";
 import { loadRawConfig } from "../../config/store.mjs";
-import { DATA_TABLES, FTS, FTS_MIRRORS, INDEXES, REGISTRY, ROADMAP_FTS } from "../ddl.mjs";
+import {
+  DATA_TABLES,
+  FTS,
+  FTS_MIRRORS,
+  INDEXES,
+  REGISTRY,
+  ROADMAP_FTS,
+  lessonsDdl,
+  memoryDdl,
+  pipelineRunsDdl,
+  projectIndexDdl,
+  projectLibsDdl,
+} from "../ddl.mjs";
 import { ACTIVE_JOB_PREDICATE } from "../schema.mjs";
 import { isBusyError, rollbackQuietly, sleepSync, withWriteRetry } from "../tx.mjs";
 import { importLegacyRegistry, stripLegacyConfig } from "./legacy-config.mjs";
@@ -19,7 +31,13 @@ const COPY_ATTEMPTS = 10;
 const RETRY_PAUSE_MS = 50;
 
 // The data tables re-created with id columns as `{ table, ddl(name) }`, each stage adding its own, in the order they are rebuilt.
-export const REBUILT_TABLES = Object.freeze([]);
+export const REBUILT_TABLES = Object.freeze([
+  { table: "lessons", ddl: lessonsDdl },
+  { table: "memory", ddl: memoryDdl },
+  { table: "project_index", ddl: projectIndexDdl },
+  { table: "project_libs", ddl: projectLibsDdl },
+  { table: "pipeline_runs", ddl: pipelineRunsDdl },
+]);
 
 // The refusal a live lease causes: exactly one line, never wrapped, because only stopping the runners fixes it.
 export class MigrationRefused extends UserError {}
@@ -120,17 +138,18 @@ function rebuildTable(db, table, ddl) {
 function copyRows(db, table) {
   const target = db.prepare(`PRAGMA table_info(${table}_v18)`).all().map((column) => column.name);
   const source = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name));
-  const plain = target.filter((column) => column !== "project_id" && column !== "org_id");
+  const mapped = (column) => (column === "project_id" || column === "org_id") && !source.has(column);
+  const plain = target.filter((column) => !mapped(column));
   const missing = plain.filter((column) => !source.has(column));
   if (missing.length) throw new UserError(`${table}: the v18 column(s) ${missing.join(", ")} have no v17 source`);
   refuseUnmappable(db, table, source);
   const ids = [];
   const joins = [];
-  if (target.includes("project_id")) {
+  if (target.includes("project_id") && mapped("project_id")) {
     ids.push({ column: "project_id", value: "p.id" });
     joins.push("LEFT JOIN projects AS p ON p.name = t.project");
   }
-  if (target.includes("org_id")) {
+  if (target.includes("org_id") && mapped("org_id")) {
     ids.push({ column: "org_id", value: "o.id" });
     joins.push("LEFT JOIN orgs AS o ON o.name = t.org");
   }

@@ -128,46 +128,78 @@ export const DATA_TABLES = Object.freeze([
 // The lexical mirrors a rebuilt content table needs indexed again.
 export const FTS_MIRRORS = Object.freeze(["lessons_fts", "memory_fts", "decisions_fts", "roadmap_items_fts", "roadmap_comments_fts"]);
 
-export const SCHEMA = `
-CREATE TABLE IF NOT EXISTS lessons (
+const PROJECT_ID = "project_id TEXT REFERENCES projects(id) ON DELETE RESTRICT";
+const REQUIRED_PROJECT_ID = "project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT";
+
+// The `lessons` table under a given name: owned by a project id, NULL for a global lesson.
+export function lessonsDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project TEXT,
+  ${PROJECT_ID},
   title TEXT NOT NULL,
   root_cause TEXT NOT NULL,
   solution TEXT NOT NULL,
   prevention TEXT NOT NULL,
   attempts INTEGER,
   model TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS memory (
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  target TEXT,
+  archived INTEGER NOT NULL DEFAULT 0,
+  archive_reason TEXT,
+  injected INTEGER NOT NULL DEFAULT 0,
+  last_injected_at TEXT,
+  violated INTEGER NOT NULL DEFAULT 0,
+  last_violated_at TEXT,
+  last_recurred_at TEXT,
+  embedding BLOB,
+  embedding_model TEXT
+);`;
+}
+
+// The `memory` table under a given name: owned by a project id, NULL for a global fact.
+export function memoryDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project TEXT,
+  ${PROJECT_ID},
   key TEXT NOT NULL,
   value TEXT NOT NULL,
   model TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS project_index (
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  embedding BLOB,
+  embedding_model TEXT
+);`;
+}
+
+// The `project_index` table under a given name: one row per file of a project.
+export function projectIndexDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project TEXT NOT NULL,
+  ${REQUIRED_PROJECT_ID},
   path TEXT NOT NULL,
   responsibility TEXT NOT NULL,
   mtime_ms INTEGER,
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (project, path)
-);
-CREATE TABLE IF NOT EXISTS project_libs (
+  UNIQUE (project_id, path)
+);`;
+}
+
+// The `project_libs` table under a given name: one row per library of a project.
+export function projectLibsDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project TEXT NOT NULL,
+  ${REQUIRED_PROJECT_ID},
   lib TEXT NOT NULL,
   version TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (project, lib)
-);
-CREATE TABLE IF NOT EXISTS pipeline_runs (
+  UNIQUE (project_id, lib)
+);`;
+}
+
+// The `pipeline_runs` table under a given name: the telemetry of one /resolve run.
+export function pipelineRunsDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project TEXT,
+  ${PROJECT_ID},
   slug TEXT NOT NULL,
   tier TEXT NOT NULL,
   task_type TEXT,
@@ -177,8 +209,18 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
   model TEXT,
   session_id TEXT,
   job_id INTEGER,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  tier_operator TEXT,
+  tier_raise_reason TEXT
+);`;
+}
+
+export const SCHEMA = `
+${lessonsDdl("lessons")}
+${memoryDdl("memory")}
+${projectIndexDdl("project_index")}
+${projectLibsDdl("project_libs")}
+${pipelineRunsDdl("pipeline_runs")}
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project TEXT NOT NULL,
@@ -239,18 +281,6 @@ ${ROADMAP_ITEM_PROJECTS}
 `;
 
 export const EVOLVING_COLUMNS = [
-  ["lessons", "target", "TEXT"],
-  ["lessons", "archived", "INTEGER NOT NULL DEFAULT 0"],
-  ["lessons", "archive_reason", "TEXT"],
-  ["lessons", "injected", "INTEGER NOT NULL DEFAULT 0"],
-  ["lessons", "last_injected_at", "TEXT"],
-  ["lessons", "violated", "INTEGER NOT NULL DEFAULT 0"],
-  ["lessons", "last_violated_at", "TEXT"],
-  ["lessons", "last_recurred_at", "TEXT"],
-  ["lessons", "embedding", "BLOB"],
-  ["lessons", "embedding_model", "TEXT"],
-  ["memory", "embedding", "BLOB"],
-  ["memory", "embedding_model", "TEXT"],
   ["jobs", "tier", "TEXT"],
   ["jobs", "not_before", "TEXT"],
   ["jobs", "blocked_code", "TEXT"],
@@ -265,8 +295,6 @@ export const EVOLVING_COLUMNS = [
   ["jobs", "orch_bash", "INTEGER"],
   ["jobs", "orch_bash_explore", "INTEGER"],
   ["jobs", "orch_ctx_last", "INTEGER"],
-  ["pipeline_runs", "tier_operator", "TEXT"],
-  ["pipeline_runs", "tier_raise_reason", "TEXT"],
   ["decisions", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],
   ["decisions", "org", "TEXT"],
   ["decisions", "job_id", "INTEGER"],
@@ -276,11 +304,11 @@ export const EVOLVING_COLUMNS = [
 ];
 
 export const INDEXES = `
-CREATE INDEX IF NOT EXISTS lessons_recall_idx ON lessons(archived, project, created_at);
+CREATE INDEX IF NOT EXISTS lessons_recall_idx ON lessons(archived, project_id, created_at);
 CREATE INDEX IF NOT EXISTS lessons_embedding_idx ON lessons(embedding_model);
-CREATE INDEX IF NOT EXISTS memory_project_idx ON memory(project, created_at);
-CREATE INDEX IF NOT EXISTS project_index_project_idx ON project_index(project, updated_at);
-CREATE INDEX IF NOT EXISTS pipeline_runs_project_idx ON pipeline_runs(project, created_at);
+CREATE INDEX IF NOT EXISTS memory_project_idx ON memory(project_id, created_at);
+CREATE INDEX IF NOT EXISTS project_index_project_idx ON project_index(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS pipeline_runs_project_idx ON pipeline_runs(project_id, created_at);
 CREATE INDEX IF NOT EXISTS pipeline_phases_run_idx ON pipeline_phases(run_id, seq);
 CREATE INDEX IF NOT EXISTS jobs_claim_idx ON jobs(status, priority, created_at);
 CREATE INDEX IF NOT EXISTS jobs_project_slug_idx ON jobs(project, slug);

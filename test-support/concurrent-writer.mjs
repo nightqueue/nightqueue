@@ -10,7 +10,7 @@ const MODES = ["lesson", "run", "decision"];
 function writeLesson(seq) {
   saveLesson(
     {
-      project: null,
+      projectId: null,
       title: `concurrent ${label} #${seq}`,
       root_cause: "concurrency root cause",
       solution: "concurrency solution",
@@ -27,7 +27,7 @@ function writeLesson(seq) {
 function writeRun() {
   logPipelineRun(
     {
-      project: null,
+      projectId: null,
       slug: `concurrent-${label}`,
       tier: "simple",
       outcome: "no_commit",

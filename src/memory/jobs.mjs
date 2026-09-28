@@ -473,12 +473,13 @@ export function bindRunSlug(id, { worker, candidates } = {}, env = process.env) 
   });
 }
 
-// Points the pipeline run of this project and slug at the job that produced it.
+// Points the pipeline run of this project and slug at the job that produced it; the job still names its project, so its id is looked up here.
 function linkRun(db, jobId, project, slug) {
-  if (!project || !slug) return 0;
+  const projectId = project ? registry.projectByName(db, project)?.id : null;
+  if (!projectId || !slug) return 0;
   return db
-    .prepare("UPDATE pipeline_runs SET job_id = ? WHERE project = ? AND slug = ? AND job_id IS NULL")
-    .run(jobId, project, slug).changes;
+    .prepare("UPDATE pipeline_runs SET job_id = ? WHERE project_id = ? AND slug = ? AND job_id IS NULL")
+    .run(jobId, projectId, slug).changes;
 }
 
 // Points the pipeline run of a project and slug at its job, for a caller outside the finish transaction.

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, runDir } from "../config/paths.mjs";
+import { resolveProjectRef } from "../config/projects.mjs";
 import { ghPrCreate } from "../host/gh.mjs";
 import { registeredProject } from "../memory/project-name.mjs";
 import { runGit } from "../host/git.mjs";
@@ -626,8 +627,9 @@ async function runIndexSave(argv, ctx) {
   for (const line of parsed.ignoredLibs) {
     ctx.err(`nightqueue run index-save: not a \`<lib>@<version>\` entry, skipped: ${line}`);
   }
-  const saved = await openStore(ctx.env).index.saveProjectIndex({
-    project,
+  const store = openStore(ctx.env);
+  const saved = await store.index.saveProjectIndex({
+    projectId: (await resolveProjectRef(store, project))?.id ?? null,
     repoRoot,
     files: parsed.files,
     libs: parsed.libs,

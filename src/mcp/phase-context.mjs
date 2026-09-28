@@ -1,3 +1,4 @@
+import { resolveProjectRef } from "../config/projects.mjs";
 import { clip, section } from "../hooks/block.mjs";
 import { lessonIdsFromRefs, recordInjected, seenRefs } from "../hooks/state.mjs";
 import { LESSON_TARGETS } from "../memory/lessons.mjs";
@@ -14,10 +15,10 @@ const LINE_MAX = 300;
 // What the caller's own job row says about this run: the session whose injections are already spent, and the project every recall reads.
 export async function callerContext(env) {
   const own = callerJobId(env);
-  if (own === null) return { sessionId: null, project: null };
+  if (own === null) return { sessionId: null, project: null, projectId: null };
   const row = await openStore(env).jobs.getJob(own);
   const session = typeof row?.session_id === "string" ? row.session_id.trim() : "";
-  return { sessionId: session || null, project: row?.project ?? null };
+  return { sessionId: session || null, project: row?.project ?? null, projectId: row?.project_id ?? null };
 }
 
 // Lesson ids this run already saw - the whole session, not a rolling window - merged with the ones the call excluded by hand.
@@ -38,9 +39,9 @@ function markSeen(sessionId, rows, env) {
 }
 
 // Lessons this run has not seen yet; when the exclusion empties the answer the same query is asked once more without it, because a phase with no lessons is worse than a repeated one.
-export async function recallFreshLessons({ query, project, target, excludeIds, sessionId, limit = PHASE_LIMIT }, env) {
+export async function recallFreshLessons({ query, projectId, target, excludeIds, sessionId, limit = PHASE_LIMIT }, env) {
   const lessons = openStore(env).lessons;
-  const spec = { query, project, target: LESSON_TARGETS.includes(target) ? target : null, limit };
+  const spec = { query, projectId, target: LESSON_TARGETS.includes(target) ? target : null, limit };
   const excluded = excludedIds(sessionId, excludeIds, env);
   const rows = await lessons.recallLessons({ ...spec, excludeIds: excluded });
   const fresh = rows.length || !excluded.length ? rows : await lessons.recallLessons(spec);
@@ -65,9 +66,9 @@ function indexLine(file) {
 }
 
 // The structural index the explore phase starts from; every other phase gets none, and a project with no map gets nothing.
-async function indexSection({ target, project, repoRoot, query }, env) {
-  if (target !== "explore" || !project) return "";
-  const { files, libs } = await openStore(env).index.recallProjectIndex({ project, repoRoot, query, limit: INDEX_LIMIT });
+async function indexSection({ target, projectId, repoRoot, query }, env) {
+  if (target !== "explore" || !projectId) return "";
+  const { files, libs } = await openStore(env).index.recallProjectIndex({ projectId, repoRoot, query, limit: INDEX_LIMIT });
   const rows = files.map(indexLine);
   if (libs.length) rows.push(`- libs: ${libs.map((lib) => `${lib.lib}@${lib.version}`).join(", ")}`);
   return section("Structural index", rows, (row) => row);
@@ -89,21 +90,27 @@ async function roadmapSection({ target, project, query }, env) {
   }
 }
 
+// The project a phase block reads: the caller's own job's, else the one the call names (a name, or a path inside a checkout); an unknown name is refused.
+async function phaseOwner(caller, project, env) {
+  if (caller.project) return { id: caller.projectId, name: caller.project };
+  const found = await resolveProjectRef(openStore(env), project);
+  return { id: found?.id ?? null, name: found?.name ?? null };
+}
+
 // The context block of one phase, ready to paste into the subagent's prompt: the lessons it has not seen, the project memory and, for the explore, the known map.
 export async function phaseContextBlock({ target, query, project, repoRoot, excludeIds }, env = process.env) {
   const caller = await callerContext(env);
-  const named = typeof project === "string" && project.trim() ? project.trim() : null;
-  const owner = caller.project ?? named;
+  const owner = await phaseOwner(caller, project, env);
   const lessons = await recallFreshLessons(
-    { query, project: owner, target, excludeIds, sessionId: caller.sessionId },
+    { query, projectId: owner.id, target, excludeIds, sessionId: caller.sessionId },
     env,
   );
-  const memories = await openStore(env).memory.recallMemories({ query, project: owner, limit: PHASE_LIMIT });
+  const memories = await openStore(env).memory.recallMemories({ query, projectId: owner.id, limit: PHASE_LIMIT });
   const sections = [
     section("Applicable lessons", lessons, lessonLine),
     section("Project memory", memories, memoryLine),
-    await indexSection({ target, project: owner, repoRoot, query }, env),
-    await roadmapSection({ target, project: owner, query }, env),
+    await indexSection({ target, projectId: owner.id, repoRoot, query }, env),
+    await roadmapSection({ target, project: owner.name, query }, env),
   ].filter(Boolean);
-  return { project: owner, block: sections.join("\n\n") };
+  return { project: owner.name, block: sections.join("\n\n") };
 }

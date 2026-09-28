@@ -1,5 +1,5 @@
 import { UserError } from "../config/errors.mjs";
-import { newId } from "../config/ids.mjs";
+import { isId, newId } from "../config/ids.mjs";
 import { projectContaining } from "../config/projects.mjs";
 import { DEFAULT_ORG_NAME } from "../config/schema.mjs";
 import { hasColumn } from "./columns.mjs";
@@ -183,6 +183,13 @@ export function removeOrg(db, id) {
     db.prepare("DELETE FROM orgs WHERE id = ?").run(id);
     return org;
   });
+}
+
+// The project id a data row is owned by: an id, or null for a global row; anything else is refused before it reaches SQL.
+export function projectIdOrNull(value) {
+  if (value === undefined || value === null || value === "") return null;
+  if (isId(value)) return value;
+  throw new UserError(`expected a project id, got \`${String(value)}\`; resolve the project name at the edge`);
 }
 
 // Sets the current `project`, `project_path` and `org` names on rows that carry `project_id` / `org_id`.

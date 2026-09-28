@@ -7,14 +7,14 @@ import { modelsDir } from "../../src/config/paths.mjs";
 import { isModelCached } from "../../src/memory/embedding.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recallLessons } from "../../src/memory/search.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 test("with an empty weight cache the recall answers lexically and downloads nothing", async (t) => {
   const env = makeHome(t, "embedding-cold", { embed: true });
   makeProject(t, env, "alpha");
   const { id } = saveLesson(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       title: "the worker leaks a file descriptor on failure",
       root_cause: "the early return skipped the close",
       solution: "close it in a finally block",
@@ -25,7 +25,7 @@ test("with an empty weight cache the recall answers lexically and downloads noth
   assert.equal(isModelCached(env), false);
 
   const rows = await recallLessons(
-    { query: "the worker leaks a file descriptor when the run fails", project: "alpha" },
+    { query: "the worker leaks a file descriptor when the run fails", projectId: projectIdOf(env, "alpha") },
     env,
   );
   assert.deepEqual(

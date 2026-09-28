@@ -6,8 +6,11 @@ import { test } from "node:test";
 import { isId } from "../../src/config/ids.mjs";
 import { configPath, dbPath, preV18BackupPath } from "../../src/config/paths.mjs";
 import { closeDb, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
+import { saveLesson } from "../../src/memory/lessons.mjs";
+import { recentMemories } from "../../src/memory/memory.mjs";
 import { migrateToV18 } from "../../src/memory/migration/v18.mjs";
 import * as registry from "../../src/memory/registry.mjs";
+import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { buildLegacyHome, legacyConfig } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 
@@ -135,6 +138,70 @@ test("two jobs of a v17 home sharing a run slug are detached by name before the 
   const rows = db.prepare("SELECT id, slug, result FROM jobs ORDER BY id").all();
   assert.deepEqual(rows.map((row) => row.slug), ["same-run", null]);
   assert.equal(JSON.parse(rows[1].result).runSlugDetached, "same-run");
+});
+
+const PROJECT_TABLES = ["lessons", "memory", "project_index", "project_libs", "pipeline_runs"];
+
+// Inserts the rows of the five project-only tables a v17 build wrote, the highest lesson and run deleted so their counters sit past the rows.
+function seedProjectRows(db) {
+  const lesson = db.prepare("INSERT INTO lessons (project, title, root_cause, solution, prevention) VALUES (?, ?, 'r', 's', 'p')");
+  for (const [project, title] of [["api", "the zebracrossing lesson of api"], [null, "a global lesson"], ["history", "a lesson of history"], ["api", "gone"]]) {
+    lesson.run(project, title);
+  }
+  db.exec("DELETE FROM lessons WHERE title = 'gone'");
+  const memory = db.prepare("INSERT INTO memory (project, key, value) VALUES (?, ?, ?)");
+  memory.run("api", "deploy", "the zebracrossing pipeline deploys it");
+  memory.run(null, "global", "a global fact");
+  db.prepare("INSERT INTO project_index (project, path, responsibility, mtime_ms) VALUES ('api', 'src/a.mjs', 'the module', 7)").run();
+  db.prepare("INSERT INTO project_libs (project, lib, version) VALUES ('api', 'zod', '4.5.4')").run();
+  const run = db.prepare("INSERT INTO pipeline_runs (project, slug, tier, outcome, job_id, tier_operator) VALUES (?, ?, 'simple', 'pr_opened', ?, ?)");
+  run.run("api", "fix-worker", 1, "simple");
+  run.run(null, "a-hunt", null, null);
+  run.run("api", "gone", null, null);
+  db.exec("DELETE FROM pipeline_runs WHERE slug = 'gone'");
+  const phase = db.prepare("INSERT INTO pipeline_phases (run_id, seq, phase) VALUES (?, ?, ?)");
+  for (const [runId, seq, name] of [[1, 1, "triage"], [1, 2, "coder"], [2, 1, "triage"]]) phase.run(runId, seq, name);
+}
+
+// Every row of a table in id order, keyed by column, from a raw connection.
+function rowsOf(db, table) {
+  return db.prepare(`SELECT * FROM ${table} ORDER BY id`).all().map((row) => ({ ...row }));
+}
+
+// The rows of a v18 table with their owner id swapped for the name it resolves to, the shape a v17 table had.
+function namedRows(db, table) {
+  return rowsOf(db, table).map(({ project_id: projectId, ...row }) => ({ ...row, project: projectId ? registry.projectById(db, projectId).name : null }));
+}
+
+// The rows of a v17 table with the owner name moved to the end, so both shapes compare column by column.
+function legacyRows(db, table) {
+  return rowsOf(db, table).map(({ project, ...row }) => ({ ...row, project }));
+}
+
+test("the five project-only tables are rebuilt by id: same rows, same values, the phases of every run kept, the mirrors and the counters intact", (t) => {
+  const { env } = v17Home(t, "v18-project-tables", { seed: seedProjectRows });
+  const db = openDb(env);
+  const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
+  const before = new DatabaseSync(preV18BackupPath(env), { readOnly: true });
+  t.after(() => before.close());
+
+  for (const table of PROJECT_TABLES) {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name);
+    assert.ok(columns.includes("project_id") && !columns.includes("project"), `${table} still owns rows by name`);
+    assert.deepEqual(namedRows(db, table), legacyRows(before, table), `${table} changed in the rebuild`);
+  }
+  assert.deepEqual(rowsOf(db, "pipeline_phases"), rowsOf(before, "pipeline_phases"), "the rebuild of pipeline_runs lost its phases");
+  assert.equal(rowsOf(db, "pipeline_phases").length, 3);
+  assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+
+  const match = (mirror, word) => db.prepare(`SELECT rowid FROM ${mirror} WHERE ${mirror} MATCH ?`).all(word).map((row) => row.rowid);
+  assert.deepEqual(match("lessons_fts", "zebracrossing"), [1]);
+  assert.deepEqual(match("memory_fts", "zebracrossing"), [1]);
+
+  const apiId = registry.projectByName(db, "api").id;
+  assert.equal(saveLesson({ projectId: apiId, title: "t", root_cause: "r", solution: "s", prevention: "p" }, env).id, 5, "a lesson id was reused");
+  assert.equal(logPipelineRun({ projectId: apiId, slug: "next", tier: "simple", outcome: "pr_opened" }, env).runId, 4, "a run id was reused");
+  assert.deepEqual(recentMemories({ projectId: apiId }, env).map((row) => [row.key, row.project]), [["deploy", "api"], ["global", null]]);
 });
 
 // Source of a process that opens the home's database and prints the version and the registry it found.

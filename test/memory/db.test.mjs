@@ -17,7 +17,7 @@ import { DOWNGRADE_TO_V5, makeHome, makeProject } from "../../test-support/memor
 
 const LESSON_COLUMNS = [
   "id",
-  "project",
+  "project_id",
   "title",
   "root_cause",
   "solution",
@@ -669,7 +669,7 @@ test("the memory FTS trigger mirrors insert, update and delete", (t) => {
   const env = makeHome(t, "db-fts-memory");
   const db = openDb(env);
   const result = db
-    .prepare("INSERT INTO memory (project, key, value) VALUES (NULL, ?, ?)")
+    .prepare("INSERT INTO memory (project_id, key, value) VALUES (NULL, ?, ?)")
     .run("zebracrossing", "the deployment runs from the pipeline");
   const id = Number(result.lastInsertRowid);
   assert.deepEqual(matchIds(db, "memory_fts", '"zebracrossing"'), [id]);

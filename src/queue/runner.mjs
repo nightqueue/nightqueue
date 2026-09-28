@@ -346,7 +346,7 @@ function attemptTotals(tally) {
 async function attemptRunOutcome(job, slug, { since, store }) {
   if (!isSafeSegment(slug)) return null;
   try {
-    return (await store.runs.latestRunOutcome({ project: job.project, slug, since })) ?? null;
+    return (await store.runs.latestRunOutcome({ projectId: job.project_id, slug, since })) ?? null;
   } catch {
     return null;
   }
@@ -483,7 +483,7 @@ async function persistTelemetry(job, run, { store, env }) {
   if (!isSafeSegment(run.facts.slug)) return;
   const log = readJobLog(job.id, env);
   try {
-    await store.runs.updateRunTelemetry({ project: job.project, slug: run.facts.slug, durationS: runDurationS(log), phases: phaseTelemetry(log) });
+    await store.runs.updateRunTelemetry({ projectId: job.project_id, slug: run.facts.slug, durationS: runDurationS(log), phases: phaseTelemetry(log) });
   } catch (err) {
     appendJobLog(job.id, `the telemetry of the run could not be updated: ${err?.message ?? String(err)}`, env);
   }

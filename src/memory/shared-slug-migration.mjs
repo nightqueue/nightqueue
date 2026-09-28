@@ -49,7 +49,8 @@ export function sharedSlugPending(db) {
 function keeperOf(db, { project, slug }) {
   const linked = db
     .prepare(
-      `SELECT DISTINCT j.id FROM jobs AS j JOIN pipeline_runs AS r ON r.job_id = j.id AND r.project = j.project AND r.slug = j.slug
+      `SELECT DISTINCT j.id FROM jobs AS j JOIN pipeline_runs AS r ON r.job_id = j.id AND r.slug = j.slug
+          AND r.project_id = (SELECT p.id FROM projects AS p WHERE p.name = j.project)
         WHERE j.project = ? AND j.slug = ?`,
     )
     .all(project, slug);

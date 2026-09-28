@@ -11,7 +11,7 @@ import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { getRoadmapItem, linkRoadmapItemJob, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { decideResume } from "../../src/queue/resume.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const WORKER = "host:4242";
@@ -188,8 +188,8 @@ test("inside a job `pipeline_log` records the run of its own row and the fields 
 
   const row = openDb(env).prepare("SELECT * FROM pipeline_runs ORDER BY id DESC LIMIT 1").get();
   assert.deepEqual(
-    { project: row.project, slug: row.slug, tier: row.tier, taskType: row.task_type, reason: row.tier_raise_reason },
-    { project: "alpha", slug: SLUG, tier: "complex", taskType: "bug/error", reason: "a stack trace in the claim path" },
+    { projectId: row.project_id, slug: row.slug, tier: row.tier, taskType: row.task_type, reason: row.tier_raise_reason },
+    { projectId: projectIdOf(env, "alpha"), slug: SLUG, tier: "complex", taskType: "bug/error", reason: "a stack trace in the claim path" },
     "the run named from the outside was recorded instead of the job's own",
   );
 });
@@ -251,7 +251,7 @@ test("inside a job the recall drops what the run already saw, and gives it back 
   for (let i = 0; i < 8; i += 1) {
     saveLesson(
       {
-        project: "alpha",
+        projectId: projectIdOf(env, "alpha"),
         title: `the worker drops the lease number ${i}`,
         root_cause: "the early return skipped the renewal",
         solution: "renew it in a finally block",

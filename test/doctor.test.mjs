@@ -294,7 +294,7 @@ test("the database check reads the schema version of an existing database", asyn
   const host = makeHostEnv(t, "doctor-db");
   saveLesson(
     {
-      project: null,
+      projectId: null,
       title: "the worker leaks a file descriptor",
       root_cause: "the early return skipped the close",
       solution: "close it in a finally block",

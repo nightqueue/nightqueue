@@ -15,7 +15,7 @@ import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs";
-import { makeDir, makeHome, makeProject, seedLegacyV8Home } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf, seedLegacyV8Home } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 import * as registry from "../../src/memory/registry.mjs";
 
@@ -174,26 +174,34 @@ test("a lesson saved through the server comes back in the recall, without its em
   assert.notEqual(tolerant.isError, true, textOf(tolerant));
 });
 
-test("the lesson and memory tools refuse an unknown project NAME, naming the known ones, and write nothing; a path outside every checkout is global", async (t) => {
+test("the lesson, memory, index, phase and pipeline tools refuse an unknown project NAME, naming the known ones, and write nothing; a path outside every checkout is global", async (t) => {
   const env = makeHome(t, "mcp-lesson-unknown");
   const alpha = makeProject(t, env, "alpha");
   const client = await connect(t, env);
-  const lessons = () => openDb(env).prepare("SELECT COUNT(*) AS n FROM lessons").get().n;
+  const count = (table) => openDb(env).prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+  const lessons = () => count("lessons");
 
   for (const [name, args] of [
     ["lesson_save", { ...LESSON, project: "ghost" }],
     ["lesson_recall", { project: "ghost" }],
     ["memory_recall", { project: "ghost" }],
+    ["index_save", { project: "ghost", repo_root: alpha, files: [{ path: "src/a.mjs", responsibility: "the module" }] }],
+    ["index_recall", { project: "ghost" }],
+    ["context_for_phase", { target: "coder", project: "ghost" }],
+    ["pipeline_log", { project: "ghost", slug: "a-run", tier: "simple", outcome: "investigated" }],
   ]) {
     const refused = await client.callTool({ name, arguments: args });
     assert.equal(refused.isError, true, name);
     assert.match(textOf(refused), /unknown project `ghost`; known projects: alpha/, name);
   }
   assert.equal(lessons(), 0, "a refused lesson_save wrote a row");
+  assert.equal(count("project_index"), 0, "a refused index_save wrote a row");
+  assert.equal(count("pipeline_runs"), 0, "a refused pipeline_log wrote a row");
 
   mkdirSync(join(alpha, "src"));
   const inside = payloadOf(await client.callTool({ name: "lesson_save", arguments: { ...LESSON, project: join(alpha, "src") } }));
   assert.equal(inside.project, "alpha");
+  assert.equal(openDb(env).prepare("SELECT project_id FROM lessons WHERE id = ?").get(inside.id).project_id, projectIdOf(env, "alpha"));
   const outside = payloadOf(await client.callTool({ name: "lesson_save", arguments: { ...LESSON, title: "a global lesson", project: makeDir(t, "mcp-outside") } }));
   assert.equal(outside.project, null);
 });

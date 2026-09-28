@@ -11,6 +11,7 @@ import { readSecret } from "../src/cli/prompt.mjs";
 import { closeDb } from "../src/memory/db.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../test-support/host.mjs";
+import { projectIdOf } from "../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const SENTINEL = "s3cr3t-sentinel-do-not-print";
@@ -350,7 +351,7 @@ test("the session start hook prints the lessons already stored for the repositor
   t.after(() => closeDb(env));
   const { id } = saveLesson(
     {
-      project: "api",
+      projectId: projectIdOf(env, "api"),
       title: "the worker leaks a file descriptor on failure",
       root_cause: "the early return skipped the close",
       solution: "close it in a finally block",

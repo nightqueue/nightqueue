@@ -7,7 +7,7 @@ import { runtimePackageDir } from "../../src/config/paths.mjs";
 import { runSessionStart } from "../../src/hooks/session-start.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const NOTICE = "nightqueue 0.4.0 is available (installed 0.1.0) - run `nightqueue update`";
 
@@ -151,7 +151,7 @@ test("the 9000-character clip still holds once the notice is appended", async (t
   for (let i = 0; i < 12; i += 1) {
     saveLesson(
       {
-        project: "alpha",
+        projectId: projectIdOf(env, "alpha"),
         title: `lesson number ${i}`,
         root_cause: "it throws",
         solution: "fix it",

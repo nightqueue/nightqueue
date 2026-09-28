@@ -49,8 +49,8 @@ function enableWal(db, path) {
 
 // Creates the base tables of the memory runtime and the registry of orgs and projects.
 function createSchema(db) {
-  db.exec(SCHEMA);
   db.exec(REGISTRY);
+  db.exec(SCHEMA);
 }
 
 // Fills the registry of a database created just now: the v17 registry a config.json may still carry, then the default org.

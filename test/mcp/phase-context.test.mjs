@@ -8,7 +8,7 @@ import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
 import { saveRoadmapItem } from "../../src/memory/roadmap.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const WORKER = "host:4242";
 const SESSION = "session-of-the-run";
@@ -26,7 +26,7 @@ function makeRunningJob(t, name, { sessionId = SESSION } = {}) {
 // Stores one lesson of the project.
 function addLesson(env, title) {
   return saveLesson(
-    { project: "alpha", title, root_cause: `${title} happened`, solution: "fix it", prevention: `prevention of ${title}` },
+    { projectId: projectIdOf(env, "alpha"), title, root_cause: `${title} happened`, solution: "fix it", prevention: `prevention of ${title}` },
     env,
   ).id;
 }
@@ -39,7 +39,7 @@ function lessonIdsOf(block) {
 test("a fresh phase gets a block, and the next phase of the same run gets other lessons", async (t) => {
   const { env } = makeRunningJob(t, "phase-context-fresh");
   for (let i = 0; i < 8; i += 1) addLesson(env, `the worker leaks a descriptor number ${i}`);
-  saveMemory({ project: "alpha", key: "worker", value: "the worker runs from the pipeline" }, env);
+  saveMemory({ projectId: projectIdOf(env, "alpha"), key: "worker", value: "the worker runs from the pipeline" }, env);
 
   const first = await phaseContextBlock({ target: "coder", query: "worker descriptor" }, env);
   assert.equal(first.project, "alpha");
@@ -81,7 +81,7 @@ test("only the explore carries the structural index, with the files the checkout
   addLesson(env, "the runner drops the lease");
   saveProjectIndex(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       repoRoot: repo,
       files: [{ path: "src/queue/runner.mjs", responsibility: "runs one job from claim to finalize" }],
       libs: [{ lib: "zod", version: "4.5.4" }],

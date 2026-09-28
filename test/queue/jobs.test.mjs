@@ -34,7 +34,7 @@ import {
   retryJob,
 } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
-import { makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf, seedClosedJob } from "../../test-support/memory.mjs";
 
 const WORKER = "host:1000";
 const OTHER_WORKER = "host:2000";
@@ -305,8 +305,8 @@ test("finishing a job closes it and links only the pipeline run of the same proj
   const id = enqueue(env);
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   persistRunFacts(id, { worker: WORKER, slug: "fix-the-worker" }, env);
-  const mine = logPipelineRun({ project: "alpha", slug: "fix-the-worker", tier: "simple", outcome: "pr_opened", phases: [] }, env);
-  const foreign = logPipelineRun({ project: "beta", slug: "fix-the-worker", tier: "simple", outcome: "pr_opened", phases: [] }, env);
+  const mine = logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: "fix-the-worker", tier: "simple", outcome: "pr_opened", phases: [] }, env);
+  const foreign = logPipelineRun({ projectId: projectIdOf(env, "beta"), slug: "fix-the-worker", tier: "simple", outcome: "pr_opened", phases: [] }, env);
   assert.equal(
     finishJob(
       id,

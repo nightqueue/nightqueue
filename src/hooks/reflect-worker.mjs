@@ -331,7 +331,7 @@ async function reflect({ transcriptPath, cwd, sessionId }, { env, runClaude, jud
   const items = await extractItems({ digest, model, injected, runClaude, log });
   const persisted = items.length
     ? await store.lessons.persistLessons(items, {
-        project: project.name,
+        projectId: project.id,
         model: `reflect/${model}`,
         injectedIds: injected.map((lesson) => lesson.id),
         judge: judge ?? makeJudge(runClaude, model),

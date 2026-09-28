@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
 import { createLocalStore } from "../../src/store/local.mjs";
 import { STORE_CONTRACT } from "../../src/store/store.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const WORKER = "host:1000";
 const PR_URL = "https://github.com/acme/api/pull/7";
@@ -57,11 +57,12 @@ test("every domain of the store writes and reads back on a real home", async (t)
   assert.equal((await store.jobs.getJob(job.id)).project, "alpha");
   assert.equal(await store.jobs.status(job.id), "pending");
 
-  const run = await store.runs.logPipelineRun({ project: "alpha", slug: "fix-it", tier: "simple", outcome: "pr_opened" });
+  const alphaId = projectIdOf(env, "alpha");
+  const run = await store.runs.logPipelineRun({ projectId: alphaId, slug: "fix-it", tier: "simple", outcome: "pr_opened" });
   assert.ok(Number.isInteger(run.runId), "a logged pipeline run answers with its id");
 
   await store.lessons.saveLesson({
-    project: "alpha",
+    projectId: alphaId,
     title: "the lease is renewed before it expires",
     root_cause: "the interval was longer than the lease",
     solution: "renew at half the lease",
@@ -70,15 +71,15 @@ test("every domain of the store writes and reads back on a real home", async (t)
   const stats = await store.lessons.memoryStats();
   assert.equal(stats.find((row) => row.project === "alpha")?.lessons, 1);
 
-  await store.memory.saveMemory({ project: "alpha", key: "runtime", value: "node 22" });
-  assert.equal((await store.memory.recentMemories({ project: "alpha" })).length, 1);
+  await store.memory.saveMemory({ projectId: alphaId, key: "runtime", value: "node 22" });
+  assert.equal((await store.memory.recentMemories({ projectId: alphaId })).length, 1);
 
   const indexed = await store.index.saveProjectIndex({
-    project: "alpha",
+    projectId: alphaId,
     files: [{ path: "src/a.mjs", responsibility: "claims the next job" }],
   });
   assert.equal(indexed.files, 1);
-  assert.equal((await store.index.recallProjectIndex({ project: "alpha" })).files.length, 1);
+  assert.equal((await store.index.recallProjectIndex({ projectId: alphaId })).files.length, 1);
 
   await store.decisions.saveDecision({
     project: "alpha",

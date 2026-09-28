@@ -5,7 +5,7 @@ import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { carriesOperatorSeed, OPERATOR_SEED_HEADING, sharedSlugPending } from "../../src/memory/shared-slug-migration.mjs";
 import { PRIOR_RUN_HEADING } from "../../src/queue/operator-run.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const SHARED = "tier-complex-set-by-the-operator";
 const PR_74 = "https://github.com/acme/api/pull/74";
@@ -145,8 +145,8 @@ test("the tiered pair whose keeper's brief quotes the seed heading in prose gets
     prompt: `${tier}Rename the lease column of the worker table.`,
     result: JSON.stringify({ repairedFrom: "state.json", cancelledFrom: "done" }),
   });
-  logPipelineRun({ project: "alpha", slug: SHARED, tier: "complex", outcome: "pr_opened", phases: [] }, env);
-  openDb(env).prepare("UPDATE pipeline_runs SET job_id = ? WHERE project = 'alpha' AND slug = ?").run(keeper, SHARED);
+  logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: SHARED, tier: "complex", outcome: "pr_opened", phases: [] }, env);
+  openDb(env).prepare("UPDATE pipeline_runs SET job_id = ? WHERE project_id = ? AND slug = ?").run(keeper, projectIdOf(env, "alpha"), SHARED);
   const before = snapshot(env, keeper);
 
   reopen(env);
@@ -165,8 +165,8 @@ test("the keeper is the job its pipeline run points at, even when it is the newe
   const env = makeQueue(t, "shared-slug-linked");
   const older = seedRow(env, { status: "cancelled" });
   const linked = seedRow(env, { status: "done", prUrl: PR_74 });
-  logPipelineRun({ project: "alpha", slug: SHARED, tier: "complex", outcome: "pr_opened", phases: [] }, env);
-  openDb(env).prepare("UPDATE pipeline_runs SET job_id = ? WHERE project = 'alpha' AND slug = ?").run(linked, SHARED);
+  logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: SHARED, tier: "complex", outcome: "pr_opened", phases: [] }, env);
+  openDb(env).prepare("UPDATE pipeline_runs SET job_id = ? WHERE project_id = ? AND slug = ?").run(linked, projectIdOf(env, "alpha"), SHARED);
 
   reopen(env);
 

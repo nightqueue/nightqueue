@@ -14,7 +14,7 @@ import { agentRuns, DRAIN_INTERVAL_S, runCycle, runDrain, runWatch, WATCH_INTERV
 import { provisionalSlug } from "../../src/queue/spawn.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeDir, makeHome, makeProject, unregisterProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf, unregisterProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { agentToolUseEvent, assistantEvent, codeChangePublishedEvent, doneStream, failureStream, gateStream, noticeText, PR_URL, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, slugTypeEvent, systemInitEvent, taskNotificationEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
 
@@ -90,7 +90,7 @@ async function waitFor(check, label) {
 test("a run that opens a pull request ends as done, with its facts, usage and pipeline run linked", async (t) => {
   const { env } = makeRunnerHome(t, "runner-done", [{ stdout: doneStream({ notice: "the pull request is open" }), exitCode: 0 }]);
   const id = enqueue(env);
-  const logged = logPipelineRun({ project: "alpha", slug: SLUG, tier: "simple", outcome: "pr_opened", phases: [] }, env);
+  const logged = logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: SLUG, tier: "simple", outcome: "pr_opened", phases: [] }, env);
 
   const cycle = await runJobCycle(env, id);
 
@@ -265,7 +265,7 @@ test("the durations and the models of the telemetry come from the stream, and th
   const id = enqueue(env);
   const logged = logPipelineRun(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       slug: SLUG,
       tier: "simple",
       outcome: "pr_opened",

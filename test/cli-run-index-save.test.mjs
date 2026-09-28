@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { openStore } from "../src/store/open.mjs";
-import { makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 
@@ -61,7 +61,7 @@ test("a real explore artifact is persisted and read back through the store", asy
 
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stdout, "index saved: 3 files, 2 libs");
-  const index = await openStore(env).index.recallProjectIndex({ project: "alpha", repoRoot: repo });
+  const index = await openStore(env).index.recallProjectIndex({ projectId: projectIdOf(env, "alpha"), repoRoot: repo });
   assert.deepEqual(
     index.files.map((file) => file.path).sort(),
     ["src/cli/index.mjs", "src/store/open.mjs", "test/store-boundary.test.mjs"],
@@ -84,7 +84,7 @@ test("a `None ...` prose bullet of the libs section never becomes a lib", async 
   const result = runIndexSave(env, repo, [artifact]);
 
   assert.equal(result.stdout, "index saved: 3 files, 2 libs");
-  const index = await openStore(env).index.recallProjectIndex({ project: "alpha", repoRoot: repo });
+  const index = await openStore(env).index.recallProjectIndex({ projectId: projectIdOf(env, "alpha"), repoRoot: repo });
   assert.equal(index.libs.some((lib) => /^None/i.test(lib.lib)), false, JSON.stringify(index.libs));
   assert.equal(result.stderr, "");
 });
@@ -109,7 +109,7 @@ test("--repo-root and --project index the artifact from any working directory", 
   const result = runIndexSave(env, makeDir(t, "index-save-elsewhere"), [artifact, "--project", "alpha", "--repo-root", repo]);
 
   assert.equal(result.code, 0, result.stderr);
-  const index = await openStore(env).index.recallProjectIndex({ project: "alpha", repoRoot: repo });
+  const index = await openStore(env).index.recallProjectIndex({ projectId: projectIdOf(env, "alpha"), repoRoot: repo });
   assert.equal(index.files.length, 3);
   assert.ok(
     index.files.every((file) => !file.path.startsWith("/")),
@@ -127,7 +127,7 @@ test("`## Libs` is read as the alias of `## Third-party libraries`", async (t) =
 
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stdout, "index saved: 3 files, 2 libs");
-  const index = await openStore(env).index.recallProjectIndex({ project: "alpha", repoRoot: repo });
+  const index = await openStore(env).index.recallProjectIndex({ projectId: projectIdOf(env, "alpha"), repoRoot: repo });
   assert.equal(index.libs.length, 2);
 });
 
@@ -141,7 +141,7 @@ test("a `None` libs section saves the files and no lib at all", async (t) => {
 
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stdout, "index saved: 3 files, 0 libs");
-  const index = await openStore(env).index.recallProjectIndex({ project: "alpha", repoRoot: repo });
+  const index = await openStore(env).index.recallProjectIndex({ projectId: projectIdOf(env, "alpha"), repoRoot: repo });
   assert.deepEqual(index.libs, []);
 });
 

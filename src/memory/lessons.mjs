@@ -1,6 +1,6 @@
 import { UserError } from "../config/errors.mjs";
 import { openDb, sqliteToIso, vectorToBlob, withWriteRetry } from "./db.mjs";
-import { resolveProjectName } from "./project-name.mjs";
+import { attachNames, projectIdOrNull } from "./registry.mjs";
 import { normalizeExcludeIds as normalizeIds } from "./search.mjs";
 
 export const LESSON_TARGETS = ["triager", "architect", "coder", "qa", "verifier"];
@@ -48,12 +48,12 @@ function requireId(id) {
   return id;
 }
 
-// Inserts a lesson and returns its id.
-export function saveLesson({ project, title, root_cause, solution, prevention, attempts, target, model }, env = process.env) {
-  const projectName = resolveProjectName(project, env);
+// Inserts a lesson of a project id (null for a global one) and returns its id.
+export function saveLesson({ projectId, title, root_cause, solution, prevention, attempts, target, model }, env = process.env) {
+  const owner = projectIdOrNull(projectId);
   const sanitized = sanitizeLesson({ title, root_cause, solution, prevention, target });
   const values = [
-    projectName,
+    owner,
     requireText("title", sanitized.title),
     sanitized.root_cause,
     sanitized.solution,
@@ -63,16 +63,18 @@ export function saveLesson({ project, title, root_cause, solution, prevention, a
     typeof model === "string" && model ? model : null,
   ];
   const statement = openDb(env).prepare(
-    `INSERT INTO lessons (project, title, root_cause, solution, prevention, attempts, target, model)
+    `INSERT INTO lessons (project_id, title, root_cause, solution, prevention, attempts, target, model)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const result = withWriteRetry(() => statement.run(...values));
-  return { id: Number(result.lastInsertRowid), project: projectName };
+  return { id: Number(result.lastInsertRowid), projectId: owner };
 }
 
-// Returns the lesson with the given id, or null.
+// Returns the lesson with the given id and its project's current name, or null.
 export function getLesson(id, env = process.env) {
-  return openDb(env).prepare("SELECT * FROM lessons WHERE id = ?").get(requireId(id)) ?? null;
+  const db = openDb(env);
+  const row = db.prepare("SELECT * FROM lessons WHERE id = ?").get(requireId(id));
+  return row ? attachNames(db, [row])[0] : null;
 }
 
 // Fills only the currently empty text columns of a lesson from a follow-up payload, never overwriting one that already has text.
@@ -161,28 +163,35 @@ export function normalizeTitle(title) {
     .trim();
 }
 
-// Finds a lesson of the same project whose normalized title is identical.
-export function findByNormalizedTitle({ project, title }, env = process.env) {
+// Finds a lesson of the same project id (null for the globals) whose normalized title is identical.
+export function findByNormalizedTitle({ projectId, title }, env = process.env) {
   const wanted = normalizeTitle(title);
   if (!wanted) return null;
   const rows = openDb(env)
-    .prepare("SELECT id, title, attempts FROM lessons WHERE project IS ? ORDER BY id")
-    .all(project ?? null);
+    .prepare("SELECT id, title, attempts FROM lessons WHERE project_id IS ? ORDER BY id")
+    .all(projectIdOrNull(projectId));
   return rows.find((row) => normalizeTitle(row.title) === wanted) ?? null;
 }
 
-// Counts of every memory table grouped by project, for `nightqueue memory stats`.
-export function memoryStats(env = process.env) {
-  const db = openDb(env);
+// Counts of every memory table per owning project id, keyed by id.
+function countsByProjectId(db) {
   const totals = new Map();
   for (const [kind, table, where] of STAT_TABLES) {
-    for (const row of db.prepare(`SELECT project, COUNT(*) AS total FROM ${table} ${where} GROUP BY project`).all()) {
-      const key = row.project ?? null;
-      if (!totals.has(key)) totals.set(key, { project: key, lessons: 0, memory: 0, index: 0, libs: 0, runs: 0 });
+    for (const row of db.prepare(`SELECT project_id, COUNT(*) AS total FROM ${table} ${where} GROUP BY project_id`).all()) {
+      const key = row.project_id ?? null;
+      if (!totals.has(key)) totals.set(key, { project_id: key, lessons: 0, memory: 0, index: 0, libs: 0, runs: 0 });
       totals.get(key)[kind] = row.total;
     }
   }
-  return [...totals.values()].sort((a, b) => String(a.project ?? "").localeCompare(String(b.project ?? "")));
+  return [...totals.values()];
+}
+
+// Counts of every memory table grouped by project, named by the project's current name, for `nightqueue memory stats`.
+export function memoryStats(env = process.env) {
+  const db = openDb(env);
+  return attachNames(db, countsByProjectId(db))
+    .map(({ project, lessons, memory, index, libs, runs }) => ({ project: project ?? null, lessons, memory, index, libs, runs }))
+    .sort((a, b) => String(a.project ?? "").localeCompare(String(b.project ?? "")));
 }
 
 // Public shape of a lesson: an explicit allowlist, because the row carries the embedding BLOB.

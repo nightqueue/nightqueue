@@ -7,7 +7,7 @@ import {
   withFullSync,
   withWriteRetry,
 } from "./db.mjs";
-import { resolveProjectName } from "./project-name.mjs";
+import { projectIdOrNull } from "./registry.mjs";
 
 export const PIPELINE_TIERS = ["trivial", "simple", "complex"];
 export const PIPELINE_TASK_TYPES = ["bug/error", "feature/refactor"];
@@ -89,19 +89,19 @@ function insertPhases(db, runId, phases) {
 }
 
 // Writes the run and its phases inside one immediate transaction, so no reader is ever promoted to writer.
-function insertRun(db, { run, projectName, values }) {
+function insertRun(db, { run, projectId, values }) {
   db.exec("BEGIN IMMEDIATE");
   try {
     const inserted = db
       .prepare(
-        `INSERT INTO pipeline_runs (project, slug, tier, tier_operator, tier_raise_reason, task_type, outcome, gate_stop, duration_s, model, session_id)
+        `INSERT INTO pipeline_runs (project_id, slug, tier, tier_operator, tier_raise_reason, task_type, outcome, gate_stop, duration_s, model, session_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(...values);
     const runId = Number(inserted.lastInsertRowid);
     insertPhases(db, runId, run.phases);
     db.exec("COMMIT");
-    return { runId, project: projectName, phases: run.phases.length };
+    return { runId, projectId, phases: run.phases.length };
   } catch (err) {
     rollbackQuietly(db);
     throw err;
@@ -153,9 +153,9 @@ function ensureRunDurable(inserted, write, env) {
   return again;
 }
 
-// The run a measured telemetry belongs to: the LAST one recorded for that project and slug, since a retried job records a run of its own.
-function lastRunId(db, project, slug) {
-  const row = db.prepare("SELECT id FROM pipeline_runs WHERE project = ? AND slug = ? ORDER BY id DESC LIMIT 1").get(project, slug);
+// The run a measured telemetry belongs to: the LAST one recorded for that project id and slug, since a retried job records a run of its own.
+function lastRunId(db, projectId, slug) {
+  const row = db.prepare("SELECT id FROM pipeline_runs WHERE project_id = ? AND slug = ? ORDER BY id DESC LIMIT 1").get(projectId, slug);
   return row ? Number(row.id) : null;
 }
 
@@ -189,40 +189,40 @@ function updateTelemetry(db, { runId, durationS, phases }) {
 }
 
 // Fills the telemetry of a run with what the runtime measured in the stream; a run the agent never recorded is left alone and never inserted.
-export function updateRunTelemetry({ project, slug, durationS, phases = [] }, env = process.env) {
+export function updateRunTelemetry({ projectId, slug, durationS, phases = [] }, env = process.env) {
   const cleanSlug = optionalText(slug);
   if (!cleanSlug) throw new UserError("`slug` is required and cannot be empty");
-  const projectName = resolveProjectName(project, env);
+  const owner = projectIdOrNull(projectId);
   const db = openDb(env);
-  const runId = lastRunId(db, projectName, cleanSlug);
-  if (runId === null) return { runId: null, project: projectName, phases: 0 };
+  const runId = lastRunId(db, owner, cleanSlug);
+  if (runId === null) return { runId: null, projectId: owner, phases: 0 };
   const stored = db.prepare("SELECT id, phase FROM pipeline_phases WHERE run_id = ? ORDER BY seq").all(runId);
   const matched = matchPhases(stored, Array.isArray(phases) ? phases : []);
   const written = withFullSync(db, () => withWriteRetry(() => updateTelemetry(db, { runId, durationS: optionalSeconds(durationS), phases: matched })));
-  return { ...written, project: projectName };
+  return { ...written, projectId: owner };
 }
 
-// The outcome of the latest run recorded for a project and slug at or after an instant, or null when no run was recorded since then.
-export function latestRunOutcome({ project, slug, since } = {}, env = process.env, db = openDb(env)) {
-  const cleanProject = optionalText(project);
+// The outcome of the latest run recorded for a project id and slug at or after an instant, or null when no run was recorded since then.
+export function latestRunOutcome({ projectId, slug, since } = {}, env = process.env, db = openDb(env)) {
+  const owner = projectIdOrNull(projectId);
   const cleanSlug = optionalText(slug);
   const from = isoToSqlite(since);
-  if (!cleanProject || !cleanSlug || !from) throw new UserError("latestRunOutcome needs a project, a slug and a valid `since` instant");
+  if (!owner || !cleanSlug || !from) throw new UserError("latestRunOutcome needs a project id, a slug and a valid `since` instant");
   const row = db
-    .prepare("SELECT outcome FROM pipeline_runs WHERE project = ? AND slug = ? AND datetime(created_at) >= datetime(?) ORDER BY id DESC LIMIT 1")
-    .get(cleanProject, cleanSlug, from);
+    .prepare("SELECT outcome FROM pipeline_runs WHERE project_id = ? AND slug = ? AND datetime(created_at) >= datetime(?) ORDER BY id DESC LIMIT 1")
+    .get(owner, cleanSlug, from);
   return row?.outcome ?? null;
 }
 
-// Persists the telemetry of one pipeline run: the run and its phases in a single transaction.
+// Persists the telemetry of one pipeline run of a project id (null for a global one): the run and its phases in a single transaction.
 export function logPipelineRun(
-  { project, slug, tier, tierOperator, tierRaiseReason, taskType, outcome, gateStop, durationS, phases = [] },
+  { projectId, slug, tier, tierOperator, tierRaiseReason, taskType, outcome, gateStop, durationS, phases = [] },
   env = process.env,
 ) {
   const run = validateRun({ slug, tier, tierOperator, taskType, outcome, gateStop, phases });
-  const projectName = resolveProjectName(project, env);
+  const owner = projectIdOrNull(projectId);
   const values = [
-    projectName,
+    owner,
     run.slug,
     run.tier,
     run.tierOperator,
@@ -235,6 +235,6 @@ export function logPipelineRun(
     optionalText(env?.NIGHTQUEUE_SESSION_ID),
   ];
   const db = openDb(env);
-  const write = { db, run, projectName, values };
+  const write = { db, run, projectId: owner, values };
   return ensureRunDurable(withFullSync(db, () => withWriteRetry(() => insertRun(db, write))), write, env);
 }
