@@ -87,6 +87,14 @@ export function projectIdOf(env, name) {
   return registry.projectByName(openDb(env), name)?.id ?? null;
 }
 
+// The `{ projectId }` / `{ orgId }` a decision or roadmap call takes, from the `{ project }` / `{ org }` names a test writes.
+export function ownerIdsOf(env, { project, org } = {}) {
+  return {
+    ...(project === undefined ? {} : { projectId: projectIdOf(env, project) }),
+    ...(org === undefined ? {} : { orgId: orgIdOf(env, org) }),
+  };
+}
+
 // The id of a project of the home, registering it without a checkout (in the given org, else the default one) when it is missing.
 export function ensureProject(env, name, { org } = {}) {
   const found = projectIdOf(env, name);
@@ -117,12 +125,8 @@ export function makeProject(t, env, name, { org } = {}) {
   return path;
 }
 
-// Everything the owner scope added to the schema, undone: what a test execs to turn an open database back into the v5 shape a previous build wrote.
+// Everything the owner scope added to the schema, undone: what a `buildLegacyHome` mutate execs on the frozen v17 tables to leave the v5 shape a previous build wrote.
 export const DOWNGRADE_TO_V5 = `
-DROP INDEX decisions_org_number_idx;
-DROP INDEX roadmap_items_org_order_idx;
-DROP INDEX roadmap_items_order_idx;
-DROP INDEX decisions_job_idx;
 ALTER TABLE decisions DROP COLUMN job_id;
 ALTER TABLE decisions DROP COLUMN scope;
 ALTER TABLE decisions DROP COLUMN org;

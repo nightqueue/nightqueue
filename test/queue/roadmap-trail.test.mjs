@@ -7,7 +7,7 @@ import { addJob } from "../../src/memory/jobs.mjs";
 import { queueRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { ROADMAP_BODY_FILE, roadmapBodyFile } from "../../src/queue/roadmap-trail.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
 const BODY = "## Report\n\nthe thing is done.\n\n";
 
@@ -28,7 +28,7 @@ function hashOf(path) {
 
 test("a job queued from a roadmap item publishes a copy of the body ending with its Roadmap line, once, and the agent's file is unchanged", async (t) => {
   const { env, runDir, bodyFile, store } = makeTrailHome(t, "roadmap-trail-linked");
-  const item = saveRoadmapItem({ type: "feature", project: "alpha", title: "ship it" }, env);
+  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
   const { job } = await queueRoadmapItem({ id: item.id }, env);
   const before = hashOf(bodyFile);
 
@@ -47,8 +47,8 @@ test("a job queued from an org item for one project ends its body with the org i
   const { env, runDir, bodyFile, store } = makeTrailHome(t, "roadmap-trail-org");
   makeProject(t, env, "beta", { org: "acme" });
   makeProject(t, env, "gamma", { org: "acme" });
-  const item = saveRoadmapItem({ type: "chore", org: "acme", title: "pin node" }, env);
-  const { jobs } = await queueRoadmapItem({ id: item.id, project: "all" }, env);
+  const item = saveRoadmapItem({ type: "chore", orgId: orgIdOf(env, "acme"), title: "pin node" }, env);
+  const { jobs } = await queueRoadmapItem({ id: item.id, allProjects: true }, env);
   assert.equal(jobs.length, 2);
 
   for (const job of jobs) {
@@ -64,7 +64,7 @@ test("the body is published as written outside a job, for a job with no roadmap 
   assert.equal(await roadmapBodyFile({ bodyFile, runDir, jobId: plain.id, store }), bodyFile);
 
   const named = makeTrailHome(t, "roadmap-trail-named", `${BODY}Roadmap: alpha#1\n`);
-  const item = saveRoadmapItem({ type: "bug", project: "alpha", title: "fix it" }, named.env);
+  const item = saveRoadmapItem({ type: "bug", projectId: projectIdOf(named.env, "alpha"), title: "fix it" }, named.env);
   const { job } = await queueRoadmapItem({ id: item.id }, named.env);
   assert.equal(await roadmapBodyFile({ ...named, jobId: job.id }), named.bodyFile);
 });

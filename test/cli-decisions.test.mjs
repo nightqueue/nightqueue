@@ -10,7 +10,7 @@ import { getDecisionByNumber, saveDecision } from "../src/memory/decisions.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { listProjects } from "../src/memory/registry.mjs";
 import { linkRoadmapItemJob, saveRoadmapItem } from "../src/memory/roadmap.mjs";
-import { ensureProject, makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
 
 // The names of the projects the registry of a home holds.
 function registeredNames(env) {
@@ -34,7 +34,7 @@ function makeCliHome(t, name) {
 function seedDecisions(env) {
   const accepted = saveDecision(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       title: "Store everything in one SQLite file",
       context: "the runtime has several writers",
       decision: "open the database in WAL with a busy timeout",
@@ -43,7 +43,7 @@ function seedDecisions(env) {
     },
     env,
   );
-  saveDecision({ project: "alpha", title: "Deliver a daemon", context: "polling is slow", decision: "run a resident process", status: "rejected" }, env);
+  saveDecision({ projectId: projectIdOf(env, "alpha"), title: "Deliver a daemon", context: "polling is slow", decision: "run a resident process", status: "rejected" }, env);
   return accepted;
 }
 
@@ -97,9 +97,9 @@ test("decision show prints the decision in full and refuses an unknown number", 
 test("roadmap groups the items by status in workflow order, p1 first, with the linked decision and the job", (t) => {
   const { env, cwd } = makeCliHome(t, "roadmap-list");
   const decision = seedDecisions(env);
-  const queued = saveRoadmapItem({ type: "improvement", project: "alpha", title: "Deliver the queue", decision_id: decision.id }, env);
-  const dashboard = saveRoadmapItem({ type: "improvement", project: "alpha", title: "Write the dashboard" }, env);
-  const urgent = saveRoadmapItem({ type: "improvement", project: "alpha", title: "Fix the crash", priority: 1 }, env);
+  const queued = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "Deliver the queue", decision_id: decision.id }, env);
+  const dashboard = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "Write the dashboard" }, env);
+  const urgent = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "Fix the crash", priority: 1 }, env);
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "deliver the queue" }, env);
   assert.equal(linkRoadmapItemJob(queued.id, job.id, env), true);
   const result = runCli(env, ["roadmap"], { cwd });
@@ -206,7 +206,7 @@ function exportedFile(result, dir) {
 // Exports decision #1 of a home into a fresh directory and imports that file into another fresh home, returning both files.
 function roundTrip(t, name, seed) {
   const a = makeCliHome(t, `${name}-a`);
-  saveDecision({ project: "alpha", status: "accepted", ...seed }, a.env);
+  saveDecision({ projectId: projectIdOf(a.env, "alpha"), status: "accepted", ...seed }, a.env);
   const firstDir = makeDir(t, `${name}-first`);
   const first = exportedFile(runCli(a.env, ["decision", "export", "1", "--dir", firstDir], { cwd: a.cwd }), firstDir);
   const firstText = readFileSync(first, "utf8");
@@ -229,8 +229,8 @@ test("export then import then export is byte-identical, and the imported row kee
   const { a, b, first, firstText, secondText } = roundTrip(t, "round-trip", seed);
   assert.equal(secondText, firstText);
   assert.equal(readFileSync(first, "utf8"), firstText, "stamping the same pointer changed the file");
-  const original = getDecisionByNumber({ project: "alpha", number: 1 }, a.env);
-  const copy = getDecisionByNumber({ project: "alpha", number: 1 }, b.env);
+  const original = getDecisionByNumber({ projectId: projectIdOf(a.env, "alpha"), number: 1 }, a.env);
+  const copy = getDecisionByNumber({ projectId: projectIdOf(b.env, "alpha"), number: 1 }, b.env);
   for (const field of ["title", "status", "context", "decision", "consequences"]) assert.equal(copy[field], original[field], field);
   assert.equal(copy.created_at.slice(0, 10), original.created_at.slice(0, 10));
   assert.ok(first.endsWith("0001-store-everything-in-one-sqlite-file.md"), first);
@@ -241,7 +241,7 @@ test("a round trip without consequences stays byte-identical and imports no cons
   const { b, firstText, secondText } = roundTrip(t, "round-trip-bare", seed);
   assert.equal(secondText, firstText);
   assert.ok(!firstText.includes("## Consequences"));
-  assert.equal(getDecisionByNumber({ project: "alpha", number: 1 }, b.env).consequences, null);
+  assert.equal(getDecisionByNumber({ projectId: projectIdOf(b.env, "alpha"), number: 1 }, b.env).consequences, null);
 });
 
 test("importing the same file again is refused as already imported, and nothing is saved", (t) => {
@@ -250,7 +250,7 @@ test("importing the same file again is refused as already imported, and nothing 
   const again = runCli(b.env, ["decision", "import", first, "--project", "alpha"], { cwd: b.cwd });
   assert.equal(again.status, 1);
   assert.match(again.stderr, /already imported as #1 \(Store everything in one SQLite file\); nothing imported/);
-  assert.equal(getDecisionByNumber({ project: "alpha", number: 2 }, b.env), null);
+  assert.equal(getDecisionByNumber({ projectId: projectIdOf(b.env, "alpha"), number: 2 }, b.env), null);
 });
 
 test("--superseded-by imports a superseded row pointing at the successor, and stamps the file", (t) => {
@@ -264,7 +264,7 @@ test("--superseded-by imports a superseded row pointing at the successor, and st
   const result = runCli(env, ["decision", "import", file, "--superseded-by", "1"], { cwd });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), "imported as #3");
-  const row = getDecisionByNumber({ project: "alpha", number: 3 }, env);
+  const row = getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 3 }, env);
   assert.equal(row.status, "superseded");
   assert.equal(row.superseded_by, successor.id);
   assert.equal(row.superseded_by_number, 1);
@@ -280,7 +280,7 @@ test("--status overrides the file's Status:, and a file without one needs it", (
   const file = writeDecisionFile(t, "0006-studio", "# 0006 - A studio for gizmos\n\nStatus: Proposed (2026-03-01).\n\n## Context\n\nGizmos are edited by hand.\n\n## Decision\n\nBuild a studio.\n\n## Pros\n\nFaster edits.\n");
   const result = runCli(env, ["decision", "import", file, "--status", "accepted"], { cwd });
   assert.equal(result.status, 0, result.stderr);
-  const row = getDecisionByNumber({ project: "alpha", number: 1 }, env);
+  const row = getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 1 }, env);
   assert.equal(row.status, "accepted");
   assert.equal(row.decision, "Build a studio.\n\n## Pros\n\nFaster edits.");
   const bare = writeDecisionFile(t, "no-status", "# Paint gadgets blue\n\n## Context\n\nc\n\n## Decision\n\nd\n");
@@ -297,7 +297,7 @@ test("an import that overlaps a decision lists the candidates, and --unrelated i
   assert.equal(refused.status, 1);
   assert.ok(refused.stderr.includes("  #1 Store everything in one SQLite file (accepted)"), refused.stderr);
   assert.match(refused.stderr, /--supersedes <n,\.\.\.>.*--unrelated <n,\.\.\.>/);
-  assert.equal(getDecisionByNumber({ project: "alpha", number: 3 }, env), null);
+  assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 3 }, env), null);
   assert.ok(!readFileSync(file, "utf8").includes("Decision #"), "a refused import stamped the file");
   const malformed = runCli(env, ["decision", "import", file, "--unrelated", "1,x"], { cwd });
   assert.equal(malformed.status, 1);
@@ -333,30 +333,30 @@ test("export never writes the database nor a file when the decision is not there
 
 test("decision update accepts or rejects a proposed decision, printing it like show", (t) => {
   const { env, cwd } = makeCliHome(t, "decision-update");
-  saveDecision({ project: "alpha", title: "Store everything in one SQLite file", context: "c", decision: "d", status: "proposed" }, env);
-  saveDecision({ project: "alpha", title: "Deliver a daemon", context: "c", decision: "d", status: "proposed" }, env);
+  saveDecision({ projectId: projectIdOf(env, "alpha"), title: "Store everything in one SQLite file", context: "c", decision: "d", status: "proposed" }, env);
+  saveDecision({ projectId: projectIdOf(env, "alpha"), title: "Deliver a daemon", context: "c", decision: "d", status: "proposed" }, env);
 
   const accepted = runCli(env, ["decision", "update", "1", "--status", "accepted"], { cwd });
   assert.equal(accepted.status, 0, accepted.stderr);
   assert.ok(accepted.stdout.includes("#1 Store everything in one SQLite file (accepted)"));
   assert.ok(accepted.stdout.includes("project: alpha"));
-  assert.equal(getDecisionByNumber({ project: "alpha", number: 1 }, env).status, "accepted");
+  assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 1 }, env).status, "accepted");
 
   const rejected = runCli(env, ["decision", "update", "2", "--status", "rejected"], { cwd });
   assert.equal(rejected.status, 0, rejected.stderr);
   assert.ok(rejected.stdout.includes("#2 Deliver a daemon (rejected)"));
-  assert.equal(getDecisionByNumber({ project: "alpha", number: 2 }, env).status, "rejected");
+  assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 2 }, env).status, "rejected");
 });
 
 test("decision update --status superseded requires --superseded-by, and never touches the row without it", (t) => {
   const { env, cwd } = makeCliHome(t, "decision-update-superseded");
-  saveDecision({ project: "alpha", title: "Store everything in one SQLite file", context: "c", decision: "d", status: "proposed" }, env);
-  saveDecision({ project: "alpha", title: "Split into two databases", context: "c", decision: "d", status: "accepted" }, env);
+  saveDecision({ projectId: projectIdOf(env, "alpha"), title: "Store everything in one SQLite file", context: "c", decision: "d", status: "proposed" }, env);
+  saveDecision({ projectId: projectIdOf(env, "alpha"), title: "Split into two databases", context: "c", decision: "d", status: "accepted" }, env);
 
   const refused = runCli(env, ["decision", "update", "1", "--status", "superseded"], { cwd });
   assert.equal(refused.status, 1);
   assert.match(refused.stderr, /a `superseded` decision needs the decision that replaced it: pass --superseded-by <number>/);
-  assert.equal(getDecisionByNumber({ project: "alpha", number: 1 }, env).status, "proposed");
+  assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 1 }, env).status, "proposed");
 
   const conflict = runCli(env, ["decision", "update", "1", "--status", "accepted", "--superseded-by", "2"], { cwd });
   assert.equal(conflict.status, 1);
@@ -365,14 +365,14 @@ test("decision update --status superseded requires --superseded-by, and never to
   const settled = runCli(env, ["decision", "update", "1", "--status", "superseded", "--superseded-by", "2"], { cwd });
   assert.equal(settled.status, 0, settled.stderr);
   assert.ok(settled.stdout.includes("#1 Store everything in one SQLite file (superseded)"));
-  const row = getDecisionByNumber({ project: "alpha", number: 1 }, env);
+  const row = getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 1 }, env);
   assert.equal(row.status, "superseded");
   assert.equal(row.superseded_by_number, 2);
 });
 
 test("decision update refuses an unknown decision number and an unknown successor, naming the owner", (t) => {
   const { env, cwd } = makeCliHome(t, "decision-update-unknown");
-  saveDecision({ project: "alpha", title: "Store everything in one SQLite file", context: "c", decision: "d", status: "proposed" }, env);
+  saveDecision({ projectId: projectIdOf(env, "alpha"), title: "Store everything in one SQLite file", context: "c", decision: "d", status: "proposed" }, env);
 
   const unknownRow = runCli(env, ["decision", "update", "9", "--status", "accepted"], { cwd });
   assert.equal(unknownRow.status, 1);
@@ -381,7 +381,7 @@ test("decision update refuses an unknown decision number and an unknown successo
   const unknownSuccessor = runCli(env, ["decision", "update", "1", "--status", "superseded", "--superseded-by", "9"], { cwd });
   assert.equal(unknownSuccessor.status, 1);
   assert.match(unknownSuccessor.stderr, /unknown decision #9 for `alpha`/);
-  assert.equal(getDecisionByNumber({ project: "alpha", number: 1 }, env).status, "proposed");
+  assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 1 }, env).status, "proposed");
 });
 
 test("export never writes the database", (t) => {

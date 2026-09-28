@@ -16,7 +16,7 @@ import { shimContent } from "../src/host/runtime.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
 import { buildLegacyHome } from "../test-support/legacy-home.mjs";
-import { ensureProject, registerCheckout } from "../test-support/memory.mjs";
+import { ensureProject, makeOrg, orgIdOf, projectIdOf, registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { makeHostEnv, readSettingsFile, writeLegacyShim, writeSettingsFixture } from "../test-support/host.mjs";
 import { makeDir, makeProject, seedClosedJob, seedLegacyV8Home } from "../test-support/memory.mjs";
@@ -326,7 +326,7 @@ test("the roadmap workflow check is ok when every linked item follows its job an
   const host = makeHostEnv(t, "doctor-roadmap-workflow");
   const db = openDb(host.env);
   const job = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "deliver it" }, host.env);
-  db.prepare("INSERT INTO roadmap_items (project, title, position, status, job_id, job_status_seen) VALUES ('alpha', 'deliver it', 1, 'in_progress', ?, 'pending')").run(job.id);
+  db.prepare("INSERT INTO roadmap_items (project_id, title, position, status, job_id, job_status_seen) VALUES (?, 'deliver it', 1, 'in_progress', ?, 'pending')").run(projectIdOf(host.env, "alpha"), job.id);
   closeDb(host.env);
 
   const quiet = await diagnose(host.env);
@@ -344,8 +344,8 @@ test("the roadmap workflow check is ok when every linked item follows its job an
 test("the roadmap workflow check flags an org item whose status disagrees with its project rows", async (t) => {
   const host = makeHostEnv(t, "doctor-roadmap-org-derived");
   const db = openDb(host.env);
-  db.prepare("INSERT INTO roadmap_items (scope, org, title, position, status) VALUES ('org', 'acme', 'raise node', 1, 'in_progress')").run();
-  db.prepare("INSERT INTO roadmap_item_projects (item_id, project, status) VALUES (1, 'api', 'done'), (1, 'app', 'in_progress')").run();
+  db.prepare("INSERT INTO roadmap_items (scope, org_id, title, position, status) VALUES ('org', ?, 'raise node', 1, 'in_progress')").run(orgIdOf(host.env, makeOrg(host.env, "acme")));
+  db.prepare("INSERT INTO roadmap_item_projects (item_id, project_id, status) VALUES (1, ?, 'done'), (1, ?, 'in_progress')").run(ensureProject(host.env, "api"), ensureProject(host.env, "app"));
   closeDb(host.env);
 
   const quiet = await diagnose(host.env);
@@ -686,7 +686,7 @@ test("the orchestrator check reads a database without the counter columns as zer
 
 // A decision proposed by the given job, stamped straight in the database.
 function proposedByJob(env, { title, jobId }) {
-  const saved = saveDecision({ project: "alpha", title, context: "why", decision: "what", status: "proposed" }, env);
+  const saved = saveDecision({ projectId: projectIdOf(env, "alpha"), title, context: "why", decision: "what", status: "proposed" }, env);
   openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(jobId, saved.id);
   return saved;
 }

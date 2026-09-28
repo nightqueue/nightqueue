@@ -6,7 +6,7 @@ import { dbPath } from "../config/paths.mjs";
 import { paddedNumber, parseDecisionFile, pointerLine, renderDecisionFile, slugOf, stampPointer } from "../memory/decision-file.mjs";
 import { DECISION_STATUSES, decisionView, renderDecisionText } from "../memory/decisions.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
-import { SCOPE_CONFLICT, ownerLabel, ownerOf, ownerRef } from "../memory/scope.mjs";
+import { SCOPE_CONFLICT, orgTargetOf, ownerLabel, ownerNames, ownerOf, ownerRef, projectTargetOf } from "../memory/scope.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { openRegistryReader, openStore, openStoreReadOnly } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -59,9 +59,9 @@ const NUMBER_WIDTH = 16;
 const STATUS_WIDTH = 12;
 const DATE_WIDTH = 12;
 
-// Owner triple of a registered project, with the label every message of these commands names it by.
+// Target of a registered project, with the label every message of these commands names it by.
 function projectTarget(project) {
-  return { scope: "project", project: project.name, org: project.org ?? null, label: `\`${project.name}\`` };
+  return { ...projectTargetOf(project), label: `\`${project.name}\`` };
 }
 
 // Owner a read-only command runs against: `--org`, the `--project` NAME, or the project of the current directory.
@@ -69,8 +69,8 @@ export async function resolveReadTarget(values, ctx) {
   if (values.project !== undefined && values.org !== undefined) throw new UserError(SCOPE_CONFLICT);
   const store = await openRegistryReader(ctx.env);
   if (values.org !== undefined) {
-    await requireOrg(store, values.org);
-    return { scope: "org", project: null, org: values.org, label: `org \`${values.org}\`` };
+    const org = await requireOrg(store, values.org);
+    return { ...orgTargetOf(org), label: `org \`${org.name}\`` };
   }
   if (values.project !== undefined) {
     const named = store ? await store.projects.byName(values.project) : null;
@@ -165,7 +165,7 @@ async function runList(argv, ctx) {
   const rows = await readOnlyQuery(ctx, (store) => store.decisions.listDecisions({ ...owner, status }), []);
   const decisions = rows.map(decisionView);
   if (values.json) {
-    ctx.out(JSON.stringify({ ...owner, decisions }));
+    ctx.out(JSON.stringify({ ...ownerNames(target), decisions }));
     return;
   }
   if (!decisions.length) {

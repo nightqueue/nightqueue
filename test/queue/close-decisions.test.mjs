@@ -7,7 +7,7 @@ import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { settleJobProposals } from "../../src/queue/proposals.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { fakeCloseDeps, mergedPr, CLOSE_PR_URL } from "../../test-support/close.mjs";
 
 const QUESTION_MARK = "accept / reject / keep? [keep] ";
@@ -29,7 +29,7 @@ function doneJob(env, prompt = "fix the worker") {
 
 // A decision the given job proposed, stamped straight in the database.
 function proposal(env, { jobId, title }) {
-  const saved = saveDecision({ project: "alpha", title, context: "why", decision: "what", status: "proposed" }, env);
+  const saved = saveDecision({ projectId: projectIdOf(env, "alpha"), title, context: "why", decision: "what", status: "proposed" }, env);
   openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(jobId, saved.id);
   return saved;
 }

@@ -10,11 +10,11 @@ import {
   saveRoadmapItem,
   updateRoadmapItem,
 } from "../../src/memory/roadmap.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
 // Saves a roadmap item of an owner with the fields every test would otherwise repeat.
 function addItem(env, { project, org, title, detail, decision_id }) {
-  return saveRoadmapItem({ type: "improvement", project, org, title, detail, decision_id }, env);
+  return saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, project), orgId: orgIdOf(env, org), title, detail, decision_id }, env);
 }
 
 // A home with the two orgs of the brief: two projects in `acme`, one in `orbit`.
@@ -35,9 +35,9 @@ function titlesOf(roadmap) {
 function positionsOf(env, priority, { project = null, org = null }) {
   return openDb(env)
     .prepare(
-      "SELECT title, position FROM roadmap_items WHERE project IS ? AND org IS ? AND priority = ? ORDER BY position",
+      "SELECT title, position FROM roadmap_items WHERE project_id IS ? AND org_id IS ? AND priority = ? ORDER BY position",
     )
-    .all(project, org, priority)
+    .all(projectIdOf(env, project), orgIdOf(env, org), priority)
     .map((row) => [row.title, row.position]);
 }
 
@@ -64,18 +64,18 @@ test("a project roadmap shows its org's items first and never another org's", (t
   addItem(env, { org: "acme", title: "every repo delivers the cache" });
   addItem(env, { org: "orbit", title: "orbit delivers nothing" });
 
-  assert.deepEqual(titlesOf(listRoadmap("acme-mobile-app", {}, env)), [
+  assert.deepEqual(titlesOf(listRoadmap(projectIdOf(env, "acme-mobile-app"), {}, env)), [
     "every repo delivers the cache",
     "deliver the app cache",
   ]);
-  assert.deepEqual(titlesOf(listRoadmap("orbit-app", {}, env)), ["orbit delivers nothing"]);
-  assert.deepEqual(titlesOf(listRoadmap({ org: "acme" }, {}, env)), ["every repo delivers the cache"]);
+  assert.deepEqual(titlesOf(listRoadmap(projectIdOf(env, "orbit-app"), {}, env)), ["orbit delivers nothing"]);
+  assert.deepEqual(titlesOf(listRoadmap({ orgId: orgIdOf(env, "acme") }, {}, env)), ["every repo delivers the cache"]);
 });
 
 test("an item links a decision its owner sees: its own, or its org's for a project item, never a sibling project's", (t) => {
   const env = makeTwoOrgHome(t, "roadmap-org-decision");
-  const orgDecision = saveDecision({ org: "acme", title: "one queue", context: "c", decision: "d" }, env);
-  const projectDecision = saveDecision({ project: "acme-api", title: "api caches", context: "c", decision: "d" }, env);
+  const orgDecision = saveDecision({ orgId: orgIdOf(env, "acme"), title: "one queue", context: "c", decision: "d" }, env);
+  const projectDecision = saveDecision({ projectId: projectIdOf(env, "acme-api"), title: "api caches", context: "c", decision: "d" }, env);
 
   const item = addItem(env, { project: "acme-mobile-app", title: "follow the org", decision_id: orgDecision.id });
   assert.equal(getRoadmapItem(item.id, env).decision_id, orgDecision.id);
@@ -97,18 +97,18 @@ test("an org item queues one job per named project on its own row, stays unlinke
 
   await assert.rejects(() => queueRoadmapItem({ id: item.id }, env), /belongs to org `acme`.*--project <name\|all>/s);
   await assert.rejects(
-    () => queueRoadmapItem({ id: item.id, project: "orbit-app" }, env),
+    () => queueRoadmapItem({ id: item.id, projectId: projectIdOf(env, "orbit-app") }, env),
     /projects of `acme`: acme-mobile-app, acme-api/,
   );
 
-  const first = await queueRoadmapItem({ id: item.id, project: "acme-mobile-app" }, env);
+  const first = await queueRoadmapItem({ id: item.id, projectId: projectIdOf(env, "acme-mobile-app") }, env);
   assert.equal(first.targetProject, "acme-mobile-app");
   assert.equal(getJob(first.job.id, env).project, "acme-mobile-app");
   const stored = getRoadmapItem(item.id, env);
   assert.equal(stored.status, "in_progress", "an org item derives its status from its in-progress row");
   assert.equal(stored.job_id, null, "an org item must never carry a job id");
 
-  const second = await queueRoadmapItem({ id: item.id, project: "acme-api" }, env);
+  const second = await queueRoadmapItem({ id: item.id, projectId: projectIdOf(env, "acme-api") }, env);
   assert.equal(second.targetProject, "acme-api");
   assert.notEqual(second.job.id, first.job.id, "the second project got no job of its own");
   assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
@@ -120,10 +120,10 @@ test("a project item keeps its own queue path: it is linked, and a project that 
   const item = addItem(env, { project: "acme-mobile-app", title: "deliver the app cache" });
 
   await assert.rejects(
-    () => queueRoadmapItem({ id: item.id, project: "acme-api" }, env),
+    () => queueRoadmapItem({ id: item.id, projectId: projectIdOf(env, "acme-api") }, env),
     /belongs to project `acme-mobile-app`, not `acme-api`/,
   );
-  const queued = await queueRoadmapItem({ id: item.id, project: "acme-mobile-app" }, env);
+  const queued = await queueRoadmapItem({ id: item.id, projectId: projectIdOf(env, "acme-mobile-app") }, env);
   assert.equal(queued.targetProject, "acme-mobile-app");
   const stored = getRoadmapItem(item.id, env);
   assert.equal(stored.status, "in_progress");

@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { stateDir } from "../config/paths.mjs";
 import { writeFileAtomic } from "../config/store.mjs";
 import { sanitizeLesson } from "../memory/lessons.mjs";
-import { projectFromCwd } from "../memory/project-name.mjs";
+import { projectFromCwd } from "../memory/registry-access.mjs";
 import { openStore } from "../store/open.mjs";
 import { lessonIdsFromRefs, readSessionState } from "./state.mjs";
 

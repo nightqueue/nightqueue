@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { queueRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { roadmapBodyFile } from "../../src/queue/roadmap-trail.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 // H-B1: ROADMAP_LINE (/^Roadmap:\s/m) matches ANY line starting with "Roadmap:" anywhere in the
 // body, not only the runtime's own trailer. An agent that writes prose starting with "Roadmap:"
@@ -25,7 +25,7 @@ test("a PR body whose prose merely starts with 'Roadmap:' still gets the job's r
   );
   const store = openStore(env);
 
-  const item = saveRoadmapItem({ type: "feature", project: "alpha", title: "ship it" }, env);
+  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
   const { job } = await queueRoadmapItem({ id: item.id }, env);
 
   const published = await roadmapBodyFile({ bodyFile, runDir, jobId: job.id, store });

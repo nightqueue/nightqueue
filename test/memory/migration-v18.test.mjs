@@ -6,7 +6,9 @@ import { test } from "node:test";
 import { isId } from "../../src/config/ids.mjs";
 import { configPath, dbPath, preV18BackupPath } from "../../src/config/paths.mjs";
 import { closeDb, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
+import { listDecisions, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
+import { getRoadmapItemDetail, listRoadmap, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recentMemories } from "../../src/memory/memory.mjs";
 import { migrateToV18 } from "../../src/memory/migration/v18.mjs";
@@ -332,6 +334,153 @@ test("the five project-only tables are rebuilt by id: same rows, same values, th
   assert.equal(saveLesson({ projectId: apiId, title: "t", root_cause: "r", solution: "s", prevention: "p" }, env).id, 5, "a lesson id was reused");
   assert.equal(logPipelineRun({ projectId: apiId, slug: "next", tier: "simple", outcome: "pr_opened" }, env).runId, 4, "a run id was reused");
   assert.deepEqual(recentMemories({ projectId: apiId }, env).map((row) => [row.key, row.project]), [["deploy", "api"], ["global", null]]);
+});
+
+// Inserts what a v17 build wrote for decisions and the roadmap: project, org and global decisions all numbered #1, an org item
+// tracking two projects with its comments, a project item linked to a job, and the highest decision and item deleted.
+function seedOwnedRows(db) {
+  const decision = db.prepare("INSERT INTO decisions (scope, project, org, number, title, context, decision, status) VALUES (?, ?, ?, ?, ?, 'c', 'd', 'accepted')");
+  decision.run("project", "api", null, 1, "the api keeps a zebradecision cache");
+  decision.run("org", null, "acme", 1, "every acme repo shares one queue");
+  decision.run("org", null, "orbit", 1, "orbit decides alone");
+  decision.run("project", null, null, 1, "a global decision every project reads");
+  decision.run("project", "api", null, 2, "gone");
+  db.exec("DELETE FROM decisions WHERE title = 'gone'");
+  const item = db.prepare("INSERT INTO roadmap_items (scope, project, org, title, status, priority, position, job_id) VALUES (?, ?, ?, ?, ?, 5, ?, ?)");
+  item.run("org", null, "acme", "raise the zebraitem node version", "in_progress", 1, null);
+  item.run("project", "api", null, "fix the worker", "in_progress", 1, 1);
+  item.run("project", "api", null, "gone", "todo", 2, null);
+  db.exec("DELETE FROM roadmap_items WHERE title = 'gone'");
+  const row = db.prepare("INSERT INTO roadmap_item_projects (item_id, project, status, job_id) VALUES (1, ?, ?, ?)");
+  row.run("api", "in_progress", 1);
+  row.run("web", "todo", null);
+  const comment = db.prepare("INSERT INTO roadmap_comments (item_id, kind, author, body, project) VALUES (?, ?, ?, ?, ?)");
+  comment.run(1, "queued", "job:1", "queued for api with a zebracomment", "api");
+  comment.run(1, "note", "operator", "an item-level note", null);
+  comment.run(2, "queued", "job:1", "queued as job #1", null);
+}
+
+// Every row a v17 build could leave, over all ten data tables and the phases of the runs.
+function seedAcceptanceRows(db) {
+  seedJobRows(db);
+  db.prepare("INSERT INTO jobs (project, prompt, status, slug) VALUES ('api', ?, 'failed', 'same-run')").run("shared first");
+  db.prepare("INSERT INTO jobs (project, prompt, status, slug) VALUES ('api', ?, 'failed', 'same-run')").run("shared second");
+  seedProjectRows(db);
+  const lesson = db.prepare("INSERT INTO lessons (project, title, root_cause, solution, prevention) VALUES (?, ?, 'r', 's', 'p')");
+  for (const project of ["Foo", "foo", "Bad Name!", "web"]) lesson.run(project, `a lesson of ${project}`);
+  seedOwnedRows(db);
+}
+
+const ALL_TABLES = [...PROJECT_TABLES, "jobs", "decisions", "roadmap_items", "roadmap_item_projects", "roadmap_comments", "pipeline_phases"];
+
+// The rows of a v18 table with every owner id swapped for the name it resolves to, the shape a v17 table had.
+function ownerNamedRows(db, table) {
+  return rowsOf(db, table).map(({ project_id: projectId, org_id: orgId, ...row }) => ({
+    ...row,
+    ...(projectId === undefined ? {} : { project: projectId ? registry.projectById(db, projectId).name : null }),
+    ...(orgId === undefined ? {} : { org: orgId ? registry.orgById(db, orgId).name : null }),
+  }));
+}
+
+// A v17 home holding the whole acceptance fixture: two config projects of `acme` (one bound to GitHub), a hand-added key, and every table seeded.
+function acceptanceHome(t, name) {
+  const env = makeHome(t, name);
+  const config = legacyConfig({
+    orgs: { acme: "gh" },
+    projects: { api: { path: checkout(t, "api"), org: "acme" }, web: { path: checkout(t, "web"), org: "acme" } },
+    extra: { handAdded: { keep: true } },
+  });
+  buildLegacyHome(env, { config, seed: seedAcceptanceRows, runs: { api: ["fix-worker"], history: ["old-run"] } });
+  return { env, config, fixture: readFileSync(dbPath(env)) };
+}
+
+test("acceptance: every table of a v17 home is rebuilt by id with the same rows, the registry imported, the config stripped, and a second open changes nothing", (t) => {
+  const { env, config: v17Config, fixture } = acceptanceHome(t, "v18-acceptance");
+  const db = openDb(env);
+  const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
+  const before = new DatabaseSync(preV18BackupPath(env), { readOnly: true });
+  t.after(() => before.close());
+  assert.ok(readFileSync(preV18BackupPath(env)).equals(fixture), "the pre-v18 copy is not the v17 database byte for byte");
+
+  for (const table of ALL_TABLES) {
+    const count = (connection) => connection.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+    assert.equal(count(db), count(before), `${table} lost or gained rows`);
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name);
+    assert.equal(columns.includes("project") || columns.includes("org"), false, `${table} still owns rows by name`);
+  }
+  const detached = rowsOf(db, "jobs").find((row) => row.prompt === "shared second");
+  assert.equal(detached.slug, null, "the shared slug was not detached");
+  assert.equal(JSON.parse(detached.result).runSlugDetached, "same-run");
+  for (const table of ALL_TABLES) {
+    const unchanged = (rows) => rows.filter((row) => row.id !== detached.id || table !== "jobs");
+    assert.deepEqual(unchanged(ownerNamedRows(db, table)), unchanged(rowsOf(before, table)), `${table} changed in the rebuild`);
+  }
+  assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+  assert.equal(sharedSlugPending(db), false);
+
+  const projects = Object.fromEntries(registry.listProjects(db).map((project) => [project.name, project]));
+  assert.deepEqual(Object.keys(projects).sort(), ["Bad Name!", "Foo", "api", "foo", "history", "web"].sort());
+  assert.notEqual(projects.Foo.id, projects.foo.id, "the case pair was collapsed");
+  for (const name of ["history", "Foo", "foo", "Bad Name!"]) {
+    assert.equal(projects[name].path, null, `${name} got a path`);
+    assert.equal(projects[name].org, "default", `${name} is not in the default org`);
+  }
+  assert.deepEqual(registry.listOrgs(db).map((org) => org.name), ["default", "acme", "orbit"]);
+
+  const match = (mirror, word) => db.prepare(`SELECT rowid FROM ${mirror} WHERE ${mirror} MATCH ?`).all(word).map((row) => row.rowid);
+  assert.deepEqual(match("lessons_fts", "zebracrossing"), [1]);
+  assert.deepEqual(match("decisions_fts", "zebradecision"), [1]);
+  assert.deepEqual(match("roadmap_items_fts", "zebraitem"), [1]);
+  assert.deepEqual(match("roadmap_comments_fts", "zebracomment"), [1]);
+  assert.throws(() => db.prepare("UPDATE roadmap_comments SET body = 'x' WHERE id = 1").run(), /append-only/);
+  assert.throws(() => db.prepare("DELETE FROM roadmap_comments WHERE id = 1").run(), /append-only/);
+
+  const api = projects.api;
+  assert.deepEqual(
+    listDecisions({ projectId: api.id }, env).map((row) => [row.scope, row.org ?? row.project, row.number]),
+    [["org", "acme", 1], ["project", "api", 1], ["project", null, 1]],
+    "a project reads its own decisions, its org's first, and the global ones, never another org's",
+  );
+  assert.equal(saveDecision({ projectId: api.id, title: "t", context: "c", decision: "d" }, env).id, 6, "a decision id was reused");
+  const web = listRoadmap({ projectId: projects.web.id }, {}, env).items;
+  assert.deepEqual(web.map((item) => [item.owner, item.project_status]), [["acme", "todo"]]);
+  assert.deepEqual(getRoadmapItemDetail(1, {}, env).projects.map((row) => row.project), ["api", "web"]);
+  assert.equal(saveRoadmapItem({ type: "bug", projectId: api.id, title: "t" }, env).id, 4, "a roadmap item id was reused");
+
+  const config = JSON.parse(readFileSync(configPath(env), "utf8"));
+  const { projects: _projects, orgs: _orgs, ...kept } = v17Config;
+  assert.deepEqual(config, {
+    ...kept,
+    defaultOrg: registry.orgByName(db, "default").id,
+    orgConnections: { [registry.orgByName(db, "acme").id]: { github: "gh" } },
+  });
+
+  const copyStat = statSync(preV18BackupPath(env));
+  const schema = db.prepare("SELECT sql FROM sqlite_master ORDER BY name").all();
+  const configText = readFileSync(configPath(env), "utf8");
+  closeDb(env);
+  const again = openDb(env);
+  assert.equal(again.prepare("PRAGMA user_version").get().user_version, 18);
+  assert.equal(again.prepare("SELECT total_changes() AS n").get().n, 0, "a second open wrote to the database");
+  assert.deepEqual(again.prepare("SELECT sql FROM sqlite_master ORDER BY name").all(), schema);
+  assert.equal(statSync(preV18BackupPath(env)).mtimeMs, copyStat.mtimeMs, "a second open took another copy");
+  assert.ok(readFileSync(preV18BackupPath(env)).equals(fixture));
+  assert.equal(readFileSync(configPath(env), "utf8"), configText, "a second open rewrote the config");
+  assert.equal(sharedSlugPending(again), false);
+});
+
+test("a v17 decision whose owner breaks the v18 owner rule fails the migration naming its row, and nothing is written", (t) => {
+  const conflict = (db) => {
+    db.prepare("INSERT INTO decisions (scope, project, org, number, title, context, decision) VALUES ('project', 'api', 'acme', 1, 't', 'c', 'd')").run();
+  };
+  const { env, fixture } = v17Home(t, "v18-owner-conflict", { seed: conflict });
+  assert.throws(
+    () => openDb(env),
+    /migration to v18 failed at decisions: decisions row 1 has scope `project` with project `api` and org `acme`: a project row names no org, an org row names an org and no project; nothing was written, the database is still at v17/,
+  );
+  assert.equal(diskVersion(env), 17);
+  assert.ok(readFileSync(dbPath(env)).equals(fixture), "a failed migration wrote to the database");
+  assert.ok(Object.hasOwn(JSON.parse(readFileSync(configPath(env), "utf8")), "projects"), "a failed migration stripped the config");
 });
 
 // Source of a process that opens the home's database and prints the version and the registry it found.

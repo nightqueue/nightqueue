@@ -19,7 +19,7 @@ import {
   updateRoadmapItem,
 } from "../../src/memory/roadmap.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { ensureProject, makeDir, makeHome, makeProject, settleThroughStore } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, orgIdOf, projectIdOf, settleThroughStore } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const PR_URL = "https://github.com/acme/alpha/pull/7";
@@ -52,7 +52,7 @@ function makeOrgItemHome(t, name) {
   const cwd = makeProject(t, env, "acme-mobile-app", { org: "acme" });
   makeProject(t, env, "acme-api", { org: "acme" });
   makeProject(t, env, "orbit-app", { org: "orbit" });
-  const item = saveRoadmapItem({ type: "improvement", org: "acme", title: "raise the node version" }, env);
+  const item = saveRoadmapItem({ type: "improvement", orgId: orgIdOf(env, "acme"), title: "raise the node version" }, env);
   return { env, cwd, item };
 }
 
@@ -60,7 +60,7 @@ function makeOrgItemHome(t, name) {
 function rowStatuses(env, itemId) {
   return Object.fromEntries(
     openDb(env)
-      .prepare("SELECT project, status FROM roadmap_item_projects WHERE item_id = ? ORDER BY project")
+      .prepare("SELECT p.name AS project, r.status FROM roadmap_item_projects r JOIN projects p ON p.id = r.project_id WHERE r.item_id = ? ORDER BY p.name")
       .all(itemId)
       .map((row) => [row.project, row.status]),
   );
@@ -69,7 +69,7 @@ function rowStatuses(env, itemId) {
 // The comments of an item as `kind project`, in order.
 function commentTrail(env, itemId) {
   return openDb(env)
-    .prepare("SELECT kind, project FROM roadmap_comments WHERE item_id = ? ORDER BY id")
+    .prepare("SELECT c.kind, p.name AS project FROM roadmap_comments c LEFT JOIN projects p ON p.id = c.project_id WHERE c.item_id = ? ORDER BY c.id")
     .all(itemId)
     .map((row) => `${row.kind} ${row.project ?? "-"}`);
 }
@@ -124,7 +124,7 @@ test("the prompt of an org item quotes the decisions of its org and nothing of a
   const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-prompt");
   const linked = saveDecision(
     {
-      org: "acme",
+      orgId: orgIdOf(env, "acme"),
       title: "every repo runs one node version",
       context: "drift",
       decision: "pin it in the toolchain",
@@ -132,7 +132,7 @@ test("the prompt of an org item quotes the decisions of its org and nothing of a
     },
     env,
   );
-  saveDecision({ org: "orbit", title: "orbit pins node too", context: "drift", decision: "pin it" }, env);
+  saveDecision({ orgId: orgIdOf(env, "orbit"), title: "orbit pins node too", context: "drift", decision: "pin it" }, env);
   const client = await connect(t, env);
   payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: item.id, decision_id: linked.id } }));
 
@@ -191,7 +191,7 @@ test("nightqueue queue add --roadmap needs --project <name|all> for an org item,
 test("an org item queued for `all` derives its status from every row, and closes once the last job is closed", async (t) => {
   const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-lifecycle");
   const store = openStore(env);
-  const queued = await store.roadmap.queueRoadmapItem({ id: item.id, project: "all" });
+  const queued = await store.roadmap.queueRoadmapItem({ id: item.id, allProjects: true });
   const [app, api] = ["acme-mobile-app", "acme-api"].map((name) => queued.jobs.find((job) => job.project === name));
   assert.equal(queued.jobs.length, 2);
   assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
@@ -227,7 +227,7 @@ test("an org item queued for `all` derives its status from every row, and closes
 test("closing an org item by hand cancels its open rows with one comment each, and leaves a done row alone", async (t) => {
   const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-manual-close");
   const store = openStore(env);
-  const queued = await store.roadmap.queueRoadmapItem({ id: item.id, project: "all" });
+  const queued = await store.roadmap.queueRoadmapItem({ id: item.id, allProjects: true });
   const app = queued.jobs.find((job) => job.project === "acme-mobile-app");
   await runTo(store, app.id, "done", { prUrl: PR_URL });
   await settleThroughStore(store, app.id);
@@ -237,7 +237,7 @@ test("closing an org item by hand cancels its open rows with one comment each, a
   assert.equal(cancelled.status, "cancelled");
   assert.deepEqual(rowStatuses(env, item.id), { "acme-api": "cancelled", "acme-mobile-app": "done" });
   const closing = openDb(env)
-    .prepare("SELECT author, project, body FROM roadmap_comments WHERE item_id = ? AND kind = 'closed' AND author = 'operator'")
+    .prepare("SELECT c.author, p.name AS project, c.body FROM roadmap_comments c LEFT JOIN projects p ON p.id = c.project_id WHERE c.item_id = ? AND c.kind = 'closed' AND c.author = 'operator'")
     .all(item.id);
   assert.deepEqual(closing.map((row) => [row.author, row.project]), [["operator", "acme-api"]]);
   assert.match(closing[0].body, /set to `cancelled` by the operator/);
@@ -247,16 +247,16 @@ test("closing an org item by hand cancels its open rows with one comment each, a
 test("a project reads only its own row and its own comments of an org item; the org reads the whole matrix", async (t) => {
   const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-visibility");
   const store = openStore(env);
-  await store.roadmap.queueRoadmapItem({ id: item.id, project: "all" });
-  await store.roadmap.addRoadmapComment({ id: item.id, body: "api only", author: "operator", viewer: "acme-api" });
+  await store.roadmap.queueRoadmapItem({ id: item.id, allProjects: true });
+  await store.roadmap.addRoadmapComment({ id: item.id, body: "api only", author: "operator", viewer: projectIdOf(env, "acme-api") });
 
-  const api = listRoadmap({ project: "acme-api" }, {}, env).items[0];
+  const api = listRoadmap({ projectId: projectIdOf(env, "acme-api") }, {}, env).items[0];
   assert.equal(api.project_status, "in_progress");
   assert.equal(api.projects, undefined);
-  const org = listRoadmap({ org: "acme" }, {}, env).items[0];
+  const org = listRoadmap({ orgId: orgIdOf(env, "acme") }, {}, env).items[0];
   assert.deepEqual(org.projects.map((row) => row.project), ["acme-api", "acme-mobile-app"]);
 
-  const seenByApp = getRoadmapItemDetail(item.id, { viewer: "acme-mobile-app" }, env);
+  const seenByApp = getRoadmapItemDetail(item.id, { viewer: projectIdOf(env, "acme-mobile-app") }, env);
   assert.deepEqual(seenByApp.projects.map((row) => row.project), ["acme-mobile-app"]);
   assert.ok(seenByApp.comments.every((comment) => comment.project === null || comment.project === "acme-mobile-app"));
   assert.equal(seenByApp.comments.some((comment) => comment.body === "api only"), false);
@@ -270,20 +270,20 @@ function linkerSource() {
   return [
     `import { openDb } from ${JSON.stringify(DB_MODULE_URL)};`,
     `import { linkOrgRow } from ${JSON.stringify(PROJECTS_MODULE_URL)};`,
-    "const [, , itemRaw, jobRaw, durationRaw] = process.argv;",
+    "const [, , itemRaw, jobRaw, durationRaw, projectId] = process.argv;",
     "const deadline = Date.now() + Number(durationRaw);",
     "let linked = 0;",
     "while (Date.now() < deadline) {",
-    "  if (linkOrgRow(openDb(process.env), { itemId: Number(itemRaw), project: 'acme-api', jobId: Number(jobRaw) })) linked += 1;",
+    "  if (linkOrgRow(openDb(process.env), { itemId: Number(itemRaw), projectId, jobId: Number(jobRaw) })) linked += 1;",
     "}",
     "process.stdout.write(String(linked));",
   ].join("\n");
 }
 
 // Runs one linker process to its end and returns how many times it linked.
-function runLinker(script, env, { itemId, jobId }) {
+function runLinker(script, env, { itemId, jobId, projectId }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [script, String(itemId), String(jobId), "400"], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [script, String(itemId), String(jobId), "400", projectId], { env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -301,7 +301,7 @@ test("two processes linking their own job to the same project row at once leave 
   const script = join(makeDir(t, "roadmap-org-queue-race-script"), "linker.mjs");
   writeFileSync(script, linkerSource(), "utf8");
 
-  const results = await Promise.all(jobs.map((job) => runLinker(script, env, { itemId: item.id, jobId: job.id })));
+  const results = await Promise.all(jobs.map((job) => runLinker(script, env, { itemId: item.id, jobId: job.id, projectId: projectIdOf(env, "acme-api") })));
   for (const result of results) assert.equal(result.code, 0, result.stderr);
   assert.equal(results.reduce((sum, result) => sum + result.linked, 0), 1, "exactly one process linked the row");
   const rows = openDb(env).prepare("SELECT job_id FROM roadmap_item_projects WHERE item_id = ?").all(item.id);

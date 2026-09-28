@@ -80,10 +80,10 @@ function roadmapLine(item) {
 }
 
 // The roadmap items the triager should know about before judging a request; any other phase, a run without an owner or a failed search gets nothing.
-async function roadmapSection({ target, project, query }, env) {
-  if (target !== "triager" || !project || typeof query !== "string" || !query.trim()) return "";
+async function roadmapSection({ target, projectId, query }, env) {
+  if (target !== "triager" || !projectId || typeof query !== "string" || !query.trim()) return "";
   try {
-    const items = await openStore(env).roadmap.searchRoadmap({ project, query });
+    const items = await openStore(env).roadmap.searchRoadmap({ projectId, query });
     return section("Related roadmap items", items, roadmapLine);
   } catch {
     return "";
@@ -110,7 +110,7 @@ export async function phaseContextBlock({ target, query, project, repoRoot, excl
     section("Applicable lessons", lessons, lessonLine),
     section("Project memory", memories, memoryLine),
     await indexSection({ target, projectId: owner.id, repoRoot, query }, env),
-    await roadmapSection({ target, project: owner.name, query }, env),
+    await roadmapSection({ target, projectId: owner.id, query }, env),
   ].filter(Boolean);
   return { project: owner.name, block: sections.join("\n\n") };
 }

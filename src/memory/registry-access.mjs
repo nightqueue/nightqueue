@@ -25,16 +25,6 @@ export function withRegistry(env, read) {
   return (readCurrent(env, read) ?? { value: read(openDb(env)) }).value;
 }
 
-// Resolves a project reference (registered name or a path inside a checkout) to the registered NAME, or null for global.
-export function resolveProjectName(reference, env = process.env) {
-  const raw = typeof reference === "string" ? reference.trim() : "";
-  if (!raw) return null;
-  return withRegistry(env, (db) => {
-    if (!db) return null;
-    return (registry.projectByName(db, raw) ?? registry.projectAt(db, raw))?.name ?? null;
-  });
-}
-
 // The registered project with its org, by NAME, or null.
 export function registeredProject(name, env = process.env) {
   if (typeof name !== "string" || !name) return null;
@@ -46,24 +36,6 @@ export function checkoutOfJob(job, env = process.env) {
   if (job && Object.hasOwn(job, "project_path")) return job.project_path ?? null;
   if (!job?.project_id) return null;
   return withRegistry(env, (db) => (db ? registry.projectById(db, job.project_id) : null))?.path ?? null;
-}
-
-// Tells whether an org of that NAME is registered.
-export function orgExists(name, env = process.env) {
-  return withRegistry(env, (db) => Boolean(db && registry.orgByName(db, name)));
-}
-
-// The names of the orgs, for a refusal that lists them.
-export function orgNames(env = process.env) {
-  return withRegistry(env, (db) => (db ? registry.listOrgs(db).map((org) => org.name) : []));
-}
-
-// The registered projects of an org that have a checkout, by org NAME.
-export function checkoutProjectsOfOrg(orgName, env = process.env) {
-  return withRegistry(env, (db) => {
-    const org = db ? registry.orgByName(db, orgName) : null;
-    return org ? registry.projectsOfOrg(db, org.id).filter((project) => project.path) : [];
-  });
 }
 
 // Resolves the project of a working directory, or null when the directory is not inside a registered project.

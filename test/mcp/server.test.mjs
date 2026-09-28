@@ -189,14 +189,27 @@ test("the lesson, memory, index, phase and pipeline tools refuse an unknown proj
     ["index_recall", { project: "ghost" }],
     ["context_for_phase", { target: "coder", project: "ghost" }],
     ["pipeline_log", { project: "ghost", slug: "a-run", tier: "simple", outcome: "investigated" }],
+    ["decision_save", { project: "ghost", title: "t", context: "c", decision: "d" }],
+    ["decision_list", { project: "ghost" }],
+    ["decision_recall", { project: "ghost" }],
+    ["roadmap_save", { project: "ghost", title: "t", type: "bug" }],
+    ["roadmap_get", { project: "ghost" }],
+    ["roadmap_search", { project: "ghost", query: "t" }],
   ]) {
     const refused = await client.callTool({ name, arguments: args });
     assert.equal(refused.isError, true, name);
     assert.match(textOf(refused), /unknown project `ghost`; known projects: alpha/, name);
   }
+  for (const name of ["decision_list", "roadmap_get"]) {
+    const refused = await client.callTool({ name, arguments: { org: "ghost" } });
+    assert.equal(refused.isError, true, name);
+    assert.match(textOf(refused), /unknown org `ghost`; existing orgs: default/, name);
+  }
   assert.equal(lessons(), 0, "a refused lesson_save wrote a row");
   assert.equal(count("project_index"), 0, "a refused index_save wrote a row");
   assert.equal(count("pipeline_runs"), 0, "a refused pipeline_log wrote a row");
+  assert.equal(count("decisions"), 0, "a refused decision_save wrote a row");
+  assert.equal(count("roadmap_items"), 0, "a refused roadmap_save wrote a row");
 
   mkdirSync(join(alpha, "src"));
   const inside = payloadOf(await client.callTool({ name: "lesson_save", arguments: { ...LESSON, project: join(alpha, "src") } }));

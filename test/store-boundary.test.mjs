@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
  * `src/store/` is the only path from the rest of `src/` to SQLite, and `src/memory/` is the store's
  * private implementation: outside those two directories nothing opens a connection and nothing
  * prepares a statement. What stays importable from `src/memory/` is only what never touches a
- * connection - the constants of `jobs.mjs` and `orgs.mjs`, the pure helpers of `schema.mjs`,
- * `project-name.mjs` and `scope.mjs`, and the view functions. A future offender is answered by
+ * connection - the constants of `jobs.mjs`, the pure helpers of `schema.mjs`,
+ * `registry-access.mjs` and `scope.mjs`, and the view functions. A future offender is answered by
  * moving that code behind the store, never by qualifying these regexes.
  */
 
@@ -47,7 +47,7 @@ test("no file outside src/store/ and src/memory/ imports the connection module",
   assert.deepEqual(
     found,
     [],
-    `\`src/memory/db.mjs\` opens and migrates SQLite: it belongs to the store alone. Import the constants and the pure helpers from \`src/memory/{schema,project-name,scope}.mjs\`, and reach every operation through \`openStore(env)\` (found in ${found.join(", ")})`,
+    `\`src/memory/db.mjs\` opens and migrates SQLite: it belongs to the store alone. Import the constants and the pure helpers from \`src/memory/{schema,registry-access,scope}.mjs\`, and reach every operation through \`openStore(env)\` (found in ${found.join(", ")})`,
   );
 });
 

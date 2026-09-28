@@ -4,7 +4,7 @@ import { runGitAsync } from "../host/git.mjs";
 import { killProcess, probePid } from "./registry.mjs";
 import { readRunState } from "./resume.mjs";
 import { isPrUrl } from "./stream.mjs";
-import { checkoutOfJob } from "../memory/project-name.mjs";
+import { checkoutOfJob } from "../memory/registry-access.mjs";
 
 export const WORKTREE_READ_TIMEOUT_MS = 5000;
 export const WORKTREE_REMOVE_TIMEOUT_MS = 60000;

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { closeDb } from "../src/memory/db.mjs";
 import { saveRoadmapItem } from "../src/memory/roadmap.mjs";
-import { makeHome, makeProject } from "./../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "./../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const LONG_TITLE = "keep the roadmap readable when a reader closes the pipe early ".repeat(4);
@@ -13,7 +13,7 @@ const LONG_TITLE = "keep the roadmap readable when a reader closes the pipe earl
 function roadmapHome(t, name, count) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  for (let index = 0; index < count; index += 1) saveRoadmapItem({ type: "improvement", project: "alpha", title: `${LONG_TITLE}${index}` }, env);
+  for (let index = 0; index < count; index += 1) saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: `${LONG_TITLE}${index}` }, env);
   closeDb(env);
   return env;
 }

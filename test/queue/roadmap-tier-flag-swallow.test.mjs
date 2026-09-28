@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { getRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
@@ -11,7 +11,7 @@ const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 function makeRoadmapHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  const item = saveRoadmapItem({ type: "improvement", project: "alpha", title: "rewrite runner heartbeat", detail: "survive a slow disk" }, env);
+  const item = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "rewrite runner heartbeat", detail: "survive a slow disk" }, env);
   return { env, item };
 }
 

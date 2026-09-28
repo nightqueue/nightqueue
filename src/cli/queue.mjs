@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSy
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { jobLogPath, queuePausedPath, queueResumePath } from "../config/paths.mjs";
-import { registrationOffer } from "../config/projects.mjs";
+import { registrationOffer, roadmapQueueTarget } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { launchOperator } from "../host/operator.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
@@ -337,7 +337,9 @@ async function addFromRoadmap(positionals, values, ctx) {
   if (positionals.length) throw new UserError(PROMPT_SOURCE_CONFLICT);
   refuseRunForAll(values);
   const id = requireInt("--roadmap", values.roadmap);
-  const queued = await openStore(ctx.env).roadmap.queueRoadmapItem({ id, project: values.project, ...addLimits(values) });
+  const store = openStore(ctx.env);
+  const target = await roadmapQueueTarget(store, values.project);
+  const queued = await store.roadmap.queueRoadmapItem({ id, ...target, ...addLimits(values) });
   for (const line of roadmapQueuedLines(queued)) ctx.out(line);
   return queued.jobs;
 }

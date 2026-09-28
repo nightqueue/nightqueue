@@ -14,7 +14,7 @@ import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { clearRunTerminal, readRunState, writeRunTerminal } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
-import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const REPAIRER = fileURLToPath(new URL("../../test-support/witness-repairer.mjs", import.meta.url));
@@ -90,7 +90,7 @@ function witness(env, { slug = SLUG, status = "done", prUrl = PR_URL } = {}) {
 
 // Records a roadmap item as linked to a job, the link the reconciliation has to move.
 function linkedItem(env, id, title) {
-  const item = saveRoadmapItem({ type: "improvement", project: "alpha", title }, env);
+  const item = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title }, env);
   assert.equal(linkRoadmapItemJob(item.id, id, env), true, "setup: the item was not linked to its job");
   return item.id;
 }

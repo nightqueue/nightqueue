@@ -1,4 +1,5 @@
 import { inTransaction } from "./db.mjs";
+import { attachNames } from "./registry.mjs";
 import { insertComment, jobRefs } from "./roadmap-comments.mjs";
 import {
   CLOSED_STATUSES,
@@ -20,15 +21,15 @@ import { ownerOf } from "./scope.mjs";
 
 const LIVE_JOB_LIST = sqlList(LIVE_JOB_STATUSES);
 
-// The job still holding the row of an org item for one project, or null when the project has no live job for it.
-export function liveRowJob(db, itemId, project) {
+// The job still holding the row of an org item for one project id, or null when the project has no live job for it.
+export function liveRowJob(db, itemId, projectId) {
   return (
     db
       .prepare(
         `SELECT j.id, j.status FROM roadmap_item_projects p JOIN jobs j ON j.id = p.job_id
-          WHERE p.item_id = ? AND p.project = ? AND j.status IN (${LIVE_JOB_LIST})`,
+          WHERE p.item_id = ? AND p.project_id = ? AND j.status IN (${LIVE_JOB_LIST})`,
       )
-      .get(itemId, project) ?? null
+      .get(itemId, projectId) ?? null
   );
 }
 
@@ -46,18 +47,18 @@ export function syncOrgStatus(db, itemId, author) {
 
 // Links the row of an org item for one project to the job built for it, moves it to `in_progress`, leaves the `queued`
 // comment and re-derives the item, in one transaction; false means a live job already holds that row.
-export function linkOrgRow(db, { itemId, project, jobId }) {
+export function linkOrgRow(db, { itemId, projectId, jobId }) {
   const job = { id: jobId };
   const statement = db.prepare(
-    `INSERT INTO roadmap_item_projects (item_id, project, status, job_id, job_status_seen)
+    `INSERT INTO roadmap_item_projects (item_id, project_id, status, job_id, job_status_seen)
      VALUES (?, ?, ?, ?, 'pending')
-     ON CONFLICT(item_id, project) DO UPDATE SET status = excluded.status, job_id = excluded.job_id,
+     ON CONFLICT(item_id, project_id) DO UPDATE SET status = excluded.status, job_id = excluded.job_id,
         job_status_seen = 'pending', closed_at = NULL, updated_at = datetime('now')
       WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = roadmap_item_projects.job_id AND j.status IN (${LIVE_JOB_LIST}))`,
   );
   return inTransaction(db, () => {
-    if (statement.run(itemId, project, JOB_TO_ROADMAP.queued.status, jobId).changes !== 1) return false;
-    insertComment(db, { itemId, project, ...commentFor(job, "queued", jobRefs(db, job)) });
+    if (statement.run(itemId, projectId, JOB_TO_ROADMAP.queued.status, jobId).changes !== 1) return false;
+    insertComment(db, { itemId, projectId, ...commentFor(job, "queued", jobRefs(db, job)) });
     syncOrgStatus(db, itemId, jobAuthor(jobId));
     return true;
   });
@@ -74,7 +75,7 @@ function applyJobRowToRow(db, row, job) {
   const { status } = roadmapTransition(job, row.job_status_seen);
   db.prepare("UPDATE roadmap_item_projects SET job_status_seen = ? WHERE id = ?").run(job.status, row.id);
   const comment = commentFor(job, event, jobRefs(db, job));
-  if (comment) insertComment(db, { itemId: row.item_id, project: row.project, ...comment });
+  if (comment) insertComment(db, { itemId: row.item_id, projectId: row.project_id, ...comment });
   if (status === null || status === row.status) return false;
   db.prepare(`UPDATE roadmap_item_projects SET ${STATUS_ASSIGNMENT}, updated_at = datetime('now') WHERE id = ?`).run(
     status,
@@ -88,7 +89,7 @@ function applyJobRowToRow(db, row, job) {
 export function followJobRows(db, job) {
   const rows = db
     .prepare(
-      "SELECT id, item_id, project, status, job_status_seen FROM roadmap_item_projects WHERE job_id = ? AND job_status_seen IS NOT ?",
+      "SELECT id, item_id, project_id, status, job_status_seen FROM roadmap_item_projects WHERE job_id = ? AND job_status_seen IS NOT ?",
     )
     .all(job.id, job.status);
   let moved = 0;
@@ -110,32 +111,32 @@ export function driftedRowJobIds(db) {
 
 // Cancels every open row of an org item closed by hand, one `closed` comment per row under its project; the caller holds the transaction.
 export function cancelOpenRows(db, { itemId, status, author = OPERATOR_AUTHOR }) {
-  const projects = db
+  const projectIds = db
     .prepare(
       `UPDATE roadmap_item_projects SET status = 'cancelled', closed_at = NULL, updated_at = datetime('now')
-        WHERE item_id = ? AND status IN (${sqlList(OPEN_STATUSES)}) RETURNING project`,
+        WHERE item_id = ? AND status IN (${sqlList(OPEN_STATUSES)}) RETURNING project_id`,
     )
     .all(itemId)
-    .map((row) => row.project);
+    .map((row) => row.project_id);
   const who = author === OPERATOR_AUTHOR ? "the operator" : author;
-  for (const project of projects) {
-    insertComment(db, { itemId, project, kind: "closed", author, body: `cancelled: the org item was set to \`${status}\` by ${who}` });
+  for (const projectId of projectIds) {
+    insertComment(db, { itemId, projectId, kind: "closed", author, body: `cancelled: the org item was set to \`${status}\` by ${who}` });
   }
-  return projects;
+  return projectIds;
 }
 
-// The project rows of some org items with their job's status, by item; a `viewer` project keeps only its own row.
+// The project rows of some org items with their job's status, by item and in project-name order; a `viewer` project id keeps only its own row.
 export function projectRowsByItem(db, itemIds, viewer = null) {
   const ids = [...new Set(itemIds)];
   const byItem = new Map(ids.map((id) => [id, []]));
   if (!ids.length) return byItem;
-  const filter = viewer === null ? "" : " AND p.project = ?";
+  const filter = viewer === null ? "" : " AND p.project_id = ?";
   const rows = db
     .prepare(
-      `SELECT p.item_id, p.project, p.status, p.job_id, p.closed_at, j.status AS job_status
-         FROM roadmap_item_projects p LEFT JOIN jobs j ON j.id = p.job_id
+      `SELECT p.item_id, owner.name AS project, p.status, p.job_id, p.closed_at, j.status AS job_status
+         FROM roadmap_item_projects p LEFT JOIN jobs j ON j.id = p.job_id LEFT JOIN projects owner ON owner.id = p.project_id
         WHERE p.item_id IN (${ids.map(() => "?").join(", ")})${filter}
-        ORDER BY p.item_id, p.project`,
+        ORDER BY p.item_id, owner.name`,
     )
     .all(...ids, ...(viewer === null ? [] : [viewer]));
   for (const row of rows) {
@@ -144,27 +145,29 @@ export function projectRowsByItem(db, itemIds, viewer = null) {
   return byItem;
 }
 
-// The item a job's project row belongs to, or null when the job carries no org row.
+// The item a job's project row belongs to, with its owner's names, or null when the job carries no org row.
 export function orgItemOfJob(db, jobId) {
-  return (
-    db
-      .prepare(
-        `SELECT r.id, r.scope, r.project, r.org FROM roadmap_item_projects p JOIN roadmap_items r ON r.id = p.item_id
-          WHERE p.job_id = ? ORDER BY p.id DESC LIMIT 1`,
-      )
-      .get(jobId) ?? null
-  );
+  const row = db
+    .prepare(
+      `SELECT r.id, r.scope, r.project_id, r.org_id FROM roadmap_item_projects p JOIN roadmap_items r ON r.id = p.item_id
+        WHERE p.job_id = ? ORDER BY p.id DESC LIMIT 1`,
+    )
+    .get(jobId);
+  return row ? attachNames(db, [row])[0] : null;
 }
 
 // The project rows whose status disagrees with what their job's current row means.
 function rowJobDrift(db) {
   return db
     .prepare(
-      `SELECT p.item_id AS id, r.scope, r.project, r.org, p.project AS row_project, p.status, p.job_id, p.job_status_seen,
-              j.status AS job_status, j.result
+      `SELECT p.item_id AS id, r.scope, item_project.name AS project, item_org.name AS org, row_owner.name AS row_project,
+              p.status, p.job_id, p.job_status_seen, j.status AS job_status, j.result
          FROM roadmap_item_projects p JOIN jobs j ON j.id = p.job_id JOIN roadmap_items r ON r.id = p.item_id
+         LEFT JOIN projects row_owner ON row_owner.id = p.project_id
+         LEFT JOIN projects item_project ON item_project.id = r.project_id
+         LEFT JOIN orgs item_org ON item_org.id = r.org_id
         WHERE p.job_status_seen IS NOT j.status
-        ORDER BY p.item_id, p.project`,
+        ORDER BY p.item_id, row_owner.name`,
     )
     .all()
     .map((row) => ({ row, expected: roadmapTransition({ ...row, status: row.job_status }, row.job_status_seen).status }))
@@ -185,8 +188,9 @@ function rowJobDrift(db) {
 function orgDerivationDrift(db) {
   const rows = db
     .prepare(
-      `SELECT r.id, r.org, r.status, p.status AS row_status FROM roadmap_items r
-         JOIN roadmap_item_projects p ON p.item_id = r.id WHERE r.scope = 'org' ORDER BY r.id`,
+      `SELECT r.id, item_org.name AS org, r.status, p.status AS row_status FROM roadmap_items r
+         JOIN roadmap_item_projects p ON p.item_id = r.id LEFT JOIN orgs item_org ON item_org.id = r.org_id
+        WHERE r.scope = 'org' ORDER BY r.id`,
     )
     .all();
   const items = new Map();

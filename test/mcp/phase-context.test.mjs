@@ -105,8 +105,8 @@ test("a project with nothing to say produces an empty block, not a header", asyn
 
 test("only the triager gets the related roadmap items of its project, in the ref-title-status line", async (t) => {
   const { env, home } = makeRunningJob(t, "phase-context-roadmap");
-  const item = saveRoadmapItem({ type: "bug", project: "alpha", title: "the runner drops its lease", priority: 2 }, home);
-  saveRoadmapItem({ type: "chore", project: "alpha", title: "unrelated cleanup" }, home);
+  const item = saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "the runner drops its lease", priority: 2 }, home);
+  saveRoadmapItem({ type: "chore", projectId: projectIdOf(env, "alpha"), title: "unrelated cleanup" }, home);
 
   const triager = await phaseContextBlock({ target: "triager", query: "runner lease" }, env);
   assert.ok(

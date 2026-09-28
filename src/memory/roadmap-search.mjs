@@ -2,7 +2,8 @@ import { UserError } from "../config/errors.mjs";
 import { openDb } from "./db.mjs";
 import { truncateByCodePoint } from "./jobs.mjs";
 import { roadmapRef } from "./roadmap.mjs";
-import { requireOwnerTarget, visibility } from "./scope.mjs";
+import { attachNames } from "./registry.mjs";
+import { requireScopeTarget, visibility } from "./scope.mjs";
 import { ftsMatch } from "./search.mjs";
 
 export const ROADMAP_SEARCH_LIMIT = 5;
@@ -24,7 +25,7 @@ function optionalTerm(value) {
 // The comments a target reads: a project reads the item-level comments and its own project's, never a sibling's; an org reads every comment of its items.
 function commentRule(target) {
   if (target.scope === "org") return { clause: "1 = 1", values: [] };
-  return { clause: "(c.project IS NULL OR c.project = ?)", values: [target.project] };
+  return { clause: "(c.project_id IS NULL OR c.project_id = ?)", values: [target.projectId] };
 }
 
 // The prefix a path must start with to sit under the searched directory: the query itself when it ends with `/`.
@@ -101,12 +102,12 @@ function rankedTextHits(db, spec) {
 }
 
 // Up to five items an owner sees that match a query (title, detail, comment) or a file path its jobs touched; file matches come first, then by relevance.
-export function searchRoadmap({ query, file, project, org, limit } = {}, env = process.env, db = null) {
+export function searchRoadmap({ query, file, projectId, orgId, limit } = {}, env = process.env, db = null) {
   const text = optionalTerm(query);
   const path = optionalTerm(file);
   if (text === null && path === null) throw new UserError("roadmap search needs `query`, `file` or both");
   const connection = db ?? openDb(env);
-  const target = requireOwnerTarget({ project, org }, env);
+  const target = requireScopeTarget(connection, { projectId, orgId });
   const size = searchLimit(limit);
   const match = text === null ? null : ftsMatch(text);
   const candidates = [
@@ -119,7 +120,7 @@ export function searchRoadmap({ query, file, project, org, limit } = {}, env = p
     if (hits.length >= size) break;
     if (seen.has(row.id)) continue;
     seen.add(row.id);
-    hits.push(hitView(row, via));
+    hits.push(hitView(attachNames(connection, [row])[0], via));
   }
   return hits;
 }

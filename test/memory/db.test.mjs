@@ -11,10 +11,11 @@ import {
   openDb,
   vectorToBlob,
 } from "../../src/memory/db.mjs";
+import { resolveProjectRef } from "../../src/config/projects.mjs";
 import { listDecisions, saveDecision } from "../../src/memory/decisions.mjs";
-import { resolveProjectName } from "../../src/memory/project-name.mjs";
-import { buildLegacyHome } from "../../test-support/legacy-home.mjs";
-import { DOWNGRADE_TO_V5, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { openStore } from "../../src/store/open.mjs";
+import { buildLegacyHome, legacyConfig } from "../../test-support/legacy-home.mjs";
+import { DOWNGRADE_TO_V5, makeDir, makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
 const LESSON_COLUMNS = [
   "id",
@@ -40,7 +41,9 @@ const LESSON_COLUMNS = [
 
 const DECISION_COLUMNS = [
   "id",
-  "project",
+  "scope",
+  "project_id",
+  "org_id",
   "number",
   "title",
   "context",
@@ -48,20 +51,18 @@ const DECISION_COLUMNS = [
   "consequences",
   "status",
   "superseded_by",
+  "job_id",
   "created_at",
   "updated_at",
   "embedding",
   "embedding_model",
-  "scope",
-  "org",
-  "job_id",
 ];
 
 const ROADMAP_COLUMNS = [
   "id",
   "scope",
-  "project",
-  "org",
+  "project_id",
+  "org_id",
   "title",
   "detail",
   "status",
@@ -233,33 +234,33 @@ test("the decisions and roadmap tables are created with their columns, defaults 
   assert.ok(roadmapIndexes.includes("roadmap_items_order_idx"), `order index missing: ${roadmapIndexes.join(", ")}`);
   assert.ok(roadmapIndexes.includes("roadmap_items_job_idx"), `job index missing: ${roadmapIndexes.join(", ")}`);
 
-  db.prepare("INSERT INTO decisions (project, number, title, context, decision) VALUES (?, 1, ?, ?, ?)").run(
-    "alpha",
+  db.prepare("INSERT INTO decisions (project_id, number, title, context, decision) VALUES (?, 1, ?, ?, ?)").run(
+    null,
     "the queue owns the worktree",
     "two runners raced on one worktree",
     "one worktree per job",
   );
   assert.equal(db.prepare("SELECT status FROM decisions").get().status, "accepted");
   assert.throws(
-    () => db.prepare("INSERT INTO decisions (project, number, title, context, decision, status) VALUES (?, 2, ?, ?, ?, ?)").run("alpha", "t", "c", "d", "maybe"),
+    () => db.prepare("INSERT INTO decisions (project_id, number, title, context, decision, status) VALUES (?, 2, ?, ?, ?, ?)").run(null, "t", "c", "d", "maybe"),
     /CHECK constraint failed/,
   );
 
-  db.prepare("INSERT INTO roadmap_items (project, title, position) VALUES (?, ?, 1)").run("alpha", "deliver the roadmap");
+  db.prepare("INSERT INTO roadmap_items (project_id, title, position) VALUES (?, ?, 1)").run(null, "deliver the roadmap");
   assert.deepEqual(
     { ...db.prepare("SELECT status, priority, type FROM roadmap_items").get() },
     { status: "todo", priority: 5, type: "improvement" },
   );
   assert.throws(
-    () => db.prepare("INSERT INTO roadmap_items (project, title, type, position) VALUES (?, ?, ?, 1)").run("alpha", "t", "epic"),
+    () => db.prepare("INSERT INTO roadmap_items (project_id, title, type, position) VALUES (?, ?, ?, 1)").run(null, "t", "epic"),
     /CHECK constraint failed/,
   );
   assert.throws(
-    () => db.prepare("INSERT INTO roadmap_items (project, title, status, position) VALUES (?, ?, ?, 1)").run("alpha", "t", "open"),
+    () => db.prepare("INSERT INTO roadmap_items (project_id, title, status, position) VALUES (?, ?, ?, 1)").run(null, "t", "open"),
     /CHECK constraint failed/,
   );
   assert.throws(
-    () => db.prepare("INSERT INTO roadmap_items (project, title, priority, position) VALUES (?, ?, ?, 1)").run("alpha", "t", 10),
+    () => db.prepare("INSERT INTO roadmap_items (project_id, title, priority, position) VALUES (?, ?, ?, 1)").run(null, "t", 10),
     /CHECK constraint failed/,
   );
 });
@@ -298,8 +299,8 @@ test("the migration from user_version 2 keeps every row and adds the decisions s
 
   const db = openDb(env);
   const result = db
-    .prepare("INSERT INTO decisions (project, number, title, context, decision) VALUES (?, 1, ?, ?, ?)")
-    .run("alpha", "zebracrossing after the migration", "the mirror was created empty", "mirror it");
+    .prepare("INSERT INTO decisions (project_id, number, title, context, decision) VALUES (?, 1, ?, ?, ?)")
+    .run(null, "zebracrossing after the migration", "the mirror was created empty", "mirror it");
   assert.deepEqual(matchIds(db, "decisions_fts", '"zebracrossing"'), [Number(result.lastInsertRowid)]);
 });
 
@@ -560,9 +561,7 @@ test("migrateIfOutdated names the fix that actually works when the migration its
     return;
   }
   const env = makeHome(t, "db-migrate-write-refused");
-  const first = openDb(env);
-  first.exec(DOWNGRADE_TO_V5);
-  closeDb(env);
+  buildLegacyHome(env, { version: 5, mutate: (db) => db.exec(DOWNGRADE_TO_V5) });
   chmodSync(dbPath(env), 0o444);
   t.after(() => chmodSync(dbPath(env), 0o644));
 
@@ -603,34 +602,43 @@ test("the migration from user_version 4 adds the tier columns once and keeps eve
 
 test("the migration from user_version 5 gives every existing row the project scope and keeps its numbering", (t) => {
   const env = makeHome(t, "db-migrate-v5");
-  makeProject(t, env, "alpha", { org: "acme" });
-  const first = openDb(env);
-  for (const number of [1, 2, 3]) {
-    first
-      .prepare("INSERT INTO decisions (project, number, title, context, decision) VALUES (?, ?, ?, ?, ?)")
-      .run("alpha", number, `decision ${number}`, "context", "decision");
-  }
-  first.prepare("INSERT INTO roadmap_items (project, title, position) VALUES (?, ?, 1)").run("alpha", "deliver it");
-  first.exec(DOWNGRADE_TO_V5);
-  assert.equal(first.prepare("PRAGMA user_version").get().user_version, 5);
-  assert.equal(columnsOf(first, "decisions").includes("scope"), false, "the downgrade kept the scope column");
-  closeDb(env);
+  const repo = makeDir(t, "db-migrate-v5-alpha");
+  mkdirSync(join(repo, ".git"));
+  const config = legacyConfig({ orgs: { acme: null }, projects: { alpha: { path: repo, org: "acme" } } });
+  buildLegacyHome(env, {
+    version: 5,
+    config,
+    mutate(first) {
+      for (const number of [1, 2, 3]) {
+        first
+          .prepare("INSERT INTO decisions (project, number, title, context, decision) VALUES (?, ?, ?, ?, ?)")
+          .run("alpha", number, `decision ${number}`, "context", "decision");
+      }
+      first.prepare("INSERT INTO roadmap_items (project, title, position) VALUES (?, ?, 1)").run("alpha", "deliver it");
+      first.exec(DOWNGRADE_TO_V5);
+      assert.equal(columnsOf(first, "decisions").includes("scope"), false, "the downgrade kept the scope column");
+    },
+  });
 
   const db = openDb(env);
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, 18);
   assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
   assert.deepEqual(columnsOf(db, "roadmap_items").sort(), [...ROADMAP_COLUMNS].sort());
-  assert.equal(db.prepare("SELECT COUNT(*) AS total FROM decisions WHERE scope = 'project' AND org IS NULL").get().total, 3);
+  const alphaId = projectIdOf(env, "alpha");
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS total FROM decisions WHERE scope = 'project' AND project_id = ? AND org_id IS NULL").get(alphaId).total,
+    3,
+  );
   assert.equal(db.prepare("SELECT scope FROM roadmap_items").get().scope, "project");
   assert.deepEqual(
     db.prepare("PRAGMA index_info(decisions_number_idx)").all().map((column) => column.name),
-    ["project", "number"],
+    ["project_id", "number"],
     "the original unique index was rewritten",
   );
 
-  assert.equal(saveDecision({ project: "alpha", title: "after", context: "c", decision: "d" }, env).number, 4);
-  assert.equal(saveDecision({ org: "acme", title: "org after", context: "c", decision: "d" }, env).number, 1);
-  assert.deepEqual(listDecisions({ project: "alpha" }, env).map((row) => row.number), [1, 1, 2, 3, 4]);
+  assert.equal(saveDecision({ projectId: projectIdOf(env, "alpha"), title: "after", context: "c", decision: "d" }, env).number, 4);
+  assert.equal(saveDecision({ orgId: orgIdOf(env, "acme"), title: "org after", context: "c", decision: "d" }, env).number, 1);
+  assert.deepEqual(listDecisions({ projectId: projectIdOf(env, "alpha") }, env).map((row) => row.number), [1, 1, 2, 3, 4]);
 });
 
 test("the jobs table of the queue is created with its columns, defaults and claim indexes", (t) => {
@@ -733,24 +741,26 @@ test("a vector stored in the database comes back with the same values", (t) => {
   assert.deepEqual([...blobToVector(stored)], [1, 0, 0, 0]);
 });
 
-test("a project reference resolves by name, by path inside it, and never guesses", (t) => {
+test("a project reference resolves by name and by path inside it, is global outside every checkout, and refuses an unknown name", async (t) => {
   const env = makeHome(t, "db-project");
   const repo = makeProject(t, env, "alpha");
   const deep = join(repo, "src", "deep");
   mkdirSync(deep, { recursive: true });
-  assert.equal(resolveProjectName("alpha", env), "alpha");
-  assert.equal(resolveProjectName(repo, env), "alpha");
-  assert.equal(resolveProjectName(deep, env), "alpha");
-  assert.equal(resolveProjectName("nightqueue-unknown-project", env), null);
-  assert.equal(resolveProjectName("", env), null);
-  assert.equal(resolveProjectName(undefined, env), null);
+  const store = openStore(env);
+  assert.equal((await resolveProjectRef(store, "alpha")).name, "alpha");
+  assert.equal((await resolveProjectRef(store, repo)).name, "alpha");
+  assert.equal((await resolveProjectRef(store, deep)).name, "alpha");
+  assert.equal(await resolveProjectRef(store, makeDir(t, "db-project-outside")), null);
+  await assert.rejects(resolveProjectRef(store, "nightqueue-unknown-project"), /unknown project `nightqueue-unknown-project`; known projects: alpha/);
+  assert.equal(await resolveProjectRef(store, ""), null);
+  assert.equal(await resolveProjectRef(store, undefined), null);
 });
 
 test("a v10 database gains decisions.job_id and its index, keeping every decision with no job", (t) => {
   const env = makeHome(t, "db-migrate-v10-job-id");
   makeProject(t, env, "alpha");
   const first = openDb(env);
-  const saved = saveDecision({ project: "alpha", title: "t", context: "c", decision: "d" }, env);
+  const saved = saveDecision({ projectId: projectIdOf(env, "alpha"), title: "t", context: "c", decision: "d" }, env);
   first.exec("DROP INDEX decisions_job_idx; ALTER TABLE decisions DROP COLUMN job_id; PRAGMA user_version = 10;");
   closeDb(env);
 

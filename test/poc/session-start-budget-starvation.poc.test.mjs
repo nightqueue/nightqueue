@@ -12,7 +12,7 @@ function addLesson(env, { title, prevention }) {
 
 // Stores one accepted decision of the project with a realistic-length title.
 function addDecision(env, { title, decision }) {
-  return saveDecision({ project: "alpha", title, context: `${title} had to be settled`, decision, status: "accepted" }, env);
+  return saveDecision({ projectId: projectIdOf(env, "alpha"), title, context: `${title} had to be settled`, decision, status: "accepted" }, env);
 }
 
 // A title built from real words, spread across the [min, max] char range the way real ADR titles vary in length.

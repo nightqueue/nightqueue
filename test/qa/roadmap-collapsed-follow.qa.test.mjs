@@ -35,7 +35,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
 import { openStore, withReadOnlyStore } from "../../src/store/open.mjs";
-import { makeHome, makeProject, mergedChecklist } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, mergedChecklist, projectIdOf } from "../../test-support/memory.mjs";
 
 const PR_URL = "https://github.com/acme/alpha/pull/9";
 
@@ -52,7 +52,7 @@ test("a done follow that crashed once is never recovered by a later settleClose 
   makeProject(t, env, "alpha");
   const store = openStore(env);
 
-  const item = await store.roadmap.saveRoadmapItem({ type: "improvement", project: "alpha", title: "collapsed follow repro" });
+  const item = await store.roadmap.saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "collapsed follow repro" });
   const { job } = await store.roadmap.queueRoadmapItem({ id: item.id });
   assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }), "setup: the job was not claimed");
   assert.equal((await store.roadmap.getRoadmapItem(item.id)).job_status_seen ?? null, "running", "setup: claim did not follow to running");

@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { dbPath } from "../src/config/paths.mjs";
-import { closeDb, openDb } from "../src/memory/db.mjs";
+import { closeDb } from "../src/memory/db.mjs";
 import { saveDecision } from "../src/memory/decisions.mjs";
 import { saveRoadmapItem } from "../src/memory/roadmap.mjs";
-import { DOWNGRADE_TO_V5, makeDir, makeHome, makeOrg, makeProject } from "../test-support/memory.mjs";
+import { buildLegacyHome, legacyConfig } from "../test-support/legacy-home.mjs";
+import { DOWNGRADE_TO_V5, makeDir, makeHome, makeOrg, makeProject, orgIdOf, projectIdOf } from "../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const LONG_ORG = "acme-platform-group";
@@ -22,37 +24,42 @@ function makeOrgHome(t, name) {
   const env = makeHome(t, name);
   const cwd = makeProject(t, env, "acme-mobile-app", { org: "acme" });
   makeProject(t, env, "orbit-app", { org: "orbit" });
-  saveDecision({ project: "acme-mobile-app", title: "the app owns its cache", context: "c", decision: "d", status: "accepted" }, env);
-  saveDecision({ org: "acme", title: "one queue per product", context: "c", decision: "d", status: "accepted" }, env);
-  saveDecision({ org: "orbit", title: "orbit decides alone", context: "c", decision: "d", status: "accepted" }, env);
-  saveRoadmapItem({ type: "improvement", project: "acme-mobile-app", title: "deliver the app cache" }, env);
-  saveRoadmapItem({ type: "improvement", org: "acme", title: "raise the node version" }, env);
+  saveDecision({ projectId: projectIdOf(env, "acme-mobile-app"), title: "the app owns its cache", context: "c", decision: "d", status: "accepted" }, env);
+  saveDecision({ orgId: orgIdOf(env, "acme"), title: "one queue per product", context: "c", decision: "d", status: "accepted" }, env);
+  saveDecision({ orgId: orgIdOf(env, "orbit"), title: "orbit decides alone", context: "c", decision: "d", status: "accepted" }, env);
+  saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "acme-mobile-app"), title: "deliver the app cache" }, env);
+  saveRoadmapItem({ type: "improvement", orgId: orgIdOf(env, "acme"), title: "raise the node version" }, env);
   return { env, cwd };
 }
 
 // A home whose database is exactly what the build before the owner scope wrote: three decisions, one roadmap item, no `scope`/`org` column, user_version 5.
 function makeV5Home(t, name) {
   const env = makeHome(t, name);
-  const cwd = makeProject(t, env, "alpha", { org: "acme" });
-  const db = openDb(env);
-  for (const number of [1, 2, 3]) {
-    db.prepare("INSERT INTO decisions (project, number, title, context, decision) VALUES (?, ?, ?, ?, ?)").run(
-      "alpha",
-      number,
-      `legacy decision ${number}`,
-      "old context",
-      `old decision ${number}`,
-    );
-  }
-  db.prepare("INSERT INTO roadmap_items (project, title, position) VALUES (?, ?, 1)").run("alpha", "legacy roadmap item");
-  db.exec(DOWNGRADE_TO_V5);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 5);
-  assert.equal(
-    db.prepare("PRAGMA table_info(decisions)").all().some((column) => column.name === "scope"),
-    false,
-    "the fixture kept the scope column, so it is not a v5 database",
-  );
-  closeDb(env);
+  const cwd = makeDir(t, `${name}-alpha`);
+  mkdirSync(join(cwd, ".git"));
+  const config = legacyConfig({ orgs: { acme: null }, projects: { alpha: { path: realpathSync(cwd), org: "acme" } } });
+  buildLegacyHome(env, {
+    version: 5,
+    config,
+    mutate(db) {
+      for (const number of [1, 2, 3]) {
+        db.prepare("INSERT INTO decisions (project, number, title, context, decision) VALUES (?, ?, ?, ?, ?)").run(
+          "alpha",
+          number,
+          `legacy decision ${number}`,
+          "old context",
+          `old decision ${number}`,
+        );
+      }
+      db.prepare("INSERT INTO roadmap_items (project, title, position) VALUES (?, ?, 1)").run("alpha", "legacy roadmap item");
+      db.exec(DOWNGRADE_TO_V5);
+      assert.equal(
+        db.prepare("PRAGMA table_info(decisions)").all().some((column) => column.name === "scope"),
+        false,
+        "the fixture kept the scope column, so it is not a v5 database",
+      );
+    },
+  });
   return { env, cwd };
 }
 
@@ -140,7 +147,7 @@ test("a short org name stays in the NUMBER column and a long one is never glued 
 
   const wide = makeHome(t, "decision-org-width-long");
   const wideCwd = makeProject(t, wide, "alpha", { org: LONG_ORG });
-  saveDecision({ org: LONG_ORG, title: "one queue per product", context: "c", decision: "d", status: "accepted" }, wide);
+  saveDecision({ orgId: orgIdOf(wide, LONG_ORG), title: "one queue per product", context: "c", decision: "d", status: "accepted" }, wide);
   const result = runCli(wide, ["decision", "list"], { cwd: wideCwd });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, new RegExp(`^${LONG_ORG}#1 accepted\\s+\\d{4}-\\d{2}-\\d{2}\\s+one queue per product$`, "m"));
@@ -189,7 +196,7 @@ test("org rename carries the decisions and the roadmap items of the org with it"
 test("an org with no project is still refused a removal while it owns decisions or roadmap items", (t) => {
   const { env, cwd } = makeOrgHome(t, "org-remove-rows");
   makeOrg(env, "solo");
-  saveDecision({ org: "solo", title: "solo decides", context: "c", decision: "d" }, env);
+  saveDecision({ orgId: orgIdOf(env, "solo"), title: "solo decides", context: "c", decision: "d" }, env);
   const refused = runCli(env, ["org", "remove", "solo"], { cwd });
   assert.equal(refused.status, 1);
   assert.match(refused.stderr, /cannot remove org `solo`: it still owns 1 decisions/);

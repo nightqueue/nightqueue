@@ -20,7 +20,7 @@ function seedFailedJob(env) {
 // Inserts an item already linked to a job, the way items were linked before comments existed.
 function insertItem(db, { status, jobId }) {
   return db
-    .prepare("INSERT INTO roadmap_items (project, title, status, position, job_id, job_status_seen) VALUES ('alpha', 't', ?, 1, ?, NULL) RETURNING id")
+    .prepare("INSERT INTO roadmap_items (project_id, title, status, position, job_id, job_status_seen) VALUES ((SELECT id FROM projects WHERE name = 'alpha'), 't', ?, 1, ?, NULL) RETURNING id")
     .get(status, jobId).id;
 }
 

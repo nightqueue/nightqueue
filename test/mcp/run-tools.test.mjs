@@ -130,7 +130,7 @@ test("outside a job the project and the slug are both required, and a registered
 
 test("`run_outcome` never moves the roadmap item the job came from: only the job's own row does", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-run-tools-roadmap");
-  const item = saveRoadmapItem({ type: "improvement", project: "alpha", title: "deliver the thing" }, env);
+  const item = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "deliver the thing" }, env);
   assert.equal(linkRoadmapItemJob(item.id, job.id, env), true, "setup: the item was not linked to its job");
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 

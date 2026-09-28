@@ -8,7 +8,7 @@ import { closeDb, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memo
 import { followDriftedJobs, getRoadmapItemDetail, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { openStore, openStoreReadOnly, withReadOnlyStore } from "../../src/store/open.mjs";
 import { makeHostEnv } from "../../test-support/host.mjs";
-import { makeDir, makeHome, makeOrg, makeProject, seedClosedJob, seedLegacyV16Roadmap } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeOrg, makeProject, projectIdOf, seedClosedJob, seedLegacyV16Roadmap } from "../../test-support/memory.mjs";
 
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
 
@@ -110,8 +110,8 @@ test("the v17 migration maps every legacy status and horizon, bumps nightqueue #
   assert.deepEqual(migratedRows(db), Object.fromEntries(Object.entries(EXPECTED).map(([id, row]) => [id, row])));
   const done = db.prepare("SELECT closed_at, updated_at FROM roadmap_items WHERE id = 6").get();
   assert.equal(done.closed_at, done.updated_at);
-  assert.deepEqual(indexColumns(db, "roadmap_items_order_idx"), ["scope", "project", "org", "priority", "position"]);
-  assert.deepEqual(indexColumns(db, "roadmap_items_org_order_idx"), ["org", "priority", "position"]);
+  assert.deepEqual(indexColumns(db, "roadmap_items_order_idx"), ["scope", "project_id", "org_id", "priority", "position"]);
+  assert.deepEqual(indexColumns(db, "roadmap_items_org_order_idx"), ["org_id", "priority", "position"]);
   assert.deepEqual(indexColumns(db, "roadmap_items_job_idx"), ["job_id"]);
 });
 
@@ -122,7 +122,7 @@ test("a reopen of the migrated database changes nothing, and the v16 INDEXES sti
   const reopened = openDb(env);
   assert.deepEqual(migratedRows(reopened), before);
   assert.doesNotThrow(() => reopened.exec(V16_INDEXES));
-  assert.deepEqual(indexColumns(reopened, "roadmap_items_order_idx"), ["scope", "project", "org", "priority", "position"]);
+  assert.deepEqual(indexColumns(reopened, "roadmap_items_order_idx"), ["scope", "project_id", "org_id", "priority", "position"]);
 });
 
 test("the migration keeps the id counter, so a new item never reuses the id of a deleted one", (t) => {
@@ -130,7 +130,7 @@ test("the migration keeps the id counter, so a new item never reuses the id of a
   makeProject(t, env, "alpha");
   seedLegacyV16Roadmap(env, { items: [{ id: 1, project: "alpha", horizon: "now", status: "open", position: 1 }], sequence: 40 });
 
-  const saved = saveRoadmapItem({ type: "improvement", project: "alpha", title: "new" }, env);
+  const saved = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "new" }, env);
   assert.equal(saved.id, 41);
 });
 
@@ -232,7 +232,7 @@ test("a v16 home is diagnosed read-only without a crash, then migrated for a rea
   assert.equal(diskVersion(env), 16);
 
   await openStoreReadOnly(env).migrateIfOutdated();
-  const listed = await withReadOnlyStore(env, (store) => store.roadmap.listRoadmap("alpha", {}));
+  const listed = await withReadOnlyStore(env, (store) => store.roadmap.listRoadmap(projectIdOf(env, "alpha"), {}));
   assert.deepEqual(
     listed.items.map((item) => ({ id: item.id, status: item.status, priority: item.priority })),
     [{ id: 1, status: "todo", priority: 5 }],

@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { getRoadmapItem, getRoadmapItemDetail, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
-import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
@@ -235,9 +235,9 @@ function makeTwoProjectHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   makeProject(t, env, "beta");
-  const own = saveDecision({ ...DECISION, project: "alpha", status: "accepted" }, env);
-  const foreign = saveDecision({ ...DECISION, project: "beta", title: "beta keeps its own log", status: "accepted" }, env);
-  const foreignItem = saveRoadmapItem({ type: "improvement", project: "beta", title: "beta delivers its dashboard" }, env);
+  const own = saveDecision({ ...DECISION, projectId: projectIdOf(env, "alpha"), status: "accepted" }, env);
+  const foreign = saveDecision({ ...DECISION, projectId: projectIdOf(env, "beta"), title: "beta keeps its own log", status: "accepted" }, env);
+  const foreignItem = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "beta"), title: "beta delivers its dashboard" }, env);
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "rewrite the runner" }, env);
   return { env, own, foreign, foreignItem, job };
 }
@@ -321,7 +321,7 @@ test("inside a job decision_save stamps job_id, refuses supersedes, and refuses 
 
 test("inside a job roadmap_comment and roadmap_get by id refuse another project's item and sign the job's own comments", async (t) => {
   const { env, foreignItem, job } = makeTwoProjectHome(t, "mcp-roadmap-comment-job");
-  const own = saveRoadmapItem({ type: "bug", project: "alpha", title: "alpha crashes" }, env);
+  const own = saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "alpha crashes" }, env);
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const refused = await client.callTool({ name: "roadmap_comment", arguments: { id: foreignItem.id, body: "leak" } });

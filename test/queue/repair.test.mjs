@@ -11,7 +11,7 @@ import { getRoadmapItem, linkRoadmapItemJob, saveRoadmapItem } from "../../src/m
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { reclassifyFromLog } from "../../src/queue/repair.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
-import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import {
   attemptMarker,
   codeChangePublishedEvent,
@@ -74,7 +74,7 @@ function finishedJob(env, { status = "gate", result = CLEAN_ENDING, log = interm
 
 // Records a roadmap item as linked to a job, the link the repair has to move.
 function linkedItem(env, id, title) {
-  const item = saveRoadmapItem({ type: "improvement", project: "alpha", title }, env);
+  const item = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title }, env);
   assert.equal(linkRoadmapItemJob(item.id, id, env), true, "setup: the item was not linked to its job");
   return item.id;
 }

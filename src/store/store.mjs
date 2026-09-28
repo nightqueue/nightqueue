@@ -123,14 +123,14 @@
 /**
  * @typedef {object} RoadmapDomain
  * @property {(id: number) => Promise<object|null>} getRoadmapItem
- * @property {(id: number, options?: {viewer?: string|null}) => Promise<object>} getRoadmapItemDetail one item untruncated with its comment thread; a project viewer reads only what its project sees
+ * @property {(id: number, options?: {viewer?: string|null}) => Promise<object>} getRoadmapItemDetail one item untruncated with its comment thread; a project viewer (by id) reads only what its project sees
  * @property {(item?: object) => Promise<object>} saveRoadmapItem `type` is required
  * @property {(id: number, patch?: object) => Promise<object>} updateRoadmapItem a move back from review or done appends `reopened`, signed by `patch.author` (the operator by default)
- * @property {(spec: {id: number, body: string, author?: string, viewer?: string|null}) => Promise<object>} addRoadmapComment appends a `note`; comments are append-only
+ * @property {(spec: {id: number, body: string, author?: string, viewer?: string|null}) => Promise<object>} addRoadmapComment (viewer: a project id) appends a `note`; comments are append-only
  * @property {(jobId: number) => Promise<string|null>} roadmapRefOfJob `<owner>#<id>` of the item a job was queued from, or null
  * @property {(options?: {dryRun?: boolean}) => Promise<{items: number, written: number, skipped: number}>} backfillRoadmap the one-off synthesis of the comments of items linked before comments existed; idempotent
  * @property {(owner: object, filters?: {status?: string[], priority?: number[], type?: string[]}) => Promise<object>} listRoadmap every item the owner sees, in workflow order, then org first, then priority (1 first) and position; an org item carries `project_status` (a project's own row) or `projects` (the org's matrix)
- * @property {(spec: {query?: string, file?: string, project?: string, org?: string, limit?: number}) => Promise<object[]>} searchRoadmap up to five items the owner sees matching the text or a file path its jobs touched
+ * @property {(spec: {query?: string, file?: string, projectId?: string|null, orgId?: string, limit?: number}) => Promise<object[]>} searchRoadmap up to five items the owner sees matching the text or a file path its jobs touched
  * @property {(id: number) => Promise<object>} queueableRoadmapItem
  * @property {(id: number, jobId: number) => Promise<boolean>} linkRoadmapItemJob links an open item to its job and moves it to `in_progress`; false means a concurrent caller linked it first
  * @property {(jobId: number) => Promise<number>} followJob moves the items and org project rows linked to a job by what its current row means, re-deriving each org item; idempotent, it returns how many moved
@@ -147,7 +147,7 @@
  * @property {(name: string) => Promise<object|null>} byName
  * @property {(id: string) => Promise<object|null>} byId
  * @property {(name: string) => Promise<object>} add
- * @property {(id: string, name: string) => Promise<object>} rename one row, in one transaction with the rows that still hold org names
+ * @property {(id: string, name: string) => Promise<object>} rename one row: every table owns rows by the org id
  * @property {(id: string) => Promise<object>} remove refused while a project or a row still belongs to it
  */
 
@@ -160,6 +160,7 @@
  * @property {(cwd: string) => Promise<object|null>} at the project whose checkout contains the directory
  * @property {(orgId: string) => Promise<object[]>} ofOrg
  * @property {(spec: {name: string, path: string|null, orgId: string}) => Promise<object>} add
+ * @property {(id: string, name: string) => Promise<object>} rename one row: every table owns rows by the project id
  * @property {(id: string, spec: {orgId?: string, path?: string|null}) => Promise<object>} move
  * @property {(id: string) => Promise<object>} remove refused while a row still belongs to it
  */
@@ -292,7 +293,7 @@ export const STORE_CONTRACT = Object.freeze({
     "queueRoadmapItem",
   ],
   orgs: ["list", "byName", "byId", "add", "rename", "remove"],
-  projects: ["list", "byName", "byId", "at", "ofOrg", "add", "move", "remove"],
+  projects: ["list", "byName", "byId", "at", "ofOrg", "add", "rename", "move", "remove"],
   "": ["health", "connect", "close", "checkpoint", "migrateIfOutdated"],
 });
 

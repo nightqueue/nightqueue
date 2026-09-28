@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { dbPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { openStore, openStoreReadOnly } from "../../src/store/open.mjs";
-import { makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf, seedClosedJob } from "../../test-support/memory.mjs";
 
 test("one store per database path, and one per kind", (t) => {
   const env = makeHome(t, "store-open");
@@ -41,7 +41,7 @@ test("a read-only store answers the decision titles, a pure read", async (t) => 
   const env = makeHome(t, "store-readonly-titles");
   makeProject(t, env, "alpha");
   await openStore(env).decisions.saveDecision({
-    project: "alpha",
+    projectId: projectIdOf(env, "alpha"),
     title: "the queue owns the worktree",
     context: "two runners raced",
     decision: "one worktree per job",
@@ -49,7 +49,7 @@ test("a read-only store answers the decision titles, a pure read", async (t) => 
   });
   const store = openStoreReadOnly(env);
 
-  const titles = await store.decisions.decisionTitles({ project: "alpha" });
+  const titles = await store.decisions.decisionTitles({ projectId: projectIdOf(env, "alpha") });
   assert.deepEqual(
     titles.map((row) => row.title),
     ["the queue owns the worktree"],
@@ -62,7 +62,7 @@ test("a read-only store answers the proposals of a job and the ones left open on
   const writer = openStore(env);
   const jobId = seedClosedJob(env, { prompt: "propose a rule" });
   const saved = await writer.decisions.saveDecision({
-    project: "alpha",
+    projectId: projectIdOf(env, "alpha"),
     title: "the queue owns the worktree",
     context: "two runners raced",
     decision: "one worktree per job",

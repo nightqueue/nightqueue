@@ -3,7 +3,7 @@ import { sameBranch } from "./branch-name.mjs";
 import { defaultCloseDeps } from "./close-deps.mjs";
 import { closedLine, parseCloseChecklist } from "./close-view.mjs";
 import { releaseJobWorktree } from "./worktree.mjs";
-import { checkoutOfJob } from "../memory/project-name.mjs";
+import { checkoutOfJob } from "../memory/registry-access.mjs";
 
 export const CLOSE_LEASE_SLACK_S = 60;
 export const PR_CLOSED_NOTE = "pull request closed without merge";

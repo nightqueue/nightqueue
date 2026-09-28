@@ -4,8 +4,6 @@ import { projectContaining } from "../config/projects.mjs";
 import { DEFAULT_ORG_NAME } from "../config/schema.mjs";
 import { hasColumn } from "./columns.mjs";
 import { DATA_TABLES } from "./ddl.mjs";
-import { renameOrgRows } from "./orgs.mjs";
-import { inTransaction } from "./tx.mjs";
 
 // The only SQL over `orgs` and `projects`: every other module reaches a name through here.
 
@@ -107,20 +105,28 @@ export function ensureDefaultOrg(db) {
   db.prepare("INSERT INTO orgs (id, name) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM orgs)").run(newId(), DEFAULT_ORG_NAME);
 }
 
-// Renames an org and, while data rows still hold org names, moves them in the same transaction.
+// Renames an org: one row, because every other table owns rows by the org's id.
 export function renameOrg(db, { id, name }) {
-  return inTransaction(db, () => {
-    const org = orgById(db, id);
-    if (!org) throw new UserError(`unknown org id \`${id}\``);
-    try {
-      db.prepare("UPDATE orgs SET name = ? WHERE id = ?").run(name, id);
-    } catch (err) {
-      if (isUniqueViolation(err, "orgs.name")) throw new UserError(`org \`${name}\` already exists`);
-      throw err;
-    }
-    renameOrgRows(db, org.name, name);
-    return orgById(db, id);
-  });
+  if (!orgById(db, id)) throw new UserError(`unknown org id \`${id}\``);
+  try {
+    db.prepare("UPDATE orgs SET name = ? WHERE id = ?").run(name, id);
+  } catch (err) {
+    if (isUniqueViolation(err, "orgs.name")) throw new UserError(`org \`${name}\` already exists`);
+    throw err;
+  }
+  return orgById(db, id);
+}
+
+// Renames a project: one row, because every other table owns rows by the project's id.
+export function renameProject(db, { id, name }) {
+  const project = projectById(db, id);
+  if (!project) throw new UserError(`unknown project id \`${id}\``);
+  try {
+    db.prepare("UPDATE projects SET name = ? WHERE id = ?").run(name, id);
+  } catch (err) {
+    throw projectWriteError(db, err, { name, path: project.path });
+  }
+  return projectById(db, id);
 }
 
 // Moves a project to another org and/or gives it a new checkout path; only the fields passed change.
@@ -135,20 +141,12 @@ export function moveProject(db, { id, orgId, path }) {
   return projectById(db, id);
 }
 
-// Counts the rows of one table an owner holds: by id where the table has the id column, by name while it still has the name one.
-function ownedIn(db, table, { idColumn, nameColumn, id, name, scoped }) {
-  if (hasColumn(db, table, idColumn)) return db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${idColumn} = ?`).get(id).n;
-  if (!hasColumn(db, table, nameColumn)) return 0;
-  const orgScope = scoped && hasColumn(db, table, "scope") ? "scope = 'org' AND " : "";
-  return db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${orgScope}${nameColumn} = ?`).get(name).n;
-}
-
-// The rows a project or an org still owns, per data table and only where there is any.
+// The rows a project or an org still owns, per data table that has the owner's id column and only where there is any.
 export function ownedRowCounts(db, { projectId, orgId }) {
-  const owner = projectId
-    ? { idColumn: "project_id", nameColumn: "project", id: projectId, name: projectById(db, projectId)?.name, scoped: false }
-    : { idColumn: "org_id", nameColumn: "org", id: orgId, name: orgById(db, orgId)?.name, scoped: true };
-  return DATA_TABLES.map((table) => ({ table, total: ownedIn(db, table, owner) })).filter((entry) => entry.total > 0);
+  const [column, id] = projectId ? ["project_id", projectId] : ["org_id", orgId];
+  return DATA_TABLES.filter((table) => hasColumn(db, table, column))
+    .map((table) => ({ table, total: db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${column} = ?`).get(id).n }))
+    .filter((entry) => entry.total > 0);
 }
 
 // The refusal of removing an owner of rows, listing what it owns.
@@ -157,32 +155,33 @@ function ownedRowsError(kind, name, owned) {
   return new UserError(`cannot remove ${kind} \`${name}\`: it still owns ${detail}; nothing was removed`);
 }
 
-// Removes a project that owns no rows.
-export function removeProject(db, id) {
-  return inTransaction(db, () => {
-    const project = projectById(db, id);
-    if (!project) throw new UserError(`unknown project id \`${id}\``);
-    const owned = ownedRowCounts(db, { projectId: id });
-    if (owned.length) throw ownedRowsError("project", project.name, owned);
-    db.prepare("DELETE FROM projects WHERE id = ?").run(id);
-    return project;
-  });
+// Deletes one registry row; the foreign keys refuse it while any data row still points to it, and the refusal lists those rows.
+function deleteOwner(db, { table, kind, row, owner }) {
+  try {
+    db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(row.id);
+  } catch (err) {
+    if (!isForeignKeyViolation(err)) throw err;
+    throw ownedRowsError(kind, row.name, ownedRowCounts(db, owner));
+  }
+  return row;
 }
 
-// Removes an org that no project points to and that owns no rows.
+// Removes a project; the database refuses one that still owns rows.
+export function removeProject(db, id) {
+  const project = projectById(db, id);
+  if (!project) throw new UserError(`unknown project id \`${id}\``);
+  return deleteOwner(db, { table: "projects", kind: "project", row: project, owner: { projectId: id } });
+}
+
+// Removes an org that no project points to; the database refuses one that still owns rows.
 export function removeOrg(db, id) {
-  return inTransaction(db, () => {
-    const org = orgById(db, id);
-    if (!org) throw new UserError(`unknown org id \`${id}\``);
-    const members = projectsOfOrg(db, id).map((project) => project.name);
-    if (members.length) {
-      throw new UserError(`cannot remove org \`${org.name}\`: ${members.length} project(s) still point to it: ${members.join(", ")}`);
-    }
-    const owned = ownedRowCounts(db, { orgId: id });
-    if (owned.length) throw ownedRowsError("org", org.name, owned);
-    db.prepare("DELETE FROM orgs WHERE id = ?").run(id);
-    return org;
-  });
+  const org = orgById(db, id);
+  if (!org) throw new UserError(`unknown org id \`${id}\``);
+  const members = projectsOfOrg(db, id).map((project) => project.name);
+  if (members.length) {
+    throw new UserError(`cannot remove org \`${org.name}\`: ${members.length} project(s) still point to it: ${members.join(", ")}`);
+  }
+  return deleteOwner(db, { table: "orgs", kind: "org", row: org, owner: { orgId: id } });
 }
 
 // The project id a data row is owned by: an id, or null for a global row; anything else is refused before it reaches SQL.

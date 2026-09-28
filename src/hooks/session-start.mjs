@@ -1,6 +1,6 @@
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { PROPOSED_HEADING, STANDING_HEADING, decisionTitleLine } from "../memory/decisions.mjs";
-import { projectFromCwd } from "../memory/project-name.mjs";
+import { projectFromCwd } from "../memory/registry-access.mjs";
 import { ownerLabel } from "../memory/scope.mjs";
 import { openStore } from "../store/open.mjs";
 import { clip, section } from "./block.mjs";
@@ -109,9 +109,9 @@ export async function runSessionStart({ input, env = process.env, fetchImpl = nu
   const store = openStore(env);
   const lessons = await store.lessons.recallLessons({ projectId: project.id, limit: LESSON_LIMIT });
   const memories = await store.memory.recentMemories({ projectId: project.id, limit: MEMORY_LIMIT });
-  const titles = await store.decisions.decisionTitles({ project: project?.name, status: "accepted" });
-  const decisions = await store.decisions.recallDecisions({ project: project?.name, limit: DECISION_LIMIT });
-  const proposed = await store.decisions.decisionTitles({ project: project?.name, status: "proposed" });
+  const titles = await store.decisions.decisionTitles({ projectId: project.id, status: "accepted" });
+  const decisions = await store.decisions.recallDecisions({ projectId: project.id, limit: DECISION_LIMIT });
+  const proposed = await store.decisions.decisionTitles({ projectId: project.id, status: "proposed" });
   const sections = [
     ...decisionSections({ titles, decisions, proposed }),
     section("Lessons learned (do not repeat these mistakes)", lessons, lessonLine),

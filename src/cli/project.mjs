@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { requireOrg } from "../config/orgs.mjs";
-import { registerProject as registerInStore, requireGitPath, requireProject } from "../config/projects.mjs";
+import { registerProject as registerInStore, renameProject, requireGitPath, requireProject } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { openRegistryReader, openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -58,7 +58,16 @@ async function runList(argv, ctx) {
   for (const project of projects) ctx.out(projectLine(project));
 }
 
-// Runs `project remove`: the registry refuses a project that still owns rows.
+// Runs `project rename`: one registry row, so every row keyed by the project id shows the new name at once.
+async function runRename(argv, ctx) {
+  const { positionals } = parseCommand(argv);
+  checkArgs(positionals, { min: 2, max: 2, usage: "nightqueue project rename <old> <new>" });
+  const [oldName, newName] = positionals;
+  await renameProject(openStore(ctx.env), oldName, newName);
+  ctx.out(`renamed project \`${oldName}\` to \`${newName}\``);
+}
+
+// Runs `project remove`: the database refuses a project that still owns rows, and the refusal lists them.
 async function runRemove(argv, ctx) {
   const { positionals } = parseCommand(argv);
   checkArgs(positionals, { min: 1, usage: "nightqueue project remove <name>" });
@@ -102,6 +111,7 @@ async function runMove(argv, ctx) {
 const SUBCOMMANDS = new Map([
   ["add", runAdd],
   ["list", runList],
+  ["rename", runRename],
   ["remove", runRemove],
   ["move", runMove],
 ]);

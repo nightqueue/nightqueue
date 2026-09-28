@@ -20,7 +20,7 @@ import {
 import { openDb } from "../../src/memory/db.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { fakeEmbedder, makeDir, makeHome, makeProject, mergedChecklist, settleThroughStore } from "../../test-support/memory.mjs";
+import { fakeEmbedder, makeDir, makeHome, makeProject, mergedChecklist, projectIdOf, settleThroughStore } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, SLUG } from "../../test-support/streams.mjs";
 import { runDir } from "../../src/config/paths.mjs";
@@ -100,9 +100,9 @@ function fakeGit() {
 function makeRoadmapHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  const linked = saveDecision({ project: "alpha", ...LINKED }, env);
-  saveDecision({ project: "alpha", ...RELATED }, env);
-  const item = saveRoadmapItem({ type: "improvement", project: "alpha", ...ITEM, decision_id: linked.id }, env);
+  const linked = saveDecision({ projectId: projectIdOf(env, "alpha"), ...LINKED }, env);
+  saveDecision({ projectId: projectIdOf(env, "alpha"), ...RELATED }, env);
+  const item = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), ...ITEM, decision_id: linked.id }, env);
   return { env, item };
 }
 
@@ -124,7 +124,7 @@ test("queue_add from a roadmap item builds the prompt of the item and links the 
 test("an item with no detail and no linked decision queues the task alone", async (t) => {
   const env = makeHome(t, "roadmap-queue-bare");
   makeProject(t, env, "alpha");
-  const item = saveRoadmapItem({ type: "chore", project: "alpha", title: "index the logs" }, env);
+  const item = saveRoadmapItem({ type: "chore", projectId: projectIdOf(env, "alpha"), title: "index the logs" }, env);
   const client = await connect(t, env);
 
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
@@ -172,7 +172,7 @@ test("a queued item is refused a second job while the first is alive, and accept
 test("a job that ends done puts its own roadmap item in review, and leaves every other one alone", async (t) => {
   const { env, item } = makeRoadmapHome(t, "roadmap-queue-done-hook");
   useFakeClaude(env, makeDir(t, "roadmap-queue-done-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
-  const untouched = saveRoadmapItem({ type: "improvement", project: "alpha", title: "index the logs" }, env);
+  const untouched = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "index the logs" }, env);
   const client = await connect(t, env);
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
 
@@ -324,14 +324,14 @@ function relatedCount(prompt) {
 function makeEmbeddedHome(t, name) {
   const env = makeHome(t, name, { embed: true });
   makeProject(t, env, "alpha");
-  const linked = saveDecision({ project: "alpha", ...LINKED }, env);
-  saveDecision({ project: "alpha", ...RELATED }, env);
-  saveDecision({ project: "alpha", ...LEXICAL_ONLY }, env);
+  const linked = saveDecision({ projectId: projectIdOf(env, "alpha"), ...LINKED }, env);
+  saveDecision({ projectId: projectIdOf(env, "alpha"), ...RELATED }, env);
+  saveDecision({ projectId: projectIdOf(env, "alpha"), ...LEXICAL_ONLY }, env);
   for (const decision of SEMANTIC_ONLY) {
-    const saved = saveDecision({ project: "alpha", ...decision }, env);
+    const saved = saveDecision({ projectId: projectIdOf(env, "alpha"), ...decision }, env);
     setDecisionEmbedding({ id: saved.id, vector: FAKE_VECTOR, model: FAKE_MODEL }, env);
   }
-  const item = saveRoadmapItem({ type: "improvement", project: "alpha", ...ITEM, decision_id: linked.id }, env);
+  const item = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), ...ITEM, decision_id: linked.id }, env);
   return { env, item };
 }
 
@@ -355,7 +355,7 @@ test("with an embedder enabled the prompt carries one `## Related decisions` hea
 test("a proposed decision is listed by title under `## Proposed (not binding)`, after the standing titles and before the related ones", async (t) => {
   const { env, item } = makeRoadmapHome(t, "roadmap-queue-proposed");
   const proposed = saveDecision(
-    { project: "alpha", title: "heartbeats move to a side table", context: "still open", decision: "nothing settled yet", status: "proposed" },
+    { projectId: projectIdOf(env, "alpha"), title: "heartbeats move to a side table", context: "still open", decision: "nothing settled yet", status: "proposed" },
     env,
   );
 
@@ -374,7 +374,7 @@ async function linkedJob(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const store = openStore(env);
-  const item = await store.roadmap.saveRoadmapItem({ type: "improvement", project: "alpha", title: "follow the job" });
+  const item = await store.roadmap.saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "follow the job" });
   const { job } = await store.roadmap.queueRoadmapItem({ id: item.id });
   return { env, store, item, job };
 }

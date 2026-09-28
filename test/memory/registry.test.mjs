@@ -8,10 +8,11 @@ import { UserError } from "../../src/config/errors.mjs";
 import { isId, newId } from "../../src/config/ids.mjs";
 import { dbPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { saveDecision } from "../../src/memory/decisions.mjs";
+import { getDecision, listDecisions, saveDecision } from "../../src/memory/decisions.mjs";
+import { addJob, claimJobById, finishJob, getJob } from "../../src/memory/jobs.mjs";
 import * as registry from "../../src/memory/registry.mjs";
 import { makeHostEnv } from "../../test-support/host.mjs";
-import { makeDir, makeHome, makeOrg, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeOrg, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const PROJECTS_URL = new URL("../../src/config/projects.mjs", import.meta.url).href;
@@ -32,20 +33,56 @@ test("ids are 26-character monotonic ULIDs", () => {
   assert.equal(isId(null), false);
 });
 
-test("an org rename is one transaction: when the sweep of its rows fails, the org and its rows keep the old name", (t) => {
-  const env = makeHome(t, "registry-rename-atomic");
-  makeOrg(env, "acme");
-  saveDecision({ org: "acme", title: "one queue per product", context: "c", decision: "d" }, env);
+// How many rows the connection changed while the action ran.
+function changesOf(db, action) {
+  const before = db.prepare("SELECT total_changes() AS n").get().n;
+  action();
+  return db.prepare("SELECT total_changes() AS n").get().n - before;
+}
+
+test("an org rename and a project rename each change exactly one row, and every view reads the new name at once", (t) => {
+  const env = makeHome(t, "registry-rename-one-row");
+  makeProject(t, env, "alpha", { org: "acme" });
+  const orgDecision = saveDecision({ orgId: orgIdOf(env, "acme"), title: "one queue per product", context: "c", decision: "d" }, env);
+  const own = saveDecision({ projectId: projectIdOf(env, "alpha"), title: "the api owns its cache", context: "c", decision: "d" }, env);
+  const job = addJob({ projectId: projectIdOf(env, "alpha"), prompt: "keep running" }, env);
+  assert.ok(claimJobById(job.id, { worker: "w1", cap: null }, env), "setup: the job was not claimed");
   const db = openDb(env);
-  db.exec("CREATE TRIGGER refuse_org_sweep BEFORE UPDATE OF org ON decisions BEGIN SELECT RAISE(ABORT, 'sweep refused'); END;");
   const acme = registry.orgByName(db, "acme");
-  assert.throws(() => registry.renameOrg(db, { id: acme.id, name: "acme-inc" }), /sweep refused/);
-  assert.equal(registry.orgById(db, acme.id).name, "acme");
-  assert.equal(db.prepare("SELECT org FROM decisions").get().org, "acme");
-  db.exec("DROP TRIGGER refuse_org_sweep");
-  registry.renameOrg(db, { id: acme.id, name: "acme-inc" });
-  assert.equal(registry.orgById(db, acme.id).name, "acme-inc");
-  assert.equal(db.prepare("SELECT org FROM decisions").get().org, "acme-inc");
+  const alpha = registry.projectByName(db, "alpha");
+
+  assert.equal(changesOf(db, () => registry.renameOrg(db, { id: acme.id, name: "acme-inc" })), 1);
+  assert.equal(changesOf(db, () => registry.renameProject(db, { id: alpha.id, name: "api" })), 1);
+  assert.equal(getDecision(orgDecision.id, env).org, "acme-inc");
+  assert.equal(getDecision(own.id, env).project, "api");
+  assert.deepEqual(listDecisions({ projectId: alpha.id }, env).map((row) => [row.id, row.org ?? row.project]), [
+    [orgDecision.id, "acme-inc"],
+    [own.id, "api"],
+  ]);
+  assert.equal(getJob(job.id, env).project, "api", "the job view kept the old name");
+  assert.equal(getJob(job.id, env).project_id, alpha.id, "the rename moved the running job to another owner");
+  assert.ok(finishJob(job.id, { worker: "w1", status: "failed" }, env), "the running job could not finish after the rename");
+  assert.equal(getJob(job.id, env).project_id, alpha.id);
+
+  registry.insertProject(db, { name: "beta", path: null, orgId: acme.id });
+  assert.throws(() => registry.renameProject(db, { id: alpha.id, name: "beta" }), /project name `beta` is already taken/);
+  assert.throws(() => registry.renameOrg(db, { id: acme.id, name: "default" }), /org `default` already exists/);
+});
+
+test("a row naming an unknown project or org id is refused by the foreign key", (t) => {
+  const env = makeHome(t, "registry-foreign-keys");
+  const db = openDb(env);
+  const ghost = "0".repeat(26);
+  assert.throws(() => db.prepare("INSERT INTO decisions (scope, project_id, number, title, context, decision) VALUES ('project', ?, 1, 't', 'c', 'd')").run(ghost), /FOREIGN KEY/);
+  assert.throws(() => db.prepare("INSERT INTO decisions (scope, org_id, number, title, context, decision) VALUES ('org', ?, 1, 't', 'c', 'd')").run(ghost), /FOREIGN KEY/);
+  assert.throws(() => db.prepare("INSERT INTO roadmap_items (scope, org_id, title, position) VALUES ('org', ?, 't', 1)").run(ghost), /FOREIGN KEY/);
+  assert.throws(() => db.prepare("INSERT INTO roadmap_item_projects (item_id, project_id) VALUES (1, ?)").run(ghost), /FOREIGN KEY/);
+  assert.throws(() => db.prepare("INSERT INTO roadmap_comments (item_id, kind, author, body, project_id) VALUES (1, 'note', 'operator', 'b', ?)").run(ghost), /FOREIGN KEY/);
+  assert.throws(() => db.prepare("INSERT INTO lessons (project_id, title, root_cause, solution, prevention) VALUES (?, 't', 'r', 's', 'p')").run(ghost), /FOREIGN KEY/);
+  assert.throws(
+    () => db.prepare("INSERT INTO decisions (scope, project_id, org_id, number, title, context, decision) VALUES ('project', NULL, ?, 1, 't', 'c', 'd')").run(registry.earliestOrg(db).id),
+    /CHECK constraint failed/,
+  );
 });
 
 test("a taken name, a taken path and an org still in use are refused with a usage error, and nothing is written", (t) => {
@@ -66,15 +103,47 @@ test("a taken name, a taken path and an org still in use are refused with a usag
   assert.ok(existsSync(path));
 });
 
-test("a project that still owns rows is refused a removal, listing what it owns", (t) => {
+test("a project or an org that still owns rows is refused a removal by the foreign keys, listing what it owns", (t) => {
   const env = makeHome(t, "registry-owned");
   makeProject(t, env, "alpha");
-  saveDecision({ project: "alpha", title: "t", context: "c", decision: "d" }, env);
+  saveDecision({ projectId: projectIdOf(env, "alpha"), title: "t", context: "c", decision: "d" }, env);
+  addJob({ projectId: projectIdOf(env, "alpha"), prompt: "p" }, env);
+  makeOrg(env, "acme");
+  saveDecision({ orgId: orgIdOf(env, "acme"), title: "t", context: "c", decision: "d" }, env);
   const db = openDb(env);
   const alpha = registry.projectByName(db, "alpha");
-  assert.deepEqual(registry.ownedRowCounts(db, { projectId: alpha.id }), [{ table: "decisions", total: 1 }]);
-  assert.throws(() => registry.removeProject(db, alpha.id), /cannot remove project `alpha`: it still owns 1 decisions; nothing was removed/);
+  const acme = registry.orgByName(db, "acme");
+  assert.deepEqual(registry.ownedRowCounts(db, { projectId: alpha.id }), [
+    { table: "jobs", total: 1 },
+    { table: "decisions", total: 1 },
+  ]);
+  assert.throws(() => registry.removeProject(db, alpha.id), /cannot remove project `alpha`: it still owns 1 jobs, 1 decisions; nothing was removed/);
   assert.equal(registry.projectById(db, alpha.id).name, "alpha");
+  assert.throws(() => registry.removeOrg(db, acme.id), /cannot remove org `acme`: it still owns 1 decisions; nothing was removed/);
+  assert.equal(registry.orgById(db, acme.id).name, "acme");
+
+  const removed = runCli(env, ["project", "remove", "alpha"]);
+  assert.notEqual(removed.status, 0);
+  assert.match(removed.stderr, /cannot remove project `alpha`: it still owns 1 jobs, 1 decisions; nothing was removed/);
+  makeProject(t, env, "empty");
+  assert.equal(runCli(env, ["project", "remove", "empty"]).status, 0);
+  assert.equal(registry.projectByName(openDb(env), "empty"), null);
+});
+
+test("`project rename` renames the one registry row and refuses an unknown, a taken or an invalid name", (t) => {
+  const env = makeHome(t, "registry-cli-rename");
+  makeProject(t, env, "alpha");
+  makeProject(t, env, "beta");
+  const id = projectIdOf(env, "alpha");
+  const renamed = runCli(env, ["project", "rename", "alpha", "api"]);
+  assert.equal(renamed.status, 0, renamed.stderr);
+  assert.equal(renamed.stdout.trim(), "renamed project `alpha` to `api`");
+  assert.equal(projectIdOf(env, "api"), id);
+  assert.match(runCli(env, ["project", "rename", "ghost", "x"]).stderr, /unknown project `ghost`; known projects: api, beta/);
+  assert.match(runCli(env, ["project", "rename", "api", "beta"]).stderr, /project name `beta` is already taken/);
+  assert.match(runCli(env, ["project", "rename", "api", "all"]).stderr, /`all` is reserved/);
+  assert.notEqual(runCli(env, ["project", "rename", "api", "Bad Name!"]).status, 0);
+  assert.equal(projectIdOf(env, "api"), id);
 });
 
 test("the read commands never create the database, and a write command does", (t) => {

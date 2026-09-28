@@ -16,7 +16,7 @@ import { compactStamp } from "./runner.mjs";
 import { runClosePipeline, CLOSE_LEASE_SLACK_S } from "./close.mjs";
 import { CLOSE_WORKER_ENV } from "./close-deps.mjs";
 import { parseCloseChecklist } from "./close-view.mjs";
-import { checkoutOfJob } from "../memory/project-name.mjs";
+import { checkoutOfJob } from "../memory/registry-access.mjs";
 
 export { CLOSE_LEASE_SLACK_S, CLOSE_WORKER_ENV };
 

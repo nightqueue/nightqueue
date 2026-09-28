@@ -16,7 +16,7 @@ function addLesson(env, { project = "alpha", title, prevention = "always close t
 
 // Stores one accepted decision of the project, the only status the recall brings back.
 function addDecision(env, { project = "alpha", title, decision }) {
-  return saveDecision({ project, title, context: `${title} had to be settled`, decision, status: "accepted" }, env);
+  return saveDecision({ projectId: projectIdOf(env, project), title, context: `${title} had to be settled`, decision, status: "accepted" }, env);
 }
 
 // Lines of one section of the block, from its heading to the next blank line.
@@ -90,7 +90,7 @@ test("the session block opens with the standing decisions of the project", async
   addLesson(env, { title: "the worker leaks a file descriptor on failure" });
   const accepted = addDecision(env, { title: "state.json is written by the runtime", decision: "only run-state.mjs writes it" });
   const proposed = saveDecision(
-    { project: "alpha", title: "the queue runs on postgres", context: "still open", decision: "nothing settled yet" },
+    { projectId: projectIdOf(env, "alpha"), title: "the queue runs on postgres", context: "still open", decision: "nothing settled yet" },
     env,
   );
 

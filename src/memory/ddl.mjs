@@ -12,18 +12,31 @@ import { CLOSED_REQUIRES_MERGE } from "./schema.mjs";
 
 const ROADMAP_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ROADMAP_TYPE}' CHECK(type IN (${sqlList(ROADMAP_TYPES)}))`;
 
-// The append-only comment thread of the roadmap items: triggers refuse every UPDATE and DELETE.
-const ROADMAP_COMMENTS = `
-CREATE TABLE IF NOT EXISTS roadmap_comments (
+const PROJECT_ID = "project_id TEXT REFERENCES projects(id) ON DELETE RESTRICT";
+const REQUIRED_PROJECT_ID = "project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT";
+const ORG_ID = "org_id TEXT REFERENCES orgs(id) ON DELETE RESTRICT";
+const SCOPE_COLUMN = "scope TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))";
+
+// The one owner a decision or a roadmap item has: a project row (or a global one) carries no org, an org row no project.
+export const OWNER_CHECK =
+  "(scope = 'project' AND org_id IS NULL) OR (scope = 'org' AND org_id IS NOT NULL AND project_id IS NULL)";
+
+// The append-only comment thread of the roadmap items, under a given name; a comment under a project carries its id.
+export function roadmapCommentsDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id INTEGER NOT NULL,
   kind TEXT NOT NULL CHECK(kind IN (${sqlList(COMMENT_KINDS)})),
   author TEXT NOT NULL CHECK(author = '${OPERATOR_AUTHOR}' OR author GLOB 'job:[0-9]*'),
   body TEXT NOT NULL,
   refs TEXT CHECK(refs IS NULL OR json_valid(refs)),
-  project TEXT,
+  ${PROJECT_ID},
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+);`;
+}
+
+// The triggers that keep the comment thread append-only: every UPDATE and DELETE is refused.
+export const ROADMAP_COMMENT_GUARDS = `
 CREATE TRIGGER IF NOT EXISTS roadmap_comments_no_update BEFORE UPDATE ON roadmap_comments BEGIN
   SELECT RAISE(ABORT, 'roadmap comments are append-only');
 END;
@@ -32,21 +45,21 @@ CREATE TRIGGER IF NOT EXISTS roadmap_comments_no_delete BEFORE DELETE ON roadmap
 END;
 `;
 
-// The per-project rows of an org item: one per project it was queued for, each linked to that project's job.
-const ROADMAP_ITEM_PROJECTS = `
-CREATE TABLE IF NOT EXISTS roadmap_item_projects (
+// The per-project rows of an org item under a given name: one per project it was queued for, each linked to that project's job.
+export function roadmapItemProjectsDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id INTEGER NOT NULL,
-  project TEXT NOT NULL,
+  ${REQUIRED_PROJECT_ID},
   status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
   job_id INTEGER,
   job_status_seen TEXT,
   closed_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(item_id, project)
-);
-`;
+  UNIQUE(item_id, project_id)
+);`;
+}
 
 // The lexical mirrors of the roadmap: item title and detail follow every write, comments are append-only so only inserts.
 export const ROADMAP_FTS = `
@@ -73,13 +86,13 @@ CREATE TRIGGER IF NOT EXISTS roadmap_comments_fts_ai AFTER INSERT ON roadmap_com
 END;
 `;
 
-// The `roadmap_items` table under a given name.
-function roadmapItemsDdl(name) {
+// The `roadmap_items` table under a given name: owned by a project id (NULL for a global item) or by an org id.
+export function roadmapItemsDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  scope TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org')),
-  project TEXT,
-  org TEXT,
+  ${SCOPE_COLUMN},
+  ${PROJECT_ID},
+  ${ORG_ID},
   title TEXT NOT NULL,
   detail TEXT,
   status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
@@ -91,7 +104,31 @@ function roadmapItemsDdl(name) {
   job_status_seen TEXT,
   closed_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK(${OWNER_CHECK})
+);`;
+}
+
+// The `decisions` table under a given name: owned by a project id (NULL for a global decision) or by an org id.
+export function decisionsDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ${SCOPE_COLUMN},
+  ${PROJECT_ID},
+  ${ORG_ID},
+  number INTEGER,
+  title TEXT NOT NULL,
+  context TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  consequences TEXT,
+  status TEXT NOT NULL DEFAULT 'accepted' CHECK(status IN ('proposed','accepted','superseded','rejected')),
+  superseded_by INTEGER,
+  job_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  embedding BLOB,
+  embedding_model TEXT,
+  CHECK(${OWNER_CHECK})
 );`;
 }
 
@@ -128,9 +165,6 @@ export const DATA_TABLES = Object.freeze([
 
 // The lexical mirrors a rebuilt content table needs indexed again.
 export const FTS_MIRRORS = Object.freeze(["lessons_fts", "memory_fts", "decisions_fts", "roadmap_items_fts", "roadmap_comments_fts"]);
-
-const PROJECT_ID = "project_id TEXT REFERENCES projects(id) ON DELETE RESTRICT";
-const REQUIRED_PROJECT_ID = "project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT";
 
 // The `lessons` table under a given name: owned by a project id, NULL for a global lesson.
 export function lessonsDdl(name) {
@@ -285,34 +319,12 @@ CREATE TABLE IF NOT EXISTS pipeline_phases (
   note TEXT,
   FOREIGN KEY (run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
 );
-CREATE TABLE IF NOT EXISTS decisions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project TEXT,
-  number INTEGER,
-  title TEXT NOT NULL,
-  context TEXT NOT NULL,
-  decision TEXT NOT NULL,
-  consequences TEXT,
-  status TEXT NOT NULL DEFAULT 'accepted' CHECK(status IN ('proposed','accepted','superseded','rejected')),
-  superseded_by INTEGER,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  embedding BLOB,
-  embedding_model TEXT
-);
+${decisionsDdl("decisions")}
 ${roadmapItemsDdl("roadmap_items")}
-${ROADMAP_COMMENTS}
-${ROADMAP_ITEM_PROJECTS}
+${roadmapCommentsDdl("roadmap_comments")}
+${ROADMAP_COMMENT_GUARDS}
+${roadmapItemProjectsDdl("roadmap_item_projects")}
 `;
-
-export const EVOLVING_COLUMNS = [
-  ["decisions", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],
-  ["decisions", "org", "TEXT"],
-  ["decisions", "job_id", "INTEGER"],
-  ["roadmap_items", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],
-  ["roadmap_items", "org", "TEXT"],
-  ["roadmap_items", "type", ROADMAP_TYPE_COLUMN],
-];
 
 export const INDEXES = `
 CREATE INDEX IF NOT EXISTS lessons_recall_idx ON lessons(archived, project_id, created_at);
@@ -323,11 +335,11 @@ CREATE INDEX IF NOT EXISTS pipeline_runs_project_idx ON pipeline_runs(project_id
 CREATE INDEX IF NOT EXISTS pipeline_phases_run_idx ON pipeline_phases(run_id, seq);
 CREATE INDEX IF NOT EXISTS jobs_claim_idx ON jobs(status, priority, created_at);
 CREATE INDEX IF NOT EXISTS jobs_project_slug_idx ON jobs(project_id, slug);
-CREATE UNIQUE INDEX IF NOT EXISTS decisions_number_idx ON decisions(project, number);
-CREATE INDEX IF NOT EXISTS roadmap_items_order_idx ON roadmap_items(scope, project, org, priority, position);
+CREATE UNIQUE INDEX IF NOT EXISTS decisions_number_idx ON decisions(project_id, number);
+CREATE INDEX IF NOT EXISTS roadmap_items_order_idx ON roadmap_items(scope, project_id, org_id, priority, position);
 CREATE INDEX IF NOT EXISTS roadmap_items_job_idx ON roadmap_items(job_id);
-CREATE UNIQUE INDEX IF NOT EXISTS decisions_org_number_idx ON decisions(org, number) WHERE scope = 'org';
-CREATE INDEX IF NOT EXISTS roadmap_items_org_order_idx ON roadmap_items(org, priority, position) WHERE scope = 'org';
+CREATE UNIQUE INDEX IF NOT EXISTS decisions_org_number_idx ON decisions(org_id, number) WHERE scope = 'org';
+CREATE INDEX IF NOT EXISTS roadmap_items_org_order_idx ON roadmap_items(org_id, priority, position) WHERE scope = 'org';
 CREATE INDEX IF NOT EXISTS decisions_job_idx ON decisions(job_id) WHERE job_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS roadmap_comments_item_idx ON roadmap_comments(item_id, id);
 CREATE INDEX IF NOT EXISTS roadmap_item_projects_job_idx ON roadmap_item_projects(job_id);

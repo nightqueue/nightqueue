@@ -1,6 +1,7 @@
 import { saveDecision } from "../src/memory/decisions.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
 import { logPipelineRun } from "../src/memory/runs.mjs";
+import { projectIdOf } from "./memory.mjs";
 
 const [, , mode, label, durationRaw] = process.argv;
 const DEFAULT_DURATION_MS = 2000;
@@ -44,7 +45,7 @@ function writeRun() {
 function writeDecision(seq) {
   saveDecision(
     {
-      project: "alpha",
+      projectId: projectIdOf(process.env, "alpha"),
       title: `concurrent ${label} #${seq}`,
       context: "concurrency context",
       decision: "concurrency decision",

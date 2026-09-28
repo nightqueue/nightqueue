@@ -7,7 +7,7 @@ import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, getJob, jobView } from "../../src/memory/jobs.mjs";
 import { CLOSE_MERGED_QUERY_LIMIT } from "../../src/queue/close-merged.mjs";
 import { createPrStateCache } from "../../src/queue/pr-state.mjs";
-import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { fakeCloseDeps, mergedPr, openPr } from "../../test-support/close.mjs";
 
 // A home with the pull request checks switched back on, the default `makeHome` turns off.
@@ -162,7 +162,7 @@ test("a running job with a merged pull request is never closed", async (t) => {
 
 // A decision the given job proposed, stamped straight in the database.
 function proposal(env, { jobId, title }) {
-  const saved = saveDecision({ project: "alpha", title, context: "why", decision: "what", status: "proposed" }, env);
+  const saved = saveDecision({ projectId: projectIdOf(env, "alpha"), title, context: "why", decision: "what", status: "proposed" }, env);
   openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(jobId, saved.id);
   return saved;
 }

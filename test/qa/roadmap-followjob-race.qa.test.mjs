@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { getRoadmapItemDetail } from "../../src/memory/roadmap.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const OPEN_STORE_URL = new URL("../../src/store/open.mjs", import.meta.url).href;
 
@@ -81,7 +81,7 @@ test("a racing fail-then-retry across two writers never silently drops the faile
   const store = openStore(env);
   t.after(() => store.close());
 
-  const item = await store.roadmap.saveRoadmapItem({ type: "bug", project: "alpha", title: "race me" });
+  const item = await store.roadmap.saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "race me" });
   const { job } = await store.roadmap.queueRoadmapItem({ id: item.id });
 
   const dir = makeDir(t, "roadmap-followjob-race-scripts");

@@ -12,13 +12,13 @@ import {
   updateDecision,
 } from "../../src/memory/decisions.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { fakeEmbedder, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { fakeEmbedder, makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
 const FAKE_MODEL = "fake-embedder@v1";
 
 // Saves a decision of a project with the fields every test would otherwise repeat.
 function addDecision(env, { project = "alpha", title, context = "the context", decision = "the decision", consequences, status }) {
-  return saveDecision({ project, title, context, decision, consequences, status }, env);
+  return saveDecision({ projectId: projectIdOf(env, project), title, context, decision, consequences, status }, env);
 }
 
 // Rowids of a full text search over the decisions mirror.
@@ -42,7 +42,7 @@ test("the number of a decision is max+1 inside its project and independent betwe
 
   const db = openDb(env);
   assert.throws(
-    () => db.prepare("INSERT INTO decisions (project, number, title, context, decision) VALUES (?, 1, ?, ?, ?)").run("alpha", "t", "c", "d"),
+    () => db.prepare("INSERT INTO decisions (project_id, number, title, context, decision) VALUES (?, 1, ?, ?, ?)").run(projectIdOf(env, "alpha"), "t", "c", "d"),
     /UNIQUE constraint failed/,
   );
 });
@@ -70,8 +70,8 @@ test("a decision defaults to proposed, is listed in number order and an invalid 
   assert.equal(getDecision(1, env).status, "accepted");
   assert.equal(getDecision(noStatus.id, env).status, "proposed");
   assert.equal(noStatus.statusDefaulted, true);
-  assert.deepEqual(listDecisions({ project: "alpha" }, env).map((row) => row.number), [1, 2]);
-  assert.deepEqual(listDecisions({ project: "alpha", status: "proposed" }, env).map((row) => row.number), [2]);
+  assert.deepEqual(listDecisions({ projectId: projectIdOf(env, "alpha") }, env).map((row) => row.number), [1, 2]);
+  assert.deepEqual(listDecisions({ projectId: projectIdOf(env, "alpha"), status: "proposed" }, env).map((row) => row.number), [2]);
   const bad = addDecision(env, { title: "bad", status: "maybe" });
   assert.equal(bad.statusDefaulted, true);
   assert.equal(getDecision(bad.id, env).status, "proposed");
@@ -137,13 +137,13 @@ test("the recall without an embedder answers from BM25 and only ever returns acc
   const superseded = addDecision(env, { title: "the runner renews the lease by hand", status: "superseded" });
   const rejected = addDecision(env, { title: "the runner renews the lease never", status: "rejected" });
 
-  const rows = await recallDecisions({ query: "how does the runner renew the lease", project: "alpha" }, env);
+  const rows = await recallDecisions({ query: "how does the runner renew the lease", projectId: projectIdOf(env, "alpha") }, env);
   assert.equal(rows[0].id, hit.id);
   assert.equal(rows[0].via, "lexical");
   for (const hidden of [proposed, superseded, rejected]) {
     assert.equal(idsOf(rows).includes(hidden.id), false, `decision ${hidden.id} leaked into the recall`);
   }
-  assert.equal(idsOf(await recallDecisions({ project: "alpha" }, env)).includes(proposed.id), false);
+  assert.equal(idsOf(await recallDecisions({ projectId: projectIdOf(env, "alpha") }, env)).includes(proposed.id), false);
 });
 
 test("the recall with an embedder keeps the BM25 top hit and adds the semantic ones", async (t) => {
@@ -165,7 +165,7 @@ test("the recall with an embedder keeps the BM25 top hit and adds the semantic o
   setDecisionEmbedding({ id: far.id, vector: [0, 1, 0, 0], model: FAKE_MODEL }, env);
 
   const rows = await recallDecisions(
-    { query: "runner renews lease long job", project: "alpha", embedder: fakeEmbedder([1, 0, 0, 0]) },
+    { query: "runner renews lease long job", projectId: projectIdOf(env, "alpha"), embedder: fakeEmbedder([1, 0, 0, 0]) },
     env,
   );
   assert.equal(rows[0].id, hit.id);
@@ -180,7 +180,7 @@ test("a recall that matches nothing comes back as the recent accepted decisions,
   const env = makeHome(t, "decisions-recall-fallback");
   makeProject(t, env, "alpha");
   const recent = addDecision(env, { title: "the queue owns the worktree", status: "accepted" });
-  const rows = await recallDecisions({ query: "zebracrossing monorepo telemetry", project: "alpha" }, env);
+  const rows = await recallDecisions({ query: "zebracrossing monorepo telemetry", projectId: projectIdOf(env, "alpha") }, env);
   assert.deepEqual(idsOf(rows), [recent.id]);
   assert.equal(rows[0].via, "fallback");
 });
@@ -213,10 +213,10 @@ test("the titles projection answers one status, org rows first, and never a text
   makeProject(t, env, "alpha", { org: "acme" });
   const own = addDecision(env, { title: "the queue owns the worktree", status: "accepted" });
   addDecision(env, { title: "the queue runs on postgres", status: "proposed" });
-  const org = saveDecision({ org: "acme", title: "one queue per product", context: "c", decision: "d", status: "accepted" }, env);
+  const org = saveDecision({ orgId: orgIdOf(env, "acme"), title: "one queue per product", context: "c", decision: "d", status: "accepted" }, env);
   setDecisionEmbedding({ id: own.id, vector: [1, 0, 0, 0], model: FAKE_MODEL }, env);
 
-  const accepted = decisionTitles({ project: "alpha" }, env);
+  const accepted = decisionTitles({ projectId: projectIdOf(env, "alpha") }, env);
   assert.deepEqual(idsOf(accepted), [org.id, own.id], "the org row comes first, then the project's in number order");
   for (const row of accepted) {
     for (const column of ["context", "decision", "consequences", "embedding", "embedding_model"]) {
@@ -224,10 +224,10 @@ test("the titles projection answers one status, org rows first, and never a text
     }
   }
   assert.deepEqual(
-    decisionTitles({ project: "alpha", status: "proposed" }, env).map((row) => row.title),
+    decisionTitles({ projectId: projectIdOf(env, "alpha"), status: "proposed" }, env).map((row) => row.title),
     ["the queue runs on postgres"],
   );
-  assert.throws(() => decisionTitles({ project: "alpha", status: "open" }, env), /invalid decision `status`/);
+  assert.throws(() => decisionTitles({ projectId: projectIdOf(env, "alpha"), status: "open" }, env), /invalid decision `status`/);
   assert.deepEqual(accepted.map(decisionTitleLine), ["- acme#1 one queue per product", "- #1 the queue owns the worktree"]);
 });
 

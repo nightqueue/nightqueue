@@ -82,15 +82,15 @@ test("every domain of the store writes and reads back on a real home", async (t)
   assert.equal((await store.index.recallProjectIndex({ projectId: alphaId })).files.length, 1);
 
   await store.decisions.saveDecision({
-    project: "alpha",
+    projectId: projectIdOf(env, "alpha"),
     title: "the store is the only path to sqlite",
     context: "the sql was spread across the cli",
     decision: "every call goes through the store",
   });
-  assert.equal((await store.decisions.listDecisions({ project: "alpha" })).length, 1);
+  assert.equal((await store.decisions.listDecisions({ projectId: projectIdOf(env, "alpha") })).length, 1);
 
-  await store.roadmap.saveRoadmapItem({ type: "improvement", project: "alpha", title: "close the boundary" });
-  const roadmap = await store.roadmap.listRoadmap("alpha");
+  await store.roadmap.saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "close the boundary" });
+  const roadmap = await store.roadmap.listRoadmap(projectIdOf(env, "alpha"));
   assert.deepEqual(
     roadmap.items.map((item) => [item.title, item.status, item.priority]),
     [["close the boundary", "todo", 5]],
@@ -127,7 +127,7 @@ async function queuedItem(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const store = createLocalStore(env);
-  const item = await store.roadmap.saveRoadmapItem({ type: "improvement", project: "alpha", title: "deliver the thing" });
+  const item = await store.roadmap.saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "deliver the thing" });
   const job = await store.jobs.addJob({ projectId: projectIdOf(env, "alpha"), prompt: "deliver the thing" });
   assert.equal(await store.roadmap.linkRoadmapItemJob(item.id, job.id), true, "setup: the item was not linked to its job");
   return { store, item, job };

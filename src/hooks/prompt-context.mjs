@@ -1,4 +1,4 @@
-import { projectFromCwd } from "../memory/project-name.mjs";
+import { projectFromCwd } from "../memory/registry-access.mjs";
 import { openStore } from "../store/open.mjs";
 import { clip, section } from "./block.mjs";
 import { lessonIdsFromRefs, nextSeq, recordInjected, seenRefs } from "./state.mjs";

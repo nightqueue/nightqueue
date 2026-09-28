@@ -86,6 +86,7 @@ commands:
   org remove <name>                         remove an empty, non-default org
   project add <path> [--org] [--name]       register a project (same behaviour as init)
   project list [--json]                     list projects, their org and whether the path still exists
+  project rename <old> <new>                rename a project (one row: its jobs, decisions and memory follow)
   project remove <name>                     unregister a project that owns no rows
   project move <name> [<org>] [--path <p>]  move a project to another org and/or give it a new checkout
   connection add <name> --type <type>       store a secret read from stdin and bind it to a free org slot

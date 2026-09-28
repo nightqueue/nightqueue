@@ -11,16 +11,16 @@ import {
   saveRoadmapItem,
   updateRoadmapItem,
 } from "../../src/memory/roadmap.mjs";
-import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 // Saves a roadmap item of a project with the fields every test would otherwise repeat.
 function addItem(env, { project = "alpha", priority, status, title, detail, decision_id }) {
-  return saveRoadmapItem({ type: "improvement", project, priority, status, title, detail, decision_id }, env);
+  return saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, project), priority, status, title, detail, decision_id }, env);
 }
 
 // Titles of one priority group, in the order the roadmap returns them.
 function titlesOf(env, priority) {
-  return listRoadmap("alpha", {}, env)
+  return listRoadmap(projectIdOf(env, "alpha"), {}, env)
     .items.filter((item) => item.priority === priority)
     .map((item) => item.title);
 }
@@ -28,8 +28,8 @@ function titlesOf(env, priority) {
 // Positions a priority group holds in the database, plus the SQLite type of each one.
 function positionsOf(env, priority) {
   return openDb(env)
-    .prepare("SELECT position, typeof(position) AS kind FROM roadmap_items WHERE project IS ? AND priority = ? ORDER BY position")
-    .all("alpha", priority);
+    .prepare("SELECT position, typeof(position) AS kind FROM roadmap_items WHERE project_id IS ? AND priority = ? ORDER BY position")
+    .all(projectIdOf(env, "alpha"), priority);
 }
 
 // Asserts a priority group holds the contiguous integer positions 1..N.
@@ -49,7 +49,7 @@ test("an item is appended at the end of its priority group, and the listing puts
   assert.equal(addItem(env, { title: "second p5" }).position, 2);
   assert.equal(addItem(env, { priority: 2, title: "first p2" }).position, 1);
 
-  const roadmap = listRoadmap("alpha", {}, env);
+  const roadmap = listRoadmap(projectIdOf(env, "alpha"), {}, env);
   assert.equal(roadmap.project, "alpha");
   assert.deepEqual(roadmap.items.map((item) => item.title), ["first p2", "first p5", "second p5"]);
   assert.equal("horizon" in roadmap.items[0], false);
@@ -60,7 +60,7 @@ test("an item is appended at the end of its priority group, and the listing puts
 test("the retired horizon is refused by name on save and on update", (t) => {
   const env = makeHome(t, "roadmap-horizon");
   makeProject(t, env, "alpha");
-  assert.throws(() => saveRoadmapItem({ type: "improvement", project: "alpha", horizon: "now", title: "x" }, env), /`horizon` was removed in schema v17: use `priority`/);
+  assert.throws(() => saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), horizon: "now", title: "x" }, env), /`horizon` was removed in schema v17: use `priority`/);
   const item = addItem(env, { title: "x" });
   assert.throws(() => updateRoadmapItem(item.id, { horizon: "next" }, env), /`horizon` was removed in schema v17/);
 });
@@ -73,12 +73,12 @@ test("the listing groups by workflow status and narrows only by the filters it i
   addItem(env, { title: "next up", priority: 3 });
   addItem(env, { title: "dropped", status: "cancelled" });
 
-  assert.deepEqual(listRoadmap("alpha", {}, env).items.map((item) => item.title), ["later", "next up", "delivered", "dropped"]);
-  assert.deepEqual(listRoadmap("alpha", { status: ["todo", "done"] }, env).items.map((item) => item.title), ["next up", "delivered"]);
-  assert.deepEqual(listRoadmap("alpha", { priority: [1, 3] }, env).items.map((item) => item.title), ["later", "next up"]);
-  assert.deepEqual(listRoadmap("alpha", { status: [] }, env).items.length, 4);
-  assert.throws(() => listRoadmap("alpha", { status: ["open"] }, env), /invalid roadmap `status` filter `open`/);
-  assert.throws(() => listRoadmap("alpha", { priority: [0] }, env), /invalid roadmap `priority` filter `0`/);
+  assert.deepEqual(listRoadmap(projectIdOf(env, "alpha"), {}, env).items.map((item) => item.title), ["later", "next up", "delivered", "dropped"]);
+  assert.deepEqual(listRoadmap(projectIdOf(env, "alpha"), { status: ["todo", "done"] }, env).items.map((item) => item.title), ["next up", "delivered"]);
+  assert.deepEqual(listRoadmap(projectIdOf(env, "alpha"), { priority: [1, 3] }, env).items.map((item) => item.title), ["later", "next up"]);
+  assert.deepEqual(listRoadmap(projectIdOf(env, "alpha"), { status: [] }, env).items.length, 4);
+  assert.throws(() => listRoadmap(projectIdOf(env, "alpha"), { status: ["open"] }, env), /invalid roadmap `status` filter `open`/);
+  assert.throws(() => listRoadmap(projectIdOf(env, "alpha"), { priority: [0] }, env), /invalid roadmap `priority` filter `0`/);
 });
 
 test("moving an item inside its priority group renumbers the group to contiguous positions", (t) => {
@@ -151,12 +151,12 @@ test("the linked decision must exist and belong to the project of the item", (t)
   const env = makeHome(t, "roadmap-decision");
   makeProject(t, env, "alpha");
   makeProject(t, env, "beta");
-  const decision = saveDecision({ project: "alpha", title: "one worktree per job", context: "races", decision: "split" }, env);
-  const foreign = saveDecision({ project: "beta", title: "beta decision", context: "c", decision: "d" }, env);
+  const decision = saveDecision({ projectId: projectIdOf(env, "alpha"), title: "one worktree per job", context: "races", decision: "split" }, env);
+  const foreign = saveDecision({ projectId: projectIdOf(env, "beta"), title: "beta decision", context: "c", decision: "d" }, env);
 
   const item = addItem(env, { title: "deliver it", decision_id: decision.id });
   assert.equal(getRoadmapItem(item.id, env).decision_id, decision.id);
-  assert.equal(listRoadmap("alpha", {}, env).items[0].decision_number, decision.number);
+  assert.equal(listRoadmap(projectIdOf(env, "alpha"), {}, env).items[0].decision_number, decision.number);
   assert.throws(() => addItem(env, { title: "bad", decision_id: foreign.id }), /belongs to project `beta`/);
   assert.throws(() => updateRoadmapItem(item.id, { decision_id: 9999 }, env), /unknown decision `9999`/);
 });
@@ -164,8 +164,8 @@ test("the linked decision must exist and belong to the project of the item", (t)
 test("updateRoadmapItem answers the linked decision number and live job status the way roadmap_get does", (t) => {
   const env = makeHome(t, "roadmap-update-view");
   makeProject(t, env, "alpha");
-  const decision = saveDecision({ project: "alpha", title: "one worktree per job", context: "races", decision: "split" }, env);
-  const other = saveDecision({ project: "alpha", title: "second decision", context: "c", decision: "d" }, env);
+  const decision = saveDecision({ projectId: projectIdOf(env, "alpha"), title: "one worktree per job", context: "races", decision: "split" }, env);
+  const other = saveDecision({ projectId: projectIdOf(env, "alpha"), title: "second decision", context: "c", decision: "d" }, env);
   const item = addItem(env, { title: "deliver it", decision_id: decision.id });
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "deliver it" }, env);
   linkRoadmapItemJob(item.id, job.id, env);
@@ -178,8 +178,8 @@ test("updateRoadmapItem answers the linked decision number and live job status t
   const relinked = updateRoadmapItem(item.id, { decision_id: other.id }, env);
   assert.equal(relinked.decision_number, other.number);
   assert.equal(getRoadmapItem(item.id, env).decision_id, other.id);
-  assert.equal(listRoadmap("alpha", {}, env).items[0].decision_number, other.number);
-  assert.equal(listRoadmap("alpha", {}, env).items[0].job_status, "pending");
+  assert.equal(listRoadmap(projectIdOf(env, "alpha"), {}, env).items[0].decision_number, other.number);
+  assert.equal(listRoadmap(projectIdOf(env, "alpha"), {}, env).items[0].job_status, "pending");
 });
 
 test("an item is linked once, refused while its job is live, and refused again once closed", (t) => {
@@ -195,7 +195,7 @@ test("an item is linked once, refused while its job is live, and refused again o
   assert.equal(linked.job_id, job.id);
   assert.equal(linked.job_status_seen, "pending");
   assert.throws(() => queueableRoadmapItem(item.id, env), new RegExp(`already queued as job \`${job.id}\``));
-  assert.equal(listRoadmap("alpha", {}, env).items[0].job_status, "pending");
+  assert.equal(listRoadmap(projectIdOf(env, "alpha"), {}, env).items[0].job_status, "pending");
 
   cancelJob(job.id, { reason: "not now" }, env);
   assert.equal(queueableRoadmapItem(item.id, env).id, item.id);

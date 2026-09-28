@@ -10,11 +10,15 @@ import {
   saveDecision,
   updateDecision,
 } from "../../src/memory/decisions.mjs";
-import { makeHome, makeOrg, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeOrg, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
 // Saves a decision of an owner with the fields every test would otherwise repeat.
 function addDecision(env, { project, org, title, context = "the context", decision = "the decision", status = "accepted" }) {
-  return saveDecision({ project, org, title, context, decision, status }, env);
+  const owner = {
+    ...(project === undefined ? {} : { projectId: projectIdOf(env, project) }),
+    ...(org === undefined ? {} : { orgId: orgIdOf(env, org) }),
+  };
+  return saveDecision({ ...owner, title, context, decision, status }, env);
 }
 
 // A home with the two orgs of the brief, one project in each.
@@ -42,23 +46,24 @@ test("an org decision is numbered inside its org, independently of every project
   assert.throws(
     () =>
       db
-        .prepare("INSERT INTO decisions (scope, org, number, title, context, decision) VALUES ('org', ?, 1, ?, ?, ?)")
-        .run("acme", "t", "c", "d"),
+        .prepare("INSERT INTO decisions (scope, org_id, number, title, context, decision) VALUES ('org', ?, 1, ?, ?, ?)")
+        .run(orgIdOf(env, "acme"), "t", "c", "d"),
     /UNIQUE constraint failed/,
   );
 });
 
-test("a write names project XOR org: both is refused, neither is refused, an unknown org names the existing ones", (t) => {
+test("a write names project XOR org: both is refused, neither is refused, an unknown or unresolved org is refused", (t) => {
   const env = makeTwoOrgHome(t, "decisions-org-target");
   assert.throws(
     () => addDecision(env, { project: "acme-mobile-app", org: "acme", title: "both" }),
     /pass either `project` or `org`, never both/,
   );
   assert.throws(() => addDecision(env, { title: "neither" }), /pass `project` .* or `org`/);
-  assert.throws(
-    () => addDecision(env, { org: "ghost", title: "unknown org" }),
-    /unknown org `ghost`; existing orgs: default, acme, orbit/,
-  );
+  const decision = { title: "t", context: "c", decision: "d" };
+  assert.throws(() => saveDecision({ orgId: "0".repeat(26), ...decision }, env), /unknown org id `0{26}`/);
+  assert.throws(() => saveDecision({ orgId: "ghost", ...decision }, env), /expected an org id, got `ghost`; resolve the org name at the edge/);
+  assert.throws(() => saveDecision({ projectId: "alpha", ...decision }, env), /expected a project id, got `alpha`/);
+  assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM decisions").get().n, 0);
 });
 
 test("a project reads its own decisions and its org's, org first, and never another org's", async (t) => {
@@ -67,18 +72,18 @@ test("a project reads its own decisions and its org's, org first, and never anot
   const orgWide = addDecision(env, { org: "acme", title: "every acme repo caches the plan" });
   const foreign = addDecision(env, { org: "orbit", title: "orbit caches nothing" });
 
-  const listed = listDecisions({ project: "acme-mobile-app" }, env);
+  const listed = listDecisions({ projectId: projectIdOf(env, "acme-mobile-app") }, env);
   assert.deepEqual(listed.map((row) => row.id), [orgWide.id, own.id]);
   assert.deepEqual(labelsOf(listed), ["acme#1", "#1"]);
   assert.equal(listed.some((row) => row.id === foreign.id), false, "a orbit decision leaked into a acme project");
 
-  const recalled = await recallDecisions({ query: "caches the plan", project: "acme-mobile-app" }, env);
+  const recalled = await recallDecisions({ query: "caches the plan", projectId: projectIdOf(env, "acme-mobile-app") }, env);
   assert.equal(recalled[0].scope, "org", "the org rows must come first");
   assert.deepEqual(new Set(recalled.map((row) => row.id)), new Set([orgWide.id, own.id]));
 
-  const other = await recallDecisions({ query: "caches", project: "orbit-app" }, env);
+  const other = await recallDecisions({ query: "caches", projectId: projectIdOf(env, "orbit-app") }, env);
   assert.equal(other.some((row) => row.id === orgWide.id), false, "a acme decision leaked into a orbit project");
-  assert.deepEqual(listDecisions({ org: "acme" }, env).map((row) => row.id), [orgWide.id], "an org read answers its rows alone");
+  assert.deepEqual(listDecisions({ orgId: orgIdOf(env, "acme") }, env).map((row) => row.id), [orgWide.id], "an org read answers its rows alone");
 });
 
 test("an org decision renders and is read by its own number, while a project decision keeps printing `#7`", (t) => {
@@ -88,8 +93,8 @@ test("an org decision renders and is read by its own number, while a project dec
 
   assert.equal(renderDecisionText(getDecision(project.id, env)).split("\n")[0], "#1 the app owns its cache (accepted)");
   assert.equal(renderDecisionText(getDecision(org.id, env)).split("\n")[0], "acme#1 one queue per product (accepted)");
-  assert.equal(getDecisionByNumber({ org: "acme", number: 1 }, env).id, org.id);
-  assert.equal(getDecisionByNumber({ project: "acme-mobile-app", number: 1 }, env).id, project.id);
+  assert.equal(getDecisionByNumber({ orgId: orgIdOf(env, "acme"), number: 1 }, env).id, org.id);
+  assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "acme-mobile-app"), number: 1 }, env).id, project.id);
 });
 
 test("superseded_by stays inside one owner: an org decision is never superseded by a project one", (t) => {
@@ -110,6 +115,6 @@ test("an org with no project still owns decisions, and a project of the default 
   makeOrg(env, "acme");
   const orphan = addDecision(env, { org: "acme", title: "nobody is registered here yet" });
   assert.equal(orphan.number, 1);
-  assert.deepEqual(listDecisions({ project: "alpha" }, env), []);
-  assert.deepEqual(listDecisions({ org: "acme" }, env).map((row) => row.number), [1]);
+  assert.deepEqual(listDecisions({ projectId: projectIdOf(env, "alpha") }, env), []);
+  assert.deepEqual(listDecisions({ orgId: orgIdOf(env, "acme") }, env).map((row) => row.number), [1]);
 });

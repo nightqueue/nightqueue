@@ -109,6 +109,14 @@ export async function requireProject(store, name) {
   throw new UserError(`unknown project \`${name ?? ""}\`; known projects: ${await knownProjects(store)}`);
 }
 
+// The project a roadmap-built job names, resolved at the edge: none, `all` (every project of an org item's org), or a registered NAME.
+export async function roadmapQueueTarget(store, project) {
+  const named = typeof project === "string" ? project.trim() : "";
+  if (!named) return { projectId: null, allProjects: false };
+  if (named === ALL_PROJECTS) return { projectId: null, allProjects: true };
+  return { projectId: (await requireProject(store, named)).id, allProjects: false };
+}
+
 // Resolves a project reference: a registered name, or an absolute path inside a checkout, null (global) when it is inside none.
 export async function resolveProjectRef(store, ref) {
   const raw = typeof ref === "string" ? ref.trim() : "";
@@ -153,6 +161,15 @@ export async function registerProject(store, config, { path, name, org } = {}) {
   const taken = await store.projects.byName(projectName);
   if (taken) throw takenNameError(taken, abs);
   return { status: "created", project: await store.projects.add({ name: projectName, path: abs, orgId: target.id }) };
+}
+
+// Renames a project: one registry row, so every job, decision, roadmap item and memory keyed by its id follows it.
+export async function renameProject(store, oldName, newName) {
+  const project = await requireProject(store, oldName);
+  assertName("project", newName);
+  if (newName === ALL_PROJECTS) throw new UserError(`project name \`${ALL_PROJECTS}\` is reserved: it targets every project of an org`);
+  if (oldName === newName) throw new UserError(`project \`${oldName}\` already has that name`);
+  return await store.projects.rename(project.id, newName);
 }
 
 // Extracts lowercase `owner/repo` from a git remote URL.

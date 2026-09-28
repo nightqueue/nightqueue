@@ -226,7 +226,7 @@ function roadmapDomain(env, db) {
   };
 }
 
-// The registry of orgs; the rename is one transaction and this method inserts no `await` inside it.
+// The registry of orgs; a rename is one row.
 function orgsDomain(db) {
   return {
     list: async () => registry.listOrgs(db()),
@@ -247,6 +247,7 @@ function projectsDomain(db) {
     at: async (cwd) => registry.projectAt(db(), cwd),
     ofOrg: async (orgId) => registry.projectsOfOrg(db(), orgId),
     add: async (spec) => registry.insertProject(db(), spec),
+    rename: async (id, name) => registry.renameProject(db(), { id, name }),
     move: async (id, spec) => registry.moveProject(db(), { ...spec, id }),
     remove: async (id) => registry.removeProject(db(), id),
   };

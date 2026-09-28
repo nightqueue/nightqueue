@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { readRunState } from "./resume.mjs";
-import { checkoutOfJob } from "../memory/project-name.mjs";
+import { checkoutOfJob } from "../memory/registry-access.mjs";
 
 // The session id and attempt of a job's last run, or null when it never recorded one.
 function lastSession(job) {

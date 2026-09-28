@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { run } from "../src/cli/index.mjs";
 import { runDir } from "../src/config/paths.mjs";
-import { ensureProject, registerCheckout } from "../test-support/memory.mjs";
+import { ensureProject, projectIdOf, registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { ghBin } from "../src/host/gh.mjs";
 import { openDb } from "../src/memory/db.mjs";
@@ -196,7 +196,7 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
 
 test("`run pr` of a job queued from a roadmap item opens the pull request with a body ending in its Roadmap line", async (t) => {
   const { env, id } = makeRun(t, "run-pr-roadmap");
-  const item = saveRoadmapItem({ type: "feature", project: "alpha", title: "log in with google" }, env);
+  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
   assert.equal(linkRoadmapItemJob(item.id, id, env), true);
   const body = writeBody(t, "run-pr-roadmap-body", BODY);
 

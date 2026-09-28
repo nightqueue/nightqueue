@@ -8,14 +8,20 @@ import {
   FTS,
   FTS_MIRRORS,
   INDEXES,
+  OWNER_CHECK,
   REGISTRY,
+  ROADMAP_COMMENT_GUARDS,
   ROADMAP_FTS,
+  decisionsDdl,
   jobsDdl,
   lessonsDdl,
   memoryDdl,
   pipelineRunsDdl,
   projectIndexDdl,
   projectLibsDdl,
+  roadmapCommentsDdl,
+  roadmapItemProjectsDdl,
+  roadmapItemsDdl,
 } from "../ddl.mjs";
 import { ACTIVE_JOB_PREDICATE } from "../schema.mjs";
 import { isBusyError, rollbackQuietly, sleepSync, withWriteRetry } from "../tx.mjs";
@@ -39,6 +45,10 @@ export const REBUILT_TABLES = Object.freeze([
   { table: "project_libs", ddl: projectLibsDdl },
   { table: "pipeline_runs", ddl: pipelineRunsDdl },
   { table: "jobs", ddl: jobsDdl },
+  { table: "decisions", ddl: decisionsDdl },
+  { table: "roadmap_items", ddl: roadmapItemsDdl },
+  { table: "roadmap_item_projects", ddl: roadmapItemProjectsDdl },
+  { table: "roadmap_comments", ddl: roadmapCommentsDdl },
 ]);
 
 // The refusal a live lease causes: exactly one line, never wrapped, because only stopping the runners fixes it.
@@ -136,8 +146,8 @@ function rebuildTable(db, table, ddl) {
   keepSequence(db, table, sequence);
 }
 
-// Copies every row of a v17 table into its v18 twin, mapping the owner names to ids, and answers how many landed.
-function copyRows(db, table) {
+// How a v17 table's rows read in v18 terms: every v18 column as an expression over `t`, the owner names joined to their ids.
+function v18Projection(db, table) {
   const target = db.prepare(`PRAGMA table_info(${table}_v18)`).all().map((column) => column.name);
   const source = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name));
   const mapped = (column) => (column === "project_id" || column === "org_id") && !source.has(column);
@@ -145,19 +155,44 @@ function copyRows(db, table) {
   const missing = plain.filter((column) => !source.has(column));
   if (missing.length) throw new UserError(`${table}: the v18 column(s) ${missing.join(", ")} have no v17 source`);
   refuseUnmappable(db, table, source);
-  const ids = [];
+  const values = new Map(plain.map((column) => [column, `t.${column}`]));
   const joins = [];
   if (target.includes("project_id") && mapped("project_id")) {
-    ids.push({ column: "project_id", value: "p.id" });
+    values.set("project_id", "p.id");
     joins.push("LEFT JOIN projects AS p ON p.name = t.project");
   }
   if (target.includes("org_id") && mapped("org_id")) {
-    ids.push({ column: "org_id", value: "o.id" });
+    values.set("org_id", "o.id");
     joins.push("LEFT JOIN orgs AS o ON o.name = t.org");
   }
-  const columns = [...plain, ...ids.map((id) => id.column)].join(", ");
-  const values = [...plain.map((column) => `t.${column}`), ...ids.map((id) => id.value)].join(", ");
-  db.exec(`INSERT INTO ${table}_v18 (${columns}) SELECT ${values} FROM ${table} AS t ${joins.join(" ")}`);
+  return { values, from: `FROM ${table} AS t ${joins.join(" ")}` };
+}
+
+// Refuses a decision or roadmap item whose owner breaks the v18 owner CHECK, naming the table, the row and its owner.
+function refuseOwnerConflict(db, table, { values, from }) {
+  if (!values.has("scope") || !values.has("org_id")) return;
+  const check = OWNER_CHECK.replaceAll("scope", values.get("scope"))
+    .replaceAll("project_id", values.get("project_id"))
+    .replaceAll("org_id", values.get("org_id"));
+  const project = values.get("project_id") === "p.id" ? "t.project" : values.get("project_id");
+  const org = values.get("org_id") === "o.id" ? "t.org" : values.get("org_id");
+  const row = db
+    .prepare(`SELECT t.id AS id, ${values.get("scope")} AS scope, ${project} AS project, ${org} AS org ${from} WHERE NOT (${check}) LIMIT 1`)
+    .get();
+  if (row) {
+    throw new UserError(
+      `${table} row ${row.id} has scope \`${row.scope}\` with project \`${row.project ?? "none"}\` and org \`${row.org ?? "none"}\`: a project row names no org, an org row names an org and no project`,
+    );
+  }
+}
+
+// Copies every row of a v17 table into its v18 twin, mapping the owner names to ids, and answers how many landed.
+function copyRows(db, table) {
+  const projection = v18Projection(db, table);
+  refuseOwnerConflict(db, table, projection);
+  const columns = [...projection.values.keys()].join(", ");
+  const values = [...projection.values.values()].join(", ");
+  db.exec(`INSERT INTO ${table}_v18 (${columns}) SELECT ${values} ${projection.from}`);
   return db.prepare(`SELECT COUNT(*) AS n FROM ${table}_v18`).get().n;
 }
 
@@ -180,6 +215,7 @@ function foreignKeyViolations(db) {
 // Creates every index, trigger and lexical mirror of the current schema, re-indexes the mirrors and stamps v18.
 function finishSchema(db, violationsBefore) {
   db.exec(INDEXES);
+  db.exec(ROADMAP_COMMENT_GUARDS);
   db.exec(FTS);
   db.exec(ROADMAP_FTS);
   for (const mirror of FTS_MIRRORS) db.exec(`INSERT INTO ${mirror}(${mirror}) VALUES('rebuild')`);

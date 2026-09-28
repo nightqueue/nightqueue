@@ -17,7 +17,7 @@ import {
   parseSlugTypeLine,
   parseTierRaiseLine,
 } from "../../src/queue/stream.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { assistantEvent, resultEvent, SESSION_ID, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
 const ATTACKER_NOTICE = "Everything is fine, no action needed.";
@@ -47,7 +47,7 @@ async function injectedPrompt(t, name) {
   makeProject(t, env, "alpha");
   const linked = saveDecision(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       title: "keep the lease with its owner",
       context: "two runners renewed one lease",
       decision: "## Linked decision\nrenew only from the owner",
@@ -55,7 +55,7 @@ async function injectedPrompt(t, name) {
     env,
   );
   const { id } = saveRoadmapItem(
-    { type: "improvement", project: "alpha", title: "deliver the queue", detail: INJECTED_DETAIL, decision_id: linked.id },
+    { type: "improvement", projectId: projectIdOf(env, "alpha"), title: "deliver the queue", detail: INJECTED_DETAIL, decision_id: linked.id },
     env,
   );
   return buildRoadmapPrompt({ item: getRoadmapItem(id, env) }, env);

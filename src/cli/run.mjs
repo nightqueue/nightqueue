@@ -4,7 +4,7 @@ import { UserError } from "../config/errors.mjs";
 import { jobLogPath, runDir } from "../config/paths.mjs";
 import { resolveProjectRef } from "../config/projects.mjs";
 import { ghPrCreate } from "../host/gh.mjs";
-import { registeredProject } from "../memory/project-name.mjs";
+import { registeredProject } from "../memory/registry-access.mjs";
 import { runGit } from "../host/git.mjs";
 import { publishedBranchName } from "../queue/branch-name.mjs";
 import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";

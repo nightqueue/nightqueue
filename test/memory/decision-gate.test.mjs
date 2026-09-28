@@ -9,14 +9,14 @@ import {
   setDecisionEmbedding,
   updateDecision,
 } from "../../src/memory/decisions.mjs";
-import { fakeEmbedder, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { fakeEmbedder, makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
 const FAKE_MODEL = "fake-embedder@v1";
 const CHAIN_TITLE = "one runner per job; runners claim jobs of the same project in parallel";
 
 // Saves a decision straight through the ungated primitive, the way a fixture seeds one.
 function seed(env, { project = "alpha", org, title, decision = "the decision", status = "accepted" }) {
-  return saveDecision({ project: org ? undefined : project, org, title, context: "the context", decision, status }, env);
+  return saveDecision({ projectId: projectIdOf(env, org ? undefined : project), orgId: orgIdOf(env, org), title, context: "the context", decision, status }, env);
 }
 
 // A home whose project carries a synthetic runner chain of three overlapping rules plus one unrelated rule.
@@ -34,7 +34,7 @@ function makeChainHome(t, name, options = {}) {
 // A reviewed save of a project decision with the fields every test would otherwise repeat.
 function review(env, spec) {
   return saveReviewedDecision(
-    { project: "alpha", context: "the context", decision: "the decision", status: "accepted", ...spec },
+    { projectId: projectIdOf(env, "alpha"), context: "the context", decision: "the decision", status: "accepted", ...spec },
     env,
   );
 }
