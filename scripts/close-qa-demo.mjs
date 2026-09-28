@@ -105,7 +105,9 @@ async function openScratchPr(ctx, branch) {
 // Seeds a `done` job of nstest-demo carrying a pull request and a recorded branch, through the store only.
 async function seedDoneJob(ctx, { prUrl, branch }) {
   const jobs = ctx.store.jobs;
-  const { id } = await jobs.addJob({ project: PROJECT, prompt: `close QA of ${prUrl}` });
+  const project = await ctx.store.projects.byName(PROJECT);
+  if (!project) throw new Error(`project ${PROJECT} is not registered in the throwaway home`);
+  const { id } = await jobs.addJob({ projectId: project.id, prompt: `close QA of ${prUrl}` });
   if (!(await jobs.claimJobById(id, { worker: SEED_WORKER, cap: null }))) throw new Error(`could not claim the seeded job ${id}`);
   await jobs.persistRunFacts(id, { worker: SEED_WORKER, slug: `close-qa-${id}`, branch });
   const finished = await jobs.finishJob(id, { worker: SEED_WORKER, status: "done", prUrl, noticeMd: `Seeded by close-qa-demo for ${prUrl}` });

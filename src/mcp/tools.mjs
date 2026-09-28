@@ -5,10 +5,19 @@ import { z } from "zod";
 import { saveProject } from "../cli/project.mjs";
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
-import { projectByName, registrationOffer, resolveProject } from "../config/projects.mjs";
+import { requireOrg } from "../config/orgs.mjs";
+import { registrationOffer, requireProject, resolveProjectRef, roadmapQueueTarget } from "../config/projects.mjs";
 import { loadConfig, saveConfig } from "../config/store.mjs";
 import { DECISION_STATUSES, decisionFullView, decisionView } from "../memory/decisions.mjs";
-import { SCOPE_CONFLICT, SCOPE_MISSING, ownerDescription } from "../memory/scope.mjs";
+import {
+  SCOPE_CONFLICT,
+  SCOPE_MISSING,
+  orgTargetOf,
+  ownerDescription,
+  ownerNames,
+  ownerRef,
+  projectTargetOf,
+} from "../memory/scope.mjs";
 import {
   MAX_ATTEMPTS_RANGE,
   PRIORITY_RANGE,
@@ -18,7 +27,6 @@ import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
 import { ROADMAP_SEARCH_LIMIT } from "../memory/roadmap-search.mjs";
 import {
-  ALL_PROJECTS,
   PROMPT_SOURCE_CONFLICT,
   PROMPT_SOURCE_MISSING,
   MANUAL_STATUSES,
@@ -109,13 +117,10 @@ const phaseSchema = z.object({
   note: z.string().nullable().optional(),
 });
 
-// Requires the project of a job to be a registered NAME, because a path never resolves to a project.
-function requireProjectName(name, env) {
-  const project = projectByName(loadConfig(env, { warn: () => {} }), name);
-  if (project) return project.name;
-  throw new UserError(
-    `unknown project \`${name}\`: pass the registered project NAME, not a path; list them with \`nightqueue project list\``,
-  );
+// The registered project a lesson, memory, index or run call scopes to: a name, or an absolute path inside a checkout; null (global) for
+// a path inside none, and an unknown name refused, so nothing is ever written under a project that does not exist.
+async function memoryProject(ref, env) {
+  return await resolveProjectRef(openStore(env), ref);
 }
 
 // Refuses to register a project from inside an unattended run: there is no user there to confirm it.
@@ -128,9 +133,10 @@ function refuseRegistrationInsideJob(cwd, env) {
   );
 }
 
-// Project of the run this process belongs to; null outside a job, and null too when the job id names no job.
+// Project of the run this process belongs to, as `{ id, name }`; null outside a job, and null too when the job id names no job.
 async function callerProject(own, env) {
-  return (await openStore(env).jobs.getJob(own))?.project ?? null;
+  const job = await openStore(env).jobs.getJob(own);
+  return job?.project_id ? { id: job.project_id, name: job.project } : null;
 }
 
 // Refuses a row of ANOTHER owner from inside an unattended run: a job may only rewrite the decisions and the roadmap of its own project, never its org's.
@@ -138,23 +144,23 @@ async function requireOwnProject({ kind, id, row }, env) {
   const own = callerJobId(env);
   if (own === null) return;
   const mine = await callerProject(own, env);
-  if (mine !== null && row?.scope !== "org" && mine === (row?.project ?? null)) return;
+  if (mine !== null && row?.scope !== "org" && mine.id === (row?.project_id ?? null)) return;
   throw new UserError(
     `refusing to update ${kind} \`${id}\` from inside job \`${own}\`: it belongs to ${ownerDescription(row)}, ` +
-      `not \`${mine ?? "unknown"}\`; an unattended run may only update its own project, ` +
+      `not \`${mine?.name ?? "unknown"}\`; an unattended run may only update its own project, ` +
       "so ask the operator to do it outside the queue",
   );
 }
 
-// Who is reading or writing the roadmap: the operator outside a job, or the job and the project it runs for, which bounds what it sees.
+// Who is reading or writing the roadmap: the operator outside a job, or the job and the project (by id) it runs for, which bounds what it sees.
 async function roadmapCaller(env) {
   const own = callerJobId(env);
-  if (own === null) return { author: OPERATOR_AUTHOR, viewer: null };
+  if (own === null) return { author: OPERATOR_AUTHOR, viewer: null, viewerName: null };
   const mine = await callerProject(own, env);
   if (mine === null) {
     throw new UserError(`job \`${own}\` is not in the queue, so its project is unknown; the roadmap cannot be read or commented from it`);
   }
-  return { author: jobAuthor(own), viewer: mine };
+  return { author: jobAuthor(own), viewer: mine.id, viewerName: mine.name };
 }
 
 // Refuses to write a run named from the outside while inside a job: the state.json of a run belongs to the job that owns it.
@@ -183,48 +189,50 @@ async function jobRun(own, args, env) {
   if (named.length > 0) refuseNamedRun(named.map(([name, value]) => [name, value.trim()]), own);
   const row = await openStore(env).jobs.getJob(own);
   if (!isSafeSegment(row?.slug)) refuseMissingRunSlug(own);
-  return { project: row.project, slug: row.slug };
+  return { project: row.project, projectId: row.project_id, slug: row.slug };
 }
 
 // The run an operator names from outside a job, where nothing else can tell which one it is.
-function operatorRun(args, env) {
+async function operatorRun(args, env) {
   const project = typeof args.project === "string" ? args.project.trim() : "";
   const slug = typeof args.slug === "string" ? args.slug.trim() : "";
   if (!project || !slug) {
     throw new UserError(
-      "outside a job, `project` (the registered NAME) and `slug` (the `<slug>` of runs/<project>/<slug>) are both required",
+      "outside a job, `project` (the registered NAME) and `slug` (the `<slug>` of runs/<project_id>/<slug>) are both required",
     );
   }
   if (!isSafeSegment(slug)) {
     throw new UserError(`invalid slug \`${slug}\`: a run slug is one path segment of letters, digits and \`. _ + -\``);
   }
-  return { project: requireProjectName(project, env), slug };
+  const registered = await requireProject(openStore(env), project);
+  return { project: registered.name, projectId: registered.id, slug };
 }
 
 // The run every `run_*` tool writes into: the caller's own job run, or the one an operator named.
 async function callerRun(args, env) {
   const own = callerJobId(env);
-  return own === null ? operatorRun(args, env) : await jobRun(own, args, env);
+  return own === null ? await operatorRun(args, env) : await jobRun(own, args, env);
 }
 
 // The run a `pipeline_log` call records: inside a job the job's own row names it, whatever the call sent, and outside one only the call can say which run it is.
 async function pipelineLogRun(args, env) {
   const own = callerJobId(env);
   const row = own === null ? null : await openStore(env).jobs.getJob(own);
-  if (isSafeSegment(row?.slug)) return { project: row.project, slug: row.slug };
+  if (isSafeSegment(row?.slug)) return { project: row.project, projectId: row.project_id ?? null, slug: row.slug };
   const slug = typeof args.slug === "string" ? args.slug.trim() : "";
   if (!slug) {
     throw new UserError(
-      "this run cannot be identified: send `project` (the registered NAME) and `slug` (the `<slug>` of runs/<project>/<slug>); " +
+      "this run cannot be identified: send `project` (the registered NAME) and `slug` (the `<slug>` of runs/<project_id>/<slug>); " +
         "only a call from inside a job, whose row already carries them, may omit the pair",
     );
   }
-  return { project: args.project, slug };
+  const project = await memoryProject(args.project, env);
+  return { project: project?.name ?? args.project, projectId: project?.id ?? null, slug };
 }
 
 // What the RUN already recorded about itself, the source of every field a `pipeline_log` call may now omit.
-function runFacts({ project, slug }, env) {
-  const state = readRunState({ project, slug, env });
+function runFacts({ projectId, slug }, env) {
+  const state = readRunState({ projectId, slug, env });
   return { tier: state?.tier ?? null, taskType: state?.type ?? null, tierRaiseReason: state?.tierRaiseReason ?? null };
 }
 
@@ -280,12 +288,6 @@ function requireCwd(cwd) {
   return path;
 }
 
-// The registered NAME the caller asked for, or null when it named no project at all.
-function namedProject(project, env) {
-  if (typeof project !== "string" || project.trim() === "") return null;
-  return requireProjectName(project, env);
-}
-
 // Answer of a decision save the gate held back: nothing was written, and every candidate must be named.
 function needsReviewAnswer(candidates) {
   return {
@@ -310,26 +312,26 @@ function savedDecisionAnswer(saved) {
   };
 }
 
-// Owner a decisions or roadmap tool names: `project` (the registered NAME) XOR `org`, refusing both and neither.
-function ownerArgs(args, env) {
+// Owner a decisions or roadmap tool names: `project` (the registered NAME) XOR `org`, refusing both and neither; resolved once to its ids.
+async function ownerArgs(args, env) {
   const project = typeof args.project === "string" && args.project.trim() !== "" ? args.project.trim() : null;
   const org = typeof args.org === "string" && args.org.trim() !== "" ? args.org.trim() : null;
   if (project && org) throw new UserError(SCOPE_CONFLICT);
-  if (org) return { org };
+  const store = openStore(env);
+  if (org) return orgTargetOf(await requireOrg(store, org));
   if (!project) throw new UserError(SCOPE_MISSING);
-  return { project: requireProjectName(project, env) };
+  return projectTargetOf(await requireProject(store, project));
 }
 
-// Project the job goes to, or the offer to register the directory of the caller when nothing is registered for it.
-function resolveQueueTarget({ project, cwd }, env) {
-  const named = namedProject(project, env);
-  if (named) return { project: named };
+// Project row the job goes to, or the offer to register the directory of the caller when nothing is registered for it.
+async function resolveQueueTarget({ project, cwd }, env) {
+  const store = openStore(env);
+  if (typeof project === "string" && project.trim() !== "") return { project: await requireProject(store, project) };
   const path = requireCwd(cwd);
-  const config = loadConfig(env, { warn: () => {} });
-  const resolved = resolveProject(config, { cwd: path });
-  if (resolved) return { project: resolved.name };
+  const resolved = await store.projects.at(path);
+  if (resolved) return { project: resolved };
   refuseRegistrationInsideJob(path, env);
-  const offer = registrationOffer(config, path);
+  const offer = await registrationOffer(store, loadConfig(env, { warn: () => {} }), path);
   if (!offer) {
     throw new UserError(
       `no project registered for ${path}, and it is not inside a git repository; pass the registered project NAME (\`nightqueue project list\`)`,
@@ -365,8 +367,9 @@ function hasRunDir(args) {
 
 // The prompt and the run slug of a job queued from an operator run: the run is checked and its block is built by the runtime; `addJob` refuses a run already bound.
 function operatorRunSeed({ args, project, env }) {
-  const run = resolveOperatorRunDir({ runDir: args.run_dir, project, env });
-  return { prompt: withPriorRun(args.prompt, priorRunBlock({ project, slug: run.slug, state: run.state, env })), slug: run.slug };
+  const run = resolveOperatorRunDir({ runDir: args.run_dir, project: project.name, projectId: project.id, env });
+  const block = priorRunBlock({ projectId: project.id, slug: run.slug, state: run.state, env });
+  return { prompt: withPriorRun(args.prompt, block), slug: run.slug };
 }
 
 // Requires exactly one source for the prompt of a job: the text itself, or the roadmap item that builds it.
@@ -420,12 +423,6 @@ function roadmapNote({ item, jobs, skipped }) {
   );
 }
 
-// The project a roadmap-built job names: a registered NAME, or `all` for every project of an org item's org.
-function roadmapQueueProject(project, env) {
-  if (typeof project === "string" && project.trim() === ALL_PROJECTS) return ALL_PROJECTS;
-  return namedProject(project, env);
-}
-
 // The answer of `queue_add` for a roadmap-built job: the first job as before, plus every job and every skipped project of an org item.
 async function roadmapQueuedAnswer(queued, env) {
   const answer = await queuedAnswer({ job: queued.job, roadmapItemId: queued.item.id, note: roadmapNote(queued) }, env);
@@ -447,15 +444,17 @@ async function roadmapItemDetail(args, env) {
 
 // The owner `roadmap_search` reads: the named one outside a job; inside a job always the job's own project, refusing any other owner.
 async function roadmapSearchOwner(args, env) {
-  const { viewer } = await roadmapCaller(env);
+  const { viewer, viewerName } = await roadmapCaller(env);
   if (viewer === null) return ownerArgs(args, env);
   const named = [args.project, args.org].filter((value) => typeof value === "string" && value.trim() !== "");
-  if (named.some((value) => value.trim() !== viewer)) {
+  if (named.some((value) => value.trim() !== viewerName)) {
     throw new UserError(
-      `inside a job \`roadmap_search\` reads the job's project \`${viewer}\` (and its org's items): omit \`project\`/\`org\` or pass \`${viewer}\``,
+      `inside a job \`roadmap_search\` reads the job's project \`${viewerName}\` (and its org's items): omit \`project\`/\`org\` or pass \`${viewerName}\``,
     );
   }
-  return { project: viewer };
+  const project = await openStore(env).projects.byId(viewer);
+  if (!project) throw new UserError(`the project of this job is no longer registered; the roadmap cannot be searched from it`);
+  return projectTargetOf(project);
 }
 
 // Clamps the size of a job listing into the accepted window.
@@ -617,7 +616,7 @@ function toolDefinitions(env) {
         const rows = await recallFreshLessons(
           {
             query: args.query,
-            project: args.project,
+            projectId: (await memoryProject(args.project, env))?.id ?? null,
             target: args.target,
             excludeIds: args.exclude_ids,
             sessionId,
@@ -671,8 +670,9 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const attempts = Number.isInteger(args.attempts) && args.attempts >= 2 ? args.attempts : null;
+        const project = await memoryProject(args.project, env);
         const saved = await openStore(env).lessons.saveLessonDeduped({
-          project: args.project,
+          projectId: project?.id ?? null,
           title: args.title,
           root_cause: args.root_cause,
           solution: args.solution,
@@ -683,7 +683,7 @@ function toolDefinitions(env) {
         return {
           ok: true,
           id: saved.id,
-          project: saved.project,
+          project: project?.name ?? null,
           deduped: saved.deduped,
           attempts: saved.attempts,
           incomplete: saved.incomplete,
@@ -699,7 +699,7 @@ function toolDefinitions(env) {
       handler: async (args) => {
         const rows = await openStore(env).memory.recallMemories({
           query: args.query,
-          project: args.project,
+          projectId: (await memoryProject(args.project, env))?.id ?? null,
           limit: RECALL_LIMIT,
         });
         return rows.map(memoryView);
@@ -719,7 +719,7 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const saved = await openStore(env).index.saveProjectIndex({
-          project: args.project,
+          projectId: (await memoryProject(args.project, env))?.id ?? null,
           repoRoot: args.repo_root,
           files: args.files,
           libs: args.libs ?? [],
@@ -736,7 +736,7 @@ function toolDefinitions(env) {
       },
       handler: async (args) =>
         openStore(env).index.recallProjectIndex({
-          project: args.project,
+          projectId: (await memoryProject(args.project, env))?.id ?? null,
           repoRoot: args.repo_root,
           query: args.query,
           limit: INDEX_LIMIT,
@@ -769,7 +769,7 @@ function toolDefinitions(env) {
         const run = await pipelineLogRun(args, env);
         const recorded = runFacts(run, env);
         const logged = await openStore(env).runs.logPipelineRun({
-          project: run.project,
+          projectId: run.projectId,
           slug: run.slug,
           tier: requireLogged("tier", args.tier ?? recorded.tier),
           tierOperator: args.tier_operator,
@@ -780,7 +780,7 @@ function toolDefinitions(env) {
           durationS: args.duration_s,
           phases: args.phases ?? [],
         });
-        return { ok: true, runId: logged.runId, project: logged.project, phases: logged.phases };
+        return { ok: true, runId: logged.runId, project: logged.projectId ? run.project : null, phases: logged.phases };
       },
     },
     {
@@ -826,16 +826,17 @@ function toolDefinitions(env) {
             .nullable()
             .optional()
             .describe(
-              "The RUN_DIR of an operator run (`~/.nightqueue/runs/<project>/<slug>`, absolute or `~/`) this job continues: the job writes into that run, and the runtime places the `## PRIOR RUN (operator)` block right after the prompt's `## Brief` section. Never write that block yourself. A run already bound to an open job is refused; `queue_retry --fresh` of the job discards the run.",
+              "The RUN_DIR of an operator run (`~/.nightqueue/runs/<project_id>/<slug>`, as `nightqueue run dir` prints it, absolute or `~/`) this job continues: the job writes into that run, and the runtime places the `## PRIOR RUN (operator)` block right after the prompt's `## Brief` section. Never write that block yourself. A run already bound to an open job is refused; `queue_retry --fresh` of the job discards the run.",
             ),
         },
       },
       handler: async (args) => {
         if (wantsRoadmapItem(args)) {
           if (hasRunDir(args)) throw new UserError("`run_dir` needs the operator's `prompt`: it cannot seed a job built from `roadmap_item_id`");
-          const queued = await openStore(env).roadmap.queueRoadmapItem({
+          const store = openStore(env);
+          const queued = await store.roadmap.queueRoadmapItem({
             id: args.roadmap_item_id,
-            project: roadmapQueueProject(args.project, env),
+            ...(await roadmapQueueTarget(store, args.project)),
             priority: args.priority,
             maxAttempts: args.max_attempts,
             timeoutS: args.timeout_s,
@@ -843,13 +844,13 @@ function toolDefinitions(env) {
           });
           return await roadmapQueuedAnswer(queued, env);
         }
-        const target = resolveQueueTarget(args, env);
+        const target = await resolveQueueTarget(args, env);
         if (target.offer && args.register !== true) return needsRegistration(target);
         const registered = target.offer ? await registerOffer(target.offer, env) : null;
-        const project = registered?.name ?? target.project;
+        const project = registered ?? target.project;
         const seeded = hasRunDir(args) ? operatorRunSeed({ args, project, env }) : { prompt: args.prompt, slug: null };
         const job = await openStore(env).jobs.addJob({
-          project,
+          projectId: project.id,
           prompt: seeded.prompt,
           priority: args.priority,
           maxAttempts: args.max_attempts,
@@ -992,7 +993,7 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const saved = await openStore(env).decisions.saveReviewedDecision({
-          ...ownerArgs(args, env),
+          ...ownerRef(await ownerArgs(args, env)),
           title: args.title,
           context: args.context,
           decision: args.decision,
@@ -1046,9 +1047,9 @@ function toolDefinitions(env) {
         inputSchema: { project: optionalText, org: optionalText, status: optionalDecisionStatus },
       },
       handler: async (args) => {
-        const owner = ownerArgs(args, env);
-        const rows = await openStore(env).decisions.listDecisions({ ...owner, status: args.status });
-        return { ...owner, decisions: rows.map(decisionView) };
+        const owner = await ownerArgs(args, env);
+        const rows = await openStore(env).decisions.listDecisions({ ...ownerRef(owner), status: args.status });
+        return { ...ownerNames(owner), decisions: rows.map(decisionView) };
       },
     },
     {
@@ -1067,7 +1068,7 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const rows = await openStore(env).decisions.recallDecisions({
-          ...ownerArgs(args, env),
+          ...ownerRef(await ownerArgs(args, env)),
           query: args.query,
           limit: Number.isInteger(args.limit) ? args.limit : RECALL_LIMIT,
         });
@@ -1096,7 +1097,7 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const saved = await openStore(env).roadmap.saveRoadmapItem({
-          ...ownerArgs(args, env),
+          ...ownerRef(await ownerArgs(args, env)),
           title: args.title,
           type: args.type,
           detail: args.detail,
@@ -1167,7 +1168,7 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         if (args.id !== undefined && args.id !== null) return await roadmapItemDetail(args, env);
-        return await openStore(env).roadmap.listRoadmap(ownerArgs(args, env), {
+        return await openStore(env).roadmap.listRoadmap(ownerRef(await ownerArgs(args, env)), {
           status: args.status,
           priority: args.priority,
           type: args.type,
@@ -1183,8 +1184,8 @@ function toolDefinitions(env) {
         inputSchema: { id: z.number().int().min(1), body: z.string() },
       },
       handler: async (args) => {
-        const caller = await roadmapCaller(env);
-        const comment = await openStore(env).roadmap.addRoadmapComment({ id: args.id, body: args.body, ...caller });
+        const { author, viewer } = await roadmapCaller(env);
+        const comment = await openStore(env).roadmap.addRoadmapComment({ id: args.id, body: args.body, author, viewer });
         return { ok: true, comment };
       },
     },
@@ -1205,8 +1206,8 @@ function toolDefinitions(env) {
       },
       handler: async (args) => {
         const owner = await roadmapSearchOwner(args, env);
-        const hits = await openStore(env).roadmap.searchRoadmap({ ...owner, query: args.query, file: args.file, limit: args.limit });
-        return { ...owner, hits };
+        const hits = await openStore(env).roadmap.searchRoadmap({ ...ownerRef(owner), query: args.query, file: args.file, limit: args.limit });
+        return { ...ownerNames(owner), hits };
       },
     },
     {

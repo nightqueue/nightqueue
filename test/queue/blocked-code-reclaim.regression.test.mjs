@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { doneStream, PR_URL } from "../../test-support/streams.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 
@@ -23,7 +23,7 @@ test("a job blocked by a preflight failure is reclaimed by the next drain cycle 
   const env = makeHome(t, "blocked-code-reclaim");
   makeProject(t, env, "alpha");
   const planPath = useFakeClaude(env, makeDir(t, "blocked-code-reclaim-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
 
   const blocked = await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit({ status: " M src/a.mjs" }) } });
   assert.deepEqual(blocked.processed, [{ id, status: "blocked", code: "dirty-checkout" }]);

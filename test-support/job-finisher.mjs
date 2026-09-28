@@ -4,7 +4,7 @@ import { sqliteToIso } from "../src/memory/db.mjs";
 import { finishJob, getJob } from "../src/memory/jobs.mjs";
 import { writeRunTerminal } from "../src/queue/resume.mjs";
 
-const [, , jobRaw, worker, project, slug, startAtRaw] = process.argv;
+const [, , jobRaw, worker, projectId, slug, startAtRaw] = process.argv;
 const PR_URL = "https://github.com/acme/api/pull/7";
 
 // Waits the given number of milliseconds.
@@ -35,7 +35,7 @@ function writeWitness(row) {
     writtenBy: packageRoot(),
     pid: process.pid,
   };
-  writeRunTerminal({ project, slug, terminal, env: process.env });
+  writeRunTerminal({ projectId, slug, terminal, env: process.env });
   return terminal;
 }
 

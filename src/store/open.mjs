@@ -1,5 +1,7 @@
 import { existsSync } from "node:fs";
 import { dbPath } from "../config/paths.mjs";
+import { loadRawConfig } from "../config/store.mjs";
+import { hasLegacyRegistry } from "../memory/migration/v18.mjs";
 import { createLocalStore } from "./local.mjs";
 
 const readWriteStores = new Map();
@@ -33,6 +35,23 @@ export async function withReadOnlyStore(env, fn) {
   } finally {
     await store.close();
   }
+}
+
+// The store a READ command reads the registry through, never creating a database for nothing: null on a home with none and no
+// v17 registry in config.json to import; the writable store when that import is due, the read-only one (migrated first) otherwise.
+export async function openRegistryReader(env = process.env) {
+  if (!existsSync(dbPath(env))) return hasLegacyRegistry(loadRawConfig(env)) ? openStore(env) : null;
+  const store = openStoreReadOnly(env);
+  await store.migrateIfOutdated();
+  return store;
+}
+
+// The writable store of a command that then reads config.json: opened first, so a v17 registry still in the file is imported and its
+// bindings moved to org ids before the command reads the config it will write back.
+export async function openRegistryWriter(env = process.env) {
+  const store = openStore(env);
+  await store.connect();
+  return store;
 }
 
 // Creates the database of this home when there is none yet, so a read-only caller has something to open; on a home that already has one it opens nothing at all.

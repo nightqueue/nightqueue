@@ -14,19 +14,19 @@ import {
   recordTermination,
   RUN_OUTCOME_STATUSES,
 } from "../../src/queue/run-state.mjs";
-import { makeHome } from "../../test-support/memory.mjs";
+import { FIXED_PROJECT_ID, makeHome } from "../../test-support/memory.mjs";
 
-const RUN = { project: "alpha", slug: "fix-the-worker" };
+const RUN = { projectId: FIXED_PROJECT_ID, slug: "fix-the-worker" };
 const UTC_ISO = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/;
 
 // The state.json of the run as it is on disk right now.
 function readState(env) {
-  return JSON.parse(readFileSync(join(runDir(RUN.project, RUN.slug, env), "state.json"), "utf8"));
+  return JSON.parse(readFileSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json"), "utf8"));
 }
 
 // Writes a state.json in the run directory, in the shape another writer would have left it.
 function writeState(env, content) {
-  const dir = runDir(RUN.project, RUN.slug, env);
+  const dir = runDir(RUN.projectId, RUN.slug, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "state.json"), JSON.stringify(content));
 }
@@ -39,8 +39,8 @@ test("a completed phase is appended with the fixed fields of the contract and a 
 
   const state = readState(env);
   assert.deepEqual(
-    { schemaVersion: state.schemaVersion, project: state.project, slug: state.slug, resumeCount: state.resumeCount },
-    { schemaVersion: 1, project: "alpha", slug: "fix-the-worker", resumeCount: 0 },
+    { schemaVersion: state.schemaVersion, projectId: state.projectId, slug: state.slug, resumeCount: state.resumeCount },
+    { schemaVersion: 1, projectId: FIXED_PROJECT_ID, slug: "fix-the-worker", resumeCount: 0 },
   );
   assert.deepEqual(state.phases, [{ phase: "triage", at: state.phases[0].at, artifact: "01-triage.md", verdict: "CONFIRMED" }]);
   assert.match(state.phases[0].at, UTC_ISO);
@@ -61,7 +61,7 @@ test("an unknown phase is refused with the accepted list and writes nothing", (t
   assert.equal(termination.status, "kept");
   assert.match(termination.reason, /unknown phase `critique`/);
 
-  assert.equal(existsSync(join(runDir(RUN.project, RUN.slug, env), "state.json")), false, "a refused record created the file");
+  assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false, "a refused record created the file");
 });
 
 test("a status outside done|gate is refused, and the notice of a gate is recorded with the outcome", (t) => {
@@ -99,7 +99,7 @@ test("the pull request the runtime read is recorded into the outcome, and anythi
     assert.equal(refused.status, "kept", String(value));
     assert.match(refused.reason, /is not a pull request URL/);
   }
-  assert.equal(existsSync(join(runDir(RUN.project, RUN.slug, env), "state.json")), false, "a refused URL created the file");
+  assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false, "a refused URL created the file");
 
   assert.equal(recordOutcome({ ...RUN, status: "gate", notice: "the checks are still red", env }).status, "written");
   assert.equal(recordPrUrl({ ...RUN, prUrl, env }).status, "written");
@@ -118,7 +118,7 @@ test("the pull request template is a top-level record the latest call overwrites
   for (const template of [null, { source: "other", headings }, { source: "nightqueue", headings: "## QA" }, { source: "repo", headings }, { source: "repo", path: " ", headings }]) {
     assert.equal(recordPrTemplate({ ...RUN, template, env }).status, "kept", JSON.stringify(template));
   }
-  assert.equal(existsSync(join(runDir(RUN.project, RUN.slug, env), "state.json")), false, "a refused template created the file");
+  assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false, "a refused template created the file");
 
   assert.equal(recordPrTemplate({ ...RUN, template: { source: "repo", path: "CLAUDE.md", headings }, env }).status, "written");
   const { at, ...repo } = readState(env).prTemplate;
@@ -159,7 +159,7 @@ test("run fields refuse an unknown field and a value outside the enum, and recor
   assert.match(recordRunFields({ ...RUN, fields: { branch: "  " }, env }).reason, /field `branch` cannot be empty/);
   assert.match(recordRunFields({ ...RUN, fields: { qaStageA: { verdict: "BREAKS-FOUND" } }, env }).reason, /field `qaStageA` needs the `artifact`/);
   assert.match(recordRunFields({ ...RUN, fields: { qaStageA: "05a-qa-analyst.md" }, env }).reason, /field `qaStageA` needs the `artifact`/);
-  assert.equal(existsSync(join(runDir(RUN.project, RUN.slug, env), "state.json")), false, "a refused record created the file");
+  assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false, "a refused record created the file");
 
   assert.equal(recordRunFields({ ...RUN, fields: { tier: "complex", type: "bug/error", branch: "fix/the-worker" }, env }).status, "written");
   const state = readState(env);
@@ -177,7 +177,7 @@ test("the operator fields accept only their enums, and the evidence level is kep
   assert.match(recordRunFields({ ...RUN, fields: { evidenceLevel: "3" }, env }).reason, /unknown evidenceLevel `3`/);
   assert.match(recordRunFields({ ...RUN, fields: { evidenceLevel: 2.5 }, env }).reason, /unknown evidenceLevel/);
   assert.match(recordRunFields({ ...RUN, fields: { planStatus: "final" }, env }).reason, /unknown planStatus `final`; accepted: draft, approved/);
-  assert.equal(existsSync(join(runDir(RUN.project, RUN.slug, env), "state.json")), false, "a refused record created the file");
+  assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false, "a refused record created the file");
 
   const written = recordRunFields({ ...RUN, fields: { origin: "operator", evidenceLevel: 3, planStatus: "approved" }, env });
   assert.equal(written.status, "written");
@@ -245,7 +245,7 @@ test("an updatedAt written by an older plugin is overwritten by the clock, and t
 
 test("an unsafe project or slug records nothing at all", (t) => {
   const env = makeHome(t, "run-state-unsafe");
-  for (const run of [{ project: "../escape", slug: "fix-the-worker" }, { project: "alpha", slug: "../escape" }]) {
+  for (const run of [{ projectId: "../escape", slug: "fix-the-worker" }, { projectId: "alpha", slug: "fix-the-worker" }, { projectId: FIXED_PROJECT_ID, slug: "../escape" }]) {
     const written = recordPhaseDone({ ...run, phase: "triage", artifact: "01-triage.md", env });
     assert.deepEqual({ status: written.status, path: written.path }, { status: "kept", path: null });
   }

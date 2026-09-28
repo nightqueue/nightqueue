@@ -8,7 +8,7 @@ import { clearOwnPause, inheritablePause, PAUSE_GRACE_S, PAUSE_POLL_MS, readOwnP
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { runCycle, runDrain } from "../../src/queue/runner.mjs";
 import { registerForegroundRunner } from "../../src/queue/start.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, PR_URL, rateLimitEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
@@ -45,7 +45,7 @@ async function keepRegistry() {
 
 // Enqueues one job of the test project.
 function enqueue(env) {
-  return addJob({ project: "alpha", prompt: PROMPT }, env).id;
+  return addJob({ projectId: ensureProject(env, "alpha"), prompt: PROMPT }, env).id;
 }
 
 // The pause this runner would have armed for a limit that resets in an hour.

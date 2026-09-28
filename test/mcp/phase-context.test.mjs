@@ -8,7 +8,7 @@ import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
 import { saveRoadmapItem } from "../../src/memory/roadmap.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const WORKER = "host:4242";
 const SESSION = "session-of-the-run";
@@ -17,7 +17,7 @@ const SESSION = "session-of-the-run";
 function makeRunningJob(t, name, { sessionId = SESSION } = {}) {
   const env = makeHome(t, name);
   const repo = makeProject(t, env, "alpha");
-  const job = addJob({ project: "alpha", prompt: "rewrite the runner" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "rewrite the runner" }, env);
   claimJobById(job.id, { worker: WORKER, cap: 4 }, env);
   persistRunFacts(job.id, { worker: WORKER, slug: "rewrite-the-runner", sessionId }, env);
   return { env: { ...env, NIGHTQUEUE_JOB_ID: String(job.id) }, home: env, repo };
@@ -26,7 +26,7 @@ function makeRunningJob(t, name, { sessionId = SESSION } = {}) {
 // Stores one lesson of the project.
 function addLesson(env, title) {
   return saveLesson(
-    { project: "alpha", title, root_cause: `${title} happened`, solution: "fix it", prevention: `prevention of ${title}` },
+    { projectId: projectIdOf(env, "alpha"), title, root_cause: `${title} happened`, solution: "fix it", prevention: `prevention of ${title}` },
     env,
   ).id;
 }
@@ -39,7 +39,7 @@ function lessonIdsOf(block) {
 test("a fresh phase gets a block, and the next phase of the same run gets other lessons", async (t) => {
   const { env } = makeRunningJob(t, "phase-context-fresh");
   for (let i = 0; i < 8; i += 1) addLesson(env, `the worker leaks a descriptor number ${i}`);
-  saveMemory({ project: "alpha", key: "worker", value: "the worker runs from the pipeline" }, env);
+  saveMemory({ projectId: projectIdOf(env, "alpha"), key: "worker", value: "the worker runs from the pipeline" }, env);
 
   const first = await phaseContextBlock({ target: "coder", query: "worker descriptor" }, env);
   assert.equal(first.project, "alpha");
@@ -81,7 +81,7 @@ test("only the explore carries the structural index, with the files the checkout
   addLesson(env, "the runner drops the lease");
   saveProjectIndex(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       repoRoot: repo,
       files: [{ path: "src/queue/runner.mjs", responsibility: "runs one job from claim to finalize" }],
       libs: [{ lib: "zod", version: "4.5.4" }],
@@ -105,8 +105,8 @@ test("a project with nothing to say produces an empty block, not a header", asyn
 
 test("only the triager gets the related roadmap items of its project, in the ref-title-status line", async (t) => {
   const { env, home } = makeRunningJob(t, "phase-context-roadmap");
-  const item = saveRoadmapItem({ type: "bug", project: "alpha", title: "the runner drops its lease", priority: 2 }, home);
-  saveRoadmapItem({ type: "chore", project: "alpha", title: "unrelated cleanup" }, home);
+  const item = saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "the runner drops its lease", priority: 2 }, home);
+  saveRoadmapItem({ type: "chore", projectId: projectIdOf(env, "alpha"), title: "unrelated cleanup" }, home);
 
   const triager = await phaseContextBlock({ target: "triager", query: "runner lease" }, env);
   assert.ok(

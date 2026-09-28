@@ -31,9 +31,14 @@ What a runtime has to provide, and what it can rely on:
   by `--stop` and pruned when dead, never written again.
 - The output of a detached runner lives in
   `${NIGHTQUEUE_HOME}/logs/runner-<stamp>.log`, next to the one log per job.
-- Run artifacts live in `${NIGHTQUEUE_HOME}/runs/<project>/<slug>/`, always
+- Run artifacts live in `${NIGHTQUEUE_HOME}/runs/<project_id>/<slug>/`, always
   outside the worktree, because the worktree is removed before the last phase
-  reads them. The runtime creates the directory before the session starts.
+  reads them. The first segment is the project's id (a ULID), never its name, so
+  a project rename leaves every run where it is; `nightqueue run dir` prints the
+  directory, and a home from an older build has its `runs/<project>/` moved to
+  `runs/<project_id>/` once (a `runs/.by-id` marker records it, and a run
+  already present under the id is never overwritten). The runtime creates the
+  directory before the session starts.
 - Artifact names, in order: `00-main-measure.md` (post-merge resume only),
   `01-triage.md`, `02-explore.md`, `03-plan.md`, `04-implementation.md`,
   `05a-qa-analyst.md`, `05-qa.md`, `06-verification.md`, `06-runtime.md`.
@@ -43,7 +48,9 @@ What a runtime has to provide, and what it can rely on:
   command `nightqueue run pr` and the runner itself call. The pipeline never writes
   the file, and an `updatedAt` an older plugin hand-wrote is overwritten by the
   runtime's clock and never read. Every key, and who writes it:
-  - `schemaVersion` (always `1`), `project` and `slug`: every write, as fixed fields.
+  - `schemaVersion` (always `1`), `projectId` and `slug`: every write, as fixed
+    fields. A `project` name left by an older build is kept as it is, never
+    rewritten and never read to find the run.
   - `updatedAt` and the `at` of every record: the runtime's UTC clock, one stamp per
     write.
   - `phases[{phase, at, artifact?, verdict?, note?}]`: `run_phase_done`, append-only,

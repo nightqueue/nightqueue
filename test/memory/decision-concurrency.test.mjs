@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
 const DECISIONS_MODULE_URL = new URL("../../src/memory/decisions.mjs", import.meta.url).href;
 const WRITERS = 4;
@@ -74,7 +74,7 @@ test(
 
     const labels = Array.from({ length: WRITERS }, (_, index) => `W${index}`);
     const results = await Promise.all(
-      labels.map((label) => runWriter(scriptPath, env, { scope: "project", owner: "alpha" }, label, DURATION_MS)),
+      labels.map((label) => runWriter(scriptPath, env, { scope: "projectId", owner: projectIdOf(env, "alpha") }, label, DURATION_MS)),
     );
 
     results.forEach((result, index) => {
@@ -110,7 +110,7 @@ test(
     );
 
     const db = openDb(env);
-    const rows = db.prepare("SELECT number FROM decisions WHERE project IS ? ORDER BY number").all("alpha");
+    const rows = db.prepare("SELECT number FROM decisions WHERE project_id IS ? ORDER BY number").all(projectIdOf(env, "alpha"));
     assert.equal(rows.length, totalWritten, `expected ${totalWritten} decisions, found ${rows.length}`);
     assert.deepEqual(
       rows.map((row) => row.number),
@@ -130,7 +130,7 @@ test(
 
     const labels = Array.from({ length: WRITERS }, (_, index) => `O${index}`);
     const results = await Promise.all(
-      labels.map((label) => runWriter(scriptPath, env, { scope: "org", owner: "acme" }, label, DURATION_MS)),
+      labels.map((label) => runWriter(scriptPath, env, { scope: "orgId", owner: orgIdOf(env, "acme") }, label, DURATION_MS)),
     );
 
     results.forEach((result, index) => {
@@ -146,8 +146,8 @@ test(
     assert.ok(numbers.length >= WRITERS * 10, `writers produced too few org rows (${numbers.length})`);
     assert.equal(new Set(numbers).size, numbers.length, "two concurrent writers received the SAME org decision number");
     const stored = openDb(env)
-      .prepare("SELECT number FROM decisions WHERE scope = 'org' AND org IS ? ORDER BY number")
-      .all("acme")
+      .prepare("SELECT number FROM decisions WHERE scope = 'org' AND org_id IS ? ORDER BY number")
+      .all(orgIdOf(env, "acme"))
       .map((row) => row.number);
     assert.deepEqual(stored, Array.from({ length: numbers.length }, (_, index) => index + 1));
     assert.equal(openDb(env).prepare("SELECT COUNT(*) AS total FROM decisions WHERE scope = 'project'").get().total, 0);

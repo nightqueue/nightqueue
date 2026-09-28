@@ -1,5 +1,5 @@
-import { addColumnIfMissing, dropColumnIfPresent, hasColumn } from "./columns.mjs";
-import { CLOSED_REQUIRES_MERGE, RESULT_OBJECT_BASE } from "./schema.mjs";
+import { addColumnIfMissing, dropColumnIfPresent, hasColumn } from "../columns.mjs";
+import { CLOSED_REQUIRES_MERGE, RESULT_OBJECT_BASE } from "../schema.mjs";
 
 const LEGACY_COLUMNS = ["ship_status", "ship", "ship_worker", "ship_lease_until"];
 const ENDED_STATUSES = "status IN ('closed', 'merged')";

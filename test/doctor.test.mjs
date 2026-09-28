@@ -15,7 +15,8 @@ import { saveLesson } from "../src/memory/lessons.mjs";
 import { shimContent } from "../src/host/runtime.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
-import { addProject } from "../src/config/projects.mjs";
+import { buildLegacyHome } from "../test-support/legacy-home.mjs";
+import { ensureProject, makeOrg, orgIdOf, projectIdOf, registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { makeHostEnv, readSettingsFile, writeLegacyShim, writeSettingsFixture } from "../test-support/host.mjs";
 import { makeDir, makeProject, seedClosedJob, seedLegacyV8Home } from "../test-support/memory.mjs";
@@ -294,7 +295,7 @@ test("the database check reads the schema version of an existing database", asyn
   const host = makeHostEnv(t, "doctor-db");
   saveLesson(
     {
-      project: null,
+      projectId: null,
       title: "the worker leaks a file descriptor",
       root_cause: "the early return skipped the close",
       solution: "close it in a finally block",
@@ -306,7 +307,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v17/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v18/);
 });
 
 test("the database check warns about a v8 home and points at the command that migrates it", async (t) => {
@@ -316,7 +317,7 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, expected v17/);
+  assert.match(database.detail, /schema v8, expected v18/);
   assert.match(database.hint, /run `nightqueue queue status` once to migrate it/);
   assert.doesNotMatch(database.hint, /nightqueue memory stats/);
 });
@@ -324,8 +325,8 @@ test("the database check warns about a v8 home and points at the command that mi
 test("the roadmap workflow check is ok when every linked item follows its job and warns about one left behind", async (t) => {
   const host = makeHostEnv(t, "doctor-roadmap-workflow");
   const db = openDb(host.env);
-  const job = addJob({ project: "alpha", prompt: "deliver it" }, host.env);
-  db.prepare("INSERT INTO roadmap_items (project, title, position, status, job_id, job_status_seen) VALUES ('alpha', 'deliver it', 1, 'in_progress', ?, 'pending')").run(job.id);
+  const job = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "deliver it" }, host.env);
+  db.prepare("INSERT INTO roadmap_items (project_id, title, position, status, job_id, job_status_seen) VALUES (?, 'deliver it', 1, 'in_progress', ?, 'pending')").run(projectIdOf(host.env, "alpha"), job.id);
   closeDb(host.env);
 
   const quiet = await diagnose(host.env);
@@ -343,8 +344,8 @@ test("the roadmap workflow check is ok when every linked item follows its job an
 test("the roadmap workflow check flags an org item whose status disagrees with its project rows", async (t) => {
   const host = makeHostEnv(t, "doctor-roadmap-org-derived");
   const db = openDb(host.env);
-  db.prepare("INSERT INTO roadmap_items (scope, org, title, position, status) VALUES ('org', 'acme', 'raise node', 1, 'in_progress')").run();
-  db.prepare("INSERT INTO roadmap_item_projects (item_id, project, status) VALUES (1, 'api', 'done'), (1, 'app', 'in_progress')").run();
+  db.prepare("INSERT INTO roadmap_items (scope, org_id, title, position, status) VALUES ('org', ?, 'raise node', 1, 'in_progress')").run(orgIdOf(host.env, makeOrg(host.env, "acme")));
+  db.prepare("INSERT INTO roadmap_item_projects (item_id, project_id, status) VALUES (1, ?, 'done'), (1, ?, 'in_progress')").run(ensureProject(host.env, "api"), ensureProject(host.env, "app"));
   closeDb(host.env);
 
   const quiet = await diagnose(host.env);
@@ -367,7 +368,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, expected v17/);
+  assert.match(database.detail, /schema v99, expected v18/);
   assert.match(database.hint, /upgrade nightqueue/);
 });
 
@@ -512,7 +513,7 @@ test("the queue jobs check counts the jobs whose runner died, and only once the 
   assert.equal(noDatabase.checks.some((entry) => entry.name === "queue jobs"), false, "the check ran without a database");
 
   makeProject(t, host.env, "alpha");
-  const { id } = addJob({ project: "alpha", prompt: "fix the worker" }, host.env);
+  const { id } = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "fix the worker" }, host.env);
   claimJobById(id, { worker: "host:6666", cap: 4 }, host.env);
   closeDb(host.env);
   const { report: live } = await diagnose(host.env);
@@ -538,7 +539,7 @@ test("the closes check reports closes in flight, failed and on a dead lease, and
   assert.equal(closesCheck((await diagnose(host.env)).report), null, "the check ran without a database");
 
   makeProject(t, host.env, "alpha");
-  const ids = [1, 2, 3].map(() => addJob({ project: "alpha", prompt: "fix the worker" }, host.env).id);
+  const ids = [1, 2, 3].map(() => addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "fix the worker" }, host.env).id);
   const db = openDb(host.env);
   for (const id of ids) db.prepare("UPDATE jobs SET status = 'done', pr_url = 'https://github.com/acme/api/pull/7' WHERE id = ?").run(id);
   closeDb(host.env);
@@ -563,11 +564,13 @@ test("the closes check reports closes in flight, failed and on a dead lease, and
 
 test("the closes check warns with the migrate hint on a database without the close columns, and leaves it as it was", async (t) => {
   const host = makeHostEnv(t, "doctor-closes-old-db");
-  makeProject(t, host.env, "alpha");
-  addJob({ project: "alpha", prompt: "old row" }, host.env);
-  const db = openDb(host.env);
-  for (const column of ["close_worker", "close_status", "close", "close_lease_until"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
-  closeDb(host.env);
+  buildLegacyHome(host.env, {
+    version: 14,
+    mutate(db) {
+      for (const column of ["close_worker", "close_status", "close", "close_lease_until"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
+      db.prepare("INSERT INTO jobs (project, prompt) VALUES ('alpha', 'old row')").run();
+    },
+  });
 
   const { report } = await diagnose(host.env);
   const row = report.checks.find((entry) => entry.name === "closes");
@@ -592,7 +595,7 @@ test("the host commands check sums the counters of the last finished jobs, warni
   );
 
   makeProject(t, host.env, "alpha");
-  const timedOut = addJob({ project: "alpha", prompt: "times out" }, host.env).id;
+  const timedOut = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "times out" }, host.env).id;
   openDb(host.env).prepare("UPDATE jobs SET status = 'done', bash_timeouts = 3 WHERE id = ?").run(timedOut);
   closeDb(host.env);
   const { report: onlyTimeouts } = await diagnose(host.env);
@@ -601,7 +604,7 @@ test("the host commands check sums the counters of the last finished jobs, warni
     { status: "ok", detail: "host commands: 0 backgrounded, 0 killed, 3 timed out in the last 20 jobs" },
   );
 
-  const killedJob = addJob({ project: "alpha", prompt: "gets killed" }, host.env).id;
+  const killedJob = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "gets killed" }, host.env).id;
   openDb(host.env).prepare("UPDATE jobs SET status = 'failed', tasks_killed = 1 WHERE id = ?").run(killedJob);
   closeDb(host.env);
   const { report: withKill } = await diagnose(host.env);
@@ -619,7 +622,7 @@ function orchestratorCheck(report) {
 
 // Finishes a job straight in the database with the given orchestrator counters.
 function finishedWithOrchestrator(env, counters) {
-  const id = addJob({ project: "alpha", prompt: "measured" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "measured" }, env).id;
   openDb(env)
     .prepare("UPDATE jobs SET status = 'done', orch_turns = ?, orch_reads = ?, orch_bash = ?, orch_bash_explore = ?, orch_ctx_last = ? WHERE id = ?")
     .run(counters.turns, counters.reads, counters.bash, counters.explore, counters.context, id);
@@ -636,7 +639,7 @@ test("the orchestrator check sums the counters of the last 20 finished jobs, war
   });
 
   makeProject(t, host.env, "alpha");
-  const unmeasured = addJob({ project: "alpha", prompt: "finished before the counters" }, host.env).id;
+  const unmeasured = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "finished before the counters" }, host.env).id;
   openDb(host.env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(unmeasured);
   closeDb(host.env);
   finishedWithOrchestrator(host.env, { turns: 10, reads: 0, bash: 4, explore: 0, context: 100000 });
@@ -665,7 +668,7 @@ test("the orchestrator check sums the counters of the last 20 finished jobs, war
 test("the orchestrator check reads a database without the counter columns as zero and never writes it", async (t) => {
   const host = makeHostEnv(t, "doctor-orchestrator-old-db");
   makeProject(t, host.env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "old row" }, host.env).id;
+  const id = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "old row" }, host.env).id;
   const db = openDb(host.env);
   db.prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(id);
   for (const column of ["orch_turns", "orch_reads", "orch_bash", "orch_bash_explore", "orch_ctx_last"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
@@ -683,7 +686,7 @@ test("the orchestrator check reads a database without the counter columns as zer
 
 // A decision proposed by the given job, stamped straight in the database.
 function proposedByJob(env, { title, jobId }) {
-  const saved = saveDecision({ project: "alpha", title, context: "why", decision: "what", status: "proposed" }, env);
+  const saved = saveDecision({ projectId: projectIdOf(env, "alpha"), title, context: "why", decision: "what", status: "proposed" }, env);
   openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(jobId, saved.id);
   return saved;
 }
@@ -699,7 +702,7 @@ test("the decision proposals check warns on a proposal of a closed job, never on
   assert.equal(proposalsCheck(noDatabase), undefined, "the check ran without a database");
 
   makeProject(t, host.env, "alpha");
-  const open = addJob({ project: "alpha", prompt: "still open" }, host.env).id;
+  const open = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "still open" }, host.env).id;
   proposedByJob(host.env, { title: "the open job proposes this", jobId: open });
   closeDb(host.env);
   const { report: none } = await diagnose(host.env);
@@ -770,7 +773,7 @@ test("--json is the only thing on stdout of the real process, and the exit code 
 // Registers a real published checkout as project `alpha` of the home, returning the resolved path the config records.
 function registerRealCheckout(t, env, name) {
   const checkout = realpathSync(publishedCheckout(t, name).checkout);
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: checkout, name: "alpha" });
   return checkout;
 }
 
@@ -787,11 +790,11 @@ test("doctor names each leftover under .claude/worktrees with its cleanup comman
   lockWorktree(checkout, liveLocked.path, process.pid);
   const gated = addWorktree(checkout, "gated");
   const closed = addWorktree(checkout, "closed");
-  const { id: gatedId } = addJob({ project: "alpha", prompt: "work of gated-run" }, host.env);
+  const { id: gatedId } = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "work of gated-run" }, host.env);
   openDb(host.env).prepare("UPDATE jobs SET status = 'gate', slug = 'gated-run' WHERE id = ?").run(gatedId);
   seedClosedJob(host.env, { project: "alpha", prompt: "work of closed-run", slug: "closed-run" });
   for (const [slug, path] of [["gated-run", gated.path], ["closed-run", closed.path]]) {
-    recordRunFields({ project: "alpha", slug, fields: { worktree: path }, env: host.env });
+    recordRunFields({ projectId: ensureProject(host.env, "alpha"), slug, fields: { worktree: path }, env: host.env });
   }
   closeDb(host.env);
 
@@ -825,11 +828,13 @@ test("doctor says so when the owner of a worktree cannot be known, or git cannot
   const checkout = registerRealCheckout(t, unreadable.env, "doctor-worktrees-unreadable");
   addWorktree(checkout, "some-run");
   ensureHome(unreadable.env);
+  closeDb(unreadable.env);
+  for (const sidecar of ["-wal", "-shm"]) rmSync(`${dbPath(unreadable.env)}${sidecar}`, { force: true });
   writeFileSync(dbPath(unreadable.env), "this is not a database");
   const { report } = await diagnose(unreadable.env);
-  const row = checkOf(report, "worktrees");
+  const row = checkOf(report, "projects");
   assert.equal(row.status, "warn");
-  assert.match(row.detail, /^the queue cannot be read \(.+\), so the owner of a worktree is unknown$/);
+  assert.match(row.detail, /^the registry cannot be read \(.+\)$/);
   assert.equal(report.checks.some((entry) => entry.name.startsWith("worktree ")), false, "a worktree was reported with an unknown owner");
 
   const noGit = makeHostEnv(t, "doctor-worktrees-no-git");

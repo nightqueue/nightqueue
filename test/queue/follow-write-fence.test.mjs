@@ -8,7 +8,7 @@ import { closeDb, hasCachedWriteConnection, openDb, openDbReadOnly } from "../..
 import { addJob, claimJobById } from "../../src/memory/jobs.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { writeRunTerminal } from "../../src/queue/resume.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // ACCEPTANCE of decision #24: `queue status --follow` writes nothing, on a read-only home where a repair and a prune WOULD write.
 
@@ -26,17 +26,17 @@ function deadKill() {
 
 // A job left `running` by a dead runner whose witness already says it finished: a repair would rewrite the row.
 function lostFinish(env) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ?, lease_until = datetime('now', '-120 seconds') WHERE id = ?").run(SLUG, id);
   const terminal = { status: "done", prUrl: "https://github.com/acme/api/pull/7", finishedAt: "2026-09-11T03:15:00Z", writtenBy: "/tmp/runtime", pid: 4242 };
-  assert.equal(writeRunTerminal({ project: "alpha", slug: SLUG, terminal, env }).status, "written", "setup: the witness was not written");
+  assert.equal(writeRunTerminal({ projectId: ensureProject(env, "alpha"), slug: SLUG, terminal, env }).status, "written", "setup: the witness was not written");
   return id;
 }
 
 // A job delivered with a pull request, the row a merge sweep used to rewrite.
 function delivered(env) {
-  const id = addJob({ project: "alpha", prompt: "deliver it" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "deliver it" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/8", id);
   return id;
 }

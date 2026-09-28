@@ -1,11 +1,10 @@
 import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { projectByName } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
 import { runGitAsync } from "../host/git.mjs";
 import { killProcess, probePid } from "./registry.mjs";
 import { readRunState } from "./resume.mjs";
 import { isPrUrl } from "./stream.mjs";
+import { checkoutOfJob } from "../memory/registry-access.mjs";
 
 export const WORKTREE_READ_TIMEOUT_MS = 5000;
 export const WORKTREE_REMOVE_TIMEOUT_MS = 60000;
@@ -191,10 +190,10 @@ export async function releaseJobWorktree({ job, env = process.env, killImpl = ki
   let path = null;
   try {
     if (typeof job?.project !== "string" || !job.project || typeof job?.slug !== "string" || !job.slug) return null;
-    const state = readRunState({ project: job.project, slug: job.slug, env });
+    const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
     path = typeof state?.worktree === "string" && state.worktree.trim() ? state.worktree.trim() : null;
     if (!path) return null;
-    const checkout = projectByName(loadConfig(env, { warn: () => {} }), job.project)?.path;
+    const checkout = checkoutOfJob(job, env);
     if (!checkout) return { path, status: "kept", reason: `the project \`${job.project}\` is not registered` };
     const prRecorded = isPrUrl(job.pr_url) || isPrUrl(state?.outcome?.prUrl);
     const inspected = await inspectRunWorktree({ checkout, path, prRecorded, env, killImpl });

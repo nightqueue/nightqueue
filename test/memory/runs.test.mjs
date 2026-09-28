@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { UserError } from "../../src/config/errors.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { logPipelineRun, updateRunTelemetry } from "../../src/memory/runs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 // Rows of the two telemetry tables, in insertion order.
 function telemetry(env) {
@@ -15,15 +15,15 @@ function telemetry(env) {
 }
 
 // Minimal valid run, overridable field by field.
-function run(overrides = {}) {
-  return { project: "alpha", slug: "fix-the-worker", tier: "simple", outcome: "pr_opened", ...overrides };
+function run(env, overrides = {}) {
+  return { projectId: projectIdOf(env, "alpha"), slug: "fix-the-worker", tier: "simple", outcome: "pr_opened", ...overrides };
 }
 
 test("a run and its phases are stored with the sequence of the call", (t) => {
   const env = makeHome(t, "runs-store");
   makeProject(t, env, "alpha");
   const logged = logPipelineRun(
-    run({
+    run(env, {
       taskType: "bug/error",
       gateStop: "triage",
       durationS: 42,
@@ -34,7 +34,7 @@ test("a run and its phases are stored with the sequence of the call", (t) => {
     }),
     env,
   );
-  assert.equal(logged.project, "alpha");
+  assert.equal(logged.projectId, projectIdOf(env, "alpha"));
   assert.equal(logged.phases, 2);
 
   const stored = telemetry(env);
@@ -57,12 +57,12 @@ test("the operator tier and the reason of a raise are stored beside the final ti
   makeProject(t, env, "alpha");
 
   logPipelineRun(
-    run({ tier: "complex", tierOperator: "simple", tierRaiseReason: "  stack trace in the claim path  " }),
+    run(env, { tier: "complex", tierOperator: "simple", tierRaiseReason: "  stack trace in the claim path  " }),
     env,
   );
-  logPipelineRun(run({ tier: "simple", tierOperator: "simple" }), env);
-  logPipelineRun(run({ tier: "simple", tierRaiseReason: "   " }), env);
-  logPipelineRun(run({ tier: "trivial", tierRaiseReason: "a reason with no raise" }), env);
+  logPipelineRun(run(env, { tier: "simple", tierOperator: "simple" }), env);
+  logPipelineRun(run(env, { tier: "simple", tierRaiseReason: "   " }), env);
+  logPipelineRun(run(env, { tier: "trivial", tierRaiseReason: "a reason with no raise" }), env);
 
   const [raised, matched, bare, reasonOnly] = telemetry(env).runs;
   assert.deepEqual(
@@ -75,7 +75,7 @@ test("the operator tier and the reason of a raise are stored beside the final ti
   assert.equal(reasonOnly.tier_raise_reason, "a reason with no raise", "a reason without a raise is stored as given");
 
   assert.throws(
-    () => logPipelineRun(run({ tierOperator: "urgent" }), env),
+    () => logPipelineRun(run(env, { tierOperator: "urgent" }), env),
     /invalid `tier_operator`.*trivial\|simple\|complex/,
   );
 });
@@ -84,7 +84,7 @@ test("an outcome outside the contract is refused and stores nothing at all", (t)
   const env = makeHome(t, "runs-outcome");
   makeProject(t, env, "alpha");
   assert.throws(
-    () => logPipelineRun(run({ outcome: "pr_aberto", phases: [{ phase: "triager" }] }), env),
+    () => logPipelineRun(run(env, { outcome: "pr_aberto", phases: [{ phase: "triager" }] }), env),
     (err) => {
       assert.ok(err instanceof UserError);
       assert.match(err.message, /invalid `outcome`: `pr_aberto`; expected one of pr_opened\|local_commit\|no_commit/);
@@ -97,33 +97,33 @@ test("an outcome outside the contract is refused and stores nothing at all", (t)
 test("every enum names the values it accepts when it refuses one", (t) => {
   const env = makeHome(t, "runs-enums");
   makeProject(t, env, "alpha");
-  assert.throws(() => logPipelineRun(run({ tier: "complexo" }), env), /invalid `tier`.*trivial\|simple\|complex/);
+  assert.throws(() => logPipelineRun(run(env, { tier: "complexo" }), env), /invalid `tier`.*trivial\|simple\|complex/);
   assert.throws(
-    () => logPipelineRun(run({ gateStop: "triagem" }), env),
+    () => logPipelineRun(run(env, { gateStop: "triagem" }), env),
     /invalid `gate_stop`.*critique\|triage\|architect\|qa\|verification\|runtime\|user/,
   );
   assert.throws(
-    () => logPipelineRun(run({ phases: [{ phase: "coder", status: "falhou" }] }), env),
+    () => logPipelineRun(run(env, { phases: [{ phase: "coder", status: "falhou" }] }), env),
     /invalid `status`.*ok\|failed\|skipped/,
   );
-  assert.throws(() => logPipelineRun(run({ taskType: "bug" }), env), /invalid `task_type`.*bug\/error\|feature\/refactor/);
-  assert.throws(() => logPipelineRun(run({ slug: "  " }), env), /`slug` is required/);
-  assert.throws(() => logPipelineRun(run({ phases: [{ phase: " " }] }), env), /every phase needs a non-empty `phase`/);
+  assert.throws(() => logPipelineRun(run(env, { taskType: "bug" }), env), /invalid `task_type`.*bug\/error\|feature\/refactor/);
+  assert.throws(() => logPipelineRun(run(env, { slug: "  " }), env), /`slug` is required/);
+  assert.throws(() => logPipelineRun(run(env, { phases: [{ phase: " " }] }), env), /every phase needs a non-empty `phase`/);
   assert.deepEqual(telemetry(env), { runs: [], phases: [] });
 });
 
 test("the operator's two outcomes are stored like any other", (t) => {
   const env = makeHome(t, "runs-operator-outcomes");
   makeProject(t, env, "alpha");
-  logPipelineRun(run({ slug: "hunt-a", outcome: "investigated" }), env);
-  logPipelineRun(run({ slug: "hunt-b", outcome: "queued" }), env);
+  logPipelineRun(run(env, { slug: "hunt-a", outcome: "investigated" }), env);
+  logPipelineRun(run(env, { slug: "hunt-b", outcome: "queued" }), env);
   assert.deepEqual(telemetry(env).runs.map((row) => row.outcome), ["investigated", "queued"]);
 });
 
 test("a run without gate stop and without phases is valid", (t) => {
   const env = makeHome(t, "runs-minimal");
   makeProject(t, env, "alpha");
-  const logged = logPipelineRun(run({ gateStop: null }), env);
+  const logged = logPipelineRun(run(env, { gateStop: null }), env);
   assert.equal(logged.phases, 0);
   const stored = telemetry(env);
   assert.equal(stored.runs[0].gate_stop, null);
@@ -136,7 +136,7 @@ test("the telemetry the runtime measured wins, and what the agent sent survives 
   const env = makeHome(t, "runs-telemetry-update");
   makeProject(t, env, "alpha");
   logPipelineRun(
-    run({
+    run(env, {
       durationS: 999,
       phases: [
         { phase: "triage", model: "haiku", duration_s: 7 },
@@ -151,7 +151,7 @@ test("the telemetry the runtime measured wins, and what the agent sent survives 
 
   const updated = updateRunTelemetry(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       slug: "fix-the-worker",
       durationS: 3900,
       phases: [
@@ -184,20 +184,20 @@ test("a run the agent never recorded is left alone: the measured telemetry never
   const env = makeHome(t, "runs-telemetry-absent");
   makeProject(t, env, "alpha");
 
-  const answer = updateRunTelemetry({ project: "alpha", slug: "never-logged", durationS: 120, phases: [{ phase: "triage", durationS: 10 }] }, env);
+  const answer = updateRunTelemetry({ projectId: projectIdOf(env, "alpha"), slug: "never-logged", durationS: 120, phases: [{ phase: "triage", durationS: 10 }] }, env);
 
-  assert.deepEqual({ runId: answer.runId, phases: answer.phases, project: answer.project }, { runId: null, phases: 0, project: "alpha" });
+  assert.deepEqual({ runId: answer.runId, phases: answer.phases, projectId: answer.projectId }, { runId: null, phases: 0, projectId: projectIdOf(env, "alpha") });
   assert.deepEqual(telemetry(env), { runs: [], phases: [] });
-  assert.throws(() => updateRunTelemetry({ project: "alpha", slug: "  " }, env), /`slug` is required/);
+  assert.throws(() => updateRunTelemetry({ projectId: projectIdOf(env, "alpha"), slug: "  " }, env), /`slug` is required/);
 });
 
 test("the measured telemetry of a retried job lands on the LAST run recorded for that slug", (t) => {
   const env = makeHome(t, "runs-telemetry-retry");
   makeProject(t, env, "alpha");
-  logPipelineRun(run({ durationS: 100, phases: [{ phase: "triage" }] }), env);
-  const second = logPipelineRun(run({ durationS: 200, phases: [{ phase: "triage" }] }), env);
+  logPipelineRun(run(env, { durationS: 100, phases: [{ phase: "triage" }] }), env);
+  const second = logPipelineRun(run(env, { durationS: 200, phases: [{ phase: "triage" }] }), env);
 
-  updateRunTelemetry({ project: "alpha", slug: "fix-the-worker", durationS: 3000, phases: [{ phase: "triage", model: "opus", durationS: 30 }] }, env);
+  updateRunTelemetry({ projectId: projectIdOf(env, "alpha"), slug: "fix-the-worker", durationS: 3000, phases: [{ phase: "triage", model: "opus", durationS: 30 }] }, env);
 
   const stored = telemetry(env);
   assert.deepEqual(stored.runs.map((row) => row.duration_s), [100, 3000]);
@@ -213,8 +213,8 @@ test("the measured telemetry of a retried job lands on the LAST run recorded for
 test("the model and the session come from the environment of the process, never from a parameter", (t) => {
   const env = makeHome(t, "runs-env");
   makeProject(t, env, "alpha");
-  logPipelineRun(run(), { ...env, NIGHTQUEUE_MODEL: "opus", NIGHTQUEUE_SESSION_ID: "s-42" });
-  logPipelineRun(run({ slug: "second-run" }), env);
+  logPipelineRun(run(env), { ...env, NIGHTQUEUE_MODEL: "opus", NIGHTQUEUE_SESSION_ID: "s-42" });
+  logPipelineRun(run(env, { slug: "second-run" }), env);
   const stored = telemetry(env);
   assert.deepEqual(
     stored.runs.map((row) => [row.slug, row.model, row.session_id]),

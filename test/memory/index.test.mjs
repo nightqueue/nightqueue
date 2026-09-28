@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { UserError } from "../../src/config/errors.mjs";
 import { recallProjectIndex, saveProjectIndex } from "../../src/memory/index.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 // Creates a file inside the repository, with its parent directories.
 function writeRepoFile(repoRoot, relative, content) {
@@ -26,7 +26,7 @@ test("the index upserts by path and by lib instead of stacking rows", (t) => {
 
   saveProjectIndex(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       repoRoot: repo,
       files: [{ path: "src/a.mjs", responsibility: "first responsibility" }],
       libs: [{ lib: "zod", version: "3.0.0" }],
@@ -35,7 +35,7 @@ test("the index upserts by path and by lib instead of stacking rows", (t) => {
   );
   const second = saveProjectIndex(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       repoRoot: repo,
       files: [{ path: "src/a.mjs", responsibility: "second responsibility" }],
       libs: [{ lib: "zod", version: "4.5.4" }],
@@ -44,7 +44,7 @@ test("the index upserts by path and by lib instead of stacking rows", (t) => {
   );
   assert.deepEqual(second, { files: 1, libs: 1 });
 
-  const index = recallProjectIndex({ project: "alpha", repoRoot: repo }, env);
+  const index = recallProjectIndex({ projectId: projectIdOf(env, "alpha"), repoRoot: repo }, env);
   assert.equal(index.files.length, 1);
   assert.equal(index.files[0].responsibility, "second responsibility");
   assert.deepEqual(
@@ -58,10 +58,10 @@ test("an absolute path inside the repository is stored relative to its root", (t
   const repo = makeProject(t, env, "alpha");
   const absolute = writeRepoFile(repo, "src/a.mjs", "export const a = 1;\n");
   saveProjectIndex(
-    { project: "alpha", repoRoot: repo, files: [{ path: absolute, responsibility: "the module" }] },
+    { projectId: projectIdOf(env, "alpha"), repoRoot: repo, files: [{ path: absolute, responsibility: "the module" }] },
     env,
   );
-  const index = recallProjectIndex({ project: "alpha", repoRoot: repo }, env);
+  const index = recallProjectIndex({ projectId: projectIdOf(env, "alpha"), repoRoot: repo }, env);
   assert.deepEqual(
     index.files.map((file) => file.path),
     ["src/a.mjs"],
@@ -76,7 +76,7 @@ test("the recall reports the real freshness of every indexed file", (t) => {
   const removed = writeRepoFile(repo, "src/removed.mjs", "export const c = 1;\n");
   saveProjectIndex(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       repoRoot: repo,
       files: [
         { path: "src/untouched.mjs", responsibility: "stable module" },
@@ -90,7 +90,7 @@ test("the recall reports the real freshness of every indexed file", (t) => {
   utimesSync(changed, future, future);
   rmSync(removed);
 
-  const index = recallProjectIndex({ project: "alpha", repoRoot: repo }, env);
+  const index = recallProjectIndex({ projectId: projectIdOf(env, "alpha"), repoRoot: repo }, env);
   assert.deepEqual(fileOf(index, "src/untouched.mjs"), {
     path: "src/untouched.mjs",
     responsibility: "stable module",
@@ -111,7 +111,7 @@ test("the index query matches both the path and the responsibility", (t) => {
   writeRepoFile(repo, "src/report.mjs", "export const r = 1;\n");
   saveProjectIndex(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       repoRoot: repo,
       files: [
         { path: "src/queue.mjs", responsibility: "runs the jobs" },
@@ -121,28 +121,29 @@ test("the index query matches both the path and the responsibility", (t) => {
     env,
   );
   assert.deepEqual(
-    recallProjectIndex({ project: "alpha", repoRoot: repo, query: "queue" }, env).files.map((file) => file.path),
+    recallProjectIndex({ projectId: projectIdOf(env, "alpha"), repoRoot: repo, query: "queue" }, env).files.map((file) => file.path),
     ["src/queue.mjs"],
   );
   assert.deepEqual(
-    recallProjectIndex({ project: "alpha", repoRoot: repo, query: "invoice" }, env).files.map((file) => file.path),
+    recallProjectIndex({ projectId: projectIdOf(env, "alpha"), repoRoot: repo, query: "invoice" }, env).files.map((file) => file.path),
     ["src/report.mjs"],
   );
 });
 
-test("an unregistered project cannot be indexed and recalls nothing", (t) => {
+test("an unregistered project cannot be indexed and recalls nothing, and a name is never taken for an id", (t) => {
   const env = makeHome(t, "index-unregistered");
   assert.throws(
     () =>
       saveProjectIndex(
-        { project: "ghost", repoRoot: "/tmp", files: [{ path: "src/a.mjs", responsibility: "the module" }] },
+        { projectId: projectIdOf(env, "ghost"), repoRoot: "/tmp", files: [{ path: "src/a.mjs", responsibility: "the module" }] },
         env,
       ),
     (err) => {
       assert.ok(err instanceof UserError);
-      assert.match(err.message, /project `ghost` is not registered; run `nightqueue init`/);
+      assert.match(err.message, /`\/tmp` is not registered; run `nightqueue init`/);
       return true;
     },
   );
-  assert.deepEqual(recallProjectIndex({ project: "ghost" }, env), { files: [], libs: [] });
+  assert.deepEqual(recallProjectIndex({ projectId: projectIdOf(env, "ghost") }, env), { files: [], libs: [] });
+  assert.throws(() => recallProjectIndex({ projectId: "ghost" }, env), /expected a project id, got `ghost`/);
 });

@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const ROADMAP_MODULE_URL = new URL("../../src/memory/roadmap.mjs", import.meta.url).href;
 const WRITERS = 4;
@@ -22,7 +22,7 @@ function buildWriterSource(moduleUrl) {
     "const errors = [];",
     "while (Date.now() < deadline) {",
     "  try {",
-    "    const row = saveRoadmapItem({ type: 'improvement', project, priority: Number(priorityRaw), title: `${label}-${written}` }, process.env);",
+    "    const row = saveRoadmapItem({ type: 'improvement', projectId: project, priority: Number(priorityRaw), title: `${label}-${written}` }, process.env);",
     "    positions.push(row.position);",
     "    written += 1;",
     "  } catch (err) {",
@@ -69,7 +69,7 @@ test(
 
     const labels = Array.from({ length: WRITERS }, (_, index) => `W${index}`);
     const results = await Promise.all(
-      labels.map((label) => runWriter(scriptPath, env, "alpha", 5, label, DURATION_MS)),
+      labels.map((label) => runWriter(scriptPath, env, projectIdOf(env, "alpha"), 5, label, DURATION_MS)),
     );
 
     results.forEach((result, index) => {
@@ -94,8 +94,8 @@ test(
 
     const db = openDb(env);
     const rows = db
-      .prepare("SELECT position FROM roadmap_items WHERE project IS ? AND priority = ? ORDER BY position")
-      .all("alpha", 5);
+      .prepare("SELECT position FROM roadmap_items WHERE project_id IS ? AND priority = ? ORDER BY position")
+      .all(projectIdOf(env, "alpha"), 5);
     assert.equal(
       rows.length,
       totalWritten,

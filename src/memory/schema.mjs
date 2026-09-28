@@ -1,4 +1,15 @@
-export const DB_USER_VERSION = 17;
+export const DB_USER_VERSION = 18;
+
+export const LEASE_GRACE_S = 60;
+
+// Predicate of an active job for one alias: running under a lease still inside the grace window of its owner.
+export function activeFor(alias) {
+  return `${alias}.status = 'running' AND ${alias}.lease_until IS NOT NULL
+      AND datetime(${alias}.lease_until) > datetime('now', '-${LEASE_GRACE_S} seconds')`;
+}
+
+// A job is active while it is running under a lease inside the grace window: the ceiling counts these.
+export const ACTIVE_JOB_PREDICATE = activeFor("slot");
 
 // The invariant of a closed job: it carries a pull request and a close checklist recording the merge, with no close in flight.
 export const CLOSED_REQUIRES_MERGE = `CHECK (status <> 'closed' OR (pr_url IS NOT NULL AND trim(pr_url) <> '' AND close_status IS NULL

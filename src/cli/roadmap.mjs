@@ -1,7 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 import { emptyRoadmap } from "../memory/roadmap.mjs";
 import { ROADMAP_STATUSES } from "../memory/roadmap-workflow.mjs";
-import { ownerPrefix, ownerRef } from "../memory/scope.mjs";
+import { ownerNames, ownerPrefix, ownerRef } from "../memory/scope.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { readOnlyQuery, resolveReadTarget } from "./decision.mjs";
 
@@ -111,9 +111,13 @@ export async function run(argv, ctx) {
     json: { type: "boolean" },
   });
   checkArgs(positionals, { max: 0, usage: USAGE.list });
-  const owner = ownerRef(resolveReadTarget(values, ctx));
+  const target = await resolveReadTarget(values, ctx);
   const filters = { status: values.status, priority: priorityFilter(values.priority), type: values.type };
-  const roadmap = await readOnlyQuery(ctx, (store) => store.roadmap.listRoadmap(owner, filters), emptyRoadmap(owner));
+  const roadmap = await readOnlyQuery(
+    ctx,
+    (store) => store.roadmap.listRoadmap(ownerRef(target), filters),
+    emptyRoadmap(ownerNames(target)),
+  );
   if (values.json) {
     ctx.out(JSON.stringify(roadmap));
     return;

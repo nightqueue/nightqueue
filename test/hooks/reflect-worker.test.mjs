@@ -7,7 +7,7 @@ import { buildDigest, defaultRunClaude, extractJson, runReflectWorker } from "..
 import { recordInjected } from "../../src/hooks/state.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { getLesson, sanitizeLesson, saveLesson } from "../../src/memory/lessons.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const LEAK_TITLE = "the worker leaks a file descriptor on failure";
 const LEAK_PREVENTION = "always close the file descriptor in a finally block";
@@ -84,7 +84,7 @@ function lessonRows(env) {
 function saveFiller(env, i) {
   return saveLesson(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       title: `filler lesson number ${i} about something unrelated`,
       root_cause: "unrelated root cause",
       solution: "unrelated solution",
@@ -104,7 +104,7 @@ test("a fresh transcript becomes a lesson of the project of the session", async 
   assert.deepEqual({ saved: result.saved, skipped: result.skipped }, { saved: 1, skipped: null });
   const rows = lessonRows(env);
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].project, "alpha");
+  assert.equal(rows[0].project_id, projectIdOf(env, "alpha"));
   assert.equal(rows[0].title, LEAK_TITLE);
   assert.equal(rows[0].target, "coder");
   assert.equal(rows[0].model, "reflect/haiku");
@@ -117,7 +117,7 @@ test("a repeated lesson merges through the judge instead of duplicating", async 
   const repo = makeProject(t, env, "alpha");
   const existing = saveLesson(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       title: LEAK_TITLE,
       root_cause: "the early return skipped the close",
       solution: "close it in a finally block",
@@ -142,7 +142,7 @@ test("a lesson injected in the session and broken again is counted as violated",
   const repo = makeProject(t, env, "alpha");
   const existing = saveLesson(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       title: LEAK_TITLE,
       root_cause: "the early return skipped the close",
       solution: "close it in a finally block",
@@ -173,7 +173,7 @@ test("the lesson injected last is still counted as violated in a session past th
   }
   const mostRecent = saveLesson(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       title: LEAK_TITLE,
       root_cause: "the early return skipped the close",
       solution: "close it in a finally block",

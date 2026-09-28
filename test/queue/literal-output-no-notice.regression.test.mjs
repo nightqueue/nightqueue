@@ -7,7 +7,7 @@ import { runtimePackageDir } from "../../src/config/paths.mjs";
 import { runSessionStart } from "../../src/hooks/session-start.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const NOTICE = "nightqueue 0.4.0 is available (installed 0.1.0) - run `nightqueue update`";
 
@@ -65,7 +65,7 @@ test("check off: queue status keeps its exact pre-existing text on every branch,
   const empty = await runCli(env, ["queue", "status"], fakeFetch(calls));
   assert.deepEqual(empty.out, ["0 runners online - pending jobs will wait until `nightqueue queue run` starts one", "no jobs in the queue"]);
 
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const table = await runCli(env, ["queue", "status"], fakeFetch(calls));
   assert.equal(table.out.some((line) => line.includes("is available")), false, table.out.join("\n"));
 
@@ -79,7 +79,7 @@ test("check off: queue status --json stays byte-identical to the pre-existing sh
   const env = makeHome(t, "regression-off-json");
   installRuntime(env);
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const calls = [];
 
   for (const argv of [["queue", "status", "--json"], ["queue", "status", String(id), "--json"]]) {
@@ -100,7 +100,7 @@ test("check on: the notice is appended exactly once, as the last line, byte for 
   const empty = await runCli(env, ["queue", "status"], fakeFetch(calls));
   assert.deepEqual(empty.out, ["0 runners online - pending jobs will wait until `nightqueue queue run` starts one", "no jobs in the queue", NOTICE]);
 
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const table = await runCli(env, ["queue", "status"], fakeFetch(calls));
   assert.equal(table.out.at(-1), NOTICE, table.out.join("\n"));
   assert.equal(table.out.filter((line) => line === NOTICE).length, 1);
@@ -115,7 +115,7 @@ test("check on: queue status --json never carries the notice either", async (t) 
   delete env.NIGHTQUEUE_NO_UPDATE_CHECK;
   installRuntime(env);
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const calls = [];
 
   for (const argv of [["queue", "status", "--json"], ["queue", "status", String(id), "--json"]]) {
@@ -151,7 +151,7 @@ test("the 9000-character clip still holds once the notice is appended", async (t
   for (let i = 0; i < 12; i += 1) {
     saveLesson(
       {
-        project: "alpha",
+        projectId: projectIdOf(env, "alpha"),
         title: `lesson number ${i}`,
         root_cause: "it throws",
         solution: "fix it",

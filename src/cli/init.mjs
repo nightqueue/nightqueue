@@ -128,8 +128,8 @@ async function installForInit(ctx, { verbose, ...options } = {}) {
 
 // Registers the repository of this run and offers it the token of the GitHub CLI, the part of init that only a repository gets.
 async function registerHere(ctx, { path, name, org, mode }) {
-  const project = registerProject(ctx, { path, name, org });
-  await importGhConnection(ctx, { mode, org: project.org });
+  const project = await registerProject(ctx, { path, name, org });
+  await importGhConnection(ctx, { mode, org: { id: project.org_id, name: project.org } });
 }
 
 // Runs `nightqueue init`: installs the runtime, registers it in the host and, inside a repository, registers the project too.

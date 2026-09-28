@@ -4,13 +4,13 @@ import { promptBody, runPromptContext } from "../../src/hooks/prompt-context.mjs
 import { nextSeq, recordInjected, seenRefs } from "../../src/hooks/state.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const LEAK_PROMPT = "the worker leaks a file descriptor when the run fails";
 
 // Stores one lesson of the project, returning its id.
 function addLesson(env, { title, prevention = "always close the descriptor in a finally block" }) {
-  return saveLesson({ project: "alpha", title, root_cause: `${title} happened`, solution: "fix it", prevention }, env)
+  return saveLesson({ projectId: projectIdOf(env, "alpha"), title, root_cause: `${title} happened`, solution: "fix it", prevention }, env)
     .id;
 }
 
@@ -71,10 +71,10 @@ test("a working directory outside every registered project leaks nothing into th
   const env = makeHome(t, "hook-prompt-outside");
   makeProject(t, env, "alpha");
   addLesson(env, { title: "the worker leaks a file descriptor on failure" });
-  saveMemory({ project: "alpha", key: "descriptor", value: "the worker owns the descriptor pool" }, env);
+  saveMemory({ projectId: projectIdOf(env, "alpha"), key: "descriptor", value: "the worker owns the descriptor pool" }, env);
   saveLesson(
     {
-      project: null,
+      projectId: null,
       title: "a global lesson about the fun\u00e7\u00e3o that leaks a file descriptor",
       root_cause: "the early return skipped the close",
       solution: "close it in a finally block",
@@ -104,7 +104,7 @@ test("a block larger than the budget is cut at three thousand characters", async
   for (let i = 0; i < 4; i += 1) {
     saveMemory(
       {
-        project: "alpha",
+        projectId: projectIdOf(env, "alpha"),
         key: `the worker owns the descriptor ${"and the pool ".repeat(90)} ${i}`,
         value: `the worker leaks a file descriptor when the run fails ${"in the pool ".repeat(40)}`,
       },

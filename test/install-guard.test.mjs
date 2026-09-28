@@ -8,7 +8,7 @@ import { runnersDir } from "../src/config/paths.mjs";
 import { addJob, claimJobById } from "../src/memory/jobs.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { assertIsolatedEnv, makeHostEnv } from "../test-support/host.mjs";
-import { makeDir, makeProject } from "../test-support/memory.mjs";
+import { ensureProject, makeDir, makeProject } from "../test-support/memory.mjs";
 
 const CHECKOUT = fileURLToPath(new URL("../", import.meta.url));
 const REFUSAL_TAIL =
@@ -59,7 +59,7 @@ function registerRunner(env, { runtimeDir = null } = {}) {
 
 // Enqueues a job and claims it, which is what a runner holding a live lease looks like.
 function claimedJob(env) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: WORKER, cap: 4 }, env);
   return id;
 }

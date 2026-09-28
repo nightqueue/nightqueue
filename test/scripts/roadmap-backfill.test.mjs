@@ -5,13 +5,13 @@ import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob, getJob } from "../../src/memory/jobs.mjs";
 import { getRoadmapItemDetail } from "../../src/memory/roadmap.mjs";
 import { sqliteToIso } from "../../src/memory/schema.mjs";
-import { makeHome, makeProject, mergedChecklist, seedClosedJob, seedDoneJob } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, mergedChecklist, seedClosedJob, seedDoneJob } from "../../test-support/memory.mjs";
 
 const PR_URL = "https://github.com/acme/alpha/pull/3";
 
 // Seeds a job that ended `failed` through the real store writes, and answers its id.
 function seedFailedJob(env) {
-  const { id } = addJob({ project: "alpha", prompt: "p" }, env);
+  const { id } = addJob({ projectId: ensureProject(env, "alpha"), prompt: "p" }, env);
   if (!claimJobById(id, { worker: "w1", cap: null }, env)) throw new Error(`seedFailedJob: job #${id} could not be claimed`);
   if (!finishJob(id, { worker: "w1", status: "failed" }, env)) throw new Error(`seedFailedJob: job #${id} could not be finished`);
   return id;
@@ -20,7 +20,7 @@ function seedFailedJob(env) {
 // Inserts an item already linked to a job, the way items were linked before comments existed.
 function insertItem(db, { status, jobId }) {
   return db
-    .prepare("INSERT INTO roadmap_items (project, title, status, position, job_id, job_status_seen) VALUES ('alpha', 't', ?, 1, ?, NULL) RETURNING id")
+    .prepare("INSERT INTO roadmap_items (project_id, title, status, position, job_id, job_status_seen) VALUES ((SELECT id FROM projects WHERE name = 'alpha'), 't', ?, 1, ?, NULL) RETURNING id")
     .get(status, jobId).id;
 }
 
@@ -32,7 +32,7 @@ function seedHome(t, name) {
     closed: seedClosedJob(env, { prUrl: PR_URL }),
     review: seedDoneJob(env, { prUrl: PR_URL }),
     failed: seedFailedJob(env),
-    pending: addJob({ project: "alpha", prompt: "p" }, env).id,
+    pending: addJob({ projectId: ensureProject(env, "alpha"), prompt: "p" }, env).id,
   };
   const db = openDb(env);
   const items = {

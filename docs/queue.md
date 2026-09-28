@@ -707,7 +707,12 @@ with `timeout <seconds>`) - never both.
 **Resuming by slug.** The run directory of a job is opened by the runner, not
 derived by the pipeline: the claim gives the job a slug when its row has none
 (built from the first words of the prompt), and the prompt carries `Project:` and
-`RUN_DIR:` from the start. The pipeline renames the run once, by printing
+`RUN_DIR:` from the start. The directory is `runs/<project_id>/<slug>/`: it
+hangs off the project's id, not its name, so a `nightqueue project rename`
+never moves it, while `Project:` carries the current name. A session that has
+no `RUN_DIR:` line asks for it with `nightqueue run dir` (inside a job) or
+`nightqueue run dir --project <name> --slug <slug>`, and never builds the path
+from the name. The pipeline renames the run once, by printing
 `SLUG: <slug> TYPE: <type>` on a line of its own, and the runtime moves the
 directory with the artifacts already inside it. Everything the run records lands in
 the `state.json` of that directory, written by the runtime alone (see
@@ -718,7 +723,7 @@ spawning anything, and hands the result over in the prompt as one block:
 
 ```
 RESUME CANDIDATE (slug `fix-the-worker`)
-RUN_DIR: /Users/me/.nightqueue/runs/api/fix-the-worker
+RUN_DIR: /Users/me/.nightqueue/runs/01J9Z3K8QW4X2V7N5M6B1C0D9E/fix-the-worker
 Branch: fix/the-worker
 Worktree: /Users/me/code/api/.claude/worktrees/fix-the-worker
 Last completed phase: triage
@@ -738,7 +743,7 @@ the pipeline never touches that file. With `queue.resumeSession: true` in
 session of its own. The default is `false`.
 
 **What the runner requires of the checkout.** Before spawning anything it
-checks, in this order: the project is registered by NAME, its checkout exists
+checks, in this order: the job's project still has a registered checkout path, it exists
 and has a `.git`, the `claude` CLI resolves (`NIGHTQUEUE_CLAUDE_BIN`, then
 `PATH`), the checkout is clean (`git status --porcelain` empty) and it sits on
 the default branch. A block is not a failure: the job goes back to `pending`

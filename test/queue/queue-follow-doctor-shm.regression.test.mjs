@@ -8,7 +8,7 @@ import { dbShmPath, runnerRegistryPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { stampRunnerDbWitness, writeRunnerRecord } from "../../src/queue/registry.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const HOLDER = fileURLToPath(new URL("../../test-support/db-holder.mjs", import.meta.url));
@@ -91,7 +91,7 @@ function followStatusSource() {
 test("a follow session never loses a live holder's shared-memory file, and doctor's witness check tracks that same file", async (t) => {
   const env = makeHome(t, "queue-follow-doctor-shm");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
 
   openDb(env);
   writeRunnerRecord(

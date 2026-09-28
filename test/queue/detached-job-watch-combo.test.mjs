@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // A spawn double: it records every call and answers with a child that has a pid and can be unreferenced.
 function fakeSpawn(calls, { pid = 4242 } = {}) {
@@ -46,7 +46,7 @@ async function runCli(env, argv, { calls = [] } = {}) {
 
 test("`queue run --job <id> --watch <n>` is refused, the same way `--stop` next to another option is refused", async (t) => {
   const env = makeQueueHome(t, "job-watch-refused");
-  const job = addJob({ project: "alpha", prompt: "fix it" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix it" }, env);
   const calls = [];
 
   const result = await runCli(env, ["queue", "run", "--job", String(job.id), "--watch", "1"], { calls });
@@ -59,7 +59,7 @@ test("`queue run --job <id> --watch <n>` is refused, the same way `--stop` next 
 
 test("the same combo is refused on the foreground branch, so the watch loop is never entered scoped to one job", async (t) => {
   const env = makeQueueHome(t, "job-watch-refused-foreground");
-  const job = addJob({ project: "alpha", prompt: "fix it" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix it" }, env);
   const calls = [];
 
   const result = await runCli(env, ["queue", "run", "--job", String(job.id), "--watch", "1", "--foreground"], { calls });

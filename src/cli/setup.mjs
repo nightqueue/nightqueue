@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { configPath, homeDir, secretsPath, shimNames } from "../config/paths.mjs";
-import { emptyConfig, emptySecrets } from "../config/schema.mjs";
+import { DEFAULT_ORG_NAME, emptyConfig, emptySecrets } from "../config/schema.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { claudeCommandLine, runClaude } from "../host/claude.mjs";
 import {
@@ -113,7 +113,7 @@ export function setupHome(ctx, report) {
     path: configPath(ctx.env),
     create: () => ctx.saveConfig(config, ctx.env),
     label: "config.json",
-    detail: `org \`${config.defaultOrg}\``,
+    detail: `org \`${DEFAULT_ORG_NAME}\``,
     report,
   });
   ensureFile({

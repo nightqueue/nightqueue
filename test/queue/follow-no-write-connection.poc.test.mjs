@@ -6,7 +6,7 @@ import { defaultContext, run } from "../../src/cli/index.mjs";
 import { jobLogPath } from "../../src/config/paths.mjs";
 import { closeDb, hasCachedWriteConnection } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // H1B: `queue log --follow`'s status reader goes through `openStore(env)`, whose eager `openDb(env)`
 // (src/store/local.mjs:200) opens and caches a WRITE connection the very first time it runs in a process
@@ -17,7 +17,7 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 test("a queue log --follow session never opens a cached write connection to read a job's status", async (t) => {
   const env = makeHome(t, "follow-no-write-connection");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   finishJob(id, { worker: "host:1", status: "done", prUrl: "https://github.com/acme/api/pull/7" }, env);
 
@@ -51,7 +51,7 @@ test("a queue log --follow session never opens a cached write connection to read
 test("a queue status --follow session with nothing to merge and nothing to repair never opens a cached write connection", async (t) => {
   const env = makeHome(t, "follow-status-no-write-connection");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   finishJob(id, { worker: "host:1", status: "done" }, env);
 

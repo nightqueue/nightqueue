@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { jobLogPath } from "../../src/config/paths.mjs";
-import { addProject } from "../../src/config/projects.mjs";
+import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
@@ -25,11 +25,11 @@ function makeWorktreeRun(t, name, { stdout, dirty = false, rowNotice = null }) {
   const worktree = addWorktree(checkout, `feat+${name}`);
   if (dirty) makeDirty(worktree.path);
   const env = { ...makeHome(t, name), ...gitVars() };
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: checkout, name: "alpha" });
   useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout, exitCode: 0 }]);
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET slug = ?, notice_md = ? WHERE id = ?").run(SLUG, rowNotice, id);
-  recordRunFields({ project: "alpha", slug: SLUG, fields: { worktree: worktree.path }, env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { worktree: worktree.path }, env });
   return { env, id, checkout, ...worktree };
 }
 

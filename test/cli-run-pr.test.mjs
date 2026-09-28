@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { run } from "../src/cli/index.mjs";
 import { runDir } from "../src/config/paths.mjs";
-import { addProject } from "../src/config/projects.mjs";
+import { ensureProject, projectIdOf, registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { ghBin } from "../src/host/gh.mjs";
 import { openDb } from "../src/memory/db.mjs";
@@ -114,11 +114,11 @@ function publishedRepo(t, name, { branch = BRANCH } = {}) {
 function makeRun(t, name, { branch = BRANCH, type = "feature/refactor" } = {}) {
   const repo = publishedRepo(t, name, { branch });
   const env = { ...makeHome(t, name), ...isolatedHostVars(makeDir(t, `${name}-host`)), ...gitVars() };
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: repo.checkout, name: "alpha" }).config, env);
-  const id = addJob({ project: "alpha", prompt: "log in with google" }, env).id;
+  registerCheckout(env, { path: repo.checkout, name: "alpha" });
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "log in with google" }, env).id;
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
-  recordRunFields({ project: "alpha", slug: SLUG, fields: { worktree: repo.worktree, type }, env });
-  const evidence = join(runDir("alpha", SLUG, env), "evidence");
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { worktree: repo.worktree, type }, env });
+  const evidence = join(runDir(ensureProject(env, "alpha"), SLUG, env), "evidence");
   mkdirSync(evidence, { recursive: true });
   writeFileSync(join(evidence, "automated-verification.md"), "## Verification: PASSED\n\nnpm test: 12 passed\n");
   assertFakeGh(env);
@@ -186,24 +186,24 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
     ["pr", "create", "--title", "feat(auth): log in with google", "--body-file", body, "--head", "feat/login-google"],
   ]);
   assert.deepEqual(
-    { status: readRunState({ project: "alpha", slug: SLUG, env }).outcome.status, prUrl: readRunState({ project: "alpha", slug: SLUG, env }).outcome.prUrl },
+    { status: readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome.status, prUrl: readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome.prUrl },
     { status: "done", prUrl: FAKE_GH_PR_URL },
   );
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).branch, "feat/login-google", "the run kept the name its branch no longer carries");
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).prTemplate.source, "nightqueue");
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).branch, "feat/login-google", "the run kept the name its branch no longer carries");
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).prTemplate.source, "nightqueue");
   assert.equal(existsSync(worktree), true);
 });
 
 test("`run pr` of a job queued from a roadmap item opens the pull request with a body ending in its Roadmap line", async (t) => {
   const { env, id } = makeRun(t, "run-pr-roadmap");
-  const item = saveRoadmapItem({ type: "feature", project: "alpha", title: "log in with google" }, env);
+  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
   assert.equal(linkRoadmapItemJob(item.id, id, env), true);
   const body = writeBody(t, "run-pr-roadmap-body", BODY);
 
   const { code } = await runCli(env, ["run", "pr", "--body-file", body, "--title", "feat(auth): log in with google"], { jobId: id });
 
   assert.equal(code, 0);
-  const published = join(runDir("alpha", SLUG, env), "pr-body.roadmap.md");
+  const published = join(runDir(ensureProject(env, "alpha"), SLUG, env), "pr-body.roadmap.md");
   assert.deepEqual(ghCalls(env), [
     ["pr", "create", "--title", "feat(auth): log in with google", "--body-file", published, "--head", "feat/login-google"],
   ]);
@@ -234,7 +234,7 @@ test("a repository template in the worktree is the one the body follows: its hea
   assert.equal(code, 0, out.join("\n"));
   assert.deepEqual(out.slice(0, 2), ["TEMPLATE: repo (CLAUDE.md § Git & PR workflow)", "HEADINGS: ## Summary · ## Changes · ## Test plan · ## OTA-able?"]);
   assert.equal(ghCalls(env).length, 1);
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).outcome.status, "done");
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome.status, "done");
 });
 
 test("`run pr --template` prints and records the template in effect, reads no body and pushes nothing", async (t) => {
@@ -244,17 +244,17 @@ test("`run pr --template` prints and records the template in effect, reads no bo
   assert.equal(asked.code, 0);
   assert.deepEqual(asked.out, ["TEMPLATE: repo (CLAUDE.md § Git & PR workflow)", "HEADINGS: ## Summary · ## Changes · ## Test plan · ## OTA-able?"]);
   assert.deepEqual(asked.err, []);
-  const { at, ...recorded } = readRunState({ project: "alpha", slug: SLUG, env: repo.env }).prTemplate;
+  const { at, ...recorded } = readRunState({ projectId: ensureProject(repo.env, "alpha"), slug: SLUG, env: repo.env }).prTemplate;
   assert.deepEqual(recorded, { source: "repo", path: "CLAUDE.md", headings: ["## Summary", "## Changes", "## Test plan", "## OTA-able?"] });
   assert.equal(typeof at, "string");
   assert.deepEqual(ghCalls(repo.env), []);
   assert.deepEqual(remoteBranches(repo.remote), ["main"]);
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env: repo.env }).outcome, undefined);
+  assert.equal(readRunState({ projectId: ensureProject(repo.env, "alpha"), slug: SLUG, env: repo.env }).outcome, undefined);
 
   const fallback = makeRun(t, "run-pr-template-fallback");
   const plain = await runCli(fallback.env, ["run", "pr", "--template"], { jobId: fallback.id });
   assert.deepEqual(plain.out, ["TEMPLATE: nightqueue (fallback)", "HEADINGS: ## Report · ## Cause · ## Changes · ## QA"]);
-  const state = readRunState({ project: "alpha", slug: SLUG, env: fallback.env }).prTemplate;
+  const state = readRunState({ projectId: ensureProject(fallback.env, "alpha"), slug: SLUG, env: fallback.env }).prTemplate;
   assert.equal(state.source, "nightqueue");
   assert.equal("path" in state, false);
 
@@ -272,7 +272,7 @@ test("`run pr --remove-worktree` removes the worktree from the checkout that own
   assert.equal(code, 0);
   assert.deepEqual(out.slice(-2), [`WORKTREE: ${worktree}`, `WORKTREE REMOVED: ${worktree}`]);
   assert.equal(existsSync(worktree), false);
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).outcome.status, "done");
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome.status, "done");
 });
 
 test("`run pr` rejects a placeholder, a missing section and a section out of order, and nothing is pushed", async (t) => {
@@ -317,7 +317,7 @@ test("`run pr` rejects a placeholder, a missing section and a section out of ord
   assert.deepEqual(remoteBranches(remote), ["main"]);
   assert.equal(git(["-C", worktree, "rev-parse", "--abbrev-ref", "HEAD"]).trim(), BRANCH);
   assert.deepEqual(ghCalls(env), []);
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).outcome, undefined);
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome, undefined);
 });
 
 test("a QA row whose method left no non-empty `<method>-*` file under the run's evidence is MISSING, and nothing is pushed", async (t) => {
@@ -334,7 +334,7 @@ test("a QA row whose method left no non-empty `<method>-*` file under the run's 
 
   assert.deepEqual(remoteBranches(remote), ["main"]);
   assert.deepEqual(ghCalls(env), []);
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).outcome, undefined);
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome, undefined);
 });
 
 test("a worktree branch with no `<type>` to restore is published as the `<type>/<slug>` of the run, with the title of the body", async (t) => {
@@ -353,14 +353,14 @@ test("a worktree branch with no `<type>` to restore is published as the `<type>/
 test("a published branch the run cannot record is reported on stderr, never fatal: the pull request is open", async (t) => {
   const { env, id } = makeRun(t, "run-pr-unrecorded");
   const body = writeBody(t, "run-pr-unrecorded-body", BODY);
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   chmodSync(dir, 0o555);
   const { code, out, errText } = await runCli(env, ["run", "pr", "--body-file", body, "--title", "feat: x"], { jobId: id }).finally(() => chmodSync(dir, 0o755));
 
   assert.equal(code, 0, errText);
   assert.ok(out.includes(`PR: ${FAKE_GH_PR_URL}`), out.join("\n"));
   assert.match(errText, /nightqueue: the published branch was not recorded on the run: /);
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).branch, undefined, "setup: the run directory was still writable");
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).branch, undefined, "setup: the run directory was still writable");
 });
 
 test("`run pr` refuses a body it cannot read, a body with no title to take and a run whose gh cannot answer", async (t) => {
@@ -383,5 +383,5 @@ test("`run pr` refuses a body it cannot read, a body with no title to take and a
   assert.equal(failed.code, 1);
   assert.match(failed.errText, /`feat\/login-google` is pushed, but gh could not open the pull request: fake gh: NIGHTQUEUE_FAKE_GH_PR_URL/);
   assert.deepEqual(remoteBranches(remote), ["feat/login-google", "main"]);
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).outcome, undefined);
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome, undefined);
 });

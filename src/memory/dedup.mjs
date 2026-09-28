@@ -1,4 +1,3 @@
-import { resolveProjectName } from "./db.mjs";
 import {
   backfillEmptyLessonFields,
   bumpAttempts,
@@ -9,6 +8,7 @@ import {
   setLessonEmbedding,
 } from "./lessons.mjs";
 import { memoryByKey, saveMemory } from "./memory.mjs";
+import { projectIdOrNull } from "./registry.mjs";
 import { normalizeExcludeIds as normalizeIds, recallLessons, resolveEmbedder } from "./search.mjs";
 
 const ITEM_KINDS = ["error", "correction", "decision"];
@@ -35,30 +35,30 @@ async function storeEmbedding(id, probe, { embedder, log }, env) {
   }
 }
 
-// Saves a lesson, or bumps the existing one when a lesson of the same project already has the same normalized title.
+// Saves a lesson of a project id, or bumps the existing one when a lesson of the same project already has the same normalized title.
 export async function saveLessonDeduped(
-  { project, title, root_cause, solution, prevention, attempts, target },
+  { projectId, title, root_cause, solution, prevention, attempts, target },
   env = process.env,
 ) {
-  const projectName = resolveProjectName(project, env);
-  const existing = findByNormalizedTitle({ project: projectName, title }, env);
+  const owner = projectIdOrNull(projectId);
+  const existing = findByNormalizedTitle({ projectId: owner, title }, env);
   if (existing) {
     const bumped = bumpAttempts(existing.id, env);
     const filled = backfillEmptyLessonFields(existing.id, { root_cause, solution, prevention }, env);
     return {
       id: existing.id,
-      project: projectName,
+      projectId: owner,
       deduped: true,
       attempts: bumped.attempts,
       incomplete: emptyLessonFields(filled),
     };
   }
-  const saved = saveLesson({ project: projectName, title, root_cause, solution, prevention, attempts, target }, env);
+  const saved = saveLesson({ projectId: owner, title, root_cause, solution, prevention, attempts, target }, env);
   const embedder = await resolveEmbedder(undefined, env);
   await storeEmbedding(saved.id, lessonProbe({ title, prevention }), { embedder, log: logToStderr }, env);
   return {
     id: saved.id,
-    project: projectName,
+    projectId: owner,
     deduped: false,
     attempts: Number.isInteger(attempts) ? attempts : null,
     incomplete: emptyLessonFields({ root_cause, solution, prevention }),
@@ -104,9 +104,9 @@ function logMerge(item, chosen, log) {
 }
 
 // Candidates of an item through both recall paths; a search failure means no candidate, so the item is saved.
-async function candidatesOf(item, { project, log, db }, env) {
+async function candidatesOf(item, { projectId, log, db }, env) {
   try {
-    const found = await recallLessons({ query: lessonProbe(item), project, limit: CANDIDATE_LIMIT }, env, db);
+    const found = await recallLessons({ query: lessonProbe(item), projectId, limit: CANDIDATE_LIMIT }, env, db);
     return found.filter((row) => row.via !== "fallback");
   } catch (err) {
     log(`candidate search failed for "${oneLine(item.title)}": ${err?.message ?? String(err)}`);
@@ -115,11 +115,11 @@ async function candidatesOf(item, { project, log, db }, env) {
 }
 
 // Stores a decision as a memory, skipping a key that is already there; never throws.
-function storeDecision(item, { project, model, log }, env) {
+function storeDecision(item, { projectId, model, log }, env) {
   try {
     const key = item.title.trim();
-    if (memoryByKey({ project, key }, env)) return false;
-    saveMemory({ project, key, value: String(item.solution || item.prevention).trim(), model }, env);
+    if (memoryByKey({ projectId, key }, env)) return false;
+    saveMemory({ projectId, key, value: String(item.solution || item.prevention).trim(), model }, env);
     return true;
   } catch (err) {
     log(`could not save memory "${oneLine(item.title)}": ${err?.message ?? String(err)}`);
@@ -128,12 +128,12 @@ function storeDecision(item, { project, model, log }, env) {
 }
 
 // Saves a new lesson with its vector; never throws, and tells whether it entered the corpus.
-async function storeLesson(item, { project, model, embedder, log }, env) {
+async function storeLesson(item, { projectId, model, embedder, log }, env) {
   let saved;
   try {
     saved = saveLesson(
       {
-        project,
+        projectId,
         title: item.title.trim(),
         root_cause: String(item.root_cause || item.title).trim(),
         solution: String(item.solution || "").trim(),
@@ -207,11 +207,11 @@ export async function persistLessons(items, options = {}, env = process.env, db 
 }
 
 // Runs the two phases of the persistence: item by item first, one judge call for the stationed ones after.
-async function persistItems(items, { project, model, injectedIds = [], judge, embedder }, write, env, db) {
+async function persistItems(items, { projectId, model, injectedIds = [], judge, embedder }, write, env, db) {
   const result = { saved: 0, merged: 0, judged: 0, violations: 0, memories: 0 };
   const injected = new Set(normalizeIds(injectedIds));
   const ctx = {
-    project: resolveProjectName(project, env),
+    projectId: projectIdOrNull(projectId),
     model,
     log: write,
     db,

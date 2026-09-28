@@ -6,7 +6,7 @@ import { addJob } from "../../src/memory/jobs.mjs";
 import { openPrsForJob, prSearchKey, runCycle } from "../../src/queue/runner.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream } from "../../test-support/streams.mjs";
 
@@ -207,7 +207,7 @@ test("an answer nobody could read attaches no block, and a failing gh never brin
 
 test("a job spawned with the check disabled spawns no gh process and its prompt is unchanged", async (t) => {
   const { env, planPath, ghLog } = makePrHome(t, "pr-list-off");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
 
   await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit() } });
 
@@ -217,7 +217,7 @@ test("a job spawned with the check disabled spawns no gh process and its prompt 
 
 test("a job spawned with the check enabled carries the block the runtime looked up", async (t) => {
   const { env, planPath, ghLog } = makePrHome(t, "pr-list-on", { prCheck: true });
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const searched = [];
 
   await runCycle({

@@ -13,7 +13,7 @@ import {
 } from "../../src/memory/embedding.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recallLessons } from "../../src/memory/search.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const ESM_FIXTURE = ["export const env = {};", "export const pipeline = async () => async () => ({ data: [] });", ""].join("\n");
 const CJS_FIXTURE = ["module.exports.env = {};", "module.exports.pipeline = async () => async () => ({ data: [] });", ""].join("\n");
@@ -81,7 +81,7 @@ test("a recall with an empty prefix answers lexically instead of failing", async
   makeProject(t, env, "alpha");
   const { id } = saveLesson(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       title: "the worker leaks a file descriptor on failure",
       root_cause: "the early return skipped the close",
       solution: "close it in a finally block",
@@ -90,7 +90,7 @@ test("a recall with an empty prefix answers lexically instead of failing", async
     env,
   );
 
-  const rows = await recallLessons({ query: "the worker leaks a file descriptor", project: "alpha" }, env);
+  const rows = await recallLessons({ query: "the worker leaks a file descriptor", projectId: projectIdOf(env, "alpha") }, env);
   assert.deepEqual(rows.map((row) => row.id), [id]);
   assert.deepEqual(rows.map((row) => row.via), ["lexical"]);
 });

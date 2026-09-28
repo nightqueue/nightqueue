@@ -11,6 +11,9 @@ import { ghAuthStatus } from "../src/host/gh.mjs";
 import { PATH_MARK, PATH_MARK_END, pathBlock } from "../src/host/shell.mjs";
 import { FAKE_GH_LOGIN, FAKE_GH_TOKEN, assertIsolatedEnv, makeHostEnv, readSettingsFile, writeLegacyShim } from "../test-support/host.mjs";
 import { makeDir } from "../test-support/memory.mjs";
+import { openDb } from "../src/memory/db.mjs";
+import { projectByName } from "../src/memory/registry.mjs";
+import { orgIdOf } from "../test-support/memory.mjs";
 
 const QUESTION = `GitHub CLI is authenticated as ${FAKE_GH_LOGIN} — import its token as connection "gh"? [Y/n] `;
 const PACKAGE_ROOT = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "");
@@ -60,6 +63,16 @@ function readConfig(home) {
   return JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
 }
 
+// The org a project of a host's home is registered in.
+function orgOfProject(host, name) {
+  return projectByName(openDb(host.env), name)?.org ?? null;
+}
+
+// The connection config.json binds to the slot of an org of a host's home, by org name.
+function bindingOf(host, org, type = "github") {
+  return readConfig(host.home).orgConnections?.[orgIdOf(host.env, org)]?.[type] ?? null;
+}
+
 // Host whose fake GitHub CLI reports an authenticated account.
 function makeAuthenticatedHost(t, name) {
   const host = makeHostEnv(t, name);
@@ -83,7 +96,7 @@ test("init sets the host up, registers the project and stays idempotent", async 
   assert.match(first.out.join("\n"), /^registered project `api` \(.+\)$/m);
   assert.equal(statSync(host.home).mode & 0o777, 0o700);
   assert.equal(statSync(join(host.home, "secrets.json")).mode & 0o777, 0o600);
-  assert.equal(readConfig(host.home).projects.api.org, "default");
+  assert.equal(orgOfProject(host, "api"), "default");
   assert.ok(readSettingsFile(host.configDir).hooks.SessionStart.length, "the hooks were not merged into the host");
   assert.ok(host.calls().some((call) => call[0] === "mcp" && call[1] === "add"), "the MCP server was not registered");
   assert.deepEqual(host.ghCalls(), [], "`--no-gh` invoked the GitHub CLI");
@@ -131,7 +144,7 @@ test("--gh imports the token of the GitHub CLI, binds it to the org and reports 
   assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--gh"], ctx), 0);
   assert.ok(out.includes("stored connection `gh` (github) and bound it to org `default`"), out.join("\n"));
   assert.ok(out.includes(`gh (github): ok — login=${FAKE_GH_LOGIN} scopes=repo`), out.join("\n"));
-  assert.equal(readConfig(host.home).orgs.default.connections.github, "gh");
+  assert.equal(bindingOf(host, "default"), "gh");
   assert.equal(readFileSync(join(host.home, "secrets.json"), "utf8").includes(FAKE_GH_TOKEN), true);
   assert.deepEqual(ghSubcommands(host), ["auth status", "auth token"]);
   assert.equal(text().includes(FAKE_GH_TOKEN), false, "the token showed up in the output");
@@ -172,7 +185,7 @@ test("an occupied slot and a name already taken stop the import, with --gh inclu
   const collision = makeCtx(host.env);
   assert.equal(await run(["init", "--no-path", other, "--name", "web", "--gh"], collision.ctx), 0);
   assert.ok(collision.out.includes("connection `gh` already exists; run `nightqueue connection bind gh --org default`"), collision.out.join("\n"));
-  assert.equal(readConfig(host.home).projects.web.org, "default");
+  assert.equal(orgOfProject(host, "web"), "default");
 });
 
 test("without a terminal init only points at the flag, and never reads the token", async (t) => {
@@ -195,7 +208,7 @@ test("on a terminal init asks the exact question and honours the answer", async 
   const yesRun = makeCtx(accepted.env, { stdin: yes.stdin, stdout: yes.stdout });
   assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-yes-repo"), "--name", "api"], yesRun.ctx), 0);
   assert.equal(yes.written.join("").includes(QUESTION), true, `the question changed: ${yes.written.join("")}`);
-  assert.equal(readConfig(accepted.home).orgs.default.connections.github, "gh");
+  assert.equal(bindingOf(accepted, "default"), "gh");
   assert.deepEqual(ghSubcommands(accepted), ["auth status", "auth token"]);
 
   const refused = makeAuthenticatedHost(t, "init-gh-no");

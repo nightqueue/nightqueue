@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { slugCandidates } from "../../src/queue/spawn.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const JOBS_MODULE_URL = new URL("../../src/memory/jobs.mjs", import.meta.url).href;
 const WRITERS = 4;
@@ -48,7 +48,7 @@ test(`${WRITERS} real OS processes binding their jobs to the same run slugs at o
   writeFileSync(scriptPath, buildBinderSource(JOBS_MODULE_URL), "utf8");
   const candidates = JSON.stringify(slugCandidates(BASE, 0));
   const jobs = Array.from({ length: WRITERS }, (_, index) => {
-    const id = addJob({ project: "alpha", prompt: "fix the worker of the queue" }, env).id;
+    const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker of the queue" }, env).id;
     claimJobById(id, { worker: `host:${index}`, cap: null }, env);
     return { id, worker: `host:${index}` };
   });

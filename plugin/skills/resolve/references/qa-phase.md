@@ -114,7 +114,7 @@ Finish with ## Proven breaks, ## Validated risks, ## Generated PoCs and
 [CONTEXT BLOCK]
 
 Repository: [CWD PATH]
-Project: [PROJECT — the same identifier used in RUN_DIR]
+Project: [PROJECT — the name on the Project: line of the prompt]
 [Include the three lines only if [PLUGIN_ROOT] resolved:]
 QA_SKILL: [PLUGIN_ROOT]/skills/qa-guardian/SKILL.md
 RISK_MATRIX: [PLUGIN_ROOT]/skills/qa-guardian/references/risk-matrix.md
@@ -160,7 +160,7 @@ H<n>") and ## Invalidated assumptions (or "None").
 [CONTEXT BLOCK]
 
 Repository: [CWD PATH]
-Project: [PROJECT — the same identifier used in RUN_DIR]
+Project: [PROJECT — the name on the Project: line of the prompt]
 [Include the three lines only if [PLUGIN_ROOT] resolved:]
 QA_SKILL: [PLUGIN_ROOT]/skills/qa-guardian/SKILL.md
 RISK_MATRIX: [PLUGIN_ROOT]/skills/qa-guardian/references/risk-matrix.md
@@ -206,7 +206,7 @@ Finish with the verdict per hypothesis: PROVEN (PoC + output of the failure) |
 REFUTED (evidence) | INCONCLUSIVE (what was missing).
 
 Repository: [CWD PATH]
-Project: [PROJECT — the same identifier used in RUN_DIR]
+Project: [PROJECT — the name on the Project: line of the prompt]
 [Include the three lines only if [PLUGIN_ROOT] resolved:]
 QA_SKILL: [PLUGIN_ROOT]/skills/qa-guardian/SKILL.md
 RISK_MATRIX: [PLUGIN_ROOT]/skills/qa-guardian/references/risk-matrix.md

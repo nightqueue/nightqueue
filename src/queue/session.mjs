@@ -1,8 +1,7 @@
 import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
-import { projectByName } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
 import { readRunState } from "./resume.mjs";
+import { checkoutOfJob } from "../memory/registry-access.mjs";
 
 // The session id and attempt of a job's last run, or null when it never recorded one.
 function lastSession(job) {
@@ -21,10 +20,10 @@ function sessionRefusal(job) {
 
 // The cwd a session resumes in: the run's worktree when it is still on disk, else the project's checkout, with whether it fell back.
 function resumeCwd(job, env) {
-  const state = readRunState({ project: job.project, slug: job.slug, env });
+  const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
   const worktree = typeof state?.worktree === "string" ? state.worktree.trim() : "";
   if (worktree && existsSync(worktree)) return { cwd: worktree, worktreeReleased: false };
-  const checkout = projectByName(loadConfig(env, { warn: () => {} }), job.project)?.path;
+  const checkout = checkoutOfJob(job, env);
   if (!checkout) throw new UserError(`project \`${job.project}\` is not registered; its checkout cannot be resolved`);
   return { cwd: checkout, worktreeReleased: Boolean(worktree) };
 }

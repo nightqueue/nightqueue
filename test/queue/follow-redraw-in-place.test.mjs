@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const ESC = "\u001b";
 
@@ -28,7 +28,7 @@ async function follow(env, { ticks, columns = 200, rows = 40 }) {
 test("a follow on a terminal redraws the table over itself and never clears the screen", async (t) => {
   const env = makeHome(t, "follow-redraw");
   makeProject(t, env, "alpha");
-  addJob({ project: "alpha", prompt: "fix the worker" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env);
 
   const { code, writes } = await follow(env, { ticks: 3 });
   assert.equal(code, 0);
@@ -44,7 +44,7 @@ test("a follow on a terminal redraws the table over itself and never clears the 
 test("a frame taller or wider than the terminal is cut to it, so the climb back never misses", async (t) => {
   const env = makeHome(t, "follow-redraw-fit");
   makeProject(t, env, "alpha");
-  for (let index = 0; index < 12; index += 1) addJob({ project: "alpha", prompt: `job ${index}` }, env);
+  for (let index = 0; index < 12; index += 1) addJob({ projectId: ensureProject(env, "alpha"), prompt: `job ${index}` }, env);
 
   const { writes } = await follow(env, { ticks: 1, columns: 60, rows: 8 });
   const frame = writes.find((text) => text.includes(`${ESC}[0J`));

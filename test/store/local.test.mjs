@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
 import { createLocalStore } from "../../src/store/local.mjs";
 import { STORE_CONTRACT } from "../../src/store/store.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const WORKER = "host:1000";
 const PR_URL = "https://github.com/acme/api/pull/7";
@@ -53,15 +53,16 @@ test("every domain of the store writes and reads back on a real home", async (t)
   makeProject(t, env, "alpha");
   const store = createLocalStore(env);
 
-  const job = await store.jobs.addJob({ project: "alpha", prompt: "do the thing" });
+  const job = await store.jobs.addJob({ projectId: projectIdOf(env, "alpha"), prompt: "do the thing" });
   assert.equal((await store.jobs.getJob(job.id)).project, "alpha");
   assert.equal(await store.jobs.status(job.id), "pending");
 
-  const run = await store.runs.logPipelineRun({ project: "alpha", slug: "fix-it", tier: "simple", outcome: "pr_opened" });
+  const alphaId = projectIdOf(env, "alpha");
+  const run = await store.runs.logPipelineRun({ projectId: alphaId, slug: "fix-it", tier: "simple", outcome: "pr_opened" });
   assert.ok(Number.isInteger(run.runId), "a logged pipeline run answers with its id");
 
   await store.lessons.saveLesson({
-    project: "alpha",
+    projectId: alphaId,
     title: "the lease is renewed before it expires",
     root_cause: "the interval was longer than the lease",
     solution: "renew at half the lease",
@@ -70,33 +71,37 @@ test("every domain of the store writes and reads back on a real home", async (t)
   const stats = await store.lessons.memoryStats();
   assert.equal(stats.find((row) => row.project === "alpha")?.lessons, 1);
 
-  await store.memory.saveMemory({ project: "alpha", key: "runtime", value: "node 22" });
-  assert.equal((await store.memory.recentMemories({ project: "alpha" })).length, 1);
+  await store.memory.saveMemory({ projectId: alphaId, key: "runtime", value: "node 22" });
+  assert.equal((await store.memory.recentMemories({ projectId: alphaId })).length, 1);
 
   const indexed = await store.index.saveProjectIndex({
-    project: "alpha",
+    projectId: alphaId,
     files: [{ path: "src/a.mjs", responsibility: "claims the next job" }],
   });
   assert.equal(indexed.files, 1);
-  assert.equal((await store.index.recallProjectIndex({ project: "alpha" })).files.length, 1);
+  assert.equal((await store.index.recallProjectIndex({ projectId: alphaId })).files.length, 1);
 
   await store.decisions.saveDecision({
-    project: "alpha",
+    projectId: projectIdOf(env, "alpha"),
     title: "the store is the only path to sqlite",
     context: "the sql was spread across the cli",
     decision: "every call goes through the store",
   });
-  assert.equal((await store.decisions.listDecisions({ project: "alpha" })).length, 1);
+  assert.equal((await store.decisions.listDecisions({ projectId: projectIdOf(env, "alpha") })).length, 1);
 
-  await store.roadmap.saveRoadmapItem({ type: "improvement", project: "alpha", title: "close the boundary" });
-  const roadmap = await store.roadmap.listRoadmap("alpha");
+  await store.roadmap.saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "close the boundary" });
+  const roadmap = await store.roadmap.listRoadmap(projectIdOf(env, "alpha"));
   assert.deepEqual(
     roadmap.items.map((item) => [item.title, item.status, item.priority]),
     [["close the boundary", "todo", 5]],
   );
   assert.deepEqual(await store.roadmap.roadmapDrift(), []);
 
-  assert.deepEqual(await store.orgs.usage("acme"), []);
+  const acme = await store.orgs.add("acme");
+  assert.equal((await store.orgs.byName("acme")).id, acme.id);
+  assert.equal((await store.projects.byName("alpha")).org, "default");
+  await store.orgs.remove(acme.id);
+  assert.equal(await store.orgs.byId(acme.id), null);
 });
 
 test("listWithSlug answers the jobs a witness could speak for", async (t) => {
@@ -104,8 +109,8 @@ test("listWithSlug answers the jobs a witness could speak for", async (t) => {
   makeProject(t, env, "alpha");
   const store = createLocalStore(env);
 
-  const withoutSlug = await store.jobs.addJob({ project: "alpha", prompt: "never ran" });
-  const job = await store.jobs.addJob({ project: "alpha", prompt: "ran once" });
+  const withoutSlug = await store.jobs.addJob({ projectId: projectIdOf(env, "alpha"), prompt: "never ran" });
+  const job = await store.jobs.addJob({ projectId: projectIdOf(env, "alpha"), prompt: "ran once" });
   await store.jobs.claimJobById(job.id, { worker: "w1", cap: 2 });
   await store.jobs.persistRunFacts(job.id, { worker: "w1", slug: "fix-it" });
 
@@ -122,8 +127,8 @@ async function queuedItem(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const store = createLocalStore(env);
-  const item = await store.roadmap.saveRoadmapItem({ type: "improvement", project: "alpha", title: "deliver the thing" });
-  const job = await store.jobs.addJob({ project: "alpha", prompt: "deliver the thing" });
+  const item = await store.roadmap.saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "deliver the thing" });
+  const job = await store.jobs.addJob({ projectId: projectIdOf(env, "alpha"), prompt: "deliver the thing" });
   assert.equal(await store.roadmap.linkRoadmapItemJob(item.id, job.id), true, "setup: the item was not linked to its job");
   return { store, item, job };
 }

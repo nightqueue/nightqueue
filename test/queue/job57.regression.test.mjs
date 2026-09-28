@@ -5,7 +5,7 @@ import { acquireClose, addJob, getJob } from "../../src/memory/jobs.mjs";
 import { STRAY_PR_PREFIX, classifyJobResult } from "../../src/queue/classify.mjs";
 import { runClosePipeline } from "../../src/queue/close.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { fakeCloseDeps, openPr } from "../../test-support/close.mjs";
 import { codeChangePublishedEvent, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
@@ -37,7 +37,7 @@ test("job 57, scenario A: the runtime QA's own scratch pull request on another b
 test("job 57, scenario B: closing the job's own recorded pull request never merges the QA's foreign pull request onto it", async (t) => {
   const env = makeHome(t, "job57-regression");
   const checkout = makeProject(t, env, "nightqueue");
-  const id = addJob({ project: "nightqueue", prompt: "fix queue close follow-ups" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "nightqueue"), prompt: "fix queue close follow-ups" }, env).id;
   // Job 57's row as it stood right before the incident: `pr_url` still points at the QA's
   // scratch pull request #71 (the wrong record scenario A above guards against), and the job
   // ran on its own real worktree branch.

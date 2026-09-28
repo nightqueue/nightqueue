@@ -12,8 +12,7 @@ import {
   secretsPath,
   shimNames,
 } from "../config/paths.mjs";
-import { listProjects } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
+import { loadConfig, loadRawConfig } from "../config/store.mjs";
 import { claudeBin } from "../host/claude.mjs";
 import { DESKTOP_LABEL, desktopState } from "../host/desktop.mjs";
 import { MCP_SERVER_NAME, readRegisteredServer, serverIsCurrent } from "../host/mcp.mjs";
@@ -26,6 +25,7 @@ import { hookStatus, readHostSettings } from "../host/settings.mjs";
 import { PATH_MARK, binDirInPath, rcFilePath, shadowingDir } from "../host/shell.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
 import { HOST_COMMANDS_SAMPLE_SIZE } from "../memory/jobs.mjs";
+import { hasLegacyRegistry } from "../memory/migration/v18.mjs";
 import { DB_USER_VERSION } from "../memory/schema.mjs";
 import { ownerLabel } from "../memory/scope.mjs";
 import { keepAwakeMode, resolveCaffeinateBin } from "../queue/keep-awake.mjs";
@@ -33,9 +33,8 @@ import { isRegistryFailure, killProcess, listRunnerRecords, liveRunnersReport, r
 import { closesSummary } from "../queue/close-view.mjs";
 import { readRunState } from "../queue/resume.mjs";
 import { canonicalPath, lockState, parseWorktreeList } from "../queue/worktree.mjs";
-import { openStoreReadOnly } from "../store/open.mjs";
+import { openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
-import { orphanOrgRows, readPendingRename } from "./org.mjs";
 import { firstLine } from "./report.mjs";
 import { runtimeLabel, runtimeLocation } from "./runtime-versions.mjs";
 
@@ -306,30 +305,6 @@ async function checkDatabase(ctx) {
   }
 }
 
-const ORG_REPAIR_HINT = "run `nightqueue org repair`";
-
-// Checks that every org row has its org: no rename left in flight, no row pointing to a name the config does not know.
-async function checkOrgRows(ctx) {
-  const pending = readPendingRename(ctx.env);
-  if (pending) {
-    const which = pending.from ? `\`${pending.from}\` -> \`${pending.to}\`` : "of unknown names";
-    return check("org rows", "fail", `org rename ${which} interrupted`, ORG_REPAIR_HINT);
-  }
-  const store = openStoreReadOnly(ctx.env);
-  try {
-    const orphans = await orphanOrgRows(ctx.env, loadConfig(ctx.env, { warn: () => {} }), store);
-    if (orphans.length) {
-      const detail = orphans.map((o) => `${o.total} row(s) point to unknown org \`${o.org}\``).join("; ");
-      return check("org rows", "fail", detail, `${ORG_REPAIR_HINT} --to <org>`);
-    }
-    return check("org rows", "ok", "every org row has its org");
-  } catch (err) {
-    return check("org rows", "fail", err?.message ?? String(err), `inspect ${dbPath(ctx.env)}`);
-  } finally {
-    await store.close();
-  }
-}
-
 // One drifted entry: an item or a project row behind its job, or an org item whose status disagrees with its rows.
 function roadmapDriftEntry(row) {
   if (row.job_id === null) return `${row.owner}#${row.id} ${row.status} (derived from its project rows: ${row.expected})`;
@@ -371,7 +346,7 @@ async function checkRoadmapWorkflow(ctx) {
 async function checkDatabaseAndRows(ctx) {
   const database = await checkDatabase(ctx);
   if (database.status !== "ok") return [database];
-  return [database, await checkOrgRows(ctx), await checkRoadmapWorkflow(ctx)];
+  return [database, await checkRoadmapWorkflow(ctx)];
 }
 
 const ORPHAN_PREFIXES = [".fuse_hidden", ".nfs"];
@@ -714,16 +689,44 @@ function checkProject(ctx, project) {
     : check(name, "ok", project.path);
 }
 
-// Checks every registered project, or reports that none is registered.
-function checkProjects(ctx) {
-  let projects = [];
+const REGISTRY_SCHEMA_VERSION = 18;
+
+// The registered projects that have a checkout, read without creating nor migrating anything: `{ projects }`, or `{ pending }` saying why they cannot be read yet.
+async function registeredCheckouts(ctx) {
+  if (!existsSync(dbPath(ctx.env))) {
+    if (hasLegacyRegistry(loadRawConfig(ctx.env))) return { pending: "the projects of config.json move into the database on the next command that writes" };
+    return { projects: [] };
+  }
+  return await withReadOnlyStore(ctx.env, async (store) => {
+    const { schemaVersion } = await store.health();
+    if (Number.isInteger(schemaVersion) && schemaVersion < REGISTRY_SCHEMA_VERSION) {
+      return { pending: `database is at v${schemaVersion}; it migrates to v${REGISTRY_SCHEMA_VERSION} on the next command that writes` };
+    }
+    const projects = (await store.projects.list()).filter((project) => project.path);
+    return { projects: projects.map((project) => ({ ...project, exists: existsSync(project.path) })) };
+  });
+}
+
+// The registered projects with a checkout, or an empty list when they cannot be read.
+async function checkoutsOrNone(ctx) {
   try {
-    projects = listProjects(loadConfig(ctx.env, { warn: () => {} }));
+    return (await registeredCheckouts(ctx)).projects ?? [];
   } catch {
     return [];
   }
-  if (!projects.length) return [check("projects", "warn", "no project registered", "run `nightqueue init`")];
-  return projects.map((project) => checkProject(ctx, project));
+}
+
+// Checks every registered project, or reports that none is registered or that the registry is not readable yet.
+async function checkProjects(ctx) {
+  let found = null;
+  try {
+    found = await registeredCheckouts(ctx);
+  } catch (err) {
+    return [check("projects", "warn", `the registry cannot be read (${err?.message ?? String(err)})`, `inspect ${dbPath(ctx.env)}`)];
+  }
+  if (found.pending) return [check("projects", "warn", found.pending)];
+  if (!found.projects.length) return [check("projects", "warn", "no project registered", "run `nightqueue init`")];
+  return found.projects.map((project) => checkProject(ctx, project));
 }
 
 // Quotes a path for a POSIX shell, so a hint can be pasted as is whatever the path holds.
@@ -732,9 +735,9 @@ function shellQuote(value) {
 }
 
 // Registered projects that have a `.claude/worktrees` directory, the only place the pipeline creates its worktrees.
-function projectsWithWorktrees(ctx) {
+async function projectsWithWorktrees(ctx) {
   try {
-    return listProjects(loadConfig(ctx.env, { warn: () => {} }))
+    return (await checkoutsOrNone(ctx))
       .filter((project) => project.exists)
       .map((project) => ({ ...project, dir: join(project.path, ".claude", "worktrees") }))
       .filter((project) => statSync(project.dir, { throwIfNoEntry: false })?.isDirectory() === true);
@@ -749,7 +752,7 @@ async function ownedWorktrees(ctx) {
   const store = openStoreReadOnly(ctx.env);
   try {
     const jobs = await store.jobs.listOpenJobs();
-    const recorded = jobs.map((job) => readRunState({ project: job.project, slug: job.slug, env: ctx.env })?.worktree);
+    const recorded = jobs.map((job) => readRunState({ projectId: job.project_id, slug: job.slug, env: ctx.env })?.worktree);
     return { paths: new Set(recorded.filter((path) => typeof path === "string" && path.trim()).map((path) => canonicalPath(path.trim()))), error: null };
   } catch (err) {
     return { paths: null, error: err?.message ?? String(err) };
@@ -796,7 +799,7 @@ function projectLeftovers(ctx, project, owned) {
 
 // Reports the directories under `.claude/worktrees` of each project that no open job owns, with the command that cleans each; it never cleans anything itself.
 async function checkWorktreeLeftovers(ctx) {
-  const projects = projectsWithWorktrees(ctx);
+  const projects = await projectsWithWorktrees(ctx);
   if (!projects.length) return [];
   const owned = await ownedWorktrees(ctx);
   if (owned.error !== null) {
@@ -849,7 +852,7 @@ async function collect(ctx, values) {
     checkDbShm(ctx),
     checkHomeMount(ctx),
     ...(await checkQueue(ctx)),
-    ...checkProjects(ctx),
+    ...(await checkProjects(ctx)),
     ...(await checkWorktreeLeftovers(ctx)),
     ...checkUpdates(ctx, values),
   ];

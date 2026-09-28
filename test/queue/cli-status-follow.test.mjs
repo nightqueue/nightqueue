@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { addJob, claimJobById, finishJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // Runs `queue status` in this process with an injected sleep, so the follow loop ticks without waiting.
 async function runStatus(env, argv, { onTick } = {}) {
@@ -30,7 +30,7 @@ async function runStatus(env, argv, { onTick } = {}) {
 test("queue status --follow --until-idle redraws on change and stops by itself once nothing runs or waits", async (t) => {
   const env = makeHome(t, "status-follow");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
 
   const result = await runStatus(env, ["queue", "status", "--follow", "--until-idle"], {

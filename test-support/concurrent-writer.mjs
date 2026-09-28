@@ -1,6 +1,7 @@
 import { saveDecision } from "../src/memory/decisions.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
 import { logPipelineRun } from "../src/memory/runs.mjs";
+import { projectIdOf } from "./memory.mjs";
 
 const [, , mode, label, durationRaw] = process.argv;
 const DEFAULT_DURATION_MS = 2000;
@@ -10,7 +11,7 @@ const MODES = ["lesson", "run", "decision"];
 function writeLesson(seq) {
   saveLesson(
     {
-      project: null,
+      projectId: null,
       title: `concurrent ${label} #${seq}`,
       root_cause: "concurrency root cause",
       solution: "concurrency solution",
@@ -27,7 +28,7 @@ function writeLesson(seq) {
 function writeRun() {
   logPipelineRun(
     {
-      project: null,
+      projectId: null,
       slug: `concurrent-${label}`,
       tier: "simple",
       outcome: "no_commit",
@@ -44,7 +45,7 @@ function writeRun() {
 function writeDecision(seq) {
   saveDecision(
     {
-      project: "alpha",
+      projectId: projectIdOf(process.env, "alpha"),
       title: `concurrent ${label} #${seq}`,
       context: "concurrency context",
       decision: "concurrency decision",

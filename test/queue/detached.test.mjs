@@ -7,7 +7,7 @@ import { homeDir, runnerRegistryPath, runnersDir } from "../../src/config/paths.
 import { ensureHome, loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const CHILD_PID = 4242;
 const LIVE_PID = 5151;
@@ -63,7 +63,7 @@ function makeQueueHome(t, name) {
 
 test("queue run starts the runner detached, hands it `--foreground` and comes back at once", async (t) => {
   const env = makeQueueHome(t, "detached-run");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const calls = [];
 
   const ran = await runCli(env, ["queue", "run", "--job", String(id)], { calls });
@@ -121,7 +121,7 @@ test("queue add --run and queue retry --run start the same detached runner", asy
 
 test("a spawn that fails exits 1 with its reason and never runs the job in this process instead", async (t) => {
   const env = makeQueueHome(t, "detached-spawn-fails");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const calls = [];
 
   const ran = await runCli(env, ["queue", "run", "--job", String(id)], {
@@ -222,7 +222,7 @@ test("queue run --stop ends every registered runner, `--stop <pid>` ends one, an
 
 test("queue status opens with one line per live runner, in the table and in the json", async (t) => {
   const env = makeQueueHome(t, "detached-status");
-  addJob({ project: "alpha", prompt: "fix the worker" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env);
 
   const stopped = await runCli(env, ["queue", "status"]);
   assert.equal(stopped.out[0], "0 runners online - pending jobs will wait until `nightqueue queue run` starts one", stopped.stderr);
@@ -276,7 +276,7 @@ test("queue status opens with one line per live runner, in the table and in the 
 
 test("queue status never answers `stopped` for a registry it could not read, and `--json` and `--stop` refuse outright", async (t) => {
   const env = makeQueueHome(t, "detached-status-unreadable");
-  addJob({ project: "alpha", prompt: "fix the worker" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env);
   ensureHome(env);
   writeFileSync(runnersDir(env), "not a directory");
 
@@ -297,9 +297,9 @@ test("queue status never answers `stopped` for a registry it could not read, and
 test("a single-job start that would claim nothing reports what it waits for, spawns nothing and leaves the job pending", async (t) => {
   const env = makeQueueHome(t, "detached-waiting");
   saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent: 2 } }, env);
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   for (const prompt of ["hold the first slot", "hold the second slot"]) {
-    claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: 4 }, env);
+    claimJobById(addJob({ projectId: ensureProject(env, "alpha"), prompt }, env).id, { worker: `host:${prompt.length}`, cap: 4 }, env);
   }
   const calls = [];
 
@@ -333,7 +333,7 @@ test("queue status prints the advisory lines right after the runner lines, and `
   const resetsAt = new Date(Date.now() + 3600_000).toISOString();
   writeRunnerRecord({ pid: process.pid, startedAt: "2026-09-08T21:04:11.000Z", mode: "drain", fiveHour: { utilization: 0.86, resetsAt, observedAt: new Date().toISOString() } }, env);
   const alive = new Set([process.pid]);
-  addJob({ project: "alpha", prompt: "fix the worker" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env);
 
   const window = await runCli(env, ["queue", "status"], { alive });
   assert.equal(window.code, 0, window.stderr);
@@ -344,7 +344,7 @@ test("queue status prints the advisory lines right after the runner lines, and `
   assert.match(window.stdout, /#1\s+○ pending\s+-\s+-\s+alpha/, "the table went missing after the advisory line");
 
   for (const prompt of ["hold the first slot", "hold the second slot"]) {
-    claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: null }, env);
+    claimJobById(addJob({ projectId: ensureProject(env, "alpha"), prompt }, env).id, { worker: `host:${prompt.length}`, cap: null }, env);
   }
   const both = await runCli(env, ["queue", "status"], { alive });
   assert.deepEqual(both.out.slice(2, 4), ["5h window at 86% · 1 runner active — another runner will likely hit the limit before finishing", ALPHA_ADVISORY]);
@@ -360,7 +360,7 @@ test("queue status prints the advisory lines right after the runner lines, and `
 test("a foreground start echoes the advice once, on stderr under `--json`, so stdout still parses", async (t) => {
   const env = makeQueueHome(t, "detached-foreground-json-advisories");
   for (const prompt of ["hold the first slot", "hold the second slot"]) {
-    claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: null }, env);
+    claimJobById(addJob({ projectId: ensureProject(env, "alpha"), prompt }, env).id, { worker: `host:${prompt.length}`, cap: null }, env);
   }
 
   const json = await runCli(env, ["queue", "run", "--foreground", "--json"]);
@@ -377,7 +377,7 @@ test("a foreground start echoes the advice once, on stderr under `--json`, so st
 // Holds two live leases on `alpha`, the crowd that makes every start echo the per-project advice.
 function holdTwoAlphaLeases(env) {
   for (const prompt of ["hold the first slot", "hold the second slot"]) {
-    claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: null }, env);
+    claimJobById(addJob({ projectId: ensureProject(env, "alpha"), prompt }, env).id, { worker: `host:${prompt.length}`, cap: null }, env);
   }
 }
 
@@ -412,7 +412,7 @@ test("a foreground `--watch --json` run echoes the advice on stderr, never on st
 test("a `queue retry --run --foreground --json` echoes the advice on stderr, and stdout opens with the job json", async (t) => {
   const env = makeQueueHome(t, "detached-retry-foreground-json-advisories");
   saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent: 2 } }, env);
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   holdTwoAlphaLeases(env);
   const cancelled = await runCli(env, ["queue", "cancel", String(id), "--reason", "not needed"]);
   assert.equal(cancelled.code, 0, cancelled.stderr);

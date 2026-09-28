@@ -24,7 +24,7 @@ export async function applyRetry({ id, note, fresh = false, env = process.env } 
   const store = openStore(env);
   const before = await store.jobs.getJob(id);
   const job = await store.jobs.retryJob(id, { note, fresh });
-  const run = { project: before?.project, slug: before?.slug, env };
+  const run = { projectId: before?.project_id, slug: before?.slug, env };
   if (fresh !== true) return { job, runDir: null, witness: clearRunTerminal(run) };
   return { job, runDir: discardRunDir(run), witness: { status: "absent", path: null, reason: null } };
 }

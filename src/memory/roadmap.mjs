@@ -1,7 +1,7 @@
 import { UserError } from "../config/errors.mjs";
-import { ALL_PROJECTS, projectByName, projectsOfOrg } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
+import { ALL_PROJECTS } from "../config/projects.mjs";
 import { inTransaction, openDb, sqliteToIso, withWriteRetry } from "./db.mjs";
+import { attachNames, projectById, projectsOfOrg } from "./registry.mjs";
 import {
   PROPOSED_HEADING,
   STANDING_HEADING,
@@ -51,6 +51,7 @@ import {
 import {
   OWNER_CLAUSE,
   ownerDescription,
+  ownerNames,
   ownerOf,
   ownerRef,
   ownerValues,
@@ -157,9 +158,15 @@ function requireDecisionId(target, value, env) {
   return id;
 }
 
-// Returns the raw row of a roadmap item, or null.
+// One row with the current names of its owner attached as `project` and `org`, or null.
+function namedRow(db, row) {
+  return row ? attachNames(db, [row])[0] : null;
+}
+
+// Returns the row of a roadmap item, its owner's names attached, or null.
 export function getRoadmapItem(id, env = process.env) {
-  return openDb(env).prepare("SELECT * FROM roadmap_items WHERE id = ?").get(requireId(id)) ?? null;
+  const db = openDb(env);
+  return namedRow(db, db.prepare("SELECT * FROM roadmap_items WHERE id = ?").get(requireId(id)));
 }
 
 // The columns and joins every read that carries a linked decision number and live job status shares.
@@ -168,19 +175,21 @@ const ROADMAP_ITEM_VIEW_QUERY = `SELECT r.*, d.number AS decision_number, j.stat
        LEFT JOIN decisions d ON d.id = r.decision_id
        LEFT JOIN jobs j ON j.id = r.job_id`;
 
-// Returns the joined row of a roadmap item — its linked decision number and live job status included — or null.
+// Returns the joined row of a roadmap item — its linked decision number, live job status and owner names included — or null.
 function getRoadmapItemJoined(id, env = process.env) {
-  return openDb(env).prepare(`${ROADMAP_ITEM_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id)) ?? null;
+  const db = openDb(env);
+  return namedRow(db, db.prepare(`${ROADMAP_ITEM_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id)));
 }
 
 // Inserts a roadmap item at the end of its priority group, in one statement so no concurrent save collides.
 export function saveRoadmapItem(
-  { project, org, title, detail, decision_id, priority, status, type, ...rest } = {},
+  { projectId, orgId, title, detail, decision_id, priority, status, type, ...rest } = {},
   env = process.env,
 ) {
   refuseHorizon(rest);
   const kind = requireType(type);
-  const target = requireScopeTarget({ project, org }, env);
+  const db = openDb(env);
+  const target = requireScopeTarget(db, { projectId, orgId });
   const owner = ownerValues(target);
   const group = priority === undefined || priority === null ? PRIORITY_RANGE.fallback : requirePriority(priority);
   const state = status === undefined || status === null ? "todo" : requireManualStatus(status);
@@ -196,14 +205,14 @@ export function saveRoadmapItem(
     ...owner,
     group,
   ];
-  const statement = openDb(env).prepare(
-    `INSERT INTO roadmap_items (scope, project, org, priority, type, status, closed_at, title, detail, decision_id, position)
+  const statement = db.prepare(
+    `INSERT INTO roadmap_items (scope, project_id, org_id, priority, type, status, closed_at, title, detail, decision_id, position)
      VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? = 'done' THEN datetime('now') END, ?, ?, ?,
              (SELECT COALESCE(MAX(position), 0) + 1 FROM roadmap_items WHERE ${OWNER_CLAUSE} AND priority = ?))
      RETURNING id, position`,
   );
   const row = withWriteRetry(() => statement.get(...values));
-  const [scope, projectName, orgName] = owner;
+  const [scope, ownerProjectId, ownerOrgId] = owner;
   return {
     id: Number(row.id),
     position: Number(row.position),
@@ -211,8 +220,10 @@ export function saveRoadmapItem(
     type: kind,
     status: state,
     scope,
-    project: projectName,
-    org: orgName,
+    project: scope === "org" ? null : target.project,
+    org: scope === "org" ? target.org : null,
+    projectId: ownerProjectId,
+    orgId: ownerOrgId,
   };
 }
 
@@ -283,7 +294,7 @@ function updateAssignments(patch, row, env) {
   }
   if (hasValue(patch, "decision_id")) {
     columns.push("decision_id = ?");
-    values.push(requireDecisionId(rowTarget(row, env), patch.decision_id, env));
+    values.push(requireDecisionId(rowTarget(openDb(env), row), patch.decision_id, env));
   }
   return { columns, values };
 }
@@ -378,26 +389,26 @@ export function emptyRoadmap(owner = {}) {
 // Every item an owner sees, in workflow order, then org items first, then by priority (1 first) and position; `db` lets a read-only caller bring its own connection.
 export function listRoadmap(owner, filters = {}, env = process.env, db = null) {
   const connection = db ?? openDb(env);
-  const target = requireOwnerTarget(owner, env);
+  const target = requireOwnerTarget(connection, owner);
   const visible = visibility(target, "r");
   const filter = listFilterSql(filters ?? {});
-  const items = connection
+  const rows = connection
     .prepare(
       `${ROADMAP_ITEM_VIEW_QUERY}
        WHERE ${visible.clause}${filter.sql}
        ORDER BY ${statusRankSql("r.status")}, CASE WHEN r.scope = 'org' THEN 0 ELSE 1 END,
                 r.priority ASC, r.position ASC, r.id ASC`,
     )
-    .all(...visible.values, ...filter.values)
-    .map(roadmapItemView);
-  return { ...ownerRef(target), items: withProjectRows(connection, target, items) };
+    .all(...visible.values, ...filter.values);
+  const items = attachNames(connection, rows).map(roadmapItemView);
+  return { ...ownerNames(target), items: withProjectRows(connection, target, items) };
 }
 
 // The org items of a listing with their project rows: a project reads only its own row's status, an org reads the whole matrix.
 function withProjectRows(db, target, items) {
   const orgIds = items.filter((item) => item.scope === "org").map((item) => item.id);
   const matrix = target.scope === "org";
-  const rows = projectRowsByItem(db, orgIds, matrix ? null : (target.project ?? ""));
+  const rows = projectRowsByItem(db, orgIds, matrix ? null : (target.projectId ?? ""));
   return items.map((item) => {
     if (item.scope !== "org") return item;
     const own = rows.get(item.id) ?? [];
@@ -550,15 +561,16 @@ export function roadmapDrift(env = process.env, db = null) {
 
 // The linked items whose status disagrees with what their job's current row means.
 function linkedItemDrift(connection) {
-  return connection
+  const rows = connection
     .prepare(
-      `SELECT r.id, r.scope, r.project, r.org, r.status, r.job_id, r.job_status_seen,
+      `SELECT r.id, r.scope, r.project_id, r.org_id, r.status, r.job_id, r.job_status_seen,
               j.status AS job_status, j.result
          FROM roadmap_items r JOIN jobs j ON j.id = r.job_id
         WHERE r.job_status_seen IS NOT j.status
         ORDER BY r.id`,
     )
-    .all()
+    .all();
+  return attachNames(connection, rows)
     .map((row) => ({ row, expected: roadmapTransition({ ...row, status: row.job_status }, row.job_status_seen).status }))
     .filter(({ row, expected }) => expected !== null && expected !== row.status)
     .map(({ row, expected }) => ({
@@ -572,10 +584,12 @@ function linkedItemDrift(connection) {
     }));
 }
 
-// Refuses an item a project viewer does not see: its own project's and its org's only; no viewer is the operator, who sees them all.
-function requireVisibleTo(row, viewer, env) {
-  if (viewer === null || seesRow(projectScope(viewer, env), row)) return;
-  throw new UserError(`roadmap item \`${row.id}\` belongs to ${ownerDescription(row)}, not project \`${viewer}\``);
+// Refuses an item a project viewer (by id) does not see: its own project's and its org's only; no viewer is the operator, who sees them all.
+function requireVisibleTo(db, row, viewer) {
+  if (viewer === null) return;
+  const target = projectScope(db, viewer);
+  if (seesRow(target, row)) return;
+  throw new UserError(`roadmap item \`${row.id}\` belongs to ${ownerDescription(row)}, not project \`${target.project ?? "global"}\``);
 }
 
 // The reference of an item the way a pull request or a prompt quotes it: `<owner>#<id>`.
@@ -583,13 +597,13 @@ export function roadmapRef(row) {
   return `${ownerOf(row)}#${row.id}`;
 }
 
-// One item with its text untruncated and its comment thread in chronological order; a project `viewer` reads only what
-// its project sees, and `db` lets a read-only caller bring its own connection.
+// One item with its text untruncated and its comment thread in chronological order; a project `viewer` (by id) reads only
+// what its project sees, and `db` lets a read-only caller bring its own connection.
 export function getRoadmapItemDetail(id, { viewer = null } = {}, env = process.env, db = null) {
   const connection = db ?? openDb(env);
-  const row = connection.prepare(`${ROADMAP_ITEM_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id));
+  const row = namedRow(connection, connection.prepare(`${ROADMAP_ITEM_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id)));
   if (!row) throw new UserError(`unknown roadmap item \`${id}\``);
-  requireVisibleTo(row, viewer, env);
+  requireVisibleTo(connection, row, viewer);
   const detail = {
     ...roadmapItemView(row),
     ref: roadmapRef(row),
@@ -601,15 +615,15 @@ export function getRoadmapItemDetail(id, { viewer = null } = {}, env = process.e
   return { ...detail, projects: projectRowsByItem(connection, [row.id], viewer).get(row.id) };
 }
 
-// Appends a `note` to an item's thread, signed by `author`; a project `viewer` (a job's project) may only comment an item it sees, and owns its comment.
+// Appends a `note` to an item's thread, signed by `author`; a project `viewer` (a job's project id) may only comment an item it sees, and owns its comment.
 export function addRoadmapComment({ id, body, author = OPERATOR_AUTHOR, viewer = null } = {}, env = process.env) {
   const signer = requireAuthor(author);
   const text = requireText("body", body);
   const row = getRoadmapItem(id, env);
   if (!row) throw new UserError(`unknown roadmap item \`${id}\``);
-  requireVisibleTo(row, viewer, env);
   const db = openDb(env);
-  return withWriteRetry(() => insertComment(db, { itemId: row.id, kind: "note", author: signer, body: text, project: viewer }));
+  requireVisibleTo(db, row, viewer);
+  return withWriteRetry(() => insertComment(db, { itemId: row.id, kind: "note", author: signer, body: text, projectId: viewer }));
 }
 
 // The reference of the item a job was queued from — a project item it is linked to, or an org item through its project
@@ -617,9 +631,8 @@ export function addRoadmapComment({ id, body, author = OPERATOR_AUTHOR, viewer =
 export function roadmapRefOfJob(jobId, env = process.env) {
   const db = openDb(env);
   const id = requireId(jobId);
-  const row =
-    db.prepare("SELECT id, scope, project, org FROM roadmap_items WHERE job_id = ? ORDER BY id DESC LIMIT 1").get(id) ??
-    orgItemOfJob(db, id);
+  const own = db.prepare("SELECT id, scope, project_id, org_id FROM roadmap_items WHERE job_id = ? ORDER BY id DESC LIMIT 1").get(id);
+  const row = namedRow(db, own) ?? orgItemOfJob(db, id);
   return row ? roadmapRef(row) : null;
 }
 
@@ -682,39 +695,41 @@ export async function buildRoadmapPrompt({ item, embedder } = {}, env = process.
   return blocks.join("\n\n");
 }
 
-// Refuses a project that is not the item's own, because a project item is what decides where its job goes.
-function requireItemProject(item, project) {
-  if (project === undefined || project === null || project === item.project) return;
-  throw new UserError(
-    `roadmap item \`${item.id}\` belongs to project \`${item.project}\`, not \`${project}\`; queue it by its id alone`,
-  );
+// The project id a project item's job goes to: its own, refusing another project (a project item decides where its job goes) and a global item.
+function itemProjectId(db, item, projectId) {
+  if (projectId !== undefined && projectId !== null && projectId !== item.project_id) {
+    const named = projectById(db, projectId)?.name ?? projectId;
+    throw new UserError(`roadmap item \`${item.id}\` belongs to project \`${item.project ?? "global"}\`, not \`${named}\`; queue it by its id alone`);
+  }
+  if (!item.project_id) {
+    throw new UserError(`roadmap item \`${item.id}\` belongs to no project, so no job can be built from it; save it under a registered project`);
+  }
+  return item.project_id;
 }
 
-// The projects an org item is queued for: one registered project of its org, or every one of them for `all`; a job is always a project's.
-function orgTargets(item, project, env) {
-  const config = loadConfig(env, { warn: () => {} });
-  const members = projectsOfOrg(config, item.org);
-  const named = typeof project === "string" ? project.trim() : "";
-  if (named === ALL_PROJECTS && members.length) return members;
-  const found = named && named !== ALL_PROJECTS ? projectByName(config, named) : null;
-  if (found && found.org === item.org) return [found.name];
+// The projects an org item is queued for: one project of its org with a checkout, or every one of them for `all`; a job is always a project's.
+function orgTargets(db, item, { projectId, allProjects }) {
+  const members = projectsOfOrg(db, item.org_id).filter((member) => member.path);
+  if (allProjects && members.length) return members;
+  const found = !allProjects && projectId ? projectById(db, projectId) : null;
+  if (found?.path && found.org_id === item.org_id) return [found];
   throw new UserError(
     `roadmap item \`${item.id}\` belongs to org \`${item.org}\`: name the project its job goes to, or \`${ALL_PROJECTS}\` for every ` +
       `project of the org, with \`--project <name|${ALL_PROJECTS}>\` (\`project\` in queue_add); projects of \`${item.org}\`: ` +
-      `${members.length ? members.join(", ") : "(none)"}`,
+      `${members.length ? members.map((member) => member.name).join(", ") : "(none)"}`,
   );
 }
 
-// Queues and links the job of an org item for one project, or reports the live job that already holds that project's row.
+// Queues and links the job of an org item for one project row, or reports the live job that already holds that project's row.
 function queueOrgTarget(item, project, { prompt, limits }, env) {
   const db = openDb(env);
-  const live = liveRowJob(db, item.id, project);
-  if (live) return { skipped: { project, job_id: live.id, job_status: live.status } };
-  const job = addJob({ project, prompt, ...limits }, env);
-  if (linkOrgRow(db, { itemId: item.id, project, jobId: job.id })) return { job };
+  const live = liveRowJob(db, item.id, project.id);
+  if (live) return { skipped: { project: project.name, job_id: live.id, job_status: live.status } };
+  const job = addJob({ projectId: project.id, prompt, ...limits }, env);
+  if (linkOrgRow(db, { itemId: item.id, projectId: project.id, jobId: job.id })) return { job };
   cancelJob(job.id, { reason: "roadmap item was queued for this project by another caller" }, env);
-  const holder = liveRowJob(db, item.id, project);
-  return { skipped: { project, job_id: holder?.id ?? null, job_status: holder?.status ?? null, cancelled_job_id: job.id } };
+  const holder = liveRowJob(db, item.id, project.id);
+  return { skipped: { project: project.name, job_id: holder?.id ?? null, job_status: holder?.status ?? null, cancelled_job_id: job.id } };
 }
 
 // Why nothing was queued for an org item: every project it was asked for already has a live job for it.
@@ -725,8 +740,8 @@ function allSkippedMessage(item, skipped) {
 
 // Queues the job an org item builds for each project it names, one per-project row linked to each job; the item's own
 // row keeps no job and its status is derived from the rows.
-async function queueOrgItem(item, { project, embedder, ...limits }, env) {
-  const targets = orgTargets(item, project, env);
+async function queueOrgItem(item, { projectId, allProjects, embedder, ...limits }, env) {
+  const targets = orgTargets(openDb(env), item, { projectId, allProjects });
   const prompt = await buildRoadmapPrompt({ item, embedder }, env);
   const jobLimits = { ...limits, tier: tierOf(item, limits.tier) };
   const outcomes = targets.map((target) => queueOrgTarget(item, target, { prompt, limits: jobLimits }, env));
@@ -736,18 +751,18 @@ async function queueOrgItem(item, { project, embedder, ...limits }, env) {
   return { job: jobs[0], jobs, skipped, item, targetProject: jobs.length === 1 ? jobs[0].project : null };
 }
 
-// Queues the job a roadmap item builds; a project item is linked to that job, an org item names the project it goes to or `all`.
+// Queues the job a roadmap item builds; a project item is linked to that job, an org item names the project id it goes to or `allProjects`.
 export async function queueRoadmapItem(
-  { id, project, priority, maxAttempts, timeoutS, tier, embedder } = {},
+  { id, projectId, allProjects = false, priority, maxAttempts, timeoutS, tier, embedder } = {},
   env = process.env,
 ) {
   const item = queueableRoadmapItem(id, env);
   if (item.scope === "org") {
-    return await queueOrgItem(item, { project, priority, maxAttempts, timeoutS, tier, embedder }, env);
+    return await queueOrgItem(item, { projectId, allProjects, priority, maxAttempts, timeoutS, tier, embedder }, env);
   }
-  requireItemProject(item, project);
+  const ownProjectId = itemProjectId(openDb(env), item, allProjects ? ALL_PROJECTS : projectId);
   const prompt = await buildRoadmapPrompt({ item, embedder }, env);
-  const job = addJob({ project: item.project, prompt, priority, maxAttempts, timeoutS, tier: tierOf(item, tier) }, env);
+  const job = addJob({ projectId: ownProjectId, prompt, priority, maxAttempts, timeoutS, tier: tierOf(item, tier) }, env);
   if (linkRoadmapItemJob(item.id, job.id, env)) return { job, jobs: [job], skipped: [], item, targetProject: item.project };
   cancelJob(job.id, { reason: "roadmap item was queued by another caller" }, env);
   throw new UserError(

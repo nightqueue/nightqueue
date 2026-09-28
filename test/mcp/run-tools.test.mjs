@@ -11,7 +11,7 @@ import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { getRoadmapItem, linkRoadmapItemJob, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { decideResume } from "../../src/queue/resume.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const WORKER = "host:4242";
@@ -38,16 +38,16 @@ function payloadOf(result) {
   return JSON.parse(textOf(result));
 }
 
-// The state.json of a run as it is on disk right now.
+// The state.json of a run of a project named by the test, as it is on disk right now.
 function readState(env, project, slug) {
-  return JSON.parse(readFileSync(join(runDir(project, slug, env), "state.json"), "utf8"));
+  return JSON.parse(readFileSync(join(runDir(projectIdOf(env, project), slug, env), "state.json"), "utf8"));
 }
 
 // A home with the project `alpha` and one claimed job, with the run slug already bound to its row unless asked otherwise.
 function makeRunningJob(t, name, { slug = SLUG, sessionId = null } = {}) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  const job = addJob({ project: "alpha", prompt: "rewrite the runner" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "rewrite the runner" }, env);
   claimJobById(job.id, { worker: WORKER, cap: 4 }, env);
   if (slug) persistRunFacts(job.id, { worker: WORKER, slug, sessionId }, env);
   return { env, job };
@@ -61,15 +61,15 @@ test("inside a job the run tools resolve the run from the job's own row", async 
     await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", artifact: "01-triage.md", verdict: "CONFIRMED" } }),
   );
   assert.deepEqual({ ok: done.ok, project: done.project, slug: done.slug }, { ok: true, project: "alpha", slug: SLUG });
-  assert.equal(done.path, join(runDir("alpha", SLUG, env), "state.json"));
+  assert.equal(done.path, join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"));
 
   payloadOf(await client.callTool({ name: "run_set", arguments: { tier: "complex", tier_raise_reason: "a native SDK is involved" } }));
   payloadOf(await client.callTool({ name: "run_outcome", arguments: { status: "gate", notice: "the operator has to choose" } }));
 
   const state = readState(env, "alpha", SLUG);
   assert.deepEqual(
-    { schemaVersion: state.schemaVersion, project: state.project, slug: state.slug, resumeCount: state.resumeCount },
-    { schemaVersion: 1, project: "alpha", slug: SLUG, resumeCount: 0 },
+    { schemaVersion: state.schemaVersion, projectId: state.projectId, slug: state.slug, resumeCount: state.resumeCount },
+    { schemaVersion: 1, projectId: projectIdOf(env, "alpha"), slug: SLUG, resumeCount: 0 },
   );
   assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage"]);
   assert.equal(state.tier, "complex");
@@ -91,8 +91,8 @@ test("inside a job a run named from the outside is refused, and nothing is writt
   assert.match(textOf(refused), /refusing to act on project `beta` and slug `another-run` from inside job `\d+`/);
   assert.match(textOf(refused), /resolved from its own row/);
 
-  assert.equal(existsSync(join(runDir("beta", "another-run", env), "state.json")), false, "the refused call wrote another run");
-  assert.equal(existsSync(join(runDir("alpha", SLUG, env), "state.json")), false, "the refused call wrote its own run");
+  assert.equal(existsSync(join(runDir(ensureProject(env, "beta"), "another-run", env), "state.json")), false, "the refused call wrote another run");
+  assert.equal(existsSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json")), false, "the refused call wrote its own run");
 });
 
 test("a job whose row has no run slug yet is told to print it instead of getting a guessed run directory", async (t) => {
@@ -130,7 +130,7 @@ test("outside a job the project and the slug are both required, and a registered
 
 test("`run_outcome` never moves the roadmap item the job came from: only the job's own row does", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-run-tools-roadmap");
-  const item = saveRoadmapItem({ type: "improvement", project: "alpha", title: "deliver the thing" }, env);
+  const item = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "deliver the thing" }, env);
   assert.equal(linkRoadmapItemJob(item.id, job.id, env), true, "setup: the item was not linked to its job");
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
@@ -188,8 +188,8 @@ test("inside a job `pipeline_log` records the run of its own row and the fields 
 
   const row = openDb(env).prepare("SELECT * FROM pipeline_runs ORDER BY id DESC LIMIT 1").get();
   assert.deepEqual(
-    { project: row.project, slug: row.slug, tier: row.tier, taskType: row.task_type, reason: row.tier_raise_reason },
-    { project: "alpha", slug: SLUG, tier: "complex", taskType: "bug/error", reason: "a stack trace in the claim path" },
+    { projectId: row.project_id, slug: row.slug, tier: row.tier, taskType: row.task_type, reason: row.tier_raise_reason },
+    { projectId: projectIdOf(env, "alpha"), slug: SLUG, tier: "complex", taskType: "bug/error", reason: "a stack trace in the claim path" },
     "the run named from the outside was recorded instead of the job's own",
   );
 });
@@ -243,7 +243,7 @@ test("a phase, a status or a call with nothing to record is refused with the acc
   assert.equal(empty.isError, true);
   assert.match(textOf(empty), /nothing was recorded in the state.json of `alpha\/fix-the-worker`: no field to record/);
 
-  assert.equal(existsSync(join(runDir("alpha", SLUG, env), "state.json")), false, "a refused call created the file");
+  assert.equal(existsSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json")), false, "a refused call created the file");
 });
 
 test("inside a job the recall drops what the run already saw, and gives it back when it is all there is", async (t) => {
@@ -251,7 +251,7 @@ test("inside a job the recall drops what the run already saw, and gives it back 
   for (let i = 0; i < 8; i += 1) {
     saveLesson(
       {
-        project: "alpha",
+        projectId: projectIdOf(env, "alpha"),
         title: `the worker drops the lease number ${i}`,
         root_cause: "the early return skipped the renewal",
         solution: "renew it in a finally block",

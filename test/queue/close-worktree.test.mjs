@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
-import { addProject } from "../../src/config/projects.mjs";
+import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, getJob, jobView } from "../../src/memory/jobs.mjs";
@@ -18,7 +18,7 @@ const MERGED_PR = "https://github.com/acme/api/pull/1";
 function makeCloseHome(t, name) {
   const { checkout } = publishedCheckout(t, name);
   const env = { ...makeHome(t, name), ...gitVars() };
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: checkout, name: "alpha" });
   return { env, checkout };
 }
 
@@ -26,9 +26,9 @@ function makeCloseHome(t, name) {
 function jobWithWorktree(home, { slug, status, prUrl = null, dirty = false }) {
   const worktree = addWorktree(home.checkout, `feat+${slug}`);
   if (dirty) makeDirty(worktree.path);
-  const id = addJob({ project: "alpha", prompt: `work of ${slug}` }, home.env).id;
+  const id = addJob({ projectId: ensureProject(home.env, "alpha"), prompt: `work of ${slug}` }, home.env).id;
   openDb(home.env).prepare("UPDATE jobs SET status = ?, slug = ?, pr_url = ? WHERE id = ?").run(status, slug, prUrl, id);
-  recordRunFields({ project: "alpha", slug, fields: { worktree: worktree.path }, env: home.env });
+  recordRunFields({ projectId: ensureProject(home.env, "alpha"), slug, fields: { worktree: worktree.path }, env: home.env });
   return { id, ...worktree };
 }
 

@@ -8,7 +8,7 @@ import { saveDecision } from "../../src/memory/decisions.mjs";
 import { getJob } from "../../src/memory/jobs.mjs";
 import { addRoadmapComment, getRoadmapItemDetail, queueRoadmapItem, saveRoadmapItem, updateRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeDir, makeHome, makeProject, mergedChecklist, settleThroughStore } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, mergedChecklist, orgIdOf, projectIdOf, settleThroughStore } from "../../test-support/memory.mjs";
 
 const ROADMAP_MODULE_URL = new URL("../../src/memory/roadmap.mjs", import.meta.url).href;
 const PR_URL = "https://github.com/acme/alpha/pull/7";
@@ -19,7 +19,7 @@ async function linkedJob(t, name, type = "improvement") {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const store = openStore(env);
-  const item = await store.roadmap.saveRoadmapItem({ type, project: "alpha", title: "follow the job" });
+  const item = await store.roadmap.saveRoadmapItem({ type, projectId: projectIdOf(env, "alpha"), title: "follow the job" });
   const { job } = await store.roadmap.queueRoadmapItem({ id: item.id });
   return { env, store, item, job };
 }
@@ -110,7 +110,7 @@ test("a close that finds its pull request closed without merge leaves `failed` a
 
 test("the refs of a comment carry the job's pull request, branch, merge sha, files and proposed decision", async (t) => {
   const { env, store, item, job } = await linkedJob(t, "roadmap-comments-refs");
-  const decision = saveDecision({ project: "alpha", title: "t", context: "c", decision: "d", status: "proposed" }, env);
+  const decision = saveDecision({ projectId: projectIdOf(env, "alpha"), title: "t", context: "c", decision: "d", status: "proposed" }, env);
   openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(job.id, decision.id);
   assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }));
   await store.jobs.persistRunFacts(job.id, { worker: "w1", branch: "feat/follow" });
@@ -145,12 +145,12 @@ test("a note is signed by its author, and a project viewer never comments nor re
   const env = makeHome(t, "roadmap-comments-note");
   makeProject(t, env, "alpha");
   makeProject(t, env, "beta");
-  const foreign = saveRoadmapItem({ type: "bug", project: "beta", title: "beta crashes" }, env);
+  const foreign = saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "beta"), title: "beta crashes" }, env);
   const note = addRoadmapComment({ id: foreign.id, body: "seen in prod" }, env);
   assert.deepEqual([note.kind, note.author, note.body, note.project], ["note", "operator", "seen in prod", null]);
 
-  assert.throws(() => addRoadmapComment({ id: foreign.id, body: "x", author: "job:1", viewer: "alpha" }, env), /belongs to project `beta`, not project `alpha`/);
-  assert.throws(() => getRoadmapItemDetail(foreign.id, { viewer: "alpha" }, env), /belongs to project `beta`/);
+  assert.throws(() => addRoadmapComment({ id: foreign.id, body: "x", author: "job:1", viewer: projectIdOf(env, "alpha") }, env), /belongs to project `beta`, not project `alpha`/);
+  assert.throws(() => getRoadmapItemDetail(foreign.id, { viewer: projectIdOf(env, "alpha") }, env), /belongs to project `beta`/);
   assert.throws(() => addRoadmapComment({ id: foreign.id, body: "x", author: "robot" }, env), /invalid roadmap comment author/);
   assert.throws(() => addRoadmapComment({ id: foreign.id, body: "  " }, env), /`body` is required/);
   assert.equal(getRoadmapItemDetail(foreign.id, {}, env).comments.length, 1, "a refused comment was written");
@@ -161,30 +161,30 @@ test("a member project reads its org's item but never a sibling project's commen
   makeProject(t, env, "alpha", { org: "acme" });
   makeProject(t, env, "beta", { org: "acme" });
   makeProject(t, env, "gamma", { org: "other" });
-  const item = saveRoadmapItem({ type: "chore", org: "acme", title: "raise node" }, env);
+  const item = saveRoadmapItem({ type: "chore", orgId: orgIdOf(env, "acme"), title: "raise node" }, env);
   addRoadmapComment({ id: item.id, body: "org-wide note" }, env);
-  addRoadmapComment({ id: item.id, body: "beta only", author: "job:2", viewer: "beta" }, env);
+  addRoadmapComment({ id: item.id, body: "beta only", author: "job:2", viewer: projectIdOf(env, "beta") }, env);
 
-  const bodies = (viewer) => getRoadmapItemDetail(item.id, { viewer }, env).comments.map((comment) => comment.body);
+  const bodies = (viewer) => getRoadmapItemDetail(item.id, { viewer: projectIdOf(env, viewer) }, env).comments.map((comment) => comment.body);
   assert.deepEqual(bodies("alpha"), ["org-wide note"]);
   assert.deepEqual(bodies("beta"), ["org-wide note", "beta only"]);
   assert.deepEqual(bodies(null), ["org-wide note", "beta only"]);
-  assert.throws(() => getRoadmapItemDetail(item.id, { viewer: "gamma" }, env), /belongs to org `acme`, not project `gamma`/);
+  assert.throws(() => getRoadmapItemDetail(item.id, { viewer: projectIdOf(env, "gamma") }, env), /belongs to org `acme`, not project `gamma`/);
 });
 
 test("the type is required on save, sets the default tier of the job, and an explicit tier wins", async (t) => {
   const env = makeHome(t, "roadmap-comments-type");
   makeProject(t, env, "alpha");
-  assert.throws(() => saveRoadmapItem({ project: "alpha", title: "x" }, env), /`type` is required: expected one of bug\|feature\|improvement\|chore\|incident/);
-  assert.throws(() => saveRoadmapItem({ project: "alpha", title: "x", type: "epic" }, env), /`type` is required/);
+  assert.throws(() => saveRoadmapItem({ projectId: projectIdOf(env, "alpha"), title: "x" }, env), /`type` is required: expected one of bug\|feature\|improvement\|chore\|incident/);
+  assert.throws(() => saveRoadmapItem({ projectId: projectIdOf(env, "alpha"), title: "x", type: "epic" }, env), /`type` is required/);
 
   const expected = { bug: "simple", feature: "complex", improvement: "simple", chore: "trivial", incident: "simple" };
   for (const [type, tier] of Object.entries(expected)) {
-    const item = saveRoadmapItem({ project: "alpha", title: `a ${type}`, type }, env);
+    const item = saveRoadmapItem({ projectId: projectIdOf(env, "alpha"), title: `a ${type}`, type }, env);
     const { job } = await queueRoadmapItem({ id: item.id }, env);
     assert.equal(getJob(job.id, env).tier, tier, type);
   }
-  const bug = saveRoadmapItem({ project: "alpha", title: "an explicit tier", type: "bug" }, env);
+  const bug = saveRoadmapItem({ projectId: projectIdOf(env, "alpha"), title: "an explicit tier", type: "bug" }, env);
   const { job } = await queueRoadmapItem({ id: bug.id, tier: "complex" }, env);
   assert.equal(getJob(job.id, env).tier, "complex");
   assert.match(getJob(job.id, env).prompt, /## Roadmap item\nRoadmap: alpha#\d+\nType: bug\nCommit type: fix/);

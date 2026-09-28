@@ -4,7 +4,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { acquireClose, addJob, getJob } from "../../src/memory/jobs.mjs";
 import { runClosePipeline } from "../../src/queue/close.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const PR_URL = "https://github.com/acme/api/pull/7";
 const MERGE_SHA = "abc1234def5678";
@@ -19,7 +19,7 @@ const WORKER = "close:test:1:aaaa";
 test("a row moved out of done right before settle stops the close as failed/close-refused instead of closing it", async (t) => {
   const env = makeHome(t, "close-engine-retry-race");
   const checkout = makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run(PR_URL, id);
 
   const acquired = acquireClose(id, { worker: WORKER, leaseS: 660 }, env);

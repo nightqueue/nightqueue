@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { addProject } from "../../src/config/projects.mjs";
+import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
@@ -16,16 +16,17 @@ import { addWorktree, gitVars, publishedCheckout } from "../../test-support/work
 function makeRaceHome(t, name) {
   const { checkout } = publishedCheckout(t, name);
   const env = { ...makeHome(t, name), ...gitVars() };
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: checkout, name: "alpha" });
   return { env, checkout };
 }
 
 // A `done` job whose run recorded a real, clean, pushed worktree of the checkout.
 function doneJobWithWorktree(home, slug) {
   const worktree = addWorktree(home.checkout, `feat+${slug}`);
-  const id = addJob({ project: "alpha", prompt: `work of ${slug}` }, home.env).id;
+  const id = addJob({ projectId: ensureProject(home.env, "alpha"), prompt: `work of ${slug}` }, home.env).id;
   openDb(home.env).prepare("UPDATE jobs SET status = 'done', slug = ?, pr_url = 'https://github.com/acme/api/pull/7' WHERE id = ?").run(slug, id);
-  recordRunFields({ project: "alpha", slug, fields: { worktree: worktree.path }, env: home.env });
+  const recorded = recordRunFields({ projectId: ensureProject(home.env, "alpha"), slug, fields: { worktree: worktree.path }, env: home.env });
+  if (recorded.status !== "written") throw new Error(`setup: the worktree was not recorded on the run: ${recorded.reason}`);
   return { id, ...worktree };
 }
 

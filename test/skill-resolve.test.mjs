@@ -363,9 +363,13 @@ test("the run comes named in the prompt, and the rename line the skill prints is
   assert.ok(
     handoff
       .replace(/\s+/g, " ")
-      .includes("No `RUN_DIR:` line in the prompt → derive `RUN_DIR` from `<project>/<slug>` as before and print `QUEUE_SLUG: <slug>` once."),
+      .includes(
+        "No `RUN_DIR:` line in the prompt → never derive it from the project name (run directories are keyed by the project's id): " +
+          "run `nightqueue run dir --project <project> --slug <slug>` and use the path it prints as `RUN_DIR`, then print `QUEUE_SLUG: <slug>` once.",
+      ),
     "step 5.2 lost the degradation line for a runtime older than this plugin",
   );
+  assert.ok(CLI_RUN.includes('["dir", '), "the skill asks for `nightqueue run dir`, a subcommand the CLI does not know");
   for (const type of PIPELINE_TASK_TYPES) {
     assert.ok(handoff.includes(`\`${type}\``), `the rename line never names the task type \`${type}\` the runtime records`);
   }

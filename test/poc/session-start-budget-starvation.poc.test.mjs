@@ -3,16 +3,16 @@ import { test } from "node:test";
 import { runSessionStart } from "../../src/hooks/session-start.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 // Stores one lesson of the project with a realistic-length title and prevention text.
 function addLesson(env, { title, prevention }) {
-  return saveLesson({ project: "alpha", title, root_cause: `${title} happened during a run`, solution: "fix it at the source", prevention }, env).id;
+  return saveLesson({ projectId: projectIdOf(env, "alpha"), title, root_cause: `${title} happened during a run`, solution: "fix it at the source", prevention }, env).id;
 }
 
 // Stores one accepted decision of the project with a realistic-length title.
 function addDecision(env, { title, decision }) {
-  return saveDecision({ project: "alpha", title, context: `${title} had to be settled`, decision, status: "accepted" }, env);
+  return saveDecision({ projectId: projectIdOf(env, "alpha"), title, context: `${title} had to be settled`, decision, status: "accepted" }, env);
 }
 
 // A title built from real words, spread across the [min, max] char range the way real ADR titles vary in length.

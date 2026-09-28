@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { dbPath } from "../../src/config/paths.mjs";
 import { addJob, claimJobById, finishJob } from "../../src/memory/jobs.mjs";
 import { withReadOnlyStore } from "../../src/store/open.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // Group C of 05a-qa-analyst.md: `withReadOnlyStore`'s `finally` calls `store.close()` unconditionally
 // (src/store/open.mjs:29-36); if that call itself threw AND `fn` had already thrown, the `finally`-throws
@@ -17,7 +17,7 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 test("a real read-only DatabaseSync throws 'database is not open' on a second .close() call", (t) => {
   const env = makeHome(t, "with-read-only-store-finally-language");
   makeProject(t, env, "alpha");
-  addJob({ project: "alpha", prompt: "fix the worker" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env);
 
   const db = new DatabaseSync(dbPath(env), { readOnly: true });
   db.close();
@@ -30,7 +30,7 @@ test("a real read-only DatabaseSync throws 'database is not open' on a second .c
 test("calling store.close() twice on a real read-only store never dispatches a second real DatabaseSync.close()", async (t) => {
   const env = makeHome(t, "with-read-only-store-finally-guard");
   makeProject(t, env, "alpha");
-  addJob({ project: "alpha", prompt: "fix the worker" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env);
 
   let realCloseCalls = 0;
   const originalClose = DatabaseSync.prototype.close;
@@ -57,7 +57,7 @@ test("calling store.close() twice on a real read-only store never dispatches a s
 test("withReadOnlyStore surfaces fn's own error untouched even when fn already closed the store before throwing", async (t) => {
   const env = makeHome(t, "with-read-only-store-finally-error");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   finishJob(id, { worker: "host:1", status: "done" }, env);
 
@@ -79,7 +79,7 @@ test("withReadOnlyStore surfaces fn's own error untouched even when fn already c
 test("closing a read-only DatabaseSync after its underlying file was deleted mid-session does not throw", (t) => {
   const env = makeHome(t, "with-read-only-store-finally-deleted-file");
   makeProject(t, env, "alpha");
-  addJob({ project: "alpha", prompt: "fix the worker" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env);
 
   const db = new DatabaseSync(dbPath(env), { readOnly: true });
   rmSync(dbPath(env));

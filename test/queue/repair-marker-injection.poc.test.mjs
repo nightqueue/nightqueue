@@ -5,7 +5,7 @@ import { jobLogPath, logsDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob } from "../../src/memory/jobs.mjs";
 import { reclassifyFromLog } from "../../src/queue/repair.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { intermediateDeliveryStream, PR_URL } from "../../test-support/streams.mjs";
 
 const WORKER = "host:1000";
@@ -29,7 +29,7 @@ function writeJobLog(env, id, log) {
 
 // A job that ended `gate`, no pull request on the row, with a real delivery on disk in its log.
 function finishedJob(env, { status = "gate", result = CLEAN_ENDING, log = intermediateDeliveryStream(), slug = SLUG } = {}) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(slug, id);
   finishJob(id, { worker: WORKER, status, result, noticeMd: NOTICE }, env);

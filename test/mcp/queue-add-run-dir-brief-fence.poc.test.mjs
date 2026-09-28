@@ -7,7 +7,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { recordPhaseDone, recordRunFields } from "../../src/queue/run-state.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, ensureProject } from "../../test-support/memory.mjs";
 
 // H1 — `withPriorRun`'s duplicate-block check (`src/queue/operator-run.mjs:87-90`) scans every
 // line of the prompt for the exact trimmed heading `## PRIOR RUN (operator)`, with no fence
@@ -39,8 +39,8 @@ function makeOperatorRun(t, name) {
   const base = makeHome(t, name);
   const env = { ...base, HOME: dirname(base.NIGHTQUEUE_HOME), CLAUDE_CONFIG_DIR: join(dirname(base.NIGHTQUEUE_HOME), ".claude") };
   makeProject(t, env, "alpha");
-  recordRunFields({ project: "alpha", slug: SLUG, fields: { origin: "operator", type: "bug/error", evidenceLevel: 3 }, env });
-  recordPhaseDone({ project: "alpha", slug: SLUG, phase: "triage", artifact: "01-triage.md", verdict: "PROCEED", env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { origin: "operator", type: "bug/error", evidenceLevel: 3 }, env });
+  recordPhaseDone({ projectId: ensureProject(env, "alpha"), slug: SLUG, phase: "triage", artifact: "01-triage.md", verdict: "PROCEED", env });
   return env;
 }
 
@@ -66,7 +66,7 @@ function jobRows(env) {
 test("queue_add with run_dir succeeds when the Brief only QUOTES the prior-run heading inside a fenced code block", async (t) => {
   const env = makeOperatorRun(t, "queue-add-run-dir-brief-fence");
   const client = await connect(t, env);
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
 
   const result = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: PROMPT, run_dir: dir } });
 

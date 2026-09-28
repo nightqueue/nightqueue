@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { stateDir } from "../config/paths.mjs";
 import { writeFileAtomic } from "../config/store.mjs";
 import { sanitizeLesson } from "../memory/lessons.mjs";
-import { projectFromCwd } from "../memory/project-name.mjs";
+import { projectFromCwd } from "../memory/registry-access.mjs";
 import { openStore } from "../store/open.mjs";
 import { lessonIdsFromRefs, readSessionState } from "./state.mjs";
 
@@ -331,7 +331,7 @@ async function reflect({ transcriptPath, cwd, sessionId }, { env, runClaude, jud
   const items = await extractItems({ digest, model, injected, runClaude, log });
   const persisted = items.length
     ? await store.lessons.persistLessons(items, {
-        project: project.name,
+        projectId: project.id,
         model: `reflect/${model}`,
         injectedIds: injected.map((lesson) => lesson.id),
         judge: judge ?? makeJudge(runClaude, model),

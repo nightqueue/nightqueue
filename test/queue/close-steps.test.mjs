@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { jobLogPath, logsDir } from "../../src/config/paths.mjs";
-import { addProject } from "../../src/config/projects.mjs";
+import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { acquireClose, addJob, getJob } from "../../src/memory/jobs.mjs";
@@ -24,7 +24,7 @@ const CONFLICTING = { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" };
 function closeHome(t, name, { worker = "close:test:1:aaaa", notice = "A", branch = "fix/worker" } = {}) {
   const env = makeHome(t, name);
   const checkout = makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ?, notice_md = ?, branch = ? WHERE id = ?").run(CLOSE_PR_URL, notice, branch, id);
   acquireClose(id, { worker, leaseS: 660 }, env);
   return { env, checkout, id, worker, store: openStore(env) };
@@ -72,11 +72,11 @@ test("preflight reads a pull request closed without merge and the job is cancell
 test("a pull request closed without merge releases the job's worktree, the same way a cancel from done does", async (t) => {
   const { checkout } = publishedCheckout(t, "close-steps-closed-worktree");
   const env = { ...makeHome(t, "close-steps-closed-worktree"), ...gitVars() };
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: checkout, name: "alpha" });
   const worktree = addWorktree(checkout, "feat+abandoned");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done', slug = 'abandoned', pr_url = ? WHERE id = ?").run(CLOSE_PR_URL, id);
-  recordRunFields({ project: "alpha", slug: "abandoned", fields: { worktree: worktree.path }, env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: "abandoned", fields: { worktree: worktree.path }, env });
   acquireClose(id, { worker: "close:test:1:aaaa", leaseS: 660 }, env);
   const home = { env, checkout, id, worker: "close:test:1:aaaa", store: openStore(env) };
 
@@ -513,15 +513,15 @@ test("settle refuses a close whose merge is not recorded with its commit", async
 test("settle closes the job, releases its worktree, appends the Closed line to the notice, and run_notice stays hidden", async (t) => {
   const { checkout } = publishedCheckout(t, "close-steps-settle");
   const env = { ...makeHome(t, "close-steps-settle"), ...gitVars() };
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: checkout, name: "alpha" });
   const worktree = addWorktree(checkout, "feat+closed");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   mkdirSync(logsDir(env), { recursive: true });
   writeFileSync(jobLogPath(id, env), doneStream({ notice: "the run's notice" }));
   openDb(env)
     .prepare("UPDATE jobs SET status = 'done', slug = 'closed', pr_url = ?, notice_md = ?, result = ? WHERE id = ?")
     .run(CLOSE_PR_URL, "the run's notice", JSON.stringify({ logPath: jobLogPath(id, env) }), id);
-  recordRunFields({ project: "alpha", slug: "closed", fields: { worktree: worktree.path }, env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: "closed", fields: { worktree: worktree.path }, env });
   acquireClose(id, { worker: "close:test:1:aaaa", leaseS: 660 }, env);
   const home = { env, checkout, id, worker: "close:test:1:aaaa", store: openStore(env) };
 

@@ -3,7 +3,11 @@ import { UserError } from "./errors.mjs";
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 export const SCHEMA_VERSION = 1;
 
-const DEFAULT_ORG = "default";
+// The name of the org the registry of a new home starts with.
+export const DEFAULT_ORG_NAME = "default";
+
+// The keys config.json owns and normalizes; every other top-level key is kept verbatim.
+const OWNED_KEYS = new Set(["version", "defaultOrg", "orgConnections", "queue", "embedding"]);
 
 // Seconds between two lease heartbeats of a runner; the upper bound keeps three heartbeats inside the lease grace.
 export const LEASE_HEARTBEAT_DEFAULT_S = 5;
@@ -37,15 +41,12 @@ export function emptySlots() {
   return slots;
 }
 
-// Initial structure of config.json.
+// Initial structure of config.json: queue settings, the connection bindings per org id and the default org id.
 export function emptyConfig() {
-  const orgs = emptyMap();
-  orgs[DEFAULT_ORG] = { displayName: "Default", connections: emptySlots() };
   return {
     version: SCHEMA_VERSION,
-    defaultOrg: DEFAULT_ORG,
-    orgs,
-    projects: emptyMap(),
+    defaultOrg: null,
+    orgConnections: emptyMap(),
     queue: {
       maxConcurrent: null,
       resumeSession: false,
@@ -103,45 +104,17 @@ function normalizeSlots(raw) {
   return slots;
 }
 
-// Normalizes an org entry.
-function normalizeOrg(name, entry) {
-  const source = isPlainObject(entry) ? entry : {};
-  const displayName = typeof source.displayName === "string" && source.displayName ? source.displayName : null;
-  return {
-    displayName: displayName ?? (name === DEFAULT_ORG ? "Default" : name),
-    connections: normalizeSlots(source.connections),
-  };
+// Normalizes the connection bindings, one slot map per org id.
+function normalizeOrgConnections(raw) {
+  const bindings = emptyMap();
+  if (!isPlainObject(raw)) return bindings;
+  for (const [orgId, slots] of Object.entries(raw)) bindings[orgId] = normalizeSlots(slots);
+  return bindings;
 }
 
-// Normalizes the org map, making sure the default org exists.
-function normalizeOrgs(raw, defaultOrg) {
-  const orgs = emptyMap();
-  if (isPlainObject(raw)) {
-    for (const [name, entry] of Object.entries(raw)) orgs[name] = normalizeOrg(name, entry);
-  }
-  if (!orgs[defaultOrg]) orgs[defaultOrg] = normalizeOrg(defaultOrg, null);
-  return orgs;
-}
-
-// Normalizes the project map, dropping entries without a path.
-function normalizeProjects(raw, defaultOrg) {
-  const projects = emptyMap();
-  if (!isPlainObject(raw)) return projects;
-  for (const [name, entry] of Object.entries(raw)) {
-    if (!isPlainObject(entry) || typeof entry.path !== "string" || !entry.path) continue;
-    projects[name] = { path: entry.path, org: typeof entry.org === "string" && entry.org ? entry.org : defaultOrg };
-  }
-  return projects;
-}
-
-// Warns about a project pointing at an unknown org, without rewriting the operator data.
-function warnOnOrphanProjects(projects, orgs, warn) {
-  for (const [name, entry] of Object.entries(projects)) {
-    if (orgs[entry.org]) continue;
-    warn(
-      `nightqueue: warning: project \`${name}\` points to unknown org \`${entry.org}\`; run \`nightqueue project move ${name} <org>\``,
-    );
-  }
+// The top-level keys config.json does not own, kept verbatim so no write ever drops what it does not understand.
+function unownedKeys(raw) {
+  return Object.fromEntries(Object.entries(raw).filter(([key]) => !OWNED_KEYS.has(key)));
 }
 
 // Heartbeat of the queue lease, clamped to the range that keeps a live runner ahead of the reclaim grace.
@@ -175,20 +148,15 @@ function normalizeCloseTimeout(value) {
   return inRange ? value : CLOSE_TIMEOUT_DEFAULT_S;
 }
 
-// Fills defaults over a config read from disk or edited by hand.
-export function normalizeConfig(raw, { warn = () => {} } = {}) {
+// Fills defaults over a config read from disk or edited by hand, keeping every key it does not own as it is.
+export function normalizeConfig(raw) {
   if (!isPlainObject(raw)) return emptyConfig();
   assertSupportedVersion("config.json", raw);
-  const defaultOrg = typeof raw.defaultOrg === "string" && raw.defaultOrg ? raw.defaultOrg : DEFAULT_ORG;
   const maxConcurrent = raw.queue?.maxConcurrent;
-  const orgs = normalizeOrgs(raw.orgs, defaultOrg);
-  const projects = normalizeProjects(raw.projects, defaultOrg);
-  warnOnOrphanProjects(projects, orgs, warn);
   return {
     version: SCHEMA_VERSION,
-    defaultOrg,
-    orgs,
-    projects,
+    defaultOrg: typeof raw.defaultOrg === "string" && raw.defaultOrg ? raw.defaultOrg : null,
+    orgConnections: normalizeOrgConnections(raw.orgConnections),
     queue: {
       maxConcurrent: Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : null,
       resumeSession: raw.queue?.resumeSession === true,
@@ -199,6 +167,7 @@ export function normalizeConfig(raw, { warn = () => {} } = {}) {
       closeTimeoutS: normalizeCloseTimeout(raw.queue?.closeTimeoutS),
     },
     embedding: normalizeEmbedding(raw.embedding),
+    ...unownedKeys(raw),
   };
 }
 

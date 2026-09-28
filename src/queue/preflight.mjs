@@ -1,9 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { projectByName } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
 import { CLAUDE_MISSING_MESSAGE, resolveClaudeBin } from "./spawn.mjs";
+import { checkoutOfJob } from "../memory/registry-access.mjs";
 
 // Every reason a job cannot start; the code is what the operator interface maps, never the message text.
 export const BLOCK_CODES = {
@@ -59,7 +58,8 @@ function checkCheckout(gitImpl, cwd) {
 // Checks every precondition of a job before the spawn; a block returns the job to the queue, it is not an outcome.
 export function preflight({ job, env = process.env, gitImpl = defaultGitImpl, existsImpl = existsSync, resolveBinImpl = resolveClaudeBin } = {}) {
   const name = String(job?.project ?? "");
-  const project = projectByName(loadConfig(env, { warn: () => {} }), name);
+  const checkout = checkoutOfJob(job, env);
+  const project = checkout ? { name, path: checkout } : null;
   if (!project) return blocked(BLOCK_CODES.UNKNOWN_PROJECT, `unknown project \`${name}\`; register it with \`nightqueue project add\``);
   if (!existsImpl(project.path) || !existsImpl(join(project.path, ".git"))) {
     return blocked(BLOCK_CODES.MISSING_CHECKOUT, `checkout of \`${name}\` is missing at ${project.path}`);

@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSy
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { jobLogPath, queuePausedPath, queueResumePath } from "../config/paths.mjs";
-import { projectByName, registrationOffer, resolveProject } from "../config/projects.mjs";
+import { registrationOffer, roadmapQueueTarget } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { launchOperator } from "../host/operator.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
@@ -152,34 +152,42 @@ function refuseRegistrationInsideJob(cwd, env) {
 }
 
 // Offers to register the repository of the current directory, and answers the project it landed on.
-async function offerRegistration(config, values, ctx) {
+async function offerRegistration({ store, config }, values, ctx) {
   const cwd = ctx.cwd ?? process.cwd();
   refuseRegistrationInsideJob(cwd, ctx.env);
   if (values.yes !== true && !ctx.stdin?.isTTY) throw unregisteredError(cwd);
-  const offer = registrationOffer(config, cwd);
+  const offer = await registrationOffer(store, config, cwd);
   if (!offer) throw unregisteredError(cwd);
   if (!(await wantsRegistration(offer, cwd, values, ctx))) throw unregisteredError(cwd);
   return await registerFromCwd(offer, ctx);
 }
 
+// The registered project with a checkout of that NAME, or null.
+async function namedProject(store, name) {
+  if (typeof name !== "string" || !name) return null;
+  const project = await store.projects.byName(name);
+  return project?.path ? project : null;
+}
+
 // Project `--project <name>` names, refusing an unknown one and the double spelling with the positional.
-function flaggedProject(config, positionals, values) {
+async function flaggedProject(store, positionals, values) {
   if (values.project === undefined) return null;
-  if (projectByName(config, positionals[0])) throw new UserError(PROJECT_NAMED_TWICE);
-  const named = projectByName(config, values.project);
+  if (await namedProject(store, positionals[0])) throw new UserError(PROJECT_NAMED_TWICE);
+  const named = await namedProject(store, values.project);
   if (named) return named;
   throw new UserError(`unknown project \`${values.project}\`; run \`nightqueue project list\``);
 }
 
 // Chooses the project of the job: `--project`, the first positional when it is a registered NAME, otherwise the project of the current directory.
 async function resolveTarget(config, positionals, values, ctx) {
-  const flagged = flaggedProject(config, positionals, values);
+  const store = openStore(ctx.env);
+  const flagged = await flaggedProject(store, positionals, values);
   if (flagged) return { project: flagged, words: positionals, fromCwd: false };
-  const named = projectByName(config, positionals[0]);
+  const named = await namedProject(store, positionals[0]);
   if (named) return { project: named, words: positionals.slice(1), fromCwd: false };
-  const resolved = resolveProject(config, { cwd: ctx.cwd ?? process.cwd() });
+  const resolved = await store.projects.at(ctx.cwd ?? process.cwd());
   if (resolved) return { project: resolved, words: positionals, fromCwd: true };
-  return { project: await offerRegistration(config, values, ctx), words: positionals, fromCwd: false };
+  return { project: await offerRegistration({ store, config }, values, ctx), words: positionals, fromCwd: false };
 }
 
 // Echoes once the advisory lines of this home at the moment of a start, on stderr when stdout carries json.
@@ -304,7 +312,7 @@ async function addFromPrompt(positionals, values, ctx) {
   const prompt = target.words.join(" ").trim();
   if (!prompt) throw new UserError(`missing argument; usage: ${USAGE.add}`);
   if (target.fromCwd) ctx.out(`project \`${target.project.name}\` resolved from the current directory`);
-  return await openStore(ctx.env).jobs.addJob({ project: target.project.name, prompt, ...addLimits(values) });
+  return await openStore(ctx.env).jobs.addJob({ projectId: target.project.id, prompt, ...addLimits(values) });
 }
 
 // Refuses `--run` for an org item queued for `all`, because it starts one job and `all` fathers one per project.
@@ -329,7 +337,9 @@ async function addFromRoadmap(positionals, values, ctx) {
   if (positionals.length) throw new UserError(PROMPT_SOURCE_CONFLICT);
   refuseRunForAll(values);
   const id = requireInt("--roadmap", values.roadmap);
-  const queued = await openStore(ctx.env).roadmap.queueRoadmapItem({ id, project: values.project, ...addLimits(values) });
+  const store = openStore(ctx.env);
+  const target = await roadmapQueueTarget(store, values.project);
+  const queued = await store.roadmap.queueRoadmapItem({ id, ...target, ...addLimits(values) });
   for (const line of roadmapQueuedLines(queued)) ctx.out(line);
   return queued.jobs;
 }

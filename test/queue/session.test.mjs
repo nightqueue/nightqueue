@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { defaultContext, run } from "../../src/cli/index.mjs";
-import { addProject } from "../../src/config/projects.mjs";
+import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById } from "../../src/memory/jobs.mjs";
@@ -19,18 +19,18 @@ const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 function makeSessionHome(t, name) {
   const { checkout } = publishedCheckout(t, name);
   const env = { ...makeHome(t, name), ...gitVars() };
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path: checkout, name: "alpha" }).config, env);
+  registerCheckout(env, { path: checkout, name: "alpha" });
   return { env, checkout };
 }
 
 // A job whose row already recorded the session and attempt of its last try, at the given status.
 function jobWithSession(home, { slug, status, session, attempt, worktree = null }) {
-  const id = addJob({ project: "alpha", prompt: `work of ${slug}` }, home.env).id;
+  const id = addJob({ projectId: ensureProject(home.env, "alpha"), prompt: `work of ${slug}` }, home.env).id;
   claimJobById(id, { worker: "w1", cap: null }, home.env);
   openDb(home.env)
     .prepare("UPDATE jobs SET status = ?, slug = ?, attempts = ?, last_session_id = ?, last_session_attempt = ? WHERE id = ?")
     .run(status, slug, attempt, session, attempt, id);
-  if (worktree) recordRunFields({ project: "alpha", slug, fields: { worktree }, env: home.env });
+  if (worktree) recordRunFields({ projectId: ensureProject(home.env, "alpha"), slug, fields: { worktree }, env: home.env });
   return id;
 }
 
@@ -74,7 +74,7 @@ test("`queue session` falls back to the checkout and says so when the run's work
 test("`queue session` refuses a running job, and a pending one too", async (t) => {
   const home = makeSessionHome(t, "session-refusals");
   const running = jobWithSession(home, { slug: "running-run", status: "running", session: "sess-running", attempt: 1 });
-  const pending = addJob({ project: "alpha", prompt: "never ran" }, home.env).id;
+  const pending = addJob({ projectId: ensureProject(home.env, "alpha"), prompt: "never ran" }, home.env).id;
 
   const runningResult = await runQueueSession(home.env, ["queue", "session", String(running)]);
   assert.equal(runningResult.code, 1);
@@ -87,7 +87,7 @@ test("`queue session` refuses a running job, and a pending one too", async (t) =
 
 test("`queue session` refuses a job that recorded no session", async (t) => {
   const home = makeSessionHome(t, "session-no-session");
-  const id = addJob({ project: "alpha", prompt: "blocked before it reached the agent" }, home.env).id;
+  const id = addJob({ projectId: ensureProject(home.env, "alpha"), prompt: "blocked before it reached the agent" }, home.env).id;
   openDb(home.env).prepare("UPDATE jobs SET status = 'failed' WHERE id = ?").run(id);
 
   const result = await runQueueSession(home.env, ["queue", "session", String(id)]);

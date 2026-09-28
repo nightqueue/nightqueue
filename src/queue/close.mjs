@@ -1,10 +1,9 @@
 import { UserError } from "../config/errors.mjs";
-import { projectByName } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
 import { sameBranch } from "./branch-name.mjs";
 import { defaultCloseDeps } from "./close-deps.mjs";
 import { closedLine, parseCloseChecklist } from "./close-view.mjs";
 import { releaseJobWorktree } from "./worktree.mjs";
+import { checkoutOfJob } from "../memory/registry-access.mjs";
 
 export const CLOSE_LEASE_SLACK_S = 60;
 export const PR_CLOSED_NOTE = "pull request closed without merge";
@@ -403,7 +402,7 @@ export { conflictStep, mergeStep, preflightStep, settleStep };
 // The registered checkout of a job's project, or null when it cannot be resolved (the preflight step reports it).
 function resolveCheckout(job, env) {
   try {
-    return projectByName(loadConfig(env), job.project)?.path ?? null;
+    return checkoutOfJob(job, env);
   } catch {
     return null;
   }

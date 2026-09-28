@@ -15,7 +15,7 @@ import {
   closeStoppedLine,
   statusLabel,
 } from "../../src/queue/close-view.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const NOW = Date.parse("2026-09-21T12:00:00Z");
 const LATER = "2026-09-21T12:10:00.000Z";
@@ -40,7 +40,7 @@ async function runCli(env, argv) {
 function closeHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run(PR_URL, id);
   return { env, id };
 }
@@ -173,7 +173,7 @@ test("a closed job shows `closed` alone, in the table and in the live view, whil
 
 test("a live close runner alone never promises a pending job will be picked up", async (t) => {
   const { env, id } = closeHome(t, "close-view-workers");
-  addJob({ project: "alpha", prompt: "the next job" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "the next job" }, env);
   writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "close", jobId: id, intervalS: null, detached: false, logPath: null, runtimeDir: null }, env);
   const status = await runCli(env, ["queue", "status"]);
   assert.match(status.stdout, new RegExp(`runner: running \\(pid ${process.pid}, close, job #${id}`));

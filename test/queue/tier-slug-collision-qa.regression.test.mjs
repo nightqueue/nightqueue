@@ -7,7 +7,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { addJob, bindRunSlug, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, PR_URL } from "../../test-support/streams.mjs";
 
@@ -21,7 +21,7 @@ function operatorPrompt(brief) {
 
 // Queues one tiered job the way the operator does.
 function queueTiered(env, brief) {
-  return addJob({ project: "alpha", prompt: operatorPrompt(brief), tier: "complex" }, env).id;
+  return addJob({ projectId: ensureProject(env, "alpha"), prompt: operatorPrompt(brief), tier: "complex" }, env).id;
 }
 
 // A home with the project `alpha` registered and the fake `claude` playing the given attempts in order.
@@ -57,7 +57,7 @@ test("a second tiered job left running under a dead worker, after losing the sam
   const rowA = getJob(a, env);
   assert.equal(rowA.slug, "shared-run", "setup: job A did not bind the run name it declared");
   assert.equal(rowA.pr_url, PR_URL, "setup: job A did not finish with its pull request recorded");
-  const stateAPath = join(runDir("alpha", rowA.slug, env), "state.json");
+  const stateAPath = join(runDir(ensureProject(env, "alpha"), rowA.slug, env), "state.json");
   const bytesBefore = readFileSync(stateAPath, "utf8");
 
   // B is picked up by a second worker and, before it ever writes anything of its own, tries to name its run

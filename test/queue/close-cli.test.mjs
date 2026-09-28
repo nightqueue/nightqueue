@@ -5,7 +5,7 @@ import { defaultContext, run } from "../../src/cli/index.mjs";
 import { runnerRegistryPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { acquireClose, addJob, getJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
 import { fakeCloseDeps, mergedPr, openPr, CLOSE_PR_URL } from "../../test-support/close.mjs";
 
 const CHILD_PID = 4242;
@@ -60,7 +60,7 @@ function makeCloseHome(t, name) {
 
 // A job of `alpha` in the given status, carrying the given pull request.
 function jobIn(env, { status = "done", prUrl = PR_URL, project = "alpha", branch = "fix/worker" } = {}) {
-  const id = addJob({ project, prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, project), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ?, branch = ?, worker = 'host:1' WHERE id = ?").run(status, prUrl, branch, id);
   return id;
 }

@@ -9,7 +9,7 @@ const AGENTS = ["coder", "qa-guardian", "verifier", "triager", "explore", "archi
 const SKILL = join(ROOT, "plugin/skills/resolve/SKILL.md");
 const QA_PHASE = join(ROOT, "plugin/skills/resolve/references/qa-phase.md");
 const REPOSITORY_LINE = "Repository: [CWD PATH]";
-const PROJECT_LINE = "Project: [PROJECT — the same identifier used in RUN_DIR]";
+const PROJECT_LINE = "Project: [PROJECT — the name on the Project: line of the prompt]";
 const RUNTIME_WORK = {
   verifier: "nightqueue verify",
   explore: "nightqueue libs",

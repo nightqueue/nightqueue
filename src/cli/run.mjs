@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, runDir } from "../config/paths.mjs";
-import { projectByName } from "../config/projects.mjs";
-import { loadConfig } from "../config/store.mjs";
+import { resolveProjectRef } from "../config/projects.mjs";
 import { ghPrCreate } from "../host/gh.mjs";
+import { registeredProject } from "../memory/registry-access.mjs";
 import { runGit } from "../host/git.mjs";
 import { publishedBranchName } from "../queue/branch-name.mjs";
 import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
@@ -26,6 +26,7 @@ import { SECRETS_SWEEP_USAGE, runSecretsSweep } from "./secrets-sweep.mjs";
 const USAGE = {
   check: "nightqueue run check <NN> [--project <name> --slug <slug>]",
   commit: "nightqueue run commit --message-file <path> [--files-from <path>] [--extra <pathspec>]",
+  dir: "nightqueue run dir [--project <name> --slug <slug>]",
   log: "nightqueue run log [--json] [--project <name> --slug <slug>]",
   pr: "nightqueue run pr --body-file <path> [--title <text>] [--remove-worktree] | --template",
   "index-save": "nightqueue run index-save <artifact> [--project <name>] [--repo-root <path>]",
@@ -60,7 +61,7 @@ async function jobRun(own, values, env) {
   if (values.project !== undefined || values.slug !== undefined) refuseNamedRun(own);
   const row = await openStore(env).jobs.getJob(own);
   if (!isSafeSegment(row?.slug)) refuseMissingSlug(own);
-  return { jobId: own, project: row.project, slug: row.slug };
+  return { jobId: own, project: row.project, projectId: row.project_id, slug: row.slug };
 }
 
 // The run an operator names from outside a job, where nothing else can tell which one it is.
@@ -69,29 +70,29 @@ function operatorRun(values, env) {
   const slug = (values.slug ?? "").trim();
   if (!project || !slug) {
     throw new UserError(
-      "outside a job, `--project` (the registered NAME) and `--slug` (the `<slug>` of runs/<project>/<slug>) are both required",
+      "outside a job, `--project` (the registered NAME) and `--slug` (the `<slug>` of runs/<project_id>/<slug>) are both required",
     );
   }
   if (!isSafeSegment(slug)) {
     throw new UserError(`invalid slug \`${slug}\`: a run slug is one path segment of letters, digits and \`. _ + -\``);
   }
-  const registered = projectByName(loadConfig(env, { warn: () => {} }), project);
+  const registered = registeredProject(project, env);
   if (!registered) {
     throw new UserError(`unknown project \`${project}\`: pass the registered project NAME; list them with \`nightqueue project list\``);
   }
-  return { jobId: null, project: registered.name, slug };
+  return { jobId: null, project: registered.name, projectId: registered.id, slug };
 }
 
 // The run every `nightqueue run` subcommand acts on: the caller's own job run inside the queue, the one an operator named outside it.
 async function resolveRun(values, ctx) {
   const own = callerJobId(ctx.env);
   const run = own === null ? operatorRun(values, ctx.env) : await jobRun(own, values, ctx.env);
-  return { ...run, runDir: runDir(run.project, run.slug, ctx.env) };
+  return { ...run, runDir: runDir(run.projectId, run.slug, ctx.env) };
 }
 
 // The state.json of the run, refusing when nothing has been recorded into it yet.
-function requireRunState({ project, slug, runDir: dir }, env) {
-  const state = readRunState({ project, slug, env });
+function requireRunState({ projectId, slug, runDir: dir }, env) {
+  const state = readRunState({ projectId, slug, env });
   if (!isStateObject(state)) {
     throw new UserError(`no run recorded at ${join(dir, "state.json")}; the runtime writes it as the phases complete`);
   }
@@ -249,14 +250,14 @@ function changedFiles(cwd, gitImpl) {
 
 // The checkout of the project of a run: the directory its worktrees were created from, and the only one that may remove them.
 function projectCheckout(project, env) {
-  const registered = projectByName(loadConfig(env, { warn: () => {} }), project);
-  if (!registered) throw new UserError(`unknown project \`${project}\`: it is no longer registered, so its checkout cannot be read`);
+  const registered = registeredProject(project, env);
+  if (!registered?.path) throw new UserError(`unknown project \`${project}\`: it is no longer registered, so its checkout cannot be read`);
   return registered.path;
 }
 
 // Where the code of this run lives: the worktree the pipeline recorded, or the project's own checkout when no worktree was created.
-function worktreeOf({ project, slug }, env) {
-  const state = readRunState({ project, slug, env });
+function worktreeOf({ project, projectId, slug }, env) {
+  const state = readRunState({ projectId, slug, env });
   const recorded = isStateObject(state) && typeof state.worktree === "string" ? state.worktree.trim() : "";
   return recorded || projectCheckout(project, env);
 }
@@ -295,6 +296,15 @@ function checkArtifact(run, artifact, ctx) {
   if (artifact.sections[0] === FILE_LIST) return checkFileList(run, path, text, ctx);
   const missing = missingParts(text, artifact);
   return missing.length === 0 ? "OK" : `MISSING: ${missing.join(", ")}`;
+}
+
+// Runs `run dir`, which prints the absolute directory of THIS run: `runs/<project_id>/<slug>` under the home.
+async function runDirCommand(argv, ctx) {
+  const { values, positionals } = parseCommand(argv, RUN_OPTIONS);
+  checkArgs(positionals, { max: 0, usage: USAGE.dir });
+  const run = await resolveRun(values, ctx);
+  ctx.out(run.runDir);
+  return 0;
 }
 
 // Runs `run check`, which answers whether the artifact of a phase of THIS run is there with the sections the pipeline reads from it.
@@ -508,9 +518,9 @@ function publishBranch({ run, cwd, branch, title, bodyFile, env }) {
   const created = ghPrCreate({ title, bodyFile, head: branch, cwd, env });
   if (created.missing) throw new UserError(`\`${branch}\` is pushed, but the GitHub CLI is not installed: open the pull request by hand`);
   if (!created.ok) throw new UserError(`\`${branch}\` is pushed, but gh could not open the pull request: ${failureLine(created)}`);
-  const recorded = recordOutcome({ project: run.project, slug: run.slug, status: "done", env });
-  const prRecorded = recordPrUrl({ project: run.project, slug: run.slug, prUrl: created.url, env });
-  const branchRecorded = recordRunFields({ project: run.project, slug: run.slug, fields: { branch }, env });
+  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", env });
+  const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: created.url, env });
+  const branchRecorded = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { branch }, env });
   return { url: created.url, recorded, prRecorded, branchRecorded };
 }
 
@@ -535,7 +545,7 @@ function announceTemplate(run, cwd, ctx) {
   const template = findPrTemplate(cwd);
   ctx.out(template.source === "repo" ? `TEMPLATE: repo (${template.label})` : "TEMPLATE: nightqueue (fallback)");
   ctx.out(`HEADINGS: ${template.headings.length > 0 ? template.headings.join(" · ") : "none"}`);
-  const recorded = recordPrTemplate({ project: run.project, slug: run.slug, template, env: ctx.env });
+  const recorded = recordPrTemplate({ projectId: run.projectId, slug: run.slug, template, env: ctx.env });
   if (recorded.status !== "written") ctx.err(`nightqueue: the pull request template was not recorded on the run: ${recorded.reason}`);
   return template;
 }
@@ -558,7 +568,7 @@ async function runPr(argv, ctx) {
     ctx.out("nothing was pushed and no pull request was opened: fix the body and call `nightqueue run pr` again");
     return 1;
   }
-  const state = readRunState({ project: run.project, slug: run.slug, env: ctx.env });
+  const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const current = currentBranch(cwd, ctx.env);
   const branch = renameBranch({ cwd, current, final: publishedBranchName(current, { type: state?.type, slug: run.slug }), env: ctx.env });
   const published = await roadmapBodyFile({ bodyFile, runDir: run.runDir, jobId: callerJobId(ctx.env), store: openStore(ctx.env) });
@@ -627,8 +637,9 @@ async function runIndexSave(argv, ctx) {
   for (const line of parsed.ignoredLibs) {
     ctx.err(`nightqueue run index-save: not a \`<lib>@<version>\` entry, skipped: ${line}`);
   }
-  const saved = await openStore(ctx.env).index.saveProjectIndex({
-    project,
+  const store = openStore(ctx.env);
+  const saved = await store.index.saveProjectIndex({
+    projectId: (await resolveProjectRef(store, project))?.id ?? null,
     repoRoot,
     files: parsed.files,
     libs: parsed.libs,
@@ -640,6 +651,7 @@ async function runIndexSave(argv, ctx) {
 const SUBCOMMANDS = new Map([
   ["check", runCheck],
   ["commit", runCommit],
+  ["dir", runDirCommand],
   ["log", runLog],
   ["pr", runPr],
   ["index-save", runIndexSave],

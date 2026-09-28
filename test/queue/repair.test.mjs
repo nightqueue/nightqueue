@@ -11,7 +11,7 @@ import { getRoadmapItem, linkRoadmapItemJob, saveRoadmapItem } from "../../src/m
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { reclassifyFromLog } from "../../src/queue/repair.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import {
   attemptMarker,
   codeChangePublishedEvent,
@@ -55,7 +55,7 @@ function writeJobLog(env, id, log) {
 
 // Writes the state.json of the run, with the witness the runner left: the same wrong outcome the row carries.
 function writeRunState(env, { slug = SLUG, terminal = { status: "gate", prUrl: null, finishedAt: "2026-09-14T21:00:00Z" } } = {}) {
-  const dir = runDir("alpha", slug, env);
+  const dir = runDir(ensureProject(env, "alpha"), slug, env);
   mkdirSync(dir, { recursive: true });
   const state = { schemaVersion: 1, slug, project: "alpha", resumeCount: 0, phases: [{ phase: "triage", artifact: "01-triage.md", verdict: "ok" }], terminal };
   writeFileSync(join(dir, "state.json"), `${JSON.stringify(state, null, 2)}\n`);
@@ -64,7 +64,7 @@ function writeRunState(env, { slug = SLUG, terminal = { status: "gate", prUrl: n
 
 // A job that ended the way the bug records it: `gate`, no pull request, and its whole stream on disk.
 function finishedJob(env, { status = "gate", result = CLEAN_ENDING, log = intermediateDeliveryStream(), slug = SLUG } = {}) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(slug, id);
   finishJob(id, { worker: WORKER, status, result, noticeMd: NOTICE }, env);
@@ -74,7 +74,7 @@ function finishedJob(env, { status = "gate", result = CLEAN_ENDING, log = interm
 
 // Records a roadmap item as linked to a job, the link the repair has to move.
 function linkedItem(env, id, title) {
-  const item = saveRoadmapItem({ type: "improvement", project: "alpha", title }, env);
+  const item = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title }, env);
   assert.equal(linkRoadmapItemJob(item.id, id, env), true, "setup: the item was not linked to its job");
   return item.id;
 }
@@ -115,8 +115,8 @@ test("`queue repair` turns a job that really opened a pull request into done, an
   assert.equal(row.status, "done");
   assert.equal(row.pr_url, PR_URL);
   assert.equal(JSON.parse(row.result).reclassifiedFrom, "gate");
-  assert.deepEqual(readRunState({ project: "alpha", slug: SLUG, env }).terminal.status, "done");
-  assert.deepEqual(readRunState({ project: "alpha", slug: SLUG, env }).terminal.prUrl, PR_URL);
+  assert.deepEqual(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).terminal.status, "done");
+  assert.deepEqual(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).terminal.prUrl, PR_URL);
 
   const after = readFileSync(statePath, "utf8");
   const again = runCli(env, ["queue", "repair", String(id)]);
@@ -134,13 +134,13 @@ test("the repaired row survives the automatic reconciliation: the file and the r
   assert.equal((await reclassifyFromLog({ id, env })).to, "done");
   assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "a finished job was repaired again by the sweep");
   assert.equal(getJob(id, env).status, "done");
-  assert.equal(readRunState({ project: "alpha", slug: SLUG, env }).terminal.status, "done");
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).terminal.status, "done");
 });
 
 test("the outcome the pipeline recorded in state.json is what the repair believes, even against the stream", async (t) => {
   const env = makeQueue(t, "repair-record");
   const id = finishedJob(env, { log: gateStream({ slug: SLUG }) });
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "state.json"),
@@ -189,7 +189,7 @@ test("each refusal of `queue repair` names what is missing, and none of them wri
 
   await assert.rejects(() => reclassifyFromLog({ id: 4242, env }), /unknown job `4242`/);
 
-  const live = addJob({ project: "alpha", prompt: "still running" }, env).id;
+  const live = addJob({ projectId: ensureProject(env, "alpha"), prompt: "still running" }, env).id;
   claimJobById(live, { worker: WORKER, cap: CAP }, env);
   writeJobLog(env, live, intermediateDeliveryStream());
   await assert.rejects(() => reclassifyFromLog({ id: live, env }), /is running with a live lease/);
@@ -214,7 +214,7 @@ function gateWithNotice(body) {
 
 // Writes the state.json of a run whose pipeline recorded a summary of its own notice, the shape the whole fix is about.
 function writeSummarizedOutcome(env) {
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "state.json");
   const state = { schemaVersion: 1, slug: SLUG, phases: [], outcome: { status: "gate", notice: "Short summary the pipeline wrote.", updatedAt: "2026-09-14T21:00:00Z" } };
@@ -285,7 +285,7 @@ test("`queue repair` of a job whose QA published another branch's pull request r
     resultEvent({ text: noticeText(NOTICE) }),
   ]);
   const id = finishedJob(env, { status: "failed", result: { ...CLEAN_ENDING, status: "failed", prUrl: qaUrl }, log });
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
   const state = {
     schemaVersion: 1,

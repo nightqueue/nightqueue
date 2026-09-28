@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runDir } from "../../src/config/paths.mjs";
-import { makeHome } from "../../test-support/memory.mjs";
+import { FIXED_PROJECT_ID, makeHome } from "../../test-support/memory.mjs";
 
 // H1: `record()` (src/queue/run-state.mjs) is a plain synchronous read-modify-write of the WHOLE
 // state.json, with no lock. Its two real writers run in two different OS processes: the agent's MCP
@@ -15,14 +15,14 @@ import { makeHome } from "../../test-support/memory.mjs";
 // against the SAME state.json - never a hand-interleaved read/write inside one process.
 
 const WORKER = fileURLToPath(new URL("./fixtures/run-state-race-worker.mjs", import.meta.url));
-const RUN = { project: "alpha", slug: "fix-the-worker" };
+const RUN = { projectId: FIXED_PROJECT_ID, slug: "fix-the-worker" };
 const COUNT = 400;
 const RACE_ATTEMPTS = 5;
 
 // Spawns one real OS process running the worker script for the given writer role; resolves once it exits.
 function spawnWriter(role, env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [WORKER, role, RUN.project, RUN.slug, String(COUNT)], {
+    const child = spawn(process.execPath, [WORKER, role, RUN.projectId, RUN.slug, String(COUNT)], {
       env,
       stdio: ["ignore", "ignore", "pipe"],
     });
@@ -38,7 +38,7 @@ function spawnWriter(role, env) {
 
 // Reads the state.json a race round left behind.
 function readState(env) {
-  return JSON.parse(readFileSync(join(runDir(RUN.project, RUN.slug, env), "state.json"), "utf8"));
+  return JSON.parse(readFileSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json"), "utf8"));
 }
 
 test("the agent's phase writes and the runner's tier writes both survive a real two-process race", async (t) => {

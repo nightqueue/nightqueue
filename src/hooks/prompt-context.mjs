@@ -1,4 +1,4 @@
-import { projectFromCwd } from "../memory/project-name.mjs";
+import { projectFromCwd } from "../memory/registry-access.mjs";
 import { openStore } from "../store/open.mjs";
 import { clip, section } from "./block.mjs";
 import { lessonIdsFromRefs, nextSeq, recordInjected, seenRefs } from "./state.mjs";
@@ -38,10 +38,10 @@ function memoryLine(memory) {
 }
 
 // Lessons relevant to this prompt, skipping the ones already injected in this session.
-async function relevantLessons({ store, body, project, seen, env }) {
+async function relevantLessons({ store, body, projectId, seen, env }) {
   const rows = await store.lessons.recallLessons({
     query: body,
-    project,
+    projectId,
     limit: LESSON_QUERY_LIMIT,
     excludeIds: lessonIdsFromRefs(seen),
     deadlineMs: embedDeadline(env),
@@ -50,8 +50,8 @@ async function relevantLessons({ store, body, project, seen, env }) {
 }
 
 // Memories relevant to this prompt, skipping the ones already injected in this session.
-async function relevantMemories({ store, body, project, seen }) {
-  const rows = await store.memory.searchMemories({ query: body, project, limit: MEMORY_QUERY_LIMIT });
+async function relevantMemories({ store, body, projectId, seen }) {
+  const rows = await store.memory.searchMemories({ query: body, projectId, limit: MEMORY_QUERY_LIMIT });
   return rows.filter((row) => !seen.has(`m${row.id}`)).slice(0, MEMORY_LIMIT);
 }
 
@@ -62,13 +62,13 @@ export async function runPromptContext({ input, env = process.env }) {
   if (body.length < MIN_PROMPT) return "";
   const cwd = typeof input?.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
   const sessionId = typeof input?.session_id === "string" ? input.session_id : "unknown";
-  const project = projectFromCwd(cwd, env)?.name;
-  if (!project) return "";
+  const projectId = projectFromCwd(cwd, env)?.id;
+  if (!projectId) return "";
   nextSeq(sessionId, env);
   const seen = seenRefs(sessionId, { reinjectAfter: REINJECT_AFTER }, env);
   const store = openStore(env);
-  const lessons = await relevantLessons({ store, body, project, seen, env });
-  const memories = await relevantMemories({ store, body, project, seen });
+  const lessons = await relevantLessons({ store, body, projectId, seen, env });
+  const memories = await relevantMemories({ store, body, projectId, seen });
   const sections = [
     section("Lessons relevant to this request (apply before acting)", lessons, lessonLine),
     section("Relevant memory", memories, memoryLine),

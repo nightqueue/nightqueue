@@ -7,7 +7,7 @@ import { defaultContext, run } from "../../src/cli/index.mjs";
 import { dbShmPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const HOLDER = fileURLToPath(new URL("../../test-support/db-holder.mjs", import.meta.url));
@@ -53,7 +53,7 @@ async function runFollow(env, onTick) {
 test("a follow session never moves the shared-memory file another process is attached to, and still sees what that process wrote", async (t) => {
   const env = makeHome(t, "follow-shm-stability");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env);
 
   const holder = await startHolder(t, env);

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { runtimePackageDir } from "../../src/config/paths.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const NOTICE = "nightqueue 0.4.0 is available (installed 0.1.0) - run `nightqueue update`";
 
@@ -48,7 +48,7 @@ async function runCli(env, argv, calls) {
 
 test("queue status closes its text output with the update notice, once per invocation", async (t) => {
   const env = makeNoticeHome(t, "notice-status");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const calls = [];
 
   const table = await runCli(env, ["queue", "status"], calls);
@@ -67,7 +67,7 @@ test("queue status closes its text output with the update notice, once per invoc
 
 test("queue status --json never carries the notice, on any of its branches", async (t) => {
   const env = makeNoticeHome(t, "notice-status-json");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const calls = [];
 
   for (const argv of [["queue", "status", "--json"], ["queue", "status", String(id), "--json"]]) {
@@ -86,7 +86,7 @@ test("queue status --json never carries the notice, on any of its branches", asy
 
 test("a home with the check off, or a session inside a job, gets the plain output back", async (t) => {
   const env = makeNoticeHome(t, "notice-status-off");
-  addJob({ project: "alpha", prompt: "fix the worker" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env);
   const calls = [];
 
   const off = await runCli({ ...env, NIGHTQUEUE_NO_UPDATE_CHECK: "1" }, ["queue", "status"], calls);

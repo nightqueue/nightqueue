@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BLOCK_CODES, preflight } from "../../src/queue/preflight.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const JOB = { id: 1, project: "alpha", prompt: "fix the worker" };
 const WRITING_GIT_VERBS = ["add", "commit", "checkout", "switch", "reset", "stash", "clean", "worktree", "push", "fetch", "pull"];
@@ -26,7 +26,7 @@ function fakeBin(found) {
 }
 
 // Runs the preflight of the test job with every external answer injected.
-function check(env, { git = fakeGit(), exists = () => true, bin = fakeBin(true), job = JOB } = {}) {
+function check(env, { git = fakeGit(), exists = () => true, bin = fakeBin(true), job = { ...JOB, project_id: projectIdOf(env, "alpha") } } = {}) {
   return preflight({ job, env, gitImpl: git, existsImpl: exists, resolveBinImpl: bin });
 }
 

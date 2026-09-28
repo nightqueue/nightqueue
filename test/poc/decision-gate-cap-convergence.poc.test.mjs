@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
 import { saveDecision, saveReviewedDecision } from "../../src/memory/decisions.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 // Group A: overlapCandidates caps the raw union to GATE_CANDIDATE_LIMIT (10) BEFORE
 // reviewAndInsert filters out numbers the caller already named. With 12 real
@@ -13,7 +13,7 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // Saves a decision straight through the ungated primitive, the way a fixture seeds one.
 function seed(env, { title }) {
-  return saveDecision({ project: "alpha", title, context: "the context", decision: "the decision", status: "accepted" }, env);
+  return saveDecision({ projectId: projectIdOf(env, "alpha"), title, context: "the context", decision: "the decision", status: "accepted" }, env);
 }
 
 // How many decision rows the home holds.
@@ -35,7 +35,7 @@ test("naming every candidate of the first needs_review answer must not let overl
   const newTitle = "runner claims job overlap check";
 
   const first = await saveReviewedDecision(
-    { project: "alpha", title: newTitle, context: "the context", decision: "the decision", status: "accepted" },
+    { projectId: projectIdOf(env, "alpha"), title: newTitle, context: "the context", decision: "the decision", status: "accepted" },
     env,
   );
   assert.equal(first.needsReview, true, `expected the first save to need review, got ${JSON.stringify(first)}`);
@@ -45,7 +45,7 @@ test("naming every candidate of the first needs_review answer must not let overl
   // The caller names every candidate the FIRST answer showed - exactly what an honest operator does.
   const retry = await saveReviewedDecision(
     {
-      project: "alpha",
+      projectId: projectIdOf(env, "alpha"),
       title: newTitle,
       context: "the context",
       decision: "the decision",

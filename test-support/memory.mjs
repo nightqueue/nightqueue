@@ -1,11 +1,14 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addOrg, getOrg } from "../src/config/orgs.mjs";
-import { addProject } from "../src/config/projects.mjs";
-import { loadConfig, saveConfig } from "../src/config/store.mjs";
+import { isId } from "../src/config/ids.mjs";
+import { requireGitPath } from "../src/config/projects.mjs";
+import { loadConfig } from "../src/config/store.mjs";
+import { hasColumn } from "../src/memory/columns.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
 import { acquireClose, addJob, claimJobById, finishJob, persistRunFacts, settleClose } from "../src/memory/jobs.mjs";
+import * as registry from "../src/memory/registry.mjs";
+import { buildLegacyHome } from "./legacy-home.mjs";
 
 const OWN_ENV_KEYS = [
   "NIGHTQUEUE_HOME",
@@ -55,29 +58,78 @@ export function makeHome(t, name, { embed = false } = {}) {
   return env;
 }
 
-// Creates an org of the home, the owner an org decision or an org roadmap item is saved under.
+// Creates an org of the home through the registry, the owner an org decision or an org roadmap item is saved under.
 export function makeOrg(env, name) {
-  const config = loadConfig(env, { warn: () => {} });
-  if (getOrg(config, name)) return name;
-  saveConfig(addOrg(config, name), env);
+  const db = openDb(env);
+  if (!registry.orgByName(db, name)) registry.insertOrg(db, name);
   return name;
+}
+
+// The default org of the home: the one config.json names by id, else the earliest org.
+function defaultOrgRow(env) {
+  const db = openDb(env);
+  const named = loadConfig(env, { warn: () => {} }).defaultOrg;
+  return (isId(named) ? registry.orgById(db, named) : null) ?? registry.earliestOrg(db);
+}
+
+// The checkout path the registry holds for a project of the home, by name.
+export function projectPathOf(env, name) {
+  return registry.projectByName(openDb(env), name)?.path ?? null;
+}
+
+// The id of an org of the home, by name.
+export function orgIdOf(env, name) {
+  return registry.orgByName(openDb(env), name)?.id ?? null;
+}
+
+// A well-formed project id no home registered, for the tests of run paths that never open a database.
+export const FIXED_PROJECT_ID = "01J9Z00000000000000000000A";
+
+// The id of a project of the home, by name.
+export function projectIdOf(env, name) {
+  return registry.projectByName(openDb(env), name)?.id ?? null;
+}
+
+// The `{ projectId }` / `{ orgId }` a decision or roadmap call takes, from the `{ project }` / `{ org }` names a test writes.
+export function ownerIdsOf(env, { project, org } = {}) {
+  return {
+    ...(project === undefined ? {} : { projectId: projectIdOf(env, project) }),
+    ...(org === undefined ? {} : { orgId: orgIdOf(env, org) }),
+  };
+}
+
+// The id of a project of the home, registering it without a checkout (in the given org, else the default one) when it is missing.
+export function ensureProject(env, name, { org } = {}) {
+  const found = projectIdOf(env, name);
+  if (found) return found;
+  const orgId = org ? orgIdOf(env, makeOrg(env, org)) : defaultOrgRow(env).id;
+  return registry.insertProject(openDb(env), { name, path: null, orgId }).id;
+}
+
+// Registers an existing git checkout as a project of the home through the registry, in the org the test asks for, and answers its row.
+export function registerCheckout(env, { path, name, org } = {}) {
+  const orgId = org ? orgIdOf(env, makeOrg(env, org)) : defaultOrgRow(env).id;
+  return registry.insertProject(openDb(env), { name, path: requireGitPath(path), orgId });
+}
+
+// Takes the checkout away from a registered project, which leaves it known only from history: for the tests of a project with nowhere to run.
+export function dropCheckout(env, name) {
+  const db = openDb(env);
+  const project = registry.projectByName(db, name);
+  if (!project) throw new Error(`dropCheckout: no project \`${name}\``);
+  registry.moveProject(db, { id: project.id, path: null });
 }
 
 // Registers a temporary directory that looks like a git repository as a project of the home, in the org the test asks for.
 export function makeProject(t, env, name, { org } = {}) {
   const path = makeDir(t, `repo-${name}`);
   mkdirSync(join(path, ".git"), { recursive: true });
-  if (org) makeOrg(env, org);
-  saveConfig(addProject(loadConfig(env, { warn: () => {} }), { path, name, org }).config, env);
+  registerCheckout(env, { path, name, org });
   return path;
 }
 
-// Everything the owner scope added to the schema, undone: what a test execs to turn an open database back into the v5 shape a previous build wrote.
+// Everything the owner scope added to the schema, undone: what a `buildLegacyHome` mutate execs on the frozen v17 tables to leave the v5 shape a previous build wrote.
 export const DOWNGRADE_TO_V5 = `
-DROP INDEX decisions_org_number_idx;
-DROP INDEX roadmap_items_org_order_idx;
-DROP INDEX roadmap_items_order_idx;
-DROP INDEX decisions_job_idx;
 ALTER TABLE decisions DROP COLUMN job_id;
 ALTER TABLE decisions DROP COLUMN scope;
 ALTER TABLE decisions DROP COLUMN org;
@@ -86,18 +138,29 @@ ALTER TABLE roadmap_items DROP COLUMN org;
 PRAGMA user_version = 5;
 `;
 
+// A statement inserting a legacy job row whose first value is its project NAME: by name into a v17 `jobs`, or mapped
+// through the registry into the id-keyed `jobs` of a home that was already opened (registered) before it was turned legacy.
+function legacyJobInsert(db, columns) {
+  const byId = hasColumn(db, "jobs", "project_id");
+  const owner = byId ? "project_id" : "project";
+  const first = byId ? "(SELECT id FROM projects WHERE name = ?)" : "?";
+  const rest = columns.map(() => "?");
+  return db.prepare(`INSERT INTO jobs (${[owner, ...columns].join(", ")}) VALUES (${[first, ...rest].join(", ")})`);
+}
+
 // Re-creates what a v8 build leaves behind - the `pr_checked_at` column and rows still on the retired `merged` status -
 // so a test can drive the runtime that is supposed to migrate it and check the home landed on v9.
 export function seedLegacyV8Home(env, { rows = 1, project = "alpha" } = {}) {
-  const db = openDb(env);
-  if (!db.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "pr_checked_at")) {
-    db.exec("ALTER TABLE jobs ADD COLUMN pr_checked_at TEXT");
-  }
-  const insert = db.prepare("INSERT INTO jobs (project, prompt, status, pr_url) VALUES (?, ?, 'merged', ?)");
-  const legacyRow = (index) => insert.run(project, `legacy job ${index + 1}`, `https://github.com/acme/api/pull/${index + 1}`);
-  const ids = Array.from({ length: rows }, (_, index) => Number(legacyRow(index).lastInsertRowid));
-  db.exec("PRAGMA user_version = 8");
-  closeDb(env);
+  let ids = [];
+  buildLegacyHome(env, {
+    version: 8,
+    mutate(db) {
+      db.exec("ALTER TABLE jobs ADD COLUMN pr_checked_at TEXT");
+      const insert = legacyJobInsert(db, ["prompt", "status", "pr_url"]);
+      const legacyRow = (index) => insert.run(project, `legacy job ${index + 1}`, "merged", `https://github.com/acme/api/pull/${index + 1}`);
+      ids = Array.from({ length: rows }, (_, index) => Number(legacyRow(index).lastInsertRowid));
+    },
+  });
   return ids;
 }
 
@@ -116,7 +179,7 @@ export function mergedChecklist(prNumber = 7) {
 
 // Seeds a job that ended `done` with a pull request, through the real store writes, and answers its id.
 export function seedDoneJob(env, { project = "alpha", prompt = "seeded job", prUrl = "https://github.com/acme/api/pull/7", slug = null } = {}) {
-  const { id } = addJob({ project, prompt }, env);
+  const { id } = addJob({ projectId: ensureProject(env, project), prompt }, env);
   claimJobById(id, { worker: SEED_WORKER, cap: null }, env);
   if (slug) persistRunFacts(id, { worker: SEED_WORKER, slug }, env);
   if (!finishJob(id, { worker: SEED_WORKER, status: "done", prUrl }, env)) throw new Error(`seedDoneJob: job #${id} could not be finished`);
@@ -171,10 +234,14 @@ CREATE INDEX roadmap_items_org_order_idx ON roadmap_items(org, horizon, position
 
 // Turns the database of a home back into the v16 roadmap shape and seeds it with raw legacy rows, then closes it so the next open migrates.
 export function seedLegacyV16Roadmap(env, { items = [], jobs = [], sequence = null } = {}) {
-  const db = openDb(env);
+  buildLegacyHome(env, { version: 16, mutate: (db) => seedV16Rows(db, { items, jobs, sequence }) });
+}
+
+// The raw v16 rows of a legacy roadmap: the table rebuilt in its v16 shape, then its jobs and items as a v16 build wrote them.
+function seedV16Rows(db, { items, jobs, sequence }) {
   db.exec(LEGACY_V16_ROADMAP_DDL);
-  const insertJob = db.prepare("INSERT INTO jobs (id, project, prompt, status, result, pr_url) VALUES (?, ?, ?, ?, ?, ?)");
-  for (const job of jobs) insertJob.run(job.id, job.project, "legacy job", job.status, job.result ?? null, job.pr_url ?? null);
+  const insertJob = legacyJobInsert(db, ["id", "prompt", "status", "result", "pr_url"]);
+  for (const job of jobs) insertJob.run(job.project, job.id, "legacy job", job.status, job.result ?? null, job.pr_url ?? null);
   const insertItem = db.prepare(
     `INSERT INTO roadmap_items (id, scope, project, org, horizon, title, status, position, job_id, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -194,8 +261,6 @@ export function seedLegacyV16Roadmap(env, { items = [], jobs = [], sequence = nu
     );
   }
   if (sequence !== null) db.prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'roadmap_items'").run(sequence);
-  db.exec("PRAGMA user_version = 16");
-  closeDb(env);
 }
 
 // Embedder double with a fixed vector, so the hybrid recall never depends on the real model.

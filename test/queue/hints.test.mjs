@@ -18,7 +18,7 @@ import {
   windowWaitingLine,
 } from "../../src/queue/hints.mjs";
 import { advisoryLinesFor, startAdvisoryLines } from "../../src/queue/advisory.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const NONE = [];
 const WATCHING = [{ running: true, pid: 4242, mode: "watch" }];
@@ -40,9 +40,9 @@ test("the queue is idle only when no job holds a live lease and no runner is reg
 test("a running job whose lease died leaves the queue idle, so the backlog still gets its nudge", (t) => {
   const env = makeHome(t, "hints-orphan-lease");
   makeProject(t, env, "alpha");
-  const orphaned = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const orphaned = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(orphaned, { worker: "host:4242", cap: 4 }, env);
-  addJob({ project: "alpha", prompt: "fix the parser" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env);
 
   assert.equal(isQueueIdle({ activeJobs: countActiveJobs(env), runners: NONE }), false, "a live lease read as idle");
 

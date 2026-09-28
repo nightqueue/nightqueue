@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { getRoadmapItemDetail } from "../../src/memory/roadmap.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeDir, makeHome, makeProject, mergedChecklist } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, mergedChecklist, projectIdOf } from "../../test-support/memory.mjs";
 
 const OPEN_STORE_URL = new URL("../../src/store/open.mjs", import.meta.url).href;
 const PR_URL = "https://github.com/acme/alpha/pull/7";
@@ -96,8 +96,8 @@ function writeScripts(t) {
 }
 
 // Queues a fresh item, runs its job to `done` with a pull request and takes the close lease for `close-w`, all through the store.
-async function closingItem(store, round) {
-  const item = await store.roadmap.saveRoadmapItem({ type: "bug", project: "alpha", title: `settle race ${round}` });
+async function closingItem(store, env, round) {
+  const item = await store.roadmap.saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "alpha"), title: `settle race ${round}` });
   const { job } = await store.roadmap.queueRoadmapItem({ id: item.id });
   assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }), `round ${round}: setup: the job was not claimed`);
   assert.equal(await store.jobs.finishJob(job.id, { worker: "w1", status: "done", prUrl: PR_URL }), true, `round ${round}: setup: not finished`);
@@ -114,7 +114,7 @@ test("a settleClose racing retries, cancels and sweeps in other processes closes
   const checklist = mergedChecklist();
 
   for (let round = 0; round < ROUNDS; round += 1) {
-    const { item, job } = await closingItem(store, round);
+    const { item, job } = await closingItem(store, env, round);
     const [settler, retrier, sweeper] = await Promise.all([
       runRacer(scripts.settler, env, [job.id, SETTLE_DELAY_MS, JSON.stringify(checklist)]),
       runRacer(scripts.retrier, env, [job.id, SPIN_MS]),

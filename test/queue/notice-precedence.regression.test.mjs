@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { jobLogPath, logsDir, runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob, getJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { GATE_MARKER, noticeText, resultEvent, slugEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
@@ -64,7 +64,7 @@ function writeJobLog(env, id) {
 
 // Writes the state.json the pipeline itself recorded: the outcome carries the SAME short summary the row got, job #28's exact shape.
 function writeSummarizedOutcome(env) {
-  const dir = runDir("alpha", SLUG, env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "state.json");
   const state = {
@@ -79,7 +79,7 @@ function writeSummarizedOutcome(env) {
 
 // A job seeded exactly the way the bug left it: the row's notice_md is the short summary, the log and state.json both carry the long notice.
 function seedBuggyJob(env) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
   finishJob(id, { worker: WORKER, status: "gate", result: CLEAN_ENDING, noticeMd: SHORT_SUMMARY }, env);

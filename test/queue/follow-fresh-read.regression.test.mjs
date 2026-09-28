@@ -7,7 +7,7 @@ import { defaultContext, run } from "../../src/cli/index.mjs";
 import { dbPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject, mergedChecklist } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, mergedChecklist } from "../../test-support/memory.mjs";
 
 // These tests guard the READ PATH of a long-lived follow: every poll reads on a connection opened for that
 // poll alone. They cannot reproduce the `-shm` split that makes a long-held connection actually answer stale
@@ -67,7 +67,7 @@ function writeThroughOwnConnection(env, statements) {
 test("a job finished by another connection between two polls renders done, with its pull request, in the later snapshot", async (t) => {
   const env = makeHome(t, "follow-fresh-read-done");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
 
   let ticks = 0;
@@ -96,10 +96,10 @@ test("a job finished by another connection between two polls renders done, with 
 test("a job closed by another connection during a running follow renders closed in a later snapshot", async (t) => {
   const env = makeHome(t, "follow-fresh-read-closed");
   makeProject(t, env, "alpha");
-  const delivered = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const delivered = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(delivered, { worker: "host:1", cap: 4 }, env);
   finishJob(delivered, { worker: "host:1", status: "done", prUrl: PR_URL }, env);
-  const waiting = addJob({ project: "alpha", prompt: "write the changelog" }, env).id;
+  const waiting = addJob({ projectId: ensureProject(env, "alpha"), prompt: "write the changelog" }, env).id;
 
   let ticks = 0;
   const result = await runFollow(env, () => {
@@ -122,7 +122,7 @@ test("a job closed by another connection during a running follow renders closed 
 test("no poll of a follow session prepares the queue view's statements on the process-wide cached connection", async (t) => {
   const env = makeHome(t, "follow-fresh-read-spy");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   finishJob(id, { worker: "host:1", status: "done", prUrl: PR_URL }, env);
 

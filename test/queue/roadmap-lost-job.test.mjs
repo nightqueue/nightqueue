@@ -5,7 +5,7 @@ import { cancelJob, getJob } from "../../src/memory/jobs.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
 import { getRoadmapItem, queueRoadmapItem, queueableRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, failureStream, gateStream } from "../../test-support/streams.mjs";
 
@@ -19,7 +19,7 @@ function fakeGit() {
 function makeItemHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  const item = saveRoadmapItem({ type: "improvement", project: "alpha", title: "deliver the thing" }, env);
+  const item = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "deliver the thing" }, env);
   return { env, item };
 }
 

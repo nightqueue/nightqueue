@@ -79,14 +79,23 @@ function acquireSync(path, { timeoutMs, staleAfterMs }) {
   }
 }
 
+const heldByThisProcess = new Set();
+
+// Releases a lock this process took.
+function release(path) {
+  heldByThisProcess.delete(path);
+  rmSync(path, { recursive: true, force: true });
+}
+
 // Runs the action with exclusion between processes over the same NIGHTQUEUE_HOME.
 export async function withLock(env, action, { timeoutMs = ACQUIRE_TIMEOUT_MS, staleAfterMs = STALE_AFTER_MS } = {}) {
   const path = lockPath(env);
   await acquire(path, { timeoutMs, staleAfterMs });
+  heldByThisProcess.add(path);
   try {
     return await action();
   } finally {
-    rmSync(path, { recursive: true, force: true });
+    release(path);
   }
 }
 
@@ -95,9 +104,26 @@ export function withLockSync(path, action, { timeoutMs = ACQUIRE_TIMEOUT_MS, sta
   if (!acquireSync(path, { timeoutMs, staleAfterMs })) {
     throw new UserError(`another nightqueue process is holding \`${path}\`; try again in a moment, or remove it if no other nightqueue is running`);
   }
+  heldByThisProcess.add(path);
   try {
     return action();
   } finally {
-    rmSync(path, { recursive: true, force: true });
+    release(path);
+  }
+}
+
+// Runs a SYNCHRONOUS action under a lock only when it is free or already held by this process, telling whether it ran; a busy lock skips it.
+export function runIfLockFree(path, action, { timeoutMs = 250, staleAfterMs = STALE_AFTER_MS } = {}) {
+  if (heldByThisProcess.has(path)) {
+    action();
+    return true;
+  }
+  if (!acquireSync(path, { timeoutMs, staleAfterMs })) return false;
+  heldByThisProcess.add(path);
+  try {
+    action();
+    return true;
+  } finally {
+    release(path);
   }
 }

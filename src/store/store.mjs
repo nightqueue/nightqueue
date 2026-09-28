@@ -9,8 +9,8 @@
  * MCP server - takes its store from `withReadOnlyStore(env, fn)` and never from `openStore(env)`.
  *
  * A method's name is the exported name of the `src/memory/` function it delegates to, verbatim.
- * The only exceptions are the names the contract fixes: `jobs.listWithSlug`, `jobs.status`,
- * `orgs.rename`, `orgs.usage`, `health` and `close`.
+ * The only exceptions are the names the contract fixes: `jobs.listWithSlug`, `jobs.status`, the
+ * `orgs` and `projects` registry domains, `health` and `close`.
  */
 
 /**
@@ -20,7 +20,7 @@
  * follows nothing, a failure of the follow never costs the job write, and `sweepOrphans` re-syncs,
  * on every claim cycle, whatever a missed event left behind (`roadmap.followDriftedJobs`).
  * @typedef {object} JobsDomain
- * @property {(spec: object) => Promise<object>} addJob a `slug` binds the job to a run, refused in the same transaction while a job not yet closed is bound to it
+ * @property {(spec: object) => Promise<object>} addJob the job's project by `projectId`; a `slug` binds the job to a run, refused in the same transaction while a job not yet closed is bound to it
  * @property {(spec: object) => Promise<object|null>} claimNextJob
  * @property {(id: number, spec: object) => Promise<object|null>} claimJobById
  * @property {(id: number, spec: object) => Promise<boolean>} releaseJob
@@ -40,7 +40,7 @@
  * @property {() => Promise<Record<string, number>>} countsByStatus
  * @property {() => Promise<number>} countPendingBlocked pending jobs a preflight block is holding back
  * @property {() => Promise<number>} countActiveJobs
- * @property {() => Promise<{project: string, count: number}[]>} countActiveJobsByProject
+ * @property {() => Promise<{projectId: string, project: string, count: number}[]>} countActiveJobsByProject
  * @property {() => Promise<number|null>} firstActiveJobId
  * @property {(id: number) => Promise<boolean>} isJobActive
  * @property {(id: number, terminal: object) => Promise<boolean>} repairJobFromWitness
@@ -123,14 +123,14 @@
 /**
  * @typedef {object} RoadmapDomain
  * @property {(id: number) => Promise<object|null>} getRoadmapItem
- * @property {(id: number, options?: {viewer?: string|null}) => Promise<object>} getRoadmapItemDetail one item untruncated with its comment thread; a project viewer reads only what its project sees
+ * @property {(id: number, options?: {viewer?: string|null}) => Promise<object>} getRoadmapItemDetail one item untruncated with its comment thread; a project viewer (by id) reads only what its project sees
  * @property {(item?: object) => Promise<object>} saveRoadmapItem `type` is required
  * @property {(id: number, patch?: object) => Promise<object>} updateRoadmapItem a move back from review or done appends `reopened`, signed by `patch.author` (the operator by default)
- * @property {(spec: {id: number, body: string, author?: string, viewer?: string|null}) => Promise<object>} addRoadmapComment appends a `note`; comments are append-only
+ * @property {(spec: {id: number, body: string, author?: string, viewer?: string|null}) => Promise<object>} addRoadmapComment (viewer: a project id) appends a `note`; comments are append-only
  * @property {(jobId: number) => Promise<string|null>} roadmapRefOfJob `<owner>#<id>` of the item a job was queued from, or null
  * @property {(options?: {dryRun?: boolean}) => Promise<{items: number, written: number, skipped: number}>} backfillRoadmap the one-off synthesis of the comments of items linked before comments existed; idempotent
  * @property {(owner: object, filters?: {status?: string[], priority?: number[], type?: string[]}) => Promise<object>} listRoadmap every item the owner sees, in workflow order, then org first, then priority (1 first) and position; an org item carries `project_status` (a project's own row) or `projects` (the org's matrix)
- * @property {(spec: {query?: string, file?: string, project?: string, org?: string, limit?: number}) => Promise<object[]>} searchRoadmap up to five items the owner sees matching the text or a file path its jobs touched
+ * @property {(spec: {query?: string, file?: string, projectId?: string|null, orgId?: string, limit?: number}) => Promise<object[]>} searchRoadmap up to five items the owner sees matching the text or a file path its jobs touched
  * @property {(id: number) => Promise<object>} queueableRoadmapItem
  * @property {(id: number, jobId: number) => Promise<boolean>} linkRoadmapItemJob links an open item to its job and moves it to `in_progress`; false means a concurrent caller linked it first
  * @property {(jobId: number) => Promise<number>} followJob moves the items and org project rows linked to a job by what its current row means, re-deriving each org item; idempotent, it returns how many moved
@@ -141,10 +141,28 @@
  */
 
 /**
+ * The registry of orgs: an org is a row with an id and a renamable name.
  * @typedef {object} OrgsDomain
- * @property {(from: string, to: string) => Promise<void>} rename both tables in one transaction
- * @property {(name: string) => Promise<{table: string, total: number}[]>} usage what the org still owns
- * @property {() => Promise<{org: string, total: number}[]>} rowCountsByOrg raw counts, no config filtering
+ * @property {() => Promise<object[]>} list every org, earliest first
+ * @property {(name: string) => Promise<object|null>} byName
+ * @property {(id: string) => Promise<object|null>} byId
+ * @property {(name: string) => Promise<object>} add
+ * @property {(id: string, name: string) => Promise<object>} rename one row: every table owns rows by the org id
+ * @property {(id: string) => Promise<object>} remove refused while a project or a row still belongs to it
+ */
+
+/**
+ * The registry of projects: a project is a row with an id, a renamable name, an org and an optional checkout path.
+ * @typedef {object} ProjectsDomain
+ * @property {() => Promise<object[]>} list every project, path-less ones included, with its org name
+ * @property {(name: string) => Promise<object|null>} byName
+ * @property {(id: string) => Promise<object|null>} byId
+ * @property {(cwd: string) => Promise<object|null>} at the project whose checkout contains the directory
+ * @property {(orgId: string) => Promise<object[]>} ofOrg
+ * @property {(spec: {name: string, path: string|null, orgId: string}) => Promise<object>} add
+ * @property {(id: string, name: string) => Promise<object>} rename one row: every table owns rows by the project id
+ * @property {(id: string, spec: {orgId?: string, path?: string|null}) => Promise<object>} move
+ * @property {(id: string) => Promise<object>} remove refused while a row still belongs to it
  */
 
 /**
@@ -166,6 +184,7 @@
  * @property {DecisionsDomain} decisions
  * @property {RoadmapDomain} roadmap
  * @property {OrgsDomain} orgs
+ * @property {ProjectsDomain} projects
  * @property {() => Promise<StoreHealth>} health
  * @property {() => Promise<void>} connect opens the connection now, for the caller that needs it to exist before it reads anything
  * @property {() => Promise<void>} close releases this instance; a read-write one never closes the shared connection
@@ -273,7 +292,8 @@ export const STORE_CONTRACT = Object.freeze({
     "buildRoadmapPrompt",
     "queueRoadmapItem",
   ],
-  orgs: ["rename", "usage", "rowCountsByOrg"],
+  orgs: ["list", "byName", "byId", "add", "rename", "remove"],
+  projects: ["list", "byName", "byId", "at", "ofOrg", "add", "rename", "move", "remove"],
   "": ["health", "connect", "close", "checkpoint", "migrateIfOutdated"],
 });
 
@@ -305,7 +325,14 @@ export const READ_ONLY_METHODS = Object.freeze([
   "roadmap.getRoadmapItemDetail",
   "roadmap.roadmapDrift",
   "roadmap.searchRoadmap",
-  "orgs.rowCountsByOrg",
+  "orgs.list",
+  "orgs.byName",
+  "orgs.byId",
+  "projects.list",
+  "projects.byName",
+  "projects.byId",
+  "projects.at",
+  "projects.ofOrg",
   "health",
   "close",
   "migrateIfOutdated",

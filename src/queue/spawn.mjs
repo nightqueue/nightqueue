@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { homeDir, runDir } from "../config/paths.mjs";
-import { BASH_TIMEOUT_DEFAULT, NAME_RE } from "../config/schema.mjs";
+import { BASH_TIMEOUT_DEFAULT } from "../config/schema.mjs";
 import { claudeConfigDir, packageRoot } from "../host/paths.mjs";
 import { jobSettings } from "../host/settings.mjs";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
@@ -13,7 +13,7 @@ import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "./home-guard.mjs";
 import { briefBody } from "./operator-run.mjs";
 import { holdJobAwake } from "./keep-awake.mjs";
 import { PLUGIN_DIR_ENV } from "./orchestrator-scope.mjs";
-import { isSafeSegment, rerunLines } from "./resume.mjs";
+import { isRunPath, isSafeSegment, rerunLines } from "./resume.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 
 // Silence of the stream that means a dead process: no event at all for this long ends the attempt.
@@ -198,12 +198,12 @@ export function provisionalSlug(job) {
 // A job whose row carries no run yet keeps the older protocol, which is the only way such a pipeline can bind its slug.
 function runLines(job, env) {
   const project = String(job?.project ?? "");
-  if (!NAME_RE.test(project) || !isSafeSegment(job?.slug)) {
+  if (!isRunPath(job?.project_id, job?.slug) || !isPromptLine(project)) {
     return ["Print `QUEUE_SLUG: <slug>` alone on a line as soon as the slug exists."];
   }
   return [
     `Project: ${project}`,
-    `RUN_DIR: ${runDir(project, job.slug, env)}`,
+    `RUN_DIR: ${runDir(job.project_id, job.slug, env)}`,
     "Use that RUN_DIR as it comes; to rename the run, print `SLUG: <slug> TYPE: <type>` alone on a line ONCE, before writing any artifact into it.",
   ];
 }
@@ -212,6 +212,11 @@ function runLines(job, env) {
 function isControlChar(char) {
   const code = char.codePointAt(0);
   return code < 32 || code === 127;
+}
+
+// Whether a value prints as one prompt line of its own: not empty and free of any control character.
+function isPromptLine(value) {
+  return value.trim() !== "" && ![...value].some(isControlChar);
 }
 
 // One field of a pull request as the prompt prints it: a single capped line, so text written by whoever opened the pull

@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const JOBS_MODULE_URL = new URL("../../src/memory/jobs.mjs", import.meta.url).href;
 const WRITERS = 4;
@@ -15,12 +15,12 @@ function buildBinderSource(moduleUrl) {
   return [
     `import { addJob } from ${JSON.stringify(moduleUrl)};`,
     "",
-    "const [, , slugCount] = process.argv;",
+    "const [, , slugCount, projectId] = process.argv;",
     "const bound = [];",
     "const errors = [];",
     "for (let index = 0; index < Number(slugCount); index += 1) {",
     "  try {",
-    "    addJob({ project: 'alpha', prompt: '## Brief\\nfix it', slug: `run-${index}` }, process.env);",
+    "    addJob({ projectId, prompt: '## Brief\\nfix it', slug: `run-${index}` }, process.env);",
     "    bound.push(`run-${index}`);",
     "  } catch (err) {",
     "    errors.push(String(err && err.message ? err.message : err));",
@@ -31,9 +31,9 @@ function buildBinderSource(moduleUrl) {
 }
 
 // Spawns one real OS process racing the others to bind the same run slugs.
-function runBinder(scriptPath, env) {
+function runBinder(scriptPath, env, projectId) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, String(SLUGS)], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [scriptPath, String(SLUGS), projectId], { env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -51,7 +51,8 @@ test(`${WRITERS} real OS processes binding the same ${SLUGS} run slugs leave exa
   const scriptPath = join(makeDir(t, "run-bind-race-script"), "run-bind-writer.mjs");
   writeFileSync(scriptPath, buildBinderSource(JOBS_MODULE_URL), "utf8");
 
-  const results = await Promise.all(Array.from({ length: WRITERS }, () => runBinder(scriptPath, env)));
+  const projectId = ensureProject(env, "alpha");
+  const results = await Promise.all(Array.from({ length: WRITERS }, () => runBinder(scriptPath, env, projectId)));
   const reports = results.map((result) => {
     assert.equal(result.code, 0, result.stderr);
     return JSON.parse(result.stdout);
@@ -61,7 +62,7 @@ test(`${WRITERS} real OS processes binding the same ${SLUGS} run slugs leave exa
     for (const message of report.errors) assert.match(message, /^job #\d+ already runs from /);
   }
   assert.equal(reports.flatMap((report) => report.bound).length, SLUGS);
-  const rows = openDb(env).prepare("SELECT slug, COUNT(*) AS jobs FROM jobs WHERE project = 'alpha' GROUP BY slug").all();
+  const rows = openDb(env).prepare("SELECT slug, COUNT(*) AS jobs FROM jobs WHERE project_id = ? GROUP BY slug").all(projectId);
   assert.equal(rows.length, SLUGS);
   for (const row of rows) assert.equal(row.jobs, 1, `run ${row.slug} is bound to ${row.jobs} jobs`);
 });

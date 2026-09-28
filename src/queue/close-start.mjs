@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { logsDir } from "../config/paths.mjs";
-import { projectByName } from "../config/projects.mjs";
 import { ensureHome, loadConfig } from "../config/store.mjs";
 import { packageRoot, spawnRoot } from "../host/paths.mjs";
 import { closeRefusal } from "../memory/jobs.mjs";
@@ -17,6 +16,7 @@ import { compactStamp } from "./runner.mjs";
 import { runClosePipeline, CLOSE_LEASE_SLACK_S } from "./close.mjs";
 import { CLOSE_WORKER_ENV } from "./close-deps.mjs";
 import { parseCloseChecklist } from "./close-view.mjs";
+import { checkoutOfJob } from "../memory/registry-access.mjs";
 
 export { CLOSE_LEASE_SLACK_S, CLOSE_WORKER_ENV };
 
@@ -44,7 +44,8 @@ export function closeWorkerId() {
 
 // The registered checkout of a job's project, refusing an unregistered project or a checkout that is gone.
 function projectCheckout(job, env) {
-  const project = projectByName(loadConfig(env), job.project);
+  const checkout = checkoutOfJob(job, env);
+  const project = checkout ? { path: checkout } : null;
   if (!project) throw new UserError(`job \`${job.id}\` belongs to project \`${job.project}\`, which is not registered; run \`nightqueue project list\``);
   if (!existsSync(project.path)) throw new UserError(`the checkout of project \`${job.project}\` is missing: ${project.path}`);
   return project.path;

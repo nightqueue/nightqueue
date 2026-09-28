@@ -7,7 +7,7 @@ import { ensureHome } from "../../src/config/store.mjs";
 import { updateNoticeLine } from "../../src/host/update-notice.mjs";
 import { runSessionStart } from "../../src/hooks/session-start.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const NOW = Date.parse("2026-09-10T12:00:00.000Z");
 
@@ -77,7 +77,7 @@ test("the session block ends with the notice, and with nothing new when the chec
   const env = makeNoticeHome(t, "notice-session");
   const repo = makeProject(t, env, "alpha");
   saveLesson(
-    { project: "alpha", title: "the worker leaks a file descriptor", root_cause: "it throws", solution: "fix it", prevention: "close it in a finally block" },
+    { projectId: projectIdOf(env, "alpha"), title: "the worker leaks a file descriptor", root_cause: "it throws", solution: "fix it", prevention: "close it in a finally block" },
     env,
   );
   const calls = [];

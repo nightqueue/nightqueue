@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { writeRunTerminal } from "../../src/queue/resume.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const WORKER = "host:1000";
@@ -39,7 +39,7 @@ function payloadOf(result) {
 
 // Enqueues a job, claims it and records the slug of its run: the row a runner owns while it works.
 function runningJob(env, { slug = SLUG } = {}) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(slug, id);
   return id;
@@ -53,7 +53,7 @@ function expireLease(env, id) {
 // Writes the witness a runner leaves next to the run once it has finished the job.
 function witness(env, { slug = SLUG, status = "done", prUrl = PR_URL } = {}) {
   return writeRunTerminal({
-    project: "alpha",
+    projectId: ensureProject(env, "alpha"),
     slug,
     terminal: { status, prUrl, finishedAt: FINISHED_AT, writtenBy: WRITTEN_BY, pid: 4242 },
     env,

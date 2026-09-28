@@ -5,7 +5,7 @@ import { ensureHome } from "../../src/config/store.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { runCycle, runDrain } from "../../src/queue/runner.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream } from "../../test-support/streams.mjs";
 
@@ -49,7 +49,7 @@ function makeRunnerHome(t, name, { projects = ["alpha"] } = {}) {
 
 test("a runner whose runtime directory is gone claims nothing, says so and leaves the queue untouched", async (t) => {
   const { env, runtimeDir } = makeRunnerHome(t, "runtime-gone-idle");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const stderr = captureStderr(t);
   rmSync(runtimeDir, { recursive: true, force: true });
 
@@ -64,8 +64,8 @@ test("a runner whose runtime directory is gone claims nothing, says so and leave
 
 test("a runtime that disappears mid-run lets the job in flight finish, and stops the runner before the next one", async (t) => {
   const { env, runtimeDir } = makeRunnerHome(t, "runtime-gone-in-flight", { projects: ["alpha", "beta"] });
-  const running = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
-  const next = addJob({ project: "beta", prompt: "fix the parser" }, env).id;
+  const running = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
+  const next = addJob({ projectId: ensureProject(env, "beta"), prompt: "fix the parser" }, env).id;
   captureStderr(t);
   const gitImpl = fakeGit(() => rmSync(runtimeDir, { recursive: true, force: true }));
 

@@ -7,16 +7,16 @@ import { sessionStatePath } from "../../src/hooks/state.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
 import { getLesson, saveLesson } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 // Stores one lesson of the project, returning its id.
 function addLesson(env, { project = "alpha", title, prevention = "always close the descriptor in a finally block" }) {
-  return saveLesson({ project, title, root_cause: `${title} happened`, solution: "fix it", prevention }, env).id;
+  return saveLesson({ projectId: projectIdOf(env, project), title, root_cause: `${title} happened`, solution: "fix it", prevention }, env).id;
 }
 
 // Stores one accepted decision of the project, the only status the recall brings back.
 function addDecision(env, { project = "alpha", title, decision }) {
-  return saveDecision({ project, title, context: `${title} had to be settled`, decision, status: "accepted" }, env);
+  return saveDecision({ projectId: projectIdOf(env, project), title, context: `${title} had to be settled`, decision, status: "accepted" }, env);
 }
 
 // Lines of one section of the block, from its heading to the next blank line.
@@ -37,7 +37,7 @@ test("the session block lists the lessons and the memory of the project", async 
   const env = makeHome(t, "hook-start-block");
   const repo = makeProject(t, env, "alpha");
   const id = addLesson(env, { title: "the worker leaks a file descriptor on failure" });
-  saveMemory({ project: "alpha", key: "deploy", value: "the deployment runs from the pipeline" }, env);
+  saveMemory({ projectId: projectIdOf(env, "alpha"), key: "deploy", value: "the deployment runs from the pipeline" }, env);
 
   const block = await runSessionStart({ input: { session_id: "s1", cwd: repo }, env });
   assert.match(block, /^# Nightqueue context/);
@@ -90,7 +90,7 @@ test("the session block opens with the standing decisions of the project", async
   addLesson(env, { title: "the worker leaks a file descriptor on failure" });
   const accepted = addDecision(env, { title: "state.json is written by the runtime", decision: "only run-state.mjs writes it" });
   const proposed = saveDecision(
-    { project: "alpha", title: "the queue runs on postgres", context: "still open", decision: "nothing settled yet" },
+    { projectId: projectIdOf(env, "alpha"), title: "the queue runs on postgres", context: "still open", decision: "nothing settled yet" },
     env,
   );
 
@@ -125,7 +125,7 @@ test("a large corpus keeps the standing decisions and the lessons inside the bud
     addLesson(env, { title: `lesson number ${i}`, prevention: `always close the descriptor ${"in a finally block ".repeat(40)}` });
   }
   for (let i = 0; i < 10; i += 1) {
-    saveMemory({ project: "alpha", key: `memory-${i}`, value: `the deployment runs from the pipeline ${i}` }, env);
+    saveMemory({ projectId: projectIdOf(env, "alpha"), key: `memory-${i}`, value: `the deployment runs from the pipeline ${i}` }, env);
   }
 
   const block = await runSessionStart({ input: { session_id: "s1", cwd: repo }, env });
@@ -180,10 +180,10 @@ test("a working directory outside every registered project leaks nothing into th
   const env = makeHome(t, "hook-start-outside");
   makeProject(t, env, "alpha");
   addLesson(env, { title: "the alpha worker leaks a file descriptor on failure" });
-  saveMemory({ project: "alpha", key: "deploy", value: "the deployment runs from the pipeline" }, env);
+  saveMemory({ projectId: projectIdOf(env, "alpha"), key: "deploy", value: "the deployment runs from the pipeline" }, env);
   saveLesson(
     {
-      project: null,
+      projectId: null,
       title: "a global lesson about the fun\u00e7\u00e3o that never closes",
       root_cause: "the early return skipped the close",
       solution: "close it in a finally block",

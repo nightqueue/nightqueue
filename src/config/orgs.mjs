@@ -1,74 +1,66 @@
 import { UserError } from "./errors.mjs";
-import { assertName, emptyMap, emptySlots } from "./schema.mjs";
+import { isId } from "./ids.mjs";
+import { assertName, emptySlots } from "./schema.mjs";
 
-// This module is pure over the config object: it mutates and returns the same object, without I/O.
+// The org edge: names resolved to registry rows through a store, and the config's bindings keyed by org id.
 
-// Returns an org entry, or null when it does not exist.
-export function getOrg(config, name) {
-  return config?.orgs?.[name] ?? null;
-}
-
-// Returns the required org, listing the existing ones when it is missing.
-export function requireOrg(config, name) {
-  const org = getOrg(config, name);
+// The registered org with that name; an unknown one is refused, listing the existing orgs (a null store is an empty registry).
+export async function requireOrg(store, name) {
+  const org = store && typeof name === "string" && name ? await store.orgs.byName(name) : null;
   if (org) return org;
-  const existing = Object.keys(config?.orgs ?? {});
-  throw new UserError(`unknown org \`${name}\`; existing orgs: ${existing.length ? existing.join(", ") : "(none)"}`);
+  const existing = store ? (await store.orgs.list()).map((entry) => entry.name) : [];
+  throw new UserError(`unknown org \`${name ?? ""}\`; existing orgs: ${existing.length ? existing.join(", ") : "(none)"}`);
 }
 
-// Counts the projects bound to an org.
-function countProjects(config, name) {
-  return Object.values(config.projects).filter((project) => project.org === name).length;
+// The default org of the home: the one config.json names (by id, or by name before the v18 strip), else the earliest org.
+export async function defaultOrg(store, config) {
+  const named = config?.defaultOrg;
+  const found = typeof named === "string" && named ? await (isId(named) ? store.orgs.byId(named) : store.orgs.byName(named)) : null;
+  if (found) return found;
+  const [earliest] = await store.orgs.list();
+  if (!earliest) throw new UserError("the registry has no org; run `nightqueue setup` to create the default one");
+  return earliest;
 }
 
-// Lists the orgs with display name, connection slots and project count.
-export function listOrgs(config) {
-  return Object.entries(config.orgs).map(([name, org]) => ({
-    name,
-    displayName: org.displayName,
-    isDefault: name === config.defaultOrg,
-    connections: { ...org.connections },
-    projects: countProjects(config, name),
+// The connection slots config.json binds to an org id, one per supported type.
+export function slotsOf(config, orgId) {
+  return { ...emptySlots(), ...(config?.orgConnections?.[orgId] ?? {}) };
+}
+
+// Lists the orgs with the default marker, the connection slots and the project count.
+export async function listOrgs(store, config) {
+  const fallback = await defaultOrg(store, config);
+  const projects = await store.projects.list();
+  return (await store.orgs.list()).map((org) => ({
+    id: org.id,
+    name: org.name,
+    isDefault: org.id === fallback.id,
+    connections: slotsOf(config, org.id),
+    projects: projects.filter((project) => project.org_id === org.id).length,
   }));
 }
 
 // Creates a new org.
-export function addOrg(config, name, { displayName } = {}) {
+export async function addOrg(store, name) {
   assertName("org", name);
-  if (config.orgs[name]) throw new UserError(`org \`${name}\` already exists`);
-  config.orgs[name] = { displayName: displayName || name, connections: emptySlots() };
-  return config;
+  if (await store.orgs.byName(name)) throw new UserError(`org \`${name}\` already exists`);
+  return await store.orgs.add(name);
 }
 
-// Rewrites a map replacing one key, keeping the original key order.
-function renameKey(map, oldKey, newKey) {
-  const next = emptyMap();
-  for (const [key, value] of Object.entries(map)) next[key === oldKey ? newKey : key] = value;
-  return next;
-}
-
-// Renames an org preserving position, display name, slots, projects and the default org.
-export function renameOrg(config, oldName, newName) {
-  requireOrg(config, oldName);
+// Renames an org: one registry row, so every binding, project and default keyed by its id follows.
+export async function renameOrg(store, oldName, newName) {
+  const org = await requireOrg(store, oldName);
   assertName("org", newName);
   if (oldName === newName) throw new UserError(`org \`${oldName}\` already has that name`);
-  if (config.orgs[newName]) throw new UserError(`org \`${newName}\` already exists`);
-  config.orgs = renameKey(config.orgs, oldName, newName);
-  for (const project of Object.values(config.projects)) {
-    if (project.org === oldName) project.org = newName;
-  }
-  if (config.defaultOrg === oldName) config.defaultOrg = newName;
-  return config;
+  if (await store.orgs.byName(newName)) throw new UserError(`org \`${newName}\` already exists`);
+  return await store.orgs.rename(org.id, newName);
 }
 
-// Removes an org that is neither the default one nor pointed at by any project.
-export function removeOrg(config, name) {
-  requireOrg(config, name);
-  if (name === config.defaultOrg) throw new UserError(`cannot remove org \`${name}\`: it is the default org`);
-  const used = Object.keys(config.projects).filter((project) => config.projects[project].org === name);
-  if (used.length) {
-    throw new UserError(`cannot remove org \`${name}\`: ${used.length} project(s) still point to it: ${used.join(", ")}`);
-  }
-  delete config.orgs[name];
+// Removes an org that is not the default one; the registry refuses one still owning projects or rows, and the config drops its bindings.
+export async function removeOrg(store, config, name) {
+  const org = await requireOrg(store, name);
+  if (org.id === (await defaultOrg(store, config)).id) throw new UserError(`cannot remove org \`${name}\`: it is the default org`);
+  await store.orgs.remove(org.id);
+  if (config.orgConnections) delete config.orgConnections[org.id];
   return config;
 }
