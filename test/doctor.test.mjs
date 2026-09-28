@@ -368,8 +368,8 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, expected v18/);
-  assert.match(database.hint, /upgrade nightqueue/);
+  assert.match(database.detail, /schema v99, newer than this nightqueue \(v18\): update nightqueue \/ restart the client that runs the old version/);
+  assert.match(database.hint, /inspect/);
 });
 
 test("the keep awake check is a plain no-op outside macOS, whatever the configured mode", async (t) => {
