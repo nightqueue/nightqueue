@@ -693,6 +693,28 @@ export function cancelJob(id, { reason } = {}, env = process.env) {
   throw new UserError(cancelRefusal(jobId, getJob(jobId, env)));
 }
 
+// Cancels a running job this worker still owns in one write, straight from `running` so no claim can take it in between, giving the attempt back; null when the row moved on.
+export function cancelRunningJob(id, { worker, reason } = {}, env = process.env) {
+  const db = openDb(env);
+  const statement = db.prepare(
+    `UPDATE jobs
+        SET result = json_set(${RESULT_OBJECT_BASE}, '$.cancelledFrom', status),
+            status = 'cancelled',
+            finished_at = COALESCE(finished_at, datetime('now')),
+            operator_note = COALESCE(?, operator_note),
+            attempts = MAX(0, attempts - 1),
+            worker = NULL,
+            lease_until = NULL,
+            close_status = NULL,
+            close_worker = NULL,
+            close_lease_until = NULL
+      WHERE id = ? AND status = 'running' AND worker = ? AND close_status IS NOT 'closing'
+      RETURNING *, json_extract(result, '$.cancelledFrom') AS cancelled_from`,
+  );
+  const row = withWriteRetry(() => statement.get(optionalText(reason), requireId(id), requireText("worker", worker)));
+  return row ? { ...jobView(withProjectFacts(openDb(env), row)), cancelled_from: row.cancelled_from ?? null } : null;
+}
+
 // Explains, from the current row, why a retry was refused; it never decides anything, only phrases it.
 function retryRefusal(id, row, { note } = {}) {
   if (!row) return `unknown job \`${id}\``;

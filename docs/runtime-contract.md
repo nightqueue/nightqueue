@@ -173,7 +173,7 @@ default. `queue_status` answers `runners` with every live runner, and keeps `run
 alias of the first for one release. `queue_status`, `queue_run` and `queue_retry` also answer
 `advisories`, the advisory lines described in [Queue](queue.md); they never block a start.
 
-The twenty-seven MCP tools, with the parameters `nightqueue mcp` actually accepts:
+The twenty-eight MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -187,8 +187,9 @@ The twenty-seven MCP tools, with the parameters `nightqueue mcp` actually accept
 | `queue_add` | `project?` (for an org roadmap item: a project of the org, or `all`), `prompt?`, `roadmap_item_id?`, `cwd?`, `register?`, `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`) |
 | `queue_status` | `job_id?`, `limit?` (1-50) |
 | `queue_run` | `job_id?` |
+| `queue_stop` | `pid?` |
 | `queue_session` | `job_id` |
-| `queue_cancel` | `job_id`, `reason?` |
+| `queue_cancel` | `job_id`, `reason?`, `stop?`, `release_worktree?` |
 | `queue_close` | `job_id`, `force?` |
 | `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` |
 | `decision_save` | `project`, `title`, `context`, `decision`, `consequences?`, `status?` (`proposed`, `accepted`, `superseded`, `rejected`; default `accepted`) |
@@ -259,6 +260,12 @@ job, worktree }` - `worktree` is `{ path, status, reason? }` when cancelling a `
 job released (`removed`) or kept (`kept`, with the reason) its worktree, and `null` otherwise; it
 refuses a job running under a live lease, or one whose close is in flight or was interrupted, without
 writing anything (an interrupted close is resumed with `queue_close`, never cancelled blind).
+With `stop: true` it cancels a job running on a live registered runner of this host in one
+owner-checked write and then stops that runner alone, answering `runner` (`{ outcome, pid,
+message }`, null for a job that was not running); `release_worktree: true`, valid only with
+`stop`, releases the worktree once that runner is gone. `queue_stop` ends every registered runner,
+or with `pid` only that one, like `nightqueue queue run --stop`, and answers `{ ok, runners }`.
+Both are refused inside a job (see [Queue](queue.md)).
 `queue_close` starts the same DETACHED closing pipeline as `nightqueue queue close <id>` (the CLI
 also offers `nightqueue queue close --merged`, which closes every `done` job whose pull request is
 merged in one call), and `queue_retry` sends a gated, failed or cancelled job back to the queue - its

@@ -363,12 +363,25 @@ async function stopRecords(records, { killImpl, sleepImpl, pollMs, timeoutMs }) 
   return records.map((record) => reports.get(record));
 }
 
-// Ends the runner registered under one pid, refusing a registration of another user: there the refusal IS the answer.
-export async function stopRunner({ pid, env = process.env, killImpl = killProcess, sleepImpl = sleep, pollMs = STOP_POLL_MS, timeoutMs = STOP_TIMEOUT_MS } = {}) {
+// Finds the registration of one pid, refusing a registry that cannot be listed.
+function registeredRecord(pid, env, killImpl) {
   const records = listRunnerRecords(env, killImpl);
   const error = registryReadError(records);
   if (error !== null) throw unreadableRegistry(error, env);
-  const record = records.find((candidate) => candidate.info?.pid === pid) ?? null;
+  return records.find((candidate) => candidate.info?.pid === pid) ?? null;
+}
+
+// Ends the runner registered under one pid when there is one; no registration is an answer (`absent`), and a registration of another user is reported, never signalled.
+export async function stopRunnerIfRegistered({ pid, env = process.env, killImpl = killProcess, sleepImpl = sleep, pollMs = STOP_POLL_MS, timeoutMs = STOP_TIMEOUT_MS } = {}) {
+  const record = registeredRecord(pid, env, killImpl);
+  if (!record) return { outcome: "absent", pid };
+  const [report] = await stopRecords([record], { killImpl, sleepImpl, pollMs, timeoutMs });
+  return report;
+}
+
+// Ends the runner registered under one pid, refusing a registration of another user: there the refusal IS the answer.
+export async function stopRunner({ pid, env = process.env, killImpl = killProcess, sleepImpl = sleep, pollMs = STOP_POLL_MS, timeoutMs = STOP_TIMEOUT_MS } = {}) {
+  const record = registeredRecord(pid, env, killImpl);
   if (!record) throw new UserError(`no runner is registered with pid ${pid}`);
   if (record.status === "foreign") refuseForeignRecord(record);
   const [report] = await stopRecords([record], { killImpl, sleepImpl, pollMs, timeoutMs });

@@ -7,6 +7,7 @@ import {
   adoptClose,
   bindRunSlug,
   cancelJob,
+  cancelRunningJob,
   failClose,
   listCloses,
   noteCloseWorktree,
@@ -387,6 +388,45 @@ test("cancel accepts a pending job and an orphan, and refuses a live run without
   assert.equal(cancelled.status, "cancelled");
   assert.equal(cancelled.worker, null);
   assert.deepEqual(JSON.parse(getJob(running, env).result), { cancelledFrom: "running" });
+});
+
+test("cancelRunningJob takes a running job its worker owns straight to cancelled and gives the attempt back", (t) => {
+  const env = makeQueue(t, "jobs-cancel-running");
+  const id = enqueue(env);
+  claimJobById(id, { worker: WORKER, cap: CAP }, env);
+  const attemptsBefore = getJob(id, env).attempts;
+
+  const cancelled = cancelRunningJob(id, { worker: WORKER, reason: "brief changed" }, env);
+  assert.equal(cancelled.status, "cancelled");
+  assert.equal(cancelled.cancelled_from, "running");
+
+  const row = getJob(id, env);
+  assert.equal(row.status, "cancelled");
+  assert.equal(row.attempts, attemptsBefore - 1, "the attempt of the cancelled run was not given back");
+  assert.equal(row.worker, null);
+  assert.equal(row.lease_until, null);
+  assert.notEqual(row.finished_at, null);
+  assert.equal(row.operator_note, "brief changed");
+  assert.deepEqual(JSON.parse(row.result), { cancelledFrom: "running" });
+});
+
+test("cancelRunningJob writes nothing to a row another worker owns or that is not running", (t) => {
+  const env = makeQueue(t, "jobs-cancel-running-moved");
+  const otherOwner = enqueue(env);
+  claimJobById(otherOwner, { worker: OTHER_WORKER, cap: CAP }, env);
+  const pending = enqueue(env);
+  const done = enqueue(env);
+  claimJobById(done, { worker: WORKER, cap: CAP }, env);
+  finishJob(done, { worker: WORKER, status: "done", result: { status: "done", prUrl: null } }, env);
+  const gate = enqueue(env);
+  claimJobById(gate, { worker: WORKER, cap: CAP }, env);
+  finishJob(gate, { worker: WORKER, status: "gate", result: { status: "gate", prUrl: null } }, env);
+
+  for (const id of [otherOwner, pending, done, gate]) {
+    const before = getJob(id, env);
+    assert.equal(cancelRunningJob(id, { worker: WORKER, reason: "too late" }, env), null);
+    assert.deepEqual(getJob(id, env), before, `the refused compare-and-set wrote to a ${before.status} job`);
+  }
 });
 
 test("cancel accepts a gated job, keeps its original finished_at and records where it came from", (t) => {
