@@ -10,6 +10,7 @@ import { jobSettings } from "../host/settings.mjs";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { escapePromptMarkers } from "../memory/prompt-safety.mjs";
 import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "./home-guard.mjs";
+import { briefBody } from "./operator-run.mjs";
 import { holdJobAwake } from "./keep-awake.mjs";
 import { PLUGIN_DIR_ENV } from "./orchestrator-scope.mjs";
 import { isSafeSegment, rerunLines } from "./resume.mjs";
@@ -147,9 +148,40 @@ function resumeBlock(handoff) {
 // How many words of the prompt a provisional slug is built from, enough to tell two jobs apart while staying one readable path segment.
 const PROVISIONAL_SLUG_WORDS = 6;
 
-// A run slug derived from the prompt of a job, so the run directory exists from the first attempt even if the pipeline never names itself.
+// How many suffixed variants of a provisional slug are tried before the job falls back to its own id.
+const SLUG_SUFFIXES = 9;
+// Longest run slug a path segment accepts.
+const MAX_SLUG_CHARS = 80;
+// A runtime header line the operator writes above the brief, which says nothing about the task itself.
+const RUNTIME_HEADER = /^\s*tier(\s+raised)?\s*:/i;
+
+// The prompt text without its leading blank and runtime-header lines.
+function withoutRuntimeHeader(text) {
+  const lines = String(text ?? "").split("\n");
+  const first = lines.findIndex((line) => line.trim() !== "" && !RUNTIME_HEADER.test(line));
+  return first < 0 ? "" : lines.slice(first).join("\n");
+}
+
+// The text a provisional slug is taken from: the brief of the prompt when it has one, the whole prompt otherwise, never a runtime header.
+function slugSource(prompt) {
+  const brief = withoutRuntimeHeader(briefBody(prompt));
+  return brief.trim() ? brief : withoutRuntimeHeader(prompt);
+}
+
+// The slugs a job may bind its run to, in order: the base, its numbered variants, then one derived from the job id.
+export function slugCandidates(base, id) {
+  const variants = [base];
+  for (let n = 2; n <= SLUG_SUFFIXES; n += 1) {
+    const suffix = `-${n}`;
+    variants.push(`${String(base ?? "").slice(0, MAX_SLUG_CHARS - suffix.length)}${suffix}`);
+  }
+  variants.push(`job-${id}`);
+  return variants.filter(isSafeSegment);
+}
+
+// A run slug derived from the brief of a job, so the run directory exists from the first attempt even if the pipeline never names itself.
 export function provisionalSlug(job) {
-  const words = String(job?.prompt ?? "")
+  const words = slugSource(job?.prompt)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim()

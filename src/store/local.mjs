@@ -101,6 +101,7 @@ function jobsMethods(env, db) {
     countAttempt: async (id, spec) => jobs.countAttempt(id, spec, env),
     sweepOrphans: async (options) => sweepAndFollow(env, options),
     persistRunFacts: async (id, facts) => jobs.persistRunFacts(id, facts, env),
+    bindRunSlug: async (id, spec) => jobs.bindRunSlug(id, spec, env),
     linkPipelineRun: async (jobId, ref) => jobs.linkPipelineRun(jobId, ref, env),
     finishJob: async (id, outcome) => jobs.finishJob(id, outcome, env),
     cancelJob: async (id, options) => jobs.cancelJob(id, options, env),

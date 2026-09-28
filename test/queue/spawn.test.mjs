@@ -17,6 +17,7 @@ import {
   pluginDir,
   provisionalSlug,
   resolveClaudeBin,
+  slugCandidates,
   spawnClaude,
 } from "../../src/queue/spawn.mjs";
 import { isControlLine } from "../../src/queue/stream.mjs";
@@ -213,6 +214,29 @@ test("the provisional slug is the prompt in kebab, at most six words, and never 
   for (const prompt of ["../../etc/passwd", "-- --dangerous flag", "fix the worker"]) {
     assert.equal(isSafeSegment(provisionalSlug({ id: 7, prompt })), true, `\`${prompt}\` derived an unsafe run directory`);
   }
+});
+
+test("the provisional slug comes from the brief, never from the runtime header the operator writes above it", () => {
+  const header = "Tier: complex (set by the operator - the pipeline may only raise it, with evidence, never lower it)";
+  const operator = `${header}\n\n## Brief\nSlug derivation ignores the tier header entirely\n\n## Success criteria\n- two jobs, two runs`;
+  assert.equal(provisionalSlug({ id: 7, prompt: operator }), "slug-derivation-ignores-the-tier-header");
+  assert.equal(provisionalSlug({ id: 7, prompt: `${header}\nTier raised: complex\n\nfix the worker of the queue` }), "fix-the-worker-of-the-queue");
+  const fenced = "```\n## Brief\nwords inside a fence\n```\nfix the worker";
+  assert.equal(provisionalSlug({ id: 7, prompt: fenced }), "brief-words-inside-a-fence-fix", "a `## Brief` inside a fence was read as the brief");
+  assert.equal(provisionalSlug({ id: 7, prompt: `${header}\n\n## Brief\n\n## Next\nfix it` }), "brief-next-fix-it", "an empty brief should fall back to the prompt");
+});
+
+test("the slug candidates are the base, its numbered variants and the job id, every one a safe segment", () => {
+  assert.deepEqual(slugCandidates("fix-the-worker", 7), [
+    "fix-the-worker",
+    ...[2, 3, 4, 5, 6, 7, 8, 9].map((n) => `fix-the-worker-${n}`),
+    "job-7",
+  ]);
+  const long = "a".repeat(79);
+  const candidates = slugCandidates(long, 7);
+  assert.equal(candidates.length, 10);
+  assert.equal(candidates[1], `${"a".repeat(78)}-2`);
+  for (const slug of candidates) assert.equal(isSafeSegment(slug), true, `\`${slug}\` is not a safe segment`);
 });
 
 test("a resumable run carries the named handoff block, with the seven fields the runtime decided", () => {

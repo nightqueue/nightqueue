@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmdirSync } from "node:fs";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, logsDir, runDir } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
@@ -28,9 +28,9 @@ import {
 import { holdRunnerAwake } from "./keep-awake.mjs";
 import { killProcess, ownRunnerRecord } from "./registry.mjs";
 import { runMaintenance } from "./maintenance.mjs";
-import { clearRunOutcome, decideResume, isRunPath, isSafeSegment, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
+import { clearRunOutcome, decideResume, isRunPath, isSafeSegment, ownRunState, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
 import { recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
-import { buildPrompt, IDLE_TIMEOUT_S, provisionalSlug, spawnClaude } from "./spawn.mjs";
+import { buildPrompt, IDLE_TIMEOUT_S, provisionalSlug, slugCandidates, spawnClaude } from "./spawn.mjs";
 import { orchestratorRoots, sessionTranscriptPath } from "./orchestrator-scope.mjs";
 import {
   extractBaselineCtx,
@@ -129,22 +129,47 @@ async function shouldStop(job, ctx, ownership) {
 async function captureSlug(job, facts, line, { store, env }) {
   const slug = extractSlugFromEventLine(line);
   if (!slug || slug === facts.slug || !isSafeSegment(slug)) return;
-  facts.slug = slug;
-  const branch = readRunState({ project: job.project, slug, env })?.branch ?? null;
-  await store.jobs.persistRunFacts(job.id, { worker: job.worker, slug, branch });
-}
-
-// Moves the run of this job onto the slug the pipeline declared; a name another run already took is refused, and the job keeps the slug the runtime gave it.
-async function adoptSlug(job, facts, slug, { store, env }) {
-  if (slug === facts.slug) return;
-  const renamed = renameRunDir({ project: job.project, from: facts.slug, to: slug, env });
-  if (renamed.status === "kept") {
-    appendJobLog(job.id, `the run keeps the slug \`${facts.slug}\`: it could not be renamed to \`${slug}\` (${renamed.reason})`, env);
+  const bound = await store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] });
+  if (bound.status !== "bound") {
+    appendJobLog(job.id, `the run keeps \`${facts.slug ?? "no slug"}\`: \`${slug}\` is not free (${slugRefusal(bound)})`, env);
     return;
   }
   facts.slug = slug;
+  await persistBranch(job, slug, { store, env });
+}
+
+// Why a slug claim was refused, phrased for the job log.
+function slugRefusal(bound) {
+  if (bound.status !== "taken") return "the job is no longer ours";
+  return Number.isInteger(bound.heldBy) ? `job #${bound.heldBy} holds it` : "every candidate is already on disk";
+}
+
+// Records the branch the state of a run registered, once the job is bound to that run.
+async function persistBranch(job, slug, { store, env }) {
   const branch = readRunState({ project: job.project, slug, env })?.branch ?? null;
-  await store.jobs.persistRunFacts(job.id, { worker: job.worker, slug, branch });
+  if (branch) await store.jobs.persistRunFacts(job.id, { worker: job.worker, branch });
+}
+
+// Binds the row back to the slug its files never left; a refused revert is said out loud, and the witness then refuses the mismatched row.
+async function revertSlugClaim(job, slug, { store, env }) {
+  const reverted = await store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] });
+  if (reverted.status === "bound") return;
+  appendJobLog(job.id, `WARNING: the row could not be bound back to \`${slug}\` (${slugRefusal(reverted)}): it names a run directory this run never wrote; the run stays in \`${slug}\``, env);
+}
+
+// Moves the run of this job onto the slug the pipeline declared; a name another job or run already took is refused, and the job keeps the slug the runtime gave it.
+async function adoptSlug(job, facts, slug, { store, env }) {
+  if (slug === facts.slug) return;
+  const keep = (reason) => appendJobLog(job.id, `the run keeps the slug \`${facts.slug}\`: it could not be renamed to \`${slug}\` (${reason})`, env);
+  const claimed = await store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] });
+  if (claimed.status !== "bound") return keep(slugRefusal(claimed));
+  const renamed = renameRunDir({ project: job.project, from: facts.slug, to: slug, env });
+  if (renamed.status === "kept") {
+    await revertSlugClaim(job, facts.slug, { store, env });
+    return keep(renamed.reason);
+  }
+  facts.slug = slug;
+  await persistBranch(job, slug, { store, env });
 }
 
 // Records the task type the pipeline declared with its slug; a state that refuses the write is said out loud and never costs the run.
@@ -402,11 +427,15 @@ function noteWitnessFailure(jobId, reason, env) {
 // Writes the witness of the outcome next to the run: the durable record the database is verified against.
 // The witness comes from the outcome the runner holds in memory, never from the row: when the finish itself
 // failed to commit, the row still says `running`, and the witness is exactly what the reconciliation needs then.
-async function writeWitness(job, outcome, { store, env }) {
+async function writeWitness(job, { outcome, runSlug }, { store, env }) {
   try {
     const row = await store.jobs.getJob(job.id);
     const slug = row?.slug ?? job.slug;
     if (!slug) return;
+    if (isSafeSegment(runSlug) && slug !== runSlug) {
+      noteWitnessFailure(job.id, `the row names the run \`${slug}\` but this run lives in \`${runSlug}\`; no witness is written into a directory that is not this run's`, env);
+      return;
+    }
     const written = writeRunTerminal({
       project: row?.project ?? job.project,
       slug,
@@ -416,6 +445,7 @@ async function writeWitness(job, outcome, { store, env }) {
         finishedAt: row?.status === outcome.status && row?.finished_at ? sqliteToIso(row.finished_at) : new Date().toISOString(),
         writtenBy: packageRoot(),
         pid: process.pid,
+        jobId: job.id,
       },
       env,
     });
@@ -559,7 +589,7 @@ async function finalize(job, run, ctx) {
   // The witness is written when the row took the finish AND when the database refused the commit - the second case is exactly
   // what the reconciliation repairs from. A finish that returned false means the row is no longer ours (another worker owns
   // it): no witness then, or the reconciliation would close a job someone else is still running.
-  if (finish.written || finish.error) await writeWitness(job, outcome, ctx);
+  if (finish.written || finish.error) await writeWitness(job, { outcome, runSlug: run.facts.slug }, ctx);
   if (finish.written) await store.checkpoint();
   if (finish.written && run.outcome.status === "done" && worktree?.removable) await dropRunWorktree(job, worktree, ctx);
   const status = finish.written ? run.outcome.status : finish.error ? "unrecorded" : "lost";
@@ -592,14 +622,55 @@ function logOperatorReruns(job, handoff, env) {
 }
 
 // The job with the run it writes into already named: the slug of its row, or a provisional one derived from its prompt and
-// persisted before the spawn, so the run directory exists from the first attempt and a retry finds it again.
-async function withRunSlug(job, { store, env }) {
+// claimed before the spawn, so the run directory exists from the first attempt and a retry finds it again. A slug another
+// job holds, or whose directory is already on disk, is never taken: the claim moves on to the next free variant.
+async function withRunSlug(job, ctx) {
   if (isSafeSegment(job.slug)) return job;
-  const slug = provisionalSlug(job);
-  if (!(await store.jobs.persistRunFacts(job.id, { worker: job.worker, slug }))) {
-    appendJobLog(job.id, `the provisional slug \`${slug}\` could not be persisted on the row of the job`, env);
+  const base = provisionalSlug(job);
+  const bound = await claimFreshRunSlug(job, slugCandidates(base, job.id), ctx);
+  if (bound.status === "bound") return { ...job, slug: bound.slug };
+  appendJobLog(job.id, `the provisional slug \`${base}\` could not be bound to the job (${slugRefusal(bound)}); the run names itself`, ctx.env);
+  return job;
+}
+
+// Walks the candidates, creating each run directory before binding it: only a directory this job created itself is ever its run.
+async function claimFreshRunSlug(job, candidates, ctx) {
+  let refusal = { status: "taken", heldBy: null };
+  for (const slug of candidates) {
+    const created = claimRunDir(job, slug, ctx.env);
+    if (created === "exists") continue;
+    refusal = await ctx.store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] });
+    if (refusal.status === "bound") return refusal;
+    if (created === "created") releaseRunDir(job, slug, ctx.env);
+    if (refusal.status === "lost") return refusal;
   }
-  return { ...job, slug };
+  return refusal;
+}
+
+// Creates the leaf of a candidate run directory only when nothing is there yet, so its creation proves the run is this job's; an existing one is logged and skipped.
+function claimRunDir(job, slug, env) {
+  const dir = runDir(job.project, slug, env);
+  try {
+    mkdirSync(dirname(dir), { recursive: true });
+    mkdirSync(dir);
+    return "created";
+  } catch (err) {
+    if (err?.code === "EEXIST") {
+      appendJobLog(job.id, `the run directory \`${slug}\` already exists on disk and was not created by this run: the job does not take it`, env);
+      return "exists";
+    }
+    appendJobLog(job.id, `the run directory could not be created before the session: ${err?.message ?? String(err)}`, env);
+    return "failed";
+  }
+}
+
+// Gives back the empty run directory of a candidate the job created but could not bind; one somebody already wrote into stays where it is.
+function releaseRunDir(job, slug, env) {
+  try {
+    rmdirSync(runDir(job.project, slug, env));
+  } catch (err) {
+    appendJobLog(job.id, `the run directory \`${slug}\` could not be given back after its slug was refused: ${err?.message ?? String(err)}`, env);
+  }
 }
 
 // Creates the run directory before the spawn, so the session never runs `mkdir` itself; a failure is logged and never costs the job.
@@ -649,7 +720,7 @@ async function runJob(claimed, ctx) {
   const openPrs = await openPrsForJob(claimed, { env, deps });
   const job = await withRunSlug(claimed, ctx);
   ensureRunDir(job, env);
-  const state = readRunState({ project: job.project, slug: job.slug, env });
+  const state = ownRunState({ project: job.project, slug: job.slug, jobId: job.id, env });
   const resume = decideResume({ state });
   const handoff = resumeHandoff({ job, resume, state, env });
   if (handoff) persistResume(job, resume.resumeCount, env);

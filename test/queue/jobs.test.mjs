@@ -5,6 +5,7 @@ import {
   acquireClose,
   addJob,
   adoptClose,
+  bindRunSlug,
   cancelJob,
   failClose,
   listCloses,
@@ -253,6 +254,35 @@ test("the run facts are written once each and never by a worker that lost the jo
   persistRunFacts(id, { worker: WORKER, branch: null, slug: null, sessionId: null }, env);
   const row = getJob(id, env);
   assert.deepEqual({ slug: row.slug, sessionId: row.session_id, branch: row.branch }, { slug: "fix-the-worker", sessionId: "sess-abc12345", branch: null });
+});
+
+test("persistRunFacts refuses a slug another job of the project holds, whatever its status, and accepts it in another project", (t) => {
+  const env = makeQueue(t, "jobs-facts-slug-held");
+  const holder = addJob({ project: "alpha", prompt: "fix the worker", slug: "fix-the-worker" }, env).id;
+  cancelJob(holder, {}, env);
+  const same = enqueue(env);
+  const other = enqueue(env, { project: "beta" });
+  claimJobById(same, { worker: WORKER, cap: CAP }, env);
+  claimJobById(other, { worker: WORKER, cap: CAP }, env);
+  assert.equal(persistRunFacts(same, { worker: WORKER, slug: "fix-the-worker" }, env), false, "two jobs of one project were bound to one run");
+  assert.equal(getJob(same, env).slug, null);
+  assert.equal(persistRunFacts(other, { worker: WORKER, slug: "fix-the-worker" }, env), true);
+  assert.equal(persistRunFacts(same, { worker: WORKER, sessionId: "sess-abc12345" }, env), true, "a fact with no slug was refused");
+});
+
+test("bindRunSlug claims the first candidate no other job of the project holds, and refuses a worker that lost the job", (t) => {
+  const env = makeQueue(t, "jobs-bind-slug");
+  addJob({ project: "alpha", prompt: "fix the worker", slug: "fix-the-worker" }, env);
+  const id = enqueue(env);
+  claimJobById(id, { worker: WORKER, cap: CAP }, env);
+  assert.deepEqual(bindRunSlug(id, { worker: OTHER_WORKER, candidates: ["fix-the-worker-2"] }, env), { status: "lost" });
+  assert.deepEqual(bindRunSlug(id, { worker: WORKER, candidates: ["fix-the-worker", "fix-the-worker-2"] }, env), { status: "bound", slug: "fix-the-worker-2" });
+  assert.equal(getJob(id, env).slug, "fix-the-worker-2");
+  assert.deepEqual(bindRunSlug(id, { worker: WORKER, candidates: ["fix-the-worker-2"] }, env), { status: "bound", slug: "fix-the-worker-2" }, "a job was refused its own slug");
+  const taken = bindRunSlug(id, { worker: WORKER, candidates: ["fix-the-worker"] }, env);
+  assert.equal(taken.status, "taken");
+  assert.equal(getJob(id, env).slug, "fix-the-worker-2");
+  assert.throws(() => bindRunSlug(id, { worker: WORKER, candidates: ["../etc"] }, env), /invalid `slug`/);
 });
 
 test("persistRunFacts overwrites the last session and its attempt every time a new one is given, unlike the first session it never changes again", (t) => {

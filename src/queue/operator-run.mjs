@@ -90,6 +90,15 @@ function briefEnd(lines) {
   return brief < 0 ? -1 : lines.length;
 }
 
+// The text of the `## Brief` section of a prompt, found outside any fenced block, or null when the prompt carries none.
+export function briefBody(prompt) {
+  const lines = String(prompt ?? "").split("\n");
+  const end = briefEnd(lines);
+  if (end < 0) return null;
+  const start = unfencedEntries(lines).find(([, line]) => BRIEF_HEADING.test(line))[0];
+  return lines.slice(start + 1, end).join("\n");
+}
+
 // The prompt with the prior-run block placed right after its `## Brief` section; a prompt already carrying one outside a fence, or without a brief, is refused.
 export function withPriorRun(prompt, block) {
   const lines = String(prompt ?? "").split("\n");

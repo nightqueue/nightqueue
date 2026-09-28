@@ -4,6 +4,7 @@ import { dbPath } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { closeMigrationPending, migrateCloseColumns } from "./close-migration.mjs";
 import { addColumnIfMissing, dropColumnIfPresent } from "./columns.mjs";
+import { migrateSharedSlugs, sharedSlugPending } from "./shared-slug-migration.mjs";
 import {
   COMMENT_KINDS,
   DEFAULT_ROADMAP_TYPE,
@@ -500,6 +501,7 @@ function migrate(db) {
   dropColumnIfPresent(db, "jobs", "merged_at");
   dropColumnIfPresent(db, "jobs", "merge_sha");
   if (closeMigrationPending(db)) inTransaction(db, () => migrateCloseColumns(db));
+  if (sharedSlugPending(db)) inTransaction(db, () => migrateSharedSlugs(db));
   const rebuilt = rebuildRoadmapItemsIfLegacy(db);
   db.exec(INDEXES);
   db.exec(FTS);

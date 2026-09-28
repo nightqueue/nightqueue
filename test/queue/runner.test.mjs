@@ -13,6 +13,7 @@ import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { agentRuns, DRAIN_INTERVAL_S, runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../../src/queue/runner.mjs";
 import { provisionalSlug } from "../../src/queue/spawn.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
+import { openStore } from "../../src/store/open.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { agentToolUseEvent, assistantEvent, codeChangePublishedEvent, doneStream, failureStream, gateStream, noticeText, PR_URL, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, slugTypeEvent, systemInitEvent, taskNotificationEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
@@ -212,17 +213,17 @@ test("a run whose subagent stayed in the foreground (is_backgrounded: false) nev
   assert.equal(getJob(id, env).notice_md, "the pull request is open");
 });
 
-test("the runner leaves the witness of the outcome next to the run, with its five keys and the tree it loaded from", async (t) => {
+test("the runner leaves the witness of the outcome next to the run, with its six keys, the tree it loaded from and the job it speaks for", async (t) => {
   const { env } = makeRunnerHome(t, "runner-witness", [{ stdout: doneStream(), exitCode: 0 }]);
   const id = enqueue(env);
 
   await runJobCycle(env, id);
 
   const state = JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8"));
-  assert.deepEqual(Object.keys(state.terminal), ["status", "prUrl", "finishedAt", "writtenBy", "pid"]);
+  assert.deepEqual(Object.keys(state.terminal), ["status", "prUrl", "finishedAt", "writtenBy", "pid", "jobId"]);
   assert.deepEqual(
-    { status: state.terminal.status, prUrl: state.terminal.prUrl, writtenBy: state.terminal.writtenBy, pid: state.terminal.pid },
-    { status: "done", prUrl: PR_URL, writtenBy: packageRoot(), pid: process.pid },
+    { status: state.terminal.status, prUrl: state.terminal.prUrl, writtenBy: state.terminal.writtenBy, pid: state.terminal.pid, jobId: state.terminal.jobId },
+    { status: "done", prUrl: PR_URL, writtenBy: packageRoot(), pid: process.pid, jobId: id },
   );
   assert.equal(state.terminal.finishedAt, sqliteToIso(getJob(id, env).finished_at));
 });
@@ -779,7 +780,7 @@ test("the run is opened before the spawn, and the ONE declaration of the pipelin
     resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
   ]);
   const { env, planPath } = makeRunnerHome(t, "runner-slug-override", [{ stdout, exitCode: 0 }]);
-  const id = enqueue(env);
+  const id = addJob({ project: "alpha", prompt: PROMPT, slug: SLUG }, env).id;
   const provisional = runDir("alpha", SLUG, env);
   mkdirSync(provisional, { recursive: true });
   writeFileSync(join(provisional, "01-triage.md"), "the artifact of the provisional run\n");
@@ -831,6 +832,67 @@ test("a slug another run of the project already took is refused, and the job kee
   assert.equal(readFileSync(join(runDir("alpha", taken, env), "state.json"), "utf8"), other, "the run of the other job was written into");
   assert.equal(JSON.parse(readFileSync(join(runDir("alpha", SLUG, env), "state.json"), "utf8")).type, "bug/error");
   assert.match(readFileSync(jobLogPath(id, env), "utf8"), /the run keeps the slug `fix-the-worker`: it could not be renamed to `fix-the-worker-of-the-queue`/);
+});
+
+test("a rename that is kept and whose revert bind is refused is said out loud, and no witness goes into the directory the row wrongly names", async (t) => {
+  const taken = "fix-the-worker-of-the-queue";
+  const stdout = toNdjson([systemInitEvent(), slugTypeEvent(taken, "bug/error"), resultEvent({ text: `Done. Pull request: ${PR_URL}` })]);
+  const { env } = makeRunnerHome(t, "runner-slug-revert-refused", [{ stdout, exitCode: 0 }]);
+  const id = enqueue(env);
+  const other = `{"schemaVersion":1,"slug":"${taken}","phases":[]}\n`;
+  mkdirSync(runDir("alpha", taken, env), { recursive: true });
+  writeFileSync(join(runDir("alpha", taken, env), "state.json"), other);
+  const jobs = openStore(env).jobs;
+  const realBind = jobs.bindRunSlug;
+  jobs.bindRunSlug = async (jobId, spec) => {
+    const claimedTaken = (await jobs.getJob(jobId))?.slug === taken;
+    return claimedTaken && spec.candidates[0] === SLUG ? { status: "taken", heldBy: 999 } : realBind(jobId, spec);
+  };
+
+  await runJobCycle(env, id);
+
+  const log = readFileSync(jobLogPath(id, env), "utf8");
+  assert.equal(getJob(id, env).slug, taken, "setup failed: the refused revert should leave the row on the declared slug");
+  assert.match(log, new RegExp(`WARNING: the row could not be bound back to \`${SLUG}\` \\(job #999 holds it\\)`));
+  assert.match(log, new RegExp(`could not write the terminal witness: the row names the run \`${taken}\` but this run lives in \`${SLUG}\``));
+  assert.equal(readFileSync(join(runDir("alpha", taken, env), "state.json"), "utf8"), other, "the witness was stamped into a directory this run never wrote");
+});
+
+test("a fresh job creates its run directory before binding its slug, and skips a directory already on disk with a line in its log", async (t) => {
+  const stdout = toNdjson([systemInitEvent(), assistantEvent(noticeText(), { messageId: "msg_notice" }), resultEvent({ text: `Done. Pull request: ${PR_URL}` })]);
+  const { env } = makeRunnerHome(t, "runner-run-dir-claim", [{ stdout, exitCode: 0 }]);
+  const id = enqueue(env);
+  mkdirSync(runDir("alpha", SLUG, env), { recursive: true });
+  const jobs = openStore(env).jobs;
+  const realBind = jobs.bindRunSlug;
+  const seen = [];
+  jobs.bindRunSlug = async (jobId, spec) => {
+    const dir = runDir("alpha", spec.candidates[0], env);
+    seen.push({ slug: spec.candidates[0], created: existsSync(dir) && readdirSync(dir).length === 0 });
+    return realBind(jobId, spec);
+  };
+
+  await runJobCycle(env, id);
+
+  assert.deepEqual(seen[0], { slug: `${SLUG}-2`, created: true }, "the slug was bound before this job created its run directory, or onto the one already on disk");
+  assert.match(readFileSync(jobLogPath(id, env), "utf8"), new RegExp(`the run directory \`${SLUG}\` already exists on disk and was not created by this run`));
+  assert.deepEqual(readdirSync(runDir("alpha", SLUG, env)), [], "the job wrote into a directory it did not create");
+});
+
+test("a slug another JOB holds is refused even when its run directory is gone, and the job keeps the one the runtime gave it", async (t) => {
+  const taken = "fix-the-worker-of-the-queue";
+  const stdout = toNdjson([systemInitEvent(), slugTypeEvent(taken, "bug/error"), resultEvent({ text: `Done. Pull request: ${PR_URL}` })]);
+  const { env } = makeRunnerHome(t, "runner-slug-row-collision", [{ stdout, exitCode: 0 }]);
+  const holder = addJob({ project: "alpha", prompt: "another job", slug: taken }, env).id;
+  const id = enqueue(env);
+  assert.equal(existsSync(runDir("alpha", taken, env)), false, "the test home already had the run directory of the other job");
+
+  await runJobCycle(env, id);
+
+  assert.equal(getJob(id, env).slug, SLUG, "the job took over the run of another job");
+  assert.equal(getJob(holder, env).slug, taken);
+  assert.equal(existsSync(runDir("alpha", taken, env)), false, "the run was renamed onto the slug another job holds");
+  assert.match(readFileSync(jobLogPath(id, env), "utf8"), new RegExp(`the run keeps the slug \`${SLUG}\`: it could not be renamed to \`${taken}\` \\(job #${holder} holds it\\)`));
 });
 
 test("the watch loop repeats the cycle and hands each pass to the caller", async (t) => {

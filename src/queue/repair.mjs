@@ -6,7 +6,7 @@ import { packageRoot } from "../host/paths.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore } from "../store/open.mjs";
 import { classifyJobResult } from "./classify.mjs";
-import { isSafeSegment, readRunState, writeRunTerminal } from "./resume.mjs";
+import { isSafeSegment, ownRunState, readRunState, writeRunTerminal } from "./resume.mjs";
 import { lastAttemptStream } from "./stream.mjs";
 
 // Statuses a re-classification may correct: a row that ended badly, never one the queue still owes work for.
@@ -71,9 +71,18 @@ function mirrorWitness(row, outcome, env) {
       finishedAt: sqliteToIso(row.finished_at) ?? new Date().toISOString(),
       writtenBy: packageRoot(),
       pid: process.pid,
+      jobId: row.id,
     },
     env,
   });
+}
+
+// The state and plan of the job's own run; a run whose witness another job stamped is foreign and lends the repair nothing.
+function ownRun(row, env) {
+  const state = ownRunState({ project: row.project, slug: row.slug, jobId: row.id, env });
+  const foreign = state === null && readRunState({ project: row.project, slug: row.slug, env }) !== null;
+  const planPath = isSafeSegment(row.slug) && !foreign ? join(runDir(row.project, row.slug, env), "03-plan.md") : null;
+  return { state, planPath, foreign };
 }
 
 // Re-derives the outcome of a gated or failed job from its own log and state.json, writing the row and the witness when it changed.
@@ -84,13 +93,13 @@ export async function reclassifyFromLog({ id, env = process.env } = {}) {
   refuseRow(id, row, await jobs.isJobActive(id));
   const log = lastAttemptStream(readJobLog(id, env));
   const ending = endingFromRow(id, row);
-  const planPath = isSafeSegment(row.slug) ? join(runDir(row.project, row.slug, env), "03-plan.md") : null;
-  const outcome = classifyJobResult({ log, ...ending, state: readRunState({ project: row.project, slug: row.slug, env }), planPath });
+  const { state, planPath, foreign } = ownRun(row, env);
+  const outcome = classifyJobResult({ log, ...ending, state, planPath });
   const witness = differsFromWitness(row, outcome);
   const notice = noticeDiffers(row, outcome);
   if (!witness && !notice) return { id, from: row.status, to: row.status, prUrl: row.pr_url ?? null, changed: false, noticeOnly: false };
   const written = await jobs.reclassifyJob(id, { status: outcome.status, prUrl: outcome.prUrl, noticeMd: outcome.noticeMd });
   if (!written) throw new UserError(`job \`${id}\` changed while it was being re-classified; read it again with \`nightqueue queue status ${id}\``);
-  if (witness) mirrorWitness(row, outcome, env);
+  if (witness && !foreign) mirrorWitness(row, outcome, env);
   return { id, from: row.status, to: outcome.status, prUrl: outcome.prUrl ?? row.pr_url ?? null, changed: true, noticeOnly: !witness };
 }

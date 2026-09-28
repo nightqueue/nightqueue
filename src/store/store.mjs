@@ -29,6 +29,7 @@
  * @property {(id: number, spec: object) => Promise<boolean>} countAttempt
  * @property {(options?: object) => Promise<{failed: number, requeued: number}>} sweepOrphans
  * @property {(id: number, facts: object) => Promise<boolean>} persistRunFacts
+ * @property {(id: number, spec: {worker: string, candidates: string[]}) => Promise<{status: "bound"|"taken"|"lost", slug?: string, heldBy?: number}>} bindRunSlug claims the first run slug no other job of the project holds
  * @property {(jobId: number, ref: object) => Promise<number>} linkPipelineRun
  * @property {(id: number, outcome: object) => Promise<boolean>} finishJob
  * @property {(id: number, options?: object) => Promise<object>} cancelJob
@@ -187,6 +188,7 @@ export const STORE_CONTRACT = Object.freeze({
     "countAttempt",
     "sweepOrphans",
     "persistRunFacts",
+    "bindRunSlug",
     "linkPipelineRun",
     "finishJob",
     "cancelJob",
