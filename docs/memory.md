@@ -11,10 +11,27 @@ Only the `nightqueue` runtime opens it: the plugin talks to the MCP tools, never
 the file. The schema is created and migrated on first use, and reopening an
 existing database is a no-op.
 
-Nine tables plus three full text mirrors:
+Schema v18 identifies orgs and projects by id instead of by name. A database
+from an older build migrates once, the first time a command opens it
+(`nightqueue doctor` only reports that it is pending), in a single transaction: before touching it the runtime copies the file to
+`nightqueue.db.pre-v18` beside it, moves the orgs and projects of `config.json`
+into the `orgs` and `projects` tables (a project name found only in history rows
+gets a path-less project in the default org, and names are kept exactly as they
+were, case included), then rebuilds every table on `project_id`/`org_id`. Any
+failure rolls the whole migration back and leaves the database at its old
+version. While a runner holds a live lease on a job the migration refuses with
+one line naming the job and asking to stop the runners
+(`nightqueue queue run --stop`) and run the command again, and writes nothing;
+a job left `running` by a runner that crashed does
+not block it. The step that gives each job of a project its own run slug still
+runs on every open, now keyed by `project_id`.
+
+Thirteen tables plus five full text mirrors:
 
 | table | what it holds |
 |---|---|
+| `orgs` | one row per org: its id (a ULID), its name (unique, renamable) and its creation date |
+| `projects` | one row per project: its id (a ULID), its name (unique, renamable), its checkout path (unique; none for a project known only from history) and the id of its org |
 | `lessons` | one lesson per mistake: title, root cause, solution, prevention rule, target phase, how many attempts it cost, how often it was injected and violated, and its embedding |
 | `memory` | project facts and durable decisions, as key and value, per project or global |
 | `project_index` | the file to responsibility map of a project, with the mtime the file had when it was indexed |
@@ -254,7 +271,12 @@ refused, so a re-run imports nothing twice. The runtime itself never reads
 | `roadmap_search` | at most five items an owner sees: `query?` (title, detail, comments), `file?` (a recorded path, exact or a directory above it), `project` or `org`, `limit?` (1-5); inside a job always the job's own project |
 
 As everywhere else in the server, an explicit `null` is treated exactly like an
-absent parameter, and `project` is the registered NAME, never a path.
+absent parameter, and `project` is the registered NAME, never a path. A name no
+project carries is refused - by every MCP tool, `lesson_*` and `memory_*`
+included - with `unknown project` and the list of the known ones, and nothing is
+written; only the lesson, memory and index tools also accept a path, which
+means the project whose checkout contains it, or the global scope when no
+checkout does.
 `decision_update` and `roadmap_update` take an `id` and no owner, so inside an
 unattended run they are restricted to the project of the job that is running:
 an `id` belonging to another project is refused, naming both projects, the same
@@ -266,15 +288,13 @@ job's project, and a thread read from a job leaves out the comments of a sibling
 project. Outside a job the restriction does not exist, and the operator updates
 any project from anywhere.
 
-Renaming an org carries its rows with it (`nightqueue org rename` rewrites the
-`org` of every decision and roadmap item), and an org that still owns rows
-cannot be removed: the removal is refused naming how many. The rename records
-its intent in `~/.nightqueue/org-rename.pending.json` before it touches either
-store; a rename interrupted halfway shows up as a failed `org rows` line of
-`nightqueue doctor`, and `nightqueue org repair` settles it in the direction
-the config already committed. Rows pointing to an org the config does not know
-are the other thing that line reports; `nightqueue org repair --to <org>` moves
-them under an existing org.
+Rows point at their owner by id: a decision or a roadmap item carries
+`project_id` or `org_id`, and every other table carries `project_id` alone (a
+project's org is always the one of its `projects` row). Renaming an org or a
+project (`nightqueue org rename`, `nightqueue project rename`) changes that one
+row, and every view shows the new name at once. An org or a project that still
+owns rows cannot be removed: the database refuses the removal, and the message
+names how many rows of which table it still owns - nothing is removed.
 
 **Queueing from the roadmap.** `queue_add` with `roadmap_item_id` and no
 `prompt` (or `nightqueue queue add --roadmap <id>`) builds the prompt from the

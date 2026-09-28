@@ -616,7 +616,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    `## Left`, `## How it was tested`).
 
    Repository: [CWD PATH]
-   Project: [PROJECT — the same identifier used in RUN_DIR]
+   Project: [PROJECT — the name on the Project: line of the prompt]
    ```
 
 3.5. Run `nightqueue run check 04` (the artifact gate, step 5.2) — `GENERATED` and
@@ -633,7 +633,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    Do NOT paste the complete sections in the response.
 
    Repository: [CWD PATH]
-   Project: [PROJECT — the same identifier used in RUN_DIR]
+   Project: [PROJECT — the name on the Project: line of the prompt]
 
    Tier: [trivial | simple]
 
@@ -762,7 +762,7 @@ Type: [bug/error | feature/refactor]
 [CONTEXT BLOCK]
 
 Repository: [CWD PATH]
-Project: [PROJECT — the same identifier used in RUN_DIR]
+Project: [PROJECT — the name on the Project: line of the prompt]
 ```
 
 Launch **1 triager agent** (subagent_type="nightqueue:triager", `model`: `haiku` if the tier
@@ -822,7 +822,7 @@ is missing for this area. Revalidate ONLY the ones marked REVALIDATE (they chang
 disappeared since the indexing). Fix the responsibilities that are wrong.
 
 The index is persisted by the runtime from your artifact (`nightqueue run index-save`); these two lines only name where it lands:
-project: [PROJECT — the same identifier used in RUN_DIR]
+project: [PROJECT — the name on the Project: line of the prompt]
 repo_root: [CWD PATH]
 
 [Paste the `block` of `context_for_phase` (target: "explore") — omit when it came back empty:]
@@ -912,7 +912,7 @@ These decisions were proposed and nobody accepted them yet: they bind nothing, a
 may go against them without a confirmation.
 
 Repository: [CWD PATH]
-Project: [PROJECT — the same identifier used in RUN_DIR]
+Project: [PROJECT — the name on the Project: line of the prompt]
 ```
 
 **How to fill in `Type:`** — it holds whenever a phase needs the Type (3, 5, 6.5), not
@@ -1041,7 +1041,7 @@ solution. Write ARTIFACT_PATH per your Required output.
 [CONTEXT BLOCK]
 
 Repository: [CWD PATH]
-Project: [PROJECT — the same identifier used in RUN_DIR]
+Project: [PROJECT — the name on the Project: line of the prompt]
 ```
 
 Run `nightqueue run check 04` (the artifact gate, step 5.2). `GENERATED` means the coder left
@@ -1149,7 +1149,7 @@ Final verdict: ## Verification: PASSED, ## Verification: PASSED-STATIC
 [CONTEXT BLOCK]
 
 Repository: [CWD PATH]
-Project: [PROJECT — the same identifier used in RUN_DIR]
+Project: [PROJECT — the name on the Project: line of the prompt]
 ```
 
 The verifier runs **after** the QA and is the independent executor: it **reproduces** the
@@ -1197,7 +1197,7 @@ a regression and keeping the project's standards. Make the PoCs pass by fixing t
 cause — never by altering or deleting the PoC.
 
 Repository: [CWD PATH]
-Project: [PROJECT — the same identifier used in RUN_DIR]
+Project: [PROJECT — the name on the Project: line of the prompt]
 ```
 
 Relaunch the coder agent with the prompt above. After it returns, run
@@ -1254,7 +1254,7 @@ Expected outcome: [the Brief's field]
 Apply your Mode: RUNTIME cases (a)–(d2); every manual CLI/MCP run goes through `nightqueue sandbox <cmd>`.
 
 Repository: [CWD PATH]
-Project: [PROJECT — the same identifier used in RUN_DIR]
+Project: [PROJECT — the name on the Project: line of the prompt]
 ```
 
 Run `nightqueue run check 06.5` (the artifact gate, step 5.2). The lane's verdict

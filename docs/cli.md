@@ -27,6 +27,7 @@ which starts the runner over the whole queue. Naming another run from inside a
 job is refused; outside one, `--project <name> --slug <slug>` is required.
 
 ```sh
+nightqueue run dir            # the absolute directory of this run: runs/<project_id>/<slug>
 nightqueue run check 03       # is the plan there, with the sections the pipeline reads?
 nightqueue run log            # one line per phase of this run, plus the total
 nightqueue run log --json     # the same table as the only thing on stdout
@@ -117,20 +118,35 @@ variables:
 
 ```
 $NIGHTQUEUE_HOME/          # 0700
-  config.json              # orgs, projects, queue settings
+  config.json              # queue settings, connection bindings by org id, default org
   secrets.json             # 0600, connection secrets
-  nightqueue.db            # the memory database (see [Memory](memory.md))
+  nightqueue.db            # the memory database, orgs and projects included (see [Memory](memory.md))
   runtime/versions/        # one directory per installed version, the last two kept
   runtime/current          # symlink into versions/, what the host is registered against
   bin/                     # the shims: nightqueue and nq
   embedding/               # npm prefix of the embedding library, opt-in
   models/                  # embedding weights, downloaded on demand
   state/                   # per-session hook state
-  runs/<project>/<slug>/   # run artifacts, written by the runtime
+  runs/<project_id>/<slug>/  # run artifacts, written by the runtime
   logs/                    # one log per queue job plus one per runner
   queue.paused             # sentinel file, present only while the queue is paused
   runners/<pid>.json       # one registration per live runner, any number of them
 ```
+
+Orgs and projects are rows of the memory database, each identified by an id
+(a ULID) and carrying a name that can change: every job, decision, lesson and
+run directory points at the id, so a rename touches one row. `config.json` keeps
+only what is not identity - the queue and embedding settings, the connection
+bound to each org (`orgConnections`, keyed by org id) and `defaultOrg` (an org
+id) - and any top-level key it does not know is kept as it is. A home written by
+an older build migrates once, on the first command that opens its database: the
+orgs and projects of `config.json` move into the database, `runs/<project>/` is
+moved to `runs/<project_id>/`, and a copy of the database as it was is left
+beside it as `nightqueue.db.pre-v18`. While a runner holds a live lease on a job
+the migration refuses and asks to stop the runners first
+(`nightqueue queue run --stop`); nothing is written until it succeeds.
+`nightqueue run dir --project <name> --slug <slug>` prints the directory of a
+run, so nothing has to build the path from a project name.
 
 `NIGHTQUEUE_HOME` must sit on local disk. The memory database is SQLite in WAL
 mode, and WAL correctness depends on the operating system really enforcing POSIX
@@ -155,8 +171,9 @@ commands such as `list` never take it. The memory and queue commands (`mcp`,
 on SQLite for concurrency, so a running server - or a runner that works all
 night - never blocks a `nightqueue init`. The one exception is the registration
 `nightqueue queue add` (and `queue_add`) offers inside an unregistered
-repository: that single write of `config.json` takes the lock by itself, so it
-never races a `nightqueue project add`.
+repository: that single registration takes the lock by itself, so it never
+races a `nightqueue project add` (and the database refuses a second project on
+the same path or name either way).
 
 ```sh
 nightqueue setup                                   # install the runtime and register everything in the host
@@ -169,15 +186,16 @@ nightqueue init                                    # set the host up and registe
 nightqueue init ~/code/api --org acme --name api   # ...or an explicit path, org and name
 nightqueue init --no-embedding --no-path --no-gh   # ...answering every question up front
 
-nightqueue org add acme --display-name "Acme"      # create an org
-nightqueue org list --json                         # orgs, connection slots, project counts
-nightqueue org rename acme acme-inc                # rewrites every project pointing at it
-nightqueue org remove acme-inc                     # refused while projects still point at it
-nightqueue org repair [--to <org>]                 # settle an interrupted rename; adopt orphan rows
+nightqueue org add acme                            # create an org
+nightqueue org list --json                         # orgs (with their id), connection slots, project counts
+nightqueue org rename acme acme-inc                # one row: its projects, decisions and bindings follow
+nightqueue org remove acme-inc                     # refused while it still owns projects or rows
 
-nightqueue project list                            # name, path, org, whether the path still exists
+nightqueue project list                            # name, path (or "no path"), org, whether the path still exists
+nightqueue project rename api api-v2               # one row: its jobs, decisions, memory and runs follow
 nightqueue project move api acme                   # move a project to another org
-nightqueue project remove api
+nightqueue project move api --path ~/code/api      # give it a new checkout (or one it never had)
+nightqueue project remove api                      # refused while it owns rows, listing them
 
 echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github
 nightqueue connection bind gh --org acme           # bind (or rebind) an org slot

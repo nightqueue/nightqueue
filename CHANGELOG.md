@@ -6,6 +6,42 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Breaking
+
+- **Projects and orgs are identified by id, and their names can change.** Each org and project
+  is a row of the database with an id (a ULID) and a unique name; every job, lesson, memory,
+  index entry, run, decision and roadmap row points at the id, so `nightqueue org rename` and the
+  new `nightqueue project rename <old> <new>` change one row and every view shows the new name
+  at once. An org or a project that still owns rows cannot be removed: the database refuses and
+  the message lists what it owns.
+- **The database migrates once to schema v18**, on the first command that opens it, in one
+  transaction: a copy of the file as it was is left beside it as `nightqueue.db.pre-v18`, and
+  any failure leaves the database at its old version with nothing written. Names are kept
+  exactly as they were, case included; a project name found only in history rows becomes a
+  project without a path in the default org. While a runner holds a live lease on a job the
+  migration refuses with one line naming the job and asking to stop the runners
+  (`nightqueue queue run --stop`) first; a job left `running` by a crashed runner does not block
+  it, and is reclaimed and resumed afterwards.
+- **Projects and orgs moved out of `config.json`.** After the migration the file keeps the queue
+  and embedding settings, `orgConnections` (the connection bound to each org, keyed by org id)
+  and `defaultOrg` as an org id; its `projects` and `orgs` are removed once they are in the
+  database. A top-level key the runtime does not know is now kept as it is instead of being
+  dropped on the next write. `nightqueue org add --display-name` is removed, and `org list` has
+  no display column (its `--json` carries the id).
+- `nightqueue project move <name> [<org>] [--path <path>]` also gives a project a new checkout
+  (or a first one, for a project known only from history), and `project list` shows a project
+  without a path as `(no path)`. `nightqueue org repair` is removed, with the pending-rename
+  record it settled: a rename is one row and can no longer be interrupted halfway.
+- **Run directories are `runs/<project_id>/<slug>/`.** The existing `runs/<project>/` directories
+  are moved under the id once, never overwriting a run already there (a `runs/.by-id` marker
+  records the move), the prompt of a job carries `Project: <current name>` and
+  `RUN_DIR: runs/<project_id>/<slug>`, and `state.json` records `projectId`. The new
+  `nightqueue run dir [--project <name> --slug <slug>]` prints the directory of a run, so nothing
+  has to build it from a project name.
+- Every MCP tool, `lesson_*` and `memory_*` included, refuses a project name no project carries
+  with `unknown project` and the list of the known projects, and writes nothing. A path outside every checkout
+  still means the global scope for the lesson, memory and index tools.
+
 ### Changed
 
 - `nightqueue open` greets: a fresh operator session opens with the operator introducing
