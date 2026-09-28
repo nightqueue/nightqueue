@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { getRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
@@ -129,7 +129,7 @@ test("inside a job, an org row is refused by name while the job's own project is
     { project: "acme-mobile-app", title: "the app caches", context: "c", decision: "d", status: "accepted" },
     env,
   );
-  const job = addJob({ project: "acme-mobile-app", prompt: "rewrite the runner" }, env);
+  const job = addJob({ projectId: ensureProject(env, "acme-mobile-app"), prompt: "rewrite the runner" }, env);
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const decision = await client.callTool({ name: "decision_update", arguments: { id: orgDecision.id, status: "rejected" } });

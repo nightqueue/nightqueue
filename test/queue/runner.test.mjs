@@ -14,7 +14,7 @@ import { agentRuns, DRAIN_INTERVAL_S, runCycle, runDrain, runWatch, WATCH_INTERV
 import { provisionalSlug } from "../../src/queue/spawn.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeDir, makeHome, makeProject, projectIdOf, unregisterProject } from "../../test-support/memory.mjs";
+import { dropCheckout, ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { agentToolUseEvent, assistantEvent, codeChangePublishedEvent, doneStream, failureStream, gateStream, noticeText, PR_URL, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, slugTypeEvent, systemInitEvent, taskNotificationEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
 
@@ -63,7 +63,7 @@ function makeRunnerHome(t, name, attempts, { projects = ["alpha"] } = {}) {
 
 // Enqueues one job of a test project.
 function enqueue(env, { project = "alpha", prompt = PROMPT, maxAttempts, timeoutS } = {}) {
-  return addJob({ project, prompt, maxAttempts, timeoutS }, env).id;
+  return addJob({ projectId: ensureProject(env, project), prompt, maxAttempts, timeoutS }, env).id;
 }
 
 // Runs one cycle over a single job with the git reads injected.
@@ -482,7 +482,7 @@ test("a job blocked by the preflight is never claimed twice in the same cycle", 
 test("an unknown project blocks the job with the code that names it", async (t) => {
   const { env } = makeRunnerHome(t, "runner-block-project", [{ stdout: doneStream(), exitCode: 0 }]);
   const id = enqueue(env);
-  unregisterProject(env, "alpha");
+  dropCheckout(env, "alpha");
 
   const cycle = await runJobCycle(env, id);
 
@@ -779,7 +779,7 @@ test("the run is opened before the spawn, and the ONE declaration of the pipelin
     resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
   ]);
   const { env, planPath } = makeRunnerHome(t, "runner-slug-override", [{ stdout, exitCode: 0 }]);
-  const id = addJob({ project: "alpha", prompt: PROMPT, slug: SLUG }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: PROMPT, slug: SLUG }, env).id;
   const provisional = runDir("alpha", SLUG, env);
   mkdirSync(provisional, { recursive: true });
   writeFileSync(join(provisional, "01-triage.md"), "the artifact of the provisional run\n");
@@ -882,7 +882,7 @@ test("a slug another JOB holds is refused even when its run directory is gone, a
   const taken = "fix-the-worker-of-the-queue";
   const stdout = toNdjson([systemInitEvent(), slugTypeEvent(taken, "bug/error"), resultEvent({ text: `Done. Pull request: ${PR_URL}` })]);
   const { env } = makeRunnerHome(t, "runner-slug-row-collision", [{ stdout, exitCode: 0 }]);
-  const holder = addJob({ project: "alpha", prompt: "another job", slug: taken }, env).id;
+  const holder = addJob({ projectId: ensureProject(env, "alpha"), prompt: "another job", slug: taken }, env).id;
   const id = enqueue(env);
   assert.equal(existsSync(runDir("alpha", taken, env)), false, "the test home already had the run directory of the other job");
 

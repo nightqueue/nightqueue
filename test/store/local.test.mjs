@@ -53,7 +53,7 @@ test("every domain of the store writes and reads back on a real home", async (t)
   makeProject(t, env, "alpha");
   const store = createLocalStore(env);
 
-  const job = await store.jobs.addJob({ project: "alpha", prompt: "do the thing" });
+  const job = await store.jobs.addJob({ projectId: projectIdOf(env, "alpha"), prompt: "do the thing" });
   assert.equal((await store.jobs.getJob(job.id)).project, "alpha");
   assert.equal(await store.jobs.status(job.id), "pending");
 
@@ -109,8 +109,8 @@ test("listWithSlug answers the jobs a witness could speak for", async (t) => {
   makeProject(t, env, "alpha");
   const store = createLocalStore(env);
 
-  const withoutSlug = await store.jobs.addJob({ project: "alpha", prompt: "never ran" });
-  const job = await store.jobs.addJob({ project: "alpha", prompt: "ran once" });
+  const withoutSlug = await store.jobs.addJob({ projectId: projectIdOf(env, "alpha"), prompt: "never ran" });
+  const job = await store.jobs.addJob({ projectId: projectIdOf(env, "alpha"), prompt: "ran once" });
   await store.jobs.claimJobById(job.id, { worker: "w1", cap: 2 });
   await store.jobs.persistRunFacts(job.id, { worker: "w1", slug: "fix-it" });
 
@@ -128,7 +128,7 @@ async function queuedItem(t, name) {
   makeProject(t, env, "alpha");
   const store = createLocalStore(env);
   const item = await store.roadmap.saveRoadmapItem({ type: "improvement", project: "alpha", title: "deliver the thing" });
-  const job = await store.jobs.addJob({ project: "alpha", prompt: "deliver the thing" });
+  const job = await store.jobs.addJob({ projectId: projectIdOf(env, "alpha"), prompt: "deliver the thing" });
   assert.equal(await store.roadmap.linkRoadmapItemJob(item.id, job.id), true, "setup: the item was not linked to its job");
   return { store, item, job };
 }

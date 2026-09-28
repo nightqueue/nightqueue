@@ -20,7 +20,7 @@
  * follows nothing, a failure of the follow never costs the job write, and `sweepOrphans` re-syncs,
  * on every claim cycle, whatever a missed event left behind (`roadmap.followDriftedJobs`).
  * @typedef {object} JobsDomain
- * @property {(spec: object) => Promise<object>} addJob a `slug` binds the job to a run, refused in the same transaction while a job not yet closed is bound to it
+ * @property {(spec: object) => Promise<object>} addJob the job's project by `projectId`; a `slug` binds the job to a run, refused in the same transaction while a job not yet closed is bound to it
  * @property {(spec: object) => Promise<object|null>} claimNextJob
  * @property {(id: number, spec: object) => Promise<object|null>} claimJobById
  * @property {(id: number, spec: object) => Promise<boolean>} releaseJob
@@ -40,7 +40,7 @@
  * @property {() => Promise<Record<string, number>>} countsByStatus
  * @property {() => Promise<number>} countPendingBlocked pending jobs a preflight block is holding back
  * @property {() => Promise<number>} countActiveJobs
- * @property {() => Promise<{project: string, count: number}[]>} countActiveJobsByProject
+ * @property {() => Promise<{projectId: string, project: string, count: number}[]>} countActiveJobsByProject
  * @property {() => Promise<number|null>} firstActiveJobId
  * @property {(id: number) => Promise<boolean>} isJobActive
  * @property {(id: number, terminal: object) => Promise<boolean>} repairJobFromWitness

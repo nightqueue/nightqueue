@@ -690,6 +690,13 @@ function requireItemProject(item, project) {
   );
 }
 
+// The id of the registered project a roadmap row still names (the roadmap holds names until it is keyed by id).
+function projectIdByName(name, env) {
+  const project = registeredProject(name, env);
+  if (!project) throw new UserError(`unknown project \`${name ?? ""}\`; register it with \`nightqueue project add\` before queueing its item`);
+  return project.id;
+}
+
 // The projects an org item is queued for: one registered project of its org, or every one of them for `all`; a job is always a project's.
 function orgTargets(item, project, env) {
   const members = checkoutProjectsOfOrg(item.org, env).map((member) => member.name);
@@ -709,7 +716,7 @@ function queueOrgTarget(item, project, { prompt, limits }, env) {
   const db = openDb(env);
   const live = liveRowJob(db, item.id, project);
   if (live) return { skipped: { project, job_id: live.id, job_status: live.status } };
-  const job = addJob({ project, prompt, ...limits }, env);
+  const job = addJob({ projectId: projectIdByName(project, env), prompt, ...limits }, env);
   if (linkOrgRow(db, { itemId: item.id, project, jobId: job.id })) return { job };
   cancelJob(job.id, { reason: "roadmap item was queued for this project by another caller" }, env);
   const holder = liveRowJob(db, item.id, project);
@@ -746,7 +753,7 @@ export async function queueRoadmapItem(
   }
   requireItemProject(item, project);
   const prompt = await buildRoadmapPrompt({ item, embedder }, env);
-  const job = addJob({ project: item.project, prompt, priority, maxAttempts, timeoutS, tier: tierOf(item, tier) }, env);
+  const job = addJob({ projectId: projectIdByName(item.project, env), prompt, priority, maxAttempts, timeoutS, tier: tierOf(item, tier) }, env);
   if (linkRoadmapItemJob(item.id, job.id, env)) return { job, jobs: [job], skipped: [], item, targetProject: item.project };
   cancelJob(job.id, { reason: "roadmap item was queued by another caller" }, env);
   throw new UserError(

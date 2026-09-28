@@ -9,7 +9,7 @@ import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { recordPhaseDone, recordRunFields } from "../src/queue/run-state.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
-import { makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
 import {
   agentToolUseEvent,
   assistantEvent,
@@ -30,7 +30,7 @@ function makeQueue(t, name) {
 
 // A claimed job already bound to its run slug, the row `nightqueue run` resolves the run from.
 function boundJob(env, { slug = SLUG } = {}) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   if (slug !== null) openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(slug, id);
   return id;
 }

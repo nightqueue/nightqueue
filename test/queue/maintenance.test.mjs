@@ -7,7 +7,7 @@ import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { lastMaintenance, runMaintenance, startMaintenance, stopMaintenance } from "../../src/queue/maintenance.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { writeRunTerminal } from "../../src/queue/resume.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const DEAD_PID = 999_997;
 const SLUG = "lost-finish";
@@ -96,7 +96,7 @@ test("a timer whose run throws keeps the failure as its warning instead of dying
 
 test("runMaintenance prunes a dead registration and repairs a lost finish, and never throws", async (t) => {
   const env = makeMaintainedHome(t, "maintenance-run");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ?, lease_until = datetime('now', '-120 seconds') WHERE id = ?").run(SLUG, id);
   const terminal = { status: "done", prUrl: "https://github.com/acme/api/pull/7", finishedAt: "2026-09-11T03:15:00Z", writtenBy: "/tmp/runtime", pid: 4242 };

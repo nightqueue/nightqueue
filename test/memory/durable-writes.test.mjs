@@ -5,7 +5,7 @@ import { jobLogPath } from "../../src/config/paths.mjs";
 import { checkpointWal, isoToSqlite, openDb, sqliteToIso, withFullSync } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob, getJob } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
-import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const WORKER = "host:1000";
 const CAP = 4;
@@ -40,7 +40,7 @@ function occurrences(text, literal) {
 
 // Enqueues a job and claims it, which is the only state a finish is allowed from.
 function claimed(env, { project = "alpha", prompt = "fix the worker" } = {}) {
-  const id = addJob({ project, prompt }, env).id;
+  const id = addJob({ projectId: ensureProject(env, project), prompt }, env).id;
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   return id;
 }

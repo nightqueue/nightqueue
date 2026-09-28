@@ -323,14 +323,13 @@ async function ownerArgs(args, env) {
   return { project: await requireProjectName(project, env) };
 }
 
-// Project the job goes to, or the offer to register the directory of the caller when nothing is registered for it.
+// Project row the job goes to, or the offer to register the directory of the caller when nothing is registered for it.
 async function resolveQueueTarget({ project, cwd }, env) {
-  const named = await namedProject(project, env);
-  if (named) return { project: named };
-  const path = requireCwd(cwd);
   const store = openStore(env);
+  if (typeof project === "string" && project.trim() !== "") return { project: await requireProject(store, project) };
+  const path = requireCwd(cwd);
   const resolved = await store.projects.at(path);
-  if (resolved) return { project: resolved.name };
+  if (resolved) return { project: resolved };
   refuseRegistrationInsideJob(path, env);
   const offer = await registrationOffer(store, loadConfig(env, { warn: () => {} }), path);
   if (!offer) {
@@ -850,10 +849,10 @@ function toolDefinitions(env) {
         const target = await resolveQueueTarget(args, env);
         if (target.offer && args.register !== true) return needsRegistration(target);
         const registered = target.offer ? await registerOffer(target.offer, env) : null;
-        const project = registered?.name ?? target.project;
-        const seeded = hasRunDir(args) ? operatorRunSeed({ args, project, env }) : { prompt: args.prompt, slug: null };
+        const project = registered ?? target.project;
+        const seeded = hasRunDir(args) ? operatorRunSeed({ args, project: project.name, env }) : { prompt: args.prompt, slug: null };
         const job = await openStore(env).jobs.addJob({
-          project,
+          projectId: project.id,
           prompt: seeded.prompt,
           priority: args.priority,
           maxAttempts: args.max_attempts,

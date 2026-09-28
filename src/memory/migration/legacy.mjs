@@ -1,4 +1,4 @@
-import { addColumnIfMissing, dropColumnIfPresent } from "../columns.mjs";
+import { addColumnIfMissing, dropColumnIfPresent, hasColumn } from "../columns.mjs";
 import {
   COMMENT_KINDS,
   DEFAULT_ROADMAP_TYPE,
@@ -275,8 +275,9 @@ function detachGroup(db, group) {
   }
 }
 
-// Gives every run slug shared by several jobs back to one of them, by project name; a no-op once done.
+// Gives every run slug shared by several jobs back to one of them, by project name; a no-op once done or on a jobs table already keyed by id.
 function migrateSharedSlugsByName(db) {
+  if (!hasColumn(db, "jobs", "project")) return;
   for (const group of pendingGroups(db)) detachGroup(db, group);
 }
 

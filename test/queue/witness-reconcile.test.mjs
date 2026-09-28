@@ -14,7 +14,7 @@ import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { clearRunTerminal, readRunState, writeRunTerminal } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const REPAIRER = fileURLToPath(new URL("../../test-support/witness-repairer.mjs", import.meta.url));
@@ -67,7 +67,7 @@ function payloadOf(result) {
 
 // Enqueues a job, claims it and records the slug of its run: the row a runner owns while it works.
 function runningJob(env, { slug = SLUG } = {}) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(slug, id);
   return id;
@@ -197,7 +197,7 @@ test("the reconciliation never touches a job a live runner owns, a row that alre
   assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "a job that already ended was rewritten by the witness");
   assert.equal(getJob(live, env).status, "failed");
 
-  const pending = addJob({ project: "alpha", prompt: "another job" }, env).id;
+  const pending = addJob({ projectId: ensureProject(env, "alpha"), prompt: "another job" }, env).id;
   witness(env, { slug: "another-run" });
   assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "a job with no slug was matched against somebody else's witness");
   assert.equal(getJob(pending, env).status, "pending");

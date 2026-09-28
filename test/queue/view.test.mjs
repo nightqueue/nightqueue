@@ -12,7 +12,7 @@ import { closedLine } from "../../src/queue/close-view.mjs";
 import { closeSuggestion, failedCoreSection, jobDetailView, prUrlsOf, queueView, truncationSuggestion } from "../../src/queue/view.mjs";
 import { KEPT_PREFIX } from "../../src/queue/worktree.mjs";
 import { withReadOnlyStore } from "../../src/store/open.mjs";
-import { makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
 import { doneStream } from "../../test-support/streams.mjs";
 
 const DEAD_PID = 999_999;
@@ -31,7 +31,7 @@ function seedHome(t, name, jobs) {
       seedClosedJob(env, { prUrl });
       continue;
     }
-    const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+    const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
     openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ? WHERE id = ?").run(status, prUrl, id);
   }
   return env;
@@ -41,7 +41,7 @@ function seedHome(t, name, jobs) {
 function seedJobWithRunLog(t, name, { runNotice, rowNotice }) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   mkdirSync(logsDir(env), { recursive: true });
   const logPath = jobLogPath(id, env);
   writeFileSync(logPath, doneStream({ notice: runNotice }));

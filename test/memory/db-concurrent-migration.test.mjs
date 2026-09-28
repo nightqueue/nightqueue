@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { closeDb, DB_USER_VERSION, openDb } from "../../src/memory/db.mjs";
+import { buildLegacyHome } from "../../test-support/legacy-home.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
@@ -77,16 +78,19 @@ test(`${RACERS} processes racing to migrate the SAME v9 database converge on the
 
   for (let pass = 0; pass < ITERATIONS; pass += 1) {
     const env = makeHome(t, `db-race-${pass}`);
-    const seed = openDb(env);
-    seed
-      .prepare("INSERT INTO jobs (project, prompt, status, pr_url) VALUES (?, ?, 'done', ?)")
-      .run("alpha", "fix the worker", "https://github.com/acme/api/pull/42");
-    seed
-      .prepare("INSERT INTO jobs (project, prompt, status, pr_url) VALUES (?, ?, 'merged', ?)")
-      .run("alpha", "deliver the api", "https://github.com/acme/api/pull/43");
-    seed.exec(SEED_AT_V9_WITH_DROPPED_COLUMNS);
-    assert.equal(seed.prepare("PRAGMA user_version").get().user_version, 9, `pass ${pass}: seed did not reach v9`);
-    closeDb(env);
+    buildLegacyHome(env, {
+      version: 9,
+      mutate(seed) {
+        seed
+          .prepare("INSERT INTO jobs (project, prompt, status, pr_url) VALUES (?, ?, 'done', ?)")
+          .run("alpha", "fix the worker", "https://github.com/acme/api/pull/42");
+        seed
+          .prepare("INSERT INTO jobs (project, prompt, status, pr_url) VALUES (?, ?, 'merged', ?)")
+          .run("alpha", "deliver the api", "https://github.com/acme/api/pull/43");
+        seed.exec(SEED_AT_V9_WITH_DROPPED_COLUMNS);
+        assert.equal(seed.prepare("PRAGMA user_version").get().user_version, 9, `pass ${pass}: seed did not reach v9`);
+      },
+    });
 
     const results = await raceOnce(env, workerPath, RACERS);
 

@@ -7,7 +7,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { queuePausedPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, LEASE_GRACE_S } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
@@ -44,10 +44,10 @@ function orphanLease(env, id) {
 
 test("queue_status does not call an orphaned running job (dead lease, no watcher) a live runner", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-orphan-hint");
-  const orphaned = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const orphaned = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(orphaned, { worker: "host:4242", cap: 4 }, env);
   orphanLease(env, orphaned);
-  addJob({ project: "alpha", prompt: "fix the parser" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env);
 
   const client = await connect(t, env);
   const status = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));

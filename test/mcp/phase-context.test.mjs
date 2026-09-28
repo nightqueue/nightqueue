@@ -8,7 +8,7 @@ import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
 import { saveRoadmapItem } from "../../src/memory/roadmap.mjs";
-import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const WORKER = "host:4242";
 const SESSION = "session-of-the-run";
@@ -17,7 +17,7 @@ const SESSION = "session-of-the-run";
 function makeRunningJob(t, name, { sessionId = SESSION } = {}) {
   const env = makeHome(t, name);
   const repo = makeProject(t, env, "alpha");
-  const job = addJob({ project: "alpha", prompt: "rewrite the runner" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "rewrite the runner" }, env);
   claimJobById(job.id, { worker: WORKER, cap: 4 }, env);
   persistRunFacts(job.id, { worker: WORKER, slug: "rewrite-the-runner", sessionId }, env);
   return { env: { ...env, NIGHTQUEUE_JOB_ID: String(job.id) }, home: env, repo };

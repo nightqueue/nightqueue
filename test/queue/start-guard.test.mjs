@@ -12,7 +12,7 @@ import { packageRoot } from "../../src/host/paths.mjs";
 import { addJob, cancelJob, getJob } from "../../src/memory/jobs.mjs";
 import { liveRunners, writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { registerForegroundRunner } from "../../src/queue/start.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const STARTER = fileURLToPath(new URL("../../test-support/runner-starter.mjs", import.meta.url));
 const BARRIER_MS = 400;
@@ -100,7 +100,7 @@ test("every start path registers its runner while another one is live, and none 
   const env = makeQueueHome(t, "start-paths");
   const alive = new Set([LIVE_PID]);
   registerRunner(env, { mode: "drain" });
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const calls = [];
 
   for (const argv of [
@@ -125,7 +125,7 @@ test("every start path registers its runner while another one is live, and none 
 
 test("a single-job start registers a `once` runner carrying the job and the tree it loaded from", async (t) => {
   const env = makeQueueHome(t, "start-once-registration");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
 
   const started = await runCli(env, ["queue", "run", "--job", String(id)]);
 

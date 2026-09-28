@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { getRoadmapItem, getRoadmapItemDetail, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
@@ -238,7 +238,7 @@ function makeTwoProjectHome(t, name) {
   const own = saveDecision({ ...DECISION, project: "alpha", status: "accepted" }, env);
   const foreign = saveDecision({ ...DECISION, project: "beta", title: "beta keeps its own log", status: "accepted" }, env);
   const foreignItem = saveRoadmapItem({ type: "improvement", project: "beta", title: "beta delivers its dashboard" }, env);
-  const job = addJob({ project: "alpha", prompt: "rewrite the runner" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "rewrite the runner" }, env);
   return { env, own, foreign, foreignItem, job };
 }
 
@@ -296,7 +296,7 @@ test("an overlapping decision_save answers needs_review, writes nothing, and sav
 
 test("inside a job decision_save stamps job_id, refuses supersedes, and refuses a second proposal", async (t) => {
   const env = makeDecisionHome(t, "mcp-decisions-job-proposal");
-  const job = addJob({ project: "alpha", prompt: "rewrite the runner" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "rewrite the runner" }, env);
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const first = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, status: "proposed" } }));

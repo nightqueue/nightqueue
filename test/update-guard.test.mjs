@@ -8,7 +8,7 @@ import { closeDb, openDb } from "../src/memory/db.mjs";
 import { addJob, claimJobById } from "../src/memory/jobs.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { assertIsolatedEnv, makeHostEnv } from "../test-support/host.mjs";
-import { makeProject } from "../test-support/memory.mjs";
+import { ensureProject, makeProject } from "../test-support/memory.mjs";
 
 const REFUSAL_TAIL =
   "the runtime cannot be replaced while it runs; stop it with nightqueue queue run --stop or wait for the queue to drain";
@@ -57,7 +57,7 @@ function registerWatcher(env) {
 
 // Enqueues a job and claims it, which is what a runner holding a live lease looks like.
 function claimedJob(env) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: WORKER, cap: 4 }, env);
   return id;
 }

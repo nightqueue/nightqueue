@@ -5,7 +5,7 @@ import { defaultContext, run } from "../../src/cli/index.mjs";
 import { dbPath } from "../../src/config/paths.mjs";
 import { openDb, openDbReadOnly } from "../../src/memory/db.mjs";
 import { addJob, claimJobById } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // Group A hypothesis (05a-qa-analyst.md): `openDbReadOnly` never sets `busy_timeout`, unlike the cached
 // write connection `openDb` sets up via `initConnection`. The question is whether that absence is actually
@@ -17,7 +17,7 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 test("openDbReadOnly succeeds while a writer holds an uncommitted BEGIN IMMEDIATE transaction (WAL readers are not blocked by a writer's lock)", (t) => {
   const env = makeHome(t, "follow-busy-poll-direct");
   makeProject(t, env, "alpha");
-  const job = addJob({ project: "alpha", prompt: "fix the worker" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env);
 
   const writer = openDb(env);
   writer.exec("BEGIN IMMEDIATE");
@@ -83,7 +83,7 @@ function snapshots(out) {
 test("a queue status --follow session survives and finishes correctly while a runner-style writer holds its claim/finish transaction open across several polls", async (t) => {
   const env = makeHome(t, "follow-busy-poll-session");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
 
   // A separate connection, exactly the shape a runner process holds: a real `BEGIN IMMEDIATE` transaction

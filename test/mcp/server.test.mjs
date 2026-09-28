@@ -15,7 +15,7 @@ import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs";
-import { makeDir, makeHome, makeProject, projectIdOf, seedLegacyV8Home } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, projectIdOf, seedLegacyV8Home } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 import * as registry from "../../src/memory/registry.mjs";
 
@@ -542,7 +542,7 @@ test("queue_add registers the repository of the `cwd` only with register: true, 
 
 test("queue_add and queue_cancel refuse the home of the runner from inside a job, and accept a temporary one", async (t) => {
   const env = makeQueueHome(t, "mcp-home-guard");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const inJob = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "9", NIGHTQUEUE_JOB_HOME: homeDir(env) });
 
   for (const call of [
@@ -568,8 +568,8 @@ test("queue_add and queue_cancel refuse the home of the runner from inside a job
 
 test("queue_status never returns the prompt and truncates the free text at five hundred code points", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-status");
-  const id = addJob({ project: "alpha", prompt: "a prompt no tool may ever return" }, env).id;
-  addJob({ project: "alpha", prompt: "another one" }, env);
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "a prompt no tool may ever return" }, env).id;
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "another one" }, env);
   openDb(env)
     .prepare("UPDATE jobs SET notice_md = ?, result = ? WHERE id = ?")
     .run(`${"n".repeat(600)}`, `${"r".repeat(600)}`, id);
@@ -637,8 +637,8 @@ test("queue_status never returns the prompt and truncates the free text at five 
 
 test("queue_status of one job shows a host-command counter only when it is not zero", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-status-host-commands");
-  const zero = addJob({ project: "alpha", prompt: "never timed out" }, env).id;
-  const some = addJob({ project: "alpha", prompt: "timed out and got backgrounded" }, env).id;
+  const zero = addJob({ projectId: ensureProject(env, "alpha"), prompt: "never timed out" }, env).id;
+  const some = addJob({ projectId: ensureProject(env, "alpha"), prompt: "timed out and got backgrounded" }, env).id;
   openDb(env).prepare("UPDATE jobs SET bash_timeouts = 0, tasks_backgrounded = 0, tasks_killed = 0 WHERE id = ?").run(zero);
   openDb(env).prepare("UPDATE jobs SET bash_timeouts = 1, tasks_backgrounded = 2, tasks_killed = 0 WHERE id = ?").run(some);
   const client = await connect(t, env);
@@ -656,7 +656,7 @@ test("queue_status of one job shows a host-command counter only when it is not z
 
 test("queue_status of one job carries the five orchestrator counters, zero included", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-status-orchestrator");
-  const id = addJob({ project: "alpha", prompt: "measured job" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "measured job" }, env).id;
   openDb(env)
     .prepare("UPDATE jobs SET orch_turns = 20, orch_reads = 0, orch_bash = 8, orch_bash_explore = 0, orch_ctx_last = 120000 WHERE id = ?")
     .run(id);
@@ -671,7 +671,7 @@ test("queue_status of one job carries the five orchestrator counters, zero inclu
 
 test("queue_status carries the run's own notice, whole, whenever it differs from the row's - and only for one job", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-status-run-notice");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   mkdirSync(logsDir(env), { recursive: true });
   const runNotice = "Delivered - the queue can now be told to work only inside a window.";
   const resultText = `Done.\n\n## Notice\n\n${runNotice}`;
@@ -691,7 +691,7 @@ test("queue_status carries the run's own notice, whole, whenever it differs from
 
 test("queue_status never fails when the log of a finished job is missing: `run_notice` is simply absent", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-status-run-notice-missing");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env)
     .prepare("UPDATE jobs SET status = 'done', notice_md = ?, result = ? WHERE id = ?")
     .run("the row's own notice", JSON.stringify({ status: "done", logPath: jobLogPath(id, env) }), id);
@@ -704,7 +704,7 @@ test("queue_status never fails when the log of a finished job is missing: `run_n
 
 test("queue_status returns a gate notice near three kilobytes whole, and clips it with a pointer in the listing", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-status-big-gate-notice");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const points = Array.from(
     { length: 8 },
     (_, i) => `- **C${i + 1}:** ${"the plan departs from the brief on a point that needs a human call before it goes out. ".repeat(5)}`,
@@ -726,7 +726,7 @@ test("queue_status returns a gate notice near three kilobytes whole, and clips i
 
 test("queue_status refuses instead of answering with no runner for a registry it could not read", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-status-unreadable");
-  addJob({ project: "alpha", prompt: "fix the worker" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env);
   rmSync(runnersDir(env), { recursive: true, force: true });
   writeFileSync(runnersDir(env), "not a directory");
   const client = await connect(t, env);
@@ -764,7 +764,7 @@ async function pollPrState(client, state) {
 
 test("queue_status never writes a delivered job whose pull request is merged, and asks gh from inside a job too without writing", async (t) => {
   const base = makeQueueHome(t, "mcp-queue-merged");
-  deliver(base, addJob({ project: "alpha", prompt: "fix the worker" }, base).id);
+  deliver(base, addJob({ projectId: ensureProject(base, "alpha"), prompt: "fix the worker" }, base).id);
   const env = { ...base, ...isolatedHostVars(makeDir(t, "mcp-queue-merged-host")), NIGHTQUEUE_FAKE_GH_PR_STATE: "MERGED", NIGHTQUEUE_FAKE_GH_PR_SHA: MERGE_SHA };
   delete env.NIGHTQUEUE_NO_PR_CHECK;
 
@@ -812,11 +812,11 @@ test("queue_status answers with the nudge that matches the state of the queue, l
     "an empty queue with no runner stayed silent about it",
   );
 
-  const first = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const first = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const one = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(one.hint, "0 runners online - pending jobs will wait until `nightqueue queue run` starts one");
 
-  addJob({ project: "alpha", prompt: "fix the parser" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env);
   const two = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(two.hint, "0 runners online - pending jobs will wait until `nightqueue queue run` starts one");
 
@@ -831,7 +831,7 @@ test("queue_status answers with the nudge that matches the state of the queue, l
   assert.deepEqual(Object.keys(detail), ["job"], "the detail of a job grew a hint");
 
   const watchedEnv = makeQueueHome(t, "mcp-queue-hint-watch");
-  addJob({ project: "alpha", prompt: "fix the worker" }, watchedEnv);
+  addJob({ projectId: ensureProject(watchedEnv, "alpha"), prompt: "fix the worker" }, watchedEnv);
   writeRunnerRecord(
     { pid: process.pid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/runner.log" },
     watchedEnv,
@@ -903,7 +903,7 @@ test("a runner still waiting for its window is what queue_add says, and a paused
 
 test("a backlog parked by a rate limit is what queue_status says, instead of asking for a batch that would claim nothing", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-hint-parked");
-  const parked = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const parked = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const notBefore = new Date(Date.now() + 3600_000).toISOString();
   claimJobById(parked, { worker: "host:4242", cap: 4 }, env);
   assert.equal(parkJob(parked, { worker: "host:4242", notBefore, result: { rateLimited: true, notBefore } }, env), true, "the fixture did not park the job");
@@ -914,7 +914,7 @@ test("a backlog parked by a rate limit is what queue_status says, instead of ask
   assert.equal(waiting.runner.running, false, "the fixture left a live runner behind, so the nudge is not the one under test");
   assert.equal(waiting.hint, `0 runners online - 1 pending job waiting — the rate limit resets at ${clockLabel(Date.parse(notBefore))} (in 1h00); a batch started now claims nothing before that.`);
 
-  addJob({ project: "alpha", prompt: "fix the parser" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env);
   const mixed = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(mixed.hint, "0 runners online - pending jobs will wait until `nightqueue queue run` starts one", "a job that could be claimed right now was held back by the park of another one");
 });
@@ -958,9 +958,9 @@ test("queue_run and queue_retry start nothing when the ceiling is full, and say 
   const env = makeQueueHome(t, "mcp-queue-run-waiting");
   rmSync(queuePausedPath(env), { force: true });
   saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent: 2 } }, env);
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   for (const prompt of ["hold the first slot", "hold the second slot"]) {
-    claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: 4 }, env);
+    claimJobById(addJob({ projectId: ensureProject(env, "alpha"), prompt }, env).id, { worker: `host:${prompt.length}`, cap: 4 }, env);
   }
   writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", intervalS: null, logPath: null }, env);
   const client = await connect(t, env);
@@ -1057,8 +1057,8 @@ test("the stale-runtime hint never appears when this server already runs the cur
 
 test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a live run or a finished one", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-cancel");
-  const pending = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
-  const running = addJob({ project: "alpha", prompt: "fix the parser" }, env).id;
+  const pending = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
+  const running = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env).id;
   claimJobById(running, { worker: "host:4242", cap: 4 }, env);
   const client = await connect(t, env);
 
@@ -1080,7 +1080,7 @@ test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a
   assert.equal(orphan.job.status, "cancelled");
   assert.equal(orphan.job.worker, null);
 
-  const gated = addJob({ project: "alpha", prompt: "wait for a human" }, env).id;
+  const gated = addJob({ projectId: ensureProject(env, "alpha"), prompt: "wait for a human" }, env).id;
   openDb(env)
     .prepare("UPDATE jobs SET status = 'gate', finished_at = ?, result = ? WHERE id = ?")
     .run(GATED_FINISHED_AT, '{"status":"gate","prUrl":null}', gated);
@@ -1095,12 +1095,12 @@ test("queue_cancel takes a pending job, a gated one and an orphan, and refuses a
 
 test("queue_close runs only on a done job with a pull request, refusing every other job by name without writing", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-close");
-  const noPr = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const noPr = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(noPr);
-  const failed = addJob({ project: "alpha", prompt: "fix the parser" }, env).id;
+  const failed = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'failed', pr_url = ?, finished_at = ? WHERE id = ?").run("https://github.com/acme/api/pull/42", GATED_FINISHED_AT, failed);
-  const pending = addJob({ project: "alpha", prompt: "wait for a human" }, env).id;
-  const running = addJob({ project: "alpha", prompt: "keep running" }, env).id;
+  const pending = addJob({ projectId: ensureProject(env, "alpha"), prompt: "wait for a human" }, env).id;
+  const running = addJob({ projectId: ensureProject(env, "alpha"), prompt: "keep running" }, env).id;
   claimJobById(running, { worker: "host:1", cap: 4 }, env);
   const client = await connect(t, env);
 
@@ -1121,7 +1121,7 @@ test("queue_close runs only on a done job with a pull request, refusing every ot
 
 test("queue_close refuses the home of the runner from inside a job, like queue_cancel", async (t) => {
   const env = makeQueueHome(t, "mcp-close-home-guard");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(id);
   const inJob = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "9", NIGHTQUEUE_JOB_HOME: homeDir(env) });
 
@@ -1133,7 +1133,7 @@ test("queue_close refuses the home of the runner from inside a job, like queue_c
 
 test("queue_retry answers a gate, refuses one without a note and only starts a runner when asked", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-retry");
-  const gated = addJob({ project: "alpha", prompt: "wait for a human" }, env).id;
+  const gated = addJob({ projectId: ensureProject(env, "alpha"), prompt: "wait for a human" }, env).id;
   openDb(env)
     .prepare("UPDATE jobs SET status = 'gate', slug = ?, finished_at = ?, notice_md = ? WHERE id = ?")
     .run("fix-the-worker", GATED_FINISHED_AT, "Rename the column or keep both?", gated);
@@ -1172,8 +1172,8 @@ test("queue_retry answers a gate, refuses one without a note and only starts a r
 
 test("a server pinned to a job refuses queue_retry aimed at any other job, and leaves that job untouched", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-retry-scope");
-  const victim = addJob({ project: "alpha", prompt: "wait for a human" }, env).id;
-  const attacker = addJob({ project: "alpha", prompt: "the run that is speaking" }, env).id;
+  const victim = addJob({ projectId: ensureProject(env, "alpha"), prompt: "wait for a human" }, env).id;
+  const attacker = addJob({ projectId: ensureProject(env, "alpha"), prompt: "the run that is speaking" }, env).id;
   openDb(env)
     .prepare("UPDATE jobs SET status = 'gate', slug = ?, finished_at = ?, notice_md = ? WHERE id = ?")
     .run("fix-the-worker", GATED_FINISHED_AT, "Rename the column or keep both?", victim);

@@ -4,6 +4,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { closeDb, DB_USER_VERSION, openDb } from "../../src/memory/db.mjs";
+import { buildLegacyHome } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
@@ -87,10 +88,14 @@ function insertRow(db, row) {
 
 // Writes a v15 home holding every row of V15_ROWS, closes it, and answers the id of each row by its name.
 function seedV15Home(env) {
-  const db = openDb(env);
-  db.exec(DOWNGRADE_TO_V15);
-  const ids = Object.fromEntries(Object.entries(V15_ROWS).map(([name, row]) => [name, insertRow(db, row)]));
-  closeDb(env);
+  let ids = null;
+  buildLegacyHome(env, {
+    version: 15,
+    mutate(db) {
+      db.exec(DOWNGRADE_TO_V15);
+      ids = Object.fromEntries(Object.entries(V15_ROWS).map(([name, row]) => [name, insertRow(db, row)]));
+    },
+  });
   return ids;
 }
 
@@ -160,7 +165,7 @@ test("a v15 home opens at v18 with the close columns, no ship column, and the cl
   const fresh = makeHome(t, "close-migration-schema-fresh");
   for (const home of [db, openDb(fresh)]) {
     const sql = home.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'").get().sql;
-    assert.match(sql, /close_worker TEXT CHECK \(status <> 'closed' OR \(pr_url IS NOT NULL AND trim\(pr_url\) <> '' AND close_status IS NULL/);
+    assert.match(sql, /close_worker TEXT,\s+CHECK \(status <> 'closed' OR \(pr_url IS NOT NULL AND trim\(pr_url\) <> '' AND close_status IS NULL/);
     assert.match(sql, /json_extract\(close, '\$\.data\.merged'\) END\) IS 1/);
   }
 });

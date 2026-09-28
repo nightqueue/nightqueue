@@ -11,7 +11,7 @@ import {
   saveRoadmapItem,
   updateRoadmapItem,
 } from "../../src/memory/roadmap.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // Saves a roadmap item of a project with the fields every test would otherwise repeat.
 function addItem(env, { project = "alpha", priority, status, title, detail, decision_id }) {
@@ -167,7 +167,7 @@ test("updateRoadmapItem answers the linked decision number and live job status t
   const decision = saveDecision({ project: "alpha", title: "one worktree per job", context: "races", decision: "split" }, env);
   const other = saveDecision({ project: "alpha", title: "second decision", context: "c", decision: "d" }, env);
   const item = addItem(env, { title: "deliver it", decision_id: decision.id });
-  const job = addJob({ project: "alpha", prompt: "deliver it" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "deliver it" }, env);
   linkRoadmapItemJob(item.id, job.id, env);
 
   const statusOnly = updateRoadmapItem(item.id, { status: "todo" }, env);
@@ -186,7 +186,7 @@ test("an item is linked once, refused while its job is live, and refused again o
   const env = makeHome(t, "roadmap-queue-link");
   makeProject(t, env, "alpha");
   const item = addItem(env, { title: "deliver the roadmap" });
-  const job = addJob({ project: "alpha", prompt: "deliver the roadmap" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "deliver the roadmap" }, env);
 
   assert.equal(queueableRoadmapItem(item.id, env).id, item.id);
   assert.equal(linkRoadmapItemJob(item.id, job.id, env), true);

@@ -5,7 +5,7 @@ import { defaultContext, run } from "../../src/cli/index.mjs";
 import { dbPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const MAX_TICKS = 20;
 
@@ -54,7 +54,7 @@ function migrateFromSecondProcess(path, jobId, value) {
 test("a live `queue status --follow` session keeps seeing fresh data after a concurrent schema migration lands a new column mid-session", async (t) => {
   const env = makeHome(t, "follow-schema-migration");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
 
   const first = openDb(env);

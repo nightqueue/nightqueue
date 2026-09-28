@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { addJob, claimJobById, getJob, releaseJob } from "../../src/memory/jobs.mjs";
 import { acquire } from "../../src/queue/claim.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // Deterministic interleave: right when `acquire`'s refusal path re-reads the job to phrase the
 // reason, another process claims-then-releases it back to pending in that exact instant.
@@ -12,7 +12,7 @@ import { makeHome, makeProject } from "../../test-support/memory.mjs";
 test("with no ceiling, a job that raced back to pending is never explained as not-pending", async (t) => {
   const env = makeHome(t, "claim-no-cap-refusal-race");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
 
   // A ghost worker claims the job first, so the caller under test finds it already running.
   const claimed = claimJobById(id, { worker: "ghost-worker", cap: null }, env);

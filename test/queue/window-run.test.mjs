@@ -9,7 +9,7 @@ import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { runCycle, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../../src/queue/runner.mjs";
 import { registerForegroundRunner } from "../../src/queue/start.mjs";
 import { resolveWindow } from "../../src/queue/window.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, PR_URL } from "../../test-support/streams.mjs";
 
@@ -31,7 +31,7 @@ function makeRunnerHome(t, name, attempts = [{ stdout: doneStream(), exitCode: 0
 
 // Enqueues one job of the test project.
 function enqueue(env) {
-  return addJob({ project: "alpha", prompt: PROMPT }, env).id;
+  return addJob({ projectId: ensureProject(env, "alpha"), prompt: PROMPT }, env).id;
 }
 
 // A sleep double that records every slice it was asked to wait, running the given hook on each one; the hook can end the wait early.
@@ -259,7 +259,7 @@ test("a malformed clock (not two-digit HH:MM) is refused", async (t) => {
 
 test("`--from`/`--until` next to `--job` are refused", async (t) => {
   const env = makeCliHome(t, "window-cli-job");
-  const job = addJob({ project: "alpha", prompt: "fix it" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix it" }, env);
   const calls = [];
 
   const result = await runCli(env, ["queue", "run", "--job", String(job.id), "--until", "04:00"], { calls });

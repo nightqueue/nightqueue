@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { addJob, claimJobById, finishJob, retryJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // H3 (QA analyst, Group 2): the 500-code-point cut of `retryRefusal` /
 // `jobView`'s `notice_md` (src/memory/jobs.mjs:517-527, :166, :133). Every case
@@ -19,7 +19,7 @@ function makeQueue(t, name) {
 
 // A gated job whose recorded notice is exactly the text given (or absent when null).
 function makeGatedJob(env, notice) {
-  const id = addJob({ project: "alpha", prompt: "fix" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   finishJob(id, { worker: "host:1", status: "gate", noticeMd: notice }, env);
   return id;
@@ -58,7 +58,7 @@ test("a notice of 501 code points is cut at exactly 500, with the exact pointer 
 
 test("a gated job with no recorded notice never prints `null` or `undefined`", (t) => {
   const env = makeQueue(t, "retry-boundary-null");
-  const id = addJob({ project: "alpha", prompt: "fix" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   finishJob(id, { worker: "host:1", status: "gate" }, env);
   const message = refusalMessage(id, env);

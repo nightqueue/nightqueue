@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { jobLogPath, queuePausedPath, queueResumePath, runDir } from "../../src/config/paths.mjs";
-import { registerCheckout } from "../../test-support/memory.mjs";
+import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
@@ -57,7 +57,7 @@ function projectPath(env) {
 
 // Enqueues one job of the test project straight in the database.
 function enqueue(env, prompt = "fix the worker") {
-  return addJob({ project: "alpha", prompt }, env).id;
+  return addJob({ projectId: ensureProject(env, "alpha"), prompt }, env).id;
 }
 
 test("--help lists the queue commands next to the ones that were already there", (t) => {
@@ -161,7 +161,7 @@ test("queue add --run --foreground exits 1 on any outcome other than done, and w
 
   saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent: 2 } }, env);
   for (const prompt of ["hold the first slot", "hold the second slot"]) {
-    claimJobById(addJob({ project: "alpha", prompt }, env).id, { worker: `host:${prompt.length}`, cap: 4 }, env);
+    claimJobById(addJob({ projectId: ensureProject(env, "alpha"), prompt }, env).id, { worker: `host:${prompt.length}`, cap: 4 }, env);
   }
   const capped = runCli(env, ["queue", "add", "alpha", "fix the parser", "--run", "--foreground"]);
   assert.equal(capped.status, 1, capped.stdout);
@@ -452,7 +452,7 @@ test("queue status shows the elapsed time and the last narration of a running jo
   const env = makeCliHome(t, "cli-status-running");
   makeGitProject(t, env, "beta");
   const narrating = enqueue(env, "fix the worker");
-  const silent = addJob({ project: "beta", prompt: "fix the parser" }, env).id;
+  const silent = addJob({ projectId: ensureProject(env, "beta"), prompt: "fix the parser" }, env).id;
   const finished = enqueue(env, "fix the docs");
   claimJobById(narrating, { worker: "host:4242", cap: 4 }, env);
   claimJobById(silent, { worker: "host:4243", cap: 4 }, env);

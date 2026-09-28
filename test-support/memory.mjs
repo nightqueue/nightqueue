@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { isId } from "../src/config/ids.mjs";
 import { requireGitPath } from "../src/config/projects.mjs";
 import { loadConfig } from "../src/config/store.mjs";
+import { hasColumn } from "../src/memory/columns.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
 import { acquireClose, addJob, claimJobById, finishJob, persistRunFacts, settleClose } from "../src/memory/jobs.mjs";
 import * as registry from "../src/memory/registry.mjs";
@@ -100,9 +101,12 @@ export function registerCheckout(env, { path, name, org } = {}) {
   return registry.insertProject(openDb(env), { name, path: requireGitPath(path), orgId });
 }
 
-// Drops a project from the registry however many rows still name it, the state a hand-edited registry leaves: for the tests of an unknown project.
-export function unregisterProject(env, name) {
-  openDb(env).prepare("DELETE FROM projects WHERE name = ?").run(name);
+// Takes the checkout away from a registered project, which leaves it known only from history: for the tests of a project with nowhere to run.
+export function dropCheckout(env, name) {
+  const db = openDb(env);
+  const project = registry.projectByName(db, name);
+  if (!project) throw new Error(`dropCheckout: no project \`${name}\``);
+  registry.moveProject(db, { id: project.id, path: null });
 }
 
 // Registers a temporary directory that looks like a git repository as a project of the home, in the org the test asks for.
@@ -127,6 +131,16 @@ ALTER TABLE roadmap_items DROP COLUMN org;
 PRAGMA user_version = 5;
 `;
 
+// A statement inserting a legacy job row whose first value is its project NAME: by name into a v17 `jobs`, or mapped
+// through the registry into the id-keyed `jobs` of a home that was already opened (registered) before it was turned legacy.
+function legacyJobInsert(db, columns) {
+  const byId = hasColumn(db, "jobs", "project_id");
+  const owner = byId ? "project_id" : "project";
+  const first = byId ? "(SELECT id FROM projects WHERE name = ?)" : "?";
+  const rest = columns.map(() => "?");
+  return db.prepare(`INSERT INTO jobs (${[owner, ...columns].join(", ")}) VALUES (${[first, ...rest].join(", ")})`);
+}
+
 // Re-creates what a v8 build leaves behind - the `pr_checked_at` column and rows still on the retired `merged` status -
 // so a test can drive the runtime that is supposed to migrate it and check the home landed on v9.
 export function seedLegacyV8Home(env, { rows = 1, project = "alpha" } = {}) {
@@ -135,8 +149,8 @@ export function seedLegacyV8Home(env, { rows = 1, project = "alpha" } = {}) {
     version: 8,
     mutate(db) {
       db.exec("ALTER TABLE jobs ADD COLUMN pr_checked_at TEXT");
-      const insert = db.prepare("INSERT INTO jobs (project, prompt, status, pr_url) VALUES (?, ?, 'merged', ?)");
-      const legacyRow = (index) => insert.run(project, `legacy job ${index + 1}`, `https://github.com/acme/api/pull/${index + 1}`);
+      const insert = legacyJobInsert(db, ["prompt", "status", "pr_url"]);
+      const legacyRow = (index) => insert.run(project, `legacy job ${index + 1}`, "merged", `https://github.com/acme/api/pull/${index + 1}`);
       ids = Array.from({ length: rows }, (_, index) => Number(legacyRow(index).lastInsertRowid));
     },
   });
@@ -158,7 +172,7 @@ export function mergedChecklist(prNumber = 7) {
 
 // Seeds a job that ended `done` with a pull request, through the real store writes, and answers its id.
 export function seedDoneJob(env, { project = "alpha", prompt = "seeded job", prUrl = "https://github.com/acme/api/pull/7", slug = null } = {}) {
-  const { id } = addJob({ project, prompt }, env);
+  const { id } = addJob({ projectId: ensureProject(env, project), prompt }, env);
   claimJobById(id, { worker: SEED_WORKER, cap: null }, env);
   if (slug) persistRunFacts(id, { worker: SEED_WORKER, slug }, env);
   if (!finishJob(id, { worker: SEED_WORKER, status: "done", prUrl }, env)) throw new Error(`seedDoneJob: job #${id} could not be finished`);
@@ -219,8 +233,8 @@ export function seedLegacyV16Roadmap(env, { items = [], jobs = [], sequence = nu
 // The raw v16 rows of a legacy roadmap: the table rebuilt in its v16 shape, then its jobs and items as a v16 build wrote them.
 function seedV16Rows(db, { items, jobs, sequence }) {
   db.exec(LEGACY_V16_ROADMAP_DDL);
-  const insertJob = db.prepare("INSERT INTO jobs (id, project, prompt, status, result, pr_url) VALUES (?, ?, ?, ?, ?, ?)");
-  for (const job of jobs) insertJob.run(job.id, job.project, "legacy job", job.status, job.result ?? null, job.pr_url ?? null);
+  const insertJob = legacyJobInsert(db, ["id", "prompt", "status", "result", "pr_url"]);
+  for (const job of jobs) insertJob.run(job.project, job.id, "legacy job", job.status, job.result ?? null, job.pr_url ?? null);
   const insertItem = db.prepare(
     `INSERT INTO roadmap_items (id, scope, project, org, horizon, title, status, position, job_id, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

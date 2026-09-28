@@ -8,7 +8,7 @@ import { addJob } from "../../src/memory/jobs.mjs";
 import { insertComment } from "../../src/memory/roadmap-comments.mjs";
 import { searchRoadmap } from "../../src/memory/roadmap-search.mjs";
 import { saveRoadmapItem } from "../../src/memory/roadmap.mjs";
-import { makeHome, makeProject, seedLegacyV16Roadmap } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, seedLegacyV16Roadmap } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
@@ -124,7 +124,7 @@ test("roadmap_search inside a job reads only the job's project, and refuses anot
   const orgItem = item(env, { org: "acme" }, "shared cache layer");
   comment(env, orgItem.id, { body: "beta cache miss", project: "beta" });
   item(env, { project: "beta" }, "beta cache layer");
-  const job = addJob({ project: "alpha", prompt: "work" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "work" }, env);
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const own = JSON.parse(textOf(await client.callTool({ name: "roadmap_search", arguments: { query: "cache" } })));

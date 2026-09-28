@@ -34,7 +34,7 @@ import {
   retryJob,
 } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
-import { makeHome, makeProject, projectIdOf, seedClosedJob } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf, seedClosedJob } from "../../test-support/memory.mjs";
 
 const WORKER = "host:1000";
 const OTHER_WORKER = "host:2000";
@@ -52,7 +52,7 @@ function makeQueue(t, name) {
 
 // Enqueues a job with the fields the test cares about.
 function enqueue(env, { project = "alpha", prompt = "fix the worker", priority, maxAttempts, timeoutS } = {}) {
-  return addJob({ project, prompt, priority, maxAttempts, timeoutS }, env).id;
+  return addJob({ projectId: ensureProject(env, project), prompt, priority, maxAttempts, timeoutS }, env).id;
 }
 
 // Moves the lease of a job past the reclaim grace, which is how a runner that died looks from the outside.
@@ -62,36 +62,39 @@ function expireLease(env, id) {
 
 test("addJob refuses an empty prompt and every value outside the accepted ranges", (t) => {
   const env = makeQueue(t, "jobs-add");
-  assert.throws(() => addJob({ project: "alpha", prompt: "   " }, env), /prompt.*required/);
-  assert.throws(() => addJob({ project: "", prompt: "x" }, env), /project.*required/);
+  assert.throws(() => addJob({ projectId: ensureProject(env, "alpha"), prompt: "   " }, env), /prompt.*required/);
+  assert.throws(() => addJob({ projectId: "", prompt: "x" }, env), /projectId.*required/);
+  assert.throws(() => addJob({ projectId: "alpha", prompt: "x" }, env), /expected a project id, got `alpha`/);
+  assert.throws(() => addJob({ projectId: "0".repeat(26), prompt: "x" }, env), /unknown project id `0{26}`/);
+  assert.equal(countsByStatus(env).pending, 0, "a refused project still wrote a job row");
   assert.throws(() => enqueue(env, { priority: 0 }), /invalid `priority`/);
   assert.throws(() => enqueue(env, { priority: 10 }), /invalid `priority`/);
   assert.throws(() => enqueue(env, { maxAttempts: 99 }), /invalid `max_attempts`/);
   assert.throws(() => enqueue(env, { timeoutS: 30 }), /invalid `timeout_s`/);
-  const job = addJob({ project: "alpha", prompt: "  fix the worker  " }, env);
-  assert.deepEqual({ ...job, id: undefined }, { id: undefined, project: "alpha", priority: 5, maxAttempts: 1, timeoutS: 14400, tier: null });
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "  fix the worker  " }, env);
+  assert.deepEqual({ ...job, id: undefined }, { id: undefined, projectId: ensureProject(env, "alpha"), project: "alpha", priority: 5, maxAttempts: 1, timeoutS: 14400, tier: null });
   assert.equal(getJob(job.id, env).prompt, "fix the worker");
 });
 
 test("the operator's tier is stored, refused when it is not one of the three, and absent when nothing was informed", (t) => {
   const env = makeQueue(t, "jobs-tier");
-  const job = addJob({ project: "alpha", prompt: "fix the worker", tier: "complex" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", tier: "complex" }, env);
   assert.equal(job.tier, "complex");
   assert.equal(getJob(job.id, env).tier, "complex");
   assert.equal(jobView(getJob(job.id, env)).tier, "complex");
 
   assert.throws(
-    () => addJob({ project: "alpha", prompt: "fix the parser", tier: "urgent" }, env),
+    () => addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser", tier: "urgent" }, env),
     /invalid `tier`: `urgent`; expected one of trivial\|simple\|complex/,
   );
   assert.equal(countsByStatus(env).pending, 1, "the refused tier still wrote a job row");
 
   for (const tier of ["", "   ", undefined, null]) {
-    const none = addJob({ project: "alpha", prompt: "fix the parser", tier }, env);
+    const none = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser", tier }, env);
     assert.equal(none.tier, null, `\`${String(tier)}\` should store no tier`);
     assert.equal(getJob(none.id, env).tier, null);
   }
-  assert.equal(addJob({ project: "alpha", prompt: "trim it", tier: " simple " }, env).tier, "simple");
+  assert.equal(addJob({ projectId: ensureProject(env, "alpha"), prompt: "trim it", tier: " simple " }, env).tier, "simple");
 });
 
 test("the claim takes the highest priority first, arms the lease and spends one attempt", (t) => {
@@ -148,15 +151,20 @@ test("the active jobs per project count only live leases, grouped by project in 
   enqueue(env);
   for (const id of [beta, ...alpha]) claimJobById(id, { worker: WORKER, cap: null }, env);
 
+  const ids = { alpha: ensureProject(env, "alpha"), beta: ensureProject(env, "beta") };
   assert.deepEqual(countActiveJobsByProject(env), [
-    { project: "alpha", count: 2 },
-    { project: "beta", count: 1 },
+    { projectId: ids.alpha, project: "alpha", count: 2 },
+    { projectId: ids.beta, project: "beta", count: 1 },
   ]);
 
   expireLease(env, alpha[0]);
   expireLease(env, beta);
   assert.equal(countsByStatus(env).running, 3, "the fixture did not leave the orphaned jobs in `running`");
-  assert.deepEqual(countActiveJobsByProject(env), [{ project: "alpha", count: 1 }], "an orphaned lease still counted as a runner on its project");
+  assert.deepEqual(
+    countActiveJobsByProject(env),
+    [{ projectId: ids.alpha, project: "alpha", count: 1 }],
+    "an orphaned lease still counted as a runner on its project",
+  );
 });
 
 test("release gives the job back without spending the attempt and keeps the previous reason", (t) => {
@@ -258,7 +266,7 @@ test("the run facts are written once each and never by a worker that lost the jo
 
 test("persistRunFacts refuses a slug another job of the project holds, whatever its status, and accepts it in another project", (t) => {
   const env = makeQueue(t, "jobs-facts-slug-held");
-  const holder = addJob({ project: "alpha", prompt: "fix the worker", slug: "fix-the-worker" }, env).id;
+  const holder = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", slug: "fix-the-worker" }, env).id;
   cancelJob(holder, {}, env);
   const same = enqueue(env);
   const other = enqueue(env, { project: "beta" });
@@ -272,7 +280,7 @@ test("persistRunFacts refuses a slug another job of the project holds, whatever 
 
 test("bindRunSlug claims the first candidate no other job of the project holds, and refuses a worker that lost the job", (t) => {
   const env = makeQueue(t, "jobs-bind-slug");
-  addJob({ project: "alpha", prompt: "fix the worker", slug: "fix-the-worker" }, env);
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", slug: "fix-the-worker" }, env);
   const id = enqueue(env);
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   assert.deepEqual(bindRunSlug(id, { worker: OTHER_WORKER, candidates: ["fix-the-worker-2"] }, env), { status: "lost" });

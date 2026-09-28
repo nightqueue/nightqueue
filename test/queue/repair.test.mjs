@@ -11,7 +11,7 @@ import { getRoadmapItem, linkRoadmapItemJob, saveRoadmapItem } from "../../src/m
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { reclassifyFromLog } from "../../src/queue/repair.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 import {
   attemptMarker,
   codeChangePublishedEvent,
@@ -64,7 +64,7 @@ function writeRunState(env, { slug = SLUG, terminal = { status: "gate", prUrl: n
 
 // A job that ended the way the bug records it: `gate`, no pull request, and its whole stream on disk.
 function finishedJob(env, { status = "gate", result = CLEAN_ENDING, log = intermediateDeliveryStream(), slug = SLUG } = {}) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(slug, id);
   finishJob(id, { worker: WORKER, status, result, noticeMd: NOTICE }, env);
@@ -189,7 +189,7 @@ test("each refusal of `queue repair` names what is missing, and none of them wri
 
   await assert.rejects(() => reclassifyFromLog({ id: 4242, env }), /unknown job `4242`/);
 
-  const live = addJob({ project: "alpha", prompt: "still running" }, env).id;
+  const live = addJob({ projectId: ensureProject(env, "alpha"), prompt: "still running" }, env).id;
   claimJobById(live, { worker: WORKER, cap: CAP }, env);
   writeJobLog(env, live, intermediateDeliveryStream());
   await assert.rejects(() => reclassifyFromLog({ id: live, env }), /is running with a live lease/);

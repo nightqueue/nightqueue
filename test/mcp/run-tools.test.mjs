@@ -11,7 +11,7 @@ import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { getRoadmapItem, linkRoadmapItemJob, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { decideResume } from "../../src/queue/resume.mjs";
-import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const WORKER = "host:4242";
@@ -47,7 +47,7 @@ function readState(env, project, slug) {
 function makeRunningJob(t, name, { slug = SLUG, sessionId = null } = {}) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  const job = addJob({ project: "alpha", prompt: "rewrite the runner" }, env);
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "rewrite the runner" }, env);
   claimJobById(job.id, { worker: WORKER, cap: 4 }, env);
   if (slug) persistRunFacts(job.id, { worker: WORKER, slug, sessionId }, env);
   return { env, job };

@@ -7,7 +7,7 @@ import { decideResume, readRunState, resumeHandoff } from "../../src/queue/resum
 import { recordPhaseDone, recordRunFields } from "../../src/queue/run-state.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
 import { releaseJobWorktree } from "../../src/queue/worktree.mjs";
-import { makeHome } from "../../test-support/memory.mjs";
+import { makeHome, projectIdOf } from "../../test-support/memory.mjs";
 import { addWorktree, git, gitVars, publishedCheckout } from "../../test-support/worktrees.mjs";
 
 const SLUG = "resume-branch";
@@ -45,7 +45,8 @@ test("a run whose branch was recorded under its published name still resumes in 
 test("releasing the worktree of a job whose branch was renamed finds it by its path, never by the pre-rename name", async (t) => {
   const { env, worktree } = publishedRun(t, "resume-branch-release");
 
-  const released = await releaseJobWorktree({ job: { project: "alpha", slug: SLUG, pr_url: PR }, env });
+  const job = { project: "alpha", project_id: projectIdOf(env, "alpha"), slug: SLUG, pr_url: PR };
+  const released = await releaseJobWorktree({ job, env });
 
   assert.deepEqual(released, { path: worktree, status: "removed" });
   assert.equal(existsSync(worktree), false);

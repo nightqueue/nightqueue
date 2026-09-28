@@ -32,7 +32,7 @@ test("a read-only store refuses a write by name instead of falling back to a wri
   openDb(env);
   const store = openStoreReadOnly(env);
 
-  await assert.rejects(() => store.jobs.addJob({ project: "alpha", prompt: "write me" }), /`jobs\.addJob`/);
+  await assert.rejects(() => store.jobs.addJob({ projectId: null, prompt: "write me" }), /`jobs\.addJob`/);
   await assert.rejects(() => store.orgs.rename("a", "b"), /`orgs\.rename`/);
   assert.equal(await store.jobs.status(1), null, "an allowed read still answers: there is no job 1");
 });

@@ -7,7 +7,7 @@ import { pauseFromEvent, readOwnPause, recordOwnPause } from "../../src/queue/ra
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { extractRateLimitFromEventLine } from "../../src/queue/stream.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, PR_URL, rateLimitEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
@@ -42,7 +42,7 @@ test("a registry write that fails leaves the child's own protection reading no p
   await assert.rejects(recordOwnPause(pause, env), "the write did not fail the way a full disk or a permission error would");
 
   // The production path, seam included: `runAttempts` builds the child's pause signal itself.
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const cycle = await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit(), idleTimeoutS, stopPollMs: 500 } });
 
   assert.equal(readOwnPause(env), null, "the durable record shows a pause after the write meant to persist it failed");

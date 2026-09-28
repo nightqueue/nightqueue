@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { registerCheckout } from "../../test-support/memory.mjs";
+import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, LEASE_GRACE_S } from "../../src/memory/jobs.mjs";
@@ -34,7 +34,7 @@ function makeCliHome(t, name) {
 }
 
 function enqueue(env, prompt = "fix the worker") {
-  return addJob({ project: "alpha", prompt }, env).id;
+  return addJob({ projectId: ensureProject(env, "alpha"), prompt }, env).id;
 }
 
 // Expires a job's lease well past the grace window, the same runtime-derived shape `doctor` treats as orphaned.

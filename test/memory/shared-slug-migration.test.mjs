@@ -5,7 +5,7 @@ import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { carriesOperatorSeed, OPERATOR_SEED_HEADING, sharedSlugPending } from "../../src/memory/shared-slug-migration.mjs";
 import { PRIOR_RUN_HEADING } from "../../src/queue/operator-run.mjs";
-import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const SHARED = "tier-complex-set-by-the-operator";
 const PR_74 = "https://github.com/acme/api/pull/74";
@@ -20,7 +20,7 @@ function makeQueue(t, name) {
 
 // Writes one job row the way a build without the fix left it: raw SQL is the only way to reach that state now.
 function seedRow(env, { prompt = "fix the worker", slug = SHARED, status = "pending", prUrl = null, branch = null, result = null } = {}) {
-  const id = addJob({ project: "alpha", prompt }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt }, env).id;
   openDb(env)
     .prepare("UPDATE jobs SET slug = ?, status = ?, pr_url = ?, branch = ?, result = ? WHERE id = ?")
     .run(slug, status, prUrl, branch, result, id);

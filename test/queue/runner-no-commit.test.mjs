@@ -7,7 +7,7 @@ import { NOTHING_TO_CLOSE_LINE } from "../../src/queue/classify.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { jobDetailView } from "../../src/queue/view.mjs";
 import { withReadOnlyStore } from "../../src/store/open.mjs";
-import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { noticeText, resultEvent, SLUG, slugEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
@@ -25,7 +25,7 @@ function noPrHome(t, name, attempts = [{ stdout: NO_PR, exitCode: 0 }], { maxAtt
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   useFakeClaude(env, makeDir(t, `${name}-plan`), attempts);
-  const id = addJob({ project: "alpha", prompt: "fix the worker", maxAttempts }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts }, env).id;
   return { env, id };
 }
 

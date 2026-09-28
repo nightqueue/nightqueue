@@ -312,7 +312,7 @@ async function addFromPrompt(positionals, values, ctx) {
   const prompt = target.words.join(" ").trim();
   if (!prompt) throw new UserError(`missing argument; usage: ${USAGE.add}`);
   if (target.fromCwd) ctx.out(`project \`${target.project.name}\` resolved from the current directory`);
-  return await openStore(ctx.env).jobs.addJob({ project: target.project.name, prompt, ...addLimits(values) });
+  return await openStore(ctx.env).jobs.addJob({ projectId: target.project.id, prompt, ...addLimits(values) });
 }
 
 // Refuses `--run` for an org item queued for `all`, because it starts one job and `all` fathers one per project.

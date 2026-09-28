@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { registerCheckout } from "../../test-support/memory.mjs";
+import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
@@ -23,7 +23,7 @@ function makeRaceHome(t, name) {
 // A `done` job whose run recorded a real, clean, pushed worktree of the checkout.
 function doneJobWithWorktree(home, slug) {
   const worktree = addWorktree(home.checkout, `feat+${slug}`);
-  const id = addJob({ project: "alpha", prompt: `work of ${slug}` }, home.env).id;
+  const id = addJob({ projectId: ensureProject(home.env, "alpha"), prompt: `work of ${slug}` }, home.env).id;
   openDb(home.env).prepare("UPDATE jobs SET status = 'done', slug = ?, pr_url = 'https://github.com/acme/api/pull/7' WHERE id = ?").run(slug, id);
   recordRunFields({ project: "alpha", slug, fields: { worktree: worktree.path }, env: home.env });
   return { id, ...worktree };

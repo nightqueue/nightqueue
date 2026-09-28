@@ -9,7 +9,7 @@ import { isoToSqlite, openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const WRITER = join(PACKAGE_ROOT, "test-support", "concurrent-writer.mjs");
@@ -31,7 +31,7 @@ function copyRuntime(t, name) {
 
 // Enqueues a job, claims it and records the slug of its run: the row a runner owns while it works.
 function runningJob(env) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
   return id;

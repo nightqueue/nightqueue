@@ -4,7 +4,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { acquireClose, addJob, getJob } from "../../src/memory/jobs.mjs";
 import { runClosePipeline } from "../../src/queue/close.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const PR_URL = "https://github.com/acme/api/pull/7";
 const MERGE_SHA = "abc1234def5678";
@@ -13,7 +13,7 @@ const MERGE_SHA = "abc1234def5678";
 function closeHome(t, name, { worker = "close:test:1:aaaa", notice = "A" } = {}) {
   const env = makeHome(t, name);
   const checkout = makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ?, notice_md = ? WHERE id = ?").run(PR_URL, notice, id);
   acquireClose(id, { worker, leaseS: 660 }, env);
   return { env, checkout, id, worker, store: openStore(env) };

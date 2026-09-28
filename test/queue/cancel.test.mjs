@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
-import { registerCheckout } from "../../test-support/memory.mjs";
+import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
@@ -44,7 +44,7 @@ async function callTool(t, env, name, args) {
 // A job of `alpha` in the given status whose run recorded a worktree of its own, clean and published.
 function jobWithWorktree(home, { status, slug, prUrl = null }) {
   const worktree = addWorktree(home.checkout, `feat+${slug}`);
-  const id = addJob({ project: "alpha", prompt: `a ${status} job` }, home.env).id;
+  const id = addJob({ projectId: ensureProject(home.env, "alpha"), prompt: `a ${status} job` }, home.env).id;
   const lease = status === "running" ? "datetime('now', '-1 hour')" : "NULL";
   openDb(home.env)
     .prepare(`UPDATE jobs SET status = ?, slug = ?, pr_url = ?, worker = 'host:1', lease_until = ${lease} WHERE id = ?`)

@@ -7,7 +7,7 @@ import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, getJob, jobView } from "../../src/memory/jobs.mjs";
 import { CLOSE_MERGED_QUERY_LIMIT } from "../../src/queue/close-merged.mjs";
 import { createPrStateCache } from "../../src/queue/pr-state.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { fakeCloseDeps, mergedPr, openPr } from "../../test-support/close.mjs";
 
 // A home with the pull request checks switched back on, the default `makeHome` turns off.
@@ -20,7 +20,7 @@ function makeCloseHome(t, name) {
 
 // Enqueues a job straight in the database, already in the given status with a pull request url.
 function terminalJob(env, { status = "done", prUrl, prompt = "fix the worker" } = {}) {
-  const id = addJob({ project: "alpha", prompt }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ? WHERE id = ?").run(status, prUrl, id);
   return id;
 }
@@ -147,7 +147,7 @@ test("a candidate already cached as merged is closed with zero gh calls", async 
 test("a running job with a merged pull request is never closed", async (t) => {
   const env = makeCloseHome(t, "close-merged-running");
   const prUrl = "https://github.com/acme/api/pull/1";
-  const id = addJob({ project: "alpha", prompt: "keep running" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "keep running" }, env).id;
   openDb(env).prepare("UPDATE jobs SET pr_url = ? WHERE id = ?").run(prUrl, id);
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   const prStates = createPrStateCache({ viewImpl: async () => ({ ok: true, state: "MERGED", mergedAt: "2026-09-11T15:54:01Z" }) });

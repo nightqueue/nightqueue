@@ -7,7 +7,7 @@ import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { provisionalSlug } from "../../src/queue/spawn.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { assistantEvent, noticeText, PR_URL, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
@@ -31,7 +31,7 @@ test("Group B: a run directory already on disk before the job's exclusive mkdir 
   const env = makeHome(t, "run-slug-dir-race-qa");
   makeProject(t, env, "alpha");
   useFakeClaude(env, makeDir(t, "run-slug-dir-race-qa-plan"), [{ stdout: unnamedDoneStream(), exitCode: 0 }]);
-  const jobId = addJob({ project: "alpha", prompt: "Investigate the slug directory race window left by a concurrent writer" }, env).id;
+  const jobId = addJob({ projectId: ensureProject(env, "alpha"), prompt: "Investigate the slug directory race window left by a concurrent writer" }, env).id;
 
   // The run directory is claimed by an exclusive, non-recursive mkdir before the bind, so the only window left is a
   // directory that already exists when the job's mkdir runs. Every `bindRunSlug` call is recorded with whether its

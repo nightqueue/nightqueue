@@ -8,7 +8,7 @@ import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
 import { discardRunDir } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const SESSION_ID = "11111111-2222-3333-4444-555555555555";
 
@@ -29,7 +29,7 @@ function writeRun(env, { project, slug }) {
 
 // Enqueues a job and leaves it at the gate with the columns a finished run would have written.
 function gatedJob(env, { slug = "fix-the-worker", branch = "fix/the-worker", note = "why it stopped" } = {}) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env)
     .prepare(
       "UPDATE jobs SET status = 'gate', slug = ?, branch = ?, session_id = ?, notice_md = ?, finished_at = datetime('now') WHERE id = ?",
@@ -186,7 +186,7 @@ test("a retry called from inside job A cannot touch job B: no delete, no note, n
 
 test("a retry of its own job from inside an unattended run passes the guard and is then decided by the status alone", async (t) => {
   const env = makeQueue(t, "retry-own-job");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:4242", cap: 4 }, env);
   const inside = { ...env, NIGHTQUEUE_JOB_ID: String(id) };
 

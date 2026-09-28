@@ -2,9 +2,8 @@ import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { dbPath } from "../config/paths.mjs";
 import { ensureHome, loadRawConfig } from "../config/store.mjs";
-import { addColumnIfMissing, dropColumnIfPresent } from "./columns.mjs";
+import { addColumnIfMissing } from "./columns.mjs";
 import { EVOLVING_COLUMNS, FTS, INDEXES, REGISTRY, ROADMAP_FTS, SCHEMA } from "./ddl.mjs";
-import { closeMigrationPending, migrateCloseColumns } from "./migration/close-columns.mjs";
 import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schemaState } from "./migration/v18.mjs";
 import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
@@ -65,10 +64,6 @@ function createRegistry(db, env) {
 // Brings an existing database to the current schema: evolving columns, indexes and the FTS mirrors.
 function migrate(db) {
   for (const [table, column, definition] of EVOLVING_COLUMNS) addColumnIfMissing(db, table, column, definition);
-  dropColumnIfPresent(db, "jobs", "pr_checked_at");
-  dropColumnIfPresent(db, "jobs", "merged_at");
-  dropColumnIfPresent(db, "jobs", "merge_sha");
-  if (closeMigrationPending(db)) inTransaction(db, () => migrateCloseColumns(db));
   if (sharedSlugPending(db)) inTransaction(db, () => migrateSharedSlugs(db));
   db.exec(INDEXES);
   db.exec(FTS);

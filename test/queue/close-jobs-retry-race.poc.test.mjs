@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
 import { acquireClose, addJob, getJob, retryJob, settleClose } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject, mergedChecklist } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, mergedChecklist } from "../../test-support/memory.mjs";
 
 // H1a — src/memory/jobs.mjs (acquireClose, settleClose)
 //
@@ -13,11 +13,11 @@ import { makeHome, makeProject, mergedChecklist } from "../../test-support/memor
 test("a failed job is never force-acquired, a done job under a close is never reopened by retry, and a moved row refuses the settle", (t) => {
   const env = makeHome(t, "close-jobs-retry-race");
   makeProject(t, env, "alpha");
-  const failed = addJob({ project: "alpha", prompt: "fix the parser" }, env).id;
+  const failed = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'failed', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/8", failed);
   assert.equal(acquireClose(failed, { worker: "close:test:1:aaaa", leaseS: 660, force: true }, env), null, "a failed job took a close lease");
 
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/7", id);
   const worker = "close:test:1:aaaa";
   assert.ok(acquireClose(id, { worker, leaseS: 660 }, env), "a done job must take the close lease");

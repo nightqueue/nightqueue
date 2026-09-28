@@ -19,7 +19,7 @@ import { runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { createServer } from "../../src/mcp/tools.mjs";
 import { recordPhaseDone, recordRunFields } from "../../src/queue/run-state.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const SLUG = "hunt-the-notice";
 const PROMPT = "## Brief\nqueue status shows the same notice twice\n\n## Stages\n1) fix it\n";
@@ -51,7 +51,9 @@ async function connectInProcess(t, env) {
 
 // Every open (not `closed`) job bound to this run's slug.
 function boundJobs(env) {
-  return openDb(env).prepare("SELECT id, status FROM jobs WHERE project = ? AND slug = ? AND status <> 'closed'").all("alpha", SLUG);
+  return openDb(env)
+    .prepare("SELECT id, status FROM jobs WHERE project_id = ? AND slug = ? AND status <> 'closed'")
+    .all(projectIdOf(env, "alpha"), SLUG);
 }
 
 test("two concurrent queue_add(run_dir) calls for the same run must not both bind a job to it", async (t) => {

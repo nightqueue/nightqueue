@@ -10,6 +10,7 @@ import {
   INDEXES,
   REGISTRY,
   ROADMAP_FTS,
+  jobsDdl,
   lessonsDdl,
   memoryDdl,
   pipelineRunsDdl,
@@ -37,6 +38,7 @@ export const REBUILT_TABLES = Object.freeze([
   { table: "project_index", ddl: projectIndexDdl },
   { table: "project_libs", ddl: projectLibsDdl },
   { table: "pipeline_runs", ddl: pipelineRunsDdl },
+  { table: "jobs", ddl: jobsDdl },
 ]);
 
 // The refusal a live lease causes: exactly one line, never wrapped, because only stopping the runners fixes it.

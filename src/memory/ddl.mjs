@@ -6,6 +6,7 @@ import {
   ROADMAP_TYPES,
   sqlList,
 } from "./roadmap-workflow.mjs";
+import { CLOSED_REQUIRES_MERGE } from "./schema.mjs";
 
 // The current schema of the memory database: one source for a fresh creation and for the v18 migration.
 
@@ -215,15 +216,11 @@ export function pipelineRunsDdl(name) {
 );`;
 }
 
-export const SCHEMA = `
-${lessonsDdl("lessons")}
-${memoryDdl("memory")}
-${projectIndexDdl("project_index")}
-${projectLibsDdl("project_libs")}
-${pipelineRunsDdl("pipeline_runs")}
-CREATE TABLE IF NOT EXISTS jobs (
+// The `jobs` table under a given name: the queue, every job owned by a project id, a closed job always carrying its merge.
+export function jobsDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project TEXT NOT NULL,
+  ${REQUIRED_PROJECT_ID},
   prompt TEXT NOT NULL,
   priority INTEGER NOT NULL DEFAULT 5,
   status TEXT NOT NULL DEFAULT 'pending',
@@ -246,8 +243,36 @@ CREATE TABLE IF NOT EXISTS jobs (
   cost_usd REAL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   started_at TEXT,
-  finished_at TEXT
-);
+  finished_at TEXT,
+  tier TEXT,
+  not_before TEXT,
+  blocked_code TEXT,
+  last_session_id TEXT,
+  last_session_attempt INTEGER,
+  bash_timeouts INTEGER,
+  tasks_backgrounded INTEGER,
+  tasks_killed INTEGER,
+  baseline_ctx INTEGER,
+  orch_turns INTEGER,
+  orch_reads INTEGER,
+  orch_bash INTEGER,
+  orch_bash_explore INTEGER,
+  orch_ctx_last INTEGER,
+  close_status TEXT CHECK(close_status IN ('closing','failed')),
+  close TEXT,
+  close_lease_until TEXT,
+  close_worker TEXT,
+  ${CLOSED_REQUIRES_MERGE}
+);`;
+}
+
+export const SCHEMA = `
+${lessonsDdl("lessons")}
+${memoryDdl("memory")}
+${projectIndexDdl("project_index")}
+${projectLibsDdl("project_libs")}
+${pipelineRunsDdl("pipeline_runs")}
+${jobsDdl("jobs")}
 CREATE TABLE IF NOT EXISTS pipeline_phases (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id INTEGER NOT NULL,
@@ -281,20 +306,6 @@ ${ROADMAP_ITEM_PROJECTS}
 `;
 
 export const EVOLVING_COLUMNS = [
-  ["jobs", "tier", "TEXT"],
-  ["jobs", "not_before", "TEXT"],
-  ["jobs", "blocked_code", "TEXT"],
-  ["jobs", "last_session_id", "TEXT"],
-  ["jobs", "last_session_attempt", "INTEGER"],
-  ["jobs", "bash_timeouts", "INTEGER"],
-  ["jobs", "tasks_backgrounded", "INTEGER"],
-  ["jobs", "tasks_killed", "INTEGER"],
-  ["jobs", "baseline_ctx", "INTEGER"],
-  ["jobs", "orch_turns", "INTEGER"],
-  ["jobs", "orch_reads", "INTEGER"],
-  ["jobs", "orch_bash", "INTEGER"],
-  ["jobs", "orch_bash_explore", "INTEGER"],
-  ["jobs", "orch_ctx_last", "INTEGER"],
   ["decisions", "scope", "TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))"],
   ["decisions", "org", "TEXT"],
   ["decisions", "job_id", "INTEGER"],
@@ -311,7 +322,7 @@ CREATE INDEX IF NOT EXISTS project_index_project_idx ON project_index(project_id
 CREATE INDEX IF NOT EXISTS pipeline_runs_project_idx ON pipeline_runs(project_id, created_at);
 CREATE INDEX IF NOT EXISTS pipeline_phases_run_idx ON pipeline_phases(run_id, seq);
 CREATE INDEX IF NOT EXISTS jobs_claim_idx ON jobs(status, priority, created_at);
-CREATE INDEX IF NOT EXISTS jobs_project_slug_idx ON jobs(project, slug);
+CREATE INDEX IF NOT EXISTS jobs_project_slug_idx ON jobs(project_id, slug);
 CREATE UNIQUE INDEX IF NOT EXISTS decisions_number_idx ON decisions(project, number);
 CREATE INDEX IF NOT EXISTS roadmap_items_order_idx ON roadmap_items(scope, project, org, priority, position);
 CREATE INDEX IF NOT EXISTS roadmap_items_job_idx ON roadmap_items(job_id);

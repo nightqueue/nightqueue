@@ -6,15 +6,19 @@ import { test } from "node:test";
 import { isId } from "../../src/config/ids.mjs";
 import { configPath, dbPath, preV18BackupPath } from "../../src/config/paths.mjs";
 import { closeDb, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
+import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recentMemories } from "../../src/memory/memory.mjs";
 import { migrateToV18 } from "../../src/memory/migration/v18.mjs";
 import * as registry from "../../src/memory/registry.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
+import { sharedSlugPending } from "../../src/memory/shared-slug-migration.mjs";
 import { buildLegacyHome, legacyConfig } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
+const PATHS_URL = new URL("../../src/config/paths.mjs", import.meta.url).href;
+const V18_URL = new URL("../../src/memory/migration/v18.mjs", import.meta.url).href;
 const LEASE_REFUSAL = /the database must migrate to v18, but a runner holds a live lease on job #1: stop the runners \(`nightqueue queue run --stop`\) and run the command again$/;
 
 // A checkout directory a v17 config registers.
@@ -135,9 +139,135 @@ test("two jobs of a v17 home sharing a run slug are detached by name before the 
   };
   const { env } = v17Home(t, "v18-shared-slug", { seed: shared });
   const db = openDb(env);
-  const rows = db.prepare("SELECT id, slug, result FROM jobs ORDER BY id").all();
+  const rows = db.prepare("SELECT id, project_id, slug, result FROM jobs ORDER BY id").all().map((row) => ({ ...row }));
   assert.deepEqual(rows.map((row) => row.slug), ["same-run", null]);
   assert.equal(JSON.parse(rows[1].result).runSlugDetached, "same-run");
+  assert.equal(JSON.parse(rows[1].result).runSlugKeptBy, rows[0].id);
+  assert.equal(rows[1].project_id, rows[0].project_id, "the detached job changed owner");
+  assert.equal(rows[0].project_id, registry.projectByName(db, "api").id);
+  assert.equal(sharedSlugPending(db), false);
+
+  closeDb(env);
+  const again = openDb(env);
+  assert.deepEqual(again.prepare("SELECT id, project_id, slug, result FROM jobs ORDER BY id").all().map((row) => ({ ...row })), rows, "a second open detached again");
+  assert.equal(again.prepare("SELECT total_changes() AS n").get().n, 0, "a second open wrote to the jobs of a settled run");
+});
+
+const CLOSED_CHECKLIST = JSON.stringify({ steps: { merge: { status: "done" } }, data: { merged: true } });
+
+// Inserts the jobs a v17 build wrote in every shape the queue leaves: each status, an expired lease, a closed job with its merge, the highest id deleted.
+function seedJobRows(db) {
+  const job = db.prepare(
+    "INSERT INTO jobs (project, prompt, status, slug, pr_url, close, worker, lease_until, tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  );
+  job.run("api", "a pending job", "pending", null, null, null, null, null, "simple");
+  job.run("api", "a job whose runner died", "running", "run-a", null, null, "host:1", "2000-01-01 00:00:00", null);
+  job.run("history", "a done job", "done", "run-b", "https://github.com/acme/api/pull/1", null, null, null, null);
+  job.run("api", "a closed job", "closed", "run-c", "https://github.com/acme/api/pull/2", CLOSED_CHECKLIST, null, null, "complex");
+  job.run("Foo", "a gated job", "gate", "run-d", null, null, null, null, null);
+  job.run("foo", "a failed job", "failed", null, null, null, null, null, null);
+  job.run("Bad Name!", "a cancelled job", "cancelled", null, null, null, null, null, null);
+  job.run("api", "gone", "failed", null, null, null, null, null, null);
+  db.exec("DELETE FROM jobs WHERE prompt = 'gone'");
+}
+
+test("the jobs table is rebuilt by id: same rows and values, the closed invariant and the foreign key armed, the id counter kept", (t) => {
+  const { env } = v17Home(t, "v18-jobs", { seed: seedJobRows });
+  const db = openDb(env);
+  const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
+  const before = new DatabaseSync(preV18BackupPath(env), { readOnly: true });
+  t.after(() => before.close());
+
+  const columns = db.prepare("PRAGMA table_info(jobs)").all().map((column) => column.name);
+  assert.ok(columns.includes("project_id") && !columns.includes("project"), "jobs still owns rows by name");
+  assert.deepEqual(namedRows(db, "jobs"), legacyRows(before, "jobs"));
+  assert.deepEqual(
+    [...new Set(rowsOf(db, "jobs").map((row) => row.status))].sort(),
+    ["cancelled", "closed", "done", "failed", "gate", "pending", "running"],
+  );
+  assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+  assert.deepEqual(
+    db.prepare("PRAGMA index_info(jobs_project_slug_idx)").all().map((column) => column.name),
+    ["project_id", "slug"],
+  );
+
+  assert.throws(() => db.prepare("INSERT INTO jobs (project_id, prompt) VALUES (?, 'x')").run("0".repeat(26)), /FOREIGN KEY/);
+  assert.throws(() => db.prepare("UPDATE jobs SET status = 'closed' WHERE prompt = 'a done job'").run(), /CHECK constraint failed/);
+  assert.equal(addJob({ projectId: registry.projectByName(db, "api").id, prompt: "after" }, env).id, 9, "a job id was reused");
+  assert.equal(getJob(2, env).project, "api", "a job view lost its project name");
+});
+
+// Source of a process that runs the v18 migration on a raw connection and kills itself at the given hook.
+function crashingMigratorSource() {
+  return [
+    'import { DatabaseSync } from "node:sqlite";',
+    `import { dbPath } from ${JSON.stringify(PATHS_URL)};`,
+    `import { migrateToV18 } from ${JSON.stringify(V18_URL)};`,
+    "const [, , hook, table] = process.argv;",
+    "const db = new DatabaseSync(dbPath(process.env));",
+    'db.exec("PRAGMA busy_timeout = 5000");',
+    'const kill = () => process.kill(process.pid, "SIGKILL");',
+    'const hooks = hook === "afterTable" ? { afterTable: (name) => name === table && kill() } : { afterCommit: kill };',
+    "migrateToV18(db, process.env, hooks);",
+    'process.stdout.write("survived\\n");',
+    "",
+  ].join("\n");
+}
+
+// Runs the crashing migrator as a real child process and answers how it ended.
+function crashMigration(t, env, args) {
+  const script = join(makeDir(t, "v18-crash-script"), "migrator.mjs");
+  writeFileSync(script, crashingMigratorSource());
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", script, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.on("error", reject);
+    child.on("exit", (code, signal) => resolve({ code, signal, stdout }));
+  });
+}
+
+test("a migration killed in the middle of the transaction, right after it rebuilt jobs, leaves v17 intact and the next open migrates it", async (t) => {
+  const { env } = v17Home(t, "v18-kill-mid", { seed: seedJobRows });
+  const crashed = await crashMigration(t, env, ["afterTable", "jobs"]);
+  assert.equal(crashed.signal, "SIGKILL", `the migrator was not killed: ${crashed.stdout}`);
+
+  const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
+  const raw = new DatabaseSync(dbPath(env));
+  const tables = raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
+  const state = {
+    version: raw.prepare("PRAGMA user_version").get().user_version,
+    jobColumns: raw.prepare("PRAGMA table_info(jobs)").all().map((column) => column.name),
+    jobs: legacyRows(raw, "jobs"),
+  };
+  raw.close();
+  assert.equal(state.version, 17);
+  assert.ok(state.jobColumns.includes("project") && !state.jobColumns.includes("project_id"), "the killed rebuild of jobs survived");
+  assert.equal(tables.includes("projects"), false, "the killed migration left a registry behind");
+  assert.equal(tables.some((name) => name.endsWith("_v18")), false, `a half-built table survived: ${tables.join(", ")}`);
+  assert.ok(Object.hasOwn(JSON.parse(readFileSync(configPath(env), "utf8")), "projects"), "a killed migration stripped the config");
+
+  const db = openDb(env);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 18);
+  assert.deepEqual(namedRows(db, "jobs"), state.jobs);
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(configPath(env), "utf8")), "projects"), false);
+});
+
+test("a crash right after the commit leaves v18 with the config still by name, and the next open finishes it", async (t) => {
+  const { env } = v17Home(t, "v18-crash-after-commit", { seed: seedJobRows });
+  const crashed = await crashMigration(t, env, ["afterCommit"]);
+  assert.equal(crashed.signal, "SIGKILL", `the migrator was not killed: ${crashed.stdout}`);
+  assert.equal(diskVersion(env), 18);
+  const stale = JSON.parse(readFileSync(configPath(env), "utf8"));
+  assert.ok(Object.hasOwn(stale, "projects") && Object.hasOwn(stale, "orgs"), "the config was stripped before the crash");
+
+  const db = openDb(env);
+  const config = JSON.parse(readFileSync(configPath(env), "utf8"));
+  assert.equal(Object.hasOwn(config, "projects"), false);
+  assert.equal(Object.hasOwn(config, "orgs"), false);
+  assert.deepEqual(config.orgConnections, { [registry.orgByName(db, "acme").id]: { github: "gh" } });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM jobs").get().n, 7);
 });
 
 const PROJECT_TABLES = ["lessons", "memory", "project_index", "project_libs", "pipeline_runs"];

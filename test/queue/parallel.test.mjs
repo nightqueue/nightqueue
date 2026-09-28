@@ -4,7 +4,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { registerCheckout } from "../../test-support/memory.mjs";
+import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { addJob, claimJobById, claimNextJob, finishJob, getJob, peekNextJob } from "../../src/memory/jobs.mjs";
 import { acquire } from "../../src/queue/claim.mjs";
@@ -159,9 +159,9 @@ test("two jobs of the same project are claimed together, bounded only by the con
   const env = makeHome(t, "parallel-claim");
   makeProject(t, env, "alpha");
   makeProject(t, env, "beta");
-  const first = addJob({ project: "alpha", prompt: "fix the worker", priority: 1 }, env).id;
-  const second = addJob({ project: "alpha", prompt: "fix the parser", priority: 2 }, env).id;
-  const other = addJob({ project: "beta", prompt: "fix the linter", priority: 3 }, env).id;
+  const first = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", priority: 1 }, env).id;
+  const second = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser", priority: 2 }, env).id;
+  const other = addJob({ projectId: ensureProject(env, "beta"), prompt: "fix the linter", priority: 3 }, env).id;
 
   assert.equal(claimNextJob({ worker: WORKER, cap: CAP }, env).id, first);
   assert.equal(peekNextJob(env).id, second, "the dry report skipped the next pending job of a project already running one");
@@ -170,7 +170,7 @@ test("two jobs of the same project are claimed together, bounded only by the con
   assert.equal((await acquire({ cap: CAP, env })).job.id, other);
 
   assert.deepEqual(await acquire({ cap: CAP, env }), { job: null, reason: "empty-queue" });
-  const fourth = addJob({ project: "alpha", prompt: "fix the docs", priority: 4 }, env).id;
+  const fourth = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the docs", priority: 4 }, env).id;
   assert.deepEqual(await acquire({ cap: 3, env }), { job: null, reason: "cap-reached" }, "the ceiling is the only limit left");
   assert.deepEqual(await acquire({ jobId: fourth, cap: 3, env }), { job: null, reason: "cap-reached" });
 
@@ -184,8 +184,8 @@ test("two jobs of the SAME project never overlap inside ONE runner, and do acros
   const serial = writeRealGitClaude(t);
   serialEnv.NIGHTQUEUE_CLAUDE_BIN = serial.bin;
   const serialIds = [
-    addJob({ project: "alpha", prompt: "fix the worker", priority: 1, timeoutS: 120 }, serialEnv).id,
-    addJob({ project: "alpha", prompt: "fix the parser", priority: 2, timeoutS: 120 }, serialEnv).id,
+    addJob({ projectId: ensureProject(serialEnv, "alpha"), prompt: "fix the worker", priority: 1, timeoutS: 120 }, serialEnv).id,
+    addJob({ projectId: ensureProject(serialEnv, "alpha"), prompt: "fix the parser", priority: 2, timeoutS: 120 }, serialEnv).id,
   ];
   await assertOneRunnerSerializes(serialEnv, serial.logPath, serialIds);
 
@@ -194,8 +194,8 @@ test("two jobs of the SAME project never overlap inside ONE runner, and do acros
   const parallel = writeRealGitClaude(t, { holdMs: CROSS_PROCESS_HOLD_MS });
   parallelEnv.NIGHTQUEUE_CLAUDE_BIN = parallel.bin;
   const parallelIds = [
-    addJob({ project: "alpha", prompt: "fix the worker", timeoutS: 120 }, parallelEnv).id,
-    addJob({ project: "alpha", prompt: "fix the parser", timeoutS: 120 }, parallelEnv).id,
+    addJob({ projectId: ensureProject(parallelEnv, "alpha"), prompt: "fix the worker", timeoutS: 120 }, parallelEnv).id,
+    addJob({ projectId: ensureProject(parallelEnv, "alpha"), prompt: "fix the parser", timeoutS: 120 }, parallelEnv).id,
   ];
   await assertTwoRunnersOverlap(parallelEnv, parallel.logPath, parallelIds);
 });
@@ -208,8 +208,8 @@ test("a job of ANOTHER project never runs beside another inside ONE runner, and 
   serialEnv.NIGHTQUEUE_CLAUDE_BIN = serial.bin;
   saveConfig({ ...loadConfig(serialEnv, { warn: () => {} }), queue: { maxConcurrent: 3 } }, serialEnv);
   const serialIds = [
-    addJob({ project: "alpha", prompt: "fix the worker", priority: 1, timeoutS: 120 }, serialEnv).id,
-    addJob({ project: "beta", prompt: "fix the linter", priority: 2, timeoutS: 120 }, serialEnv).id,
+    addJob({ projectId: ensureProject(serialEnv, "alpha"), prompt: "fix the worker", priority: 1, timeoutS: 120 }, serialEnv).id,
+    addJob({ projectId: ensureProject(serialEnv, "beta"), prompt: "fix the linter", priority: 2, timeoutS: 120 }, serialEnv).id,
   ];
   await assertOneRunnerSerializes(serialEnv, serial.logPath, serialIds);
 
@@ -219,8 +219,8 @@ test("a job of ANOTHER project never runs beside another inside ONE runner, and 
   const parallel = writeRealGitClaude(t, { holdMs: CROSS_PROCESS_HOLD_MS });
   parallelEnv.NIGHTQUEUE_CLAUDE_BIN = parallel.bin;
   const parallelIds = [
-    addJob({ project: "alpha", prompt: "fix the worker", timeoutS: 120 }, parallelEnv).id,
-    addJob({ project: "beta", prompt: "fix the linter", timeoutS: 120 }, parallelEnv).id,
+    addJob({ projectId: ensureProject(parallelEnv, "alpha"), prompt: "fix the worker", timeoutS: 120 }, parallelEnv).id,
+    addJob({ projectId: ensureProject(parallelEnv, "beta"), prompt: "fix the linter", timeoutS: 120 }, parallelEnv).id,
   ];
   await assertTwoRunnersOverlap(parallelEnv, parallel.logPath, parallelIds);
 });
@@ -233,7 +233,7 @@ test("a same-project job whose canonical checkout another job dirtied is blocked
   // What a project that does NOT ignore the pipeline's worktree directory looks like while a first job runs:
   // the worktree of that job sits inside the canonical checkout the next job would branch from.
   execFileSync("git", ["-C", project, "worktree", "add", "-b", "nightqueue/job-in-flight", join(project, "worktree-in-flight")], { stdio: "ignore" });
-  const id = addJob({ project: "alpha", prompt: "fix the parser", timeoutS: 120 }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser", timeoutS: 120 }, env).id;
 
   const cycle = await runCycle({ jobId: id, env });
 

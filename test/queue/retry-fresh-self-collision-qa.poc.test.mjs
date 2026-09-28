@@ -7,7 +7,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { assistantEvent, noticeText, PR_URL, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
@@ -28,7 +28,7 @@ function unnamedDoneStream() {
 
 // Enqueues a job and leaves it at the gate, as a runner that stopped to ask a question would.
 function gatedJob(env, { slug = "fix-the-worker" } = {}) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env)
     .prepare("UPDATE jobs SET status = 'gate', slug = ?, notice_md = 'why it stopped', finished_at = datetime('now') WHERE id = ?")
     .run(slug, id);

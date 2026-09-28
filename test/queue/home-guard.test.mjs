@@ -9,7 +9,7 @@ import { closeDb, openDb } from "../../src/memory/db.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV, refuseHomeWriteInsideJob } from "../../src/queue/home-guard.mjs";
 import { makeHostEnv } from "../../test-support/host.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { projectByName } from "../../src/memory/registry.mjs";
 
 const JOB = 9;
@@ -149,7 +149,7 @@ test("a job spawned by a runner that pinned nothing is refused whenever it aims 
 test("a job answering its own gate against the home of the runner is never refused", async (t) => {
   const home = makeHome(t, "home-guard-own-retry");
   makeProject(t, home, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, home).id;
+  const id = addJob({ projectId: ensureProject(home, "alpha"), prompt: "fix the worker" }, home).id;
   openDb(home).prepare("UPDATE jobs SET status = 'gate', notice_md = ? WHERE id = ?").run("why it stopped", id);
   const env = { ...home, NIGHTQUEUE_JOB_ID: String(id), [JOB_HOME_ENV]: homeDir(home) };
 
@@ -157,7 +157,7 @@ test("a job answering its own gate against the home of the runner is never refus
   assert.equal(await run(["queue", "retry", String(id), "--note", "go on"], own.ctx), 0, own.err.join("\n"));
   assert.equal(getJob(id, env).status, "pending");
 
-  const other = addJob({ project: "alpha", prompt: "fix the parser" }, env).id;
+  const other = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'gate' WHERE id = ?").run(other);
   const cross = makeCtx(env);
   assert.equal(await run(["queue", "retry", String(other), "--note", "go on"], cross.ctx), 1);

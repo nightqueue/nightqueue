@@ -7,7 +7,8 @@ import { dbPath } from "../src/config/paths.mjs";
 import { closeDb, openDb, openDbReadOnly, schemaVersionOn } from "../src/memory/db.mjs";
 import { openStore } from "../src/store/open.mjs";
 import { FROM_LINE, FROM_URL, JOB_ID, REFUSAL_EXIT, TO_LINE, TO_URL, main } from "../scripts/repair-job-pr-attribution.mjs";
-import { makeHome } from "../test-support/memory.mjs";
+import { buildLegacyHome } from "../test-support/legacy-home.mjs";
+import { ensureProject, makeHome } from "../test-support/memory.mjs";
 
 const SCRIPT = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "scripts", "repair-job-pr-attribution.mjs");
 const NOTICE_BEFORE = "Delivered the close command.\n\nPR: " + FROM_URL + "\n\n" + FROM_LINE + "\n";
@@ -19,12 +20,13 @@ const CLOSE_COLUMN = JSON.stringify({
 
 // Seeds a job-57-shaped row straight into a throwaway home, the shape the incident left behind.
 function seedJob57(env, { prUrl = FROM_URL, notice = NOTICE_BEFORE } = {}) {
+  const projectId = ensureProject(env, "nightqueue");
   openDb(env)
     .prepare(
-      `INSERT INTO jobs (id, project, prompt, status, pr_url, notice_md, close, branch, slug)
-       VALUES (?, 'nightqueue', 'close a done job', 'closed', ?, ?, ?, 'worktree-feat+queue-close', 'queue-close')`,
+      `INSERT INTO jobs (id, project_id, prompt, status, pr_url, notice_md, close, branch, slug)
+       VALUES (?, ?, 'close a done job', 'closed', ?, ?, ?, 'worktree-feat+queue-close', 'queue-close')`,
     )
-    .run(JOB_ID, prUrl, notice, CLOSE_COLUMN);
+    .run(JOB_ID, projectId, prUrl, notice, CLOSE_COLUMN);
 }
 
 // The raw row of job 57, every column.
@@ -145,11 +147,16 @@ test("the store's compare-and-swap refuses a moved URL, a missing line and a dou
 
 test("a dry run on a database an older build wrote never migrates it", async (t) => {
   const env = makeHome(t, "repair-attr-older");
-  seedJob57(env);
-  const db = openDb(env);
-  for (const column of ["close_worker", "close_status", "close", "close_lease_until"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
-  db.exec("PRAGMA user_version = 14");
-  closeDb(env);
+  buildLegacyHome(env, {
+    version: 14,
+    mutate(db) {
+      for (const column of ["close_worker", "close_status", "close", "close_lease_until"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
+      db.prepare(
+        `INSERT INTO jobs (id, project, prompt, status, pr_url, notice_md, branch, slug)
+         VALUES (?, 'nightqueue', 'close a done job', 'closed', ?, ?, 'worktree-feat+queue-close', 'queue-close')`,
+      ).run(JOB_ID, FROM_URL, NOTICE_BEFORE);
+    },
+  });
   const { out, io } = capture();
   assert.equal(await main(["--job", "57"], env, io), 0);
   assert.equal(out.at(-1), "dry run: nothing written; re-run with --apply to write these two changes.");

@@ -4,7 +4,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { registerCheckout } from "../../test-support/memory.mjs";
+import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, countActiveJobs, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
@@ -128,7 +128,7 @@ test("a lease that expires while its owner is ALIVE never gives a second real ru
   const marker1 = join(makeDir(t, "lease-marker1"), "marker.json");
   const marker2 = join(makeDir(t, "lease-marker2"), "marker.json");
   const pidsToKill = killerOf(t);
-  const jobId = addJob({ project: "alpha", prompt: "fix the worker", maxAttempts: 5, timeoutS: TIMEOUT_S }, env).id;
+  const jobId = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts: 5, timeoutS: TIMEOUT_S }, env).id;
 
   const process1 = runQueueCli(runnerEnv(env, bin, { holdMs: FIRST_HOLD_MS, marker: marker1 }), jobId);
   const child1 = await waitForFile(marker1, 8000, "the first real child to start");
@@ -162,7 +162,7 @@ test("the job of a runner that DIED is requeued after the grace and picked up by
   const marker1 = join(makeDir(t, "lease-dead-marker1"), "marker.json");
   const marker2 = join(makeDir(t, "lease-dead-marker2"), "marker.json");
   const pidsToKill = killerOf(t);
-  const jobId = addJob({ project: "alpha", prompt: "fix the worker", maxAttempts: 5, timeoutS: TIMEOUT_S }, env).id;
+  const jobId = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts: 5, timeoutS: TIMEOUT_S }, env).id;
 
   const process1 = runQueueCli(runnerEnv(env, bin, { holdMs: FIRST_HOLD_MS, marker: marker1 }), jobId);
   const child1 = await waitForFile(marker1, 8000, "the first real child to start");
@@ -189,7 +189,7 @@ test("the job of a runner that DIED is requeued after the grace and picked up by
 test("a live owner past the hard ceiling is recycled anyway: reclaiming never depends on a healthy process", (t) => {
   const env = makeHome(t, "lease-hard-ceiling");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
   claimJobById(id, { worker: LIVE_WORKER, cap: CAP }, env);
   setLeaseAge(env, id, 120);
   setStartAge(env, id, HARD_CEILING_S + 60);
@@ -202,9 +202,9 @@ test("a live owner past the hard ceiling is recycled anyway: reclaiming never de
 test("a lease inside the grace window is left alone and keeps its slot busy", (t) => {
   const env = makeHome(t, "lease-grace");
   makeProject(t, env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "fix the worker", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
   claimJobById(id, { worker: LIVE_WORKER, cap: CAP }, env);
-  const second = addJob({ project: "alpha", prompt: "fix the parser" }, env).id;
+  const second = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env).id;
   setLeaseAge(env, id, 30);
 
   assert.deepEqual(sweepOrphans(env, { liveWorkerImpl: liveLocalWorker }), { failed: 0, requeued: 0 });
@@ -218,8 +218,8 @@ test("an expired lease of a LIVE owner is protected, and a malformed worker neve
   const env = makeHome(t, "lease-protection");
   makeProject(t, env, "alpha");
   makeProject(t, env, "beta");
-  const mine = addJob({ project: "alpha", prompt: "fix the worker", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
-  const broken = addJob({ project: "beta", prompt: "fix the parser", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
+  const mine = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
+  const broken = addJob({ projectId: ensureProject(env, "beta"), prompt: "fix the parser", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
   claimJobById(mine, { worker: LIVE_WORKER, cap: CAP }, env);
   claimJobById(broken, { worker: "no-colon-at-all", cap: CAP }, env);
   setLeaseAge(env, mine, 120);

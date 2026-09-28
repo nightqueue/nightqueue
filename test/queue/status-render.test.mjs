@@ -3,11 +3,11 @@ import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
 
 // A job written straight into the table with the given status.
 function seedJob(env, status) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = ? WHERE id = ?").run(status, id);
   return id;
 }

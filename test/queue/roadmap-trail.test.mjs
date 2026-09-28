@@ -7,7 +7,7 @@ import { addJob } from "../../src/memory/jobs.mjs";
 import { queueRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
 import { ROADMAP_BODY_FILE, roadmapBodyFile } from "../../src/queue/roadmap-trail.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const BODY = "## Report\n\nthe thing is done.\n\n";
 
@@ -59,7 +59,7 @@ test("a job queued from an org item for one project ends its body with the org i
 
 test("the body is published as written outside a job, for a job with no roadmap item, and when it already names one", async (t) => {
   const { env, runDir, bodyFile, store } = makeTrailHome(t, "roadmap-trail-absent");
-  const plain = addJob({ project: "alpha", prompt: "fix it" }, env);
+  const plain = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix it" }, env);
   assert.equal(await roadmapBodyFile({ bodyFile, runDir, jobId: null, store }), bodyFile);
   assert.equal(await roadmapBodyFile({ bodyFile, runDir, jobId: plain.id, store }), bodyFile);
 

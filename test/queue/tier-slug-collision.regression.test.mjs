@@ -8,7 +8,7 @@ import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { reclassifyFromLog } from "../../src/queue/repair.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { assistantEvent, doneStream, gateStream, noticeText, PR_URL, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
@@ -40,7 +40,7 @@ function operatorPrompt(brief) {
 
 // Queues one tiered job the way the operator does.
 function queueTiered(env, brief) {
-  return addJob({ project: "alpha", prompt: operatorPrompt(brief), tier: "complex" }, env).id;
+  return addJob({ projectId: ensureProject(env, "alpha"), prompt: operatorPrompt(brief), tier: "complex" }, env).id;
 }
 
 // A run that opens a pull request without ever naming its run, so the job keeps the slug the runtime bound.

@@ -204,28 +204,52 @@ function optionalRunSlug(value) {
   throw new UserError(`invalid \`slug\`: \`${String(value)}\`; expected one safe path segment`);
 }
 
-const INSERT_JOB = "INSERT INTO jobs (project, prompt, priority, max_attempts, timeout_s, tier, slug) VALUES (?, ?, ?, ?, ?, ?, ?)";
+const INSERT_JOB = "INSERT INTO jobs (project_id, prompt, priority, max_attempts, timeout_s, tier, slug) VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+// Requires the id of the project a job is queued for; a name never reaches the jobs table.
+function requireProjectId(projectId) {
+  const id = registry.projectIdOrNull(projectId);
+  if (id === null) throw new UserError("job field `projectId` is required and cannot be empty");
+  return id;
+}
+
+// The registered project of that id, refused by name when the registry does not know it.
+function requireJobProject(db, projectId) {
+  const project = registry.projectById(db, projectId);
+  if (!project) throw new UserError(`unknown project id \`${projectId}\``);
+  return project;
+}
+
+// Runs the insert of one job, turning the foreign key refusal of a project that vanished meanwhile into a usage error.
+function runInsert(statement, values) {
+  try {
+    return statement.run(...values);
+  } catch (err) {
+    if (/FOREIGN KEY constraint failed/i.test(String(err?.message ?? ""))) throw new UserError(`unknown project id \`${values[0]}\``);
+    throw err;
+  }
+}
 
 // Inserts one job row from its validated column values.
 function insertJob(db, values) {
   const statement = db.prepare(INSERT_JOB);
-  return withWriteRetry(() => statement.run(...values));
+  return withWriteRetry(() => runInsert(statement, values));
 }
 
 // Inserts a job bound to a run in the same transaction that proves no open job is bound to it already.
-function insertRunJob(db, values, env) {
-  const [project, , , , , , slug] = values;
+function insertRunJob(db, { values, project }, env) {
+  const slug = values[6];
   return inTransaction(db, () => {
-    const bound = openJobForRun({ project, slug }, env, db);
-    if (bound) throw new UserError(`job #${bound.id} already runs from ${runDir(project, slug, env)}`);
-    return db.prepare(INSERT_JOB).run(...values);
+    const bound = openJobForRun(db, { projectId: project.id, slug });
+    if (bound) throw new UserError(`job #${bound.id} already runs from ${runDir(project.name, slug, env)}`);
+    return runInsert(db.prepare(INSERT_JOB), values);
   });
 }
 
-// Enqueues a job for a project, validating every range before the write; a run slug is refused while an open job is bound to it.
-export function addJob({ project, prompt, priority, maxAttempts, timeoutS, tier, slug } = {}, env = process.env) {
+// Enqueues a job for a project id, validating every range before the write; a run slug is refused while an open job is bound to it.
+export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tier, slug } = {}, env = process.env) {
   const values = [
-    requireText("project", project),
+    requireProjectId(projectId),
     requireText("prompt", prompt),
     optionalRangedInt("priority", priority, PRIORITY_RANGE),
     optionalRangedInt("max_attempts", maxAttempts, MAX_ATTEMPTS_RANGE),
@@ -233,10 +257,13 @@ export function addJob({ project, prompt, priority, maxAttempts, timeoutS, tier,
     optionalTier(tier),
     optionalRunSlug(slug),
   ];
-  const inserted = values[6] === null ? insertJob(openDb(env), values) : insertRunJob(openDb(env), values, env);
+  const db = openDb(env);
+  const project = requireJobProject(db, values[0]);
+  const inserted = values[6] === null ? insertJob(db, values) : insertRunJob(db, { values, project }, env);
   return {
     id: Number(inserted.lastInsertRowid),
-    project: values[0],
+    projectId: project.id,
+    project: project.name,
     priority: values[2],
     maxAttempts: values[3],
     timeoutS: values[4],
@@ -244,11 +271,11 @@ export function addJob({ project, prompt, priority, maxAttempts, timeoutS, tier,
   };
 }
 
-// The job not yet closed that is bound to the run of a project and slug, or null when none is.
-function openJobForRun({ project, slug } = {}, env = process.env, db = openDb(env)) {
+// The job not yet closed that is bound to the run of a project id and slug, or null when none is.
+function openJobForRun(db, { projectId, slug }) {
   const row = db
-    .prepare("SELECT id, status FROM jobs WHERE project = ? AND slug = ? AND status <> 'closed' ORDER BY id DESC LIMIT 1")
-    .get(project, slug);
+    .prepare("SELECT id, status FROM jobs WHERE project_id = ? AND slug = ? AND status <> 'closed' ORDER BY id DESC LIMIT 1")
+    .get(projectId, slug);
   return row ? { id: Number(row.id), status: row.status } : null;
 }
 
@@ -425,7 +452,7 @@ export function persistRunFacts(id, { worker, slug, sessionId, branch, lastSessi
             last_session_id = COALESCE(?, last_session_id),
             last_session_attempt = COALESCE(?, last_session_attempt)
       WHERE id = ? AND worker = ?
-        AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS other WHERE other.project = jobs.project AND other.slug = ? AND other.id <> jobs.id))`,
+        AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS other WHERE other.project_id = jobs.project_id AND other.slug = ? AND other.id <> jobs.id))`,
   );
   const runSlug = optionalText(slug);
   const changed = withWriteRetry(() =>
@@ -445,8 +472,8 @@ export function persistRunFacts(id, { worker, slug, sessionId, branch, lastSessi
 }
 
 // The id of another job of the project already bound to this slug, or null when none is, whatever its status.
-function slugHolder(db, { project, slug, id }) {
-  const row = db.prepare("SELECT id FROM jobs WHERE project = ? AND slug = ? AND id <> ? LIMIT 1").get(project, slug, id);
+function slugHolder(db, { projectId, slug, id }) {
+  const row = db.prepare("SELECT id FROM jobs WHERE project_id = ? AND slug = ? AND id <> ? LIMIT 1").get(projectId, slug, id);
   return row ? Number(row.id) : null;
 }
 
@@ -458,11 +485,11 @@ export function bindRunSlug(id, { worker, candidates } = {}, env = process.env) 
   if (slugs.length === 0) throw new UserError("`candidates` must carry at least one safe run slug");
   const db = openDb(env);
   return inTransaction(db, () => {
-    const row = db.prepare("SELECT project, worker FROM jobs WHERE id = ?").get(jobId);
+    const row = db.prepare("SELECT project_id, worker FROM jobs WHERE id = ?").get(jobId);
     if (!row || row.worker !== owner) return { status: "lost" };
     let heldBy = null;
     for (const slug of slugs) {
-      const holder = slugHolder(db, { project: row.project, slug, id: jobId });
+      const holder = slugHolder(db, { projectId: row.project_id, slug, id: jobId });
       if (holder === null) {
         db.prepare("UPDATE jobs SET slug = ? WHERE id = ? AND worker = ?").run(slug, jobId, owner);
         return { status: "bound", slug };
@@ -473,19 +500,19 @@ export function bindRunSlug(id, { worker, candidates } = {}, env = process.env) 
   });
 }
 
-// Points the pipeline run of this project and slug at the job that produced it; the job still names its project, so its id is looked up here.
-function linkRun(db, jobId, project, slug) {
-  const projectId = project ? registry.projectByName(db, project)?.id : null;
+// Points the pipeline run of this project id and slug at the job that produced it.
+function linkRun(db, jobId, projectId, slug) {
   if (!projectId || !slug) return 0;
   return db
     .prepare("UPDATE pipeline_runs SET job_id = ? WHERE project_id = ? AND slug = ? AND job_id IS NULL")
     .run(jobId, projectId, slug).changes;
 }
 
-// Points the pipeline run of a project and slug at its job, for a caller outside the finish transaction.
-export function linkPipelineRun(jobId, { project, slug } = {}, env = process.env) {
+// Points the pipeline run of a project id and slug at its job, for a caller outside the finish transaction.
+export function linkPipelineRun(jobId, { projectId, slug } = {}, env = process.env) {
+  const owner = registry.projectIdOrNull(projectId);
   const db = openDb(env);
-  return inTransaction(db, () => linkRun(db, requireId(jobId), optionalText(project), optionalText(slug)));
+  return inTransaction(db, () => linkRun(db, requireId(jobId), owner, optionalText(slug)));
 }
 
 const FINISH_COLUMNS = ["status", "pr_url", "finished_at"];
@@ -593,7 +620,7 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
             orch_bash_explore = COALESCE(?, orch_bash_explore),
             orch_ctx_last = COALESCE(?, orch_ctx_last)
       WHERE id = ? AND status = 'running' AND worker = ?
-      RETURNING project, slug, status, pr_url, finished_at`,
+      RETURNING project_id, slug, status, pr_url, finished_at`,
   );
   const values = [
     requireWritableStatus(status),
@@ -620,7 +647,7 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
   const written = withFullSync(db, () =>
     inTransaction(db, () => {
       const row = statement.get(...values);
-      if (row) linkRun(db, id, row.project, row.slug);
+      if (row) linkRun(db, id, row.project_id, row.slug);
       return row ?? null;
     }),
   );
@@ -897,28 +924,21 @@ export function noteCloseWorktree(id, { worktree } = {}, env = process.env) {
 
 // The closes in flight, failed or stalled, newest first, with the liveness of each lease read on SQLite's own clock.
 export function listCloses(env = process.env, db = openDb(env)) {
-  return db
+  const rows = db
     .prepare(
-      `SELECT id, project, status, pr_url, close_status, close_worker, close_lease_until, close,
+      `SELECT id, project_id, status, pr_url, close_status, close_worker, close_lease_until, close,
               CASE WHEN ${CLOSE_LEASE_LIVE} THEN 1 ELSE 0 END AS close_lease_live
          FROM jobs
         WHERE close_status IN ('closing', 'failed')
         ORDER BY id DESC LIMIT 50`,
     )
     .all();
+  return registry.attachNames(db, rows);
 }
 
-// Sets the `project_id` and checkout `project_path` of a job row from the registry, found by the project name the row still holds.
+// Sets the current project name and checkout `project_path` of a job row from the registry, by the `project_id` it holds.
 function withProjectFacts(db, row) {
-  if (!row) return row;
-  let project = null;
-  try {
-    project = registry.projectByName(db, row.project);
-  } catch (err) {
-    if (!/no such table/i.test(String(err?.message ?? ""))) throw err;
-  }
-  row.project_id = project?.id ?? null;
-  row.project_path = project?.path ?? null;
+  if (row) registry.attachNames(db, [row]);
   return row;
 }
 
@@ -946,12 +966,14 @@ export function listCloseCandidates(env = process.env, db = openDb(env)) {
 
 // Unfinished jobs that already have a run directory; a job with no slug never ran, so no witness can speak for it.
 export function listJobsWithSlug(env = process.env, db = openDb(env)) {
-  return db.prepare("SELECT id, project, slug FROM jobs WHERE status IN ('running', 'pending') AND slug IS NOT NULL").all();
+  const rows = db.prepare("SELECT id, project_id, slug FROM jobs WHERE status IN ('running', 'pending') AND slug IS NOT NULL").all();
+  return registry.attachNames(db, rows);
 }
 
 // Every job that is not closed and already named its run, the owners `nightqueue doctor` checks a worktree against.
 export function listOpenJobs(env = process.env, db = openDb(env)) {
-  return db.prepare("SELECT id, project, slug, status FROM jobs WHERE status <> 'closed' AND slug IS NOT NULL").all();
+  const rows = db.prepare("SELECT id, project_id, slug, status FROM jobs WHERE status <> 'closed' AND slug IS NOT NULL").all();
+  return registry.attachNames(db, rows);
 }
 
 // Reads the status of a job on the connection the caller holds; a job whose row is gone has no status at all.
@@ -1016,9 +1038,15 @@ export function countActiveJobs(env = process.env, db = openDb(env)) {
 // Jobs running under a live lease, counted per project: with one job per runner, the runners working each repository right now.
 export function countActiveJobsByProject(env = process.env, db = openDb(env)) {
   return db
-    .prepare(`SELECT slot.project AS project, COUNT(*) AS count FROM jobs AS slot WHERE ${ACTIVE_JOB_PREDICATE} GROUP BY slot.project ORDER BY slot.project ASC`)
+    .prepare(
+      `SELECT slot.project_id AS project_id, p.name AS project, COUNT(*) AS count
+         FROM jobs AS slot LEFT JOIN projects AS p ON p.id = slot.project_id
+        WHERE ${ACTIVE_JOB_PREDICATE}
+        GROUP BY slot.project_id
+        ORDER BY p.name ASC`,
+    )
     .all()
-    .map((row) => ({ project: row.project, count: Number(row.count) }));
+    .map((row) => ({ projectId: row.project_id, project: row.project, count: Number(row.count) }));
 }
 
 // Id of the lowest numbered job running under a live lease, or null when none is: the job the install guard names.
@@ -1102,14 +1130,14 @@ export function hasClaimablePending(env = process.env) {
 
 // Returns the job the next claim would pick, for the read-only report of `queue run --dry`.
 export function peekNextJob(env = process.env) {
-  return (
-    openDb(env)
-      .prepare(
-        `SELECT candidate.* FROM jobs AS candidate
-          WHERE candidate.status = 'pending' AND ${DUE_NOW}
-          ORDER BY candidate.priority ASC, candidate.created_at ASC, candidate.id ASC
-          LIMIT 1`,
-      )
-      .get() ?? null
-  );
+  const db = openDb(env);
+  const row = db
+    .prepare(
+      `SELECT candidate.* FROM jobs AS candidate
+        WHERE candidate.status = 'pending' AND ${DUE_NOW}
+        ORDER BY candidate.priority ASC, candidate.created_at ASC, candidate.id ASC
+        LIMIT 1`,
+    )
+    .get();
+  return withProjectFacts(db, row ?? null);
 }

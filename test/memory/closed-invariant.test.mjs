@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../../src/memory/db.mjs";
 import { acquireClose, addJob, claimJobById, finishJob, getJob, reclassifyJob, repairJobFromWitness, settleClose } from "../../src/memory/jobs.mjs";
-import { makeHome, makeProject, mergedChecklist, seedDoneJob } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, mergedChecklist, seedDoneJob } from "../../test-support/memory.mjs";
 
 const SRC = fileURLToPath(new URL("../../src", import.meta.url));
 const WORKER = "host:1";
@@ -24,7 +24,7 @@ function invariantHome(t, name) {
 
 // A job the given worker is running, the row every generic status writer starts from.
 function runningJob(env) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: WORKER, cap: null }, env);
   return id;
 }
@@ -65,12 +65,13 @@ test("raw SQL cannot write a closed row without a pull request and a recorded me
   assert.deepEqual(getJob(id, env), before);
 
   const merged = JSON.stringify(mergedChecklist());
-  const insert = "INSERT INTO jobs (project, prompt, status, pr_url, close, close_status) VALUES ('alpha', 'raw', 'closed', ?, ?, ?)";
-  assert.throws(() => db.prepare(insert).run(null, merged, null), /CHECK constraint failed/);
-  assert.throws(() => db.prepare(insert).run("", merged, null), /CHECK constraint failed/);
-  assert.throws(() => db.prepare(insert).run("   ", merged, null), /CHECK constraint failed/);
-  assert.throws(() => db.prepare(insert).run(PR_URL, null, null), /CHECK constraint failed/);
-  assert.throws(() => db.prepare(insert).run(PR_URL, merged, "closing"), /CHECK constraint failed/);
+  const alpha = ensureProject(env, "alpha");
+  const insert = "INSERT INTO jobs (project_id, prompt, status, pr_url, close, close_status) VALUES (?, 'raw', 'closed', ?, ?, ?)";
+  assert.throws(() => db.prepare(insert).run(alpha, null, merged, null), /CHECK constraint failed/);
+  assert.throws(() => db.prepare(insert).run(alpha, "", merged, null), /CHECK constraint failed/);
+  assert.throws(() => db.prepare(insert).run(alpha, "   ", merged, null), /CHECK constraint failed/);
+  assert.throws(() => db.prepare(insert).run(alpha, PR_URL, null, null), /CHECK constraint failed/);
+  assert.throws(() => db.prepare(insert).run(alpha, PR_URL, merged, "closing"), /CHECK constraint failed/);
 });
 
 test("a settle whose checklist records no merge is refused by the schema and the job stays done under its lease", (t) => {

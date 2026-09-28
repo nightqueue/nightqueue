@@ -15,7 +15,8 @@ import { saveLesson } from "../src/memory/lessons.mjs";
 import { shimContent } from "../src/host/runtime.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
-import { registerCheckout } from "../test-support/memory.mjs";
+import { buildLegacyHome } from "../test-support/legacy-home.mjs";
+import { ensureProject, registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { makeHostEnv, readSettingsFile, writeLegacyShim, writeSettingsFixture } from "../test-support/host.mjs";
 import { makeDir, makeProject, seedClosedJob, seedLegacyV8Home } from "../test-support/memory.mjs";
@@ -324,7 +325,7 @@ test("the database check warns about a v8 home and points at the command that mi
 test("the roadmap workflow check is ok when every linked item follows its job and warns about one left behind", async (t) => {
   const host = makeHostEnv(t, "doctor-roadmap-workflow");
   const db = openDb(host.env);
-  const job = addJob({ project: "alpha", prompt: "deliver it" }, host.env);
+  const job = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "deliver it" }, host.env);
   db.prepare("INSERT INTO roadmap_items (project, title, position, status, job_id, job_status_seen) VALUES ('alpha', 'deliver it', 1, 'in_progress', ?, 'pending')").run(job.id);
   closeDb(host.env);
 
@@ -512,7 +513,7 @@ test("the queue jobs check counts the jobs whose runner died, and only once the 
   assert.equal(noDatabase.checks.some((entry) => entry.name === "queue jobs"), false, "the check ran without a database");
 
   makeProject(t, host.env, "alpha");
-  const { id } = addJob({ project: "alpha", prompt: "fix the worker" }, host.env);
+  const { id } = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "fix the worker" }, host.env);
   claimJobById(id, { worker: "host:6666", cap: 4 }, host.env);
   closeDb(host.env);
   const { report: live } = await diagnose(host.env);
@@ -538,7 +539,7 @@ test("the closes check reports closes in flight, failed and on a dead lease, and
   assert.equal(closesCheck((await diagnose(host.env)).report), null, "the check ran without a database");
 
   makeProject(t, host.env, "alpha");
-  const ids = [1, 2, 3].map(() => addJob({ project: "alpha", prompt: "fix the worker" }, host.env).id);
+  const ids = [1, 2, 3].map(() => addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "fix the worker" }, host.env).id);
   const db = openDb(host.env);
   for (const id of ids) db.prepare("UPDATE jobs SET status = 'done', pr_url = 'https://github.com/acme/api/pull/7' WHERE id = ?").run(id);
   closeDb(host.env);
@@ -563,11 +564,13 @@ test("the closes check reports closes in flight, failed and on a dead lease, and
 
 test("the closes check warns with the migrate hint on a database without the close columns, and leaves it as it was", async (t) => {
   const host = makeHostEnv(t, "doctor-closes-old-db");
-  makeProject(t, host.env, "alpha");
-  addJob({ project: "alpha", prompt: "old row" }, host.env);
-  const db = openDb(host.env);
-  for (const column of ["close_worker", "close_status", "close", "close_lease_until"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
-  closeDb(host.env);
+  buildLegacyHome(host.env, {
+    version: 14,
+    mutate(db) {
+      for (const column of ["close_worker", "close_status", "close", "close_lease_until"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
+      db.prepare("INSERT INTO jobs (project, prompt) VALUES ('alpha', 'old row')").run();
+    },
+  });
 
   const { report } = await diagnose(host.env);
   const row = report.checks.find((entry) => entry.name === "closes");
@@ -592,7 +595,7 @@ test("the host commands check sums the counters of the last finished jobs, warni
   );
 
   makeProject(t, host.env, "alpha");
-  const timedOut = addJob({ project: "alpha", prompt: "times out" }, host.env).id;
+  const timedOut = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "times out" }, host.env).id;
   openDb(host.env).prepare("UPDATE jobs SET status = 'done', bash_timeouts = 3 WHERE id = ?").run(timedOut);
   closeDb(host.env);
   const { report: onlyTimeouts } = await diagnose(host.env);
@@ -601,7 +604,7 @@ test("the host commands check sums the counters of the last finished jobs, warni
     { status: "ok", detail: "host commands: 0 backgrounded, 0 killed, 3 timed out in the last 20 jobs" },
   );
 
-  const killedJob = addJob({ project: "alpha", prompt: "gets killed" }, host.env).id;
+  const killedJob = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "gets killed" }, host.env).id;
   openDb(host.env).prepare("UPDATE jobs SET status = 'failed', tasks_killed = 1 WHERE id = ?").run(killedJob);
   closeDb(host.env);
   const { report: withKill } = await diagnose(host.env);
@@ -619,7 +622,7 @@ function orchestratorCheck(report) {
 
 // Finishes a job straight in the database with the given orchestrator counters.
 function finishedWithOrchestrator(env, counters) {
-  const id = addJob({ project: "alpha", prompt: "measured" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "measured" }, env).id;
   openDb(env)
     .prepare("UPDATE jobs SET status = 'done', orch_turns = ?, orch_reads = ?, orch_bash = ?, orch_bash_explore = ?, orch_ctx_last = ? WHERE id = ?")
     .run(counters.turns, counters.reads, counters.bash, counters.explore, counters.context, id);
@@ -636,7 +639,7 @@ test("the orchestrator check sums the counters of the last 20 finished jobs, war
   });
 
   makeProject(t, host.env, "alpha");
-  const unmeasured = addJob({ project: "alpha", prompt: "finished before the counters" }, host.env).id;
+  const unmeasured = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "finished before the counters" }, host.env).id;
   openDb(host.env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(unmeasured);
   closeDb(host.env);
   finishedWithOrchestrator(host.env, { turns: 10, reads: 0, bash: 4, explore: 0, context: 100000 });
@@ -665,7 +668,7 @@ test("the orchestrator check sums the counters of the last 20 finished jobs, war
 test("the orchestrator check reads a database without the counter columns as zero and never writes it", async (t) => {
   const host = makeHostEnv(t, "doctor-orchestrator-old-db");
   makeProject(t, host.env, "alpha");
-  const id = addJob({ project: "alpha", prompt: "old row" }, host.env).id;
+  const id = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "old row" }, host.env).id;
   const db = openDb(host.env);
   db.prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(id);
   for (const column of ["orch_turns", "orch_reads", "orch_bash", "orch_bash_explore", "orch_ctx_last"]) db.exec(`ALTER TABLE jobs DROP COLUMN ${column}`);
@@ -699,7 +702,7 @@ test("the decision proposals check warns on a proposal of a closed job, never on
   assert.equal(proposalsCheck(noDatabase), undefined, "the check ran without a database");
 
   makeProject(t, host.env, "alpha");
-  const open = addJob({ project: "alpha", prompt: "still open" }, host.env).id;
+  const open = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "still open" }, host.env).id;
   proposedByJob(host.env, { title: "the open job proposes this", jobId: open });
   closeDb(host.env);
   const { report: none } = await diagnose(host.env);
@@ -787,7 +790,7 @@ test("doctor names each leftover under .claude/worktrees with its cleanup comman
   lockWorktree(checkout, liveLocked.path, process.pid);
   const gated = addWorktree(checkout, "gated");
   const closed = addWorktree(checkout, "closed");
-  const { id: gatedId } = addJob({ project: "alpha", prompt: "work of gated-run" }, host.env);
+  const { id: gatedId } = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "work of gated-run" }, host.env);
   openDb(host.env).prepare("UPDATE jobs SET status = 'gate', slug = 'gated-run' WHERE id = ?").run(gatedId);
   seedClosedJob(host.env, { project: "alpha", prompt: "work of closed-run", slug: "closed-run" });
   for (const [slug, path] of [["gated-run", gated.path], ["closed-run", closed.path]]) {

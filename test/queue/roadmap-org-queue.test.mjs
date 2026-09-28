@@ -19,7 +19,7 @@ import {
   updateRoadmapItem,
 } from "../../src/memory/roadmap.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeDir, makeHome, makeProject, settleThroughStore } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, settleThroughStore } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const PR_URL = "https://github.com/acme/alpha/pull/7";
@@ -297,7 +297,7 @@ function runLinker(script, env, { itemId, jobId }) {
 
 test("two processes linking their own job to the same project row at once leave one link and one queued comment", async (t) => {
   const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-race");
-  const jobs = [1, 2].map(() => addJob({ project: "acme-api", prompt: "raise node" }, env));
+  const jobs = [1, 2].map(() => addJob({ projectId: ensureProject(env, "acme-api"), prompt: "raise node" }, env));
   const script = join(makeDir(t, "roadmap-org-queue-race-script"), "linker.mjs");
   writeFileSync(script, linkerSource(), "utf8");
 

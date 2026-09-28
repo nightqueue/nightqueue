@@ -41,10 +41,11 @@ export function registeredProject(name, env = process.env) {
   return withRegistry(env, (db) => (db ? registry.projectByName(db, name) : null));
 }
 
-// The checkout of a job's project: the `project_path` a job view carries, or the registry's for a job object that carries none.
+// The checkout of a job's project: the `project_path` a job view carries, or the registry's by its `project_id` for a job object that carries none.
 export function checkoutOfJob(job, env = process.env) {
   if (job && Object.hasOwn(job, "project_path")) return job.project_path ?? null;
-  return registeredProject(job?.project, env)?.path ?? null;
+  if (!job?.project_id) return null;
+  return withRegistry(env, (db) => (db ? registry.projectById(db, job.project_id) : null))?.path ?? null;
 }
 
 // Tells whether an org of that NAME is registered.

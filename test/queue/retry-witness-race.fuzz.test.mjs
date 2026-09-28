@@ -4,7 +4,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, retryJob } from "../../src/memory/jobs.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { readRunState, writeRunTerminal } from "../../src/queue/resume.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const WORKER = "host:1000";
 const CAP = 4;
@@ -21,7 +21,7 @@ function makeQueue(t, name) {
 
 // Enqueues a job, claims it and records the slug of its run: the row a runner owns while it works.
 function runningJob(env, { slug = SLUG } = {}) {
-  const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(slug, id);
   return id;

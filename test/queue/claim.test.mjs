@@ -8,7 +8,7 @@ import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { addJob, claimJobById, countActiveJobs, getJob, releaseJob } from "../../src/memory/jobs.mjs";
 import { acquire, concurrencyCap, inheritUserEnvironment, isPaused, leaseHeartbeatMs, resumeSessionEnabled, workerId } from "../../src/queue/claim.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const CLAIMER = fileURLToPath(new URL("../../test-support/queue-claimer.mjs", import.meta.url));
 const BARRIER_MS = 400;
@@ -23,7 +23,7 @@ function makeQueue(t, name) {
 
 // Enqueues one job of a test project.
 function enqueue(env, prompt = "fix the worker", project = "alpha") {
-  return addJob({ project, prompt }, env).id;
+  return addJob({ projectId: ensureProject(env, project), prompt }, env).id;
 }
 
 // Runs the claimer as a real child process, so the two claims cross inside SQLite and not inside one heap.

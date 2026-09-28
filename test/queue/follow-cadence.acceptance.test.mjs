@@ -7,7 +7,7 @@ import { defaultContext, run } from "../../src/cli/index.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
-import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // ACCEPTANCE of decisions #24/#25: a follow behind a gh that takes 2s to fail redraws as often as one with the checks off.
 
@@ -24,7 +24,7 @@ function seedHome(t, name, jobs) {
   return {
     env,
     ids: jobs.map(({ status, prUrl = null }) => {
-      const id = addJob({ project: "alpha", prompt: "fix the worker" }, env).id;
+      const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
       openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ? WHERE id = ?").run(status, prUrl, id);
       return id;
     }),
