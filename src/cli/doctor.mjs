@@ -280,13 +280,6 @@ function checkEmbeddingPrefix(ctx) {
   return checks;
 }
 
-// Hint for a database whose schema version is not the one this build knows.
-function schemaVersionHint(version) {
-  return version < DB_USER_VERSION
-    ? "run `nightqueue queue status` once to migrate it"
-    : "upgrade nightqueue to the version that wrote this schema";
-}
-
 // Checks the memory database, opening it read-only so the diagnosis never creates nor migrates it.
 async function checkDatabase(ctx) {
   const path = dbPath(ctx.env);
@@ -296,8 +289,12 @@ async function checkDatabase(ctx) {
     const { schemaVersion, errors } = await store.health();
     if (errors.schemaVersion !== null) return check("database", "fail", errors.schemaVersion, `inspect ${path}`);
     if (schemaVersion === DB_USER_VERSION) return check("database", "ok", `schema v${schemaVersion}`);
-    const status = schemaVersion < DB_USER_VERSION ? "warn" : "fail";
-    return check("database", status, `schema v${schemaVersion}, expected v${DB_USER_VERSION}`, schemaVersionHint(schemaVersion));
+    return check(
+      "database",
+      "warn",
+      `schema v${schemaVersion}, expected v${DB_USER_VERSION}`,
+      "run `nightqueue queue status` once to migrate it",
+    );
   } catch (err) {
     return check("database", "fail", err?.message ?? String(err), `inspect ${path}`);
   } finally {
