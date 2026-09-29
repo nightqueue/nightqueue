@@ -81,7 +81,7 @@ test("the item tools take a ref, old key included, and refuse an integer or an u
   assert.equal(payloadOf(await client.callTool({ name: "roadmap_get", arguments: { id: "AM-1" } })).ref, "AC-1");
   assert.equal(payloadOf(await client.callTool({ name: "roadmap_get", arguments: { id: "G-1" } })).id, globalItem.id);
 
-  assert.match(await refusalOf(client, "roadmap_get", { id: alphaItem.id }), /expected a roadmap item ref \(`<KEY>-<number>`\), got `1`/);
+  assert.match(await refusalOf(client, "roadmap_get", { id: alphaItem.id }), /^your client has the tool definitions of an older nightqueue \(contract 1, this server is 2\)/);
   assert.match(await refusalOf(client, "roadmap_get", { id: "D-1" }), /expected a roadmap item ref/);
   assert.match(await refusalOf(client, "roadmap_get", { id: "J-1" }), /expected a roadmap item ref/);
   assert.match(await refusalOf(client, "roadmap_get", { id: "NQ-9" }), /unknown roadmap item `NQ-9`/);
@@ -89,12 +89,12 @@ test("the item tools take a ref, old key included, and refuse an integer or an u
 
   const comment = payloadOf(await client.callTool({ name: "roadmap_comment", arguments: { id: "AP-1", body: "seen" } }));
   assert.equal(comment.comment.body, "seen");
-  assert.match(await refusalOf(client, "roadmap_comment", { id: 1, body: "x" }), /expected a roadmap item ref/);
+  assert.match(await refusalOf(client, "roadmap_comment", { id: 1, body: "x" }), /older nightqueue/);
 
   const updated = payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: "AP-1", decision_id: "D-2" } }));
   assert.deepEqual([updated.item.ref, updated.item.decision_ref], ["NQ-1", "D-2"]);
-  assert.match(await refusalOf(client, "roadmap_update", { id: 1, status: "cancelled" }), /expected a roadmap item ref/);
-  assert.match(await refusalOf(client, "roadmap_update", { id: "NQ-1", decision_id: 2 }), /expected a decision ref/);
+  assert.match(await refusalOf(client, "roadmap_update", { id: 1, status: "cancelled" }), /older nightqueue/);
+  assert.match(await refusalOf(client, "roadmap_update", { id: "NQ-1", decision_id: 2 }), /older nightqueue/);
   assert.match(await refusalOf(client, "roadmap_update", { id: "AC-1", decision_id: "D-1" }), /`D-1` names a decision of a project: pass the project, or write it `<KEY>\/D-1`/);
   const orgLinked = payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: "AC-1", decision_id: "AM/D-1" } }));
   assert.equal(orgLinked.item.decision_ref, "AC/D-1");
@@ -113,7 +113,7 @@ test("the item tools take a ref, old key included, and refuse an integer or an u
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: "AP-1" } }));
   assert.equal(queued.roadmap_ref, "NQ-1");
   assert.equal(queued.roadmapItemId, alphaItem.id);
-  assert.match(await refusalOf(client, "queue_add", { roadmap_item_id: 2 }), /expected a roadmap item ref/);
+  assert.match(await refusalOf(client, "queue_add", { roadmap_item_id: 2 }), /older nightqueue/);
 });
 
 test("decision_update takes a decision ref: `D-<n>` needs a project, `<KEY>/D-<n>` names its owner, old keys resolve", async (t) => {
@@ -124,7 +124,7 @@ test("decision_update takes a decision ref: `D-<n>` needs a project, `<KEY>/D-<n
     await refusalOf(client, "decision_update", { id: "D-1", status: "rejected" }),
     /`D-1` names a decision of a project: pass the project, or write it `<KEY>\/D-1`/,
   );
-  assert.match(await refusalOf(client, "decision_update", { id: 1, status: "rejected" }), /expected a decision ref/);
+  assert.match(await refusalOf(client, "decision_update", { id: 1, status: "rejected" }), /older nightqueue/);
   assert.match(await refusalOf(client, "decision_update", { id: "NQ-1", status: "rejected" }), /expected a decision ref/);
   assert.match(await refusalOf(client, "decision_update", { id: "NQ/D-9", status: "rejected" }), /unknown decision `NQ\/D-9`/);
 

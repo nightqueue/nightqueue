@@ -295,7 +295,7 @@ test("the index round trip reports the freshness of the checkout", async (t) => 
       },
     }),
   );
-  assert.deepEqual(saved, { ok: true, files: 1, libs: 0 });
+  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 2 });
 
   const fresh = payloadOf(
     await client.callTool({ name: "index_recall", arguments: { project: "alpha", repo_root: repo } }),
@@ -455,6 +455,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
     priority: 2,
     timeoutS: 600,
     hint: "queued J-1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.",
+    contract: 2,
   });
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
@@ -509,7 +510,7 @@ test("queue_add resolves the project of the caller `cwd`, and answers needs_regi
   assert.equal(known.id, 1);
 
   const offered = payloadOf(await client.callTool({ name: "queue_add", arguments: { cwd: repo, prompt: "fix the parser" } }));
-  assert.deepEqual(Object.keys(offered).sort(), ["cwd", "hint", "needs_registration", "org", "suggested_key", "suggested_name"]);
+  assert.deepEqual(Object.keys(offered).sort(), ["contract", "cwd", "hint", "needs_registration", "org", "suggested_key", "suggested_name"].sort());
   assert.match(offered.suggested_key, /^[A-Z][A-Z0-9]{1,4}$/);
   assert.ok(offered.hint.includes(`with key \`${offered.suggested_key}\``), offered.hint);
   assert.ok(offered.hint.includes("plus `key` when the user chose another key"), offered.hint);
@@ -855,7 +856,7 @@ test("queue_status answers with the nudge that matches the state of the queue, l
   );
 
   const detail = payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: first } }));
-  assert.deepEqual(Object.keys(detail), ["job"], "the detail of a job grew a hint");
+  assert.deepEqual(Object.keys(detail), ["job", "contract"], "the detail of a job grew a hint");
 
   const watchedEnv = makeQueueHome(t, "mcp-queue-hint-watch");
   addJob({ projectId: ensureProject(watchedEnv, "alpha"), prompt: "fix the worker" }, watchedEnv);
@@ -1150,7 +1151,7 @@ test("queue_stop answers the CLI line per runner, and refuses an unknown pid", a
   const client = await connect(t, env);
 
   const empty = payloadOf(await client.callTool({ name: "queue_stop", arguments: {} }));
-  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }] });
+  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 2 });
 
   const unknown = await client.callTool({ name: "queue_stop", arguments: { pid: 999999 } });
   assert.equal(unknown.isError, true, textOf(unknown));

@@ -31,6 +31,17 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A tool contract version (contract 2).** The MCP server publishes it in its `serverInfo`
+  title and instructions, every tool answer carries `contract`, and `nightqueue doctor` shows
+  it. A client that cached the older tool definitions and sends an internal integer id where a
+  ref is now expected (`roadmap_get`, `roadmap_comment`, `roadmap_update`, `roadmap_save`
+  `decision_id`, `decision_update` `id`/`superseded_by`, `queue_add` `roadmap_item_id`) is
+  answered `your client has the tool definitions of an older nightqueue (contract 1, this
+  server is 2): start a new session or restart the MCP client`. For this release an id that
+  names one row of the caller's project (or its org) is still accepted, and the answer carries
+  `deprecated_input`; it will be refused after the grace release. `queue_status` advises
+  `this client's tool contract is older than the server` once the server saw an old shape. The
+  upgrading section of `docs/install.md` lists the clients to restart.
 - A schema test fails on any `*_id` or `superseded_by` column without a foreign key and an
   explicit `ON DELETE` rule, unless an exception entry gives the reason (contributor-facing).
 
