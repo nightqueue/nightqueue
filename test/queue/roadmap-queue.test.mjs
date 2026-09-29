@@ -24,6 +24,7 @@ import { fakeEmbedder, makeDir, makeHome, makeProject, mergedChecklist, projectI
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, SLUG } from "../../test-support/streams.mjs";
 import { runDir } from "../../src/config/paths.mjs";
+import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const PR_URL = "https://github.com/acme/alpha/pull/7";
@@ -176,7 +177,7 @@ test("a job that ends done puts its own roadmap item in review, and leaves every
   const client = await connect(t, env);
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref } }));
 
-  const cycle = await runCycle({ jobId: queued.id, env, deps: { gitImpl: fakeGit() } });
+  const cycle = await runCycle({ jobId: queued.id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
 
   assert.deepEqual(
     cycle.processed.map((entry) => entry.status),
@@ -198,7 +199,7 @@ test("the runner records the files the implementation artifact lists, and the pr
   mkdirSync(artifactDir, { recursive: true });
   writeFileSync(join(artifactDir, "04-implementation.md"), "## Modified files\n- `src/runner.mjs`\n```\nsrc/example.mjs\n```\n\n## Done\n");
 
-  await runCycle({ jobId: queued.id, env, deps: { gitImpl: fakeGit() } });
+  await runCycle({ jobId: queued.id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
 
   assert.deepEqual(JSON.parse(getJob(queued.id, env).result).files, ["src/runner.mjs"]);
   const pr = getRoadmapItemDetail(item.id, {}, env).comments.find((comment) => comment.kind === "pr");
@@ -212,7 +213,7 @@ test("a job that ends done moves an item the operator cancelled while it ran, an
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref } }));
   updateRoadmapItem(item.id, { status: "cancelled" }, env);
 
-  const cycle = await runCycle({ jobId: queued.id, env, deps: { gitImpl: fakeGit() } });
+  const cycle = await runCycle({ jobId: queued.id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
 
   assert.deepEqual(
     cycle.processed.map((entry) => entry.status),

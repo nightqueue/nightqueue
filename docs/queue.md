@@ -422,7 +422,8 @@ pipeline appended to a notice, under its former name, is rewritten to `Closed: P
 only where the notice holds exactly the line its checklist recorded.
 
 A `gate` job the preflight refused to start also carries a reason, in its own
-`blocked_code` column - it answers a different question than `status`: not where
+`blocked_code` column (a job whose worktree the runtime could not place gates the same way,
+with `worktree-failed`) - it answers a different question than `status`: not where
 the job is, but why the runner never started it, and it is what lets `queue retry`
 send that job back without a `--note`. See **What the runner requires of the
 checkout** below for what sets and clears it.
@@ -533,23 +534,44 @@ by nothing but `pending`: the only limits are the atomic claim of one job and, w
 `queue.maxConcurrent`.
 Each job runs in its own git worktree, and merge conflicts between the pull requests of two
 jobs of one repository are the operator's to resolve. **The caveat is the preflight, and it
-stays:** a job only starts from a clean canonical checkout. The pipeline creates its worktree
-under `.claude/worktrees/` of that checkout and Claude Code leaves its per-machine
-`.claude/settings.local.json` there, so before every job the preflight makes the checkout's
-local `.git/info/exclude` (the common git dir, shared by every linked worktree, never a
-tracked file) ignore exactly those two paths: it asks `git check-ignore -q` for
-`.claude/worktrees/x` and for `.claude/settings.local.json`, and appends
-`/.claude/worktrees/` and `/.claude/settings.local.json`, each only when git does not
-already ignore its path and never twice. nightqueue never ignores a project's `.claude/` as
-a whole, because a project may version its own `.claude/commands` and `run commit` must
-still be able to stage a new file there. A write that fails (a read-only `.git`) never
-blocks the job: the dirty check reads `git status --porcelain -z` (an untracked directory
-stays one entry, however large), expands an untracked `.claude/` directory git collapsed
-with `git status --porcelain -z --untracked-files=all -- .claude/`, and drops only the untracked entries under `.claude/worktrees/` or equal to
-`.claude/settings.local.json`, so the second same-project job is not blocked by the first
-one's worktree. Any other untracked path under `.claude/`, and any tracked `.claude/` file
-that changed, still blocks with `dirty-checkout`. `nightqueue doctor` reports the same
-coverage per registered project, and `nightqueue doctor --fix` writes the same two lines.
+stays:** a job only starts from a clean canonical checkout. Nothing of nightqueue lives in
+that checkout: the runtime creates the job's worktree before the spawn at
+`<NIGHTQUEUE_HOME>/worktrees/<project_id>/<slug>` - it runs `git fetch origin <default>`
+(a failure is only logged), branches `worktree-<slug>` with `--no-track` from
+`origin/<default>` (or the checkout's `HEAD` when there is no such ref) and spawns the
+session with that directory as its cwd. `branch` and `worktree` are recorded in `state.json`
+*before* `git worktree add` runs: a state that refuses the record creates nothing, and a
+failed add sets the record back to what git actually holds (the branch when git created it,
+never a directory it did not), so the retry succeeds once the cause is gone. A retry reuses
+the worktree its state records (a legacy `.claude/worktrees/` one included) only when git
+registers it on the recorded branch and can work in it - one git cannot use (the checkout
+moved, say) gates `worktree-failed` with the hint to run `nightqueue doctor --fix` - recreates
+it under the home from the recorded branch when its directory is gone, and gates the job with
+`worktree-failed` (the reason in `result`, like a preflight block) when the path is taken by
+something else, a `worktree-<slug>` branch the state does not name already exists, or the
+job has no slug; nothing is ever deleted or forced. A provisional slug whose worktree path or
+`worktree-<slug>` branch is still taken (another job renamed its run away from it, or a
+`retry --fresh` left the earlier worktree behind) is skipped when the slug is claimed: the job
+takes the next free variant (`<slug>-2`, ...) and the kept worktree stays for the operator.
+nightqueue never writes inside a project's `.git/` or `.claude/`. The dirty check reads
+`git status --porcelain -z` (an untracked directory stays one entry, however large), expands
+an untracked `.claude/` directory git collapsed with
+`git status --porcelain -z --untracked-files=all -- .claude/`, and ignores exactly one
+untracked path, `.claude/settings.local.json` (Claude Code's per-machine settings); every
+other entry blocks with `dirty-checkout`, with one transitional exception: while a job that
+is not closed names, with its branch, a worktree still under `.claude/worktrees/` that git
+registers for the checkout, that worktree is not dirt (an open job keeps its old worktree
+until it closes); the exception ends the moment the job closes. An interactive `/resolve`
+outside the queue keeps creating its own worktree the Claude Code way, under
+`.claude/worktrees/` of the checkout; that worktree is the operator's open work and gates the
+project's jobs with `dirty-checkout`, the notice naming it as a linked worktree no open job
+owns - finish it and remove it, or ignore the worktrees directory in the project's own
+tracked `.gitignore` (an operator commit; nightqueue never writes it). The
+`/.claude/worktrees/` and `/.claude/settings.local.json` lines an older nightqueue wrote into
+a checkout's `.git/info/exclude` are harmless, but they hide interactive worktrees from the
+dirty check too; delete them by hand once no job that started before the upgrade is open, and
+from then on an interactive worktree gates as above. The operator's QA worktrees live apart
+from every job's, at `<NIGHTQUEUE_HOME>/operator-qa/<project_id>/<slug>`.
 Two same-project jobs whose slugs collide on one branch name fail safely, one job at a
 time. The ``2 runners on `<project>` ``
 advisory line is what warns about it while it happens.
@@ -570,7 +592,10 @@ run produced none), never replacing it, and a resumed run replaces its own earli
 of stacking it. A clean, published worktree kept only because the run stopped at `gate` or
 `failed` is not named. Nothing is ever forced, no branch is deleted and nothing on the remote is
 touched; ignored files inside a removed worktree (a local `.env`, build output) go with it.
-`nightqueue doctor` lists what is left under `.claude/worktrees/` with the command that cleans it
+`nightqueue doctor` lists what is left under `<NIGHTQUEUE_HOME>/worktrees/` and under the legacy
+`.claude/worktrees/` of each checkout with the command that cleans it, marks a legacy worktree
+an open job still runs in as `legacy-in-use`, and `nightqueue doctor --fix` runs
+`git worktree repair` for a home worktree whose checkout or home moved
 (see [Doctor](cli.md#doctor)).
 
 **Ownership and orphans.** A claim is one atomic `UPDATE` inside SQLite, so two
@@ -698,7 +723,8 @@ server, plugin and hooks, plus the project's own `.claude/settings.json` and
 user hooks, and never the operator's own `CLAUDE.md` (measured on a real operator
 install: 39 MCP servers, 95 skills and 20 agents before, 1, 21 and 11 after; the
 orchestrator's first turn went from ~114k to ~68k tokens, paid again on every turn). The child gets `--strict-mcp-config
---setting-sources project,local`, which on its own would still re-import
+--setting-sources project` (the `local` source is left out, so the operator's per-machine
+`.claude/settings.local.json` never shapes a job), which on its own would still re-import
 `<claude config dir>/CLAUDE.md` through the ancestor walk, plus a `--settings` payload
 carrying this package's own four hooks and a `claudeMdExcludes` entry that removes it.
 `queue.inheritUserEnvironment: true` is the escape hatch back to the old, unfenced
@@ -766,8 +792,8 @@ spawning anything, and hands the result over in the prompt as one block:
 ```
 RESUME CANDIDATE (slug `fix-the-worker`)
 RUN_DIR: /Users/me/.nightqueue/runs/01J9Z3K8QW4X2V7N5M6B1C0D9E/fix-the-worker
-Branch: fix/the-worker
-Worktree: /Users/me/code/api/.claude/worktrees/fix-the-worker
+Branch: worktree-fix-the-worker
+Worktree: /Users/me/.nightqueue/worktrees/01J9Z3K8QW4X2V7N5M6B1C0D9E/fix-the-worker
 Last completed phase: triage
 Resume from phase: explore
 From stage: none
@@ -829,7 +855,8 @@ agent, never a second job, never queue work:
    stop: `WARNING: git fetch origin failed (...)` is prefixed to every later step note),
    then the pull request is read with gh. First, the pull request must be the job's own: when
    its head branch is not the job's recorded branch (or the published `<type>/<slug>` name of
-   its `worktree-<type>+<slug>` branch), the close stops with `pr-not-the-job-branch`, naming
+   its `worktree-<type>+<slug>` branch, or any `<commit type>/<slug>` of the runtime's
+   `worktree-<slug>` branch), the close stops with `pr-not-the-job-branch`, naming
    both branches, before anything is merged or settled - even when the pull request is already
    merged, so a foreign merge is never written onto the job. `--force` never lifts this check:
    when the recorded pull request is really not the job's, fix the job's `pr_url` first (the

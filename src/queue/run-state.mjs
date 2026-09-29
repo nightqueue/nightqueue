@@ -182,6 +182,21 @@ export function recordRunFields({ projectId, slug, fields, env = process.env } =
   return record({ projectId, slug, env, change: (_state, at) => runFieldsRecord(changes, at) });
 }
 
+// Sets where the code of a run lives to what git actually holds: `branch` and `worktree` each recorded, or dropped when null.
+export function recordHeldWorktree({ projectId, slug, branch = null, worktree = null, env = process.env } = {}) {
+  return underRunLock({
+    projectId,
+    slug,
+    env,
+    write: () => {
+      const at = new Date().toISOString();
+      const held = withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug });
+      const rest = Object.fromEntries(Object.entries(held).filter(([name]) => name !== "branch" && name !== "worktree"));
+      return saveRunState({ projectId, slug, env, state: { ...withText(rest, { branch, worktree }), updatedAt: at } });
+    },
+  });
+}
+
 // The resume count over the state already on disk: a run the pipeline never recorded anything into is not created by a resume.
 function saveResumeCount({ projectId, slug, resumeCount, env }) {
   const state = readRunState({ projectId, slug, env });

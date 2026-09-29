@@ -31,6 +31,12 @@ What a runtime has to provide, and what it can rely on:
   by `--stop` and pruned when dead, never written again.
 - The output of a detached runner lives in
   `${NIGHTQUEUE_HOME}/logs/runner-<stamp>.log`, next to the one log per job.
+- The git worktree of a queued job lives in
+  `${NIGHTQUEUE_HOME}/worktrees/<project_id>/<slug>/`, on branch `worktree-<slug>`: the
+  runtime creates it (or reuses the one `state.json` records) before the spawn, the child
+  runs with it as its cwd and `--setting-sources project`, and the runtime removes it after
+  the finish when it is clean and published. Nothing of nightqueue is written into the
+  project's checkout, its `.git/` or its `.claude/`.
 - Run artifacts live in `${NIGHTQUEUE_HOME}/runs/<project_id>/<slug>/`, always
   outside the worktree, because the worktree is removed before the last phase
   reads them. The first segment is the project's id (a ULID), never its name, so
@@ -66,7 +72,9 @@ What a runtime has to provide, and what it can rely on:
   - `type`, `tier`, `tierRaiseReason`, `branch`, `worktree` and
     `qaStageA{artifact, verdict?, at}`: `run_set`; the runner also records
     `tier`/`tierRaiseReason` from the `Tier raised:` line and `type` from the `TYPE:`
-    half of the slug declaration.
+    half of the slug declaration. Inside a queued job the runner records `branch` and
+    `worktree` itself, before the spawn, when it creates the job's worktree; the pipeline
+    sends them only in an interactive `/resolve`.
   - `resumeCount`: the runner alone, when it hands a resume over to the pipeline.
   - `terminal{status, prUrl, finishedAt, writtenBy, pid}`: the runner, once it has
     closed the job - the witness of the outcome, read only by the reconciliation.
@@ -110,7 +118,8 @@ What a runtime has to provide, and what it can rely on:
   one repository: the run's own repository is the one the rest of the classification
   reports, or the one of its FIRST publication. The run's own delivery is the LAST
   publication of THAT repository whose `branch` is the run's own branch - the `branch`
-  of `state.json` or its published alias (`worktree-feat+x` is `feat/x`, the rename
+  of `state.json` or its published alias (`worktree-feat+x` is `feat/x`, and a job's
+  `worktree-x` is `<commit type>/x` for any commit type of the pipeline, the rename
   `nightqueue run pr` applies and then records as the run's branch). A publication that
   names no branch, or that the run cannot compare because it recorded none, is unproven:
   it loses to a recorded `outcome.prUrl` and is only the delivery when the runtime

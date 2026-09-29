@@ -104,10 +104,10 @@ function operatorReadReason(path, roots) {
 }
 
 // Reason of an operator Bash command outside its closed list.
-function operatorBashReason() {
+function operatorBashReason(env) {
   return (
     `the operator does not run this command - hand it to the subagent of the step: ` +
-    `the operator runs only its closed command list (${describeOperatorBashRules()}), ` +
+    `the operator runs only its closed command list (${describeOperatorBashRules(env)}), ` +
     "each as the bare program name followed by its subcommand (no binary path, no `git -C`/`-c`/`--git-dir`/`--work-tree`); " +
     "no commit, no push, no write to the repository"
   );
@@ -150,7 +150,7 @@ function orchestratorScopeReason({ input, toolName, toolInput, env, mode }) {
     const target = readTarget(toolName, toolInput, input.cwd);
     return insideRoots(target, roots) ? null : scope.readReason(target, roots);
   }
-  if (toolName === "Bash") return scope.bashAllowed(toolInput.command) ? null : scope.bashReason();
+  if (toolName === "Bash") return scope.bashAllowed(toolInput.command, env) ? null : scope.bashReason(env);
   return null;
 }
 

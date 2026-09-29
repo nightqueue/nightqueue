@@ -10,6 +10,7 @@ import { applyRetry } from "../../src/queue/retry.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { assistantEvent, noticeText, PR_URL, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 // A git double for the preflight: a clean checkout of the default branch.
 function fakeGit() {
@@ -57,7 +58,7 @@ test("a job whose own run dir survives --fresh as an unremovable symlink moves t
   assert.equal(getJob(id, env).slug, null, "setup failed: --fresh did not clear the slug column");
   assert.equal(existsSync(link), true, "setup failed: the symlink disappeared before the job ran again");
 
-  await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit() } });
+  await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
 
   const row = getJob(id, env);
   assert.equal(row.status, "done", `the job did not complete after its own leftover blocked --fresh's cleanup (status=${row.status})`);

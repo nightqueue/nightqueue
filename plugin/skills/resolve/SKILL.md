@@ -125,7 +125,8 @@ The runtime waits for every subagent and background task of an unattended run; l
 
    - Take every field from the block itself: `RUN_DIR:` is the run dir of this run (use it
      as it comes, do not derive another), `Branch:` and `Worktree:` are the ones to reuse
-     (step 4), and execution STARTS at the phase in `Resume from phase:`. A field worth
+     (step 4; in a queued job the runtime already reused or recreated them and you are in
+     it), and execution STARTS at the phase in `Resume from phase:`. A field worth
      `none` means there is nothing to reuse there.
    - Skip every phase up to `Last completed phase:` and read its artifact in `RUN_DIR` via
      Read — do NOT re-triage, do NOT re-explore, do NOT re-architect.
@@ -317,8 +318,9 @@ The runtime waits for every subagent and background task of an unattended run; l
    This brief depends on another job's pull request. A job must be self-contained: fold this work into that job (as a stage) or make it independent. Nothing was changed.
    ```
 
-   Stop there, before step 3 — nothing was created, since the worktree of step 4 does not
-   exist yet — and record `gate_stop: critique` in the run telemetry (`pipeline_log`).
+   Stop there, before step 3 — nothing was created, since the interactive worktree of step 4
+   does not exist yet (in a job the runtime's worktree stays untouched and the runtime keeps
+   or removes it) — and record `gate_stop: critique` in the run telemetry (`pipeline_log`).
 
    Rules: a non-`EXECUTE` verdict requires concrete evidence — not a style
    opinion; do not stall the pipeline over preciousness. These count as evidence: lessons and
@@ -361,8 +363,17 @@ The runtime waits for every subagent and background task of an unattended run; l
    Also define a short **kebab-case slug** describing the change
    (e.g. `login-google`, `fix-pagination`).
 
-4. **Decide whether to create the exclusive worktree**:
+4. **The exclusive worktree**:
 
+   - **Inside a queued job (`NIGHTQUEUE_JOB_ID` set):** the runtime created your worktree at
+     `$PWD` before this session started, on branch `worktree-<slug>`, and already recorded
+     `branch` + `worktree` in the state; never create another, never call
+     `EnterWorktree`/`ExitWorktree`, never `run_set` those two fields. Run `git status --short`
+     once: anything listed is work a previous attempt of this job left there - keep it. Every
+     later phase runs in `$PWD`; pass its absolute path to every phase. The rest of this step
+     (down to the shell rule) is for an interactive `/resolve` only.
+   - **Interactive `/resolve` (no `NIGHTQUEUE_JOB_ID`):** create the worktree the Claude Code
+     way, as below.
    - Confirm you are inside a git repository: `git rev-parse --is-inside-work-tree`. If not,
      skip the worktree, warn the user and follow the pipeline in the current directory.
    - Detect the current branch: `git branch --show-current`.
@@ -385,7 +396,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    - If you are **not** on `main`, **do not ask** — do not create a worktree and follow the
      pipeline in the current directory/branch. Warn in 1 line: **"Current branch
      `<current-branch>` (non-main): proceeding without a worktree."**
-   - **On a valid resume (step 0.5)** with a `worktree` recorded in the state: if the directory
+   - **On a valid interactive resume (step 0.5)** with a `worktree` recorded in the state: if the directory
      still exists, REUSE it (do not call `EnterWorktree`). If gone, recreate it via
      `EnterWorktree` from the recorded `branch` (or base `fresh` if it no longer exists) — with
      no `EnterWorktree` in the host, use the same `git worktree add` fallback as above.
@@ -423,7 +434,8 @@ The runtime waits for every subagent and background task of an unattended run; l
    session started. Use that `RUN_DIR` as it comes (ALWAYS outside the worktree, NEVER
    inside it); the runtime created it before this session started. `<project>` is the `Project:` line, the same
    identifier used in `lesson_recall`/`pipeline_log`. The artifacts live OUTSIDE the worktree
-   because Phase 7 (`ExitWorktree`) deletes the worktree BEFORE Phase 8 reads the artifacts.
+   because the interactive Phase 7 (`ExitWorktree`) deletes the worktree BEFORE Phase 8 reads
+   the artifacts (in a job the runtime removes it after the finish).
 
    **Renaming the run is ONE declaration**, only when the kebab slug of this Phase 0 differs
    from the one in `RUN_DIR`: print ONCE, alone on a line, exactly `SLUG: <slug> TYPE: <type>`
@@ -493,7 +505,8 @@ The runtime waits for every subagent and background task of an unattended run; l
      ended in `gate_stop`.
    - **The fields of the run itself.** Call `run_set` ONCE for each field the moment it becomes
      known: `type` (`bug/error` | `feature/refactor`, the same one from the Brief of step 1),
-     `tier`, and `branch` + `worktree` (step 4). Only the fields sent are touched.
+     `tier`, and `branch` + `worktree` (interactive step 4; inside a job the runtime recorded
+     them). Only the fields sent are touched.
    - **Termination on purpose.** When the pipeline terminates by the VERDICT of a phase that
      **was completed and recorded**, call `run_terminate` with that `phase` and the summarized
      verdict as `reason` — today only **Phase 1** with `NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION`.
@@ -1364,8 +1377,9 @@ The two commands below own the mechanics — staging, the commit, the branch nam
      body that carries one.
    - Write the body with Write to `<RUN_DIR>/pr-body.md` and run
      `nightqueue run pr --body-file <RUN_DIR>/pr-body.md`. The command checks the body,
-     renames the branch to its final name (the worktree creates it with the `worktree-` prefix
-     and `+` in place of `/`), pushes it and opens the pull request, answering `BRANCH:`,
+     renames the branch to its final name (a job's `worktree-<slug>` becomes
+     `<commit type>/<slug>`, the type read from the commit subject; an interactive
+     `worktree-<type>+<slug>` becomes `<type>/<slug>`), pushes it and opens the pull request, answering `BRANCH:`,
      `PR: <url>` and `WORKTREE: <path>`. You never run `git branch -m`, `git push` or
      `gh pr create` by hand.
    - `REJECTED: <reason>` and `MISSING: <what>` (one line per violation; the evidence one
@@ -1380,9 +1394,11 @@ The two commands below own the mechanics — staging, the commit, the branch nam
    - If `gh` is not installed or could not open the pull request, the command says so with the
      branch already pushed: inform it and leave the pull request to be opened by hand.
 
-5. **Close the worktree immediately after the PR is created** (or after confirming
-   that the commit stayed local): call `ExitWorktree` with `action: "delete"`. The branch is
-   already on the remote via push and the PR is open.
+5. **Close the worktree immediately after the PR is created** (interactive `/resolve` only;
+   inside a queued job skip this step: the runtime removes the worktree after the finish when
+   it is clean and pushed). Interactive (or after confirming that the commit stayed local):
+   call `ExitWorktree` with `action: "delete"`. The branch is already on the remote via push
+   and the PR is open.
    - Inform the user of the PR link and warn: **"Worktree removed. The branch
      `<type>/<slug>` is on the remote — use `git checkout <type>/<slug>` or
      open a new worktree for new edits."**

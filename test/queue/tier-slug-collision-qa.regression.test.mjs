@@ -10,6 +10,7 @@ import { runCycle } from "../../src/queue/runner.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, PR_URL } from "../../test-support/streams.mjs";
+import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 // The exact header the operator's Step 8 stamps onto a tiered job, verbatim.
 const TIER_HEADER = "Tier: complex (set by the operator - the pipeline may only raise it, with evidence, never lower it)";
@@ -44,7 +45,7 @@ function fakeGit() {
 
 // Runs one cycle over a single job with the git reads injected.
 function runJobCycle(env, jobId) {
-  return runCycle({ jobId, env, deps: { gitImpl: fakeGit() } });
+  return runCycle({ jobId, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
 }
 
 test("a second tiered job left running under a dead worker, after losing the same-name race, never inherits the first job's run, its witness or its pull request", async (t) => {

@@ -11,6 +11,7 @@ import { registerForegroundRunner } from "../../src/queue/start.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, PR_URL, rateLimitEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const PROMPT = "fix the worker";
 
@@ -85,7 +86,7 @@ test("a rate limit event mid stream keeps the child alive through a silence long
   const id = enqueue(env);
 
   assert.ok(silenceMs > idleTimeoutS * 1000, "the fixture does not keep the child silent longer than the idle timeout");
-  const cycle = await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit(), idleTimeoutS, stopPollMs: 500 } });
+  const cycle = await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), idleTimeoutS, stopPollMs: 500 } });
 
   assert.deepEqual(cycle.processed, [{ id, status: "done", prUrl: PR_URL, attempts: 1 }], "the silence of the limit ended the attempt");
   const row = getJob(id, env);
@@ -106,7 +107,7 @@ test("a runner waiting out its own limit never stops another runner of the same 
   const id = enqueue(env);
   const slept = [];
 
-  const cycle = await runCycle({ env, deps: { gitImpl: fakeGit(), sleepImpl: slicedSleep(slept), maintenanceImpl: keepRegistry } });
+  const cycle = await runCycle({ env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: slicedSleep(slept), maintenanceImpl: keepRegistry } });
 
   assert.ok(inheritablePause(env, killImpl), "the fixture left no live pause on the other runner, so the test proves nothing");
   assert.equal(readOwnPause(env), null, "the pause of another runner was adopted by a runner that was already claiming");
@@ -130,7 +131,7 @@ test("a runner registered while a live runner of this home waits out a limit joi
   const cycle = await runCycle({
     env,
     deps: {
-      gitImpl: fakeGit(),
+      worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(),
       sleepImpl: slicedSleep(slept, async (slice) => {
         if (slice === 2) await endOwnPause(env);
       }),
@@ -151,7 +152,7 @@ test("a drain does not exit while this runner waits out a rate limit: it waits i
     if (slice === 3) await endOwnPause(env);
   });
 
-  const passes = await runDrain({ intervalS: 7, env, deps: { gitImpl: fakeGit(), sleepImpl } });
+  const passes = await runDrain({ intervalS: 7, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl } });
 
   assert.deepEqual(slept, [PAUSE_POLL_MS, PAUSE_POLL_MS, PAUSE_POLL_MS], "the drain did not wait the limit out one slice at a time");
   assert.deepEqual(passes.map((pass) => pass.reason), ["empty-queue"], "the drain exited on the rate limit instead of waiting for it");
@@ -168,7 +169,7 @@ test("a runner told to stop while it waits out a limit comes back within one sli
   const passes = await runDrain({
     intervalS: 7,
     env,
-    deps: { gitImpl: fakeGit(), sleepImpl: slicedSleep(slept, (slice) => (slice === 2 ? process.emit("SIGTERM") : undefined)) },
+    deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: slicedSleep(slept, (slice) => (slice === 2 ? process.emit("SIGTERM") : undefined)) },
   });
 
   assert.equal(slept.length, 2, "the shutdown signal was swallowed by the wait instead of ending it on the next slice");
@@ -189,7 +190,7 @@ test("`queue resume` reaches a runner that is already waiting, and a stamp older
     jobId: first,
     env,
     deps: {
-      gitImpl: fakeGit(),
+      worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(),
       sleepImpl: slicedSleep(stale, async (slice) => {
         if (slice === 3) await endOwnPause(env);
       }),
@@ -207,7 +208,7 @@ test("`queue resume` reaches a runner that is already waiting, and a stamp older
     jobId: second,
     env,
     deps: {
-      gitImpl: fakeGit(),
+      worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(),
       sleepImpl: slicedSleep(fresh, () => writeFileSync(queueResumePath(env), `${new Date().toISOString()}\n`)),
     },
   });
@@ -225,8 +226,8 @@ test("`queue pause` wins over a rate limit wait, and an explicit --job claim sti
   writeFileSync(queuePausedPath(env), `${new Date().toISOString()}\n`);
   const slept = [];
 
-  const manual = await runCycle({ env, deps: { gitImpl: fakeGit(), sleepImpl: slicedSleep(slept) } });
-  const drained = await runDrain({ intervalS: 7, env, deps: { gitImpl: fakeGit(), sleepImpl: slicedSleep(slept) } });
+  const manual = await runCycle({ env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: slicedSleep(slept) } });
+  const drained = await runDrain({ intervalS: 7, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: slicedSleep(slept) } });
 
   assert.deepEqual(slept, [], "a queue the operator paused by hand slept until the reset instead of stopping now");
   assert.equal(manual.reason, "paused");
@@ -238,7 +239,7 @@ test("`queue pause` wins over a rate limit wait, and an explicit --job claim sti
     jobId: id,
     env,
     deps: {
-      gitImpl: fakeGit(),
+      worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(),
       sleepImpl: slicedSleep(byJob, async (slice) => {
         if (slice === 2) await endOwnPause(env);
       }),

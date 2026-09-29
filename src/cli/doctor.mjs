@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import {
   SHIM_NAME,
   binDir,
@@ -8,9 +8,11 @@ import {
   dbShmPath,
   embeddingDir,
   homeDir,
+  operatorQaDir,
   queuePausedPath,
   secretsPath,
   shimNames,
+  worktreesDir,
 } from "../config/paths.mjs";
 import { loadConfig, loadRawConfig } from "../config/store.mjs";
 import { claudeBin } from "../host/claude.mjs";
@@ -31,10 +33,8 @@ import { DB_USER_VERSION } from "../memory/schema.mjs";
 import { decisionRef } from "../memory/scope.mjs";
 import { keepAwakeMode, resolveCaffeinateBin } from "../queue/keep-awake.mjs";
 import { isRegistryFailure, killProcess, listRunnerRecords, liveRunnersReport, registryReadError } from "../queue/registry.mjs";
-import { CLAUDE_EXCLUDE_RULES, ensureClaudeExcluded, missingClaudeExcludes } from "../queue/claude-exclude.mjs";
 import { closesSummary } from "../queue/close-view.mjs";
-import { readRunState } from "../queue/resume.mjs";
-import { canonicalPath, lockState, parseWorktreeList } from "../queue/worktree.mjs";
+import { canonicalPath, jobWorktreeOwners, lockState, parseWorktreeList } from "../queue/worktree.mjs";
 import { openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { firstLine } from "./report.mjs";
@@ -43,7 +43,7 @@ import { jobRef } from "../memory/refs.mjs";
 
 const COMMAND_TIMEOUT_MS = 5000;
 const MIN_NODE_MAJOR = 22;
-const CLAUDE_EXCLUDE_LINES = CLAUDE_EXCLUDE_RULES.map((rule) => rule.line).join(", ");
+const GITDIR_PREFIX = "gitdir:";
 
 // One diagnosis line, with the hint the user needs when it is not `ok`.
 function check(name, status, detail, hint = null) {
@@ -57,11 +57,12 @@ function runCommand(ctx, file, args, options = {}) {
     return {
       ok: !result?.error && result?.status === 0,
       stdout: typeof result?.stdout === "string" ? result.stdout : "",
+      stderr: typeof result?.stderr === "string" ? result.stderr : "",
       missing: result?.error?.code === "ENOENT",
       status: result?.status ?? null,
     };
   } catch (err) {
-    return { ok: false, stdout: "", missing: err?.code === "ENOENT", status: null };
+    return { ok: false, stdout: "", stderr: err?.message ?? "", missing: err?.code === "ENOENT", status: null };
   }
 }
 
@@ -739,50 +740,8 @@ async function checkoutsOrNone(ctx) {
   }
 }
 
-// A git runner in the shape the exclude helper takes, throwing with git's exit status when git refuses.
-function gitVia(ctx) {
-  return ({ args, cwd }) => {
-    const result = runCommand(ctx, "git", args, { cwd });
-    if (result.ok) return result.stdout;
-    const err = new Error(`git ${args[0]} failed in ${cwd}`);
-    err.status = result.status;
-    throw err;
-  };
-}
-
-// The row of an exclude `--fix` tried to complete, from what the write answered.
-function fixedExcludeCheck(name, project, { outcome, missing }) {
-  if (outcome.status === "added") return check(name, "ok", `added ${outcome.lines.join(", ")} to ${outcome.file}`);
-  if (outcome.status === "covered") return check(name, "ok", `${CLAUDE_EXCLUDE_LINES} are ignored`);
-  if (outcome.status === "unwritable") {
-    const lines = missing.map(shellQuote).join(" ");
-    return check(name, "warn", `${outcome.file} cannot be written (${outcome.error})`, `printf '%s\\n' ${lines} >> ${shellQuote(outcome.file)}`);
-  }
-  if (outcome.status === "overridden") {
-    return check(name, "warn", `${missing.join(", ")} is in ${outcome.file} but a .gitignore rule un-ignores it`, `inspect the .gitignore of ${project.path}`);
-  }
-  return check(name, "warn", "git check-ignore did not answer", `inspect ${project.path}`);
-}
-
-// Reports whether a checkout ignores the Claude Code local paths, and adds the missing lines to its local exclude with `--fix`.
-function checkClaudeExclude(ctx, project, fix) {
-  const name = `exclude ${project.name}`;
-  const gitImpl = gitVia(ctx);
-  const missing = missingClaudeExcludes({ cwd: project.path, gitImpl });
-  if (missing === null) return check(name, "warn", "git check-ignore did not answer", `inspect ${project.path}`);
-  if (!missing.length) return check(name, "ok", `${CLAUDE_EXCLUDE_LINES} are ignored`);
-  if (!fix) return check(name, "warn", `${missing.join(", ")} not ignored - Claude Code leaves it untracked in the checkout`, "run: nightqueue doctor --fix");
-  return fixedExcludeCheck(name, project, { outcome: ensureClaudeExcluded({ cwd: project.path, gitImpl }), missing });
-}
-
-// The rows of one registered project: its checkout, then the exclude of its Claude Code paths when the checkout exists.
-function projectChecks(ctx, project, fix) {
-  const row = checkProject(ctx, project);
-  return project.exists ? [row, checkClaudeExclude(ctx, project, fix)] : [row];
-}
-
 // Checks every registered project, or reports that none is registered or that the registry is not readable yet.
-async function checkProjects(ctx, values) {
+async function checkProjects(ctx) {
   let found = null;
   try {
     found = await registeredCheckouts(ctx);
@@ -791,7 +750,7 @@ async function checkProjects(ctx, values) {
   }
   if (found.pending) return [check("projects", "warn", found.pending, found.hint)];
   if (!found.projects.length) return [check("projects", "warn", "no project registered", "run `nightqueue init`")];
-  return found.projects.flatMap((project) => projectChecks(ctx, project, values.fix === true));
+  return found.projects.map((project) => checkProject(ctx, project));
 }
 
 // Quotes a path for a POSIX shell, so a hint can be pasted as is whatever the path holds.
@@ -799,78 +758,214 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
-// Registered projects that have a `.claude/worktrees` directory, the only place the pipeline creates its worktrees.
-async function projectsWithWorktrees(ctx) {
+// Tells whether a path is a directory, never throwing.
+function isDirectory(path) {
   try {
-    return (await checkoutsOrNone(ctx))
-      .filter((project) => project.exists)
-      .map((project) => ({ ...project, dir: join(project.path, ".claude", "worktrees") }))
-      .filter((project) => statSync(project.dir, { throwIfNoEntry: false })?.isDirectory() === true);
+    return statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
   } catch {
-    return [];
+    return false;
   }
 }
 
-// The worktrees a job that is not closed still names in the state of its run, canonical; read through a read-only store only.
+// Registered projects with a legacy `.claude/worktrees` directory, the place an older nightqueue created its worktrees; it is only ever read.
+function projectsWithLegacyWorktrees(projects) {
+  return projects
+    .filter((project) => project.exists)
+    .map((project) => ({ ...project, dir: join(project.path, ".claude", "worktrees") }))
+    .filter((project) => isDirectory(project.dir));
+}
+
+// The worktrees a job that is not closed still names in the state of its run, canonical and mapped to that job; read through a read-only store only.
 async function ownedWorktrees(ctx) {
-  if (!existsSync(dbPath(ctx.env))) return { paths: new Set(), error: null };
+  if (!existsSync(dbPath(ctx.env))) return { owners: new Map(), error: null };
   const store = openStoreReadOnly(ctx.env);
   try {
-    const jobs = await store.jobs.listOpenJobs();
-    const recorded = jobs.map((job) => readRunState({ projectId: job.project_id, slug: job.slug, env: ctx.env })?.worktree);
-    return { paths: new Set(recorded.filter((path) => typeof path === "string" && path.trim()).map((path) => canonicalPath(path.trim()))), error: null };
+    const found = jobWorktreeOwners(await store.jobs.listOpenJobs(), ctx.env);
+    const owners = new Map([...found].map(([path, owner]) => [path, owner.jobId]));
+    return { owners, error: null };
   } catch (err) {
-    return { paths: null, error: err?.message ?? String(err) };
+    return { owners: null, error: err?.message ?? String(err) };
   } finally {
     await store.close();
   }
 }
 
-// The report of one directory under `.claude/worktrees` no open job owns, or null when it is owned or a live session holds it.
-function leftoverCheck(ctx, { project, dir, entries, owned }) {
+// The row of a directory git does not register: removable by hand only when it holds no link to git, else repaired first.
+function unregisteredCheck(name, { project, dir, where }) {
+  if (!existsSync(join(dir, ".git"))) return check(name, "warn", `${where}left over: not registered in git (orphaned), no open job owns it`, `rm -rf ${shellQuote(dir)}`);
+  const repair = `git -C ${shellQuote(project.path)} worktree repair ${shellQuote(dir)}`;
+  return check(name, "warn", `${where}left over: it links to git but ${project.path} does not register it, no open job owns it`, `${repair}, then git worktree remove it`);
+}
+
+// The report of one worktree directory: legacy-in-use when an open job owns a legacy one, a leftover when none owns it, null when owned or a live session holds it.
+function leftoverCheck(ctx, { project, dir, entries, owners, legacy, kind = "worktree" }) {
   const canonical = canonicalPath(dir);
-  if (owned.has(canonical)) return null;
-  const name = `worktree ${project.name}/${basename(dir)}`;
+  const name = `${kind} ${project.name}/${basename(dir)}`;
+  const owner = owners.get(canonical);
+  if (owner !== undefined) {
+    return legacy ? check(name, "ok", `legacy-in-use by ${jobRef(owner)} (old location .claude/worktrees): released when the job closes`) : null;
+  }
+  const where = legacy ? "legacy location, " : "";
   const entry = entries.find((candidate) => canonicalPath(candidate.path) === canonical);
-  if (!entry) return check(name, "warn", "left over: not registered in git (orphaned), no open job owns it", `rm -rf ${shellQuote(dir)}`);
+  if (!entry) return unregisteredCheck(name, { project, dir, where });
   const lock = lockState(entry, ctx.killImpl ?? killProcess);
   if (lock === "live") return null;
   const remove = `git -C ${shellQuote(project.path)} worktree remove ${shellQuote(dir)}`;
-  if (lock === "none") return check(name, "warn", "left over: registered in git, no open job owns it", remove);
+  if (lock === "none") return check(name, "warn", `${where}left over: registered in git, no open job owns it`, remove);
   const unlock = `git -C ${shellQuote(project.path)} worktree unlock ${shellQuote(dir)}`;
-  return check(name, "warn", `left over: registered in git and locked (${entry.locked || "no reason"}), no open job owns it`, `${unlock} && ${remove}`);
+  return check(name, "warn", `${where}left over: registered in git and locked (${entry.locked || "no reason"}), no open job owns it`, `${unlock} && ${remove}`);
 }
 
-// Directories directly under a `.claude/worktrees`, symlinks left out.
+// Directories directly under a worktrees directory, symlinks left out.
 function worktreeDirs(dir) {
   return readdirSync(dir, { withFileTypes: true })
     .filter((dirent) => dirent.isDirectory())
     .map((dirent) => join(dir, dirent.name));
 }
 
-// Reports every leftover under the `.claude/worktrees` of one project, or one warning when git or the directory cannot be read.
-function projectLeftovers(ctx, project, owned) {
+// Directories directly under a worktrees directory, or none when it cannot be read.
+function worktreeDirsOrNone(dir) {
+  try {
+    return worktreeDirs(dir);
+  } catch {
+    return [];
+  }
+}
+
+// Reports one row per directory under a worktrees directory of a project, or one warning when git or the directory cannot be read.
+function scanWorktreeDir(ctx, { project, root, rowOf }) {
   const listed = runCommand(ctx, "git", ["worktree", "list", "--porcelain"], { cwd: project.path });
   if (!listed.ok) return [check(`worktrees ${project.name}`, "warn", "git could not list the worktrees of the checkout", `inspect ${project.path}`)];
   const entries = parseWorktreeList(listed.stdout);
   try {
-    return worktreeDirs(project.dir)
-      .map((dir) => leftoverCheck(ctx, { project, dir, entries, owned }))
+    return worktreeDirs(root)
+      .map((dir) => rowOf(dir, entries))
       .filter(Boolean);
   } catch (err) {
-    return [check(`worktrees ${project.name}`, "warn", `${project.dir} cannot be listed (${err?.message ?? String(err)})`, `read the permissions of ${project.dir}`)];
+    return [check(`worktrees ${project.name}`, "warn", `${root} cannot be listed (${err?.message ?? String(err)})`, `read the permissions of ${root}`)];
   }
 }
 
-// Reports the directories under `.claude/worktrees` of each project that no open job owns, with the command that cleans each; it never cleans anything itself.
-async function checkWorktreeLeftovers(ctx) {
-  const projects = await projectsWithWorktrees(ctx);
-  if (!projects.length) return [];
+// The trimmed content of a small text file, or null when it cannot be read.
+function readText(path) {
+  try {
+    return readFileSync(path, "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+// The git administrative directory a worktree's `.git` file points to, or null when it holds no such link.
+function linkedAdminDir(dir) {
+  const text = readText(join(dir, ".git"));
+  if (!text?.startsWith(GITDIR_PREFIX)) return null;
+  return resolve(dir, text.slice(GITDIR_PREFIX.length).trim());
+}
+
+// Tells whether a path lies strictly under a root once both are resolved.
+function isUnderDir(root, path) {
+  const inside = relative(canonicalPath(root), canonicalPath(path));
+  return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside);
+}
+
+// The git common directory of a checkout as git itself reports it, canonical, or null when git cannot read the checkout.
+function commonDirOf(ctx, checkout) {
+  const answered = runCommand(ctx, "git", ["rev-parse", "--git-common-dir"], { cwd: checkout });
+  const out = answered.stdout.trim();
+  return answered.ok && out ? canonicalPath(resolve(checkout, out)) : null;
+}
+
+// Tells whether the two-way link between a worktree and the common directory of its checkout broke, which is what a moved checkout or home leaves behind.
+function linkBroken(dir, commonDir) {
+  const admin = linkedAdminDir(dir);
+  if (admin === null) return false;
+  if (!existsSync(admin) || !isUnderDir(join(commonDir, "worktrees"), admin)) return true;
+  const back = readText(join(admin, "gitdir"));
+  return back === null || canonicalPath(resolve(admin, back)) !== canonicalPath(join(dir, ".git"));
+}
+
+// Runs one `git worktree repair` over the broken worktrees of a project, from its checkout; answers null when git accepted it, else git's reason.
+function repairLinks(ctx, project, dirs) {
+  const repaired = runCommand(ctx, "git", ["worktree", "repair", ...dirs], { cwd: project.path });
+  return repaired.ok ? null : firstLine(repaired.stderr) || "git worktree repair failed";
+}
+
+// The row of a worktree whose link to its checkout broke: a warning, or what `--fix` made of it once the link is checked again.
+function brokenLinkCheck(project, dir, { fix, failure, holdsNow }) {
+  const name = `worktree ${project.name}/${basename(dir)}`;
+  if (!fix) return check(name, "warn", `git no longer links it to ${project.path} (the checkout or the home moved)`, "run: nightqueue doctor --fix");
+  if (holdsNow) return check(name, "ok", `repaired: git links it to ${project.path} again`);
+  const why = failure === null ? "still not linked after git worktree repair" : `git worktree repair failed (${failure})`;
+  return check(name, "warn", why, `git -C ${shellQuote(project.path)} worktree repair ${shellQuote(dir)}`);
+}
+
+// The row of a linked worktree whose link cannot be checked because git cannot read the checkout; nothing is offered for removal.
+function unreadableLinkCheck(project, dir) {
+  return check(`worktree ${project.name}/${basename(dir)}`, "warn", `cannot check its link: git could not read ${project.path}`, `inspect ${shellQuote(project.path)}`);
+}
+
+// The link state of the worktrees of one project under the home: the broken ones, repaired with `--fix` and checked again.
+function homeLinks(ctx, { project, dirs, fix }) {
+  const commonDir = commonDirOf(ctx, project.path);
+  if (commonDir === null) return { commonDir, broken: [], failure: null, stillBroken: [] };
+  const broken = dirs.filter((dir) => linkBroken(dir, commonDir));
+  const failure = fix && broken.length ? repairLinks(ctx, project, broken) : null;
+  const stillBroken = fix ? broken.filter((dir) => linkBroken(dir, commonDir)) : broken;
+  return { commonDir, broken, failure, stillBroken };
+}
+
+// The row of one worktree directory of a project under the home.
+function homeRow(ctx, { project, dir, entries, owners, links, fix }) {
+  if (links.commonDir === null && existsSync(join(dir, ".git"))) return unreadableLinkCheck(project, dir);
+  if (links.broken.includes(dir)) return brokenLinkCheck(project, dir, { fix, failure: links.failure, holdsNow: !links.stillBroken.includes(dir) });
+  return leftoverCheck(ctx, { project, dir, entries, owners, legacy: false });
+}
+
+// The rows of the worktrees one project has under the home, the broken links repaired first with `--fix`.
+function homeProjectRows(ctx, { project, root, owners, fix }) {
+  const links = homeLinks(ctx, { project, dirs: worktreeDirsOrNone(root), fix });
+  return scanWorktreeDir(ctx, { project, root, rowOf: (dir, entries) => homeRow(ctx, { project, dir, entries, owners, links, fix }) });
+}
+
+// Reports every project directory under a directory of the home: the rows of a registered project, one warning for an id no project with a checkout has.
+function scanHomeRoot({ base, projects, label, rowsOf }) {
+  const byId = new Map(projects.filter((project) => project.exists).map((project) => [project.id, project]));
+  return worktreeDirsOrNone(base).flatMap((root) => {
+    const project = byId.get(basename(root));
+    if (project) return rowsOf(project, root);
+    return [check(`${label} ${basename(root)}`, "warn", "project not registered (no registered project with a checkout has this id)", `inspect ${shellQuote(root)}`)];
+  });
+}
+
+// Reports every project directory under the home's worktrees.
+function checkHomeWorktrees(ctx, { projects, owners, fix }) {
+  return scanHomeRoot({ base: worktreesDir(ctx.env), projects, label: "worktrees", rowsOf: (project, root) => homeProjectRows(ctx, { project, root, owners, fix }) });
+}
+
+// Reports the QA worktrees the operator left under the home; no job ever owns one, so each is a leftover.
+function checkOperatorQa(ctx, { projects }) {
+  const rowOf = (project) => (dir, entries) => leftoverCheck(ctx, { project, dir, entries, owners: new Map(), legacy: false, kind: "operator-qa" });
+  return scanHomeRoot({ base: operatorQaDir(ctx.env), projects, label: "operator-qa", rowsOf: (project, root) => scanWorktreeDir(ctx, { project, root, rowOf: rowOf(project) }) });
+}
+
+// Tells whether the home holds any worktree directory doctor reports on.
+function hasHomeWorktrees(env) {
+  return worktreeDirsOrNone(worktreesDir(env)).length > 0 || worktreeDirsOrNone(operatorQaDir(env)).length > 0;
+}
+
+// Reports the worktrees of the home and the legacy ones under `.claude/worktrees`, with the command that cleans each; the only write is `git worktree repair` with `--fix`.
+async function checkWorktreeLeftovers(ctx, values) {
+  const projects = await checkoutsOrNone(ctx);
+  const legacy = projectsWithLegacyWorktrees(projects);
+  if (!legacy.length && !hasHomeWorktrees(ctx.env)) return [];
   const owned = await ownedWorktrees(ctx);
   if (owned.error !== null) {
     return [check("worktrees", "warn", `the queue cannot be read (${owned.error}), so the owner of a worktree is unknown`, `inspect ${dbPath(ctx.env)}`)];
   }
-  return projects.flatMap((project) => projectLeftovers(ctx, project, owned.paths));
+  const legacyRows = legacy.flatMap((project) =>
+    scanWorktreeDir(ctx, { project, root: project.dir, rowOf: (dir, entries) => leftoverCheck(ctx, { project, dir, entries, owners: owned.owners, legacy: true }) }),
+  );
+  return [...legacyRows, ...checkHomeWorktrees(ctx, { projects, owners: owned.owners, fix: values.fix === true }), ...checkOperatorQa(ctx, { projects })];
 }
 
 // Reason the registry could not answer, short enough for a report line.
@@ -918,8 +1013,8 @@ async function collect(ctx, values) {
     checkDbShm(ctx),
     checkHomeMount(ctx),
     ...(await checkQueue(ctx)),
-    ...(await checkProjects(ctx, values)),
-    ...(await checkWorktreeLeftovers(ctx)),
+    ...(await checkProjects(ctx)),
+    ...(await checkWorktreeLeftovers(ctx, values)),
     ...checkUpdates(ctx, values),
   ];
 }
@@ -935,7 +1030,7 @@ export function reportLine({ status, name, detail, hint }, width = 22) {
   return `${status.padEnd(6)}${name.padEnd(width)}${tail}`;
 }
 
-// Runs `nightqueue doctor`: reads the host and the home, writes nothing but a checkout's local exclude with `--fix`, exits 1 on any failure.
+// Runs `nightqueue doctor`: reads the host and the home, writes nothing but `git worktree repair` with `--fix`, exits 1 on any failure.
 export async function run(argv, ctx) {
   const options = { json: { type: "boolean" }, "check-updates": { type: "boolean" }, fix: { type: "boolean" } };
   const { values, positionals } = parseCommand(argv, options);

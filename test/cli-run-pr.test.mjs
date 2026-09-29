@@ -484,6 +484,18 @@ test("a worktree branch with no `<type>` to restore is published as the `<type>/
   assert.equal(ghCalls(env)[0][3], "fix(auth): the google login");
 });
 
+test("a runtime `worktree-<slug>` branch is published under the commit type its HEAD subject declares, over the run's final slug", async (t) => {
+  const { env, id, remote, worktree } = makeRun(t, "run-pr-commit-type", { branch: "worktree-log-in-with-google", type: "feature/refactor" });
+  git(["-C", worktree, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-q", "-m", "refactor(auth): split the google login"]);
+  const body = writeBody(t, "run-pr-commit-type-body", `# refactor(auth): split the google login\n\n${BODY}`);
+
+  const { code, out } = await runCli(env, ["run", "pr", "--body-file", body], { jobId: id });
+
+  assert.equal(code, 0);
+  assert.equal(out[2], "BRANCH: refactor/login-google (renamed from worktree-log-in-with-google)");
+  assert.deepEqual(remoteBranches(remote), ["main", "refactor/login-google"]);
+});
+
 test("a published branch the run cannot record is reported on stderr, never fatal: the pull request is open", async (t) => {
   const { env, id } = makeRun(t, "run-pr-unrecorded");
   const body = writeBody(t, "run-pr-unrecorded-body", BODY);

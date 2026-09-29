@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { branchAliases, publishedBranchName, sameBranch, WORKTREE_BRANCH_PREFIX } from "../../src/queue/branch-name.mjs";
+import { branchAliases, COMMIT_TYPES, commitTypeOf, publishedBranchName, sameBranch, WORKTREE_BRANCH_PREFIX } from "../../src/queue/branch-name.mjs";
 
 // The rename `run pr` applied before the rule moved here, kept verbatim as the reference the module must match.
 function legacyFinalBranch(current, { type, slug }) {
@@ -38,7 +38,7 @@ test("a worktree branch and its published name are the same branch, both ways", 
 
 test("different branches, and absent names, are never the same branch", () => {
   assert.equal(sameBranch("worktree-feat+queue-close", "scratch/close-qa-20260921201325"), false);
-  assert.equal(sameBranch("worktree-login", "feat/login", { type: "bug/error", slug: "login" }), false);
+  assert.equal(sameBranch("worktree-login", "feat/logout", { type: "bug/error", slug: "login" }), false);
   assert.equal(sameBranch("main", "develop"), false);
   assert.ok(sameBranch("main", "main"), "a plain name is itself");
   assert.equal(sameBranch("", ""), false);
@@ -53,4 +53,33 @@ test("the aliases of a branch are itself, its published form and its worktree fo
   assert.deepEqual(branchAliases("worktree-login"), ["worktree-login"], "a slugless rename invented a published name");
   assert.deepEqual(branchAliases("main"), ["main"]);
   assert.deepEqual(branchAliases(42), []);
+});
+
+test("the commit type of a subject is read only from a Conventional Commits prefix of a known type", () => {
+  assert.equal(commitTypeOf("refactor(x): y"), "refactor");
+  assert.equal(commitTypeOf("docs: y"), "docs");
+  assert.equal(commitTypeOf("feat!: breaking"), "feat");
+  assert.equal(commitTypeOf("chore(deps)!: bump"), "chore");
+  assert.equal(commitTypeOf("perf(x): y"), null, "a type outside the pipeline's table");
+  assert.equal(commitTypeOf("Refactor the parser"), null);
+  assert.equal(commitTypeOf("refactor:no space"), null);
+  assert.equal(commitTypeOf(undefined), null);
+  assert.deepEqual(COMMIT_TYPES, ["feat", "fix", "refactor", "docs", "style", "build", "chore", "test"]);
+});
+
+test("a runtime `worktree-<slug>` branch is published under the commit type, else the task type, and the `+` form is unchanged", () => {
+  assert.equal(publishedBranchName("worktree-foo", { type: "feature", slug: "foo", commitType: "refactor" }), "refactor/foo");
+  assert.equal(publishedBranchName("worktree-foo", { type: "bug/error", slug: "foo", commitType: null }), "fix/foo");
+  assert.equal(publishedBranchName("worktree-foo", { type: "feature", slug: "foo" }), "feat/foo");
+  assert.equal(publishedBranchName("worktree-provisional-name", { slug: "final-name", commitType: "docs" }), "docs/final-name");
+  assert.equal(publishedBranchName("worktree-feat+x", { type: "bug/error", slug: "y", commitType: "docs" }), "feat/x");
+});
+
+test("a runtime `worktree-<slug>` branch is the same branch as its publication under any commit type", () => {
+  assert.ok(sameBranch("worktree-foo", "docs/foo", { slug: "foo" }));
+  assert.ok(sameBranch("worktree-foo", "refactor/foo", { slug: "foo" }));
+  assert.ok(sameBranch("refactor/foo", "worktree-foo", { slug: "foo" }));
+  assert.equal(sameBranch("worktree-foo", "perf/foo", { slug: "foo" }), false);
+  assert.equal(sameBranch("worktree-foo", "refactor/bar", { slug: "foo" }), false);
+  assert.equal(sameBranch("worktree-feat+x", "refactor/x", { slug: "x" }), false, "the `+` form keeps its own type");
 });

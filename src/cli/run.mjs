@@ -7,7 +7,7 @@ import { ghPrCreate } from "../host/gh.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { registeredProject } from "../memory/registry-access.mjs";
 import { runGit } from "../host/git.mjs";
-import { publishedBranchName } from "../queue/branch-name.mjs";
+import { commitTypeOf, publishedBranchName } from "../queue/branch-name.mjs";
 import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
 import { formatDuration } from "../queue/narrate.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
@@ -576,6 +576,12 @@ function currentBranch(cwd, env) {
   return name;
 }
 
+// The commit type the subject of HEAD declares, or null when git cannot read it or it follows no known type.
+function headCommitType(cwd, env) {
+  const subject = runGit({ args: ["log", "-1", "--format=%s"], cwd, env });
+  return subject.ok ? commitTypeOf(subject.stdout.trim()) : null;
+}
+
 // Renames the local branch to the name the remote should carry, which is what the push and the pull request then use.
 function renameBranch({ cwd, current, final, env }) {
   if (final === current) return current;
@@ -647,7 +653,8 @@ async function runPr(argv, ctx) {
   const published = await publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, store: openStore(ctx.env) });
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const current = currentBranch(cwd, ctx.env);
-  const branch = renameBranch({ cwd, current, final: publishedBranchName(current, { type: state?.type, slug: run.slug }), env: ctx.env });
+  const final = publishedBranchName(current, { type: state?.type, slug: run.slug, commitType: headCommitType(cwd, ctx.env) });
+  const branch = renameBranch({ cwd, current, final, env: ctx.env });
   const { url, recorded, prRecorded, branchRecorded } = publishBranch({ run, cwd, branch, title: prTitle(values.title, body), bodyFile: published, env: ctx.env });
   ctx.out(`BRANCH: ${branch}${branch === current ? "" : ` (renamed from ${current})`}`);
   ctx.out(`PR: ${url ?? "opened"}`);

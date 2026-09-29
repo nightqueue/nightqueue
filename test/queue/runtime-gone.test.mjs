@@ -8,6 +8,7 @@ import { runCycle, runDrain } from "../../src/queue/runner.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream } from "../../test-support/streams.mjs";
+import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const WARNING = /^runtime directory (.+) is gone - this runner finishes the job it is running and exits; start a new runner with: nightqueue queue run$/m;
 
@@ -53,7 +54,7 @@ test("a runner whose runtime directory is gone claims nothing, says so and leave
   const stderr = captureStderr(t);
   rmSync(runtimeDir, { recursive: true, force: true });
 
-  const cycle = await runCycle({ env, deps: { gitImpl: fakeGit() } });
+  const cycle = await runCycle({ env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
 
   assert.equal(cycle.reason, "runtime-gone");
   assert.deepEqual(cycle.processed, [], "a runner running from a tree that is gone claimed a job anyway");
@@ -69,7 +70,7 @@ test("a runtime that disappears mid-run lets the job in flight finish, and stops
   captureStderr(t);
   const gitImpl = fakeGit(() => rmSync(runtimeDir, { recursive: true, force: true }));
 
-  const passes = await runDrain({ max: 1, env, deps: { gitImpl } });
+  const passes = await runDrain({ max: 1, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl } });
 
   assert.deepEqual(
     passes.map((pass) => pass.reason),
