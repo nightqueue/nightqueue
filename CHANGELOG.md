@@ -8,6 +8,12 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`queue close` waits for pending checks at preflight.** Required checks still running no
+  longer stop the close with `checks-pending` at once: preflight polls them like the wait after
+  a `BEHIND` update (same backoff, same `waiting for checks on <sha>` line), out of the one
+  `queue.closeTimeoutS` budget the whole close shares. Green goes on to merge, red stops with
+  `checks-red`, and past the budget it stops with `checks still running on <sha> - run queue
+  close N again` and the next run continues.
 - **Every reference to another row is enforced (schema v20).** The database migrates once to
   v20, on the first command that opens it and in the same open as the v18 and v19 steps when
   they are pending, leaving a copy `nightqueue.db.pre-v20` beside it. The rules: a comment and a

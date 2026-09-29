@@ -813,7 +813,12 @@ agent, never a second job, never queue work:
    step note. A pull request closed without being merged cancels the job (see *A closed pull
    request cancels* below); one that is already merged is recorded as merged by the operator
    and nothing else is checked. Otherwise the checks must be
-   green - a red or a pending check stops the close naming it, and it never waits for one.
+   green - a red check stops the close naming it (`checks-red`), and a pending one is waited
+   on in the same run with the same poll, backoff and `waiting for checks on <sha>: 2/3 done`
+   line as the `BEHIND` wait below, out of the one `queue.closeTimeoutS` budget the whole
+   close shares (a later `BEHIND` wait spends only what is left of it); when the budget is
+   nearly out it stops with `checks-pending` - `checks still running on <sha> - run queue
+   close N again` - and the next run continues. A pull request with no checks reported goes on.
    Uncommitted files in the checkout only stop it when the pull that follows the merge
    would touch them (`checkout-dirty` names up to ten): nightqueue never stashes, so they are
    yours to commit or stash.
@@ -832,7 +837,7 @@ agent, never a second job, never queue work:
    foreground close show `waiting for checks on <sha>: 2/3 done`, and the close lease is
    renewed at each poll. All green goes on to merge; a red check stops with `checks-red`
    naming it; when `queue.closeTimeoutS` is nearly out it stops with `checks-pending` -
-   `branch updated to <sha>, checks still running - run queue close N again` - and the next
+   `branch updated to <sha>, checks still running - run queue close J-N again` - and the next
    run starts at preflight on that head. No other state (`BLOCKED`, `UNSTABLE`) is updated,
    and with `--force` the wait is skipped.
 3. **merge** - `gh pr merge --squash --match-head-commit <the verified head>`, never

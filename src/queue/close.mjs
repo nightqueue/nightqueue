@@ -178,6 +178,14 @@ function withAttributionNote(note, attribution) {
   return attribution.note ? `${note}; ${attribution.note}` : note;
 }
 
+// The checks verdict of preflight; checks still running are waited on within the close's budget instead of stopping it.
+async function checksOrWait(ctx, deps, data) {
+  const checks = await checksVerdict(ctx, deps);
+  if (checks.problem?.reason !== "checks-pending" || !data.headSha) return checks;
+  const waited = await waitForChecks(ctx, deps, { status: "done", note: "checks waited", data }, `checks still running on ${sha7(data.headSha)}`);
+  return waited.status === "done" ? { note: waited.note } : { problem: { ...waited, reopen: [] } };
+}
+
 // Checks, before anything is changed, that the pull request is the job's own, open, green and pullable into the canonical checkout.
 async function preflightStep({ ctx, deps }) {
   if (!ctx.checkout || !deps.fs.exists(ctx.checkout)) return failed("checkout-missing", `the checkout of project \`${ctx.project}\` is missing: ${ctx.checkout ?? "not registered"}`);
@@ -190,7 +198,7 @@ async function preflightStep({ ctx, deps }) {
   if (attribution.problem) return { ...attribution.problem, data };
   if (pr.state === "CLOSED") return failed("pr-closed", `PR #${pr.number} was closed without being merged`, { data });
   if (pr.state === "MERGED") return { status: "done", note: withAttributionNote(`PR #${pr.number} already merged as ${sha7(pr.mergeSha)}`, attribution), data: { ...data, ...mergedData(pr, mergedByOf(ctx)) } };
-  const checks = await checksVerdict(ctx, deps);
+  const checks = await checksOrWait(ctx, deps, data);
   if (checks.problem) return { ...checks.problem, data };
   const checkout = await checkoutVerdict(ctx, deps, pr.baseRefName);
   if (checkout.problem) return { ...checkout.problem, data };
@@ -224,7 +232,7 @@ async function updateBehindHead(ctx, deps, branches) {
   const updated = await rebaseInThrowaway(ctx, deps, branches);
   if (updated.status !== "done" || ctx.force) return updated;
   if (!updated.data.headSha) return failed("head-unreadable", "the branch was pushed but its new head could not be read; run again", { data: updated.data, reopen: ["preflight"] });
-  return await waitForChecks(ctx, deps, updated);
+  return await waitForChecks(ctx, deps, updated, `branch updated to ${sha7(updated.data.headSha)}, checks still running`);
 }
 
 // The progress line of the checks of a head, or null when they could not be read.
@@ -235,7 +243,7 @@ function checksProgress(sha, checks) {
 }
 
 // Polls the checks of the updated head with a growing gap until they are all green, one is red or the close's time is nearly out.
-async function waitForChecks(ctx, deps, updated) {
+async function waitForChecks(ctx, deps, updated, stillRunning) {
   const { data } = updated;
   const stop = { data, reopen: ["preflight"] };
   for (let attempt = 0, gap = CHECKS_POLL_MS; ; attempt += 1, gap = Math.min(gap * 2, CHECKS_POLL_MAX_MS)) {
@@ -246,7 +254,7 @@ async function waitForChecks(ctx, deps, updated) {
     }
     await ctx.progress?.(checksProgress(data.headSha, checks) ?? `waiting for checks on ${sha7(data.headSha)}: not readable yet`);
     if (ctx.remainingMs() <= CHECKS_WAIT_RESERVE_MS) {
-      return failed("checks-pending", `branch updated to ${sha7(data.headSha)}, checks still running - run queue close ${ctx.jobId} again`, stop);
+      return failed("checks-pending", `${stillRunning} - run queue close ${jobRef(ctx.jobId)} again`, stop);
     }
     await pause(ctx, deps, Math.min(gap, ctx.remainingMs() - CHECKS_WAIT_RESERVE_MS));
   }
