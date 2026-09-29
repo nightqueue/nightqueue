@@ -188,6 +188,7 @@ function openAttempt(state, attempt, iso) {
   state.clockMs = ms;
   state.lanes.clear();
   state.closedLanes.clear();
+  state.bashTasks.clear();
   state.tools.clear();
   state.seen.clear();
   state.plain = 0;
@@ -372,14 +373,18 @@ function closeLane(state, event) {
   return [narrationEvent(state, "laneClose", `${label} ${status} (${laneSummary(state, lane, event.usage)})`)];
 }
 
-// A `system` event: only the two that open and close a subagent lane say anything to the operator.
+// A `system` event: only the two that open and close a subagent lane say anything to the operator, and a background Bash task is no subagent.
 function narrateSystem(state, event) {
   if (event.subtype === "task_started") {
     const id = typeof event.tool_use_id === "string" ? event.tool_use_id : "";
     if (!id || state.lanes.has(id)) return [];
+    if (event.task_type === "local_bash") {
+      state.bashTasks.add(id);
+      return [];
+    }
     return [openLane(state, { toolUseId: id, subagentType: event.subagent_type, description: event.description })];
   }
-  if (event.subtype === "task_notification") return closeLane(state, event);
+  if (event.subtype === "task_notification") return state.bashTasks.has(event.tool_use_id) ? [] : closeLane(state, event);
   return [];
 }
 
@@ -437,7 +442,7 @@ function finishNarration(state, { running = false } = {}) {
 
 // A narrator of one job log: it takes raw lines, one at a time, and answers with the lines to print.
 export function createNarrator({ all = false, jobId = null } = {}) {
-  const state = { all: all === true, jobId: jobId ?? null, anchorMs: null, clockMs: null, lanes: new Map(), closedLanes: new Map(), tools: new Map(), seen: new Map(), skipped: 0, plain: 0 };
+  const state = { all: all === true, jobId: jobId ?? null, anchorMs: null, clockMs: null, lanes: new Map(), closedLanes: new Map(), bashTasks: new Set(), tools: new Map(), seen: new Map(), skipped: 0, plain: 0 };
   return {
     push: (rawLine) => narrateLine(state, rawLine),
     finish: (options) => finishNarration(state, options),

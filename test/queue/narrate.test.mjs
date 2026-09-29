@@ -152,6 +152,12 @@ test("the lane opens from `task_started` when the tool call that spawned it was 
   assert.equal(lines.filter((line) => line.includes("▶")).length, 1);
 });
 
+test("a background Bash task opens no subagent lane and reports no lane close", () => {
+  const started = { ...taskStartedEvent({ toolUseId: "toolu_bash" }), task_type: "local_bash", subagent_type: undefined };
+  const lines = narrate(attemptLog([started, taskNotificationEvent({ toolUseId: "toolu_bash", toolUses: 0, durationMs: 1000 })]));
+  assert.equal(lines.filter((line) => line.includes("▶") || line.includes("◀")).length, 0, lines.join("\n"));
+});
+
 test("the lane label carries the model of the `tool_use` that launched it, the only event of the stream that says it", () => {
   const lines = narrate(
     attemptLog([
