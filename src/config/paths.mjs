@@ -3,10 +3,27 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Resolves the configuration home, reading the environment on every call.
+// Reads the explicitly named home, or an empty string when the environment names none.
+function explicitHome(env) {
+  return typeof env?.NIGHTQUEUE_HOME === "string" ? env.NIGHTQUEUE_HOME.trim() : "";
+}
+
+// Resolves the configuration home, reading the environment on every call; a test process never falls back to the default.
 export function homeDir(env = process.env) {
-  const raw = typeof env?.NIGHTQUEUE_HOME === "string" ? env.NIGHTQUEUE_HOME.trim() : "";
-  return raw ? resolve(raw) : join(homedir(), ".nightqueue");
+  const raw = explicitHome(env);
+  if (raw) return resolve(raw);
+  if (process.env.NODE_TEST_CONTEXT) {
+    throw new Error("refused: a test resolved the default ~/.nightqueue; set NIGHTQUEUE_HOME to a temporary directory (see test-support/memory.mjs makeHome)");
+  }
+  return join(homedir(), ".nightqueue");
+}
+
+// Resolves the home for a script that touches the store, refusing the default so an operator's own home is never reached by accident.
+export function requireExplicitHome(env = process.env) {
+  if (!explicitHome(env)) {
+    throw new Error("refused: this script changes the store and needs an explicit NIGHTQUEUE_HOME (NIGHTQUEUE_HOME=/path node scripts/...)");
+  }
+  return homeDir(env);
 }
 
 // Path of the configuration file.

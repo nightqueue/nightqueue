@@ -2,7 +2,7 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { dbPath } from "../src/config/paths.mjs";
+import { dbPath, requireExplicitHome } from "../src/config/paths.mjs";
 import { openStore } from "../src/store/open.mjs";
 
 const USAGE = "usage: node scripts/roadmap-backfill.mjs [--dry-run]";
@@ -17,6 +17,7 @@ function parseOptions(argv) {
 // Synthesizes the comments of the roadmap items linked to a job before comments existed, in the home NIGHTQUEUE_HOME names; answers the exit code.
 export async function main(argv = process.argv.slice(2), env = process.env, io = console) {
   const { dryRun } = parseOptions(argv);
+  requireExplicitHome(env);
   const store = openStore(env);
   try {
     const tally = await store.roadmap.backfillRoadmap({ dryRun });

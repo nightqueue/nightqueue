@@ -626,7 +626,7 @@ test("the orchestrator counts are zero on an empty stream, and a stream with no 
 });
 
 test("an orchestrator Read of its own session's spilled tool result is never counted, another session's always is", () => {
-  const env = { NIGHTQUEUE_JOB_HOME: "/ns-orchestrator-test-home", HOME: "/ns-orchestrator-test-user", CLAUDE_CONFIG_DIR: "/ns-orchestrator-test-claude" };
+  const env = { NIGHTQUEUE_JOB_HOME: "/ns-orchestrator-test-home", NIGHTQUEUE_HOME: "/ns-orchestrator-test-home", HOME: "/ns-orchestrator-test-user", CLAUDE_CONFIG_DIR: "/ns-orchestrator-test-claude" };
   const project = "/ns-orchestrator-test-claude/projects/-ns-orchestrator-test-repo";
   const log = toNdjson([
     orchAssistant({ id: "msg_1", tools: [["toolu_a", "Read", { file_path: `${project}/${ORCH_SESSION}/tool-results/toolu_big.txt` }]] }),

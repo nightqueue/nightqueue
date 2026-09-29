@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { UserError } from "../src/config/errors.mjs";
@@ -113,8 +113,6 @@ test("the configuration home is resolved on every call", () => {
     assert.equal(configPath(), join(tmpdir(), "one", "config.json"));
     process.env.NIGHTQUEUE_HOME = join(tmpdir(), "two");
     assert.equal(configPath(), join(tmpdir(), "two", "config.json"));
-    delete process.env.NIGHTQUEUE_HOME;
-    assert.equal(homeDir(), join(homedir(), ".nightqueue"));
   } finally {
     if (previous === undefined) delete process.env.NIGHTQUEUE_HOME;
     else process.env.NIGHTQUEUE_HOME = previous;

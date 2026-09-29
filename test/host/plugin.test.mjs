@@ -31,7 +31,7 @@ function writeAlienMarketplace(configDir) {
 
 test("marketplaceIsCurrent must not call a name collision (no local path) 'this package'", () => {
   // Correct behavior: an entry with no path pointing at this package root is NOT "current" just because the key matched.
-  assert.equal(marketplaceIsCurrent(ALIEN_ENTRY), false);
+  assert.equal(marketplaceIsCurrent(ALIEN_ENTRY, { NIGHTQUEUE_HOME: "/tmp/ns" }), false);
 });
 
 test("setup must fix a marketplace registered under our name but pointing elsewhere, not call it 'already present'", async (t) => {

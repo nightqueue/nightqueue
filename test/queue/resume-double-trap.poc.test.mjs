@@ -53,7 +53,7 @@ test("a double-trap operator state.json resumes at triage without an unearned ar
   // The handoff prompt actually shown to the resuming agent must not carry the unearned line.
   const job = { id: 7, project: "alpha", project_id: FIXED_PROJECT_ID, slug: "fix-the-worker", prompt: "p" };
   const handoff = resumeHandoff({ job, resume: decision, state: recorded, env: { NIGHTQUEUE_HOME: "/tmp/ns" } });
-  const prompt = buildPrompt({ job, handoff });
+  const prompt = buildPrompt({ job, handoff, env: { NIGHTQUEUE_HOME: "/tmp/ns" } });
   assert.ok(prompt.includes("Re-run: triage"), prompt);
   assert.ok(!prompt.includes("Re-run: architecture"), prompt);
 });
