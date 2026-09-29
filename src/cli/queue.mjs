@@ -58,7 +58,7 @@ import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue
 import { resolveJobSession } from "../queue/session.mjs";
 import { stopReport, stopRunners } from "../queue/stop.mjs";
 import { runCloseHere, startCloseDetached } from "../queue/close-start.mjs";
-import { closeChecklistLines, closeLastCell, closeStoppedLine, queueWorkers, statusLabel } from "../queue/close-view.mjs";
+import { CLOSE_STEP_ICONS, closeChecklistLines, closeLastCell, closeStoppedLine, queueWorkers, statusLabel } from "../queue/close-view.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -1217,8 +1217,6 @@ async function runCloseMerged(values, ctx, chooser) {
     prStates.dispose();
   }
 }
-
-const CLOSE_STEP_ICONS = { done: "✓", skipped: "-", failed: "✗" };
 
 // The line a forced close prints first, so what `--force` skips, and what it never skips, is always said out loud.
 function forcedCloseLine(id) {

@@ -114,7 +114,12 @@ test("a skipped step is re-evaluated on the next attempt, and a step can reopen 
   const home = closeHome(t, "close-engine-reopen");
   const first = fakeSteps({ ...GREEN, merge: async () => ({ status: "failed", reason: "head-moved", note: "the head moved", reopen: ["preflight", "conflict"] }) });
   await attempt(home, { steps: first.steps });
-  assert.deepEqual(Object.keys(checklistOf(home).steps), ["merge"]);
+  const reopened = checklistOf(home).steps;
+  assert.deepEqual(Object.keys(reopened), ["preflight", "conflict", "merge"], "a reopened entry was deleted");
+  assert.equal(reopened.preflight.status, "reopened");
+  assert.equal(reopened.preflight.note, "checks green");
+  assert.equal(reopened.conflict.status, "reopened");
+  assert.equal(reopened.conflict.note, "mergeable");
 
   const next = reacquire(home, "close:test:2:bbbb");
   const second = fakeSteps(GREEN);
@@ -263,4 +268,57 @@ test("the fetch warning a step records prefixes every later note", async (t) => 
   const steps = checklistOf(home).steps;
   assert.equal(steps.preflight.note, "WARNING: git fetch origin failed (offline) | checks green");
   assert.equal(steps.merge.note, "WARNING: git fetch origin failed (offline) | merged");
+});
+
+test("a successful step that reopens an earlier one loops back to it in the same attempt, and the step after it is not labelled earlier", async (t) => {
+  const home = closeHome(t, "close-engine-loopback");
+  let pushes = 0;
+  const conflict = async () => {
+    pushes += 1;
+    return { status: "done", note: "pushed", data: { headSha: "2222222" }, reopen: pushes === 1 ? ["preflight"] : [] };
+  };
+  const counted = fakeSteps({ ...GREEN, conflict });
+  const { outcome, reported } = await attempt(home, { steps: counted.steps });
+  assert.equal(outcome.status, "closed", JSON.stringify(outcome));
+  assert.deepEqual(counted.calls, { preflight: 2, conflict: 1, merge: 1, settle: 1 });
+  assert.deepEqual(
+    reported.map(({ name, status, earlier }) => [name, status, earlier]),
+    [["preflight", "done", false], ["conflict", "done", false], ["preflight", "done", false], ["conflict", "done", false], ["merge", "done", false], ["settle", "done", false]],
+  );
+});
+
+test("a step that keeps reopening an earlier one stops the close at reopen-loop after two loop-backs", async (t) => {
+  const home = closeHome(t, "close-engine-reopen-loop");
+  const counted = fakeSteps({ ...GREEN, conflict: async () => ({ status: "skipped", note: "nothing to rebase", reopen: ["preflight"] }) });
+  const { outcome } = await attempt(home, { steps: counted.steps });
+  assert.deepEqual(outcome, { status: "failed", step: "conflict", reason: "reopen-loop", mergeSha: null, worktree: null });
+  assert.equal(counted.calls.preflight, 3);
+  assert.equal(counted.calls.conflict, 3);
+  assert.equal(counted.calls.merge, 0);
+  assert.deepEqual(checklistOf(home).failed, { step: "conflict", reason: "reopen-loop" });
+});
+
+test("a step that reopens something other than a close step fails at reopen-unknown, keeping its data and touching no other entry", async (t) => {
+  for (const reopen of [["bogus"], "preflight"]) {
+    const home = closeHome(t, `close-engine-reopen-unknown-${Array.isArray(reopen) ? "list" : "text"}`);
+    const counted = fakeSteps({ ...GREEN, conflict: async () => ({ status: "done", note: "pushed", data: { headSha: "x" }, reopen }) });
+    const { outcome } = await attempt(home, { steps: counted.steps });
+    assert.deepEqual(outcome, { status: "failed", step: "conflict", reason: "reopen-unknown", mergeSha: null, worktree: null });
+    const checklist = checklistOf(home);
+    assert.equal(checklist.steps.conflict.note, `reopen-unknown - the conflict step reopened ${JSON.stringify(Array.isArray(reopen) ? reopen[0] : reopen)}, which is not a close step (it answered: pushed)`);
+    assert.equal(checklist.steps.preflight.status, "done", "another entry changed");
+    assert.equal(checklist.data.headSha, "x", "the data of the step was dropped");
+    assert.equal(counted.calls.merge, 0);
+  }
+});
+
+test("a failed step's reopen never loops back in the same attempt, and a step with no entry is not created by it", async (t) => {
+  const home = closeHome(t, "close-engine-reopen-failed");
+  const counted = fakeSteps({ ...GREEN, conflict: async () => ({ status: "skipped", note: "mergeable" }), merge: async () => ({ status: "failed", reason: "head-moved", note: "moved", reopen: ["preflight", "settle"] }) });
+  const { outcome } = await attempt(home, { steps: counted.steps });
+  assert.equal(outcome.reason, "head-moved");
+  assert.equal(counted.calls.preflight, 1, "a failed result looped back");
+  const steps = checklistOf(home).steps;
+  assert.equal(steps.preflight.status, "reopened");
+  assert.equal(steps.settle, undefined, "a reopen created an entry for a step that never ran");
 });

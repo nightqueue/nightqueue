@@ -22,6 +22,9 @@ const MERGE_REREAD_GAP_MS = 2000;
 const CHECKS_POLL_MS = 10000;
 const CHECKS_POLL_MAX_MS = 60000;
 const CHECKS_WAIT_RESERVE_MS = 30000;
+const PUSH_REREADS = 3;
+const PUSH_REREAD_GAP_MS = 2000;
+const MAX_LOOPBACKS = 2;
 const NAMES_SHOWN = 10;
 const SUITE_LINES_SHOWN = 20;
 const CONFLICTED_STATES = new Set(["CONFLICTING", "DIRTY"]);
@@ -99,6 +102,28 @@ function mergedByOf(ctx) {
 // Waits between two reads through the injected sleep, never past the deadline.
 async function pause(ctx, deps, ms) {
   await deps.sleep(Math.max(0, Math.min(ms, ctx.remainingMs())), ctx.signal);
+}
+
+// Tells whether a read settles the post-push wait: a readable pull request not open, or showing the expected head with its mergeability computed.
+function settlesPushedRead(pr, expected) {
+  if (!pr?.ok) return false;
+  return pr.state !== "OPEN" || (pr.headRefOid === expected && pr.mergeable !== "UNKNOWN");
+}
+
+// Reads the pull request after the close pushed its head, a few times at most, until GitHub shows the expected head.
+async function readPushedPr(ctx, deps, expected) {
+  let last = null;
+  for (let attempt = 0; attempt < PUSH_REREADS; attempt += 1) {
+    if (attempt > 0) await pause(ctx, deps, PUSH_REREAD_GAP_MS);
+    last = await readPr(ctx, deps);
+    if (settlesPushedRead(last, expected)) return last;
+  }
+  return last;
+}
+
+// Reads the pull request, retrying while GitHub still lags behind a head this close pushed.
+async function readHeadPr(ctx, deps) {
+  return ctx.data.pushedBy === "close" && ctx.data.headSha ? await readPushedPr(ctx, deps, ctx.data.headSha) : await readPr(ctx, deps);
 }
 
 // What the checks of the pull request said, as a stop of the close or the note of checks that let it go on.
@@ -180,10 +205,44 @@ function withAttributionNote(note, attribution) {
 
 // The checks verdict of preflight; checks still running are waited on within the close's budget instead of stopping it.
 async function checksOrWait(ctx, deps, data) {
-  const checks = await checksVerdict(ctx, deps);
-  if (checks.problem?.reason !== "checks-pending" || !data.headSha) return checks;
+  const waitsFirst = ctx.data.pushedBy === "close" && Boolean(data.headSha) && !ctx.force;
+  const checks = waitsFirst ? null : await checksVerdict(ctx, deps);
+  if (checks && (checks.problem?.reason !== "checks-pending" || !data.headSha)) return checks;
   const waited = await waitForChecks(ctx, deps, { status: "done", note: "checks waited", data }, `checks still running on ${sha7(data.headSha)}`);
   return waited.status === "done" ? { note: waited.note } : { problem: { ...waited, reopen: [] } };
+}
+
+// The tip of a branch as `git fetch` left it in the canonical checkout, or null when it cannot be told.
+async function remoteHead(ctx, deps, fetchedOk, branch) {
+  if (!fetchedOk || !branch) return null;
+  const resolved = await git(ctx, deps, ["rev-parse", `origin/${branch}`]);
+  return resolved.ok ? resolved.stdout.trim() || null : null;
+}
+
+// The head preflight expects after this close's push: the recorded one, else the branch tip git fetched; null when nothing was pushed.
+async function expectedPushedHead(ctx, deps, fetchedOk) {
+  if (ctx.data.pushedBy !== "close") return null;
+  return ctx.data.headSha ?? (await remoteHead(ctx, deps, fetchedOk, ctx.data.headBranch));
+}
+
+// Whether GitHub's read of a pull request this close pushed is confirmed, by the push record or by the branch tip git fetched; otherwise the stop.
+async function pushedHeadVerdict(ctx, deps, { pr, expected, fetchedOk }) {
+  if (expected && pr.headRefOid === expected) return { pushedBy: "close" };
+  const head = await remoteHead(ctx, deps, fetchedOk, pr.headRefName);
+  const gitAgrees = Boolean(head) && pr.headRefOid === head;
+  if (gitAgrees && !ctx.data.headSha) return { pushedBy: "close" };
+  if (gitAgrees) {
+    const note = `this close pushed ${sha7(ctx.data.headSha)}, but ${pr.headRefName} is now at ${sha7(head)}; the next run checks the new head`;
+    return { problem: failed("head-moved", note, { data: { pushedBy: null }, reopen: ["conflict"] }) };
+  }
+  const pushed = expected ?? head;
+  const note = `this close pushed ${sha7(pushed)}, but GitHub still shows ${sha7(pr.headRefOid)} after ${PUSH_REREADS} reads; run again`;
+  return { problem: failed("head-not-visible", note, { data: !ctx.data.headSha && pushed ? { headSha: pushed } : {} }) };
+}
+
+// The preflight note of a head this close pushed, or an empty suffix.
+function pushedHeadNote(data) {
+  return data.pushedBy === "close" ? `; head ${sha7(data.headSha)} pushed by this close` : "";
 }
 
 // Checks, before anything is changed, that the pull request is the job's own, open, green and pullable into the canonical checkout.
@@ -191,9 +250,13 @@ async function preflightStep({ ctx, deps }) {
   if (!ctx.checkout || !deps.fs.exists(ctx.checkout)) return failed("checkout-missing", `the checkout of project \`${ctx.project}\` is missing: ${ctx.checkout ?? "not registered"}`);
   const fetched = await git(ctx, deps, ["fetch", "origin"]);
   const data = { fetchWarning: fetched.ok ? null : `WARNING: git fetch origin failed (${firstLine(fetched.stderr)})` };
-  const pr = await readPr(ctx, deps);
+  const expected = await expectedPushedHead(ctx, deps, fetched.ok);
+  const pr = expected ? await readPushedPr(ctx, deps, expected) : await readPr(ctx, deps);
   if (!pr?.ok) return { ...unreadablePr(ctx, pr), data };
+  const verdict = ctx.data.pushedBy === "close" && pr.state === "OPEN" ? await pushedHeadVerdict(ctx, deps, { pr, expected, fetchedOk: fetched.ok }) : null;
+  if (verdict?.problem) return { ...verdict.problem, data: { ...data, ...verdict.problem.data } };
   Object.assign(data, prData(pr));
+  if (verdict) data.pushedBy = verdict.pushedBy;
   const attribution = attributionVerdict(ctx, pr);
   if (attribution.problem) return { ...attribution.problem, data };
   if (pr.state === "CLOSED") return failed("pr-closed", `PR #${pr.number} was closed without being merged`, { data });
@@ -202,12 +265,12 @@ async function preflightStep({ ctx, deps }) {
   if (checks.problem) return { ...checks.problem, data };
   const checkout = await checkoutVerdict(ctx, deps, pr.baseRefName);
   if (checkout.problem) return { ...checkout.problem, data };
-  return { status: "done", note: withAttributionNote(`PR #${pr.number} open; ${checks.note}; ${checkout.note}`, attribution), data };
+  return { status: "done", note: withAttributionNote(`PR #${pr.number} open; ${checks.note}; ${checkout.note}${pushedHeadNote(data)}`, attribution), data };
 }
 
 // Reads the pull request's mergeability, reading once more after a pause when GitHub has not computed it yet.
 async function readMergeability(ctx, deps) {
-  const pr = await readPr(ctx, deps);
+  const pr = await readHeadPr(ctx, deps);
   if (!pr?.ok || pr.state !== "OPEN" || pr.mergeable !== "UNKNOWN") return pr;
   await pause(ctx, deps, UNKNOWN_RETRY_MS);
   return await readPr(ctx, deps);
@@ -220,19 +283,44 @@ async function conflictStep({ ctx, deps }) {
   if (!pr?.ok) return unreadablePr(ctx, pr);
   if (pr.state === "MERGED") return { status: "skipped", note: "the pull request is already merged", data: mergedData(pr, mergedByOf(ctx)) };
   if (pr.state === "CLOSED") return failed("pr-closed", `PR #${pr.number} was closed without being merged`);
+  if (ctx.data.pushedBy === "close" && pr.headRefOid !== ctx.data.headSha) {
+    return failed("head-moved", `the head moved from ${sha7(ctx.data.headSha)} to ${sha7(pr.headRefOid)} after this close pushed it; the next run checks it again`, { reopen: ["preflight"] });
+  }
   if (pr.mergeStateStatus === "BEHIND") return await updateBehindHead(ctx, deps, { head: pr.headRefName, base: pr.baseRefName });
+  if (pr.mergeStateStatus === "BLOCKED" && pr.mergeable === "MERGEABLE") return await waitBlockedHead(ctx, deps, pr);
   if (pr.mergeable === "MERGEABLE" || pr.mergeStateStatus === "CLEAN") return { status: "skipped", note: `mergeable (${pr.mergeStateStatus ?? pr.mergeable})` };
   if (pr.mergeable === "UNKNOWN") return failed("mergeability-unknown", "GitHub has not computed whether the pull request merges; run again in a minute");
   if (CONFLICTED_STATES.has(pr.mergeable) || CONFLICTED_STATES.has(pr.mergeStateStatus)) return await rebaseInThrowaway(ctx, deps, { head: pr.headRefName, base: pr.baseRefName });
   return { status: "skipped", note: `mergeable is ${pr.mergeable ?? "unknown"} (${pr.mergeStateStatus ?? "no state"}); the merge step decides` };
 }
 
+// Waits for the checks of the recorded head GitHub reports mergeable but BLOCKED; another head is head-moved, --force skips the wait, no checks go on at once.
+async function waitBlockedHead(ctx, deps, pr) {
+  if (pr.headRefOid !== ctx.data.headSha) {
+    return failed("head-moved", `the head moved from ${sha7(ctx.data.headSha)} to ${sha7(pr.headRefOid)} before the merge; the next run checks it again`, { reopen: ["preflight"] });
+  }
+  if (ctx.force) return { status: "skipped", note: "merge state BLOCKED; checks not waited with --force" };
+  const head = sha7(ctx.data.headSha);
+  const blocked = { status: "done", note: `merge state BLOCKED on ${head}`, data: { headSha: ctx.data.headSha } };
+  return await waitForChecks(ctx, deps, blocked, `merge blocked on ${head}, checks still running`, { emptySettles: true });
+}
+
 // Brings a head behind its base up to date with the rebase path, then waits for the required checks of the new head.
 async function updateBehindHead(ctx, deps, branches) {
   const updated = await rebaseInThrowaway(ctx, deps, branches);
   if (updated.status !== "done" || ctx.force) return updated;
-  if (!updated.data.headSha) return failed("head-unreadable", "the branch was pushed but its new head could not be read; run again", { data: updated.data, reopen: ["preflight"] });
   return await waitForChecks(ctx, deps, updated, `branch updated to ${sha7(updated.data.headSha)}, checks still running`);
+}
+
+// The success note of a checks wait: how many checks went green on the head, or that none was reported.
+function checksGreenNote(checks, sha) {
+  return checks.checks.length ? `${checks.checks.length} checks green on ${sha7(sha)}` : `no checks reported on ${sha7(sha)}`;
+}
+
+// The stop of a checks wait out of time: checks-unreadable when its last read failed, checks-pending otherwise.
+function checksWaitStop(ctx, { checks, data, stillRunning, stop }) {
+  if (!checks?.ok) return failed("checks-unreadable", `gh could not read the checks of ${ctx.prUrl} (${checks?.error ?? "no answer"}) while waiting on ${sha7(data.headSha)}`, stop);
+  return failed("checks-pending", `${stillRunning} - run queue close ${jobRef(ctx.jobId)} again`, stop);
 }
 
 // The progress line of the checks of a head, or null when they could not be read.
@@ -243,19 +331,17 @@ function checksProgress(sha, checks) {
 }
 
 // Polls the checks of the updated head with a growing gap until they are all green, one is red or the close's time is nearly out.
-async function waitForChecks(ctx, deps, updated, stillRunning) {
+async function waitForChecks(ctx, deps, updated, stillRunning, { emptySettles = false } = {}) {
   const { data } = updated;
   const stop = { data, reopen: ["preflight"] };
   for (let attempt = 0, gap = CHECKS_POLL_MS; ; attempt += 1, gap = Math.min(gap * 2, CHECKS_POLL_MAX_MS)) {
     const checks = await deps.gh.prChecks(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
     if (checks?.ok && checks.failing.length) return failed("checks-red", `failing checks: ${namesNote(checks.failing)}`, stop);
-    if (checks?.ok && !checks.pending.length && (checks.checks.length || attempt > 0)) {
-      return { ...updated, note: `${updated.note}; ${checks.checks.length} checks green on ${sha7(data.headSha)}` };
+    if (checks?.ok && !checks.pending.length && (checks.checks.length || attempt > 0 || emptySettles)) {
+      return { ...updated, note: `${updated.note}; ${checksGreenNote(checks, data.headSha)}` };
     }
     await ctx.progress?.(checksProgress(data.headSha, checks) ?? `waiting for checks on ${sha7(data.headSha)}: not readable yet`);
-    if (ctx.remainingMs() <= CHECKS_WAIT_RESERVE_MS) {
-      return failed("checks-pending", `${stillRunning} - run queue close ${jobRef(ctx.jobId)} again`, stop);
-    }
+    if (ctx.remainingMs() <= CHECKS_WAIT_RESERVE_MS) return checksWaitStop(ctx, { checks, data, stillRunning, stop });
     await pause(ctx, deps, Math.min(gap, ctx.remainingMs() - CHECKS_WAIT_RESERVE_MS));
   }
 }
@@ -320,9 +406,14 @@ async function rebaseTestAndPush(ctx, deps, work) {
   const pushed = await git(ctx, deps, ["push", `--force-with-lease=refs/heads/${work.head}:${work.headShaBefore}`, "origin", `HEAD:refs/heads/${work.head}`], { cwd: work.dir });
   if (!pushed.ok) return failed("push-refused", `git push to ${work.head} was refused (${firstLine(pushed.stderr)})`, { data });
   const after = await git(ctx, deps, ["rev-parse", "HEAD"], { cwd: work.dir });
-  data.headSha = after.ok ? after.stdout.trim() : null;
+  if (!after.ok) {
+    const note = `pushed ${sha7(work.headShaBefore)} -> ? but the new head could not be read (${firstLine(after.stderr)}); run again`;
+    return failed("head-unreadable", note, { data: { ...data, headSha: null, pushedBy: "close" }, reopen: ["preflight"] });
+  }
+  data.headSha = after.stdout.trim();
   const suiteNote = ctx.force ? "suite skipped with --force" : "suite green";
-  return { status: "done", note: `rebased onto origin/${work.base}, ${suiteNote}, pushed ${sha7(work.headShaBefore)} -> ${sha7(data.headSha)}`, data };
+  const note = `rebased onto origin/${work.base}, ${suiteNote}, pushed ${sha7(work.headShaBefore)} -> ${sha7(data.headSha)}`;
+  return { status: "done", note, data: { ...data, pushedBy: "close" }, reopen: ["preflight"] };
 }
 
 // Records the conflict of a stopped rebase, aborts it and answers the failure naming the conflicted files.
@@ -413,15 +504,15 @@ async function confirmRecordedMerge(ctx, deps) {
 // Squash-merges the pull request at the head the close verified, and proves the merge by re-reading its merge commit.
 async function mergeStep({ ctx, deps }) {
   if (ctx.data.merged) return await confirmRecordedMerge(ctx, deps);
-  const pr = await readPr(ctx, deps);
+  const pr = await readHeadPr(ctx, deps);
   if (!pr?.ok) return unreadablePr(ctx, pr);
   if (pr.state === "MERGED") return await madeMergeResult(ctx, deps, { pr, mergedBy: mergedByOf(ctx) });
   if (pr.state === "CLOSED") return failed("pr-closed", `PR #${pr.number} was closed without being merged`);
-  if (CONFLICTED_STATES.has(pr.mergeable) || CONFLICTED_STATES.has(pr.mergeStateStatus)) {
-    return failed("not-mergeable", "the pull request conflicts with its base again; the next run rebases it", { reopen: ["conflict"] });
-  }
   if (pr.headRefOid !== ctx.data.headSha) {
     return failed("head-moved", `the head moved from ${sha7(ctx.data.headSha)} to ${sha7(pr.headRefOid)}; the next run checks it again`, { reopen: ["preflight", "conflict"] });
+  }
+  if (CONFLICTED_STATES.has(pr.mergeable) || CONFLICTED_STATES.has(pr.mergeStateStatus)) {
+    return failed("not-mergeable", "the pull request conflicts with its base again; the next run rebases it", { reopen: ["conflict"] });
   }
   const call = await deps.gh.prMerge(ctx.prUrl, { matchHeadCommit: ctx.data.headSha, ...bounded(ctx, MERGE_TIMEOUT_MS) });
   const reread = await rereadMerge(ctx, deps);
@@ -442,6 +533,7 @@ export const CLOSE_STEPS = [
   { name: "merge", run: mergeStep },
   { name: "settle", run: settleStep },
 ];
+const CLOSE_STEP_SET = new Set(CLOSE_STEPS.map((step) => step.name));
 
 export { conflictStep, mergeStep, preflightStep, settleStep };
 
@@ -523,6 +615,17 @@ function isStepResult(result) {
   return Boolean(result) && typeof result === "object" && STEP_STATUSES.has(result.status);
 }
 
+// The failure of a result that reopens something other than a close step, keeping its data; null when its reopen is valid.
+function reopenProblem(stepName, result) {
+  if (result.reopen === undefined) return null;
+  const list = Array.isArray(result.reopen) ? result.reopen : null;
+  const badIndex = list ? list.findIndex((name) => typeof name !== "string" || !CLOSE_STEP_SET.has(name)) : -1;
+  if (list && badIndex < 0) return null;
+  const bad = list ? list[badIndex] : result.reopen;
+  const answered = result.note ? ` (it answered: ${result.note})` : "";
+  return { status: "failed", reason: "reopen-unknown", note: `the ${stepName} step reopened ${JSON.stringify(bad)}, which is not a close step${answered}`, data: result.data };
+}
+
 // Runs one step raced against the deadline; a throw, an invalid answer or the deadline becomes a failed result, never an exception.
 async function runStepRaced(step, { ctx, deps, deadline }) {
   if (deadline.state.reason) return abortedResult(deadline.state.reason);
@@ -535,7 +638,7 @@ async function runStepRaced(step, { ctx, deps, deadline }) {
     const result = await Promise.race([Promise.resolve().then(() => step.run({ ctx, deps })), aborted]);
     if (result === ABORTED) return abortedResult(deadline.state.reason);
     if (!isStepResult(result)) return { status: "failed", reason: "step-crashed", note: `the ${step.name} step answered an invalid result` };
-    return result;
+    return reopenProblem(step.name, result) ?? result;
   } catch (err) {
     if (deadline.state.reason) return abortedResult(deadline.state.reason);
     return { status: "failed", reason: "step-crashed", note: err?.message ?? String(err) };
@@ -563,8 +666,14 @@ function applyResult(checklist, { name, result, at }) {
   const warning = checklist.data.fetchWarning ?? null;
   const note = checklistNote(result, warning);
   checklist.steps[name] = { status: result.status, note, at };
-  for (const reopened of Array.isArray(result.reopen) ? result.reopen : []) delete checklist.steps[reopened];
+  for (const reopened of Array.isArray(result.reopen) ? result.reopen : []) markReopened(checklist, reopened);
   return note;
+}
+
+// Marks a step's entry reopened, keeping its note and time; a step with no entry has nothing to reopen.
+function markReopened(checklist, name) {
+  const entry = checklist.steps[name];
+  if (entry) checklist.steps[name] = { ...entry, status: "reopened" };
 }
 
 // The outcome of an attempt, in the shape every caller reads.
@@ -642,9 +751,10 @@ async function refuseSettle(run, refusal) {
 async function advance(run, step, isLast) {
   const entry = run.checklist.steps[step.name];
   if (entry?.status === "done" && !isLast) {
-    run.onStep?.({ name: step.name, status: "done", note: entry.note, earlier: true });
+    run.onStep?.({ name: step.name, status: "done", note: entry.note, earlier: !run.ranThisAttempt?.has(step.name) });
     return null;
   }
+  run.ranThisAttempt?.add(step.name);
   const ctx = buildContext(run, step.name);
   const result = await runStepRaced(step, { ctx, deps: run.deps, deadline: run.deadline });
   const note = applyResult(run.checklist, { name: step.name, result, at: new Date(run.now()).toISOString() });
@@ -667,6 +777,31 @@ async function recordOrStop(run, name) {
   }
 }
 
+// The index of the earliest step before `index` a result reopened, or -1.
+function reopenedBefore(run, steps, index) {
+  return steps.findIndex((step, position) => position < index && run.checklist.steps[step.name]?.status === "reopened");
+}
+
+// Walks the steps in order, looping back to an earlier step a successful result reopened, at most MAX_LOOPBACKS times.
+async function walkSteps(run, steps) {
+  run.ranThisAttempt = new Set();
+  let index = 0;
+  let loopbacks = 0;
+  while (index < steps.length) {
+    const outcome = await advance(run, steps[index], index === steps.length - 1);
+    if (outcome) return outcome;
+    const back = reopenedBefore(run, steps, index);
+    if (back < 0) {
+      index += 1;
+      continue;
+    }
+    if (loopbacks === MAX_LOOPBACKS) return await stopClose(run, { step: steps[index].name, reason: "reopen-loop" });
+    loopbacks += 1;
+    index = back;
+  }
+  return await stopClose(run, { step: "settle", reason: "not-settled" });
+}
+
 // Runs one attempt of a close over its steps, resuming from the stored checklist; a step failure is an outcome, never an exception.
 export async function runClosePipeline({ store, job, worker, env = process.env, deps = null, timeoutS, signal = null, now = Date.now, onStep = null, checkout, force = false, steps = CLOSE_STEPS }) {
   if (!job) throw new UserError("runClosePipeline needs the job it closes");
@@ -674,11 +809,7 @@ export async function runClosePipeline({ store, job, worker, env = process.env, 
   const checklist = startingChecklist(job);
   const run = { store, job, worker, env, deps: deps ?? defaultCloseDeps(env), now, onStep, checklist, deadline, force, checkout: checkout ?? resolveCheckout(job, env) };
   try {
-    for (const [index, step] of steps.entries()) {
-      const outcome = await advance(run, step, index === steps.length - 1);
-      if (outcome) return outcome;
-    }
-    return await stopClose(run, { step: "settle", reason: "not-settled" });
+    return await walkSteps(run, steps);
   } finally {
     deadline.disarm();
   }
