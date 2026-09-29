@@ -15,6 +15,7 @@ export function buildLegacyHome(env, { version = 17, config = null, seed = null,
   const db = new DatabaseSync(dbPath(env));
   try {
     db.exec("PRAGMA foreign_keys = OFF");
+    db.exec("DROP TRIGGER IF EXISTS roadmap_comments_no_delete");
     bringToV17(db);
     seed?.(db);
     mutate?.(db);

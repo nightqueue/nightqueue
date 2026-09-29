@@ -183,7 +183,8 @@
  * @typedef {object} StoreHealth
  * @property {number|null} schemaVersion
  * @property {number|null} orphanJobs
- * @property {{schemaVersion: string|null, orphanJobs: string|null}} errors
+ * @property {number|null} danglingReferences rows whose reference names a row that does not exist
+ * @property {{schemaVersion: string|null, orphanJobs: string|null, danglingReferences: string|null}} errors
  */
 
 /**

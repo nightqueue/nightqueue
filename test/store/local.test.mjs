@@ -202,6 +202,7 @@ test("health answers the raw numbers of a diagnosis, never an exception", async 
   assert.deepEqual(await store.health(), {
     schemaVersion: DB_USER_VERSION,
     orphanJobs: 0,
-    errors: { schemaVersion: null, orphanJobs: null },
+    danglingReferences: 0,
+    errors: { schemaVersion: null, orphanJobs: null, danglingReferences: null },
   });
 });

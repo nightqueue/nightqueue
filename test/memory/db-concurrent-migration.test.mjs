@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { dbPath, preV20BackupPath } from "../../src/config/paths.mjs";
 import { closeDb, DB_USER_VERSION, openDb } from "../../src/memory/db.mjs";
 import { buildLegacyHome } from "../../test-support/legacy-home.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
+import { buildV19Home } from "../../test-support/v19-home.mjs";
 
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
 const BARRIER_MS = 300;
@@ -122,6 +124,31 @@ test(`${RACERS} processes racing to migrate the SAME v9 database converge on the
     assert.equal(rows[0].status, "done", `pass ${pass}: pre-existing row status lost or altered`);
     assert.equal(rows[1].pr_url, "https://github.com/acme/api/pull/43", `pass ${pass}: merged row lost its pull request`);
     assert.equal(rows[1].status, "closed", `pass ${pass}: merged row was not closed`);
+    closeDb(env);
+  }
+});
+
+test("two processes opening one v19 home at once end with one v20 migration and the v19 bytes in the copy", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "nightqueue-db-race-v20-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const workerPath = join(dir, "racer.mjs");
+  writeFileSync(workerPath, racerSource());
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    const env = makeHome(t, `db-race-v20-${pass}`);
+    buildV19Home(env);
+    const fixture = readFileSync(dbPath(env));
+    const results = await raceOnce(env, workerPath, 2);
+    for (const [idx, result] of results.entries()) {
+      assert.equal(result.code, 0, `pass ${pass} racer ${idx} exited ${result.code}: ${result.stderr}`);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.error, null, `pass ${pass} racer ${idx} threw: ${parsed.error}`);
+      assert.equal(parsed.version, DB_USER_VERSION, `pass ${pass} racer ${idx} ended at v${parsed.version}`);
+      assert.deepEqual(parsed.statuses, ["done", "failed"], `pass ${pass} racer ${idx} read statuses ${parsed.statuses}`);
+    }
+    assert.ok(readFileSync(preV20BackupPath(env)).equals(fixture), `pass ${pass}: the copy is not the v19 database`);
+    assert.deepEqual(readdirSync(dirname(dbPath(env))).filter((name) => name.endsWith(".tmp")), [], `pass ${pass}: a temporary copy was left`);
+    assert.deepEqual(openDb(env).prepare("PRAGMA foreign_key_check").all(), [], `pass ${pass}: a foreign key broke`);
     closeDb(env);
   }
 });

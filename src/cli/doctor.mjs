@@ -281,15 +281,30 @@ function checkEmbeddingPrefix(ctx) {
   return checks;
 }
 
+// Why the pending migration of an older database will refuse, or null when nothing points at a missing row.
+function refusedMigration(health) {
+  const count = health.danglingReferences;
+  if (!Number.isInteger(count) || count === 0) return null;
+  return `${count} row(s) point at a row that does not exist, so its migration to v${DB_USER_VERSION} will refuse and write nothing`;
+}
+
+// The hint that lists and fixes the rows a pending migration refuses.
+function danglingHint(path) {
+  return `run \`nightqueue queue status\` to list them (it writes nothing), then fix or clear them with sqlite3 on ${path}`;
+}
+
 // Checks the memory database, opening it read-only so the diagnosis never creates nor migrates it.
 async function checkDatabase(ctx) {
   const path = dbPath(ctx.env);
   if (!existsSync(path)) return check("database", "warn", "no database yet", "it is created on the first memory write");
   const store = openStoreReadOnly(ctx.env);
   try {
-    const { schemaVersion, errors } = await store.health();
+    const health = await store.health();
+    const { schemaVersion, errors } = health;
     if (errors.schemaVersion !== null) return check("database", "fail", errors.schemaVersion, `inspect ${path}`);
     if (schemaVersion === DB_USER_VERSION) return check("database", "ok", `schema v${schemaVersion}`);
+    const refusal = refusedMigration(health);
+    if (refusal) return check("database", "warn", `schema v${schemaVersion}, expected v${DB_USER_VERSION}; ${refusal}`, danglingHint(path));
     return check(
       "database",
       "warn",
@@ -694,8 +709,11 @@ async function registeredCheckouts(ctx) {
     return { projects: [] };
   }
   return await withReadOnlyStore(ctx.env, async (store) => {
-    const { schemaVersion } = await store.health();
+    const health = await store.health();
+    const { schemaVersion } = health;
     if (Number.isInteger(schemaVersion) && schemaVersion < DB_USER_VERSION) {
+      const refusal = refusedMigration(health);
+      if (refusal) return { pending: `database is at v${schemaVersion}; ${refusal}`, hint: danglingHint(dbPath(ctx.env)) };
       return { pending: `database is at v${schemaVersion}; it migrates to v${DB_USER_VERSION} on the next command that writes` };
     }
     const projects = (await store.projects.list()).filter((project) => project.path);
@@ -720,7 +738,7 @@ async function checkProjects(ctx) {
   } catch (err) {
     return [check("projects", "warn", `the registry cannot be read (${err?.message ?? String(err)})`, `inspect ${dbPath(ctx.env)}`)];
   }
-  if (found.pending) return [check("projects", "warn", found.pending)];
+  if (found.pending) return [check("projects", "warn", found.pending, found.hint)];
   if (!found.projects.length) return [check("projects", "warn", "no project registered", "run `nightqueue init`")];
   return found.projects.map((project) => checkProject(ctx, project));
 }

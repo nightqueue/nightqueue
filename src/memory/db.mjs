@@ -5,6 +5,7 @@ import { ensureHome, loadRawConfig } from "../config/store.mjs";
 import { FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ROADMAP_FTS, ROADMAP_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
 import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schemaState } from "./migration/v18.mjs";
 import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
+import { isPendingV20, migrateToV20, refuseOrphans } from "./migration/v20.mjs";
 import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
 import { migrateSharedSlugs, sharedSlugPending } from "./shared-slug-migration.mjs";
@@ -50,10 +51,13 @@ function enableWal(db, path) {
 const ONE_SHOT_STEPS = Object.freeze([
   { pending: (db) => schemaState(db) === "legacy", run: migrateToV18 },
   { pending: isPendingV19, run: migrateToV19 },
+  { pending: isPendingV20, run: migrateToV20 },
 ]);
 
-// Runs every pending one-shot step in order, each gate read after the step before it committed.
+// Runs every pending one-shot step in order, each gate read after the step before it committed; the orphans the last step
+// refuses are refused before the first step, so a refusal leaves an older home exactly as it was.
 function runOneShotSteps(db, env) {
+  if (ONE_SHOT_STEPS.some((step) => step.pending(db))) refuseOrphans(db, env);
   for (const step of ONE_SHOT_STEPS) {
     if (step.pending(db)) step.run(db, env);
   }
@@ -80,6 +84,7 @@ function createRegistry(db, env) {
 function migrate(db) {
   const version = db.prepare("PRAGMA user_version").get().user_version;
   if (version === 18) throw new UserError("the v19 migration did not run; nothing was stamped");
+  if (version === 19) throw new UserError("the v20 migration did not run; nothing was stamped");
   if (sharedSlugPending(db)) inTransaction(db, () => migrateSharedSlugs(db));
   db.exec(INDEXES);
   db.exec(FTS);

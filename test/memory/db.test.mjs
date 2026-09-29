@@ -762,10 +762,12 @@ test("a v10 database gains decisions.job_id and its index, keeping every decisio
   makeProject(t, env, "alpha");
   const first = openDb(env);
   const saved = saveDecision({ projectId: projectIdOf(env, "alpha"), title: "t", context: "c", decision: "d" }, env);
-  first.exec("DROP INDEX decisions_job_idx; ALTER TABLE decisions DROP COLUMN job_id; PRAGMA user_version = 10;");
+  first.exec(
+    "DROP TRIGGER roadmap_comments_no_delete; DROP INDEX decisions_job_idx; ALTER TABLE decisions DROP COLUMN job_id; PRAGMA user_version = 10;",
+  );
   closeDb(env);
 
-  assert.equal(DB_USER_VERSION, 19);
+  assert.equal(DB_USER_VERSION, 20);
   for (const pass of [1, 2]) {
     const db = openDb(env);
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION, `pass ${pass}`);

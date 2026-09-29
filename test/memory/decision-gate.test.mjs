@@ -129,6 +129,7 @@ test("two back-to-back saves of one title: the second is held back naming the fi
 
 test("a job proposes at most one decision while the first is still proposed, and its rows carry the job id", async (t) => {
   const env = makeChainHome(t, "gate-job-proposal");
+  openDb(env).prepare("INSERT INTO jobs (id, project_id, prompt) VALUES (7, ?, 'the job')").run(projectIdOf(env, "alpha"));
   const first = await review(env, { title: "logs are rotated daily", status: "proposed", jobId: 7 });
   assert.equal(first.jobId, 7);
   assert.equal(getDecision(first.id, env).job_id, 7);

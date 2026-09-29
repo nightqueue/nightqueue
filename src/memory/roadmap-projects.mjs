@@ -1,4 +1,5 @@
 import { inTransaction } from "./db.mjs";
+import { refuseMissingJob } from "./job-row.mjs";
 import { attachNames } from "./registry.mjs";
 import { insertComment, jobRefs } from "./roadmap-comments.mjs";
 import {
@@ -58,6 +59,7 @@ export function linkOrgRow(db, { itemId, projectId, jobId }) {
       WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = roadmap_item_projects.job_id AND j.status IN (${LIVE_JOB_LIST}))`,
   );
   return inTransaction(db, () => {
+    refuseMissingJob(db, jobId);
     if (statement.run(itemId, projectId, JOB_TO_ROADMAP.queued.status, jobId).changes !== 1) return false;
     insertComment(db, { itemId, projectId, ...commentFor(job, "queued", jobRefs(db, job)) });
     syncOrgStatus(db, itemId, jobAuthor(jobId));

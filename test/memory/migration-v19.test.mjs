@@ -70,7 +70,7 @@ test("a v18 home migrates to v19: row counts kept, items numbered per owner, key
     decisions: raw.prepare("SELECT id, number FROM decisions ORDER BY id").all().map((row) => ({ ...row })),
   }));
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 19);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.deepEqual(counts(db), before.counts, "a table lost or gained rows");
 
   const numbers = db.prepare("SELECT id, number FROM roadmap_items ORDER BY id").all().map((row) => [row.id, row.number]);
@@ -178,7 +178,7 @@ test("two processes opening one v18 home at once end with one migration and the 
   writeFileSync(script, openerSource());
   const startAt = Date.now() + 400;
   const results = await Promise.all([spawnOpener(env, script, startAt), spawnOpener(env, script, startAt)]);
-  const expected = { version: 19, keys: ["NQ", "AP", "NW"], error: null };
+  const expected = { version: DB_USER_VERSION, keys: ["NQ", "AP", "NW"], error: null };
   assert.deepEqual(results, [expected, expected]);
   assert.ok(readFileSync(preV19BackupPath(env)).equals(fixture), "the copy is not the v18 database");
 });
@@ -187,7 +187,7 @@ test("the read-only registry paths answer with the key on a v18 home once it is 
   const { env, path } = v18Home(t, "v19-read-only");
   migrateIfOutdated(env);
   closeDb(env);
-  assert.equal(diskVersion(env), 19);
+  assert.equal(diskVersion(env), DB_USER_VERSION);
   assert.equal(registeredProject("nightqueue", env).key, "NQ");
   assert.equal(projectFromCwd(path, env).key, "NQ");
   assert.equal(projectFromCwd(path, env).org_key, "DW");

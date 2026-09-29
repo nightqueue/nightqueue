@@ -10,6 +10,7 @@ import {
   withFullSync,
   withWriteRetry,
 } from "./db.mjs";
+import { refuseMissingJob } from "./job-row.mjs";
 import { jobRef } from "./refs.mjs";
 import * as registry from "./registry.mjs";
 import { ACTIVE_JOB_PREDICATE, LEASE_GRACE_S, RESULT_OBJECT_BASE } from "./schema.mjs";
@@ -504,6 +505,7 @@ export function bindRunSlug(id, { worker, candidates } = {}, env = process.env) 
 // Points the pipeline run of this project id and slug at the job that produced it.
 function linkRun(db, jobId, projectId, slug) {
   if (!projectId || !slug) return 0;
+  refuseMissingJob(db, jobId);
   return db
     .prepare("UPDATE pipeline_runs SET job_id = ? WHERE project_id = ? AND slug = ? AND job_id IS NULL")
     .run(jobId, projectId, slug).changes;

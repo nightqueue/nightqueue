@@ -209,6 +209,7 @@ export async function settleThroughStore(store, jobId, { worker = "test:close", 
 // The `roadmap_items` table exactly as a v16 build left it: the horizon, the four legacy statuses and the indexes on them.
 export const LEGACY_V16_ROADMAP_DDL = `
 DROP TRIGGER IF EXISTS roadmap_comments_fts_ai;
+DROP TRIGGER IF EXISTS roadmap_comments_fts_ad;
 DROP TABLE IF EXISTS roadmap_comments_fts;
 DROP TABLE IF EXISTS roadmap_items_fts;
 DROP TABLE roadmap_items;
