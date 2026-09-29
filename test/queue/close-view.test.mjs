@@ -88,6 +88,18 @@ test("the checklist block prints every step in order, with the ones not reached 
   assert.deepEqual(closeChecklistLines(closeRow({}), NOW), []);
 });
 
+test("a reopened step keeps its line with its earlier note and time, and is not passed", () => {
+  const close = {
+    attempts: 1,
+    steps: { preflight: { status: "done", note: "checks green", at: "t1" }, conflict: { status: "reopened", note: "pushed 1111111 -> 2222222", at: "t2" }, merge: { status: "failed", note: "not-mergeable - conflicts again" } },
+    failed: { step: "merge", reason: "not-mergeable" },
+  };
+  const lines = closeChecklistLines(closeRow({ close_status: "failed", close }), NOW);
+  assert.equal(lines[2], "  ↺ conflict   reopened: pushed 1111111 -> 2222222  (t2)");
+  assert.equal(lines.some((line) => line.includes("conflict   not reached")), false);
+  assert.equal(currentCloseStep({ steps: { preflight: { status: "done" }, conflict: { status: "reopened" } } }), "conflict");
+});
+
 test("the summary names closes in flight with their pid, stopped ones with their reason and stalled ones with their lease", () => {
   const rows = [
     { id: 12, close_status: "closing", close_lease_live: 1, close: JSON.stringify({ steps: { preflight: { status: "done" } } }) },

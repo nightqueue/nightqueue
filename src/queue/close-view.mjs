@@ -6,7 +6,8 @@ export const CLOSE_STEP_NAMES = ["preflight", "conflict", "merge", "settle"];
 export const CLOSED_PREFIX = "Closed: ";
 
 const PASSED_STEP_STATUSES = new Set(["done", "skipped"]);
-const STEP_ICONS = { done: "✓", skipped: "-", failed: "✗" };
+export const CLOSE_STEP_ICONS = { done: "✓", skipped: "-", failed: "✗", reopened: "↺" };
+const LABELLED_STATUSES = new Set(["skipped", "reopened"]);
 const STATUS_SUFFIXES = { closing: " · closing", stalled: " · close stalled" };
 
 // The line a settled close appends to the job's notice: `Closed: PR #N merged as <sha7> on <YYYY-MM-DD>`.
@@ -91,8 +92,8 @@ function leaseIso(value) {
 // One checklist line of the detail view: icon, step name and what the step recorded, or `not reached`.
 function checklistLine(name, entry) {
   if (!entry) return `  · ${name.padEnd(10)} not reached`;
-  const icon = STEP_ICONS[entry.status] ?? "·";
-  const note = entry.status === "skipped" ? `skipped: ${entry.note ?? ""}` : String(entry.note ?? "");
+  const icon = CLOSE_STEP_ICONS[entry.status] ?? "·";
+  const note = LABELLED_STATUSES.has(entry.status) ? `${entry.status}: ${entry.note ?? ""}` : String(entry.note ?? "");
   const at = entry.at ? `  (${entry.at})` : "";
   return `  ${icon} ${name.padEnd(10)} ${note}${at}`;
 }

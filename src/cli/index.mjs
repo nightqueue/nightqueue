@@ -145,20 +145,22 @@ options:
 exit codes: 0 ok · 1 user error · 2 unexpected error
 configuration home: $NIGHTQUEUE_HOME (default ~/.nightqueue)`;
 
+const READER_CLOSED_CODES = new Set(["EPIPE", "ENOTCONN", "ECONNRESET"]);
+
 let stdoutGuarded = false;
 let stdoutClosed = false;
 
-// Turns a reader that closed the pipe (`nightqueue roadmap | head`) into dropped output instead of an uncaught EPIPE; any other stream error still surfaces.
+// Drops further output once the reader of stdout is gone (EPIPE, ENOTCONN, ECONNRESET); any other stream error is rethrown.
+export function onStdoutError(err) {
+  if (!READER_CLOSED_CODES.has(err?.code)) throw err;
+  stdoutClosed = true;
+}
+
+// Turns a reader that closed the pipe (`nightqueue roadmap | head`) into dropped output instead of an uncaught error; any other stream error still surfaces.
 function installStdoutGuard() {
   if (stdoutGuarded) return;
   stdoutGuarded = true;
-  process.stdout.on("error", (err) => {
-    if (err?.code === "EPIPE") {
-      stdoutClosed = true;
-      return;
-    }
-    throw err;
-  });
+  process.stdout.on("error", onStdoutError);
 }
 
 // Writes one line of output, or nothing once the reader closed the pipe.

@@ -498,7 +498,7 @@ project, an org item shows the status of that project's own row in parentheses; 
 each org item lists its project rows under it (`<project>: <status> J-<id> (<job status>)`), the
 item × project matrix. It survives a reader
 that closes the pipe early (`nightqueue roadmap | head`): the CLI stops writing instead of
-crashing with `EPIPE`. `nightqueue roadmap show <ref> [--json]` prints one item in full - its
+crashing with `EPIPE` (or `ENOTCONN`/`ECONNRESET`, the same closed reader on a socket). `nightqueue roadmap show <ref> [--json]` prints one item in full - its
 ref, type, status and priority, its untruncated title and detail, an org item's project
 rows under `projects:` - and then its comment thread in chronological order, one `<when> <author> <kind>` line per comment with its body
 indented under it. Both read the database and never write to it.

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { onStdoutError } from "../src/cli/index.mjs";
 import { closeDb } from "../src/memory/db.mjs";
 import { saveRoadmapItem } from "../src/memory/roadmap.mjs";
 import { makeHome, makeProject, projectIdOf } from "./../test-support/memory.mjs";
@@ -43,6 +44,12 @@ test("nightqueue roadmap survives a reader that closes the pipe after more than 
   assert.match(first, /^todo:/);
   assert.doesNotMatch(stderr, /EPIPE/);
   assert.equal(code, 0, stderr);
+});
+
+test("the stdout guard drops output for a reader gone with EPIPE, ENOTCONN or ECONNRESET, and rethrows any other error", () => {
+  for (const code of ["EPIPE", "ENOTCONN", "ECONNRESET"]) assert.doesNotThrow(() => onStdoutError(Object.assign(new Error(`write ${code}`), { code })), code);
+  const other = Object.assign(new Error("write EIO"), { code: "EIO" });
+  assert.throws(() => onStdoutError(other), (err) => err === other);
 });
 
 test("nightqueue roadmap with a small output still exits 0 when the reader closes early", async (t) => {

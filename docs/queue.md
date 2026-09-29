@@ -838,8 +838,10 @@ agent, never a second job, never queue work:
    renewed at each poll. All green goes on to merge; a red check stops with `checks-red`
    naming it; when `queue.closeTimeoutS` is nearly out it stops with `checks-pending` -
    `branch updated to <sha>, checks still running - run queue close J-N again` - and the next
-   run starts at preflight on that head. No other state (`BLOCKED`, `UNSTABLE`) is updated,
-   and with `--force` the wait is skipped.
+   run starts at preflight on that head. `UNSTABLE` is not updated; `BLOCKED` is never read
+   as mergeable: a pull request GitHub reports mergeable but `BLOCKED` waits the same way for
+   the checks of the verified head (`merge state BLOCKED on <sha>; N checks green on <sha>`),
+   then goes on to merge. With `--force` both waits are skipped.
 3. **merge** - `gh pr merge --squash --match-head-commit <the verified head>`, never
    `--delete-branch`, `--admin` or `--auto`. gh's exit code is never the evidence: the pull
    request is re-read until GitHub reports it merged with its merge commit, and that
@@ -855,6 +857,29 @@ agent, never a second job, never queue work:
 
 The job's status is untouched until settle: a close that stops leaves it `done`, except for a
 pull request closed without merge, which cancels it.
+
+**The close verifies the head it merges.** Any push by the close (a rebase of a conflicting
+head or the update of a `BEHIND` one) records `data.pushedBy: "close"` and reopens
+preflight, which runs again in the same run on the pushed head - the checks of that head are
+waited for, even when none is registered yet - and its note ends `head <sha7> pushed by this
+close`. GitHub can answer the old head for a few seconds after a push, so every read of the
+pull request after the close's push is retried (3 reads, 2 s apart) until it shows the
+pushed head with its mergeability computed; only a head that still differs is `head-moved`.
+One run is enough after a rebase or a branch update. After a push, preflight accepts only
+the pushed head, or the branch tip `git fetch` shows when GitHub agrees with it; it never
+records a head GitHub may be answering stale:
+- GitHub still showing another head after 3 reads stops with `head-not-visible`, keeping
+  the pushed head, and the next run checks again;
+- a push by someone else after the close's own (the fetched tip is the head GitHub shows)
+  stops with `head-moved` and re-runs conflict on the next run;
+- a push whose new head cannot be read stops with `head-unreadable`, and the next run
+  takes the head from the fetched branch tip;
+- `BLOCKED` on a head other than the recorded one stops with `head-moved`, even with
+  `--force`, before any checks are read;
+- `BLOCKED` with no checks at all goes straight to the merge
+  (`no checks reported on <sha>`), and GitHub decides;
+- a checks wait whose reads only ever failed stops with `checks-unreadable`, never
+  `checks-pending`.
 
 **A closed pull request cancels.** When any step reads the pull request `CLOSED` without a
 merge, the close does not stop at `failed`: the job becomes `cancelled` in one write, with
@@ -873,7 +898,9 @@ every such job at once.
 
 **The checklist lives on the job.** Each step writes its result to the job row as soon as it
 settles: `close_status` (`closing` or `failed`, cleared once the job is `closed`) and `close`, a checklist with the
-attempt count, one entry per step (`done`, `skipped` or `failed`, a note and the time) and
+attempt count, one entry per step (`done`, `skipped`, `failed` or `reopened`, a note and the
+time; a `reopened` entry keeps the note and time of the run it reopens, is shown as
+`↺ <step> reopened: <earlier note>` and counts as not passed) and
 the data the steps read (pull request number, head, merge commit, who merged it). `queue status` shows it:
 the STATUS cell reads `done · closing` while a close is in progress and `closed` alone once
 it closed, a stopped close adds ` · close failed at <step>` or ` · close stalled` to the job's status,
@@ -890,7 +917,10 @@ lease expired.
 again, and whether the merge happened is decided by the merge commit recorded from GitHub -
 never by a step status - so a close that stopped after the merge never merges twice. A merge
 that finds the pull request conflicted again, or its head moved, reopens the earlier steps
-it depends on.
+it depends on. A failed step's reopen re-runs those steps on the next run; a successful
+step's reopen (the close's own push) re-runs them in the same run, at most twice, after
+which the close stops with `reopen-loop`. A step that reopens a name that is not a close
+step stops the close with `reopen-unknown`, naming it.
 
 **The lease is only a mutex.** Starting a close takes a lease on the job, in one atomic
 update, so two closes of the same job never run together: a second start is refused
