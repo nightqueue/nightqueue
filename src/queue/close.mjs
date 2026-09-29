@@ -19,6 +19,9 @@ const TEST_RESERVE_MS = 90000;
 const UNKNOWN_RETRY_MS = 3000;
 const MERGE_REREADS = 3;
 const MERGE_REREAD_GAP_MS = 2000;
+const CHECKS_POLL_MS = 10000;
+const CHECKS_POLL_MAX_MS = 60000;
+const CHECKS_WAIT_RESERVE_MS = 30000;
 const NAMES_SHOWN = 10;
 const SUITE_LINES_SHOWN = 20;
 const CONFLICTED_STATES = new Set(["CONFLICTING", "DIRTY"]);
@@ -209,10 +212,44 @@ async function conflictStep({ ctx, deps }) {
   if (!pr?.ok) return unreadablePr(ctx, pr);
   if (pr.state === "MERGED") return { status: "skipped", note: "the pull request is already merged", data: mergedData(pr, mergedByOf(ctx)) };
   if (pr.state === "CLOSED") return failed("pr-closed", `PR #${pr.number} was closed without being merged`);
+  if (pr.mergeStateStatus === "BEHIND") return await updateBehindHead(ctx, deps, { head: pr.headRefName, base: pr.baseRefName });
   if (pr.mergeable === "MERGEABLE" || pr.mergeStateStatus === "CLEAN") return { status: "skipped", note: `mergeable (${pr.mergeStateStatus ?? pr.mergeable})` };
   if (pr.mergeable === "UNKNOWN") return failed("mergeability-unknown", "GitHub has not computed whether the pull request merges; run again in a minute");
   if (CONFLICTED_STATES.has(pr.mergeable) || CONFLICTED_STATES.has(pr.mergeStateStatus)) return await rebaseInThrowaway(ctx, deps, { head: pr.headRefName, base: pr.baseRefName });
   return { status: "skipped", note: `mergeable is ${pr.mergeable ?? "unknown"} (${pr.mergeStateStatus ?? "no state"}); the merge step decides` };
+}
+
+// Brings a head behind its base up to date with the rebase path, then waits for the required checks of the new head.
+async function updateBehindHead(ctx, deps, branches) {
+  const updated = await rebaseInThrowaway(ctx, deps, branches);
+  if (updated.status !== "done" || ctx.force) return updated;
+  if (!updated.data.headSha) return failed("head-unreadable", "the branch was pushed but its new head could not be read; run again", { data: updated.data, reopen: ["preflight"] });
+  return await waitForChecks(ctx, deps, updated);
+}
+
+// The progress line of the checks of a head, or null when they could not be read.
+function checksProgress(sha, checks) {
+  if (!checks?.ok) return null;
+  const total = checks.checks.length;
+  return `waiting for checks on ${sha7(sha)}: ${total - checks.pending.length}/${total} done`;
+}
+
+// Polls the checks of the updated head with a growing gap until they are all green, one is red or the close's time is nearly out.
+async function waitForChecks(ctx, deps, updated) {
+  const { data } = updated;
+  const stop = { data, reopen: ["preflight"] };
+  for (let attempt = 0, gap = CHECKS_POLL_MS; ; attempt += 1, gap = Math.min(gap * 2, CHECKS_POLL_MAX_MS)) {
+    const checks = await deps.gh.prChecks(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
+    if (checks?.ok && checks.failing.length) return failed("checks-red", `failing checks: ${namesNote(checks.failing)}`, stop);
+    if (checks?.ok && !checks.pending.length && (checks.checks.length || attempt > 0)) {
+      return { ...updated, note: `${updated.note}; ${checks.checks.length} checks green on ${sha7(data.headSha)}` };
+    }
+    await ctx.progress?.(checksProgress(data.headSha, checks) ?? `waiting for checks on ${sha7(data.headSha)}: not readable yet`);
+    if (ctx.remainingMs() <= CHECKS_WAIT_RESERVE_MS) {
+      return failed("checks-pending", `branch updated to ${sha7(data.headSha)}, checks still running - run queue close ${ctx.jobId} again`, stop);
+    }
+    await pause(ctx, deps, Math.min(gap, ctx.remainingMs() - CHECKS_WAIT_RESERVE_MS));
+  }
 }
 
 // Creates the throwaway detached worktree of the pull request's head, or answers why it could not.
@@ -452,8 +489,10 @@ function armDeadline({ timeoutS, signal, now }) {
 }
 
 // The context every step reads: the job, its pull request, the deadline and the data recorded by earlier steps.
-function buildContext({ job, checkout, checklist, deadline, now, force }) {
+function buildContext(run, stepName) {
+  const { job, checkout, checklist, deadline, now, force } = run;
   return {
+    progress: (note) => reportProgress(run, stepName, note),
     jobId: job.id,
     prUrl: job.pr_url,
     prNumber: prNumberOf(job.pr_url, checklist.data),
@@ -553,6 +592,18 @@ async function recordStep(run) {
   return await run.store.jobs.recordCloseStep(run.job.id, { worker: run.worker, close: run.checklist, leaseS: renewalSeconds(run) });
 }
 
+// Records a running step's progress line on the checklist, renewing the lease, and shows it when it changed; a failed write never stops the step.
+async function reportProgress(run, name, note) {
+  const changed = run.checklist.steps[name]?.note !== note;
+  run.checklist.steps[name] = { status: "running", note, at: new Date(run.now()).toISOString() };
+  if (changed) run.onStep?.({ name, status: "running", note, earlier: false });
+  try {
+    await recordStep(run);
+  } catch {
+    return;
+  }
+}
+
 // Performs the terminal write of a settled close: the job becomes `closed`, then where its worktree went is noted.
 async function settleRun(run) {
   const { store, job, worker, checklist, deps } = run;
@@ -586,7 +637,7 @@ async function advance(run, step, isLast) {
     run.onStep?.({ name: step.name, status: "done", note: entry.note, earlier: true });
     return null;
   }
-  const ctx = buildContext(run);
+  const ctx = buildContext(run, step.name);
   const result = await runStepRaced(step, { ctx, deps: run.deps, deadline: run.deadline });
   const note = applyResult(run.checklist, { name: step.name, result, at: new Date(run.now()).toISOString() });
   run.onStep?.({ name: step.name, status: result.status, note, earlier: false });

@@ -37,8 +37,8 @@ function reacquire(home, worker) {
 }
 
 // Runs one attempt of the real steps against the fake gh, git and npm.
-async function close(home, fake, { force = false } = {}) {
-  const outcome = await runClosePipeline({ store: home.store, job: getJob(home.id, home.env), worker: home.worker, env: home.env, deps: fake.deps, timeoutS: 600, checkout: home.checkout, force });
+async function close(home, fake, { force = false, now = Date.now, onStep = null } = {}) {
+  const outcome = await runClosePipeline({ store: home.store, job: getJob(home.id, home.env), worker: home.worker, env: home.env, deps: fake.deps, timeoutS: 600, checkout: home.checkout, force, now, onStep });
   return { outcome, row: getJob(home.id, home.env), checklist: JSON.parse(getJob(home.id, home.env).close) };
 }
 
@@ -535,4 +535,70 @@ test("settle closes the job, releases its worktree, appends the Closed line to t
   assert.equal(row.notice_md, "the run's notice\n\nClosed: PR #7 merged as abc1234 on 2026-09-21");
   const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
   assert.equal("run_notice" in detail, false, "the Closed line made the row's notice look replaced");
+});
+
+const GREEN = { ok: true, checks: [{ name: "a", bucket: "pass" }, { name: "b", bucket: "pass" }], failing: [], pending: [] };
+const HALF = { ok: true, checks: [{ name: "a", bucket: "pass" }, { name: "b", bucket: "pending" }], failing: [], pending: ["b"] };
+const RED = { ok: true, checks: [{ name: "a", bucket: "pass" }, { name: "b", bucket: "fail" }], failing: ["b"], pending: [] };
+
+// A fake close of a BEHIND pull request whose push moves the head, with a clock the fake sleep advances.
+function behindWorld(changes = {}) {
+  const clock = { at: Date.now() };
+  const fake = fakeCloseDeps({ pr: openPr({ mergeStateStatus: "BEHIND" }), checks: GREEN, ...changes });
+  fake.world.git.push = () => {
+    fake.world.pr = openPr({ headRefOid: PUSHED_SHA });
+    return gitOk();
+  };
+  const sleep = fake.deps.sleep;
+  fake.deps.sleep = async (ms) => {
+    clock.at += ms;
+    await sleep(ms);
+  };
+  return { fake, now: () => clock.at };
+}
+
+test("a BEHIND pull request is updated, waits for the checks of the new head and merges in one run", async (t) => {
+  const home = closeHome(t, "close-steps-behind-green");
+  const { fake, now } = behindWorld({ checkReads: [GREEN, HALF, GREEN] });
+  const lines = [];
+  const { outcome, checklist } = await close(home, fake, { now, onStep: (step) => lines.push(`${step.status} ${step.note}`) });
+  assert.equal(outcome.status, "closed", JSON.stringify(outcome));
+  assert.match(checklist.steps.conflict.note, new RegExp(`pushed ${HEAD_SHA.slice(0, 7)} -> ${PUSHED_SHA.slice(0, 7)}.*2 checks green`));
+  assert.ok(lines.includes("running waiting for checks on 2222222: 1/2 done"), lines.join("\n"));
+  assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: PUSHED_SHA }]);
+  assert.deepEqual(fake.log.sleeps, [10000]);
+});
+
+test("a BEHIND pull request whose new head goes red stops at checks-red and merges nothing", async (t) => {
+  const home = closeHome(t, "close-steps-behind-red");
+  const { fake, now } = behindWorld({ checkReads: [GREEN, HALF, RED] });
+  const { outcome, checklist } = await close(home, fake, { now });
+  assert.equal(outcome.reason, "checks-red");
+  assert.match(checklist.steps.conflict.note, /failing checks: b/);
+  assert.equal(fake.log.merges.length, 0);
+});
+
+test("a BEHIND pull request whose checks outlast the timeout stops resumable, and the next run merges once green", async (t) => {
+  const home = closeHome(t, "close-steps-behind-timeout");
+  const { fake, now } = behindWorld({ checkReads: [GREEN], checks: HALF });
+  const first = await close(home, fake, { now });
+  assert.equal(first.outcome.reason, "checks-pending");
+  assert.match(first.checklist.steps.conflict.note, /branch updated to 2222222, checks still running - run queue close \d+ again/);
+  assert.equal(fake.log.merges.length, 0);
+  assert.equal(fake.log.sleeps.every((ms) => ms <= 60000), true, "a wait exceeded the backoff cap");
+
+  fake.world.checks = GREEN;
+  const second = await close(reacquire(home, "close:test:2:bbbb"), fake, { now });
+  assert.equal(second.outcome.status, "closed", JSON.stringify(second.outcome));
+  assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: PUSHED_SHA }]);
+});
+
+test("a CLEAN pull request is neither updated nor waited on", async (t) => {
+  const home = closeHome(t, "close-steps-clean-unchanged");
+  const fake = fakeCloseDeps();
+  const { outcome } = await close(home, fake);
+  assert.equal(outcome.status, "closed");
+  assert.equal(fake.log.tempDirs.length, 0);
+  assert.equal(fake.log.checkReads, 1);
+  assert.deepEqual(fake.log.sleeps, []);
 });

@@ -1258,8 +1258,24 @@ async function closeInThisProcess(id, values, ctx) {
     deps: ctx.closeDeps ?? null,
     killImpl: ctx.killImpl,
     onStart: (lease) => lease.forced && say(forcedCloseLine(id)),
-    onStep: (step) => say(closeStepLine(step)),
+    onStep: closeStepPrinter(say, values.json === true ? null : ctx.stdout),
   });
+}
+
+// Prints the steps of a foreground close; on a TTY a running step redraws one live line that the next settled step replaces.
+export function closeStepPrinter(say, tty) {
+  const live = tty?.isTTY === true ? tty : null;
+  let drawn = false;
+  return (step) => {
+    if (live && step.status === "running") {
+      live.write(`\r\x1b[2K${closeStepLine(step)}`);
+      drawn = true;
+      return;
+    }
+    if (drawn) live.write("\r\x1b[2K");
+    drawn = false;
+    say(closeStepLine(step));
+  };
 }
 
 // Prints how a foreground close ended, plus the proposals it settled, and answers 0 only when it closed the job.
