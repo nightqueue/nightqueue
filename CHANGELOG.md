@@ -41,6 +41,45 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Every MCP tool, `lesson_*` and `memory_*` included, refuses a project name no project carries
   with `unknown project` and the list of the known projects, and writes nothing. A path outside every checkout
   still means the global scope for the lesson, memory and index tools.
+- **Roadmap items and decisions no longer take internal ids.** Every tool and command that names
+  one takes its ref instead: `roadmap_update`, `roadmap_get` and `roadmap_comment` `id`,
+  `queue_add` `roadmap_item_id` and `queue add --roadmap` take an item ref (`NQ-12`);
+  `decision_update` `id` and `superseded_by`, and `roadmap_save`/`roadmap_update` `decision_id`,
+  take a decision ref (`D-7`, `DLW/D-3`). An integer there is refused. `decision_save`
+  `supersedes`/`unrelated` and the `decision` commands keep their per-owner numbers. Jobs keep
+  accepting the plain id next to `J-<id>`.
+- **The database migrates once to schema v19**, the same way as v18 (and in the same open when a
+  home is older): a copy `nightqueue.db.pre-v19` is left beside it, every project and org gets a
+  key suggested from its name, and every roadmap item gets its number inside its owner, in the
+  order the items were created. Decision numbers are unchanged, and comments, notices and prompts
+  written before keep their old text (`job #N`). The live-lease refusal now names the job
+  `J-<id>`.
+- **Everything the runtime prints names jobs, items and decisions by ref**: `J-77 queued`,
+  `J-77 done: <PR>`, `J-77 closed` in item threads; `J-5 started ...`, `cancelled J-5`,
+  `J-5 closed: PR #12 merged as ...` on the terminal; `p5 NQ-12 <title>` in the roadmap;
+  `D-7` / `DLW/D-3` for decisions everywhere, including the standing-decisions block of a
+  session and exported decision files (`Decision D-7 in the <owner> store.`; files exported
+  before still import). `project list` and `org list` gain a key column.
+- **`nightqueue run pr` appends the pull request footer itself.** It publishes a copy of the body
+  ending `Refs <KEY>-<n>` and `Opened by nightqueue · <KEY>-<n>` for a roadmap job, or
+  `Opened by nightqueue` otherwise, and REJECTS a body that already carries an `Opened by
+  nightqueue` line, a `Refs` line, a job ref or the run slug. The old last `Roadmap:` line and
+  the `pr-body.roadmap.md` copy are gone. `nightqueue run commit` adds a `Refs: <KEY>-<n>`
+  trailer to a roadmap job's commit and refuses a message that carries one.
+
+### Added
+
+- **Project and org keys.** Every project and org carries a key of 2 to 5 uppercase letters or
+  digits, unique across both. `init`, `project add`, `org add` and the registration offer of
+  `queue add`/`queue_add` suggest one (`nightqueue` → `NQ`) and ask for it on a terminal;
+  `--key <KEY>` (and `key` on `queue_add`) chooses it. `nightqueue project key <name> <KEY>` and
+  `nightqueue org key <name> <KEY>` change it in one row, and the old key keeps resolving to the
+  same owner.
+- **Refs.** `J-<id>` names a job, `<KEY>-<n>` a roadmap item numbered inside its owner, `D-<n>`
+  a decision of the project in context and `<KEY>/D-<n>` a decision named by its owner; rows
+  without an owner use `G`. MCP answers carry a `ref` next to every job, item and decision.
+- `nightqueue queue status <PR URL>` and `queue_status` with `pr_url` find the job that opened a
+  pull request; a URL opened by more than one job is refused with their refs.
 
 ### Changed
 

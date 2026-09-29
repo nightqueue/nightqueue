@@ -65,7 +65,7 @@ function noticeLineOf(log, options = {}) {
 test("a notice the narration had to cut says where the whole text is read, with the real job id", () => {
   const line = noticeLineOf(narrationStream({ notice: LONG_NOTICE }), { jobId: 7 });
   assert.ok(line.includes("..."), line);
-  assert.ok(line.endsWith("\n    read the whole notice with: nightqueue queue status 7"), line);
+  assert.ok(line.endsWith("\n    read the whole notice with: nightqueue queue status J-7"), line);
 });
 
 test("a narration with no job id never points at a job nobody named", () => {

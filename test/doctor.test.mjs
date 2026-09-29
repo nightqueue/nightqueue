@@ -307,7 +307,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v18/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v19/);
 });
 
 test("the database check warns about a v8 home and points at the command that migrates it", async (t) => {
@@ -317,7 +317,7 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, expected v18/);
+  assert.match(database.detail, /schema v8, expected v19/);
   assert.match(database.hint, /run `nightqueue queue status` once to migrate it/);
   assert.doesNotMatch(database.hint, /nightqueue memory stats/);
 });
@@ -326,7 +326,7 @@ test("the roadmap workflow check is ok when every linked item follows its job an
   const host = makeHostEnv(t, "doctor-roadmap-workflow");
   const db = openDb(host.env);
   const job = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "deliver it" }, host.env);
-  db.prepare("INSERT INTO roadmap_items (project_id, title, position, status, job_id, job_status_seen) VALUES (?, 'deliver it', 1, 'in_progress', ?, 'pending')").run(projectIdOf(host.env, "alpha"), job.id);
+  db.prepare("INSERT INTO roadmap_items (project_id, number, title, position, status, job_id, job_status_seen) VALUES (?, 1, 'deliver it', 1, 'in_progress', ?, 'pending')").run(projectIdOf(host.env, "alpha"), job.id);
   closeDb(host.env);
 
   const quiet = await diagnose(host.env);
@@ -337,14 +337,14 @@ test("the roadmap workflow check is ok when every linked item follows its job an
   const { report } = await diagnose(host.env);
   const check = report.checks.find((entry) => entry.name === "roadmap workflow");
   assert.equal(check.status, "warn");
-  assert.equal(check.detail, `1 roadmap status out of step: #1 in_progress (job ${job.id} done, expected in_review)`);
+  assert.equal(check.detail, `1 roadmap status out of step: AP-1 in_progress (J-${job.id} done, expected in_review)`);
   assert.match(check.hint, /next `nightqueue queue run` claim cycle re-syncs the ones behind a job/);
 });
 
 test("the roadmap workflow check flags an org item whose status disagrees with its project rows", async (t) => {
   const host = makeHostEnv(t, "doctor-roadmap-org-derived");
   const db = openDb(host.env);
-  db.prepare("INSERT INTO roadmap_items (scope, org_id, title, position, status) VALUES ('org', ?, 'raise node', 1, 'in_progress')").run(orgIdOf(host.env, makeOrg(host.env, "acme")));
+  db.prepare("INSERT INTO roadmap_items (scope, org_id, number, title, position, status) VALUES ('org', ?, 1, 'raise node', 1, 'in_progress')").run(orgIdOf(host.env, makeOrg(host.env, "acme")));
   db.prepare("INSERT INTO roadmap_item_projects (item_id, project_id, status) VALUES (1, ?, 'done'), (1, ?, 'in_progress')").run(ensureProject(host.env, "api"), ensureProject(host.env, "app"));
   closeDb(host.env);
 
@@ -356,7 +356,7 @@ test("the roadmap workflow check flags an org item whose status disagrees with i
   const { report } = await diagnose(host.env);
   const check = report.checks.find((entry) => entry.name === "roadmap workflow");
   assert.equal(check.status, "warn");
-  assert.equal(check.detail, "1 roadmap status out of step: acme#1 todo (derived from its project rows: in_progress)");
+  assert.equal(check.detail, "1 roadmap status out of step: AM-1 todo (derived from its project rows: in_progress)");
   assert.match(check.hint, /re-derived at its next project row change/);
 });
 
@@ -368,7 +368,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, newer than this nightqueue \(v18\): update nightqueue \/ restart the client that runs the old version/);
+  assert.match(database.detail, /schema v99, newer than this nightqueue \(v19\): update nightqueue \/ restart the client that runs the old version/);
   assert.match(database.hint, /inspect/);
 });
 
@@ -547,7 +547,7 @@ test("the closes check reports closes in flight, failed and on a dead lease, and
 
   acquireClose(ids[0], { worker: "close:host:1:aaaa", leaseS: 660 }, host.env);
   closeDb(host.env);
-  assert.deepEqual(closesCheck((await diagnose(host.env)).report), { status: "ok", detail: `1 in flight (#${ids[0]} at preflight)` });
+  assert.deepEqual(closesCheck((await diagnose(host.env)).report), { status: "ok", detail: `1 in flight (J-${ids[0]} at preflight)` });
 
   acquireClose(ids[1], { worker: "close:host:1:bbbb", leaseS: 660 }, host.env);
   failClose(ids[1], { worker: "close:host:1:bbbb", close: { attempts: 1, steps: {}, data: {}, failed: { step: "merge", reason: "merge-without-sha" } } }, host.env);
@@ -557,7 +557,7 @@ test("the closes check reports closes in flight, failed and on a dead lease, and
   const { report } = await diagnose(host.env);
   assert.deepEqual(closesCheck(report), {
     status: "warn",
-    detail: `1 in flight (#${ids[0]} at preflight), 1 failed (#${ids[1]} at merge: merge-without-sha), 1 with a dead lease (#${ids[2]})`,
+    detail: `1 in flight (J-${ids[0]} at preflight), 1 failed (J-${ids[1]} at merge: merge-without-sha), 1 with a dead lease (J-${ids[2]})`,
   });
   assert.equal(report.checks.find((entry) => entry.name === "closes").hint, "run again with: nightqueue queue close <id>");
 });
@@ -716,7 +716,7 @@ test("the decision proposals check warns on a proposal of a closed job, never on
   closeDb(host.env);
   const { report: one } = await diagnose(host.env);
   assert.equal(proposalsCheck(one).status, "warn");
-  assert.equal(proposalsCheck(one).detail, `1 proposed decision of closed jobs: #${first.number} (job ${closed})`);
+  assert.equal(proposalsCheck(one).detail, `1 proposed decision of closed jobs: D-${first.number} (J-${closed})`);
   assert.match(proposalsCheck(one).hint, /nightqueue queue close <id> --decisions accept\|reject/);
 
   const second = proposedByJob(host.env, { title: "and a second one from it", jobId: closed });
@@ -724,7 +724,7 @@ test("the decision proposals check warns on a proposal of a closed job, never on
   const { report: two } = await diagnose(host.env);
   assert.equal(
     proposalsCheck(two).detail,
-    `2 proposed decisions of closed jobs: #${first.number} (job ${closed}), #${second.number} (job ${closed})`,
+    `2 proposed decisions of closed jobs: D-${first.number} (J-${closed}), D-${second.number} (J-${closed})`,
   );
 });
 

@@ -128,8 +128,8 @@ server answers; the return itself is not used.
 `context_for_phase` (MCP `nightqueue`) with `target` = the agent you are about to launch and
 `query` = the Brief's affected area + objective, once per launch; paste its `block` into that
 agent's prompt (omit when empty). `decision_recall` with the Brief once, to build
-`## Standing decisions` exactly as /resolve step 1 does (project rows as `#<n>`, org rows as
-`<owner>#<n>`; `proposed` ones bind nothing). The session-start block `# Nightqueue context`
+`## Standing decisions` exactly as /resolve step 1 does (project rows as `D-<n>`, org rows as
+`<ORGKEY>/D-<n>`; `proposed` ones bind nothing). The session-start block `# Nightqueue context`
 already carries the accepted titles — copy them, do not refetch.
 
 ## Step 2 — The Brief
@@ -377,7 +377,7 @@ Call `queue_add` with `project`, `prompt`, `tier`, `cwd` and `run_dir` = `RUN_DI
 runtime builds the `## PRIOR RUN (operator)` block from the run's `state.json` itself and puts
 it right after `## Brief`, so the prompt you send carries no such block: never send both
 `run_dir` and a hand-written block (the runtime refuses it). Answer `needs_registration` by
-asking, then `register: true`. Report the job id, the tier, and whether a runner is online.
+asking, then `register: true`. Report the job ref (`J-<id>`), the tier, and whether a runner is online.
 
 **Why the block matters:** /resolve resumes from the last completed phase when the run's
 `state.json` says so — without it, the job re-triages what the person just paid for. The

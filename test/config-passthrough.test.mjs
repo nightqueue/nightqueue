@@ -77,7 +77,7 @@ test("a config-only v17 home lists its projects with their paths, and the config
   const { env, api, web } = configOnlyHome(t, "passthrough-config-only");
   const listed = runCli(env, ["project", "list"]);
   assert.equal(listed.status, 0, listed.stderr);
-  assert.equal(listed.stdout, `api  ${api}  acme  ok\nweb  ${web}  default  ok\n`);
+  assert.equal(listed.stdout, `api  AP  ${api}  acme  ok\nweb  WE  ${web}  default  ok\n`);
 
   const stripped = rawConfig(env);
   assert.equal(Object.hasOwn(stripped, "projects"), false, "the registry stayed in config.json");

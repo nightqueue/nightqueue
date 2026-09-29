@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { JOB_STATUSES, VIEW_TEXT_LIMIT, jobView } from "../memory/jobs.mjs";
+import { jobRef } from "../memory/refs.mjs";
 import { advisoryLinesFor } from "./advisory.mjs";
 import { ABANDONED_COMMAND_PREFIX, NOTHING_TO_CLOSE_LINE } from "./classify.mjs";
 import { isQueueIdle } from "./hints.mjs";
@@ -31,7 +32,7 @@ function qualifiesForClose(job) {
 
 // The ids a suggestion line names, at most five, with the rest folded into a count.
 function suggestionIdList(ids) {
-  const shown = ids.slice(0, SUGGESTION_ID_LIMIT).map((id) => `#${id}`).join(", ");
+  const shown = ids.slice(0, SUGGESTION_ID_LIMIT).map(jobRef).join(", ");
   const extra = ids.length - SUGGESTION_ID_LIMIT;
   return extra > 0 ? `${shown} and ${extra} more` : shown;
 }
@@ -40,7 +41,7 @@ function suggestionIdList(ids) {
 export function closeSuggestion(jobs) {
   const ids = (Array.isArray(jobs) ? jobs : []).filter(qualifiesForClose).map((job) => job.id);
   if (ids.length === 0) return null;
-  if (ids.length === 1) return `#${ids[0]} PR merged - close it with nightqueue queue close ${ids[0]}`;
+  if (ids.length === 1) return `${jobRef(ids[0])} PR merged - close it with nightqueue queue close ${jobRef(ids[0])}`;
   return `${ids.length} jobs have a merged PR (${suggestionIdList(ids)}) - close them with nightqueue queue close --merged`;
 }
 
@@ -53,7 +54,7 @@ function wasTruncated(job) {
 export function truncationSuggestion(jobs) {
   const ids = (Array.isArray(jobs) ? jobs : []).filter(wasTruncated).map((job) => job.id);
   if (ids.length === 0) return null;
-  if (ids.length === 1) return `#${ids[0]} text cut at ${VIEW_TEXT_LIMIT} characters - read it whole with nightqueue queue status ${ids[0]}`;
+  if (ids.length === 1) return `${jobRef(ids[0])} text cut at ${VIEW_TEXT_LIMIT} characters - read it whole with nightqueue queue status ${jobRef(ids[0])}`;
   return `${ids.length} jobs have text cut at ${VIEW_TEXT_LIMIT} characters (${suggestionIdList(ids)}) - read each whole with nightqueue queue status <id>`;
 }
 
@@ -178,13 +179,23 @@ function withoutRuntimeAppendedLines(notice) {
   }
 }
 
+// The ref of the roadmap item a job was queued from; null when it carries none or the roadmap cannot be read, which never fails the view.
+async function itemRefOfJob(readStore, jobId) {
+  if (typeof readStore?.roadmap?.roadmapRefOfJob !== "function") return null;
+  try {
+    return await readStore.roadmap.roadmapRefOfJob(jobId);
+  } catch {
+    return null;
+  }
+}
+
 // One job in full with the state of its pull request, or null when the row is gone. When the run's own notice (read fresh
 // from its log) really differs from the row's `notice_md` - once the lines the runtime itself appends to the row are set
 // aside - both are carried: `notice` is the row's, `run_notice` the run's whole own.
 export async function jobDetailView(readStore, id, { prStates = null } = {}) {
   const job = jobView(await readStore.jobs.getJob(id), { full: true });
   if (!job) return null;
-  const withState = withPrState(job, prStates);
+  const withState = { ...withPrState(job, prStates), item_ref: await itemRefOfJob(readStore, job.id) };
   const runNotice = runNoticeOf(job);
   const rowNotice = withoutRuntimeAppendedLines(job.notice_md).trim();
   return runNotice && runNotice.trim() !== rowNotice ? { ...withState, run_notice: runNotice } : withState;

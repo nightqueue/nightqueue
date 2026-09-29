@@ -67,7 +67,7 @@ test("finishJob returning false strands the item behind a phantom `running` job,
 
   assert.throws(
     () => queueableRoadmapItem(item.id, env),
-    /already queued as job `\d+` \(`running`\); cancel that job first/,
+    /already queued as J-\d+ \(`running`\); cancel that job first/,
     "queue_add on the item is refused with an ACTIONABLE message, not a silent no-op",
   );
   assert.throws(
@@ -105,7 +105,7 @@ test("runJob returning early via run.lost (ownership stolen mid-run, detected by
   assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
   assert.throws(
     () => queueableRoadmapItem(item.id, env),
-    /already queued as job `\d+` \(`running`\); cancel that job first/,
+    /already queued as J-\d+ \(`running`\); cancel that job first/,
     "same actionable (if misleading) refusal as the finishJob-false path: both bypass-of-finalize routes share one root and one recovery story",
   );
 });
@@ -144,7 +144,7 @@ test("a `gate` outcome keeps the item correctly in progress behind a retryable j
   assert.equal(getRoadmapItem(gateItem.id, gateEnv).status, "in_progress");
   assert.throws(
     () => queueableRoadmapItem(gateItem.id, gateEnv),
-    /already queued as job `\d+` \(`gate`\); cancel that job first/,
+    /already queued as J-\d+ \(`gate`\); cancel that job first/,
     "a gated job is correctly treated as still alive: queue_add refuses it",
   );
   await applyRetry({ id: gateQueued.job.id, note: "go ahead", env: gateEnv });

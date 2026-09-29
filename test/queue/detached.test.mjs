@@ -69,7 +69,7 @@ test("queue run starts the runner detached, hands it `--foreground` and comes ba
   const ran = await runCli(env, ["queue", "run", "--job", String(id)], { calls });
 
   assert.equal(ran.code, 0, ran.stderr);
-  assert.equal(ran.stdout, `job #${id} started (pid ${CHILD_PID}) - follow with: nightqueue queue log ${id} --follow`);
+  assert.equal(ran.stdout, `J-${id} started (pid ${CHILD_PID}) - follow with: nightqueue queue log J-${id} --follow`);
   const spawned = calls[0];
   assert.equal(spawned.file, process.execPath);
   assert.deepEqual(spawned.args.slice(1), ["queue", "run", "--foreground", "--job", String(id)]);
@@ -107,15 +107,15 @@ test("queue add --run and queue retry --run start the same detached runner", asy
   const added = await runCli(env, ["queue", "add", "alpha", "fix the worker", "--run"], { calls });
 
   assert.equal(added.code, 0, added.stderr);
-  assert.match(added.stdout, /queued job #1 for project `alpha`/);
-  assert.match(added.stdout, /job #1 started \(pid 4242\) - follow with: nightqueue queue log 1 --follow/);
+  assert.match(added.stdout, /queued J-1 for project `alpha`/);
+  assert.match(added.stdout, /J-1 started \(pid 4242\) - follow with: nightqueue queue log J-1 --follow/);
   assert.deepEqual(calls[0].args.slice(1), ["queue", "run", "--foreground", "--job", "1"]);
 
   const cancelled = await runCli(env, ["queue", "cancel", "1", "--reason", "not needed"]);
   assert.equal(cancelled.code, 0, cancelled.stderr);
   const retried = await runCli(env, ["queue", "retry", "1", "--run"], { calls });
   assert.equal(retried.code, 0, retried.stderr);
-  assert.match(retried.stdout, /job #1 started \(pid 4242\) - follow with: nightqueue queue log 1 --follow/);
+  assert.match(retried.stdout, /J-1 started \(pid 4242\) - follow with: nightqueue queue log J-1 --follow/);
   assert.deepEqual(calls[2].args.slice(1), ["queue", "run", "--foreground", "--job", "1"]);
 });
 
@@ -238,7 +238,7 @@ test("queue status opens with one line per live runner, in the table and in the 
   const table = await runCli(env, ["queue", "status"], { alive });
   assert.equal(table.out[0], "1 runner online");
   assert.equal(table.out[1], `runner: running (pid ${CHILD_PID}, watch every 30 s, since ${startedAt})`);
-  assert.match(table.stdout, /#1\s+○ pending\s+-\s+-\s+alpha/, "the runner line took the place of the table");
+  assert.match(table.stdout, /J-1\s+○ pending\s+-\s+-\s+alpha/, "the runner line took the place of the table");
 
   const payload = JSON.parse((await runCli(env, ["queue", "status", "--json"], { alive })).stdout);
   assert.deepEqual(payload.runner, {
@@ -307,7 +307,7 @@ test("a single-job start that would claim nothing reports what it waits for, spa
 
   assert.equal(waiting.code, 0, waiting.stderr);
   assert.deepEqual(waiting.out, [
-    `job #${id} waiting: concurrency cap reached`,
+    `J-${id} waiting: concurrency cap reached`,
     "2 of 2 jobs already running",
     "2 runners on `alpha` — parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output",
   ]);
@@ -341,7 +341,7 @@ test("queue status prints the advisory lines right after the runner lines, and `
   assert.match(window.out[1], /^runner: running/);
   assert.equal(window.out[2], "5h window at 86% · 1 runner active — another runner will likely hit the limit before finishing");
   assert.equal(window.out.filter((line) => line.startsWith("5h window")).length, 1, "the advisory line was printed more than once");
-  assert.match(window.stdout, /#1\s+○ pending\s+-\s+-\s+alpha/, "the table went missing after the advisory line");
+  assert.match(window.stdout, /J-1\s+○ pending\s+-\s+-\s+alpha/, "the table went missing after the advisory line");
 
   for (const prompt of ["hold the first slot", "hold the second slot"]) {
     claimJobById(addJob({ projectId: ensureProject(env, "alpha"), prompt }, env).id, { worker: `host:${prompt.length}`, cap: null }, env);

@@ -116,7 +116,7 @@ test("a job closed by another connection during a running follow renders closed 
   assert.ok(views.length >= 2, `the follow redrew only ${views.length} time(s); it never polled after the other connection's write`);
   assert.match(views[0], /closed=0/, "the first poll already counted a closed job; the transition this test asserts never happened inside the session");
   assert.match(views.at(-1), /closed=1/, "the follow never rendered the close another connection wrote mid-session");
-  assert.match(views.at(-1), new RegExp(`#${delivered}\\s+\\S+ closed`), `the row of job #${delivered} is not rendered as closed: ${views.at(-1)}`);
+  assert.match(views.at(-1), new RegExp(`J-${delivered}\\s+\\S+ closed`), `the row of J-${delivered} is not rendered as closed: ${views.at(-1)}`);
 });
 
 test("no poll of a follow session prepares the queue view's statements on the process-wide cached connection", async (t) => {

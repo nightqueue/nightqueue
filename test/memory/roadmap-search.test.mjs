@@ -59,7 +59,7 @@ test("a search matches the title, the detail and a comment, and names how it mat
   assert.equal(hits.find((hit) => hit.id === commented.id).via, "comment");
   assert.equal(hits.find((hit) => hit.id === titled.id).via, "text");
   assert.deepEqual(Object.keys(hits[0]).sort(), ["id", "priority", "ref", "status", "title", "type", "via"]);
-  assert.equal(hits.find((hit) => hit.id === titled.id).ref, `alpha#${titled.id}`);
+  assert.equal(hits.find((hit) => hit.id === titled.id).ref, titled.ref);
 });
 
 test("a file search matches a recorded path exactly or by prefix, first, and takes % and _ literally", (t) => {

@@ -15,6 +15,7 @@ import { holdJobAwake } from "./keep-awake.mjs";
 import { PLUGIN_DIR_ENV } from "./orchestrator-scope.mjs";
 import { isRunPath, isSafeSegment, rerunLines } from "./resume.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 // Silence of the stream that means a dead process: no event at all for this long ends the attempt.
 export const IDLE_TIMEOUT_S = 1200;
@@ -256,7 +257,7 @@ export function buildPrompt({ job, handoff, openPrs, env = process.env } = {}) {
   const base = [
     `/nightqueue:resolve ${String(job?.prompt ?? "").trim()}`,
     "",
-    `Unattended run, job #${job?.id}, no operator available.`,
+    `Unattended run, ${jobRef(job?.id)}, no operator available.`,
     ...tierLine(job?.tier),
     ...runLines(job, env),
     "Open the pull request at the end.",

@@ -194,7 +194,7 @@ test("an item is linked once, refused while its job is live, and refused again o
   assert.equal(linked.status, "in_progress");
   assert.equal(linked.job_id, job.id);
   assert.equal(linked.job_status_seen, "pending");
-  assert.throws(() => queueableRoadmapItem(item.id, env), new RegExp(`already queued as job \`${job.id}\``));
+  assert.throws(() => queueableRoadmapItem(item.id, env), new RegExp(`already queued as J-${job.id}`));
   assert.equal(listRoadmap(projectIdOf(env, "alpha"), {}, env).items[0].job_status, "pending");
 
   cancelJob(job.id, { reason: "not now" }, env);

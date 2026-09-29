@@ -108,7 +108,7 @@ test("`queue repair` turns a job that really opened a pull request into done, an
 
   const repaired = runCli(env, ["queue", "repair", String(id)]);
   assert.equal(repaired.status, 0, repaired.stderr);
-  assert.match(repaired.stdout, new RegExp(`job #${id} re-classified from \`gate\` to \`done\``));
+  assert.match(repaired.stdout, new RegExp(`J-${id} re-classified from \`gate\` to \`done\``));
   assert.ok(repaired.stdout.includes(PR_URL), repaired.stdout);
 
   const row = getJob(id, env);
@@ -165,7 +165,7 @@ test("only the LAST attempt of an accumulated log decides: an older delivery nev
 
   const answered = runCli(env, ["queue", "repair", String(id)]);
   assert.equal(answered.status, 0, answered.stderr);
-  assert.match(answered.stdout, new RegExp(`job #${id} is still \`gate\`; there is nothing to correct`));
+  assert.match(answered.stdout, new RegExp(`J-${id} is still \`gate\`; there is nothing to correct`));
   assert.equal(readFileSync(statePath, "utf8"), before, "a repair with nothing to correct rewrote the run directory");
   assert.equal(getJob(id, env).status, "gate");
 });
@@ -248,7 +248,7 @@ test("`queue repair` says it re-read the notice from the log, and `queue status`
   const repaired = runCli(env, ["queue", "repair", String(id)]);
   assert.equal(repaired.status, 0, repaired.stderr);
   assert.ok(
-    repaired.stdout.includes(`job #${id} is still \`gate\`; its notice was re-read from the log. Read it with: nightqueue queue status ${id}`),
+    repaired.stdout.includes(`J-${id} is still \`gate\`; its notice was re-read from the log. Read it with: nightqueue queue status J-${id}`),
     repaired.stdout,
   );
   assert.equal(readFileSync(statePath, "utf8"), before, "a notice-only repair rewrote the witness of the run");

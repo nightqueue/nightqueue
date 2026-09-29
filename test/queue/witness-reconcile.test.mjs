@@ -222,9 +222,9 @@ test("a repair the database refuses only warns: `queue status` still prints the 
 
   const status = runCli(env, ["queue", "status"]);
   assert.equal(status.status, 0, status.stderr);
-  assert.ok(status.stdout.includes(`#${id}`), `the queue table is missing:\n${status.stdout}`);
+  assert.ok(status.stdout.includes(`J-${id}`), `the queue table is missing:\n${status.stdout}`);
   assert.ok(
-    status.stderr.includes(`warning: could not repair a job from state.json: job #${id}:`),
+    status.stderr.includes(`warning: could not repair a job from state.json: J-${id}:`),
     `the refused repair did not warn:\n${status.stderr}`,
   );
 });
@@ -325,7 +325,7 @@ test("a witness is restored to the instant it names, in both shapes, whatever th
     assert.equal(
       row.finished_at,
       instant,
-      `job #${id} was repaired to another instant than its witness names: the timezone of the repairing process shifted it`,
+      `J-${id} was repaired to another instant than its witness names: the timezone of the repairing process shifted it`,
     );
   }
 });

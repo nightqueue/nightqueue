@@ -63,8 +63,8 @@ const SELF_LOCKING_COMMANDS = new Set(["mcp", "hook", "reflect", "embed", "memor
 const HOME_WRITE_COMMANDS = new Set(["init", "setup", "update"]);
 
 const HOME_WRITE_SUBCOMMANDS = new Map([
-  ["org", new Set(["add", "rename", "remove"])],
-  ["project", new Set(["add", "remove", "move"])],
+  ["org", new Set(["add", "rename", "key", "remove"])],
+  ["project", new Set(["add", "key", "remove", "move"])],
   ["connection", new Set(["add", "bind", "remove"])],
   ["embed", new Set(["install", "download", "backfill"])],
   ["queue", new Set(["add", "cancel", "close", "pause", "resume"])],
@@ -77,16 +77,18 @@ usage: nightqueue <command> [options]
 commands:
   setup [--from <dir>] [--remove]           install the runtime in the home and register the MCP server, hooks and plugin in the host
   doctor [--json] [--check-updates]         check the host and the home, one line per check; exits 1 on any failure
-  init [path] [--gh|--no-gh]                install the runtime and register the git repository at [path] (default: .) as a project
+  init [path] [--key <KEY>] [--gh|--no-gh]  install the runtime and register the git repository at [path] (default: .) as a project
   open [project] [--resume <session>]       open the operator in a terminal: it investigates, plans and queues jobs, and never edits the code
   update [<version>] [--from] [--force]     reinstall the runtime at the newest version (or at <version>) and re-point the host at it
-  org add <name>                            create an org
-  org list [--json]                         list orgs, their connection slots and project counts
+  org add <name> [--key <KEY>]              create an org; without --key a terminal is asked, else a key is suggested from the name
+  org list [--json]                         list orgs, their key, connection slots and project counts
   org rename <old> <new>                    rename an org (one row: its projects and bindings follow)
+  org key <name> <KEY>                      change an org's key; the old key keeps resolving
   org remove <name>                         remove an empty, non-default org
-  project add <path> [--org] [--name]       register a project (same behaviour as init)
-  project list [--json]                     list projects, their org and whether the path still exists
+  project add <path> [--org] [--name] [--key <KEY>]  register a project (same behaviour as init)
+  project list [--json]                     list projects, their key, their org and whether the path still exists
   project rename <old> <new>                rename a project (one row: its jobs, decisions and memory follow)
+  project key <name> <KEY>                  change a project's key; the old key keeps resolving
   project remove <name>                     unregister a project that owns no rows
   project move <name> [<org>] [--path <p>]  move a project to another org and/or give it a new checkout
   connection add <name> --type <type>       store a secret read from stdin and bind it to a free org slot
@@ -103,14 +105,14 @@ commands:
   embed backfill                            compute the embeddings of the lessons and decisions that still have none
   memory stats [--json]                     count lessons, memories, index entries and runs per project
   decision list [--project|--org] [--status]  list the architecture decisions of a project and of its org
-  decision show <number> [--project|--org]  print one decision in full
-  decision export <number> [--dir] [--force]  write one decision as a markdown file (default: docs, folder decisions, of the current directory); never writes the database
-  decision import <file.md> [--status] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]  save a markdown decision file, reviewed like decision_save, and stamp its row number into it
-  decision update <number> --status accepted|rejected|superseded [--superseded-by <n>]  accept, reject or supersede a decision, same as decision_update
+  decision show <number|ref> [--project|--org]  print one decision in full (D-7, DLW/D-3)
+  decision export <number|ref> [--dir] [--force]  write one decision as a markdown file (default: docs, folder decisions, of the current directory); never writes the database
+  decision import <file.md> [--status] [--superseded-by <n|ref>] [--supersedes <n|ref,...>] [--unrelated <n|ref,...>]  save a markdown decision file, reviewed like decision_save, and stamp its row number into it
+  decision update <number|ref> --status accepted|rejected|superseded [--superseded-by <n|ref>]  accept, reject or supersede a decision, same as decision_update
   roadmap [--project|--org] [--status] [--priority] [--type]  print the roadmap of a project and of its org, grouped by status, p1 first; --org adds each item's project rows
-  roadmap show <id> [--json]               print one roadmap item in full with its comment thread
+  roadmap show <ref> [--json]              print one roadmap item in full with its comment thread
   queue add [project] <prompt...> [--run]   enqueue an unattended /nightqueue:resolve run; --run starts it detached
-  queue status [id] [--limit] [--json]      show one job or the table of the queue plus the counts per status
+  queue status [J-<id>|<PR URL>] [--json]  show one job or the table of the queue plus the counts per status
   queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)
   queue run [--job | --watch] [--max]       start the runner detached, one job at a time; --max <n> exits after n jobs, --foreground runs it here, --stop ends a watcher
   queue cancel <id> [--reason "..."]        cancel a pending, gated, done, failed or orphaned job; a done or failed one also releases its worktree

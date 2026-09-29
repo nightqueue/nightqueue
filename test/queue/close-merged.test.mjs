@@ -68,11 +68,11 @@ test("close --merged on a cold cache queries gh, closes the confirmed merges and
 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.ok(result.out.some((line) => line === "checking 2 pull requests on GitHub..."), result.out.join("\n"));
-  assert.ok(result.out.includes(`closed job #${merged}`), result.out.join("\n"));
+  assert.ok(result.out.includes(`closed J-${merged}`), result.out.join("\n"));
   assert.equal(getJob(merged, env).status, "closed");
   assert.equal(jobView(getJob(merged, env)).close.data.merged, true, "the close did not record the merge through the pipeline");
-  assert.ok(result.out.some((line) => line === `job #${open} not closed: pull request is open`), result.out.join("\n"));
-  assert.ok(result.out.some((line) => line === `job #${notGithub} not closed: no GitHub pull request url`), result.out.join("\n"));
+  assert.ok(result.out.some((line) => line === `J-${open} not closed: pull request is open`), result.out.join("\n"));
+  assert.ok(result.out.some((line) => line === `J-${notGithub} not closed: no GitHub pull request url`), result.out.join("\n"));
 });
 
 test("close --merged --json answers one parseable document, and the checking line never reaches stdout", async (t) => {
@@ -100,7 +100,7 @@ test("an injected gh that never answers, with a small deadline, closes nothing, 
 
   assert.equal(result.code, 0, result.err.join("\n"));
   for (const id of [first, second]) {
-    assert.ok(result.out.some((line) => line === `job #${id} not closed: gh did not confirm its state`), result.out.join("\n"));
+    assert.ok(result.out.some((line) => line === `J-${id} not closed: gh did not confirm its state`), result.out.join("\n"));
   }
 });
 
@@ -139,7 +139,7 @@ test("a candidate already cached as merged is closed with zero gh calls", async 
   const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates });
 
   assert.equal(result.code, 0, result.err.join("\n"));
-  assert.ok(result.out.includes(`closed job #${merged}`), result.out.join("\n"));
+  assert.ok(result.out.includes(`closed J-${merged}`), result.out.join("\n"));
   assert.equal(view.calls.length, 0, "a warm cache still asked gh");
   assert.equal(result.out.some((line) => line.startsWith("checking")), false, "a warm cache still printed a checking line");
 });
@@ -156,7 +156,7 @@ test("a running job with a merged pull request is never closed", async (t) => {
   const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates });
 
   assert.equal(result.code, 0, result.err.join("\n"));
-  assert.equal(result.out.some((line) => line.includes(`#${id}`)), false, `a running job was reported:\n${result.out.join("\n")}`);
+  assert.equal(result.out.some((line) => line.includes(`J-${id}`)), false, `a running job was reported:\n${result.out.join("\n")}`);
   assert.deepEqual(result.out, ["nothing to close"]);
 });
 
@@ -184,7 +184,7 @@ test("close --merged --decisions accept settles the proposals of every job it cl
 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.equal(getDecision(first.id, env).status, "accepted");
-  assert.deepEqual(result.out, [`closed job #${merged}`, `decision #${first.number} leases are renewed by their owner: accepted`]);
+  assert.deepEqual(result.out, [`closed J-${merged}`, `decision D-${first.number} leases are renewed by their owner: accepted`]);
 });
 
 test("close --merged without the flag keeps the proposals, and --merged --json carries them in one parseable line", async (t) => {
@@ -195,7 +195,7 @@ test("close --merged without the flag keeps the proposals, and --merged --json c
 
   const textResult = await runQueueClose(env, ["queue", "close", "--merged"], { prStates: await mergedCache(env, prUrl) });
   assert.equal(textResult.code, 0, textResult.err.join("\n"));
-  assert.deepEqual(textResult.out, [`closed job #${text}`, `decision #${kept.number} leases are renewed by their owner: kept (proposed)`]);
+  assert.deepEqual(textResult.out, [`closed J-${text}`, `decision D-${kept.number} leases are renewed by their owner: kept (proposed)`]);
   assert.equal(getDecision(kept.id, env).status, "proposed");
 
   const json = terminalJob(env, { prUrl, prompt: "second" });
@@ -252,7 +252,7 @@ test("close --merged reports a candidate whose pipeline stops as not closed, nam
   const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates: await mergedCache(env, prUrl), closeDeps });
 
   assert.equal(result.code, 0, result.err.join("\n"));
-  assert.deepEqual(result.out, [`job #${id} not closed: preflight: pr-unreadable`]);
+  assert.deepEqual(result.out, [`J-${id} not closed: preflight: pr-unreadable`]);
   assert.equal(getJob(id, env).status, "done");
   assert.equal(getJob(id, env).close_status, "failed");
 });
@@ -266,7 +266,7 @@ test("close --merged cancels a candidate whose pull request gh reads closed with
   const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates: await mergedCache(env, prUrl), closeDeps });
 
   assert.equal(result.code, 0, result.err.join("\n"));
-  assert.deepEqual(result.out, [`job #${id} not closed: preflight: pr-closed`]);
+  assert.deepEqual(result.out, [`J-${id} not closed: preflight: pr-closed`]);
   assert.equal(getJob(id, env).status, "cancelled");
   assert.equal(getJob(id, env).close_status, null);
 });
@@ -283,6 +283,6 @@ test("close --merged refuses a candidate whose project checkout is gone, by name
 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.equal(result.out.length, 1, result.out.join("\n"));
-  assert.match(result.out[0], new RegExp(`^job #${id} not closed: the checkout of project \`alpha\` is missing`));
+  assert.match(result.out[0], new RegExp(`^J-${id} not closed: the checkout of project \`alpha\` is missing`));
   assert.equal(getJob(id, env).status, "done");
 });

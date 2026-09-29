@@ -852,7 +852,7 @@ test("a rename that is kept and whose revert bind is refused is said out loud, a
 
   const log = readFileSync(jobLogPath(id, env), "utf8");
   assert.equal(getJob(id, env).slug, taken, "setup failed: the refused revert should leave the row on the declared slug");
-  assert.match(log, new RegExp(`WARNING: the row could not be bound back to \`${SLUG}\` \\(job #999 holds it\\)`));
+  assert.match(log, new RegExp(`WARNING: the row could not be bound back to \`${SLUG}\` \\(J-999 holds it\\)`));
   assert.match(log, new RegExp(`could not write the terminal witness: the row names the run \`${taken}\` but this run lives in \`${SLUG}\``));
   assert.equal(readFileSync(join(runDir(ensureProject(env, "alpha"), taken, env), "state.json"), "utf8"), other, "the witness was stamped into a directory this run never wrote");
 });
@@ -891,7 +891,7 @@ test("a slug another JOB holds is refused even when its run directory is gone, a
   assert.equal(getJob(id, env).slug, SLUG, "the job took over the run of another job");
   assert.equal(getJob(holder, env).slug, taken);
   assert.equal(existsSync(runDir(ensureProject(env, "alpha"), taken, env)), false, "the run was renamed onto the slug another job holds");
-  assert.match(readFileSync(jobLogPath(id, env), "utf8"), new RegExp(`the run keeps the slug \`${SLUG}\`: it could not be renamed to \`${taken}\` \\(job #${holder} holds it\\)`));
+  assert.match(readFileSync(jobLogPath(id, env), "utf8"), new RegExp(`the run keeps the slug \`${SLUG}\`: it could not be renamed to \`${taken}\` \\(J-${holder} holds it\\)`));
 });
 
 test("the watch loop repeats the cycle and hands each pass to the caller", async (t) => {
@@ -951,7 +951,7 @@ test("a finish the database refused to commit still leaves the witness, is repor
 
   assert.deepEqual(cycle.processed, [{ id, status: "unrecorded", prUrl: PR_URL, attempts: 1, error: "the nightqueue database is still locked by another process after 24 attempts" }]);
   assert.equal(getJob(id, env).status, "running", "the row kept the state the refused commit left it in");
-  assert.match(readFileSync(jobLogPath(id, env), "utf8"), /finish verification failed\nthe finish of job #\d+ did not commit: the nightqueue database is still locked/);
+  assert.match(readFileSync(jobLogPath(id, env), "utf8"), /finish verification failed\nthe finish of J-\d+ did not commit: the nightqueue database is still locked/);
   const state = JSON.parse(readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8"));
   assert.deepEqual({ status: state.terminal.status, prUrl: state.terminal.prUrl }, { status: "done", prUrl: PR_URL }, "the witness was not written from the outcome in memory");
 

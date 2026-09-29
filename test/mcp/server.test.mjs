@@ -22,7 +22,7 @@ import * as registry from "../../src/memory/registry.mjs";
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const GATED_FINISHED_AT = "2020-01-01 00:00:00";
 const HOME_REFUSAL =
-  "refused: this command would change the operator's nightqueue home from inside job #9; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead";
+  "refused: this command would change the operator's nightqueue home from inside J-9; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead";
 
 const CONTRACT_TOOLS = [
   "context_for_phase",
@@ -450,18 +450,19 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
   assert.deepEqual(queued, {
     ok: true,
     id: 1,
+    ref: "J-1",
     project: "alpha",
     priority: 2,
     timeoutS: 600,
-    hint: "queued job #1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.",
+    hint: "queued J-1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.",
   });
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
   const second = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the parser" } }));
-  assert.equal(second.hint, "queued job #2 for `alpha` (2 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.");
+  assert.equal(second.hint, "queued J-2 for `alpha` (2 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.");
 
   const add = (await client.listTools()).tools.find((tool) => tool.name === "queue_add");
-  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "max_attempts", "priority", "project", "prompt", "register", "roadmap_item_id", "run_dir", "tier", "timeout_s"]);
+  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "key", "max_attempts", "priority", "project", "prompt", "register", "roadmap_item_id", "run_dir", "tier", "timeout_s"]);
   assert.ok(add.description.includes("start the whole batch later with `queue_run`"), add.description);
 
   const byPath = await client.callTool({ name: "queue_add", arguments: { project: "/tmp/alpha", prompt: "fix the worker" } });
@@ -508,7 +509,10 @@ test("queue_add resolves the project of the caller `cwd`, and answers needs_regi
   assert.equal(known.id, 1);
 
   const offered = payloadOf(await client.callTool({ name: "queue_add", arguments: { cwd: repo, prompt: "fix the parser" } }));
-  assert.deepEqual(Object.keys(offered).sort(), ["cwd", "hint", "needs_registration", "org", "suggested_name"]);
+  assert.deepEqual(Object.keys(offered).sort(), ["cwd", "hint", "needs_registration", "org", "suggested_key", "suggested_name"]);
+  assert.match(offered.suggested_key, /^[A-Z][A-Z0-9]{1,4}$/);
+  assert.ok(offered.hint.includes(`with key \`${offered.suggested_key}\``), offered.hint);
+  assert.ok(offered.hint.includes("plus `key` when the user chose another key"), offered.hint);
   assert.equal(offered.needs_registration, true);
   assert.equal(offered.cwd, repo);
   assert.equal(offered.org, "default");
@@ -547,11 +551,20 @@ test("queue_add registers the repository of the `cwd` only with register: true, 
   assert.ok(entry, `\`${name}\` is missing from the registry`);
   assert.equal(entry.org, "default");
   assert.equal(getJob(queued.id, env).prompt, "fix the worker");
-  assert.ok(queued.hint.startsWith(`registered project \`${name}\` (${entry.path}). queued job #${queued.id}`), queued.hint);
+  assert.ok(queued.hint.startsWith(`registered project \`${name}\` (${entry.path}). queued J-${queued.id}`), queued.hint);
 
   const again = payloadOf(await client.callTool({ name: "queue_add", arguments: { cwd: repo, prompt: "fix the parser" } }));
   assert.equal(again.project, name, "the registered repository was offered for registration again");
   assert.equal(again.needs_registration, undefined);
+
+  const chosenRepo = makeRepo(t, "mcp-queue-register-key-repo");
+  const invalid = await client.callTool({ name: "queue_add", arguments: { cwd: chosenRepo, prompt: "fix it", register: true, key: "1x" } });
+  assert.equal(invalid.isError, true);
+  assert.match(textOf(invalid), /key `1x` is invalid/);
+  const offered = payloadOf(await client.callTool({ name: "queue_add", arguments: { cwd: chosenRepo, prompt: "fix it" } }));
+  const chosen = payloadOf(await client.callTool({ name: "queue_add", arguments: { cwd: chosenRepo, prompt: "fix it", register: true, key: "mq1" } }));
+  assert.equal(registeredProject(env, chosen.project).key, "MQ1");
+  assert.notEqual(offered.suggested_key, "MQ1");
 });
 
 test("queue_add and queue_cancel refuse the home of the runner from inside a job, and accept a temporary one", async (t) => {
@@ -601,7 +614,7 @@ test("queue_status never returns the prompt and truncates the free text at five 
   assert.deepEqual({ notice: cutRow.notice_truncated, result: cutRow.result_truncated }, { notice: true, result: true }, "a cut row carries no flag");
   const fitRow = listed.jobs.find((job) => job.id !== id);
   assert.equal("notice_truncated" in fitRow || "result_truncated" in fitRow, false, "a row whose text fits carries a truncated key");
-  const pointer = `#${id} text cut at 500 characters - read it whole with nightqueue queue status ${id}`;
+  const pointer = `J-${id} text cut at 500 characters - read it whole with nightqueue queue status J-${id}`;
   assert.deepEqual(listed.suggestions, [pointer]);
   assert.ok(listed.hint.endsWith(pointer), listed.hint);
   assert.equal("notice_truncated" in one.job, false, "the detail of one job was flagged as cut");
@@ -735,7 +748,7 @@ test("queue_status returns a gate notice near three kilobytes whole, and clips i
   const row = listed.jobs.find((job) => job.id === id);
   assert.equal(row.notice_md, `${Array.from(notice).slice(0, 500).join("")}...`, "the listing did not clip the gate notice");
   assert.equal(row.notice_truncated, true);
-  assert.ok(listed.suggestions.includes(`#${id} text cut at 500 characters - read it whole with nightqueue queue status ${id}`), listed.suggestions.join("\n"));
+  assert.ok(listed.suggestions.includes(`J-${id} text cut at 500 characters - read it whole with nightqueue queue status J-${id}`), listed.suggestions.join("\n"));
 });
 
 test("queue_status refuses instead of answering with no runner for a registry it could not read", async (t) => {
@@ -791,8 +804,8 @@ test("queue_status never writes a delivered job whose pull request is merged, an
 
   const listed = await pollPrState(client, "merged");
   assert.equal(listed.jobs[0].pr_state, "merged", "the refresh fired after the answer never landed in the cache");
-  assert.deepEqual(listed.suggestions, ["#1 PR merged - close it with nightqueue queue close 1"]);
-  assert.ok(listed.hint.endsWith("#1 PR merged - close it with nightqueue queue close 1"), listed.hint);
+  assert.deepEqual(listed.suggestions, ["J-1 PR merged - close it with nightqueue queue close J-1"]);
+  assert.ok(listed.hint.endsWith("J-1 PR merged - close it with nightqueue queue close J-1"), listed.hint);
   assert.equal(listed.jobs[0].status, "done");
   assert.equal(listed.counts.done, 1);
   assert.equal(listed.counts.closed, 0);
@@ -885,7 +898,7 @@ test("a runner waiting out a rate limit is what queue_status and queue_add say, 
   assert.equal(empty.runner.pausedUntil, new Date(resetsAt.getTime() + 60_000).toISOString());
 
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker" } }));
-  assert.equal(queued.hint, `queued job #1 for \`alpha\` (1 pending). 1 runner online - nothing to start: ${pause}; it claims again by itself when the limit resets.`);
+  assert.equal(queued.hint, `queued J-1 for \`alpha\` (1 pending). 1 runner online - nothing to start: ${pause}; it claims again by itself when the limit resets.`);
 
   const pending = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(pending.hint, `1 runner online - 1 pending job waiting — ${pause}.`);
@@ -903,7 +916,7 @@ test("a runner still waiting for its window is what queue_add says, and a paused
   const waiting = `1 runner waiting for its window (opens ${clockLabel(fromMs)})`;
 
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker" } }));
-  assert.equal(queued.hint, `queued job #1 for \`alpha\` (1 pending). ${waiting}; it claims once the window opens.`);
+  assert.equal(queued.hint, `queued J-1 for \`alpha\` (1 pending). ${waiting}; it claims once the window opens.`);
 
   const status = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.deepEqual(status.runner.window, window, "queue_status did not carry the window of the live runner");
@@ -984,7 +997,7 @@ test("queue_run and queue_retry start nothing when the ceiling is full, and say 
     { ok: started.ok, started: started.started, pid: started.pid, reason: started.waiting?.reason },
     { ok: true, started: false, pid: null, reason: "cap-reached" },
   );
-  assert.match(started.message, /job #1 waiting: concurrency cap reached; 2 of 2 jobs already running/);
+  assert.match(started.message, /J-1 waiting: concurrency cap reached; 2 of 2 jobs already running/);
   assert.match(started.message, new RegExp(`a live runner \\(pid ${process.pid}, drain\\) will pick it up`));
   assert.equal(existsSync(join(homeDir(env), "logs")), false, "a start that claims nothing opened the log of a runner nobody started");
   assert.deepEqual(started.advisories, [ALPHA_ADVISORY], "a waiting start did not answer the advice of the two live alpha leases");

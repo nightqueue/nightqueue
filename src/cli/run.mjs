@@ -4,6 +4,7 @@ import { UserError } from "../config/errors.mjs";
 import { jobLogPath, runDir } from "../config/paths.mjs";
 import { resolveProjectRef } from "../config/projects.mjs";
 import { ghPrCreate } from "../host/gh.mjs";
+import { jobRef } from "../memory/refs.mjs";
 import { registeredProject } from "../memory/registry-access.mjs";
 import { runGit } from "../host/git.mjs";
 import { publishedBranchName } from "../queue/branch-name.mjs";
@@ -12,7 +13,7 @@ import { formatDuration } from "../queue/narrate.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
-import { roadmapBodyFile } from "../queue/roadmap-trail.mjs";
+import { itemRefOfJob, publishedBodyFile } from "../queue/pr-footer.mjs";
 import { recordOutcome, recordPrTemplate, recordPrUrl, recordRunFields } from "../queue/run-state.mjs";
 import { phaseTelemetry, runDurationS } from "../queue/telemetry.mjs";
 import { openStore } from "../store/open.mjs";
@@ -350,6 +351,12 @@ const CONVENTION_FILES = [
 
 const CONVENTIONAL_SUBJECT_RE = /^[a-z]+(\([^)]*\))?!?: \S/;
 
+// A `Refs:` trailer line, which `run commit` appends itself from the job row and refuses in the agent's message.
+const REFS_TRAILER = /^Refs\s*:/i;
+
+// The copy of the agent's message a roadmap job commits with, under the run directory.
+const COMMIT_MESSAGE_FILE = "commit-message.md";
+
 // The lines a host command answered on stdout, trimmed and without the empty ones.
 function outputLines(result) {
   return String(result?.stdout ?? "")
@@ -474,9 +481,53 @@ async function runCommit(argv, ctx) {
     return 1;
   }
   if (paths.length === 0) throw new UserError(`${artifact} lists no file under \`${FILE_LIST}\`: there is nothing to commit`);
+  const trailer = refsTrailerLine(readRequiredFile(messageFile, "--message-file"));
+  if (trailer !== null) {
+    ctx.out(`REFUSED: line ${trailer.number} of the message is a \`Refs:\` trailer, which \`run commit\` appends from the job row: ${trailer.line}`);
+    return 1;
+  }
+  const committedMessage = await commitMessageFile({ messageFile, run, cwd, env: ctx.env });
   ctx.out(`CONVENTION: ${commitConvention(cwd, ctx.env)}`);
-  ctx.out(`COMMITTED: ${commitFiles({ cwd, paths, messageFile, env: ctx.env })} (${paths.length} files)`);
+  ctx.out(`COMMITTED: ${commitFiles({ cwd, paths, messageFile: committedMessage, env: ctx.env })} (${paths.length} files)`);
   return 0;
+}
+
+// The first line of the agent's message that is a `Refs:` trailer, or null when it carries none.
+function refsTrailerLine(message) {
+  const lines = message.split("\n");
+  const at = lines.findIndex((line) => REFS_TRAILER.test(line.trim()));
+  return at < 0 ? null : { number: at + 1, line: lines[at].trim() };
+}
+
+// The ref of the roadmap item the run's job came from, or null; a store that cannot answer stops the commit.
+async function commitItemRef(run, env) {
+  try {
+    return await itemRefOfJob(openStore(env), run.jobId);
+  } catch (error) {
+    throw new UserError(`could not read the roadmap item of ${jobRef(run.jobId)}:${error?.message ?? String(error)}; nothing was committed`);
+  }
+}
+
+// Copies the agent's message into the run directory, so the trailer is added to the copy and never to the agent's own file.
+function copyMessage(messageFile, runDirectory) {
+  const copy = join(runDirectory, COMMIT_MESSAGE_FILE);
+  try {
+    mkdirSync(runDirectory, { recursive: true });
+    writeFileSync(copy, readFileSync(messageFile, "utf8"));
+    return copy;
+  } catch (error) {
+    throw new UserError(`could not copy the commit message to ${copy}: ${error?.message ?? String(error)}; nothing was committed`);
+  }
+}
+
+// The message file git commits: the agent's own, or for a roadmap job a copy whose trailer block ends with `Refs: <item ref>`.
+async function commitMessageFile({ messageFile, run, cwd, env }) {
+  const ref = await commitItemRef(run, env);
+  if (ref === null) return messageFile;
+  const copy = copyMessage(messageFile, run.runDir);
+  const added = runGit({ args: ["interpret-trailers", "--in-place", "--no-divider", "--trailer", `Refs: ${ref}`, copy], cwd, env });
+  if (!added.ok) throw new UserError(`git could not add the \`Refs: ${ref}\` trailer to ${copy}: ${failureLine(added)}; nothing was committed`);
+  return copy;
 }
 
 // One violation of the body as the command prints it, the rules being the template's own (`references/pr-template.md`).
@@ -562,16 +613,16 @@ async function runPr(argv, ctx) {
   if (values.template === true) return 0;
   const bodyFile = resolve(values["body-file"]);
   const body = readRequiredFile(bodyFile, "--body-file");
-  const problems = bodyProblems({ body, template, evidenceDir: join(run.runDir, "evidence") });
+  const problems = bodyProblems({ body, template, evidenceDir: join(run.runDir, "evidence"), slug: run.slug, jobId: run.jobId });
   if (problems.length > 0) {
     for (const problem of problems) ctx.out(problemLine(problem));
     ctx.out("nothing was pushed and no pull request was opened: fix the body and call `nightqueue run pr` again");
     return 1;
   }
+  const published = await publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, store: openStore(ctx.env) });
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const current = currentBranch(cwd, ctx.env);
   const branch = renameBranch({ cwd, current, final: publishedBranchName(current, { type: state?.type, slug: run.slug }), env: ctx.env });
-  const published = await roadmapBodyFile({ bodyFile, runDir: run.runDir, jobId: callerJobId(ctx.env), store: openStore(ctx.env) });
   const { url, recorded, prRecorded, branchRecorded } = publishBranch({ run, cwd, branch, title: prTitle(values.title, body), bodyFile: published, env: ctx.env });
   ctx.out(`BRANCH: ${branch}${branch === current ? "" : ` (renamed from ${current})`}`);
   ctx.out(`PR: ${url ?? "opened"}`);

@@ -186,7 +186,7 @@ test("preflight refuses a pull request that is not on the job's branch, naming b
   assert.deepEqual(outcome, { status: "failed", step: "preflight", reason: "pr-not-the-job-branch", mergeSha: null, worktree: null });
   assert.equal(
     checklist.steps.preflight.note,
-    `pr-not-the-job-branch - PR #7 is on branch \`scratch/close-qa-20260921201325\`, but job \`${home.id}\` ran on \`worktree-feat+queue-close\`; it is not this job's pull request. Fix the job's pr_url before closing it`,
+    `pr-not-the-job-branch - PR #7 is on branch \`scratch/close-qa-20260921201325\`, but J-${home.id} ran on \`worktree-feat+queue-close\`; it is not this job's pull request. Fix the job's pr_url before closing it`,
   );
   assert.equal(fake.log.merges.length, 0, "a foreign pull request was merged");
   assert.equal(fake.log.checkReads, 0, "the checks of a foreign pull request were read");

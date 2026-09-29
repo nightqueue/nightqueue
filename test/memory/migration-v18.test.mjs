@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { isId } from "../../src/config/ids.mjs";
 import { configPath, dbPath, homeDir, preV18BackupPath, runDir, runsIdMarkerPath } from "../../src/config/paths.mjs";
-import { closeDb, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
+import { closeDb, DB_USER_VERSION, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { listDecisions, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
 import { getRoadmapItemDetail, listRoadmap, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
@@ -22,7 +22,7 @@ import { makeDir, makeHome } from "../../test-support/memory.mjs";
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
 const PATHS_URL = new URL("../../src/config/paths.mjs", import.meta.url).href;
 const V18_URL = new URL("../../src/memory/migration/v18.mjs", import.meta.url).href;
-const LEASE_REFUSAL = /the database must migrate to v18, but a runner holds a live lease on job #1: stop the runners \(`nightqueue queue run --stop`\) and run the command again$/;
+const LEASE_REFUSAL = /the database must migrate to v18, but a runner holds a live lease on J-1: stop the runners \(`nightqueue queue run --stop`\) and run the command again$/;
 
 // A checkout directory a v17 config registers.
 function checkout(t, name) {
@@ -64,7 +64,7 @@ function diskVersion(env) {
 test("a v17 home migrates once: the registry is imported, history-only names join the default org, the config is stripped, and a byte copy stays beside it", (t) => {
   const { env, api, fixture } = v17Home(t, "v18-import");
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 18);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.ok(readFileSync(preV18BackupPath(env)).equals(fixture), "the pre-v18 copy is not the v17 database byte for byte");
 
   const projects = Object.fromEntries(registry.listProjects(db).map((project) => [project.name, project]));
@@ -92,7 +92,7 @@ test("a v17 home migrates once: the registry is imported, history-only names joi
   const configText = readFileSync(configPath(env), "utf8");
   closeDb(env);
   const again = openDb(env);
-  assert.equal(again.prepare("PRAGMA user_version").get().user_version, 18);
+  assert.equal(again.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.deepEqual(again.prepare("SELECT sql FROM sqlite_master ORDER BY name").all(), schema);
   assert.equal(statSync(preV18BackupPath(env)).mtimeMs, copyStat.mtimeMs, "a second open took another copy");
   assert.equal(readFileSync(configPath(env), "utf8"), configText, "a second open rewrote the config");
@@ -112,7 +112,7 @@ test("a runner holding a live lease refuses the migration with one line and noth
 
   const expired = v17Home(t, "v18-expired-lease", { seed: running("-1 hour") });
   const db = openDb(expired.env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 18);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.equal(db.prepare("SELECT status FROM jobs").get().status, "running");
 });
 
@@ -252,7 +252,7 @@ test("a migration killed in the middle of the transaction, right after it rebuil
   assert.ok(Object.hasOwn(JSON.parse(readFileSync(configPath(env), "utf8")), "projects"), "a killed migration stripped the config");
 
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 18);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.deepEqual(namedRows(db, "jobs"), state.jobs);
   assert.equal(Object.hasOwn(JSON.parse(readFileSync(configPath(env), "utf8")), "projects"), false);
 });
@@ -488,9 +488,10 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
   const detached = rowsOf(db, "jobs").find((row) => row.prompt === "shared second");
   assert.equal(detached.slug, null, "the shared slug was not detached");
   assert.equal(JSON.parse(detached.result).runSlugDetached, "same-run");
+  const withoutV19Number = (table, rows) => (table === "roadmap_items" ? rows.map(({ number: _number, ...row }) => row) : rows);
   for (const table of ALL_TABLES) {
     const unchanged = (rows) => rows.filter((row) => row.id !== detached.id || table !== "jobs");
-    assert.deepEqual(unchanged(ownerNamedRows(db, table)), unchanged(rowsOf(before, table)), `${table} changed in the rebuild`);
+    assert.deepEqual(unchanged(withoutV19Number(table, ownerNamedRows(db, table))), unchanged(rowsOf(before, table)), `${table} changed in the rebuild`);
   }
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   assert.equal(sharedSlugPending(db), false);
@@ -546,7 +547,7 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
   const configText = readFileSync(configPath(env), "utf8");
   closeDb(env);
   const again = openDb(env);
-  assert.equal(again.prepare("PRAGMA user_version").get().user_version, 18);
+  assert.equal(again.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.equal(again.prepare("SELECT total_changes() AS n").get().n, 0, "a second open wrote to the database");
   assert.deepEqual(runEntries(env), runs, "a second open moved the run directories again");
   assert.equal(statSync(runsIdMarkerPath(env)).mtimeMs, markerStat.mtimeMs, "a second open rewrote the marker");
@@ -608,8 +609,8 @@ test("two processes opening one v17 home end with one migration, the same regist
   const startAt = Date.now() + 400;
   const results = await Promise.all([spawnOpener(env, script, startAt), spawnOpener(env, script, startAt)]);
   assert.deepEqual(results, [
-    { version: 18, projects: 5, error: null },
-    { version: 18, projects: 5, error: null },
+    { version: DB_USER_VERSION, projects: 5, error: null },
+    { version: DB_USER_VERSION, projects: 5, error: null },
   ]);
   assert.ok(readFileSync(preV18BackupPath(env)).equals(fixture), "the copy is not the v17 database");
   assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM lessons").get().n, 4);

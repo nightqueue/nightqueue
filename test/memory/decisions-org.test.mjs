@@ -31,7 +31,7 @@ function makeTwoOrgHome(t, name) {
 
 // Owner label of a row, the way the CLI and the prompts print it.
 function labelsOf(rows) {
-  return rows.map((row) => (row.scope === "org" ? `${row.org}#${row.number}` : `#${row.number}`));
+  return rows.map((row) => (row.scope === "org" ? `${row.org_key}/D-${row.number}` : `D-${row.number}`));
 }
 
 test("an org decision is numbered inside its org, independently of every project", (t) => {
@@ -74,7 +74,7 @@ test("a project reads its own decisions and its org's, org first, and never anot
 
   const listed = listDecisions({ projectId: projectIdOf(env, "acme-mobile-app") }, env);
   assert.deepEqual(listed.map((row) => row.id), [orgWide.id, own.id]);
-  assert.deepEqual(labelsOf(listed), ["acme#1", "#1"]);
+  assert.deepEqual(labelsOf(listed), ["AM/D-1", "D-1"]);
   assert.equal(listed.some((row) => row.id === foreign.id), false, "a orbit decision leaked into a acme project");
 
   const recalled = await recallDecisions({ query: "caches the plan", projectId: projectIdOf(env, "acme-mobile-app") }, env);
@@ -86,13 +86,13 @@ test("a project reads its own decisions and its org's, org first, and never anot
   assert.deepEqual(listDecisions({ orgId: orgIdOf(env, "acme") }, env).map((row) => row.id), [orgWide.id], "an org read answers its rows alone");
 });
 
-test("an org decision renders and is read by its own number, while a project decision keeps printing `#7`", (t) => {
+test("an org decision renders and is read by its own number, while a project decision prints `D-7`", (t) => {
   const env = makeTwoOrgHome(t, "decisions-org-render");
   const project = addDecision(env, { project: "acme-mobile-app", title: "the app owns its cache" });
   const org = addDecision(env, { org: "acme", title: "one queue per product" });
 
-  assert.equal(renderDecisionText(getDecision(project.id, env)).split("\n")[0], "#1 the app owns its cache (accepted)");
-  assert.equal(renderDecisionText(getDecision(org.id, env)).split("\n")[0], "acme#1 one queue per product (accepted)");
+  assert.equal(renderDecisionText(getDecision(project.id, env)).split("\n")[0], "D-1 the app owns its cache (accepted)");
+  assert.equal(renderDecisionText(getDecision(org.id, env)).split("\n")[0], "AM/D-1 one queue per product (accepted)");
   assert.equal(getDecisionByNumber({ orgId: orgIdOf(env, "acme"), number: 1 }, env).id, org.id);
   assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "acme-mobile-app"), number: 1 }, env).id, project.id);
 });

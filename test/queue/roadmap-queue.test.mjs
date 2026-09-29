@@ -51,22 +51,22 @@ rewrite runner heartbeat
 the renew path must survive a slow disk
 
 ## Roadmap item
-Roadmap: alpha#1
+Roadmap: AP-1
 Type: improvement
 Commit type: refactor or perf
 
 ## Linked decision
-#1 the heartbeat is renewed by the owner only (accepted)
+D-1 the heartbeat is renewed by the owner only (accepted)
 Context: two runners renewed the same lease
 Decision: renew the lease only from the worker that owns it
 Consequences: a lost lease kills the child
 
 ## Standing decisions
-- #1 the heartbeat is renewed by the owner only
-- #2 heartbeat interval is configuration, never a constant
+- D-1 the heartbeat is renewed by the owner only
+- D-2 heartbeat interval is configuration, never a constant
 
 ## Related decisions
-#2 heartbeat interval is configuration, never a constant (accepted)
+D-2 heartbeat interval is configuration, never a constant (accepted)
 Context: a slow disk timed the lease out
 Decision: read the heartbeat interval from the configuration`;
 
@@ -110,7 +110,7 @@ test("queue_add from a roadmap item builds the prompt of the item and links the 
   const { env, item } = makeRoadmapHome(t, "roadmap-queue-prompt");
   const client = await connect(t, env);
 
-  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id, prompt: null } }));
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, prompt: null } }));
   assert.equal(queued.ok, true);
   assert.equal(queued.project, "alpha");
   assert.equal(queued.roadmapItemId, item.id);
@@ -127,8 +127,8 @@ test("an item with no detail and no linked decision queues the task alone", asyn
   const item = saveRoadmapItem({ type: "chore", projectId: projectIdOf(env, "alpha"), title: "index the logs" }, env);
   const client = await connect(t, env);
 
-  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
-  assert.equal(getJob(queued.id, env).prompt, "## Task\nindex the logs\n\n## Roadmap item\nRoadmap: alpha#1\nType: chore\nCommit type: chore");
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref } }));
+  assert.equal(getJob(queued.id, env).prompt, "## Task\nindex the logs\n\n## Roadmap item\nRoadmap: AP-1\nType: chore\nCommit type: chore");
 });
 
 test("queue_add refuses two prompt sources, none at all, and a project that is not the item's", async (t) => {
@@ -136,7 +136,7 @@ test("queue_add refuses two prompt sources, none at all, and a project that is n
   makeProject(t, env, "beta");
   const client = await connect(t, env);
 
-  const both = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id, prompt: "fix the worker" } });
+  const both = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, prompt: "fix the worker" } });
   assert.equal(both.isError, true);
   assert.match(textOf(both), /pass either `prompt` or `roadmap_item_id`, never both/);
 
@@ -144,13 +144,13 @@ test("queue_add refuses two prompt sources, none at all, and a project that is n
   assert.equal(neither.isError, true);
   assert.match(textOf(neither), /queue_add needs `prompt`, or `roadmap_item_id` to build it from a roadmap item/);
 
-  const foreign = await client.callTool({ name: "queue_add", arguments: { project: "beta", roadmap_item_id: item.id } });
+  const foreign = await client.callTool({ name: "queue_add", arguments: { project: "beta", roadmap_item_id: item.ref } });
   assert.equal(foreign.isError, true);
   assert.match(textOf(foreign), /belongs to project `alpha`, not `beta`/);
 
-  const unknown = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: 404 } });
+  const unknown = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: "AP-404" } });
   assert.equal(unknown.isError, true);
-  assert.match(textOf(unknown), /unknown roadmap item `404`/);
+  assert.match(textOf(unknown), /unknown roadmap item `AP-404`/);
   assert.equal(getRoadmapItem(item.id, env).status, "todo");
 });
 
@@ -158,13 +158,13 @@ test("a queued item is refused a second job while the first is alive, and accept
   const { env, item } = makeRoadmapHome(t, "roadmap-queue-live-job");
   const client = await connect(t, env);
 
-  const first = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
-  const refused = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } });
+  const first = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref } }));
+  const refused = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref } });
   assert.equal(refused.isError, true);
-  assert.match(textOf(refused), new RegExp(`already queued as job \`${first.id}\` \\(\`pending\`\\)`));
+  assert.match(textOf(refused), new RegExp(`already queued as J-${first.id} \\(\`pending\`\\)`));
 
   cancelJob(first.id, { reason: "no longer needed" }, env);
-  const second = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
+  const second = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref } }));
   assert.notEqual(second.id, first.id);
   assert.equal(getRoadmapItem(item.id, env).job_id, second.id);
 });
@@ -174,7 +174,7 @@ test("a job that ends done puts its own roadmap item in review, and leaves every
   useFakeClaude(env, makeDir(t, "roadmap-queue-done-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
   const untouched = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "index the logs" }, env);
   const client = await connect(t, env);
-  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref } }));
 
   const cycle = await runCycle({ jobId: queued.id, env, deps: { gitImpl: fakeGit() } });
 
@@ -193,7 +193,7 @@ test("the runner records the files the implementation artifact lists, and the pr
   const { env, item } = makeRoadmapHome(t, "roadmap-queue-files");
   useFakeClaude(env, makeDir(t, "roadmap-queue-files-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
   const client = await connect(t, env);
-  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref } }));
   const artifactDir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(artifactDir, { recursive: true });
   writeFileSync(join(artifactDir, "04-implementation.md"), "## Modified files\n- `src/runner.mjs`\n```\nsrc/example.mjs\n```\n\n## Done\n");
@@ -209,7 +209,7 @@ test("a job that ends done moves an item the operator cancelled while it ran, an
   const { env, item } = makeRoadmapHome(t, "roadmap-queue-dropped-item");
   useFakeClaude(env, makeDir(t, "roadmap-queue-dropped-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
   const client = await connect(t, env);
-  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } }));
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref } }));
   updateRoadmapItem(item.id, { status: "cancelled" }, env);
 
   const cycle = await runCycle({ jobId: queued.id, env, deps: { gitImpl: fakeGit() } });
@@ -227,17 +227,17 @@ test("nightqueue queue add --roadmap builds the same prompt as the tool, from an
   const { env, item } = makeRoadmapHome(t, "roadmap-queue-cli");
   const elsewhere = makeDir(t, "roadmap-queue-cli-cwd");
 
-  const added = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", String(item.id)], {
+  const added = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", item.ref], {
     env,
     cwd: elsewhere,
     encoding: "utf8",
   });
   assert.equal(added.status, 0, added.stderr);
-  assert.match(added.stdout, /roadmap item #1 of `alpha` is now `in_progress`/);
+  assert.match(added.stdout, /roadmap item AP-1 of `alpha` is now `in_progress`/);
   assert.equal(getJob(1, env).prompt, EXPECTED_PROMPT);
   assert.equal(getRoadmapItem(item.id, env).job_id, 1);
 
-  const both = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", "1", "fix", "the", "worker"], {
+  const both = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", "AP-1", "fix", "the", "worker"], {
     env,
     cwd: elsewhere,
     encoding: "utf8",
@@ -247,7 +247,7 @@ test("nightqueue queue add --roadmap builds the same prompt as the tool, from an
 
   const malformed = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", "zero"], { env, cwd: elsewhere, encoding: "utf8" });
   assert.equal(malformed.status, 1);
-  assert.match(malformed.stderr, /`--roadmap` expects a positive integer, got `zero`/);
+  assert.match(malformed.stderr, /expected a roadmap item ref \(`<KEY>-<number>`\), got `zero`/);
 });
 
 test("a job built from a roadmap item carries the operator's tier, through the tool and through the CLI", async (t) => {
@@ -256,13 +256,13 @@ test("a job built from a roadmap item carries the operator's tier, through the t
   const client = await connect(t, env);
 
   const queued = payloadOf(
-    await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id, tier: "complex" } }),
+    await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, tier: "complex" } }),
   );
   assert.equal(queued.tier, "complex");
   assert.equal(getJob(queued.id, env).tier, "complex");
   cancelJob(queued.id, { reason: "queued again through the CLI" }, env);
 
-  const added = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", String(item.id), "--tier", "complex"], {
+  const added = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", item.ref, "--tier", "complex"], {
     env,
     cwd: elsewhere,
     encoding: "utf8",
@@ -317,7 +317,7 @@ function relatedCount(prompt) {
   return prompt
     .slice(start + RELATED_HEADING.length)
     .split("\n")
-    .filter((line) => /^#\d+ /.test(line)).length;
+    .filter((line) => /^D-\d+ /.test(line)).length;
 }
 
 // A home with the semantic path ON: one item, decisions its title recalls lexically, and decisions only an embedder reaches.
@@ -362,7 +362,7 @@ test("a proposed decision is listed by title under `## Proposed (not binding)`, 
   const prompt = await buildRoadmapPrompt({ item: getRoadmapItem(item.id, env) }, env);
 
   const heading = "## Proposed (not binding)";
-  assert.ok(prompt.includes(`${heading}\n- #${proposed.number} heartbeats move to a side table\n\n${RELATED_HEADING}`), prompt);
+  assert.ok(prompt.includes(`${heading}\n- D-${proposed.number} heartbeats move to a side table\n\n${RELATED_HEADING}`), prompt);
   assert.ok(prompt.indexOf(STANDING_HEADING) < prompt.indexOf(heading), prompt);
   assert.equal(prompt.includes("nothing settled yet"), false, "a proposal is listed by title only");
   const standing = prompt.slice(prompt.indexOf(STANDING_HEADING), prompt.indexOf(heading));
