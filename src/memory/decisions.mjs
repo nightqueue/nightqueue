@@ -434,8 +434,18 @@ function markSuperseded(db, rows, successorId) {
   ).run(successorId, ...rows.map((row) => row.id));
 }
 
+// Refuses a save from a job this database has no row for, since the decision could not record its job of origin.
+function refuseUnknownJob(db, spec) {
+  if (spec.jobId === null) return;
+  if (db.prepare("SELECT 1 FROM jobs WHERE id = ?").get(spec.jobId)) return;
+  throw new UserError(
+    `job \`${spec.jobId}\` is not in the queue of this database, so a decision saved from it cannot record its job of origin; save it outside the job`,
+  );
+}
+
 // The synchronous body of a reviewed save: refusals, the overlap review, the insert and the supersedes, all in one transaction.
 function reviewAndInsert(db, spec, embedded) {
+  refuseUnknownJob(db, spec);
   refuseSecondProposal(db, spec);
   const successor = spec.supersededBy === null ? [] : [spec.supersededBy];
   const named = rowsByNumber(db, spec.target, [...new Set([...spec.replaced, ...spec.untouched, ...successor])]);

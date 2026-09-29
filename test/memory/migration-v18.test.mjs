@@ -353,6 +353,7 @@ function seedProjectRows(db) {
   memory.run(null, "global", "a global fact");
   db.prepare("INSERT INTO project_index (project, path, responsibility, mtime_ms) VALUES ('api', 'src/a.mjs', 'the module', 7)").run();
   db.prepare("INSERT INTO project_libs (project, lib, version) VALUES ('api', 'zod', '4.5.4')").run();
+  db.prepare("INSERT OR IGNORE INTO jobs (id, project, prompt, status, slug) VALUES (1, 'api', 'fix the worker', 'done', 'fix-worker')").run();
   const run = db.prepare("INSERT INTO pipeline_runs (project, slug, tier, outcome, job_id, tier_operator) VALUES (?, ?, 'simple', 'pr_opened', ?, ?)");
   run.run("api", "fix-worker", 1, "simple");
   run.run(null, "a-hunt", null, null);

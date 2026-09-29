@@ -8,7 +8,8 @@ import { isBusyError, rollbackQuietly, sleepSync, withWriteRetry } from "../tx.m
 import { keepSequence, sequenceOf } from "./legacy.mjs";
 
 // The machinery of a one-shot, version-gated schema step: nothing is written unless the whole step commits, and a byte copy of
-// the database taken right before stays beside it. A step is `{ version, backupPath(env), isPending(db), migrateInside(db, env, ctx) }`.
+// the database taken right before stays beside it. A step is `{ version, backupPath(env), isPending(db), migrateInside(db, env, ctx),
+// refuse?(db, env) }`, `refuse` throwing a `MigrationRefused` before any copy is published.
 
 const COPY_ATTEMPTS = 10;
 const RETRY_PAUSE_MS = 50;
@@ -86,6 +87,7 @@ function verdictUnderLock(db, env, { tmp, step }) {
   if (!step.isPending(db)) return "skipped";
   if (!copyIsCurrent(env, tmp)) return "retry";
   refuseLiveLease(db, step.version);
+  step.refuse?.(db, env);
   return "go";
 }
 
@@ -161,6 +163,7 @@ export function runOneShot(db, env, step, hooks = {}) {
     waitForWriters(db);
     if (!step.isPending(db)) return false;
     refuseLiveLease(db, step.version);
+    step.refuse?.(db, env);
     if (!walFolded(db)) {
       sleepSync(RETRY_PAUSE_MS);
       continue;

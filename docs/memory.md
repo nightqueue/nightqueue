@@ -36,6 +36,27 @@ the current shape. Decision numbers, comments, notices and prompts are not
 touched - text written before keeps its old spelling. The same live-lease refusal
 applies, naming the job `J-<id>`.
 
+Schema v20 gives every column that holds another row's id a foreign key with its
+own delete rule: a comment and a per-project row of an item go with the item
+(`roadmap_comments.item_id`, `roadmap_item_projects.item_id`: cascade); the job
+of an item, of a per-project row, of a decision and of a pipeline run is cleared
+when that job is deleted (`job_id`: set null), and so is the decision an item
+links (`roadmap_items.decision_id`); a decision that another one names in
+`superseded_by` cannot be deleted (restrict). A v19 database migrates once, in
+the same open as the v18 and v19 steps when they are pending: a copy
+`nightqueue.db.pre-v20` first, then one transaction that rebuilds `decisions`,
+`roadmap_items`, `roadmap_item_projects`, `roadmap_comments` and `pipeline_runs`
+with every row as it was. A row that points at a row that does not exist refuses
+the migration with one line naming each such row, its column and the missing id,
+and writes nothing, not even the copy: fix or clear those rows with `sqlite3` and
+run the command again. That check runs before the first pending step, so a v17 or
+v18 home with such a row stays at its version with no copy of any step, and
+`nightqueue doctor` reports the rows instead of the migration. A column of those
+five tables that v20 does not know refuses the migration naming it, so no data
+is dropped. The same live-lease refusal applies. Comments stay
+append-only - an UPDATE or a DELETE of a comment is still refused while its item
+exists - but they go away with their item.
+
 **Keys and refs.** A key is 2 to 5 uppercase letters or digits starting with a
 letter, unique across projects and orgs together; the database refuses a
 repeat with triggers over `projects`, `orgs` and their two alias tables. It is a

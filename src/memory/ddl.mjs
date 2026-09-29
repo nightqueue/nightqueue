@@ -8,8 +8,8 @@ import {
 } from "./roadmap-workflow.mjs";
 import { CLOSED_REQUIRES_MERGE } from "./schema.mjs";
 
-// The current (v19) schema of the memory database: one source for a fresh creation and for the v19 migration; the frozen
-// v18 shapes the v18 migration builds live under `migration/`.
+// The current (v20) schema of the memory database: one source for a fresh creation and for the v20 migration; the frozen
+// v18 and v19 shapes the earlier migrations build live under `migration/`.
 
 const ROADMAP_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ROADMAP_TYPE}' CHECK(type IN (${sqlList(ROADMAP_TYPES)}))`;
 
@@ -26,7 +26,7 @@ export const OWNER_CHECK =
 export function roadmapCommentsDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  item_id INTEGER NOT NULL,
+  item_id INTEGER NOT NULL REFERENCES roadmap_items(id) ON DELETE CASCADE,
   kind TEXT NOT NULL CHECK(kind IN (${sqlList(COMMENT_KINDS)})),
   author TEXT NOT NULL CHECK(author = '${OPERATOR_AUTHOR}' OR author GLOB 'job:[0-9]*'),
   body TEXT NOT NULL,
@@ -36,12 +36,13 @@ export function roadmapCommentsDdl(name) {
 );`;
 }
 
-// The triggers that keep the comment thread append-only: every UPDATE and DELETE is refused.
+// The triggers that keep the comment thread append-only: every UPDATE is refused; a DELETE is refused while its item exists, so a comment only ends with its item.
 export const ROADMAP_COMMENT_GUARDS = `
 CREATE TRIGGER IF NOT EXISTS roadmap_comments_no_update BEFORE UPDATE ON roadmap_comments BEGIN
   SELECT RAISE(ABORT, 'roadmap comments are append-only');
 END;
-CREATE TRIGGER IF NOT EXISTS roadmap_comments_no_delete BEFORE DELETE ON roadmap_comments BEGIN
+CREATE TRIGGER IF NOT EXISTS roadmap_comments_no_delete BEFORE DELETE ON roadmap_comments
+WHEN EXISTS (SELECT 1 FROM roadmap_items WHERE id = OLD.item_id) BEGIN
   SELECT RAISE(ABORT, 'roadmap comments are append-only');
 END;
 `;
@@ -50,10 +51,10 @@ END;
 export function roadmapItemProjectsDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  item_id INTEGER NOT NULL,
+  item_id INTEGER NOT NULL REFERENCES roadmap_items(id) ON DELETE CASCADE,
   ${REQUIRED_PROJECT_ID},
   status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
-  job_id INTEGER,
+  job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
   job_status_seen TEXT,
   closed_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -62,7 +63,7 @@ export function roadmapItemProjectsDdl(name) {
 );`;
 }
 
-// The lexical mirrors of the roadmap: item title and detail follow every write, comments are append-only so only inserts.
+// The lexical mirrors of the roadmap: item title and detail follow every write, comments follow inserts and the deletes their item's removal makes.
 export const ROADMAP_FTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS roadmap_items_fts USING fts5(
   title, detail,
@@ -85,6 +86,9 @@ CREATE VIRTUAL TABLE IF NOT EXISTS roadmap_comments_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS roadmap_comments_fts_ai AFTER INSERT ON roadmap_comments BEGIN
   INSERT INTO roadmap_comments_fts(rowid, body) VALUES (new.id, new.body);
 END;
+CREATE TRIGGER IF NOT EXISTS roadmap_comments_fts_ad AFTER DELETE ON roadmap_comments BEGIN
+  INSERT INTO roadmap_comments_fts(roadmap_comments_fts, rowid, body) VALUES ('delete', old.id, old.body);
+END;
 `;
 
 // The `roadmap_items` table under a given name: owned by a project id (NULL for a global item) or by an org id, numbered per owner.
@@ -101,8 +105,8 @@ export function roadmapItemsDdl(name) {
   priority INTEGER NOT NULL DEFAULT 5 CHECK(priority BETWEEN 1 AND 9),
   type ${ROADMAP_TYPE_COLUMN},
   position INTEGER NOT NULL,
-  decision_id INTEGER,
-  job_id INTEGER,
+  decision_id INTEGER REFERENCES decisions(id) ON DELETE SET NULL,
+  job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
   job_status_seen TEXT,
   closed_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -124,8 +128,8 @@ export function decisionsDdl(name) {
   decision TEXT NOT NULL,
   consequences TEXT,
   status TEXT NOT NULL DEFAULT 'accepted' CHECK(status IN ('proposed','accepted','superseded','rejected')),
-  superseded_by INTEGER,
-  job_id INTEGER,
+  superseded_by INTEGER REFERENCES decisions(id) ON DELETE RESTRICT,
+  job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   embedding BLOB,
@@ -308,7 +312,7 @@ export function pipelineRunsDdl(name) {
   duration_s INTEGER,
   model TEXT,
   session_id TEXT,
-  job_id INTEGER,
+  job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   tier_operator TEXT,
   tier_raise_reason TEXT
@@ -408,7 +412,22 @@ CREATE INDEX IF NOT EXISTS roadmap_items_org_order_idx ON roadmap_items(org_id, 
 CREATE INDEX IF NOT EXISTS decisions_job_idx ON decisions(job_id) WHERE job_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS roadmap_comments_item_idx ON roadmap_comments(item_id, id);
 CREATE INDEX IF NOT EXISTS roadmap_item_projects_job_idx ON roadmap_item_projects(job_id);
+CREATE INDEX IF NOT EXISTS pipeline_runs_job_idx ON pipeline_runs(job_id);
+CREATE INDEX IF NOT EXISTS roadmap_items_decision_idx ON roadmap_items(decision_id);
+CREATE INDEX IF NOT EXISTS decisions_superseded_idx ON decisions(superseded_by);
 `;
+
+// The columns that hold another row's id with a foreign key since v20, as `{ table, column, parent }`; the v20 migration checks them.
+export const REFERENCED_COLUMNS = Object.freeze([
+  { table: "roadmap_comments", column: "item_id", parent: "roadmap_items" },
+  { table: "roadmap_item_projects", column: "item_id", parent: "roadmap_items" },
+  { table: "roadmap_item_projects", column: "job_id", parent: "jobs" },
+  { table: "roadmap_items", column: "job_id", parent: "jobs" },
+  { table: "roadmap_items", column: "decision_id", parent: "decisions" },
+  { table: "decisions", column: "job_id", parent: "jobs" },
+  { table: "decisions", column: "superseded_by", parent: "decisions" },
+  { table: "pipeline_runs", column: "job_id", parent: "jobs" },
+]);
 
 // The per-owner uniqueness of roadmap item numbers, kept out of INDEXES because the v18 migration builds v18-shaped tables.
 export const ROADMAP_NUMBER_INDEXES = `

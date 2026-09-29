@@ -12,6 +12,7 @@ import {
   renderDecisionText,
 } from "./decisions.mjs";
 import { PRIORITY_RANGE, addJob, cancelJob, truncateByCodePoint } from "./jobs.mjs";
+import { refuseMissingJob } from "./job-row.mjs";
 import { escapePromptMarkers } from "./prompt-safety.mjs";
 import { GLOBAL_KEY, decisionRef, itemRef, jobRef, parseRef } from "./refs.mjs";
 import { COMMENT_JOB_COLUMNS, insertComment, jobRefs, listComments } from "./roadmap-comments.mjs";
@@ -481,6 +482,7 @@ export function linkRoadmapItemJob(id, jobId, env = process.env) {
         AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = roadmap_items.job_id AND j.status IN (${LIVE_JOB_LIST}))`,
   );
   return inTransaction(db, () => {
+    refuseMissingJob(db, job.id);
     if (statement.run(JOB_TO_ROADMAP.queued.status, job.id, itemId).changes !== 1) return false;
     insertComment(db, { itemId, ...commentFor(job, "queued", jobRefs(db, job)) });
     return true;

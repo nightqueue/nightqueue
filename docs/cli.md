@@ -155,6 +155,11 @@ the migration refuses and asks to stop the runners first
 then goes to v19 the same way, in the same open, with its own copy
 `nightqueue.db.pre-v19`: every project and org gets a key (below), and every roadmap
 item gets its number within its owner, in the order the items were created.
+A v19 database then goes to v20 in the same open, with its copy
+`nightqueue.db.pre-v20`: every reference to another row gets a foreign key, and a
+row pointing at a row that does not exist refuses the migration, naming the row,
+with nothing written - checked before the first pending step, so an older home
+stays at its version too; `nightqueue doctor` reports such rows.
 `nightqueue run dir --project <name> --slug <slug>` prints the directory of a
 run, so nothing has to build the path from a project name.
 

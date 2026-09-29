@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { openDb } from "../../src/memory/db.mjs";
 import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { getRoadmapItem, getRoadmapItemDetail, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
@@ -317,6 +318,21 @@ test("inside a job decision_save stamps job_id, refuses supersedes, and refuses 
   assert.equal(superseding.isError, true);
   assert.ok(textOf(superseding).includes(`inside J-${job.id} \`supersedes\` is refused`), textOf(superseding));
   assert.equal(getDecision(first.id, env).status, "proposed");
+});
+
+test("inside a job missing from this database decision_save is refused naming the job, and nothing is saved", async (t) => {
+  const env = makeDecisionHome(t, "mcp-decisions-missing-job");
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "999" });
+
+  const refused = await client.callTool({ name: "decision_save", arguments: { ...DECISION, status: "proposed" } });
+  assert.equal(refused.isError, true);
+  assert.ok(
+    textOf(refused).includes(
+      "job `999` is not in the queue of this database, so a decision saved from it cannot record its job of origin; save it outside the job",
+    ),
+    textOf(refused),
+  );
+  assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM decisions").get().n, 0);
 });
 
 test("inside a job roadmap_comment and roadmap_get by id refuse another project's item and sign the job's own comments", async (t) => {

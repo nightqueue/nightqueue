@@ -6,6 +6,7 @@ import * as index from "../memory/index.mjs";
 import * as jobs from "../memory/jobs.mjs";
 import * as lessons from "../memory/lessons.mjs";
 import * as memory from "../memory/memory.mjs";
+import { orphansOf } from "../memory/migration/v20.mjs";
 import * as registry from "../memory/registry.mjs";
 import * as roadmap from "../memory/roadmap.mjs";
 import * as roadmapBackfill from "../memory/roadmap-backfill.mjs";
@@ -273,17 +274,19 @@ function errorMessage(err) {
 
 // The raw numbers of a diagnosis, each field resolved on its own so one broken read never poisons the other and nothing ever throws.
 function readHealth(db) {
-  const errors = { schemaVersion: null, orphanJobs: null };
-  const health = { schemaVersion: null, orphanJobs: null, errors };
-  try {
-    health.schemaVersion = schemaVersionOn(db());
-  } catch (err) {
-    errors.schemaVersion = errorMessage(err);
-  }
-  try {
-    health.orphanJobs = jobs.countOrphanJobs(db());
-  } catch (err) {
-    errors.orphanJobs = errorMessage(err);
+  const errors = { schemaVersion: null, orphanJobs: null, danglingReferences: null };
+  const health = { schemaVersion: null, orphanJobs: null, danglingReferences: null, errors };
+  const readers = {
+    schemaVersion: () => schemaVersionOn(db()),
+    orphanJobs: () => jobs.countOrphanJobs(db()),
+    danglingReferences: () => orphansOf(db()).length,
+  };
+  for (const [field, read] of Object.entries(readers)) {
+    try {
+      health[field] = read();
+    } catch (err) {
+      errors[field] = errorMessage(err);
+    }
   }
   return health;
 }

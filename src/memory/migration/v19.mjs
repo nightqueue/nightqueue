@@ -8,13 +8,14 @@ import {
   ROADMAP_NUMBER_INDEXES,
   orgsDdl,
   projectsDdl,
-  roadmapItemsDdl,
 } from "../ddl.mjs";
 import { suggestKeyUnbounded } from "../refs.mjs";
 import { foreignKeyViolations, rebuildTable, runOneShot, userVersion } from "./one-shot.mjs";
+import { roadmapItemsDdlV19 } from "./v19-shape.mjs";
 
 // The one-shot, version-gated migration of a v18 database to v19: every project and org gets a key, every roadmap item a
-// per-owner number. Nothing is written unless the whole of it commits, and a byte copy stays beside it as `nightqueue.db.pre-v19`.
+// per-owner number, built in the frozen v19 shape. Nothing is written unless the whole of it commits, and a byte copy stays
+// beside it as `nightqueue.db.pre-v19`.
 
 export const V19 = 19;
 
@@ -105,7 +106,7 @@ function migrateInside(db, env, { hooks, progress }) {
   for (const [table, ddl, projection] of [
     ["orgs", orgsDdl, keyedCopy("orgs")],
     ["projects", projectsDdl, keyedCopy("projects")],
-    ["roadmap_items", roadmapItemsDdl, numberedItems],
+    ["roadmap_items", roadmapItemsDdlV19, numberedItems],
   ]) {
     progress.step = table;
     rebuildTable(db, { table, ddl, suffix: "v19", projection });

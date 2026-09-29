@@ -7,23 +7,25 @@ import {
   FTS_MIRRORS,
   INDEXES,
   OWNER_CHECK,
-  ROADMAP_COMMENT_GUARDS,
   ROADMAP_FTS,
-  decisionsDdl,
   jobsDdl,
   lessonsDdl,
   memoryDdl,
-  pipelineRunsDdl,
   projectIndexDdl,
   projectLibsDdl,
-  roadmapCommentsDdl,
-  roadmapItemProjectsDdl,
 } from "../ddl.mjs";
 import { importLegacyRegistry, stripLegacyConfig } from "./legacy-config.mjs";
 import { bringToV17 } from "./legacy.mjs";
 import { foreignKeyViolations, hasTable, rebuildTable, runOneShot, userVersion } from "./one-shot.mjs";
 import { moveRunsToIds } from "./runs-by-id.mjs";
 import { REGISTRY_V18, roadmapItemsDdlV18 } from "./v18-shape.mjs";
+import {
+  ROADMAP_COMMENT_GUARDS_V19,
+  decisionsDdlV19,
+  pipelineRunsDdlV19,
+  roadmapCommentsDdlV19,
+  roadmapItemProjectsDdlV19,
+} from "./v19-shape.mjs";
 
 export { hasLegacyRegistry, importLegacyRegistry, readV17Registry } from "./legacy-config.mjs";
 export { MigrationRefused } from "./one-shot.mjs";
@@ -39,12 +41,12 @@ export const REBUILT_TABLES = Object.freeze([
   { table: "memory", ddl: memoryDdl },
   { table: "project_index", ddl: projectIndexDdl },
   { table: "project_libs", ddl: projectLibsDdl },
-  { table: "pipeline_runs", ddl: pipelineRunsDdl },
+  { table: "pipeline_runs", ddl: pipelineRunsDdlV19 },
   { table: "jobs", ddl: jobsDdl },
-  { table: "decisions", ddl: decisionsDdl },
+  { table: "decisions", ddl: decisionsDdlV19 },
   { table: "roadmap_items", ddl: roadmapItemsDdlV18 },
-  { table: "roadmap_item_projects", ddl: roadmapItemProjectsDdl },
-  { table: "roadmap_comments", ddl: roadmapCommentsDdl },
+  { table: "roadmap_item_projects", ddl: roadmapItemProjectsDdlV19 },
+  { table: "roadmap_comments", ddl: roadmapCommentsDdlV19 },
 ]);
 
 // Where the database stands: `current` at v18 or later, `legacy` below it with data tables, `fresh` with none.
@@ -119,7 +121,7 @@ function refuseUnmappable(db, table, source) {
 // Creates every index, trigger and lexical mirror of the v18 schema, re-indexes the mirrors and stamps v18.
 function finishSchema(db, violationsBefore) {
   db.exec(INDEXES);
-  db.exec(ROADMAP_COMMENT_GUARDS);
+  db.exec(ROADMAP_COMMENT_GUARDS_V19);
   db.exec(FTS);
   db.exec(ROADMAP_FTS);
   for (const mirror of FTS_MIRRORS) db.exec(`INSERT INTO ${mirror}(${mirror}) VALUES('rebuild')`);

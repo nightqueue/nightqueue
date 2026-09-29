@@ -4,18 +4,20 @@ import { mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
-import { dbPath } from "../../src/config/paths.mjs";
 import { openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { makeHostEnv } from "../../test-support/host.mjs";
 import { makeDir } from "../../test-support/memory.mjs";
-import { buildV18Home } from "../../test-support/v18-home.mjs";
+import { buildV19Home } from "../../test-support/v19-home.mjs";
 
-// doctor on an un-migrated v18 home must name the pending migration, never a raw SQL error, and must not migrate.
-test("doctor on a v18 home names the pending v19 migration and does not migrate", async (t) => {
-  const host = makeHostEnv(t, "qa-doctor-v18");
-  const checkout = join(makeDir(t, "qa-doctor-v18-checkout"), "nightqueue");
+// A v19 home with a dangling job reference will REFUSE the v20 migration; doctor must not promise a clean migration.
+test("doctor on a v19 home with an orphan job_id does not promise a clean migration", async (t) => {
+  const host = makeHostEnv(t, "qa-doctor-v19-orphan");
+  const checkout = join(makeDir(t, "qa-doctor-v19-orphan-checkout"), "nightqueue");
   mkdirSync(join(checkout, ".git"), { recursive: true });
-  buildV18Home(host.env, { checkout: realpathSync(checkout) });
+  buildV19Home(host.env, {
+    checkout: realpathSync(checkout),
+    extra: (db) => db.prepare("UPDATE roadmap_items SET job_id = 999 WHERE id = 3").run(),
+  });
 
   const out = [];
   const ctx = {
@@ -29,15 +31,13 @@ test("doctor on a v18 home names the pending v19 migration and does not migrate"
   const report = JSON.parse(out[0]);
   const projects = report.checks.find((check) => check.name === "projects");
   assert.ok(projects, "no projects check");
-  assert.doesNotMatch(projects.detail, /no such column/, `doctor leaked a SQL error: ${projects.detail}`);
-  assert.match(projects.detail, /v18/);
-  assert.match(projects.detail, /v20/);
 
   const db = openDbReadOnly(host.env);
   try {
-    assert.equal(schemaVersionOn(db), 18, "doctor must not migrate");
+    assert.equal(schemaVersionOn(db), 19, "doctor must not migrate");
   } finally {
     db.close();
   }
-  assert.ok(dbPath(host.env));
+
+  assert.match(projects.detail, /dangling|orphan|refus|reference/i, `doctor promises a clean migration on a home that will refuse: ${projects.detail}`);
 });

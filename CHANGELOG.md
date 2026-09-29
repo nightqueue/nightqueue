@@ -4,6 +4,30 @@ Every notable change of this project is recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- **Every reference to another row is enforced (schema v20).** The database migrates once to
+  v20, on the first command that opens it and in the same open as the v18 and v19 steps when
+  they are pending, leaving a copy `nightqueue.db.pre-v20` beside it. The rules: a comment and a
+  per-project row go with their item (cascade); the job of an item, a per-project row, a
+  decision or a pipeline run, and the decision an item links, are cleared when that row is
+  deleted (set null); a decision named by another one's `superseded_by` cannot be deleted
+  (restrict). A home with a row pointing at a row that does not exist refuses to migrate with
+  one line naming each such row, its column and the missing id, and changes nothing - not even
+  the copy, nor the v18/v19 steps of an older home - and `nightqueue doctor` reports those rows
+  instead of promising the migration. A column v20 does not know refuses the migration naming
+  it instead of being dropped. Deleting a roadmap item now removes its comments: they stay append-only and the
+  guard still refuses to edit or delete one while its item exists. Inside a job that is not in
+  the queue of the database being written, `decision_save` and `nightqueue decision save` are
+  refused instead of saving a decision whose job of origin does not exist.
+
+### Added
+
+- A schema test fails on any `*_id` or `superseded_by` column without a foreign key and an
+  explicit `ON DELETE` rule, unless an exception entry gives the reason (contributor-facing).
+
 ## 0.5.0 - 2026-09-29
 
 ### Breaking
