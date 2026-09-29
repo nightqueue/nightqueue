@@ -89,7 +89,7 @@ commands:
   project list [--json]                     list projects, their key, their org and whether the path still exists
   project rename <old> <new>                rename a project (one row: its jobs, decisions and memory follow)
   project key <name> <KEY>                  change a project's key; the old key keeps resolving
-  project remove <name>                     unregister a project that owns no rows
+  project remove <name> [--purge [--yes]]   unregister a project; --purge also deletes every row it owns (asks first)
   project move <name> [<org>] [--path <p>]  move a project to another org and/or give it a new checkout
   connection add <name> --type <type>       store a secret read from stdin and bind it to a free org slot
   connection bind <name> --org <name>       bind (or rebind) a stored connection to an org slot

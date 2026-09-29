@@ -124,7 +124,7 @@ test("a project or an org that still owns rows is refused a removal by the forei
 
   const removed = runCli(env, ["project", "remove", "alpha"]);
   assert.notEqual(removed.status, 0);
-  assert.match(removed.stderr, /cannot remove project `alpha`: it still owns 1 jobs, 1 decisions; nothing was removed/);
+  assert.match(removed.stderr, /cannot remove project `alpha`: it still owns 1 jobs, 1 decisions; use --purge .*nothing was removed/);
   makeProject(t, env, "empty");
   assert.equal(runCli(env, ["project", "remove", "empty"]).status, 0);
   assert.equal(registry.projectByName(openDb(env), "empty"), null);
