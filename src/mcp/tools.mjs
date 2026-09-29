@@ -73,9 +73,11 @@ import {
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
 import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons } from "./phase-context.mjs";
 import { readVersion } from "../cli/version.mjs";
+import { newContractState, STALE_CONTRACT_ADVISORY, StaleContractError, TOOL_CONTRACT, upgradeOldShapes, withContract } from "./tool-contract.mjs";
 
 const SERVER_NAME = "nightqueue";
 const SERVER_INSTRUCTIONS = [
+  `tool contract ${TOOL_CONTRACT}: every answer carries \`contract\`; a tool refused with "your client has the tool definitions of an older nightqueue" means this session cached old definitions - start a new session or restart the MCP client.`,
   "nightqueue is a backlog of unattended coding jobs, not a synchronous executor: `queue_add` records work, it never runs it.",
   "Queue every task or plan the moment it comes up - one job is one self-contained deliverable, and a large plan is ONE job with numbered stages written in the prompt, never several jobs that depend on each other.",
   "Do not start jobs as they are queued: the whole batch starts with `queue_run` without `job_id`, when the user is about to step away.",
@@ -546,12 +548,14 @@ function validateArgs(name, inputSchema, args) {
 }
 
 // Wraps a handler so a business failure comes back as a clear message instead of a raw exception.
-function guard(name, handler) {
+function guard(name, handler, session) {
   return async (args) => {
     try {
-      return asText(await handler(args ?? {}));
+      const upgraded = await upgradeOldShapes(name, args ?? {}, session);
+      return asText(withContract(await handler(upgraded.args), upgraded.deprecated));
     } catch (err) {
-      return { content: [{ type: "text", text: `${name}: ${err?.message ?? String(err)}` }], isError: true };
+      const message = err instanceof StaleContractError ? err.message : `${name}: ${err?.message ?? String(err)}`;
+      return { content: [{ type: "text", text: message }], isError: true };
     }
   };
 }
@@ -610,7 +614,7 @@ function statusJobAsked(args) {
 }
 
 // The answer of `queue_status` for the tail of the queue, mapped from the one queue view every surface renders.
-async function queueStatusAnswer(args, { store, warning, env }) {
+async function queueStatusAnswer(args, { store, warning, env, state }) {
   const asked = statusJobAsked(args);
   if (asked.jobId !== undefined) return await jobStatusAnswer(asked.jobId, { store, warning });
   if (asked.prUrl !== undefined) return await jobStatusAnswer(await jobIdOfPrUrl(store, asked.prUrl), { store, warning });
@@ -620,7 +624,7 @@ async function queueStatusAnswer(args, { store, warning, env }) {
   if (view.registryError !== null) throw unreadableRegistry(view.registryError, env);
   const { runners, advisories, jobs, counts, suggestions, closes, activeJobs, sections } = view;
   const stale = staleRuntimeHint(env);
-  const advisoriesWithStale = stale ? [...advisories, stale] : advisories;
+  const advisoriesWithStale = [...advisories, ...(stale ? [stale] : []), ...(state.sawOldShape ? [STALE_CONTRACT_ADVISORY] : [])];
   return {
     runner: runners[0] ?? STOPPED_RUNNER,
     runners,
@@ -664,7 +668,7 @@ async function queueCancelAnswer(args, env) {
 }
 
 // The twenty-eight tools of the plugin contract, with the parameter names the plugin actually sends.
-function toolDefinitions(env) {
+function toolDefinitions(env, state) {
   return [
     {
       name: "lesson_recall",
@@ -957,7 +961,7 @@ function toolDefinitions(env) {
       handler: async (args) => {
         await ensureStoreExists(env);
         const warning = lastMaintenance(env)?.warning ?? null;
-        const answer = await withReadOnlyStore(env, (store) => queueStatusAnswer(args, { store, warning, env }));
+        const answer = await withReadOnlyStore(env, (store) => queueStatusAnswer(args, { store, warning, env, state }));
         void serverPrStates.refresh(answeredPrUrls(answer), env);
         return answer;
       },
@@ -1409,11 +1413,16 @@ function toolHandler(tool, env) {
 
 // Builds the MCP server with the twenty-eight tools of the plugin contract.
 export function createServer(env = process.env) {
-  const server = new McpServer({ name: SERVER_NAME, version: readVersion() }, { instructions: SERVER_INSTRUCTIONS });
+  const server = new McpServer(
+    { name: SERVER_NAME, title: `nightqueue (tool contract ${TOOL_CONTRACT})`, version: readVersion() },
+    { instructions: SERVER_INSTRUCTIONS },
+  );
+  const state = newContractState();
+  const session = { env, state };
   const schemas = new Map();
-  for (const tool of toolDefinitions(env)) {
+  for (const tool of toolDefinitions(env, state)) {
     schemas.set(tool.name, tool.config.inputSchema);
-    server.registerTool(tool.name, tool.config, guard(tool.name, toolHandler(tool, env)));
+    server.registerTool(tool.name, tool.config, guard(tool.name, toolHandler(tool, env), session));
   }
   // The SDK validates the call before the handler and refuses with one issue; this refusal carries every issue, the whole contract and what was received, which is what lets an agent fix the next call instead of repeating the same payload.
   server.validateToolInput = async (tool, args, toolName) => validateArgs(toolName, schemas.get(toolName) ?? tool.inputSchema, args);

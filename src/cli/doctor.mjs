@@ -22,6 +22,7 @@ import { OPERATOR_AGENT, OPERATOR_MODE_AGENT, operatorAgentPath, probeOperatorLa
 import { marketplaceIsCurrent, pluginRef, readInstalledPlugin, readKnownMarketplace } from "../host/plugin.mjs";
 import { isOwnShim, legacyShimState, packageVersion, registrySpec, runtimeVersion, shimState } from "../host/runtime.mjs";
 import { hookStatus, readHostSettings } from "../host/settings.mjs";
+import { TOOL_CONTRACT } from "../mcp/tool-contract.mjs";
 import { PATH_MARK, binDirInPath, rcFilePath, shadowingDir } from "../host/shell.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
 import { HOST_COMMANDS_SAMPLE_SIZE } from "../memory/jobs.mjs";
@@ -198,6 +199,11 @@ function checkRuntime(ctx) {
     return check("runtime", "warn", detail, "run `nightqueue update`");
   }
   return check("runtime", "ok", `v${installed} at ${location}`);
+}
+
+// Shows the tool contract this server publishes, the number a client's cached tool definitions are compared with.
+function checkToolContract() {
+  return check("tool contract", "ok", `contract ${TOOL_CONTRACT}; a client that cached older tool definitions must be restarted`);
 }
 
 // Hint for a command name that is not on disk: only an installation that already has the canonical shim can have turned the shortcuts off.
@@ -853,6 +859,7 @@ async function collect(ctx, values) {
     checkConfig(ctx),
     checkSecrets(ctx),
     checkRuntime(ctx),
+    checkToolContract(),
     ...checkShims(ctx),
     ...checkLegacyShim(ctx),
     checkPath(ctx),

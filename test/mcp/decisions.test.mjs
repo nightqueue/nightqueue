@@ -101,7 +101,7 @@ test("a decision saved through the server is numbered, listed, updated and recal
   const client = await connect(t, env);
 
   const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, status: "accepted" } }));
-  assert.deepEqual(saved, { ok: true, id: 1, number: 1, ref: "D-1", scope: "project", owner: "alpha" });
+  assert.deepEqual(saved, { ok: true, id: 1, number: 1, ref: "D-1", scope: "project", owner: "alpha", contract: 2 });
   const second = payloadOf(
     await client.callTool({
       name: "decision_save",
@@ -290,7 +290,7 @@ test("an overlapping decision_save answers needs_review, writes nothing, and sav
   assert.equal(getDecision(2, env), null, "a refused save wrote a row");
 
   const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...overlapping, supersedes: [1] } }));
-  assert.deepEqual(saved, { ok: true, id: 2, number: 2, ref: "D-2", scope: "project", owner: "alpha", superseded: [1] });
+  assert.deepEqual(saved, { ok: true, id: 2, number: 2, ref: "D-2", scope: "project", owner: "alpha", superseded: [1], contract: 2 });
   assert.equal(getDecision(1, env).status, "superseded");
   assert.equal(getDecision(1, env).superseded_by, 2);
 });
