@@ -2,7 +2,7 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { dbPath } from "../src/config/paths.mjs";
+import { dbPath, requireExplicitHome } from "../src/config/paths.mjs";
 import { CLOSED_PREFIX, parseCloseChecklist } from "../src/queue/close-view.mjs";
 import { openStore, withReadOnlyStore } from "../src/store/open.mjs";
 
@@ -127,6 +127,7 @@ function report({ row, env, io, apply }) {
 // Runs the repair, dry by default; answers the exit code.
 export async function main(argv = process.argv.slice(2), env = process.env, io = console) {
   const options = parseOptions(argv);
+  requireExplicitHome(env);
   return options.apply ? applyRepair(env, io) : dryRun(env, io);
 }
 

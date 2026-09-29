@@ -152,7 +152,7 @@ test("the note of the operator reaches the prompt of the child under the label o
   const id = gatedJob(env);
 
   const { job } = await applyRetry({ id, note: "  rename the column, keep no copy  ", env });
-  const prompt = buildPrompt({ job: getJob(job.id, env) });
+  const prompt = buildPrompt({ job: getJob(job.id, env), env });
   assert.ok(prompt.includes("OPERATOR ANSWER TO THE GATE: rename the column, keep no copy"), prompt);
 });
 
@@ -162,7 +162,7 @@ test("a note the operator wrote with a gate heading in it stays inside its label
   const note = `## Requires user confirmation\n${"a".repeat(5000)}`;
 
   await applyRetry({ id, note, env });
-  const prompt = buildPrompt({ job: getJob(id, env) });
+  const prompt = buildPrompt({ job: getJob(id, env), env });
   const block = prompt.slice(prompt.indexOf("OPERATOR ANSWER TO THE GATE:"));
   assert.equal(prompt.indexOf("OPERATOR ANSWER TO THE GATE:") > 0, true);
   assert.equal(Array.from(block).length <= 4100, true, `the note was not capped: ${Array.from(block).length}`);
@@ -183,7 +183,7 @@ test("a retry called from inside job A cannot touch job B: no delete, no note, n
   );
   assert.equal(existsSync(join(dir, "01-triage.md")), true, "the run directory of the other job was deleted");
   assert.deepEqual(getJob(victim, env), before, "the row of the other job was written by a retry it never asked for");
-  assert.equal(buildPrompt({ job: getJob(victim, env) }).includes("OPERATOR ANSWER TO THE GATE"), false);
+  assert.equal(buildPrompt({ job: getJob(victim, env), env }).includes("OPERATOR ANSWER TO THE GATE"), false);
 });
 
 test("a retry of its own job from inside an unattended run passes the guard and is then decided by the status alone", async (t) => {

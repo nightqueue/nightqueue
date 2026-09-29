@@ -205,7 +205,7 @@ function operatorState({ phases = ["triage"], resumeCount = 0, ...extra } = {}) 
 function resumePrompt(recorded) {
   const job = { id: 7, project: "alpha", project_id: ALPHA_ID, slug: "fix-the-worker", prompt: "p" };
   const handoff = resumeHandoff({ job, resume: decideResume({ state: recorded }), state: recorded, env: { NIGHTQUEUE_HOME: "/tmp/ns" } });
-  return buildPrompt({ job, handoff });
+  return buildPrompt({ job, handoff, env: { NIGHTQUEUE_HOME: "/tmp/ns" } });
 }
 
 test("an operator run with a triage at evidence level 3 resumes at explore, with nothing to re-run", () => {

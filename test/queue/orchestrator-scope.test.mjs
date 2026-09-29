@@ -260,7 +260,7 @@ test("only the calling session's own spill of a large tool result is readable, n
   const project = join(config, "projects", "-Users-me-repo");
   const session = join(project, "0b6f3c1e-session");
   mkdirSync(join(session, "tool-results"), { recursive: true });
-  const env = { [JOB_HOME_ENV]: join(base, "home"), HOME: base, CLAUDE_CONFIG_DIR: config };
+  const env = { [JOB_HOME_ENV]: join(base, "home"), NIGHTQUEUE_HOME: join(base, "home"), HOME: base, CLAUDE_CONFIG_DIR: config };
   const roots = orchestratorRoots(env, [{ transcriptPath: join(project, "0b6f3c1e-session.jsonl"), sessionId: "0b6f3c1e-session" }]);
   assert.equal(insideRoots(join(session, "tool-results", "toolu_01abc.txt"), roots), true);
   assert.equal(insideRoots(join(session, "tool-results"), roots), true);
