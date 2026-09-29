@@ -16,7 +16,7 @@ nightqueue queue add "fix the flaky worker" --yes              # register the re
 nightqueue queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
 nightqueue queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightqueue queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
-nightqueue queue status --blocked                              # only the pending jobs a preflight block is holding back
+nightqueue queue status --blocked                              # only the gated jobs a preflight block stopped
 nightqueue queue status J-7 [--json]                           # one job (J-<id>, the plain id, or its PR URL), never with its prompt
 nightqueue queue run [--job 7] [--max 2] [--dry]               # start the runner detached; --max 2 exits after two jobs; --dry only reports
 nightqueue queue run --watch [30]                              # start a watcher, one pass every N seconds
@@ -26,7 +26,7 @@ nightqueue queue run --foreground [--job 7]                    # run it in this 
 nightqueue queue log 7 [--follow] [--raw] [--all]              # the narrated stream of the job
 nightqueue queue session 7 [--print]                           # resume the claude session of the job's last attempt
 nightqueue queue cancel 7 --reason "not needed"                # cancel a pending, gated, orphaned, done or failed job
-nightqueue queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue
+nightqueue queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue (a preflight gate needs no --note)
 nightqueue queue repair 7 [--json]                             # re-classify a gated or failed job from its own log
 nightqueue queue close 7 [--force] [--foreground] [--json]      # merge a done job's pull request and close the job, detached
 nightqueue queue close --merged [--json]                         # close every done job whose pull request is already merged
@@ -101,13 +101,13 @@ the child it is the worker. A start that cannot spawn exits `1` with the reason 
 never falls back to running the job in the foreground behind your back.
 
 **`nightqueue queue run` with no other option drains the queue**: the child runs
-cycle after cycle until nothing is pending, waiting 15 s between passes while the
-pending jobs are held back by a preflight block or the ceiling the operator set in
-`queue.maxConcurrent`, and exits by itself when the queue is empty. `--max <n>` is a budget
+cycle after cycle until nothing is pending, waiting 15 s between passes only while the
+pending jobs are held back by the ceiling the operator set in `queue.maxConcurrent` or by
+a rate limit, and exits by itself when the queue is empty. `--max <n>` is a budget
 for the run: the runner processes at most n jobs that reach the agent and exits, printing
-`queue: stopped - the --max budget of this run is spent`. A job the preflight releases (a
-dirty checkout, a missing `claude` binary) spends none of it, so the drain keeps waiting on
-that job with its budget intact. The budget applies to `--watch` and to a single foreground
+`queue: stopped - the --max budget of this run is spent`. A job the preflight gates (a
+dirty checkout, a missing `claude` binary) spends none of it: the job stops at a gate and
+the same pass moves on to the next pending job with the budget intact. The budget applies to `--watch` and to a single foreground
 cycle too; without it the drain runs until nothing is pending. The command that starts it registers it in
 `$NIGHTQUEUE_HOME/runners/<pid>.json` with `mode: "drain"` for as long as it lives, so
 `queue status` shows `runner: running (pid <pid>, drain, runtime <version>, since <iso>)`
@@ -226,7 +226,7 @@ the line never appears. The second appears once per repository that two or more 
 live lease are working at the same time, in project name order:
 
 ```
-N runners on `<project>` — parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output
+N runners on `<project>` — parallel jobs on one repository fight over the checkout; a job the preflight blocks waits at a gate for queue retry
 ```
 
 When both apply, the window line comes first. `queue status` prints them right
@@ -275,9 +275,9 @@ the columns of the cockpit: `ID STATUS DURATION TOKENS PROJECT SLUG/LAST PR`.
 reads `✓ done · closing`, and a closed one `■ closed` alone. `DURATION` is how long a
 running job has been up (from its own `started_at`) or how long a finished one
 took; `TOKENS` is what it spent so far (`374k`, `1.2M`). `SLUG/LAST` is the last
-thing the orchestrator said in its log while the job runs (`» ...`), the first
-line of the notice of a `gate` or `failed` job, `⛔ <code>: <message>` for a
-`pending` job a preflight block is holding back, and the slug otherwise; `PR` is
+thing the orchestrator said in its log while the job runs (`» ...`), `⛔ <code>: <message>`
+for a `gate` job a preflight block stopped, the first line of the notice of any other
+`gate` or `failed` job, and the slug otherwise; `PR` is
 the URL of the pull request, bare, so the terminal makes it clickable on its own. Only running jobs are read from disk, and only the tail of their log, so
 listing a job whose stream is already hundreds of kilobytes costs nothing; a job
 with no log yet and a log that cannot be read both show `-`, the table is always
@@ -421,10 +421,11 @@ failed preflight kept as history and `migrated.from: "failed"`. The merge line t
 pipeline appended to a notice, under its former name, is rewritten to `Closed: PR #<n> ...`
 only where the notice holds exactly the line its checklist recorded.
 
-A `pending` job the preflight refused to start also carries a reason, in its own
+A `gate` job the preflight refused to start also carries a reason, in its own
 `blocked_code` column - it answers a different question than `status`: not where
-the job is, but why it is not moving right now. See **What the runner requires
-of the checkout** below for what sets and clears it.
+the job is, but why the runner never started it, and it is what lets `queue retry`
+send that job back without a `--note`. See **What the runner requires of the
+checkout** below for what sets and clears it.
 
 **The pull request state is derived, never stored.** Every job with a GitHub pull
 request carries `pr_state`, read from `gh pr view <url> --json
@@ -494,9 +495,14 @@ refuses it as already finished, and `queue retry` still takes `failed`,
 `cancelled` and `gate` and nothing else. A gated job only moves with `--note`, and that note is
 the only thing that ever reaches the prompt of the run, in a block labelled
 `OPERATOR ANSWER TO THE GATE:` - a retry without `--note` clears whatever was in
-`operator_note`, so the label never lies about where the text came from. Each
+`operator_note`, so the label never lies about where the text came from. The one
+exception is a gate the preflight wrote (its `blocked_code` is set): there is no
+question to answer, only a cause to fix, so `queue retry J-n` with no `--note` sends it
+back, clears `blocked_code` and does not check the cause itself - the next claim runs the
+preflight again and gates the job again if the cause is still there. Each
 retry widens the allowance of attempts by one, capped at 10, and never rewrites
-the attempts already spent.
+the attempts already spent; a retry of a preflight gate widens nothing, since the
+preflight already gave that attempt back.
 
 Without `--fresh` the retry keeps slug, branch, session and run directory, and
 the pipeline resumes from the last completed phase. The ceiling of those resumes
@@ -527,13 +533,25 @@ by nothing but `pending`: the only limits are the atomic claim of one job and, w
 `queue.maxConcurrent`.
 Each job runs in its own git worktree, and merge conflicts between the pull requests of two
 jobs of one repository are the operator's to resolve. **The caveat is the preflight, and it
-stays:** a job only starts from a clean canonical checkout. In a project that does NOT ignore
-the directory the pipeline creates its worktree in (this repository ignores
-`.claude/worktrees/`), the worktree of the first job makes the checkout dirty, so the second
-same-project job is blocked with `dirty-checkout`, released with its attempt given back and
-retried by the drain every 15 s until the first job finishes - degraded and visible in
-`queue status`, never lost and never corrupt. Two same-project jobs whose slugs collide on
-one branch name fail the same safe way, one job at a time. The ``2 runners on `<project>` ``
+stays:** a job only starts from a clean canonical checkout. The pipeline creates its worktree
+under `.claude/worktrees/` of that checkout and Claude Code leaves its per-machine
+`.claude/settings.local.json` there, so before every job the preflight makes the checkout's
+local `.git/info/exclude` (the common git dir, shared by every linked worktree, never a
+tracked file) ignore exactly those two paths: it asks `git check-ignore -q` for
+`.claude/worktrees/x` and for `.claude/settings.local.json`, and appends
+`/.claude/worktrees/` and `/.claude/settings.local.json`, each only when git does not
+already ignore its path and never twice. nightqueue never ignores a project's `.claude/` as
+a whole, because a project may version its own `.claude/commands` and `run commit` must
+still be able to stage a new file there. A write that fails (a read-only `.git`) never
+blocks the job: the dirty check reads `git status --porcelain -z` (an untracked directory
+stays one entry, however large), expands an untracked `.claude/` directory git collapsed
+with `git status --porcelain -z --untracked-files=all -- .claude/`, and drops only the untracked entries under `.claude/worktrees/` or equal to
+`.claude/settings.local.json`, so the second same-project job is not blocked by the first
+one's worktree. Any other untracked path under `.claude/`, and any tracked `.claude/` file
+that changed, still blocks with `dirty-checkout`. `nightqueue doctor` reports the same
+coverage per registered project, and `nightqueue doctor --fix` writes the same two lines.
+Two same-project jobs whose slugs collide on one branch name fail safely, one job at a
+time. The ``2 runners on `<project>` ``
 advisory line is what warns about it while it happens.
 
 **Worktrees.** A job's worktree lives as long as the job does. When a run ends `done`, the
@@ -769,21 +787,29 @@ session of its own. The default is `false`.
 **What the runner requires of the checkout.** Before spawning anything it
 checks, in this order: the job's project still has a registered checkout path, it exists
 and has a `.git`, the `claude` CLI resolves (`NIGHTQUEUE_CLAUDE_BIN`, then
-`PATH`), the checkout is clean (`git status --porcelain` empty) and it sits on
-the default branch. A block is not a failure: the job goes back to `pending`
-without spending an attempt and the reason is stored in `result` (the operator
-note is never touched), so a later run picks it up once the checkout is in
-shape. The block code also lands in its own `blocked_code` column - orthogonal
-to `status`, the same way `notice_md` sits beside a `gate` - which is what makes
-a blocked job visible: `queue status` breaks it out of the pending count
-(`pending=3 (1 blocked)`), shows `⛔ <code>: <message>` in `SLUG/LAST` and the
-detail view, and `--blocked` lists only the pending jobs a preflight block is
-holding back. **`gate` and `blocked` are not the same wait.** A gate needs the
-operator to answer it with `queue_retry`; a block needs the operator to fix the
-cause (clean the checkout, register the project, put `claude` back on the
-`PATH`) and the job goes back to `running` by itself on the drain's next pass -
-no retry, no operator call. The claim clears `blocked_code` the instant it
-picks the job back up.
+`PATH`), the checkout is clean (no `git status` entry beyond the untracked Claude Code
+paths of *Two jobs of the same project* above - the dirty-checkout message names the
+first three paths that are left) and it sits on the default branch. **A block is a
+`gate` on that job, not a failure**: the job moves from `running` to `gate` in one
+write, without spending an attempt; the reason is stored in `result` as `{ blocked:
+{ code, message } }` (the operator note is never touched) and as the notice
+(`<code>: <message>` and the retry that answers it), and the code lands in its own
+`blocked_code` column. A gated job is not `pending`, so no claim takes it again: the
+drain moves on to the next pending job in the same pass and never waits on it, and
+the runner prints one `J-n gated <code>` line for it. `queue status` breaks it out of
+the gate count (`gate=3 (1 blocked)`), shows `⛔ <code>: <message>` in `SLUG/LAST` and
+the `blocked` line of the detail view, closes with `N job(s) blocked (<codes>) - fix
+the cause, then: nightqueue queue retry J-<id>`, and `--blocked` lists only the gated
+jobs a preflight block stopped. **A preflight gate is answered without a note.** An
+agent's gate needs the operator's answer with `queue retry --note`; a preflight gate
+needs the operator to fix the cause (clean the checkout, register the project, put
+`claude` back on the `PATH`) and then `queue retry J-n` (the MCP `queue_retry` with
+no `note`), which clears `blocked_code` and puts the job back in the queue, keeping an
+`operator_note` an earlier `--note` left for the agent (an explicit note replaces it). A runner
+started before this behaviour was installed keeps releasing a blocked job to
+`pending` and waiting on it until it is restarted, so restart the runners after an
+update; a `pending` row an older runner left with a `blocked_code` is claimed like any
+other and gated on its next preflight if the cause is still there.
 
 **What it does NOT do in v1.** The runner never merges anything and never closes the
 cycle after the pull request on its own - that is `nightqueue queue close`, an operator

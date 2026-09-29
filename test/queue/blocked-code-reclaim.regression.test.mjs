@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addJob, getJob } from "../../src/memory/jobs.mjs";
+import { addJob, getJob, retryJob } from "../../src/memory/jobs.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { doneStream, PR_URL } from "../../test-support/streams.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 
-// A pending job the preflight blocks writes `blocked_code` and is left visibly stuck; once the cause is gone
-// (here, the checkout is clean again) the NEXT cycle of the drain claims it by itself, with no operator retry
-// and no `queue_retry` call. `blocked_code` must be cleared the instant the claim picks it back up, because a
-// job that starts running again must never still look blocked.
+// A job the preflight blocks stops at a gate carrying `blocked_code`, so no claim takes it again by itself; once the cause
+// is gone (here, the checkout is clean again) `queue retry` with no note sends it back and the next cycle runs it.
+// `blocked_code` is cleared by the retry, because a job that is pending again must never still look blocked.
 function fakeGit({ status = "" } = {}) {
   return ({ args }) => {
     if (args[0] === "status") return `${status}\n`;
@@ -19,16 +18,27 @@ function fakeGit({ status = "" } = {}) {
   };
 }
 
-test("a job blocked by a preflight failure is reclaimed by the next drain cycle alone, once the cause clears", async (t) => {
+test("a job gated by a preflight failure is not reclaimed until a noteless retry, then runs once the cause clears", async (t) => {
   const env = makeHome(t, "blocked-code-reclaim");
   makeProject(t, env, "alpha");
-  const planPath = useFakeClaude(env, makeDir(t, "blocked-code-reclaim-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
+  useFakeClaude(env, makeDir(t, "blocked-code-reclaim-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
 
   const blocked = await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit({ status: " M src/a.mjs" }) } });
-  assert.deepEqual(blocked.processed, [{ id, status: "blocked", code: "dirty-checkout" }]);
+  assert.deepEqual(blocked.processed, [{ id, status: "gated", code: "dirty-checkout" }]);
   const stuck = getJob(id, env);
-  assert.deepEqual({ status: stuck.status, blockedCode: stuck.blocked_code }, { status: "pending", blockedCode: "dirty-checkout" });
+  assert.deepEqual(
+    { status: stuck.status, blockedCode: stuck.blocked_code, attempts: stuck.attempts, note: stuck.operator_note },
+    { status: "gate", blockedCode: "dirty-checkout", attempts: 0, note: null },
+  );
+  assert.match(stuck.notice_md, /^dirty-checkout: /);
+  assert.equal(JSON.parse(stuck.result).blocked.code, "dirty-checkout");
+
+  const untouched = await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit() } });
+  assert.deepEqual({ processed: untouched.processed, reason: untouched.reason }, { processed: [], reason: "not-pending" });
+
+  const retried = retryJob(id, {}, env);
+  assert.deepEqual({ status: retried.status, blockedCode: retried.blocked_code, maxAttempts: retried.max_attempts }, { status: "pending", blockedCode: null, maxAttempts: stuck.max_attempts });
 
   const recovered = await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit() } });
   assert.deepEqual(recovered.processed, [{ id, status: "done", prUrl: PR_URL, attempts: 1 }]);

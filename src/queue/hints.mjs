@@ -43,7 +43,7 @@ function crowdedProjectLines(activeByProject) {
     .filter((entry) => Number.isInteger(entry?.count) && entry.count >= 2)
     .map(
       ({ project, count }) =>
-        `${count} runners on \`${project}\` — parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output`,
+        `${count} runners on \`${project}\` — parallel jobs on one repository fight over the checkout; a job the preflight blocks waits at a gate for queue retry`,
     );
 }
 

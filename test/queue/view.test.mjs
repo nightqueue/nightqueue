@@ -213,7 +213,7 @@ test("a store whose listing throws fails the jobs section with its first line, a
         throw new Error("disk I/O error\nat somewhere");
       },
       countsByStatus: async () => ({ pending: 0, running: 0, done: 0, gate: 0, failed: 0, cancelled: 0, closed: 0 }),
-      countPendingBlocked: async () => 0,
+      countBlockedGates: async () => 0,
       countActiveJobs: async () => 0,
       countActiveJobsByProject: async () => [],
     },

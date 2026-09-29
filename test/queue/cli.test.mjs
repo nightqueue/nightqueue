@@ -1049,23 +1049,32 @@ test("an unrecognized token is always an error, and never falls through to runni
   assert.equal(getJob(id, env).status, "pending", "a refused command still claimed a job");
 });
 
-test("queue status names a job the runner gave back, with the preflight code, and says the runner retries by itself", (t) => {
+test("queue status names a job the preflight gated, with its code, and says the retry that sends it back takes no note", (t) => {
   const env = makeCliHome(t, "cli-status-blocked");
   const id = enqueue(env, "fix the worker");
   const other = enqueue(env, "fix the parser");
+  const agentGate = enqueue(env, "fix the api");
   openDb(env)
-    .prepare("UPDATE jobs SET result = ?, blocked_code = ? WHERE id = ?")
-    .run(JSON.stringify({ blocked: { code: "dirty-checkout", message: "/repo has uncommitted changes" } }), "dirty-checkout", id);
+    .prepare("UPDATE jobs SET status = 'gate', finished_at = datetime('now'), result = ?, notice_md = ?, blocked_code = ? WHERE id = ?")
+    .run(JSON.stringify({ blocked: { code: "dirty-checkout", message: "/repo has uncommitted changes" } }), "dirty-checkout: /repo has uncommitted changes", "dirty-checkout", id);
+  openDb(env).prepare("UPDATE jobs SET status = 'gate', finished_at = datetime('now'), notice_md = 'Rename the column?' WHERE id = ?").run(agentGate);
   const table = runCli(env, ["queue", "status"]);
   assert.equal(table.status, 0, table.stderr);
-  assert.match(tableLine(table.stdout, id), /○ pending\s+-\s+-\s+alpha\s+⛔ dirty-checkout: \/repo has uncommitted changes/);
-  assert.match(table.stdout, /pending=2 \(1 blocked\)/, "the counts line did not break the blocked pending out of the total");
-  assert.match(table.stdout, /1 job blocked \(dirty-checkout\) - fix the cause, the runner retries by itself/);
+  assert.match(tableLine(table.stdout, id), /gate\s+.*alpha\s+⛔ dirty-checkout: \/repo has uncommitted changes/);
+  assert.match(table.stdout, /gate=2 \(1 blocked\)/, "the counts line did not break the blocked gates out of the total");
+  assert.match(table.stdout, new RegExp(`1 job blocked \\(dirty-checkout\\) - fix the cause, then: nightqueue queue retry J-${id}$`, "m"));
+
+  const detail = runCli(env, ["queue", "status", String(id)]);
+  assert.equal(detail.status, 0, detail.stderr);
+  assert.match(detail.stdout, new RegExp(`retry it with: nightqueue queue retry J-${id}$`, "m"), "a preflight gate asked for a note");
+  const agentDetail = runCli(env, ["queue", "status", String(agentGate)]);
+  assert.match(agentDetail.stdout, /retry it with: nightqueue queue retry J-\d+ --note "<your answer>"/, "an agent gate lost its --note hint");
 
   const blockedOnly = runCli(env, ["queue", "status", "--blocked"]);
   assert.equal(blockedOnly.status, 0, blockedOnly.stderr);
   assert.ok(tableLine(blockedOnly.stdout, id), "`--blocked` dropped the blocked job");
   assert.equal(tableLine(blockedOnly.stdout, other), "", "`--blocked` still listed a job that is not blocked");
+  assert.equal(tableLine(blockedOnly.stdout, agentGate), "", "`--blocked` listed a gate the agent wrote");
 });
 
 test("`--blocked` with no blocked job says so instead of claiming the queue itself is empty", (t) => {

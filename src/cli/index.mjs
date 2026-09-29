@@ -76,7 +76,7 @@ usage: nightqueue <command> [options]
 
 commands:
   setup [--from <dir>] [--remove]           install the runtime in the home and register the MCP server, hooks and plugin in the host
-  doctor [--json] [--check-updates]         check the host and the home, one line per check; exits 1 on any failure
+  doctor [--json] [--check-updates] [--fix] check the host and the home, one line per check; exits 1 on any failure
   init [path] [--key <KEY>] [--gh|--no-gh]  install the runtime and register the git repository at [path] (default: .) as a project
   open [project] [--resume <session>]       open the operator in a terminal: it investigates, plans and queues jobs, and never edits the code
   update [<version>] [--from] [--force]     reinstall the runtime at the newest version (or at <version>) and re-point the host at it

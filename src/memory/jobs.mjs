@@ -359,6 +359,28 @@ export function releaseJob(id, { worker, result, blockedCode } = {}, env = proce
   return changed.changes === 1;
 }
 
+// Stops a claimed job at a gate on a preflight block, giving the attempt back; `blocked_code` marks the gate a retry answers with no note.
+export function gatePreflightJob(id, { worker, code, message, noticeMd } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET status = 'gate',
+            finished_at = datetime('now'),
+            worker = NULL,
+            lease_until = NULL,
+            started_at = NULL,
+            not_before = NULL,
+            attempts = MAX(0, attempts - 1),
+            result = ?,
+            notice_md = ?,
+            blocked_code = ?
+      WHERE id = ? AND status = 'running' AND worker = ?`,
+  );
+  const blockCode = requireText("blocked_code", code);
+  const result = toJsonText({ blocked: { code: blockCode, message: optionalText(message) } });
+  const values = [result, requireText("notice_md", noticeMd), blockCode, requireId(id), requireText("worker", worker)];
+  return withWriteRetry(() => statement.run(...values)).changes === 1;
+}
+
 // Parks a claimed job on the instant a rate limit resets: it goes back to the queue without spending the attempt and is out of every claim until then.
 export function parkJob(id, { worker, notBefore, result } = {}, env = process.env) {
   const due = isoToSqlite(notBefore);
@@ -734,7 +756,8 @@ function retryRefusal(id, row, { note } = {}) {
 // Columns a `--fresh` retry gives up, so the next run starts from phase 0 with a worktree of its own.
 const RETRY_FRESH_COLUMNS = ", slug = NULL, branch = NULL, session_id = NULL, last_session_id = NULL, last_session_attempt = NULL";
 
-// Sends a gated, failed or cancelled job back to the queue; the decision is in the WHERE and a refusal writes nothing.
+// Sends a gated, failed or cancelled job back to the queue; a gate a preflight block wrote (`blocked_code` set) needs no note
+// and keeps its attempts and the operator note it had, since that attempt was already given back; the decision is in the WHERE and a refusal writes nothing.
 export function retryJob(id, { note, fresh } = {}, env = process.env) {
   const statement = openDb(env).prepare(
     `UPDATE jobs
@@ -745,9 +768,11 @@ export function retryJob(id, { note, fresh } = {}, env = process.env) {
             started_at = NULL,
             finished_at = NULL,
             not_before = NULL,
-            max_attempts = min(max_attempts + 1, ${MAX_ATTEMPTS_RANGE.max}),
-            operator_note = ?${fresh === true ? RETRY_FRESH_COLUMNS : ""}
-      WHERE id = ? AND (status IN ('failed', 'cancelled') OR (status = 'gate' AND ? IS NOT NULL))
+            max_attempts = CASE WHEN status = 'gate' AND blocked_code IS NOT NULL THEN max_attempts
+                                ELSE min(max_attempts + 1, ${MAX_ATTEMPTS_RANGE.max}) END,
+            blocked_code = NULL,
+            operator_note = COALESCE(?, CASE WHEN status = 'gate' AND blocked_code IS NOT NULL THEN operator_note END)${fresh === true ? RETRY_FRESH_COLUMNS : ""}
+      WHERE id = ? AND (status IN ('failed', 'cancelled') OR (status = 'gate' AND (? IS NOT NULL OR blocked_code IS NOT NULL)))
       RETURNING *`,
   );
   const jobId = requireId(id);
@@ -972,12 +997,12 @@ export function getJob(id, env = process.env, db = openDb(env)) {
   return withProjectFacts(db, db.prepare("SELECT * FROM jobs WHERE id = ?").get(requireId(id)) ?? null);
 }
 
-const BLOCKED_PENDING_PREDICATE = "status = 'pending' AND blocked_code IS NOT NULL";
+const BLOCKED_GATE_PREDICATE = "status = 'gate' AND blocked_code IS NOT NULL";
 
-// Returns the most recent jobs, newest first, or only the pending ones a preflight block is holding back with `blockedOnly`.
+// Returns the most recent jobs, newest first, or only the gated ones a preflight block stopped with `blockedOnly`.
 export function listJobs({ limit, blockedOnly } = {}, env = process.env, db = openDb(env)) {
   const clamped = optionalRangedInt("limit", limit, LIST_LIMIT_RANGE);
-  const where = blockedOnly === true ? `WHERE ${BLOCKED_PENDING_PREDICATE} ` : "";
+  const where = blockedOnly === true ? `WHERE ${BLOCKED_GATE_PREDICATE} ` : "";
   return db.prepare(`SELECT * FROM jobs ${where}ORDER BY id DESC LIMIT ?`).all(clamped).map((row) => withProjectFacts(db, row));
 }
 
@@ -1047,9 +1072,9 @@ export function recentOrchestratorCounts(env = process.env, db = openDb(env)) {
     .all(...TERMINAL_STATUSES);
 }
 
-// Counts the pending jobs a preflight block is holding back, the number the queue view shows next to `pending`.
-export function countPendingBlocked(env = process.env, db = openDb(env)) {
-  return db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE ${BLOCKED_PENDING_PREDICATE}`).get().n;
+// Counts the gated jobs a preflight block stopped, the number the queue view shows next to `gate`.
+export function countBlockedGates(env = process.env, db = openDb(env)) {
+  return db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE ${BLOCKED_GATE_PREDICATE}`).get().n;
 }
 
 // Counts the jobs of every status, including the statuses with no row at all.

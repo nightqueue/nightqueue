@@ -980,7 +980,7 @@ test("queue_run comes back at once with the log of the detached runner, inside t
 });
 
 const ALPHA_ADVISORY =
-  "2 runners on `alpha` — parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output";
+  "2 runners on `alpha` — parallel jobs on one repository fight over the checkout; a job the preflight blocks waits at a gate for queue retry";
 
 test("queue_run and queue_retry start nothing when the ceiling is full, and say what the job is waiting for", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-run-waiting");

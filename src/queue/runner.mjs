@@ -8,7 +8,7 @@ import { ghPrList } from "../host/gh.mjs";
 import { packageRoot, spawnRoot } from "../host/paths.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore, openStoreReadOnly } from "../store/open.mjs";
-import { acquire, bashTimeoutS, concurrencyCap, inheritUserEnvironment, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
+import { acquire, bashTimeoutS, concurrencyCap, gate, inheritUserEnvironment, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isTerminalRuntimeKill, isTransientFailure } from "./classify.mjs";
 import { recordedFiles } from "./file-list.mjs";
 import { preflight } from "./preflight.mjs";
@@ -715,8 +715,11 @@ async function runJob(claimed, ctx) {
   const { env, deps } = ctx;
   const check = preflight({ job: claimed, env, gitImpl: deps.gitImpl, existsImpl: deps.existsImpl, resolveBinImpl: deps.resolveBinImpl });
   if (!check.ok) {
-    await release(claimed, { blocked: { code: check.code, message: check.message } }, env, check.code);
-    return { id: claimed.id, status: "blocked", code: check.code };
+    if (!(await gate(claimed, check, env))) {
+      noteOwnershipLost(claimed, env);
+      return { id: claimed.id, status: "lost" };
+    }
+    return { id: claimed.id, status: "gated", code: check.code };
   }
   const openPrs = await openPrsForJob(claimed, { env, deps });
   const job = await withRunSlug(claimed, ctx);
@@ -855,9 +858,9 @@ async function windowClosedCheck(window, ctx) {
 // A runner works one job at a time; simultaneity comes from starting several runners, never from one.
 const RUNNER_POOL_SIZE = 1;
 
-// Counts the results that reached the agent; a job the preflight released refunded its attempt and spends no budget.
+// Counts the results that reached the agent; a job the preflight gated refunded its attempt and spends no budget.
 export function agentRuns(results) {
-  return results.filter((result) => result.status !== "blocked").length;
+  return results.filter((result) => result.status !== "gated").length;
 }
 
 // Tells whether this run already ran every job its --max budget allows; a run with no budget never spends it.
@@ -887,7 +890,6 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
   const processed = [];
   const pool = new Set();
   const seen = new Set();
-  const blocked = new Set();
   let reason = "empty-queue";
   let windowClosed = null;
   try {
@@ -937,9 +939,8 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
       if (seen.has(claimed.job.id)) {
         await release(claimed.job, null, env);
         await Promise.allSettled([...pool]);
-        // A job released by a preflight block (dirty checkout, missing binary) stays pending on purpose: the operator fixes the
-        // cause and the drain must be there to pick it up, so this pass ends as `blocked`, which the drain waits on.
-        reason = blocked.has(claimed.job.id) ? "blocked" : "already-tried";
+        // Only a job that ran and came back pending is claimed twice: a preflight block gates the job, which no claim takes.
+        reason = "already-tried";
         break;
       }
       seen.add(claimed.job.id);
@@ -947,7 +948,6 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
       const task = runJob(claimed.job, ctx)
         .catch((err) => ({ id: claimed.job.id, status: "error", error: err?.message ?? String(err) }))
         .then((result) => {
-          if (result.status === "blocked") blocked.add(result.id);
           processed.push(result);
           pool.delete(task);
         });
@@ -1024,10 +1024,10 @@ export const DRAIN_INTERVAL_S = 15;
 
 // Reasons of a cycle after which a drain has nothing left to do: the queue is empty, paused, the cycle was told to stop, the --max budget is spent, or the tree it runs from is gone.
 const DRAIN_DONE_REASONS = new Set(["empty-queue", "paused", "already-tried", "runtime-gone", "max-reached"]);
-// Reasons the drain keeps waiting on: the pending job is held back by something the operator, another runner or the provider will clear.
-const DRAIN_WAIT_REASONS = new Set(["blocked", "cap-reached", "rate-limited"]);
+// Reasons the drain keeps waiting on: the pending job is held back by something another runner or the provider will clear.
+const DRAIN_WAIT_REASONS = new Set(["cap-reached", "rate-limited"]);
 
-// Runs cycles until the queue has nothing pending or the --max budget is spent (a job the preflight releases spends none), waiting between passes while the pending jobs are held back by a preflight block or the concurrency cap - what "run the queue" means to an operator.
+// Runs cycles until the queue has nothing pending or the --max budget is spent (a job the preflight gates spends none), waiting between passes while the pending jobs are held back by the concurrency cap or a rate limit - what "run the queue" means to an operator.
 export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {
   const options = withDefaults(deps, env);
   options.keepAwakeImpl({ pid: process.pid, env });

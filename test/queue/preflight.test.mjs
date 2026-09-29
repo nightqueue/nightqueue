@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
-import { BLOCK_CODES, preflight } from "../../src/queue/preflight.mjs";
+import { BLOCK_CODES, blockingStatusPaths, preflight } from "../../src/queue/preflight.mjs";
 import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const JOB = { id: 1, project: "alpha", prompt: "fix the worker" };
@@ -45,7 +47,8 @@ test("a clean checkout on the default branch passes and hands the runner the dir
   assert.equal(result.branch, "trunk");
   assert.ok(result.cwd.length > 0);
   const verbs = git.calls.map((call) => call.args[0]);
-  assert.deepEqual(verbs, ["status", "rev-parse", "symbolic-ref"]);
+  assert.deepEqual(verbs, ["check-ignore", "status", "rev-parse", "symbolic-ref"]);
+  assert.equal(existsSync(join(result.cwd, "main", "info", "exclude")), false, "a fake git that cannot answer check-ignore must never lead to a write");
   for (const call of git.calls) {
     assert.equal(WRITING_GIT_VERBS.includes(call.args[0]), false, `the preflight ran a git command that writes: ${call.args.join(" ")}`);
   }
@@ -85,7 +88,43 @@ test("uncommitted changes in the canonical checkout block the job", (t) => {
   const env = makeQueue(t, "preflight-dirty");
   const result = check(env, { git: fakeGit({ status: " M src/queue/runner.mjs" }) });
   assert.deepEqual({ ok: result.ok, code: result.code }, { ok: false, code: BLOCK_CODES.DIRTY_CHECKOUT });
-  assert.match(result.message, /uncommitted changes/);
+  assert.match(result.message, /uncommitted changes \(src\/queue\/runner\.mjs\)/);
+});
+
+test("the porcelain parser drops only the untracked Claude Code local paths and keeps every other entry", () => {
+  const raw = [
+    "?? .claude/worktrees/fix+x/",
+    "?? .claude/settings.local.json",
+    "?? .claude/commands/x.md",
+    " M .claude/settings.json",
+    "R  new.mjs",
+    "old.mjs",
+    " M src/a.mjs",
+    "",
+  ].join("\0");
+  assert.deepEqual(blockingStatusPaths(raw), [".claude/commands/x.md", ".claude/settings.json", "new.mjs", "src/a.mjs"]);
+  assert.deepEqual(blockingStatusPaths("?? .claude/\0"), [".claude/"], "a collapsed `.claude/` entry is not one of the allowed paths");
+  assert.deepEqual(blockingStatusPaths(""), []);
+});
+
+test("the dirty-checkout message names the first three paths and counts the rest", (t) => {
+  const env = makeQueue(t, "preflight-dirty-many");
+  const status = ["?? a", "?? b", "?? c", "?? d", "?? e", ""].join("\0");
+  const result = check(env, { git: fakeGit({ status }) });
+  assert.match(result.message, /uncommitted changes \(a, b, c and 2 more\)/);
+});
+
+test("the ensure step runs before the dirty check and a throw of its own never blocks the job", (t) => {
+  const env = makeQueue(t, "preflight-ensure-throws");
+  const order = [];
+  const git = fakeGit();
+  const ensureExcludeImpl = ({ cwd }) => {
+    order.push(["ensure", cwd]);
+    throw new Error("disk on fire");
+  };
+  const result = preflight({ job: { ...JOB, project_id: projectIdOf(env, "alpha") }, env, gitImpl: git, existsImpl: () => true, resolveBinImpl: fakeBin(true), ensureExcludeImpl });
+  assert.equal(result.ok, true);
+  assert.deepEqual(order, [["ensure", result.cwd]]);
 });
 
 test("a checkout parked on another branch is blocked, naming the branch it should be on", (t) => {

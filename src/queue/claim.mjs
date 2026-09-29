@@ -93,10 +93,21 @@ export async function acquire({ jobId = null, cap, env = process.env } = {}) {
   return { job: null, reason: await refusalReason({ jobId, cap, env }) };
 }
 
-// Gives a claimed job back to the queue without spending the attempt, recording why it came back; `blockedCode` is the
-// preflight block code of a job the runner refused to spawn, and null clears whatever a prior attempt left there.
+// Gives a claimed job back to the queue without spending the attempt, recording why it came back; null `blockedCode` clears a stale one.
 export async function release(job, result, env = process.env, blockedCode = null) {
   return await openStore(env).jobs.releaseJob(job.id, { worker: job.worker, result, blockedCode });
+}
+
+// The notice of a job a preflight block stopped: the block first, then the retry that answers it.
+export function preflightNotice(job, check) {
+  const fix = `The runner did not start this job. Fix the cause, then send it back: nightqueue queue retry ${jobRef(job.id)} (no note needed)`;
+  return `${check.code}: ${check.message}\n${fix}`;
+}
+
+// Stops a claimed job at a gate on a preflight block without spending the attempt; false means this runner no longer owns it.
+export async function gate(job, check, env = process.env) {
+  const spec = { worker: job.worker, code: check.code, message: check.message, noticeMd: preflightNotice(job, check) };
+  return await openStore(env).jobs.gatePreflightJob(job.id, spec);
 }
 
 // Re-arms the lease of a job; false means this runner no longer owns it and must stop working on it.

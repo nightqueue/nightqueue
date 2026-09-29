@@ -546,22 +546,22 @@ function blockedMessage(job, code) {
   }
 }
 
-// The preflight block a pending job carries in its `blocked_code` column, or null: the reason the runner gave it back.
+// The preflight block a gated job carries in its `blocked_code` column, or null: the reason the runner did not start it.
 function blockedOf(job) {
-  if (job.status !== "pending" || !job.blocked_code) return null;
+  if (job.status !== "gate" || !job.blocked_code) return null;
   const code = String(job.blocked_code);
   return { code, message: blockedMessage(job, code) };
 }
 
-// What SLUG/LAST says about a job: what it is doing while it runs, why it stopped at the gate, why the runner gave it
-// back, which reset it waits for when a rate limit parked it, its slug otherwise.
+// What SLUG/LAST says about a job: what it is doing while it runs, why the preflight stopped it, why it stopped at the
+// gate, which reset it waits for when a rate limit parked it, its slug otherwise.
 function lastCell(job, env) {
   if (job.status === "running") return lastNarration(job.id, env);
   const close = closeLastCell(job);
   if (close) return close;
-  if (job.status === "gate" || job.status === "failed") return firstNoticeLine(job) ?? job.slug ?? "-";
   const blocked = blockedOf(job);
   if (blocked) return blocked.message ? `⛔ ${blocked.code}: ${blocked.message}` : `⛔ ${blocked.code}`;
+  if (job.status === "gate" || job.status === "failed") return firstNoticeLine(job) ?? job.slug ?? "-";
   return parkedJobLabel(job) ?? job.slug ?? "-";
 }
 
@@ -605,8 +605,14 @@ function formatTable(jobs, ctx) {
 function formatNotice(job) {
   if (!job.notice_md) return [];
   const body = String(job.notice_md).split("\n").map((line) => `  ${line}`);
-  const answer = job.status === "gate" ? [`retry it with: nightqueue queue retry ${jobRef(job.id)} --note "<your answer>"`] : [];
-  return ["notice", ...body, ...answer];
+  return ["notice", ...body, ...gateAnswer(job)];
+}
+
+// The way to answer a gated job: a preflight block needs only its cause fixed, any other gate needs the operator's answer.
+function gateAnswer(job) {
+  if (job.status !== "gate") return [];
+  if (blockedOf(job)) return [`retry it with: nightqueue queue retry ${jobRef(job.id)}`];
+  return [`retry it with: nightqueue queue retry ${jobRef(job.id)} --note "<your answer>"`];
 }
 
 // The run's OWN notice, read fresh from its log, printed under its own line whenever it differs from the row's `notice_md`.
@@ -616,7 +622,7 @@ function formatRunNotice(job) {
   return ["run_notice", ...body];
 }
 
-// The block a pending job is stuck on, readable: the code alone, or with its message when one is still on the result.
+// The block a gated job is stopped on, readable: the code alone, or with its message when one is still on the result.
 function formatBlocked(job) {
   const blocked = blockedOf(job);
   if (!blocked) return [];
@@ -674,12 +680,19 @@ function formatRunners(runners, activeJobs = 0, env = process.env) {
   return [noRunnerWait()];
 }
 
-// The line `queue status` closes with when a backlog is sitting there with nobody working it, when the runner gave a job
-// back, or when a rate limit holds the queue - whether a live runner is waiting it out or the backlog was parked by a
+// The backlog line of the jobs a preflight block gated: their codes and the retry that sends each one back once fixed.
+function blockedBacklogLine(gated) {
+  const codes = [...new Set(gated.map((job) => blockedOf(job).code))].join(", ");
+  const refs = gated.map((job) => jobRef(job.id)).join(" / ");
+  return `${gated.length} job${gated.length === 1 ? "" : "s"} blocked (${codes}) - fix the cause, then: nightqueue queue retry ${refs}`;
+}
+
+// The line `queue status` closes with when a backlog is sitting there with nobody working it, when the preflight gated a
+// job, or when a rate limit holds the queue - whether a live runner is waiting it out or the backlog was parked by a
 // runner that has since exited, starting another one then would only put it to sleep too.
 function backlogLine({ activeJobs, counts, runners, jobs = [] }) {
-  const blocked = jobs.map(blockedOf).filter(Boolean);
-  if (blocked.length) return `${blocked.length} job${blocked.length === 1 ? "" : "s"} blocked (${[...new Set(blocked.map((entry) => entry.code))].join(", ")}) - fix the cause, the runner retries by itself`;
+  const gated = jobs.filter(blockedOf);
+  if (gated.length) return blockedBacklogLine(gated);
   if (counts.pending === 0) return null;
   const paused = pausedRunnerLine(runners);
   if (paused) return `${pendingJobs(counts.pending)} waiting - ${paused}`;
@@ -711,10 +724,10 @@ function unreadableRegistryLine(error) {
   return `runner: unknown - the runner registry cannot be listed (${error}), a runner may be live; run \`nightqueue doctor\``;
 }
 
-// The counts-by-status line, breaking out how many of the pending jobs a preflight block is holding back.
-function countsLine(counts, blockedPending) {
+// The counts-by-status line, breaking out how many of the gated jobs a preflight block stopped.
+function countsLine(counts, blockedGates) {
   return Object.entries(counts)
-    .map(([status, total]) => (status === "pending" && blockedPending > 0 ? `pending=${total} (${blockedPending} blocked)` : `${status}=${total}`))
+    .map(([status, total]) => (status === "gate" && blockedGates > 0 ? `gate=${total} (${blockedGates} blocked)` : `${status}=${total}`))
     .join("  ");
 }
 
@@ -735,7 +748,7 @@ function renderQueueView(view, ctx, { blockedOnly = false } = {}) {
   const truncation = truncationSuggestion(view.jobs);
   const suggestions = view.suggestions.filter((line) => line !== truncation);
   if (!sectionOk(view, "counts")) return [...lines, ...suggestions];
-  lines.push(countsLine(view.counts, view.blockedPending), ...suggestions);
+  lines.push(countsLine(view.counts, view.blockedGates), ...suggestions);
   const backlog = readable ? backlogLine({ activeJobs: view.activeJobs, counts: view.counts, runners: view.runners, jobs: view.jobs }) : null;
   if (backlog) lines.push(backlog);
   return lines;
@@ -1336,7 +1349,7 @@ function reportRunDir(discarded, ctx) {
   ctx.out(`run directory kept (${discarded.reason}): ${discarded.dir ?? "no safe path"}`);
 }
 
-// Runs `queue retry`, which sends a gated, failed or cancelled job back to the queue; a gated one only moves with a note.
+// Runs `queue retry`, which sends a gated, failed or cancelled job back to the queue; a gated one only moves with a note, unless a preflight block gated it.
 async function runRetry(argv, ctx) {
   const { values, positionals } = parseCommand(argv, {
     note: { type: "string" },
