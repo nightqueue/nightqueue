@@ -26,7 +26,7 @@ import { test } from "node:test";
 //    does not pass. A PoC that only fails for lack of that flag would be failing by setup, not by
 //    the real break - explicitly disallowed.
 // 4. Even a real two-OS-process race (the technique that DOES work for `renameRunDir`'s own
-//    existsSync-then-renameSync gap in test/queue/rename-run-dir-race.poc.test.mjs, and for
+//    existsSync-then-renameSync gap in test/queue/rename-run-dir-race.test.mjs, and for
 //    `bindRunSlug` contention in test/memory/run-slug-bind-concurrency.test.mjs) does not apply
 //    here: the window this hypothesis needs is bounded by ONE microtask tick plus a single
 //    synchronous `existsSync` call between adoptSlug's two `bindRunSlug` transactions - on the

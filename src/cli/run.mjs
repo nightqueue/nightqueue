@@ -22,6 +22,7 @@ import { parseExploreArtifact } from "./explore-artifact.mjs";
 import { realPath } from "./paths.mjs";
 import { bodyProblems } from "./pr-body.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
+import { scratchFiles } from "./scratch-files.mjs";
 import { SECRETS_SWEEP_USAGE, runSecretsSweep } from "./secrets-sweep.mjs";
 
 const USAGE = {
@@ -38,6 +39,8 @@ const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
 // The options every subcommand shares: outside a job they are the only way to say which run is meant.
 const RUN_OPTIONS = { project: { type: "string" }, slug: { type: "string" } };
+
+const BASE_REFS = ["refs/remotes/origin/HEAD", "origin/main", "origin/master", "main", "master"];
 
 const NOTHING_TO_PRINT = "no phase recorded yet";
 
@@ -535,6 +538,27 @@ function problemLine(problem) {
   return problem.missing === undefined ? `REJECTED: ${problem.rejected}` : `MISSING: ${problem.missing}`;
 }
 
+// The first ref among the remote and local default branches that exists in the worktree: the base the branch is compared with.
+function baseRef(cwd, env) {
+  const found = BASE_REFS.find((ref) => runGit({ args: ["rev-parse", "--verify", "--quiet", ref], cwd, env }).ok);
+  if (!found) throw new UserError(`no base branch (${BASE_REFS.join(", ")}) exists in ${cwd}: the files the branch adds cannot be checked for scratch`);
+  return found;
+}
+
+// The files the branch adds against its base, as repo-relative paths.
+function addedFiles(cwd, env) {
+  const added = runGit({ args: ["diff", "--name-only", "-z", "--no-renames", "--diff-filter=A", `${baseRef(cwd, env)}...HEAD`], cwd, env });
+  if (!added.ok) throw new UserError(`git could not list the files the branch adds: ${failureLine(added)}`);
+  return added.stdout.split("\0").filter(Boolean);
+}
+
+// One `REJECTED:` line per scratch file the branch adds, each naming the way out.
+function scratchProblemLines(cwd, run, env) {
+  return scratchFiles(addedFiles(cwd, env), { cwd, runDir: run.runDir }).map(
+    (path) => `REJECTED: scratch file ${path} — remove it, or promote it to a hermetic test with a real name, then commit and retry`,
+  );
+}
+
 // The title of the pull request: the one the caller passed, or the `# <title>` the body opens with.
 function prTitle(given, body) {
   const asked = (given ?? "").trim();
@@ -614,9 +638,10 @@ async function runPr(argv, ctx) {
   const bodyFile = resolve(values["body-file"]);
   const body = readRequiredFile(bodyFile, "--body-file");
   const problems = bodyProblems({ body, template, evidenceDir: join(run.runDir, "evidence"), slug: run.slug, jobId: run.jobId });
-  if (problems.length > 0) {
-    for (const problem of problems) ctx.out(problemLine(problem));
-    ctx.out("nothing was pushed and no pull request was opened: fix the body and call `nightqueue run pr` again");
+  const lines = [...problems.map(problemLine), ...scratchProblemLines(cwd, run, ctx.env)];
+  if (lines.length > 0) {
+    for (const line of lines) ctx.out(line);
+    ctx.out("nothing was pushed and no pull request was opened: fix the problems above and call `nightqueue run pr` again");
     return 1;
   }
   const published = await publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, store: openStore(ctx.env) });

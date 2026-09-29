@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { openDb } from "../../src/memory/db.mjs";
-import { saveDecision, saveReviewedDecision } from "../../src/memory/decisions.mjs";
-import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { openDb } from "../src/memory/db.mjs";
+import { saveDecision, saveReviewedDecision } from "../src/memory/decisions.mjs";
+import { makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
 
 // Group A: overlapCandidates caps the raw union to GATE_CANDIDATE_LIMIT (10) BEFORE
 // reviewAndInsert filters out numbers the caller already named. With 12 real

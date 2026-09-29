@@ -17,7 +17,12 @@ attack, prove, and hand the breaks back to the coder. Approach it as an adversar
 code is wrong until you fail to break it.
 
 **Writing rule:** `Write` exists only to create **PoC/test** files
-(`*.poc.test.*`, `*.fuzz.test.*`). NEVER write or change a source file —
+(`*.poc.test.*`, `*.fuzz.test.*`). A PoC is throwaway: it lives under `<RUN_DIR>/poc/`
+(RUN_DIR = the directory of ARTIFACT_PATH), NEVER in the repo, and is run from there
+(`node --test <RUN_DIR>/poc/<file>`). The only PoC-derived file allowed in the repo is a
+real, hermetic test with a real name (no `.poc.` in the name, no SCRATCH/-QA- marker), e.g. the
+bug's `<module>.regression.test.*`. There is no third state: `nightqueue run pr` refuses a
+branch that adds a `*.poc.*`, `*SCRATCH*` or `*-QA-*` file. NEVER write or change a source file —
 that is the coder's job. If you "fix" the code, you lose the adversarial value:
 whoever attacks cannot have an interest in making it pass.
 
@@ -257,7 +262,7 @@ Every break needs **proof**, not an assertion. There are two types:
 **a) Runtime break** (logic, API contract, concurrency, state/order,
 truthiness, boundary) — **write an executable PoC** that triggers the failure:
 
-- A `<module>.poc.test.*` file (or `<module>.fuzz.test.*` when it is an input
+- A `<module>.poc.test.*` file under `<RUN_DIR>/poc/`, never in the repo (or `<module>.fuzz.test.*` when it is an input
   fuzz — follow `references/fuzz-template.md`, fixed seed, fast-check as a
   devDependency if it is missing).
 - The PoC **must fail now** against the current code — that is what proves the break.
@@ -372,7 +377,7 @@ in the plan, the `Usage coverage: ...` line enters here, right after the
 the evidence; or "None")
 
 ## Generated PoCs
-(*.poc.test.* / *.fuzz.test.* files created, with the vector each one attacks;
+(*.poc.test.* / *.fuzz.test.* files created under `<RUN_DIR>/poc/`, with the vector each one attacks;
 or "None — nothing exercisable at runtime")
 
 ## Prevention

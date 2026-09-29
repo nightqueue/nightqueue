@@ -98,6 +98,9 @@ assumption too: if you find evidence that invalidates it, report it in ## Invali
 assumptions — the plan was designed on top of it. On a bug, use the criterion of the
 break from the user's point of view (fallback-zero in the bug's scenario = BROKE). Do NOT
 fix anything — prove each break with an executable PoC and hand it back to the coder.
+A PoC is throwaway and lives under `<RUN_DIR>/poc/`, never in the repo; only a real, hermetic
+test with a real name (no `.poc.` in the name, no SCRATCH/-QA- marker) may be committed — no
+third state.
 
 [Include only if Type = bug/error:]
 MANDATORY (the bug's regression net): besides the break PoCs, create
@@ -188,7 +191,7 @@ start from here, without rebuilding stage A. Prompt of each one:
 ```
 Read before acting (via Read): `<RUN_DIR>/05a-qa-analyst.md` — stick to YOUR group
 of hypotheses (## Break hypotheses: <IDs/label of the assigned group>) and to the ## Test
-recipe. Write ONLY the assigned PoC files — with no .md artifact of your own.
+recipe. Write ONLY the assigned PoC files, under `<RUN_DIR>/poc/` and never in the repo — with no .md artifact of your own.
 Return summary (≤10 lines): verdict per hypothesis + open items.
 
 Mode: PROVER

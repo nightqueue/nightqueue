@@ -4,6 +4,7 @@ import { runGitAsync } from "../host/git.mjs";
 import { killProcess, probePid } from "./registry.mjs";
 import { readRunState } from "./resume.mjs";
 import { isPrUrl } from "./stream.mjs";
+import { scratchFiles } from "../cli/scratch-files.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
 
 export const WORKTREE_READ_TIMEOUT_MS = 5000;
@@ -68,9 +69,18 @@ function gitRead(args, cwd, env) {
   return runGitAsync({ args, cwd, env, timeoutMs: WORKTREE_READ_TIMEOUT_MS });
 }
 
-// A worktree nightqueue keeps, with the reason it would refuse to remove it.
-function kept(path, reason) {
-  return { path, removable: false, reason };
+// A worktree nightqueue keeps, with the reason it would refuse to remove it and the untracked QA scratch files it holds.
+function kept(path, reason, scratch = []) {
+  return scratch.length > 0 ? { path, removable: false, reason, scratch } : { path, removable: false, reason };
+}
+
+// The untracked QA scratch files a `git status --porcelain --untracked-files=all` lists.
+function untrackedScratch(porcelain) {
+  const untracked = String(porcelain ?? "")
+    .split("\n")
+    .filter((line) => line.startsWith("?? "))
+    .map((line) => line.slice(3).replace(/^"(.*)"$/, "$1"));
+  return scratchFiles(untracked);
 }
 
 // Why a locked worktree is kept, or null when its lock is gone or stale and does not hold it.
@@ -100,9 +110,9 @@ async function judgeRegistered({ entry, path, prRecorded, env, killImpl }) {
   const lock = lockState(entry, killImpl);
   const locked = lockReason(entry, lock);
   if (locked) return kept(path, locked);
-  const status = await gitRead(["status", "--porcelain"], path, env);
+  const status = await gitRead(["status", "--porcelain", "--untracked-files=all"], path, env);
   if (!status.ok) return kept(path, "git could not read it");
-  if (status.stdout.trim()) return kept(path, "it has uncommitted changes");
+  if (status.stdout.trim()) return kept(path, "it has uncommitted changes", untrackedScratch(status.stdout));
   const unpublished = prRecorded ? null : await publicationReason(path, env);
   return unpublished ? kept(path, unpublished) : { path, removable: true, staleLock: lock === "stale" };
 }
@@ -157,8 +167,9 @@ function unremovedVerdict(path, reason) {
 }
 
 // The notice line that names a worktree nightqueue kept, and why.
-export function keptWorktreeLine({ path, reason }) {
-  return `${KEPT_PREFIX}${path} - ${reason}.`;
+export function keptWorktreeLine({ path, reason, scratch }) {
+  const left = Array.isArray(scratch) && scratch.length > 0 ? ` Untracked QA scratch files left in it: ${scratch.join(", ")}.` : "";
+  return `${KEPT_PREFIX}${path} - ${reason}.${left}`;
 }
 
 // A notice without the kept-worktree paragraph a previous run appended at its end, so a resumed run never stacks it.

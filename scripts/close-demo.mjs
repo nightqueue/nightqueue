@@ -17,7 +17,7 @@ export const REFUSAL_EXIT = 2;
 
 const CLI = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "bin", "nightqueue.mjs");
 const PROJECT = "nstest-demo";
-const SEED_WORKER = "close-qa-demo:seed";
+const SEED_WORKER = "close-demo:seed";
 const READY_POLLS = 10;
 const READY_POLL_MS = 3000;
 const CHECKS_TIMEOUT_MS = 600000;
@@ -26,14 +26,14 @@ const CHECKS_TIMEOUT_MS = 600000;
 export function jobIdentityRefusal(env) {
   const present = JOB_IDENTITY_VARS.filter((name) => typeof env?.[name] === "string" && env[name].trim() !== "");
   if (!present.length) return null;
-  return `close-qa-demo refuses to start inside a nightqueue job (${present.join(", ")} set): operator-run acceptance: run it from your own terminal. It never unsets a nightqueue variable.`;
+  return `close-demo refuses to start inside a nightqueue job (${present.join(", ")} set): operator-run acceptance: run it from your own terminal. It never unsets a nightqueue variable.`;
 }
 
 // The refusal of a checkout whose origin is not the nstest-demo remote, or null when it is.
 export function demoOriginRefusal(repoPath, options = {}) {
   const slug = repoSlugOf({ path: repoPath }, options);
   if (slug === DEMO_REMOTE.toLowerCase()) return null;
-  return `close-qa-demo refuses to run against ${repoPath}: its origin is ${slug ?? "unreadable"}, not ${DEMO_REMOTE}; real pull request QA runs only on nstest-demo.`;
+  return `close-demo refuses to run against ${repoPath}: its origin is ${slug ?? "unreadable"}, not ${DEMO_REMOTE}; real pull request QA runs only on nstest-demo.`;
 }
 
 // The options of the script: the demo checkout and its base branch.
@@ -93,7 +93,7 @@ async function waitUntilReady(url) {
 // Opens a scratch pull request on nstest-demo from a new branch and answers its URL once it is ready to close.
 async function openScratchPr(ctx, branch) {
   pushScratchBranch(ctx, branch);
-  const body = "Scratch pull request of nightqueue's scripts/close-qa-demo.mjs; merged or closed by the script.";
+  const body = "Scratch pull request of nightqueue's scripts/close-demo.mjs; merged or closed by the script.";
   const created = must("gh", ["pr", "create", "--repo", DEMO_REMOTE, "--head", branch, "--base", ctx.base, "--title", `close QA ${branch}`, "--body", body]);
   const url = created.stdout.trim().split("\n").pop();
   ctx.prs.push(url);
@@ -110,7 +110,7 @@ async function seedDoneJob(ctx, { prUrl, branch }) {
   const { id } = await jobs.addJob({ projectId: project.id, prompt: `close QA of ${prUrl}` });
   if (!(await jobs.claimJobById(id, { worker: SEED_WORKER, cap: null }))) throw new Error(`could not claim the seeded job ${id}`);
   await jobs.persistRunFacts(id, { worker: SEED_WORKER, slug: `close-qa-${id}`, branch });
-  const finished = await jobs.finishJob(id, { worker: SEED_WORKER, status: "done", prUrl, noticeMd: `Seeded by close-qa-demo for ${prUrl}` });
+  const finished = await jobs.finishJob(id, { worker: SEED_WORKER, status: "done", prUrl, noticeMd: `Seeded by close-demo for ${prUrl}` });
   if (!finished) throw new Error(`could not finish the seeded job ${id} as done`);
   return id;
 }
@@ -304,7 +304,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       process.exitCode = code;
     },
     (err) => {
-      console.error(`close-qa-demo: ${err?.message ?? String(err)}`);
+      console.error(`close-demo: ${err?.message ?? String(err)}`);
       process.exitCode = 1;
     },
   );
