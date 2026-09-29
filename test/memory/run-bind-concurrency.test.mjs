@@ -59,7 +59,7 @@ test(`${WRITERS} real OS processes binding the same ${SLUGS} run slugs leave exa
   });
 
   for (const report of reports) {
-    for (const message of report.errors) assert.match(message, /^job #\d+ already runs from /);
+    for (const message of report.errors) assert.match(message, /^J-\d+ already runs from /);
   }
   assert.equal(reports.flatMap((report) => report.bound).length, SLUGS);
   const rows = openDb(env).prepare("SELECT slug, COUNT(*) AS jobs FROM jobs WHERE project_id = ? GROUP BY slug").all(projectId);

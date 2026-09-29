@@ -164,7 +164,7 @@ test("--resume is only appended for a session id that is safe as argv", (t) => {
 test("the prompt asks for the pipeline, the slug line and the gate, and carries the answer of the operator", () => {
   const prompt = buildPrompt({ job: { ...JOB, operator_note: "deliver without the migration" } });
   assert.match(prompt, /^\/nightqueue:resolve fix the worker\n/);
-  assert.match(prompt, /job #7/);
+  assert.match(prompt, /J-7/);
   assert.match(prompt, /QUEUE_SLUG: <slug>/);
   assert.match(prompt, /OPERATOR ANSWER TO THE GATE: deliver without the migration/);
   assert.equal(buildPrompt({ job: JOB }).includes("OPERATOR ANSWER TO THE GATE"), false);

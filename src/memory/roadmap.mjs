@@ -1,7 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 import { ALL_PROJECTS } from "../config/projects.mjs";
 import { inTransaction, openDb, sqliteToIso, withWriteRetry } from "./db.mjs";
-import { attachNames, projectById, projectsOfOrg } from "./registry.mjs";
+import { attachNames, ownerByKey, projectById, projectsOfOrg } from "./registry.mjs";
 import {
   PROPOSED_HEADING,
   STANDING_HEADING,
@@ -13,6 +13,7 @@ import {
 } from "./decisions.mjs";
 import { PRIORITY_RANGE, addJob, cancelJob, truncateByCodePoint } from "./jobs.mjs";
 import { escapePromptMarkers } from "./prompt-safety.mjs";
+import { GLOBAL_KEY, decisionRef, itemRef, jobRef, parseRef } from "./refs.mjs";
 import { COMMENT_JOB_COLUMNS, insertComment, jobRefs, listComments } from "./roadmap-comments.mjs";
 import {
   cancelOpenRows,
@@ -170,15 +171,31 @@ export function getRoadmapItem(id, env = process.env) {
 }
 
 // The columns and joins every read that carries a linked decision number and live job status shares.
-const ROADMAP_ITEM_VIEW_QUERY = `SELECT r.*, d.number AS decision_number, j.status AS job_status
+const ROADMAP_ITEM_VIEW_QUERY = `SELECT r.*, d.number AS decision_number, d.scope AS decision_scope,
+              d.project_id AS decision_project_id, d.org_id AS decision_org_id, j.status AS job_status
        FROM roadmap_items r
        LEFT JOIN decisions d ON d.id = r.decision_id
        LEFT JOIN jobs j ON j.id = r.job_id`;
 
+// The ref of the decision a joined item row links, rendered from its owner's current key, or null.
+function linkedDecisionRef(db, row) {
+  if (row.decision_number === null || row.decision_number === undefined) return null;
+  const [decision] = attachNames(db, [
+    { scope: row.decision_scope, project_id: row.decision_project_id, org_id: row.decision_org_id, number: row.decision_number },
+  ]);
+  return decisionRef(decision);
+}
+
+// Joined item rows with their owner names and the ref of their linked decision attached.
+function namedViewRows(db, rows) {
+  return attachNames(db, rows).map((row) => Object.assign(row, { decision_ref: linkedDecisionRef(db, row) }));
+}
+
 // Returns the joined row of a roadmap item — its linked decision number, live job status and owner names included — or null.
 function getRoadmapItemJoined(id, env = process.env) {
   const db = openDb(env);
-  return namedRow(db, db.prepare(`${ROADMAP_ITEM_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id)));
+  const row = db.prepare(`${ROADMAP_ITEM_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id));
+  return row ? namedViewRows(db, [row])[0] : null;
 }
 
 // Inserts a roadmap item at the end of its priority group, in one statement so no concurrent save collides.
@@ -204,17 +221,21 @@ export function saveRoadmapItem(
     decision_id === undefined || decision_id === null ? null : requireDecisionId(target, decision_id, env),
     ...owner,
     group,
+    ...owner,
   ];
   const statement = db.prepare(
-    `INSERT INTO roadmap_items (scope, project_id, org_id, priority, type, status, closed_at, title, detail, decision_id, position)
+    `INSERT INTO roadmap_items (scope, project_id, org_id, priority, type, status, closed_at, title, detail, decision_id, position, number)
      VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? = 'done' THEN datetime('now') END, ?, ?, ?,
-             (SELECT COALESCE(MAX(position), 0) + 1 FROM roadmap_items WHERE ${OWNER_CLAUSE} AND priority = ?))
-     RETURNING id, position`,
+             (SELECT COALESCE(MAX(position), 0) + 1 FROM roadmap_items WHERE ${OWNER_CLAUSE} AND priority = ?),
+             (SELECT COALESCE(MAX(number), 0) + 1 FROM roadmap_items WHERE ${OWNER_CLAUSE}))
+     RETURNING id, position, number`,
   );
   const row = withWriteRetry(() => statement.get(...values));
   const [scope, ownerProjectId, ownerOrgId] = owner;
   return {
     id: Number(row.id),
+    ref: itemRef({ scope, project_id: ownerProjectId, project_key: target.key, org_key: target.key, number: row.number }),
+    number: Number(row.number),
     position: Number(row.position),
     priority: group,
     type: kind,
@@ -336,6 +357,8 @@ export function updateRoadmapItem(id, patch = {}, env = process.env) {
 export function roadmapItemView(row) {
   return {
     id: row.id,
+    ref: roadmapRef(row),
+    number: row.number,
     scope: row.scope,
     owner: ownerOf(row),
     title: truncateByCodePoint(row.title),
@@ -345,7 +368,9 @@ export function roadmapItemView(row) {
     type: row.type,
     position: row.position,
     decision_number: row.decision_number ?? null,
+    decision_ref: row.decision_ref ?? null,
     job_id: row.job_id ?? null,
+    job_ref: row.job_id ? jobRef(row.job_id) : null,
     job_status: row.job_status ?? null,
     closed_at: sqliteToIso(row.closed_at ?? null),
     updated_at: sqliteToIso(row.updated_at),
@@ -400,7 +425,7 @@ export function listRoadmap(owner, filters = {}, env = process.env, db = null) {
                 r.priority ASC, r.position ASC, r.id ASC`,
     )
     .all(...visible.values, ...filter.values);
-  const items = attachNames(connection, rows).map(roadmapItemView);
+  const items = namedViewRows(connection, rows).map(roadmapItemView);
   return { ...ownerNames(target), items: withProjectRows(connection, target, items) };
 }
 
@@ -438,7 +463,7 @@ export function queueableRoadmapItem(id, env = process.env) {
   const live = liveJobOf(row, env);
   if (live) {
     throw new UserError(
-      `roadmap item \`${row.id}\` is already queued as job \`${live.id}\` (\`${live.status}\`); cancel that job first`,
+      `roadmap item \`${row.id}\` is already queued as ${jobRef(live.id)} (\`${live.status}\`); cancel that job first`,
     );
   }
   return row;
@@ -563,7 +588,7 @@ export function roadmapDrift(env = process.env, db = null) {
 function linkedItemDrift(connection) {
   const rows = connection
     .prepare(
-      `SELECT r.id, r.scope, r.project_id, r.org_id, r.status, r.job_id, r.job_status_seen,
+      `SELECT r.id, r.scope, r.project_id, r.org_id, r.number, r.status, r.job_id, r.job_status_seen,
               j.status AS job_status, j.result
          FROM roadmap_items r JOIN jobs j ON j.id = r.job_id
         WHERE r.job_status_seen IS NOT j.status
@@ -575,6 +600,7 @@ function linkedItemDrift(connection) {
     .filter(({ row, expected }) => expected !== null && expected !== row.status)
     .map(({ row, expected }) => ({
       id: row.id,
+      ref: roadmapRef(row),
       scope: row.scope,
       owner: ownerOf(row),
       status: row.status,
@@ -592,21 +618,39 @@ function requireVisibleTo(db, row, viewer) {
   throw new UserError(`roadmap item \`${row.id}\` belongs to ${ownerDescription(row)}, not project \`${target.project ?? "global"}\``);
 }
 
-// The reference of an item the way a pull request or a prompt quotes it: `<owner>#<id>`.
+// The ref of an item the way a pull request or a prompt quotes it: `<KEY>-<number>`.
 export function roadmapRef(row) {
-  return `${ownerOf(row)}#${row.id}`;
+  return itemRef(row);
+}
+
+// The owner target an item ref's key names: the global owner for `G`, otherwise the project or org holding it now or before, or null.
+function itemRefOwner(db, key) {
+  return key === GLOBAL_KEY ? projectScope(db, null) : ownerByKey(db, key);
+}
+
+// Resolves an item ref (`<KEY>-<number>`, the key current or old) to the id of the roadmap item it names; `db` lets a read-only caller bring its own connection.
+export function itemIdOfRef(value, env = process.env, db = null) {
+  const ref = parseRef(value);
+  if (ref?.kind !== "item") throw new UserError(`expected a roadmap item ref (\`<KEY>-<number>\`), got \`${String(value)}\``);
+  const connection = db ?? openDb(env);
+  const owner = itemRefOwner(connection, ref.key);
+  const row = owner
+    ? connection.prepare(`SELECT id FROM roadmap_items WHERE ${OWNER_CLAUSE} AND number = ?`).get(...ownerValues(owner), ref.number)
+    : null;
+  if (!row) throw new UserError(`unknown roadmap item \`${ref.key}-${ref.number}\``);
+  return Number(row.id);
 }
 
 // One item with its text untruncated and its comment thread in chronological order; a project `viewer` (by id) reads only
 // what its project sees, and `db` lets a read-only caller bring its own connection.
 export function getRoadmapItemDetail(id, { viewer = null } = {}, env = process.env, db = null) {
   const connection = db ?? openDb(env);
-  const row = namedRow(connection, connection.prepare(`${ROADMAP_ITEM_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id)));
-  if (!row) throw new UserError(`unknown roadmap item \`${id}\``);
+  const found = connection.prepare(`${ROADMAP_ITEM_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id));
+  if (!found) throw new UserError(`unknown roadmap item \`${id}\``);
+  const [row] = namedViewRows(connection, [found]);
   requireVisibleTo(connection, row, viewer);
   const detail = {
     ...roadmapItemView(row),
-    ref: roadmapRef(row),
     title: row.title,
     detail: row.detail ?? null,
     comments: listComments(connection, row.id, viewer),
@@ -627,11 +671,13 @@ export function addRoadmapComment({ id, body, author = OPERATOR_AUTHOR, viewer =
 }
 
 // The reference of the item a job was queued from — a project item it is linked to, or an org item through its project
-// row — or null when the job carries no roadmap item.
-export function roadmapRefOfJob(jobId, env = process.env) {
-  const db = openDb(env);
+// row — or null when the job carries no roadmap item; `db` lets a read-only caller bring its own connection.
+export function roadmapRefOfJob(jobId, env = process.env, connection = null) {
+  const db = connection ?? openDb(env);
   const id = requireId(jobId);
-  const own = db.prepare("SELECT id, scope, project_id, org_id FROM roadmap_items WHERE job_id = ? ORDER BY id DESC LIMIT 1").get(id);
+  const own = db
+    .prepare("SELECT id, scope, project_id, org_id, number FROM roadmap_items WHERE job_id = ? ORDER BY id DESC LIMIT 1")
+    .get(id);
   const row = namedRow(db, own) ?? orgItemOfJob(db, id);
   return row ? roadmapRef(row) : null;
 }
@@ -734,7 +780,7 @@ function queueOrgTarget(item, project, { prompt, limits }, env) {
 
 // Why nothing was queued for an org item: every project it was asked for already has a live job for it.
 function allSkippedMessage(item, skipped) {
-  const held = skipped.map((entry) => `\`${entry.project}\` (job \`${entry.job_id ?? "?"}\`, \`${entry.job_status ?? "?"}\`)`);
+  const held = skipped.map((entry) => `\`${entry.project}\` (${entry.job_id ? jobRef(entry.job_id) : "no job"}, \`${entry.job_status ?? "?"}\`)`);
   return `roadmap item \`${item.id}\` is already queued for ${held.join(", ")}; cancel that job first`;
 }
 
@@ -766,6 +812,6 @@ export async function queueRoadmapItem(
   if (linkRoadmapItemJob(item.id, job.id, env)) return { job, jobs: [job], skipped: [], item, targetProject: item.project };
   cancelJob(job.id, { reason: "roadmap item was queued by another caller" }, env);
   throw new UserError(
-    `roadmap item \`${item.id}\` was queued by another caller; job \`${job.id}\` was cancelled and nothing else changed`,
+    `roadmap item \`${item.id}\` was queued by another caller; ${jobRef(job.id)} was cancelled and nothing else changed`,
   );
 }

@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { jobLogPath, logsDir } from "../config/paths.mjs";
 import { openStore } from "../store/open.mjs";
 import { ownRunState } from "./resume.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 export const REPAIR_FAILED_PREFIX = "could not repair a job from state.json";
 
@@ -35,7 +36,7 @@ async function repairOne(row, { readStore, writeStore, env }) {
     logRepair(row.id, terminal, env);
     return { repaired: true, error: null };
   } catch (err) {
-    return { repaired: false, error: `job #${row.id}: ${String(err?.message ?? err).split("\n")[0]}` };
+    return { repaired: false, error: `${jobRef(row.id)}: ${String(err?.message ?? err).split("\n")[0]}` };
   }
 }
 

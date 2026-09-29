@@ -60,8 +60,8 @@ test("decision list prints the number, the status and the title of every decisio
   const result = runCli(env, ["decision", "list"], { cwd });
   assert.equal(result.status, 0);
   assert.match(result.stdout, /^NUMBER\s+STATUS\s+UPDATED\s+TITLE$/m);
-  assert.match(result.stdout, /^#1\s+accepted\s+\d{4}-\d{2}-\d{2}\s+Store everything in one SQLite file$/m);
-  assert.match(result.stdout, /^#2\s+rejected\s+\d{4}-\d{2}-\d{2}\s+Deliver a daemon$/m);
+  assert.match(result.stdout, /^D-1\s+accepted\s+\d{4}-\d{2}-\d{2}\s+Store everything in one SQLite file$/m);
+  assert.match(result.stdout, /^D-2\s+rejected\s+\d{4}-\d{2}-\d{2}\s+Deliver a daemon$/m);
 });
 
 test("decision list --status keeps only that status and refuses one outside the enum", (t) => {
@@ -83,14 +83,14 @@ test("decision show prints the decision in full and refuses an unknown number", 
   seedDecisions(env);
   const result = runCli(env, ["decision", "show", "1"], { cwd });
   assert.equal(result.status, 0);
-  assert.ok(result.stdout.includes("#1 Store everything in one SQLite file (accepted)"));
+  assert.ok(result.stdout.includes("D-1 Store everything in one SQLite file (accepted)"));
   assert.ok(result.stdout.includes("Context: the runtime has several writers"));
   assert.ok(result.stdout.includes("Decision: open the database in WAL with a busy timeout"));
   assert.ok(result.stdout.includes("Consequences: no server to run, one file to back up"));
   assert.ok(result.stdout.includes("project: alpha"));
   const unknown = runCli(env, ["decision", "show", "9"], { cwd });
   assert.equal(unknown.status, 1);
-  assert.match(unknown.stderr, /unknown decision #9 for `alpha`/);
+  assert.match(unknown.stderr, /unknown decision D-9 for `alpha`/);
   assert.equal(runCli(env, ["decision", "show", "zero"], { cwd }).status, 1);
 });
 
@@ -105,13 +105,13 @@ test("roadmap groups the items by status in workflow order, p1 first, with the l
   const result = runCli(env, ["roadmap"], { cwd });
   assert.equal(result.status, 0);
   assert.ok(result.stdout.indexOf("todo:") < result.stdout.indexOf("in_progress:"), "the statuses are out of order");
-  assert.ok(result.stdout.includes(`  p5 #${queued.id} Deliver the queue\n     decision #${decision.number}\n     job #${job.id} (pending)`));
-  assert.ok(result.stdout.indexOf(`p1 #${urgent.id} Fix the crash`) < result.stdout.indexOf(`p5 #${dashboard.id} Write the dashboard`), "p1 is not first");
+  assert.ok(result.stdout.includes(`  p5 ${queued.ref} Deliver the queue\n     decision D-${decision.number}\n     J-${job.id} (pending)`));
+  assert.ok(result.stdout.indexOf(`p1 ${urgent.ref} Fix the crash`) < result.stdout.indexOf(`p5 ${dashboard.ref} Write the dashboard`), "p1 is not first");
   assert.equal(result.stdout.includes("backlog:"), false, "a status with no item printed a heading");
 
   const filtered = runCli(env, ["roadmap", "--status", "todo", "--priority", "1"], { cwd });
   assert.equal(filtered.status, 0, filtered.stderr);
-  assert.equal(filtered.stdout, `todo:\n  p1 #${urgent.id} Fix the crash\n`);
+  assert.equal(filtered.stdout, `todo:\n  p1 ${urgent.ref} Fix the crash\n`);
   const wrong = runCli(env, ["roadmap", "--priority", "high"], { cwd });
   assert.equal(wrong.status, 1);
   assert.match(wrong.stderr, /invalid `--priority` `high`/);
@@ -161,7 +161,7 @@ test("the three commands never write the database, and a project with nothing sa
 
   const show = runCli(env, ["decision", "show", "1"], { cwd });
   assert.equal(show.status, 1);
-  assert.match(show.stderr, /unknown decision #1 for `alpha`/);
+  assert.match(show.stderr, /unknown decision D-1 for `alpha`/);
   assert.equal(show.stderr.includes("SQLITE"), false, `a raw SQLite error reached the operator: ${show.stderr}`);
 
   assert.deepEqual(readFileSync(dbPath(env)), databaseBefore, "a read-only command wrote to the database");
@@ -213,7 +213,7 @@ function roundTrip(t, name, seed) {
   const b = makeCliHome(t, `${name}-b`);
   const imported = runCli(b.env, ["decision", "import", first, "--project", "alpha"], { cwd: b.cwd });
   assert.equal(imported.status, 0, imported.stderr);
-  assert.equal(imported.stdout.trim(), "imported as #1");
+  assert.equal(imported.stdout.trim(), "imported as D-1");
   const secondDir = makeDir(t, `${name}-second`);
   const second = exportedFile(runCli(b.env, ["decision", "export", "1", "--dir", secondDir], { cwd: b.cwd }), secondDir);
   return { a, b, first, firstText, secondText: readFileSync(second, "utf8") };
@@ -249,7 +249,7 @@ test("importing the same file again is refused as already imported, and nothing 
   const { b, first } = roundTrip(t, "reimport", seed);
   const again = runCli(b.env, ["decision", "import", first, "--project", "alpha"], { cwd: b.cwd });
   assert.equal(again.status, 1);
-  assert.match(again.stderr, /already imported as #1 \(Store everything in one SQLite file\); nothing imported/);
+  assert.match(again.stderr, /already imported as D-1 \(Store everything in one SQLite file\); nothing imported/);
   assert.equal(getDecisionByNumber({ projectId: projectIdOf(b.env, "alpha"), number: 2 }, b.env), null);
 });
 
@@ -263,13 +263,13 @@ test("--superseded-by imports a superseded row pointing at the successor, and st
   );
   const result = runCli(env, ["decision", "import", file, "--superseded-by", "1"], { cwd });
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), "imported as #3");
+  assert.equal(result.stdout.trim(), "imported as D-3");
   const row = getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 3 }, env);
   assert.equal(row.status, "superseded");
   assert.equal(row.superseded_by, successor.id);
   assert.equal(row.superseded_by_number, 1);
   assert.equal(row.created_at, "2026-01-05 00:00:00");
-  assert.ok(readFileSync(file, "utf8").startsWith("# 0003 - Widgets live on one shelf\n\nDecision #3 in the alpha store.\n\nStatus: Accepted"));
+  assert.ok(readFileSync(file, "utf8").startsWith("# 0003 - Widgets live on one shelf\n\nDecision D-3 in the alpha store.\n\nStatus: Accepted"));
   const conflict = runCli(env, ["decision", "import", file, "--superseded-by", "1", "--status", "accepted"], { cwd });
   assert.equal(conflict.status, 1);
   assert.match(conflict.stderr, /conflicts with `--status accepted`/);
@@ -295,16 +295,16 @@ test("an import that overlaps a decision lists the candidates, and --unrelated i
   const file = writeDecisionFile(t, "overlap", "# Store everything in one SQLite database\n\nStatus: Accepted (2026-02-02).\n\n## Context\n\nc\n\n## Decision\n\nd\n");
   const refused = runCli(env, ["decision", "import", file], { cwd });
   assert.equal(refused.status, 1);
-  assert.ok(refused.stderr.includes("  #1 Store everything in one SQLite file (accepted)"), refused.stderr);
+  assert.ok(refused.stderr.includes("  D-1 Store everything in one SQLite file (accepted)"), refused.stderr);
   assert.match(refused.stderr, /--supersedes <n,\.\.\.>.*--unrelated <n,\.\.\.>/);
   assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 3 }, env), null);
   assert.ok(!readFileSync(file, "utf8").includes("Decision #"), "a refused import stamped the file");
   const malformed = runCli(env, ["decision", "import", file, "--unrelated", "1,x"], { cwd });
   assert.equal(malformed.status, 1);
-  assert.match(malformed.stderr, /`--unrelated` expects a positive integer decision number, got `x`/);
+  assert.match(malformed.stderr, /`--unrelated` expects a decision number or ref \(`3`, `D-3`, `<KEY>\/D-3`\), got `x`/);
   const accepted = runCli(env, ["decision", "import", file, "--unrelated", "1"], { cwd });
   assert.equal(accepted.status, 0, accepted.stderr);
-  assert.equal(accepted.stdout.trim(), "imported as #3");
+  assert.equal(accepted.stdout.trim(), "imported as D-3");
 });
 
 test("export refuses an existing file unless --force, and defaults to docs/decisions of the current directory", (t) => {
@@ -326,7 +326,7 @@ test("export never writes the database nor a file when the decision is not there
   const dir = makeDir(t, "export-no-database-dir");
   const result = runCli(env, ["decision", "export", "1", "--dir", dir], { cwd });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /unknown decision #1 for `alpha`/);
+  assert.match(result.stderr, /unknown decision D-1 for `alpha`/);
   assert.deepEqual(readFileSync(dbPath(env)), databaseBefore, "export wrote to the database");
   assert.deepEqual(readdirSync(dir), []);
 });
@@ -338,13 +338,13 @@ test("decision update accepts or rejects a proposed decision, printing it like s
 
   const accepted = runCli(env, ["decision", "update", "1", "--status", "accepted"], { cwd });
   assert.equal(accepted.status, 0, accepted.stderr);
-  assert.ok(accepted.stdout.includes("#1 Store everything in one SQLite file (accepted)"));
+  assert.ok(accepted.stdout.includes("D-1 Store everything in one SQLite file (accepted)"));
   assert.ok(accepted.stdout.includes("project: alpha"));
   assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 1 }, env).status, "accepted");
 
   const rejected = runCli(env, ["decision", "update", "2", "--status", "rejected"], { cwd });
   assert.equal(rejected.status, 0, rejected.stderr);
-  assert.ok(rejected.stdout.includes("#2 Deliver a daemon (rejected)"));
+  assert.ok(rejected.stdout.includes("D-2 Deliver a daemon (rejected)"));
   assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 2 }, env).status, "rejected");
 });
 
@@ -364,7 +364,7 @@ test("decision update --status superseded requires --superseded-by, and never to
 
   const settled = runCli(env, ["decision", "update", "1", "--status", "superseded", "--superseded-by", "2"], { cwd });
   assert.equal(settled.status, 0, settled.stderr);
-  assert.ok(settled.stdout.includes("#1 Store everything in one SQLite file (superseded)"));
+  assert.ok(settled.stdout.includes("D-1 Store everything in one SQLite file (superseded)"));
   const row = getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 1 }, env);
   assert.equal(row.status, "superseded");
   assert.equal(row.superseded_by_number, 2);
@@ -376,11 +376,11 @@ test("decision update refuses an unknown decision number and an unknown successo
 
   const unknownRow = runCli(env, ["decision", "update", "9", "--status", "accepted"], { cwd });
   assert.equal(unknownRow.status, 1);
-  assert.match(unknownRow.stderr, /unknown decision #9 for `alpha`/);
+  assert.match(unknownRow.stderr, /unknown decision D-9 for `alpha`/);
 
   const unknownSuccessor = runCli(env, ["decision", "update", "1", "--status", "superseded", "--superseded-by", "9"], { cwd });
   assert.equal(unknownSuccessor.status, 1);
-  assert.match(unknownSuccessor.stderr, /unknown decision #9 for `alpha`/);
+  assert.match(unknownSuccessor.stderr, /unknown decision D-9 for `alpha`/);
   assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 1 }, env).status, "proposed");
 });
 

@@ -105,7 +105,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    - **The standing decisions are already in your context** — the `## Standing decisions`
      section of the `# Nightqueue context` block injected at the start of the session carries
      them: EVERY accepted title of the project and of its org, org rows first, each already
-     named `#<number>` or `<owner>#<number>`, followed by `## Standing decisions in detail`
+     named by its ref, `D-<n>` or `<ORGKEY>/D-<n>`, followed by `## Standing decisions in detail`
      with the text of the 8 most recently updated. No preflight
      call fetches them; `decision_recall` stays the way to refine them by query (step 1).
      When the block is absent, ONE `decision_list` with `status: "accepted"` gives the titles.
@@ -171,13 +171,13 @@ The runtime waits for every subagent and background task of an unattended run; l
    **Key evidence:** [max 5 lines of the stack trace — omit if feature]
 
    ## Standing decisions   [omit the whole section when the log has no accepted decision]
-   - #<number> <title>                       [every accepted title, copied from the session block]
-   - <owner>#<number> <title>                [a row whose `scope` is `org`]
+   - D-<n> <title>                           [every accepted title, copied from the session block]
+   - <ORGKEY>/D-<n> <title>                  [a row whose `scope` is `org`]
    ### In full (the 8 closest to this Brief)
-   - #<number> <title> — <the `decision` field in 1 line>
+   - D-<n> <title> — <the `decision` field in 1 line>
 
    ## Proposed (not binding)   [omit when the session block has no such section]
-   - #<number> <title>                       [titles only, copied from the session block]
+   - D-<n> <title>                           [titles only, copied from the session block]
    ```
 
    **How `## Proposed (not binding)` is filled in.** Copy the titles of the section of the
@@ -193,9 +193,9 @@ The runtime waits for every subagent and background task of an unattended run; l
    (MCP `nightqueue`) with `project` = the current project, `limit: 8` and
    `query` = the `**Affected area:**` plus the `**Objective:**` of the Brief. ONE call
    answers both levels: the project's own decisions and the decisions of its org, with the
-   org rows FIRST — never call the tool a second time. Name each row the way it comes: a
-   row whose `scope` is `project` is written `#<number>`, a row whose `scope` is `org` is
-   written `<owner>#<number>` (`acme#3`), because two levels may hold the same number. Both
+   org rows FIRST — never call the tool a second time. Name each row by the `ref` it carries:
+   a row whose `scope` is `project` is `D-<n>`, a row whose `scope` is `org` is
+   `<ORGKEY>/D-<n>` (`DLW/D-3`), because two levels may hold the same number. Both
    sources only ever carry accepted decisions, so a `proposed`, a `superseded` or
    a `rejected` one can never reach this section. Keep the order received in both parts;
    a row marked `via: "fallback"` did not match the query and is dropped from the full part.
@@ -283,10 +283,10 @@ The runtime waits for every subagent and background task of an unattended run; l
 
    <the alternative and its trade-off, or the single objective question — ≤ 5 lines>
 
-   Answer with: nightqueue queue retry <id> --note "<your answer>"
+   Answer with: nightqueue queue retry J-<id> --note "<your answer>"
    ```
 
-   `<id>` is the number of this job, in the header of the run ("Unattended run, job #N").
+   `J-<id>` is this job's ref, in the header of the run ("Unattended run, J-N").
    **The `## Notice` body IS the `## Requires user confirmation` block, VERBATIM** — the
    heading line itself plus every point of it (what was expected, the problem, the proposed
    solution, the expected result, the closing question) — followed by the answer line.
@@ -308,7 +308,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    stream, so a gate survives any paraphrase of the two headings.
 
    **A brief that depends on another job's pull request is not executable here.** When the
-   request conditions the work on another job ("after job #N", "once PR #N is merged",
+   request conditions the work on another job ("after J-N", "once PR #N is merged",
    "depends on job ..."), the verdict is `PROPOSE-ALTERNATIVE` — this case adds no new
    verdict — and the alternative is fixed. Print the gate block above with exactly this
    body under `## Requires user confirmation`, inside the `## Notice` section:
@@ -896,18 +896,18 @@ Project conventions: read `<CWD>/CLAUDE.md` yourself via Read if it exists (the 
 
 [Include only if the Standing decisions section of the Brief exists:]
 ## Standing decisions
-- #<number> <title>
+- D-<n> <title>
 ### In full (the 8 closest to this Brief)
-- #<number> <title> — <decision>
+- D-<n> <title> — <decision>
 These are the standing constraints of the project and of its org, decided before this task
-(a number written `<owner>#<number>` belongs to the org and binds every project of it).
+(a ref written `<ORGKEY>/D-<n>` belongs to the org and binds every project of it).
 They are binding context, never a proposed solution: a design that contradicts one either
 follows the decision or takes the conflict to `## Requires user confirmation` naming its
-number.
+ref.
 
 [Include only if the Proposed (not binding) section of the Brief exists:]
 ## Proposed (not binding)
-- #<number> <title>
+- D-<n> <title>
 These decisions were proposed and nobody accepted them yet: they bind nothing, and a design
 may go against them without a confirmation.
 
@@ -958,9 +958,9 @@ no block → nothing is saved, nothing is recorded, and the run proceeds normall
 
 **A `needs_review` answer:** `decision_save` answers `status: "needs_review"` with `candidates`
 when the proposal overlaps a standing or proposed decision, and nothing is saved. If the
-block has an `**Unrelated to:**` line whose numbers cover EVERY candidate number, call
-`decision_save` again ONCE with `unrelated` = those numbers. Otherwise do NOT save: record the
-open item `Proposed decision not saved: it touches #a, #b (needs_review); the operator decides
+block has an `**Unrelated to:**` line whose refs cover EVERY candidate, call
+`decision_save` again ONCE with `unrelated` = those refs. Otherwise do NOT save: record the
+open item `Proposed decision not saved: it touches D-a, D-b (needs_review); the operator decides
 it with decision_save outside the queue` for Phase 8, and the run proceeds. Never pass
 `supersedes` from a run: superseding a decision is the operator's call.
 
@@ -1316,7 +1316,7 @@ The two commands below own the mechanics — staging, the commit, the branch nam
      `<type>` of Phase 0. Include a body when the task is not trivial, with a `Tests:` line
      listing only the checks that actually passed and the tracker's canonical ID (e.g. `Fixes
      PROJ-123`) when the task came from one. No `Co-Authored-By` trailer, agent, model or
-     vendor name.
+     vendor name. Never write a `Refs:` trailer; `run commit` adds it.
    - Write the message with Write to `<RUN_DIR>/commit-message.txt`, which lives outside the
      worktree and is therefore never committed.
 
@@ -1357,9 +1357,11 @@ The two commands below own the mechanics — staging, the commit, the branch nam
      saved a `## Proposed decision` block, it is reported only in Phase 8, where the
      operator decides whether it deserves a ticket.
    - **No bare `#<number>` in the title or body** — GitHub cross-references an unrelated
-     issue/PR and notifies it. Write a queue job id or decision number without the `#`
-     (`job 24`, `decision 1`); the only `#<number>` allowed is a real issue of this
-     repository in the `Fixes`/`Closes` line.
+     issue/PR and notifies it. A decision is named by its ref (`D-1`), never `#1`; the only
+     `#<number>` allowed is a real issue of this repository in the `Fixes`/`Closes` line.
+   - **No job ref (`J-24`), run slug, `Refs` line or `Opened by nightqueue` line in the body**
+     — `nightqueue run pr` appends the traceability footer from the job row and refuses a
+     body that carries one.
    - Write the body with Write to `<RUN_DIR>/pr-body.md` and run
      `nightqueue run pr --body-file <RUN_DIR>/pr-body.md`. The command checks the body,
      renames the branch to its final name (the worktree creates it with the `worktree-` prefix
@@ -1642,8 +1644,8 @@ item with the literal `dedicated ticket: yes`, list it with `file:line` + 1 line
 the runtime's closing flow opens the ticket, never this pipeline (Phase 7, step 6). The same
 paragraph collects `unconfirmed decisions:` of the QA's `Usage coverage:` line, the `NOT MET /
 to confirm` lines of Phase 6.5 and, when Phase 3 saved a `## Proposed decision` block, one line
-`` Proposed decision <number>: <title> — recorded as `proposed`; accept or reject it with `decision_update`. ``
-(bare number, never `#<number>`) — this report is the ONLY place it surfaces. All of them become
+`` Proposed decision <ref>: <title> — recorded as `proposed`; accept or reject it with `decision_update`. ``
+(the `ref` `decision_save` answered, `D-<n>`, never `#<number>`) — this report is the ONLY place it surfaces. All of them become
 open items, reflected in `## Notice`'s "Still open" in user language (no file, no identifier).
 
 On both paths, proceed to the Telemetry below.

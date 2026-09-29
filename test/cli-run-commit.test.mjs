@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { runDir } from "../src/config/paths.mjs";
 import { run } from "../src/cli/index.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
+import { linkRoadmapItemJob, saveRoadmapItem } from "../src/memory/roadmap.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
-import { ensureProject, makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
 
 const SLUG = "fix-the-worker";
 
@@ -46,7 +47,7 @@ async function runCli(env, argv, { jobId }) {
   const out = [];
   const err = [];
   const code = await run(argv, {
-    env: { ...env, NIGHTQUEUE_JOB_ID: String(jobId) },
+    env: jobId === null ? env : { ...env, NIGHTQUEUE_JOB_ID: String(jobId) },
     out: (line) => out.push(line),
     err: (line) => err.push(line),
     stdout: { write: () => {} },
@@ -175,6 +176,72 @@ test("[R4] the refusal folds the case, because `.Claude/settings.json` is the ve
   const extra = await runCli(env, ["run", "commit", "--message-file", message, "--extra", ".Claude/*"], { jobId: id });
   assert.equal(extra.code, 1);
   assert.equal(extra.out[0], "REFUSED: .Claude/* (under `.claude/`)", "`--extra` in another case walked past the refusal");
+
+  assert.equal(execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), head);
+  assert.equal(execFileSync("git", ["-C", repo, "diff", "--cached", "--name-only"], { encoding: "utf8" }), "");
+});
+
+// The full message of the last commit and the trailers git itself parses out of it.
+function lastMessage(repo) {
+  const body = execFileSync("git", ["-C", repo, "log", "-1", "--format=%B"], { encoding: "utf8" }).trimEnd();
+  const trailers = execFileSync("git", ["-C", repo, "log", "-1", "--format=%(trailers)"], { encoding: "utf8" }).trim();
+  return { body, trailers: trailers.split("\n").filter(Boolean) };
+}
+
+// A run whose one listed file is ready to commit, with the message the agent wrote.
+function readyCommit(t, env, repo, name, message) {
+  writeIn(repo, "src/a.mjs");
+  writeImplementation(env, ["src/a.mjs"]);
+  return writeMessage(t, name, message);
+}
+
+const CO_AUTHORED = "feat: ship it\n\nRefs are resolved at the edge.\n\nCo-Authored-By: Someone <someone@example.invalid>\n";
+
+test("`run commit` of a roadmap job adds `Refs: <item ref>` as the last trailer of the existing block, and the agent's file is untouched", async (t) => {
+  const env = makeQueue(t, "run-commit-roadmap");
+  const { id, repo } = boundRun(t, env);
+  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
+  assert.equal(linkRoadmapItemJob(item.id, id, env), true);
+  const message = readyCommit(t, env, repo, "run-commit-roadmap-message", CO_AUTHORED);
+
+  const { code, text } = await runCli(env, ["run", "commit", "--message-file", message], { jobId: id });
+
+  assert.equal(code, 0, text);
+  assert.deepEqual(lastMessage(repo), {
+    body: "feat: ship it\n\nRefs are resolved at the edge.\n\nCo-Authored-By: Someone <someone@example.invalid>\nRefs: AP-1",
+    trailers: ["Co-Authored-By: Someone <someone@example.invalid>", "Refs: AP-1"],
+  });
+  assert.equal(readFileSync(message, "utf8"), CO_AUTHORED, "the agent's message file was edited");
+});
+
+test("`run commit` of a free-prompt job, or outside the queue, commits the message untouched", async (t) => {
+  const env = makeQueue(t, "run-commit-free");
+  const { id, repo } = boundRun(t, env);
+  const inside = readyCommit(t, env, repo, "run-commit-free-message", CO_AUTHORED);
+  assert.equal((await runCli(env, ["run", "commit", "--message-file", inside], { jobId: id })).code, 0);
+  assert.equal(lastMessage(repo).body, CO_AUTHORED.trimEnd());
+
+  writeIn(repo, "src/a.mjs", "changed\n");
+  const outside = writeMessage(t, "run-commit-outside-message", "fix: outside\n");
+  const operator = await runCli(env, ["run", "commit", "--message-file", outside, "--project", "alpha", "--slug", SLUG], { jobId: null });
+  assert.equal(operator.code, 0, `${operator.text}\n${operator.errText}`);
+  assert.equal(lastMessage(repo).body, "fix: outside");
+});
+
+test("a message carrying a `Refs:` line is REFUSED naming the line, and nothing is staged or committed", async (t) => {
+  const env = makeQueue(t, "run-commit-refs");
+  const { id, repo } = boundRun(t, env);
+  const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const cases = [
+    ["feat: x\n\nRefs: AP-1\n", "line 3 of the message is a `Refs:` trailer, which `run commit` appends from the job row: Refs: AP-1"],
+    ["feat: x\n\nbody\n\n  refs : AP-1  \n", "line 5 of the message is a `Refs:` trailer, which `run commit` appends from the job row: refs : AP-1"],
+  ];
+  for (const [index, [body, reason]] of cases.entries()) {
+    const message = readyCommit(t, env, repo, `run-commit-refs-${index}`, body);
+    const refused = await runCli(env, ["run", "commit", "--message-file", message], { jobId: id });
+    assert.equal(refused.code, 1);
+    assert.deepEqual(refused.out, [`REFUSED: ${reason}`]);
+  }
 
   assert.equal(execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), head);
   assert.equal(execFileSync("git", ["-C", repo, "diff", "--cached", "--name-only"], { encoding: "utf8" }), "");

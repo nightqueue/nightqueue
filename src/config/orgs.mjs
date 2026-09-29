@@ -27,24 +27,33 @@ export function slotsOf(config, orgId) {
   return { ...emptySlots(), ...(config?.orgConnections?.[orgId] ?? {}) };
 }
 
-// Lists the orgs with the default marker, the connection slots and the project count.
+// Lists the orgs with their key and old keys, the default marker, the connection slots and the project count.
 export async function listOrgs(store, config) {
   const fallback = await defaultOrg(store, config);
   const projects = await store.projects.list();
+  const aliases = await store.orgs.keyAliases();
   return (await store.orgs.list()).map((org) => ({
     id: org.id,
     name: org.name,
+    key: org.key,
+    aliases: aliases[org.id] ?? [],
     isDefault: org.id === fallback.id,
     connections: slotsOf(config, org.id),
     projects: projects.filter((project) => project.org_id === org.id).length,
   }));
 }
 
-// Creates a new org.
-export async function addOrg(store, name) {
+// Creates a new org under the key asked for, or a free one derived from its name.
+export async function addOrg(store, name, key = null) {
   assertName("org", name);
   if (await store.orgs.byName(name)) throw new UserError(`org \`${name}\` already exists`);
-  return await store.orgs.add(name);
+  return await store.orgs.add(name, key);
+}
+
+// Gives an org a new key; its old key keeps resolving to it.
+export async function setOrgKey(store, name, key) {
+  const org = await requireOrg(store, name);
+  return await store.orgs.setKey(org.id, key);
 }
 
 // Renames an org: one registry row, so every binding, project and default keyed by its id follows.

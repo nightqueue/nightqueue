@@ -17,6 +17,7 @@ import { runClosePipeline, CLOSE_LEASE_SLACK_S } from "./close.mjs";
 import { CLOSE_WORKER_ENV } from "./close-deps.mjs";
 import { parseCloseChecklist } from "./close-view.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 export { CLOSE_LEASE_SLACK_S, CLOSE_WORKER_ENV };
 
@@ -66,7 +67,7 @@ async function acquireOrRefuse({ store, id, worker, force, env }) {
   const row = await store.jobs.acquireClose(id, { worker, leaseS: closeLeaseSeconds(env), force });
   if (row) return row;
   const refusal = closeRefusal(id, await store.jobs.getJob(id), { force });
-  throw new UserError(refusal ?? `job \`${id}\` could not take the close lease; run nightqueue queue status ${id}`);
+  throw new UserError(refusal ?? `job \`${id}\` could not take the close lease; run nightqueue queue status ${jobRef(id)}`);
 }
 
 // Validates the target and takes its lease: the part of a start that writes, run only after every refusal had its say.
@@ -147,7 +148,7 @@ export async function startCloseDetached({ store, id, force = false, env = proce
     return { started: true, jobId: id, pid: started.pid, logPath: started.logPath, worker: claimed.worker, forced: claimed.forced, status: claimed.job.status };
   } catch (err) {
     await failCloseStart({ store, id, worker: claimed.worker, row: claimed.row });
-    throw new UserError(`could not start the close of job #${id}: ${err?.message ?? String(err)}; run again with: nightqueue queue close ${id}`);
+    throw new UserError(`could not start the close of ${jobRef(id)}: ${err?.message ?? String(err)}; run again with: nightqueue queue close ${jobRef(id)}`);
   }
 }
 
@@ -166,7 +167,7 @@ async function registerForegroundClose({ id, env, killImpl }) {
 async function adoptParentLease({ store, id, force, env }) {
   const worker = env[CLOSE_WORKER_ENV].trim();
   const adopted = await store.jobs.adoptClose(id, { worker, leaseS: closeLeaseSeconds(env) });
-  if (!adopted) throw new UserError(`the close lease of job #${id} is not held by this process any more; run nightqueue queue status ${id}`);
+  if (!adopted) throw new UserError(`the close lease of ${jobRef(id)} is not held by this process any more; run nightqueue queue status ${jobRef(id)}`);
   const job = await store.jobs.getJob(id);
   return { job, worker, forced: force === true, row: job };
 }

@@ -27,7 +27,7 @@ import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../me
 import { HOST_COMMANDS_SAMPLE_SIZE } from "../memory/jobs.mjs";
 import { hasLegacyRegistry } from "../memory/migration/v18.mjs";
 import { DB_USER_VERSION } from "../memory/schema.mjs";
-import { ownerLabel } from "../memory/scope.mjs";
+import { decisionRef } from "../memory/scope.mjs";
 import { keepAwakeMode, resolveCaffeinateBin } from "../queue/keep-awake.mjs";
 import { isRegistryFailure, killProcess, listRunnerRecords, liveRunnersReport, registryReadError } from "../queue/registry.mjs";
 import { closesSummary } from "../queue/close-view.mjs";
@@ -37,6 +37,7 @@ import { openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { firstLine } from "./report.mjs";
 import { runtimeLabel, runtimeLocation } from "./runtime-versions.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 const COMMAND_TIMEOUT_MS = 5000;
 const MIN_NODE_MAJOR = 22;
@@ -304,9 +305,9 @@ async function checkDatabase(ctx) {
 
 // One drifted entry: an item or a project row behind its job, or an org item whose status disagrees with its rows.
 function roadmapDriftEntry(row) {
-  if (row.job_id === null) return `${row.owner}#${row.id} ${row.status} (derived from its project rows: ${row.expected})`;
+  if (row.job_id === null) return `${row.ref} ${row.status} (derived from its project rows: ${row.expected})`;
   const where = row.project ? ` row ${row.project}` : "";
-  return `#${row.id}${where} ${row.status} (job ${row.job_id} ${row.job_status}, expected ${row.expected})`;
+  return `${row.ref}${where} ${row.status} (${jobRef(row.job_id)} ${row.job_status}, expected ${row.expected})`;
 }
 
 // The detail of the roadmap entries whose status disagrees with their job or their rows: how many, then each with its status and the expected one.
@@ -493,7 +494,7 @@ async function checkQueueJobs(ctx) {
 // The detail of the proposals left open on closed jobs: how many, then each by number and job.
 function staleProposalsDetail(rows) {
   const noun = rows.length === 1 ? "proposed decision" : "proposed decisions";
-  const items = rows.map((row) => `${ownerLabel(row)} (job ${row.job_id})`).join(", ");
+  const items = rows.map((row) => `${decisionRef(row)} (${jobRef(row.job_id)})`).join(", ");
   return `${rows.length} ${noun} of closed jobs: ${items}`;
 }
 
@@ -519,7 +520,7 @@ async function checkDecisionProposals(ctx) {
 // What a live registration does, as the report adds it: a watcher's cadence, the job a close is closing, nothing otherwise.
 function runnerCadenceDetail(info) {
   if (Number.isInteger(info.intervalS)) return `, ${info.mode} every ${info.intervalS} s`;
-  if (info.mode === "close") return `, close job #${info.jobId}`;
+  if (info.mode === "close") return `, close ${jobRef(info.jobId)}`;
   return "";
 }
 
@@ -645,9 +646,9 @@ function closeGroup(entries, label, describe) {
 // The detail of the closes row: every close in flight, failed or on a dead lease, grouped.
 function closesDetail({ inFlight, failed, stalled }) {
   const groups = [
-    ...closeGroup(inFlight, "in flight", ({ id, step, pid }) => `#${id} at ${step}${pid === null ? "" : `, pid ${pid}`}`),
-    ...closeGroup(failed, "failed", ({ id, step, reason }) => `#${id} at ${step}: ${reason}`),
-    ...closeGroup(stalled, "with a dead lease", ({ id }) => `#${id}`),
+    ...closeGroup(inFlight, "in flight", ({ id, step, pid }) => `${jobRef(id)} at ${step}${pid === null ? "" : `, pid ${pid}`}`),
+    ...closeGroup(failed, "failed", ({ id, step, reason }) => `${jobRef(id)} at ${step}: ${reason}`),
+    ...closeGroup(stalled, "with a dead lease", ({ id }) => jobRef(id)),
   ];
   return groups.length ? groups.join(", ") : "no close in flight, failed or stalled";
 }
@@ -686,8 +687,6 @@ function checkProject(ctx, project) {
     : check(name, "ok", project.path);
 }
 
-const REGISTRY_SCHEMA_VERSION = 18;
-
 // The registered projects that have a checkout, read without creating nor migrating anything: `{ projects }`, or `{ pending }` saying why they cannot be read yet.
 async function registeredCheckouts(ctx) {
   if (!existsSync(dbPath(ctx.env))) {
@@ -696,8 +695,8 @@ async function registeredCheckouts(ctx) {
   }
   return await withReadOnlyStore(ctx.env, async (store) => {
     const { schemaVersion } = await store.health();
-    if (Number.isInteger(schemaVersion) && schemaVersion < REGISTRY_SCHEMA_VERSION) {
-      return { pending: `database is at v${schemaVersion}; it migrates to v${REGISTRY_SCHEMA_VERSION} on the next command that writes` };
+    if (Number.isInteger(schemaVersion) && schemaVersion < DB_USER_VERSION) {
+      return { pending: `database is at v${schemaVersion}; it migrates to v${DB_USER_VERSION} on the next command that writes` };
     }
     const projects = (await store.projects.list()).filter((project) => project.path);
     return { projects: projects.map((project) => ({ ...project, exists: existsSync(project.path) })) };

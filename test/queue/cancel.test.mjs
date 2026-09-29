@@ -86,7 +86,7 @@ test("queue cancel prints the released worktree, and --json and queue_cancel ans
 
   const done = jobWithWorktree(home, { status: "done", slug: "cli-done", prUrl: PR_URL });
   assert.equal(await run(["queue", "cancel", String(done.id)], ctx), 0);
-  assert.deepEqual(out, [`cancelled job #${done.id}`, `worktree removed: ${done.path}`]);
+  assert.deepEqual(out, [`cancelled J-${done.id}`, `worktree removed: ${done.path}`]);
 
   out.length = 0;
   const failed = jobWithWorktree(home, { status: "failed", slug: "cli-failed" });

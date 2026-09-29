@@ -1,7 +1,7 @@
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { PROPOSED_HEADING, STANDING_HEADING, decisionTitleLine } from "../memory/decisions.mjs";
 import { projectFromCwd } from "../memory/registry-access.mjs";
-import { ownerLabel } from "../memory/scope.mjs";
+import { decisionRef } from "../memory/scope.mjs";
 import { openStore } from "../store/open.mjs";
 import { clip, section } from "./block.mjs";
 import { recordInjected } from "./state.mjs";
@@ -76,7 +76,7 @@ function memoryLine(memory) {
 
 // One standing decision of the session block, short on purpose: the full text comes from `decision_recall`.
 function decisionLine(decision) {
-  return `- ${ownerLabel(decision)} ${clip(`${decision.title}: ${decision.decision}`, DECISION_MAX)}`;
+  return `- ${decisionRef(decision)} ${clip(`${decision.title}: ${decision.decision}`, DECISION_MAX)}`;
 }
 
 // Marks the lessons as injected in the corpus, tolerating a write failure that must not cost the block.

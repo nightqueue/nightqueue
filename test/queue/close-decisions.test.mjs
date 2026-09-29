@@ -99,10 +99,10 @@ test("close --decisions accept flips every proposal of the closed job, and says 
   assert.equal(getJob(job, env).status, "closed");
   assert.equal(statusOf(env, first.id), "accepted");
   assert.equal(statusOf(env, second.id), "accepted");
-  assert.ok(result.out.includes(`job #${job} closed: PR #7 merged as abc1234`), result.out.join("\n"));
+  assert.ok(result.out.includes(`J-${job} closed: PR #7 merged as abc1234`), result.out.join("\n"));
   assert.deepEqual(decisionLines(result.out), [
-    `decision #${first.number} leases are renewed by their owner: accepted`,
-    `decision #${second.number} runners register in one table: accepted`,
+    `decision D-${first.number} leases are renewed by their owner: accepted`,
+    `decision D-${second.number} runners register in one table: accepted`,
   ]);
 });
 
@@ -118,7 +118,7 @@ test("close --decisions reject rejects the proposal, and leaves the proposal of 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.equal(statusOf(env, mine.id), "rejected");
   assert.equal(statusOf(env, theirs.id), "proposed");
-  assert.deepEqual(decisionLines(result.out), [`decision #${mine.number} leases are renewed by their owner: rejected`]);
+  assert.deepEqual(decisionLines(result.out), [`decision D-${mine.number} leases are renewed by their owner: rejected`]);
 });
 
 test("without the flag and without a terminal the proposals stay proposed and are listed as kept", async (t) => {
@@ -131,7 +131,7 @@ test("without the flag and without a terminal the proposals stay proposed and ar
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.equal(getJob(job, env).status, "closed");
   assert.equal(statusOf(env, first.id), "proposed");
-  assert.deepEqual(decisionLines(result.out), [`decision #${first.number} leases are renewed by their owner: kept (proposed)`]);
+  assert.deepEqual(decisionLines(result.out), [`decision D-${first.number} leases are renewed by their owner: kept (proposed)`]);
 });
 
 test("a detached close settles nothing itself and hands its --decisions choice to the child, which settles by it", async (t) => {
@@ -195,7 +195,7 @@ test("close --json on a terminal never prompts, keeps the proposals and prints o
   const payload = JSON.parse(result.out[0]);
   assert.equal(payload.job.status, "closed");
   assert.deepEqual(payload.decisions, [
-    { job_id: job, id: first.id, number: first.number, label: `#${first.number}`, title: "leases are renewed by their owner", action: "kept" },
+    { job_id: job, id: first.id, number: first.number, label: `D-${first.number}`, ref: `D-${first.number}`, title: "leases are renewed by their owner", action: "kept" },
   ]);
   assert.equal(statusOf(env, first.id), "proposed");
 });
@@ -242,9 +242,9 @@ test("on a terminal each proposal is asked by number, title and job; an empty or
 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.deepEqual(tty.asked, [
-    `decision #${first.number} "leases are renewed by their owner" of job #${job}: ${QUESTION_MARK}`,
-    `decision #${second.number} "runners register in one table" of job #${job}: ${QUESTION_MARK}`,
-    `decision #${third.number} "heartbeats are configuration" of job #${job}: ${QUESTION_MARK}`,
+    `decision D-${first.number} "leases are renewed by their owner" of J-${job}: ${QUESTION_MARK}`,
+    `decision D-${second.number} "runners register in one table" of J-${job}: ${QUESTION_MARK}`,
+    `decision D-${third.number} "heartbeats are configuration" of J-${job}: ${QUESTION_MARK}`,
   ]);
   assert.equal(statusOf(env, first.id), "rejected");
   assert.equal(statusOf(env, second.id), "proposed");
@@ -262,7 +262,7 @@ test("on a terminal whose input ends before an answer, the proposal is kept", as
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.equal(tty.asked.length, 1);
   assert.equal(statusOf(env, first.id), "proposed");
-  assert.deepEqual(decisionLines(result.out), [`decision #${first.number} leases are renewed by their owner: kept (proposed)`]);
+  assert.deepEqual(decisionLines(result.out), [`decision D-${first.number} leases are renewed by their owner: kept (proposed)`]);
 });
 
 test("a proposal that cannot be settled is reported on stderr and never undoes the close", async (t) => {
@@ -277,7 +277,7 @@ test("a proposal that cannot be settled is reported on stderr and never undoes t
   assert.equal(getJob(job, env).status, "closed");
   assert.deepEqual(decisionLines(result.out), []);
   assert.equal(result.err.length, 1, result.err.join("\n"));
-  assert.match(result.err[0], new RegExp(`^decisions of job #${job} not settled: .*decisions are frozen`));
+  assert.match(result.err[0], new RegExp(`^decisions of J-${job} not settled: .*decisions are frozen`));
   assert.equal(statusOf(env, first.id), "proposed");
 });
 

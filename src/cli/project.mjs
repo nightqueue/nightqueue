@@ -1,52 +1,77 @@
 import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { requireOrg } from "../config/orgs.mjs";
-import { registerProject as registerInStore, renameProject, requireGitPath, requireProject } from "../config/projects.mjs";
+import { registerProject as registerInStore, renameProject, requireGitPath, requireProject, setProjectKey } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
+import { requireKey } from "../memory/refs.mjs";
 import { openRegistryReader, openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
+import { askKey } from "./prompt.mjs";
 
-// Registers a git repository as a project of an org and answers what happened, printing nothing.
-export async function saveProject(ctx, { path, name, org } = {}) {
-  return await registerInStore(openStore(ctx.env), loadConfig(ctx.env, { warn: ctx.err }), { path, name, org });
+// The key `--key` asks for, validated at the edge; undefined when the option is absent.
+export function keyOption(values) {
+  return values.key === undefined ? undefined : requireKey(values.key);
+}
+
+// Registers a git repository as a project of an org and answers what happened, printing nothing; without a key the terminal is asked, or the suggestion taken.
+export async function saveProject(ctx, { path, name, org, key } = {}) {
+  const store = openStore(ctx.env);
+  const chooseKey = async (projectName) =>
+    await askKey(ctx, { kind: "project", name: projectName, suggested: await store.projects.suggestKey(projectName) });
+  return await registerInStore(store, loadConfig(ctx.env, { warn: ctx.err }), { path, name, org, key, chooseKey });
 }
 
 // Registers a git repository as a project of an org, reports the one fact that matters and returns the row it landed on.
-export async function registerProject(ctx, { path, name, org } = {}) {
-  const { project } = await saveProject(ctx, { path, name, org });
-  ctx.out(`registered project \`${project.name}\` (${project.path})`);
+export async function registerProject(ctx, { path, name, org, key } = {}) {
+  const { project } = await saveProject(ctx, { path, name, org, key });
+  ctx.out(`registered project \`${project.name}\` (${project.path}) with key ${project.key}`);
   return project;
 }
 
 // Registers a git repository as a project of an org, from the arguments of a command.
 export async function addFromArgs(argv, ctx, usage) {
-  const { values, positionals } = parseCommand(argv, { org: { type: "string" }, name: { type: "string" } });
+  const { values, positionals } = parseCommand(argv, { org: { type: "string" }, name: { type: "string" }, key: { type: "string" } });
   checkArgs(positionals, { max: 1, usage });
-  await registerProject(ctx, { path: positionals[0] ?? ".", name: values.name, org: values.org });
+  await registerProject(ctx, { path: positionals[0] ?? ".", name: values.name, org: values.org, key: keyOption(values) });
 }
 
 // Runs `project add`.
 async function runAdd(argv, ctx) {
-  await addFromArgs(argv, ctx, "nightqueue project add <path> [--org <name>] [--name <name>]");
+  await addFromArgs(argv, ctx, "nightqueue project add <path> [--org <name>] [--name <name>] [--key <KEY>]");
 }
 
-// The listing shape of a project: its checkout path, when it has one, and whether that path still exists.
-function listedProject(project) {
-  return { id: project.id, name: project.name, path: project.path, org: project.org, exists: project.path ? existsSync(project.path) : false };
+// The listing shape of a project: its key and old keys, its checkout path, when it has one, and whether that path still exists.
+function listedProject(project, aliases) {
+  return {
+    id: project.id,
+    name: project.name,
+    key: project.key,
+    aliases: aliases[project.id] ?? [],
+    path: project.path,
+    org: project.org,
+    exists: project.path ? existsSync(project.path) : false,
+  };
 }
 
 // One line of `project list`; a project known only from history has no path.
 function projectLine(project) {
-  if (!project.path) return `${project.name}  (no path)  ${project.org}`;
-  return `${project.name}  ${project.path}  ${project.org}  ${project.exists ? "ok" : "missing"}`;
+  if (!project.path) return `${project.name}  ${project.key}  (no path)  ${project.org}`;
+  return `${project.name}  ${project.key}  ${project.path}  ${project.org}  ${project.exists ? "ok" : "missing"}`;
+}
+
+// Every registered project in its listing shape; a home with no database yet has none.
+async function listedProjects(ctx) {
+  const store = await openRegistryReader(ctx.env);
+  if (!store) return [];
+  const aliases = await store.projects.keyAliases();
+  return (await store.projects.list()).map((project) => listedProject(project, aliases));
 }
 
 // Runs `project list`: every registered project, path-less ones included.
 async function runList(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
   checkArgs(positionals, { max: 0, usage: "nightqueue project list [--json]" });
-  const store = await openRegistryReader(ctx.env);
-  const projects = store ? (await store.projects.list()).map(listedProject) : [];
+  const projects = await listedProjects(ctx);
   if (values.json) {
     ctx.out(JSON.stringify({ projects }));
     return;
@@ -65,6 +90,15 @@ async function runRename(argv, ctx) {
   const [oldName, newName] = positionals;
   await renameProject(openStore(ctx.env), oldName, newName);
   ctx.out(`renamed project \`${oldName}\` to \`${newName}\``);
+}
+
+// Runs `project key`: one registry row and one alias, so the old key keeps resolving and every render shows the new one.
+async function runKey(argv, ctx) {
+  const { positionals } = parseCommand(argv);
+  checkArgs(positionals, { min: 2, max: 2, usage: "nightqueue project key <name> <KEY>" });
+  const [name, key] = positionals;
+  const { oldKey, key: newKey } = await setProjectKey(openStore(ctx.env), name, key);
+  ctx.out(`changed the key of project \`${name}\` from ${oldKey} to ${newKey}; ${oldKey} refs still resolve`);
 }
 
 // Runs `project remove`: the database refuses a project that still owns rows, and the refusal lists them.
@@ -112,6 +146,7 @@ const SUBCOMMANDS = new Map([
   ["add", runAdd],
   ["list", runList],
   ["rename", runRename],
+  ["key", runKey],
   ["remove", runRemove],
   ["move", runMove],
 ]);

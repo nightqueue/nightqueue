@@ -108,6 +108,7 @@ function jobsMethods(env, db) {
     cancelJob: async (id, options) => jobs.cancelJob(id, options, env),
     cancelRunningJob: async (id, spec) => jobs.cancelRunningJob(id, spec, env),
     listCloseCandidates: async () => jobs.listCloseCandidates(env, db()),
+    jobsWithPrNumber: async (number) => jobs.jobsWithPrNumber(number, env, db()),
     retryJob: async (id, options) =>
       followingPassedStatus({ jobId: id, write: () => jobs.retryJob(id, options, env), fromKey: "retriedFrom" }, env),
     getJob: async (id) => jobs.getJob(id, env, db()),
@@ -190,6 +191,9 @@ function decisionsDomain(env, db) {
   return {
     getDecision: async (id) => decisions.getDecision(id, env),
     getDecisionByNumber: async (spec) => decisions.getDecisionByNumber(spec, env, db()),
+    decisionOfRef: async (ref, context) => decisions.decisionOfRef(ref, context, env, db()),
+    decisionIdOfRef: async (ref, context) => decisions.decisionIdOfRef(ref, context, env, db()),
+    ownDecisionNumbers: async (entries, owner) => decisions.ownDecisionNumbers(entries, owner, env, db()),
     saveDecision: async (decision) => decisions.saveDecision(decision, env),
     saveReviewedDecision: async (spec) => decisions.saveReviewedDecision(spec, env),
     updateDecision: async (id, patch) => decisions.updateDecision(id, patch, env),
@@ -206,7 +210,7 @@ function decisionsDomain(env, db) {
   };
 }
 
-// The roadmap; `listRoadmap`, `searchRoadmap`, `getRoadmapItemDetail` and `roadmapDrift` take the store's own connection, which is what makes them work read-only.
+// The roadmap; `listRoadmap`, `searchRoadmap`, `getRoadmapItemDetail`, `roadmapRefOfJob` and `roadmapDrift` take the store's own connection, which is what makes them work read-only.
 function roadmapDomain(env, db) {
   return {
     getRoadmapItem: async (id) => roadmap.getRoadmapItem(id, env),
@@ -214,7 +218,8 @@ function roadmapDomain(env, db) {
     saveRoadmapItem: async (item) => roadmap.saveRoadmapItem(item, env),
     updateRoadmapItem: async (id, patch) => roadmap.updateRoadmapItem(id, patch, env),
     addRoadmapComment: async (spec) => roadmap.addRoadmapComment(spec, env),
-    roadmapRefOfJob: async (jobId) => roadmap.roadmapRefOfJob(jobId, env),
+    roadmapRefOfJob: async (jobId) => roadmap.roadmapRefOfJob(jobId, env, db()),
+    itemIdOfRef: async (ref) => roadmap.itemIdOfRef(ref, env, db()),
     backfillRoadmap: async (options) => roadmapBackfill.backfillRoadmap(options, env),
     listRoadmap: async (owner, filters) => roadmap.listRoadmap(owner, filters, env, db()),
     searchRoadmap: async (spec) => roadmapSearch.searchRoadmap(spec, env, db()),
@@ -234,8 +239,11 @@ function orgsDomain(db) {
     list: async () => registry.listOrgs(db()),
     byName: async (name) => registry.orgByName(db(), name),
     byId: async (id) => registry.orgById(db(), id),
-    add: async (name) => registry.insertOrg(db(), name),
+    add: async (name, key) => registry.insertOrg(db(), name, key),
     rename: async (id, name) => registry.renameOrg(db(), { id, name }),
+    setKey: async (id, key) => registry.setOrgKey(db(), { id, key }),
+    suggestKey: async (name) => registry.suggestFreeKey(db(), name, "org"),
+    keyAliases: async () => registry.keyAliases(db(), "org"),
     remove: async (id) => registry.removeOrg(db(), id),
   };
 }
@@ -250,6 +258,9 @@ function projectsDomain(db) {
     ofOrg: async (orgId) => registry.projectsOfOrg(db(), orgId),
     add: async (spec) => registry.insertProject(db(), spec),
     rename: async (id, name) => registry.renameProject(db(), { id, name }),
+    setKey: async (id, key) => registry.setProjectKey(db(), { id, key }),
+    suggestKey: async (name) => registry.suggestFreeKey(db(), name, "project"),
+    keyAliases: async () => registry.keyAliases(db(), "project"),
     move: async (id, spec) => registry.moveProject(db(), { ...spec, id }),
     remove: async (id) => registry.removeProject(db(), id),
   };

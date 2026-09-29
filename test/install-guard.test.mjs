@@ -81,7 +81,7 @@ test("setup --from refuses under the same condition, before packing anything", a
 
   const { ctx, err } = makeCtx(host.env);
   assert.equal(await run(["setup", "--from", CHECKOUT, "--no-path", "--no-embedding"], ctx), 1);
-  assert.deepEqual(err, [refusal(`job #${id}`)]);
+  assert.deepEqual(err, [refusal(`J-${id}`)]);
   assert.deepEqual(host.npmCalls(), [], "a refused setup --from still reached npm");
 });
 
@@ -93,7 +93,7 @@ test("init refuses while a runner holds a job, naming both the pid and the job",
 
   const { ctx, err } = makeCtx(host.env, { alive, cwd });
   assert.equal(await run(["init", "--no-path", "--no-embedding", "--no-gh"], ctx), 1);
-  assert.deepEqual(err, [refusal(`pid ${RUNNER_PID} / job #${id}`)]);
+  assert.deepEqual(err, [refusal(`pid ${RUNNER_PID} / J-${id}`)]);
   assert.deepEqual(host.npmCalls(), [], "a refused init still reached npm");
   assert.equal(existsSync(host.runtimeCurrent), false, "a refused init still swapped the runtime");
 });

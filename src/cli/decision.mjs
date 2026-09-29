@@ -6,19 +6,20 @@ import { dbPath } from "../config/paths.mjs";
 import { paddedNumber, parseDecisionFile, pointerLine, renderDecisionFile, slugOf, stampPointer } from "../memory/decision-file.mjs";
 import { DECISION_STATUSES, decisionView, renderDecisionText } from "../memory/decisions.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
-import { SCOPE_CONFLICT, orgTargetOf, ownerLabel, ownerNames, ownerOf, ownerRef, projectTargetOf } from "../memory/scope.mjs";
+import { parseRef } from "../memory/refs.mjs";
+import { SCOPE_CONFLICT, decisionRef, orgTargetOf, ownerNames, ownerOf, ownerRef, ownerValues, projectTargetOf, rowOwner, targetDecisionRef } from "../memory/scope.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { openRegistryReader, openStore, openStoreReadOnly } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
 export const USAGE = {
   list: "nightqueue decision list [--project <name> | --org <name>] [--status <status>] [--json]",
-  show: "nightqueue decision show <number> [--project <name> | --org <name>]",
-  export: "nightqueue decision export <number> [--project <name> | --org <name>] [--dir <path>] [--force]",
+  show: "nightqueue decision show <number|ref> [--project <name> | --org <name>]",
+  export: "nightqueue decision export <number|ref> [--project <name> | --org <name>] [--dir <path>] [--force]",
   import:
-    "nightqueue decision import <file.md> [--project <name> | --org <name>] [--status <status>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]",
+    "nightqueue decision import <file.md> [--project <name> | --org <name>] [--status <status>] [--superseded-by <n|ref>] [--supersedes <n|ref,...>] [--unrelated <n|ref,...>]",
   update:
-    "nightqueue decision update <number> --status accepted|rejected|superseded [--superseded-by <n>] [--project <name> | --org <name>]",
+    "nightqueue decision update <number|ref> --status accepted|rejected|superseded [--superseded-by <n|ref>] [--project <name> | --org <name>]",
 };
 
 const OWNER_OPTIONS = {
@@ -115,19 +116,70 @@ function requireNumber(raw, usage = USAGE.show) {
   return parsed;
 }
 
-// Requires a flag to carry one positive integer decision number.
-function requireNumberFlag(flag, raw) {
+// Requires a flag to carry one decision number or decision ref, kept as text for the owner to resolve.
+function requireDecisionFlag(flag, raw) {
   const text = String(raw).trim();
-  if (/^[1-9]\d*$/.test(text)) return Number(text);
-  throw new UserError(`\`--${flag}\` expects a positive integer decision number, got \`${raw}\``);
+  if (/^[1-9]\d*$/.test(text) || parseRef(text)?.kind === "decision") return text;
+  throw new UserError(`\`--${flag}\` expects a decision number or ref (\`3\`, \`D-3\`, \`<KEY>/D-3\`), got \`${raw}\``);
 }
 
-// Decision numbers of a comma-separated flag; an absent flag names none.
-function numberListFlag(flag, raw) {
+// Decision numbers or refs of a comma-separated flag; an absent flag names none.
+function decisionListFlag(flag, raw) {
   if (raw === undefined) return [];
   const parts = String(raw).split(",").map((part) => part.trim()).filter(Boolean);
-  if (!parts.length) throw new UserError(`\`--${flag}\` expects decision numbers like \`3,7\`, got \`${raw}\``);
-  return parts.map((part) => requireNumberFlag(flag, part));
+  if (!parts.length) throw new UserError(`\`--${flag}\` expects decision numbers or refs like \`3,D-7\`, got \`${raw}\``);
+  return parts.map((part) => requireDecisionFlag(flag, part));
+}
+
+// Where a positional decision lives: a plain number or `D-<n>` in the owner of the flags (or of the cwd), `<KEY>/D-<n>` in its key's owner.
+async function decisionAddress(raw, values, ctx, usage) {
+  const ref = parseRef(raw);
+  const flagged = values.project !== undefined || values.org !== undefined;
+  if (ref?.kind === "decision" && ref.key !== null) {
+    return { qualified: true, raw: String(raw).trim(), target: flagged ? await resolveReadTarget(values, ctx) : null };
+  }
+  const number = ref?.kind === "decision" ? ref.number : requireNumber(raw, usage);
+  return { qualified: false, number, target: await resolveReadTarget(values, ctx) };
+}
+
+// The owner a decision row is shown under, with the label every message of these commands names it by.
+function rowTargetOf(row) {
+  const owner = rowOwner(row);
+  const label = owner.scope === "org" ? `org \`${owner.org}\`` : `\`${owner.project ?? "global"}\``;
+  return { ...owner, label };
+}
+
+// Tells whether two targets name the same owner.
+function sameTarget(a, b) {
+  return ownerValues(a).every((value, index) => value === ownerValues(b)[index]);
+}
+
+// The refusal of a decision an address names but the database does not hold.
+function unknownDecision(address) {
+  if (address.qualified) return new UserError(`unknown decision \`${address.raw}\``);
+  return new UserError(`unknown decision ${targetDecisionRef(address.target, address.number)} for ${address.target.label}`);
+}
+
+// The decision row an address names and the owner it is shown under; a qualified ref beside a flag naming another owner is refused.
+async function findDecision(store, address) {
+  if (!address.qualified) {
+    const row = await store.decisions.getDecisionByNumber({ ...ownerRef(address.target), number: address.number });
+    if (!row) throw unknownDecision(address);
+    return { row, target: address.target };
+  }
+  const row = await store.decisions.decisionOfRef(address.raw);
+  const target = rowTargetOf(row);
+  if (address.target !== null && !sameTarget(address.target, target)) {
+    throw new UserError(`\`${address.raw}\` is a decision of ${target.label}, not of ${address.target.label}; drop --project/--org`);
+  }
+  return { row, target };
+}
+
+// Reads the decision a positional names on a read-only connection; a home with no database names none.
+async function readDecision(ctx, address) {
+  const found = await readOnlyQuery(ctx, (store) => findDecision(store, address), null);
+  if (!found) throw unknownDecision(address);
+  return found;
 }
 
 // Date part of an ISO timestamp, the only precision the table has room for.
@@ -148,7 +200,7 @@ function header() {
 // One line of the table of `decision list`.
 function formatRow(row) {
   return [
-    cell(ownerLabel(row), NUMBER_WIDTH),
+    cell(row.ref, NUMBER_WIDTH),
     cell(row.status, STATUS_WIDTH),
     cell(shortDate(row.updated_at), DATE_WIDTH),
     String(row.title ?? "").replace(/\s+/g, " ").trim(),
@@ -186,16 +238,13 @@ function printDecision(ctx, target, row) {
 async function runShow(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { project: { type: "string" }, org: { type: "string" } });
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.show });
-  const target = await resolveReadTarget(values, ctx);
-  const number = requireNumber(positionals[0]);
-  const row = await readOnlyQuery(ctx, (store) => store.decisions.getDecisionByNumber({ ...ownerRef(target), number }), null);
-  if (!row) throw new UserError(`unknown decision #${number} for ${target.label}`);
+  const { row, target } = await readDecision(ctx, await decisionAddress(positionals[0], values, ctx, USAGE.show));
   printDecision(ctx, target, row);
 }
 
 // Label of the decision that replaced a row, or null when nothing did.
 function successorLabel(row) {
-  return row.superseded_by_number ? ownerLabel({ ...row, number: row.superseded_by_number }) : null;
+  return row.superseded_by_number ? decisionRef({ ...row, number: row.superseded_by_number }) : null;
 }
 
 // Path `export` writes a decision to: `--dir`, or the decisions folder under `docs` of the current directory.
@@ -220,10 +269,7 @@ function writeExportedFile(path, text, force) {
 async function runExport(argv, ctx) {
   const { values, positionals } = parseCommand(argv, EXPORT_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.export });
-  const target = await resolveReadTarget(values, ctx);
-  const number = requireNumber(positionals[0], USAGE.export);
-  const row = await readOnlyQuery(ctx, (store) => store.decisions.getDecisionByNumber({ ...ownerRef(target), number }), null);
-  if (!row) throw new UserError(`unknown decision #${number} for ${target.label}`);
+  const { row } = await readDecision(ctx, await decisionAddress(positionals[0], values, ctx, USAGE.export));
   const path = exportPath(row, values, ctx);
   writeExportedFile(path, renderDecisionFile(row, { successorLabel: successorLabel(row) }), values.force === true);
   ctx.out(path);
@@ -241,7 +287,7 @@ function readImportedFile(path) {
 // Status and successor of an imported row: `--superseded-by` implies `superseded`, `--status` wins over the file's `Status:`.
 function importStatus(values, parsed) {
   const flagged = requireStatusOption(values.status);
-  const successorFlag = values["superseded-by"] === undefined ? null : requireNumberFlag("superseded-by", values["superseded-by"]);
+  const successorFlag = values["superseded-by"] === undefined ? null : requireDecisionFlag("superseded-by", values["superseded-by"]);
   if (successorFlag !== null && flagged !== undefined && flagged !== "superseded") {
     throw new UserError(`\`--superseded-by\` makes the decision \`superseded\`; it conflicts with \`--status ${flagged}\``);
   }
@@ -260,9 +306,9 @@ function importStatus(values, parsed) {
 // Refuses a file whose pointer already names an existing row of this owner, so a re-run imports nothing twice.
 async function refuseAlreadyImported(store, target, pointer) {
   if (!pointer || pointer.owner !== ownerOf(target)) return;
-  if (pointer.label !== ownerLabel({ ...target, number: pointer.number })) return;
+  if ((pointer.qualifier !== null) !== (target.scope === "org")) return;
   const row = await store.decisions.getDecisionByNumber({ ...ownerRef(target), number: pointer.number });
-  if (row) throw new UserError(`already imported as ${ownerLabel(row)} (${row.title}); nothing imported`);
+  if (row) throw new UserError(`already imported as ${decisionRef(row)} (${row.title}); nothing imported`);
 }
 
 // The refusal of an import that overlaps decisions nobody named, listing each one and how to re-run.
@@ -277,7 +323,7 @@ function needsReviewMessage(candidates) {
 
 // Writes the pointer of the imported row into the file; a failure only warns, because the row is already saved.
 function stampImportedFile(ctx, path, saved) {
-  const label = ownerLabel(saved);
+  const label = saved.ref;
   const owner = ownerOf(saved);
   try {
     const text = readFileSync(path, "utf8");
@@ -295,10 +341,14 @@ async function runImport(argv, ctx) {
   const target = await resolveReadTarget(values, ctx);
   const path = resolve(ctx.cwd ?? process.cwd(), positionals[0]);
   const parsed = parseDecisionFile(readImportedFile(path), path);
-  const { status, supersededBy } = importStatus(values, parsed);
-  const supersedes = numberListFlag("supersedes", values.supersedes);
-  const unrelated = numberListFlag("unrelated", values.unrelated);
+  const { status, supersededBy: successor } = importStatus(values, parsed);
+  const supersedesFlag = decisionListFlag("supersedes", values.supersedes);
+  const unrelatedFlag = decisionListFlag("unrelated", values.unrelated);
   const store = openStore(ctx.env);
+  const owner = ownerRef(target);
+  const [supersededBy] = successor === null ? [null] : await store.decisions.ownDecisionNumbers([successor], owner);
+  const supersedes = await store.decisions.ownDecisionNumbers(supersedesFlag, owner);
+  const unrelated = await store.decisions.ownDecisionNumbers(unrelatedFlag, owner);
   await refuseAlreadyImported(store, target, parsed.pointer);
   const saved = await store.decisions.saveReviewedDecision({
     ...ownerRef(target),
@@ -314,7 +364,7 @@ async function runImport(argv, ctx) {
     jobId: callerJobId(ctx.env),
   });
   if (saved.needsReview) throw new UserError(needsReviewMessage(saved.candidates));
-  ctx.out(`imported as ${ownerLabel(saved)}`);
+  ctx.out(`imported as ${saved.ref}`);
   stampImportedFile(ctx, path, saved);
 }
 
@@ -331,28 +381,30 @@ function requireUpdateTransition(values) {
   if (status === "superseded" && successorFlag === undefined) {
     throw new UserError("a `superseded` decision needs the decision that replaced it: pass --superseded-by <number>");
   }
-  return { status, successorNumber: successorFlag === undefined ? null : requireNumberFlag("superseded-by", successorFlag) };
+  return { status, successor: successorFlag === undefined ? null : requireDecisionFlag("superseded-by", successorFlag) };
 }
 
-// The id of the successor row `--superseded-by` names, of the same owner as the decision being updated.
-async function resolveSuccessorId(store, target, successorNumber) {
-  if (successorNumber === null) return null;
-  const successor = await store.decisions.getDecisionByNumber({ ...ownerRef(target), number: successorNumber });
-  if (!successor) throw new UserError(`unknown decision #${successorNumber} for ${target.label}`);
-  return successor.id;
+// The id of the successor row `--superseded-by` names: a number of the updated decision's owner, or a ref read in that owner's context.
+async function resolveSuccessorId(store, target, successor) {
+  if (successor === null) return null;
+  if (parseRef(successor)?.kind === "decision") {
+    return await store.decisions.decisionIdOfRef(successor, { projectId: target.scope === "project" ? target.projectId : null });
+  }
+  const number = Number(successor);
+  const row = await store.decisions.getDecisionByNumber({ ...ownerRef(target), number });
+  if (!row) throw new UserError(`unknown decision ${targetDecisionRef(target, number)} for ${target.label}`);
+  return row.id;
 }
 
 // Runs `nightqueue decision update <number>`, the terminal's way to accept, reject or supersede a decision, same as `decision_update`.
 async function runUpdate(argv, ctx) {
   const { values, positionals } = parseCommand(argv, UPDATE_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.update });
-  const target = await resolveReadTarget(values, ctx);
-  const number = requireNumber(positionals[0], USAGE.update);
-  const { status, successorNumber } = requireUpdateTransition(values);
+  const address = await decisionAddress(positionals[0], values, ctx, USAGE.update);
+  const { status, successor } = requireUpdateTransition(values);
   const store = openStore(ctx.env);
-  const row = await store.decisions.getDecisionByNumber({ ...ownerRef(target), number });
-  if (!row) throw new UserError(`unknown decision #${number} for ${target.label}`);
-  const superseded_by = await resolveSuccessorId(store, target, successorNumber);
+  const { row, target } = await findDecision(store, address);
+  const superseded_by = await resolveSuccessorId(store, target, successor);
   const updated = await store.decisions.updateDecision(row.id, { status, superseded_by });
   printDecision(ctx, target, updated);
 }

@@ -129,7 +129,7 @@ test("queue close starts detached: the child gets --foreground and the lease tok
   assert.match(record.logPath, new RegExp(`close-${id}-\\d{8}T\\d{6}Z\\.log$`));
   assert.equal(
     ran.stdout,
-    `close of job #${id} started (pid ${CHILD_PID}) - follow with: tail -f ${record.logPath} (log: ${record.logPath}), or nightqueue queue status ${id}`,
+    `close of J-${id} started (pid ${CHILD_PID}) - follow with: tail -f ${record.logPath} (log: ${record.logPath}), or nightqueue queue status J-${id}`,
   );
 
   const again = await runCli(env, ["queue", "close", String(id)]);
@@ -143,8 +143,8 @@ test("queue close --force hands --force to the detached child of a done job, and
   const calls = [];
   const ran = await runCli(env, ["queue", "close", String(id), "--force"], { calls });
   assert.equal(ran.code, 0, ran.stderr);
-  assert.equal(ran.out[0], `job #${id}: --force: pull request checks and the rebase suite are skipped; conflicts, attribution and status still stop the close`);
-  assert.match(ran.out[1], new RegExp(`^close of job #${id} started`));
+  assert.equal(ran.out[0], `J-${id}: --force: pull request checks and the rebase suite are skipped; conflicts, attribution and status still stop the close`);
+  assert.match(ran.out[1], new RegExp(`^close of J-${id} started`));
   assert.deepEqual(calls[0].args.slice(1), ["queue", "close", String(id), "--foreground", "--force"]);
   assert.equal(JSON.parse(getJob(id, env).close).forced, true, "the checklist does not say the close was forced");
 
@@ -159,7 +159,7 @@ test("a spawn that fails leaves the close failed at start, the lease cleared and
   const id = jobIn(env);
   const ran = await runCli(env, ["queue", "close", String(id)], { spawnImpl: fakeSpawn([], { fail: new Error("spawn EACCES") }) });
   assert.equal(ran.code, 1);
-  assert.match(ran.stderr, /could not start the close of job #\d+: spawn EACCES; run again with: nightqueue queue close \d+/);
+  assert.match(ran.stderr, /could not start the close of J-\d+: spawn EACCES; run again with: nightqueue queue close J-\d+/);
   const row = getJob(id, env);
   assert.equal(row.close_status, "failed");
   assert.equal(row.close_worker, null);
@@ -188,7 +188,7 @@ test("queue close --foreground runs the engine here, prints where it stopped and
   assert.equal(ran.code, 1, "only a closed job exits 0");
   assert.equal(calls.length, 0, "--foreground spawned a child");
   assert.match(ran.out[0], /^✗ preflight\s+checks-red - failing checks: lint$/);
-  assert.equal(ran.out.at(-1), `⛔ close stopped at preflight: checks-red - run again with: nightqueue queue close ${id}`);
+  assert.equal(ran.out.at(-1), `⛔ close stopped at preflight: checks-red - run again with: nightqueue queue close J-${id}`);
   const row = getJob(id, env);
   assert.equal(row.close_status, "failed");
   assert.equal(row.close_worker, null);
@@ -208,9 +208,9 @@ test("queue close --foreground --force goes past red checks, says so first, and 
   const fake = fakeCloseDeps({ checks: RED_CHECKS });
   const ran = await runCli(env, ["queue", "close", String(id), "--foreground", "--force"], { closeDeps: fake.deps });
   assert.equal(ran.code, 0, ran.stdout);
-  assert.equal(ran.out[0], `job #${id}: --force: pull request checks and the rebase suite are skipped; conflicts, attribution and status still stop the close`);
+  assert.equal(ran.out[0], `J-${id}: --force: pull request checks and the rebase suite are skipped; conflicts, attribution and status still stop the close`);
   assert.match(ran.out[1], /^✓ preflight\s+PR #7 open; checks ignored with --force: failing: lint; canonical checkout clean$/);
-  assert.equal(ran.out.at(-1), `job #${id} closed: PR #7 merged as abc1234`);
+  assert.equal(ran.out.at(-1), `J-${id} closed: PR #7 merged as abc1234`);
   const checklist = JSON.parse(getJob(id, env).close);
   assert.equal(checklist.forced, true);
   assert.equal(checklist.data.mergedBy, "nightqueue");
@@ -223,7 +223,7 @@ test("queue close --foreground of a pull request closed without merge cancels th
   const ran = await runCli(env, ["queue", "close", String(id), "--foreground"], { closeDeps: fakeCloseDeps({ pr: openPr({ state: "CLOSED" }) }).deps });
   assert.equal(ran.code, 1, "a cancelled close exited 0");
   assert.match(ran.out[0], /^✗ preflight\s+pr-closed - PR #7 was closed without being merged$/);
-  assert.equal(ran.out.at(-1), `job #${id} cancelled: PR #7 was closed without being merged; nothing to close`);
+  assert.equal(ran.out.at(-1), `J-${id} cancelled: PR #7 was closed without being merged; nothing to close`);
   const row = getJob(id, env);
   assert.equal(row.status, "cancelled");
   assert.equal(row.operator_note, "pull request closed without merge");
@@ -245,7 +245,7 @@ test("queue close re-runs a failed close keeping its checklist, reclaims a dead 
 
   const first = await runCli(env, ["queue", "close", String(id), "--foreground"], { closeDeps: fake.deps });
   assert.equal(first.code, 1);
-  assert.equal(first.out.at(-1), `⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close ${id}`);
+  assert.equal(first.out.at(-1), `⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close J-${id}`);
   assert.equal(getJob(id, env).status, "done");
 
   acquireClose(id, { worker: "close:gone:1:dead", leaseS: 660 }, env);
@@ -255,7 +255,7 @@ test("queue close re-runs a failed close keeping its checklist, reclaims a dead 
 
   assert.equal(second.code, 0, second.stderr);
   assert.match(second.out[0], /^✓ preflight\s+PR #7 open; 1 checks green; canonical checkout clean \(earlier attempt\)$/);
-  assert.equal(second.out.at(-1), `job #${id} closed: PR #7 merged as abc1234`);
+  assert.equal(second.out.at(-1), `J-${id} closed: PR #7 merged as abc1234`);
   assert.equal(fake.log.merges.length, 1, "the re-run merged again");
   const row = getJob(id, env);
   assert.equal(row.status, "closed");
@@ -270,7 +270,7 @@ test("queue close refuses a pull request on another branch at preflight, and the
   const { env } = makeCloseHome(t, "close-cli-attribution");
   const id = jobIn(env, { branch: "worktree-feat+queue-close" });
   const foreign = () => fakeCloseDeps({ pr: openPr({ headRefName: "scratch/qa" }) });
-  const refusal = /^✗ preflight\s+pr-not-the-job-branch - PR #7 is on branch `scratch\/qa`, but job `\d+` ran on `worktree-feat\+queue-close`; it is not this job's pull request\. Fix the job's pr_url before closing it$/;
+  const refusal = /^✗ preflight\s+pr-not-the-job-branch - PR #7 is on branch `scratch\/qa`, but J-\d+ ran on `worktree-feat\+queue-close`; it is not this job's pull request\. Fix the job's pr_url before closing it$/;
 
   const refused = await runCli(env, ["queue", "close", String(id), "--foreground"], { closeDeps: foreign().deps });
   assert.equal(refused.code, 1);
@@ -298,7 +298,7 @@ test("the detached child adopts the lease through its token, and a token that do
 
   const stranger = await runCli({ ...env, NIGHTQUEUE_CLOSE_WORKER: "close:other:1:beef" }, ["queue", "close", String(id), "--foreground"]);
   assert.equal(stranger.code, 1);
-  assert.match(stranger.stderr, /the close lease of job #\d+ is not held by this process any more/);
+  assert.match(stranger.stderr, /the close lease of J-\d+ is not held by this process any more/);
   assert.equal(getJob(id, env).close_status, "closing", "a stranger's token changed the close");
 
   const child = await runCli({ ...env, NIGHTQUEUE_CLOSE_WORKER: token }, ["queue", "close", String(id), "--foreground"]);

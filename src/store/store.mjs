@@ -35,6 +35,7 @@
  * @property {(id: number, options?: object) => Promise<object>} cancelJob
  * @property {(id: number, spec: {worker: string, reason?: string}) => Promise<object|null>} cancelRunningJob cancels a running job only while that worker still owns it; null when the row moved on
  * @property {() => Promise<object[]>} listCloseCandidates done jobs that carry a pull request url, the candidates `queue close --merged` may confirm and close
+ * @property {(number: number) => Promise<{id: number, pr_url: string}[]>} jobsWithPrNumber the jobs whose pull request URL carries `/pull/<number>`; the caller compares the whole URL
  * @property {(id: number, options?: object) => Promise<object>} retryJob
  * @property {(id: number) => Promise<object|null>} getJob
  * @property {(options?: object) => Promise<object[]>} listJobs
@@ -106,6 +107,9 @@
  * @typedef {object} DecisionsDomain
  * @property {(id: number) => Promise<object|null>} getDecision
  * @property {(spec?: object) => Promise<object|null>} getDecisionByNumber
+ * @property {(ref: string, context?: {projectId?: string|null}) => Promise<object>} decisionOfRef the one decision a ref names (`D-<n>` in the project context, `<KEY>/D-<n>`, `G/D-<n>`), refusing an unknown or ambiguous ref
+ * @property {(ref: string, context?: {projectId?: string|null}) => Promise<number>} decisionIdOfRef the id of the one decision a ref names
+ * @property {(entries: Array<number|string>|null|undefined, owner: object) => Promise<number[]|null|undefined>} ownDecisionNumbers the per-owner numbers a list of numbers or refs names, refusing a ref of another owner
  * @property {(decision: object) => Promise<object>} saveDecision
  * @property {(spec: object) => Promise<object>} saveReviewedDecision
  * @property {(id: number, patch?: object) => Promise<object>} updateDecision
@@ -128,7 +132,8 @@
  * @property {(item?: object) => Promise<object>} saveRoadmapItem `type` is required
  * @property {(id: number, patch?: object) => Promise<object>} updateRoadmapItem a move back from review or done appends `reopened`, signed by `patch.author` (the operator by default)
  * @property {(spec: {id: number, body: string, author?: string, viewer?: string|null}) => Promise<object>} addRoadmapComment (viewer: a project id) appends a `note`; comments are append-only
- * @property {(jobId: number) => Promise<string|null>} roadmapRefOfJob `<owner>#<id>` of the item a job was queued from, or null
+ * @property {(jobId: number) => Promise<string|null>} roadmapRefOfJob `<KEY>-<number>` of the item a job was queued from, or null
+ * @property {(ref: string) => Promise<number>} itemIdOfRef the id of the item a ref (`<KEY>-<number>`, current or old key) names, refusing an unknown one
  * @property {(options?: {dryRun?: boolean}) => Promise<{items: number, written: number, skipped: number}>} backfillRoadmap the one-off synthesis of the comments of items linked before comments existed; idempotent
  * @property {(owner: object, filters?: {status?: string[], priority?: number[], type?: string[]}) => Promise<object>} listRoadmap every item the owner sees, in workflow order, then org first, then priority (1 first) and position; an org item carries `project_status` (a project's own row) or `projects` (the org's matrix)
  * @property {(spec: {query?: string, file?: string, projectId?: string|null, orgId?: string, limit?: number}) => Promise<object[]>} searchRoadmap up to five items the owner sees matching the text or a file path its jobs touched
@@ -147,8 +152,11 @@
  * @property {() => Promise<object[]>} list every org, earliest first
  * @property {(name: string) => Promise<object|null>} byName
  * @property {(id: string) => Promise<object|null>} byId
- * @property {(name: string) => Promise<object>} add
+ * @property {(name: string, key?: string|null) => Promise<object>} add the key asked for, or a free one derived from the name
  * @property {(id: string, name: string) => Promise<object>} rename one row: every table owns rows by the org id
+ * @property {(id: string, key: string) => Promise<{row: object, oldKey: string, key: string}>} setKey one row and one alias: the old key keeps resolving
+ * @property {(name: string) => Promise<string>} suggestKey a free key derived from the name
+ * @property {() => Promise<Record<string, string[]>>} keyAliases the old keys of every org, oldest first, keyed by org id
  * @property {(id: string) => Promise<object>} remove refused while a project or a row still belongs to it
  */
 
@@ -160,8 +168,11 @@
  * @property {(id: string) => Promise<object|null>} byId
  * @property {(cwd: string) => Promise<object|null>} at the project whose checkout contains the directory
  * @property {(orgId: string) => Promise<object[]>} ofOrg
- * @property {(spec: {name: string, path: string|null, orgId: string}) => Promise<object>} add
+ * @property {(spec: {name: string, path: string|null, orgId: string, key?: string|null}) => Promise<object>} add the key asked for, or a free one derived from the name
  * @property {(id: string, name: string) => Promise<object>} rename one row: every table owns rows by the project id
+ * @property {(id: string, key: string) => Promise<{row: object, oldKey: string, key: string}>} setKey one row and one alias: the old key keeps resolving
+ * @property {(name: string) => Promise<string>} suggestKey a free key derived from the name
+ * @property {() => Promise<Record<string, string[]>>} keyAliases the old keys of every project, oldest first, keyed by project id
  * @property {(id: string, spec: {orgId?: string, path?: string|null}) => Promise<object>} move
  * @property {(id: string) => Promise<object>} remove refused while a row still belongs to it
  */
@@ -214,6 +225,7 @@ export const STORE_CONTRACT = Object.freeze({
     "cancelJob",
     "cancelRunningJob",
     "listCloseCandidates",
+    "jobsWithPrNumber",
     "retryJob",
     "getJob",
     "listJobs",
@@ -262,6 +274,9 @@ export const STORE_CONTRACT = Object.freeze({
   decisions: [
     "getDecision",
     "getDecisionByNumber",
+    "decisionOfRef",
+    "decisionIdOfRef",
+    "ownDecisionNumbers",
     "saveDecision",
     "saveReviewedDecision",
     "updateDecision",
@@ -283,6 +298,7 @@ export const STORE_CONTRACT = Object.freeze({
     "updateRoadmapItem",
     "addRoadmapComment",
     "roadmapRefOfJob",
+    "itemIdOfRef",
     "backfillRoadmap",
     "listRoadmap",
     "searchRoadmap",
@@ -294,8 +310,8 @@ export const STORE_CONTRACT = Object.freeze({
     "buildRoadmapPrompt",
     "queueRoadmapItem",
   ],
-  orgs: ["list", "byName", "byId", "add", "rename", "remove"],
-  projects: ["list", "byName", "byId", "at", "ofOrg", "add", "rename", "move", "remove"],
+  orgs: ["list", "byName", "byId", "add", "rename", "setKey", "suggestKey", "keyAliases", "remove"],
+  projects: ["list", "byName", "byId", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove"],
   "": ["health", "connect", "close", "checkpoint", "migrateIfOutdated"],
 });
 
@@ -318,23 +334,30 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.recentHostCommandCounts",
   "jobs.recentOrchestratorCounts",
   "jobs.listCloses",
+  "jobs.jobsWithPrNumber",
   "decisions.listDecisions",
   "decisions.decisionTitles",
   "decisions.proposalsOfJob",
   "decisions.staleProposals",
   "decisions.getDecisionByNumber",
+  "decisions.decisionOfRef",
+  "decisions.decisionIdOfRef",
   "roadmap.listRoadmap",
   "roadmap.getRoadmapItemDetail",
+  "roadmap.roadmapRefOfJob",
+  "roadmap.itemIdOfRef",
   "roadmap.roadmapDrift",
   "roadmap.searchRoadmap",
   "orgs.list",
   "orgs.byName",
   "orgs.byId",
+  "orgs.keyAliases",
   "projects.list",
   "projects.byName",
   "projects.byId",
   "projects.at",
   "projects.ofOrg",
+  "projects.keyAliases",
   "health",
   "close",
   "migrateIfOutdated",

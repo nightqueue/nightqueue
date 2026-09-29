@@ -119,7 +119,7 @@ test("every start path registers its runner while another one is live, and none 
   cancelJob(id, { reason: "not needed" }, env);
   const retried = await runCli(env, ["queue", "retry", String(id), "--run"], { calls, alive });
   assert.equal(retried.code, 0, retried.stderr);
-  assert.match(retried.stdout, /job #1 started \(pid 5252\)/, retried.stdout);
+  assert.match(retried.stdout, /J-1 started \(pid 5252\)/, retried.stdout);
   assert.equal(getJob(id, env).status, "pending", "the retried job is not pending, so no runner will ever claim it");
 });
 
@@ -140,7 +140,7 @@ test("a single-job start registers a `once` runner carrying the job and the tree
   assert.equal(status.out[0], "1 runner online");
   assert.equal(
     status.out[1],
-    `runner: running (pid ${CHILD_PID}, once, job #${id}, runtime ${packageRoot()}, since ${info.startedAt})`,
+    `runner: running (pid ${CHILD_PID}, once, J-${id}, runtime ${packageRoot()}, since ${info.startedAt})`,
     "`queue status` does not show the single-job runner the way it was registered",
   );
 });

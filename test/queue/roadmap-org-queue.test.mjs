@@ -84,36 +84,36 @@ test("queue_add on an org item requires a project of that org or `all`, and link
   const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-mcp");
   const client = await connect(t, env);
 
-  const bare = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id } });
+  const bare = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref } });
   assert.equal(bare.isError, true);
   assert.match(textOf(bare), /belongs to org `acme`: name the project its job goes to, or `all`/);
-  const outside = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id, project: "orbit-app" } });
+  const outside = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, project: "orbit-app" } });
   assert.equal(outside.isError, true);
   assert.match(textOf(outside), /projects of `acme`: acme-mobile-app, acme-api/);
 
   const queued = payloadOf(
-    await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id, project: "acme-mobile-app" } }),
+    await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, project: "acme-mobile-app" } }),
   );
   assert.equal(queued.project, "acme-mobile-app");
   assert.equal(queued.roadmapItemId, item.id);
-  assert.deepEqual(queued.jobs, [{ id: queued.id, project: "acme-mobile-app" }]);
+  assert.deepEqual(queued.jobs, [{ id: queued.id, ref: `J-${queued.id}`, project: "acme-mobile-app" }]);
   assert.deepEqual(queued.skipped, []);
   assert.match(queued.hint, /`in_progress` while any row is, `done` once every row is done or cancelled/);
   assert.equal(
     getJob(queued.id, env).prompt,
-    "## Task\nraise the node version\n\n## Roadmap item\nRoadmap: acme#1\nType: improvement\nCommit type: refactor or perf",
+    "## Task\nraise the node version\n\n## Roadmap item\nRoadmap: AM-1\nType: improvement\nCommit type: refactor or perf",
   );
   const row = getRoadmapItem(item.id, env);
   assert.equal(row.status, "in_progress", "the org status is derived from its one in-progress row");
   assert.equal(row.job_id, null, "the org item's own row never carries a job");
   assert.deepEqual(rowStatuses(env, item.id), { "acme-mobile-app": "in_progress" });
-  assert.equal(roadmapRefOfJob(queued.id, env), "acme#1");
+  assert.equal(roadmapRefOfJob(queued.id, env), "AM-1");
 
-  const again = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id, project: "acme-mobile-app" } });
+  const again = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, project: "acme-mobile-app" } });
   assert.equal(again.isError, true);
-  assert.match(textOf(again), /already queued for `acme-mobile-app` \(job `1`, `pending`\)/);
+  assert.match(textOf(again), /already queued for `acme-mobile-app` \(J-1, `pending`\)/);
 
-  const all = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id, project: "all" } }));
+  const all = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, project: "all" } }));
   assert.deepEqual(all.jobs.map((job) => job.project), ["acme-api"]);
   assert.deepEqual(all.skipped, [{ project: "acme-mobile-app", job_id: queued.id, job_status: "pending" }]);
   assert.match(all.hint, /Skipped, a live job already holds them: `acme-mobile-app`/);
@@ -134,13 +134,13 @@ test("the prompt of an org item quotes the decisions of its org and nothing of a
   );
   saveDecision({ orgId: orgIdOf(env, "orbit"), title: "orbit pins node too", context: "drift", decision: "pin it" }, env);
   const client = await connect(t, env);
-  payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: item.id, decision_id: linked.id } }));
+  payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: item.ref, decision_id: linked.ref } }));
 
   const queued = payloadOf(
-    await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.id, project: "acme-api" } }),
+    await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, project: "acme-api" } }),
   );
   const prompt = getJob(queued.id, env).prompt;
-  assert.ok(prompt.includes("## Linked decision\nacme#1 every repo runs one node version (accepted)"), prompt);
+  assert.ok(prompt.includes("## Linked decision\nAM/D-1 every repo runs one node version (accepted)"), prompt);
   assert.equal(prompt.includes("orbit pins node too"), false, "a decision of another org reached the prompt");
 });
 
@@ -148,11 +148,11 @@ test("nightqueue queue add --roadmap needs --project <name|all> for an org item,
   const { env, cwd, item } = makeOrgItemHome(t, "roadmap-org-queue-cli");
   const elsewhere = makeDir(t, "roadmap-org-queue-cwd");
 
-  const fromCwd = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", String(item.id)], { env, cwd, encoding: "utf8" });
+  const fromCwd = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", item.ref], { env, cwd, encoding: "utf8" });
   assert.equal(fromCwd.status, 1);
   assert.match(fromCwd.stderr, /--project <name\|all>/);
 
-  const runAll = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", String(item.id), "--project", "all", "--run"], {
+  const runAll = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", item.ref, "--project", "all", "--run"], {
     env,
     cwd: elsewhere,
     encoding: "utf8",
@@ -160,31 +160,31 @@ test("nightqueue queue add --roadmap needs --project <name|all> for an org item,
   assert.equal(runAll.status, 1);
   assert.match(runAll.stderr, /`--run` starts one job/);
 
-  const named = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", String(item.id), "--project", "acme-api"], {
+  const named = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", item.ref, "--project", "acme-api"], {
     env,
     cwd: elsewhere,
     encoding: "utf8",
   });
   assert.equal(named.status, 0, named.stderr);
-  assert.match(named.stdout, /roadmap item #1 of org `acme` queued for `acme-api`; its status is derived from its project rows/);
+  assert.match(named.stdout, /roadmap item AM-1 of org `acme` queued for `acme-api`; its status is derived from its project rows/);
 
-  const all = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", String(item.id), "--project", "all"], {
+  const all = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", item.ref, "--project", "all"], {
     env,
     cwd: elsewhere,
     encoding: "utf8",
   });
   assert.equal(all.status, 0, all.stderr);
   assert.match(all.stdout, /queued for `acme-mobile-app`/);
-  assert.match(all.stdout, /skipped `acme-api`: job #1 \(pending\) still holds it/);
+  assert.match(all.stdout, /skipped `acme-api`: J-1 \(pending\) still holds it/);
   assert.deepEqual(listJobs({ limit: 10 }, env).map((job) => job.project).sort(), ["acme-api", "acme-mobile-app"]);
   assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
 
   const matrix = spawnSync(process.execPath, [CLI, "roadmap", "--org", "acme"], { env, cwd: elsewhere, encoding: "utf8" });
   assert.equal(matrix.status, 0, matrix.stderr);
-  assert.match(matrix.stdout, /in_progress:\n {2}p5 acme #1 raise the node version\n {5}acme-api: in_progress job #1 \(pending\)\n {5}acme-mobile-app: in_progress job #2 \(pending\)/);
+  assert.match(matrix.stdout, /in_progress:\n {2}p5 AM-1 raise the node version\n {5}acme-api: in_progress J-1 \(pending\)\n {5}acme-mobile-app: in_progress J-2 \(pending\)/);
   const project = spawnSync(process.execPath, [CLI, "roadmap", "--project", "acme-api"], { env, cwd: elsewhere, encoding: "utf8" });
   assert.equal(project.status, 0, project.stderr);
-  assert.match(project.stdout, /p5 acme #1 raise the node version \(in_progress\)/);
+  assert.match(project.stdout, /p5 AM-1 raise the node version \(in_progress\)/);
   assert.doesNotMatch(project.stdout, /acme-mobile-app/);
 });
 

@@ -12,7 +12,18 @@ import * as registry from "../../src/memory/registry.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // The question `queue add` asks before it registers the repository of the current directory.
-const question = (cwd, name) => `No project registered for ${cwd}. Register it as \`${name}\` in org \`default\` and queue the job? [Y/n] `;
+const question = (cwd, name, key) =>
+  `No project registered for ${cwd}. Register it as \`${name}\` (key ${key}) in org \`default\` and queue the job? [Y/n] `;
+
+// The key the offer suggests for a name on this home right now.
+function offeredKey(env, name) {
+  return registry.suggestFreeKey(openDb(env), name, "project");
+}
+
+// The key the registry holds for a project of a home.
+function registeredKey(env, name) {
+  return registry.projectByName(openDb(env), name)?.key;
+}
 
 // A directory that looks like a git repository, without calling git.
 function makeRepo(t, name) {
@@ -85,20 +96,23 @@ test("queue add registers the repository of the current directory after one ques
   const repo = makeRepo(t, "register-yes-repo");
   const name = derivedName(repo);
 
+  const key = offeredKey(env, name);
   const first = makeCtx(env, { cwd: repo, answer: "\n" });
   assert.equal(await run(["queue", "add", "fix", "the", "worker"], first.ctx), 0, first.err.join("\n"));
-  assert.equal(first.asked(), question(repo, name));
+  assert.equal(first.asked(), question(repo, name, key));
   const path = registeredPath(env, name);
   assert.ok(path, `\`${name}\` is missing from the registry`);
-  assert.ok(first.out.includes(`registered project \`${name}\` (${path})`), first.out.join("\n"));
+  assert.ok(first.out.includes(`registered project \`${name}\` (${path}) with key ${key}`), first.out.join("\n"));
+  assert.equal(registeredKey(env, name), key);
   assert.equal(first.out.some((line) => line.includes("resolved from the current directory")), false, first.out.join("\n"));
   assert.equal(getJob(1, env).prompt, "fix the worker");
   assert.equal(getJob(1, env).project, name);
 
   const other = makeRepo(t, "register-yes-other");
+  const otherKey = offeredKey(env, derivedName(other));
   const second = makeCtx(env, { cwd: other, answer: "y\n" });
   assert.equal(await run(["queue", "add", "fix", "the", "parser"], second.ctx), 0, second.err.join("\n"));
-  assert.equal(second.asked(), question(other, derivedName(other)));
+  assert.equal(second.asked(), question(other, derivedName(other), otherKey));
   assert.equal(getJob(2, env).project, derivedName(other));
 });
 
@@ -107,8 +121,9 @@ test("queue add answered with `n` keeps today's error, registers nothing and que
   const repo = makeRepo(t, "register-no-repo");
   const { ctx, err, asked } = makeCtx(env, { cwd: repo, answer: "n\n" });
 
+  const key = offeredKey(env, derivedName(repo));
   assert.equal(await run(["queue", "add", "fix the worker"], ctx), 1);
-  assert.equal(asked(), question(repo, derivedName(repo)));
+  assert.equal(asked(), question(repo, derivedName(repo), key));
   assert.match(err.join("\n"), /no project registered for .*; run `nightqueue init` here, or pass the project NAME/);
   assert.deepEqual(registeredNames(env), []);
   assert.equal(getJob(1, env), null);
@@ -165,9 +180,10 @@ test("queue add offers the next free name when the derived one is already taken"
   const name = derivedName(repo);
   const taken = preregister(t, env, name);
 
+  const key = offeredKey(env, `${name}-2`);
   const second = makeCtx(env, { cwd: repo, answer: "\n" });
   assert.equal(await run(["queue", "add", "fix the worker"], second.ctx), 0, second.err.join("\n"));
-  assert.equal(second.asked(), question(repo, `${name}-2`));
+  assert.equal(second.asked(), question(repo, `${name}-2`, key));
   assert.equal(getJob(1, env).project, `${name}-2`);
   assert.equal(basename(registeredPath(env, name)), basename(taken), "the entry that was already there moved");
 
@@ -210,12 +226,39 @@ test("queue add registers the repository root when the current directory is insi
   const inside = join(repo, "src", "api");
   mkdirSync(inside, { recursive: true });
   const name = derivedName(repo);
+  const key = offeredKey(env, name);
   const { ctx, out, err, asked } = makeCtx(env, { cwd: inside, answer: "\n" });
 
   assert.equal(await run(["queue", "add", "fix the worker"], ctx), 0, err.join("\n"));
-  assert.equal(asked(), question(inside, name));
+  assert.equal(asked(), question(inside, name, key));
   const path = registeredPath(env, name);
   assert.equal(basename(path), basename(repo), `the registered path is not the repository root: ${path}`);
-  assert.ok(out.includes(`registered project \`${name}\` (${path})`), out.join("\n"));
+  assert.ok(out.includes(`registered project \`${name}\` (${path}) with key ${key}`), out.join("\n"));
   assert.equal(getJob(1, env).project, name);
+});
+
+test("queue add --key names the key in the question and registers the project under it", async (t) => {
+  const env = makeHome(t, "register-key-flag");
+  const repo = makeRepo(t, "register-key-flag-repo");
+  const name = derivedName(repo);
+
+  const asked = makeCtx(env, { cwd: repo, answer: "\n" });
+  assert.equal(await run(["queue", "add", "--key", "rk1", "fix the worker"], asked.ctx), 0, asked.err.join("\n"));
+  assert.equal(asked.asked(), question(repo, name, "RK1"));
+  assert.equal(registeredKey(env, name), "RK1");
+
+  const other = makeRepo(t, "register-key-flag-other");
+  const forced = makeCtx(env, { cwd: other });
+  assert.equal(await run(["queue", "add", "--yes", "--key", "RK2", "fix the parser"], forced.ctx), 0, forced.err.join("\n"));
+  assert.equal(registeredKey(env, derivedName(other)), "RK2");
+
+  const third = makeRepo(t, "register-key-flag-third");
+  const taken = makeCtx(env, { cwd: third });
+  assert.equal(await run(["queue", "add", "--yes", "--key", "RK1", "fix the linter"], taken.ctx), 1);
+  assert.match(taken.err.join("\n"), /key `RK1` is taken: it is the key of project/);
+
+  const invalid = makeCtx(env, { cwd: third });
+  assert.equal(await run(["queue", "add", "--yes", "--key", "9x", "fix the linter"], invalid.ctx), 1);
+  assert.match(invalid.err.join("\n"), /key `9x` is invalid/);
+  assert.equal(getJob(3, env), null);
 });

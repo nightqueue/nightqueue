@@ -51,7 +51,7 @@ test("`queue session --print` on a job with three attempts opens the third attem
 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.deepEqual(result.out, [
-    `job ${id} · attempt 3 · session sess-attempt-3 · cwd ${worktree.path}`,
+    `J-${id} · attempt 3 · session sess-attempt-3 · cwd ${worktree.path}`,
     `cd '${worktree.path}' && nightqueue open --resume sess-attempt-3`,
   ]);
 });
@@ -66,7 +66,7 @@ test("`queue session` falls back to the checkout and says so when the run's work
 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.deepEqual(result.out, [
-    `job ${id} · attempt 1 · session sess-released · cwd ${realpathSync(home.checkout)} (worktree released, using the checkout)`,
+    `J-${id} · attempt 1 · session sess-released · cwd ${realpathSync(home.checkout)} (worktree released, using the checkout)`,
     `cd '${realpathSync(home.checkout)}' && nightqueue open --resume sess-released`,
   ]);
 });
@@ -136,7 +136,7 @@ test("MCP queue_session returns the attempt, session and cwd of the last attempt
 
   assert.notEqual(result.isError, true, JSON.stringify(result));
   const payload = JSON.parse(result.content.map((block) => block.text).join("\n"));
-  assert.deepEqual(payload, { job_id: id, attempt: 2, session: "sess-mcp", cwd: worktree.path, worktree_released: false });
+  assert.deepEqual(payload, { job_id: id, ref: `J-${id}`, attempt: 2, session: "sess-mcp", cwd: worktree.path, worktree_released: false });
 });
 
 test("MCP queue_session refuses a running job by name, with no session field leaked", async (t) => {

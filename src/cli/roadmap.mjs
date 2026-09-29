@@ -1,13 +1,14 @@
 import { UserError } from "../config/errors.mjs";
 import { emptyRoadmap } from "../memory/roadmap.mjs";
 import { ROADMAP_STATUSES } from "../memory/roadmap-workflow.mjs";
-import { ownerNames, ownerPrefix, ownerRef } from "../memory/scope.mjs";
+import { jobRef } from "../memory/refs.mjs";
+import { ownerNames, ownerRef } from "../memory/scope.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { readOnlyQuery, resolveReadTarget } from "./decision.mjs";
 
 const USAGE = {
   list: "nightqueue roadmap [--project <name> | --org <name>] [--status <s>]... [--priority <n>]... [--type <t>]... [--json]",
-  show: "nightqueue roadmap show <id> [--json]",
+  show: "nightqueue roadmap show <ref> [--json]",
 };
 
 // Collapses the whitespace of operator free text, so a multi-line title never breaks the listing.
@@ -17,7 +18,7 @@ function oneLine(text) {
 
 // One project row of an org item: the project, its status and the job that holds it.
 function projectRowLine(row) {
-  const job = row.job_id === null ? "" : ` job #${row.job_id} (${row.job_status ?? "unknown"})`;
+  const job = row.job_id === null ? "" : ` ${jobRef(row.job_id)} (${row.job_status ?? "unknown"})`;
   return `     ${row.project}: ${row.status}${job}`;
 }
 
@@ -34,9 +35,9 @@ function projectStatusMark(item) {
 
 // Lines of one roadmap item: its priority and reference first, its links and project rows indented under it.
 function itemLines(item) {
-  const lines = [`  p${item.priority} ${ownerPrefix(item)}#${item.id} ${oneLine(item.title)}${projectStatusMark(item)}`];
-  if (item.decision_number !== null) lines.push(`     decision #${item.decision_number}`);
-  if (item.job_id !== null) lines.push(`     job #${item.job_id} (${item.job_status ?? "unknown"})`);
+  const lines = [`  p${item.priority} ${item.ref} ${oneLine(item.title)}${projectStatusMark(item)}`];
+  if (item.decision_number !== null) lines.push(`     decision ${item.decision_ref}`);
+  if (item.job_id !== null) lines.push(`     ${jobRef(item.job_id)} (${item.job_status ?? "unknown"})`);
   return [...lines, ...matrixLines(item)];
 }
 
@@ -59,11 +60,10 @@ function priorityFilter(values) {
   });
 }
 
-// Requires the positional `<id>` of `roadmap show` to be a positive integer.
-function requireItemId(raw) {
-  const id = Number(raw);
-  if (Number.isInteger(id) && id > 0) return id;
-  throw new UserError(`invalid roadmap item id \`${String(raw)}\`; usage: ${USAGE.show}`);
+// The author of a comment as printed: `J-<id>` for a job, the stored value otherwise.
+function authorLabel(author) {
+  const job = /^job:(\d+)$/.exec(String(author ?? ""));
+  return job ? jobRef(job[1]) : author;
 }
 
 // Lines of one comment: who wrote it, when and what kind, then its body indented.
@@ -71,27 +71,27 @@ function commentLines(comment) {
   const body = String(comment.body ?? "")
     .split("\n")
     .map((line) => `    ${line}`);
-  return [`  ${comment.created_at ?? "?"} ${comment.author} ${comment.kind}${comment.project ? ` (${comment.project})` : ""}`, ...body];
+  return [`  ${comment.created_at ?? "?"} ${authorLabel(comment.author)} ${comment.kind}${comment.project ? ` (${comment.project})` : ""}`, ...body];
 }
 
 // Lines of one item read in full: its header, its text and its comment thread.
 function detailLines(item) {
   const lines = [`${item.ref} [${item.type}] ${item.status} p${item.priority}`, item.title];
   if (item.detail) lines.push("", item.detail);
-  if (item.decision_number !== null) lines.push("", `decision #${item.decision_number}`);
-  if (item.job_id !== null) lines.push(`job #${item.job_id} (${item.job_status ?? "unknown"})`);
+  if (item.decision_number !== null) lines.push("", `decision ${item.decision_ref}`);
+  if (item.job_id !== null) lines.push(`${jobRef(item.job_id)} (${item.job_status ?? "unknown"})`);
   if (Array.isArray(item.projects)) lines.push("", "projects:", ...matrixLines(item).map((line) => line.slice(3)));
   lines.push("", "comments:");
   return item.comments.length ? [...lines, ...item.comments.flatMap(commentLines)] : [...lines, "  (none)"];
 }
 
-// Runs `nightqueue roadmap show <id>`, which reads one item and its thread and never writes.
+// Runs `nightqueue roadmap show <ref>`, which reads one item and its thread and never writes.
 async function runShow(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.show });
-  const id = requireItemId(positionals[0]);
-  const item = await readOnlyQuery(ctx, (store) => store.roadmap.getRoadmapItemDetail(id), null);
-  if (item === null) throw new UserError(`unknown roadmap item \`${id}\``);
+  const ref = positionals[0];
+  const item = await readOnlyQuery(ctx, async (store) => store.roadmap.getRoadmapItemDetail(await store.roadmap.itemIdOfRef(ref)), null);
+  if (item === null) throw new UserError(`unknown roadmap item \`${ref}\``);
   if (values.json) {
     ctx.out(JSON.stringify(item));
     return;
@@ -99,7 +99,7 @@ async function runShow(argv, ctx) {
   for (const line of detailLines(item)) ctx.out(line);
 }
 
-// Runs `nightqueue roadmap`, which reads the database and never writes to it; `show <id>` reads one item in full.
+// Runs `nightqueue roadmap`, which reads the database and never writes to it; `show <ref>` reads one item in full.
 export async function run(argv, ctx) {
   if (argv[0] === "show") return await runShow(argv.slice(1), ctx);
   const { values, positionals } = parseCommand(argv, {

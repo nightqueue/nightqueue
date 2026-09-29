@@ -30,16 +30,17 @@ test("the Phase 0 preflight pings only lesson_recall and takes the decisions fro
 
 test("the Brief and the architect prompt carry the proposed titles as a section that binds nothing", () => {
   assert.ok(SKILL.includes("## Proposed (not binding)   [omit when the session block has no such section]"), SKILL);
-  assert.ok(SKILL.includes("- #<number> <title>                       [titles only, copied from the session block]"), SKILL);
-  assert.ok(SKILL.includes("[Include only if the Proposed (not binding) section of the Brief exists:]\n## Proposed (not binding)\n- #<number> <title>"), SKILL);
+  assert.ok(SKILL.includes("- D-<n> <title>                           [titles only, copied from the session block]"), SKILL);
+  assert.ok(SKILL.includes("[Include only if the Proposed (not binding) section of the Brief exists:]\n## Proposed (not binding)\n- D-<n> <title>"), SKILL);
   assert.ok(SKILL.includes("they bind nothing, and a design\nmay go against them without a confirmation."), SKILL);
   assert.ok(ARCHITECT.includes("A `## Proposed (not binding)` section lists, by title\nonly, decisions proposed and not accepted yet: they bind nothing"), ARCHITECT);
 });
 
 test("the Brief carries every accepted title plus the 8 closest decisions in full", () => {
   assert.ok(SKILL.includes("## Standing decisions   [omit the whole section when the log has no accepted decision]"), SKILL);
-  assert.ok(SKILL.includes("- #<number> <title>                       [every accepted title, copied from the session block]"), SKILL);
-  assert.ok(SKILL.includes("### In full (the 8 closest to this Brief)\n   - #<number> <title> — <the `decision` field in 1 line>"), SKILL);
+  assert.ok(SKILL.includes("- D-<n> <title>                           [every accepted title, copied from the session block]"), SKILL);
+  assert.ok(SKILL.includes("- <ORGKEY>/D-<n> <title>                  [a row whose `scope` is `org`]"), SKILL);
+  assert.ok(SKILL.includes("### In full (the 8 closest to this Brief)\n   - D-<n> <title> — <the `decision` field in 1 line>"), SKILL);
   assert.ok(SKILL.includes("copy EVERY title from it, in the order it came."), SKILL);
   assert.ok(SKILL.includes("`limit: 8`"), SKILL);
   assert.equal(SKILL.includes("Take at most 5"), false, "the Brief still caps the standing decisions at five");
@@ -61,13 +62,13 @@ test("the Brief carries every accepted title plus the 8 closest decisions in ful
 test("the architect prompt receives standing decisions as binding constraints, not as design", () => {
   assert.ok(
     SKILL.includes(
-      "[Include only if the Standing decisions section of the Brief exists:]\n## Standing decisions\n- #<number> <title>\n### In full (the 8 closest to this Brief)\n- #<number> <title> — <decision>",
+      "[Include only if the Standing decisions section of the Brief exists:]\n## Standing decisions\n- D-<n> <title>\n### In full (the 8 closest to this Brief)\n- D-<n> <title> — <decision>",
     ),
     SKILL,
   );
   assert.ok(
     SKILL.includes(
-      "These are the standing constraints of the project and of its org, decided before this task\n(a number written `<owner>#<number>` belongs to the org and binds every project of it).\nThey are binding context, never a proposed solution: a design that contradicts one either\nfollows the decision or takes the conflict to `## Requires user confirmation` naming its\nnumber.",
+      "These are the standing constraints of the project and of its org, decided before this task\n(a ref written `<ORGKEY>/D-<n>` belongs to the org and binds every project of it).\nThey are binding context, never a proposed solution: a design that contradicts one either\nfollows the decision or takes the conflict to `## Requires user confirmation` naming its\nref.",
     ),
     SKILL,
   );
@@ -83,7 +84,7 @@ test("a proposed decision is saved right after the Phase 3 gate, fail-open, and 
     "the Phase 3 post-gate does not say that a plan without the block is the normal case",
   );
   assert.ok(
-    SKILL.includes("`` Proposed decision <number>: <title> — recorded as `proposed`; accept or reject it with `decision_update`. ``"),
+    SKILL.includes("`` Proposed decision <ref>: <title> — recorded as `proposed`; accept or reject it with `decision_update`. ``"),
     "the Phase 8 report does not carry the proposed-decision line",
   );
   assert.ok(
@@ -98,13 +99,13 @@ test("a needs_review proposal is saved again only with the plan's unrelated numb
   assert.ok(SKILL.includes('**A `needs_review` answer:** `decision_save` answers `status: "needs_review"` with `candidates`'), SKILL);
   assert.ok(
     SKILL.includes(
-      "If the\nblock has an `**Unrelated to:**` line whose numbers cover EVERY candidate number, call\n`decision_save` again ONCE with `unrelated` = those numbers.",
+      "If the\nblock has an `**Unrelated to:**` line whose refs cover EVERY candidate, call\n`decision_save` again ONCE with `unrelated` = those refs.",
     ),
     SKILL,
   );
   assert.ok(
     SKILL.includes(
-      "`Proposed decision not saved: it touches #a, #b (needs_review); the operator decides\nit with decision_save outside the queue`",
+      "`Proposed decision not saved: it touches D-a, D-b (needs_review); the operator decides\nit with decision_save outside the queue`",
     ),
     SKILL,
   );
@@ -114,7 +115,7 @@ test("a needs_review proposal is saved again only with the plan's unrelated numb
 test("the architect's Proposed decision block may name the standing decisions it leaves untouched", () => {
   assert.ok(
     ARCHITECT.includes(
-      "- **Unrelated to:** [#n — why this decision leaves it untouched, one line each; omit when no standing decision touches the subject]",
+      "- **Unrelated to:** [D-<n> or <ORGKEY>/D-<n> — why this decision leaves it untouched, one line each; omit when no standing decision touches the subject]",
     ),
     ARCHITECT,
   );
@@ -126,7 +127,7 @@ test("the architect may read decisions but never writes one", () => {
   assert.ok(frontmatter.includes("mcp__nightqueue__decision_recall"), frontmatter);
   assert.equal(frontmatter.includes("decision_save"), false, "the architect must not be granted `decision_save`");
   assert.ok(ARCHITECT.includes("**Standing decisions are binding.**"), ARCHITECT);
-  assert.ok(ARCHITECT.includes("naming the decision's number"), ARCHITECT);
+  assert.ok(ARCHITECT.includes("naming the decision's ref (`D-<n>`)"), ARCHITECT);
   assert.ok(ARCHITECT.includes("The section lists EVERY accepted title plus the 8 closest to the task in full;"), ARCHITECT);
 });
 

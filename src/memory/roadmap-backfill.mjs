@@ -1,4 +1,5 @@
 import { inTransaction, openDb } from "./db.mjs";
+import { jobRef } from "./refs.mjs";
 import { COMMENT_JOB_COLUMNS, insertComment, jobRefs } from "./roadmap-comments.mjs";
 import { CLOSED_STATUSES, jobAuthor } from "./roadmap-workflow.mjs";
 
@@ -21,14 +22,14 @@ function closedByHand(row) {
 // The comment the job's close leaves, or null while the job is not closed.
 function closingComment(row) {
   if (row.status !== "closed") return null;
-  return { kind: "closed", body: `job #${row.id} closed`, createdAt: row.finished_at };
+  return { kind: "closed", body: `${jobRef(row.id)} closed`, createdAt: row.finished_at };
 }
 
 // The comments the history of one linked job stands for, dated when each event happened.
 function historyComments(db, row) {
   const refs = jobRefs(db, row);
-  const comments = [{ kind: "queued", body: `queued as job #${row.id}`, createdAt: row.queued_at }];
-  if (row.pr_url) comments.push({ kind: "pr", body: `job #${row.id} done: ${row.pr_url}`, createdAt: row.finished_at });
+  const comments = [{ kind: "queued", body: `${jobRef(row.id)} queued`, createdAt: row.queued_at }];
+  if (row.pr_url) comments.push({ kind: "pr", body: `${jobRef(row.id)} done: ${row.pr_url}`, createdAt: row.finished_at });
   const closing = closingComment(row);
   if (closing) comments.push(closing);
   return comments.map((comment) => ({ ...comment, itemId: row.item_id, author: jobAuthor(row.id), refs }));

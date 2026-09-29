@@ -10,6 +10,7 @@ import {
   withFullSync,
   withWriteRetry,
 } from "./db.mjs";
+import { jobRef } from "./refs.mjs";
 import * as registry from "./registry.mjs";
 import { ACTIVE_JOB_PREDICATE, LEASE_GRACE_S, RESULT_OBJECT_BASE } from "./schema.mjs";
 import { isSafeSegment } from "../queue/resume.mjs";
@@ -173,7 +174,7 @@ function inTransaction(db, steps) {
 // The public view of a job: never the prompt, ISO timestamps, and free text cut for listings unless `full`, a cut field flagged `notice_truncated`/`result_truncated`.
 export function jobView(row, { full = false } = {}) {
   if (!row) return null;
-  const view = {};
+  const view = { id: row.id ?? null, ref: row.id ? jobRef(row.id) : null };
   for (const column of JOB_VIEW_COLUMNS) view[column] = row[column] ?? null;
   for (const column of JOB_VIEW_ZERO_OMITTED) if (view[column] === 0) view[column] = null;
   for (const column of JOB_VIEW_TIMESTAMPS) view[column] = sqliteToIso(row[column]);
@@ -241,7 +242,7 @@ function insertRunJob(db, { values, project }, env) {
   const slug = values[6];
   return inTransaction(db, () => {
     const bound = openJobForRun(db, { projectId: project.id, slug });
-    if (bound) throw new UserError(`job #${bound.id} already runs from ${runDir(project.id, slug, env)}`);
+    if (bound) throw new UserError(`${jobRef(bound.id)} already runs from ${runDir(project.id, slug, env)}`);
     return runInsert(db.prepare(INSERT_JOB), values);
   });
 }
@@ -661,10 +662,10 @@ function cancelRefusal(id, row) {
   if (!row) return `unknown job \`${id}\``;
   if (row.status === "running") return `job \`${id}\` is running with a live lease on worker \`${row.worker}\`; stop that runner first`;
   if (row.close_status === "closing" && closeLeaseLooksLive(row, Date.now())) {
-    return `job \`${id}\` is being closed by \`${row.close_worker}\` until ${sqliteToIso(row.close_lease_until)}; wait for it or follow it with nightqueue queue status ${id}`;
+    return `job \`${id}\` is being closed by \`${row.close_worker}\` until ${sqliteToIso(row.close_lease_until)}; wait for it or follow it with nightqueue queue status ${jobRef(id)}`;
   }
   if (row.close_status === "closing") {
-    return `job \`${id}\` has an interrupted close whose merge may already have happened; resume it with nightqueue queue close ${id} - a merged pull request is recorded as closed, and one closed without merge cancels the job, so to cancel it close the pull request first`;
+    return `job \`${id}\` has an interrupted close whose merge may already have happened; resume it with nightqueue queue close ${jobRef(id)} - a merged pull request is recorded as closed, and one closed without merge cancels the job, so to cancel it close the pull request first`;
   }
   return `job \`${id}\` is already finished with status \`${row.status}\``;
 }
@@ -722,7 +723,7 @@ function retryRefusal(id, row, { note } = {}) {
   if (row.status === "pending") return `job \`${id}\` is already pending; there is nothing to retry`;
   if (row.status === "gate" && !note) {
     const reason = jobView(row).notice_md;
-    const whole = reason && reason !== row.notice_md ? `Read the whole notice with: nightqueue queue status ${id}.` : null;
+    const whole = reason && reason !== row.notice_md ? `Read the whole notice with: nightqueue queue status ${jobRef(id)}.` : null;
     return [reason, whole, 'This job is waiting for a decision. Re-run with --note "<your answer>".'].filter(Boolean).join("\n");
   }
   return `job \`${id}\` cannot be retried from status \`${row.status}\``;
@@ -790,7 +791,7 @@ function statusRefusal(id, row) {
   if (row.status === "closed") return `job \`${id}\` is already closed`;
   if (row.status === "running") return `job \`${id}\` is running with a live lease on worker \`${row.worker}\`; stop that runner first`;
   if (row.status === "pending") return `job \`${id}\` is pending; it has not produced a pull request yet`;
-  if (row.status === "gate") return `job \`${id}\` is waiting at a gate; answer it with nightqueue queue retry ${id} --note "…", or cancel it`;
+  if (row.status === "gate") return `job \`${id}\` is waiting at a gate; answer it with nightqueue queue retry ${jobRef(id)} --note "…", or cancel it`;
   if (row.status === "failed") return `job \`${id}\` failed; retry it or cancel it - only a done job is closed`;
   if (row.status === "cancelled") return `job \`${id}\` is cancelled; retry it before closing`;
   return `job \`${id}\` cannot be closed from status \`${row.status}\``;
@@ -803,7 +804,7 @@ export function closeRefusal(id, row, { nowMs = Date.now() } = {}) {
   if (refusal) return refusal;
   if (!row.pr_url) return "nothing to close: the job has no pull request";
   if (closeLeaseLooksLive(row, nowMs)) {
-    return `job \`${id}\` is already being closed by \`${row.close_worker}\` until ${sqliteToIso(row.close_lease_until)}; follow it with nightqueue queue status ${id}`;
+    return `job \`${id}\` is already being closed by \`${row.close_worker}\` until ${sqliteToIso(row.close_lease_until)}; follow it with nightqueue queue status ${jobRef(id)}`;
   }
   return null;
 }
@@ -984,6 +985,14 @@ export function listCloseCandidates(env = process.env, db = openDb(env)) {
     .prepare("SELECT * FROM jobs WHERE status = 'done' AND pr_url IS NOT NULL ORDER BY id DESC")
     .all()
     .map((row) => withProjectFacts(db, row));
+}
+
+// The jobs whose pull request URL carries `/pull/<number>`, as `{ id, pr_url }`; the caller compares the whole URL.
+export function jobsWithPrNumber(number, env = process.env, db = openDb(env)) {
+  if (!Number.isSafeInteger(number) || number <= 0) {
+    throw new UserError(`expected a positive integer pull request number, got \`${String(number)}\``);
+  }
+  return db.prepare("SELECT id, pr_url FROM jobs WHERE instr(pr_url, ?) > 0 ORDER BY id").all(`/pull/${number}`);
 }
 
 // Unfinished jobs that already have a run directory; a job with no slug never ran, so no witness can speak for it.

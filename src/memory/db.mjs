@@ -2,8 +2,9 @@ import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { dbPath } from "../config/paths.mjs";
 import { ensureHome, loadRawConfig } from "../config/store.mjs";
-import { FTS, INDEXES, REGISTRY, ROADMAP_FTS, SCHEMA } from "./ddl.mjs";
+import { FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ROADMAP_FTS, ROADMAP_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
 import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schemaState } from "./migration/v18.mjs";
+import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
 import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
 import { migrateSharedSlugs, sharedSlugPending } from "./shared-slug-migration.mjs";
@@ -45,10 +46,25 @@ function enableWal(db, path) {
   console.warn(`nightqueue: warning: could not enable WAL on ${path} (journal_mode=${mode})`);
 }
 
-// Creates the base tables of the memory runtime and the registry of orgs and projects.
+// The one-shot schema steps, in the order a database takes them; a newer-database guard belongs in front of this list.
+const ONE_SHOT_STEPS = Object.freeze([
+  { pending: (db) => schemaState(db) === "legacy", run: migrateToV18 },
+  { pending: isPendingV19, run: migrateToV19 },
+]);
+
+// Runs every pending one-shot step in order, each gate read after the step before it committed.
+function runOneShotSteps(db, env) {
+  for (const step of ONE_SHOT_STEPS) {
+    if (step.pending(db)) step.run(db, env);
+  }
+}
+
+// Creates the base tables of the memory runtime and the registry of orgs and projects, with the key and number guards.
 function createSchema(db) {
   db.exec(REGISTRY);
   db.exec(SCHEMA);
+  db.exec(ROADMAP_NUMBER_INDEXES);
+  db.exec(OWNER_KEY_GUARDS);
 }
 
 // Fills the registry of a database created just now: the v17 registry a config.json may still carry, then the default org.
@@ -62,12 +78,15 @@ function createRegistry(db, env) {
 
 // Brings an existing database to the current schema: the per-open shared-slug step, indexes and the FTS mirrors.
 function migrate(db) {
+  const version = db.prepare("PRAGMA user_version").get().user_version;
+  if (version === 18) throw new UserError("the v19 migration did not run; nothing was stamped");
   if (sharedSlugPending(db)) inTransaction(db, () => migrateSharedSlugs(db));
   db.exec(INDEXES);
   db.exec(FTS);
   db.exec(ROADMAP_FTS);
+  db.exec(ROADMAP_NUMBER_INDEXES);
+  db.exec(OWNER_KEY_GUARDS);
   ensureDefaultOrg(db);
-  const version = db.prepare("PRAGMA user_version").get().user_version;
   if (version < DB_USER_VERSION) db.exec(`PRAGMA user_version = ${DB_USER_VERSION}`);
 }
 
@@ -93,12 +112,12 @@ function assertSchemaNotNewer(db, path) {
   );
 }
 
-// Applies the pragmas and brings the schema of a freshly opened connection up to date: the one-shot v18 migration first,
-// before WAL is switched on, then the per-open steps.
+// Applies the pragmas and brings the schema of a freshly opened connection up to date: the one-shot steps first, in order
+// and before WAL is switched on, then the per-open steps.
 function initConnection(db, path, env) {
   db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   const state = schemaState(db);
-  if (state === "legacy") migrateToV18(db, env);
+  runOneShotSteps(db, env);
   enableWal(db, path);
   createSchema(db);
   if (state === "fresh") createRegistry(db, env);

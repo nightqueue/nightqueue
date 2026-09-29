@@ -51,7 +51,7 @@ test("queue close removes the clean, pushed worktree of the job it closed, and k
   assert.equal(getJob(clean.id, home.env).status, "closed");
   assert.equal(existsSync(clean.path), false, "the clean, pushed worktree is still on disk");
   assert.ok(localBranches(home.checkout).includes(clean.branch), "the close deleted the local branch");
-  assert.equal(text.out.at(-1), `job #${clean.id} closed: PR #7 merged as abc1234; worktree removed: ${clean.path}`);
+  assert.equal(text.out.at(-1), `J-${clean.id} closed: PR #7 merged as abc1234; worktree removed: ${clean.path}`);
 });
 
 test("queue close keeps a dirty worktree by name, still closes the job and exits 0, and --json carries it in the checklist", async (t) => {
@@ -95,7 +95,7 @@ test("queue close --merged removes the worktree of the job it closes and reports
 
   const text = await runQueueClose(home.env, ["queue", "close", "--merged"], { prStates });
   assert.equal(text.code, 0, text.err.join("\n"));
-  assert.deepEqual(text.out, [`closed job #${merged.id}`, `worktree removed: ${merged.path}`]);
+  assert.deepEqual(text.out, [`closed J-${merged.id}`, `worktree removed: ${merged.path}`]);
   assert.equal(existsSync(merged.path), false);
 
   const again = jobWithWorktree(home, { slug: "merged-again", status: "done", prUrl: MERGED_PR });

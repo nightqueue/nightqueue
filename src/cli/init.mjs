@@ -8,12 +8,12 @@ import { checkArgs, parseCommand } from "./args.mjs";
 import { importGhConnection } from "./gh-import.mjs";
 import { guardIdleRuntime } from "./install-guard.mjs";
 import { setupEmbedding, setupPath, setupRuntime, setupShim, verifyShim } from "./install-steps.mjs";
-import { registerProject } from "./project.mjs";
+import { keyOption, registerProject } from "./project.mjs";
 import { firstLine, makeReport } from "./report.mjs";
 import { INSTALL_OPTIONS, finish, installOptions, registerHostServices, setupHome } from "./setup.mjs";
 
 const USAGE =
-  "nightqueue init [path] [--org <name>] [--name <name>] [--from <dir>] [--force] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--gh|--no-gh] [--verbose]";
+  "nightqueue init [path] [--org <name>] [--name <name>] [--key <KEY>] [--from <dir>] [--force] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--gh|--no-gh] [--verbose]";
 
 const SOURCE_HINT = "Open a new terminal or run `source ~/.zshrc` (or your shell's rc) to use `nightqueue`.";
 
@@ -127,8 +127,8 @@ async function installForInit(ctx, { verbose, ...options } = {}) {
 }
 
 // Registers the repository of this run and offers it the token of the GitHub CLI, the part of init that only a repository gets.
-async function registerHere(ctx, { path, name, org, mode }) {
-  const project = await registerProject(ctx, { path, name, org });
+async function registerHere(ctx, { path, name, org, key, mode }) {
+  const project = await registerProject(ctx, { path, name, org, key });
   await importGhConnection(ctx, { mode, org: { id: project.org_id, name: project.org } });
 }
 
@@ -138,15 +138,17 @@ export async function run(argv, ctx) {
     ...INSTALL_OPTIONS,
     org: { type: "string" },
     name: { type: "string" },
+    key: { type: "string" },
     gh: { type: "boolean" },
     "no-gh": { type: "boolean" },
     verbose: { type: "boolean" },
   });
   checkArgs(positionals, { max: 1, usage: USAGE });
   const mode = ghMode(values);
+  const key = keyOption(values);
   const path = projectPath(positionals, ctx);
   await installForInit(ctx, { ...installOptions(values, USAGE), verbose: values.verbose === true });
-  if (path) await registerHere(ctx, { path, name: values.name, org: values.org, mode });
+  if (path) await registerHere(ctx, { path, name: values.name, org: values.org, key, mode });
   printNextSteps(ctx, { registered: Boolean(path) });
   return 0;
 }

@@ -110,8 +110,8 @@ The full reference is in [docs/cli.md](docs/cli.md); this is the daily set.
 ```sh
 # queue
 nightqueue queue add [project] "<request>" [--tier trivial|simple|complex] [--priority 1-9] [--run]
-nightqueue queue run [--watch [s] [--from HH:MM] --until HH:MM] [--job <id>] [--stop]
-nightqueue queue status [<id>] [--follow] [--json]
+nightqueue queue run [--watch [s] [--from HH:MM] --until HH:MM] [--job J-<id>] [--stop]
+nightqueue queue status [J-<id>|<PR URL>] [--follow] [--json]
 nightqueue queue log <id> [--follow]
 nightqueue queue session <id> [--print]
 nightqueue queue retry <id> --note "<answer>"
@@ -122,15 +122,16 @@ nightqueue queue pause | resume
 
 # memory
 nightqueue memory stats
-nightqueue decision list | show <number>     [--project <name> | --org <name>]
-nightqueue decision export <number> [--dir <path>] [--force]
-nightqueue decision import <file.md> [--status <s>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]
-nightqueue decision update <number> --status accepted|rejected|superseded [--superseded-by <n>]
+nightqueue decision list | show <number|ref>     [--project <name> | --org <name>]
+nightqueue decision export <number|ref> [--dir <path>] [--force]
+nightqueue decision import <file.md> [--status <s>] [--superseded-by <n|ref>] [--supersedes <n|ref,...>] [--unrelated <n|ref,...>]
+nightqueue decision update <number|ref> --status accepted|rejected|superseded [--superseded-by <n|ref>]
 nightqueue roadmap                            [--project <name> | --org <name>]
+nightqueue roadmap show <ref>                 # NQ-12, DLW-3
 
 # home
-nightqueue org add|list|rename|remove|repair
-nightqueue project list|move|remove
+nightqueue org add|list|rename|key|remove|repair
+nightqueue project add|list|key|move|remove
 nightqueue connection bind|test|list|remove
 nightqueue doctor
 nightqueue update [<version>]

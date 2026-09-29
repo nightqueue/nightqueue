@@ -16,7 +16,7 @@ const VERIFIER_JOB_ID = 42;
 
 // The refusal the operator's own home always answers with from inside a job.
 function homeRefusal(id) {
-  return `refused: this command would change the operator's nightqueue home from inside job #${id}; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead`;
+  return `refused: this command would change the operator's nightqueue home from inside J-${id}; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead`;
 }
 
 // Context that captures the output and never asks a terminal anything.

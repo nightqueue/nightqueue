@@ -1,4 +1,6 @@
-export const ROADMAP_STATUSES = Object.freeze(["backlog", "todo", "in_progress", "in_review", "done", "cancelled"]);
+import { jobRef } from "./refs.mjs";
+
+export const ROADMAP_STATUSES =Object.freeze(["backlog", "todo", "in_progress", "in_review", "done", "cancelled"]);
 export const OPEN_STATUSES = Object.freeze(["backlog", "todo", "in_progress", "in_review"]);
 export const CLOSED_STATUSES = Object.freeze(["done", "cancelled"]);
 export const MANUAL_STATUSES = Object.freeze(ROADMAP_STATUSES.filter((status) => status !== "in_progress"));
@@ -109,13 +111,13 @@ function withNote(line, note) {
 }
 
 const COMMENT_BODIES = Object.freeze({
-  queued: (job) => `queued as job #${job.id}`,
-  retried: (job) => withNote(`re-queued by retry of job #${job.id}`, job.operator_note),
-  gate: (job) => withNote(`job #${job.id} stopped at a gate`, job.notice_md),
-  done: (job) => withNote(job.pr_url ? `job #${job.id} done: ${job.pr_url}` : `job #${job.id} done without a pull request`, job.notice_md),
-  failed: (job) => withNote(`job #${job.id} failed`, job.notice_md),
-  cancelled: (job) => withNote(`job #${job.id} cancelled`, job.operator_note),
-  closed: (job) => `job #${job.id} closed`,
+  queued: (job) => `${jobRef(job.id)} queued`,
+  retried: (job) => withNote(`${jobRef(job.id)} re-queued by retry`, job.operator_note),
+  gate: (job) => withNote(`${jobRef(job.id)} stopped at a gate`, job.notice_md),
+  done: (job) => withNote(job.pr_url ? `${jobRef(job.id)} done: ${job.pr_url}` : `${jobRef(job.id)} done without a pull request`, job.notice_md),
+  failed: (job) => withNote(`${jobRef(job.id)} failed`, job.notice_md),
+  cancelled: (job) => withNote(`${jobRef(job.id)} cancelled`, job.operator_note),
+  closed: (job) => `${jobRef(job.id)} closed`,
 });
 
 // The comment a job event leaves on its linked item, or null when the event leaves none.

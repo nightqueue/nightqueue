@@ -17,6 +17,7 @@ import {
   ownerNames,
   ownerRef,
   projectTargetOf,
+  rowOwner,
 } from "../memory/scope.mjs";
 import {
   MAX_ATTEMPTS_RANGE,
@@ -25,6 +26,7 @@ import {
 } from "../memory/jobs.mjs";
 import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
+import { itemRef, jobRef, parseJobRef, requireKey } from "../memory/refs.mjs";
 import { ROADMAP_SEARCH_LIMIT } from "../memory/roadmap-search.mjs";
 import {
   PROMPT_SOURCE_CONFLICT,
@@ -40,6 +42,7 @@ import { noRunnerWait, parkedBacklogLine, pausedRunnerLine, pendingJobs, runners
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { blockerLines } from "../queue/claim.mjs";
 import { lastMaintenance } from "../queue/maintenance.mjs";
+import { jobIdOfPrUrl } from "../queue/pr-lookup.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
 import { liveRunnersReport, STOPPED_RUNNER, unreadableRegistry } from "../queue/registry.mjs";
 import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
@@ -80,7 +83,7 @@ const SERVER_INSTRUCTIONS = [
   "Every job ends as an open pull request (`done`) or stopped at a gate with its reason in `notice_md`, which is answered with `queue_retry`.",
   "Call `queue_status` to see what is pending before suggesting a batch.",
   "decisions are the project's standing constraints - recall them before proposing architecture and save one when the user settles a design question",
-  'the roadmap is where "what next" lives - read it before suggesting work, and queue from it with `roadmap_item_id`',
+  "the roadmap is where \"what next\" lives - read it before suggesting work, and queue from it with `roadmap_item_id` (the item's ref)",
   "a constraint the conversation states for two or more repos of the same org is saved ONCE with `org`, never once per repo: a project reads its own decisions and its org's",
 ].join("\n");
 const RECALL_LIMIT = 8;
@@ -93,7 +96,11 @@ const serverPrStates = createPrStateCache();
 const target = z.enum(LESSON_TARGETS).nullable().optional();
 const optionalText = z.string().nullable().optional();
 const optionalId = z.number().int().min(1).nullable().optional();
-const optionalNumbers = z.array(z.number().int().min(1)).nullable().optional();
+const optionalNumbers = z.array(z.union([z.number().int().min(1), z.string()])).nullable().optional();
+const jobRefInput = z.union([z.number().int().min(1), z.string()]);
+const jobIdField = jobRefInput.describe("The job's ref (`J-77`) or its plain id.");
+const itemRefInput = z.union([z.string(), z.number().int()]);
+const decisionRefInput = z.union([z.string(), z.number().int()]);
 const optionalDecisionStatus = z.enum(DECISION_STATUSES).nullable().optional();
 const looseDecisionStatus = z.string().nullable().optional();
 const optionalManualRoadmapStatus = z
@@ -305,6 +312,7 @@ function savedDecisionAnswer(saved) {
     ok: true,
     id: saved.id,
     number: saved.number,
+    ref: saved.ref,
     scope: saved.scope,
     owner: saved.org ?? saved.project,
     ...(saved.superseded.length ? { superseded: saved.superseded } : {}),
@@ -322,6 +330,28 @@ async function ownerArgs(args, env) {
   if (org) return orgTargetOf(await requireOrg(store, org));
   if (!project) throw new UserError(SCOPE_MISSING);
   return projectTargetOf(await requireProject(store, project));
+}
+
+// Tells whether an optional argument was sent: an explicit null is treated exactly like an absent one.
+function sent(value) {
+  return value !== undefined && value !== null;
+}
+
+// The project a bare `D-<n>` linked from an owner is read in: the project of a project owner, none for an org or the global owner.
+function projectContext({ scope, projectId }) {
+  return { projectId: scope === "project" ? (projectId ?? null) : null };
+}
+
+// Resolves an optional decision ref linked from an owner to the decision id, leaving an absent one absent.
+async function linkedDecisionId(value, owner, env) {
+  return sent(value) ? await openStore(env).decisions.decisionIdOfRef(value, projectContext(owner)) : value;
+}
+
+// The project a bare `D-<n>` of `decision_update` is read in: the `project` named, else the caller job's project, else none.
+async function decisionUpdateContext(args, env) {
+  const named = typeof args.project === "string" && args.project.trim() !== "" ? args.project.trim() : null;
+  if (named) return { projectId: (await requireProject(openStore(env), named)).id };
+  return { projectId: (await callerContext(env)).projectId };
 }
 
 // Project row the job goes to, or the offer to register the directory of the caller when nothing is registered for it.
@@ -347,17 +377,20 @@ function needsRegistration({ cwd, offer }) {
     needs_registration: true,
     cwd,
     suggested_name: offer.name,
+    suggested_key: offer.key,
     org: offer.org,
     hint:
-      `no project is registered for \`${cwd}\`; ask the user to confirm registering it as \`${offer.name}\` in org ` +
-      `\`${offer.org}\`, then call queue_add again with the same \`cwd\` and \`register: true\`. Nothing was queued.`,
+      `no project is registered for \`${cwd}\`; ask the user to confirm registering it as \`${offer.name}\` with key ` +
+      `\`${offer.key}\` in org \`${offer.org}\` (the key prefixes its refs, e.g. \`${offer.key}-1\`; the user may type another), ` +
+      "then call queue_add again with the same `cwd` and `register: true`, plus `key` when the user chose another key. Nothing was queued.",
   };
 }
 
-// Registers the repository the offer names, taking the configuration lock this server never takes for itself.
-async function registerOffer(offer, env) {
+// Registers the repository the offer names under the key the user chose or the suggested one, taking the configuration lock this server never takes for itself.
+async function registerOffer(offer, key, env) {
   const ctx = { env, out: () => {}, err: () => {}, saveConfig };
-  const { project } = await withLock(env, () => saveProject(ctx, { path: offer.path, name: offer.name }));
+  const chosen = typeof key === "string" && key.trim() !== "" ? requireKey(key) : offer.key;
+  const { project } = await withLock(env, () => saveProject(ctx, { path: offer.path, name: offer.name, key: chosen }));
   return project;
 }
 
@@ -397,40 +430,41 @@ function queuedRunnerLine(env) {
 }
 
 // The answer of `queue_add`: the job it recorded, and the roadmap item behind it when there is one.
-async function queuedAnswer({ job, registered = null, roadmapItemId = null, note = "" }, env) {
+async function queuedAnswer({ job, registered = null, roadmapItem = null, note = "" }, env) {
   const pending = (await openStore(env).jobs.countsByStatus()).pending;
   const done = registered ? `registered project \`${registered.name}\` (${registered.path}). ` : "";
   const stale = staleRuntimeHint(env);
   return {
     ok: true,
     id: job.id,
+    ref: jobRef(job.id),
     project: job.project,
     priority: job.priority,
     timeoutS: job.timeoutS,
-    ...(roadmapItemId === null ? {} : { roadmapItemId }),
+    ...(roadmapItem === null ? {} : { roadmapItemId: roadmapItem.id, roadmap_ref: itemRef(roadmapItem) }),
     ...(job.tier ? { tier: job.tier } : {}),
-    hint: `${done}queued job #${job.id} for \`${job.project}\` (${pending} pending).${note} ${queuedRunnerLine(env)}${stale ? ` ${stale}` : ""}`,
+    hint: `${done}queued ${jobRef(job.id)} for \`${job.project}\` (${pending} pending).${note} ${queuedRunnerLine(env)}${stale ? ` ${stale}` : ""}`,
   };
 }
 
 // What the answer of a roadmap-built job adds: an org item fathers one job per project, each on its own project row, and its status is derived from the rows.
 function roadmapNote({ item, jobs, skipped }) {
   if (item.scope !== "org") return "";
-  const queued = jobs.map((job) => `#${job.id} for \`${job.project}\``).join(", ");
+  const queued = jobs.map((job) => `${jobRef(job.id)} for \`${job.project}\``).join(", ");
   const held = skipped.length ? ` Skipped, a live job already holds them: ${skipped.map((entry) => `\`${entry.project}\``).join(", ")}.` : "";
   return (
-    ` Roadmap item #${item.id} of org \`${item.org}\` queued as ${queued}; each project row follows its job, and the item is ` +
+    ` Roadmap item ${itemRef(item)} of org \`${item.org}\` queued as ${queued}; each project row follows its job, and the item is ` +
     `\`in_progress\` while any row is, \`done\` once every row is done or cancelled, otherwise the lowest open row status.${held}`
   );
 }
 
 // The answer of `queue_add` for a roadmap-built job: the first job as before, plus every job and every skipped project of an org item.
 async function roadmapQueuedAnswer(queued, env) {
-  const answer = await queuedAnswer({ job: queued.job, roadmapItemId: queued.item.id, note: roadmapNote(queued) }, env);
+  const answer = await queuedAnswer({ job: queued.job, roadmapItem: queued.item, note: roadmapNote(queued) }, env);
   if (queued.item.scope !== "org") return answer;
   return {
     ...answer,
-    jobs: queued.jobs.map((job) => ({ id: job.id, project: job.project })),
+    jobs: queued.jobs.map((job) => ({ id: job.id, ref: jobRef(job.id), project: job.project })),
     skipped: queued.skipped,
   };
 }
@@ -440,7 +474,8 @@ async function roadmapItemDetail(args, env) {
   const named = [args.project, args.org].some((value) => typeof value === "string" && value.trim() !== "");
   if (named) throw new UserError("pass `id` alone to read one roadmap item, or `project`/`org` without `id` to list a roadmap");
   const { viewer } = await roadmapCaller(env);
-  return await openStore(env).roadmap.getRoadmapItemDetail(args.id, { viewer });
+  const store = openStore(env);
+  return await store.roadmap.getRoadmapItemDetail(await store.roadmap.itemIdOfRef(args.id), { viewer });
 }
 
 // The owner `roadmap_search` reads: the named one outside a job; inside a job always the job's own project, refusing any other owner.
@@ -565,9 +600,20 @@ async function jobStatusAnswer(id, { store, warning }) {
   return { job, ...warningAnswer(warning) };
 }
 
+// The one job `queue_status` was asked about, by `job_id` (a ref or a plain id) or by `pr_url`, never both; neither asks for the queue.
+function statusJobAsked(args) {
+  const prUrl = sent(args.pr_url) ? String(args.pr_url).trim() : undefined;
+  if (prUrl === "") throw new UserError("`pr_url` is blank: pass the URL of the pull request, or leave `pr_url` out for the queue");
+  if (sent(args.job_id) && prUrl !== undefined) throw new UserError("pass either `job_id` or `pr_url`, never both: each names one job");
+  if (sent(args.job_id)) return { jobId: parseJobRef(args.job_id) };
+  return { prUrl };
+}
+
 // The answer of `queue_status` for the tail of the queue, mapped from the one queue view every surface renders.
 async function queueStatusAnswer(args, { store, warning, env }) {
-  if (Number.isInteger(args.job_id)) return await jobStatusAnswer(args.job_id, { store, warning });
+  const asked = statusJobAsked(args);
+  if (asked.jobId !== undefined) return await jobStatusAnswer(asked.jobId, { store, warning });
+  if (asked.prUrl !== undefined) return await jobStatusAnswer(await jobIdOfPrUrl(store, asked.prUrl), { store, warning });
   const view = await queueView(store, { env, limit: jobLimit(args.limit), prStates: serverPrStates });
   const unread = failedCoreSection(view);
   if (unread) throw new UserError(`the queue cannot be read: ${unread.error}`);
@@ -612,7 +658,7 @@ async function queueStopAnswer(args, env) {
 async function queueCancelAnswer(args, env) {
   const stop = args.stop === true;
   if (args.release_worktree === true && !stop) throw new UserError("`release_worktree` only has meaning with `stop: true`");
-  const cancel = { store: openStore(env), id: args.job_id, reason: args.reason, env };
+  const cancel = { store: openStore(env), id: parseJobRef(args.job_id), reason: args.reason, env };
   if (!stop) return { ok: true, ...(await cancelJobAndWorktree(cancel)) };
   return { ok: true, ...(await stopAndCancelJob({ ...cancel, releaseWorktree: args.release_worktree === true })) };
 }
@@ -814,7 +860,7 @@ function toolDefinitions(env) {
           "Enqueues an unattended /nightqueue:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
           "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. The hint reports how many runners are live right now, and a job queued with none online waits until `nightqueue queue run` starts one. " +
           "With `project` omitted, `cwd` (the absolute working directory of the caller) resolves the project. When no project is registered for it, the answer is `needs_registration`: ask the user to confirm, then call again with the same `cwd` and `register: true`. Registration never happens without `register: true`. " +
-          "With `roadmap_item_id` and no `prompt`, the job prompt is built from that roadmap item, its linked decision and the accepted decisions related to it; a project item moves to `in_progress` and then follows its job: `in_review` once the job is done, `done` once the job is closed - its pull request merged through `queue_close` - and back to `todo` when the job fails or is cancelled (a close that finds the pull request closed without merge cancels the job)." +
+          "With `roadmap_item_id` (the item's ref, `NQ-12`) and no `prompt`, the job prompt is built from that roadmap item, its linked decision and the accepted decisions related to it; a project item moves to `in_progress` and then follows its job: `in_review` once the job is done, `done` once the job is closed - its pull request merged through `queue_close` - and back to `todo` when the job fails or is cancelled (a close that finds the pull request closed without merge cancels the job)." +
           "An ORG roadmap item needs an explicit `project` of that org, or `all` for every project of the org, because a job is always one project's: each project gets its own row linked to its own job (a project whose row still has a live job is skipped and reported in `skipped`; the answer lists every job in `jobs`), and the item's status is derived from its rows - `in_progress` while any row is, `done` once every row is done or cancelled, otherwise the lowest open row status. Closing it by hand cancels its open rows.",
         inputSchema: {
           project: z.string().nullable().optional(),
@@ -828,6 +874,9 @@ function toolDefinitions(env) {
             .nullable()
             .optional()
             .describe("Registers the git repository of `cwd` as a project before queueing. Only ever sent after the user confirmed it."),
+          key: optionalText.describe(
+            "The key of the project `register: true` creates (2 to 5 uppercase letters or digits, starting with a letter), when the user chose one other than `suggested_key`. Ignored without `register: true`.",
+          ),
           prompt: z
             .string()
             .nullable()
@@ -835,7 +884,10 @@ function toolDefinitions(env) {
             .describe(
               "The whole request, as prose. One self-contained deliverable that can be reviewed and merged on its own; large work goes here as ONE prompt with numbered stages (`Stages: 1) ... 2) ...`), never as several jobs that depend on each other.",
             ),
-          roadmap_item_id: optionalId,
+          roadmap_item_id: itemRefInput
+            .nullable()
+            .optional()
+            .describe("The ref of the roadmap item that builds the prompt (`NQ-12`, an org item `DLW-3`; an old key still resolves), never an internal id."),
           priority: z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).nullable().optional(),
           max_attempts: z.number().int().min(MAX_ATTEMPTS_RANGE.min).max(MAX_ATTEMPTS_RANGE.max).nullable().optional(),
           timeout_s: z.number().int().min(TIMEOUT_RANGE.min).max(TIMEOUT_RANGE.max).nullable().optional(),
@@ -858,7 +910,7 @@ function toolDefinitions(env) {
           if (hasRunDir(args)) throw new UserError("`run_dir` needs the operator's `prompt`: it cannot seed a job built from `roadmap_item_id`");
           const store = openStore(env);
           const queued = await store.roadmap.queueRoadmapItem({
-            id: args.roadmap_item_id,
+            id: await store.roadmap.itemIdOfRef(args.roadmap_item_id),
             ...(await roadmapQueueTarget(store, args.project)),
             priority: args.priority,
             maxAttempts: args.max_attempts,
@@ -869,7 +921,7 @@ function toolDefinitions(env) {
         }
         const target = await resolveQueueTarget(args, env);
         if (target.offer && args.register !== true) return needsRegistration(target);
-        const registered = target.offer ? await registerOffer(target.offer, env) : null;
+        const registered = target.offer ? await registerOffer(target.offer, args.key, env) : null;
         const project = registered ?? target.project;
         const seeded = hasRunDir(args) ? operatorRunSeed({ args, project, env }) : { prompt: args.prompt, slug: null };
         const job = await openStore(env).jobs.addJob({
@@ -888,14 +940,17 @@ function toolDefinitions(env) {
       name: "queue_status",
       config: {
         description:
-          "State of the queue: one job by id, or the most recent ones plus the counts per status and every live runner in `runners` (`runner` is the first of them, kept for one release; `runnersOnline` is the count of `runners`). The `hint` leads with the live-runner count, and says that a job queued with none online waits until `nightqueue queue run` starts one. " +
+          "State of the queue: one job by `job_id` (its ref `J-77` or plain id) or by `pr_url` (the pull request it opened), or the most recent ones plus the counts per status and every live runner in `runners` (`runner` is the first of them, kept for one release; `runnersOnline` is the count of `runners`). The `hint` leads with the live-runner count, and says that a job queued with none online waits until `nightqueue queue run` starts one. " +
           "The `hint` ends with the advisory lines when they apply - a five-hour window close to its limit while runners are live, or two or more runners on one repository - also listed under `advisories`; they never block anything. Never returns the prompt. " +
           "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`. " +
           "The listing cuts `notice_md` and `result` at 500 characters and marks a cut row with `notice_truncated: true` or `result_truncated: true` (the key is absent when the text fits); call again with that `job_id` for the whole text. " +
           "`sections` carries each part of the read with `ok`, `error` and elapsed `ms`, and `pr_state` of each job comes from a cache refreshed outside the answer (`unknown` until gh answered); " +
           "a merged pull request on a `done` job is listed in `suggestions`, and closing it is `queue_close`. `closes` groups the closes in flight, failed and stalled.",
         inputSchema: {
-          job_id: z.number().int().min(1).nullable().optional(),
+          job_id: jobRefInput.nullable().optional().describe("One job by its ref (`J-77`) or its plain id."),
+          pr_url: optionalText.describe(
+            "One job by the pull request it opened (a GitHub pull request URL; a trailing `/files` or slash still matches). Never together with `job_id`; a URL opened by more than one job is refused with their refs.",
+          ),
           limit: z.number().int().min(JOB_LIST_LIMIT.min).max(JOB_LIST_LIMIT.max).nullable().optional(),
         },
       },
@@ -916,10 +971,10 @@ function toolDefinitions(env) {
           "A single job that cannot be claimed right now answers `started: false` with `waiting` and starts nothing. " +
           "The runner exits by itself once the queue is empty; `queue_stop` (or `nightqueue queue run --stop`) ends every runner, with a pid only that one. " +
           "Each runner works one job at a time; parallel jobs come from starting more runners. `advisories` warns, from the provider's real five-hour utilization and the live leases, when another runner would likely hit the rate limit or fight over one repository - it never blocks a start.",
-        inputSchema: { job_id: z.number().int().min(1).nullable().optional() },
+        inputSchema: { job_id: jobIdField.nullable().optional() },
       },
       handler: async (args) => {
-        const started = await startQueueRunner({ jobId: Number.isInteger(args.job_id) ? args.job_id : null, env });
+        const started = await startQueueRunner({ jobId: sent(args.job_id) ? parseJobRef(args.job_id) : null, env });
         const advisories = await startAdvisoryLines({ env });
         const stale = staleRuntimeHint(env);
         return { ok: true, ...runnerAnswer(started, env, stale ? [...advisories, stale] : advisories) };
@@ -946,13 +1001,14 @@ function toolDefinitions(env) {
           "The claude session of a job's last attempt: its attempt number, session id and the cwd it ran in (the run's worktree, or the project's checkout when that worktree was already released, with `worktree_released: true`). " +
           "Never resumes it - this tool only reads; resume it yourself with `nightqueue open --resume <session>` in `cwd`, or run `nightqueue queue session <job_id>` in a terminal (the same operator launch). " +
           "`pending` and `running` are refused by name: a live runner owns a running job, and a pending one has not run yet. A job that never reached the agent has no session to answer with, and is refused too.",
-        inputSchema: { job_id: z.number().int().min(1) },
+        inputSchema: { job_id: jobIdField },
       },
       handler: async (args) => {
-        const job = await openStore(env).jobs.getJob(args.job_id);
-        if (!job) throw new UserError(`unknown job \`${args.job_id}\``);
+        const id = parseJobRef(args.job_id);
+        const job = await openStore(env).jobs.getJob(id);
+        if (!job) throw new UserError(`unknown job \`${id}\``);
         const resolved = resolveJobSession(job, env);
-        return { job_id: resolved.jobId, attempt: resolved.attempt, session: resolved.session, cwd: resolved.cwd, worktree_released: resolved.worktreeReleased };
+        return { job_id: resolved.jobId, ref: jobRef(resolved.jobId), attempt: resolved.attempt, session: resolved.session, cwd: resolved.cwd, worktree_released: resolved.worktreeReleased };
       },
     },
     {
@@ -966,7 +1022,7 @@ function toolDefinitions(env) {
           "The runner notices the stop only at its next heartbeat, so `alive` is an expected answer when `queue.leaseHeartbeatS` is long: that runner ends by itself and the job stays cancelled.`release_worktree: true` (only with `stop`) then releases the job's worktree by the same rule as a done or failed cancel, once the runner is gone. " +
           "A worker of another host, a pid that is not a live registered runner of this home, and a registration of another user are refused with the reason, with nothing signalled or written. A job that is not running is cancelled by the rules above and `runner` is null.",
         inputSchema: {
-          job_id: z.number().int().min(1),
+          job_id: jobIdField,
           reason: optionalText,
           stop: z.boolean().nullable().optional(),
           release_worktree: z.boolean().nullable().optional(),
@@ -985,11 +1041,12 @@ function toolDefinitions(env) {
           "A close that stopped keeps its checklist and its reason on the job (`close`, `close_status: failed`); calling this tool again resumes it at the step that failed. " +
           "`force` skips the pull request checks and the rebase test suite only; conflicts, a pull request that is not the job's own and the job's status still stop the close. " +
           "A pull request closed without merge cancels the job and releases its worktree; one merged by hand is recorded as `merged outside a close`.",
-        inputSchema: { job_id: z.number().int().min(1), force: z.boolean().nullable().optional() },
+        inputSchema: { job_id: jobIdField, force: z.boolean().nullable().optional() },
       },
       handler: async (args) => {
-        const started = await startCloseDetached({ store: openStore(env), id: args.job_id, force: args.force === true, env });
-        return { ok: true, started: true, job_id: args.job_id, pid: started.pid, logPath: started.logPath, follow: `nightqueue queue status ${args.job_id}` };
+        const id = parseJobRef(args.job_id);
+        const started = await startCloseDetached({ store: openStore(env), id, force: args.force === true, env });
+        return { ok: true, started: true, job_id: id, ref: jobRef(id), pid: started.pid, logPath: started.logPath, follow: `nightqueue queue status ${jobRef(id)}` };
       },
     },
     {
@@ -1001,14 +1058,14 @@ function toolDefinitions(env) {
           "`run` starts a DETACHED runner, the same one `queue_run` starts - and the same one the `--run` of the CLI starts, unless it is asked for `--foreground`; a job that cannot be claimed right now answers `waiting` and starts nothing. " +
           "Inside an unattended run this tool only accepts the id of the job it is running: retrying another job is refused, because the note is delivered as a human answer in that job's next prompt.",
         inputSchema: {
-          job_id: z.number().int().min(1),
+          job_id: jobIdField,
           note: optionalText,
           fresh: z.boolean().nullable().optional(),
           run: z.boolean().nullable().optional(),
         },
       },
       handler: async (args) => {
-        const { job, runDir } = await applyRetry({ id: args.job_id, note: args.note, fresh: args.fresh === true, env });
+        const { job, runDir } = await applyRetry({ id: parseJobRef(args.job_id), note: args.note, fresh: args.fresh === true, env });
         const started = args.run === true ? await startQueueRunner({ jobId: job.id, env }) : null;
         return { ok: true, job, runDir, ...(started ? runnerAnswer(started, env, await startAdvisoryLines({ env })) : { runner: null }) };
       },
@@ -1019,10 +1076,10 @@ function toolDefinitions(env) {
         description:
           "Records one architecture decision: the context that forced it, what was decided and what it costs. " +
           "Owned by `project` (the registered NAME, never a path) or by `org`, never both — an org decision binds every project of that org and is the right shape when the constraint holds for more than one repo of the same product. " +
-          "Numbered inside its owner (`#1`, `#2` per project; `acme#1`, `acme#2` per org); a missing or invalid `status` falls back to `proposed` (the answer then carries `status_defaulted: true`). " +
+          "Numbered inside its owner, and named by its ref (`D-1`, `D-2` per project; `DLW/D-1`, `DLW/D-2` per org, after the org's key); a missing or invalid `status` falls back to `proposed` (the answer then carries `status_defaulted: true`). " +
           "Before saving, the title is searched against the owner's accepted and proposed decision titles, and the title plus decision text against their meaning. " +
           'When it overlaps any, nothing is saved and the answer is `status: "needs_review"` with `candidates` (id, number, title, status, via). ' +
-          "Save again naming EVERY candidate by its `number`: in `supersedes` the ones this decision replaces WHOLE (they become `superseded` and point at the new row, so restate in the new text what still holds), in `unrelated` the ones it leaves untouched. " +
+          "Save again naming EVERY candidate by its `number` or its `ref` (a ref must name a decision of the same owner): in `supersedes` the ones this decision replaces WHOLE (they become `superseded` and point at the new row, so restate in the new text what still holds), in `unrelated` the ones it leaves untouched. " +
           "Any candidate left unnamed refuses again. Inside a queue job `supersedes` is refused, and a job proposes at most one decision.",
         inputSchema: {
           project: optionalText,
@@ -1037,15 +1094,17 @@ function toolDefinitions(env) {
         },
       },
       handler: async (args) => {
-        const saved = await openStore(env).decisions.saveReviewedDecision({
-          ...ownerRef(await ownerArgs(args, env)),
+        const store = openStore(env);
+        const owner = ownerRef(await ownerArgs(args, env));
+        const saved = await store.decisions.saveReviewedDecision({
+          ...owner,
           title: args.title,
           context: args.context,
           decision: args.decision,
           consequences: args.consequences,
           status: args.status,
-          supersedes: args.supersedes,
-          unrelated: args.unrelated,
+          supersedes: await store.decisions.ownDecisionNumbers(args.supersedes, owner),
+          unrelated: await store.decisions.ownDecisionNumbers(args.unrelated, owner),
           jobId: callerJobId(env),
         });
         return saved.needsReview ? needsReviewAnswer(saved.candidates) : savedDecisionAnswer(saved);
@@ -1055,30 +1114,33 @@ function toolDefinitions(env) {
       name: "decision_update",
       config: {
         description:
-          "Changes a decision by its `id`: accept or reject a proposed one, correct its text, or point `superseded_by` at the decision that replaced it. " +
+          "Changes a decision by its ref in `id` (`D-7`, `DLW/D-3`, `NQ/D-7`): accept or reject a proposed one, correct its text, or point `superseded_by` at the ref of the decision that replaced it. " +
+          "A bare `D-<n>` is read in `project` (the registered NAME), or inside a job in the job's project; `superseded_by` is read in the updated decision's owner. " +
           "Only the fields present are touched; an explicit `null` is treated exactly like an absent one. " +
           '`status: "superseded"` requires `superseded_by`, unless the decision already names its successor.',
         inputSchema: {
-          id: z.number().int().min(1),
+          id: decisionRefInput,
+          project: optionalText,
           title: optionalText,
           context: optionalText,
           decision: optionalText,
           consequences: optionalText,
           status: optionalDecisionStatus,
-          superseded_by: optionalId,
+          superseded_by: decisionRefInput.nullable().optional(),
         },
       },
       handler: async (args) => {
         const store = openStore(env);
-        const current = await store.decisions.getDecision(args.id);
-        if (current) await requireOwnProject({ kind: "decision", id: args.id, row: current }, env);
-        const row = await store.decisions.updateDecision(args.id, {
+        const id = await store.decisions.decisionIdOfRef(args.id, await decisionUpdateContext(args, env));
+        const current = await store.decisions.getDecision(id);
+        if (current) await requireOwnProject({ kind: "decision", id: String(args.id).trim(), row: current }, env);
+        const row = await store.decisions.updateDecision(id, {
           title: args.title,
           context: args.context,
           decision: args.decision,
           consequences: args.consequences,
           status: args.status,
-          superseded_by: args.superseded_by,
+          superseded_by: await linkedDecisionId(args.superseded_by, rowOwner(current), env),
         });
         return { ok: true, decision: decisionView(row) };
       },
@@ -1127,7 +1189,7 @@ function toolDefinitions(env) {
           "Adds one intent to a roadmap, at the end of its `priority` group (1-9, default 5, 1 first like a job's). Owned by `project` or by `org`, never both: an org item is work every project of the org has to do, and names the project its job goes to at queue time. " +
           `\`type\` (${ROADMAP_TYPES.join("|")}) is required. ` +
           `\`status\` defaults to \`todo\`; by hand it may be ${MANUAL_STATUSES.join("|")}, never \`in_progress\`, which only a job sets. ` +
-          "`decision_id` links it to the decision that motivated it. `horizon` was removed in schema v17 and is refused by name.",
+          "`decision_id` links it to the decision that motivated it, by its ref (`D-7` of the item's project, `DLW/D-3`). `horizon` was removed in schema v17 and is refused by name.",
         inputSchema: {
           project: optionalText,
           org: optionalText,
@@ -1136,58 +1198,60 @@ function toolDefinitions(env) {
           detail: optionalText,
           priority: optionalRoadmapPriority,
           status: optionalManualRoadmapStatus,
-          decision_id: optionalId,
+          decision_id: decisionRefInput.nullable().optional(),
           horizon: retiredHorizon,
         },
       },
       handler: async (args) => {
+        const owner = await ownerArgs(args, env);
         const saved = await openStore(env).roadmap.saveRoadmapItem({
-          ...ownerRef(await ownerArgs(args, env)),
+          ...ownerRef(owner),
           title: args.title,
           type: args.type,
           detail: args.detail,
           priority: args.priority,
           status: args.status,
-          decision_id: args.decision_id,
+          decision_id: await linkedDecisionId(args.decision_id, owner, env),
           horizon: args.horizon,
         });
-        return { ok: true, id: saved.id, type: saved.type, priority: saved.priority, position: saved.position, status: saved.status };
+        return { ok: true, id: saved.id, ref: saved.ref, type: saved.type, priority: saved.priority, position: saved.position, status: saved.status };
       },
     },
     {
       name: "roadmap_update",
       config: {
         description:
-          "Changes a roadmap item by its `id`: its text, its `type`, its `priority` (a change moves it to the end of the new priority group), its position inside the priority group, its `decision_id`, or its status. " +
+          "Changes a roadmap item by its ref in `id` (`NQ-12`; an old key still resolves): its text, its `type`, its `priority` (a change moves it to the end of the new priority group), its position inside the priority group, its `decision_id` (a decision ref, `D-7` read in the item's project), or its status. " +
           `By hand the status may be ${MANUAL_STATUSES.join("|")}; \`in_progress\` is refused because only a job sets it, and moving back from \`in_review\` or \`done\` is allowed and leaves a \`reopened\` comment. ` +
           "A linked item follows its job: `in_progress` while it runs or waits at a gate, `in_review` once it is done, `done` once it is closed - its pull request merged through `queue_close` - and `todo` when it fails or is cancelled (a close that finds the pull request closed without merge cancels the job)." +
           "An org item's status is derived from its project rows; setting it to `done` or `cancelled` by hand cancels every open row, with a `closed` comment per row. " +
           "`horizon` was removed in schema v17 and is refused by name.",
         inputSchema: {
-          id: z.number().int().min(1),
+          id: itemRefInput,
           title: optionalText,
           detail: optionalText,
           type: roadmapType.nullable().optional(),
           status: optionalManualRoadmapStatus,
           priority: optionalRoadmapPriority,
           position: optionalId,
-          decision_id: optionalId,
+          decision_id: decisionRefInput.nullable().optional(),
           horizon: retiredHorizon,
         },
       },
       handler: async (args) => {
         const store = openStore(env);
-        const current = await store.roadmap.getRoadmapItem(args.id);
-        if (current) await requireOwnProject({ kind: "roadmap item", id: args.id, row: current }, env);
+        const id = await store.roadmap.itemIdOfRef(args.id);
+        const current = await store.roadmap.getRoadmapItem(id);
+        if (current) await requireOwnProject({ kind: "roadmap item", id: String(args.id).trim(), row: current }, env);
         const { author } = await roadmapCaller(env);
-        const row = await store.roadmap.updateRoadmapItem(args.id, {
+        const row = await store.roadmap.updateRoadmapItem(id, {
           title: args.title,
           detail: args.detail,
           type: args.type,
           status: args.status,
           priority: args.priority,
           position: args.position,
-          decision_id: args.decision_id,
+          decision_id: await linkedDecisionId(args.decision_id, rowOwner(current), env),
           horizon: args.horizon,
           author,
         });
@@ -1201,9 +1265,9 @@ function toolDefinitions(env) {
           "The roadmap of an owner as one list of `items`, in workflow order (backlog, todo, in_progress, in_review, done, cancelled), then org items first, then by `priority` (1 first) and `position`; each item carries its linked decision, the status of the job it was queued as and `closed_at`. " +
           "With `project`, the project's items plus its org's, each carrying its `scope` and its `owner`, and each org item the `project_status` of that project's own row; with `org`, only that org's items, each with `projects` (every project row: `project`, `status`, `job_id`, `job_status`). " +
           "`status`, `priority` and `type` narrow the list to the values given; without them every item is returned. " +
-          "With `id` alone, that one item with its text untruncated and its comment thread in chronological order (the job events the runtime recorded and the notes); inside a job only an item of the job's project or of its org is readable.",
+          "With `id` alone (the item's ref, `NQ-12`), that one item with its text untruncated and its comment thread in chronological order (the job events the runtime recorded and the notes); inside a job only an item of the job's project or of its org is readable.",
         inputSchema: {
-          id: optionalId,
+          id: itemRefInput.nullable().optional(),
           project: optionalText,
           org: optionalText,
           status: z.array(z.enum(ROADMAP_STATUSES)).nullable().optional(),
@@ -1224,13 +1288,15 @@ function toolDefinitions(env) {
       name: "roadmap_comment",
       config: {
         description:
-          "Appends a `note` to the comment thread of a roadmap item by its `id`; comments are append-only, never edited nor deleted. " +
+          "Appends a `note` to the comment thread of a roadmap item by its ref in `id` (`NQ-12`); comments are append-only, never edited nor deleted. " +
           "Outside a job the author is `operator`; inside a job it is `job:<id>`, and only an item of the job's project or of its org may be commented.",
-        inputSchema: { id: z.number().int().min(1), body: z.string() },
+        inputSchema: { id: itemRefInput, body: z.string() },
       },
       handler: async (args) => {
         const { author, viewer } = await roadmapCaller(env);
-        const comment = await openStore(env).roadmap.addRoadmapComment({ id: args.id, body: args.body, author, viewer });
+        const store = openStore(env);
+        const id = await store.roadmap.itemIdOfRef(args.id);
+        const comment = await store.roadmap.addRoadmapComment({ id, body: args.body, author, viewer });
         return { ok: true, comment };
       },
     },

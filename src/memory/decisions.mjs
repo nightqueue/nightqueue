@@ -2,17 +2,20 @@ import { UserError } from "../config/errors.mjs";
 import { inTransaction, openDb, sqliteToIso, toQueryVector, vectorToBlob, withWriteRetry } from "./db.mjs";
 import { truncateByCodePoint } from "./jobs.mjs";
 import { escapePromptMarkers } from "./prompt-safety.mjs";
-import { attachNames } from "./registry.mjs";
+import { GLOBAL_KEY, jobRef, parseRef } from "./refs.mjs";
+import { attachNames, ownerByKey } from "./registry.mjs";
 import {
   OWNER_CLAUSE,
+  decisionRef,
   orgFirst,
   ownerDescription,
-  ownerLabel,
   ownerOf,
   ownerRef,
   ownerValues,
+  projectScope,
   requireScopeTarget,
   sameOwner,
+  targetDecisionRef,
   visibility,
 } from "./scope.mjs";
 import {
@@ -47,6 +50,8 @@ const INSERT_DECISION = `INSERT INTO decisions
   VALUES (?, ?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM decisions WHERE ${OWNER_CLAUSE}),
     ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
   RETURNING id, number`;
+const NUMBERED_DECISION_QUERY = `SELECT *, (SELECT s.number FROM decisions s WHERE s.id = decisions.superseded_by) AS superseded_by_number
+  FROM decisions WHERE ${OWNER_CLAUSE} AND number = ?`;
 
 // Requires a non-empty text field, because the column is NOT NULL and a raw SQLite error helps nobody.
 function requireText(field, value) {
@@ -105,13 +110,62 @@ export function getDecisionByNumber({ projectId, orgId, number } = {}, env = pro
   }
   const connection = db ?? openDb(env);
   const target = requireScopeTarget(connection, { projectId, orgId });
-  const row = connection
-    .prepare(
-      `SELECT *, (SELECT s.number FROM decisions s WHERE s.id = decisions.superseded_by) AS superseded_by_number
-       FROM decisions WHERE ${OWNER_CLAUSE} AND number = ?`,
-    )
-    .get(...ownerValues(target), number);
+  const row = connection.prepare(NUMBERED_DECISION_QUERY).get(...ownerValues(target), number);
   return namedRow(connection, row);
+}
+
+// The owner target a parsed decision ref names: its key's owner (current or old key), the global owner for `G`, or the project context of a bare `D-<n>`.
+function decisionRefOwner(db, ref, projectId) {
+  if (ref.key === GLOBAL_KEY) return projectScope(db, null);
+  if (ref.key !== null) return ownerByKey(db, ref.key);
+  if (projectId === null || projectId === undefined) {
+    throw new UserError(`\`D-${ref.number}\` names a decision of a project: pass the project, or write it \`<KEY>/D-${ref.number}\``);
+  }
+  return projectScope(db, projectId);
+}
+
+// Resolves a decision ref (`D-<n>` in the `projectId` context, `<KEY>/D-<n>`, `G/D-<n>`) to its row, names attached; a ref never resolves to two rows.
+export function decisionOfRef(value, { projectId = null } = {}, env = process.env, db = null) {
+  const ref = parseRef(value);
+  if (ref?.kind !== "decision") {
+    throw new UserError(`expected a decision ref (\`D-<number>\` or \`<KEY>/D-<number>\`), got \`${String(value)}\``);
+  }
+  const connection = db ?? openDb(env);
+  const owner = decisionRefOwner(connection, ref, projectId);
+  const text = ref.key === null ? `D-${ref.number}` : `${ref.key}/D-${ref.number}`;
+  const rows = owner ? connection.prepare(NUMBERED_DECISION_QUERY).all(...ownerValues(owner), ref.number) : [];
+  if (rows.length === 0) throw new UserError(`unknown decision \`${text}\``);
+  if (rows.length > 1) throw new UserError(`\`${text}\` names ${rows.length} decisions; a ref must name exactly one, so fix the duplicate numbers first`);
+  return namedRow(connection, rows[0]);
+}
+
+// Resolves a decision ref to the id of the one decision it names.
+export function decisionIdOfRef(value, context = {}, env = process.env, db = null) {
+  return Number(decisionOfRef(value, context, env, db).id);
+}
+
+// Tells whether a decision row belongs to exactly the given owner target.
+function ownedBy(row, target) {
+  const [scope, projectId, orgId] = ownerValues(target);
+  return row.scope === scope && (row.project_id ?? null) === projectId && (row.org_id ?? null) === orgId;
+}
+
+// The per-owner number one `supersedes`/`unrelated` entry names: a plain number as it is, or a ref that must name a decision of the owner itself.
+function ownDecisionNumber(db, target, entry, env) {
+  if (typeof entry === "number") return entry;
+  if (typeof entry === "string" && /^\s*\d+\s*$/.test(entry)) return Number(entry);
+  const context = { projectId: target.scope === "project" ? target.projectId : null };
+  const row = decisionOfRef(entry, context, env, db);
+  if (!ownedBy(row, target)) throw new UserError(`\`${String(entry).trim()}\` is not a decision of ${ownerDescription(target)}`);
+  return Number(row.number);
+}
+
+// The per-owner numbers a list of numbers or refs names, for the owner `{ projectId }` or `{ orgId }`; an absent list stays absent.
+export function ownDecisionNumbers(entries, owner = {}, env = process.env, db = null) {
+  if (!Array.isArray(entries)) return entries;
+  const connection = db ?? openDb(env);
+  const target = requireScopeTarget(connection, owner);
+  return entries.map((entry) => ownDecisionNumber(connection, target, entry, env));
 }
 
 // The status to store plus whether the safe default ("proposed") replaced a missing or invalid one.
@@ -144,6 +198,7 @@ function savedIdentity(target, inserted, statusDefaulted) {
   return {
     id: inserted.id,
     number: inserted.number,
+    ref: targetDecisionRef(target, inserted.number),
     scope: target.scope,
     project: org ? null : target.project,
     org: org ? target.org : null,
@@ -208,7 +263,7 @@ function namedNumbers({ supersedes, unrelated, jobId }) {
   }
   if (replaced.length && jobId !== null) {
     throw new UserError(
-      `inside job ${jobId} \`supersedes\` is refused: superseding a decision is the operator's call; name it in \`unrelated\` only if this decision really leaves it untouched, otherwise stop and leave it to the operator`,
+      `inside ${jobRef(jobId)} \`supersedes\` is refused: superseding a decision is the operator's call; name it in \`unrelated\` only if this decision really leaves it untouched, otherwise stop and leave it to the operator`,
     );
   }
   return { replaced, untouched };
@@ -250,7 +305,7 @@ function refuseSecondProposal(db, spec) {
       .get(spec.jobId),
   );
   if (first) {
-    throw new UserError(`job ${spec.jobId} already proposed decision ${ownerLabel(first)}; a job proposes at most one decision`);
+    throw new UserError(`${jobRef(spec.jobId)} already proposed decision ${decisionRef(first)}; a job proposes at most one decision`);
   }
 }
 
@@ -279,7 +334,7 @@ function requireSupersedable(rows) {
   for (const row of rows) {
     if (GATE_STATUSES.includes(row.status)) continue;
     throw new UserError(
-      `decision ${ownerLabel(row)} is \`${row.status}\`: only an accepted or proposed decision can be superseded`,
+      `decision ${decisionRef(row)} is \`${row.status}\`: only an accepted or proposed decision can be superseded`,
     );
   }
 }
@@ -367,7 +422,7 @@ function firstOfEachId(rows) {
 
 // Compact shape of an overlap candidate, the one a needs_review answer lists.
 function candidateView(row) {
-  return { id: row.id, number: row.number, label: ownerLabel(row), title: row.title, status: row.status, via: row.via };
+  return { id: row.id, number: row.number, label: decisionRef(row), ref: decisionRef(row), title: row.title, status: row.status, via: row.via };
 }
 
 // Marks the superseded rows as replaced by the new decision.
@@ -524,7 +579,7 @@ export function staleProposals(env = process.env, db = null) {
 // One title line of a decisions section, the single rendering the session block and the roadmap prompt share.
 export function decisionTitleLine(row) {
   const title = String(row?.title ?? "").replace(/\s+/g, " ").trim();
-  return `- ${ownerLabel(row)} ${escapePromptMarkers(truncateByCodePoint(title, TITLE_LINE_MAX))}`;
+  return `- ${decisionRef(row)} ${escapePromptMarkers(truncateByCodePoint(title, TITLE_LINE_MAX))}`;
 }
 
 // Text a decision is embedded by: title plus the decision itself.
@@ -560,6 +615,7 @@ export function decisionView(row) {
     id: row.id,
     scope: row.scope,
     owner: ownerOf(row),
+    ref: decisionRef(row),
     number: row.number,
     title: truncateByCodePoint(row.title),
     status: row.status,
@@ -573,6 +629,7 @@ export function decisionFullView(row) {
     id: row.id,
     scope: row.scope,
     owner: ownerOf(row),
+    ref: decisionRef(row),
     project: row.project ?? null,
     org: row.org ?? null,
     number: row.number,
@@ -593,7 +650,7 @@ export function decisionFullView(row) {
 export function renderDecisionText(row) {
   return escapePromptMarkers(
     [
-      `${ownerLabel(row)} ${row.title} (${row.status})`,
+      `${decisionRef(row)} ${row.title} (${row.status})`,
       `Context: ${row.context}`,
       `Decision: ${row.decision}`,
       ...(row.consequences ? [`Consequences: ${row.consequences}`] : []),
