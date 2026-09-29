@@ -107,7 +107,7 @@ test("a pull request merged by hand is recorded at preflight as the operator's, 
   assertCanonicalUntouched(fake.log, home.checkout);
 });
 
-test("preflight stops at checks-red and checks-pending naming the checks, and never waits for them", async () => {
+test("preflight stops at checks-red, and at checks-pending once the budget is spent waiting", async () => {
   const red = fakeCloseDeps({ checks: { ok: true, checks: [], failing: ["lint", "e2e"], pending: ["docs"] } });
   const redResult = await preflightStep({ ctx: ctxFor(), deps: red.deps });
   assert.equal(redResult.status, "failed");
@@ -115,10 +115,10 @@ test("preflight stops at checks-red and checks-pending naming the checks, and ne
   assert.match(redResult.note, /failing checks: lint, e2e/);
 
   const pending = fakeCloseDeps({ checks: { ok: true, checks: [], failing: [], pending: ["e2e", "ci/legacy"] } });
-  const pendingResult = await preflightStep({ ctx: ctxFor(), deps: pending.deps });
+  const pendingResult = await preflightStep({ ctx: ctxFor({}, "/work/alpha", { remainingMs: () => 0 }), deps: pending.deps });
   assert.equal(pendingResult.reason, "checks-pending");
-  assert.match(pendingResult.note, /checks still running: e2e, ci\/legacy/);
-  assert.deepEqual(pending.log.sleeps, [], "preflight waited for pending checks");
+  assert.match(pendingResult.note, /checks still running on \w{7} - run queue close J-3 again/);
+  assert.deepEqual(pending.log.sleeps, [], "preflight slept with no budget left");
 
   const unreadable = await preflightStep({ ctx: ctxFor(), deps: fakeCloseDeps({ checks: { ok: false, checks: [], failing: [], pending: [] } }).deps });
   assert.equal(unreadable.reason, "checks-unreadable");
@@ -583,7 +583,7 @@ test("a BEHIND pull request whose checks outlast the timeout stops resumable, an
   const { fake, now } = behindWorld({ checkReads: [GREEN], checks: HALF });
   const first = await close(home, fake, { now });
   assert.equal(first.outcome.reason, "checks-pending");
-  assert.match(first.checklist.steps.conflict.note, /branch updated to 2222222, checks still running - run queue close \d+ again/);
+  assert.match(first.checklist.steps.conflict.note, /branch updated to 2222222, checks still running - run queue close J-\d+ again/);
   assert.equal(fake.log.merges.length, 0);
   assert.equal(fake.log.sleeps.every((ms) => ms <= 60000), true, "a wait exceeded the backoff cap");
 
@@ -591,6 +591,53 @@ test("a BEHIND pull request whose checks outlast the timeout stops resumable, an
   const second = await close(reacquire(home, "close:test:2:bbbb"), fake, { now });
   assert.equal(second.outcome.status, "closed", JSON.stringify(second.outcome));
   assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: PUSHED_SHA }]);
+});
+
+test("preflight waits for pending checks and the close merges in one run once they are green", async (t) => {
+  const home = closeHome(t, "close-steps-preflight-green");
+  const { fake, now } = behindWorld({ pr: openPr(), checkReads: [HALF, HALF, GREEN] });
+  const lines = [];
+  const { outcome, checklist } = await close(home, fake, { now, onStep: (step) => lines.push(`${step.status} ${step.note}`) });
+  assert.equal(outcome.status, "closed", JSON.stringify(outcome));
+  assert.match(checklist.steps.preflight.note, /2 checks green on 1111111/);
+  assert.ok(lines.includes("running waiting for checks on 1111111: 1/2 done"), lines.join("\n"));
+  assert.deepEqual(fake.log.sleeps, [10000]);
+  assert.equal(fake.log.merges.length, 1);
+});
+
+test("pending checks that turn red in the preflight wait stop at checks-red and merge nothing", async (t) => {
+  const home = closeHome(t, "close-steps-preflight-red");
+  const { fake, now } = behindWorld({ pr: openPr(), checkReads: [HALF, HALF, RED] });
+  const { outcome, checklist } = await close(home, fake, { now });
+  assert.equal(outcome.reason, "checks-red");
+  assert.match(checklist.steps.preflight.note, /failing checks: b/);
+  assert.equal(fake.log.merges.length, 0);
+});
+
+test("pending checks that outlast the budget stop resumable in preflight, and the next run continues", async (t) => {
+  const home = closeHome(t, "close-steps-preflight-timeout");
+  const { fake, now } = behindWorld({ pr: openPr(), checks: HALF });
+  const first = await close(home, fake, { now });
+  assert.equal(first.outcome.reason, "checks-pending");
+  assert.match(first.checklist.steps.preflight.note, /checks still running on 1111111 - run queue close J-\d+ again/);
+  assert.equal(fake.log.merges.length, 0);
+
+  fake.world.checks = GREEN;
+  const second = await close(reacquire(home, "close:test:2:bbbb"), fake, { now });
+  assert.equal(second.outcome.status, "closed", JSON.stringify(second.outcome));
+  assert.equal(fake.log.merges.length, 1);
+});
+
+test("a BEHIND update after a preflight wait spends only what is left of the one close budget", async (t) => {
+  const home = closeHome(t, "close-steps-preflight-then-behind");
+  const firstWait = [HALF, HALF, HALF, HALF, HALF, HALF, HALF];
+  const { fake, now } = behindWorld({ checkReads: [HALF, ...firstWait, GREEN], checks: HALF });
+  const { outcome } = await close(home, fake, { now });
+  assert.equal(outcome.reason, "checks-pending");
+  const spent = fake.log.sleeps.reduce((sum, ms) => sum + ms, 0);
+  assert.equal(spent <= (600 - 30) * 1000 && spent > 550000, true, `the two waits spent ${spent}ms of one 600s budget`);
+  assert.deepEqual(fake.log.sleeps.slice(0, 7), [10000, 20000, 40000, 60000, 60000, 60000, 60000]);
+  assert.equal(fake.log.merges.length, 0);
 });
 
 test("a CLEAN pull request is neither updated nor waited on", async (t) => {
