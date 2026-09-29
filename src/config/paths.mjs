@@ -143,6 +143,18 @@ export function binDir(env = process.env) {
 export const SHIM_NAME = "nightqueue";
 export const SHORTCUT_SHIM_NAMES = ["nq"];
 export const LEGACY_SHIM_NAME = "shift";
+export const LEGACY_SHIM_NAMES = ["nightshift", "nsft", "nshift"];
+
+// The user's own home directory, the one a legacy `~/.nightshift` lives in; HOME wins so a test can point it at a temporary directory.
+export function userHomeDir(env = process.env) {
+  const raw = typeof env?.HOME === "string" ? env.HOME.trim() : "";
+  return raw ? resolve(raw) : homedir();
+}
+
+// Directory the command before the rename kept its runtime and data in.
+export function legacyHomeDir(env = process.env) {
+  return join(userHomeDir(env), ".nightshift");
+}
 
 // Path of one shim that starts the CLI from the runtime, the canonical name unless another is asked for.
 export function shimPath(env = process.env, name = SHIM_NAME) {
@@ -154,9 +166,9 @@ export function shimNames({ shortcuts } = {}) {
   return shortcuts === false ? [SHIM_NAME] : [SHIM_NAME, ...SHORTCUT_SHIM_NAMES];
 }
 
-// Path of the shim an older installation wrote under the previous command name.
-export function legacyShimPath(env = process.env) {
-  return shimPath(env, LEGACY_SHIM_NAME);
+// Path of the shim an older installation wrote under a previous command name, `shift` unless another is asked for.
+export function legacyShimPath(env = process.env, name = LEGACY_SHIM_NAME) {
+  return shimPath(env, name);
 }
 
 // Directory of the per-session state written by the hooks.

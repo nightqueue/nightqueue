@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { defaultContext, run } from "../src/cli/index.mjs";
@@ -10,7 +10,7 @@ import { stampRunnerDbWitness, writeRunnerRecord } from "../src/queue/registry.m
 import { makeHostEnv } from "../test-support/host.mjs";
 
 // Runs the diagnosis in process, with a host that answers nothing so only the checks of the home matter.
-async function diagnose(env, { alive = false } = {}) {
+async function diagnose(env, { alive = false, args = [] } = {}) {
   const out = [];
   const ctx = {
     ...defaultContext(),
@@ -23,7 +23,7 @@ async function diagnose(env, { alive = false } = {}) {
       throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
     },
   };
-  await run(["doctor", "--json"], ctx);
+  await run(["doctor", "--json", ...args], ctx);
   return JSON.parse(out[0]).checks;
 }
 
@@ -114,4 +114,58 @@ test("the db shm check states an unknown instead of crashing the report when the
   assert.equal(line.status, "warn");
   assert.match(line.detail, /^unknown: .* cannot be listed/);
   assert.ok(checks.length > 5, "the unreadable home cut the rest of the report short");
+});
+
+// Leaves one hidden orphan beside a database and returns its path.
+function leaveOrphan(env) {
+  const path = join(homeDir(env), ".nfs0000000000000001");
+  writeFileSync(path, "orphan");
+  return path;
+}
+
+test("doctor without --fix keeps the shm orphans, and --fix removes them only when no runner is alive", async (t) => {
+  const host = makeHostEnv(t, "doctor-db-shm-fix");
+  ensureHome(host.env);
+  openDb(host.env);
+  const orphan = leaveOrphan(host.env);
+
+  const plain = dbShmLine(await diagnose(host.env));
+  assert.equal(plain.status, "warn");
+  assert.match(plain.hint, /doctor --fix/);
+  assert.equal(existsSync(orphan), true, "a plain doctor removed a file");
+
+  registerRunner(host.env);
+  const held = dbShmLine(await diagnose(host.env, { alive: true, args: ["--fix"] }));
+  assert.equal(held.status, "warn");
+  assert.match(held.detail, /not removed: a live runner is registered \(pid \d+\)/);
+  assert.equal(existsSync(orphan), true, "--fix removed an orphan while a runner is alive");
+
+  const fixed = dbShmLine(await diagnose(host.env, { args: ["--fix"] }));
+  assert.equal(fixed.status, "ok");
+  assert.match(fixed.detail, /removed 1 hidden orphan file/);
+  assert.equal(existsSync(orphan), false);
+});
+
+test("doctor names an old _broken quarantine with its size and the legacy ~/.nightshift, and deletes neither", async (t) => {
+  const host = makeHostEnv(t, "doctor-legacy-leftovers");
+  ensureHome(host.env);
+  const old = join(homeDir(host.env), "_broken-20200101T000000Z");
+  const fresh = join(homeDir(host.env), "_broken-fresh");
+  mkdirSync(old);
+  mkdirSync(fresh);
+  writeFileSync(join(old, "data"), "x".repeat(2048));
+  const longAgo = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+  utimesSync(old, longAgo, longAgo);
+  const legacyHome = join(host.env.HOME, ".nightshift");
+  mkdirSync(legacyHome, { recursive: true });
+
+  const checks = await diagnose(host.env);
+  const quarantine = checks.find((entry) => entry.name === "quarantine _broken-20200101T000000Z");
+  assert.equal(quarantine.status, "warn");
+  assert.match(quarantine.detail, /^2\.0 KB at .*_broken-20200101T000000Z, older than 30 days$/);
+  assert.equal(checks.some((entry) => entry.name === "quarantine _broken-fresh"), false);
+  const legacy = checks.find((entry) => entry.name === "legacy home");
+  assert.equal(legacy.status, "warn");
+  assert.match(legacy.hint, /rm -rf /);
+  assert.equal(existsSync(old) && existsSync(legacyHome), true);
 });

@@ -416,15 +416,19 @@ again, naming it once more.
 nightqueue doctor                  # one line per check: ok, warn or fail
 nightqueue doctor --json           # the same report, as the only thing on stdout
 nightqueue doctor --check-updates  # ...plus the newest version published in the registry
-nightqueue doctor --fix            # ...and git worktree repair the job worktrees whose checkout or home moved
+nightqueue doctor --fix            # ...and git worktree repair the job worktrees whose checkout or home moved, and remove the shm orphans
 ```
 
 `nightqueue doctor` reads the host and the home and writes nothing, except `git worktree
-repair` with `--fix` (below): it never creates
+repair` and the removal of the `db shm` orphans with `--fix` (below): it never creates
 the database, never touches `settings.json` and never asks `claude` about
 anything but its version. It checks the Node version, the `claude` and `gh`
 CLIs, `config.json`, the mode of `secrets.json`, each of the three shims (a
-missing shortcut only warns), a shim left over from the `shift` command, the
+missing shortcut only warns), a shim left over from a previous command name (`shift`,
+`nightshift`, `nsft`, `nshift`: a `legacy shim <name>` warning, removed by `nightqueue setup` or
+`nightqueue update` only when this package wrote it, else the path to delete by hand), the
+`~/.nightshift/` directory of the command before the rename (a `legacy home` warning with
+the `rm -rf` command; nothing deletes it), the
 MCP registration, the registration in the Claude Desktop app (`claude desktop
 mcp`, which is a `warn` when the app is installed and does not know the server
 and an `ok` when the app is not installed at all), each of the four hooks, the
@@ -445,14 +449,20 @@ outside its run or ran a Bash command outside its closed list - see
 project. It exits `1` when any check fails, `0` otherwise - a `warn` never fails
 the run.
 
-Two of the checks are about the storage under the home (see [Configuration](cli.md#configuration)):
+Three of the checks are about the storage under the home (see [Configuration](cli.md#configuration)):
 
 - `db shm` warns when the shared-memory index of the WAL was replaced under a
   connection still attached to it: hidden orphans left beside the database
   (`.fuse_hidden*`, `.nfs*`, which survive a restart and are the only trace a
   past split leaves), or a live runner whose registered `nightqueue.db-shm` is
   gone or is no longer the file on disk. A runner registered by an older version
-  carries no witness, and the check then says so instead of passing.
+  carries no witness, and the check then says so instead of passing. With `--fix` the
+  orphans are removed, but only when no live runner is registered (a `runners/*.json` whose
+  pid is alive) and the registry can be listed; otherwise the row stays a `warn` and says
+  `not removed: a live runner is registered (pid <n>)`. Without `--fix` nothing is deleted.
+- `quarantine _broken-<stamp>` names each `_broken-*` directory of the home last modified
+  more than 30 days ago as removable, with its size (`2.0 KB`) and its path, and the
+  `rm -rf` command. It never deletes it.
 - `home mount` names the filesystem the home sits on - read from
   `/proc/mounts` (or `/proc/self/mountinfo`) on Linux and from `mount` on macOS -
   and warns for `nfs`, `nfs3`, `nfs4`, `smbfs`, `cifs`, `afpfs`, `webdav`, `9p`

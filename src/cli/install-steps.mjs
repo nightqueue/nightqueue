@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { binDir, embeddingDir, homeDir, legacyShimPath, runtimeDir, runtimeVersionsDir, shimPath } from "../config/paths.mjs";
+import { LEGACY_SHIM_NAME, LEGACY_SHIM_NAMES, binDir, embeddingDir, homeDir, legacyShimPath, runtimeDir, runtimeVersionsDir, shimPath } from "../config/paths.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { npmInstall, npmPack } from "../host/npm.mjs";
 import { packageRoot } from "../host/paths.mjs";
@@ -154,18 +154,29 @@ export function verifyShim(ctx, report) {
   return true;
 }
 
-// Deletes the shim of the previous command name, telling the user why the old command stopped resolving.
-export function dropLegacyShim(ctx, report) {
-  guarded(report, LEGACY_SHIM_LABEL, `rm -f ${legacyShimPath(ctx.env)}`, () => {
-    const { path, status } = removeLegacyShim(ctx.env);
+// Row label of one legacy shim: the historical one keeps its plain label, the others carry their name.
+function legacyShimLabel(name) {
+  return name === LEGACY_SHIM_NAME ? LEGACY_SHIM_LABEL : `${LEGACY_SHIM_LABEL} ${name}`;
+}
+
+// Deletes the shim of one previous command name, telling the user why the old command stopped resolving.
+function dropOneLegacyShim(ctx, report, name) {
+  const label = legacyShimLabel(name);
+  guarded(report, label, `rm -f ${legacyShimPath(ctx.env, name)}`, () => {
+    const { path, status } = removeLegacyShim(ctx.env, name);
     if (status === "not present") return;
     if (status === "kept") {
-      report.step(LEGACY_SHIM_LABEL, status, `${path} was not written by nightqueue`);
+      report.step(label, status, `${path} was not written by nightqueue`);
       return;
     }
-    report.step(LEGACY_SHIM_LABEL, status, path);
-    ctx.out("the `shift` command was renamed to `nightqueue`; use `nightqueue` or `nq` from now on");
+    report.step(label, status, path);
+    ctx.out(`the \`${name}\` command was renamed to \`nightqueue\`; use \`nightqueue\` or \`nq\` from now on`);
   });
+}
+
+// Deletes the shims of every previous command name a package of ours wrote.
+export function dropLegacyShim(ctx, report) {
+  for (const name of [LEGACY_SHIM_NAME, ...LEGACY_SHIM_NAMES]) dropOneLegacyShim(ctx, report, name);
 }
 
 // Writes the shims that start the CLI of the runtime, the command names the user types.
