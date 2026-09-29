@@ -4,7 +4,7 @@ Every notable change of this project is recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.5.0 - 2026-09-29
 
 ### Breaking
 
@@ -80,6 +80,35 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   without an owner use `G`. MCP answers carry a `ref` next to every job, item and decision.
 - `nightqueue queue status <PR URL>` and `queue_status` with `pr_url` find the job that opened a
   pull request; a URL opened by more than one job is refused with their refs.
+
+- `queue_stop` (MCP) mirrors `nightqueue queue run --stop [pid]`: without `pid` it ends every
+  registered runner, with `pid` that one, and answers one `{ outcome, pid, message }` per runner.
+  `queue_cancel` with `stop: true` cancels a RUNNING job in one call: the job goes from `running`
+  to `cancelled` in one write that only succeeds while its runner still owns it (no other runner
+  can claim it in between), its attempt is given back, and then that runner alone is stopped;
+  `release_worktree: true` also releases the job's worktree once the runner is gone. A worker of
+  another host, or a pid that is not a live registered runner of this home, is refused with
+  nothing signalled or written. An operator session can now stop and cancel a job without a
+  terminal.
+
+### Fixed
+
+- Every job queued with a tier got the same run slug (`tier-complex-set-by-the-operator`, taken
+  from the runtime's `Tier:` header) and so the same run directory: stopping one of them made its
+  row copy another job's pull request and finish time. A run's slug now comes from its own brief,
+  a slug another job already holds gets a numbered variant, a repair only reads its own job's
+  `state.json`, and the rows that already shared a slug are separated on the next open.
+- A nightqueue process older than the database it opens (a runner, an MCP server or a hook still
+  running after an upgrade) used to read and even try to write a schema it did not know. Every
+  open now reads the schema version first and refuses one newer than the runtime with one line
+  (`update nightqueue / restart the client that runs the old version`), writing nothing; the
+  check waits for a database another process is creating or migrating instead of failing the
+  open with `database is locked`. `doctor` reports the same line.
+- `queue close` of a pull request behind its base (the repository requires branches to be up to
+  date) skipped the conflict step and then failed at the merge. The close now brings the branch
+  up to date, waits in the same run for the required checks of the new head and merges it once
+  they are green; a red check stops with `checks-red`, and a wait longer than
+  `queue.closeTimeoutS` stops resumable with the head it updated.
 
 ### Changed
 
