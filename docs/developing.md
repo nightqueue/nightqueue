@@ -68,8 +68,8 @@ run is refused by `queue close` itself, so from your own terminal (no nightqueue
 variables set), in this checkout:
 
 ```sh
-node scripts/close-qa-demo.mjs                      # default demo checkout
-node scripts/close-qa-demo.mjs --repo <nstest-demo> # another clone of the same remote
+node scripts/close-demo.mjs                      # default demo checkout
+node scripts/close-demo.mjs --repo <nstest-demo> # another clone of the same remote
 ```
 
 It refuses to start inside a nightqueue job and refuses a checkout whose `origin` is not
@@ -105,7 +105,7 @@ acceptance runs by hand on the demo, from your own terminal and never inside a j
    maykonVinicius/nstest-demo --base main --head qa/close-<stamp> --title "close QA <stamp>"
    --body "throwaway"`.
 3. `nightqueue project add "$PWD" --name nstest-demo`, then seed one `done` job for that pull
-   request through the store, the way `seedDoneJob` in `scripts/close-qa-demo.mjs` does
+   request through the store, the way `seedDoneJob` in `scripts/close-demo.mjs` does
    (`addJob`, `claimJobById`, `persistRunFacts` with the branch `qa/close-<stamp>`,
    `finishJob` with `status: "done"` and the pull request URL) - never by SQL. The branch
    must be the pull request's head, or preflight stops at `pr-not-the-job-branch`.

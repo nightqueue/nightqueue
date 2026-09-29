@@ -95,7 +95,7 @@ test("a rate limit event mid stream keeps the child alive through a silence long
 });
 
 // A registry that refuses the pause never costs the child its protection: that run lives in
-// `test/queue/rate-limit-write-failure.poc.test.mjs`, the named regression net of that break.
+// `test/queue/rate-limit-write-failure.test.mjs`, the named regression net of that break.
 
 test("a runner waiting out its own limit never stops another runner of the same home from claiming", async (t) => {
   const env = makeRunnerHome(t, "rate-limit-sibling-claims", [{ stdout: doneStream(), exitCode: 0 }]);

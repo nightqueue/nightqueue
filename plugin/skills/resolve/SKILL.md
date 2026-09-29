@@ -1304,10 +1304,10 @@ The two commands below own the mechanics — staging, the commit, the branch nam
 
 1. **Decide what goes into the commit and write its message.**
    - The list is `## Modified files` of `<RUN_DIR>/04-implementation.md` plus the QA's
-     PoCs/tests that passed (including the bug's `*.regression.test.*`), each added with one
-     `--extra <pathspec>`. Leave out Phase 6.5's screenshots/artifacts and anything Step 2.7 of
+     real, hermetic tests that passed (including the bug's `*.regression.test.*`), each added with one
+     `--extra <pathspec>`; a PoC lives under `<RUN_DIR>/poc/` and is never committed (`run pr` refuses `*.poc.*`, `*SCRATCH*`, `*-QA-*`). Leave out Phase 6.5's screenshots/artifacts and anything Step 2.7 of
      the verifier flags; `.claude/`, `tmp/` and lockfiles the command refuses on its own. Check
-     `git status --short` first: a file that is neither in `## Modified files` nor a QA PoC is
+     `git status --short` first: a file that is neither in `## Modified files` nor a QA test is
      left out and recorded as an ⚠️ open item — never opened, never included in the dark; a file
      IN the scope that mixes pre-existing unrequested hunks (read from the verifier's
      diff-hygiene finding in `06-verification.md`) → ask the user BEFORE committing.

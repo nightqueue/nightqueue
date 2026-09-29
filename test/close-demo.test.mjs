@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { DEMO_REMOTE, demoOriginRefusal, jobIdentityRefusal, REFUSAL_EXIT } from "../scripts/close-qa-demo.mjs";
+import { DEMO_REMOTE, demoOriginRefusal, jobIdentityRefusal, REFUSAL_EXIT } from "../scripts/close-demo.mjs";
 import { makeDir } from "../test-support/memory.mjs";
 import { git } from "../test-support/worktrees.mjs";
 
-const SCRIPT = fileURLToPath(new URL("../scripts/close-qa-demo.mjs", import.meta.url));
+const SCRIPT = fileURLToPath(new URL("../scripts/close-demo.mjs", import.meta.url));
 const JOB_REFUSAL = /refuses to start inside a nightqueue job .*operator-run acceptance: run it from your own terminal/;
 
 // A local git repository whose origin is the given URL; nothing is fetched or pushed.
@@ -39,7 +39,7 @@ test("the acceptance script accepts only a checkout whose origin is the nstest-d
 
 test("the origin guard reads the real origin of a local checkout, and refuses the nightqueue repository", (t) => {
   assert.match(demoOriginRefusal(repoWithOrigin(t, "close-qa-nightqueue", "git@github.com:nightqueue/nightqueue.git")), /not maykonVinicius\/nstest-demo/);
-  assert.equal(demoOriginRefusal(repoWithOrigin(t, "close-qa-demo", `https://github.com/${DEMO_REMOTE}.git`)), null);
+  assert.equal(demoOriginRefusal(repoWithOrigin(t, "close-demo", `https://github.com/${DEMO_REMOTE}.git`)), null);
   assert.match(demoOriginRefusal(makeDir(t, "close-qa-no-git")), /its origin is unreadable/);
 });
 

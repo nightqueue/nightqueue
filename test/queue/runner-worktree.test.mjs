@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { jobLogPath } from "../../src/config/paths.mjs";
 import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
@@ -86,4 +87,18 @@ test("(d) a run with no notice of its own appends the kept line to the notice th
   assert.deepEqual(cycle.processed, [{ id: run.id, status: "done", prUrl: PR_URL, attempts: 1 }]);
   assert.equal(getJob(run.id, run.env).notice_md, `earlier notice\n\nWorktree kept: ${run.path} - it has uncommitted changes.`);
   assert.equal(existsSync(run.path), true);
+});
+
+test("(e) a kept worktree names the untracked QA scratch files in the kept line and deletes none", async (t) => {
+  const run = makeWorktreeRun(t, "rw-scratch", { stdout: doneStream({ notice: "the pull request is open" }), dirty: true });
+  mkdirSync(join(run.path, "test"));
+  writeFileSync(join(run.path, "test/foo.poc.test.mjs"), "// scratch\n");
+  writeFileSync(join(run.path, "SHIP-QA-SCRATCH.md"), "scratch\n");
+
+  await runJob(run.env, run.id);
+
+  const notice = getJob(run.id, run.env).notice_md;
+  assert.ok(notice.includes(`Worktree kept: ${run.path} - it has uncommitted changes. Untracked QA scratch files left in it: SHIP-QA-SCRATCH.md, test/foo.poc.test.mjs.`), notice);
+  assert.equal(existsSync(join(run.path, "test/foo.poc.test.mjs")), true, "a scratch file was deleted");
+  assert.equal(notice.includes("uncommitted.txt"), false);
 });

@@ -93,6 +93,12 @@ The qa-guardian is adversarial: it **proves** each break with an executable PoC
 input fuzzing) and **fixes nothing**. Your role is to run those PoCs and report — you are
 the one who confirms, independently and reproducibly, whether the break still exists.
 
+- **Where they live:** a QA PoC is throwaway and sits under `<RUN_DIR>/poc/` (RUN_DIR = the
+  directory of ARTIFACT_PATH), never in the repo: run those files from there with the
+  project's test runner (e.g. `node --test <RUN_DIR>/poc/<file>`). A `*.poc.*`, `*SCRATCH*` or
+  `*-QA-*` file in the diff is `FAILED` ("scratch file in the diff: <path>") — `nightqueue run
+  pr` would refuse it. The only PoC-derived file that may be committed is a real, hermetic test
+  with a real name (Step 2.11 proves it hermetic).
 - **Run** them with `nightqueue verify --scope +poc`: the `poc` line of the block covers
   `*.poc.test.*` / `*.poc.spec.*` / `*.fuzz.test.*` / `*.fuzz.spec.*` /
   `*.regression.test.*`, preferring the `test:poc` / `test:fuzz` script when
@@ -200,6 +206,18 @@ settings must never be repointed.
 
 - **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
 - **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightqueue run pr`.
+
+### Step 2.11 — CI-shaped check (committed tests are hermetic)
+
+A test that passes only inside the worktree (it reads uncommitted changes, the network, the
+operator's HOME or a sibling checkout) turns CI red. When the branch carries commits (the
+checks run on the committed HEAD), run `node scripts/ci-shaped-check.mjs` from the worktree
+(`--timeout-s <n>` sets the suite timeout, default 300; in a repo without that script, do the
+same steps by hand): it clones the worktree's HEAD into a fresh temp dir (uncommitted changes are absent),
+links `node_modules` by symlink or runs `npm ci --offline` (no network), points HOME at a
+fresh temp dir and runs `npm test` there. `CI-SHAPED: FAILED` = overall `FAILED` with the
+failing test named; a test that passes in the worktree but not in the clone is a break of the
+test, never a flake. Add the result as a `ci-shaped` line to `## Checks run`.
 
 ## Mode: RUNTIME (Phase 6.5 lane)
 

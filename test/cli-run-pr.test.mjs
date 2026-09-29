@@ -431,6 +431,29 @@ test("`run pr` rejects a placeholder, a missing section and a section out of ord
   assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome, undefined);
 });
 
+test("`run pr` refuses a branch that adds scratch files, naming each with the way out, and pushes nothing", async (t) => {
+  const { env, id, remote, worktree } = makeRun(t, "run-pr-scratch");
+  mkdirSync(join(worktree, "test"));
+  writeFileSync(join(worktree, "test/foo.poc.test.mjs"), "// scratch\n");
+  writeFileSync(join(worktree, "SHIP-QA-SCRATCH.md"), "scratch\n");
+  writeFileSync(join(worktree, "test/foo.test.mjs"), "// real\n");
+  git(["-C", worktree, "add", "-A"]);
+  git(["-C", worktree, "commit", "-q", "-m", "add files"]);
+
+  const result = await runCli(env, ["run", "pr", "--body-file", writeBody(t, "run-pr-scratch-body", BODY), "--title", "t"], { jobId: id });
+
+  const way = "remove it, or promote it to a hermetic test with a real name, then commit and retry";
+  assert.equal(result.code, 1, result.text);
+  assert.deepEqual(result.out.slice(2), [
+    `REJECTED: scratch file SHIP-QA-SCRATCH.md — ${way}`,
+    `REJECTED: scratch file test/foo.poc.test.mjs — ${way}`,
+    "nothing was pushed and no pull request was opened: fix the problems above and call `nightqueue run pr` again",
+  ]);
+  assert.deepEqual(remoteBranches(remote), ["main"]);
+  assert.deepEqual(ghCalls(env), []);
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome, undefined);
+});
+
 test("a QA row whose method left no non-empty `<method>-*` file under the run's evidence is MISSING, and nothing is pushed", async (t) => {
   const { env, id, remote, evidence } = makeRun(t, "run-pr-evidence");
   const problems = (name, body) => rejectedProblems(t, { env, id, name, body });

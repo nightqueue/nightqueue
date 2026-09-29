@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseDecisionFile, renderDecisionFile } from "../../src/memory/decision-file.mjs";
+import { parseDecisionFile, renderDecisionFile } from "../src/memory/decision-file.mjs";
 
 // Vector 1: an HTML comment mentioning a status word sits in the header zone, ahead of the real `Status:` line.
 const DECOY_STATUS_COMMENT = `# 0001 - Runner leases jobs eagerly

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runSessionStart } from "../../src/hooks/session-start.mjs";
-import { saveDecision } from "../../src/memory/decisions.mjs";
-import { saveLesson } from "../../src/memory/lessons.mjs";
-import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { runSessionStart } from "../src/hooks/session-start.mjs";
+import { saveDecision } from "../src/memory/decisions.mjs";
+import { saveLesson } from "../src/memory/lessons.mjs";
+import { makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
 
 // Stores one lesson of the project with a realistic-length title and prevention text.
 function addLesson(env, { title, prevention }) {
