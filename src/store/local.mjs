@@ -7,6 +7,7 @@ import * as jobs from "../memory/jobs.mjs";
 import * as lessons from "../memory/lessons.mjs";
 import * as memory from "../memory/memory.mjs";
 import { orphansOf } from "../memory/migration/v20.mjs";
+import * as purge from "../memory/project-purge.mjs";
 import * as registry from "../memory/registry.mjs";
 import * as roadmap from "../memory/roadmap.mjs";
 import * as roadmapBackfill from "../memory/roadmap-backfill.mjs";
@@ -264,6 +265,8 @@ function projectsDomain(db) {
     keyAliases: async () => registry.keyAliases(db(), "project"),
     move: async (id, spec) => registry.moveProject(db(), { ...spec, id }),
     remove: async (id) => registry.removeProject(db(), id),
+    footprint: async (id) => purge.projectFootprint(db(), id),
+    purge: async (id) => purge.purgeProject(db(), id),
   };
 }
 

@@ -175,6 +175,8 @@
  * @property {() => Promise<Record<string, string[]>>} keyAliases the old keys of every project, oldest first, keyed by project id
  * @property {(id: string, spec: {orgId?: string, path?: string|null}) => Promise<object>} move
  * @property {(id: string) => Promise<object>} remove refused while a row still belongs to it
+ * @property {(id: string) => Promise<{table: string, total: number}[]>} footprint the rows the project owns, per table, only where there is any
+ * @property {(id: string) => Promise<{project: object, removed: {table: string, total: number}[]}>} purge the project and every row it owns in one transaction; refused while a job is running or closing
  */
 
 /**
@@ -312,7 +314,7 @@ export const STORE_CONTRACT = Object.freeze({
     "queueRoadmapItem",
   ],
   orgs: ["list", "byName", "byId", "add", "rename", "setKey", "suggestKey", "keyAliases", "remove"],
-  projects: ["list", "byName", "byId", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove"],
+  projects: ["list", "byName", "byId", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
   "": ["health", "connect", "close", "checkpoint", "migrateIfOutdated"],
 });
 

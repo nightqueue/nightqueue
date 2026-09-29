@@ -1,12 +1,15 @@
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { requireOrg } from "../config/orgs.mjs";
 import { registerProject as registerInStore, renameProject, requireGitPath, requireProject, setProjectKey } from "../config/projects.mjs";
+import { runsDir } from "../config/paths.mjs";
 import { loadConfig } from "../config/store.mjs";
+import { keptCommentsError } from "../memory/project-purge.mjs";
 import { requireKey } from "../memory/refs.mjs";
 import { openRegistryReader, openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
-import { askKey } from "./prompt.mjs";
+import { askKey, choose } from "./prompt.mjs";
 
 // The key `--key` asks for, validated at the edge; undefined when the option is absent.
 export function keyOption(values) {
@@ -101,12 +104,48 @@ async function runKey(argv, ctx) {
   ctx.out(`changed the key of project \`${name}\` from ${oldKey} to ${newKey}; ${oldKey} refs still resolve`);
 }
 
-// Runs `project remove`: the database refuses a project that still owns rows, and the refusal lists them.
+// The per-table counts of what a project owns, one per line, as `<total> <table>`.
+function footprintLines(footprint) {
+  return footprint.map((entry) => `  ${entry.total} ${entry.table.replaceAll("_", " ")}`);
+}
+
+// Refuses a plain remove of a project with history, listing what it owns and pointing to --purge.
+function refuseOwnedRows(project, footprint) {
+  const detail = footprint.map((entry) => `${entry.total} ${entry.table.replaceAll("_", " ")}`).join(", ");
+  throw new UserError(`cannot remove project \`${project.name}\`: it still owns ${detail}; use --purge to delete it with everything it owns; nothing was removed`);
+}
+
+// Lists what a purge deletes and asks the terminal to confirm; without --yes and without a terminal it refuses.
+async function confirmPurge(ctx, project, footprint, yes) {
+  ctx.out(`purging project \`${project.name}\` deletes:`);
+  for (const line of footprintLines(footprint)) ctx.out(line);
+  if (yes) return;
+  if (!ctx.stdin?.isTTY) throw new UserError("purge needs confirmation: run it on a terminal or pass --yes; nothing was removed");
+  const question = `Delete project \`${project.name}\` and all of the above? [y/N] `;
+  const answer = await choose({ stdin: ctx.stdin, stdout: ctx.stdout ?? process.stdout, question, choices: ["y", "yes"], fallback: "no" });
+  if (answer === "no") throw new UserError("purge cancelled; nothing was removed");
+}
+
+// Purges a project: the rows in one transaction, and its run directory only after that commits.
+async function purgeProject(ctx, store, project, yes) {
+  const footprint = await store.projects.footprint(project.id);
+  const kept = footprint.find((entry) => entry.kept);
+  if (kept) throw keptCommentsError(project, kept.total);
+  await confirmPurge(ctx, project, footprint, yes);
+  await store.projects.purge(project.id);
+  rmSync(join(runsDir(ctx.env), project.id), { recursive: true, force: true });
+  ctx.out(`purged project \`${project.name}\` and everything it owned`);
+}
+
+// Runs `project remove`: a project with history is refused unless --purge deletes it with everything it owns.
 async function runRemove(argv, ctx) {
-  const { positionals } = parseCommand(argv);
-  checkArgs(positionals, { min: 1, usage: "nightqueue project remove <name>" });
+  const { values, positionals } = parseCommand(argv, { purge: { type: "boolean" }, yes: { type: "boolean" } });
+  checkArgs(positionals, { min: 1, max: 1, usage: "nightqueue project remove <name> [--purge [--yes]]" });
   const store = openStore(ctx.env);
   const project = await requireProject(store, positionals[0]);
+  if (values.purge) return await purgeProject(ctx, store, project, values.yes === true);
+  const footprint = await store.projects.footprint(project.id);
+  if (footprint.length) refuseOwnedRows(project, footprint);
   await store.projects.remove(project.id);
   ctx.out(`removed project \`${project.name}\``);
 }

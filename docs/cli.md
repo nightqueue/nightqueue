@@ -215,7 +215,8 @@ nightqueue project list                            # name, key, path (or "no pat
 nightqueue project rename api api-v2               # one row: its jobs, decisions, memory and runs follow
 nightqueue project move api acme                   # move a project to another org
 nightqueue project move api --path ~/code/api      # give it a new checkout (or one it never had)
-nightqueue project remove api                      # refused while it owns rows, listing them
+nightqueue project remove api                      # refused while it owns rows, listing them and hinting --purge
+nightqueue project remove api --purge [--yes]      # delete it and every row it owns (jobs, lessons, memory, roadmap, runs dir); asks first, refused while a job runs or closes, or while it has comments on org roadmap items (they stay)
 
 echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github
 nightqueue connection bind gh --org acme           # bind (or rebind) an org slot
