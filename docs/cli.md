@@ -197,6 +197,7 @@ nightqueue update                                  # reinstall the runtime and r
 nightqueue update 0.2.0                            # ...at one exact version from the registry
 nightqueue doctor --json                           # check the host and the home, exit 1 on any failure
 nightqueue doctor --check-updates                  # ...and ask the registry for the newest version
+nightqueue doctor --fix                            # ...and add the missing Claude Code lines to each checkout's exclude
 nightqueue init                                    # set the host up and register the current repository
 nightqueue init ~/code/api --org acme --name api   # ...or an explicit path, org and name
 nightqueue init --no-embedding --no-path --no-gh   # ...answering every question up front
@@ -413,9 +414,11 @@ again, naming it once more.
 nightqueue doctor                  # one line per check: ok, warn or fail
 nightqueue doctor --json           # the same report, as the only thing on stdout
 nightqueue doctor --check-updates  # ...plus the newest version published in the registry
+nightqueue doctor --fix            # ...and add the missing Claude Code lines to each checkout's local exclude
 ```
 
-`nightqueue doctor` reads the host and the home and writes nothing: it never creates
+`nightqueue doctor` reads the host and the home and writes nothing, except with `--fix`
+(below): it never creates
 the database, never touches `settings.json` and never asks `claude` about
 anything but its version. It checks the Node version, the `claude` and `gh`
 CLIs, `config.json`, the mode of `secrets.json`, each of the three shims (a
@@ -460,6 +463,18 @@ The `database` check compares the schema version on disk with the one this build
 database one version behind is a `warn` (`run nightqueue queue status once to let it migrate`),
 and a database written by a NEWER version is a `fail` (upgrade nightqueue to the version that
 wrote it).
+
+For every registered project whose checkout exists, one `exclude <project>` row says whether
+git ignores the two paths Claude Code leaves untracked in it, asked with `git check-ignore -q`
+for `.claude/worktrees/x` and `.claude/settings.local.json`. It is `ok` when both are ignored,
+and a `warn` naming the missing lines (`/.claude/worktrees/`, `/.claude/settings.local.json`)
+otherwise, with the hint `run: nightqueue doctor --fix`. With `--fix`, and only then, the
+diagnosis appends each missing line to the checkout's local `.git/info/exclude` (the common git
+dir, never a tracked file) - the same step the runner's preflight takes before every job - and
+the row reads `added <lines> to <file>`. An exclude it cannot write stays a `warn` with the
+`printf ... >> '<file>'` command that does it, and a line already there that a `.gitignore`
+negation overrides stays a `warn` pointing at that `.gitignore`. It never writes a blanket
+`.claude/` line, and `--fix` never removes a worktree.
 
 For every registered project that has a `.claude/worktrees/` directory, one `warn` row
 `worktree <project>/<dir>` names each directory there that no job still open (any status but

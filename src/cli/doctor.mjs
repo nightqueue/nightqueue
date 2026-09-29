@@ -31,6 +31,7 @@ import { DB_USER_VERSION } from "../memory/schema.mjs";
 import { decisionRef } from "../memory/scope.mjs";
 import { keepAwakeMode, resolveCaffeinateBin } from "../queue/keep-awake.mjs";
 import { isRegistryFailure, killProcess, listRunnerRecords, liveRunnersReport, registryReadError } from "../queue/registry.mjs";
+import { CLAUDE_EXCLUDE_RULES, ensureClaudeExcluded, missingClaudeExcludes } from "../queue/claude-exclude.mjs";
 import { closesSummary } from "../queue/close-view.mjs";
 import { readRunState } from "../queue/resume.mjs";
 import { canonicalPath, lockState, parseWorktreeList } from "../queue/worktree.mjs";
@@ -42,6 +43,7 @@ import { jobRef } from "../memory/refs.mjs";
 
 const COMMAND_TIMEOUT_MS = 5000;
 const MIN_NODE_MAJOR = 22;
+const CLAUDE_EXCLUDE_LINES = CLAUDE_EXCLUDE_RULES.map((rule) => rule.line).join(", ");
 
 // One diagnosis line, with the hint the user needs when it is not `ok`.
 function check(name, status, detail, hint = null) {
@@ -56,9 +58,10 @@ function runCommand(ctx, file, args, options = {}) {
       ok: !result?.error && result?.status === 0,
       stdout: typeof result?.stdout === "string" ? result.stdout : "",
       missing: result?.error?.code === "ENOENT",
+      status: result?.status ?? null,
     };
   } catch (err) {
-    return { ok: false, stdout: "", missing: err?.code === "ENOENT" };
+    return { ok: false, stdout: "", missing: err?.code === "ENOENT", status: null };
   }
 }
 
@@ -736,8 +739,50 @@ async function checkoutsOrNone(ctx) {
   }
 }
 
+// A git runner in the shape the exclude helper takes, throwing with git's exit status when git refuses.
+function gitVia(ctx) {
+  return ({ args, cwd }) => {
+    const result = runCommand(ctx, "git", args, { cwd });
+    if (result.ok) return result.stdout;
+    const err = new Error(`git ${args[0]} failed in ${cwd}`);
+    err.status = result.status;
+    throw err;
+  };
+}
+
+// The row of an exclude `--fix` tried to complete, from what the write answered.
+function fixedExcludeCheck(name, project, { outcome, missing }) {
+  if (outcome.status === "added") return check(name, "ok", `added ${outcome.lines.join(", ")} to ${outcome.file}`);
+  if (outcome.status === "covered") return check(name, "ok", `${CLAUDE_EXCLUDE_LINES} are ignored`);
+  if (outcome.status === "unwritable") {
+    const lines = missing.map(shellQuote).join(" ");
+    return check(name, "warn", `${outcome.file} cannot be written (${outcome.error})`, `printf '%s\\n' ${lines} >> ${shellQuote(outcome.file)}`);
+  }
+  if (outcome.status === "overridden") {
+    return check(name, "warn", `${missing.join(", ")} is in ${outcome.file} but a .gitignore rule un-ignores it`, `inspect the .gitignore of ${project.path}`);
+  }
+  return check(name, "warn", "git check-ignore did not answer", `inspect ${project.path}`);
+}
+
+// Reports whether a checkout ignores the Claude Code local paths, and adds the missing lines to its local exclude with `--fix`.
+function checkClaudeExclude(ctx, project, fix) {
+  const name = `exclude ${project.name}`;
+  const gitImpl = gitVia(ctx);
+  const missing = missingClaudeExcludes({ cwd: project.path, gitImpl });
+  if (missing === null) return check(name, "warn", "git check-ignore did not answer", `inspect ${project.path}`);
+  if (!missing.length) return check(name, "ok", `${CLAUDE_EXCLUDE_LINES} are ignored`);
+  if (!fix) return check(name, "warn", `${missing.join(", ")} not ignored - Claude Code leaves it untracked in the checkout`, "run: nightqueue doctor --fix");
+  return fixedExcludeCheck(name, project, { outcome: ensureClaudeExcluded({ cwd: project.path, gitImpl }), missing });
+}
+
+// The rows of one registered project: its checkout, then the exclude of its Claude Code paths when the checkout exists.
+function projectChecks(ctx, project, fix) {
+  const row = checkProject(ctx, project);
+  return project.exists ? [row, checkClaudeExclude(ctx, project, fix)] : [row];
+}
+
 // Checks every registered project, or reports that none is registered or that the registry is not readable yet.
-async function checkProjects(ctx) {
+async function checkProjects(ctx, values) {
   let found = null;
   try {
     found = await registeredCheckouts(ctx);
@@ -746,7 +791,7 @@ async function checkProjects(ctx) {
   }
   if (found.pending) return [check("projects", "warn", found.pending, found.hint)];
   if (!found.projects.length) return [check("projects", "warn", "no project registered", "run `nightqueue init`")];
-  return found.projects.map((project) => checkProject(ctx, project));
+  return found.projects.flatMap((project) => projectChecks(ctx, project, values.fix === true));
 }
 
 // Quotes a path for a POSIX shell, so a hint can be pasted as is whatever the path holds.
@@ -873,7 +918,7 @@ async function collect(ctx, values) {
     checkDbShm(ctx),
     checkHomeMount(ctx),
     ...(await checkQueue(ctx)),
-    ...(await checkProjects(ctx)),
+    ...(await checkProjects(ctx, values)),
     ...(await checkWorktreeLeftovers(ctx)),
     ...checkUpdates(ctx, values),
   ];
@@ -890,11 +935,11 @@ export function reportLine({ status, name, detail, hint }, width = 22) {
   return `${status.padEnd(6)}${name.padEnd(width)}${tail}`;
 }
 
-// Runs `nightqueue doctor`: reads the state of the host and of the home, writes nothing, and exits 1 on any failure.
+// Runs `nightqueue doctor`: reads the host and the home, writes nothing but a checkout's local exclude with `--fix`, exits 1 on any failure.
 export async function run(argv, ctx) {
-  const options = { json: { type: "boolean" }, "check-updates": { type: "boolean" } };
+  const options = { json: { type: "boolean" }, "check-updates": { type: "boolean" }, fix: { type: "boolean" } };
   const { values, positionals } = parseCommand(argv, options);
-  checkArgs(positionals, { max: 0, usage: "nightqueue doctor [--json] [--check-updates]" });
+  checkArgs(positionals, { max: 0, usage: "nightqueue doctor [--json] [--check-updates] [--fix]" });
   const checks = await collect(ctx, values);
   const ok = !checks.some((entry) => entry.status === "fail");
   if (values.json === true) ctx.out(JSON.stringify({ ok, checks }));

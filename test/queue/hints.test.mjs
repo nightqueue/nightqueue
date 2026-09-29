@@ -71,7 +71,7 @@ test("the zero-runner wait sentence leads with the count and names the way to st
 });
 
 const WINDOW_TAIL = "another runner will likely hit the limit before finishing";
-const PROJECT_TAIL = "parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output";
+const PROJECT_TAIL = "parallel jobs on one repository fight over the checkout; a job the preflight blocks waits at a gate for queue retry";
 
 // A list of live runners of the given length, the only thing rule (a) counts.
 function liveRunnerList(count) {
@@ -90,7 +90,7 @@ test("a five-hour window at the threshold warns with the utilization and the liv
 
 test("every repository two or more runners work at once warns, in the order given, and nothing else does", () => {
   assert.deepEqual(advisoryLines({ runners: [], activeByProject: [{ project: "alpha", count: 2 }, { project: "beta", count: 1 }] }), [
-    "2 runners on `alpha` — parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output",
+    "2 runners on `alpha` — parallel jobs on one repository fight over the checkout; a job the preflight blocks waits at a gate for queue retry",
   ]);
   assert.deepEqual(advisoryLines({ runners: [], activeByProject: [{ project: "alpha", count: 3 }, { project: "beta", count: 2 }] }), [
     `3 runners on \`alpha\` — ${PROJECT_TAIL}`,

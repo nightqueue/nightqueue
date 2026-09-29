@@ -24,6 +24,7 @@
  * @property {(spec: object) => Promise<object|null>} claimNextJob
  * @property {(id: number, spec: object) => Promise<object|null>} claimJobById
  * @property {(id: number, spec: object) => Promise<boolean>} releaseJob
+ * @property {(id: number, spec: {worker: string, code: string, message: string, noticeMd: string}) => Promise<boolean>} gatePreflightJob stops a claimed job at a gate on a preflight block, giving the attempt back and keeping `blocked_code` as the mark of a retry that needs no note
  * @property {(id: number, spec: object) => Promise<boolean>} parkJob back to pending, due only at the instant a rate limit resets
  * @property {(id: number, spec: object) => Promise<boolean>} renewLease
  * @property {(id: number, spec: object) => Promise<boolean>} countAttempt
@@ -40,7 +41,7 @@
  * @property {(id: number) => Promise<object|null>} getJob
  * @property {(options?: object) => Promise<object[]>} listJobs
  * @property {() => Promise<Record<string, number>>} countsByStatus
- * @property {() => Promise<number>} countPendingBlocked pending jobs a preflight block is holding back
+ * @property {() => Promise<number>} countBlockedGates gated jobs a preflight block stopped
  * @property {() => Promise<number>} countActiveJobs
  * @property {() => Promise<{projectId: string, project: string, count: number}[]>} countActiveJobsByProject
  * @property {() => Promise<number|null>} firstActiveJobId
@@ -217,6 +218,7 @@ export const STORE_CONTRACT = Object.freeze({
     "claimNextJob",
     "claimJobById",
     "releaseJob",
+    "gatePreflightJob",
     "parkJob",
     "renewLease",
     "countAttempt",
@@ -233,7 +235,7 @@ export const STORE_CONTRACT = Object.freeze({
     "getJob",
     "listJobs",
     "countsByStatus",
-    "countPendingBlocked",
+    "countBlockedGates",
     "countActiveJobs",
     "countActiveJobsByProject",
     "firstActiveJobId",
@@ -331,7 +333,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.listOpenJobs",
   "jobs.isJobActive",
   "jobs.countsByStatus",
-  "jobs.countPendingBlocked",
+  "jobs.countBlockedGates",
   "jobs.countActiveJobs",
   "jobs.countActiveJobsByProject",
   "jobs.recentHostCommandCounts",

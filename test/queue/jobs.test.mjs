@@ -19,9 +19,10 @@ import {
   countAttempt,
   countActiveJobs,
   countActiveJobsByProject,
-  countPendingBlocked,
+  countBlockedGates,
   countsByStatus,
   finishJob,
+  gatePreflightJob,
   getJob,
   hasClaimablePending,
   jobView,
@@ -743,20 +744,78 @@ test("listCloseCandidates lists only done jobs with a pull request url, newest f
   assert.equal(listCloseCandidates(env).some((row) => [failed, gated, doneNoPr, pending, running].includes(row.id)), false);
 });
 
-test("the blocked-pending count and listing only ever see a pending job with a block code, never a running or done one", (t) => {
-  const env = makeQueue(t, "jobs-blocked-pending");
-  const [blocked, plain] = [enqueue(env), enqueue(env)];
-  assert.equal(countPendingBlocked(env), 0);
-  claimJobById(blocked, { worker: WORKER, cap: CAP }, env);
-  releaseJob(blocked, { worker: WORKER, result: { blocked: { code: "dirty-checkout" } }, blockedCode: "dirty-checkout" }, env);
+const DIRTY_BLOCK = { code: "dirty-checkout", message: "/repo has uncommitted changes (src/a.mjs)", noticeMd: "dirty-checkout: /repo has uncommitted changes (src/a.mjs)" };
 
-  assert.equal(countPendingBlocked(env), 1);
+test("the blocked-gate count and listing only ever see a gated job with a block code, never a pending, running or agent-gated one", (t) => {
+  const env = makeQueue(t, "jobs-blocked-gate");
+  const [blocked, plain, agentGate, oldBlocked] = [enqueue(env), enqueue(env), enqueue(env), enqueue(env)];
+  assert.equal(countBlockedGates(env), 0);
+  claimJobById(blocked, { worker: WORKER, cap: CAP }, env);
+  assert.equal(gatePreflightJob(blocked, { worker: WORKER, ...DIRTY_BLOCK }, env), true);
+  claimJobById(agentGate, { worker: WORKER, cap: CAP }, env);
+  finishJob(agentGate, { worker: WORKER, status: "gate", noticeMd: "Rename the column or keep both?" }, env);
+  openDb(env).prepare("UPDATE jobs SET blocked_code = 'dirty-checkout' WHERE id = ?").run(oldBlocked);
+
+  assert.equal(countBlockedGates(env), 1);
   assert.deepEqual(listJobs({ blockedOnly: true }, env).map((row) => row.id), [blocked]);
-  assert.deepEqual(listJobs({}, env).map((row) => row.id).sort(), [blocked, plain].sort(), "blockedOnly is opt-in, not the default");
+  assert.deepEqual(listJobs({}, env).map((row) => row.id).sort(), [blocked, plain, agentGate, oldBlocked].sort(), "blockedOnly is opt-in, not the default");
 
-  claimJobById(blocked, { worker: WORKER, cap: CAP }, env);
-  assert.equal(countPendingBlocked(env), 0, "the claim cleared the block code, so the count must drop with it");
+  retryJob(blocked, {}, env);
+  assert.equal(countBlockedGates(env), 0, "the retry cleared the block code, so the count must drop with it");
   assert.deepEqual(listJobs({ blockedOnly: true }, env), []);
+});
+
+test("a preflight gate gives the attempt back, keeps the block in result and notice, and only the owner can write it", (t) => {
+  const env = makeQueue(t, "jobs-gate-preflight");
+  const id = enqueue(env);
+  claimJobById(id, { worker: WORKER, cap: CAP }, env);
+  assert.equal(gatePreflightJob(id, { worker: "someone-else", ...DIRTY_BLOCK }, env), false, "a worker that does not own the job gated it");
+  assert.throws(() => gatePreflightJob(id, { worker: WORKER, ...DIRTY_BLOCK, noticeMd: "  " }, env), /notice_md/);
+  assert.equal(getJob(id, env).status, "running");
+
+  assert.equal(gatePreflightJob(id, { worker: WORKER, ...DIRTY_BLOCK }, env), true);
+  const row = getJob(id, env);
+  assert.deepEqual(
+    { status: row.status, attempts: row.attempts, worker: row.worker, lease: row.lease_until, blockedCode: row.blocked_code, note: row.operator_note, notice: row.notice_md },
+    { status: "gate", attempts: 0, worker: null, lease: null, blockedCode: "dirty-checkout", note: null, notice: DIRTY_BLOCK.noticeMd },
+  );
+  assert.deepEqual(JSON.parse(row.result), { blocked: { code: DIRTY_BLOCK.code, message: DIRTY_BLOCK.message } });
+  assert.equal(claimNextJob({ worker: WORKER, cap: CAP }, env), null, "a claim took a gated job");
+});
+
+test("a preflight gate is retried without a note, keeps its allowance, and an agent gate still needs one", (t) => {
+  const env = makeQueue(t, "jobs-retry-preflight-gate");
+  const id = enqueue(env);
+  claimJobById(id, { worker: WORKER, cap: CAP }, env);
+  gatePreflightJob(id, { worker: WORKER, ...DIRTY_BLOCK }, env);
+  const before = getJob(id, env);
+
+  const job = retryJob(id, {}, env);
+  assert.deepEqual(
+    { status: job.status, blockedCode: job.blocked_code, maxAttempts: job.max_attempts, note: job.operator_note },
+    { status: "pending", blockedCode: null, maxAttempts: before.max_attempts, note: null },
+  );
+
+  const agentGate = enqueue(env);
+  claimJobById(agentGate, { worker: WORKER, cap: CAP }, env);
+  finishJob(agentGate, { worker: WORKER, status: "gate", noticeMd: "Rename the column or keep both?" }, env);
+  assert.throws(() => retryJob(agentGate, {}, env), /Re-run with --note/);
+});
+
+test("a noteless retry of a preflight gate keeps the operator's earlier answer, and an explicit note still replaces it", (t) => {
+  const env = makeQueue(t, "jobs-retry-preflight-keeps-note");
+  const id = enqueue(env);
+  claimJobById(id, { worker: WORKER, cap: CAP }, env);
+  finishJob(id, { worker: WORKER, status: "gate", noticeMd: "Which database?" }, env);
+  retryJob(id, { note: "use postgres" }, env);
+
+  claimJobById(id, { worker: WORKER, cap: CAP }, env);
+  gatePreflightJob(id, { worker: WORKER, ...DIRTY_BLOCK }, env);
+  assert.equal(retryJob(id, {}, env).operator_note, "use postgres", "the noteless retry wiped the human answer");
+
+  claimJobById(id, { worker: WORKER, cap: CAP }, env);
+  gatePreflightJob(id, { worker: WORKER, ...DIRTY_BLOCK }, env);
+  assert.equal(retryJob(id, { note: "use sqlite" }, env).operator_note, "use sqlite");
 });
 
 const CLOSE_WORKER = "close:host:1:aaaa";

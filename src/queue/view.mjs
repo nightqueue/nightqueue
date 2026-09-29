@@ -105,7 +105,7 @@ function zeroCounts() {
 // The counts section: jobs per status, the pending ones a block holds back and the ones running under a live lease.
 async function readCounts(readStore) {
   const counts = await readStore.jobs.countsByStatus();
-  return { counts, blockedPending: await readStore.jobs.countPendingBlocked(), activeJobs: await readStore.jobs.countActiveJobs() };
+  return { counts, blockedGates: await readStore.jobs.countBlockedGates(), activeJobs: await readStore.jobs.countActiveJobs() };
 }
 
 // The runners section: a registry that cannot be listed is a failed section carrying the reason.
@@ -125,13 +125,13 @@ export async function queueView(readStore, { env = process.env, limit, blockedOn
   const advisoriesPart = await timedSection("advisories", async () => (runnersPart.ok ? await advisoryLinesFor({ store: readStore, runners, env, killImpl }) : []), now);
   const closesPart = await timedSection("closes", async () => closesSummary(await readStore.jobs.listCloses(), runners), now);
   const jobs = (jobsPart.value ?? []).map((job) => withPrState(job, prStates));
-  const { counts, blockedPending, activeJobs } = countsPart.value ?? { counts: zeroCounts(), blockedPending: 0, activeJobs: 0 };
+  const { counts, blockedGates, activeJobs } = countsPart.value ?? { counts: zeroCounts(), blockedGates: 0, activeJobs: 0 };
   const sections = [jobsPart, countsPart, runnersPart, advisoriesPart, closesPart].map(({ name, ok, ms, error }) => ({ name, ok, ms, error }));
   const advisories = advisoriesPart.value ?? [];
   const closes = closesPart.value ?? { inFlight: [], failed: [], stalled: [] };
   const suggestions = [closeSuggestion(jobs), truncationSuggestion(jobs), ...unknownStatusAdvisories(jobs), ...closeLines(closes)].filter(Boolean);
   const idle = isViewIdle({ jobs, counts, activeJobs, runners, registryError, readable: jobsPart.ok && countsPart.ok });
-  return { jobs, counts, blockedPending, activeJobs, runners, registryError, advisories, suggestions, closes, idle, sections };
+  return { jobs, counts, blockedGates, activeJobs, runners, registryError, advisories, suggestions, closes, idle, sections };
 }
 
 // The first failed section among the ones a listing cannot do without (jobs, counts), or null when both were read.

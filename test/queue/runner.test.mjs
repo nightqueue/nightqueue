@@ -6,7 +6,7 @@ import { jobLogPath, runDir } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb, sqliteToIso } from "../../src/memory/db.mjs";
 import { packageRoot } from "../../src/host/paths.mjs";
-import { addJob, claimJobById, countsByStatus, getJob } from "../../src/memory/jobs.mjs";
+import { addJob, claimJobById, countsByStatus, getJob, retryJob } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { clearOwnPause, PAUSE_GRACE_S, readOwnPause } from "../../src/queue/rate-limit.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
@@ -444,7 +444,7 @@ test("the runner records the session of every attempt, so the last one wins acro
   );
 });
 
-test("every preflight block returns the job to the queue without spending an attempt", async (t) => {
+test("every preflight block stops the job at a gate without spending an attempt", async (t) => {
   const cases = [
     ["dirty-checkout", { gitImpl: fakeGit({ status: " M src/queue/runner.mjs" }) }],
     ["wrong-branch", { gitImpl: fakeGit({ branch: "feat/queue-runner" }) }],
@@ -457,26 +457,28 @@ test("every preflight block returns the job to the queue without spending an att
 
     const cycle = await runJobCycle(env, id, deps);
 
-    assert.deepEqual(cycle.processed, [{ id, status: "blocked", code }]);
+    assert.deepEqual(cycle.processed, [{ id, status: "gated", code }]);
     const row = getJob(id, env);
     assert.deepEqual(
       { status: row.status, attempts: row.attempts, worker: row.worker, note: row.operator_note, blockedCode: row.blocked_code },
-      { status: "pending", attempts: 0, worker: null, note: null, blockedCode: code },
+      { status: "gate", attempts: 0, worker: null, note: null, blockedCode: code },
     );
     assert.equal(JSON.parse(row.result).blocked.code, code);
+    assert.ok(row.notice_md.startsWith(`${code}: `), `the notice of ${code} does not open with the block: ${row.notice_md}`);
+    assert.match(row.notice_md, new RegExp(`nightqueue queue retry J-${id} \\(no note needed\\)`));
     assert.equal(fakeCalls(planPath).length, 0, `${code} still spawned the CLI`);
   }
 });
 
-test("a job blocked by the preflight is never claimed twice in the same cycle", async (t) => {
+test("a job gated by the preflight is never claimed twice in the same cycle, and the cycle ends on an empty queue", async (t) => {
   const { env } = makeRunnerHome(t, "runner-block-loop", [{ stdout: doneStream(), exitCode: 0 }]);
   const id = enqueue(env);
 
   const cycle = await runCycle({ env, deps: { gitImpl: fakeGit({ status: " M file.mjs" }) } });
 
-  assert.deepEqual(cycle.processed.map((job) => job.status), ["blocked"]);
-  assert.equal(cycle.reason, "blocked", "a cycle that gave a job back to the operator must say so, so a drain waits instead of exiting");
-  assert.equal(getJob(id, env).status, "pending");
+  assert.deepEqual(cycle.processed.map((job) => job.status), ["gated"]);
+  assert.equal(cycle.reason, "empty-queue", "a gated job must leave the queue, not end the pass as a job to wait on");
+  assert.equal(getJob(id, env).status, "gate");
 });
 
 test("an unknown project blocks the job with the code that names it", async (t) => {
@@ -486,8 +488,8 @@ test("an unknown project blocks the job with the code that names it", async (t) 
 
   const cycle = await runJobCycle(env, id);
 
-  assert.deepEqual(cycle.processed, [{ id, status: "blocked", code: "unknown-project" }]);
-  assert.equal(getJob(id, env).status, "pending");
+  assert.deepEqual(cycle.processed, [{ id, status: "gated", code: "unknown-project" }]);
+  assert.equal(getJob(id, env).status, "gate");
 });
 
 test("the slug and the session id are stored while the run is still going, not at the end", async (t) => {
@@ -962,19 +964,28 @@ test("a finish the database refused to commit still leaves the witness, is repor
   assert.match(String(row.result), /repairedFrom/);
 });
 
-test("a drain waits on a job the preflight gave back instead of exiting, so the operator's fix is picked up", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-drain-blocked", []);
-  const id = enqueue(env);
+test("a drain over [A blocked, B clean] gates A once, runs B in the same pass and exits without waiting; a retry of A then runs it", async (t) => {
+  const attempts = [1, 2].map(() => ({ stdout: doneStream(), exitCode: 0 }));
+  const { env } = makeRunnerHome(t, "runner-drain-blocked", attempts);
+  const a = enqueue(env, { prompt: "fix the worker a" });
+  const b = enqueue(env, { prompt: "fix the worker b" });
   const seen = [];
   const slept = [];
 
-  const passes = await runDrain({ env, cycles: 2, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: fakeGit({ status: " M src/a.mjs" }), sleepImpl: async (ms) => slept.push(ms) } });
+  const passes = await runDrain({ env, cycles: 3, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: dirtyOnceGit(), sleepImpl: async (ms) => slept.push(ms) } });
 
-  assert.equal(passes.length, 2, "the drain exited on a blocked job instead of waiting");
-  assert.deepEqual(seen, ["blocked", "blocked"]);
-  assert.deepEqual(slept, [DRAIN_INTERVAL_S * 1000]);
-  assert.equal(getJob(id, env).status, "pending");
-  assert.match(String(getJob(id, env).result), /dirty-checkout/);
+  assert.equal(passes.length, 1, "the drain waited on a gated job instead of moving on");
+  assert.deepEqual(seen, ["empty-queue"]);
+  assert.deepEqual(passes[0].processed.map((result) => [result.id, result.status]), [[a, "gated"], [b, "done"]]);
+  assert.deepEqual(slept, [], "a gated job made the drain sleep");
+  const gated = getJob(a, env);
+  assert.deepEqual({ status: gated.status, attempts: gated.attempts, blockedCode: gated.blocked_code, note: gated.operator_note }, { status: "gate", attempts: 0, blockedCode: "dirty-checkout", note: null });
+  assert.match(gated.notice_md, /^dirty-checkout: /);
+  assert.equal(JSON.parse(gated.result).blocked.code, "dirty-checkout");
+
+  retryJob(a, {}, env);
+  const again = await runDrain({ env, cycles: 1, deps: { gitImpl: fakeGit(), sleepImpl: async () => {} } });
+  assert.deepEqual(again[0].processed.map((result) => [result.id, result.status]), [[a, "done"]]);
 });
 
 test("`--max` is a budget for the run: the drain stops after n jobs and leaves the rest pending", async (t) => {
@@ -998,28 +1009,27 @@ test("`--max` is a budget for the run: the drain stops after n jobs and leaves t
   assert.equal(cycle.reason, "max-reached");
 });
 
-test("a job the preflight releases spends no --max budget: the drain waits on it and still runs n jobs that reach the agent", async (t) => {
+test("a job the preflight gates spends no --max budget: the same pass still runs n jobs that reach the agent", async (t) => {
   const attempts = [1, 2, 3].map(() => ({ stdout: doneStream(), exitCode: 0 }));
   const { env } = makeRunnerHome(t, "runner-max-released", attempts);
-  const [a, b, c] = ["a", "b", "c"].map((name) => enqueue(env, { prompt: `fix the worker ${name}` }));
+  const [a, b, c, d] = ["a", "b", "c", "d"].map((name) => enqueue(env, { prompt: `fix the worker ${name}` }));
   const seen = [];
   const slept = [];
 
   const passes = await runDrain({ max: 2, cycles: 3, env, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: dirtyOnceGit(), sleepImpl: async (ms) => slept.push(ms) } });
 
-  assert.deepEqual(seen, ["blocked", "max-reached"]);
-  assert.deepEqual(passes[0].processed.map((result) => result.status), ["blocked"]);
-  assert.deepEqual(passes[1].processed.map((result) => result.status), ["done", "done"]);
-  assert.deepEqual(slept, [DRAIN_INTERVAL_S * 1000]);
-  assert.deepEqual([a, b, c].map((id) => getJob(id, env).status), ["done", "done", "pending"]);
-  assert.equal(getJob(a, env).attempts, 1, "a released job kept the attempt the preflight should have refunded");
+  assert.deepEqual(seen, ["max-reached"]);
+  assert.deepEqual(passes[0].processed.map((result) => result.status), ["gated", "done", "done"]);
+  assert.deepEqual(slept, []);
+  assert.deepEqual([a, b, c, d].map((id) => getJob(id, env).status), ["gate", "done", "done", "pending"]);
+  assert.equal(getJob(a, env).attempts, 0, "a gated job kept the attempt the preflight should have refunded");
 
   const dirty = makeRunnerHome(t, "runner-max-dirty", attempts);
   const id = enqueue(dirty.env);
   const dirtySeen = [];
   await runDrain({ max: 2, cycles: 2, env: dirty.env, onCycle: (pass) => dirtySeen.push(pass.reason), deps: { gitImpl: fakeGit({ status: " M src/a.mjs" }), sleepImpl: async () => {} } });
-  assert.deepEqual(dirtySeen, ["blocked", "blocked"], "a dirty checkout spent the --max budget");
-  assert.equal(getJob(id, dirty.env).status, "pending");
+  assert.deepEqual(dirtySeen, ["empty-queue"], "a dirty checkout spent the --max budget or held the drain");
+  assert.equal(getJob(id, dirty.env).status, "gate");
 });
 
 test("a watcher with --max exits once its budget is spent", async (t) => {
@@ -1036,8 +1046,8 @@ test("a watcher with --max exits once its budget is spent", async (t) => {
   assert.ok(passes.length < 5, `the watcher kept going for ${passes.length} passes`);
 });
 
-test("only a job the preflight released stays out of the --max budget", () => {
-  const results = ["done", "failed", "gate", "interrupted", "rate-limited", "lost", "error", "unrecorded", "blocked"].map((status, id) => ({ id, status }));
+test("only a job the preflight gated stays out of the --max budget", () => {
+  const results = ["done", "failed", "gate", "interrupted", "rate-limited", "lost", "error", "unrecorded", "gated"].map((status, id) => ({ id, status }));
 
   assert.equal(agentRuns(results), 8);
 });

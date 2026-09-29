@@ -309,7 +309,7 @@ test("a single-job start that would claim nothing reports what it waits for, spa
   assert.deepEqual(waiting.out, [
     `J-${id} waiting: concurrency cap reached`,
     "2 of 2 jobs already running",
-    "2 runners on `alpha` — parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output",
+    "2 runners on `alpha` — parallel jobs on one repository fight over the checkout; a job the preflight blocks waits at a gate for queue retry",
   ]);
   assert.deepEqual(calls, [], "a start that claims nothing spawned a runner anyway");
   assert.equal(existsSync(runnersDir(env)), false, "a start that spawned nothing still registered a runner");
@@ -326,7 +326,7 @@ test("a single-job start that would claim nothing reports what it waits for, spa
 });
 
 const ALPHA_ADVISORY =
-  "2 runners on `alpha` — parallel jobs on one repository fight over the checkout; a job the preflight releases retries with backoff and burns tokens for no output";
+  "2 runners on `alpha` — parallel jobs on one repository fight over the checkout; a job the preflight blocks waits at a gate for queue retry";
 
 test("queue status prints the advisory lines right after the runner lines, and `--json` carries them", async (t) => {
   const env = makeQueueHome(t, "detached-status-advisories");

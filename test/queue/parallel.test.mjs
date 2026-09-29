@@ -225,7 +225,7 @@ test("a job of ANOTHER project never runs beside another inside ONE runner, and 
   await assertTwoRunnersOverlap(parallelEnv, parallel.logPath, parallelIds);
 });
 
-test("a same-project job whose canonical checkout another job dirtied is blocked, keeps its attempt and stays pending", async (t) => {
+test("a same-project job whose canonical checkout another job dirtied is gated and keeps its attempt", async (t) => {
   const env = makeHome(t, "parallel-dirty-checkout");
   const project = makeRealGitProject(t, env, "alpha");
   const { bin } = writeRealGitClaude(t);
@@ -237,9 +237,9 @@ test("a same-project job whose canonical checkout another job dirtied is blocked
 
   const cycle = await runCycle({ jobId: id, env });
 
-  assert.deepEqual(cycle.processed, [{ id, status: "blocked", code: "dirty-checkout" }]);
+  assert.deepEqual(cycle.processed, [{ id, status: "gated", code: "dirty-checkout" }]);
   const row = getJob(id, env);
-  assert.equal(row.status, "pending", "a job blocked by the preflight was lost instead of staying in the queue");
+  assert.equal(row.status, "gate", "a job blocked by the preflight was not stopped at a gate");
   assert.equal(row.attempts, 0, "the blocked job spent an attempt it never used");
   assert.match(String(row.result), /dirty-checkout/);
 });
