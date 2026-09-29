@@ -283,7 +283,7 @@ export function buildArgs({ prompt, resumeSessionId = null, env = process.env, j
     mcpConfigArg(env, jobId),
   ];
   if (inheritUserEnvironment !== true) {
-    args.push("--strict-mcp-config", "--setting-sources", "project,local", "--settings", JSON.stringify(jobSettings(env)));
+    args.push("--strict-mcp-config", "--setting-sources", "project", "--settings", JSON.stringify(jobSettings(env)));
   }
   if (isSessionIdSafe(resumeSessionId)) args.push("--resume", resumeSessionId);
   return args;

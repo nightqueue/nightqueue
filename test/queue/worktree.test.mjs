@@ -46,15 +46,22 @@ const KEPT_LINE = "Worktree kept: /tmp/wt/feat+x - it has uncommitted changes.";
 
 test("parseWorktreeList reads the porcelain of the triage, newline or NUL separated, with the lock reason as written", () => {
   const expected = [
-    { path: "/Users/me/nightqueue", branch: "refs/heads/main", locked: null },
-    { path: "/Users/me/nightqueue/.claude/worktrees/feat+login", branch: "refs/heads/worktree-feat+login", locked: null },
-    { path: "/Users/me/nightqueue/.claude/worktrees/bug+parser", branch: "refs/heads/worktree-bug+parser", locked: "claude agent agent-a1b2 (pid 48213)" },
-    { path: "/Users/me/nightqueue/.claude/worktrees/manual", branch: null, locked: "" },
+    { path: "/Users/me/nightqueue", branch: "refs/heads/main", locked: null, prunable: null },
+    { path: "/Users/me/nightqueue/.claude/worktrees/feat+login", branch: "refs/heads/worktree-feat+login", locked: null, prunable: null },
+    { path: "/Users/me/nightqueue/.claude/worktrees/bug+parser", branch: "refs/heads/worktree-bug+parser", locked: "claude agent agent-a1b2 (pid 48213)", prunable: null },
+    { path: "/Users/me/nightqueue/.claude/worktrees/manual", branch: null, locked: "", prunable: null },
   ];
   assert.deepEqual(parseWorktreeList(TRIAGE_PORCELAIN), expected);
   assert.deepEqual(parseWorktreeList(TRIAGE_PORCELAIN.replaceAll("\n", "\0")), expected);
   assert.deepEqual(parseWorktreeList(""), []);
   assert.deepEqual(parseWorktreeList(null), []);
+});
+
+test("parseWorktreeList reads a prunable entry with its reason, and a bare `prunable` as an empty reason", () => {
+  const porcelain = ["worktree /r", "branch refs/heads/main", "", "worktree /r/gone", "branch refs/heads/worktree-x", "prunable gitdir file points to non-existent location", "", "worktree /r/bare", "detached", "prunable", ""].join("\n");
+  const [, gone, bare] = parseWorktreeList(porcelain);
+  assert.equal(gone.prunable, "gitdir file points to non-existent location");
+  assert.equal(bare.prunable, "");
 });
 
 test("lockPid reads the pid a lock names, and null for a lock that names none", () => {

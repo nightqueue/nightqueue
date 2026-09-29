@@ -12,6 +12,7 @@ import { resolveWindow } from "../../src/queue/window.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, PR_URL } from "../../test-support/streams.mjs";
+import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const PROMPT = "fix the worker";
 
@@ -53,7 +54,7 @@ test("`--from` in the future: the runner claims nothing and, told to stop while 
     env,
     window,
     deps: {
-      gitImpl: fakeGit(),
+      worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(),
       nowImpl: () => nowMs,
       sleepImpl: slicedSleep(slept, (slice) => (slice === 2 ? process.emit("SIGTERM") : undefined)),
     },
@@ -73,7 +74,7 @@ test("started already inside the window works immediately: no wait, the job is c
   const window = { fromMs: nowMs, untilMs: nowMs + 3600_000 };
   const slept = [];
 
-  const cycle = await runCycle({ env, window, deps: { gitImpl: fakeGit(), nowImpl: () => nowMs, sleepImpl: slicedSleep(slept) } });
+  const cycle = await runCycle({ env, window, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), nowImpl: () => nowMs, sleepImpl: slicedSleep(slept) } });
 
   assert.deepEqual(slept, [], "a window already open still made the runner wait before claiming");
   assert.deepEqual(cycle.processed, [{ id, status: "done", prUrl: PR_URL, attempts: 1 }]);
@@ -92,7 +93,7 @@ test("at `until` the runner stops claiming, reports `window-closed` with the cou
     env,
     window,
     deps: {
-      gitImpl: fakeGit(),
+      worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(),
       nowImpl: () => nowMs,
       sleepImpl: async () => {},
       finishJobImpl: (id, outcome) => {
@@ -137,7 +138,7 @@ test("a rate-limit wait inside the window is cut at `until`: the runner never sl
     env,
     window,
     deps: {
-      gitImpl: fakeGit(),
+      worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(),
       nowImpl: () => nowMs,
       sleepImpl: slicedSleep(slept, () => {
         nowMs = untilMs;
@@ -170,7 +171,7 @@ test("the watch loop stops on `window-closed` once `until` arrives between two p
       // The window is resolved once, at the start of the watch; time passing between two passes is simulated here.
       nowMs = untilMs;
     },
-    deps: { gitImpl: fakeGit(), nowImpl: () => nowMs, sleepImpl: async () => {} },
+    deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), nowImpl: () => nowMs, sleepImpl: async () => {} },
   });
 
   assert.equal(passes.length, 2, "the watch did not stop right on the pass that saw the window close");

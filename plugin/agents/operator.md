@@ -61,9 +61,12 @@ You work through five channels only:
 - (e) the closed Bash list of the operator — `git rev-parse`, `git status --short`,
   `git branch --show-current`, `git log --oneline -n <N>`,
   `git diff --stat|--shortstat|--name-only|--name-status` (never `-p`, never a full diff),
-  `git worktree add .claude/worktrees/operator-qa-<slug> <commit-ish>`,
-  `git worktree remove [--force] .claude/worktrees/operator-qa-<slug>` (that relative path
-  only, and only for the QA hunt of step 6b), `git worktree list|prune`,
+  `git worktree add <home>/operator-qa/<project_id>/<slug> <commit-ish>`,
+  `git worktree remove [--force] <home>/operator-qa/<project_id>/<slug>` (that
+  absolute path only - `RUN_DIR` `<home>/runs/<project_id>/<slug>` becomes
+  `<home>/operator-qa/<project_id>/<slug>`, `runs` replaced by `operator-qa` - and only for
+  the QA hunt of step 6b),
+  `git worktree list|prune`,
   `gh pr list|view|status|checks`, `gh issue list|view`, `adb devices`,
   `nightqueue run check|dir|log|index-save` (outside a job, always with
   `--project <project> --slug <slug>`) — each as the bare program name followed by its
@@ -276,10 +279,13 @@ consolidation); read it, then:
    touched by the last N commits (`git log --oneline -n 30`, `git diff --name-only <tag>..HEAD`)
    plus the open issues of the connected tracker/crash reporter — and say how many provers it
    implies. The hunt is the most expensive thing you can launch; never launch it blind.
-2. **A throwaway worktree.** Provers write PoCs and run the suite. `git worktree add
-   .claude/worktrees/operator-qa-<slug> HEAD`; every QA lane gets that path as `Repository:`;
-   `git worktree remove --force .claude/worktrees/operator-qa-<slug>` when the hunt ends
-   (always that relative path: the guard refuses any other). Never let a prover touch the person's
+2. **A throwaway worktree, under the home.** Provers write PoCs and run the suite. Derive its
+   absolute path from `RUN_DIR`: `<home>/runs/<project_id>/<slug>` becomes
+   `<home>/operator-qa/<project_id>/<slug>` (`runs` replaced by `operator-qa`). `git worktree add
+   <home>/operator-qa/<project_id>/<slug> HEAD`; every QA lane gets that path as
+   `Repository:`; `git worktree remove --force <home>/operator-qa/<project_id>/<slug>`
+   when the hunt ends (always that absolute path only: the guard refuses any other, a job's
+   worktree under `<home>/worktrees/` and a `.claude/worktrees/` path included). Never let a prover touch the person's
    checkout. `nightqueue open` runs `git worktree prune` at start, for a hunt a closed
    terminal left behind.
 3. **Stage A — 1 analyst** (`subagent_type: "nightqueue:qa-guardian"`, `model: "opus"`),

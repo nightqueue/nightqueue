@@ -174,6 +174,21 @@ export function runDir(projectId, slug, env = process.env) {
   return join(runsDir(env), projectId, slug);
 }
 
+// Directory holding the git worktree of every queued job, one sub-directory per project id.
+export function worktreesDir(env = process.env) {
+  return join(homeDir(env), "worktrees");
+}
+
+// Path of the git worktree the runtime places a queued job's run in, keyed by the project's id and the run slug.
+export function jobWorktreePath(projectId, slug, env = process.env) {
+  return join(worktreesDir(env), projectId, slug);
+}
+
+// Directory holding the QA worktrees the operator creates, one sub-directory per project id, apart from every job's worktree.
+export function operatorQaDir(env = process.env) {
+  return join(homeDir(env), "operator-qa");
+}
+
 // Path of the marker saying the run directories were moved from project names to project ids.
 export function runsIdMarkerPath(env = process.env) {
   return join(runsDir(env), ".by-id");

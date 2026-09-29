@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { UserError } from "../config/errors.mjs";
-import { jobLogPath, logsDir, runDir } from "../config/paths.mjs";
+import { jobLogPath, jobWorktreePath, logsDir, runDir } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { ghPrList } from "../host/gh.mjs";
 import { packageRoot, spawnRoot } from "../host/paths.mjs";
@@ -12,6 +12,7 @@ import { acquire, bashTimeoutS, concurrencyCap, gate, inheritUserEnvironment, is
 import { backoffMs, classifyJobResult, isTerminalRuntimeKill, isTransientFailure } from "./classify.mjs";
 import { recordedFiles } from "./file-list.mjs";
 import { preflight } from "./preflight.mjs";
+import { jobBranchName, prepareJobWorktree, worktreeSlotFree } from "./job-worktree.mjs";
 import {
   clearOwnPause,
   fiveHourReading,
@@ -51,7 +52,7 @@ import {
 } from "./stream.mjs";
 import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
 import { resolveWindow, windowPhase } from "./window.mjs";
-import { finishNotice, inspectRunWorktree, keptWorktreeLine, removeRunWorktree } from "./worktree.mjs";
+import { finishNotice, inspectRunWorktree, keptWorktreeLine, openJobWorktrees, removeRunWorktree } from "./worktree.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
 // Interval between two cycles of `queue run --watch` when the operator gives no number.
@@ -83,6 +84,7 @@ const DEFAULT_DEPS = {
   killImpl: null,
   keepAwakeImpl: holdRunnerAwake,
   holdJobAwakeImpl: undefined,
+  worktreeImpl: prepareJobWorktree,
 };
 
 // Bounds of the key the pre-spawn pull request check searches for.
@@ -266,6 +268,7 @@ async function captureSession(job, facts, line, attempt, { store }) {
   if (!sessionId || sessionId === facts.lastSessionId) return;
   const isFirst = !facts.sessionId;
   if (isFirst) facts.sessionId = sessionId;
+  facts.resumableSessionId ??= sessionId;
   facts.lastSessionId = sessionId;
   await store.jobs.persistRunFacts(job.id, {
     worker: job.worker,
@@ -360,6 +363,7 @@ async function runAttempts(job, ctx) {
     slug: job.slug ?? null,
     slugDeclared: false,
     sessionId: job.session_id ?? null,
+    resumableSessionId: ctx.sessionResumable === false ? null : (job.session_id ?? null),
     lastSessionId: job.last_session_id ?? job.session_id ?? null,
     rateLimit: null,
     fiveHour: null,
@@ -374,7 +378,7 @@ async function runAttempts(job, ctx) {
   while (true) {
     if (!(await renew(job, env))) return { lost: true, facts, attempt, ...attemptTotals(tally), outcome: null, result: null };
     if (isSafeSegment(facts.slug)) clearRunOutcome({ projectId: job.project_id, slug: facts.slug, env });
-    const resumeSessionId = resumeForced ? facts.sessionId : null;
+    const resumeSessionId = resumeForced ? facts.resumableSessionId : null;
     const attemptStartedAt = new Date().toISOString();
     const result = await spawnClaude({
       prompt: ctx.prompt,
@@ -624,20 +628,29 @@ function logOperatorReruns(job, handoff, env) {
 
 // The job with the run it writes into already named: the slug of its row, or a provisional one derived from its prompt and
 // claimed before the spawn, so the run directory exists from the first attempt and a retry finds it again. A slug another
-// job holds, or whose directory is already on disk, is never taken: the claim moves on to the next free variant.
-async function withRunSlug(job, ctx) {
+// job holds, or whose directory or worktree slot is already taken, is never taken: the claim moves on to the next free variant.
+async function withRunSlug(job, ctx, checkout) {
   if (isSafeSegment(job.slug)) return job;
   const base = provisionalSlug(job);
-  const bound = await claimFreshRunSlug(job, slugCandidates(base, job.id), ctx);
+  const bound = await claimFreshRunSlug(job, slugCandidates(base, job.id), { ...ctx, checkout });
   if (bound.status === "bound") return { ...job, slug: bound.slug };
   appendJobLog(job.id, `the provisional slug \`${base}\` could not be bound to the job (${slugRefusal(bound)}); the run names itself`, ctx.env);
   return job;
 }
 
-// Walks the candidates, creating each run directory before binding it: only a directory this job created itself is ever its run.
+// Tells whether the worktree slot of a candidate slug is free, logging the slot that is taken; advisory, `git worktree add` refuses an occupied path anyway.
+async function slotIsFree(job, slug, ctx) {
+  const path = jobWorktreePath(job.project_id, slug, ctx.env);
+  if (await worktreeSlotFree({ projectId: job.project_id, slug, checkout: ctx.checkout, env: ctx.env })) return true;
+  appendJobLog(job.id, `the worktree slot of \`${slug}\` is taken (${path} or branch ${jobBranchName(slug)} exists): the job does not take it`, ctx.env);
+  return false;
+}
+
+// Walks the candidates, creating each run directory before binding it: only a directory this job created itself is ever its run, and a slug whose worktree slot is taken is skipped.
 async function claimFreshRunSlug(job, candidates, ctx) {
   let refusal = { status: "taken", heldBy: null };
   for (const slug of candidates) {
+    if (!(await slotIsFree(job, slug, ctx))) continue;
     const created = claimRunDir(job, slug, ctx.env);
     if (created === "exists") continue;
     refusal = await ctx.store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] });
@@ -710,27 +723,34 @@ export async function openPrsForJob(job, { env = process.env, deps = {} } = {}) 
   }
 }
 
-// Runs one claimed job end to end: preflight, attempts and the single write of the outcome.
+// Stops a job at a gate on a block found before its spawn, without spending the attempt.
+async function gateJob(job, check, env) {
+  if (!(await gate(job, check, env))) {
+    noteOwnershipLost(job, env);
+    return { id: job.id, status: "lost" };
+  }
+  return { id: job.id, status: "gated", code: check.code };
+}
+
+// Runs one claimed job end to end: preflight, its worktree, attempts and the single write of the outcome.
 async function runJob(claimed, ctx) {
   const { env, deps } = ctx;
-  const check = preflight({ job: claimed, env, gitImpl: deps.gitImpl, existsImpl: deps.existsImpl, resolveBinImpl: deps.resolveBinImpl });
-  if (!check.ok) {
-    if (!(await gate(claimed, check, env))) {
-      noteOwnershipLost(claimed, env);
-      return { id: claimed.id, status: "lost" };
-    }
-    return { id: claimed.id, status: "gated", code: check.code };
-  }
+  const openWorktrees = await openJobWorktrees({ store: ctx.store, env });
+  const check = preflight({ job: claimed, env, gitImpl: deps.gitImpl, existsImpl: deps.existsImpl, resolveBinImpl: deps.resolveBinImpl, openWorktrees });
+  if (!check.ok) return await gateJob(claimed, check, env);
   const openPrs = await openPrsForJob(claimed, { env, deps });
-  const job = await withRunSlug(claimed, ctx);
+  const job = await withRunSlug(claimed, ctx, check.cwd);
   ensureRunDir(job, env);
+  const prepared = await deps.worktreeImpl({ job, checkout: check.cwd, baseBranch: check.branch, env, log: (line) => appendJobLog(job.id, line, env) });
+  if (!prepared.ok) return await gateJob(job, prepared, env);
+  if (!prepared.reused) await persistBranch(job, job.slug, ctx);
   const state = ownRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, env });
   const resume = decideResume({ state });
   const handoff = resumeHandoff({ job, resume, state, env });
   if (handoff) persistResume(job, resume.resumeCount, env);
   logOperatorReruns(job, handoff, env);
   const prompt = buildPrompt({ job, handoff, openPrs, env });
-  const run = await runAttempts(job, { ...ctx, cwd: check.cwd, prompt });
+  const run = await runAttempts(job, { ...ctx, cwd: prepared.path, sessionResumable: prepared.reused && !prepared.legacy, prompt });
   if (run.lost) {
     noteOwnershipLost(job, env);
     return { id: job.id, status: "lost", attempts: run.attempt };

@@ -9,6 +9,7 @@ import { isolatedHostVars } from "../../test-support/host.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream } from "../../test-support/streams.mjs";
+import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const JOB = { id: 7, project: "alpha", prompt: "fix the worker" };
 const PRS = [
@@ -209,7 +210,7 @@ test("a job spawned with the check disabled spawns no gh process and its prompt 
   const { env, planPath, ghLog } = makePrHome(t, "pr-list-off");
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
 
-  await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit() } });
+  await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
 
   assert.ok(!spawnedPrompt(planPath).includes("Open pull requests"));
   assert.equal(existsSync(ghLog), false, "the disabled check must not spawn gh at all");
@@ -224,7 +225,7 @@ test("a job spawned with the check enabled carries the block the runtime looked 
     jobId: id,
     env,
     deps: {
-      gitImpl: fakeGit(),
+      worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(),
       prListImpl: (key) => {
         searched.push(key);
         return PRS;

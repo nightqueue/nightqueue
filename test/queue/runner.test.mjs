@@ -17,6 +17,7 @@ import { openStore } from "../../src/store/open.mjs";
 import { dropCheckout, ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { agentToolUseEvent, assistantEvent, codeChangePublishedEvent, doneStream, failureStream, gateStream, noticeText, PR_URL, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, slugTypeEvent, systemInitEvent, taskNotificationEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
+import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const PROMPT = "fix the worker";
 
@@ -68,7 +69,7 @@ function enqueue(env, { project = "alpha", prompt = PROMPT, maxAttempts, timeout
 
 // Runs one cycle over a single job with the git reads injected.
 function runJobCycle(env, jobId, deps = {}) {
-  return runCycle({ jobId, env, deps: { gitImpl: fakeGit(), ...deps } });
+  return runCycle({ jobId, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), ...deps } });
 }
 
 // Waits the given number of milliseconds.
@@ -446,8 +447,8 @@ test("the runner records the session of every attempt, so the last one wins acro
 
 test("every preflight block stops the job at a gate without spending an attempt", async (t) => {
   const cases = [
-    ["dirty-checkout", { gitImpl: fakeGit({ status: " M src/queue/runner.mjs" }) }],
-    ["wrong-branch", { gitImpl: fakeGit({ branch: "feat/queue-runner" }) }],
+    ["dirty-checkout", { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit({ status: " M src/queue/runner.mjs" }) }],
+    ["wrong-branch", { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit({ branch: "feat/queue-runner" }) }],
     ["missing-checkout", { existsImpl: () => false }],
     ["claude-missing", { resolveBinImpl: () => ({ bin: null, via: "missing" }) }],
   ];
@@ -474,7 +475,7 @@ test("a job gated by the preflight is never claimed twice in the same cycle, and
   const { env } = makeRunnerHome(t, "runner-block-loop", [{ stdout: doneStream(), exitCode: 0 }]);
   const id = enqueue(env);
 
-  const cycle = await runCycle({ env, deps: { gitImpl: fakeGit({ status: " M file.mjs" }) } });
+  const cycle = await runCycle({ env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit({ status: " M file.mjs" }) } });
 
   assert.deepEqual(cycle.processed.map((job) => job.status), ["gated"]);
   assert.equal(cycle.reason, "empty-queue", "a gated job must leave the queue, not end the pass as a job to wait on");
@@ -645,7 +646,7 @@ test("one cycle runs two jobs of DIFFERENT projects strictly one after the other
     enqueue(env, { project: "beta", prompt: "fix the parser" });
     const active = [];
 
-    const cycle = await runCycle({ env, deps: { gitImpl: countingGit(env, active) } });
+    const cycle = await runCycle({ env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: countingGit(env, active) } });
 
     assert.deepEqual(cycle.processed.map((job) => job.status), ["done", "done"]);
     assert.deepEqual(active, [1, 1], "the second job started before the first one finished");
@@ -661,7 +662,7 @@ test("one cycle runs maintenance exactly once, and `--dry` never runs it", async
   enqueue(env, { project: "beta", prompt: "fix the parser" });
   const upkeeps = [];
 
-  const cycle = await runCycle({ env, deps: { gitImpl: fakeGit(), maintenanceImpl: async (args) => upkeeps.push(args) } });
+  const cycle = await runCycle({ env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), maintenanceImpl: async (args) => upkeeps.push(args) } });
   assert.deepEqual(cycle.processed.map((job) => job.status), ["done", "done"]);
   assert.equal(upkeeps.length, 1, "maintenance ran once per claimed job instead of once per cycle");
   assert.equal(upkeeps[0].env, env);
@@ -681,7 +682,7 @@ test("with a ceiling of one the same cycle runs the two jobs strictly one after 
   enqueue(env, { project: "beta", prompt: "fix the parser" });
   const activeRunning = [];
 
-  const cycle = await runCycle({ env, deps: { gitImpl: countingGit(env, activeRunning) } });
+  const cycle = await runCycle({ env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: countingGit(env, activeRunning) } });
 
   assert.equal(cycle.cap, 1);
   assert.deepEqual(activeRunning, [1, 1], "the runner crossed its own ceiling");
@@ -902,7 +903,7 @@ test("the watch loop repeats the cycle and hands each pass to the caller", async
   const seen = [];
   const slept = [];
 
-  const passes = await runWatch({ intervalS: 7, env, cycles: 2, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
+  const passes = await runWatch({ intervalS: 7, env, cycles: 2, onCycle: (pass) => seen.push(pass.reason), deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
 
   assert.equal(passes.length, 2);
   assert.deepEqual(seen, ["empty-queue", "empty-queue"]);
@@ -917,7 +918,7 @@ test("the drain runs the job it can claim and stops by itself once the queue is 
   const seen = [];
   const slept = [];
 
-  const passes = await runDrain({ env, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
+  const passes = await runDrain({ env, onCycle: (pass) => seen.push(pass.reason), deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
 
   assert.equal(getJob(id, env).status, "done");
   assert.equal(seen.at(-1), "empty-queue", seen.join(","));
@@ -935,7 +936,7 @@ test("a drain held back by the concurrency cap waits and tries again instead of 
   const seen = [];
   const slept = [];
 
-  const passes = await runDrain({ env, cycles: 2, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
+  const passes = await runDrain({ env, cycles: 2, onCycle: (pass) => seen.push(pass.reason), deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
 
   assert.equal(passes.length, 2);
   assert.deepEqual(seen, ["cap-reached", "cap-reached"], "a drain that hit the ceiling broke out of its loop instead of waiting");
@@ -972,7 +973,7 @@ test("a drain over [A blocked, B clean] gates A once, runs B in the same pass an
   const seen = [];
   const slept = [];
 
-  const passes = await runDrain({ env, cycles: 3, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: dirtyOnceGit(), sleepImpl: async (ms) => slept.push(ms) } });
+  const passes = await runDrain({ env, cycles: 3, onCycle: (pass) => seen.push(pass.reason), deps: { worktreeImpl: fakeJobWorktree(), gitImpl: dirtyOnceGit(), sleepImpl: async (ms) => slept.push(ms) } });
 
   assert.equal(passes.length, 1, "the drain waited on a gated job instead of moving on");
   assert.deepEqual(seen, ["empty-queue"]);
@@ -984,7 +985,7 @@ test("a drain over [A blocked, B clean] gates A once, runs B in the same pass an
   assert.equal(JSON.parse(gated.result).blocked.code, "dirty-checkout");
 
   retryJob(a, {}, env);
-  const again = await runDrain({ env, cycles: 1, deps: { gitImpl: fakeGit(), sleepImpl: async () => {} } });
+  const again = await runDrain({ env, cycles: 1, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: async () => {} } });
   assert.deepEqual(again[0].processed.map((result) => [result.id, result.status]), [[a, "done"]]);
 });
 
@@ -995,7 +996,7 @@ test("`--max` is a budget for the run: the drain stops after n jobs and leaves t
   const seen = [];
   const slept = [];
 
-  await runDrain({ max: 2, env, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
+  await runDrain({ max: 2, env, onCycle: (pass) => seen.push(pass.reason), deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
 
   assert.deepEqual(ids.map((id) => getJob(id, env).status), ["done", "done", "pending"]);
   assert.equal(seen.at(-1), "max-reached", seen.join(","));
@@ -1004,7 +1005,7 @@ test("`--max` is a budget for the run: the drain stops after n jobs and leaves t
   const home = makeRunnerHome(t, "runner-max-cycle", attempts);
   enqueue(home.env, { prompt: "fix the worker" });
   enqueue(home.env, { prompt: "fix the parser" });
-  const cycle = await runCycle({ max: 1, env: home.env, deps: { gitImpl: fakeGit() } });
+  const cycle = await runCycle({ max: 1, env: home.env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
   assert.equal(cycle.processed.length, 1);
   assert.equal(cycle.reason, "max-reached");
 });
@@ -1016,7 +1017,7 @@ test("a job the preflight gates spends no --max budget: the same pass still runs
   const seen = [];
   const slept = [];
 
-  const passes = await runDrain({ max: 2, cycles: 3, env, onCycle: (pass) => seen.push(pass.reason), deps: { gitImpl: dirtyOnceGit(), sleepImpl: async (ms) => slept.push(ms) } });
+  const passes = await runDrain({ max: 2, cycles: 3, env, onCycle: (pass) => seen.push(pass.reason), deps: { worktreeImpl: fakeJobWorktree(), gitImpl: dirtyOnceGit(), sleepImpl: async (ms) => slept.push(ms) } });
 
   assert.deepEqual(seen, ["max-reached"]);
   assert.deepEqual(passes[0].processed.map((result) => result.status), ["gated", "done", "done"]);
@@ -1027,7 +1028,7 @@ test("a job the preflight gates spends no --max budget: the same pass still runs
   const dirty = makeRunnerHome(t, "runner-max-dirty", attempts);
   const id = enqueue(dirty.env);
   const dirtySeen = [];
-  await runDrain({ max: 2, cycles: 2, env: dirty.env, onCycle: (pass) => dirtySeen.push(pass.reason), deps: { gitImpl: fakeGit({ status: " M src/a.mjs" }), sleepImpl: async () => {} } });
+  await runDrain({ max: 2, cycles: 2, env: dirty.env, onCycle: (pass) => dirtySeen.push(pass.reason), deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit({ status: " M src/a.mjs" }), sleepImpl: async () => {} } });
   assert.deepEqual(dirtySeen, ["empty-queue"], "a dirty checkout spent the --max budget or held the drain");
   assert.equal(getJob(id, dirty.env).status, "gate");
 });
@@ -1038,7 +1039,7 @@ test("a watcher with --max exits once its budget is spent", async (t) => {
   enqueue(env, { prompt: "fix the worker" });
   enqueue(env, { prompt: "fix the parser" });
 
-  const passes = await runWatch({ max: 1, intervalS: 7, env, cycles: 5, deps: { gitImpl: fakeGit(), sleepImpl: async () => {} } });
+  const passes = await runWatch({ max: 1, intervalS: 7, env, cycles: 5, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: async () => {} } });
 
   assert.equal(passes.at(-1).reason, "max-reached");
   assert.equal(countsByStatus(env).done, 1);

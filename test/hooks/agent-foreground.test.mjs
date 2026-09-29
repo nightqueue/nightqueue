@@ -367,12 +367,16 @@ test("the operator reads its run's handoff files and the plugin, never the repos
 
 test("the operator's Bash outside its closed list is denied with the operator's reason, and its own list passes untouched", (t) => {
   const { env, worktree } = operatorFixture(t);
-  for (const command of ["git commit -m x", "git push", "git fetch origin", "nightqueue run commit", "gh pr create", "git worktree add /tmp/x HEAD", "npm test"]) {
+  const qaWorktree = join(env.NIGHTQUEUE_HOME, "operator-qa", FIXED_PROJECT_ID, "x");
+  const jobWorktree = join(env.NIGHTQUEUE_HOME, "worktrees", FIXED_PROJECT_ID, "operator-qa-x");
+  const denied = ["git commit -m x", "git push", "git fetch origin", "nightqueue run commit", "gh pr create", "git worktree add /tmp/x HEAD", "git worktree add .claude/worktrees/operator-qa-x HEAD", `git worktree add ${jobWorktree} HEAD`, `git worktree remove --force ${jobWorktree}`, "npm test"];
+  for (const command of denied) {
     const reason = denyReasonOf(runAgentForeground({ input: mainCall("Bash", { command }, worktree), env }));
     assert.ok(reason.startsWith(OPERATOR_BASH_REASON), reason);
+    assert.ok(reason.includes(`git worktree add ${join(env.NIGHTQUEUE_HOME, "operator-qa")}/<project_id>/<slug> <commit-ish>`), reason);
     assert.match(reason, /no commit, no push, no write to the repository$/);
   }
-  for (const command of ["git worktree add .claude/worktrees/operator-qa-x HEAD", "git log --oneline -n 30", "adb devices"]) {
+  for (const command of [`git worktree add ${qaWorktree} HEAD`, "git log --oneline -n 30", "adb devices"]) {
     assert.equal(runAgentForeground({ input: mainCall("Bash", { command }, worktree), env }), "", command);
   }
   assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "git status --short", run_in_background: true }, worktree), env }), "");

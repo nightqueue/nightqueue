@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
-import { dbPath, queuePausedPath, resolvedRuntimeDir, runnerRegistryPath, secretsPath } from "../src/config/paths.mjs";
+import { dbPath, operatorQaDir, queuePausedPath, resolvedRuntimeDir, runnerRegistryPath, secretsPath, worktreesDir } from "../src/config/paths.mjs";
+import { moveProject } from "../src/memory/registry.mjs";
 import { ensureHome } from "../src/config/store.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
 import { acquireClose, addJob, claimJobById, failClose } from "../src/memory/jobs.mjs";
@@ -20,7 +21,7 @@ import { ensureProject, makeOrg, orgIdOf, projectIdOf, registerCheckout } from "
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { makeHostEnv, readSettingsFile, writeLegacyShim, writeSettingsFixture } from "../test-support/host.mjs";
 import { makeDir, makeProject, seedClosedJob, seedLegacyV8Home } from "../test-support/memory.mjs";
-import { addWorktree, deadPid, lockWorktree, publishedCheckout } from "../test-support/worktrees.mjs";
+import { addWorktree, deadPid, git, lockWorktree, publishedCheckout, registeredWorktrees } from "../test-support/worktrees.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const SETUP = ["setup", "--no-path", "--no-embedding"];
@@ -35,7 +36,7 @@ function withFakeGh(authenticated) {
 }
 
 // Runs the diagnosis in process and returns the parsed report plus the exit code.
-async function diagnose(env, overrides = {}) {
+async function diagnose(env, overrides = {}, args = []) {
   const out = [];
   const ctx = {
     ...defaultContext(),
@@ -45,7 +46,7 @@ async function diagnose(env, overrides = {}) {
     spawnSyncImpl: withFakeGh(true),
     ...overrides,
   };
-  const code = await run(["doctor", "--json"], ctx);
+  const code = await run(["doctor", "--json", ...args], ctx);
   assert.equal(out.length, 1, out.join("\n"));
   return { code, report: JSON.parse(out[0]), lines: out };
 }
@@ -779,7 +780,7 @@ function registerRealCheckout(t, env, name) {
   return checkout;
 }
 
-test("doctor names each leftover under .claude/worktrees with its cleanup command, skips what an open job or a live session holds, and deletes nothing", async (t) => {
+test("doctor names each legacy leftover under .claude/worktrees with its cleanup command, marks what an open job holds as legacy-in-use, skips a live session, and deletes nothing", async (t) => {
   const host = makeHostEnv(t, "doctor-worktrees");
   const checkout = registerRealCheckout(t, host.env, "doctor-worktrees");
   const orphan = join(checkout, ".claude", "worktrees", "orphan");
@@ -808,13 +809,14 @@ test("doctor names each leftover under .claude/worktrees with its cleanup comman
   assert.deepEqual(
     rows.sort((a, b) => a.name.localeCompare(b.name)),
     [
-      check("worktree alpha/closed", "warn", "left over: registered in git, no open job owns it", remove(closed.path)),
-      check("worktree alpha/orphan", "warn", "left over: not registered in git (orphaned), no open job owns it", `rm -rf ${quoted(orphan)}`),
-      check("worktree alpha/ownerless", "warn", "left over: registered in git, no open job owns it", remove(ownerless.path)),
+      check("worktree alpha/closed", "warn", "legacy location, left over: registered in git, no open job owns it", remove(closed.path)),
+      check("worktree alpha/gated", "ok", `legacy-in-use by J-${gatedId} (old location .claude/worktrees): released when the job closes`, null),
+      check("worktree alpha/orphan", "warn", "legacy location, left over: not registered in git (orphaned), no open job owns it", `rm -rf ${quoted(orphan)}`),
+      check("worktree alpha/ownerless", "warn", "legacy location, left over: registered in git, no open job owns it", remove(ownerless.path)),
       check(
         "worktree alpha/stale-locked",
         "warn",
-        `left over: registered in git and locked (claude agent agent-1 (pid ${stalePid})), no open job owns it`,
+        `legacy location, left over: registered in git and locked (claude agent agent-1 (pid ${stalePid})), no open job owns it`,
         `git -C ${quoted(checkout)} worktree unlock ${quoted(staleLocked.path)} && ${remove(staleLocked.path)}`,
       ),
     ],
@@ -845,6 +847,121 @@ test("doctor says so when the owner of a worktree cannot be known, or git cannot
   const { report: gitless } = await diagnose(noGit.env);
   assert.deepEqual(checkOf(gitless, "worktrees alpha"), check("worktrees alpha", "warn", "git could not list the worktrees of the checkout", `inspect ${fake}`));
   assert.equal(existsSync(join(fake, ".claude", "worktrees", "some-run")), true);
+});
+
+// Adds a linked worktree of the checkout at `<home>/worktrees/<project id>/<name>`, the place the runtime creates a job's worktree.
+function addHomeWorktree(env, checkout, name) {
+  const path = join(worktreesDir(env), ensureProject(env, "alpha"), name);
+  git(["-C", checkout, "worktree", "add", "-q", "--no-track", "-b", `worktree-${name}`, path, "main"]);
+  return path;
+}
+
+test("doctor reports the home worktrees no open job owns, never offers rm -rf for a directory linked to git, and flags an unknown project id", async (t) => {
+  const host = makeHostEnv(t, "doctor-home-worktrees");
+  const checkout = registerRealCheckout(t, host.env, "doctor-home-worktrees");
+  const owned = addHomeWorktree(host.env, checkout, "owned-run");
+  const leftover = addHomeWorktree(host.env, checkout, "leftover-run");
+  const unlinked = addHomeWorktree(host.env, checkout, "unlinked-run");
+  git(["-C", checkout, "worktree", "remove", "--force", unlinked]);
+  mkdirSync(unlinked, { recursive: true });
+  writeFileSync(join(unlinked, ".git"), `gitdir: ${join(checkout, ".git", "worktrees", "gone")}\n`);
+  const bare = join(worktreesDir(host.env), ensureProject(host.env, "alpha"), "bare-dir");
+  mkdirSync(bare, { recursive: true });
+  const stray = join(worktreesDir(host.env), "01J9Z00000000000000000000A");
+  mkdirSync(join(stray, "some-run"), { recursive: true });
+  const { id } = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "work of owned-run" }, host.env);
+  openDb(host.env).prepare("UPDATE jobs SET status = 'gate', slug = 'owned-run' WHERE id = ?").run(id);
+  recordRunFields({ projectId: ensureProject(host.env, "alpha"), slug: "owned-run", fields: { worktree: owned }, env: host.env });
+  closeDb(host.env);
+
+  const { report } = await diagnose(host.env);
+
+  const rows = report.checks.filter((entry) => entry.name.startsWith("worktree")).sort((a, b) => a.name.localeCompare(b.name));
+  const quoted = (path) => `'${path}'`;
+  assert.deepEqual(rows, [
+    check("worktree alpha/bare-dir", "warn", "left over: not registered in git (orphaned), no open job owns it", `rm -rf ${quoted(bare)}`),
+    check("worktree alpha/leftover-run", "warn", "left over: registered in git, no open job owns it", `git -C ${quoted(checkout)} worktree remove ${quoted(leftover)}`),
+    check(
+      "worktree alpha/unlinked-run",
+      "warn",
+      "git no longer links it to " + checkout + " (the checkout or the home moved)",
+      "run: nightqueue doctor --fix",
+    ),
+    check("worktrees 01J9Z00000000000000000000A", "warn", "project not registered (no registered project with a checkout has this id)", `inspect ${quoted(stray)}`),
+  ]);
+  assert.equal(rows.some((row) => /rm -rf/.test(row.hint ?? "") && row.name.endsWith("unlinked-run")), false, "a directory linked to git was offered rm -rf");
+  for (const path of [owned, leftover, unlinked, bare, stray]) assert.equal(existsSync(path), true, `the diagnosis deleted ${path}`);
+});
+
+test("a home worktree whose checkout moved is flagged, and doctor --fix repairs it with git worktree repair and writes no exclude line", async (t) => {
+  const host = makeHostEnv(t, "doctor-home-moved");
+  const checkout = registerRealCheckout(t, host.env, "doctor-home-moved");
+  const path = addHomeWorktree(host.env, checkout, "moved-run");
+  const excludeBefore = readFileSync(join(checkout, ".git", "info", "exclude"), "utf8");
+  const moved = join(makeDir(t, "doctor-home-moved-new"), "checkout");
+  renameSync(checkout, moved);
+  moveProject(openDb(host.env), { id: ensureProject(host.env, "alpha"), path: moved });
+  closeDb(host.env);
+
+  const before = checkOf((await diagnose(host.env)).report, "worktree alpha/moved-run");
+  assert.deepEqual(before, check("worktree alpha/moved-run", "warn", `git no longer links it to ${moved} (the checkout or the home moved)`, "run: nightqueue doctor --fix"));
+
+  const fixed = checkOf((await diagnose(host.env, {}, ["--fix"])).report, "worktree alpha/moved-run");
+  assert.deepEqual(fixed, check("worktree alpha/moved-run", "ok", `repaired: git links it to ${moved} again`, null));
+  assert.ok(registeredWorktrees(moved).some((listed) => realpathSync(listed) === realpathSync(path)), "git of the moved checkout does not list the repaired worktree");
+  assert.equal(readFileSync(join(moved, ".git", "info", "exclude"), "utf8"), excludeBefore, "doctor --fix wrote into .git/info/exclude");
+  const after = checkOf((await diagnose(host.env)).report, "worktree alpha/moved-run");
+  assert.equal(after.status, "warn");
+  assert.match(after.detail, /^left over: registered in git/);
+});
+
+test("a healthy home worktree of a checkout whose .git is a file is never flagged as moved, and --fix claims no repair", async (t) => {
+  const host = makeHostEnv(t, "doctor-home-gitfile");
+  const project = makeDir(t, "doctor-home-gitfile-project");
+  git(["clone", "--bare", "-q", publishedCheckout(t, "doctor-home-gitfile").checkout, join(project, ".bare")]);
+  git(["-C", join(project, ".bare"), "worktree", "add", "-q", "../main", "main"]);
+  const checkout = realpathSync(join(project, "main"));
+  registerCheckout(host.env, { path: checkout, name: "alpha" });
+  addHomeWorktree(host.env, checkout, "healthy-run");
+  closeDb(host.env);
+
+  const plain = checkOf((await diagnose(host.env)).report, "worktree alpha/healthy-run");
+  const fixed = checkOf((await diagnose(host.env, {}, ["--fix"])).report, "worktree alpha/healthy-run");
+
+  assert.match(plain.detail, /^left over: registered in git/);
+  assert.match(fixed.detail, /^left over: registered in git/);
+});
+
+test("doctor --fix that git cannot make hold again keeps a warning, never a repaired row", async (t) => {
+  const host = makeHostEnv(t, "doctor-home-unfixable");
+  const checkout = registerRealCheckout(t, host.env, "doctor-home-unfixable");
+  const path = addHomeWorktree(host.env, checkout, "unfixable-run");
+  git(["-C", checkout, "worktree", "remove", "--force", path]);
+  mkdirSync(path, { recursive: true });
+  writeFileSync(join(path, ".git"), `gitdir: ${join(checkout, ".git", "worktrees", "gone")}\n`);
+  closeDb(host.env);
+
+  const fixed = checkOf((await diagnose(host.env, {}, ["--fix"])).report, "worktree alpha/unfixable-run");
+
+  assert.equal(fixed.status, "warn");
+  assert.doesNotMatch(fixed.detail, /^repaired/);
+  assert.equal(fixed.hint, `git -C '${checkout}' worktree repair '${path}'`);
+});
+
+test("a QA worktree the operator left under the home is reported as an operator-qa leftover, and an unknown id as not registered", async (t) => {
+  const host = makeHostEnv(t, "doctor-operator-qa");
+  const checkout = registerRealCheckout(t, host.env, "doctor-operator-qa");
+  const path = join(operatorQaDir(host.env), ensureProject(host.env, "alpha"), "qa-hunt");
+  git(["-C", checkout, "worktree", "add", "-q", "--detach", path, "main"]);
+  const stray = join(operatorQaDir(host.env), "01J9Z00000000000000000000A");
+  mkdirSync(join(stray, "old-hunt"), { recursive: true });
+  closeDb(host.env);
+
+  const { report } = await diagnose(host.env);
+
+  assert.deepEqual(checkOf(report, "operator-qa alpha/qa-hunt"), check("operator-qa alpha/qa-hunt", "warn", "left over: registered in git, no open job owns it", `git -C '${checkout}' worktree remove '${path}'`));
+  assert.equal(checkOf(report, "operator-qa 01J9Z00000000000000000000A").status, "warn");
+  assert.equal(existsSync(path), true, "the diagnosis deleted the QA worktree");
 });
 
 // One report row, in the shape the diagnosis prints.

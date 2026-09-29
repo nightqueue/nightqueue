@@ -8,6 +8,7 @@ import { runCycle } from "../../src/queue/runner.mjs";
 import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, failureStream, gateStream } from "../../test-support/streams.mjs";
+import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 // A git double for the preflight: a clean checkout of the default branch.
 function fakeGit() {
@@ -51,7 +52,7 @@ test("finishJob returning false strands the item behind a phantom `running` job,
   const planPath = useFakeClaude(env, makeDir(t, "roadmap-lost-finishjob-false-plan"), [{ stdout: doneStream(), holdMs: 400, exitCode: 0 }]);
   const queued = await queueRoadmapItem({ id: item.id }, env);
 
-  const cycle = runCycle({ jobId: queued.job.id, env, deps: { gitImpl: fakeGit(), stopSignalImpl: () => false } });
+  const cycle = runCycle({ jobId: queued.job.id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), stopSignalImpl: () => false } });
   await waitFor(() => fakeCalls(planPath).length > 0, "the fake claude to start");
   openDb(env).prepare("UPDATE jobs SET worker = ? WHERE id = ?").run("phantom:9999", queued.job.id);
   const done = await cycle;
@@ -77,7 +78,7 @@ test("finishJob returning false strands the item behind a phantom `running` job,
   );
 
   expireLease(env, queued.job.id);
-  await runCycle({ env, deps: { gitImpl: fakeGit() } });
+  await runCycle({ env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
   assert.equal(getJob(queued.job.id, env).status, "failed", "once the lease's grace window passes, the NEXT queue cycle sweeps the orphan on its own");
   assert.equal(getRoadmapItem(item.id, env).status, "todo", "the sweep that failed the orphan also sent its item back to todo");
   const requeued = await queueRoadmapItem({ id: item.id }, env);
@@ -90,7 +91,7 @@ test("runJob returning early via run.lost (ownership stolen mid-run, detected by
   const planPath = useFakeClaude(env, makeDir(t, "roadmap-lost-run-lost-plan"), [{ stdout: doneStream(), holdMs: 5000, exitCode: 0 }]);
   const queued = await queueRoadmapItem({ id: item.id }, env);
 
-  const cycle = runCycle({ jobId: queued.job.id, env, deps: { gitImpl: fakeGit(), stopPollMs: 200 } });
+  const cycle = runCycle({ jobId: queued.job.id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), stopPollMs: 200 } });
   await waitFor(() => fakeCalls(planPath).length > 0, "the fake claude to start");
   openDb(env).prepare("UPDATE jobs SET worker = ? WHERE id = ?").run("phantom:1234", queued.job.id);
   const done = await cycle;
@@ -115,7 +116,7 @@ test("runJob returning early via ctx.state.stopping (an interrupted runner) is N
   useFakeClaude(env, makeDir(t, "roadmap-lost-interrupted-plan"), [{ stdout: doneStream(), holdMs: 5000, exitCode: 0 }]);
   const queued = await queueRoadmapItem({ id: item.id }, env);
 
-  const cycle = runCycle({ jobId: queued.job.id, env, deps: { gitImpl: fakeGit(), stopPollMs: 200 } });
+  const cycle = runCycle({ jobId: queued.job.id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), stopPollMs: 200 } });
   await waitFor(() => getJob(queued.job.id, env).status === "running", "the job to start running");
   process.emit("SIGINT");
   const done = await cycle;
@@ -129,7 +130,7 @@ test("runJob returning early via ctx.state.stopping (an interrupted runner) is N
   );
   assert.equal(getRoadmapItem(item.id, env).status, "in_progress", "the item still points at the same job id, which is exactly correct here");
 
-  const finish = await runCycle({ jobId: queued.job.id, env, deps: { gitImpl: fakeGit() } });
+  const finish = await runCycle({ jobId: queued.job.id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
   assert.deepEqual(finish.processed.map((entry) => entry.status), ["done"]);
   assert.equal(getRoadmapItem(item.id, env).status, "in_review", "the interrupted path self-heals completely with no operator action at all, unlike the two lost-ownership paths above");
 });
@@ -138,7 +139,7 @@ test("a `gate` outcome keeps the item correctly in progress behind a retryable j
   const { env: gateEnv, item: gateItem } = makeItemHome(t, "roadmap-lost-gate");
   useFakeClaude(gateEnv, makeDir(t, "roadmap-lost-gate-plan"), [{ stdout: gateStream(), exitCode: 0 }, { stdout: doneStream(), exitCode: 0 }]);
   const gateQueued = await queueRoadmapItem({ id: gateItem.id }, gateEnv);
-  const gateCycle = await runCycle({ jobId: gateQueued.job.id, env: gateEnv, deps: { gitImpl: fakeGit() } });
+  const gateCycle = await runCycle({ jobId: gateQueued.job.id, env: gateEnv, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
   assert.deepEqual(gateCycle.processed.map((entry) => entry.status), ["gate"]);
   assert.equal(getJob(gateQueued.job.id, gateEnv).status, "gate");
   assert.equal(getRoadmapItem(gateItem.id, gateEnv).status, "in_progress");
@@ -148,14 +149,14 @@ test("a `gate` outcome keeps the item correctly in progress behind a retryable j
     "a gated job is correctly treated as still alive: queue_add refuses it",
   );
   await applyRetry({ id: gateQueued.job.id, note: "go ahead", env: gateEnv });
-  const gateRetryCycle = await runCycle({ jobId: gateQueued.job.id, env: gateEnv, deps: { gitImpl: fakeGit() } });
+  const gateRetryCycle = await runCycle({ jobId: gateQueued.job.id, env: gateEnv, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
   assert.deepEqual(gateRetryCycle.processed.map((entry) => entry.status), ["done"]);
   assert.equal(getRoadmapItem(gateItem.id, gateEnv).status, "in_review", "the intended path (queue_retry, not queue_add) resolves the SAME job and moves the SAME item; gate is recoverable by design");
 
   const { env: failedEnv, item: failedItem } = makeItemHome(t, "roadmap-lost-failed");
   useFakeClaude(failedEnv, makeDir(t, "roadmap-lost-failed-plan"), [{ stdout: failureStream(), exitCode: 1 }]);
   const failedQueued = await queueRoadmapItem({ id: failedItem.id }, failedEnv);
-  const failedCycle = await runCycle({ jobId: failedQueued.job.id, env: failedEnv, deps: { gitImpl: fakeGit() } });
+  const failedCycle = await runCycle({ jobId: failedQueued.job.id, env: failedEnv, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
   assert.deepEqual(failedCycle.processed.map((entry) => entry.status), ["failed"]);
   assert.equal(getJob(failedQueued.job.id, failedEnv).status, "failed");
   assert.equal(getRoadmapItem(failedItem.id, failedEnv).status, "todo", "a failed job sends its item back to todo");

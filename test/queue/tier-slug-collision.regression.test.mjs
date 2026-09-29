@@ -11,6 +11,7 @@ import { runCycle } from "../../src/queue/runner.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { assistantEvent, doneStream, gateStream, noticeText, PR_URL, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const TIER_HEADER = "Tier: complex (set by the operator - the pipeline may only raise it, with evidence, never lower it)";
 const A_FINISHED_AT = "2026-09-23T10:00:00.000Z";
@@ -50,7 +51,7 @@ function unnamedDoneStream() {
 
 // Runs one cycle over a single job with the git reads injected.
 function runJobCycle(env, jobId) {
-  return runCycle({ jobId, env, deps: { gitImpl: fakeGit() } });
+  return runCycle({ jobId, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
 }
 
 // Writes the state.json of a run with the terminal witness a runner left in it, and answers its bytes.

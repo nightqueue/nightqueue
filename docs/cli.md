@@ -101,8 +101,10 @@ the footer read from the job row (`Refs <KEY>-<n>` and `Opened by nightqueue ·
 fails prints one `REJECTED: <reason>` or `MISSING: <what>` line per violation
 and exits `1` with nothing pushed. Otherwise it renames the branch
 when it still carries the `worktree-` prefix (`worktree-feat+login-google` →
-`feat/login-google`, falling back to `<type>/<slug>` from `state.json` when the
-name carries no `+`), pushes it with `git push -u origin <branch>`, opens the
+`feat/login-google`; a queued job's `worktree-<slug>`, which carries no `+`, becomes
+`<commit type>/<run slug>` with the type read from the Conventional Commits subject of
+`HEAD` - `worktree-login-google` with `refactor(auth): ...` → `refactor/login-google` -
+falling back to `feat` or `fix` from the `type` in `state.json`), pushes it with `git push -u origin <branch>`, opens the
 pull request with `gh pr create` and records in `state.json` the outcome `done`,
 the pull request URL gh answered and, as the run's `branch`, the name it pushed
 (a record it cannot write is reported on stderr, never fatal: the pull request is
@@ -197,7 +199,7 @@ nightqueue update                                  # reinstall the runtime and r
 nightqueue update 0.2.0                            # ...at one exact version from the registry
 nightqueue doctor --json                           # check the host and the home, exit 1 on any failure
 nightqueue doctor --check-updates                  # ...and ask the registry for the newest version
-nightqueue doctor --fix                            # ...and add the missing Claude Code lines to each checkout's exclude
+nightqueue doctor --fix                            # ...and git worktree repair the job worktrees whose checkout or home moved
 nightqueue init                                    # set the host up and register the current repository
 nightqueue init ~/code/api --org acme --name api   # ...or an explicit path, org and name
 nightqueue init --no-embedding --no-path --no-gh   # ...answering every question up front
@@ -414,11 +416,11 @@ again, naming it once more.
 nightqueue doctor                  # one line per check: ok, warn or fail
 nightqueue doctor --json           # the same report, as the only thing on stdout
 nightqueue doctor --check-updates  # ...plus the newest version published in the registry
-nightqueue doctor --fix            # ...and add the missing Claude Code lines to each checkout's local exclude
+nightqueue doctor --fix            # ...and git worktree repair the job worktrees whose checkout or home moved
 ```
 
-`nightqueue doctor` reads the host and the home and writes nothing, except with `--fix`
-(below): it never creates
+`nightqueue doctor` reads the host and the home and writes nothing, except `git worktree
+repair` with `--fix` (below): it never creates
 the database, never touches `settings.json` and never asks `claude` about
 anything but its version. It checks the Node version, the `claude` and `gh`
 CLIs, `config.json`, the mode of `secrets.json`, each of the three shims (a
@@ -464,32 +466,52 @@ database one version behind is a `warn` (`run nightqueue queue status once to le
 and a database written by a NEWER version is a `fail` (upgrade nightqueue to the version that
 wrote it).
 
-For every registered project whose checkout exists, one `exclude <project>` row says whether
-git ignores the two paths Claude Code leaves untracked in it, asked with `git check-ignore -q`
-for `.claude/worktrees/x` and `.claude/settings.local.json`. It is `ok` when both are ignored,
-and a `warn` naming the missing lines (`/.claude/worktrees/`, `/.claude/settings.local.json`)
-otherwise, with the hint `run: nightqueue doctor --fix`. With `--fix`, and only then, the
-diagnosis appends each missing line to the checkout's local `.git/info/exclude` (the common git
-dir, never a tracked file) - the same step the runner's preflight takes before every job - and
-the row reads `added <lines> to <file>`. An exclude it cannot write stays a `warn` with the
-`printf ... >> '<file>'` command that does it, and a line already there that a `.gitignore`
-negation overrides stays a `warn` pointing at that `.gitignore`. It never writes a blanket
-`.claude/` line, and `--fix` never removes a worktree.
+Job worktrees live under the home, at `<NIGHTQUEUE_HOME>/worktrees/<project_id>/<slug>`, and
+an older nightqueue left them under `.claude/worktrees/` of each checkout; the diagnosis reads
+both places and writes nothing in either, except `git worktree repair` with `--fix`. One row
+`worktree <project>/<dir>` is printed per directory that needs a word:
 
-For every registered project that has a `.claude/worktrees/` directory, one `warn` row
-`worktree <project>/<dir>` names each directory there that no job still open (any status but
-`closed`) records as its worktree, with the command that cleans it - the diagnosis never runs
-it, and deletes nothing:
+- under the home, a directory whose two-way link with its checkout broke (its `.git` file names
+  an administrative directory that is gone or outside the `worktrees` directory of the
+  checkout's git common directory - `git rev-parse --git-common-dir`, so a checkout whose own
+  `.git` is a file is read right - or that directory no longer points back at it - what a
+  moved checkout or a moved home leaves behind): a `warn`
+  `git no longer links it to <checkout> (the checkout or the home moved)` with the hint
+  `run: nightqueue doctor --fix`. With `--fix` the diagnosis runs ONE
+  `git worktree repair <dir...>` per project from its checkout, then checks each link again:
+  the row reads `repaired: git links it to <checkout> again` only when the link now holds, and
+  otherwise stays a `warn` - git's reason, or `still not linked after git worktree repair` -
+  with the `git -C '<checkout>' worktree repair '<dir>'` command;
+- under the home, a directory holding a `.git` link when git cannot read its checkout at all:
+  a `warn` `cannot check its link: git could not read <checkout>`, with no repair and no
+  removal offered;
+- under `.claude/worktrees/`, a directory an open job (any status but `closed`) still records
+  as its worktree: an `ok` `legacy-in-use by J-<n> (old location .claude/worktrees): released
+  when the job closes`;
+- in either place, a directory no open job records as its worktree: a `warn` (prefixed
+  `legacy location, ` under `.claude/worktrees/`) with the command that cleans it - the
+  diagnosis never runs it, and deletes nothing:
+  - registered in git, not locked: `git -C '<checkout>' worktree remove '<dir>'`;
+  - registered and locked by a pid that is gone, or with no pid: `git -C '<checkout>' worktree
+    unlock '<dir>' && git -C '<checkout>' worktree remove '<dir>'`;
+  - not registered in git and holding no `.git` link (orphaned): `rm -rf '<dir>'`; a directory
+    that still holds a `.git` link is never offered `rm -rf`, but a `worktree repair` first.
 
-- registered in git, not locked: `git -C '<checkout>' worktree remove '<dir>'`;
-- registered and locked by a pid that is gone, or with no pid: `git -C '<checkout>' worktree
-  unlock '<dir>' && git -C '<checkout>' worktree remove '<dir>'`;
-- not registered in git (orphaned): `rm -rf '<dir>'`.
+A directory under `<NIGHTQUEUE_HOME>/worktrees/` named after an id no registered project with a
+checkout has (a project removed with `--purge` leaves it) is one `warn` row
+`worktrees <id>` `project not registered`, with `inspect '<dir>'`.
 
-A directory a live session holds locked, and the worktree of an open job (its cleanup is
-`nightqueue queue close`, or `nightqueue queue cancel` for a `done` or `failed` job), are not reported. When the queue cannot be read, one `worktrees`
-row says the owner is unknown and nothing is listed; when git cannot list the worktrees of a
-checkout, one `worktrees <project>` row says so. The owners are read through a read-only store.
+The operator's QA worktrees live at `<NIGHTQUEUE_HOME>/operator-qa/<project_id>/<slug>`, apart
+from every job's. No job ever owns one, so each directory there is a leftover row
+`operator-qa <project>/<dir>` with the same cleanup commands as above (never `rm -rf` for a
+directory that still holds a `.git` link), and an id no registered project has is one `warn`
+row `operator-qa <id>` `project not registered`.
+
+A directory a live session holds locked, and the worktree of an open job under the home (its
+cleanup is `nightqueue queue close`, or `nightqueue queue cancel` for a `done` or `failed` job),
+are not reported. When the queue cannot be read, one `worktrees` row says the owner is unknown
+and nothing is listed; when git cannot list the worktrees of a checkout, one
+`worktrees <project>` row says so. The owners are read through a read-only store.
 
 One more `warn` row, `decision proposals`, names every decision a queue job proposed and nobody
 settled before its job was closed, by number and job - settle it with `decision_update`
@@ -646,7 +668,9 @@ nightqueue open --resume <session>       # resume an operator (or job) session
 `nightqueue open [project] [--resume <session>]` starts an interactive `claude` with the
 `nightqueue:nightqueue-operator` agent as the main thread (`--append-system-prompt` with the
 agent's body when `claude --help` does not list `--agent`; `nightqueue doctor` reports which),
-the job settings, `--setting-sources project,local`, the plugin and the nightqueue MCP server,
+the job settings, `--setting-sources project,local` (the operator's interactive session keeps
+the `local` source; a queued job's child gets `--setting-sources project` only), the plugin and
+the nightqueue MCP server,
 and `NIGHTQUEUE_MODE=operator`, which puts the guard hook in operator mode: reads only under
 the runs, plugin and spill roots, and a closed read-only Bash list. `git worktree prune` runs
 first. The cwd is the registered checkout, or with `--resume` the current directory when it

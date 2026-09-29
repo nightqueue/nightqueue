@@ -10,6 +10,7 @@ import { withReadOnlyStore } from "../../src/store/open.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { noticeText, resultEvent, SLUG, slugEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const REASON = "The bug is already fixed on main; there was nothing to change.";
 const NO_PR = toNdjson([systemInitEvent(), slugEvent(SLUG), resultEvent({ text: noticeText(REASON) })]);
@@ -39,7 +40,7 @@ test("a clean run with no pull request whose own telemetry says no_commit ends c
   const { env, id } = noPrHome(t, "runner-no-commit");
   recordRun(env, "no_commit", "+1 hour");
 
-  const cycle = await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit() } });
+  const cycle = await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
 
   assert.deepEqual(cycle.processed, [{ id, status: "cancelled", prUrl: null, attempts: 1 }]);
   const row = getJob(id, env);
@@ -59,7 +60,7 @@ test("only a no_commit row of THIS attempt cancels: an older one, local_commit a
   for (const [label, seed] of cases) {
     const { env, id } = noPrHome(t, `runner-no-commit-${label}`);
     seed(env);
-    const cycle = await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit() } });
+    const cycle = await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
     assert.equal(cycle.processed[0].status, "failed", label);
     assert.equal(String(getJob(id, env).notice_md).includes(NOTHING_TO_CLOSE_LINE), false, `${label}: the nothing-to-close line was written`);
   }
@@ -70,7 +71,7 @@ test("a no_commit run is never retried, even when its log carries a transient er
   const { env, id } = noPrHome(t, "runner-no-commit-transient", [{ stdout: overloaded, exitCode: 0 }, { stdout: overloaded, exitCode: 0 }], { maxAttempts: 2 });
   recordRun(env, "no_commit", "+1 hour");
 
-  const cycle = await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit(), sleepImpl: async () => {} } });
+  const cycle = await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: async () => {} } });
 
   assert.deepEqual(cycle.processed, [{ id, status: "cancelled", prUrl: null, attempts: 1 }]);
 });

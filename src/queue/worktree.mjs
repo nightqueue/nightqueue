@@ -14,19 +14,48 @@ const LOCK_PID_RE = /\(pid (\d+)\b/;
 const WORKTREE_FIELD = "worktree ";
 const BRANCH_FIELD = "branch ";
 const LOCKED_FIELD = "locked";
+const PRUNABLE_FIELD = "prunable";
 
-// Parses `git worktree list --porcelain` (with or without `-z`) into one `{ path, branch, locked }` per worktree, the main one first.
+// The reason of a flag line such as `locked <reason>` or `prunable <reason>`, "" for a bare flag, or null when the line is another field.
+function flagValue(line, field) {
+  if (line === field) return "";
+  return line.startsWith(`${field} `) ? line.slice(field.length + 1) : null;
+}
+
+// Parses `git worktree list --porcelain` (with or without `-z`) into one `{ path, branch, locked, prunable }` per worktree, the main one first.
 export function parseWorktreeList(porcelain) {
   const text = String(porcelain ?? "");
   const entries = [];
   for (const line of text.split(text.includes("\0") ? "\0" : "\n")) {
-    if (line.startsWith(WORKTREE_FIELD)) entries.push({ path: line.slice(WORKTREE_FIELD.length), branch: null, locked: null });
+    if (line.startsWith(WORKTREE_FIELD)) entries.push({ path: line.slice(WORKTREE_FIELD.length), branch: null, locked: null, prunable: null });
     const current = entries.at(-1);
     if (!current) continue;
     if (line.startsWith(BRANCH_FIELD)) current.branch = line.slice(BRANCH_FIELD.length);
-    if (line === LOCKED_FIELD || line.startsWith(`${LOCKED_FIELD} `)) current.locked = line.slice(LOCKED_FIELD.length + 1);
+    current.locked = flagValue(line, LOCKED_FIELD) ?? current.locked;
+    current.prunable = flagValue(line, PRUNABLE_FIELD) ?? current.prunable;
   }
   return entries;
+}
+
+// The worktrees the given jobs name in the state of their run, canonical and mapped to `{ jobId, branch }`.
+export function jobWorktreeOwners(jobs, env = process.env) {
+  const owners = new Map();
+  for (const job of Array.isArray(jobs) ? jobs : []) {
+    const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
+    const path = typeof state?.worktree === "string" ? state.worktree.trim() : "";
+    const branch = typeof state?.branch === "string" ? state.branch.trim() : "";
+    if (path) owners.set(canonicalPath(path), { jobId: job.id, branch: branch || null });
+  }
+  return owners;
+}
+
+// The worktrees the jobs that are not closed name; an empty map when the queue cannot be read, so a failure never exempts anything.
+export async function openJobWorktrees({ store, env = process.env } = {}) {
+  try {
+    return jobWorktreeOwners(await store.jobs.listOpenJobs(), env);
+  } catch {
+    return new Map();
+  }
 }
 
 // The pid a lock reason names as its owner, or null when the reason names none.

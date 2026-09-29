@@ -341,6 +341,20 @@ test("Phase 7 is the two `nightqueue run` calls the CLI really offers, and no gi
   assert.equal(phase.includes("--remove-worktree"), false, "the command is told to remove the worktree the session is inside");
 });
 
+test("step 4 splits the worktree: a queued job runs in the one the runtime created, an interactive /resolve still enters its own", () => {
+  const start = SKILL.indexOf("4. **The exclusive worktree**");
+  const end = SKILL.indexOf("5. **Create the tasks**", start);
+  assert.ok(start >= 0 && end > start, "the skill no longer documents the worktree in step 4");
+  const step = SKILL.slice(start, end);
+  assert.ok(step.includes("the runtime created your worktree"), "a queued job is no longer told the runtime placed its worktree");
+  assert.ok(step.includes("never create another"), "a queued job may create a second worktree");
+  assert.ok(step.includes("never `run_set` those two fields"), "a queued job may overwrite the worktree the runtime recorded");
+  const job = step.slice(step.indexOf("Inside a queued job"), step.indexOf("Interactive `/resolve`"));
+  assert.ok(job.includes("never call\n     `EnterWorktree`/`ExitWorktree`") || job.includes("never call `EnterWorktree`/`ExitWorktree`"), job);
+  const interactive = step.slice(step.indexOf("Interactive `/resolve`"));
+  assert.ok(interactive.includes("call `EnterWorktree` with `name: \"<type>/<slug>\"`"), "an interactive /resolve no longer enters its own worktree");
+});
+
 // The text of step 5.2, from its heading to the artifact map below it.
 function handoffStep() {
   const start = SKILL.indexOf("5.2. **File handoff");

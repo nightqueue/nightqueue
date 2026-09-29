@@ -10,6 +10,7 @@ import { extractRateLimitFromEventLine } from "../../src/queue/stream.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, PR_URL, rateLimitEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 // A git double for the preflight: a clean checkout of the default branch.
 function fakeGit() {
@@ -43,7 +44,7 @@ test("a registry write that fails leaves the child's own protection reading no p
 
   // The production path, seam included: `runAttempts` builds the child's pause signal itself.
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
-  const cycle = await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit(), idleTimeoutS, stopPollMs: 500 } });
+  const cycle = await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), idleTimeoutS, stopPollMs: 500 } });
 
   assert.equal(readOwnPause(env), null, "the durable record shows a pause after the write meant to persist it failed");
   assert.deepEqual(

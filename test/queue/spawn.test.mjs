@@ -66,7 +66,7 @@ test("by default the child is fenced off from the operator's own MCP servers, pl
   const args = buildArgs({ prompt: "do the work", env });
 
   assert.equal(args.includes("--strict-mcp-config"), true);
-  assert.equal(argValue(args, "--setting-sources"), "project,local");
+  assert.equal(argValue(args, "--setting-sources"), "project");
 
   const settings = JSON.parse(argValue(args, "--settings"));
   const expected = {};
@@ -93,7 +93,7 @@ test("the resume path carries the isolation flags too, with --resume always last
   const args = buildArgs({ prompt: "p", env, resumeSessionId: SESSION_ID });
 
   assert.equal(args.includes("--strict-mcp-config"), true);
-  assert.equal(argValue(args, "--setting-sources"), "project,local");
+  assert.equal(argValue(args, "--setting-sources"), "project");
   assert.ok(argValue(args, "--settings"), "the resume path dropped the --settings payload");
   assert.deepEqual(args.slice(-2), ["--resume", SESSION_ID]);
 });

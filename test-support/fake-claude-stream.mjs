@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { sep } from "node:path";
 
 const PLAN_PATH = String(process.env.NIGHTQUEUE_FAKE_PLAN ?? "");
 const COUNTER_PATH = `${PLAN_PATH}.attempt`;
@@ -26,7 +29,28 @@ function nextAttempt(total) {
 function recordCall(plan) {
   const call = { pid: process.pid, argv: process.argv.slice(2), jobId: process.env.NIGHTQUEUE_JOB_ID ?? null, cwd: process.cwd() };
   if (typeof plan.probePath === "string") call.probeExisted = existsSync(plan.probePath);
+  if (typeof plan.probeStatusOf === "string") call.probedStatus = gitOut(plan.probeStatusOf, ["status", "--porcelain"]);
   appendFileSync(CALLS_PATH, `${JSON.stringify(call)}\n`);
+}
+
+// Runs git in a directory with an identity of its own, answering its output.
+function gitOut(cwd, args) {
+  const identity = ["-c", "user.name=fake", "-c", "user.email=fake@example.invalid", "-c", "commit.gpgsign=false"];
+  return execFileSync("git", [...identity, ...args], { cwd, encoding: "utf8" });
+}
+
+// Refuses to commit anywhere outside the system temp dir, so a fake never commits into the enclosing repository.
+function assertInTempDir(cwd) {
+  const root = realpathSync(tmpdir());
+  if (!realpathSync(cwd).startsWith(root + sep)) throw new Error(`refusing to commit outside ${root}: cwd is ${cwd}`);
+}
+
+// Writes one file in the working directory and commits it, the way a run leaves its work on its branch.
+function commitFile(name) {
+  assertInTempDir(process.cwd());
+  writeFileSync(name, `work of ${process.pid}\n`);
+  gitOut(process.cwd(), ["add", name]);
+  gitOut(process.cwd(), ["commit", "-q", "-m", `feat: add ${name}`]);
 }
 
 // Waits the given number of milliseconds.
@@ -36,6 +60,7 @@ function sleep(ms) {
 
 // Plays one attempt: the first slice of the stream, a silent hold and then the rest.
 async function play(step) {
+  if (typeof step.commitFile === "string") commitFile(step.commitFile);
   if (step.stdout) process.stdout.write(step.stdout);
   if (step.stderr) process.stderr.write(step.stderr);
   if (step.holdMs) await sleep(step.holdMs);

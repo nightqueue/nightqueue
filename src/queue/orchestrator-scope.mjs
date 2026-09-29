@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { homeDir } from "../config/paths.mjs";
+import { ID_RE } from "../config/ids.mjs";
+import { homeDir, operatorQaDir } from "../config/paths.mjs";
 import { claudeConfigDir, claudePluginsDir, hostPackageRoot, packageRoot } from "../host/paths.mjs";
 
 export const PLUGIN_DIR_ENV = "NIGHTQUEUE_PLUGIN_DIR";
@@ -34,10 +35,37 @@ export const ORCHESTRATOR_BASH_RULES = Object.freeze(
   ].map(freezeRule),
 );
 
-// A QA worktree of the operator: a relative path of one segment under `.claude/worktrees/operator-qa-`, so `..`, `~` and an absolute path never match.
-const OPERATOR_QA_WORKTREE = /^\.claude\/worktrees\/operator-qa-[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+const QA_WORKTREE_LEAF = "[A-Za-z0-9][A-Za-z0-9._-]{0,79}";
+const PROJECT_ID_SEGMENT = ID_RE.source.slice(1, -1);
 const COMMIT_ISH = /^[A-Za-z0-9][A-Za-z0-9._/~^-]{0,199}$/;
-const QA_WORKTREE_SHOWN = ".claude/worktrees/operator-qa-<slug>";
+
+// Escapes every character a regular expression reads as syntax, so a path is matched literally.
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// The operator's QA directory of the home the environment names, or null when no home can be resolved.
+function operatorQaRoot(env) {
+  try {
+    return resolve(operatorQaDir(env));
+  } catch {
+    return null;
+  }
+}
+
+// A QA worktree of the operator: the absolute `<home>/operator-qa/<project id>/<slug>` of the caller's home, never a job's worktree, so `..`, `~`, a relative path or another home never match.
+const OPERATOR_QA_WORKTREE = Object.freeze({
+  test(value, env = process.env) {
+    const root = operatorQaRoot(env);
+    if (root === null || typeof value !== "string") return false;
+    return new RegExp(`^${escapeRegExp(root)}/${PROJECT_ID_SEGMENT}/${QA_WORKTREE_LEAF}$`).test(value);
+  },
+});
+
+// The QA worktree path as a refusal shows it, with the caller's home resolved.
+function qaWorktreeShown(env) {
+  return `${operatorQaRoot(env) ?? "<NIGHTQUEUE_HOME>/operator-qa"}/<project_id>/<slug>`;
+}
 
 // The closed list of commands the operator of `nightqueue open` may run: read-only git, its own QA worktree, and nothing that commits, pushes or fetches.
 export const OPERATOR_BASH_RULES = Object.freeze(
@@ -56,14 +84,14 @@ export const OPERATOR_BASH_RULES = Object.freeze(
       flags: ["--detach", "-q", "--quiet"],
       positionals: [OPERATOR_QA_WORKTREE, COMMIT_ISH],
       minPositionals: 2,
-      describe: `git worktree add ${QA_WORKTREE_SHOWN} <commit-ish>`,
+      describe: (env) => `git worktree add ${qaWorktreeShown(env)} <commit-ish>`,
     },
     {
       argv: ["git", "worktree", "remove"],
       flags: ["--force", "-f"],
       positionals: [OPERATOR_QA_WORKTREE],
       minPositionals: 1,
-      describe: `git worktree remove [--force] ${QA_WORKTREE_SHOWN}`,
+      describe: (env) => `git worktree remove [--force] ${qaWorktreeShown(env)}`,
     },
     { argv: ["git", "worktree", "list"], flags: ["--porcelain", "-v", "--verbose"], positionals: [] },
     { argv: ["git", "worktree", "prune"], flags: ["-n", "--dry-run", "-v", "--verbose"], positionals: [] },
@@ -109,21 +137,21 @@ function onlyListedFlags(flags, rest) {
 }
 
 // Tells whether the non-flag arguments are between the minimum and the pattern count, each matching the pattern of its position.
-function positionalsMatch({ positionals, minPositionals = 0 }, rest) {
+function positionalsMatch({ positionals, minPositionals = 0 }, rest, env) {
   const values = rest.filter((token) => !token.startsWith("-"));
   if (values.length < minPositionals || values.length > positionals.length) return false;
-  return values.every((value, index) => positionals[index].test(value));
+  return values.every((value, index) => positionals[index].test(value, env));
 }
 
 // Tells whether the arguments after the subcommand satisfy the constraints of one rule.
-function ruleAccepts(rule, rest) {
+function ruleAccepts(rule, rest, env) {
   if (rule.anyOf && !rest.some((token) => rule.anyOf.some((flag) => isFlag(token, flag)))) return false;
   if (rule.noneOf && rest.some((token) => rule.noneOf.some((flag) => isDeniedFlag(token, flag)))) return false;
   if (rule.noPrefix && rest.some((token) => rule.noPrefix.some((prefix) => token.startsWith(prefix)))) return false;
   if (rule.next && !rule.next.includes(rest[0])) return false;
   if (rule.exact && !matchesExactly(rule.exact, rest)) return false;
   if (rule.flags && !onlyListedFlags(rule.flags, rest)) return false;
-  if (rule.positionals && !positionalsMatch(rule, rest)) return false;
+  if (rule.positionals && !positionalsMatch(rule, rest, env)) return false;
   return true;
 }
 
@@ -134,11 +162,11 @@ function matchingRule(rules, tokens) {
 }
 
 // Tells whether a Bash command is one row of a closed list: no shell operator, the bare program name, the row's own constraints.
-function bashAllowed(rules, command) {
+function bashAllowed(rules, command, env) {
   if (typeof command !== "string" || FORBIDDEN_SHELL_CHARS.test(command)) return false;
   const tokens = tokenize(command.trim());
   const rule = matchingRule(rules, tokens);
-  return rule ? ruleAccepts(rule, tokens.slice(rule.argv.length)) : false;
+  return rule ? ruleAccepts(rule, tokens.slice(rule.argv.length), env) : false;
 }
 
 // Tells whether a Bash command is one of the closed list the orchestrator of a queued job may run.
@@ -147,12 +175,13 @@ export function orchestratorBashAllowed(command) {
 }
 
 // Tells whether a Bash command is one of the closed list the operator of `nightqueue open` may run.
-export function operatorBashAllowed(command) {
-  return bashAllowed(OPERATOR_BASH_RULES, command);
+export function operatorBashAllowed(command, env = process.env) {
+  return bashAllowed(OPERATOR_BASH_RULES, command, env);
 }
 
 // Human rendering of one rule: the program and subcommand, what must follow, and what never may.
-function describeRule({ argv, anyOf, noneOf, noPrefix, next, describe }) {
+function describeRule({ argv, anyOf, noneOf, noPrefix, next, describe }, env) {
+  if (typeof describe === "function") return describe(env);
   if (describe) return describe;
   const allowed = next ?? anyOf;
   const never = [...(noneOf ?? []), ...(noPrefix ?? []).map((prefix) => `a ${prefix}refspec`)];
@@ -162,12 +191,12 @@ function describeRule({ argv, anyOf, noneOf, noPrefix, next, describe }) {
 
 // Human rendering of the closed list, one entry per rule, for a deny reason or a document.
 export function describeOrchestratorBashRules() {
-  return ORCHESTRATOR_BASH_RULES.map(describeRule).join(", ");
+  return ORCHESTRATOR_BASH_RULES.map((rule) => describeRule(rule, process.env)).join(", ");
 }
 
 // Human rendering of the operator's closed list, one entry per rule, for a deny reason.
-export function describeOperatorBashRules() {
-  return OPERATOR_BASH_RULES.map(describeRule).join(", ");
+export function describeOperatorBashRules(env = process.env) {
+  return OPERATOR_BASH_RULES.map((rule) => describeRule(rule, env)).join(", ");
 }
 
 // Real path of a path, or of its nearest existing ancestor with the missing rest appended, so a symlink never hides where a path really points.

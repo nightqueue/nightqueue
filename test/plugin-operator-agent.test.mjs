@@ -28,13 +28,16 @@ test("the operator's tools carry no Edit nor Write: it coordinates and never edi
   for (const writer of ["Edit", "Write", "NotebookEdit", "MultiEdit"]) assert.equal(tools.includes(writer), false, writer);
 });
 
-test("the operator's text names only commands its guard allows: no fetch, no run commit, the QA worktree by its relative path", () => {
+test("the operator's text names only commands its guard allows: no fetch, no run commit, the QA worktree by its absolute path under the home", () => {
   assert.equal(OPERATOR.includes("git fetch"), false);
   assert.equal(OPERATOR.includes("nightqueue run commit"), false);
   assert.equal(OPERATOR.includes("nightqueue run pr"), false);
-  for (const named of ["gh issue list|view", "adb devices", "gh pr list|view|status|checks", "git log --oneline -n <N>", ".claude/worktrees/operator-qa-<slug>"]) {
+  for (const named of ["gh issue list|view", "adb devices", "gh pr list|view|status|checks", "git log --oneline -n <N>", "<home>/operator-qa/<project_id>/<slug>"]) {
     assert.ok(OPERATOR.includes(named), `operator.md does not name ${named}`);
   }
+  assert.equal(/worktree (add|remove)[^`]*\.claude\/worktrees/.test(OPERATOR), false, "operator.md still adds or removes a QA worktree under .claude/worktrees");
+  assert.equal(/worktree (add|remove)[^`]*<home>\/worktrees/.test(OPERATOR), false, "operator.md still adds or removes a QA worktree among the jobs' worktrees");
+  assert.equal(OPERATOR.includes("operator-qa-<slug>"), false, "operator.md still names the old QA worktree leaf");
   assert.ok(OPERATOR_BASH_RULES.some(({ argv }) => argv.join(" ") === "adb devices"));
 });
 

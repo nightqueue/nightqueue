@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -11,6 +11,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
+import { initGitRepo } from "../../test-support/git.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome, projectPathOf, seedClosedJob } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
@@ -23,10 +24,9 @@ function runCli(env, args, { cwd } = {}) {
   return spawnSync(process.execPath, [CLI, ...args], { env, cwd, encoding: "utf8" });
 }
 
-// Registers a real (and empty) git repository as a project of the home.
+// Registers a real git repository with one commit as a project of the home, the checkout a job's worktree is branched from.
 function makeGitProject(t, env, name) {
-  const path = makeDir(t, `repo-${name}`);
-  execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q", path]);
+  const path = initGitRepo(makeDir(t, `repo-${name}`));
   registerCheckout(env, { path, name });
   return path;
 }
@@ -726,7 +726,9 @@ test("queue status of a gated job spells the reason out and says how to answer i
 
   const json = runCli(env, ["queue", "status", "1", "--json"]);
   assert.equal(json.status, 0, json.stderr);
-  assert.equal(JSON.parse(json.stdout).job.notice_md, GATE_NOTICE);
+  const noticeMd = JSON.parse(json.stdout).job.notice_md;
+  assert.ok(noticeMd.startsWith(`${GATE_NOTICE}\n\nWorktree kept: `), noticeMd);
+  assert.match(noticeMd, /\/worktrees\/[0-9A-Z]{26}\/fix-the-worker - its branch was never pushed\.$/, "the kept worktree is the one the runtime placed under the home");
 });
 
 test("queue status of one job also shows the run's own notice, whole, whenever it differs from the row's", (t) => {

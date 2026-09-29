@@ -49,7 +49,7 @@ test("stop-and-cancel of the job of a drain runner leaves the next pending job p
   const exited = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
   const owner = `${hostname()}:${child.pid}`;
   await waitFor(
-    () => getJob(first, env)?.status === "running" && getJob(first, env)?.worker === owner && findRunnerRecord(child.pid, env)?.status === "alive",
+    () => getJob(first, env)?.status === "running" && getJob(first, env)?.worker === owner && findRunnerRecord(child.pid, env)?.status === "alive" && fakeCalls(planPath).length === 1,
     "J running under the drain runner",
     15000,
   );
