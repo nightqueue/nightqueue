@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   LEGACY_RUNTIME_PACKAGE_TRAIL,
+  LEGACY_SHIM_NAME,
   PACKAGE_NAME,
   RUNTIME_PACKAGE_TRAIL,
   SHIM_NAME,
@@ -128,15 +129,15 @@ export function isOwnShim(path) {
   return SHIM_SHAPE.test(contentAt(path));
 }
 
-export function legacyShimState(env = process.env) {
-  const path = legacyShimPath(env);
+export function legacyShimState(env = process.env, name = LEGACY_SHIM_NAME) {
+  const path = legacyShimPath(env, name);
   if (!existsSync(path)) return { path, present: false, own: false };
   return { path, present: true, own: SHIM_SHAPE.test(contentAt(path)) };
 }
 
 // Deletes the shim of the previous command name, and only when its shape proves this package wrote it.
-export function removeLegacyShim(env = process.env) {
-  const state = legacyShimState(env);
+export function removeLegacyShim(env = process.env, name = LEGACY_SHIM_NAME) {
+  const state = legacyShimState(env, name);
   if (!state.present) return { path: state.path, status: "not present" };
   if (!state.own) return { path: state.path, status: "kept" };
   rmSync(state.path, { force: true });

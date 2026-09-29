@@ -161,6 +161,32 @@ test("a file of another tool under the previous command name is kept, never dele
   assert.ok(out.includes(`legacy shim: kept (${host.legacyShim} was not written by nightqueue)`), out.join("\n"));
 });
 
+// Writes a shim under one of the command names before the rename, pointing into the old nightshift runtime.
+function writeOldNameShim(host, name, content = null) {
+  const path = join(host.binDir, name);
+  const entry = join(host.home, "..", ".nightshift", "runtime", "current", "node_modules", "@maykonv", "nightshift", "bin", "nightshift.mjs");
+  mkdirSync(host.binDir, { recursive: true });
+  writeFileSync(path, content ?? `#!/bin/sh\nexec node "${entry}" "$@"\n`, { mode: 0o755 });
+  return path;
+}
+
+test("setup and update remove the shims of the nightshift command names it wrote, and keep a foreign file of the same name", async (t) => {
+  const host = makeHostEnv(t, "install-old-name-shims");
+  const foreign = "#!/bin/sh\necho other-tool\n";
+  const paths = ["nightshift", "nsft"].map((name) => writeOldNameShim(host, name));
+  const kept = writeOldNameShim(host, "nshift", foreign);
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["setup", "--no-path", "--no-embedding"], ctx), 0);
+  for (const path of paths) assert.equal(existsSync(path), false, `setup kept ${path}`);
+  assert.equal(readFileSync(kept, "utf8"), foreign);
+  assert.ok(out.includes(`legacy shim nshift: kept (${kept} was not written by nightqueue)`), out.join("\n"));
+
+  const again = writeOldNameShim(host, "nightshift");
+  assert.equal(await run(["update"], makeCtx(host.env).ctx), 0);
+  assert.equal(existsSync(again), false, "update kept the old nightshift shim");
+});
+
 test("the PATH step asks on a terminal, writes one marked line and never asks again once the directory is there", async (t) => {
   const host = makeHostEnv(t, "install-path-tty");
   writeFileSync(host.rcPath, `${THIRD_PARTY}\n`);

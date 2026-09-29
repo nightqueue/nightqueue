@@ -202,6 +202,18 @@ test("a shim left over from the previous command name warns, with a hint that de
   assert.equal(foreign.code, 0);
 });
 
+test("a shim of a nightshift command name warns, and setup is what removes it", async (t) => {
+  const host = makeHostEnv(t, "doctor-old-name-shim");
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+  const path = join(host.binDir, "nsft");
+  writeFileSync(path, `#!/bin/sh\nexec node "${join(host.home, "..", ".nightshift", "runtime", "current", "node_modules", "@maykonv", "nightshift", "bin", "nightshift.mjs")}" "$@"\n`, { mode: 0o755 });
+
+  const report = (await diagnose(host.env)).report;
+  const line = report.checks.find((entry) => entry.name === "legacy shim nsft");
+  assert.equal(line.status, "warn");
+  assert.match(line.hint, /nightqueue setup/);
+});
+
 test("a home that never went through setup fails and exits 1", async (t) => {
   const host = makeHostEnv(t, "doctor-virgin");
   const { code, report } = await diagnose(host.env, { spawnSyncImpl: withFakeGh(false) });

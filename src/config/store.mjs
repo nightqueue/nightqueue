@@ -1,10 +1,21 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { UserError } from "./errors.mjs";
 import { configPath, homeDir, secretsPath } from "./paths.mjs";
 import { emptyConfig, emptySecrets, normalizeConfig, normalizeSecrets } from "./schema.mjs";
 
 const SECRETS_MODE = 0o600;
 const HOME_MODE = 0o700;
+
+// Deletes files by name from the home, answering the first failure's message or null.
+export function removeHomeFiles(env, names) {
+  try {
+    for (const name of names) rmSync(join(homeDir(env), name), { force: true });
+    return null;
+  } catch (err) {
+    return err?.message ?? String(err);
+  }
+}
 
 // Writes a file atomically, through a sibling temporary file plus rename.
 export function writeFileAtomic(filePath, content, { mode } = {}) {

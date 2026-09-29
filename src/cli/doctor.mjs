@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import {
+  LEGACY_SHIM_NAME,
+  LEGACY_SHIM_NAMES,
   SHIM_NAME,
   binDir,
   configPath,
@@ -8,13 +10,14 @@ import {
   dbShmPath,
   embeddingDir,
   homeDir,
+  legacyHomeDir,
   operatorQaDir,
   queuePausedPath,
   secretsPath,
   shimNames,
   worktreesDir,
 } from "../config/paths.mjs";
-import { loadConfig, loadRawConfig } from "../config/store.mjs";
+import { loadConfig, loadRawConfig, removeHomeFiles } from "../config/store.mjs";
 import { claudeBin } from "../host/claude.mjs";
 import { DESKTOP_LABEL, desktopState } from "../host/desktop.mjs";
 import { MCP_SERVER_NAME, readRegisteredServer, serverIsCurrent } from "../host/mcp.mjs";
@@ -240,12 +243,25 @@ function checkShims(ctx) {
   return shimNames().map((name) => checkShim(ctx, name));
 }
 
-// Warns about the shim of the previous command name, which a current installation no longer writes.
-function checkLegacyShim(ctx) {
-  const state = legacyShimState(ctx.env);
+// Warns about the shim of one previous command name, which a current installation no longer writes.
+function checkOneLegacyShim(ctx, name) {
+  const state = legacyShimState(ctx.env, name);
   if (!state.present) return [];
-  const hint = state.own ? "run `nightqueue setup` to remove it" : `remove ${state.path} by hand`;
-  return [check("legacy shim", "warn", `${state.path} is left over from the \`shift\` command`, hint)];
+  const hint = state.own ? "run `nightqueue setup` or `nightqueue update` to remove it" : `remove ${state.path} by hand`;
+  const label = name === LEGACY_SHIM_NAME ? "legacy shim" : `legacy shim ${name}`;
+  return [check(label, "warn", `${state.path} is left over from the \`${name}\` command`, hint)];
+}
+
+// Warns about every shim of a previous command name still in the shim directory.
+function checkLegacyShim(ctx) {
+  return [LEGACY_SHIM_NAME, ...LEGACY_SHIM_NAMES].flatMap((name) => checkOneLegacyShim(ctx, name));
+}
+
+// Names the `~/.nightshift` directory of the command before the rename as removable; nothing here ever deletes it.
+function checkLegacyHome(ctx) {
+  const path = legacyHomeDir(ctx.env);
+  if (!isDirectory(path)) return [];
+  return [check("legacy home", "warn", `${path} is left over from the \`nightshift\` command and nothing reads it`, `remove it with: rm -rf ${shellQuote(path)}`)];
 }
 
 // Checks whether the shim directory is on the PATH, which is what makes `nightqueue` resolve at all.
@@ -424,17 +440,79 @@ function checkShmWitness(ctx, name) {
   return checks.find((entry) => entry.status !== "ok") ?? checks[0];
 }
 
-// Checks the shared-memory file of the database: the hidden orphans a filesystem left beside it, and whether a live runner is still attached to the one on disk.
-function checkDbShm(ctx) {
+// Why the orphans must stay: a live runner may still hold them, and an unreadable registry could hide one; null when no runner can be attached.
+function orphanHolder(ctx) {
+  const records = listRunnerRecords(ctx.env, ctx.killImpl);
+  const registryError = registryReadError(records);
+  if (registryError !== null) return `the runner registry cannot be listed (${registryError})`;
+  const live = records.filter((record) => record.status === "alive");
+  return live.length ? `a live runner is registered (${live.map((record) => `pid ${record.info.pid}`).join(", ")})` : null;
+}
+
+// The `db shm` row for orphans found: a warning, or what `--fix` made of them once no live runner can hold them.
+function orphanCheck(ctx, name, orphans, fix) {
+  const detail = `${orphans.length} hidden orphan file(s) beside the database (${orphans.slice(0, 3).join(", ")})`;
+  if (!fix) return check(name, "warn", detail, `${SHM_HINT}; with no runner alive, \`nightqueue doctor --fix\` removes them`);
+  const holder = orphanHolder(ctx);
+  if (holder !== null) return check(name, "warn", `${detail}; not removed: ${holder}`, SHM_HINT);
+  const failure = removeHomeFiles(ctx.env, orphans);
+  if (failure !== null) return check(name, "warn", `${detail}; could not remove them (${failure})`, `remove them by hand from ${homeDir(ctx.env)}`);
+  return check(name, "ok", `removed ${orphans.length} hidden orphan file(s) beside the database`);
+}
+
+// Checks the shared-memory file of the database: the hidden orphans a filesystem left beside it (removed with `--fix` when no runner is alive), and whether a live runner is still attached to the one on disk.
+function checkDbShm(ctx, fix) {
   const name = "db shm";
   if (!existsSync(dbPath(ctx.env))) return check(name, "ok", "no database yet");
   const orphans = orphanArtifacts(ctx.env);
   if (orphans.error) return check(name, "warn", `unknown: ${homeDir(ctx.env)} cannot be listed (${orphans.error})`, `read the permissions of ${homeDir(ctx.env)}`);
-  if (orphans.names.length) {
-    const detail = `${orphans.names.length} hidden orphan file(s) beside the database (${orphans.names.slice(0, 3).join(", ")})`;
-    return check(name, "warn", detail, SHM_HINT);
-  }
+  if (orphans.names.length) return orphanCheck(ctx, name, orphans.names, fix);
   return checkShmWitness(ctx, name);
+}
+
+const QUARANTINE_PREFIX = "_broken-";
+const QUARANTINE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Total bytes of the files under a path, unreadable entries counting zero.
+function treeBytes(path) {
+  try {
+    const stats = statSync(path);
+    if (!stats.isDirectory()) return stats.size;
+    return readdirSync(path).reduce((total, entry) => total + treeBytes(join(path, entry)), 0);
+  } catch {
+    return 0;
+  }
+}
+
+// A byte count as `12 B`, `3.4 KB`, `5.6 MB` or `1.2 GB`.
+function humanBytes(bytes) {
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return unit === 0 ? `${value} B` : `${value.toFixed(1)} ${units[unit]}`;
+}
+
+// Quarantine directories of the home last written more than 30 days ago, or none when the home cannot be listed.
+function oldQuarantines(ctx) {
+  try {
+    return readdirSync(homeDir(ctx.env), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(QUARANTINE_PREFIX))
+      .map((entry) => join(homeDir(ctx.env), entry.name))
+      .filter((path) => Date.now() - statSync(path).mtimeMs > QUARANTINE_MAX_AGE_MS);
+  } catch {
+    return [];
+  }
+}
+
+// Names each `_broken-<stamp>` quarantine older than 30 days as removable, with its size; nothing here ever deletes it.
+function checkQuarantines(ctx) {
+  return oldQuarantines(ctx).map((path) =>
+    check(`quarantine ${basename(path)}`, "warn", `${humanBytes(treeBytes(path))} at ${path}, older than 30 days`, `remove it with: rm -rf ${shellQuote(path)}`),
+  );
 }
 
 // Runs `mount` for the home-mount check, falling back to the bare name when the absolute path is not on this host.
@@ -1002,6 +1080,7 @@ async function collect(ctx, values) {
     checkToolContract(),
     ...checkShims(ctx),
     ...checkLegacyShim(ctx),
+    ...checkLegacyHome(ctx),
     checkPath(ctx),
     checkMcp(ctx),
     checkDesktopMcp(ctx),
@@ -1010,7 +1089,8 @@ async function collect(ctx, values) {
     checkModel(ctx),
     ...checkEmbeddingPrefix(ctx),
     ...(await checkDatabaseAndRows(ctx)),
-    checkDbShm(ctx),
+    checkDbShm(ctx, values.fix === true),
+    ...checkQuarantines(ctx),
     checkHomeMount(ctx),
     ...(await checkQueue(ctx)),
     ...(await checkProjects(ctx)),
@@ -1030,7 +1110,7 @@ export function reportLine({ status, name, detail, hint }, width = 22) {
   return `${status.padEnd(6)}${name.padEnd(width)}${tail}`;
 }
 
-// Runs `nightqueue doctor`: reads the host and the home, writes nothing but `git worktree repair` with `--fix`, exits 1 on any failure.
+// Runs `nightqueue doctor`: reads the host and the home, writes nothing but `git worktree repair` and the removal of shm orphans with `--fix`, exits 1 on any failure.
 export async function run(argv, ctx) {
   const options = { json: { type: "boolean" }, "check-updates": { type: "boolean" }, fix: { type: "boolean" } };
   const { values, positionals } = parseCommand(argv, options);

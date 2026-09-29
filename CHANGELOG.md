@@ -8,6 +8,12 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The rename leftovers are cleaned or named.** `setup` and `update` remove the shims `nightshift`,
+  `nsft` and `nshift` from the shim directory when this package wrote them (a foreign file of the
+  same name is kept). `doctor` warns about a leftover one, names `~/.nightshift/` and every
+  `_broken-*` quarantine older than 30 days as removable (never deleting them), and
+  `doctor --fix` now also removes the `.fuse_hidden*` / `.nfs*` shm orphans when no live runner is
+  registered.
 - **`queue close` waits for pending checks at preflight.** Required checks still running no
   longer stop the close with `checks-pending` at once: preflight polls them like the wait after
   a `BEHIND` update (same backoff, same `waiting for checks on <sha>` line), out of the one
