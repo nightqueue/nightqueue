@@ -430,8 +430,7 @@ type (`bug`/`improvement`/`incident` → `simple`, `feature` → `complex`, `cho
 
 **Traceability is the runtime's, never the agent's.** `nightqueue run pr`
 publishes a copy of the body, `<RUN_DIR>/pr-body.published.md` (the agent's file
-untouched), ending in a footer read from the job row: `Refs <KEY>-<n>`, a blank
-line and `Opened by nightqueue · <KEY>-<n>` for a job queued from a roadmap item
+untouched), ending in a footer read from the job row: `Opened by nightqueue · <KEY>-<n>` for a job queued from a roadmap item
 (project or org), `Opened by nightqueue` alone for any other job and outside the
 queue. The ref is built from the owner's CURRENT key, so a job published after a
 `project key` carries the new one. A body that already carries an
@@ -454,7 +453,7 @@ An org item is queued per project (`project` names one project of the org, or
 `all`), each on its own `roadmap_item_projects` row linked to that project's
 job; the item itself carries no job. Each row follows its job exactly as above,
 its comments carry the row's `project`, and a job of a row publishes the
-footer of the org item's ref (`Refs DLW-<n>`). The org item's status is derived from its rows in the
+footer of the org item's ref (`Opened by nightqueue · DLW-<n>`). The org item's status is derived from its rows in the
 same transaction: `in_progress` while any row is, `done` once every row is
 `done` or `cancelled`, otherwise the lowest open status among them. Closing it by
 hand cancels every open row with a `closed` comment each. `nightqueue doctor`

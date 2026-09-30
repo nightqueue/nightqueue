@@ -26,8 +26,8 @@ function hashOf(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-test("the footer is `Refs <ref>` plus `Opened by nightqueue · <ref>` for an item, and the bare signature otherwise", () => {
-  assert.equal(footerOf("NQ-12"), "Refs NQ-12\n\nOpened by nightqueue · NQ-12");
+test("the footer is only `Opened by nightqueue · <ref>` for an item, and the bare signature otherwise", () => {
+  assert.equal(footerOf("NQ-12"), "Opened by nightqueue · NQ-12");
   assert.equal(footerOf(null), "Opened by nightqueue");
   assert.equal(footerOf(undefined), "Opened by nightqueue");
 });
@@ -44,7 +44,7 @@ test("a roadmap job publishes a copy ending with its item's footer, the same on 
   assert.equal(first, join(runDir, PUBLISHED_BODY_FILE));
   assert.equal(second, first);
   assert.equal(item.ref, "AP-1");
-  assert.equal(readFileSync(first, "utf8"), "## Report\n\nthe thing is done.\n\nRefs AP-1\n\nOpened by nightqueue · AP-1\n");
+  assert.equal(readFileSync(first, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue · AP-1\n");
   assert.equal(hashOf(bodyFile), before, "the agent's body file was edited");
 });
 
@@ -58,7 +58,7 @@ test("a job queued from an org item ends its body with the org item's ref", asyn
 
   for (const job of jobs) {
     const published = await publishedBodyFile({ bodyFile, runDir, jobId: job.id, resolveItemRef: () => itemRefOfJob(store, job.id) });
-    assert.ok(readFileSync(published, "utf8").endsWith(`\n\nRefs ${item.ref}\n\nOpened by nightqueue · ${item.ref}\n`));
+    assert.ok(readFileSync(published, "utf8").endsWith(`\n\nOpened by nightqueue · ${item.ref}\n`));
   }
 });
 

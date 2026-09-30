@@ -348,7 +348,7 @@ test("Phase 7 is the one `nightqueue run publish` call the CLI really offers, an
   assert.ok(phase.includes("the `prTemplate` `run start` answered"), "Phase 7 no longer reads the template the runtime found");
   assert.ok(phase.includes("never Read the repository's template file"), "Phase 7 may read the repository's template by hand");
   assert.ok(CLI_RUN.includes("prTemplate"), "`run start` no longer answers the template Phase 7 reads");
-  assert.ok(phase.includes("`MISSING: evidence for QA row <method>`"), "Phase 7 no longer reads the evidence refusal");
+  assert.ok(phase.includes("`MISSING: evidence for QA section <method>`"), "Phase 7 no longer reads the evidence refusal");
   assert.ok(phase.includes("`COMMITTED: <sha> (already committed)`"), "Phase 7 no longer reads the retry answer of the publication");
   for (const answer of ["CONVENTION:", "COMMITTED:", "REFUSED:", "REJECTED:", "MISSING:", "BRANCH:", "WORKTREE:"]) {
     assert.ok(phase.includes(answer), `Phase 7 never reads the \`${answer}\` line the command prints`);

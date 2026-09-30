@@ -22,6 +22,7 @@ test("a PR body whose prose merely starts like a trail line still gets exactly o
 
   const text = readFileSync(await publishedBodyFile({ bodyFile, runDir, jobId: job.id, resolveItemRef: () => itemRefOfJob(store, job.id) }), "utf8");
 
-  assert.deepEqual(text.split("\n").filter((line) => line === `Refs ${item.ref}`), [`Refs ${item.ref}`], JSON.stringify(text));
-  assert.ok(text.endsWith(`\n\nRefs ${item.ref}\n\nOpened by nightqueue · ${item.ref}\n`), JSON.stringify(text));
+  assert.deepEqual(text.split("\n").filter((line) => line.startsWith("Opened by nightqueue")), [`Opened by nightqueue · ${item.ref}`], JSON.stringify(text));
+  assert.equal(text.split("\n").some((line) => line === `Refs ${item.ref}`), false, JSON.stringify(text));
+  assert.ok(text.endsWith(`\n\nOpened by nightqueue · ${item.ref}\n`), JSON.stringify(text));
 });

@@ -33,22 +33,20 @@ const JOB_REF = /\bJ-\d+\b/;
 // A heading line of the body, matched on the trimmed line.
 const HEADING = /^#{1,6}\s+\S/;
 
-// The exact header of the `## QA` table of the nightqueue template.
-const QA_HEADER = ["Method", "Executed", "Result"];
+// The `###` subsections a `## QA` section may carry, each with the token its evidence files start with.
+const QA_SUBSECTIONS = { automated: "automated", api: "api", browser: "browser", device: "emulator" };
 
-// One cell of the separator line under a table header.
-const SEPARATOR_CELL = /^:?-{3,}:?$/;
+// The subsections as the template names them, said when a heading names none of them.
+const KNOWN_SUBSECTIONS = "### Automated, ### API, ### Browser, ### Device";
 
-// The methods a `## QA` row may start with, each with the token its evidence files start with.
-const METHOD_TOKENS = [
-  ["automated", /^automated/],
-  ["api", /^api\b/],
-  ["browser", /^browser/],
-  ["emulator", /^(emulator|device|android)|^ios\b/],
-];
+// The `###` heading that opens a QA subsection, matched on the trimmed line.
+const QA_SUBHEADING = /^###\s+(\S.*)$/;
 
-// The methods as the template names them, said when a row names none of them.
-const KNOWN_METHODS = "Automated, API, Browser, Android / iOS emulator or device";
+// A QA bullet: what ran, an em dash, and a result ending in PASSED, FAILED or SKIPPED (<reason>) with an optional ✅/❌.
+const QA_BULLET = /^-\s+\S.*\s—\s+.*\b(PASSED|FAILED|SKIPPED\s+\(\s*\S[^)]*\))\s*(✅|❌)?$/;
+
+// The line that closes the `## QA` section, with text of its own.
+const NOT_TESTED_LINE = /^Not tested:\s*\S/;
 
 // A violation the command prints as `MISSING: <what>`.
 function missing(text) {
@@ -135,58 +133,44 @@ function qaBlock(lines, qaAt) {
   return end < 0 ? after : after.slice(0, end);
 }
 
-// The cells of a markdown table line, trimmed and without the outer pipes.
-function tableCells(line) {
-  const cells = line.split("|").map((cell) => cell.trim());
-  if (cells[0] === "") cells.shift();
-  if (cells.at(-1) === "") cells.pop();
-  return cells;
+// The QA subsections of a block: each heading with its name, evidence token, bullets and line index.
+function qaSubsections(block) {
+  const sections = [];
+  block.forEach((line, index) => {
+    const name = QA_SUBHEADING.exec(line)?.[1].trim();
+    if (name !== undefined) sections.push({ name, token: Object.hasOwn(QA_SUBSECTIONS, name.toLowerCase()) ? QA_SUBSECTIONS[name.toLowerCase()] : null, bullets: [], at: index });
+    else if (line.startsWith("-") && sections.length > 0) sections.at(-1).bullets.push({ line, index });
+  });
+  return sections;
 }
 
-// Whether a line is the separator a markdown table carries under its header.
-function isSeparator(line) {
-  const cells = typeof line === "string" && line.startsWith("|") ? tableCells(line) : [];
-  return cells.length > 0 && cells.every((cell) => SEPARATOR_CELL.test(cell));
+// What one QA bullet violates: a `N/A` result, or a shape other than `- <what ran> — <result>` ending in PASSED, FAILED or SKIPPED (<reason>).
+function bulletProblems(section, { line }) {
+  if (/\bN\/A\b/i.test(line)) return [rejected(`QA subsection ${section.name} has a N/A bullet: a method that did not run has no subsection: ${line}`)];
+  if (QA_BULLET.test(line)) return [];
+  return [missing(`QA bullet \`- <what ran> — <result>\` in subsection ${section.name}, the result ending in PASSED, FAILED or SKIPPED (<reason>): ${line}`)];
 }
 
-// The `## QA` table as the validator reads it: whether its header is the template's, its rows, and the line it ends on.
-function qaTable(block) {
-  const headerAt = block.findIndex((line) => line.startsWith("|"));
-  const header = headerAt >= 0 ? tableCells(block[headerAt]) : [];
-  const headerOk = header.join("|") === QA_HEADER.join("|") && isSeparator(block[headerAt + 1]);
-  if (!headerOk) return { headerOk, rows: [], end: -1 };
-  const rest = block.slice(headerAt + 2);
-  const count = rest.findIndex((line) => !line.startsWith("|"));
-  const rows = (count < 0 ? rest : rest.slice(0, count)).map(tableCells);
-  return { headerOk, rows, end: headerAt + 1 + rows.length };
-}
-
-// The evidence token of the method a row's cell starts with, or null when it starts with none of the template's methods.
-function methodToken(cell) {
-  const text = cell.toLowerCase();
-  return METHOD_TOKENS.find(([, pattern]) => pattern.test(text))?.[0] ?? null;
-}
-
-// What one QA row violates: a method the template does not know, or a `N/A` a method that did not run never carries.
-function rowProblems(cells) {
-  const method = cells[0] ?? "";
+// What one QA subsection violates: a method the template does not know, no bullet, or a malformed bullet.
+function subsectionProblems(section) {
   const problems = [];
-  if (cells.some((cell) => cell.toLowerCase() === "n/a")) problems.push(rejected(`QA row ${method} is marked N/A: a method that did not run has no row`));
-  if (methodToken(method) === null) problems.push(missing(`a known method in QA row ${method} (${KNOWN_METHODS})`));
-  return problems;
+  if (section.token === null) problems.push(missing(`a known QA subsection instead of ### ${section.name} (${KNOWN_SUBSECTIONS})`));
+  if (section.bullets.length === 0) problems.push(missing(`a bullet under QA subsection ${section.name}`));
+  return [...problems, ...section.bullets.flatMap((bullet) => bulletProblems(section, bullet))];
 }
 
-// What the `## QA` section violates: the table header, at least one row, each row's method, and the `Not tested:` line after the table.
-function qaProblems(block, table) {
-  if (!table.headerOk) return [missing(`QA table header | ${QA_HEADER.join(" | ")} |`), ...notTestedProblems(block, table)];
-  const rows = table.rows.length === 0 ? [missing("a QA table row for a method that ran")] : table.rows.flatMap(rowProblems);
-  return [...rows, ...notTestedProblems(block, table)];
+// What the `## QA` section violates: a table, no subsection, a bad subsection, and a `Not tested:` line missing or before the last subsection.
+function qaProblems(block, sections) {
+  const table = block.some((line) => line.startsWith("|")) ? [missing("QA subsections (### Automated, ### API, ### Browser, ### Device, one bullet per test) instead of a table")] : [];
+  const none = sections.length === 0 ? [missing(`a QA subsection for a method that ran (${KNOWN_SUBSECTIONS})`)] : [];
+  return [...table, ...none, ...sections.flatMap(subsectionProblems), ...notTestedProblems(block, sections)];
 }
 
-// The `Not tested:` line the template requires after the QA table, with text of its own.
-function notTestedProblems(block, table) {
-  const present = block.slice(table.end + 1).some((line) => /^Not tested:\s*\S/.test(line));
-  return present ? [] : [missing("Not tested: line after the QA table")];
+// The `Not tested:` line the template requires after the last QA subsection, with text of its own.
+function notTestedProblems(block, sections) {
+  const lastAt = Math.max(-1, ...sections.flatMap((section) => [section.at, ...section.bullets.map((bullet) => bullet.index)]));
+  const present = block.slice(lastAt + 1).some((line) => NOT_TESTED_LINE.test(line));
+  return present ? [] : [missing("Not tested: line after the last QA subsection")];
 }
 
 // Whether a path is a regular file with something in it.
@@ -210,24 +194,24 @@ function evidenceFiles(evidenceDir) {
   }
 }
 
-// The QA rows whose method has no `<method>-*` evidence file under the run's evidence directory.
-function evidenceProblems(rows, evidenceDir) {
-  const files = rows.length > 0 ? evidenceFiles(evidenceDir) : [];
-  return rows
-    .map((cells) => ({ method: cells[0] ?? "", token: methodToken(cells[0] ?? "") }))
-    .filter(({ token }) => token !== null && !files.some((name) => name.startsWith(`${token}-`)))
-    .map(({ method }) => missing(`evidence for QA row ${method}`));
+// The QA subsections whose method has no `<method>-*` evidence file under the run's evidence directory.
+function evidenceProblems(sections, evidenceDir) {
+  const known = sections.filter((section) => section.token !== null);
+  const files = known.length > 0 ? evidenceFiles(evidenceDir) : [];
+  return known
+    .filter((section) => !files.some((name) => name.startsWith(`${section.token}-`)))
+    .map((section) => missing(`evidence for QA section ${section.name}`));
 }
 
-// Why a body cannot be published against the nightqueue template: its four sections in order, its QA table, its `Not tested:` line and the evidence of every row.
+// Why a body cannot be published against the nightqueue template: its four sections in order, its QA subsections, its `Not tested:` line and the evidence of every subsection.
 function nightqueueTemplateProblems(lines, evidenceDir) {
   const found = bodyHeadings(lines);
   const sections = sectionLines(found);
   const qaAt = sections.at(-1).at;
   if (qaAt < 0) return sectionProblems(found, sections);
   const block = qaBlock(lines, qaAt);
-  const table = qaTable(block);
-  return [...sectionProblems(found, sections), ...qaProblems(block, table), ...evidenceProblems(table.rows, evidenceDir)];
+  const subsections = qaSubsections(block);
+  return [...sectionProblems(found, sections), ...qaProblems(block, subsections), ...evidenceProblems(subsections, evidenceDir)];
 }
 
 // The body lines outside fenced blocks, each with its 1-based number, and the fence left open at the end of the body (null when none).

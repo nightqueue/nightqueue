@@ -130,15 +130,16 @@ rules of `references/pr-template.md`. Against a repository template: every headi
 of it present and in its order, and no nightqueue heading (`## Report`,
 `## Cause`, `## Changes`, `## QA`) the template does not have. Against the
 nightqueue fallback: `## Report`, `## Cause`, `## Changes` and `## QA` in that
-order with no fifth `## `, a `## QA` table with the header
-`| Method | Executed | Result |` and at least one row (none marked `N/A`), a
-`Not tested:` line after it, and a non-empty file under
-`<RUN_DIR>/evidence/<method>-*` (`automated`, `api`, `browser`, `emulator`) for
-every row. Both: no bare `#<number>` outside a `Fixes`/`Closes` line, no
+order with no fifth `## `, a `## QA` made of `###` subsections (`Automated`,
+`API`, `Browser`, `Device`) with at least one `- <what ran> — <result>` bullet each,
+the result ending in `PASSED`, `FAILED` or `SKIPPED (<reason>)` (none marked
+`N/A`, no table), a `Not tested:` line after the last one, and a non-empty file
+under `<RUN_DIR>/evidence/<method>-*` (`automated`, `api`, `browser`, `emulator`)
+for every subsection. Both: no bare `#<number>` outside a `Fixes`/`Closes` line, no
 `{{placeholder}}` or `<...>` example left over from the template, and none of the
 traceability the runtime appends itself - an `Opened by nightqueue` line, a whole
 `Refs` line, a job ref or the run slug. It then publishes a copy of the body with
-the footer read from the job row (`Refs <KEY>-<n>` and `Opened by nightqueue ·
+the footer read from the job row (`Opened by nightqueue ·
 <KEY>-<n>` for a roadmap job, `Opened by nightqueue` otherwise; see
 [Runtime contract](runtime-contract.md)). A body that
 fails prints one `REJECTED: <reason>` or `MISSING: <what>` line per violation
