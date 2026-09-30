@@ -9,6 +9,8 @@ import {
   hasGateMarker,
   hasGateMarkerInStream,
   isPrUrl,
+  lastAttemptStream,
+  parseEventLine,
   prUrlRepo,
   publishedDelivery,
   runtimeKillFromStream,
@@ -60,7 +62,7 @@ function endedCleanly({ exitCode, timedOut, idleTimedOut, stopped }) {
 }
 
 // The fixed notice of a gate whose own notice does not carry the question it is supposed to ask.
-function brokenGateNotice(planPath) {
+export function brokenGateNotice(planPath) {
   return `the run stopped at a gate but its notice does not carry the question - see ${planPath ?? "an unknown plan path"}`;
 }
 
@@ -201,6 +203,59 @@ export function isTransientFailure(log) {
     /\bETIMEDOUT\b/.test(text) ||
     /fetch failed/i.test(text)
   );
+}
+
+const NIGHTQUEUE_MCP_SERVER = "nightqueue";
+const NIGHTQUEUE_TOOL_PREFIX = "mcp__nightqueue__";
+const CONNECTION_CLOSED_RESULT = /^(?:Error: )?(?:MCP error -?\d+: )?Connection closed\.?$/;
+
+// Tells whether a `system`/`init` event lists the nightqueue MCP server as failed; a pending one does not count.
+function initSaysNightqueueFailed(event) {
+  const servers = Array.isArray(event?.mcp_servers) ? event.mcp_servers : [];
+  return servers.some((server) => server?.name === NIGHTQUEUE_MCP_SERVER && server?.status === "failed");
+}
+
+// The blocks of a message content, whatever shape the event gave it.
+function contentBlocks(event) {
+  return Array.isArray(event?.message?.content) ? event.message.content : [];
+}
+
+// The text of a tool result, whether its content is a string or a list of text blocks.
+function toolResultText(block) {
+  if (typeof block?.content === "string") return block.content;
+  if (!Array.isArray(block?.content)) return "";
+  return block.content.map((part) => (typeof part?.text === "string" ? part.text : "")).join("\n");
+}
+
+// The first result a nightqueue tool call got in the events, as `{ isError, text }`, or null when no nightqueue call got one.
+function firstNightqueueResult(events) {
+  const calls = new Set();
+  for (const event of events) {
+    for (const block of contentBlocks(event)) {
+      if (block?.type === "tool_use" && String(block.name ?? "").startsWith(NIGHTQUEUE_TOOL_PREFIX)) calls.add(block.id);
+      if (block?.type === "tool_result" && calls.has(block.tool_use_id)) {
+        return { isError: block.is_error === true, text: toolResultText(block) };
+      }
+    }
+  }
+  return null;
+}
+
+// Tells whether a tool result is the client's own "Connection closed" error, as a whole answer, never a text that merely quotes it.
+function isConnectionClosedResult(result) {
+  return result?.isError === true && CONNECTION_CLOSED_RESULT.test(result.text.trim());
+}
+
+// Tells whether the last attempt's session never reached the nightqueue MCP server: its init lists it as failed, or its first nightqueue call failed with exactly "Connection closed"; never throws.
+export function nightqueueMcpUnreachable(log) {
+  try {
+    const events = lastAttemptStream(log).split("\n").map(parseEventLine).filter(Boolean);
+    const init = events.find((event) => event.type === "system" && event.subtype === "init");
+    if (initSaysNightqueueFailed(init)) return true;
+    return isConnectionClosedResult(firstNightqueueResult(events));
+  } catch {
+    return false;
+  }
 }
 
 // Exponential backoff of the given attempt: 5s, 15s, 45s, capped at 60s.

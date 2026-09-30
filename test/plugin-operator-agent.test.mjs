@@ -53,6 +53,12 @@ test("the operator records what the resume needs, and a session that queues noth
   }
 });
 
+test("the operator's opening stops on a store-unavailable answer too, pointing at doctor --fix", () => {
+  const step0 = OPERATOR.slice(OPERATOR.indexOf("## Step 0"), OPERATOR.indexOf("- **Empty memory**"));
+  assert.match(step0, /it answers `"error": "store-unavailable"`/);
+  assert.ok(step0.replace(/\s+/g, " ").includes("`nightqueue memory unavailable: run nightqueue doctor --fix and retry` — and stop"), step0);
+});
+
 test("the triager's verdict opens with `Evidence level: <1|2|3|4>`, and the 0-4 scale is gone", () => {
   const lines = TRIAGER.split("\n");
   const verdict = lines.findIndex((line) => line.startsWith("## Verdict:"));

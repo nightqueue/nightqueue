@@ -3,11 +3,12 @@ import { accessSync, appendFileSync, constants, createWriteStream, existsSync, m
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { UserError } from "../config/errors.mjs";
 import { homeDir, runDir } from "../config/paths.mjs";
 import { BASH_TIMEOUT_DEFAULT } from "../config/schema.mjs";
 import { claudeConfigDir, packageRoot } from "../host/paths.mjs";
 import { jobSettings } from "../host/settings.mjs";
-import { truncateByCodePoint } from "../memory/jobs.mjs";
+import { RECOVERED_PROMPT, recoveredPromptRefusal, truncateByCodePoint } from "../memory/jobs.mjs";
 import { escapePromptMarkers } from "../memory/prompt-safety.mjs";
 import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "./home-guard.mjs";
 import { briefBody } from "./operator-run.mjs";
@@ -254,6 +255,7 @@ function tierLine(tier) {
 
 // Builds the prompt of the unattended run; every marker is quoted inline, so the echo never looks like one.
 export function buildPrompt({ job, handoff, openPrs, env = process.env } = {}) {
+  if (job?.prompt === RECOVERED_PROMPT) throw new UserError(recoveredPromptRefusal(job.id));
   const base = [
     `/nightqueue:resolve ${String(job?.prompt ?? "").trim()}`,
     "",

@@ -52,7 +52,8 @@ import {
   stampRunnerDbWitness,
   STOPPED_RUNNER,
 } from "../queue/registry.mjs";
-import { reclassifyFromLog } from "../queue/repair.mjs";
+import { logOnlyTail } from "../queue/lost-rows.mjs";
+import { reclassifyFromLog, recoverFromDisk, replayPending } from "../queue/repair.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
@@ -74,7 +75,7 @@ export const USAGE = {
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
   close: "nightqueue queue close <id> [--force] [--foreground] [--decisions accept|reject|keep] [--json], or nightqueue queue close --merged [--decisions accept|reject|keep] [--json]",
   retry: "nightqueue queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
-  repair: "nightqueue queue repair <id> [--json]",
+  repair: "nightqueue queue repair [<id>] [--from-disk] [--json]",
   pause: "nightqueue queue pause",
   resume: "nightqueue queue resume",
   log: "nightqueue queue log <id> [--follow] [--raw] [--all]",
@@ -1379,10 +1380,44 @@ function repairLine(outcome) {
   return `${jobRef(outcome.id)} re-classified from \`${outcome.from}\` to \`${outcome.to}\`${outcome.prUrl ? ` (${outcome.prUrl})` : ""}`;
 }
 
-// Runs `queue repair`, which re-derives the outcome of a gated or failed job from its own log and state.json.
+// What a replay answers the operator for one run directory: its counts, or the failure of its own.
+function replayLine(run) {
+  const where = `${run.projectId}/${run.slug}`;
+  if (run.failed) return `${where}: not replayed: ${run.failed}`;
+  const counts = `applied ${run.applied}, filled ${run.filled}, superseded ${run.superseded}, refused ${run.refused}`;
+  return `${where}: ${counts}${run.malformed ? `, ${run.malformed} malformed line(s) skipped` : ""}`;
+}
+
+// Replays every run's pending writes and prints one line per run directory, or that nothing was pending.
+async function runReplay(values, ctx) {
+  const runs = await replayPending({ env: ctx.env });
+  if (values.json) ctx.out(JSON.stringify({ replay: runs }));
+  else ctx.out(runs.length === 0 ? "nothing pending" : runs.map(replayLine).join("\n"));
+}
+
+// What a recovery from disk answers the operator for one job.
+function recoveryLine(entry) {
+  const pr = entry.prUrl ? ` (${entry.prUrl})` : "";
+  return `${jobRef(entry.jobId)} ${entry.project}/${entry.slug}: ${entry.result}${pr}`;
+}
+
+// Recreates the lost rows from disk and prints one line per job, then the log-only tail.
+async function runRecovery(values, positionals, ctx) {
+  const id = positionals.length === 0 ? null : parseJobRef(positionals[0]);
+  const { results, logOnly } = await recoverFromDisk({ id, env: ctx.env });
+  if (values.json) return ctx.out(JSON.stringify({ recovered: results, logOnly }));
+  const lines = results.map(recoveryLine);
+  if (lines.length === 0) lines.push("no job on disk is missing from the table");
+  const tail = logOnlyTail(logOnly);
+  ctx.out([...lines, ...(tail ? [tail] : [])].join("\n"));
+}
+
+// Runs `queue repair`: bare, it replays the pending writes of every run; with an id, it re-derives the outcome of a gated or failed job from its own log and state.json; `--from-disk` recreates the rows the table lost.
 async function runRepair(argv, ctx) {
-  const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
-  checkArgs(positionals, { min: 1, usage: USAGE.repair });
+  const { values, positionals } = parseCommand(argv, { json: { type: "boolean" }, "from-disk": { type: "boolean" } });
+  checkArgs(positionals, { max: 1, usage: USAGE.repair });
+  if (values["from-disk"] === true) return await runRecovery(values, positionals, ctx);
+  if (positionals.length === 0) return await runReplay(values, ctx);
   const outcome = await reclassifyFromLog({ id: parseJobRef(positionals[0]), env: ctx.env });
   ctx.out(values.json ? JSON.stringify({ repair: outcome }) : repairLine(outcome));
 }

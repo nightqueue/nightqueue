@@ -204,5 +204,6 @@ test("health answers the raw numbers of a diagnosis, never an exception", async 
     orphanJobs: 0,
     danglingReferences: 0,
     errors: { schemaVersion: null, orphanJobs: null, danglingReferences: null },
+    unavailable: null,
   });
 });

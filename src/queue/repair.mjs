@@ -1,11 +1,13 @@
-import { readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
-import { jobLogPath, runDir } from "../config/paths.mjs";
+import { jobLogPath, logsDir, runDir } from "../config/paths.mjs";
 import { packageRoot } from "../host/paths.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore } from "../store/open.mjs";
 import { classifyJobResult } from "./classify.mjs";
+import { deriveRecovered, findLostJobs, scanDisk, stillRunningCheck } from "./lost-rows.mjs";
+import { replayAllPendingWrites } from "./pending-writes.mjs";
 import { isRunPath, ownRunState, readRunState, writeRunTerminal } from "./resume.mjs";
 import { lastAttemptStream } from "./stream.mjs";
 import { jobRef } from "../memory/refs.mjs";
@@ -103,4 +105,63 @@ export async function reclassifyFromLog({ id, env = process.env } = {}) {
   if (!written) throw new UserError(`job \`${id}\` changed while it was being re-classified; read it again with \`nightqueue queue status ${jobRef(id)}\``);
   if (witness && !foreign) mirrorWitness(row, outcome, env);
   return { id, from: row.status, to: outcome.status, prUrl: outcome.prUrl ?? row.pr_url ?? null, changed: true, noticeOnly: !witness };
+}
+
+// The disk entries a recovery works on: every lost job, or the run of the one id asked for, whatever its row says.
+async function recoveryTargets(id, store, env) {
+  const disk = scanDisk(env);
+  if (id === null) {
+    const found = await findLostJobs(env, store, disk);
+    return { entries: found.lostEntries, logOnly: found.logOnly };
+  }
+  const entry = disk.runs.find((run) => run.jobId === id);
+  if (!entry) throw new UserError(`no run on disk names ${jobRef(id)}; there is nothing to recover it from`);
+  return { entries: [entry], logOnly: [] };
+}
+
+// Appends the recovery to the job's own log; the line is a trace, so a failure to write it never undoes the row.
+function logRecovery(jobId, outcome, env) {
+  try {
+    mkdirSync(logsDir(env), { recursive: true });
+    appendFileSync(jobLogPath(jobId, env), `recovered from disk: status=${outcome.status} prUrl=${outcome.prUrl ?? "-"}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Recreates the row of one lost job from its run on disk and answers what happened to it.
+async function recoverEntry(entry, { store, env, isRunning }) {
+  const base = { jobId: entry.jobId, project: entry.job?.projectKey ?? entry.projectId, projectId: entry.projectId, slug: entry.slug };
+  if (isRunning(entry)) return { ...base, result: "skipped: still running" };
+  const outcome = deriveRecovered(entry, env);
+  const answer = await store.jobs.recoverJob({
+    id: entry.jobId,
+    projectId: entry.projectId,
+    slug: entry.slug,
+    branch: entry.branch,
+    ...outcome,
+    recovered: { from: "disk", at: new Date().toISOString(), runDir: runDir(entry.projectId, entry.slug, env) },
+    createdAt: entry.job?.createdAt ?? null,
+    finishedAt: entry.terminal?.finishedAt ?? null,
+  });
+  if (answer !== "recovered") return { ...base, result: answer };
+  return { ...base, result: `recovered as ${outcome.status}`, status: outcome.status, prUrl: outcome.prUrl ?? null, logged: logRecovery(entry.jobId, outcome, env) };
+}
+
+// Recreates every job whose row the table lost, or only `id`, from the runs on disk; roadmap rows are never rebuilt, and log-only ids are reported, not recovered.
+export async function recoverFromDisk({ id = null, env = process.env } = {}) {
+  const store = openStore(env);
+  const { entries, logOnly } = await recoveryTargets(id, store, env);
+  const isRunning = stillRunningCheck(env);
+  const results = [];
+  for (const entry of entries) results.push(await recoverEntry(entry, { store, env, isRunning }));
+  return { results, logOnly };
+}
+
+// Replays every run's pending writes for the operator, one result per run directory; an unavailable database is raised as the one-line error it is.
+export async function replayPending({ env = process.env } = {}) {
+  const replayed = await replayAllPendingWrites({ env, store: openStore(env) });
+  if (replayed.error) throw replayed.error;
+  return replayed.runs;
 }

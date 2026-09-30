@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { runDir } from "../../src/config/paths.mjs";
 import { clearRunOutcome, decideResume, isSafeSegment, readRunState, RESUME_PHASE_ORDER, resumeHandoff } from "../../src/queue/resume.mjs";
+import { recordHeldWorktree, recordJobBlock } from "../../src/queue/run-state.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
 import { FIXED_PROJECT_ID as ALPHA_ID, makeHome } from "../../test-support/memory.mjs";
 
@@ -282,4 +283,17 @@ test("a run with no operator origin takes exactly the decision it took before", 
     lastPhase: "architecture",
   });
   assert.equal(decideResume({ state: state({ phases, resumeCount: 1 }) }).reason, "resume-cap");
+});
+
+test("a first attempt whose state.json holds only the job block and the worktree is not resumed, for the reason it had before the block", (t) => {
+  const env = makeHome(t, "resume-job-block-only");
+  const slug = "fix-the-worker";
+  const block = { id: 3, createdAt: "2026-01-01T00:00:00.000Z" };
+  assert.equal(recordJobBlock({ projectId: ALPHA_ID, slug, block, env }).status, "written");
+  assert.equal(recordHeldWorktree({ projectId: ALPHA_ID, slug, branch: "fix/the-worker", worktree: "/tmp/wt", env }).status, "written");
+
+  const decision = decideResume({ state: readRunState({ projectId: ALPHA_ID, slug, env }) });
+
+  assert.equal(decision.resume, false);
+  assert.equal(decision.reason, "invalid-state");
 });

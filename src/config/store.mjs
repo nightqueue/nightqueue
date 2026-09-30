@@ -17,6 +17,24 @@ export function removeHomeFiles(env, names) {
   }
 }
 
+// Moves the files of the home named in `names` that exist into its subdirectory `dir`, answering the names moved and the first failure's message or null.
+export function moveHomeFilesInto(env, { names, dir }) {
+  const moved = [];
+  try {
+    const target = join(homeDir(env), dir);
+    mkdirSync(target, { recursive: true });
+    for (const name of names) {
+      const from = join(homeDir(env), name);
+      if (!statSync(from, { throwIfNoEntry: false })) continue;
+      renameSync(from, join(target, name));
+      moved.push(name);
+    }
+    return { moved, error: null };
+  } catch (err) {
+    return { moved, error: err?.message ?? String(err) };
+  }
+}
+
 // Writes a file atomically, through a sibling temporary file plus rename.
 export function writeFileAtomic(filePath, content, { mode } = {}) {
   const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;

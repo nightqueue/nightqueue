@@ -10,7 +10,7 @@
  *
  * A method's name is the exported name of the `src/memory/` function it delegates to, verbatim.
  * The only exceptions are the names the contract fixes: `jobs.listWithSlug`, `jobs.status`, the
- * `orgs` and `projects` registry domains, `health` and `close`.
+ * `orgs` and `projects` registry domains, `db.files`, `health` and `close`.
  */
 
 /**
@@ -33,12 +33,15 @@
  * @property {(id: number, spec: {worker: string, candidates: string[]}) => Promise<{status: "bound"|"taken"|"lost", slug?: string, heldBy?: number}>} bindRunSlug claims the first run slug no other job of the project holds
  * @property {(jobId: number, ref: object) => Promise<number>} linkPipelineRun
  * @property {(id: number, outcome: object) => Promise<boolean>} finishJob
+ * @property {(id: number, spec: {status: string, noticeMd?: string|null, prUrl?: string|null}) => Promise<boolean>} fillFinishGaps fills the notice and the pull request a row already at `status` is missing, never moving its status; the replay of a queued finish the row already took by another path
+ * @property {(id: number, spec: {worker: string, attempts: number, sessionId?: string|null, lastSessionId: string, lastSessionAttempt: number}) => Promise<boolean>} fillSessionFacts fills the session facts of one attempt while the same claim still runs the row, never rewinding a later attempt's session; the replay of a queued `session` record
  * @property {(id: number, options?: object) => Promise<object>} cancelJob
  * @property {(id: number, spec: {worker: string, reason?: string}) => Promise<object|null>} cancelRunningJob cancels a running job only while that worker still owns it; null when the row moved on
  * @property {() => Promise<object[]>} listCloseCandidates done jobs that carry a pull request url, the candidates `queue close --merged` may confirm and close
  * @property {(number: number) => Promise<{id: number, pr_url: string}[]>} jobsWithPrNumber the jobs whose pull request URL carries `/pull/<number>`; the caller compares the whole URL
  * @property {(id: number, options?: object) => Promise<object>} retryJob
  * @property {(id: number) => Promise<object|null>} getJob
+ * @property {(id: number) => Promise<{projectKey: string|null, itemRef: string|null, decisionRefs: string[]}>} jobSpawnRefs the refs the runtime records in a run's job block before the spawn
  * @property {(options?: object) => Promise<object[]>} listJobs
  * @property {() => Promise<Record<string, number>>} countsByStatus
  * @property {() => Promise<number>} countBlockedGates gated jobs a preflight block stopped
@@ -48,6 +51,8 @@
  * @property {(id: number) => Promise<boolean>} isJobActive
  * @property {(id: number, terminal: object) => Promise<boolean>} repairJobFromWitness
  * @property {(id: number, outcome: object) => Promise<boolean>} reclassifyJob the outcome re-derived from the job's own log
+ * @property {(ids: number[]) => Promise<number[]>} existingJobIds the ids of the list that have a row, read-only
+ * @property {(spec: object) => Promise<"recovered"|"exists"|"project-missing">} recoverJob recreates a lost row from its run on disk with a `result.recovered` marker; not a status writer, so no roadmap follow runs
  * @property {(id: number, spec: object) => Promise<boolean>} correctJobPrAttribution moves a job's pull request URL and swaps its one notice line in a single compare-and-swap; false means refused, nothing written
  * @property {() => Promise<boolean>} hasClaimablePending
  * @property {() => Promise<object|null>} peekNextJob
@@ -69,6 +74,7 @@
 /**
  * @typedef {object} RunsDomain
  * @property {(run: object) => Promise<object>} logPipelineRun
+ * @property {(run: object, options: {since: string}) => Promise<object>} logPipelineRunOnce the replay of a queued run: writes it unless a run of the same project and slug was recorded since `since`, then answers `{skipped: true}`
  * @property {(spec: object) => Promise<string|null>} latestRunOutcome the outcome of the latest run recorded for a project and slug at or after an instant, or null when there is none
  * @property {(telemetry: object) => Promise<object>} updateRunTelemetry fills the durations and the models the RUNTIME measured in the stream over the row the agent recorded: the measured value wins, the agent's survives only where there is none, and a run the agent never recorded is never inserted
  */
@@ -101,6 +107,7 @@
 /**
  * @typedef {object} IndexDomain
  * @property {(spec: object) => Promise<object>} saveProjectIndex
+ * @property {(spec: {projectId: string, repoRoot?: string, files?: object[], libs?: object[], since: string}) => Promise<{files: number, libs: number}>} fillProjectIndex writes a queued index save only where no save touched the row since `since`, with the queued modification times; the replay of a queued `index_save`
  * @property {(spec?: object) => Promise<object>} recallProjectIndex
  */
 
@@ -181,6 +188,16 @@
  */
 
 /**
+ * The health of the database file itself, which `nightqueue doctor --db` reports and `--fix` repairs.
+ * @typedef {object} DbDomain
+ * @property {() => Promise<{main: number|null, wal: number|null, shm: number|null}>} files the sizes of the main file and its sidecars, null when absent
+ * @property {() => Promise<{ok: boolean, lines: string[]}>} quickCheck `PRAGMA quick_check` on the live file, read-only
+ * @property {() => Promise<{ok: boolean, lines: string[]}>} quickCheckMainAlone `PRAGMA quick_check` on a temporary copy of the main file alone
+ * @property {() => Promise<{ok: boolean, lines: string[]}>} integrityCheck `PRAGMA integrity_check` on the live file, read-only
+ * @property {() => Promise<{busy: number, log: number, checkpointed: number}>} checkpointTruncate `PRAGMA wal_checkpoint(TRUNCATE)` with no migration, behind a read-only pin
+ */
+
+/**
  * The raw numbers `nightqueue doctor` diagnoses with. It never throws: each field is resolved in its
  * own `try` and its failure is reported in `errors`, so one broken check never poisons the other.
  * @typedef {object} StoreHealth
@@ -188,6 +205,8 @@
  * @property {number|null} orphanJobs
  * @property {number|null} danglingReferences rows whose reference names a row that does not exist
  * @property {{schemaVersion: string|null, orphanJobs: string|null, danglingReferences: string|null}} errors
+ * @property {{code: string, errcode: number|null, detail: string, home: string, path: string, hint: string}|null} unavailable
+ *   the first field failure that means the database itself is unusable (a StoreUnavailableError), else null
  */
 
 /**
@@ -201,6 +220,7 @@
  * @property {RoadmapDomain} roadmap
  * @property {OrgsDomain} orgs
  * @property {ProjectsDomain} projects
+ * @property {DbDomain} db
  * @property {() => Promise<StoreHealth>} health
  * @property {() => Promise<void>} connect opens the connection now, for the caller that needs it to exist before it reads anything
  * @property {() => Promise<void>} close releases this instance; a read-write one never closes the shared connection
@@ -227,12 +247,15 @@ export const STORE_CONTRACT = Object.freeze({
     "bindRunSlug",
     "linkPipelineRun",
     "finishJob",
+    "fillFinishGaps",
+    "fillSessionFacts",
     "cancelJob",
     "cancelRunningJob",
     "listCloseCandidates",
     "jobsWithPrNumber",
     "retryJob",
     "getJob",
+    "jobSpawnRefs",
     "listJobs",
     "countsByStatus",
     "countBlockedGates",
@@ -242,6 +265,8 @@ export const STORE_CONTRACT = Object.freeze({
     "isJobActive",
     "repairJobFromWitness",
     "reclassifyJob",
+    "existingJobIds",
+    "recoverJob",
     "correctJobPrAttribution",
     "hasClaimablePending",
     "peekNextJob",
@@ -259,7 +284,7 @@ export const STORE_CONTRACT = Object.freeze({
     "noteCloseWorktree",
     "listCloses",
   ],
-  runs: ["logPipelineRun", "updateRunTelemetry", "latestRunOutcome"],
+  runs: ["logPipelineRun", "logPipelineRunOnce", "updateRunTelemetry", "latestRunOutcome"],
   lessons: [
     "saveLesson",
     "getLesson",
@@ -275,7 +300,7 @@ export const STORE_CONTRACT = Object.freeze({
     "persistLessons",
   ],
   memory: ["saveMemory", "recentMemories", "searchMemories", "memoryByKey", "recallMemories"],
-  index: ["saveProjectIndex", "recallProjectIndex"],
+  index: ["saveProjectIndex", "fillProjectIndex", "recallProjectIndex"],
   decisions: [
     "getDecision",
     "getDecisionByNumber",
@@ -317,6 +342,7 @@ export const STORE_CONTRACT = Object.freeze({
   ],
   orgs: ["list", "byName", "byId", "add", "rename", "setKey", "suggestKey", "keyAliases", "remove"],
   projects: ["list", "byName", "byId", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
+  db: ["files", "quickCheck", "quickCheckMainAlone", "integrityCheck", "checkpointTruncate"],
   "": ["health", "connect", "close", "checkpoint", "migrateIfOutdated"],
 });
 
@@ -328,10 +354,12 @@ export const STORE_CONTRACT = Object.freeze({
 export const READ_ONLY_METHODS = Object.freeze([
   "jobs.status",
   "jobs.getJob",
+  "jobs.jobSpawnRefs",
   "jobs.listJobs",
   "jobs.listWithSlug",
   "jobs.listOpenJobs",
   "jobs.isJobActive",
+  "jobs.existingJobIds",
   "jobs.countsByStatus",
   "jobs.countBlockedGates",
   "jobs.countActiveJobs",
@@ -363,6 +391,10 @@ export const READ_ONLY_METHODS = Object.freeze([
   "projects.at",
   "projects.ofOrg",
   "projects.keyAliases",
+  "db.files",
+  "db.quickCheck",
+  "db.quickCheckMainAlone",
+  "db.integrityCheck",
   "health",
   "close",
   "migrateIfOutdated",

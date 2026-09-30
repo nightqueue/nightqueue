@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { UserError } from "../config/errors.mjs";
-import { dbPath } from "../config/paths.mjs";
+import { StoreUnavailableError, UserError } from "../config/errors.mjs";
+import { dbPath, homeDir } from "../config/paths.mjs";
 import { ensureHome, loadRawConfig } from "../config/store.mjs";
 import { FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ROADMAP_FTS, ROADMAP_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
 import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schemaState } from "./migration/v18.mjs";
@@ -9,6 +9,7 @@ import { isPendingV20, migrateToV20, refuseOrphans } from "./migration/v20.mjs";
 import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
 import { migrateSharedSlugs, sharedSlugPending } from "./shared-slug-migration.mjs";
+import { classifyStoreError } from "./store-error.mjs";
 import { inTransaction, withWriteRetry } from "./tx.mjs";
 
 export { DB_USER_VERSION, isoToSqlite, sqliteToIso } from "./schema.mjs";
@@ -33,6 +34,7 @@ const { DatabaseSync } = await importSqlite();
 
 const connections = new Map();
 const walPins = new Map();
+const retired = [];
 let walWarned = false;
 let exitHookInstalled = false;
 
@@ -177,22 +179,37 @@ function pinWal(env, path) {
   }
 }
 
+// Closes a handle (one whose open failed, or one being released) without letting the close throw.
+function closeHalfOpened(db) {
+  try {
+    db?.close();
+  } catch {
+    return;
+  }
+}
+
+// The error an open that failed throws: a StoreUnavailableError when the database itself is unusable, the failure as is otherwise.
+function classifiedOpenError(err, env, path) {
+  return classifyStoreError(err, { home: homeDir(env), path }) ?? err;
+}
+
 // Opens the database of this NIGHTQUEUE_HOME, creating and migrating it on first use.
 export function openDb(env = process.env) {
   const path = dbPath(env);
   const cached = connections.get(path);
   if (cached) return cached;
   ensureHome(env);
-  const db = new DatabaseSync(path);
+  let db = null;
   try {
+    db = new DatabaseSync(path);
     withWriteRetry(() => {
       db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
       assertSchemaNotNewer(db, path);
       initConnection(db, path, env);
     });
   } catch (err) {
-    db.close();
-    throw err;
+    closeHalfOpened(db);
+    throw classifiedOpenError(err, env, path);
   }
   connections.set(path, db);
   installExitHook();
@@ -203,16 +220,30 @@ export function openDb(env = process.env) {
 // Opens the database read-only and outside the connection cache, for a caller that must never create or migrate it.
 export function openDbReadOnly(env = process.env) {
   const path = dbPath(env);
-  const db = new DatabaseSync(path, { readOnly: true });
+  let db = null;
   try {
+    db = new DatabaseSync(path, { readOnly: true });
     db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
     withWriteRetry(() => assertSchemaNotNewer(db, path));
   } catch (err) {
-    db.close();
-    throw err;
+    closeHalfOpened(db);
+    throw classifiedOpenError(err, env, path);
   }
   db.exec("PRAGMA foreign_keys = ON");
   return db;
+}
+
+// Opens a bare connection on any database file, with no cache, no migration and no pin, for the repairs of `nightqueue doctor --fix`.
+export function openBareDb({ path, env = process.env, readOnly = false }) {
+  let db = null;
+  try {
+    db = new DatabaseSync(path, { readOnly });
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    return db;
+  } catch (err) {
+    closeHalfOpened(db);
+    throw classifiedOpenError(err, env, path);
+  }
 }
 
 // Schema version an already open connection reports, so a read-only caller reads it without creating nor migrating anything.
@@ -239,7 +270,7 @@ export function migrateIfOutdated(env = process.env) {
   try {
     openDb(env);
   } catch (err) {
-    if (err instanceof MigrationRefused) throw err;
+    if (err instanceof MigrationRefused || err instanceof StoreUnavailableError) throw err;
     const detail = err instanceof UserError ? err.message : (err?.message ?? String(err));
     throw new UserError(
       `the memory database at ${path} is at schema v${version} and this build needs v${DB_USER_VERSION}, but it could not be migrated: ${detail}; make the database writable and run \`nightqueue queue status\` again`,
@@ -261,8 +292,37 @@ export function closeDb(env = process.env) {
   const pin = walPins.get(path);
   connections.delete(path);
   walPins.delete(path);
+  retired.length = 0;
   if (db) db.close();
   if (pin) pin.close();
+}
+
+// Takes a failed home's writable connection and read-only pin out of the cache WITHOUT closing them (a last close can unlink `-wal`/`-shm` under a repair, see `pinWal`), so the next call opens afresh.
+export function retireConnection(env = process.env) {
+  const path = dbPath(env);
+  for (const cache of [connections, walPins]) {
+    const handle = cache.get(path);
+    if (!handle) continue;
+    cache.delete(path);
+    retired.push({ path, handle });
+  }
+}
+
+// Tells whether this process still holds a retired (broken, never closed) handle of a home, which a repair must count as a live holder.
+export function hasRetiredConnection(env = process.env) {
+  const path = dbPath(env);
+  return retired.some((entry) => entry.path === path);
+}
+
+// Closes this process's cached writable connection of a home, then its read-only pin, so `nightqueue doctor --fix` moves no sidecar from under itself; the next call opens afresh.
+export function releaseCachedConnection(env = process.env) {
+  const path = dbPath(env);
+  const db = connections.get(path);
+  const pin = walPins.get(path);
+  connections.delete(path);
+  walPins.delete(path);
+  closeHalfOpened(db);
+  closeHalfOpened(pin);
 }
 
 export const FINISH_VERIFICATION_FAILED = "finish verification failed";

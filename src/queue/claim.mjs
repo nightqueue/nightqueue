@@ -5,6 +5,7 @@ import { queuePausedPath } from "../config/paths.mjs";
 import { BASH_TIMEOUT_DEFAULT, LEASE_HEARTBEAT_DEFAULT_S } from "../config/schema.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { openStore } from "../store/open.mjs";
+import { replayAllPendingWrites } from "./pending-writes.mjs";
 import { liveRunnersReport } from "./registry.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
@@ -82,10 +83,17 @@ async function refusalReason({ jobId, cap, env }) {
   return cap !== null ? "cap-reached" : "claim-raced";
 }
 
-// Takes ownership of one job: sweeps the orphans first, then claims atomically inside the database.
+// Sweeps the orphans only after replaying what runs queued while the database was unavailable, so a queued finish lands before its dead owner's row is reclaimed; the only sweep of the queue.
+async function replayThenSweep(store, env) {
+  const replayed = await replayAllPendingWrites({ env, store });
+  if (replayed.error) throw replayed.error;
+  await store.jobs.sweepOrphans({ liveWorkerImpl: liveLocalWorker });
+}
+
+// Takes ownership of one job: replays the records runs queued while the database was unavailable, sweeps the orphans, then claims atomically inside the database.
 export async function acquire({ jobId = null, cap, env = process.env } = {}) {
   const store = openStore(env);
-  await store.jobs.sweepOrphans({ liveWorkerImpl: liveLocalWorker });
+  await replayThenSweep(store, env);
   if (jobId === null && isPaused(env)) return { job: null, reason: "paused" };
   const worker = workerId();
   const job = jobId === null ? await store.jobs.claimNextJob({ worker, cap }) : await store.jobs.claimJobById(jobId, { worker, cap });
@@ -136,11 +144,11 @@ async function capBlocker({ jobId, env }) {
 }
 
 // The reason a start of this shape would claim nothing, with the facts its message needs.
-// The orphans are swept first, exactly as `acquire` does: a job whose dead owner is about to be reclaimed is claimable, not `not-pending`.
+// The queued records are replayed and the orphans swept first, exactly as `acquire` does: a job whose dead owner is about to be reclaimed is claimable, not `not-pending`.
 async function previewRefusal({ jobId, env }) {
   if (jobId === null) return isPaused(env) ? { reason: "paused", jobId } : await capBlocker({ jobId, env });
   const store = openStore(env);
-  await store.jobs.sweepOrphans({ liveWorkerImpl: liveLocalWorker });
+  await replayThenSweep(store, env);
   const job = await store.jobs.getJob(jobId);
   if (!job) return { reason: "unknown-job", jobId };
   if (job.status !== "pending") return { reason: "not-pending", jobId, status: job.status };

@@ -1,3 +1,4 @@
+import { StoreUnavailableError, storeWarningLine } from "../config/errors.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { PROPOSED_HEADING, STANDING_HEADING, decisionTitleLine } from "../memory/decisions.mjs";
 import { projectFromCwd } from "../memory/registry-access.mjs";
@@ -99,9 +100,19 @@ async function stampInjection(store, sessionId, lessons, env) {
   return markInjectedQuietly(store, ids);
 }
 
-// Builds the context block injected at the start of a session: top lessons plus the project memories.
+// Builds the context block injected at the start of a session, or one warning line when the home database is unavailable.
 export async function runSessionStart({ input, env = process.env, fetchImpl = null }) {
   if (env?.NIGHTQUEUE_REFLECT === "1") return "";
+  try {
+    return await sessionBlock({ input, env, fetchImpl });
+  } catch (err) {
+    if (err instanceof StoreUnavailableError) return storeWarningLine(err);
+    throw err;
+  }
+}
+
+// The context block of a session: top lessons plus the project memories and decisions.
+async function sessionBlock({ input, env, fetchImpl }) {
   const cwd = typeof input?.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
   const sessionId = typeof input?.session_id === "string" ? input.session_id : "unknown";
   const project = projectFromCwd(cwd, env);

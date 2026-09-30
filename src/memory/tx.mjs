@@ -1,4 +1,5 @@
 import { UserError } from "../config/errors.mjs";
+import { classifyStoreError } from "./store-error.mjs";
 
 const BUSY_ATTEMPTS = 24;
 const BUSY_BASE_MS = 20;
@@ -29,6 +30,7 @@ export function withWriteRetry(action) {
     try {
       return action();
     } catch (err) {
+      if (classifyStoreError(err, {})) throw err;
       if (!isBusyError(err)) throw err;
       sleepSync(backoffDelay(attempt));
     }

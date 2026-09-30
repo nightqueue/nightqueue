@@ -8,8 +8,9 @@ import { run } from "../src/cli/index.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { linkRoadmapItemJob, saveRoadmapItem } from "../src/memory/roadmap.mjs";
-import { recordRunFields } from "../src/queue/run-state.mjs";
+import { recordJobBlock, recordRunFields } from "../src/queue/run-state.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
+import { makeSickHome } from "../test-support/sick-home.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
 
 const SLUG = "fix-the-worker";
@@ -212,6 +213,38 @@ test("`run commit` of a roadmap job adds `Refs: <item ref>` as the last trailer 
     trailers: ["Co-Authored-By: Someone <someone@example.invalid>", "Refs: AP-1"],
   });
   assert.equal(readFileSync(message, "utf8"), CO_AUTHORED, "the agent's message file was edited");
+});
+
+test("`run commit` inside a job with a job block commits on an unavailable database, with the `Refs:` trailer read from state.json", async (t) => {
+  const env = makeQueue(t, "run-commit-sick-home");
+  const { id, repo } = boundRun(t, env);
+  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
+  assert.equal(linkRoadmapItemJob(item.id, id, env), true);
+  const block = { id, projectKey: "AP", itemRef: item.ref, createdAt: new Date().toISOString() };
+  assert.equal(recordJobBlock({ projectId: ensureProject(env, "alpha"), slug: SLUG, block, env }).status, "written");
+  const message = readyCommit(t, env, repo, "run-commit-sick-home-message", "feat: ship it\n");
+  const sick = makeSickHome(env);
+  t.after(() => sick.restore());
+
+  const { code, text, errText } = await runCli(env, ["run", "commit", "--message-file", message], { jobId: id });
+
+  assert.equal(code, 0, `${text}\n${errText}`);
+  assert.deepEqual(lastMessage(repo), { body: `feat: ship it\n\nRefs: ${item.ref}`, trailers: [`Refs: ${item.ref}`] });
+});
+
+test("`run commit` inside a job with no job block on an unavailable database refuses with the store error and commits nothing", async (t) => {
+  const env = makeQueue(t, "run-commit-sick-home-no-block");
+  const { id, repo } = boundRun(t, env);
+  const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const message = readyCommit(t, env, repo, "run-commit-sick-home-no-block-message", "feat: ship it\n");
+  const sick = makeSickHome(env);
+  t.after(() => sick.restore());
+
+  const { code, errText } = await runCli(env, ["run", "commit", "--message-file", message], { jobId: id });
+
+  assert.equal(code, 1);
+  assert.match(errText, /the nightqueue database at .* is unavailable \(SQLITE_NOTADB/);
+  assert.equal(execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), head);
 });
 
 test("`run commit` of a free-prompt job, or outside the queue, commits the message untouched", async (t) => {

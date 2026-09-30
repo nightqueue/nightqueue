@@ -12,9 +12,10 @@ import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { linkRoadmapItemJob, queueRoadmapItem, saveRoadmapItem } from "../src/memory/roadmap.mjs";
 import { readRunState } from "../src/queue/resume.mjs";
-import { recordRunFields } from "../src/queue/run-state.mjs";
+import { recordJobBlock, recordRunFields } from "../src/queue/run-state.mjs";
 import { openStore } from "../src/store/open.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
+import { makeSickHome } from "../test-support/sick-home.mjs";
 import { FAKE_GH_PR_URL, isolatedHostVars } from "../test-support/host.mjs";
 import { makeDir, makeHome, orgIdOf } from "../test-support/memory.mjs";
 
@@ -220,6 +221,24 @@ test("`run pr` of a job queued from a roadmap item ends the published body with 
   const published = await publishedBody(t, { env, jobId: id, name: "run-pr-roadmap-body" });
 
   assert.equal(published, `${BODY.trimEnd()}\n\nRefs AP-1\n\nOpened by nightqueue · AP-1\n`);
+});
+
+test("`run pr` inside a job with a job block publishes on an unavailable database, the footer built from state.json", async (t) => {
+  const { env, id } = makeRun(t, "run-pr-sick-home");
+  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
+  assert.equal(linkRoadmapItemJob(item.id, id, env), true);
+  const block = { id, projectKey: "AP", itemRef: item.ref, createdAt: new Date().toISOString() };
+  assert.equal(recordJobBlock({ projectId: ensureProject(env, "alpha"), slug: SLUG, block, env }).status, "written");
+  const published = publishedPath(env);
+  const file = writeBody(t, "run-pr-sick-home-body", BODY);
+  const sick = makeSickHome(env);
+  t.after(() => sick.restore());
+
+  const { code, text, errText } = await runCli(env, ["run", "pr", "--body-file", file, "--title", "feat(auth): log in with google"], { jobId: id });
+
+  assert.equal(code, 0, `${text}\n${errText}`);
+  assert.deepEqual(ghCalls(env).at(-1).slice(4, 6), ["--body-file", published]);
+  assert.equal(readFileSync(published, "utf8"), `${BODY.trimEnd()}\n\nRefs ${item.ref}\n\nOpened by nightqueue · ${item.ref}\n`);
 });
 
 test("`run pr` of a job queued from an org item ends with the org item's ref", async (t) => {

@@ -8,6 +8,24 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A sick home database degrades instead of killing the MCP server, the runner and the run.**
+  A database SQLite cannot read (`SQLITE_NOTADB`, `CORRUPT`, `IOERR`, `READONLY`, `FULL`,
+  `PROTOCOL`, and `CANTOPEN` of an existing file, classified by `errcode`) is one `StoreUnavailableError` with the hint `nightqueue doctor --fix`: the CLI
+  prints one line, the MCP tools answer `store-unavailable` and the server keeps serving (it
+  also starts on a sick home), `context_for_phase` and the SessionStart hook answer empty plus
+  one line, and the failed connection is retired, never closed. The runner prints one outage
+  line, backs off from 30 s to 5 min without exiting or stopping its child, and renews its
+  running job's lease the moment the database answers; the steal rule is unchanged. A run knows
+  itself from a runtime-only `job` block of `state.json`, written before the worktree, so
+  `run commit`/`run pr` and the `run_*` tools keep working, and the writes it cannot make go to
+  `pending-writes.jsonl`, replayed once (finalize, every claim sweep, maintenance, bare
+  `queue repair`) without ever demoting a row. A session that cannot reach the MCP server is
+  gated `store-unavailable` with no attempt spent and a noteless retry. Plain `doctor` warns
+  instead of failing; `doctor --db` adds `db files`, `db integrity` and `lost jobs`;
+  `doctor --fix` folds the WAL, moves a broken `-wal`/`-shm` aside when the main file is intact
+  and no process holds the files (`lsof`), and refuses with the list of backups when it is not;
+  `queue repair --from-disk` recreates the jobs the table lost from their runs on disk, as
+  records that `queue retry` refuses since their prompt was not kept.
 - **The rename leftovers are cleaned or named.** `setup` and `update` remove the shims `nightshift`,
   `nsft` and `nshift` from the shim directory when this package wrote them (a foreign file of the
   same name is kept). `doctor` warns about a leftover one, names `~/.nightshift/` and every

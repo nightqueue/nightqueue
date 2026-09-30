@@ -1,5 +1,7 @@
 import { UserError } from "../config/errors.mjs";
-import { checkpointWal, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../memory/db.mjs";
+import { dbPath, homeDir } from "../config/paths.mjs";
+import { checkpointWal, migrateIfOutdated, openDb, openDbReadOnly, retireConnection, schemaVersionOn } from "../memory/db.mjs";
+import * as dbHealth from "../memory/db-health.mjs";
 import * as decisions from "../memory/decisions.mjs";
 import * as dedup from "../memory/dedup.mjs";
 import * as index from "../memory/index.mjs";
@@ -14,6 +16,7 @@ import * as roadmapBackfill from "../memory/roadmap-backfill.mjs";
 import * as roadmapSearch from "../memory/roadmap-search.mjs";
 import * as runs from "../memory/runs.mjs";
 import * as search from "../memory/search.mjs";
+import { classifyStoreError } from "../memory/store-error.mjs";
 import { READ_ONLY_METHODS } from "./store.mjs";
 
 const READ_ONLY_ALLOWED = new Set(READ_ONLY_METHODS);
@@ -109,6 +112,8 @@ function jobsMethods(env, db) {
     bindRunSlug: async (id, spec) => jobs.bindRunSlug(id, spec, env),
     linkPipelineRun: async (jobId, ref) => jobs.linkPipelineRun(jobId, ref, env),
     finishJob: async (id, outcome) => jobs.finishJob(id, outcome, env),
+    fillFinishGaps: async (id, spec) => jobs.fillFinishGaps(id, spec, env),
+    fillSessionFacts: async (id, spec) => jobs.fillSessionFacts(id, spec, env),
     cancelJob: async (id, options) => jobs.cancelJob(id, options, env),
     cancelRunningJob: async (id, spec) => jobs.cancelRunningJob(id, spec, env),
     listCloseCandidates: async () => jobs.listCloseCandidates(env, db()),
@@ -116,6 +121,7 @@ function jobsMethods(env, db) {
     retryJob: async (id, options) =>
       followingPassedStatus({ jobId: id, write: () => jobs.retryJob(id, options, env), fromKey: "retriedFrom" }, env),
     getJob: async (id) => jobs.getJob(id, env, db()),
+    jobSpawnRefs: async (id) => roadmap.jobSpawnRefs(id, env, db()),
     listJobs: async (options) => jobs.listJobs(options, env, db()),
     countsByStatus: async () => jobs.countsByStatus(env, db()),
     countBlockedGates: async () => jobs.countBlockedGates(env, db()),
@@ -125,6 +131,8 @@ function jobsMethods(env, db) {
     isJobActive: async (id) => jobs.isJobActive(id, env, db()),
     repairJobFromWitness: async (id, terminal) => jobs.repairJobFromWitness(id, terminal, env),
     reclassifyJob: async (id, outcome) => jobs.reclassifyJob(id, outcome, env),
+    existingJobIds: async (ids) => jobs.existingJobIds(ids, env, db()),
+    recoverJob: async (spec) => jobs.recoverJob(spec, env),
     correctJobPrAttribution: async (id, spec) => jobs.correctJobPrAttribution(id, spec, env),
     hasClaimablePending: async () => jobs.hasClaimablePending(env),
     peekNextJob: async () => jobs.peekNextJob(env),
@@ -148,6 +156,7 @@ function jobsMethods(env, db) {
 function runsDomain(env) {
   return {
     logPipelineRun: async (run) => runs.logPipelineRun(run, env),
+    logPipelineRunOnce: async (run, options) => runs.logPipelineRunOnce(run, options, env),
     updateRunTelemetry: async (telemetry) => runs.updateRunTelemetry(telemetry, env),
     latestRunOutcome: async (spec) => runs.latestRunOutcome(spec, env),
   };
@@ -186,6 +195,7 @@ function memoryDomain(env) {
 function indexDomain(env) {
   return {
     saveProjectIndex: async (spec) => index.saveProjectIndex(spec, env),
+    fillProjectIndex: async (spec) => index.fillProjectIndex(spec, env),
     recallProjectIndex: async (spec) => index.recallProjectIndex(spec, env),
   };
 }
@@ -272,15 +282,36 @@ function projectsDomain(db) {
   };
 }
 
+// The health of the database file itself, for `nightqueue doctor --db` and `--fix`; each call opens and closes its own connection.
+function dbDomain(env) {
+  return {
+    files: async () => dbHealth.dbFiles(env),
+    quickCheck: async () => dbHealth.quickCheck(env),
+    quickCheckMainAlone: async () => dbHealth.quickCheckMainAlone(env),
+    integrityCheck: async () => dbHealth.integrityCheck(env),
+    checkpointTruncate: async () => dbHealth.checkpointTruncate(env),
+  };
+}
+
 // The message of a failure, as the caller would print it.
 function errorMessage(err) {
   return err?.message ?? String(err);
 }
 
+// The StoreUnavailableError a failure means for this home, or null when the database itself is not the problem.
+function unavailableOf(err, env) {
+  return classifyStoreError(err, { home: homeDir(env), path: dbPath(env) });
+}
+
+// The `unavailable` block of a diagnosis: what doctor needs to name the failure and its fix.
+function unavailableBlock({ code, errcode, detail, home, path, hint }) {
+  return { code, errcode, detail, home, path, hint };
+}
+
 // The raw numbers of a diagnosis, each field resolved on its own so one broken read never poisons the other and nothing ever throws.
-function readHealth(db) {
+function readHealth({ db, env, connection }) {
   const errors = { schemaVersion: null, orphanJobs: null, danglingReferences: null };
-  const health = { schemaVersion: null, orphanJobs: null, danglingReferences: null, errors };
+  const health = { schemaVersion: null, orphanJobs: null, danglingReferences: null, errors, unavailable: null };
   const readers = {
     schemaVersion: () => schemaVersionOn(db()),
     orphanJobs: () => jobs.countOrphanJobs(db()),
@@ -290,15 +321,27 @@ function readHealth(db) {
     try {
       health[field] = read();
     } catch (err) {
+      const unavailable = unavailableOf(err, env);
       errors[field] = errorMessage(err);
+      if (unavailable) health.unavailable ??= unavailableBlock(unavailable);
     }
   }
+  if (health.unavailable) connection.drop();
   return health;
 }
 
 // The shared read-write connection of the home, opened only when a method needs it - building a store creates no database - and re-resolved on every call so the store can never hold a handle a test closed.
 function readWriteConnection(env) {
-  return { get: () => openDb(env), release: () => {} };
+  return { get: () => openDb(env), release: () => {}, drop: () => retireConnection(env) };
+}
+
+// Closes a read-only connection without letting the close throw; closing a read-only one never removes `-shm`.
+function closeQuietly(db) {
+  try {
+    db?.close();
+  } catch {
+    return;
+  }
 }
 
 // The read-only connection of the store, opened only when a method needs it: `openDbReadOnly` throws on a home with no database, and every read-only caller guards around its own open.
@@ -311,7 +354,38 @@ function readOnlyConnection(env) {
       db = null;
       open?.close();
     },
+    drop: () => {
+      const open = db;
+      db = null;
+      closeQuietly(open);
+    },
   };
+}
+
+// Wraps a store method so a failure of the database itself leaves as a StoreUnavailableError and the broken handle is never reused.
+function classifying(fn, { env, connection }) {
+  return async (...args) => {
+    try {
+      return await fn(...args);
+    } catch (err) {
+      const unavailable = unavailableOf(err, env);
+      if (!unavailable) throw err;
+      connection.drop();
+      throw unavailable;
+    }
+  };
+}
+
+// Wraps every domain method and every top-level method but `close` in `classifying`.
+function classifyAll(store, context) {
+  for (const [key, value] of Object.entries(store)) {
+    if (typeof value === "function") {
+      if (key !== "close") store[key] = classifying(value, context);
+      continue;
+    }
+    for (const [method, fn] of Object.entries(value)) value[method] = classifying(fn, context);
+  }
+  return store;
 }
 
 // Refuses a method a read-only connection must never run, naming it; never a silent fallback to a writable connection.
@@ -340,7 +414,7 @@ function fenceReadOnly(store) {
 export function createLocalStore(env = process.env, { readOnly = false, onClose = () => {} } = {}) {
   const connection = readOnly ? readOnlyConnection(env) : readWriteConnection(env);
   const db = () => connection.get();
-  const store = {
+  const store = classifyAll({
     jobs: jobsDomain(env, db),
     runs: runsDomain(env),
     lessons: lessonsDomain(env, db),
@@ -350,7 +424,8 @@ export function createLocalStore(env = process.env, { readOnly = false, onClose 
     roadmap: roadmapDomain(env, db),
     orgs: orgsDomain(db),
     projects: projectsDomain(db),
-    health: async () => readHealth(db),
+    db: dbDomain(env),
+    health: async () => readHealth({ db, env, connection }),
     connect: async () => {
       db();
     },
@@ -360,6 +435,6 @@ export function createLocalStore(env = process.env, { readOnly = false, onClose 
     },
     checkpoint: async () => checkpointWal(env),
     migrateIfOutdated: async () => migrateIfOutdated(env),
-  };
+  }, { env, connection });
   return readOnly ? fenceReadOnly(store) : store;
 }

@@ -115,8 +115,9 @@ to understand what a triager is.
 anything else, one call to `lesson_recall` with `project` = this project proves the memory
 server answers; the return itself is not used.
 
-- **The tool does not exist / the server does not answer** → one line: `nightqueue memory
-  unavailable: run nightqueue doctor and retry` — and stop. There is no memoryless mode.
+- **The tool does not exist / the server does not answer / it answers `"error": "store-unavailable"`**
+  → one line: `nightqueue memory unavailable: run nightqueue doctor --fix and retry` — and stop.
+  There is no memoryless mode.
 - **Empty memory** → normal. It is the first day of a project; say nothing about it.
 - **The project is not registered** → `queue_add` answers `needs_registration` when the time
   comes; ask the person then, and call again with `register: true` only after they confirm.
