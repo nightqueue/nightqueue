@@ -8,83 +8,74 @@ import { makeDir } from "../test-support/memory.mjs";
 
 const TEMPLATE = { source: "nightqueue", headings: NIGHTQUEUE_SECTIONS };
 
-function withEvidence(t, name) {
+const HEAD = "## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\n";
+
+const NOT_TESTED = "Not tested: nothing else\n";
+
+const TABLE_REFUSAL = { missing: "QA subsections (### Automated, ### API, ### Browser, ### Device, one bullet per test) instead of a table" };
+
+const NO_SUBSECTION = { missing: "a QA subsection for a method that ran (### Automated, ### API, ### Browser, ### Device)" };
+
+// A run directory holding the evidence file of each named method.
+function withEvidence(t, name, methods = ["automated"]) {
   const evidenceDir = makeDir(t, name);
-  writeFileSync(join(evidenceDir, "automated-verification.md"), "PASSED\n");
+  for (const method of methods) writeFileSync(join(evidenceDir, `${method}-verification.md`), "PASSED\n");
   return evidenceDir;
 }
 
-// Group C: a QA table without outer pipes is valid GFM; the header itself is present and readable.
-test("a QA table without outer pipes is reported as a MISSING header naming the exact piped form the template requires", (t) => {
-  const evidenceDir = withEvidence(t, "pr-body-no-pipes");
-  const body =
-    "## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\nMethod | Executed | Result\n--- | --- | ---\nAutomated | `npm test` | PASSED\nNot tested: nothing else\n";
-  const problems = bodyProblems({ body, template: TEMPLATE, evidenceDir });
-  assert.deepEqual(problems, [{ missing: "QA table header | Method | Executed | Result |" }]);
+// The problems of a body made of the QA text under `## QA`, against the evidence of the named methods.
+function qaProblems(t, name, qa, methods) {
+  return bodyProblems({ body: HEAD + qa, template: TEMPLATE, evidenceDir: withEvidence(t, name, methods) });
+}
+
+test("subsections in any order, one bullet per test, with optional ✅/❌ and a reasoned SKIPPED are accepted", (t) => {
+  const qa =
+    "### Browser\n- http://localhost:3000/login, flow login → dashboard — the redirect was observed, PASSED ✅\n### Automated\n- `npm test` — PASSED ✅\n- `npm run lint` — FAILED ❌\n- `npm run e2e` — SKIPPED (no display)\n### Device\n- iOS simulator, login — PASSED\n" +
+    NOT_TESTED;
+  assert.deepEqual(qaProblems(t, "pr-body-any-order", qa, ["automated", "browser", "emulator"]), []);
 });
 
-// R9 open sub-case: `Not tested:` written AS a pipe-prefixed table row, mixed into the data rows.
-test("`Not tested:` written as a table row is absorbed as a bogus method row, and the plain `Not tested:` line is still reported missing", (t) => {
-  const evidenceDir = withEvidence(t, "pr-body-not-tested-as-row");
-  const body =
-    "## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\n| Method | Executed | Result |\n| --- | --- | --- |\n| Automated | `npm test` | PASSED |\n| Not tested: nothing else |\n";
-  const problems = bodyProblems({ body, template: TEMPLATE, evidenceDir });
-  assert.deepEqual(problems, [
-    { missing: "a known method in QA row Not tested: nothing else (Automated, API, Browser, Android / iOS emulator or device)" },
-    { missing: "Not tested: line after the QA table" },
-  ]);
+test("a table under `## QA` is refused, with or without outer pipes", (t) => {
+  const piped = "| Method | Executed | Result |\n| --- | --- | --- |\n| Automated | `npm test` | PASSED |\n" + NOT_TESTED;
+  assert.deepEqual(qaProblems(t, "pr-body-table", piped), [TABLE_REFUSAL, NO_SUBSECTION]);
+  const bare = "Method | Executed | Result\n--- | --- | ---\nAutomated | `npm test` | PASSED\n" + NOT_TESTED;
+  assert.deepEqual(qaProblems(t, "pr-body-no-pipes", bare), [NO_SUBSECTION]);
 });
 
-// Header separator with GFM alignment colons must still be recognized.
-test("a separator with alignment colons is accepted", (t) => {
-  const evidenceDir = withEvidence(t, "pr-body-align-colons");
-  const body =
-    "## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\n| Method | Executed | Result |\n| :--- | :---: | ---: |\n| Automated | `npm test` | PASSED |\nNot tested: nothing else\n";
-  const problems = bodyProblems({ body, template: TEMPLATE, evidenceDir });
-  assert.deepEqual(problems, []);
+test("a method outside the four is refused, `### Manual` included", (t) => {
+  const qa = "### Automated\n- `npm test` — PASSED ✅\n### Manual\n- clicked around — PASSED\n" + NOT_TESTED;
+  assert.deepEqual(qaProblems(t, "pr-body-manual", qa), [{ missing: "a known QA subsection instead of ### Manual (### Automated, ### API, ### Browser, ### Device)" }]);
 });
 
-// Extra inner spaces and trailing whitespace on every table line must not break parsing.
-test("extra spaces and trailing whitespace around cells are tolerated", (t) => {
-  const evidenceDir = withEvidence(t, "pr-body-extra-spaces");
-  const body =
-    "## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\n|  Method  |  Executed  |  Result  |   \n|  ---  |  ---  |  ---  |  \n|  Automated  |  `npm test`  |  PASSED  |  \nNot tested: nothing else\n";
-  const problems = bodyProblems({ body, template: TEMPLATE, evidenceDir });
-  assert.deepEqual(problems, []);
+test("an N/A bullet is rejected and an N/A subsection is no known method", (t) => {
+  const bullet = qaProblems(t, "pr-body-na-bullet", "### Automated\n- `npm test` — N/A\n" + NOT_TESTED);
+  assert.equal(bullet.length, 1);
+  assert.match(bullet[0].rejected, /^QA subsection Automated has a N\/A bullet/);
+  const subsection = qaProblems(t, "pr-body-na-subsection", "### Automated\n- `npm test` — PASSED ✅\n### N/A\n- nothing — PASSED\n" + NOT_TESTED);
+  assert.deepEqual(subsection, [{ missing: "a known QA subsection instead of ### N/A (### Automated, ### API, ### Browser, ### Device)" }]);
 });
 
-// A blank line between the header/separator and the first data row ends the table early, same as a real markdown renderer would.
-test("a blank line between the separator and the data rows ends the table before any row", (t) => {
-  const evidenceDir = withEvidence(t, "pr-body-blank-before-rows");
-  const body =
-    "## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\n| Method | Executed | Result |\n| --- | --- | --- |\n\n| Automated | `npm test` | PASSED |\nNot tested: nothing else\n";
-  const problems = bodyProblems({ body, template: TEMPLATE, evidenceDir });
-  assert.deepEqual(problems, [{ missing: "a QA table row for a method that ran" }]);
+test("a bullet whose result does not end in PASSED, FAILED or SKIPPED (<reason>) is refused", (t) => {
+  for (const [index, line] of ["- `npm test` — the run went fine", "- `npm test` PASSED", "- `npm test` — SKIPPED", "- `npm test` — SKIPPED ()", "- `npm test` — PASSED and more"].entries()) {
+    const problems = qaProblems(t, `pr-body-bad-bullet-${index}`, `### Automated\n${line}\n${NOT_TESTED}`);
+    assert.equal(problems.length, 1, line);
+    assert.match(problems[0].missing, /^QA bullet .* in subsection Automated/, line);
+  }
 });
 
-// A blank line between the header and its separator makes the whole table unrecognized, same as a real markdown renderer would.
-test("a blank line between the header and the separator makes the header unrecognized", (t) => {
-  const evidenceDir = withEvidence(t, "pr-body-blank-before-separator");
-  const body =
-    "## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\n| Method | Executed | Result |\n\n| --- | --- | --- |\n| Automated | `npm test` | PASSED |\nNot tested: nothing else\n";
-  const problems = bodyProblems({ body, template: TEMPLATE, evidenceDir });
-  assert.deepEqual(problems, [{ missing: "QA table header | Method | Executed | Result |" }]);
+test("a subsection with no bullet is refused", (t) => {
+  assert.deepEqual(qaProblems(t, "pr-body-empty-subsection", "### Automated\n" + NOT_TESTED), [{ missing: "a bullet under QA subsection Automated" }]);
 });
 
-// A row whose Result is FAILED is not blocked (only an explicit N/A row is rejected).
-test("a FAILED result does not block publication", (t) => {
-  const evidenceDir = withEvidence(t, "pr-body-failed-result");
-  const body =
-    "## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\n| Method | Executed | Result |\n| --- | --- | --- |\n| Automated | `npm test` | FAILED |\nNot tested: nothing else\n";
-  const problems = bodyProblems({ body, template: TEMPLATE, evidenceDir });
-  assert.deepEqual(problems, []);
+test("`Not tested:` missing, empty, or before the last subsection is refused", (t) => {
+  const missing = { missing: "Not tested: line after the last QA subsection" };
+  assert.deepEqual(qaProblems(t, "pr-body-no-not-tested", "### Automated\n- `npm test` — PASSED ✅\n"), [missing]);
+  assert.deepEqual(qaProblems(t, "pr-body-not-tested-empty", "### Automated\n- `npm test` — PASSED ✅\nNot tested:\n"), [missing]);
+  assert.deepEqual(qaProblems(t, "pr-body-not-tested-before", "Not tested: nothing\n### Automated\n- `npm test` — PASSED ✅\n"), [missing]);
 });
 
-// `Not tested:` with no text of its own must be treated the same as an absent line.
-test("`Not tested:` with empty text is reported missing", (t) => {
-  const evidenceDir = withEvidence(t, "pr-body-not-tested-empty");
-  const body =
-    "## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\n| Method | Executed | Result |\n| --- | --- | --- |\n| Automated | `npm test` | PASSED |\nNot tested:\n";
-  const problems = bodyProblems({ body, template: TEMPLATE, evidenceDir });
-  assert.deepEqual(problems, [{ missing: "Not tested: line after the QA table" }]);
+test("each subsection needs its own `<method>-*` evidence, Device mapping to `emulator`", (t) => {
+  const qa = "### Automated\n- `npm test` — PASSED ✅\n### API\n- GET /health — 200, PASSED ✅\n### Device\n- Android emulator — PASSED ✅\n" + NOT_TESTED;
+  assert.deepEqual(qaProblems(t, "pr-body-evidence", qa), [{ missing: "evidence for QA section API" }, { missing: "evidence for QA section Device" }]);
+  assert.deepEqual(qaProblems(t, "pr-body-evidence-all", qa, ["automated", "api", "emulator"]), []);
 });

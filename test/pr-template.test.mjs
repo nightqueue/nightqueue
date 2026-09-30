@@ -93,11 +93,11 @@ test("a repository template with no heading accepts any body except one carrying
   ]);
 });
 
-test("a `Not tested:` line above the QA table does not count", (t) => {
+test("a `Not tested:` line above the QA subsections does not count", (t) => {
   const evidenceDir = makeDir(t, "pr-body-evidence");
   writeFileSync(join(evidenceDir, "automated-verification.md"), "PASSED\n");
-  const body = "## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\nNot tested: nothing\n| Method | Executed | Result |\n| --- | --- | --- |\n| Automated | `npm test` | PASSED |\n";
+  const body = "## Report\nx\n## Cause\ny\n## Changes\n- z\n## QA\nNot tested: nothing\n### Automated\n- `npm test` — PASSED ✅\n";
   const template = { source: "nightqueue", headings: NIGHTQUEUE_SECTIONS };
-  assert.deepEqual(bodyProblems({ body, template, evidenceDir }), [{ missing: "Not tested: line after the QA table" }]);
+  assert.deepEqual(bodyProblems({ body, template, evidenceDir }), [{ missing: "Not tested: line after the last QA subsection" }]);
   assert.deepEqual(bodyProblems({ body: `${body}Not tested: the real device; low risk\n`, template, evidenceDir }), []);
 });

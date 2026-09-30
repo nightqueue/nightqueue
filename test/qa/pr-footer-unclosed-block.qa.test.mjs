@@ -32,9 +32,8 @@ const BODY = [
   "",
   "## QA",
   "",
-  "| Method | Executed | Result |",
-  "| --- | --- | --- |",
-  "| Automated | `npm test` | PASSED |",
+  "### Automated",
+  "- `npm test` — PASSED ✅",
   "",
   "Not tested: the real google consent screen; low risk, the callback is covered by the suite.",
   "",
@@ -109,7 +108,7 @@ async function attempt(t, name, body) {
   });
   if (code !== 0) return;
   const published = readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "pr-body.published.md"), "utf8");
-  const footerAt = published.lastIndexOf("Refs AP-1");
+  const footerAt = published.lastIndexOf("Opened by nightqueue · AP-1");
   assert.ok(footerAt > 0, published);
   assert.equal(endsOpen(published.slice(0, footerAt)), null, `the footer was published inside an open ${endsOpen(published.slice(0, footerAt))}:\n${published}`);
 }

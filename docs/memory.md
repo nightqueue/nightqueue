@@ -298,7 +298,7 @@ became `cancelled`, and every item got priority 5.
 **Private by design.** Both live only in `$NIGHTQUEUE_HOME/nightqueue.db`, the
 same file as the rest of the memory. The runtime writes nothing into the
 repository and publishes nothing; the one thing it puts in a pull request is the
-footer `nightqueue run pr` appends (`Refs <KEY>-<n>` and `Opened by nightqueue ·
+footer `nightqueue run pr` appends (`Opened by nightqueue ·
 <KEY>-<n>` for a job queued from a roadmap item, `Opened by nightqueue` otherwise),
 and in a commit the `Refs: <KEY>-<n>` trailer `nightqueue run commit` adds: no `docs/adr/` tree, no `ROADMAP.md`; only an explicit `nightqueue decision export`
 writes a file. The only ways in are the MCP tools below and the one deliberate

@@ -55,7 +55,7 @@ Four sections, mandatory, in this order:
 - `## Report` — what was reported as happening, symptom from the reporter's point of view (user, Sentry, QA, issue), no root cause.
 - `## Cause` — what was producing the behavior, specific file/function/condition; if a hypothesis was discarded, one line saying which and why.
 - `## Changes` — what changed and where; known side effects / what was deliberately left untouched.
-- `## QA` — how it was validated, only what actually ran for this PR, as a markdown table with columns `Method | Executed | Result` and one row per method actually executed among: Automated (tsc / lint / test) with command and PASSED/FAILED/SKIPPED (reason); API with request, endpoint, status, relevant payload; Browser with URL, flow walked through, what was observed; Android / iOS emulator or device with build or OTA installed, flow walked through, what was observed. Rows that did not run are removed, never marked N/A. After the table a mandatory line `Not tested: <what was left out and the risk>`.
+- `## QA` — how it was validated, only what actually ran for this PR: one `###` subsection per method that ran, one bullet per test. `### Automated` (tsc / lint / test) with the command; `### API` with request, endpoint, status, payload; `### Browser` with URL, flow, what was observed; `### Device` (Android / iOS emulator or device) with build or OTA, flow, what was observed. Then a mandatory line `Not tested: <what was left out and the risk>`.
 
 The fence delimits the MODEL in this document; the real body is emitted without a fence.
 
@@ -67,32 +67,31 @@ The fence delimits the MODEL in this document; the real body is emitted without 
 ## Changes
 - <...>
 ## QA
-| Method | Executed | Result |
-| --- | --- | --- |
-| Automated | `<command>` | PASSED |
+### Automated
+- `<command>` — PASSED ✅
 Not tested: <what was left out and the risk>
 ```
 
-The `## QA` table starts with exactly the header `| Method | Executed | Result |` and
-its `| --- |` separator, carries at least one row, and is followed by the `Not tested:`
-line. The method cell starts with the method name: `Automated`, `API`, `Browser`,
-`Android / iOS emulator or device` (`Android`, `iOS`, `Emulator` or `Device`).
+Only the subsections that ran, in any order, each with at least one bullet
+`- <what ran> — <result>`, the result ending in `PASSED`, `FAILED` or `SKIPPED (<reason>)`
+and an optional ✅/❌, e.g. `- http://localhost:3000/login, flow login → dashboard — the redirect was observed, PASSED ✅`.
+`Not tested:` comes after the last subsection. A table, another `###` subsection or an `N/A` is refused.
 
 ## Evidence
 
-Every row of the `## QA` table is backed by a non-empty file under
+Every subsection of `## QA` is backed by a non-empty file under
 `<RUN_DIR>/evidence/`, named `<method>-<name>.<ext>`:
 
-| Row | `<method>` | What the file holds |
+| Subsection | `<method>` | What the file holds |
 | --- | --- | --- |
 | Automated | `automated` | the verifier's real output: a copy of `06-verification.md` (`automated-verification.md`), plus the PoC excerpt of `05-qa.md` when the tier produced one |
 | API | `api` | the HTTP log or the recorded request and response of Phase 6.5 |
 | Browser | `browser` | the screenshot or the page log of Phase 6.5 |
-| Android / iOS emulator or device | `emulator` | the screenshot or the log of the build or OTA exercised in Phase 6.5 |
+| Device (Android / iOS emulator or device) | `emulator` | the screenshot or the log of the build or OTA exercised in Phase 6.5 |
 
 Extensions: `.log`, `.md`, `.txt`, `.png`, `.jpg`. A method with no evidence file has no
-row — never a row without a file. `nightqueue run pr` answers
-`MISSING: evidence for QA row <method>` for a row whose file is absent or empty.
+subsection — never a subsection without a file. `nightqueue run pr` answers
+`MISSING: evidence for QA section <method>` for a subsection whose file is absent or empty.
 
 ## Where each section comes from
 
@@ -101,7 +100,7 @@ row — never a row without a file. `nightqueue run pr` answers
 | `## Report` | `01-triage.md` (`## Validated brief`); in the trivial tier, the `## Brief` of Phase 0 (`**Affected area:**`, `**Objective:**`, `**Expected outcome:**`) | The symptom as the reporter saw it, never the cause. For a feature: what was asked and by whom. |
 | `## Cause` | `01-triage.md` `## Diagnosis`, `03-plan.md` | For a feature, write what motivated the change — no invented root cause. |
 | `## Changes` | `## Modified files` of `04-implementation.md`, described by the matching line of `**Files to create/modify:**` of `03-plan.md` | One bullet per file or per coherent area, at most 10 bullets, one line each. A path with no matching plan line (a deviation from the plan, or the trivial tier, which has no plan) carries the path alone or the coder's deviation note — never an invented description. More than 10 paths: group by directory or area, one bullet per area with the number of files. Every path of `## Modified files` appears in EXACTLY one bullet — alone or inside a group, never in both and never dropped. |
-| `## QA` | the files under `<RUN_DIR>/evidence/` | One row per file-backed method that really ran; `Not tested:` names what was left out (a `NOT MET` line of Phase 6.5, a `## Suggestions` item with `dedicated ticket: yes`, a part that depends on another system) and its risk. **Never drop a real open item to make the pull request look clean.** |
+| `## QA` | the files under `<RUN_DIR>/evidence/` | One `###` subsection per file-backed method that really ran, one bullet per test; `Not tested:` names what was left out (a `NOT MET` line of Phase 6.5, a `## Suggestions` item with `dedicated ticket: yes`, a part that depends on another system) and its risk. **Never drop a real open item to make the pull request look clean.** |
 
 A decision proposed by this run is NOT part of this body: it goes only to the Phase 8
 report, where the operator decides whether it deserves a ticket.
@@ -124,7 +123,6 @@ report, where the operator decides whether it deserves a ticket.
   body that carries one.
 - In the nightqueue template, a fifth `## ` section: the four above are the whole body.
   A repository template has no such limit.
-- A QA row marked `N/A`: a method that did not run has no row.
 - The execution record of the run: phases, models, statuses, durations, `Lessons
   saved`, `Tier`, `Slug` as a field. It belongs to the telemetry of Phase 8, not here.
 - The name of an agent, a model or a vendor. To identify the automation, use the
@@ -138,7 +136,7 @@ report, where the operator decides whether it deserves a ticket.
 ## Size
 
 The body fits on one screen — past that it stops being read. `## Changes` at most 10
-bullets of one line; the `## QA` table one row per method. Write it already fitting; do
+bullets of one line; the `## QA` section one subsection per method. Write it already fitting; do
 not write long expecting someone to cut it.
 
 ## Before `nightqueue run pr`
@@ -150,8 +148,8 @@ item by item:
 2. Repository template: every heading of it present, in its order, and no nightqueue
    heading it does not have.
 3. Nightqueue template: `## Report`, `## Cause`, `## Changes`, `## QA` present, in this
-   order, and no fifth `## `; the `## QA` table with the exact header, at least one row,
-   no `N/A` row, and the `Not tested:` line after it; every row backed by its file under
+   order, and no fifth `## `; the `## QA` subsections, each with at least one
+   bullet ending in PASSED, FAILED or SKIPPED (reason), no `N/A`, and the `Not tested:` line after the last one; every subsection backed by its file under
    `<RUN_DIR>/evidence/`.
 4. No bare `#<number>` outside the `Fixes`/`Closes` line.
 5. No placeholder in double curly braces and no `<...>` example left over.

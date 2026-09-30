@@ -486,7 +486,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    prints the whole table. Every `phase_prompt` answer
    already carries the `model` of its agent — in the fix loops, the relaunched coder keeps the
    `model` of the task's tier. `QA methods of the PR` is guidance for which methods to run, not a
-   runtime check: each one becomes a `## QA` row only with its file under `<RUN_DIR>/evidence/`
+   runtime check: each one becomes a `## QA` subsection only with its file under `<RUN_DIR>/evidence/`
    (Phase 7 step 3), and the trivial tier runs no Phase 6.5, so there its non-automated methods
    apply only when that evidence exists.
 
@@ -1044,7 +1044,7 @@ The command below owns the mechanics — staging, the commit, the branch name, t
      needed, by the nickname `nightqueue` — never an agent, model or vendor name, and no
      `Co-Authored-By` trailer.
    - **How it was validated goes inside the template's own test section.** Nightqueue template:
-     the `## QA` table, one row per method that really ran, each backed by a non-empty file
+     the `## QA` section, one `###` subsection per method that really ran, one bullet per test, each backed by a non-empty file
      under `<RUN_DIR>/evidence/<method>-<name>.<ext>` (`<method>` ∈ `automated`, `api`,
      `browser`, `emulator`), then the `Not tested:` line. The evidence files are already there: the
      verifier wrote `automated-verification.md` (Phase 6, every tier) and the runtime lane wrote
@@ -1078,9 +1078,9 @@ The command below owns the mechanics — staging, the commit, the branch name, t
      it came from the artifact), call the command again and record the refusal as an ⚠️ open
      item of Phase 8.
    - `REJECTED: <reason>` and `MISSING: <what>` (one line per violation; the evidence one
-     reads `MISSING: evidence for QA row <method>`) mean the body failed the check of the
+     reads `MISSING: evidence for QA section <method>`) mean the body failed the check of the
      template in effect (a heading missing or out of order, a nightqueue heading against a
-     repository template, the `## QA` table or the `Not tested:` line, a bare `#<number>`, a
+     repository template, the `## QA` subsections or the `Not tested:` line, a bare `#<number>`, a
      placeholder or a leftover `<...>` example) and nothing was pushed. Fix the body or the
      evidence and call the command again.
    - **The delivery is recorded by the command itself** — `nightqueue run publish` records

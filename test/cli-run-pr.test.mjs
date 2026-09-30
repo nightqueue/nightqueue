@@ -24,7 +24,7 @@ const BRANCH = "worktree-feat+login-google";
 
 const REPORT = "logging in with google failed for every user.";
 
-const AUTOMATED_ROW = "| Automated | `npm test` | PASSED |";
+const AUTOMATED_ROW = "- `npm test` — PASSED ✅";
 
 const BODY = [
   "## Report",
@@ -41,8 +41,7 @@ const BODY = [
   "",
   "## QA",
   "",
-  "| Method | Executed | Result |",
-  "| --- | --- | --- |",
+  "### Automated",
   AUTOMATED_ROW,
   "",
   "Not tested: the real google consent screen; low risk, the callback is covered by the suite.",
@@ -213,14 +212,15 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
   assert.equal(existsSync(worktree), true);
 });
 
-test("`run pr` of a job queued from a roadmap item ends the published body with `Refs <ref>` and `Opened by nightqueue · <ref>`", async (t) => {
+test("`run pr` of a job queued from a roadmap item ends the published body with only `Opened by nightqueue · <ref>`", async (t) => {
   const { env, id } = makeRun(t, "run-pr-roadmap");
   const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
   assert.equal(linkRoadmapItemJob(item.id, id, env), true);
 
   const published = await publishedBody(t, { env, jobId: id, name: "run-pr-roadmap-body" });
 
-  assert.equal(published, `${BODY.trimEnd()}\n\nRefs AP-1\n\nOpened by nightqueue · AP-1\n`);
+  assert.equal(published, `${BODY.trimEnd()}\n\nOpened by nightqueue · AP-1\n`);
+  assert.equal(published.includes("Refs"), false);
 });
 
 test("`run pr` inside a job with a job block publishes on an unavailable database, the footer built from state.json", async (t) => {
@@ -238,7 +238,7 @@ test("`run pr` inside a job with a job block publishes on an unavailable databas
 
   assert.equal(code, 0, `${text}\n${errText}`);
   assert.deepEqual(ghCalls(env).at(-1).slice(4, 6), ["--body-file", published]);
-  assert.equal(readFileSync(published, "utf8"), `${BODY.trimEnd()}\n\nRefs ${item.ref}\n\nOpened by nightqueue · ${item.ref}\n`);
+  assert.equal(readFileSync(published, "utf8"), `${BODY.trimEnd()}\n\nOpened by nightqueue · ${item.ref}\n`);
 });
 
 test("`run pr` of a job queued from an org item ends with the org item's ref", async (t) => {
@@ -254,7 +254,7 @@ test("`run pr` of a job queued from an org item ends with the org item's ref", a
   const published = await publishedBody(t, { env, jobId: jobs[0].id, name: "run-pr-org-item-body" });
 
   assert.equal(item.ref, `${orgKey}-1`);
-  assert.ok(published.endsWith(`\n\nRefs ${orgKey}-1\n\nOpened by nightqueue · ${orgKey}-1\n`), published);
+  assert.ok(published.endsWith(`\n\nOpened by nightqueue · ${orgKey}-1\n`), published);
 });
 
 test("`run pr` of a free-prompt job, or outside the queue, ends with only `Opened by nightqueue`", async (t) => {
@@ -276,7 +276,7 @@ test("after `project key` renames the key, the footer carries the new key", asyn
 
   const published = await publishedBody(t, { env, jobId: id, name: "run-pr-renamed-key-body" });
 
-  assert.ok(published.endsWith("\n\nRefs NX-1\n\nOpened by nightqueue · NX-1\n"), published);
+  assert.ok(published.endsWith("\n\nOpened by nightqueue · NX-1\n"), published);
 });
 
 test("a body carrying the footer, a `Refs` line, a job id or the run slug is REJECTED naming the line, and nothing is pushed", async (t) => {
@@ -423,22 +423,21 @@ test("`run pr` rejects a placeholder, a missing section and a section out of ord
   assert.deepEqual(await problems("run-pr-fifth", `${BODY}\n## Run\n\nthe details\n`), [
     "REJECTED: the body carries a fifth section `## Run`; the four sections are the whole body",
   ]);
-  assert.deepEqual(await problems("run-pr-no-not-tested", BODY.replace("Not tested:", "Untested:")), ["MISSING: Not tested: line after the QA table"]);
-  assert.deepEqual(await problems("run-pr-header", BODY.replace("| Method | Executed | Result |", "| Method | Result |")), [
-    "MISSING: QA table header | Method | Executed | Result |",
-  ]);
-  assert.deepEqual(await problems("run-pr-no-row", BODY.replace(`${AUTOMATED_ROW}\n`, "")), ["MISSING: a QA table row for a method that ran"]);
-  const notApplicable = await problems("run-pr-na", BODY.replace(AUTOMATED_ROW, `${AUTOMATED_ROW}\n| Browser | N/A | N/A |`));
-  assert.ok(notApplicable.includes("REJECTED: QA row Browser is marked N/A: a method that did not run has no row"), notApplicable.join("\n"));
-  assert.deepEqual(await problems("run-pr-unknown", BODY.replace(AUTOMATED_ROW, `${AUTOMATED_ROW}\n| Unit tests | \`npm test\` | PASSED |`)), [
-    "MISSING: a known method in QA row Unit tests (Automated, API, Browser, Android / iOS emulator or device)",
+  assert.deepEqual(await problems("run-pr-no-not-tested", BODY.replace("Not tested:", "Untested:")), ["MISSING: Not tested: line after the last QA subsection"]);
+  const table = await problems("run-pr-table", BODY.replace(AUTOMATED_ROW, "| Method | Executed | Result |\n| --- | --- | --- |\n| Automated | `npm test` | PASSED |"));
+  assert.ok(table.some((line) => line.startsWith("MISSING: QA subsections (### Automated, ### API, ### Browser, ### Device")), table.join("\n"));
+  assert.deepEqual(await problems("run-pr-no-row", BODY.replace(`${AUTOMATED_ROW}\n`, "")), ["MISSING: a bullet under QA subsection Automated"]);
+  const notApplicable = await problems("run-pr-na", BODY.replace(AUTOMATED_ROW, `${AUTOMATED_ROW}\n### Browser\n- http://localhost:3000 — N/A`));
+  assert.ok(notApplicable.some((line) => line.startsWith("REJECTED: QA subsection Browser has a N/A bullet")), notApplicable.join("\n"));
+  assert.deepEqual(await problems("run-pr-unknown", BODY.replace(AUTOMATED_ROW, `${AUTOMATED_ROW}\n### Manual\n- clicked around — PASSED`)), [
+    "MISSING: a known QA subsection instead of ### Manual (### Automated, ### API, ### Browser, ### Device)",
   ]);
   assert.deepEqual(await problems("run-pr-old-shape", OLD_BODY), [
     "MISSING: ## Report",
     "MISSING: ## Cause",
     "REJECTED: the body carries a fifth section `## Summary`; the four sections are the whole body",
-    "MISSING: QA table header | Method | Executed | Result |",
-    "MISSING: Not tested: line after the QA table",
+    "MISSING: a QA subsection for a method that ran (### Automated, ### API, ### Browser, ### Device)",
+    "MISSING: Not tested: line after the last QA subsection",
   ]);
   assert.deepEqual(await problems("run-pr-bare", BODY.replace(REPORT, `${REPORT} see #12`)), [
     "REJECTED: the body carries a bare `#12` outside a Fixes/Closes line: name a decision by its ref (`D-24`), or write the number inside a code span",
@@ -473,17 +472,17 @@ test("`run pr` refuses a branch that adds scratch files, naming each with the wa
   assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome, undefined);
 });
 
-test("a QA row whose method left no non-empty `<method>-*` file under the run's evidence is MISSING, and nothing is pushed", async (t) => {
+test("a QA subsection whose method left no non-empty `<method>-*` file under the run's evidence is MISSING, and nothing is pushed", async (t) => {
   const { env, id, remote, evidence } = makeRun(t, "run-pr-evidence");
   const problems = (name, body) => rejectedProblems(t, { env, id, name, body });
-  const apiRow = "| API | `POST /auth/google/callback` | 200, session cookie set |";
+  const apiRow = "### API\n- `POST /auth/google/callback` — 200, session cookie set, PASSED ✅";
 
-  assert.deepEqual(await problems("run-pr-api", BODY.replace(AUTOMATED_ROW, `${AUTOMATED_ROW}\n${apiRow}`)), ["MISSING: evidence for QA row API"]);
+  assert.deepEqual(await problems("run-pr-api", BODY.replace(AUTOMATED_ROW, `${AUTOMATED_ROW}\n${apiRow}`)), ["MISSING: evidence for QA section API"]);
 
   rmSync(join(evidence, "automated-verification.md"));
   writeFileSync(join(evidence, "automated-empty.log"), "");
   mkdirSync(join(evidence, "automated-dir"));
-  assert.deepEqual(await problems("run-pr-no-evidence", BODY), ["MISSING: evidence for QA row Automated"]);
+  assert.deepEqual(await problems("run-pr-no-evidence", BODY), ["MISSING: evidence for QA section Automated"]);
 
   assert.deepEqual(remoteBranches(remote), ["main"]);
   assert.deepEqual(ghCalls(env), []);

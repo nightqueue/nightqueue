@@ -5,10 +5,10 @@ import { jobRef } from "../memory/refs.mjs";
 
 export const PUBLISHED_BODY_FILE = "pr-body.published.md";
 
-// The traceability footer `run pr` appends: the item's `Refs` line and ref for a roadmap job, the bare signature otherwise.
+// The traceability footer `run pr` appends: the signature with the item's ref for a roadmap job, the bare signature otherwise.
 export function footerOf(itemRef) {
   if (itemRef === null || itemRef === undefined) return "Opened by nightqueue";
-  return `Refs ${itemRef}\n\nOpened by nightqueue · ${itemRef}`;
+  return `Opened by nightqueue · ${itemRef}`;
 }
 
 // The ref of the roadmap item the job was queued from, or null outside a job or for a free-prompt job; a store failure is thrown.

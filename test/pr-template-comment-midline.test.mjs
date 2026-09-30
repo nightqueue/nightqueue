@@ -78,9 +78,8 @@ test("probe: a CRLF body still validates against the nightqueue template", (t) =
     "## Changes",
     "- z",
     "## QA",
-    "| Method | Executed | Result |",
-    "| --- | --- | --- |",
-    "| Automated | `npm test` | PASSED |",
+    "### Automated",
+    "- `npm test` — PASSED ✅",
     "Not tested: the real device; low risk",
     "",
   ].join("\r\n");
