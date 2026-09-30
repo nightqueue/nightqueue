@@ -8,6 +8,15 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The close merges the head GitHub shows, verified by its checks, instead of the head it
+  recorded.** A head that moved since the last step (an *Update branch*, a commit pushed to the
+  branch, a rebase by hand) no longer stops the close with `head-moved`: when CI reports on the
+  new head the step goes on - green at once, pending waited for, red `checks-red` - and the
+  merge pins that head with `--match-head-commit`, reading and merging once more if it moves
+  during the call. `head-moved` remains only for a head that moved after the close's own push
+  when no CI reports on it, since then the suite the close ran was the only verification;
+  `--force` takes any head. One run now closes a pull request updated from its base by the
+  operator; before, it took a second run for nothing.
 - **`queue status` reads `◐ closing` alone while a close holds the job.** The STATUS cell no
   longer says `done · closing`: a job under a live close is neither done nor closed yet, so it
   carries its own label, icon and color (cyan) until it reads `■ closed` - or, when the close

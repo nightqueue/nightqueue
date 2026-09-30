@@ -225,6 +225,26 @@ async function expectedPushedHead(ctx, deps, fetchedOk) {
   return ctx.data.headSha ?? (await remoteHead(ctx, deps, fetchedOk, ctx.data.headBranch));
 }
 
+// Whether the close goes on with a head other than the one it recorded: it does when CI reports on the new head (green now, or waited for),
+// and it stops with head-moved only when nothing but the suite this close ran ever verified the pull request. The head taken is recorded.
+async function movedHeadVerdict(ctx, deps, pr, { reopen }) {
+  const from = ctx.data.headSha;
+  const to = pr.headRefOid;
+  const moved = `the head moved from ${sha7(from)} to ${sha7(to)}`;
+  const data = { headSha: to, pushedBy: null };
+  if (ctx.force) return { note: `${moved}; taken with --force`, data };
+  const checks = await deps.gh.prChecks(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
+  if (!checks?.ok) return { problem: failed("checks-unreadable", `${moved}; gh could not read the checks of ${ctx.prUrl} (${checks?.error ?? "no answer"})`, { reopen }) };
+  if (checks.failing.length) return { problem: failed("checks-red", `${moved}; failing checks: ${namesNote(checks.failing)}`, { data, reopen }) };
+  if (!checks.checks.length && ctx.data.pushedBy === "close") {
+    const note = `${moved} after this close pushed it, and no CI reports on ${sha7(to)}: only the suite this close ran verified ${sha7(from)}. Run the suite on ${sha7(to)} and push it, or close with --force`;
+    return { problem: failed("head-moved", note, { data: { pushedBy: null }, reopen }) };
+  }
+  if (!checks.pending.length) return { note: `${moved}; ${checksGreenNote(checks, to)}`, data };
+  const waited = await waitForChecks(ctx, deps, { status: "done", note: moved, data }, `checks still running on ${sha7(to)}`);
+  return waited.status === "done" ? { note: waited.note, data } : { problem: { ...waited, reopen } };
+}
+
 // Whether GitHub's read of a pull request this close pushed is confirmed, by the push record or by the branch tip git fetched; otherwise the stop.
 async function pushedHeadVerdict(ctx, deps, { pr, expected, fetchedOk }) {
   if (expected && pr.headRefOid === expected) return { pushedBy: "close" };
@@ -232,8 +252,8 @@ async function pushedHeadVerdict(ctx, deps, { pr, expected, fetchedOk }) {
   const gitAgrees = Boolean(head) && pr.headRefOid === head;
   if (gitAgrees && !ctx.data.headSha) return { pushedBy: "close" };
   if (gitAgrees) {
-    const note = `this close pushed ${sha7(ctx.data.headSha)}, but ${pr.headRefName} is now at ${sha7(head)}; the next run checks the new head`;
-    return { problem: failed("head-moved", note, { data: { pushedBy: null }, reopen: ["conflict"] }) };
+    const moved = await movedHeadVerdict(ctx, deps, pr, { reopen: ["conflict"] });
+    return moved.problem ? moved : { pushedBy: null, note: moved.note };
   }
   const pushed = expected ?? head;
   const note = `this close pushed ${sha7(pushed)}, but GitHub still shows ${sha7(pr.headRefOid)} after ${PUSH_REREADS} reads; run again`;
@@ -261,7 +281,7 @@ async function preflightStep({ ctx, deps }) {
   if (attribution.problem) return { ...attribution.problem, data };
   if (pr.state === "CLOSED") return failed("pr-closed", `PR #${pr.number} was closed without being merged`, { data });
   if (pr.state === "MERGED") return { status: "done", note: withAttributionNote(`PR #${pr.number} already merged as ${sha7(pr.mergeSha)}`, attribution), data: { ...data, ...mergedData(pr, mergedByOf(ctx)) } };
-  const checks = await checksOrWait(ctx, deps, data);
+  const checks = verdict?.note ? { note: verdict.note } : await checksOrWait(ctx, deps, data);
   if (checks.problem) return { ...checks.problem, data };
   const checkout = await checkoutVerdict(ctx, deps, pr.baseRefName);
   if (checkout.problem) return { ...checkout.problem, data };
@@ -276,6 +296,17 @@ async function readMergeability(ctx, deps) {
   return await readPr(ctx, deps);
 }
 
+// Tells whether the head GitHub shows is another than the recorded one.
+function headMoved(ctx, pr) {
+  return Boolean(ctx.data.headSha) && pr.headRefOid !== ctx.data.headSha;
+}
+
+// A step result with the note and data of a moved head the step went on with put before its own.
+function withMovedHead(moved, result) {
+  if (!moved) return result;
+  return { ...result, note: `${moved.note}; ${result.note}`, data: { ...moved.data, ...(result.data ?? {}) } };
+}
+
 // Rebases the pull request when GitHub says it conflicts with its base; otherwise there is nothing to do here.
 async function conflictStep({ ctx, deps }) {
   if (ctx.data.merged) return { status: "skipped", note: "the pull request is already merged" };
@@ -283,9 +314,13 @@ async function conflictStep({ ctx, deps }) {
   if (!pr?.ok) return unreadablePr(ctx, pr);
   if (pr.state === "MERGED") return { status: "skipped", note: "the pull request is already merged", data: mergedData(pr, mergedByOf(ctx)) };
   if (pr.state === "CLOSED") return failed("pr-closed", `PR #${pr.number} was closed without being merged`);
-  if (ctx.data.pushedBy === "close" && pr.headRefOid !== ctx.data.headSha) {
-    return failed("head-moved", `the head moved from ${sha7(ctx.data.headSha)} to ${sha7(pr.headRefOid)} after this close pushed it; the next run checks it again`, { reopen: ["preflight"] });
-  }
+  const moved = headMoved(ctx, pr) ? await movedHeadVerdict(ctx, deps, pr, { reopen: ["preflight"] }) : null;
+  if (moved?.problem) return moved.problem;
+  return withMovedHead(moved, await conflictVerdict(ctx, deps, pr));
+}
+
+// What the conflict step does with an open pull request at the head it goes on with.
+async function conflictVerdict(ctx, deps, pr) {
   if (pr.mergeStateStatus === "BEHIND") return await updateBehindHead(ctx, deps, { head: pr.headRefName, base: pr.baseRefName });
   if (pr.mergeStateStatus === "BLOCKED" && pr.mergeable === "MERGEABLE") return await waitBlockedHead(ctx, deps, pr);
   if (pr.mergeable === "MERGEABLE" || pr.mergeStateStatus === "CLEAN") return { status: "skipped", note: `mergeable (${pr.mergeStateStatus ?? pr.mergeable})` };
@@ -294,14 +329,11 @@ async function conflictStep({ ctx, deps }) {
   return { status: "skipped", note: `mergeable is ${pr.mergeable ?? "unknown"} (${pr.mergeStateStatus ?? "no state"}); the merge step decides` };
 }
 
-// Waits for the checks of the recorded head GitHub reports mergeable but BLOCKED; another head is head-moved, --force skips the wait, no checks go on at once.
+// Waits for the checks of the head GitHub reports mergeable but BLOCKED; --force skips the wait, no checks go on at once.
 async function waitBlockedHead(ctx, deps, pr) {
-  if (pr.headRefOid !== ctx.data.headSha) {
-    return failed("head-moved", `the head moved from ${sha7(ctx.data.headSha)} to ${sha7(pr.headRefOid)} before the merge; the next run checks it again`, { reopen: ["preflight"] });
-  }
   if (ctx.force) return { status: "skipped", note: "merge state BLOCKED; checks not waited with --force" };
-  const head = sha7(ctx.data.headSha);
-  const blocked = { status: "done", note: `merge state BLOCKED on ${head}`, data: { headSha: ctx.data.headSha } };
+  const head = sha7(pr.headRefOid);
+  const blocked = { status: "done", note: `merge state BLOCKED on ${head}`, data: { headSha: pr.headRefOid } };
   return await waitForChecks(ctx, deps, blocked, `merge blocked on ${head}, checks still running`, { emptySettles: true });
 }
 
@@ -501,23 +533,28 @@ async function confirmRecordedMerge(ctx, deps) {
   return mergeWithoutSha({ pr, call: null });
 }
 
-// Squash-merges the pull request at the head the close verified, and proves the merge by re-reading its merge commit.
-async function mergeStep({ ctx, deps }) {
+// Squash-merges the pull request at the head GitHub shows, verified by its checks, and proves the merge by re-reading its merge commit.
+// A head that moves between the read and the merge call is read and merged once more; a second move is left to the next run.
+async function mergeStep({ ctx, deps }, { retried = false } = {}) {
   if (ctx.data.merged) return await confirmRecordedMerge(ctx, deps);
   const pr = await readHeadPr(ctx, deps);
   if (!pr?.ok) return unreadablePr(ctx, pr);
   if (pr.state === "MERGED") return await madeMergeResult(ctx, deps, { pr, mergedBy: mergedByOf(ctx) });
   if (pr.state === "CLOSED") return failed("pr-closed", `PR #${pr.number} was closed without being merged`);
-  if (pr.headRefOid !== ctx.data.headSha) {
-    return failed("head-moved", `the head moved from ${sha7(ctx.data.headSha)} to ${sha7(pr.headRefOid)}; the next run checks it again`, { reopen: ["preflight", "conflict"] });
-  }
+  const moved = headMoved(ctx, pr) ? await movedHeadVerdict(ctx, deps, pr, { reopen: ["preflight", "conflict"] }) : null;
+  if (moved?.problem) return moved.problem;
   if (CONFLICTED_STATES.has(pr.mergeable) || CONFLICTED_STATES.has(pr.mergeStateStatus)) {
-    return failed("not-mergeable", "the pull request conflicts with its base again; the next run rebases it", { reopen: ["conflict"] });
+    return withMovedHead(moved, failed("not-mergeable", "the pull request conflicts with its base again; the next run rebases it", { reopen: ["conflict"] }));
   }
-  const call = await deps.gh.prMerge(ctx.prUrl, { matchHeadCommit: ctx.data.headSha, ...bounded(ctx, MERGE_TIMEOUT_MS) });
+  const head = pr.headRefOid;
+  const call = await deps.gh.prMerge(ctx.prUrl, { matchHeadCommit: head, ...bounded(ctx, MERGE_TIMEOUT_MS) });
   const reread = await rereadMerge(ctx, deps);
-  if (!reread?.mergeSha || reread.state !== "MERGED") return mergeWithoutSha({ pr: reread, call });
-  return await mergedResult(ctx, deps, { pr: reread, note: "squash-merged", mergedBy: "nightqueue" });
+  if (reread?.mergeSha && reread.state === "MERGED") return withMovedHead(moved, await mergedResult(ctx, deps, { pr: reread, note: "squash-merged", mergedBy: "nightqueue" }));
+  if (!call.ok && !retried && reread?.ok && reread.state === "OPEN" && reread.headRefOid !== head) {
+    const again = { ...ctx, data: { ...ctx.data, headSha: head, pushedBy: null } };
+    return withMovedHead(moved, await mergeStep({ ctx: again, deps }, { retried: true }));
+  }
+  return withMovedHead(moved, mergeWithoutSha({ pr: reread, call }));
 }
 
 // Prepares the close: the merge must be recorded with its commit, and the notice line is written from it.

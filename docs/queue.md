@@ -911,26 +911,36 @@ agent, never a second job, never queue work:
 The job's status is untouched until settle: a close that stops leaves it `done`, except for a
 pull request closed without merge, which cancels it.
 
-**The close verifies the head it merges.** Any push by the close (a rebase of a conflicting
-head or the update of a `BEHIND` one) records `data.pushedBy: "close"` and reopens
-preflight, which runs again in the same run on the pushed head - the checks of that head are
-waited for, even when none is registered yet - and its note ends `head <sha7> pushed by this
-close`. GitHub can answer the old head for a few seconds after a push, so every read of the
-pull request after the close's push is retried (3 reads, 2 s apart) until it shows the
-pushed head with its mergeability computed; only a head that still differs is `head-moved`.
-One run is enough after a rebase or a branch update. After a push, preflight accepts only
-the pushed head, or the branch tip `git fetch` shows when GitHub agrees with it; it never
+**The close merges the head GitHub shows, verified by its checks.** Every step reads the pull
+request again and works on the head GitHub reports now; the recorded `data.headSha` is the
+head the last step took, never a condition. A head that differs from the recorded one (an
+*Update branch*, a commit pushed to the branch, a rebase by hand) is taken when CI reports on
+it: green checks let the step go on at once, pending ones are waited for within the close's
+time, red ones stop with `checks-red`, and the note starts `the head moved from <old> to
+<new>`. The merge call itself pins that head (`--match-head-commit`); a head that moves
+between the read and the call is read and merged once more, and a second move is left to the
+next run. `head-moved` survives in one case only: the close pushed the head itself (a rebase
+of a conflicting head or the update of a `BEHIND` one, recorded as `data.pushedBy: "close"`),
+the head moved after that push, and **no CI reports on the new head** - then the suite this
+close ran on its own head is the only verification the pull request ever had, and nothing has
+verified the new one. Run the suite on it and push, or close with `--force`, which takes any
+head without reading its checks.
+
+Any push by the close reopens preflight, which runs again in the same run on the pushed head
+- the checks of that head are waited for, even when none is registered yet - and its note ends
+`head <sha7> pushed by this close`. GitHub can answer the old head for a few seconds after a
+push, so every read of the pull request after the close's push is retried (3 reads, 2 s apart)
+until it shows the pushed head with its mergeability computed; only then is a differing head a
+moved one. One run is enough after a rebase or a branch update. After a push, preflight never
 records a head GitHub may be answering stale:
-- GitHub still showing another head after 3 reads stops with `head-not-visible`, keeping
-  the pushed head, and the next run checks again;
-- a push by someone else after the close's own (the fetched tip is the head GitHub shows)
-  stops with `head-moved` and re-runs conflict on the next run;
+- GitHub still showing another head after 3 reads, with `git fetch` not agreeing with it,
+  stops with `head-not-visible`, keeping the pushed head, and the next run checks again;
+- a push by someone else after the close's own (the fetched tip is the head GitHub shows) is
+  taken on its checks as above;
 - a push whose new head cannot be read stops with `head-unreadable`, and the next run
   takes the head from the fetched branch tip;
-- `BLOCKED` on a head other than the recorded one stops with `head-moved`, even with
-  `--force`, before any checks are read;
-- `BLOCKED` with no checks at all goes straight to the merge
-  (`no checks reported on <sha>`), and GitHub decides;
+- `BLOCKED` waits for the checks of the head GitHub shows; with no checks at all it goes
+  straight to the merge (`no checks reported on <sha>`), and GitHub decides;
 - a checks wait whose reads only ever failed stops with `checks-unreadable`, never
   `checks-pending`.
 
