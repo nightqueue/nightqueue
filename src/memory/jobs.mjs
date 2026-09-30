@@ -681,6 +681,52 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
   return true;
 }
 
+// Fills the notice and the pull request a row already at `status` is missing, never moving its status nor replacing a value it holds; false when there was nothing to fill.
+export function fillFinishGaps(id, { status, noticeMd, prUrl } = {}, env = process.env) {
+  const notice = optionalText(noticeMd);
+  const url = optionalText(prUrl);
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET notice_md = COALESCE(notice_md, ?),
+            pr_url = COALESCE(pr_url, ?)
+      WHERE id = ? AND status = ?
+        AND ((notice_md IS NULL AND ? IS NOT NULL) OR (pr_url IS NULL AND ? IS NOT NULL))`,
+  );
+  const changed = withWriteRetry(() => statement.run(notice, url, requireId(id), requireStatus(status), notice, url));
+  return changed.changes === 1;
+}
+
+// Requires a non-negative integer attempt counter, so a queued record never compares against garbage.
+function requireAttempt(field, value) {
+  if (Number.isInteger(value) && value >= 0) return value;
+  throw new UserError(`job field \`${field}\` must be a non-negative integer, got \`${String(value)}\``);
+}
+
+// Fills the session facts of the attempt that announced them, only while the same claim still runs the row and never over a later attempt's session; false when it landed nowhere.
+export function fillSessionFacts(id, { worker, attempts, sessionId, lastSessionId, lastSessionAttempt } = {}, env = process.env) {
+  const attempt = requireAttempt("lastSessionAttempt", lastSessionAttempt);
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET session_id = COALESCE(session_id, ?),
+            last_session_id = ?,
+            last_session_attempt = ?
+      WHERE id = ? AND status = 'running' AND worker = ? AND attempts = ?
+        AND (last_session_attempt IS NULL OR last_session_attempt <= ?)`,
+  );
+  const changed = withWriteRetry(() =>
+    statement.run(
+      optionalText(sessionId),
+      requireText("lastSessionId", lastSessionId),
+      attempt,
+      requireId(id),
+      requireText("worker", worker),
+      requireAttempt("attempts", attempts),
+      attempt,
+    ),
+  );
+  return changed.changes === 1;
+}
+
 // Explains, from the current row, why a cancel was refused; it never decides anything, only phrases it.
 function cancelRefusal(id, row) {
   if (!row) return `unknown job \`${id}\``;
@@ -753,6 +799,16 @@ function retryRefusal(id, row, { note } = {}) {
   return `job \`${id}\` cannot be retried from status \`${row.status}\``;
 }
 
+// The refusal of a job that cannot run again because its prompt was lost with its row.
+export function recoveredPromptRefusal(id) {
+  return `${jobRef(id)} was rebuilt from disk by \`nightqueue queue repair --from-disk\` and its prompt was not kept, so it cannot run again; queue the task anew with \`nightqueue queue add\``;
+}
+
+// Refuses to send back to the queue a row `queue repair --from-disk` rebuilt: its prompt is a placeholder, never a task.
+function refuseRecoveredRetry(id, env) {
+  if (getJob(id, env)?.prompt === RECOVERED_PROMPT) throw new UserError(recoveredPromptRefusal(id));
+}
+
 // Columns a `--fresh` retry gives up, so the next run starts from phase 0 with a worktree of its own.
 const RETRY_FRESH_COLUMNS = ", slug = NULL, branch = NULL, session_id = NULL, last_session_id = NULL, last_session_attempt = NULL";
 
@@ -776,6 +832,7 @@ export function retryJob(id, { note, fresh } = {}, env = process.env) {
       RETURNING *`,
   );
   const jobId = requireId(id);
+  refuseRecoveredRetry(jobId, env);
   const answer = optionalText(note);
   const row = withWriteRetry(() => statement.get(answer, jobId, answer));
   if (row) return jobView(withProjectFacts(openDb(env), row));
@@ -1155,6 +1212,55 @@ export function reclassifyJob(id, { status, prUrl, noticeMd } = {}, env = proces
   );
   const values = [requireWritableStatus(status), optionalText(prUrl), optionalText(noticeMd), requireId(id)];
   return withWriteRetry(() => statement.run(...values)).changes === 1;
+}
+
+// The ids of this list that have a row in the jobs table; a read that never writes.
+export function existingJobIds(ids, env = process.env, db = openDb(env)) {
+  const wanted = (Array.isArray(ids) ? ids : []).filter((id) => Number.isInteger(id) && id > 0);
+  if (wanted.length === 0) return [];
+  const rows = db.prepare("SELECT id FROM jobs WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id").all(JSON.stringify(wanted));
+  return rows.map((row) => row.id);
+}
+
+export const RECOVERED_PROMPT = "recovered from disk: the prompt of this job was not kept on disk";
+
+const RECOVER_JOB = `INSERT INTO jobs (id, project_id, prompt, status, slug, branch, pr_url, notice_md, result, created_at, finished_at)
+SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now'))
+WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE id = ?)`;
+
+// Names the refusal of a recovery insert: another writer's row is `exists`, a project gone from the registry is `project-missing`.
+function recoverRefusal(err) {
+  const message = String(err?.message ?? "");
+  if (/UNIQUE constraint failed|PRIMARY KEY/i.test(message)) return "exists";
+  if (/FOREIGN KEY constraint failed/i.test(message)) return "project-missing";
+  return null;
+}
+
+// Recreates, under its own id, a job whose row the table lost, from what its run left on disk; it never touches a row that exists.
+export function recoverJob({ id, projectId, slug, branch, status, noticeMd, prUrl, recovered, createdAt, finishedAt } = {}, env = process.env) {
+  const jobId = requireId(id);
+  const values = [
+    jobId,
+    requireProjectId(projectId),
+    RECOVERED_PROMPT,
+    requireWritableStatus(status),
+    optionalRunSlug(slug),
+    optionalText(branch),
+    optionalText(prUrl),
+    optionalText(noticeMd),
+    JSON.stringify({ recovered }),
+    isoToSqlite(createdAt),
+    isoToSqlite(finishedAt),
+    jobId,
+  ];
+  const statement = openDb(env).prepare(RECOVER_JOB);
+  try {
+    return withWriteRetry(() => statement.run(...values)).changes === 1 ? "recovered" : "exists";
+  } catch (err) {
+    const refusal = recoverRefusal(err);
+    if (refusal === null) throw err;
+    return refusal;
+  }
 }
 
 // Moves a job's pull request attribution from one URL to another and swaps its one notice line, in a single compare-and-swap: a row whose URL differs or whose notice does not hold the line exactly once is refused and nothing is written.

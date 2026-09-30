@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { dbPath } from "../config/paths.mjs";
 import { loadRawConfig } from "../config/store.mjs";
+import { hasRetiredConnection, releaseCachedConnection } from "../memory/db.mjs";
 import { hasLegacyRegistry } from "../memory/migration/v18.mjs";
 import { createLocalStore } from "./local.mjs";
 
@@ -52,6 +53,12 @@ export async function openRegistryWriter(env = process.env) {
   const store = openStore(env);
   await store.connect();
   return store;
+}
+
+// Releases this process's own writable connection of the home before a repair moves its files, answering `heldBroken` when a retired handle of it is still held.
+export function releaseHomeConnections(env = process.env) {
+  releaseCachedConnection(env);
+  return { heldBroken: hasRetiredConnection(env) };
 }
 
 // Creates the database of this home when there is none yet, so a read-only caller has something to open; on a home that already has one it opens nothing at all.

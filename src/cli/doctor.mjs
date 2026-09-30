@@ -1,5 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { STORE_UNAVAILABLE_HINT, StoreUnavailableError } from "../config/errors.mjs";
 import {
   LEGACY_SHIM_NAME,
   LEGACY_SHIM_NAMES,
@@ -8,16 +10,20 @@ import {
   configPath,
   dbPath,
   dbShmPath,
+  dbWalPath,
   embeddingDir,
   homeDir,
   legacyHomeDir,
   operatorQaDir,
+  preV18BackupPath,
+  preV19BackupPath,
+  preV20BackupPath,
   queuePausedPath,
   secretsPath,
   shimNames,
   worktreesDir,
 } from "../config/paths.mjs";
-import { loadConfig, loadRawConfig, removeHomeFiles } from "../config/store.mjs";
+import { loadConfig, loadRawConfig, moveHomeFilesInto, removeHomeFiles } from "../config/store.mjs";
 import { claudeBin } from "../host/claude.mjs";
 import { DESKTOP_LABEL, desktopState } from "../host/desktop.mjs";
 import { MCP_SERVER_NAME, readRegisteredServer, serverIsCurrent } from "../host/mcp.mjs";
@@ -35,10 +41,12 @@ import { hasLegacyRegistry } from "../memory/migration/v18.mjs";
 import { DB_USER_VERSION } from "../memory/schema.mjs";
 import { decisionRef } from "../memory/scope.mjs";
 import { keepAwakeMode, resolveCaffeinateBin } from "../queue/keep-awake.mjs";
+import { findLostJobs, logOnlyTail, scanDisk } from "../queue/lost-rows.mjs";
 import { isRegistryFailure, killProcess, listRunnerRecords, liveRunnersReport, registryReadError } from "../queue/registry.mjs";
 import { closesSummary } from "../queue/close-view.mjs";
 import { canonicalPath, jobWorktreeOwners, lockState, parseWorktreeList } from "../queue/worktree.mjs";
-import { openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
+import { compactStamp } from "../queue/runner.mjs";
+import { openStore, openStoreReadOnly, releaseHomeConnections, withReadOnlyStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { firstLine } from "./report.mjs";
 import { runtimeLabel, runtimeLocation } from "./runtime-versions.mjs";
@@ -319,7 +327,12 @@ function danglingHint(path) {
   return `run \`nightqueue queue status\` to list them (it writes nothing), then fix or clear them with sqlite3 on ${path}`;
 }
 
-// Checks the memory database, opening it read-only so the diagnosis never creates nor migrates it.
+// A row for a database SQLite refuses (not a database, corrupt, I/O error, read-only): a warning naming the code, with the one fix.
+function unavailableCheck(name, { code, detail }) {
+  return check(name, "warn", `${code}: ${detail}`, STORE_UNAVAILABLE_HINT);
+}
+
+// Checks the memory database, opening it read-only so the diagnosis never creates nor migrates it; a database SQLite refuses only warns.
 async function checkDatabase(ctx) {
   const path = dbPath(ctx.env);
   if (!existsSync(path)) return check("database", "warn", "no database yet", "it is created on the first memory write");
@@ -327,6 +340,7 @@ async function checkDatabase(ctx) {
   try {
     const health = await store.health();
     const { schemaVersion, errors } = health;
+    if (health.unavailable) return unavailableCheck("database", health.unavailable);
     if (errors.schemaVersion !== null) return check("database", "fail", errors.schemaVersion, `inspect ${path}`);
     if (schemaVersion === DB_USER_VERSION) return check("database", "ok", `schema v${schemaVersion}`);
     const refusal = refusedMigration(health);
@@ -338,6 +352,7 @@ async function checkDatabase(ctx) {
       "run `nightqueue queue status` once to migrate it",
     );
   } catch (err) {
+    if (err instanceof StoreUnavailableError) return unavailableCheck("database", err);
     return check("database", "fail", err?.message ?? String(err), `inspect ${path}`);
   } finally {
     await store.close();
@@ -390,7 +405,7 @@ async function checkDatabaseAndRows(ctx) {
 
 const ORPHAN_PREFIXES = [".fuse_hidden", ".nfs"];
 const SHM_HINT =
-  "the shared-memory index of the WAL was replaced while a connection was still attached to it, which loses writes; stop the runner, run `nightqueue doctor` again, and move NIGHTQUEUE_HOME to local disk";
+  "the shared-memory index of the WAL was replaced while a connection was still attached to it, which loses writes; stop the runner, run `nightqueue doctor` again, and move NIGHTQUEUE_HOME to local disk; a copy for inspection is `cp`, never a second sqlite on the live file";
 const MOUNT_LIMITATION = "only the mount in effect right now";
 const MOUNT_HINT = `NIGHTQUEUE_HOME must be on local disk: ${RISKY_FS_TYPES.join(", ")} and any fuse filesystem are known to drop the POSIX advisory locks SQLite's WAL depends on`;
 
@@ -513,6 +528,256 @@ function checkQuarantines(ctx) {
   return oldQuarantines(ctx).map((path) =>
     check(`quarantine ${basename(path)}`, "warn", `${humanBytes(treeBytes(path))} at ${path}, older than 30 days`, `remove it with: rm -rf ${shellQuote(path)}`),
   );
+}
+
+const SICK_CODES = ["SQLITE_NOTADB", "SQLITE_CORRUPT"];
+const CHECKPOINT_BUSY_HINT = "stop the runner, then nightqueue doctor --fix";
+const HOLDER_HINT = "stop every nightqueue process (runners and MCP clients), then nightqueue doctor --fix";
+
+// The first lines a check pragma answered, short enough for a report line.
+function checkLines(verdict) {
+  return verdict.lines.slice(0, 3).join("; ");
+}
+
+// A byte count for the `db files` row, or `none` when the file is not there.
+function sizeOrNone(bytes) {
+  return Number.isFinite(bytes) ? humanBytes(bytes) : "none";
+}
+
+// The sizes of the database file and its sidecars, stat only.
+async function dbFileSizes(ctx) {
+  return await withReadOnlyStore(ctx.env, (store) => store.db.files());
+}
+
+// The `db files` row of `--db`: the sizes of the main file, `-wal` and `-shm`, and the identity of `-shm`.
+async function checkDbFiles(ctx) {
+  try {
+    const { main, wal, shm } = await dbFileSizes(ctx);
+    const identity = shmIdentity(dbShmPath(ctx.env));
+    const inode = identity ? ` (inode ${identity.dev}:${identity.ino})` : "";
+    return check("db files", "ok", `main ${sizeOrNone(main)}, wal ${sizeOrNone(wal)}, shm ${sizeOrNone(shm)}${inode}`);
+  } catch (err) {
+    return check("db files", "warn", err?.message ?? String(err), `read the permissions of ${homeDir(ctx.env)}`);
+  }
+}
+
+// The `db integrity` row of `--db`: `quick_check` on the live file, read-only.
+async function checkDbIntegrity(ctx) {
+  const name = "db integrity";
+  try {
+    const verdict = await withReadOnlyStore(ctx.env, (store) => store.db.quickCheck());
+    return verdict.ok ? check(name, "ok", "quick_check ok") : check(name, "warn", `quick_check: ${checkLines(verdict)}`, STORE_UNAVAILABLE_HINT);
+  } catch (err) {
+    if (err instanceof StoreUnavailableError) return unavailableCheck(name, err);
+    return check(name, "warn", err?.message ?? String(err), `inspect ${dbPath(ctx.env)}`);
+  }
+}
+
+const RECOVER_HINT = "nightqueue queue repair --from-disk";
+
+// One lost job as the `lost jobs` row names it.
+function lostJobEntry(job) {
+  return `${jobRef(job.jobId)} ${job.project}/${job.slug} last=${job.lastStatus} pr=${job.prUrl ?? "-"}`;
+}
+
+// The detail of the `lost jobs` row: each lost job, then the tail of the logs no run and no row explain.
+function lostJobsDetail({ lost, logOnly }) {
+  const tail = logOnlyTail(logOnly);
+  return [...lost.map(lostJobEntry), ...(tail ? [tail] : [])].join("; ");
+}
+
+// The ok detail of the `lost jobs` row: log-only ids are named for reading only, since no repair can rebuild them.
+function nothingLostDetail(logOnly) {
+  const tail = logOnlyTail(logOnly);
+  return tail ? `no job on disk is missing from the table; ${tail}, kept for reading only` : "no job on disk is missing from the table";
+}
+
+// The `lost jobs` row when the table cannot be read: unknown, still naming the jobs the disk holds.
+function unreadableLostJobs(ctx) {
+  const disk = scanDisk(ctx.env);
+  const ids = [...new Set([...disk.runs.map((entry) => entry.jobId), ...disk.logIds])].sort((a, b) => a - b);
+  const onDisk = ids.length === 0 ? "no job on disk" : `on disk: ${ids.map(jobRef).join(", ")}`;
+  return check("lost jobs", "warn", `unknown: the table cannot be read; ${onDisk}`, STORE_UNAVAILABLE_HINT);
+}
+
+// The `lost jobs` row of `--db`: the jobs the disk knows and the table does not.
+async function checkLostJobs(ctx) {
+  try {
+    const found = await withReadOnlyStore(ctx.env, (store) => findLostJobs(ctx.env, store));
+    if (found.lost.length === 0) return check("lost jobs", "ok", nothingLostDetail(found.logOnly));
+    return check("lost jobs", "warn", lostJobsDetail(found), RECOVER_HINT);
+  } catch (err) {
+    if (err instanceof StoreUnavailableError) return unreadableLostJobs(ctx);
+    return check("lost jobs", "warn", err?.message ?? String(err), `inspect ${dbPath(ctx.env)}`);
+  }
+}
+
+// The rows only `--db` adds to the report; it never changes what `--fix` does.
+async function dbReportChecks(ctx, values) {
+  if (values.db !== true || !existsSync(dbPath(ctx.env))) return [];
+  return [await checkDbFiles(ctx), await checkDbIntegrity(ctx), await checkLostJobs(ctx)];
+}
+
+// The `db checkpoint` row of `--fix`: the write-ahead log folded and truncated; no row when there is no log to fold or the store does not answer.
+async function checkpointChecks(ctx) {
+  const name = "db checkpoint";
+  try {
+    const { wal } = await dbFileSizes(ctx);
+    if (!(wal > 0)) return [];
+    const { busy, log, checkpointed } = await openStore(ctx.env).db.checkpointTruncate();
+    if (busy) return [check(name, "warn", `busy: a live connection kept ${Math.max(0, log - checkpointed)} frames`, CHECKPOINT_BUSY_HINT)];
+    return [check(name, "ok", `folded ${checkpointed} frames (busy=${busy})`)];
+  } catch (err) {
+    if (err instanceof StoreUnavailableError) return [];
+    return [check(name, "warn", err?.message ?? String(err), `inspect ${dbPath(ctx.env)}`)];
+  }
+}
+
+// The code of a database the probe finds not a database or corrupt, or null when it answers or fails for another reason.
+async function sickCode(ctx) {
+  const probe = ctx.dbProbeImpl ?? (() => withReadOnlyStore(ctx.env, (store) => store.db.quickCheck()));
+  try {
+    const verdict = await probe();
+    return verdict?.ok === false ? "SQLITE_CORRUPT" : null;
+  } catch (err) {
+    return err instanceof StoreUnavailableError && SICK_CODES.includes(err.code) ? err.code : null;
+  }
+}
+
+// Tells whether the main file passes `quick_check` on its own, checked on a temporary copy and never on the live file.
+async function mainIsIntact(ctx) {
+  try {
+    return (await withReadOnlyStore(ctx.env, (store) => store.db.quickCheckMainAlone())).ok === true;
+  } catch {
+    return false;
+  }
+}
+
+// One backup file with its size and last change, or null when the path is not a file.
+function backupEntry(path) {
+  try {
+    const stats = statSync(path, { throwIfNoEntry: false });
+    return stats?.isFile() ? { path, size: stats.size, mtimeMs: stats.mtimeMs } : null;
+  } catch {
+    return null;
+  }
+}
+
+// The files of every `_broken-*` quarantine of the home, or none when the home cannot be listed.
+function quarantinedFiles(env) {
+  try {
+    return readdirSync(homeDir(env), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(QUARANTINE_PREFIX))
+      .flatMap((entry) => readdirSync(join(homeDir(env), entry.name)).map((name) => join(homeDir(env), entry.name, name)));
+  } catch {
+    return [];
+  }
+}
+
+// Every backup of the home: the copies taken before the v18, v19 and v20 migrations, then the files of each quarantine.
+function homeBackups(env) {
+  const copies = [preV18BackupPath(env), preV19BackupPath(env), preV20BackupPath(env)];
+  return [...copies, ...quarantinedFiles(env)].map(backupEntry).filter(Boolean);
+}
+
+// One backup as the report names it: path, size and last change.
+function describeBackup({ path, size, mtimeMs }) {
+  return `${path} (${humanBytes(size)}, ${new Date(mtimeMs).toISOString()})`;
+}
+
+// The command that puts the newest whole-database backup back, once every process that holds the database is stopped.
+function restoreHint(env, backups) {
+  const mains = backups.filter((entry) => !/-(wal|shm)$/.test(entry.path)).sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const source = mains.length ? shellQuote(mains[0].path) : "<newest backup>";
+  return `stop every nightqueue process (runners and MCP clients), then: cp ${source} ${shellQuote(dbPath(env))}`;
+}
+
+// The `db repair` refusal for a main file that fails on its own: nothing moves, and the detail names every backup of the home.
+function refusedRepair(ctx, code) {
+  const backups = homeBackups(ctx.env);
+  const listed = backups.length ? `backups: ${backups.map(describeBackup).join(", ")}` : `no backup found in ${homeDir(ctx.env)}`;
+  return check("db repair", "fail", `${code}: the main file fails on its own, so nothing was moved; ${listed}`, restoreHint(ctx.env, backups));
+}
+
+// Reopens the database once its sidecars are gone: null when `quick_check` and `integrity_check` both pass, else why not.
+async function reopenFailure(ctx) {
+  try {
+    return await withReadOnlyStore(ctx.env, async (store) => {
+      const quick = await store.db.quickCheck();
+      if (!quick.ok) return `quick_check: ${checkLines(quick)}`;
+      const full = await store.db.integrityCheck();
+      return full.ok ? null : `integrity_check: ${checkLines(full)}`;
+    });
+  } catch (err) {
+    return err?.message ?? String(err);
+  }
+}
+
+// The `db repair` row once no runner can hold the sidecars: they are moved aside, then the database is reopened and checked.
+async function moveSidecarsAside(ctx, code) {
+  const name = `${QUARANTINE_PREFIX}${compactStamp()}`;
+  const dir = join(homeDir(ctx.env), name);
+  const sidecars = [dbWalPath(ctx.env), dbShmPath(ctx.env)].map((path) => basename(path));
+  const { moved, error } = moveHomeFilesInto(ctx.env, { names: sidecars, dir: name });
+  if (error !== null) {
+    return check("db repair", "fail", `${code}: moving the sidecars into ${dir} failed after ${moved.length ? moved.join(", ") : "none"} (${error})`, `inspect ${homeDir(ctx.env)} and ${dir}`);
+  }
+  const what = `moved ${moved.length ? moved.join(", ") : "nothing"} into ${dir}`;
+  const failure = await reopenFailure(ctx);
+  if (failure === null) return check("db repair", "ok", `${what}; integrity ok`);
+  return check("db repair", "fail", `${code}: ${what}; the database still fails (${failure})`, restoreHint(ctx.env, homeBackups(ctx.env)));
+}
+
+// Reads `lsof -t` strictly: the pids other than this process, no holder only for a clean exit 1, and `unknown` for anything else.
+function parseLsof(result) {
+  if (result?.error) return { unknown: `lsof: ${result.error.code ?? result.error.message ?? String(result.error)}` };
+  const stdout = typeof result?.stdout === "string" ? result.stdout.trim() : "";
+  const stderr = typeof result?.stderr === "string" ? result.stderr.trim() : "";
+  if (result?.status === 1 && !stdout && !stderr) return { pids: [] };
+  const lines = stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (result?.status === 0 && lines.length && lines.every((line) => /^\d+$/.test(line))) {
+    return { pids: [...new Set(lines.map(Number))].filter((pid) => pid !== process.pid) };
+  }
+  return { unknown: `lsof exited ${result?.status ?? "without a status"}${stderr ? `: ${firstLine(stderr)}` : ""}` };
+}
+
+// The processes other than this one that hold any of the files open, by `lsof`; `unknown` when that cannot be told.
+function fileHolders(ctx, paths) {
+  const existing = paths.filter((path) => existsSync(path));
+  if (!existing.length) return { pids: [] };
+  const lsof = ctx.lsofImpl ?? spawnSync;
+  try {
+    return parseLsof(lsof("lsof", ["-t", "--", ...existing], { encoding: "utf8", timeout: COMMAND_TIMEOUT_MS }));
+  } catch (err) {
+    return { unknown: `lsof: ${err?.message ?? String(err)}` };
+  }
+}
+
+// Why the sidecars must stay because some process holds the database files (this one included, through a broken handle); null when none is proven to.
+function databaseHolder(ctx) {
+  if (releaseHomeConnections(ctx.env).heldBroken) return "this doctor process holds a broken connection; run `nightqueue doctor --fix` again";
+  const found = fileHolders(ctx, [dbPath(ctx.env), dbWalPath(ctx.env), dbShmPath(ctx.env)]);
+  if (found.unknown) return `cannot tell whether a process holds the database (${found.unknown})`;
+  return found.pids.length ? `pid ${found.pids.join(", ")} still has the database open` : null;
+}
+
+// The `db repair` row of `--fix`, only for a database the probe finds not a database or corrupt.
+async function repairChecks(ctx) {
+  const code = await sickCode(ctx);
+  if (code === null) return [];
+  if (!(await mainIsIntact(ctx))) return [refusedRepair(ctx, code)];
+  const notMoved = (holder, hint) => [check("db repair", "warn", `${code} with an intact main file; not moved: ${holder}`, hint)];
+  const runner = orphanHolder(ctx);
+  if (runner !== null) return notMoved(runner, CHECKPOINT_BUSY_HINT);
+  const holder = databaseHolder(ctx);
+  if (holder !== null) return notMoved(holder, HOLDER_HINT);
+  return [await moveSidecarsAside(ctx, code)];
+}
+
+// The database actions of `--fix`, one row per action taken: fold the log, then repair a database SQLite refuses.
+async function dbFixChecks(ctx, values) {
+  if (values.fix !== true || !existsSync(dbPath(ctx.env))) return [];
+  return [...(await checkpointChecks(ctx)), ...(await repairChecks(ctx))];
 }
 
 // Runs `mount` for the home-mount check, falling back to the bare name when the absolute path is not on this host.
@@ -1090,6 +1355,8 @@ async function collect(ctx, values) {
     ...checkEmbeddingPrefix(ctx),
     ...(await checkDatabaseAndRows(ctx)),
     checkDbShm(ctx, values.fix === true),
+    ...(await dbFixChecks(ctx, values)),
+    ...(await dbReportChecks(ctx, values)),
     ...checkQuarantines(ctx),
     checkHomeMount(ctx),
     ...(await checkQueue(ctx)),
@@ -1110,11 +1377,11 @@ export function reportLine({ status, name, detail, hint }, width = 22) {
   return `${status.padEnd(6)}${name.padEnd(width)}${tail}`;
 }
 
-// Runs `nightqueue doctor`: reads the host and the home, writes nothing but `git worktree repair` and the removal of shm orphans with `--fix`, exits 1 on any failure.
+// Runs `nightqueue doctor`: reads the host and the home (more of the database with `--db`), writes only with `--fix` (`git worktree repair`, shm orphans, the WAL checkpoint, the db sidecars moved aside), exits 1 on any failure.
 export async function run(argv, ctx) {
-  const options = { json: { type: "boolean" }, "check-updates": { type: "boolean" }, fix: { type: "boolean" } };
+  const options = { json: { type: "boolean" }, "check-updates": { type: "boolean" }, fix: { type: "boolean" }, db: { type: "boolean" } };
   const { values, positionals } = parseCommand(argv, options);
-  checkArgs(positionals, { max: 0, usage: "nightqueue doctor [--json] [--check-updates] [--fix]" });
+  checkArgs(positionals, { max: 0, usage: "nightqueue doctor [--json] [--check-updates] [--fix] [--db]" });
   const checks = await collect(ctx, values);
   const ok = !checks.some((entry) => entry.status === "fail");
   if (values.json === true) ctx.out(JSON.stringify({ ok, checks }));

@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { queueRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
-import { publishedBodyFile } from "../../src/queue/pr-footer.mjs";
+import { itemRefOfJob, publishedBodyFile } from "../../src/queue/pr-footer.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
@@ -20,7 +20,7 @@ test("a PR body whose prose merely starts like a trail line still gets exactly o
   const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
   const { job } = await queueRoadmapItem({ id: item.id }, env);
 
-  const text = readFileSync(await publishedBodyFile({ bodyFile, runDir, jobId: job.id, store }), "utf8");
+  const text = readFileSync(await publishedBodyFile({ bodyFile, runDir, jobId: job.id, resolveItemRef: () => itemRefOfJob(store, job.id) }), "utf8");
 
   assert.deepEqual(text.split("\n").filter((line) => line === `Refs ${item.ref}`), [`Refs ${item.ref}`], JSON.stringify(text));
   assert.ok(text.endsWith(`\n\nRefs ${item.ref}\n\nOpened by nightqueue · ${item.ref}\n`), JSON.stringify(text));

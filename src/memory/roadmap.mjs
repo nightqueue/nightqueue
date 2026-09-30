@@ -675,13 +675,33 @@ export function addRoadmapComment({ id, body, author = OPERATOR_AUTHOR, viewer =
 // The reference of the item a job was queued from — a project item it is linked to, or an org item through its project
 // row — or null when the job carries no roadmap item; `db` lets a read-only caller bring its own connection.
 export function roadmapRefOfJob(jobId, env = process.env, connection = null) {
+  const row = itemOfJob(connection ?? openDb(env), requireId(jobId));
+  return row ? roadmapRef(row) : null;
+}
+
+// The roadmap item a job was queued from, with its owner names and linked decision id, or null.
+function itemOfJob(db, id) {
+  const own = db
+    .prepare("SELECT id, scope, project_id, org_id, number, decision_id FROM roadmap_items WHERE job_id = ? ORDER BY id DESC LIMIT 1")
+    .get(id);
+  return namedRow(db, own) ?? orgItemOfJob(db, id);
+}
+
+// The ref of the decision an item links, as a one-entry list, or an empty list when it links none.
+function linkedDecisionRefs(db, item) {
+  if (!item?.decision_id) return [];
+  const row = db.prepare("SELECT id, scope, project_id, org_id, number FROM decisions WHERE id = ?").get(item.decision_id);
+  return row ? [decisionRef(namedRow(db, row))] : [];
+}
+
+// The refs the runtime records in a run's job block before its spawn: the job's project key, its roadmap item ref and the item's linked decision.
+export function jobSpawnRefs(jobId, env = process.env, connection = null) {
   const db = connection ?? openDb(env);
   const id = requireId(jobId);
-  const own = db
-    .prepare("SELECT id, scope, project_id, org_id, number FROM roadmap_items WHERE job_id = ? ORDER BY id DESC LIMIT 1")
-    .get(id);
-  const row = namedRow(db, own) ?? orgItemOfJob(db, id);
-  return row ? roadmapRef(row) : null;
+  const job = namedRow(db, db.prepare("SELECT id, project_id FROM jobs WHERE id = ?").get(id));
+  if (!job) throw new UserError(`unknown job \`${id}\``);
+  const item = itemOfJob(db, id);
+  return { projectKey: job.project_key ?? null, itemRef: item ? roadmapRef(item) : null, decisionRefs: linkedDecisionRefs(db, item) };
 }
 
 // Accepted decisions worth quoting next to an item; a row marked `fallback` did not match the title and is dropped.

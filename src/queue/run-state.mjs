@@ -1,5 +1,6 @@
 import { withLockSync } from "../config/lock.mjs";
 import { runDir } from "../config/paths.mjs";
+import { jobRef } from "../memory/refs.mjs";
 import { PIPELINE_TASK_TYPES, PIPELINE_TIERS } from "../memory/runs.mjs";
 import { isRunPath, isStateObject, readRunState, RESUME_PHASE_ORDER, RESUME_SCHEMA_VERSION, saveRunState } from "./resume.mjs";
 import { isPrUrl } from "./stream.mjs";
@@ -9,6 +10,12 @@ const RUN_LOCK = { timeoutMs: 5000, staleAfterMs: 15000 };
 
 // The only two outcomes the pipeline may record in `state.json`; how the process ended stays the runtime's call.
 export const RUN_OUTCOME_STATUSES = ["done", "gate"];
+
+// The keys of `state.json` only the runtime writes: no pipeline writer may set them, whole or by a dotted name.
+export const RUNTIME_ONLY_KEYS = ["job"];
+
+// Why a second record of the same job's block is kept: the block is written once, and a retry keeps the first one.
+export const JOB_BLOCK_ALREADY_RECORDED = "already recorded";
 
 // Where the pull request template of a run came from: the repository's own, or nightqueue's fallback.
 const PR_TEMPLATE_SOURCES = ["repo", "nightqueue"];
@@ -71,6 +78,16 @@ function underRunLock({ projectId, slug, env, write }) {
   }
 }
 
+// The runtime-only key a field name writes, whole (`job`) or dotted (`job.id`), or null when it names none.
+function runtimeOnlyKey(name) {
+  return RUNTIME_ONLY_KEYS.find((key) => name === key || String(name).startsWith(`${key}.`)) ?? null;
+}
+
+// A pipeline change with every runtime-only key dropped, so the runtime's own record survives any writer.
+function withoutRuntimeKeys(change) {
+  return Object.fromEntries(Object.entries(isStateObject(change) ? change : {}).filter(([name]) => runtimeOnlyKey(name) === null));
+}
+
 // Writes one change into the state.json of a run: the runtime stamps the time, and an `updatedAt` written by an agent is overwritten, never trusted.
 function record({ projectId, slug, env, change }) {
   return underRunLock({
@@ -80,7 +97,7 @@ function record({ projectId, slug, env, change }) {
     write: () => {
       const at = new Date().toISOString();
       const state = withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug });
-      return saveRunState({ projectId, slug, env, state: { ...state, ...change(state, at), updatedAt: at } });
+      return saveRunState({ projectId, slug, env, state: { ...state, ...withoutRuntimeKeys(change(state, at)), updatedAt: at } });
     },
   });
 }
@@ -156,6 +173,8 @@ function invalidQaStageA(value) {
 
 // Refusal of a field `run_set` does not own, or of a value outside the enum of a field that has one.
 function invalidRunField([name, value]) {
+  const reserved = runtimeOnlyKey(name);
+  if (reserved !== null) return kept(`\`${reserved}\` is written by the runtime only`);
   if (!(name in RUN_FIELDS)) return refuseEnum("field", name, Object.keys(RUN_FIELDS));
   if (name === QA_STAGE_A) return invalidQaStageA(value);
   const accepted = RUN_FIELDS[name];
@@ -210,4 +229,40 @@ export function recordResume({ projectId, slug, resumeCount, env = process.env }
     return kept(`resumeCount must be a non-negative integer, got \`${String(resumeCount)}\``);
   }
   return underRunLock({ projectId, slug, env, write: () => saveResumeCount({ projectId, slug, resumeCount, env }) });
+}
+
+// Refusal of a job block the run could not identify itself by, or null when its shape is the one state.json keeps.
+function invalidJobBlock(block) {
+  if (!isStateObject(block) || !Number.isSafeInteger(block.id) || block.id <= 0) return kept("a job block needs the positive integer `id` of its job");
+  if (trimmedText(block.createdAt) === null) return kept("a job block needs its `createdAt`");
+  if (block.decisionRefs !== undefined && !Array.isArray(block.decisionRefs)) return kept("the job block `decisionRefs` must be an array of refs");
+  return null;
+}
+
+// The job block as state.json keeps it: exactly its six fields, an absent ref recorded as null.
+function jobBlockRecord(block) {
+  return {
+    id: block.id,
+    ref: trimmedText(block.ref) ?? jobRef(block.id),
+    projectKey: trimmedText(block.projectKey),
+    itemRef: trimmedText(block.itemRef),
+    decisionRefs: (block.decisionRefs ?? []).map(trimmedText).filter((ref) => ref !== null),
+    createdAt: trimmedText(block.createdAt),
+  };
+}
+
+// Writes the job block into the run's state.json once: the same job keeps its first record, and another job's run is never claimed.
+function saveJobBlock({ projectId, slug, block, env }) {
+  const state = withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug });
+  const held = isStateObject(state.job) ? state.job : null;
+  if (held !== null && held.id === block.id) return kept(JOB_BLOCK_ALREADY_RECORDED);
+  if (held !== null) return kept(`the run directory belongs to ${jobRef(held.id)}`);
+  return saveRunState({ projectId, slug, env, state: { ...state, job: jobBlockRecord(block), updatedAt: new Date().toISOString() } });
+}
+
+// Records who the run belongs to — the runtime's own block, written before the spawn, which lets the run know itself without the database.
+export function recordJobBlock({ projectId, slug, block, env = process.env } = {}) {
+  const refused = invalidJobBlock(block);
+  if (refused) return refused;
+  return underRunLock({ projectId, slug, env, write: () => saveJobBlock({ projectId, slug, block, env }) });
 }

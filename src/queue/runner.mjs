@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { UserError } from "../config/errors.mjs";
+import { STORE_UNAVAILABLE_HINT, StoreUnavailableError, UserError } from "../config/errors.mjs";
 import { jobLogPath, jobWorktreePath, logsDir, runDir } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { ghPrList } from "../host/gh.mjs";
@@ -9,9 +9,10 @@ import { packageRoot, spawnRoot } from "../host/paths.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore, openStoreReadOnly } from "../store/open.mjs";
 import { acquire, bashTimeoutS, concurrencyCap, gate, inheritUserEnvironment, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
-import { backoffMs, classifyJobResult, isTerminalRuntimeKill, isTransientFailure } from "./classify.mjs";
+import { backoffMs, classifyJobResult, isTerminalRuntimeKill, isTransientFailure, nightqueueMcpUnreachable } from "./classify.mjs";
 import { recordedFiles } from "./file-list.mjs";
-import { preflight } from "./preflight.mjs";
+import { BLOCK_CODES, preflight } from "./preflight.mjs";
+import { createStoreOutage, OUTAGE_STOPPED, waitNextPass } from "./store-outage.mjs";
 import { jobBranchName, prepareJobWorktree, worktreeSlotFree } from "./job-worktree.mjs";
 import {
   clearOwnPause,
@@ -29,8 +30,9 @@ import {
 import { holdRunnerAwake } from "./keep-awake.mjs";
 import { killProcess, ownRunnerRecord } from "./registry.mjs";
 import { runMaintenance } from "./maintenance.mjs";
+import { appendPendingWrite, PENDING_KEYS, replayPendingWrites } from "./pending-writes.mjs";
 import { clearRunOutcome, decideResume, isRunPath, isSafeSegment, ownRunState, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
-import { recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
+import { JOB_BLOCK_ALREADY_RECORDED, recordJobBlock, recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
 import { buildPrompt, IDLE_TIMEOUT_S, provisionalSlug, slugCandidates, spawnClaude } from "./spawn.mjs";
 import { orchestratorRoots, sessionTranscriptPath } from "./orchestrator-scope.mjs";
 import {
@@ -123,16 +125,34 @@ function installShutdown(state) {
 async function shouldStop(job, ctx, ownership) {
   if (ctx.state.stopping) return true;
   if (typeof ctx.deps.stopSignalImpl === "function") return Boolean(await ctx.deps.stopSignalImpl(job));
-  if (await stillOwned(job, ctx.env)) return false;
+  if ((await heartbeat(job, ctx)) !== false) return false;
   ownership.lost = true;
   return true;
 }
 
+// Renews the running job's lease at the heartbeat cadence, never backed off: an unavailable database answers null (the child keeps going), and the first renew that lands closes the outage.
+async function heartbeat(job, ctx) {
+  try {
+    const owned = await stillOwned(job, ctx.env);
+    await ctx.outage.recovered(ctx.state);
+    return owned;
+  } catch (err) {
+    if (!(err instanceof StoreUnavailableError)) throw err;
+    ctx.outage.note(err);
+    return null;
+  }
+}
+
 // Records the slug of the run: the LAST declaration of the orchestrator wins, and only a safe path segment counts.
-async function captureSlug(job, facts, line, { store, env }) {
+async function captureSlug(job, facts, line, ctx) {
+  const { store, env } = ctx;
   const slug = extractSlugFromEventLine(line);
   if (!slug || slug === facts.slug || !isSafeSegment(slug)) return;
-  const bound = await store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] });
+  const bound = await bindSlugOrNull(job, slug, ctx);
+  if (!bound) {
+    appendJobLog(job.id, `the run keeps \`${facts.slug ?? "no slug"}\`: the database is unavailable`, env);
+    return;
+  }
   if (bound.status !== "bound") {
     appendJobLog(job.id, `the run keeps \`${facts.slug ?? "no slug"}\`: \`${slug}\` is not free (${slugRefusal(bound)})`, env);
     return;
@@ -141,34 +161,54 @@ async function captureSlug(job, facts, line, { store, env }) {
   await persistBranch(job, slug, { store, env });
 }
 
+// Claims a slug for the row this runner holds; an unavailable database notes the outage and answers null.
+async function bindSlugOrNull(job, slug, { store, outage }) {
+  try {
+    return await store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] });
+  } catch (err) {
+    if (!(err instanceof StoreUnavailableError)) throw err;
+    outage?.note(err);
+    return null;
+  }
+}
+
 // Why a slug claim was refused, phrased for the job log.
 function slugRefusal(bound) {
+  if (!bound) return "the database is unavailable";
   if (bound.status !== "taken") return "the job is no longer ours";
   return Number.isInteger(bound.heldBy) ? `${jobRef(bound.heldBy)} holds it` : "every candidate is already on disk";
 }
 
 // Records the branch the state of a run registered, once the job is bound to that run.
-async function persistBranch(job, slug, { store, env }) {
-  const branch = readRunState({ projectId: job.project_id, slug, env })?.branch ?? null;
-  if (branch) await store.jobs.persistRunFacts(job.id, { worker: job.worker, branch });
+async function persistBranch(job, slug, ctx) {
+  const branch = readRunState({ projectId: job.project_id, slug, env: ctx.env })?.branch ?? null;
+  if (branch) await recordBranch(job, slug, branch, ctx);
+}
+
+// Records the branch of the run on its row, queuing it when the database is unavailable.
+async function recordBranch(job, slug, branch, { store, env }) {
+  const facts = { worker: job.worker, branch };
+  const record = { kind: "run_facts", key: PENDING_KEYS.runFacts(job.id), payload: facts };
+  await writeOrQueue(job, slug, record, { write: () => store.jobs.persistRunFacts(job.id, facts), env });
 }
 
 // Binds the row back to the slug its files never left; a refused revert is said out loud, and the witness then refuses the mismatched row.
-async function revertSlugClaim(job, slug, { store, env }) {
-  const reverted = await store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] });
-  if (reverted.status === "bound") return;
-  appendJobLog(job.id, `WARNING: the row could not be bound back to \`${slug}\` (${slugRefusal(reverted)}): it names a run directory this run never wrote; the run stays in \`${slug}\``, env);
+async function revertSlugClaim(job, slug, ctx) {
+  const reverted = await bindSlugOrNull(job, slug, ctx);
+  if (reverted?.status === "bound") return;
+  appendJobLog(job.id, `WARNING: the row could not be bound back to \`${slug}\` (${slugRefusal(reverted)}): it names a run directory this run never wrote; the run stays in \`${slug}\``, ctx.env);
 }
 
-// Moves the run of this job onto the slug the pipeline declared; a name another job or run already took is refused, and the job keeps the slug the runtime gave it.
-async function adoptSlug(job, facts, slug, { store, env }) {
+// Moves the run of this job onto the slug the pipeline declared; a name another job or run already took, or an unavailable database, keeps the slug the runtime gave it.
+async function adoptSlug(job, facts, slug, ctx) {
+  const { store, env } = ctx;
   if (slug === facts.slug) return;
   const keep = (reason) => appendJobLog(job.id, `the run keeps the slug \`${facts.slug}\`: it could not be renamed to \`${slug}\` (${reason})`, env);
-  const claimed = await store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] });
-  if (claimed.status !== "bound") return keep(slugRefusal(claimed));
+  const claimed = await bindSlugOrNull(job, slug, ctx);
+  if (claimed?.status !== "bound") return keep(slugRefusal(claimed));
   const renamed = renameRunDir({ projectId: job.project_id, from: facts.slug, to: slug, env });
   if (renamed.status === "kept") {
-    await revertSlugClaim(job, facts.slug, { store, env });
+    await revertSlugClaim(job, facts.slug, ctx);
     return keep(renamed.reason);
   }
   facts.slug = slug;
@@ -187,8 +227,8 @@ async function captureSlugOverride(job, facts, line, ctx) {
   const declared = extractSlugTypeFromEventLine(line);
   if (!declared || !isSafeSegment(declared.slug) || !isSafeSegment(facts.slug)) return;
   facts.slugDeclared = true;
-  await adoptSlug(job, facts, declared.slug, ctx);
   if (declared.type) persistRunType(job, declared.type, facts.slug, ctx.env);
+  await adoptSlug(job, facts, declared.slug, ctx);
 }
 
 // Records the tier a raise announced in the Brief moved the run to, with the evidence that justified it; a state that refuses the write is said out loud and never costs the run.
@@ -222,6 +262,28 @@ function appendJobLog(jobId, line, env) {
     appendFileSync(jobLogPath(jobId, env), `${line}\n`);
   } catch {
     return;
+  }
+}
+
+// Queues a record the unavailable database refused into the run's pending-writes file, saying in the job log where it waits; null when it could not be queued.
+function queueRecord(job, slug, { kind, key, payload }, env) {
+  const queued = appendPendingWrite({ projectId: job.project_id, slug, entry: { key, kind, jobId: job.id, payload }, env });
+  if (queued.status !== "queued") {
+    appendJobLog(job.id, `the ${kind} record could not be queued for the database: ${queued.reason}`, env);
+    return null;
+  }
+  appendJobLog(job.id, `the database is unavailable: the ${kind} record waits in ${queued.path}`, env);
+  return queued.path;
+}
+
+// Runs a store write, queuing its record when the database is unavailable; any other failure is the caller's.
+async function writeOrQueue(job, slug, record, { write, env }) {
+  try {
+    return await write();
+  } catch (err) {
+    if (!(err instanceof StoreUnavailableError)) throw err;
+    queueRecord(job, slug, record, env);
+    return null;
   }
 }
 
@@ -262,20 +324,34 @@ async function captureRateLimit(job, facts, line, { env }) {
 
 // Records the first session id of the job (never overwritten) and, whenever the stream reveals a session id different
 // from the last one recorded, the session and attempt of the run's latest attempt: once per attempt, so `queue session`
-// always resumes the one the operator is actually waiting on.
-async function captureSession(job, facts, line, attempt, { store }) {
+// always resumes the one the operator is actually waiting on. A session neither written nor queued is tried again on the next line.
+async function captureSession(job, facts, line, attempt, ctx) {
   const sessionId = extractSessionIdFromEventLine(line);
-  if (!sessionId || sessionId === facts.lastSessionId) return;
+  if (!sessionId || sessionId === facts.lastSessionId || sessionId === facts.sessionInFlight) return;
   const isFirst = !facts.sessionId;
-  if (isFirst) facts.sessionId = sessionId;
   facts.resumableSessionId ??= sessionId;
-  facts.lastSessionId = sessionId;
-  await store.jobs.persistRunFacts(job.id, {
-    worker: job.worker,
-    sessionId: isFirst ? sessionId : null,
-    lastSessionId: sessionId,
-    lastSessionAttempt: attempt,
-  });
+  facts.sessionInFlight = sessionId;
+  const session = { worker: job.worker, attempts: attempt, sessionId: isFirst ? sessionId : null, lastSessionId: sessionId, lastSessionAttempt: attempt };
+  try {
+    if (!(await sessionRecorded(job, facts.slug, session, ctx))) return;
+    if (isFirst) facts.sessionId = sessionId;
+    facts.lastSessionId = sessionId;
+  } finally {
+    if (facts.sessionInFlight === sessionId) facts.sessionInFlight = null;
+  }
+}
+
+// Writes the session facts of an attempt, queuing them when the database is unavailable; false when they were neither written nor queued.
+async function sessionRecorded(job, slug, session, { store, env }) {
+  try {
+    const { attempts, ...facts } = session;
+    await store.jobs.persistRunFacts(job.id, facts);
+    return true;
+  } catch (err) {
+    if (!(err instanceof StoreUnavailableError)) throw err;
+    const record = { kind: "session", key: PENDING_KEYS.session(job.id, session.attempts), payload: session };
+    return queueRecord(job, slug, record, env) !== null;
+  }
 }
 
 // Records the run facts that appear in the stream, writing one fact per line of the stream at most.
@@ -365,6 +441,7 @@ async function runAttempts(job, ctx) {
     sessionId: job.session_id ?? null,
     resumableSessionId: ctx.sessionResumable === false ? null : (job.session_id ?? null),
     lastSessionId: job.last_session_id ?? job.session_id ?? null,
+    sessionInFlight: null,
     rateLimit: null,
     fiveHour: null,
     pause: null,
@@ -376,7 +453,9 @@ async function runAttempts(job, ctx) {
   const tally = { usages: [], hostCommands: [], orchestrator: [], baselineCtx: null };
   let attempt = job.attempts;
   while (true) {
-    if (!(await renew(job, env))) return { lost: true, facts, attempt, ...attemptTotals(tally), outcome: null, result: null };
+    const renewed = await untilStoreAnswers(ctx, () => renew(job, env));
+    if (renewed === OUTAGE_STOPPED) return { lost: false, outageStopped: true, facts, attempt, ...attemptTotals(tally), outcome: null, result: null };
+    if (!renewed) return { lost: true, facts, attempt, ...attemptTotals(tally), outcome: null, result: null };
     if (isSafeSegment(facts.slug)) clearRunOutcome({ projectId: job.project_id, slug: facts.slug, env });
     const resumeSessionId = resumeForced ? facts.resumableSessionId : null;
     const attemptStartedAt = new Date().toISOString();
@@ -401,6 +480,7 @@ async function runAttempts(job, ctx) {
       inheritUserEnvironment: deps.inheritUserEnvironment,
     });
     if (ownership.lost) return { lost: true, facts, attempt, ...attemptTotals(tally), outcome: null, result };
+    if (nightqueueMcpUnreachable(result.log)) return { lost: false, blocked: mcpUnreachableBlock(), facts, attempt, ...attemptTotals(tally), outcome: null, result };
     tallyAttempt(tally, result.log, ctx, { resumed: Boolean(resumeSessionId) });
     const totals = attemptTotals(tally);
     const notBefore = rateLimitExit(result, facts);
@@ -413,11 +493,24 @@ async function runAttempts(job, ctx) {
       return { lost: false, facts, attempt, ...totals, outcome, result };
     }
     await deps.sleepImpl(backoffMs(attempt));
-    if (!(await ctx.store.jobs.countAttempt(job.id, { worker: job.worker }))) {
-      return { lost: true, facts, attempt, ...totals, outcome, result };
-    }
+    const counted = await untilStoreAnswers(ctx, () => ctx.store.jobs.countAttempt(job.id, { worker: job.worker }));
+    if (counted === OUTAGE_STOPPED) return { lost: false, outageStopped: true, facts, attempt, ...totals, outcome, result };
+    if (!counted) return { lost: true, facts, attempt, ...totals, outcome, result };
     attempt += 1;
   }
+}
+
+// Runs a store step of the job in hand until the database answers it, through the runner's outage backoff; OUTAGE_STOPPED when the runner is told to stop meanwhile.
+function untilStoreAnswers(ctx, fn) {
+  return ctx.outage.retryWhileUnavailable(fn, ctx.state);
+}
+
+// The preflight-style block of a session that never reached the nightqueue MCP server: the job gates and its attempt is given back.
+function mcpUnreachableBlock() {
+  return {
+    code: BLOCK_CODES.STORE_UNAVAILABLE,
+    message: `the session could not reach the nightqueue MCP server ("Connection closed"); no attempt was spent. Run ${STORE_UNAVAILABLE_HINT}`,
+  };
 }
 
 // Records in the job log that the outcome could not be witnessed on disk; the job keeps the outcome it was given.
@@ -429,13 +522,23 @@ function noteWitnessFailure(jobId, reason, env) {
   }
 }
 
+// The row the witness is checked against and the run it goes into; an unavailable database leaves no row, and the run this runner holds is the target.
+async function witnessTarget(job, runSlug, store) {
+  try {
+    const row = await store.jobs.getJob(job.id);
+    return { row, slug: row?.slug ?? job.slug };
+  } catch (err) {
+    if (!(err instanceof StoreUnavailableError)) throw err;
+    return { row: null, slug: isSafeSegment(runSlug) ? runSlug : job.slug };
+  }
+}
+
 // Writes the witness of the outcome next to the run: the durable record the database is verified against.
 // The witness comes from the outcome the runner holds in memory, never from the row: when the finish itself
 // failed to commit, the row still says `running`, and the witness is exactly what the reconciliation needs then.
 async function writeWitness(job, { outcome, runSlug }, { store, env }) {
   try {
-    const row = await store.jobs.getJob(job.id);
-    const slug = row?.slug ?? job.slug;
+    const { row, slug } = await witnessTarget(job, runSlug, store);
     if (!slug) return;
     if (isSafeSegment(runSlug) && slug !== runSlug) {
       noteWitnessFailure(job.id, `the row names the run \`${slug}\` but this run lives in \`${runSlug}\`; no witness is written into a directory that is not this run's`, env);
@@ -460,17 +563,19 @@ async function writeWitness(job, { outcome, runSlug }, { store, env }) {
   }
 }
 
-// Runs the finish, turning a database that refused the commit into a reported failure instead of a crash of the runner.
-async function tryFinish(job, outcome, env) {
+// Runs the finish, turning a database that refused the commit into a reported failure instead of a crash of the runner;
+// an unavailable database also queues the exact finish in the run's pending-writes file, replayed once it is back.
+async function tryFinish(job, { write, slug, spec }, env) {
   try {
-    return { written: await outcome.write(), error: null };
+    return { written: await write(), error: null, pending: null };
   } catch (err) {
     const message = err?.message ?? String(err);
     try {
       appendFileSync(jobLogPath(job.id, env), `finish verification failed\nthe finish of ${jobRef(job.id)} did not commit: ${message}\n`);
       process.stderr.write(`${jobRef(job.id)}: the finish did not commit: ${message}\n`);
     } catch {}
-    return { written: false, error: message };
+    const pending = err instanceof StoreUnavailableError ? queueRecord(job, slug, { kind: "finish", key: PENDING_KEYS.finish(job.id, job.worker), payload: spec }, env) : null;
+    return { written: false, error: message, pending };
   }
 }
 
@@ -487,8 +592,10 @@ function persistPrUrl(job, run, state, env) {
 async function persistTelemetry(job, run, { store, env }) {
   if (!isSafeSegment(run.facts.slug)) return;
   const log = readJobLog(job.id, env);
+  const telemetry = { projectId: job.project_id, slug: run.facts.slug, durationS: runDurationS(log), phases: phaseTelemetry(log) };
+  const record = { kind: "telemetry", key: PENDING_KEYS.telemetry(job.id, job.worker), payload: telemetry };
   try {
-    await store.runs.updateRunTelemetry({ projectId: job.project_id, slug: run.facts.slug, durationS: runDurationS(log), phases: phaseTelemetry(log) });
+    await writeOrQueue(job, run.facts.slug, record, { write: () => store.runs.updateRunTelemetry(telemetry), env });
   } catch (err) {
     appendJobLog(job.id, `the telemetry of the run could not be updated: ${err?.message ?? String(err)}`, env);
   }
@@ -561,56 +668,71 @@ async function finalize(job, run, ctx) {
   const state = readRunState({ projectId: job.project_id, slug: run.facts.slug, env });
   persistPrUrl(job, run, state, env);
   await persistTelemetry(job, run, ctx);
-  if (state?.branch) await store.jobs.persistRunFacts(job.id, { worker: job.worker, branch: state.branch });
+  if (state?.branch) await recordBranch(job, run.facts.slug, state.branch, ctx);
   const worktree = await inspectJobWorktree(run, state, ctx);
   const outcome = outcomeWithWorktree(job, run, worktree, env);
-  const finish = await tryFinish(job, {
-    write: () =>
-      finishJobImpl(
-        job.id,
-        {
-          worker: job.worker,
-          status: run.outcome.status,
-          result: {
-            status: run.outcome.status,
-            prUrl: run.outcome.prUrl,
-            logPath: jobLogPath(job.id, env),
-            exitCode: run.result.exitCode,
-            timedOut: run.result.timedOut,
-            idleTimedOut: run.result.idleTimedOut,
-            attempts: run.attempt,
-            files: implementedFiles(job, run, state, env),
-          },
-          prUrl: run.outcome.prUrl,
-          noticeMd: outcome.noticeMd,
-          usage: run.usage,
-          hostCommands: run.hostCommands,
-          baselineCtx: run.baselineCtx,
-          orchestrator: run.orchestrator,
-        },
-        env,
-      ),
-  }, env);
+  const spec = finishSpec(job, run, { state, noticeMd: outcome.noticeMd, env });
+  await replayOwnPendingWrites(job, run.facts.slug, ctx);
+  const finish = await tryFinish(job, { write: () => finishJobImpl(job.id, spec, env), slug: run.facts.slug, spec }, env);
   // The witness is written when the row took the finish AND when the database refused the commit - the second case is exactly
   // what the reconciliation repairs from. A finish that returned false means the row is no longer ours (another worker owns
   // it): no witness then, or the reconciliation would close a job someone else is still running.
   if (finish.written || finish.error) await writeWitness(job, { outcome, runSlug: run.facts.slug }, ctx);
   if (finish.written) await store.checkpoint();
+  if (finish.written) await replayOwnPendingWrites(job, run.facts.slug, ctx);
   if (finish.written && run.outcome.status === "done" && worktree?.removable) await dropRunWorktree(job, worktree, ctx);
   const status = finish.written ? run.outcome.status : finish.error ? "unrecorded" : "lost";
   const report = { id: job.id, status, prUrl: run.outcome.prUrl, attempts: run.attempt };
-  return finish.error ? { ...report, error: finish.error } : report;
+  if (!finish.error) return report;
+  return finish.pending ? { ...report, error: finish.error, pending: finish.pending } : { ...report, error: finish.error };
+}
+
+// The exact finish a run writes on its row, worker included, so a queued copy replays it unchanged.
+function finishSpec(job, run, { state, noticeMd, env }) {
+  return {
+    worker: job.worker,
+    status: run.outcome.status,
+    result: {
+      status: run.outcome.status,
+      prUrl: run.outcome.prUrl,
+      logPath: jobLogPath(job.id, env),
+      exitCode: run.result.exitCode,
+      timedOut: run.result.timedOut,
+      idleTimedOut: run.result.idleTimedOut,
+      attempts: run.attempt,
+      files: implementedFiles(job, run, state, env),
+    },
+    prUrl: run.outcome.prUrl,
+    noticeMd,
+    usage: run.usage,
+    hostCommands: run.hostCommands,
+    baselineCtx: run.baselineCtx,
+    orchestrator: run.orchestrator,
+  };
+}
+
+// Replays what this run queued while the database was unavailable, before its finish (while the row is still this claim's) and once it landed; a replay that fails is one job-log line and never costs the job.
+async function replayOwnPendingWrites(job, slug, { store, env }) {
+  if (!isRunPath(job.project_id, slug)) return;
+  try {
+    await replayPendingWrites({ projectId: job.project_id, slug, env, store });
+  } catch (err) {
+    appendJobLog(job.id, `the pending writes of the run could not be replayed: ${err?.message ?? String(err)}`, env);
+  }
 }
 
 // Puts a job whose run ended on a rate limit back in the queue, due at the reset and with its attempt intact; the session it was running is kept, so the next claim resumes it.
 async function parkRun(job, run, ctx) {
   const { env, store } = ctx;
   const notBefore = run.parked.notBefore;
-  const parked = await store.jobs.parkJob(job.id, {
+  const spec = {
     worker: job.worker,
     notBefore,
     result: { rateLimited: true, notBefore, logPath: jobLogPath(job.id, env), exitCode: run.result.exitCode, attempts: run.attempt },
-  });
+  };
+  const record = { kind: "park", key: PENDING_KEYS.park(job.id, job.worker), payload: spec };
+  const parked = await writeOrQueue(job, run.facts.slug, record, { write: () => store.jobs.parkJob(job.id, spec), env });
+  if (parked === null) return { id: job.id, status: "unrecorded", attempts: run.attempt, notBefore };
   if (!parked) return { id: job.id, status: "lost", attempts: run.attempt };
   return { id: job.id, status: "rate-limited", attempts: run.attempt, notBefore };
 }
@@ -633,6 +755,7 @@ async function withRunSlug(job, ctx, checkout) {
   if (isSafeSegment(job.slug)) return job;
   const base = provisionalSlug(job);
   const bound = await claimFreshRunSlug(job, slugCandidates(base, job.id), { ...ctx, checkout });
+  if (bound === OUTAGE_STOPPED) return OUTAGE_STOPPED;
   if (bound.status === "bound") return { ...job, slug: bound.slug };
   appendJobLog(job.id, `the provisional slug \`${base}\` could not be bound to the job (${slugRefusal(bound)}); the run names itself`, ctx.env);
   return job;
@@ -646,16 +769,17 @@ async function slotIsFree(job, slug, ctx) {
   return false;
 }
 
-// Walks the candidates, creating each run directory before binding it: only a directory this job created itself is ever its run, and a slug whose worktree slot is taken is skipped.
+// Walks the candidates, creating each run directory before binding it (the bind waits out an outage, so it never moves the run): only a directory this job created itself is ever its run, and a slug whose worktree slot is taken is skipped.
 async function claimFreshRunSlug(job, candidates, ctx) {
   let refusal = { status: "taken", heldBy: null };
   for (const slug of candidates) {
     if (!(await slotIsFree(job, slug, ctx))) continue;
     const created = claimRunDir(job, slug, ctx.env);
     if (created === "exists") continue;
-    refusal = await ctx.store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] });
-    if (refusal.status === "bound") return refusal;
+    refusal = await untilStoreAnswers(ctx, () => ctx.store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] }));
+    if (refusal !== OUTAGE_STOPPED && refusal.status === "bound") return refusal;
     if (created === "created") releaseRunDir(job, slug, ctx.env);
+    if (refusal === OUTAGE_STOPPED) return refusal;
     if (refusal.status === "lost") return refusal;
   }
   return refusal;
@@ -697,6 +821,38 @@ function ensureRunDir(job, env) {
   }
 }
 
+// Records the runtime's job block in the run's state.json before the spawn, waiting out an unavailable database for its read; any other failure is one job-log line, never the job.
+async function recordJob(job, ctx) {
+  if (!isRunPath(job.project_id, job.slug)) return null;
+  const refs = await untilStoreAnswers(ctx, () => readSpawnRefs(job, ctx));
+  if (refs === OUTAGE_STOPPED) return OUTAGE_STOPPED;
+  if (refs) writeJobBlock(job, refs, ctx.env);
+  return null;
+}
+
+// The refs the job block carries, read from the store; an unavailable store is thrown to the backoff, any other failure is logged and answers null.
+async function readSpawnRefs(job, ctx) {
+  try {
+    return await ctx.store.jobs.jobSpawnRefs(job.id);
+  } catch (err) {
+    if (err instanceof StoreUnavailableError) throw err;
+    appendJobLog(job.id, `the job block could not be recorded in the state of the run: ${err?.message ?? String(err)}`, ctx.env);
+    return null;
+  }
+}
+
+// Writes the job block into the run's state.json; a refusal other than "already recorded" is one job-log line.
+function writeJobBlock(job, refs, env) {
+  try {
+    const block = { id: job.id, ref: jobRef(job.id), ...refs, createdAt: new Date().toISOString() };
+    const written = recordJobBlock({ projectId: job.project_id, slug: job.slug, block, env });
+    if (written.status === "written" || written.reason === JOB_BLOCK_ALREADY_RECORDED) return;
+    appendJobLog(job.id, `the job block could not be recorded in the state of the run: ${written.reason}`, env);
+  } catch (err) {
+    appendJobLog(job.id, `the job block could not be recorded in the state of the run: ${err?.message ?? String(err)}`, env);
+  }
+}
+
 // Search key of a job: its slug once it has one, and otherwise the first significant words of its prompt, with no punctuation gh could read as syntax.
 export function prSearchKey(job) {
   const slug = typeof job?.slug === "string" ? job.slug.trim() : "";
@@ -723,27 +879,62 @@ export async function openPrsForJob(job, { env = process.env, deps = {} } = {}) 
   }
 }
 
-// Stops a job at a gate on a block found before its spawn, without spending the attempt.
-async function gateJob(job, check, env) {
-  if (!(await gate(job, check, env))) {
-    noteOwnershipLost(job, env);
+// Stops a job at a gate on a block found before its spawn, or on a session that never reached the MCP server, without spending the attempt; the write waits out an unavailable database.
+async function gateJob(job, check, ctx) {
+  const gated = await untilStoreAnswers(ctx, () => gate(job, check, ctx.env));
+  if (gated === OUTAGE_STOPPED) return stoppedInOutage(job, ctx.env);
+  if (!gated) {
+    noteOwnershipLost(job, ctx.env);
     return { id: job.id, status: "lost" };
   }
   return { id: job.id, status: "gated", code: check.code };
 }
 
-// Runs one claimed job end to end: preflight, its worktree, attempts and the single write of the outcome.
-async function runJob(claimed, ctx) {
+// The report of a job the runner was told to stop while the database was unavailable: its row cannot be given back, so its lease runs out.
+function stoppedInOutage(job, env) {
+  appendJobLog(job.id, "the runner stopped while the database was unavailable: the job could not be given back and waits for its lease to run out", env);
+  return { id: job.id, status: "interrupted" };
+}
+
+// Runs the preflight of a claimed job against the worktrees the open jobs hold.
+async function preflightJob(job, { store, env, deps }) {
+  const openWorktrees = await openJobWorktrees({ store, env });
+  return preflight({ job, env, gitImpl: deps.gitImpl, existsImpl: deps.existsImpl, resolveBinImpl: deps.resolveBinImpl, openWorktrees });
+}
+
+// Everything before the spawn - preflight, run slug, job block, worktree - each store step waiting out an outage; answers what the spawn needs, or the report that ends the job.
+async function prepareJob(claimed, ctx) {
   const { env, deps } = ctx;
-  const openWorktrees = await openJobWorktrees({ store: ctx.store, env });
-  const check = preflight({ job: claimed, env, gitImpl: deps.gitImpl, existsImpl: deps.existsImpl, resolveBinImpl: deps.resolveBinImpl, openWorktrees });
-  if (!check.ok) return await gateJob(claimed, check, env);
+  const check = await untilStoreAnswers(ctx, () => preflightJob(claimed, ctx));
+  if (check === OUTAGE_STOPPED) return { report: stoppedInOutage(claimed, env) };
+  if (!check.ok) return { report: await gateJob(claimed, check, ctx) };
   const openPrs = await openPrsForJob(claimed, { env, deps });
   const job = await withRunSlug(claimed, ctx, check.cwd);
+  if (job === OUTAGE_STOPPED) return { report: stoppedInOutage(claimed, env) };
   ensureRunDir(job, env);
+  if ((await recordJob(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
   const prepared = await deps.worktreeImpl({ job, checkout: check.cwd, baseBranch: check.branch, env, log: (line) => appendJobLog(job.id, line, env) });
-  if (!prepared.ok) return await gateJob(job, prepared, env);
+  if (!prepared.ok) return { report: await gateJob(job, prepared, ctx) };
   if (!prepared.reused) await persistBranch(job, job.slug, ctx);
+  return { job, check, prepared, openPrs };
+}
+
+// Runs one claimed job end to end, its lease renewed the moment an unavailable database answers again.
+async function runJob(claimed, ctx) {
+  const letGo = ctx.outage.hold(() => renew(claimed, ctx.env));
+  try {
+    return await runHeldJob(claimed, ctx);
+  } finally {
+    letGo();
+  }
+}
+
+// Runs one held job: what comes before the spawn, its attempts and the single write of the outcome.
+async function runHeldJob(claimed, ctx) {
+  const { env } = ctx;
+  const ready = await prepareJob(claimed, ctx);
+  if (ready.report) return ready.report;
+  const { job, check, prepared, openPrs } = ready;
   const state = ownRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, env });
   const resume = decideResume({ state });
   const handoff = resumeHandoff({ job, resume, state, env });
@@ -755,6 +946,8 @@ async function runJob(claimed, ctx) {
     noteOwnershipLost(job, env);
     return { id: job.id, status: "lost", attempts: run.attempt };
   }
+  if (run.outageStopped) return stoppedInOutage(job, env);
+  if (run.blocked) return await gateJob(job, run.blocked, ctx);
   if (run.parked) return await parkRun(job, run, ctx);
   if (ctx.state.stopping) {
     await release(job, { interrupted: true }, env);
@@ -898,103 +1091,107 @@ function remainingBudget(max, passes) {
 // A `window` bounds the claiming to `[fromMs, untilMs)`: nothing is claimed before it opens or after it closes, but a
 // job already running when it closes always finishes - the window never kills or shortens a job's own timeout.
 export async function runCycle({ jobId = null, max = null, dry = false, env = process.env, deps = {}, window = null, keepAwake = true } = {}) {
-  await openStoreReadOnly(env).migrateIfOutdated();
+  if (dry) {
+    await openStoreReadOnly(env).migrateIfOutdated();
+    return await dryReport({ jobId, cap: concurrencyCap(env), max, env });
+  }
   const cap = concurrencyCap(env);
-  if (dry) return await dryReport({ jobId, cap, max, env });
-  const ctx = { env, store: openStore(env), deps: withDefaults(deps, env), state: { stopping: false } };
-  if (keepAwake) ctx.deps.keepAwakeImpl({ pid: process.pid, env });
-  const upkeep = await ctx.deps.maintenanceImpl({ env });
-  if (upkeep?.warning) process.stderr.write(`warning: ${upkeep.warning}\n`);
+  const merged = withDefaults(deps, env);
+  const ctx = { env, store: openStore(env), deps: merged, state: { stopping: false }, outage: runnerOutage(merged) };
   const uninstall = installShutdown(ctx.state);
+  try {
+    const migrated = await untilStoreAnswers(ctx, () => openStoreReadOnly(env).migrateIfOutdated());
+    if (migrated === OUTAGE_STOPPED) return { processed: [], reason: "stopped", cap, stopped: true };
+    if (keepAwake) ctx.deps.keepAwakeImpl({ pid: process.pid, env });
+    const upkeep = await ctx.deps.maintenanceImpl({ env });
+    if (upkeep?.warning) process.stderr.write(`warning: ${upkeep.warning}\n`);
+    return await claimLoop({ jobId, max, window, cap, ctx });
+  } finally {
+    uninstall();
+  }
+}
+
+// The outage state the runner shares across its cycles: the injected one, or a new one backing off on the runner's own sleep.
+function runnerOutage(deps) {
+  return deps.storeOutage ?? createStoreOutage({ sleepImpl: deps.sleepImpl, probeMs: deps.stopPollMs });
+}
+
+// Claims and runs jobs until the queue refuses another one, the budget is spent, the window closes or the runner is told to stop.
+async function claimLoop({ jobId, max, window, cap, ctx }) {
+  const { env } = ctx;
   const runtime = ownRuntimeDir(env);
   const processed = [];
   const pool = new Set();
   const seen = new Set();
   let reason = "empty-queue";
   let windowClosed = null;
-  try {
-    while (!ctx.state.stopping) {
-      if (!existsSync(runtime)) {
-        reason = "runtime-gone";
-        warnRuntimeGone(runtime);
-        break;
-      }
-      if (pool.size >= RUNNER_POOL_SIZE) {
-        await Promise.race(pool);
-        continue;
-      }
-      if (window) {
-        const opened = await waitOutWindowOpen(window, ctx);
-        if (opened !== null) {
-          reason = opened;
-          break;
-        }
-        windowClosed = await windowClosedCheck(window, ctx);
-        if (windowClosed) {
-          reason = "window-closed";
-          break;
-        }
-      }
-      if (budgetSpent(max, processed)) {
-        reason = "max-reached";
-        break;
-      }
-      const limited = await waitOutRateLimitPause(jobId, ctx, window);
-      if (limited !== null) {
-        reason = limited;
-        break;
-      }
-      if (window) {
-        windowClosed = await windowClosedCheck(window, ctx);
-        if (windowClosed) {
-          reason = "window-closed";
-          break;
-        }
-      }
-      const claimed = await acquire({ jobId, cap, env });
-      if (!claimed.job) {
-        reason = claimed.reason;
-        break;
-      }
-      if (seen.has(claimed.job.id)) {
-        await release(claimed.job, null, env);
-        await Promise.allSettled([...pool]);
-        // Only a job that ran and came back pending is claimed twice: a preflight block gates the job, which no claim takes.
-        reason = "already-tried";
-        break;
-      }
-      seen.add(claimed.job.id);
-      reason = "claimed";
-      const task = runJob(claimed.job, ctx)
-        .catch((err) => ({ id: claimed.job.id, status: "error", error: err?.message ?? String(err) }))
-        .then((result) => {
-          processed.push(result);
-          pool.delete(task);
-        });
-      pool.add(task);
-      if (jobId !== null) break;
+  while (!ctx.state.stopping) {
+    if (!existsSync(runtime)) {
+      reason = "runtime-gone";
+      warnRuntimeGone(runtime);
+      break;
     }
-    await Promise.allSettled([...pool]);
-  } finally {
-    uninstall();
+    if (pool.size >= RUNNER_POOL_SIZE) {
+      await Promise.race(pool);
+      continue;
+    }
+    if (window) {
+      const opened = await waitOutWindowOpen(window, ctx);
+      if (opened !== null) {
+        reason = opened;
+        break;
+      }
+      windowClosed = await windowClosedCheck(window, ctx);
+      if (windowClosed) {
+        reason = "window-closed";
+        break;
+      }
+    }
+    if (budgetSpent(max, processed)) {
+      reason = "max-reached";
+      break;
+    }
+    const limited = await waitOutRateLimitPause(jobId, ctx, window);
+    if (limited !== null) {
+      reason = limited;
+      break;
+    }
+    if (window) {
+      windowClosed = await windowClosedCheck(window, ctx);
+      if (windowClosed) {
+        reason = "window-closed";
+        break;
+      }
+    }
+    const claimed = await untilStoreAnswers(ctx, () => acquire({ jobId, cap, env }));
+    if (claimed === OUTAGE_STOPPED) {
+      reason = "stopped";
+      break;
+    }
+    if (!claimed.job) {
+      reason = claimed.reason;
+      break;
+    }
+    if (seen.has(claimed.job.id)) {
+      await release(claimed.job, null, env);
+      await Promise.allSettled([...pool]);
+      // Only a job that ran and came back pending is claimed twice: a preflight block gates the job, which no claim takes.
+      reason = "already-tried";
+      break;
+    }
+    seen.add(claimed.job.id);
+    reason = "claimed";
+    const task = runJob(claimed.job, ctx)
+      .catch((err) => ({ id: claimed.job.id, status: "error", error: err?.message ?? String(err) }))
+      .then((result) => {
+        processed.push(result);
+        pool.delete(task);
+      });
+    pool.add(task);
+    if (jobId !== null) break;
   }
+  await Promise.allSettled([...pool]);
   return { processed, reason, cap, stopped: ctx.state.stopping, ...(windowClosed ?? {}) };
-}
-
-// Waits until the next pass over the queue, or until a shutdown signal wakes the runner up first.
-function waitNextPass(ms, state, sleepImpl) {
-  const waiting = sleepImpl(ms);
-  return new Promise((done) => {
-    const finish = () => {
-      state.wake = null;
-      done();
-    };
-    state.wake = () => {
-      waiting?.cancel?.();
-      finish();
-    };
-    Promise.resolve(waiting).then(finish);
-  });
 }
 
 // Repeats the cycle while the runner lives, sleeping between two passes over the queue, until its --max budget is spent
@@ -1012,6 +1209,7 @@ export async function runWatch({
   until = null,
 } = {}) {
   const options = withDefaults(deps, env);
+  options.storeOutage = runnerOutage(options);
   options.keepAwakeImpl({ pid: process.pid, env });
   const window = until === null ? null : resolveWindow({ from, until, nowMs: options.nowImpl() });
   const state = { stopping: false };
@@ -1050,6 +1248,7 @@ const DRAIN_WAIT_REASONS = new Set(["cap-reached", "rate-limited"]);
 // Runs cycles until the queue has nothing pending or the --max budget is spent (a job the preflight gates spends none), waiting between passes while the pending jobs are held back by the concurrency cap or a rate limit - what "run the queue" means to an operator.
 export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {
   const options = withDefaults(deps, env);
+  options.storeOutage = runnerOutage(options);
   options.keepAwakeImpl({ pid: process.pid, env });
   const state = { stopping: false };
   const uninstall = installShutdown(state);

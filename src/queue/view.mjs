@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { StoreUnavailableError } from "../config/errors.mjs";
 import { JOB_STATUSES, VIEW_TEXT_LIMIT, jobView } from "../memory/jobs.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { advisoryLinesFor } from "./advisory.mjs";
@@ -86,14 +87,15 @@ function firstLine(err) {
   return String(err?.message ?? err).split("\n")[0];
 }
 
-// Runs one part of the read and times it; a failure is the section's answer, never a throw.
+// Runs one part of the read and times it; a failure is the section's answer, never a throw, and an unavailable database rides along classified.
 async function timedSection(name, read, now) {
   const startedAt = now();
   try {
     const value = await read();
     return { name, ok: true, ms: Math.max(0, Math.round(now() - startedAt)), error: null, value };
   } catch (err) {
-    return { name, ok: false, ms: Math.max(0, Math.round(now() - startedAt)), error: firstLine(err), value: null };
+    const unavailable = err instanceof StoreUnavailableError ? { unavailable: err } : {};
+    return { name, ok: false, ms: Math.max(0, Math.round(now() - startedAt)), error: firstLine(err), value: null, ...unavailable };
   }
 }
 
@@ -126,7 +128,7 @@ export async function queueView(readStore, { env = process.env, limit, blockedOn
   const closesPart = await timedSection("closes", async () => closesSummary(await readStore.jobs.listCloses(), runners), now);
   const jobs = (jobsPart.value ?? []).map((job) => withPrState(job, prStates));
   const { counts, blockedGates, activeJobs } = countsPart.value ?? { counts: zeroCounts(), blockedGates: 0, activeJobs: 0 };
-  const sections = [jobsPart, countsPart, runnersPart, advisoriesPart, closesPart].map(({ name, ok, ms, error }) => ({ name, ok, ms, error }));
+  const sections = [jobsPart, countsPart, runnersPart, advisoriesPart, closesPart].map(({ name, ok, ms, error, unavailable }) => ({ name, ok, ms, error, ...(unavailable ? { unavailable } : {}) }));
   const advisories = advisoriesPart.value ?? [];
   const closes = closesPart.value ?? { inFlight: [], failed: [], stalled: [] };
   const suggestions = [closeSuggestion(jobs), truncationSuggestion(jobs), ...unknownStatusAdvisories(jobs), ...closeLines(closes)].filter(Boolean);

@@ -1,70 +1,85 @@
-import { statSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { openDb, withWriteRetry } from "./db.mjs";
+import { indexedFileMtime, statMtime, toRelativePath } from "./index-paths.mjs";
 import { projectIdOrNull } from "./registry.mjs";
+import { isoToSqlite } from "./schema.mjs";
 import { queryTokens } from "./search.mjs";
 
 const RESPONSIBILITY_MAX = 200;
 
-// Normalizes an indexed path to a path relative to the repository root, so worktrees share the same rows.
-function toRelativePath(path, repoRoot) {
-  const raw = String(path ?? "").trim();
-  if (!repoRoot || !raw.startsWith("/")) return raw.replace(/^\.\//, "");
-  const root = repoRoot.endsWith("/") ? repoRoot : `${repoRoot}/`;
-  return raw.startsWith(root) ? raw.slice(root.length) : raw;
-}
+const FILE_UPSERT = `INSERT INTO project_index (project_id, path, responsibility, mtime_ms) VALUES (?, ?, ?, ?)
+     ON CONFLICT(project_id, path) DO UPDATE SET
+       responsibility = excluded.responsibility,
+       mtime_ms = excluded.mtime_ms,
+       updated_at = datetime('now')`;
 
-// Modification time of a file in milliseconds, or null when it is not there.
-function statMtime(absPath) {
-  try {
-    return Math.round(statSync(absPath).mtimeMs);
-  } catch {
-    return null;
-  }
-}
+const LIB_UPSERT = `INSERT INTO project_libs (project_id, lib, version) VALUES (?, ?, ?)
+     ON CONFLICT(project_id, lib) DO UPDATE SET version = excluded.version, updated_at = datetime('now')`;
 
 // Returns the array as given, treating anything else as an empty list.
 function asList(value) {
   return Array.isArray(value) ? value : [];
 }
 
-// Persists the structural map of a project id, upserting by (project_id, path) and by (project_id, lib).
-export function saveProjectIndex({ projectId, repoRoot, files = [], libs = [] }, env = process.env) {
+// The registered owner of an index write, or a UserError naming the repository that is not registered.
+function requireIndexOwner(projectId, repoRoot) {
   const owner = projectIdOrNull(projectId);
-  if (!owner) {
-    throw new UserError(`the index needs a registered project, and \`${repoRoot ?? ""}\` is not registered; run \`nightqueue init\` in the repository first`);
-  }
-  const db = openDb(env);
-  const fileStmt = db.prepare(
-    `INSERT INTO project_index (project_id, path, responsibility, mtime_ms) VALUES (?, ?, ?, ?)
-     ON CONFLICT(project_id, path) DO UPDATE SET
-       responsibility = excluded.responsibility,
-       mtime_ms = excluded.mtime_ms,
-       updated_at = datetime('now')`,
-  );
-  let savedFiles = 0;
+  if (owner) return owner;
+  throw new UserError(`the index needs a registered project, and \`${repoRoot ?? ""}\` is not registered; run \`nightqueue init\` in the repository first`);
+}
+
+// The file rows an index write stores, each with the modification time `mtimeOf` gives it; an entry with no path or no responsibility is skipped.
+function fileRows(files, repoRoot, mtimeOf) {
+  const rows = [];
   for (const file of asList(files)) {
-    const relative = toRelativePath(file?.path, repoRoot);
+    const path = toRelativePath(file?.path, repoRoot);
     const responsibility = String(file?.responsibility ?? "").trim();
-    if (!relative || !responsibility) continue;
-    const mtime = repoRoot ? statMtime(join(repoRoot, relative)) : null;
-    withWriteRetry(() => fileStmt.run(owner, relative, responsibility.slice(0, RESPONSIBILITY_MAX), mtime));
-    savedFiles++;
+    if (path && responsibility) rows.push({ path, responsibility: responsibility.slice(0, RESPONSIBILITY_MAX), mtime: mtimeOf(file) });
   }
-  const libStmt = db.prepare(
-    `INSERT INTO project_libs (project_id, lib, version) VALUES (?, ?, ?)
-     ON CONFLICT(project_id, lib) DO UPDATE SET version = excluded.version, updated_at = datetime('now')`,
-  );
-  let savedLibs = 0;
+  return rows;
+}
+
+// The lib rows an index write stores; an entry with no lib or no version is skipped.
+function libRows(libs) {
+  const rows = [];
   for (const entry of asList(libs)) {
     const lib = String(entry?.lib ?? "").trim();
     const version = String(entry?.version ?? "").trim();
-    if (!lib || !version) continue;
-    withWriteRetry(() => libStmt.run(owner, lib, version));
-    savedLibs++;
+    if (lib && version) rows.push({ lib, version });
   }
-  return { files: savedFiles, libs: savedLibs };
+  return rows;
+}
+
+// Persists the structural map of a project id, upserting by (project_id, path) and by (project_id, lib).
+export function saveProjectIndex({ projectId, repoRoot, files = [], libs = [] }, env = process.env) {
+  const owner = requireIndexOwner(projectId, repoRoot);
+  const db = openDb(env);
+  const fileStmt = db.prepare(FILE_UPSERT);
+  const savedFiles = fileRows(files, repoRoot, (file) => indexedFileMtime(file?.path, repoRoot));
+  for (const row of savedFiles) withWriteRetry(() => fileStmt.run(owner, row.path, row.responsibility, row.mtime));
+  const libStmt = db.prepare(LIB_UPSERT);
+  const savedLibs = libRows(libs);
+  for (const row of savedLibs) withWriteRetry(() => libStmt.run(owner, row.lib, row.version));
+  return { files: savedFiles.length, libs: savedLibs.length };
+}
+
+// Persists an index save queued while the database was unavailable, writing only the rows no save touched since `since`
+// and the modification times measured when it was queued; answers the rows it actually wrote.
+export function fillProjectIndex({ projectId, repoRoot, files = [], libs = [], since }, env = process.env) {
+  const owner = requireIndexOwner(projectId, repoRoot);
+  const from = isoToSqlite(since);
+  if (!from) throw new UserError(`fillProjectIndex needs the instant the save was queued at; got \`${String(since)}\``);
+  const db = openDb(env);
+  const fileStmt = db.prepare(`${FILE_UPSERT} WHERE datetime(project_index.updated_at) < datetime(?)`);
+  let filled = 0;
+  for (const row of fileRows(files, repoRoot, (file) => (Number.isFinite(file?.mtimeMs) ? file.mtimeMs : null))) {
+    filled += withWriteRetry(() => fileStmt.run(owner, row.path, row.responsibility, row.mtime, from)).changes;
+  }
+  const libStmt = db.prepare(`${LIB_UPSERT} WHERE datetime(project_libs.updated_at) < datetime(?)`);
+  let filledLibs = 0;
+  for (const row of libRows(libs)) filledLibs += withWriteRetry(() => libStmt.run(owner, row.lib, row.version, from)).changes;
+  return { files: filled, libs: filledLibs };
 }
 
 // Freshness of an indexed file against the current checkout.

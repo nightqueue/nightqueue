@@ -88,24 +88,62 @@ function insertPhases(db, runId, phases) {
   });
 }
 
-// Writes the run and its phases inside one immediate transaction, so no reader is ever promoted to writer.
-function insertRun(db, { run, projectId, values }) {
+// Runs the steps inside one immediate transaction, so no reader is ever promoted to writer.
+function inImmediateTransaction(db, steps) {
   db.exec("BEGIN IMMEDIATE");
   try {
-    const inserted = db
-      .prepare(
-        `INSERT INTO pipeline_runs (project_id, slug, tier, tier_operator, tier_raise_reason, task_type, outcome, gate_stop, duration_s, model, session_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(...values);
-    const runId = Number(inserted.lastInsertRowid);
-    insertPhases(db, runId, run.phases);
+    const result = steps();
     db.exec("COMMIT");
-    return { runId, projectId, phases: run.phases.length };
+    return result;
   } catch (err) {
     rollbackQuietly(db);
     throw err;
   }
+}
+
+// Inserts the run and its phases into a transaction that is already open.
+function insertRunRows(db, { run, projectId, values }) {
+  const inserted = db
+    .prepare(
+      `INSERT INTO pipeline_runs (project_id, slug, tier, tier_operator, tier_raise_reason, task_type, outcome, gate_stop, duration_s, model, session_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(...values);
+  const runId = Number(inserted.lastInsertRowid);
+  insertPhases(db, runId, run.phases);
+  return { runId, projectId, phases: run.phases.length };
+}
+
+// Writes the run and its phases inside one immediate transaction.
+function insertRun(db, write) {
+  return inImmediateTransaction(db, () => insertRunRows(db, write));
+}
+
+// Writes the run unless one was already recorded for its project and slug at or after `from`, the check and the insert in one transaction.
+function insertRunOnce(db, write, from) {
+  return inImmediateTransaction(db, () => {
+    const seen = db
+      .prepare("SELECT 1 FROM pipeline_runs WHERE project_id IS ? AND slug = ? AND datetime(created_at) >= datetime(?) LIMIT 1")
+      .get(write.projectId, write.run.slug, from);
+    return seen ? { skipped: true, projectId: write.projectId } : insertRunRows(db, write);
+  });
+}
+
+// The column values of one pipeline run, in the order `insertRunRows` writes them; `origin` names the model and the session that ran it.
+function runValues(run, owner, { tierRaiseReason, durationS }, origin) {
+  return [
+    owner,
+    run.slug,
+    run.tier,
+    run.tierOperator,
+    optionalText(tierRaiseReason),
+    run.taskType,
+    run.outcome,
+    run.gateStop,
+    optionalSeconds(durationS),
+    optionalText(origin.model),
+    optionalText(origin.sessionId),
+  ];
 }
 
 // Reads a pipeline run back through a connection of its own, so no cached snapshot answers for the file.
@@ -221,20 +259,20 @@ export function logPipelineRun(
 ) {
   const run = validateRun({ slug, tier, tierOperator, taskType, outcome, gateStop, phases });
   const owner = projectIdOrNull(projectId);
-  const values = [
-    owner,
-    run.slug,
-    run.tier,
-    run.tierOperator,
-    optionalText(tierRaiseReason),
-    run.taskType,
-    run.outcome,
-    run.gateStop,
-    optionalSeconds(durationS),
-    optionalText(env?.NIGHTQUEUE_MODEL),
-    optionalText(env?.NIGHTQUEUE_SESSION_ID),
-  ];
+  const values = runValues(run, owner, { tierRaiseReason, durationS }, { model: env?.NIGHTQUEUE_MODEL, sessionId: env?.NIGHTQUEUE_SESSION_ID });
   const db = openDb(env);
   const write = { db, run, projectId: owner, values };
   return ensureRunDurable(withFullSync(db, () => withWriteRetry(() => insertRun(db, write))), write, env);
+}
+
+// Persists a pipeline run queued while the database was unavailable, unless a run of the same project and slug was recorded since
+// it was queued; `model` and `sessionId` travel in the spec, because the process replaying it is not the one that ran it.
+export function logPipelineRunOnce(spec = {}, { since } = {}, env = process.env) {
+  const run = validateRun(spec);
+  const owner = projectIdOrNull(spec.projectId);
+  const from = isoToSqlite(since);
+  if (!from) throw new UserError(`logPipelineRunOnce needs the instant the run was queued at; got \`${String(since)}\``);
+  const values = runValues(run, owner, spec, { model: spec.model, sessionId: spec.sessionId });
+  const db = openDb(env);
+  return withFullSync(db, () => withWriteRetry(() => insertRunOnce(db, { run, projectId: owner, values }, from)));
 }

@@ -1,9 +1,12 @@
 import { dbPath } from "../config/paths.mjs";
+import { openStore } from "../store/open.mjs";
+import { replayAllPendingWrites } from "./pending-writes.mjs";
 import { REPAIR_FAILED_PREFIX, repairWarningLine } from "./reconcile.mjs";
 import { pruneDeadRunners } from "./registry.mjs";
 import { callerJobId } from "./retry.mjs";
 
 export const MAINTENANCE_INTERVAL_MS = 60_000;
+export const REPLAY_FAILED_PREFIX = "could not replay the pending writes of a run";
 
 const timers = new Map();
 
@@ -30,12 +33,30 @@ async function repairQuietly(env) {
   }
 }
 
-// The upkeep a view never does, owned by the runner cycle, the one-shot status and the MCP server: prune, then repair; it never throws.
+// The first failure of a replay, phrased for the warning line, or null when every run replayed.
+function replayFailure(replayed) {
+  if (replayed.error) return firstLine(replayed.error);
+  const failed = replayed.runs.find((run) => run.failed);
+  return failed ? `${failed.projectId}/${failed.slug}: ${failed.failed}` : null;
+}
+
+// Replays the records runs queued while the database was unavailable, turning the first failure into the warning line.
+async function replayQuietly(env) {
+  try {
+    const failure = replayFailure(await replayAllPendingWrites({ env, store: openStore(env) }));
+    return failure ? `${REPLAY_FAILED_PREFIX}: ${failure}` : null;
+  } catch (err) {
+    return `${REPLAY_FAILED_PREFIX}: ${firstLine(err)}`;
+  }
+}
+
+// The upkeep a view never does, owned by the runner cycle, the one-shot status and the MCP server: prune, replay the pending writes, then repair; it never throws.
 export async function runMaintenance({ env = process.env, killImpl } = {}) {
   const startedAt = performance.now();
   const pruned = pruneQuietly(env, killImpl);
-  const warning = await repairQuietly(env);
-  return { warning, pruned, ms: Math.round(performance.now() - startedAt) };
+  const replayWarning = await replayQuietly(env);
+  const repairWarning = await repairQuietly(env);
+  return { warning: replayWarning ?? repairWarning, pruned, ms: Math.round(performance.now() - startedAt) };
 }
 
 // Runs one pass of a timer, skipping it while the previous one is still going, and keeps what it found for the readers.

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { queueRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
-import { PUBLISHED_BODY_FILE, footerOf, publishedBodyFile } from "../../src/queue/pr-footer.mjs";
+import { PUBLISHED_BODY_FILE, footerOf, itemRefOfJob, publishedBodyFile } from "../../src/queue/pr-footer.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
@@ -38,8 +38,8 @@ test("a roadmap job publishes a copy ending with its item's footer, the same on 
   const { job } = await queueRoadmapItem({ id: item.id }, env);
   const before = hashOf(bodyFile);
 
-  const first = await publishedBodyFile({ bodyFile, runDir, jobId: job.id, store });
-  const second = await publishedBodyFile({ bodyFile, runDir, jobId: job.id, store });
+  const first = await publishedBodyFile({ bodyFile, runDir, jobId: job.id, resolveItemRef: () => itemRefOfJob(store, job.id) });
+  const second = await publishedBodyFile({ bodyFile, runDir, jobId: job.id, resolveItemRef: () => itemRefOfJob(store, job.id) });
 
   assert.equal(first, join(runDir, PUBLISHED_BODY_FILE));
   assert.equal(second, first);
@@ -57,7 +57,7 @@ test("a job queued from an org item ends its body with the org item's ref", asyn
   assert.equal(jobs.length, 2);
 
   for (const job of jobs) {
-    const published = await publishedBodyFile({ bodyFile, runDir, jobId: job.id, store });
+    const published = await publishedBodyFile({ bodyFile, runDir, jobId: job.id, resolveItemRef: () => itemRefOfJob(store, job.id) });
     assert.ok(readFileSync(published, "utf8").endsWith(`\n\nRefs ${item.ref}\n\nOpened by nightqueue · ${item.ref}\n`));
   }
 });
@@ -67,7 +67,7 @@ test("a free-prompt job and a run outside the queue end with the bare signature"
   const plain = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix it" }, env);
 
   for (const jobId of [plain.id, null]) {
-    const published = await publishedBodyFile({ bodyFile, runDir, jobId, store });
+    const published = await publishedBodyFile({ bodyFile, runDir, jobId, resolveItemRef: () => itemRefOfJob(store, jobId) });
     assert.equal(readFileSync(published, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue\n");
   }
 });
@@ -75,7 +75,7 @@ test("a free-prompt job and a run outside the queue end with the bare signature"
 test("a store that cannot answer refuses the publication, naming the job, instead of dropping the footer", async (t) => {
   const { runDir, bodyFile } = makeFooterHome(t, "pr-footer-broken");
   const store = { roadmap: { roadmapRefOfJob: async () => { throw new Error("database is locked"); } } };
-  await assert.rejects(publishedBodyFile({ bodyFile, runDir, jobId: 3, store }), {
+  await assert.rejects(publishedBodyFile({ bodyFile, runDir, jobId: 3, resolveItemRef: () => itemRefOfJob(store, 3) }), {
     name: "UserError",
     message: "could not build the pull request footer from J-3: database is locked; nothing was pushed",
   });

@@ -3,7 +3,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { saveProject } from "../cli/project.mjs";
-import { UserError } from "../config/errors.mjs";
+import { StoreUnavailableError, storeWarningLine, UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { requireOrg } from "../config/orgs.mjs";
 import { registrationOffer, requireProject, resolveProjectRef, roadmapQueueTarget } from "../config/projects.mjs";
@@ -47,6 +47,8 @@ import { createPrStateCache } from "../queue/pr-state.mjs";
 import { liveRunnersReport, STOPPED_RUNNER, unreadableRegistry } from "../queue/registry.mjs";
 import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
 import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume.mjs";
+import { resolveJobRun } from "../queue/job-run.mjs";
+import { appendPendingWrite, PENDING_KEYS } from "../queue/pending-writes.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { priorRunBlock, resolveOperatorRunDir, withPriorRun } from "../queue/operator-run.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
@@ -190,16 +192,16 @@ function refuseMissingRunSlug(own) {
   );
 }
 
-// The run of the job this process belongs to, read from its own row.
+// The run of the job this process belongs to: its own row, or its job block on disk when the database is unavailable.
 async function jobRun(own, args, env) {
   const named = [
     ["project", args.project],
     ["slug", args.slug],
   ].filter(([, value]) => typeof value === "string" && value.trim() !== "");
   if (named.length > 0) refuseNamedRun(named.map(([name, value]) => [name, value.trim()]), own);
-  const row = await openStore(env).jobs.getJob(own);
-  if (!isSafeSegment(row?.slug)) refuseMissingRunSlug(own);
-  return { project: row.project, projectId: row.project_id, slug: row.slug };
+  const run = await resolveJobRun(own, env);
+  if (!isSafeSegment(run.slug)) refuseMissingRunSlug(own);
+  return { project: run.project, projectId: run.projectId, slug: run.slug };
 }
 
 // The run an operator names from outside a job, where nothing else can tell which one it is.
@@ -227,8 +229,8 @@ async function callerRun(args, env) {
 // The run a `pipeline_log` call records: inside a job the job's own row names it, whatever the call sent, and outside one only the call can say which run it is.
 async function pipelineLogRun(args, env) {
   const own = callerJobId(env);
-  const row = own === null ? null : await openStore(env).jobs.getJob(own);
-  if (isSafeSegment(row?.slug)) return { project: row.project, projectId: row.project_id ?? null, slug: row.slug };
+  const run = own === null ? null : await resolveJobRun(own, env);
+  if (isSafeSegment(run?.slug)) return { project: run.project, projectId: run.projectId ?? null, slug: run.slug };
   const slug = typeof args.slug === "string" ? args.slug.trim() : "";
   if (!slug) {
     throw new UserError(
@@ -244,6 +246,18 @@ async function pipelineLogRun(args, env) {
 function runFacts({ projectId, slug }, env) {
   const state = readRunState({ projectId, slug, env });
   return { tier: state?.tier ?? null, taskType: state?.type ?? null, tierRaiseReason: state?.tierRaiseReason ?? null };
+}
+
+// Queues a pipeline run the unavailable database refused into the run's pending-writes file, fully resolved, and answers ok with the warning;
+// any other failure, or a run it cannot be queued into, is raised as it came.
+function queuedPipelineLog(err, spec, env) {
+  if (!(err instanceof StoreUnavailableError)) throw err;
+  const at = new Date().toISOString();
+  const payload = { ...spec, model: env?.NIGHTQUEUE_MODEL ?? null, sessionId: env?.NIGHTQUEUE_SESSION_ID ?? null };
+  const entry = { key: PENDING_KEYS.pipelineLog(spec.projectId, spec.slug, at), kind: "pipeline_log", at, jobId: callerJobId(env), payload };
+  const queued = appendPendingWrite({ projectId: spec.projectId, slug: spec.slug, entry, env });
+  if (queued.status !== "queued") throw err;
+  return { ok: true, queued: true, warning: `recorded in ${queued.path}; replayed once the database is back`, pending: queued.path };
 }
 
 // Requires a field neither the call nor the run resolved, saying which tool would have recorded it during the run.
@@ -547,6 +561,22 @@ function validateArgs(name, inputSchema, args) {
   throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for tool ${name}: ${issues}\n${name} contract:\n${describeSchema(inputSchema)}\nreceived: ${received}`);
 }
 
+// The machine-readable error a tool answers when the home database cannot be used at all.
+function storeUnavailableAnswer(err) {
+  const payload = withContract({ ok: false, error: "store-unavailable", code: err.code, home: err.home, hint: err.hint });
+  return { content: [{ type: "text", text: JSON.stringify(payload) }], isError: true };
+}
+
+// Builds a phase's context block, degrading to an empty block plus one warning line when the home database is unavailable.
+async function degradedPhaseContext(args, build) {
+  try {
+    return await build();
+  } catch (err) {
+    if (!(err instanceof StoreUnavailableError)) throw err;
+    return { project: args.project ?? null, block: "", warning: storeWarningLine(err) };
+  }
+}
+
 // Wraps a handler so a business failure comes back as a clear message instead of a raw exception.
 function guard(name, handler, session) {
   return async (args) => {
@@ -554,6 +584,7 @@ function guard(name, handler, session) {
       const upgraded = await upgradeOldShapes(name, args ?? {}, session);
       return asText(withContract(await handler(upgraded.args), upgraded.deprecated));
     } catch (err) {
+      if (err instanceof StoreUnavailableError) return storeUnavailableAnswer(err);
       const message = err instanceof StaleContractError ? err.message : `${name}: ${err?.message ?? String(err)}`;
       return { content: [{ type: "text", text: message }], isError: true };
     }
@@ -620,6 +651,7 @@ async function queueStatusAnswer(args, { store, warning, env, state }) {
   if (asked.prUrl !== undefined) return await jobStatusAnswer(await jobIdOfPrUrl(store, asked.prUrl), { store, warning });
   const view = await queueView(store, { env, limit: jobLimit(args.limit), prStates: serverPrStates });
   const unread = failedCoreSection(view);
+  if (unread?.unavailable) throw unread.unavailable;
   if (unread) throw new UserError(`the queue cannot be read: ${unread.error}`);
   if (view.registryError !== null) throw unreadableRegistry(view.registryError, env);
   const { runners, advisories, jobs, counts, suggestions, closes, activeJobs, sections } = view;
@@ -716,15 +748,17 @@ function toolDefinitions(env, state) {
         },
       },
       handler: async (args) =>
-        phaseContextBlock(
-          {
-            target: args.target,
-            query: args.query,
-            project: args.project,
-            repoRoot: args.repo_root,
-            excludeIds: args.exclude_ids,
-          },
-          env,
+        degradedPhaseContext(args, () =>
+          phaseContextBlock(
+            {
+              target: args.target,
+              query: args.query,
+              project: args.project,
+              repoRoot: args.repo_root,
+              excludeIds: args.exclude_ids,
+            },
+            env,
+          ),
         ),
     },
     {
@@ -841,7 +875,7 @@ function toolDefinitions(env, state) {
         refuseOperatorOutcomeInsideJob(args.outcome, env);
         const run = await pipelineLogRun(args, env);
         const recorded = runFacts(run, env);
-        const logged = await openStore(env).runs.logPipelineRun({
+        const spec = {
           projectId: run.projectId,
           slug: run.slug,
           tier: requireLogged("tier", args.tier ?? recorded.tier),
@@ -852,8 +886,13 @@ function toolDefinitions(env, state) {
           gateStop: args.gate_stop,
           durationS: args.duration_s,
           phases: args.phases ?? [],
-        });
-        return { ok: true, runId: logged.runId, project: logged.projectId ? run.project : null, phases: logged.phases };
+        };
+        try {
+          const logged = await openStore(env).runs.logPipelineRun(spec);
+          return { ok: true, runId: logged.runId, project: logged.projectId ? run.project : null, phases: logged.phases };
+        } catch (err) {
+          return queuedPipelineLog(err, spec, env);
+        }
       },
     },
     {
@@ -1057,7 +1096,7 @@ function toolDefinitions(env, state) {
       name: "queue_retry",
       config: {
         description:
-          "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate - except a job the preflight gated (its `blocked_code` is set: dirty checkout, wrong branch, missing checkout or `claude`), which moves without one once its cause is fixed. " +
+          "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate - except a job the preflight gated (its `blocked_code` is set: dirty checkout, wrong branch, missing checkout or `claude`, or `store-unavailable`: the session could not reach this server), which moves without one once its cause is fixed. " +
           "Without `fresh` the run resumes from the last phase, keeping slug, branch, session and run directory; with `fresh` it starts from phase 0 and the run directory is dropped. " +
           "`run` starts a DETACHED runner, the same one `queue_run` starts - and the same one the `--run` of the CLI starts, unless it is asked for `--foreground`; a job that cannot be claimed right now answers `waiting` and starts nothing. " +
           "Inside an unattended run this tool only accepts the id of the job it is running: retrying another job is refused, because the note is delivered as a human answer in that job's next prompt.",

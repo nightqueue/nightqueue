@@ -152,7 +152,7 @@ export function projectRowsByItem(db, itemIds, viewer = null) {
 export function orgItemOfJob(db, jobId) {
   const row = db
     .prepare(
-      `SELECT r.id, r.scope, r.project_id, r.org_id, r.number FROM roadmap_item_projects p JOIN roadmap_items r ON r.id = p.item_id
+      `SELECT r.id, r.scope, r.project_id, r.org_id, r.number, r.decision_id FROM roadmap_item_projects p JOIN roadmap_items r ON r.id = p.item_id
         WHERE p.job_id = ? ORDER BY p.id DESC LIMIT 1`,
     )
     .get(jobId);

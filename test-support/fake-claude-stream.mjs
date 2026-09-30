@@ -29,6 +29,7 @@ function nextAttempt(total) {
 function recordCall(plan) {
   const call = { pid: process.pid, argv: process.argv.slice(2), jobId: process.env.NIGHTQUEUE_JOB_ID ?? null, cwd: process.cwd() };
   if (typeof plan.probePath === "string") call.probeExisted = existsSync(plan.probePath);
+  if (typeof plan.probeReadPath === "string") call.probedText = existsSync(plan.probeReadPath) ? readFileSync(plan.probeReadPath, "utf8") : null;
   if (typeof plan.probeStatusOf === "string") call.probedStatus = gitOut(plan.probeStatusOf, ["status", "--porcelain"]);
   appendFileSync(CALLS_PATH, `${JSON.stringify(call)}\n`);
 }
@@ -58,13 +59,14 @@ function sleep(ms) {
   return new Promise((done) => setTimeout(done, ms));
 }
 
-// Plays one attempt: the first slice of the stream, a silent hold and then the rest.
+// Plays one attempt: the first slice of the stream, a silent hold, the rest, and a last silent hold before the exit.
 async function play(step) {
   if (typeof step.commitFile === "string") commitFile(step.commitFile);
   if (step.stdout) process.stdout.write(step.stdout);
   if (step.stderr) process.stderr.write(step.stderr);
   if (step.holdMs) await sleep(step.holdMs);
   if (step.tail) process.stdout.write(step.tail);
+  if (step.afterHoldMs) await sleep(step.afterHoldMs);
   process.exitCode = Number.isInteger(step.exitCode) ? step.exitCode : 0;
 }
 

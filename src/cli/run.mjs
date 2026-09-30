@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { UserError } from "../config/errors.mjs";
+import { StoreUnavailableError, UserError } from "../config/errors.mjs";
 import { jobLogPath, runDir } from "../config/paths.mjs";
 import { resolveProjectRef } from "../config/projects.mjs";
 import { ghPrCreate } from "../host/gh.mjs";
+import { withMeasuredMtimes } from "../memory/index-paths.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { registeredProject } from "../memory/registry-access.mjs";
 import { runGit } from "../host/git.mjs";
@@ -14,6 +15,8 @@ import { defaultGitImpl } from "../queue/preflight.mjs";
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { itemRefOfJob, publishedBodyFile } from "../queue/pr-footer.mjs";
+import { resolveJobRun } from "../queue/job-run.mjs";
+import { appendPendingWrite, PENDING_KEYS } from "../queue/pending-writes.mjs";
 import { recordOutcome, recordPrTemplate, recordPrUrl, recordRunFields } from "../queue/run-state.mjs";
 import { phaseTelemetry, runDurationS } from "../queue/telemetry.mjs";
 import { openStore } from "../store/open.mjs";
@@ -60,12 +63,12 @@ function refuseMissingSlug(own) {
   );
 }
 
-// The run of the job this process belongs to, read from its own row.
+// The run of the job this process belongs to: its own row, or its job block on disk when the database is unavailable.
 async function jobRun(own, values, env) {
   if (values.project !== undefined || values.slug !== undefined) refuseNamedRun(own);
-  const row = await openStore(env).jobs.getJob(own);
-  if (!isSafeSegment(row?.slug)) refuseMissingSlug(own);
-  return { jobId: own, project: row.project, projectId: row.project_id, slug: row.slug };
+  const run = await resolveJobRun(own, env);
+  if (!isSafeSegment(run.slug)) refuseMissingSlug(own);
+  return { jobId: own, project: run.project, projectId: run.projectId, slug: run.slug };
 }
 
 // The run an operator names from outside a job, where nothing else can tell which one it is.
@@ -94,13 +97,30 @@ async function resolveRun(values, ctx) {
   return { ...run, runDir: runDir(run.projectId, run.slug, ctx.env) };
 }
 
-// The state.json of the run, refusing when nothing has been recorded into it yet.
+// Whether the pipeline has recorded anything into the run: a phase or an outcome, as opposed to the runtime's own job block alone.
+function pipelineStarted(state) {
+  return (Array.isArray(state.phases) && state.phases.length > 0) || isStateObject(state.outcome);
+}
+
+// The state.json of the run, refusing when nothing has been recorded into it yet or only the runtime created it.
 function requireRunState({ projectId, slug, runDir: dir }, env) {
   const state = readRunState({ projectId, slug, env });
+  const path = join(dir, "state.json");
   if (!isStateObject(state)) {
-    throw new UserError(`no run recorded at ${join(dir, "state.json")}; the runtime writes it as the phases complete`);
+    throw new UserError(`no run recorded at ${path}; the runtime writes it as the phases complete`);
+  }
+  if (isStateObject(state.job) && !pipelineStarted(state)) {
+    throw new UserError(`the runtime created this run at ${state.job.createdAt ?? "an unknown time"}; the pipeline has recorded no phase in ${path} yet`);
   }
   return state;
+}
+
+// The ref of the roadmap item the run's job came from: the job block of state.json first (null for a free-prompt job), the job row otherwise.
+async function runItemRef(run, env) {
+  const state = readRunState({ projectId: run.projectId, slug: run.slug, env });
+  const block = isStateObject(state) && isStateObject(state.job) ? state.job : null;
+  if (block !== null && run.jobId !== null && block.id === run.jobId) return block.itemRef ?? null;
+  return await itemRefOfJob(openStore(env), run.jobId);
 }
 
 // The accumulated stream of the job on disk, the only source of what the runtime measured; no log means nothing was measured.
@@ -505,7 +525,7 @@ function refsTrailerLine(message) {
 // The ref of the roadmap item the run's job came from, or null; a store that cannot answer stops the commit.
 async function commitItemRef(run, env) {
   try {
-    return await itemRefOfJob(openStore(env), run.jobId);
+    return await runItemRef(run, env);
   } catch (error) {
     throw new UserError(`could not read the roadmap item of ${jobRef(run.jobId)}:${error?.message ?? String(error)}; nothing was committed`);
   }
@@ -650,7 +670,7 @@ async function runPr(argv, ctx) {
     ctx.out("nothing was pushed and no pull request was opened: fix the problems above and call `nightqueue run pr` again");
     return 1;
   }
-  const published = await publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, store: openStore(ctx.env) });
+  const published = await publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, resolveItemRef: () => runItemRef(run, ctx.env) });
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const current = currentBranch(cwd, ctx.env);
   const final = publishedBranchName(current, { type: state?.type, slug: run.slug, commitType: headCommitType(cwd, ctx.env) });
@@ -721,13 +741,31 @@ async function runIndexSave(argv, ctx) {
     ctx.err(`nightqueue run index-save: not a \`<lib>@<version>\` entry, skipped: ${line}`);
   }
   const store = openStore(ctx.env);
-  const saved = await store.index.saveProjectIndex({
-    projectId: (await resolveProjectRef(store, project))?.id ?? null,
-    repoRoot,
-    files: parsed.files,
-    libs: parsed.libs,
-  });
-  ctx.out(`index saved: ${saved.files} files, ${saved.libs} libs`);
+  try {
+    const saved = await store.index.saveProjectIndex({
+      projectId: (await resolveProjectRef(store, project))?.id ?? null,
+      repoRoot,
+      files: parsed.files,
+      libs: parsed.libs,
+    });
+    ctx.out(`index saved: ${saved.files} files, ${saved.libs} libs`);
+    return 0;
+  } catch (err) {
+    return await queueIndexSave(err, { repoRoot, parsed }, ctx);
+  }
+}
+
+// Queues an index save the unavailable database refused inside a job into the job's run, saying where it waits; outside a job, or for any other failure, the error is raised as it came.
+async function queueIndexSave(err, { repoRoot, parsed }, ctx) {
+  const own = callerJobId(ctx.env);
+  if (!(err instanceof StoreUnavailableError) || own === null) throw err;
+  const run = await resolveJobRun(own, ctx.env);
+  const at = new Date().toISOString();
+  const payload = { projectId: run.projectId, repoRoot, files: withMeasuredMtimes(parsed.files, repoRoot), libs: parsed.libs };
+  const entry = { key: PENDING_KEYS.indexSave(run.projectId, at), kind: "index_save", at, jobId: own, payload };
+  const queued = appendPendingWrite({ projectId: run.projectId, slug: run.slug, entry, env: ctx.env });
+  if (queued.status !== "queued") throw err;
+  ctx.err(`QUEUED: ${queued.path}`);
   return 0;
 }
 

@@ -17,10 +17,10 @@ export async function itemRefOfJob(store, jobId) {
   return (await store.roadmap.roadmapRefOfJob(jobId)) ?? null;
 }
 
-// The body file `run pr` publishes: a copy of the agent's body in the run directory ending with the footer built from the job row.
-export async function publishedBodyFile({ bodyFile, runDir, jobId, store }) {
+// The body file `run pr` publishes: a copy of the agent's body in the run directory ending with the footer of the item ref the caller resolves.
+export async function publishedBodyFile({ bodyFile, runDir, jobId, resolveItemRef }) {
   try {
-    const footer = footerOf(await itemRefOfJob(store, jobId));
+    const footer = footerOf(await resolveItemRef());
     const body = readFileSync(bodyFile, "utf8");
     mkdirSync(runDir, { recursive: true });
     const published = join(runDir, PUBLISHED_BODY_FILE);

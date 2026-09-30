@@ -7,7 +7,7 @@ import { jobLogPath, logsDir, runDir } from "../src/config/paths.mjs";
 import { run } from "../src/cli/index.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
-import { recordPhaseDone, recordRunFields } from "../src/queue/run-state.mjs";
+import { recordJobBlock, recordPhaseDone, recordRunFields } from "../src/queue/run-state.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
 import {
@@ -165,6 +165,25 @@ test("`run log` refuses a run named from inside a job, a row with no slug and a 
   const noState = await runCli(env, ["run", "log"], { jobId: id });
   assert.equal(noState.code, 1);
   assert.match(noState.err.join("\n"), /no run recorded at .*state\.json/);
+});
+
+test("`run log` on a run the runtime created but the pipeline has not started says so, and prints once a phase is recorded", async (t) => {
+  const env = makeQueue(t, "cli-run-log-created");
+  const id = boundJob(env);
+  const projectId = ensureProject(env, "alpha");
+  const block = { id, createdAt: "2026-03-04T05:06:07.000Z" };
+  assert.equal(recordJobBlock({ projectId, slug: SLUG, block, env }).status, "written");
+
+  const created = await runCli(env, ["run", "log"], { jobId: id });
+  assert.equal(created.code, 1);
+  assert.deepEqual(created.err, [
+    `nightqueue: the runtime created this run at 2026-03-04T05:06:07.000Z; the pipeline has recorded no phase in ${join(runDir(projectId, SLUG, env), "state.json")} yet`,
+  ]);
+
+  recordPhaseDone({ projectId, slug: SLUG, phase: "triage", env });
+  const started = await runCli(env, ["run", "log"], { jobId: id });
+  assert.equal(started.code, 0);
+  assert.deepEqual(started.out, ["triage\t-\tok\t-", "total\t-"]);
 });
 
 test("outside a job `run log` requires the run to be named, with a registered project and a safe slug", async (t) => {

@@ -199,7 +199,7 @@ nightqueue update                                  # reinstall the runtime and r
 nightqueue update 0.2.0                            # ...at one exact version from the registry
 nightqueue doctor --json                           # check the host and the home, exit 1 on any failure
 nightqueue doctor --check-updates                  # ...and ask the registry for the newest version
-nightqueue doctor --fix                            # ...and git worktree repair the job worktrees whose checkout or home moved
+nightqueue doctor --fix                            # ...and git worktree repair the job worktrees whose checkout or home moved, and repair the database files
 nightqueue init                                    # set the host up and register the current repository
 nightqueue init ~/code/api --org acme --name api   # ...or an explicit path, org and name
 nightqueue init --no-embedding --no-path --no-gh   # ...answering every question up front
@@ -275,7 +275,38 @@ nightqueue queue cancel 42 --reason "abandoned"       # cancel a done or failed 
 
 nightqueue queue run --watch --from 22:00 --until 04:00   # watch only inside that window, local wall clock, then exit
 nightqueue queue run --watch --until 04:00                # `--from` defaults to now
+
+nightqueue queue repair [--json]                      # replay the pending writes every run left while the database was unavailable
+nightqueue queue repair 42 [--json]                   # re-classify a gated or failed job from its own log
+nightqueue queue repair --from-disk [42] [--json]     # recreate the jobs the table lost, from their runs on disk
 ```
+
+`queue repair` has three forms. Bare, it replays every `pending-writes.jsonl` a run left while
+the database was unavailable (see [Runtime contract](runtime-contract.md)) and prints one
+`<project_id>/<slug>: applied <n>, filled <n>, superseded <n>, refused <n>` line per run
+directory, or `nothing pending`. With an id it re-classifies a gated or failed job from its own
+log, as described in [Queue](queue.md). With `--from-disk` it recreates every job `doctor --db`
+lists under `lost jobs` - or only the one named - from its run on disk: status from the
+`terminal` witness, then the recorded `outcome`, then the last attempt of its log (a run that
+left none is `failed` with `recovered from disk: the run left no outcome`), the notice from the
+stream's `## Notice`, the pull request, slug and branch; the row carries
+`result.recovered = { from: "disk", at, runDir }` and the job log gains
+`recovered from disk: status=<s> prUrl=<u|->`. It prints one `J-<n> <project>/<slug>: <result>`
+line per job, where the result is `recovered as <status>`, `exists` (the row is there - a second
+run, or the loser of two concurrent ones), `skipped: still running` or `project-missing`, then
+the tail of the job logs no run explains, which cannot be rebuilt. Nothing is written to the
+roadmap or to the decisions. A recovered row is a record, not a task: its prompt was not kept on
+disk, so `queue retry` (and `queue_retry`) refuses it with ``J-<n> was rebuilt from disk by
+`nightqueue queue repair --from-disk` and its prompt was not kept, so it cannot run again; queue
+the task anew with `nightqueue queue add` ``.
+
+A session that could not reach the nightqueue MCP server - its `init` lists `nightqueue` as
+`failed`, or its first nightqueue tool call fails (`is_error`) with nothing but
+`Connection closed` (optionally prefixed by `MCP error <n>: `) - is not a failed attempt; a
+result that merely quotes the phrase, such as a recalled lesson or this very gate notice, never
+counts: the job stops at a `gate` with `blocked_code` `store-unavailable`, the attempt is given
+back and the worktree kept, exactly like any other preflight block. The notice names
+`nightqueue doctor --fix` and ends in `nightqueue queue retry J-<n> (no note needed)`.
 
 `queue status <PR URL>` (and `queue_status` with `pr_url`) finds the job that opened that
 pull request, whatever the case of the owner, a trailing slash or a `/files` suffix. A URL no
@@ -416,11 +447,12 @@ again, naming it once more.
 nightqueue doctor                  # one line per check: ok, warn or fail
 nightqueue doctor --json           # the same report, as the only thing on stdout
 nightqueue doctor --check-updates  # ...plus the newest version published in the registry
-nightqueue doctor --fix            # ...and git worktree repair the job worktrees whose checkout or home moved, and remove the shm orphans
+nightqueue doctor --fix            # ...and git worktree repair the job worktrees whose checkout or home moved, remove the shm orphans and repair the database files
+nightqueue doctor --db             # ...plus the database files, a quick_check and the jobs on disk the table lost
 ```
 
 `nightqueue doctor` reads the host and the home and writes nothing, except `git worktree
-repair` and the removal of the `db shm` orphans with `--fix` (below): it never creates
+repair`, the removal of the `db shm` orphans and the database actions with `--fix` (below): it never creates
 the database, never touches `settings.json` and never asks `claude` about
 anything but its version. It checks the Node version, the `claude` and `gh`
 CLIs, `config.json`, the mode of `secrets.json`, each of the three shims (a
@@ -474,7 +506,56 @@ Three of the checks are about the storage under the home (see [Configuration](cl
 The `database` check compares the schema version on disk with the one this build expects: a
 database one version behind is a `warn` (`run nightqueue queue status once to let it migrate`),
 and a database written by a NEWER version is a `fail` (upgrade nightqueue to the version that
-wrote it).
+wrote it). A database SQLite itself cannot read - `SQLITE_NOTADB`, `SQLITE_CORRUPT`,
+`SQLITE_IOERR` or `SQLITE_READONLY` (see [Memory](memory.md)) - is a `warn`, never a `fail`:
+the row reads `<code>: <detail>` with the hint `nightqueue doctor --fix`, the one hint every
+place that meets a sick database prints.
+
+`--db` only adds rows to the report, after `db shm`; it never changes what `--fix` does:
+
+- `db files` - the sizes of `nightqueue.db`, `-wal` and `-shm`, and the inode of the `-shm`
+  (`main <size>, wal <size>, shm <size> (inode dev:ino)`);
+- `db integrity` - `quick_check ok`, or a `warn` carrying what `PRAGMA quick_check` answered,
+  with the hint `nightqueue doctor --fix`;
+- `lost jobs` - every job whose run is on disk (its `state.json` job block or witness, its log,
+  its worktree) and whose row the table no longer has, one
+  `J-<n> <project>/<slug> last=<status> pr=<url|->` each, plus `and <n> job logs with no run and
+  no row (J-…)` for a log nothing else explains: a `warn` with the hint
+  `nightqueue queue repair --from-disk`, or `ok` `no job on disk is missing from the table`.
+  Logs with no run and no row alone (the logs a `project remove --purge` keeps, for instance)
+  never make the row warn, since no repair can rebuild them: it stays `ok` and names them,
+  `no job on disk is missing from the table; and <n> job logs with no run and no row (J-…), kept
+  for reading only`.
+  When the table cannot be read the row says `unknown: the table cannot be read` and still lists
+  the ids on disk.
+
+`--fix` extends to the database, with one row per action it took, whether or not `--db` is given:
+
+- `db checkpoint` - when the `-wal` is not empty and the database answers, it folds the log
+  into the main file (`wal_checkpoint(TRUNCATE)`, on a connection that never migrates):
+  `folded <n> frames (busy=0)`, or a `warn` `busy: a live connection kept <n> frames` with the
+  hint `stop the runner, then nightqueue doctor --fix`. An empty `-wal` prints no row.
+- `db repair` - only when the database answers `SQLITE_NOTADB` or `SQLITE_CORRUPT` (or a
+  `quick_check` that is not `ok`). A copy of the main file ALONE is checked in a temporary
+  directory, so the live file never gets a second sqlite:
+  - the main file is intact and no other process holds the database: `-wal` and `-shm` are moved
+    into `_broken-<stamp>/` in the home, the database is reopened and `integrity_check` runs -
+    `moved nightqueue.db-wal, nightqueue.db-shm into <dir>; integrity ok`;
+  - the main file is intact but a live runner is registered: a `warn`
+    `not moved: a live runner is registered (pid <n>)`, and nothing moves;
+  - the main file is intact but another process has the database files open - an MCP server or
+    a hook registers nowhere, so the files themselves are asked, through `lsof -t`: a `warn`
+    `not moved: pid <n>[, …] still has the database open`, or, when `lsof` cannot run or answers
+    anything unexpected, `not moved: cannot tell whether a process holds the database (<why>)`.
+    Nothing moves, and the hint is
+    `stop every nightqueue process (runners and MCP clients), then nightqueue doctor --fix`. The
+    doctor first closes its own connection; one it had to retire as broken makes it say
+    `this doctor process holds a broken connection; run \`nightqueue doctor --fix\` again`;
+  - the main file itself is broken: a `fail` - the one database row that fails, because
+    `--fix` was asked and could not act. Nothing moves; the detail lists every backup in the
+    home with its size and time (`nightqueue.db.pre-v18`, `pre-v19`, `pre-v20` and the files of
+    each `_broken-*` directory), or `no backup found in <home>`, and the hint is
+    `stop every nightqueue process (runners and MCP clients), then: cp '<newest backup>' '<db path>'`.
 
 Job worktrees live under the home, at `<NIGHTQUEUE_HOME>/worktrees/<project_id>/<slug>`, and
 an older nightqueue left them under `.claude/worktrees/` of each checkout; the diagnosis reads

@@ -12,6 +12,7 @@ export const BLOCK_CODES = {
   CLAUDE_MISSING: "claude-missing",
   DIRTY_CHECKOUT: "dirty-checkout",
   WRONG_BRANCH: "wrong-branch",
+  STORE_UNAVAILABLE: "store-unavailable",
 };
 
 const GIT_TIMEOUT_MS = 5000;

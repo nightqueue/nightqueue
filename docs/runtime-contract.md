@@ -78,9 +78,58 @@ What a runtime has to provide, and what it can rely on:
   - `resumeCount`: the runner alone, when it hands a resume over to the pipeline.
   - `terminal{status, prUrl, finishedAt, writtenBy, pid}`: the runner, once it has
     closed the job - the witness of the outcome, read only by the reconciliation.
+  - `job{id, ref, projectKey, itemRef, decisionRefs, createdAt}`: the runner alone, ONCE,
+    right after it creates the run directory and before it creates the worktree - so a job
+    the worktree step gates still has it. `ref` is `J-<id>`, `projectKey` the project's key,
+    `itemRef` the ref of the roadmap item the job was queued from (`null` for a free
+    prompt), `decisionRefs` the item's linked decision (`[]` when none). A later attempt of
+    the same job keeps the first block, a block of another job refuses the write, and a
+    `SLUG:` rename carries it along with the directory. `job` is runtime-only: `run_set`
+    refuses `job` and every `job.*` name (``kept("`job` is written by the runtime only")``),
+    and no pipeline write can change it. It is how a run knows itself without the database:
+    the `run_*` tools and `nightqueue run` resolve a job's run from it when the row cannot be
+    read, and `run commit`/`run pr` take the `Refs` of their trailer and footer from `itemRef`.
 
   Nothing else of the file is touched, and the direction is never reversed - the row
   is rebuilt from the file, the file is never rebuilt from the row.
+
+  A `state.json` exists from the spawn, so its existence no longer means the pipeline has
+  started. **Run created** is a file holding the `job` block (and the runtime's `branch`
+  and `worktree`) with no `phases` and no `outcome`; **pipeline started** is a file with a
+  non-empty `phases` or an `outcome`. `nightqueue run log` refuses a run that was only
+  created with ``the runtime created this run at <createdAt>; the
+  pipeline has recorded no phase in <path> yet``, and a resume of it answers
+  `invalid-state`, as before.
+- `pending-writes.jsonl` in the same directory holds the writes a run could not make while
+  the database was unavailable, one JSON line each, appended and fsynced under the lock
+  `<runDir>/pending-writes.jsonl.lock`. An entry is
+  `{"v":1,"key","kind","at","jobId","projectId","slug","payload"}`, and its key is fixed by its
+  kind: `finish:<jobId>:<worker>`, `park:<jobId>:<worker>`, `telemetry:<jobId>:<worker>`,
+  `run_facts:<jobId>:branch`, `session:<jobId>:<attempts>`,
+  `pipeline_log:<projectId>/<slug>:<at>` and `index_save:<projectId>:<at>` - a key already in
+  the file is not appended twice. The writers are the runner's finish, park, telemetry, branch
+  and session ids (the stream's session, queued per attempt; the slug a `SLUG:` line declares
+  during an outage is not queued: the run keeps its slug and the job log says
+  ``the run keeps the slug `<slug>`: … (the database is unavailable)``, while the `TYPE` is
+  recorded in state.json anyway), the MCP `pipeline_log` and `nightqueue run index-save` inside a
+  job, whose entry carries each file's modification time measured when it was queued. The file is
+  replayed at the run's own finalize (right before its finish, while the row is still this
+  claim's, and again after it), before every sweep of the orphans - a claim's and the preview of
+  `queue run <id>` alike - by the maintenance and by a bare `nightqueue queue repair`:
+  the entries apply in file order, and each gets a marker line
+  `{"v":1,"applied":"<key>","at","result"}` with `result` one of `applied`, `filled`,
+  `superseded` or `refused: <reason>`. A replay never demotes a row: a finish lands through
+  the same `running` + worker guard as a live one, else it only FILLS a notice or a pull
+  request the row lacks at the same status (`filled`), else it is `superseded` - a `done` or
+  `closed` row is never rewritten. A `pipeline_log` entry is skipped when its run already
+  logged since the entry's time, so applying twice changes nothing. A `session` entry only fills
+  the row while the same claim runs it (`running`, same worker, same `attempts`) and never over
+  a later attempt's session. An `index_save` entry writes only the files and libs no save touched
+  since the entry's time (a save in the same second counts as later), with the queued
+  modification times, and is `superseded` when it wrote none. Once every key carries a
+  marker the file is renamed to `pending-writes.<stamp>.done.jsonl` under the lock, so an
+  append that races the rename starts a live file. A replay that meets the database still
+  unavailable stops there and leaves the rest of the file untouched.
 - Literals a runtime parses from the pipeline's stdout: `SLUG: <slug> TYPE: <type>`
   (the run renames itself), `Tier raised: <from> -> <to>: <evidence>` (the Brief
   raised the tier), `## Requires user confirmation` (the run is waiting on a human
@@ -182,6 +231,22 @@ default. `queue_status` answers `runners` with every live runner, and keeps `run
 alias of the first for one release. `queue_status`, `queue_run` and `queue_retry` also answer
 `advisories`, the advisory lines described in [Queue](queue.md); they never block a start.
 
+**A runner outlives an unavailable database.** When the database answers a classified error
+(see [Memory](memory.md)) the runner prints ONE line, ``nightqueue: the database is unavailable
+(<code> at <home>): claims and sweeps retry every 30 s, doubling to 5 min; the running job keeps
+going - run `nightqueue doctor --fix` ``, and retries its start, its claims and the store steps
+of the job in hand before the spawn at 30, 60, 120, 240 and then every 300 seconds; it never
+exits for it, and a stop signal still ends it. The child is never stopped: the heartbeat keeps
+renewing the lease at its own cadence, and a renewal the database refuses means "unknown",
+never "ownership lost". The first renewal that lands - or, while the job waits before its spawn,
+a probe at the heartbeat cadence - renews the running job's lease AT ONCE, before any backoff
+timer and before any sweep, prints `nightqueue: the database is reachable again` and wakes the
+wait. The steal rule is unchanged: a lease is taken over only when it expired AND its pid is
+dead or the job is past the hard ceiling, so an outage shorter than that never costs the job.
+Writes the job cannot make meanwhile go to its `pending-writes.jsonl` (above); a finish that
+could not be recorded keeps the worktree and writes the witness, and the report says
+`unrecorded` with the pending path.
+
 The twenty-eight MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
 | tool | parameters |
@@ -245,6 +310,16 @@ attempt marker to the last message, and one lane per subagent, matched to its ph
 the order the phases were launched - and they overwrite what the call sent. A phase the
 runtime measured no lane for keeps the value the call carried, and a phase the call
 never recorded is not inserted.
+
+When the database is unavailable (see [Memory](memory.md)) a tool answers `isError` with the
+JSON `{ "ok": false, "error": "store-unavailable", "code", "home", "hint": "nightqueue doctor
+--fix", "contract" }`, and the same server answers the next call normally once the database is
+back. `context_for_phase` is not an error there: it answers `block: ""` and one `warning`
+line. Inside a job whose `state.json` carries its `job` block, the four `run_*` tools keep
+working from that file. `pipeline_log` whose run resolves (from that block inside a job) queues
+its fully resolved row in the run's `pending-writes.jsonl` and answers `{ "ok": true, "queued": true, "warning": "recorded in
+<path>; replayed once the database is back", "pending": <path> }`; when it cannot queue it
+answers `store-unavailable`.
 
 The eight queue tools are the same subsystem as `nightqueue queue` (see [Queue](queue.md)):
 `queue_add` takes the registered project NAME and never a path - or, with

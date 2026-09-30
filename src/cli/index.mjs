@@ -76,7 +76,7 @@ usage: nightqueue <command> [options]
 
 commands:
   setup [--from <dir>] [--remove]           install the runtime in the home and register the MCP server, hooks and plugin in the host
-  doctor [--json] [--check-updates] [--fix] check the host and the home, one line per check; exits 1 on any failure
+  doctor [--json] [--check-updates] [--fix] [--db]  check the host and the home, one line per check; --db reports more of the database, --fix also folds its WAL and moves broken sidecars aside; exits 1 on any failure
   init [path] [--key <KEY>] [--gh|--no-gh]  install the runtime and register the git repository at [path] (default: .) as a project
   open [project] [--resume <session>]       open the operator in a terminal: it investigates, plans and queues jobs, and never edits the code
   update [<version>] [--from] [--force]     reinstall the runtime at the newest version (or at <version>) and re-point the host at it
@@ -118,7 +118,7 @@ commands:
   queue cancel <id> [--reason "..."]        cancel a pending, gated, done, failed or orphaned job; a done or failed one also releases its worktree
   queue close <id> | --merged               merge a done job's pull request and close the job: preflight, conflict, merge, settle; detached unless --foreground; --merged closes every done job whose pull request is merged; --decisions accept|reject|keep settles the decisions they proposed
   queue retry <id> [--note] [--fresh]       send a gated, failed or cancelled job back to the queue; --run starts it detached
-  queue repair <id> [--json]                re-classify a gated or failed job from its own log; corrects a lost PR link
+  queue repair [<id>] [--from-disk]         re-classify a gated or failed job from its own log; corrects a lost PR link; bare, replays every run's pending writes; --from-disk recreates the jobs the table lost from their runs on disk
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written
   queue session <id> [--print] [--json]     resume the claude session of a job's last attempt as the operator (nightqueue open --resume); --print shows it without exec'ing

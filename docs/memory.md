@@ -57,6 +57,29 @@ is dropped. The same live-lease refusal applies. Comments stay
 append-only - an UPDATE or a DELETE of a comment is still refused while its item
 exists - but they go away with their item.
 
+**A sick database degrades, it does not kill.** The file can break under a live process - a
+home on a network or FUSE mount, a copy taken by hand, a second sqlite opened on the live
+file. Every open and every store call classifies what SQLite throws by its numeric `errcode`
+(`errcode & 0xff`: 26 `SQLITE_NOTADB`, 11 `SQLITE_CORRUPT`, 10 `SQLITE_IOERR`, 8
+`SQLITE_READONLY`, 13 `SQLITE_FULL`, 15 `SQLITE_PROTOCOL`, and 14 `SQLITE_CANTOPEN` only when
+the file exists - a home with no database yet is not a sick one - extended codes included), and
+by the message only for a node:sqlite error (`ERR_SQLITE_ERROR`) that carries no `errcode`, so
+an error that merely echoes one of those phrases is never classified; busy, locked and a plain
+SQL error are never classified either. A classified error is one
+`StoreUnavailableError` with `code`, `home`, `path` and the hint `nightqueue doctor --fix`: it is
+never retried as busy, the CLI prints it as one line, the MCP tools answer
+`{ ok: false, error: "store-unavailable", code, home, hint }`, `context_for_phase` and the
+SessionStart hook answer an empty block and one warning line, the MCP server still starts, and
+the runner backs off (see [Runtime contract](runtime-contract.md)). The connection that failed is
+retired - dropped from the cache so the next call opens a fresh one, and never closed, because
+closing a handle whose WAL index is broken can fold the log and unlink `-wal`/`-shm` under a
+repair in progress. Two broken states are SILENT, since SQLite survives them: a random `-shm`
+(it rebuilds the index) and a `-wal` truncated mid-frame (it reads the valid frames and the rest
+of the rows are gone). Neither throws; `nightqueue doctor --db` is what finds them - the file
+sizes, `quick_check`, and the `lost jobs` whose run is on disk and whose row is not - and
+`nightqueue queue repair --from-disk` rebuilds those rows. To inspect the database, `cp` it
+first: never open a second sqlite on the live file.
+
 **Keys and refs.** A key is 2 to 5 uppercase letters or digits starting with a
 letter, unique across projects and orgs together; the database refuses a
 repeat with triggers over `projects`, `orgs` and their two alias tables. It is a

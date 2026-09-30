@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
-import { dbPath } from "../config/paths.mjs";
+import { dbPath, homeDir } from "../config/paths.mjs";
 import { loadRawConfig } from "../config/store.mjs";
-import { hasCachedWriteConnection, openDb, openDbReadOnly, schemaVersionOn } from "./db.mjs";
+import { hasCachedWriteConnection, openDb, openDbReadOnly, retireConnection, schemaVersionOn } from "./db.mjs";
 import { hasLegacyRegistry } from "./migration/v18.mjs";
 import * as registry from "./registry.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
+import { classifyStoreError } from "./store-error.mjs";
 
 // Runs a registry read on a short-lived read-only connection when the database is current, answering null when it is not.
 function readCurrent(env, read) {
@@ -20,9 +21,26 @@ function readCurrent(env, read) {
 // open, a short-lived read-only one on a current database, the writable one when there is something to migrate or import, and
 // none (null) on a home with no database and nothing to import.
 export function withRegistry(env, read) {
+  try {
+    return readRegistry(env, read);
+  } catch (err) {
+    throw classifiedRegistryError(err, env);
+  }
+}
+
+// Picks the connection of a registry read and runs it.
+function readRegistry(env, read) {
   if (hasCachedWriteConnection(env)) return read(openDb(env));
   if (!existsSync(dbPath(env))) return hasLegacyRegistry(loadRawConfig(env)) ? read(openDb(env)) : read(null);
   return (readCurrent(env, read) ?? { value: read(openDb(env)) }).value;
+}
+
+// The error a failed registry read throws: classified when the database is unusable, retiring the cached writable connection it failed on.
+function classifiedRegistryError(err, env) {
+  const classified = classifyStoreError(err, { home: homeDir(env), path: dbPath(env) });
+  if (!classified) return err;
+  retireConnection(env);
+  return classified;
 }
 
 // The registered project with its org, by NAME, or null.
