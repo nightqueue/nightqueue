@@ -59,7 +59,7 @@ import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue
 import { resolveJobSession } from "../queue/session.mjs";
 import { stopReport, stopRunners } from "../queue/stop.mjs";
 import { runCloseHere, startCloseDetached } from "../queue/close-start.mjs";
-import { CLOSE_STEP_ICONS, closeChecklistLines, closeLastCell, closeStoppedLine, queueWorkers, statusLabel } from "../queue/close-view.mjs";
+import { CLOSE_STEP_ICONS, CLOSING_LABEL, closeChecklistLines, closeLastCell, closeStoppedLine, queueWorkers, statusLabel } from "../queue/close-view.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -455,6 +455,9 @@ const STATUS_STYLE = {
 // Style of a row whose status is not one this build knows: marked loud instead of blending in with the rest.
 const UNKNOWN_STATUS_STYLE = { icon: "!", color: "97;41" };
 
+// Style of a job a live close holds: neither done nor closed yet, so its own icon and color rather than either's.
+const CLOSING_STYLE = { icon: "◐", color: "36" };
+
 // The icon and color a status renders with: its own style, or the loud unknown one for a status outside the enum.
 function statusStyleOf(status) {
   return JOB_STATUSES.includes(status) ? (STATUS_STYLE[status] ?? { icon: "·", color: null }) : UNKNOWN_STATUS_STYLE;
@@ -483,9 +486,14 @@ function columnsFor(jobs, nowMs) {
   return COLUMNS.map((column) => (column.key === "status" ? { ...column, width: Math.max(column.width, statusCell) } : column));
 }
 
-// The STATUS cell of a job: the icon of its status and the label the close view gives it.
+// The style a row renders with: the closing one while a live close holds the job, its status's otherwise.
+function rowStyleOf(job, nowMs) {
+  return statusLabel(job, nowMs) === CLOSING_LABEL ? CLOSING_STYLE : statusStyleOf(job.status);
+}
+
+// The STATUS cell of a job: the icon of its row style and the label the close view gives it.
 function statusCellOf(job, nowMs) {
-  return `${statusStyleOf(job.status).icon} ${statusLabel(job, nowMs)}`;
+  return `${rowStyleOf(job, nowMs).icon} ${statusLabel(job, nowMs)}`;
 }
 
 // Cuts a cell to its column, with an ellipsis when something was left out.
@@ -583,7 +591,7 @@ function formatRow(job, { nowMs, env, width, color, columns }) {
   const cells = rowCells(job, nowMs, env);
   const fixed = columns.map((column) => {
     const cell = fit(cells[column.key], column.width - 1).padEnd(column.width);
-    return column.key === "status" ? paint(cell, statusStyleOf(job.status).color, color) : cell;
+    return column.key === "status" ? paint(cell, rowStyleOf(job, nowMs).color, color) : cell;
   });
   const last = fit(cells.last, width - 1).padEnd(width);
   return `${fixed.join("")}${last}${formatPr(job)}`.trimEnd();

@@ -272,7 +272,7 @@ another runner.
 the columns of the cockpit: `ID STATUS DURATION TOKENS PROJECT SLUG/LAST PR`.
 `STATUS` carries an icon (`● running`, `✓ done`, `■ closed`, `⚑ gate`, `✗ failed`,
 `⊘ cancelled`, `○ pending`) and a color on a terminal; a job whose close is in progress
-reads `✓ done · closing`, and a closed one `■ closed` alone. `DURATION` is how long a
+reads `◐ closing` alone, and a closed one `■ closed` alone. `DURATION` is how long a
 running job has been up (from its own `started_at`) or how long a finished one
 took; `TOKENS` is what it spent so far (`374k`, `1.2M`). `SLUG/LAST` is the last
 thing the orchestrator said in its log while the job runs (`» ...`), `⛔ <code>: <message>`
@@ -955,7 +955,7 @@ attempt count, one entry per step (`done`, `skipped`, `failed` or `reopened`, a 
 time; a `reopened` entry keeps the note and time of the run it reopens, is shown as
 `↺ <step> reopened: <earlier note>` and counts as not passed) and
 the data the steps read (pull request number, head, merge commit, who merged it). `queue status` shows it:
-the STATUS cell reads `done · closing` while a close is in progress and `closed` alone once
+the STATUS cell reads `closing` alone while a close is in progress and `closed` alone once
 it closed, a stopped close adds ` · close failed at <step>` or ` · close stalled` to the job's status,
 `SLUG/LAST` names the current step or the stop, and `queue status <id>` prints the whole
 checklist under the status line; `--json` and the MCP `queue_status` carry `close_status`,

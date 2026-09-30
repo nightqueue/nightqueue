@@ -8,6 +8,10 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`queue status` reads `◐ closing` alone while a close holds the job.** The STATUS cell no
+  longer says `done · closing`: a job under a live close is neither done nor closed yet, so it
+  carries its own label, icon and color (cyan) until it reads `■ closed` - or, when the close
+  stops, `done · close failed at <step>` / `done · close stalled` as before.
 - **A sick home database degrades instead of killing the MCP server, the runner and the run.**
   A database SQLite cannot read (`SQLITE_NOTADB`, `CORRUPT`, `IOERR`, `READONLY`, `FULL`,
   `PROTOCOL`, and `CANTOPEN` of an existing file, classified by `errcode`) is one `StoreUnavailableError` with the hint `nightqueue doctor --fix`: the CLI

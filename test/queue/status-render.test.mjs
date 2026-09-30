@@ -38,7 +38,7 @@ test("a closed job is painted 38;5;91 on a terminal, and carries no escape when 
   assert.equal(/\u001b\[/.test(tableLine(withoutColor.out, id)), false, "a non-terminal output carried colour");
 });
 
-test("a job under a live close is painted as its status and labelled `done · closing`, and a closed one `closed` alone", async (t) => {
+test("a job under a live close is painted cyan and labelled `closing` alone, and a closed one `closed` alone", async (t) => {
   const env = makeHome(t, "status-render-close");
   makeProject(t, env, "alpha");
   const closing = seedJob(env, "done");
@@ -48,7 +48,7 @@ test("a job under a live close is painted as its status and labelled `done · cl
 
   const { code, out } = await statusLines(env);
   assert.equal(code, 0, out.join("\n"));
-  assert.match(tableLine(out, closing), /\u001b\[32m✓ done · closing\s*\u001b\[0m/);
+  assert.match(tableLine(out, closing), /\u001b\[36m◐ closing\s*\u001b\[0m/);
   assert.match(tableLine(out, closed), /\u001b\[38;5;91m■ closed\s*\u001b\[0m/);
 });
 

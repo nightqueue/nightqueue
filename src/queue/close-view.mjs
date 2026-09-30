@@ -8,7 +8,8 @@ export const CLOSED_PREFIX = "Closed: ";
 const PASSED_STEP_STATUSES = new Set(["done", "skipped"]);
 export const CLOSE_STEP_ICONS = { done: "✓", skipped: "-", failed: "✗", reopened: "↺" };
 const LABELLED_STATUSES = new Set(["skipped", "reopened"]);
-const STATUS_SUFFIXES = { closing: " · closing", stalled: " · close stalled" };
+const STATUS_SUFFIXES = { stalled: " · close stalled" };
+export const CLOSING_LABEL = "closing";
 
 // The line a settled close appends to the job's notice: `Closed: PR #N merged as <sha7> on <YYYY-MM-DD>`.
 export function closedLine({ number, sha, at }) {
@@ -57,15 +58,17 @@ function failedReason(checklist) {
   return String(parseCloseChecklist(checklist)?.failed?.reason ?? "unknown");
 }
 
-// The suffix the STATUS cell adds for a close under way or stopped: ` · closing`, ` · close stalled` or ` · close failed at <step>`.
+// The suffix the STATUS cell adds for a close that stopped: ` · close stalled` or ` · close failed at <step>`.
 function closeSuffix(job, state) {
   if (state === "failed") return ` · close failed at ${currentCloseStep(job.close)}`;
   return STATUS_SUFFIXES[state] ?? "";
 }
 
-// What the STATUS cell says of a job: its status, plus the state of a close that holds it or stopped on it.
+// What the STATUS cell says of a job: `closing` alone while a live close holds it, otherwise its status plus the state of a close that stopped on it.
 export function statusLabel(job, nowMs = Date.now()) {
-  return `${job?.status ?? ""}${closeSuffix(job, closeState(job, nowMs))}`;
+  const state = closeState(job, nowMs);
+  if (state === "closing") return CLOSING_LABEL;
+  return `${job?.status ?? ""}${closeSuffix(job, state)}`;
 }
 
 // The line that tells the operator a close stopped and how to resume it, or null when the job's close did not fail.

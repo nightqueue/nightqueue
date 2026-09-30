@@ -60,7 +60,7 @@ test("the status label, the current step and the stopped line follow the checkli
   const steps = { preflight: { status: "done" }, conflict: { status: "skipped" } };
   const failed = closeRow({ close_status: "failed", close: { steps, failed: { step: "merge", reason: "merge-without-sha" } } });
   assert.equal(statusLabel(closeRow({}), NOW), "done");
-  assert.equal(statusLabel(closeRow({ close_status: "closing", close_lease_until: LATER }), NOW), "done · closing");
+  assert.equal(statusLabel(closeRow({ close_status: "closing", close_lease_until: LATER }), NOW), "closing");
   assert.equal(statusLabel(closeRow({ close_status: "closing", close_lease_until: EARLIER }), NOW), "done · close stalled");
   assert.equal(statusLabel(failed, NOW), "done · close failed at merge");
   assert.equal(statusLabel(closeRow({ status: "closed", close: { data: { merged: true } } }), NOW), "closed");
@@ -125,15 +125,15 @@ test("the Closed line names the pull request, the short sha and the day it merge
   assert.equal(closedLine({ number: 7, sha: "abc1234def5678", at: "2026-09-21T23:59:00Z" }), "Closed: PR #7 merged as abc1234 on 2026-09-21");
 });
 
-test("queue status shows `done · closing` while a close holds the job, `done · close failed at <step>` once it stopped, and prints the close hint lines", async (t) => {
+test("queue status shows `closing` alone while a close holds the job, `done · close failed at <step>` once it stopped, and prints the close hint lines", async (t) => {
   const { env, id } = closeHome(t, "close-view-render");
   const before = await runCli(env, ["queue", "status"]);
   assert.match(before.out[1], /^ID {4}STATUS {7}DURATION/, "a listing with no close changed its STATUS width");
 
   acquireClose(id, { worker: WORKER, leaseS: 660 }, env);
   const closing = await runCli(env, ["queue", "status"]);
-  assert.match(closing.stdout, /^ID {4}STATUS {11}DURATION/m, "STATUS did not grow to the `done · closing` label");
-  assert.match(closing.stdout, new RegExp(`^J-${id} +✓ done · closing +-`, "m"));
+  assert.match(closing.stdout, /^ID {4}STATUS {7}DURATION/m, "STATUS changed width for the `closing` label");
+  assert.match(closing.stdout, new RegExp(`^J-${id} +◐ closing +-`, "m"));
   assert.match(closing.stdout, /closing: preflight/);
   assert.ok(closing.out.includes(`close in flight: J-${id} at preflight - follow with: nightqueue queue status J-${id}`), closing.stdout);
 
@@ -166,7 +166,7 @@ test("a closed job shows `closed` alone, in the table and in the live view, whil
   acquireClose(id, { worker: WORKER, leaseS: 660 }, env);
   const live = await followOnce(env);
   assert.equal(live.code, 0, live.stdout);
-  assert.match(live.stdout, new RegExp(`^J-${id} +✓ done · closing +-`, "m"), "the live view did not show `done · closing`");
+  assert.match(live.stdout, new RegExp(`^J-${id} +◐ closing +-`, "m"), "the live view did not show `closing`");
 
   settleClose(id, { worker: WORKER, close: { attempts: 1, steps: {}, data: { merged: true, mergeSha: "abc1234def" } }, noticeLine: "Closed: PR #7 merged as abc1234 on 2026-09-21" }, env);
   const table = await runCli(env, ["queue", "status"]);
