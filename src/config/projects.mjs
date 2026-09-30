@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { UserError } from "./errors.mjs";
 import { defaultOrg, requireOrg } from "./orgs.mjs";
@@ -60,6 +60,21 @@ export function gitRootOrNull(path) {
     const parent = dirname(current);
     if (parent === current) return null;
     current = parent;
+  }
+}
+
+// The main checkout a linked worktree root belongs to, through git's `commondir`; the root itself when it is not a linked worktree.
+export function mainCheckoutOf(root) {
+  const dotGit = join(root, ".git");
+  try {
+    if (!statSync(dotGit).isFile()) return root;
+    const gitdir = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1]?.trim();
+    if (!gitdir) return root;
+    const linkedDir = resolve(root, gitdir);
+    const common = resolve(linkedDir, readFileSync(join(linkedDir, "commondir"), "utf8").trim());
+    return basename(common) === ".git" ? normalizePath(dirname(common)) : root;
+  } catch {
+    return root;
   }
 }
 

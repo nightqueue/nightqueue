@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -37,6 +37,7 @@ const CONTRACT_TOOLS = [
   "memory_recall",
   "phase_prompt",
   "pipeline_log",
+  "project_register",
   "queue_add",
   "queue_cancel",
   "queue_close",
@@ -84,12 +85,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the twenty-nine tools of the contract", async (t) => {
+test("the server exposes exactly the thirty tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 29, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 30, "the contract list and the server disagree on how many tools there are");
 });
 
 test("the server migrates a v8 home to v9 once at boot, before it answers any tool", async (t) => {
@@ -576,6 +577,75 @@ test("queue_add registers the repository of the `cwd` only with register: true, 
   const chosen = payloadOf(await client.callTool({ name: "queue_add", arguments: { cwd: chosenRepo, prompt: "fix it", register: true, key: "mq1" } }));
   assert.equal(registeredProject(env, chosen.project).key, "MQ1");
   assert.notEqual(offered.suggested_key, "MQ1");
+});
+
+test("project_register registers the repository with the defaults, and answers an already registered one without writing", async (t) => {
+  const env = makeQueueHome(t, "mcp-project-register");
+  const repo = makeRepo(t, "mcp-project-register-repo");
+  const client = await connect(t, env);
+
+  const created = payloadOf(await client.callTool({ name: "project_register", arguments: { cwd: repo } }));
+  const entry = registeredProject(env, created.project);
+  assert.ok(entry, "the repository was not registered");
+  assert.equal(created.registered, true);
+  assert.equal(created.org, "default");
+  assert.equal(created.key, entry.key);
+  assert.equal(created.path, entry.path);
+  assert.equal(created.hint, `registered project ${created.project} (${entry.path}) in org default with key ${entry.key}. Nothing was queued.`);
+
+  const again = payloadOf(await client.callTool({ name: "project_register", arguments: { cwd: repo, name: "other", key: "ot1" } }));
+  assert.equal(again.registered, false);
+  assert.equal(again.project, created.project);
+  assert.match(again.hint, /^already registered project /);
+  assert.match(again.hint, /Nothing was queued\.$/);
+  assert.deepEqual(registeredNames(env).sort(), ["alpha", created.project].sort(), "an already registered directory wrote a row");
+
+  const chosenRepo = makeRepo(t, "mcp-project-register-chosen");
+  const chosen = payloadOf(await client.callTool({ name: "project_register", arguments: { cwd: chosenRepo, name: "chosen", key: "ch1" } }));
+  assert.equal(chosen.project, "chosen");
+  assert.equal(chosen.key, "CH1");
+});
+
+test("project_register refuses an unknown org with the list of orgs, and a directory outside any repository", async (t) => {
+  const env = makeQueueHome(t, "mcp-project-register-org");
+  const repo = makeRepo(t, "mcp-project-register-org-repo");
+  const client = await connect(t, env);
+
+  const unknown = await client.callTool({ name: "project_register", arguments: { cwd: repo, org: "nowhere" } });
+  assert.equal(unknown.isError, true);
+  assert.match(textOf(unknown), /unknown org `nowhere`; existing orgs: .*default/);
+  assert.deepEqual(registeredNames(env), ["alpha"], "a refused org registered a project");
+
+  const outside = await client.callTool({ name: "project_register", arguments: { cwd: makeDir(t, "mcp-project-register-bare") } });
+  assert.equal(outside.isError, true);
+  assert.match(textOf(outside), /is not inside a git repository/);
+});
+
+test("project_register is refused from inside a job", async (t) => {
+  const env = makeQueueHome(t, "mcp-project-register-job");
+  const repo = makeRepo(t, "mcp-project-register-job-repo");
+  const inJob = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "7" });
+
+  const refused = await inJob.callTool({ name: "project_register", arguments: { cwd: repo } });
+  assert.equal(refused.isError, true);
+  assert.match(textOf(refused), /refusing to register .* from inside job `7`/);
+  assert.deepEqual(registeredNames(env), ["alpha"], "an unattended run registered a project");
+});
+
+test("project_register resolves a linked worktree to its main checkout", async (t) => {
+  const env = makeQueueHome(t, "mcp-project-register-worktree");
+  const main = makeRepo(t, "mcp-project-register-main");
+  const linkedGit = join(main, ".git", "worktrees", "wt");
+  mkdirSync(linkedGit, { recursive: true });
+  writeFileSync(join(linkedGit, "commondir"), "../..\n");
+  const linked = makeDir(t, "mcp-project-register-linked");
+  writeFileSync(join(linked, ".git"), `gitdir: ${linkedGit}\n`);
+  const client = await connect(t, env);
+
+  const answer = payloadOf(await client.callTool({ name: "project_register", arguments: { cwd: linked } }));
+  assert.equal(answer.registered, true);
+  assert.equal(answer.path, registeredProject(env, answer.project).path);
+  assert.equal(answer.path, realpathSync(main));
 });
 
 test("queue_add and queue_cancel refuse the home of the runner from inside a job, and accept a temporary one", async (t) => {
