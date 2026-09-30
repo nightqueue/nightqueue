@@ -5,8 +5,16 @@ import { z } from "zod";
 import { saveProject } from "../cli/project.mjs";
 import { StoreUnavailableError, storeWarningLine, UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
-import { requireOrg } from "../config/orgs.mjs";
-import { registrationOffer, requireProject, resolveProjectRef, roadmapQueueTarget } from "../config/projects.mjs";
+import { defaultOrg, requireOrg } from "../config/orgs.mjs";
+import {
+  gitRootOrNull,
+  mainCheckoutOf,
+  registrationOffer,
+  requireProject,
+  resolveProjectRef,
+  roadmapQueueTarget,
+  suggestName,
+} from "../config/projects.mjs";
 import { loadConfig, saveConfig } from "../config/store.mjs";
 import { DECISION_STATUSES, decisionFullView, decisionView } from "../memory/decisions.mjs";
 import {
@@ -413,6 +421,49 @@ async function registerOffer(offer, key, env) {
   return project;
 }
 
+// Tells whether an optional text argument carries text.
+function filled(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+// The answer of `project_register`, the same shape whether the project was created or already there.
+function projectRegisterAnswer({ registered, project, org }) {
+  const verb = registered ? "registered" : "already registered";
+  return {
+    registered,
+    project: project.name,
+    key: project.key,
+    org,
+    path: project.path,
+    hint: `${verb} project ${project.name} (${project.path}) in org ${org} with key ${project.key}. Nothing was queued.`,
+  };
+}
+
+// Registers the repository at `path` inside the configuration lock, writing nothing when a project already holds that path.
+async function registerRepositoryLocked(args, path, env) {
+  const store = openStore(env);
+  const orgName = filled(args.org) ? args.org.trim() : null;
+  const org = orgName ? await requireOrg(store, orgName) : await defaultOrg(store, loadConfig(env, { warn: () => {} }));
+  const existing = (await store.projects.list()).find((project) => project.path === path);
+  if (existing) return projectRegisterAnswer({ registered: false, project: existing, org: existing.org ?? org.name });
+  const name = filled(args.name) ? args.name.trim() : suggestName((await store.projects.list()).map((project) => project.name), path);
+  if (name === null) throw new UserError(`cannot derive a free project name for ${path}; pass \`name\``);
+  const key = filled(args.key) ? requireKey(args.key) : await store.projects.suggestKey(name);
+  const ctx = { env, out: () => {}, err: () => {}, saveConfig };
+  const { project } = await saveProject(ctx, { path, name, org: org.name, key });
+  return projectRegisterAnswer({ registered: true, project, org: org.name });
+}
+
+// Registers the repository of `cwd` (a linked worktree goes to its main checkout) without queueing a job.
+async function registerRepository(args, env) {
+  const cwd = requireCwd(args.cwd);
+  refuseRegistrationInsideJob(cwd, env);
+  const root = gitRootOrNull(cwd);
+  if (root === null) throw new UserError(`${cwd} is not inside a git repository`);
+  const path = mainCheckoutOf(root);
+  return await withLock(env, () => registerRepositoryLocked(args, path, env));
+}
+
 // Tells whether `queue_add` was asked to seed the job from an operator run.
 function hasRunDir(args) {
   return typeof args.run_dir === "string" && args.run_dir.trim() !== "";
@@ -702,7 +753,7 @@ async function queueCancelAnswer(args, env) {
   return { ok: true, ...(await stopAndCancelJob({ ...cancel, releaseWorktree: args.release_worktree === true })) };
 }
 
-// The twenty-nine tools of the plugin contract, with the parameter names the plugin actually sends.
+// The thirty tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -1004,6 +1055,23 @@ function toolDefinitions(env, state) {
         });
         return await queuedAnswer({ job, registered }, env);
       },
+    },
+    {
+      name: "project_register",
+      guardsHome: true,
+      config: {
+        description:
+          "Registers the git repository of `cwd` as a project without queueing anything, so its roadmap, decisions and lessons can be used before any job. Call it only after the person said yes to registering it - never on your own initiative. " +
+          "`cwd` is the absolute working directory; the repository root is resolved from it, and a linked worktree resolves to its main checkout. `name` defaults to the folder's suggested name, `key` to the suggested key, `org` to the default org (an unknown org is refused with the list of orgs). " +
+          "A directory already registered is answered with `registered: false` and the existing project, and nothing is written. Refused from inside a job.",
+        inputSchema: {
+          cwd: z.string().describe("Absolute path of the working directory of the caller."),
+          name: optionalText.describe("The project name; defaults to the suggested name of the folder."),
+          key: optionalText.describe("The project key (2 to 5 uppercase letters or digits, starting with a letter); defaults to the suggested key."),
+          org: optionalText.describe("The org the project joins; defaults to the default org."),
+        },
+      },
+      handler: async (args) => await registerRepository(args, env),
     },
     {
       name: "queue_status",
@@ -1476,7 +1544,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the twenty-nine tools of the plugin contract.
+// Builds the MCP server with the thirty tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     { name: SERVER_NAME, title: `nightqueue (tool contract ${TOOL_CONTRACT})`, version: readVersion() },
