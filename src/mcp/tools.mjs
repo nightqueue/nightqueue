@@ -539,6 +539,33 @@ async function roadmapQueuedAnswer(queued, env) {
   };
 }
 
+// Refuses a decision a job may not read: inside a job only the job's project's decisions and its org's; outside a job every one is readable.
+async function requireReadableDecision({ id, row }, env) {
+  const own = callerJobId(env);
+  if (own === null) return;
+  const mine = await callerProject(own, env);
+  const project = mine === null ? null : await openStore(env).projects.byId(mine.id);
+  const sameOrg = row.scope === "org" && project !== null && project.org_id === row.org_id;
+  const sameProject = row.scope !== "org" && mine !== null && mine.id === (row.project_id ?? null);
+  if (sameOrg || sameProject) return;
+  throw new UserError(
+    `decision \`${id}\` belongs to ${ownerDescription(row)}, not \`${mine?.name ?? "unknown"}\`; inside job \`${own}\` only a decision of the job's project or of its org is readable`,
+  );
+}
+
+// The one decision `decision_recall` reads by `id`, whole whatever its status; `query`, `limit` and an owner beside the id are refused.
+async function decisionDetail(args, env) {
+  if (sent(args.query) || sent(args.limit) || sent(args.org)) {
+    throw new UserError("pass `id` alone (with `project` only to read a bare `D-<n>`) to read one decision, or `project`/`org` with `query`/`limit` without `id` to recall the accepted ones");
+  }
+  const store = openStore(env);
+  const ref = String(args.id).trim();
+  const row = await store.decisions.getDecision(await store.decisions.decisionIdOfRef(ref, await decisionUpdateContext(args, env)));
+  if (!row) throw new UserError(`decision \`${ref}\` does not exist`);
+  await requireReadableDecision({ id: ref, row }, env);
+  return { ...decisionFullView(row), job_ref: row.job_id ? jobRef(row.job_id) : null };
+}
+
 // The one item `roadmap_get` reads by `id`, as the caller may see it; an owner beside the id is refused, because the id already names the item.
 async function roadmapItemDetail(args, env) {
   const named = [args.project, args.org].some((value) => typeof value === "string" && value.trim() !== "");
@@ -1302,8 +1329,10 @@ function toolDefinitions(env, state) {
         description:
           "Standing constraints, before proposing architecture. With `project`, the project's decisions and its org's, org rows first, each carrying its `scope` and its `owner`; with `org`, only that org's. " +
           "Only accepted decisions come back, with their text untruncated, because this feeds prompts. " +
-          'An item with via "fallback" did not match the query: it is recent context, never an answer.',
+          'An item with via "fallback" did not match the query: it is recent context, never an answer. ' +
+          "With `id` (a decision ref: `D-45`, `DLW/D-3`, `NQ/D-7`) and no `query`, `limit` or `org`, that ONE decision whole whatever its status (proposed, rejected, superseded too), with `job_ref` of the job that proposed it; a bare `D-<n>` is read in `project`, or inside a job in the job's project, and inside a job only a decision of the job's project or of its org is readable.",
         inputSchema: {
+          id: decisionRefInput.nullable().optional(),
           project: optionalText,
           org: optionalText,
           query: optionalText,
@@ -1311,6 +1340,7 @@ function toolDefinitions(env, state) {
         },
       },
       handler: async (args) => {
+        if (sent(args.id)) return await decisionDetail(args, env);
         const rows = await openStore(env).decisions.recallDecisions({
           ...ownerRef(await ownerArgs(args, env)),
           query: args.query,
