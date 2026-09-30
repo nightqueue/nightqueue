@@ -185,7 +185,7 @@ test("`nightqueue run` lists exactly the two steps it dispatches", (t) => {
   assert.match(help.stdout, /nightqueue run index-save <artifact>/);
   assert.match(help.stdout, /nightqueue run secrets-sweep --files <list>/);
   assert.match(help.stdout, /nightqueue run dir \[--project <name> --slug <slug>\]/);
-  assert.equal(help.stdout.split("\n").filter((line) => line.startsWith("  nightqueue run ")).length, 7);
+  assert.equal(help.stdout.split("\n").filter((line) => line.startsWith("  nightqueue run ")).length, 10);
   assert.equal(unknown.status, 1);
-  assert.match(unknown.stderr, /unknown run subcommand `nope`; use: check, commit, dir, log, pr, index-save, secrets-sweep/);
+  assert.match(unknown.stderr, /unknown run subcommand `nope`; use: check, commit, dir, log, pr, index-save, secrets-sweep, start, publish, report/);
 });

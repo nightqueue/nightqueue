@@ -1,0 +1,29 @@
+## File handoff (contract — read first)
+ARTIFACT_PATH: <RUN_DIR>/04-implementation.md
+Read before acting (via Read): [only when the triager ran:] `<RUN_DIR>/01-triage.md` — ## Validated brief and the confirmed cause. [otherwise: none]
+Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
+Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open items — never file contents, never a diff.
+Do NOT paste the complete sections in the response.
+
+Brief:
+[BRIEF FROM PHASE 0]
+
+Affected files (read them yourself, via Read):
+Affected area: [AFFECTED AREA]
+[PATHS FROM index_recall — omit in the tier whose row says no]
+
+[Include only when the row names CLAUDE.md and <CWD>/CLAUDE.md exists:]
+Project conventions (via Read): <CWD>/CLAUDE.md
+
+[Include only when the row calls it — paste the `block` of `context_for_phase` (target: "coder"), omitted when it came back empty:]
+[CONTEXT BLOCK]
+
+Apply the simplest possible change the brief defines. Do not introduce abstractions.
+[Include only in the simple tier:] Follow the test patterns already in the project and
+cover the new behaviour in the test file that already covers this area.
+
+Write `04-implementation.md` per your Required output (`## Modified files`, `## Done`,
+`## Left`, `## How it was tested`).
+
+Repository: [CWD PATH]
+Project: [PROJECT — the name on the Project: line of the prompt]

@@ -1,0 +1,19 @@
+| Routing | trivial | simple | complex |
+| ------------- | ------- | ------- | -------- |
+| Track | Fast Lite | Fast | Standard |
+| Phases that run | 0 · 4 · 6 · 7 · 8 | 0 · 1 (bug only) · 4 · 6 · 7 · 8 | every phase, 0 to 8 |
+| 🔍 triager       | —       | haiku (bug only) | sonnet   |
+| 🧭 Explore       | —       | —       | sonnet   |
+| 📐 architect     | —       | —       | opus     |
+| ⚙️ coder         | sonnet  | sonnet  | opus     |
+| 🛡️ qa-guardian   | —       | —       | sonnet   |
+| ✅ verifier      | haiku   | haiku   | sonnet   |
+| Verifier scope | tsc + lint + the tests of the files that were touched (no build, no full suite) | tsc + lint + the project's FULL test suite (no QA PoCs in this tier) | the project's real checks (typecheck, lint, build, tests) + the QA's PoCs |
+| QA methods of the PR | automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo | automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo | automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo |
+| Max fix iterations | 1 | 2 | 2 |
+| Request critique (step 2.5) | skipped | mandatory | mandatory |
+| `<CWD>/CLAUDE.md` | not named to the coder | named to the coder when it exists | named to the coder (Phase 4) |
+| `index_recall` | no | yes, to locate the affected files | yes, in Phase 2 before the Explore |
+| `context_for_phase` for the coder | no | yes | yes |
+| `04-implementation.md` | written by the coder, gate `nightqueue run check 04` | written by the coder, gate `nightqueue run check 04` | written by the coder, gate `nightqueue run check 04` |
+| Time target | under 5 minutes | under 15 minutes | none — the depth is the target |

@@ -8,8 +8,9 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const AGENTS = ["coder", "qa-guardian", "verifier", "triager", "explore", "architect"];
 const SKILL = join(ROOT, "plugin/skills/resolve/SKILL.md");
 const QA_PHASE = join(ROOT, "plugin/skills/resolve/references/qa-phase.md");
-const REPOSITORY_LINE = "Repository: [CWD PATH]";
-const PROJECT_LINE = "Project: [PROJECT — the name on the Project: line of the prompt]";
+const PROMPTS = join(ROOT, "plugin/skills/resolve/references/prompts");
+const REPOSITORY_LINE = "Repository: {{REPOSITORY}}";
+const PROJECT_LINE = "Project: {{PROJECT}}";
 const RUNTIME_WORK = {
   verifier: "nightqueue verify",
   explore: "nightqueue libs",
@@ -24,6 +25,11 @@ function pluginFiles() {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => join(entry.parentPath ?? entry.path, entry.name));
+}
+
+// The prompt templates of the resolve skill, partials (`_*.md`) excluded
+function promptTemplates() {
+  return readdirSync(PROMPTS).filter((name) => name.endsWith(".md") && !name.startsWith("_")).sort();
 }
 
 // Reads one plugin agent file with its line wrapping collapsed
@@ -58,20 +64,21 @@ test("the verifier reads the diff-hygiene line instead of running git itself", (
   assert.ok(agent.includes("the summary of `git diff --stat`"), "the verifier does not report the scale of the change");
 });
 
-// Every orchestrator prompt template that carries the repository path also names the project.
+// Every subagent prompt template that carries the repository path also names the project: they all end with the shared footer.
 test("each Repository template of the skill carries a Project line", () => {
-  const lines = [SKILL, QA_PHASE].flatMap((file) => readFileSync(file, "utf8").split("\n"));
-  const projectLines = lines.filter((line) => line.trim() === PROJECT_LINE);
-  const repositoryLines = lines.filter((line) => line.trim() === REPOSITORY_LINE);
-  assert.ok(repositoryLines.length >= 8, "the skill lost its Repository templates");
-  assert.equal(projectLines.length, repositoryLines.length, "the skill does not carry one Project line per Repository template");
-  for (const [index, line] of lines.entries()) {
-    if (line.trim() !== REPOSITORY_LINE) continue;
-    assert.equal(
-      lines[index + 1]?.trim(),
-      PROJECT_LINE,
-      `the Repository template at line ${index + 1} is not followed by its Project line`,
-    );
+  const footer = readFileSync(join(PROMPTS, "_footer.md"), "utf8").split("\n");
+  const at = footer.indexOf(REPOSITORY_LINE);
+  assert.ok(at >= 0, "the shared footer lost its Repository line");
+  assert.equal(footer[at + 1], PROJECT_LINE, "the Repository line of the footer is not followed by its Project line");
+  const templates = promptTemplates();
+  assert.ok(templates.length >= 12, "the skill lost its prompt templates");
+  for (const name of templates) {
+    const text = readFileSync(join(PROMPTS, name), "utf8");
+    const named = text.includes("{{>_footer}}") || (text.includes("project: {{PROJECT}}") && text.includes("repo_root: {{REPOSITORY}}"));
+    assert.ok(named, `${name} names neither the repository nor the project`);
+  }
+  for (const file of [SKILL, QA_PHASE]) {
+    assert.equal(readFileSync(file, "utf8").includes("Repository: [CWD PATH]"), false, `${file} still carries a hand-filled prompt template`);
   }
 });
 
@@ -85,9 +92,10 @@ test("the qa-guardian calls the sweep and still resolves its own plugin paths", 
     agent.includes("fall back to `Glob` for `**/skills/qa-guardian/SKILL.md`"),
     "qa-guardian lost the Glob fallback for a prompt that brings no absolute path",
   );
-  assert.equal(
-    skill.split("\n").filter((line) => line.startsWith("QA_SKILL: ")).length,
-    3,
+  assert.ok(readFileSync(join(PROMPTS, "_qa-skill.md"), "utf8").startsWith("QA_SKILL: {{PLUGIN_ROOT}}/"), "the plugin paths partial lost its QA_SKILL line");
+  assert.deepEqual(
+    promptTemplates().filter((name) => readFileSync(join(PROMPTS, name), "utf8").includes("{{>_qa-skill}}")),
+    ["qa-analyst.md", "qa-lite.md", "qa-prover.md"],
     "the three qa-guardian prompts do not all carry the plugin paths",
   );
   assert.ok(

@@ -276,6 +276,20 @@ test("`run check` answers OK on a complete artifact and names every section the 
   assert.deepEqual(runtime.out, ["OK"]);
 });
 
+test("`run check 00` answers the missing brief, and OK once the brief carries ## Brief", async (t) => {
+  const env = makeQueue(t, "cli-run-check-brief");
+  const id = boundJob(env);
+
+  const missing = await runCli(env, ["run", "check", "00"], { jobId: id });
+  assert.equal(missing.code, 0);
+  assert.deepEqual(missing.out, ["MISSING: ## Brief"]);
+
+  writeArtifact(env, "00-brief.md", "# Brief\n\n## Brief\n\nFix the notice.\n");
+  const brief = await runCli(env, ["run", "check", "00"], { jobId: id });
+  assert.equal(brief.code, 0);
+  assert.deepEqual(brief.out, ["OK"]);
+});
+
 const EVIDENCE_MISSING = "MISSING: Evidence level: <1|2|3|4> as the first line under ## Verdict";
 
 test("`run check 01` requires `Evidence level: <1-4>` as the first line under ## Verdict, and nowhere else", async (t) => {
@@ -354,7 +368,7 @@ test("`run check` refuses a phase it does not know and a missing argument, and e
 
   const unknown = await runCli(env, ["run", "check", "07"], { jobId: id });
   assert.equal(unknown.code, 1);
-  assert.match(unknown.err.join("\n"), /unknown phase `07`; the artifact gate covers: 01, 02, 03, 04, 05a, 05, 06, 06\.5$/m);
+  assert.match(unknown.err.join("\n"), /unknown phase `07`; the artifact gate covers: 00, 01, 02, 03, 04, 05a, 05, 06, 06\.5$/m);
 
   const missing = await runCli(env, ["run", "check"], { jobId: id });
   assert.equal(missing.code, 1);

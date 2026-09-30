@@ -247,12 +247,13 @@ Writes the job cannot make meanwhile go to its `pending-writes.jsonl` (above); a
 could not be recorded keeps the worktree and writes the witness, and the report says
 `unrecorded` with the pending path.
 
-The twenty-eight MCP tools, with the parameters `nightqueue mcp` actually accepts:
+The twenty-nine MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
 | `lesson_recall` | `query?`, `project?`, `target?`, `exclude_ids?` |
 | `context_for_phase` | `target` (`triager`, `architect`, `coder`, `qa`, `verifier`, `explore`), `query?`, `project?`, `repo_root?`, `exclude_ids?` |
+| `phase_prompt` | `target` (`triager`, `explore`, `architect`, `coder`, `coder-fix`, `verifier`, `runtime`, `qa-lite`, `qa-analyst`, `qa-prover`), `query?`, `stage?`, `delivery_constraints?`, `raw_evidence?`, `group?` (required for `qa-prover`), `note?`, `artifact?` (`runtime` only), `project?`, `slug?` |
 | `lesson_save` | `title`, `root_cause`, `solution`, `prevention`, `attempts?`, `project?`, `target?` |
 | `memory_recall` | `query?`, `project?` |
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
@@ -295,6 +296,17 @@ finds for the query in the job's project), already formatted, and is empty when 
 nothing to inject. Inside a job it excludes the lessons this run was already given
 and asks again without the exclusion when that would leave the phase with nothing -
 `lesson_recall` does the same, so no caller keeps that bookkeeping by hand.
+
+`phase_prompt` returns `{prompt, subagent_type, model, artifact, check, open_items}`: the
+whole prompt of one /resolve subagent, rendered from the templates under
+`plugin/skills/resolve/references/prompts/`. It resolves the run like the `run_*` tools and reads
+every value from it: the tier and type `nightqueue run start` recorded, the `## Brief` of
+`<RUN_DIR>/00-brief.md` (refused, naming the path, when it is missing), the routing row of
+`src/queue/routing.mjs`, the same context block `context_for_phase` answers (with the same
+per-run lesson exclusion) and, for the architect, the standing decisions. `coder` and
+`verifier` render the fast-track prompt on `trivial`/`simple`. A placeholder the run cannot
+fill is an error, never a half prompt; a target the tier does not route is rendered with
+an `open_items` line.
 
 In `pipeline_log`, `tier` is the FINAL tier the run executed, `tier_operator` is the
 tier the operator declared on the job (absent when there was none), and a run whose

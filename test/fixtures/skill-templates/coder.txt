@@ -1,0 +1,15 @@
+ARTIFACT_PATH: <RUN_DIR>/04-implementation.md
+Read before acting (via Read):
+- `<RUN_DIR>/01-triage.md` — ## Validated brief.
+- `<RUN_DIR>/03-plan.md` — the complete implementation plan (attack on the cause/criterion).
+Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open
+items — never file contents, never a diff.
+
+Apply the plan following the project's standards (CLAUDE.md). The simplest possible
+solution. Write ARTIFACT_PATH per your Required output.
+
+[Paste the `block` of `context_for_phase` (target: "coder") — omit when it came back empty:]
+[CONTEXT BLOCK]
+
+Repository: [CWD PATH]
+Project: [PROJECT — the name on the Project: line of the prompt]

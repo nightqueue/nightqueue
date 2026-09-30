@@ -35,6 +35,7 @@ const CONTRACT_TOOLS = [
   "lesson_recall",
   "lesson_save",
   "memory_recall",
+  "phase_prompt",
   "pipeline_log",
   "queue_add",
   "queue_cancel",
@@ -83,12 +84,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the twenty-eight tools of the contract", async (t) => {
+test("the server exposes exactly the twenty-nine tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 28, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 29, "the contract list and the server disagree on how many tools there are");
 });
 
 test("the server migrates a v8 home to v9 once at boot, before it answers any tool", async (t) => {
@@ -189,6 +190,7 @@ test("the lesson, memory, index, phase and pipeline tools refuse an unknown proj
     ["index_save", { project: "ghost", repo_root: alpha, files: [{ path: "src/a.mjs", responsibility: "the module" }] }],
     ["index_recall", { project: "ghost" }],
     ["context_for_phase", { target: "coder", project: "ghost" }],
+    ["phase_prompt", { target: "coder", project: "ghost", slug: "a-run" }],
     ["pipeline_log", { project: "ghost", slug: "a-run", tier: "simple", outcome: "investigated" }],
     ["decision_save", { project: "ghost", title: "t", context: "c", decision: "d" }],
     ["decision_list", { project: "ghost" }],

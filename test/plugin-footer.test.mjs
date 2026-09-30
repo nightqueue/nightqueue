@@ -32,7 +32,7 @@ test("plugin/ never tells an agent to write the footer, a job id suffix, the run
   assert.deepEqual(linesMatching(/run <slug>`?\s*$|· run <slug>/), []);
   assert.deepEqual(linesMatching(/without the `#` \(`job 24`/), []);
   assert.deepEqual(linesMatching(/## The closing line/), []);
-  assert.deepEqual(linesMatching(/Refs:/).filter((line) => !/Never write a `Refs:` trailer; `run commit` adds it/.test(line)), []);
+  assert.deepEqual(linesMatching(/Refs:/).filter((line) => !/Never write a `Refs:` trailer; `run (commit|publish)` adds it/.test(line)), []);
 });
 
 test("the model of the pull request template ends at `Not tested:`, and the bare `#<number>` rule is still there", () => {

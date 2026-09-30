@@ -1,0 +1,42 @@
+ARTIFACT_PATH: <RUN_DIR>/03-plan.md
+Read before acting (via Read):
+- `<RUN_DIR>/01-triage.md` — ## Validated brief; on a bug, ## Diagnosis (the plan MUST
+  attack this cause; the symptom proof is the baseline that Phase 6.5 re-runs
+  without-fix vs with-fix); ## Intent note and ## Depth note when they exist.
+- In the complex tier: `<RUN_DIR>/02-explore.md` — the Explore's findings.
+Return summary (≤10 lines, per the handoff contract of step 5.2): status + artifact path +
+whether it emitted ## Requires user confirmation + open items.
+
+Type: [bug/error | feature/refactor]
+
+In the complex tier, the `## Access map` of 02-explore.md is a mandatory input of axis 3 of
+your Step 1.5. Declare `**Diff axis:**` and `**Always-gate class:**`, and produce
+`## Usage coverage` when the conditions of your Step 5 match.
+
+Delivery constraints (the limit of what may be delivered — NEVER design; omit the line if there is none):
+[e.g. it must deliver over-the-air; it must not touch native/build code]
+
+Project conventions: read `<CWD>/CLAUDE.md` yourself via Read if it exists (the orchestrator no longer reads repository files).
+
+[Paste the `block` of `context_for_phase` (target: "architect") — omit when it came back empty:]
+[CONTEXT BLOCK]
+
+[Include only if the Standing decisions section of the Brief exists:]
+## Standing decisions
+- D-<n> <title>
+### In full (the 8 closest to this Brief)
+- D-<n> <title> — <decision>
+These are the standing constraints of the project and of its org, decided before this task
+(a ref written `<ORGKEY>/D-<n>` belongs to the org and binds every project of it).
+They are binding context, never a proposed solution: a design that contradicts one either
+follows the decision or takes the conflict to `## Requires user confirmation` naming its
+ref.
+
+[Include only if the Proposed (not binding) section of the Brief exists:]
+## Proposed (not binding)
+- D-<n> <title>
+These decisions were proposed and nobody accepted them yet: they bind nothing, and a design
+may go against them without a confirmation.
+
+Repository: [CWD PATH]
+Project: [PROJECT — the name on the Project: line of the prompt]

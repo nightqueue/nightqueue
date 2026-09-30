@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { PHASE_TARGETS } from "../src/mcp/phase-context.mjs";
-import { PIPELINE_TASK_TYPES } from "../src/memory/runs.mjs";
+import { LESSON_TARGET_OF, PROMPT_TARGETS } from "../src/mcp/phase-prompt.mjs";
+import { PIPELINE_TASK_TYPES, PIPELINE_TIERS } from "../src/memory/runs.mjs";
 import { RESUME_PHASE_ORDER } from "../src/queue/resume.mjs";
+import { TRACK_ROUTING } from "../src/queue/routing.mjs";
 import { RUN_OUTCOME_STATUSES } from "../src/queue/run-state.mjs";
 import { buildPrompt } from "../src/queue/spawn.mjs";
 import { parseSlugTypeLine, parseTierRaiseLine } from "../src/queue/stream.mjs";
@@ -13,7 +15,8 @@ const QA_PHASE = readFileSync(new URL("../plugin/skills/resolve/references/qa-ph
 const OPERATOR = readFileSync(new URL("../plugin/agents/operator.md", import.meta.url), "utf8");
 const CLASSIFY = readFileSync(new URL("../src/queue/classify.mjs", import.meta.url), "utf8");
 const TOOLS = readFileSync(new URL("../src/mcp/tools.mjs", import.meta.url), "utf8");
-const CLI_RUN = readFileSync(new URL("../src/cli/run.mjs", import.meta.url), "utf8");
+const CLI_RUN = ["run.mjs", "run-publish.mjs", "run-start.mjs", "run-report.mjs"].map((file) => readFileSync(new URL(`../src/cli/${file}`, import.meta.url), "utf8")).join("\n");
+const REPORT_LAYOUT = readFileSync(new URL("../plugin/skills/resolve/references/report.md", import.meta.url), "utf8");
 const QA_AGENT = readFileSync(new URL("../plugin/agents/qa-guardian.md", import.meta.url), "utf8");
 const OPERATOR_TIER_LITERAL = "(set by the operator - the pipeline may only raise it, with evidence, never lower it)";
 
@@ -37,43 +40,47 @@ function contextTargets(text) {
   return [...text.matchAll(/`context_for_phase` \(target: "([a-z]+)"\)/g)].map((match) => match[1]);
 }
 
-// The cells of a markdown table row, trimmed and without the outer pipes.
-function cellsOf(line) {
-  return line.split("|").slice(1, -1).map((cell) => cell.trim());
-}
-
-// The row of the Track routing table whose first cell ends with the given label.
+// The row of the routing table (src/queue/routing.mjs) whose label ends with the given one, as [label, trivial, simple, complex].
 function routingRow(label) {
-  const row = SKILL.split("\n").find((line) => line.includes("|") && cellsOf(line)[0]?.endsWith(label));
-  assert.ok(row, `the Track routing table has no row for ${label}`);
-  return cellsOf(row);
+  const row = TRACK_ROUTING.find(([name]) => name.endsWith(label));
+  assert.ok(row, `the routing table has no row for ${label}`);
+  return [row[0], ...row[1]];
 }
 
-test("every subagent prompt takes its context from one context_for_phase block", () => {
-  assert.deepEqual(contextTargets(SKILL), ["coder", "triager", "explore", "architect", "coder", "verifier"]);
-  assert.deepEqual(contextTargets(QA_PHASE), ["qa", "qa"]);
+// A prompt template of the resolve skill, as the runtime renders it from.
+function promptTemplate(name) {
+  return readFileSync(new URL(`../plugin/skills/resolve/references/prompts/${name}.md`, import.meta.url), "utf8");
+}
+
+test("every subagent prompt takes its context from one context block, in the old placeholder order", () => {
+  const skillOrder = ["coder-fast", "triager", "explore", "architect", "coder", "verifier"];
+  assert.deepEqual(skillOrder.map((template) => LESSON_TARGET_OF[template]), ["coder", "triager", "explore", "architect", "coder", "verifier"]);
+  assert.deepEqual(["qa-lite", "qa-analyst"].map((template) => LESSON_TARGET_OF[template]), ["qa", "qa"]);
+  for (const target of Object.values(LESSON_TARGET_OF)) {
+    assert.ok(PHASE_TARGETS.includes(target), `a prompt names \`${target}\`, which the context block does not accept`);
+  }
   for (const text of [SKILL, QA_PHASE]) {
-    for (const target of contextTargets(text)) {
-      assert.ok(PHASE_TARGETS.includes(target), `the skill names \`${target}\`, which context_for_phase does not accept`);
-    }
-    assert.equal(text.split("[CONTEXT BLOCK]").length - 1, contextTargets(text).length, "a placeholder lost its target line");
+    assert.deepEqual(contextTargets(text), [], "a hand-filled context placeholder survived outside the templates");
+    assert.equal(text.includes("[CONTEXT BLOCK]"), false, "a hand-filled context placeholder survived outside the templates");
   }
   assert.equal(SKILL.includes("[Include only if lesson_recall returned something:]"), false, "a lesson_recall placeholder survived");
   assert.equal(SKILL.includes("[Include only if memory_recall returned something:]"), false, "a memory_recall placeholder survived");
 });
 
-test("the per-phase section hands the project, the exclusion and its retry to the server", () => {
+test("the per-phase section hands the prompt, the context block and the exclusion to the server", () => {
   assert.ok(SKILL.includes("### Context per phase (applies to every phase with a subagent)"), SKILL);
-  assert.ok(SKILL.includes("call `context_for_phase` (MCP `nightqueue`)\nONCE with `target` = the target phase"), SKILL);
-  assert.ok(SKILL.includes('For `target: "explore"`, also pass\n`repo_root` = the pipeline\'s CWD'), SKILL);
+  assert.ok(SKILL.includes("Every subagent prompt comes from ONE `phase_prompt` call (MCP `nightqueue`) with `target` = the"), SKILL);
+  for (const target of PROMPT_TARGETS) assert.ok(SKILL.includes(`\`${target}\``), `the skill never names the \`${target}\` prompt`);
   assert.ok(SKILL.includes("excludes by itself the lessons already\ninjected in earlier phases of this session"), SKILL);
+  assert.ok(SKILL.includes("Pass `prompt` to `Agent` exactly as it came"), "the orchestrator may edit the rendered prompt");
   assert.equal(/Also pass `exclude_ids`/.test(SKILL), false, "the agent is still told to rebuild exclude_ids by hand");
   assert.equal(/repeat the call without `exclude_ids`/.test(SKILL), false, "the agent is still told to retry the recall by hand");
   assert.ok(
-    SKILL.includes("A host that answers `unknown` for `context_for_phase` is a runtime older than this plugin:"),
-    "the older-runtime degradation line of context_for_phase is missing",
+    SKILL.includes("A host that answers `unknown` for `phase_prompt` is a runtime older than this plugin:"),
+    "the older-runtime degradation line of phase_prompt is missing",
   );
-  assert.ok(TOOLS.includes('name: "context_for_phase"'), "the skill names a tool src/mcp/tools.mjs does not register");
+  assert.ok(TOOLS.includes('name: "phase_prompt"'), "the skill names a tool src/mcp/tools.mjs does not register");
+  assert.ok(TOOLS.includes('name: "context_for_phase"'), "the degraded path names a tool src/mcp/tools.mjs does not register");
 });
 
 test("a tier is raised only on evidence, never lowered, and the mandatory escalation block is gone", () => {
@@ -91,7 +98,10 @@ test("the operator-tier line of the prompt is the same literal in the skill and 
 });
 
 test("the three tracks are one routing table, one value per tier", () => {
-  assert.deepEqual(routingRow("Routing"), ["Routing", "trivial", "simple", "complex"], "the tier columns moved");
+  assert.deepEqual(PIPELINE_TIERS, ["trivial", "simple", "complex"], "the tier columns moved");
+  assert.equal(SKILL.includes("| Routing | trivial | simple | complex |"), false, "the skill still carries a copy of the routing table");
+  assert.equal(SKILL.includes("## Appendix A"), false, "the skill still carries the routing rationale");
+  assert.ok(SKILL.includes("is `src/queue/routing.mjs`, with the rationale in its header"), "step 6 no longer names the source of the routing");
   assert.deepEqual(routingRow("Track"), ["Track", "Fast Lite", "Fast", "Standard"]);
   assert.deepEqual(routingRow("triager").slice(1), ["—", "haiku (bug only)", "sonnet"]);
   assert.deepEqual(routingRow("Explore").slice(1), ["—", "—", "sonnet"]);
@@ -116,27 +126,31 @@ test("every tier keeps the verifier scope, the CLAUDE.md rule and the time targe
   assert.deepEqual(routingRow("Time target").slice(1), ["under 5 minutes", "under 15 minutes", "none — the depth is the target"]);
   assert.equal(routingRow("`<CWD>/CLAUDE.md`")[1], "not named to the coder", "the trivial tier started reading CLAUDE.md");
   assert.match(routingRow("`<CWD>/CLAUDE.md`")[2], /when it exists/);
-  const scopeLine = "Run: [the `Verifier scope` cell of this tier's column in the Track routing table].";
-  assert.equal(SKILL.split(scopeLine).length - 1, 2, "the fast tracks and Phase 6 no longer read the same scope cell");
+  const scopeLine = "Run: {{VERIFIER_SCOPE}}.";
+  for (const template of ["verifier-fast", "verifier"]) {
+    assert.ok(promptTemplate(template).includes(scopeLine), `the ${template} prompt no longer reads the scope cell of the row`);
+  }
 });
 
-test("the two track headings are gone and every phase reads its tier from the table", () => {
+test("the two track headings are gone and every phase reads its tier from the routing row", () => {
   assert.equal(/### Fast Lite Track/.test(SKILL), false, "the Fast Lite block survived");
   assert.equal(/### Fast Track/.test(SKILL), false, "the Fast Track block survived");
   assert.ok(SKILL.includes('### Fast tracks — execute this block if the tier is "trivial" or "simple"'), SKILL);
   assert.equal(/\*\*trivial\*\* → does not execute/.test(SKILL), false, "a phase still restates the tier scoping the table carries");
   for (const phase of ["### Phase 1 —", "### Phase 2 —", "### Phase 3 —", "### Phase 4 —", "### Phase 5 —", "### Phase 6.5 —"]) {
-    assert.match(passageAt(phase).slice(0, 400), /\*\*Track routing\*\* table \(step 6\)/, `${phase} does not read its tier from the table`);
+    assert.match(passageAt(phase).slice(0, 400), /`routing` row \(step 6\)/, `${phase} does not read its tier from the routing row`);
   }
   const loop = passageAt("- **Maximum of iterations**:");
-  assert.match(loop, /`Max fix iterations` cell of this tier's column/, "the fix loop still hard-codes the iterations per tier");
-  assert.match(passageAt('### Phase 6 — Verification'), /the `model` of the ✅ verifier\nrow of the \*\*Track routing\*\* table/);
+  assert.match(loop, /`Max fix iterations` of this tier's `routing` row/, "the fix loop still hard-codes the iterations per tier");
+  assert.match(passageAt("### Phase 6 — Verification"), /the ✅ verifier of the `routing` row, step 6/);
 });
 
 test("the fast tracks hand the coder the file list, never the pasted content", () => {
-  assert.equal(SKILL.includes("[CONTENT READ INLINE]"), false, "a fast track still pastes file content into the coder prompt");
-  assert.equal(SKILL.includes("Content of the affected files:"), false, "a fast track still pastes file content into the coder prompt");
-  assert.ok(SKILL.includes("Affected files (read them yourself, via Read):"), SKILL);
+  for (const text of [SKILL, promptTemplate("coder-fast")]) {
+    assert.equal(text.includes("[CONTENT READ INLINE]"), false, "a fast track still pastes file content into the coder prompt");
+    assert.equal(text.includes("Content of the affected files:"), false, "a fast track still pastes file content into the coder prompt");
+  }
+  assert.ok(promptTemplate("coder-fast").includes("Affected files (read them yourself, via Read):"), "the fast coder prompt lost its file list");
   assert.match(passageAt("1. **Locate the affected files**"), /never their content pasted inline: it has Read/);
 });
 
@@ -187,7 +201,7 @@ test("every artifact gate of the skill is one `nightqueue run check` call the CL
   const gate = passageAt("**Artifact gate (apply after every phase that expects a Write):**");
   assert.ok(gate.includes("`nightqueue run check <NN>`"), "the gate is no longer a single command");
   assert.ok(gate.includes("Never check an artifact with `ls`"), "the gate no longer forbids checking an artifact by hand");
-  for (const phase of ["01", "02", "03", "04", "05a", "05", "06", "06.5"]) {
+  for (const phase of ["00", "01", "02", "03", "04", "05a", "05", "06", "06.5"]) {
     assert.ok(`${SKILL}${QA_PHASE}`.includes(`nightqueue run check ${phase}`), `the gate of phase ${phase} is not a \`run check\` call`);
     assert.ok(CLI_RUN.includes(`["${phase}", {`), `the skill calls \`run check ${phase}\`, a phase the CLI does not know`);
   }
@@ -201,7 +215,9 @@ test("the QA echo is gone, and the pair that replaces it is really in the flow",
   assert.equal(/ECHO per section/.test(SKILL), false, "a QA prompt still asks for the echo of the plan");
   assert.equal(/echo line per section/.test(QA_AGENT), false, "the qa-guardian agent still returns the echo of the plan");
   assert.equal(SKILL.includes("Validation of the QA echo"), false, "the orchestrator still audits an echo nobody returns");
-  assert.equal(QA_PHASE.split("`<RUN_DIR>/03-plan.md` (open it only AFTER step 0").length - 1, 2, "a QA prompt stopped reading the plan");
+  for (const template of ["qa-lite", "qa-analyst"]) {
+    assert.ok(promptTemplate(template).includes("`{{RUN_DIR}}/03-plan.md` (open it only AFTER step 0"), `the ${template} prompt stopped reading the plan`);
+  }
   assert.ok(CLI_RUN.includes('sections: ["## Validated risks"]'), "`run check 05` no longer requires the section the plan feeds");
 });
 
@@ -264,9 +280,9 @@ test("step 0.5 trusts the resume block the runtime emits and re-validates nothin
 // The text of the Phase 8 telemetry instruction, from its heading to the end of the section.
 function telemetryStep() {
   const start = SKILL.indexOf("**Telemetry (mandatory");
+  assert.ok(start >= 0, "the skill no longer documents the telemetry of Phase 8");
   const end = SKILL.indexOf("\n---", start);
-  assert.ok(start >= 0 && end > start, "the skill no longer documents the telemetry of Phase 8");
-  return SKILL.slice(start, end);
+  return SKILL.slice(start, end > start ? end : SKILL.length);
 }
 
 // The `Tier raised:` line as the Brief tells the orchestrator to print it, read from the skill instead of copied.
@@ -299,13 +315,16 @@ test("the agent measures no time: no clock, no arithmetic, no timestamp", () => 
   assert.ok(SKILL.includes("Never compute a duration and never write a timestamp"), "Phase 8 lost the rule about the times");
 });
 
-test("the Time column of Phase 8 is read from the command the CLI really offers", () => {
-  const table = passageAt("**The Time column is read, never computed.**");
-  assert.ok(table.includes("`nightqueue run log`"), "the Phase 8 table no longer reads the runtime's measurement");
-  assert.ok(table.includes("`nightqueue run log --json`"), "the report lost the `at` stamps of the phases");
-  assert.ok(SKILL.includes("**Total:** ⏱️ the `total` line of `nightqueue run log`"), "the Total is assembled by the agent again");
-  assert.ok(CLI_RUN.includes("nightqueue run log [--json]"), "the CLI no longer offers the command the skill pastes from");
-  assert.ok(CLI_RUN.includes("total\\t"), "the CLI no longer prints the `total` line the skill pastes into the Total");
+test("the tables of Phase 8 and their Time column come from the command the CLI really offers", () => {
+  const report = passageAt("**Open the report with `nightqueue run report`, pasted verbatim**");
+  assert.ok(report.includes("Time column the\nruntime measured and its `**Total:**`"), "the Phase 8 table no longer reads the runtime's measurement");
+  assert.ok(report.includes("may only turn a `Happy: yes` into not\nhappy — never the reverse"), "the agent may override the fail-safe verdict of the report");
+  assert.ok(CLI_RUN.includes("nightqueue run report [--json]"), "the CLI no longer offers the command the skill pastes from");
+  assert.ok(REPORT_LAYOUT.includes("**Total:** ⏱️"), "the report layout no longer prints the Total the report carries");
+  assert.ok(CLI_RUN.includes('renderSkillTemplate(skillReferencesDir(), "report"'), "`run report` no longer renders its one layout, references/report.md");
+  assert.equal(CLI_RUN.includes("| Step | Agent | Status |"), false, "the CLI carries a copy of the table layout of references/report.md");
+  assert.ok(CLI_RUN.includes("Lessons saved: "), "the CLI no longer prints the lesson-capture audit line");
+  assert.equal(SKILL.includes("| Step | Agent | Status | Highlight |"), false, "the skill still carries the table model the report prints");
 });
 
 // The text of Phase 7, from its heading to the start of Phase 8.
@@ -316,19 +335,22 @@ function commitPhase() {
   return SKILL.slice(start, end);
 }
 
-test("Phase 7 is the two `nightqueue run` calls the CLI really offers, and no git or gh is run by hand", () => {
+test("Phase 7 is the one `nightqueue run publish` call the CLI really offers, and no git or gh is run by hand", () => {
   const phase = commitPhase();
-  assert.ok(phase.includes("`nightqueue run commit --message-file <RUN_DIR>/commit-message.txt`"), "the commit is no longer the command's");
-  assert.ok(phase.includes("`nightqueue run pr --body-file <RUN_DIR>/pr-body.md`"), "the pull request is no longer the command's");
-  assert.ok(CLI_RUN.includes("nightqueue run commit --message-file <path>"), "the CLI no longer offers the command Phase 7 calls");
-  assert.ok(CLI_RUN.includes("nightqueue run pr --body-file <path>"), "the CLI no longer offers the command Phase 7 calls");
-  for (const flag of ["--extra <pathspec>", "--message-file", "--body-file"]) {
+  assert.ok(
+    phase.includes("`nightqueue run publish --message-file <RUN_DIR>/commit-message.txt --body-file <RUN_DIR>/pr-body.md`"),
+    "the commit and the pull request are no longer the command's",
+  );
+  assert.ok(CLI_RUN.includes("nightqueue run publish --message-file <path> --body-file <path>"), "the CLI no longer offers the command Phase 7 calls");
+  for (const flag of ["--extra <pathspec>", "--message-file", "--body-file", "--files-from"]) {
     assert.ok(CLI_RUN.includes(flag), `Phase 7 passes \`${flag}\`, which the CLI does not accept`);
   }
-  assert.ok(phase.includes("`nightqueue run pr --template`"), "Phase 7 no longer asks the runtime which template the body follows");
-  assert.ok(CLI_RUN.includes("| --template"), "the CLI no longer offers the template query Phase 7 calls");
+  assert.ok(phase.includes("the `prTemplate` `run start` answered"), "Phase 7 no longer reads the template the runtime found");
+  assert.ok(phase.includes("never Read the repository's template file"), "Phase 7 may read the repository's template by hand");
+  assert.ok(CLI_RUN.includes("prTemplate"), "`run start` no longer answers the template Phase 7 reads");
   assert.ok(phase.includes("`MISSING: evidence for QA row <method>`"), "Phase 7 no longer reads the evidence refusal");
-  for (const answer of ["CONVENTION:", "COMMITTED:", "REFUSED:", "REJECTED:", "MISSING:", "TEMPLATE:", "BRANCH:", "WORKTREE:"]) {
+  assert.ok(phase.includes("`COMMITTED: <sha> (already committed)`"), "Phase 7 no longer reads the retry answer of the publication");
+  for (const answer of ["CONVENTION:", "COMMITTED:", "REFUSED:", "REJECTED:", "MISSING:", "BRANCH:", "WORKTREE:"]) {
     assert.ok(phase.includes(answer), `Phase 7 never reads the \`${answer}\` line the command prints`);
     assert.ok(CLI_RUN.includes(answer), `Phase 7 reads \`${answer}\`, which the CLI never prints`);
   }
@@ -405,18 +427,33 @@ test("the raise line the Brief prints is the line the runtime parses", () => {
   });
 });
 
-test("the QA methodology lives in references/qa-phase.md alone, and both of its readers point there", () => {
+test("the QA methodology lives in references/qa-phase.md and its prompts in references/prompts/, and both readers point there", () => {
   const phase5 = SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —"));
   assert.match(phase5, /Read `references\/qa-phase\.md`/, "Phase 5 no longer points to the QA reference");
+  assert.match(phase5, /Read `references\/prompts\/_qa-attack-brief\.md`/, "Phase 5 no longer reads the definitions its validations audit");
   assert.ok(OPERATOR.includes("skills/resolve/references/qa-phase.md"), "the operator no longer points to the QA reference");
-  for (const anchor of ["#### QA attack brief", "**Stage A gate:**", "Mode: ANALYST", "Mode: PROVER", "**Consolidation (inline"]) {
+  assert.ok(QA_PHASE.includes("**An operator hunt has no `phase_prompt` run:**"), "the operator's hunt lost the way to the templates");
+  for (const anchor of ["**Stage A gate:**", "**Consolidation (inline"]) {
     const count = [SKILL, QA_PHASE, OPERATOR].reduce((sum, text) => sum + text.split(anchor).length - 1, 0);
     assert.equal(count, 1, `\`${anchor}\` is not written exactly once across the skill, the reference and the operator`);
     assert.ok(QA_PHASE.includes(anchor), `\`${anchor}\` left references/qa-phase.md`);
   }
+  for (const [anchor, template] of [["Mode: LITE", "qa-lite"], ["Mode: ANALYST", "qa-analyst"], ["Mode: PROVER", "qa-prover"]]) {
+    assert.equal([SKILL, QA_PHASE, OPERATOR].some((text) => text.includes(anchor)), false, `\`${anchor}\` is still written by hand outside its template`);
+    assert.ok(promptTemplate(template).includes(anchor), `\`${anchor}\` left prompts/${template}.md`);
+  }
+  assert.equal(QA_PHASE.includes("#### QA attack brief"), false, "the QA attack brief is still copied in the reference");
   for (const [, name] of SKILL.matchAll(/references\/([a-z0-9-]+\.md)/g)) {
     assert.ok(existsSync(new URL(`../plugin/skills/resolve/references/${name}`, import.meta.url)), `the skill names references/${name}, which is not on disk`);
   }
+  for (const [, name] of `${SKILL}${QA_PHASE}`.matchAll(/prompts\/([a-z0-9_-]+\.md)/g)) {
+    assert.ok(existsSync(new URL(`../plugin/skills/resolve/references/prompts/${name}`, import.meta.url)), `the skill names prompts/${name}, which is not on disk`);
+  }
+});
+
+test("the resolve skill directory holds only SKILL.md and references/", () => {
+  const entries = readdirSync(new URL("../plugin/skills/resolve", import.meta.url)).sort();
+  assert.deepEqual(entries, ["SKILL.md", "references"], "a new top-level entry appeared under plugin/skills/resolve/");
 });
 
 test("step 0.5 reads the re-run lines and the prior-run block of a job queued from an operator run", () => {
