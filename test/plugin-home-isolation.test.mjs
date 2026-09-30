@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
+
+const PROMPTS = new URL("../plugin/skills/resolve/references/prompts/", import.meta.url);
 
 const RESOLVE = readFileSync(new URL("../plugin/skills/resolve/SKILL.md", import.meta.url), "utf8");
 const VERIFIER = readFileSync(new URL("../plugin/agents/verifier.md", import.meta.url), "utf8");
@@ -14,7 +16,7 @@ const GUARD_RULES_BLOCK = [
   "**Real pull requests and nightqueue guards — hard rules.**",
   "",
   "- **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.",
-  "- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightqueue run pr`.",
+  "- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightqueue run publish`, which opens it through the `nightqueue run pr` path.",
 ].join("\n");
 
 const GUARD_RULE_FILES = { "resolve skill": RESOLVE, "verifier agent": VERIFIER, "qa-guardian agent": QA_AGENT, "qa-guardian skill": QA_SKILL };
@@ -56,4 +58,16 @@ test("the verifier agent carries the same rule as its own step, before the repor
 test("neither file tells the operator to hand-roll a throwaway home with mktemp anymore", () => {
   assert.equal(RESOLVE.includes("mktemp"), false, "the resolve skill still mentions mktemp");
   assert.equal(VERIFIER.includes("mktemp"), false, "the verifier agent still mentions mktemp");
+});
+
+test("the subagent prompt templates keep the home isolation: no hand-rolled home, and the runtime lane goes through the sandbox", () => {
+  const names = readdirSync(PROMPTS).filter((name) => name.endsWith(".md"));
+  assert.ok(names.length >= 12, "the prompt templates were not found");
+  for (const name of names) {
+    const text = readFileSync(new URL(name, PROMPTS), "utf8");
+    assert.equal(text.includes("mktemp"), false, `${name} tells a subagent to hand-roll a throwaway home`);
+    assert.equal(/NIGHTQUEUE_HOME=/.test(text), false, `${name} tells a subagent to export a home`);
+    assert.equal(/NIGHTQUEUE_JOB_(ID|HOME|CLAUDE_DIR)=/.test(text), false, `${name} tells a subagent to override a nightqueue guard`);
+  }
+  assert.ok(readFileSync(new URL("runtime.md", PROMPTS), "utf8").includes("nightqueue sandbox <cmd>"), "the runtime lane lost the sandbox rule");
 });

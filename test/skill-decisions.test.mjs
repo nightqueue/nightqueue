@@ -7,6 +7,8 @@ const read = (relative) => readFileSync(new URL(`../${relative}`, import.meta.ur
 const SKILL = read("plugin/skills/resolve/SKILL.md");
 const ARCHITECT = read("plugin/agents/architect.md");
 const SERVER = read("src/mcp/tools.mjs");
+const ARCHITECT_PROMPT = read("plugin/skills/resolve/references/prompts/architect.md");
+const PHASE_PROMPT = read("src/mcp/phase-prompt.mjs");
 
 // Reflect files the pipeline must keep away from the decisions and roadmap tables.
 const REFLECT_FILES = ["src/hooks/reflect.mjs", "src/hooks/reflect-worker.mjs", "src/cli/reflect.mjs", "src/memory/dedup.mjs"];
@@ -19,58 +21,42 @@ test("the Phase 0 preflight pings only lesson_recall and takes the decisions fro
     "step 0.1 does not say where the standing decisions already are",
   );
   assert.ok(SKILL.includes("them: EVERY accepted title of the project and of its org, org rows first"), SKILL);
-  assert.ok(SKILL.includes("No preflight\n     call fetches them; `decision_recall` stays the way to refine them by query (step 1)."), SKILL);
+  assert.ok(SKILL.includes("No preflight\n     call fetches them; `decision_recall` stays the way to refine them by query (`phase_prompt` does it for the architect)."), SKILL);
   assert.ok(
-    SKILL.includes("**`decision_recall` failed or is unavailable while `lesson_recall` answered**"),
-    "the fail-open bullet of decision_recall is missing from step 0.1",
+    SKILL.includes("**A `phase_prompt` answer whose `open_items` names the decision tools**"),
+    "the fail-open bullet of the decision tools is missing from step 0.1",
   );
-  assert.ok(SKILL.includes("→ continue WITHOUT a `## Standing decisions` section and record it as an open\n     item of Phase 8."), SKILL);
-  assert.ok(SKILL.includes("An empty return is different: it means the project has no accepted\n     decision, and the section is simply omitted, with no open item."), SKILL);
+  assert.ok(SKILL.includes("→ the architect ran WITHOUT a `## Standing decisions` section: record it\n     as an open item of Phase 8."), SKILL);
+  assert.ok(SKILL.includes("An empty log is different: the section is simply omitted, with\n     no open item."), SKILL);
+  assert.ok(PHASE_PROMPT.includes('"the decision tools (the architect got no `## Standing decisions`)"'), "a failing decision tool no longer becomes an open item");
 });
 
-test("the Brief and the architect prompt carry the proposed titles as a section that binds nothing", () => {
-  assert.ok(SKILL.includes("## Proposed (not binding)   [omit when the session block has no such section]"), SKILL);
-  assert.ok(SKILL.includes("- D-<n> <title>                           [titles only, copied from the session block]"), SKILL);
-  assert.ok(SKILL.includes("[Include only if the Proposed (not binding) section of the Brief exists:]\n## Proposed (not binding)\n- D-<n> <title>"), SKILL);
-  assert.ok(SKILL.includes("they bind nothing, and a design\nmay go against them without a confirmation."), SKILL);
+test("the architect prompt carries the proposed titles as a section that binds nothing", () => {
+  assert.ok(ARCHITECT_PROMPT.includes("{{#PROPOSED_TITLES}}\n## Proposed (not binding)\n{{PROPOSED_TITLES}}\n"), ARCHITECT_PROMPT);
+  assert.ok(ARCHITECT_PROMPT.includes("they bind nothing, and a design\nmay go against them without a confirmation."), ARCHITECT_PROMPT);
+  assert.ok(PHASE_PROMPT.includes('decisions.decisionTitles({ projectId: run.projectId, status: "proposed" })'), "the proposed titles no longer come from the store");
+  assert.ok(SKILL.includes("The architect's `## Standing decisions`\n   and `## Proposed (not binding)` sections are built by `phase_prompt` from the store"), SKILL);
   assert.ok(ARCHITECT.includes("A `## Proposed (not binding)` section lists, by title\nonly, decisions proposed and not accepted yet: they bind nothing"), ARCHITECT);
 });
 
-test("the Brief carries every accepted title plus the 8 closest decisions in full", () => {
-  assert.ok(SKILL.includes("## Standing decisions   [omit the whole section when the log has no accepted decision]"), SKILL);
-  assert.ok(SKILL.includes("- D-<n> <title>                           [every accepted title, copied from the session block]"), SKILL);
-  assert.ok(SKILL.includes("- <ORGKEY>/D-<n> <title>                  [a row whose `scope` is `org`]"), SKILL);
-  assert.ok(SKILL.includes("### In full (the 8 closest to this Brief)\n   - D-<n> <title> — <the `decision` field in 1 line>"), SKILL);
-  assert.ok(SKILL.includes("copy EVERY title from it, in the order it came."), SKILL);
-  assert.ok(SKILL.includes("`limit: 8`"), SKILL);
+test("the architect prompt carries every accepted title plus the 8 closest decisions in full", () => {
+  assert.ok(ARCHITECT_PROMPT.includes("{{#STANDING_TITLES}}\n## Standing decisions\n{{STANDING_TITLES}}\n"), ARCHITECT_PROMPT);
+  assert.ok(ARCHITECT_PROMPT.includes("### In full (the 8 closest to this Brief)\n{{STANDING_DETAIL}}"), ARCHITECT_PROMPT);
+  assert.ok(PHASE_PROMPT.includes('decisions.decisionTitles({ projectId: run.projectId, status: "accepted" })'), "the titles are no longer every accepted one");
+  assert.ok(PHASE_PROMPT.includes("const DECISION_LIMIT = 8;"), "the full part is no longer the 8 closest");
+  assert.ok(PHASE_PROMPT.includes('`${briefField(brief, "Affected area")} ${briefField(brief, "Objective")}`'), "the recall no longer queries the Affected area plus the Objective");
+  assert.ok(PHASE_PROMPT.includes('row?.via !== "fallback"'), "a fallback row reaches the full part");
+  assert.ok(PHASE_PROMPT.includes("decisionTitleLine"), "the titles are not rendered by the session block's own line");
+  assert.equal(SKILL.includes("copy EVERY title from it, in the order it came."), false, "the skill still tells the orchestrator to copy the titles by hand");
   assert.equal(SKILL.includes("Take at most 5"), false, "the Brief still caps the standing decisions at five");
-  assert.ok(SKILL.includes('ONE `decision_list` with `status: "accepted"` gives the titles.'), SKILL);
-  assert.ok(
-    SKILL.includes("The source is the `## Standing decisions`\n   section of the `# Nightqueue context` block you already received"),
-    "the Brief paragraph does not name the session block as the source",
-  );
-  assert.ok(SKILL.includes("`query` = the `**Affected area:**` plus the `**Objective:**` of the Brief."), SKILL);
-  for (const status of ["proposed", "superseded", "rejected"]) {
-    assert.ok(
-      SKILL.includes(`a \`${status}\``),
-      `the Brief paragraph does not say what happens to a \`${status}\` decision`,
-    );
-  }
-  assert.ok(SKILL.includes('a row marked `via: "fallback"` did not match the query and is'), SKILL);
 });
 
 test("the architect prompt receives standing decisions as binding constraints, not as design", () => {
   assert.ok(
-    SKILL.includes(
-      "[Include only if the Standing decisions section of the Brief exists:]\n## Standing decisions\n- D-<n> <title>\n### In full (the 8 closest to this Brief)\n- D-<n> <title> — <decision>",
-    ),
-    SKILL,
-  );
-  assert.ok(
-    SKILL.includes(
+    ARCHITECT_PROMPT.includes(
       "These are the standing constraints of the project and of its org, decided before this task\n(a ref written `<ORGKEY>/D-<n>` belongs to the org and binds every project of it).\nThey are binding context, never a proposed solution: a design that contradicts one either\nfollows the decision or takes the conflict to `## Requires user confirmation` naming its\nref.",
     ),
-    SKILL,
+    ARCHITECT_PROMPT,
   );
   assert.ok(SKILL.includes("The `## Standing decisions` section of the prompt below is NOT an exception to this\nprohibition"), SKILL);
 });

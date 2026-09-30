@@ -59,6 +59,19 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The resolve pipeline's mechanics moved into the runtime.** `nightqueue run start` records
+  the run's tier and type and answers, as one JSON line, the run directory, the worktree the
+  runtime created, the ONE routing row of the tier (now `src/queue/routing.mjs`), the phases,
+  the tasks and the pull request template; `nightqueue run start --routing` prints the whole
+  table. The MCP tool `phase_prompt` (twenty-nine tools now) renders the complete prompt of each
+  subagent from `plugin/skills/resolve/references/prompts/`, with the Brief the orchestrator
+  wrote to `<RUN_DIR>/00-brief.md` (`run check 00`), the context block and the architect's
+  standing decisions; an unresolved placeholder is an error. `nightqueue run publish` checks the
+  body, commits the list once and opens the pull request in one call (`run commit` and `run pr`
+  are unchanged), and `nightqueue run report` renders the final report's tables and the
+  happy/not-happy verdict from the layout in `plugin/skills/resolve/references/report.md`. The
+  resolve skill no longer carries the subagent templates, the routing table or its rationale:
+  its SKILL.md went from 110,517 to 94,796 bytes.
 - **A tool contract version (contract 2).** The MCP server publishes it in its `serverInfo`
   title and instructions, every tool answer carries `contract`, and `nightqueue doctor` shows
   it. A client that cached the older tool definitions and sends an internal integer id where a

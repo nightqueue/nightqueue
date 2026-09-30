@@ -34,11 +34,54 @@ nightqueue run log --json     # the same table as the only thing on stdout
 nightqueue run commit --message-file msg.txt   # stage what the implementation listed, and commit it
 nightqueue run pr --template                   # print and record the PR template in effect
 nightqueue run pr --body-file body.md          # check the body, push and open the pull request
+nightqueue run start --tier simple --type bug/error --commit-type fix   # the run's routing row, phases and tasks, as JSON
+nightqueue run start --routing                 # the whole routing table, every tier, as markdown
+nightqueue run publish --message-file msg.txt --body-file body.md      # check the body, commit once, push and open the PR
+nightqueue run report                          # the tables of the final report, from the run's own records
 ```
+
+`run start --tier <t> --type <bug/error|feature/refactor> --commit-type <c>
+[--expect-slug <slug>]` is Phase 0's mechanics in one call. It refuses a tier, a
+type or a commit type outside the pipeline's own (naming the accepted values),
+records `type` and `tier` in `state.json` (the same write as `run_set`) and the
+pull request template in effect (the same as `run pr --template`), and prints one
+JSON line: `project`, `slug`, `runDir`, the `worktree` and `branch` the runtime
+recorded (it never creates a worktree), `tier`, `type`, `commitType`, the ONE
+`routing` row of the tier (from `src/queue/routing.mjs`), the `phases` and `tasks`
+of the tier and type, `prTemplate` and `commitConvention`. With `--expect-slug`,
+inside a job, it waits up to 10 seconds for the runner to bind the slug the
+orchestrator just declared (`SLUG: <slug> TYPE: <type>`) and answers `slugDeclared`
+and `slugBound`; it never renames anything itself. Calling it again answers the
+same JSON. `run start --routing` takes no other option: it prints the whole routing
+table of `src/queue/routing.mjs` as markdown, one row per line, and resolves no run
+and writes nothing, inside a job or outside.
+
+`run publish --message-file <p> --body-file <p> [--files-from <p>] [--extra
+<pathspec>]... [--title <t>] [--remove-worktree]` is `run commit` then `run pr` in
+one call, in the safe order: the body is checked against the template in effect
+first, then the list is checked for refused paths and scratch files, and only then
+is anything committed - any problem prints its `MISSING:`/`REJECTED:`/`REFUSED:`
+lines and `nothing was committed or pushed`, and exits `1`. A retry after the commit
+already happened (every listed path clean and the branch ahead of its base) prints
+`COMMITTED: <sha> (already committed)` instead of committing again. The title is
+`--title`, else the body's `# <title>` line, else the subject of the commit message.
+It prints the same `CONVENTION:`, `COMMITTED:`, `BRANCH:`, `PR:` and `WORKTREE:`
+lines as the two commands, which keep working unchanged.
+
+`run report [--json]` renders the tables of Phase 8 from `state.json`, the job log
+and `03-plan.md`: the step table (complex) or the compact `Verification ✅ · PR
+<url>` line (trivial/simple), the `Lessons saved:` audit line (the orchestrator's
+`lesson_save` calls of the last attempt that did not error), a `Happy: yes|no —
+<first failing gate>` line decided by the fail-safe rule (a termination, a failed
+verdict, a re-run, a planned phase never recorded, a plan with `## Requires user
+confirmation`, no delivery recorded), and, when not happy, the execution table with
+the measured Time column and the `**Total:**`. The layout it fills is
+`plugin/skills/resolve/references/report.md`, rendered by the same template engine
+as `phase_prompt`; the orchestrator never reads that file, it pastes the output.
 
 `run check <NN>` is the artifact gate of a phase: it reads
 `<RUN_DIR>/<NN-phase>.md` and prints `OK` or `MISSING: <sections>` - the
-sections required are `## Verdict` (`01`), the four sections of the plan (`03`),
+sections required are `## Brief` (`00`, the `00-brief.md` the orchestrator writes in Phase 0), `## Verdict` (`01`), the four sections of the plan (`03`),
 `## Modified files` (`04`), `## Break hypotheses` + `## Test recipe` (`05a`),
 `## Validated risks` (`05`), `## Verification` (`06`) and `## Runtime verdict`
 (`06.5`, the runtime lane's `06-runtime.md`); `02` is checked for

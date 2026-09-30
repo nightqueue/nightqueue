@@ -26,7 +26,7 @@ Measured 2026-09-21 over 14 jobs: a job's cost is ~77% cache-read (turns × cont
 It works through five channels only:
 
 - (a) the run's handoff files under `<RUN_DIR>`;
-- (b) the plugin files it is told to read (`references/pr-template.md`, `references/qa-phase.md`, the qa-guardian paths of Phase 5);
+- (b) the plugin files it is told to read (`references/pr-template.md`, `references/qa-phase.md` and `references/prompts/_qa-attack-brief.md` of Phase 5);
 - (c) the `nightqueue` MCP tools;
 - (d) the `Agent` tool;
 - (e) the closed Bash list — `git rev-parse`, `git worktree`, `git status --short`, `git add`,
@@ -35,7 +35,7 @@ It works through five channels only:
   `git fetch` (never `--upload-pack`), `git branch --show-current`,
   `git diff --stat|--shortstat|--name-only|--name-status` (never `-p`/`-u`/`--patch`, a full diff, `show` or `log`),
   `gh pr view|list|status|checks|create` (never `gh pr diff`, `merge`, `edit` or `close`), and
-  `nightqueue run check|log|index-save|commit|pr` — each as the bare program name followed by its
+  `nightqueue run start|check|log|index-save|commit|pr|publish|report` — each as the bare program name followed by its
   subcommand, never a path to the binary nor a global flag before the subcommand (`-C`, `--git-dir`,
   `--work-tree`, `-c`). Nothing else.
 
@@ -94,7 +94,7 @@ The runtime waits for every subagent and background task of an unattended run; l
 
 0.1. **Memory preflight (before anything else in Phase 0).** Call `lesson_recall` (MCP
    `nightqueue`) ONCE, with `project` = the current project, only to prove the server is
-   reachable — the return is not used here; the per-phase `context_for_phase` (below) is the
+   reachable — the return is not used here; the per-phase `phase_prompt` (below) is the
    one that feeds the prompts. There is no memoryless mode.
 
    - **The tool does not exist in the host** → **STOP the run right here**: print one short
@@ -107,16 +107,16 @@ The runtime waits for every subagent and background task of an unattended run; l
      them: EVERY accepted title of the project and of its org, org rows first, each already
      named by its ref, `D-<n>` or `<ORGKEY>/D-<n>`, followed by `## Standing decisions in detail`
      with the text of the 8 most recently updated. No preflight
-     call fetches them; `decision_recall` stays the way to refine them by query (step 1).
+     call fetches them; `decision_recall` stays the way to refine them by query (`phase_prompt` does it for the architect).
      When the block is absent, ONE `decision_list` with `status: "accepted"` gives the titles.
      A `## Proposed (not binding)` section of the same block lists, by title only, the
      decisions still `proposed`: they bind nothing.
    - One call answers both levels: `decision_recall` with `project` returns the project's
      decisions AND its org's, org rows first, each carrying `scope` and `owner`.
-   - **`decision_recall` failed or is unavailable while `lesson_recall` answered** (an older
-     runtime) → continue WITHOUT a `## Standing decisions` section and record it as an open
-     item of Phase 8. An empty return is different: it means the project has no accepted
-     decision, and the section is simply omitted, with no open item.
+   - **A `phase_prompt` answer whose `open_items` names the decision tools** (an older runtime,
+     a failing store) → the architect ran WITHOUT a `## Standing decisions` section: record it
+     as an open item of Phase 8. An empty log is different: the section is simply omitted, with
+     no open item.
 
 0.5. **Run resume (right after the preflight, before interpreting).** If the
    job context brought a block ``RESUME CANDIDATE (slug `<slug>`)``, this run continues a
@@ -149,7 +149,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    a resumed session where the operator's expected behavior contradicts `## Usage coverage` of
    `03-plan.md`, or the delivery is already merged with no such section. Protocol: (1)
    have the runtime lane measure the current behavior on main with real evidence — launch the
-   Phase 6.5 lane (verifier, `Mode: RUNTIME`) with `ARTIFACT_PATH: <RUN_DIR>/00-main-measure.md`
+   Phase 6.5 lane (`phase_prompt` with `target: "runtime"`, `artifact: "00-main-measure.md"` and the scenarios as `note`) with `ARTIFACT_PATH: <RUN_DIR>/00-main-measure.md`
    and the operator's scenarios; the table of (2) is built from its handoff file; (2) **show side by side**, one
    line per scenario: `<scenario> · today-on-main: <measured> · expected by the operator:
    <what he described> · divergence: yes|no`; (3) **ask** where the fix goes (`gh pr list
@@ -170,37 +170,13 @@ The runtime waits for every subagent and background task of an unattended run; l
    **Type:** [bug/error | feature/refactor]
    **Bug account:** [phone/email/user ID from the ticket that reproduces the bug — or "not identified"]
    **Key evidence:** [max 5 lines of the stack trace — omit if feature]
-
-   ## Standing decisions   [omit the whole section when the log has no accepted decision]
-   - D-<n> <title>                           [every accepted title, copied from the session block]
-   - <ORGKEY>/D-<n> <title>                  [a row whose `scope` is `org`]
-   ### In full (the 8 closest to this Brief)
-   - D-<n> <title> — <the `decision` field in 1 line>
-
-   ## Proposed (not binding)   [omit when the session block has no such section]
-   - D-<n> <title>                           [titles only, copied from the session block]
    ```
 
-   **How `## Proposed (not binding)` is filled in.** Copy the titles of the section of the
-   same name of the session block, in the order they came; nothing else feeds it. These
-   decisions were proposed and nobody accepted them yet: they bind nothing, and a plan may
-   go against them.
-
-   **How `## Standing decisions` is filled in.** The source is the `## Standing decisions`
-   section of the `# Nightqueue context` block you already received at the start of the
-   session: copy EVERY title from it, in the order it came. When that section is absent,
-   take the titles from ONE `decision_list` (MCP `nightqueue`) with `project` = the current
-   project and `status: "accepted"`. The `### In full` part comes from ONE `decision_recall`
-   (MCP `nightqueue`) with `project` = the current project, `limit: 8` and
-   `query` = the `**Affected area:**` plus the `**Objective:**` of the Brief. ONE call
-   answers both levels: the project's own decisions and the decisions of its org, with the
-   org rows FIRST — never call the tool a second time. Name each row by the `ref` it carries:
-   a row whose `scope` is `project` is `D-<n>`, a row whose `scope` is `org` is
-   `<ORGKEY>/D-<n>` (`DLW/D-3`), because two levels may hold the same number. Both
-   sources only ever carry accepted decisions, so a `proposed`, a `superseded` or
-   a `rejected` one can never reach this section. Keep the order received in both parts;
-   a row marked `via: "fallback"` did not match the query and is dropped from the full part.
-   No accepted title at all (or the tools failed, per step 0.1) → omit the section.
+   **The Brief is written once, to a file** — `<RUN_DIR>/00-brief.md`, at step 3, gated by
+   `nightqueue run check 00`: every subagent prompt is rendered from that file by `phase_prompt`,
+   so the Brief is never pasted into a prompt by hand. The architect's `## Standing decisions`
+   and `## Proposed (not binding)` sections are built by `phase_prompt` from the store — never
+   copied into the Brief.
 
    The **raw input is never passed to Explore**. Only the triager (Phase 1), on bugs, may
    receive the raw error/stack trace block, the only agent that needs that detail to
@@ -346,22 +322,18 @@ The runtime waits for every subagent and background task of an unattended run; l
    or the question/alternative in one sentence>`. A non-`EXECUTE` verdict stops the run
    with the same gate block, in either tier.
 
-3. **Define the commit type** (Conventional Commits) that describes the task.
-   That type names the branch/worktree and prefixes the Phase 7 commit:
-
-   | type       | when to use                                |
-   | ---------- | ------------------------------------------ |
-   | `feat`     | new capability                             |
-   | `fix`      | bug fix                                    |
-   | `refactor` | refactoring without behavior change        |
-   | `docs`     | documentation only                         |
-   | `style`    | formatting/lint                            |
-   | `build`    | dependencies/build                         |
-   | `chore`    | configs, auxiliary tasks                   |
-   | `test`     | tests                                      |
-
-   Also define a short **kebab-case slug** describing the change
-   (e.g. `login-google`, `fix-pagination`).
+3. **Define the commit type and the slug** (judgment): the Conventional Commits type (`feat`,
+   `fix`, `refactor`, `docs`, `style`, `build`, `chore`, `test`) that describes the task — it names
+   the branch and prefixes the Phase 7 commit — and a short **kebab-case slug** describing the
+   change (e.g. `login-google`, `fix-pagination`). Then, in this order:
+   - print the rename line of step 5.2 when the slug differs from the one in `RUN_DIR`;
+   - run `nightqueue run start --tier <tier> --type <bug/error|feature/refactor> --commit-type <type> --expect-slug <slug>`
+     (outside a job, add `--project <project> --slug <slug>`). It records `type` and `tier` and
+     answers one JSON line: `runDir` (the `RUN_DIR` from here on), `worktree`, `branch`, the ONE
+     `routing` row of the tier (step 6), the `phases` and `tasks` of the tier and type,
+     `prTemplate` and `commitConvention`. `slugBound: false` means the runtime has not bound the
+     declared slug yet: call it again once;
+   - `Write` the Brief of step 1 to `<runDir>/00-brief.md` and run `nightqueue run check 00`.
 
 4. **The exclusive worktree**:
 
@@ -401,30 +373,17 @@ The runtime waits for every subagent and background task of an unattended run; l
      `EnterWorktree` from the recorded `branch` (or base `fresh` if it no longer exists) — with
      no `EnterWorktree` in the host, use the same `git worktree add` fallback as above.
 
-5. **Create the tasks** via TaskCreate, one per pipeline phase relevant to the chosen track.
-   The `subject` of each task MANDATORILY follows the format `<phase>: <short summary>`, with
-   `<phase>` being exactly one of: `triage`, `explore`, `architecture`, `implementation`, `qa`,
+5. **Create the tasks** via TaskCreate, one per entry of the `tasks` list `run start` answered,
+   in its order. The `subject` of each task MANDATORILY follows the format `<phase>: <short summary>`, with
+   `<phase>` being exactly the entry — one of `triage`, `explore`, `architecture`, `implementation`, `qa`,
    `verification`, `runtime`, `commit` — the cockpit links task→phase by that prefix; a task
    without it does not show up in the log trail. Via TaskUpdate, mark each task `in_progress`
    when the phase starts and `completed` when it ends.
 
-5.1. **Initialize the execution log** — a table you keep inline (not in a file), one line per
-   agent launched, icon + title in the Agent column:
-
-   ```
-   | Step | Agent | Status | Summary (<1 line) | Time |
-   ```
-
-   Status: ✅ done · ❌ failed · 🔁 re-run · ⏳ in progress. For each agent launched (any phase,
-   including loop re-entries): Summary is one sentence of what it delivered in that execution;
-   Time stays empty while running — **Never time an agent yourself**, the runtime measures every
-   phase from the session stream and Phase 8 fills this column from `nightqueue run log`. If QA
-   (Phase 5) rejects and the coder is relaunched (Phase 6 loop), add a **new "coder" line** —
-   never overwrite the previous one, the history must show every round trip.
-
-   This table feeds the "full execution table" of Phase 8 (shown only when the run is unhappy)
-   and, line by line, the telemetry at the end of Phase 8 regardless of outcome. The pre-commit
-   (Phase 7) shows only branch + commit + diff stat.
+5.1. **No execution log by hand.** **Never time an agent yourself** and keep no table: the runtime
+   measures every phase from the session stream, and `nightqueue run report` (Phase 8) derives the
+   execution table — every loop re-entry (🔁) on a line of its own — from the phases recorded in
+   step 5.3. The pre-commit (Phase 7) shows only branch + commit + diff stat.
 
 5.2. **File handoff (RUN_DIR + artifact gate).** Each subagent
    writes its COMPLETE output to an artifact and returns only a ≤10-line summary; the
@@ -451,6 +410,7 @@ The runtime waits for every subagent and background task of an unattended run; l
 
    | Artifact | Author (Write) | Read by (Read) |
    | --- | --- | --- |
+   | `00-brief.md` | orchestrator (Phase 0, step 3) | `phase_prompt` (every subagent prompt) |
    | `01-triage.md` | 🔍 triager | 📐 architect (P3) |
    | `02-explore.md` | 🧭 explore | 📐 architect (P3) |
    | `03-plan.md` | 📐 architect | ⚙️ coder (P4), 🛡️ qa (P5), orchestrator (gate/pause) |
@@ -460,18 +420,9 @@ The runtime waits for every subagent and background task of an unattended run; l
    | `06-verification.md` | ✅ verifier (append per iteration, every tier; also `evidence/automated-verification.md`) | coder-loop (P6), Phase 8 |
    | `06-runtime.md` | 📱 runtime lane (✅ verifier, Mode: RUNTIME; also `evidence/api-*`, `browser-*`, `emulator-*`) | orchestrator (6.5 gate), Phase 7, Phase 8 |
 
-   Each subagent receives its `ARTIFACT_PATH` (RUN_DIR + the phase's file) and the
-   **handoff contract** at the TOP of the prompt (stable block), with the variable data
-   (RUN_DIR, brief, repository, tier) at the END (stable-first). The contract:
-
-   ```
-   ## File handoff (contract — read first)
-   ARTIFACT_PATH: <RUN_DIR>/<NN-phase>.md
-   Read before acting (via Read): <source artifacts of this phase — or "none">
-   Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
-   Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open items — never file contents, never a diff.
-   Do NOT paste the complete sections in the response.
-   ```
+   Each subagent prompt comes from `phase_prompt` (Context per phase, below) with the
+   **handoff contract** at its TOP (stable block) and the variable data (RUN_DIR, brief,
+   repository, tier) at the END (stable-first): pass it to `Agent` verbatim, never edit it.
 
    **Artifact gate (apply after every phase that expects a Write):** run
    `nightqueue run check <NN>` — one Bash call, from inside the job, with the phase number
@@ -503,10 +454,10 @@ The runtime waits for every subagent and background task of an unattended run; l
      `phase` is one of the 8 canonical names — `triage`, `explore`, `architecture`,
      `implementation`, `qa`, `verification`, `runtime`, `commit`. **NEVER** record a phase that
      ended in `gate_stop`.
-   - **The fields of the run itself.** Call `run_set` ONCE for each field the moment it becomes
-     known: `type` (`bug/error` | `feature/refactor`, the same one from the Brief of step 1),
-     `tier`, and `branch` + `worktree` (interactive step 4; inside a job the runtime recorded
-     them). Only the fields sent are touched.
+   - **The fields of the run itself.** `nightqueue run start` records `type` and `tier` (step 3).
+     Call `run_set` ONCE for a field only when it changes afterwards — the corrected `type` of the
+     Phase 3 divergence valve, `tier` on a raise — and, in an interactive step 4, `branch` +
+     `worktree` (inside a job the runtime recorded them). Only the fields sent are touched.
    - **Termination on purpose.** When the pipeline terminates by the VERDICT of a phase that
      **was completed and recorded**, call `run_terminate` with that `phase` and the summarized
      verdict as `reason` — today only **Phase 1** with `NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION`.
@@ -520,46 +471,24 @@ The runtime waits for every subagent and background task of an unattended run; l
      the runtime writes it from what the session really published.
    - **Tolerant:** a `run_*` call that fails NEVER aborts the pipeline — record it as an open
      item of Phase 8 and continue to the next phase normally.
-   - A `run_*`/`context_for_phase` tool or a `nightqueue run` subcommand that answers `unknown`
+   - A `run_*`/`phase_prompt`/`context_for_phase` tool or a `nightqueue run` subcommand that answers `unknown`
      means the runtime is older than this plugin: record it as an open item of Phase 8 and
      continue — never hand-write `state.json` to compensate.
 
 6. **Track routing** — the whole pipeline runs on Claude agents via `Agent` (every call MUST
    pass `model`); there is no external engine. The three tracks execute the SAME pipeline and
-   differ ONLY in the routing below: this table is rendered once, and every phase reads its
-   tier's column from here instead of restating it.
-
-   | Routing | trivial | simple | complex |
-   | ------------- | ------- | ------- | -------- |
-   | Track | Fast Lite | Fast | Standard |
-   | Phases that run | 0 · 4 · 6 · 7 · 8 | 0 · 1 (bug only) · 4 · 6 · 7 · 8 | every phase, 0 to 8 |
-   | 🔍 triager       | —       | haiku (bug only) | sonnet   |
-   | 🧭 Explore       | —       | —       | sonnet   |
-   | 📐 architect     | —       | —       | opus     |
-   | ⚙️ coder         | sonnet  | sonnet  | opus     |
-   | 🛡️ qa-guardian   | —       | —       | sonnet   |
-   | ✅ verifier      | haiku   | haiku   | sonnet   |
-   | Verifier scope | tsc + lint + the tests of the files that were touched (no build, no full suite) | tsc + lint + the project's FULL test suite (no QA PoCs in this tier) | the project's real checks (typecheck, lint, build, tests) + the QA's PoCs |
-   | QA methods of the PR | automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo | automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo | automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo |
-   | Max fix iterations | 1 | 2 | 2 |
-   | Request critique (step 2.5) | skipped | mandatory | mandatory |
-   | `<CWD>/CLAUDE.md` | not named to the coder | named to the coder when it exists | named to the coder (Phase 4) |
-   | `index_recall` | no | yes, to locate the affected files | yes, in Phase 2 before the Explore |
-   | `context_for_phase` for the coder | no | yes | yes |
-   | `04-implementation.md` | written by the coder, gate `nightqueue run check 04` | written by the coder, gate `nightqueue run check 04` | written by the coder, gate `nightqueue run check 04` |
-   | Time target | under 5 minutes | under 15 minutes | none — the depth is the target |
-
-   `—` = the agent does not run in that tier. `haiku (bug only)` = in `simple` the
-   triager runs only when the request is a bug. In the fix loops, the relaunched coder
-   keeps the `model` of the task's tier. Each phase below repeats the expected `model`
-   in parentheses — in case of divergence, this table is the source of truth.
-   `QA methods of the PR` is guidance for which methods to run, not a runtime check: each
-   one becomes a `## QA` row only with its file under `<RUN_DIR>/evidence/` (Phase 7
-   step 4), and the trivial tier runs no Phase 6.5, so there its non-automated methods
+   differ ONLY in the `routing` row `nightqueue run start` answers for the tier (step 3): the
+   `model` of each agent (`null` = the agent does not run in that tier; `triagerBugOnly` = in
+   `simple` the triager runs only when the request is a bug), the verifier scope, the QA methods
+   of the PR, the `Max fix iterations`, the request critique, the `<CWD>/CLAUDE.md` and
+   `index_recall` rules, the context block of the coder and the time target. Its single source
+   is `src/queue/routing.mjs`, with the rationale in its header; `nightqueue run start --routing`
+   prints the whole table. Every `phase_prompt` answer
+   already carries the `model` of its agent — in the fix loops, the relaunched coder keeps the
+   `model` of the task's tier. `QA methods of the PR` is guidance for which methods to run, not a
+   runtime check: each one becomes a `## QA` row only with its file under `<RUN_DIR>/evidence/`
+   (Phase 7 step 3), and the trivial tier runs no Phase 6.5, so there its non-automated methods
    apply only when that evidence exists.
-
-   The **rationale** behind this table is in **Appendix A** (end of the file). Consult it when
-   changing any routing line.
 
 7. **Execution autonomy** — the pipeline runs autonomously. Every `Agent` call MUST pass
    `mode: "bypassPermissions"`, so subagents execute any command without asking for
@@ -583,14 +512,14 @@ The runtime waits for every subagent and background task of an unattended run; l
 
 > One block for the two fast tracks: every value that changes with the tier — the `model`
 > of each agent, the verifier's scope, the fix iterations, `<CWD>/CLAUDE.md`,
-> `index_recall`, the time target — is read from **your tier's column in the Track routing
-> table (step 6)**. The phases the row does not list are skipped; once done, go straight to
-> Phase 7.
+> `index_recall`, the time target — comes from your tier's `routing` row (step 6) and is
+> already inside each `phase_prompt` answer. The phases the row does not list are skipped;
+> once done, go straight to Phase 7.
 
-1. **Locate the affected files** — not yourself: hand the coder the `**Affected area:**` of
-   the brief plus, in the tier whose row allows it, the PATHS `index_recall` (MCP `nightqueue`)
-   answered — paths only, never content. The coder locates the rest itself and lists what it
-   touched in `04-implementation.md`.
+1. **Locate the affected files** — not yourself: `phase_prompt` hands the coder the
+   `**Affected area:**` of the Brief plus, in the tier whose row allows it, the PATHS the
+   project index answers — paths only, never content. The coder locates the rest itself and
+   lists what it touched in `04-implementation.md`.
    The coder receives the LIST of paths, never their content pasted inline: it has Read.
 
 2. **Triager — only when `Type = bug/error` and the row gives the triager a `model`** (a
@@ -598,63 +527,16 @@ The runtime waits for every subagent and background task of an unattended run; l
    exactly as written. The bug is reproduced before a line is changed;
    `NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION` terminates the run there.
 
-3. **Launch 1 coder agent** (subagent_type="nightqueue:coder", the `model` of the row):
-
-   ```
-   ## File handoff (contract — read first)
-   ARTIFACT_PATH: <RUN_DIR>/04-implementation.md
-   Read before acting (via Read): [only when the triager ran:] `<RUN_DIR>/01-triage.md` — ## Validated brief and the confirmed cause. [otherwise: none]
-   Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
-   Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open items — never file contents, never a diff.
-   Do NOT paste the complete sections in the response.
-
-   Brief:
-   [BRIEF FROM PHASE 0]
-
-   Affected files (read them yourself, via Read):
-   Affected area: [AFFECTED AREA]
-   [PATHS FROM index_recall — omit in the tier whose row says no]
-
-   [Include only when the row names CLAUDE.md and <CWD>/CLAUDE.md exists:]
-   Project conventions (via Read): <CWD>/CLAUDE.md
-
-   [Include only when the row calls it — paste the `block` of `context_for_phase` (target: "coder"), omitted when it came back empty:]
-   [CONTEXT BLOCK]
-
-   Apply the simplest possible change the brief defines. Do not introduce abstractions.
-   [Include only in the simple tier:] Follow the test patterns already in the project and
-   cover the new behaviour in the test file that already covers this area.
-
-   Write `04-implementation.md` per your Required output (`## Modified files`, `## Done`,
-   `## Left`, `## How it was tested`).
-
-   Repository: [CWD PATH]
-   Project: [PROJECT — the name on the Project: line of the prompt]
-   ```
+3. **Launch 1 coder agent**: `phase_prompt` with `target: "coder"`, then `Agent` with the
+   answered `subagent_type` (`nightqueue:coder`), `model` and `prompt` passed verbatim.
 
 3.5. Run `nightqueue run check 04` (the artifact gate, step 5.2) — `GENERATED` and
    `MISSING: ## Modified files (no changed files)` are read as in Phase 4.
 
-4. **Launch 1 verifier agent** (subagent_type="nightqueue:verifier", the `model` of the row):
-
-   ```
-   ## File handoff (contract — read first)
-   ARTIFACT_PATH: <RUN_DIR>/06-verification.md (append per iteration)
-   Read before acting (via Read): <RUN_DIR>/04-implementation.md — ## Modified files
-   Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
-   Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open items — never file contents, never a diff.
-   Do NOT paste the complete sections in the response.
-
-   Repository: [CWD PATH]
-   Project: [PROJECT — the name on the Project: line of the prompt]
-
-   Tier: [trivial | simple]
-
-   Run: [the `Verifier scope` cell of this tier's column in the Track routing table].
-   Produce the verdict ## Verification: PASSED or ## Verification: FAILED.
-   ```
-
-   Then run `nightqueue run check 06`.
+4. **Launch 1 verifier agent**: `phase_prompt` with `target: "verifier"`, then `Agent` with the
+   answered `subagent_type` (`nightqueue:verifier`), `model` and `prompt` passed verbatim — the
+   prompt carries the `Verifier scope` of the row and asks for `## Verification: PASSED` or
+   `## Verification: FAILED`. Then run `nightqueue run check 06`.
 
 5. **Fix loop — the `Max fix iterations` cell of the row is the limit**:
    - `PASSED` → go to Phase 7.
@@ -671,26 +553,24 @@ order never changes.
 
 ### Context per phase (applies to every phase with a subagent)
 
-Before launching each subagent (Phases 1–6), call `context_for_phase` (MCP `nightqueue`)
-ONCE with `target` = the target phase (`triager` | `explore` | `architect` | `coder` | `qa`
-| `verifier`) and `query` = 2–4 keywords from the brief. For `target: "explore"`, also pass
-`repo_root` = the pipeline's CWD.
-
-The call answers a `block` already formatted: `## Applicable lessons` (up to 4 preventions,
-1 line each, starting with the real `[L<id>]`), `## Project memory` (up to 4 `[M<id>]
-<key>: <value>` pairs) and, for the explore, `## Structural index`. Paste `block` into the
-subagent's prompt exactly as it came, at the placeholder each phase's prompt already carries —
-never rewrite a line of it. An empty `block` means there is nothing to inject, so the
-placeholder simply disappears.
-
-Nothing else is computed by hand: inside a job the server reads the run from the caller's own
-job row: it takes the project from there and excludes by itself the lessons already
+Every subagent prompt comes from ONE `phase_prompt` call (MCP `nightqueue`) with `target` = the
+prompt of the phase (`triager` | `explore` | `architect` | `coder` | `coder-fix` | `verifier` |
+`runtime` | `qa-lite` | `qa-analyst` | `qa-prover`) and, optionally, `query` = 2–4 keywords from
+the brief. The context block (`## Applicable lessons`, `## Project memory` and, for the explore,
+`## Structural index`) is already inside the prompt: inside a job the server excludes by itself the lessons already
 injected in earlier phases of this session, so the same lesson is not handed to two phases —
-unless it is all this run has to give, in which case it comes back anyway. `project` and
-`exclude_ids` are optional and exist for a call made outside a job.
+unless it is all this run has to give, in which case it comes back anyway.
 
-A host that answers `unknown` for `context_for_phase` is a runtime older than this plugin:
-launch the subagent without the block and record it as an open item of Phase 8.
+Pass `prompt` to `Agent` exactly as it came, with the answered `subagent_type` and `model` —
+never rewrite a line of it, never add one; relaunch context goes in the `note` argument only.
+Then gate the answered `artifact` with `nightqueue run check <check>`. Each `open_items` line of
+the answer becomes an open item of Phase 8. `phase_prompt` refuses a run whose Brief is not
+in `<RUN_DIR>/00-brief.md` yet: write it (step 3) and call again.
+
+A host that answers `unknown` for `phase_prompt` is a runtime older than this plugin: fill the
+target's template under `references/prompts/` of this skill by hand (`coder-fast.md`/`verifier-fast.md` on
+trivial/simple), with the `block` of `context_for_phase` as its context block, and record it as
+an open item of Phase 8.
 
 #### Lesson payload
 
@@ -736,7 +616,7 @@ blocks the run: record it as an open item in Phase 8 and continue, the same way 
 
 ### Phase 1 — Triage-Gate
 
-> Tier scoping: the 🔍 triager row of the **Track routing** table (step 6) — a `—` there
+> Tier scoping: the 🔍 triager `model` of the `routing` row (step 6) — a `null` there
 > means this phase does not run, and in the fast tracks it is the block above that launches
 > it, on the same artifact and the same gates.
 
@@ -747,41 +627,15 @@ The triage methodology (≥2 hypotheses, ban on hedging, REAL payload vs TS type
 discrimination gate, executable simulation, native SDK/crash reporter, symptom proof) lives in
 `triager.md`. The skill's prompt only injects the data and demands the output format.
 
-Prompt:
+Prompt: `phase_prompt` with `target: "triager"` — on a bug, pass the raw error block of the
+user (below) as `raw_evidence`; the triager is the only agent that receives it. The prompt
+demands `## Verdict` · `## Diagnosis` (bug only, incl. Symptom proof) · `## Validated brief` ·
+`## Out of scope` · `## Request gaps` · `## Intent signals` (bug only) · `## Open items`.
 
-```
-ARTIFACT_PATH: <RUN_DIR>/01-triage.md
-Read before acting (via Read): none.
-Return summary (≤10 lines, per the handoff contract of step 5.2): verdict + artifact path +
-whether it emitted ## Intent note / ## Depth note + open items.
-
-Follow your triage methodology. On a bug, validate the cause with the REAL data of the bug
-account (not by reading/guessing/TS type) and prove the symptom before PROCEED.
-Finish with: ## Verdict · ## Diagnosis (bug only, incl. Symptom proof) ·
-## Validated brief · ## Out of scope · ## Request gaps ·
-## Intent signals (bug only) · ## Open items.
-
-Brief:
-[BRIEF FROM PHASE 0]
-
-[Include only if Type = bug/error:]
-Raw evidence from the user:
-[RAW ERROR BLOCK / STACK TRACE — on a crash from a crash reporter (e.g. Sentry), ≥3
-events with stack + breadcrumbs + tags in_foreground/device/os/release]
-
-Type: [bug/error | feature/refactor]
-
-[Paste the `block` of `context_for_phase` (target: "triager") — omit when it came back empty:]
-[CONTEXT BLOCK]
-
-Repository: [CWD PATH]
-Project: [PROJECT — the name on the Project: line of the prompt]
-```
-
-Launch **1 triager agent** (subagent_type="nightqueue:triager", `model`: `haiku` if the tier
-is simple, `sonnet` if the tier is complex) — read mode, it does not edit files. It writes the
-output to `01-triage.md`; run `nightqueue run check 01` (the artifact gate, step 5.2)
-before evaluating the verdict.
+Launch **1 triager agent** with the answered `subagent_type` (`nightqueue:triager`), `model`
+(`haiku` if the tier is simple, `sonnet` if the tier is complex) and `prompt` verbatim — read
+mode, it does not edit files. It writes the output to `01-triage.md`; run
+`nightqueue run check 01` (the artifact gate, step 5.2) before evaluating the verdict.
 
 **Bug from a crash reporter:** when an MCP for it is available, pull ≥3 events (stack +
 breadcrumbs + tags) before launching the triager and include them in the `Raw evidence` —
@@ -805,49 +659,14 @@ architect decides whether to pause in their own Step 1.5.
 
 ### Phase 2 — Exploration
 
-> Tier scoping: the 🧭 Explore row of the **Track routing** table (step 6) — a `—` there
+> Tier scoping: the 🧭 Explore `model` of the `routing` row (step 6) — a `null` there
 > means this phase does not run.
 
-**Structural index (recall — before launching the Explore):** call `index_recall`
-(MCP `nightqueue`) with `project` = the current project, `repo_root` = the pipeline's CWD
-and `query` = 1-2 words from the Affected area. The return brings the already known map of the
-project with real per-file freshness: `stale`/`missing` = revalidate; the rest are
-fresh. An empty index → proceed exactly as before (graceful degradation).
-
-**complex** — launch **1 explore agent** (subagent_type="nightqueue:explore",
-`model: "sonnet"`) — NEVER generic/general-purpose.
-
-```
-ARTIFACT_PATH: <RUN_DIR>/02-explore.md
-Read before acting (via Read): none.
-Return summary (≤10 lines, per the handoff contract of step 5.2): status + artifact path +
-"index saved: N files" (or the reason for not having saved it) + open items.
-
-Find the files related to: [AFFECTED AREA]
-Task objective: [OBJECTIVE]
-
-[Include only if index_recall returned files:]
-Already known map of the project (index from earlier runs):
-[LIST: path — responsibility (mark the ones with stale/missing as "REVALIDATE")]
-Already known libs: [lib@version, ...]
-Do NOT rediscover the fresh files of the map — trust them and complement only what
-is missing for this area. Revalidate ONLY the ones marked REVALIDATE (they changed or
-disappeared since the indexing). Fix the responsibilities that are wrong.
-
-The index is persisted by the runtime from your artifact (`nightqueue run index-save`); these two lines only name where it lands:
-project: [PROJECT — the name on the Project: line of the prompt]
-repo_root: [CWD PATH]
-
-[Paste the `block` of `context_for_phase` (target: "explore") — omit when it came back empty:]
-[CONTEXT BLOCK]
-
-Produce also the `## Access map` of the target code (max 3 hops, each consumer walked up to
-a terminal) and the `unimplemented intent: <param> · governs <scope | filter |
-auth | other>` lines for every parameter/field/flag read and not used in a decision. The cap of
-30 files includes the files of the map.
-
-Limit: at most 30 relevant files.
-```
+**complex** — launch **1 explore agent**: `phase_prompt` with `target: "explore"`, then `Agent`
+with the answered `subagent_type` (`nightqueue:explore` — NEVER generic/general-purpose),
+`model` and `prompt` verbatim. The prompt already carries the structural index earlier runs
+saved (`stale`/`missing` files marked REVALIDATE); an empty index → the prompt simply has no
+map (graceful degradation).
 
 Wait for the Explore to finish. Run `nightqueue run check 02` (the artifact gate, step 5.2)
 before proceeding. Phase 3 reads the findings from `02-explore.md`.
@@ -863,11 +682,14 @@ open item of Phase 8, the same as an empty index.
 
 ### Phase 3 — Architecture
 
-> Tier scoping: the 📐 architect row of the **Track routing** table (step 6) — a `—` there
+> Tier scoping: the 📐 architect `model` of the `routing` row (step 6) — a `null` there
 > means this phase does not run.
 
-Launch **1 architect agent** (subagent_type="nightqueue:architect", `model: "opus"`) —
-complex only:
+Launch **1 architect agent** — complex only: `phase_prompt` with `target: "architect"` (plus
+`delivery_constraints` when there is one, and `note` on a relaunch), then `Agent` with the
+answered `subagent_type` (`nightqueue:architect`), `model` and `prompt` verbatim. The prompt
+already carries the `## Standing decisions` and `## Proposed (not binding)` sections, built by
+the runtime.
 
 **What you may NOT inject into the architect's prompt (a prohibition without exception):** the
 DESIGN is theirs. You inject context and a DELIVERY constraint — never a solution. FORBIDDEN in
@@ -882,51 +704,6 @@ trade-off to the user via `## Requires user confirmation` when the risk deserves
 The `## Standing decisions` section of the prompt below is NOT an exception to this
 prohibition: it is binding context, in the same family as `Delivery constraints:`, and it
 never names the mechanism, file or line where THIS task's solution goes.
-
-```
-ARTIFACT_PATH: <RUN_DIR>/03-plan.md
-Read before acting (via Read):
-- `<RUN_DIR>/01-triage.md` — ## Validated brief; on a bug, ## Diagnosis (the plan MUST
-  attack this cause; the symptom proof is the baseline that Phase 6.5 re-runs
-  without-fix vs with-fix); ## Intent note and ## Depth note when they exist.
-- In the complex tier: `<RUN_DIR>/02-explore.md` — the Explore's findings.
-Return summary (≤10 lines, per the handoff contract of step 5.2): status + artifact path +
-whether it emitted ## Requires user confirmation + open items.
-
-Type: [bug/error | feature/refactor]
-
-In the complex tier, the `## Access map` of 02-explore.md is a mandatory input of axis 3 of
-your Step 1.5. Declare `**Diff axis:**` and `**Always-gate class:**`, and produce
-`## Usage coverage` when the conditions of your Step 5 match.
-
-Delivery constraints (the limit of what may be delivered — NEVER design; omit the line if there is none):
-[e.g. it must deliver over-the-air; it must not touch native/build code]
-
-Project conventions: read `<CWD>/CLAUDE.md` yourself via Read if it exists (the orchestrator no longer reads repository files).
-
-[Paste the `block` of `context_for_phase` (target: "architect") — omit when it came back empty:]
-[CONTEXT BLOCK]
-
-[Include only if the Standing decisions section of the Brief exists:]
-## Standing decisions
-- D-<n> <title>
-### In full (the 8 closest to this Brief)
-- D-<n> <title> — <decision>
-These are the standing constraints of the project and of its org, decided before this task
-(a ref written `<ORGKEY>/D-<n>` belongs to the org and binds every project of it).
-They are binding context, never a proposed solution: a design that contradicts one either
-follows the decision or takes the conflict to `## Requires user confirmation` naming its
-ref.
-
-[Include only if the Proposed (not binding) section of the Brief exists:]
-## Proposed (not binding)
-- D-<n> <title>
-These decisions were proposed and nobody accepted them yet: they bind nothing, and a design
-may go against them without a confirmation.
-
-Repository: [CWD PATH]
-Project: [PROJECT — the name on the Project: line of the prompt]
-```
 
 **How to fill in `Type:`** — it holds whenever a phase needs the Type (3, 5, 6.5), not
 only here. Walk this order and stop at the first one that resolves it:
@@ -1031,31 +808,14 @@ architect (🔁) instructing the literal plan. Never write code before that conf
 
 ### Phase 4 — Implementation
 
-> Tier scoping: the ⚙️ coder row of the **Track routing** table (step 6) — in `trivial` and
-> `simple` the coder is the one the fast-tracks block launches, with the prompt written
-> there; this phase is the `complex` launch.
+> Tier scoping: the ⚙️ coder `model` of the `routing` row (step 6) — in `trivial` and
+> `simple` the coder is the one the fast-tracks block launches; this phase is the `complex`
+> launch.
 
-Launch 1 coder agent (subagent_type="nightqueue:coder", `model: "opus"`).
-The `coder.md` already requires the `## Modified files` section
-and the completeness rule on a textual refactor — the prompt only injects the data:
-
-```
-ARTIFACT_PATH: <RUN_DIR>/04-implementation.md
-Read before acting (via Read):
-- `<RUN_DIR>/01-triage.md` — ## Validated brief.
-- `<RUN_DIR>/03-plan.md` — the complete implementation plan (attack on the cause/criterion).
-Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open
-items — never file contents, never a diff.
-
-Apply the plan following the project's standards (CLAUDE.md). The simplest possible
-solution. Write ARTIFACT_PATH per your Required output.
-
-[Paste the `block` of `context_for_phase` (target: "coder") — omit when it came back empty:]
-[CONTEXT BLOCK]
-
-Repository: [CWD PATH]
-Project: [PROJECT — the name on the Project: line of the prompt]
-```
+Launch 1 coder agent: `phase_prompt` with `target: "coder"` (plus `stage` in a staged plan),
+then `Agent` with the answered `subagent_type` (`nightqueue:coder`), `model` and `prompt`
+verbatim. The `coder.md` already requires the `## Modified files` section
+and the completeness rule on a textual refactor — the prompt only injects the data.
 
 Run `nightqueue run check 04` (the artifact gate, step 5.2). `GENERATED` means the coder left
 no file list and the runtime derived one from the worktree's own changes — accept and move on.
@@ -1063,7 +823,7 @@ no file list and the runtime derived one from the worktree's own changes — acc
 user that the implementation did not complete successfully and terminate.
 
 **One coder lane per stage:** a brief/plan with numbered stages launches one coder per stage,
-in order, never in parallel. Each prompt carries `Stage: <n> — <title>` and reads
+in order, never in parallel. Each prompt carries `Stage: <n> — <title>` (the `stage` of `phase_prompt`) and reads
 `03-plan.md` (its stage) and `04-implementation.md` (what earlier lanes did, when it exists);
 each lane appends its `### Stage <n>` block and rewrites the cumulative `## Modified files`.
 Run `nightqueue run check 04` after each lane, then the verifier between stages (the Phase 6
@@ -1077,7 +837,7 @@ coders go **in a single message** (N `tool_use` in the same content block).
 
 ### Phase 5 — Adversarial QA (attack)
 
-> Tier scoping: the 🛡️ qa-guardian row of the **Track routing** table (step 6) — a `—` there
+> Tier scoping: the 🛡️ qa-guardian `model` of the `routing` row (step 6) — a `null` there
 > means this phase does not run and the track goes from the coder straight to the verifier.
 
 The QA is **adversarial and fixes nothing**: it attacks the code on every front,
@@ -1096,20 +856,22 @@ by the tier. Every qa-guardian runs in **read/PoC mode, it does not edit source*
 creates PoC/test files).
 
 Read `references/qa-phase.md` (this skill's base directory) via Read before launching any
-qa-guardian: it carries the plugin root, the QA attack brief, the LITE/ANALYST/PROVER prompts,
-the Stage A gate and the consolidation.
+qa-guardian: it carries the Stage A gate and the consolidation. Read `references/prompts/_qa-attack-brief.md`
+too: the QA attack brief every LITE/ANALYST prompt carries, with the definitions the two
+validations below audit. The LITE/ANALYST/PROVER prompts come from `phase_prompt` (`qa-lite`,
+`qa-analyst`, `qa-prover` with its `group`).
 
 **Validation of the coverage (only when `Type = bug/error` — LITE and complex):** confront
 `05-qa.md`'s `Symptom coverage: ...` line (opening `## Validated risks`) with the `## Symptom
 coverage` table of `03-plan.md`, using the QA attack brief's `N vectors of the plan's table` and
-`omitted:` definitions in `references/qa-phase.md` — N matches the table's total, the re-enumeration cites a concrete
+`omitted:` definitions in `references/prompts/_qa-attack-brief.md` — N matches the table's total, the re-enumeration cites a concrete
 method (not "I reviewed the plan"), `omitted:` is filled in. Any mismatch or missing line → the
 QA skipped the attack: fail the phase and relaunch the QA (🔁).
 
 **Validation of the usage coverage (when `03-plan.md` has `## Usage coverage` — LITE and
 complex, also mandatory with `**Always-gate class:** yes`):** confront `05-qa.md`'s `##
 Access map (QA)` and its `Usage coverage: ...` line with `## Usage coverage` of `03-plan.md`,
-using the brief's `N` and `M` definitions in `references/qa-phase.md` — `N` and `M` match, `divergences:` and
+using the brief's `N` and `M` definitions in `references/prompts/_qa-attack-brief.md` — `N` and `M` match, `divergences:` and
 `unconfirmed decisions:` are filled in, and no `## What to avoid`/`source=pipeline` item shows
 up as `HELD`. Any mismatch or missing piece → fail the phase and relaunch the QA (🔁), exactly
 as with the coverage. `unconfirmed decisions:` different from `none` does **not** change the
@@ -1131,39 +893,12 @@ filter above before relaunching; if both conditions hold, call `lesson_save` wit
 
 ### Phase 6 — Verification (final gate + correction loop)
 
-Launch 1 verifier agent (subagent_type="nightqueue:verifier", the `model` of the ✅ verifier
-row of the **Track routing** table, step 6). The `verifier.md` already covers the detection
-of checks, running the QA's PoCs (a PoC missing when there was a changed input/API =
-FAILED; a PoC that fails = the break is still present) and the Runtime API Check (when the diff
-uses a third-party API). The prompt only defines the scope:
-
-```
-## File handoff (contract — read first)
-ARTIFACT_PATH: <RUN_DIR>/06-verification.md (append per iteration)
-Read before acting (via Read):
-- `<RUN_DIR>/05-qa.md` — ## Generated PoCs (run them all); items with Proof=reading of
-  ## Proven breaks (confirm by grep that they are gone).
-- `<RUN_DIR>/04-implementation.md` — ## Modified files (the files to verify).
-Write the verdict and the detail to ARTIFACT_PATH via Write; if it already exists (a re-run 🔁),
-read it and rewrite it preserving the previous iterations, appending
-## Verification — iteration N at the end. Return to the orchestrator AT MOST 10 lines:
-verdict/status + the handoff file written + open items — never file contents, never a diff.
-Do NOT paste the complete detail.
-
-Tier: [trivial | simple | complex]
-
-Run: [the `Verifier scope` cell of this tier's column in the Track routing table].
-Apply your methodology (the QA's PoCs and the Runtime API Check when they apply).
-A PoC that fails = the break is still present → FAILED.
-Final verdict: ## Verification: PASSED, ## Verification: PASSED-STATIC
-(runtime of the bug not executed) or ## Verification: FAILED.
-
-[Paste the `block` of `context_for_phase` (target: "verifier") — omit when it came back empty:]
-[CONTEXT BLOCK]
-
-Repository: [CWD PATH]
-Project: [PROJECT — the name on the Project: line of the prompt]
-```
+Launch 1 verifier agent: `phase_prompt` with `target: "verifier"` (plus `stage` between the
+stages of a staged plan), then `Agent` with the answered `subagent_type` (`nightqueue:verifier`),
+`model` (the ✅ verifier of the `routing` row, step 6) and `prompt` verbatim. The `verifier.md`
+already covers the detection of checks, running the QA's PoCs (a PoC missing when there was a
+changed input/API = FAILED; a PoC that fails = the break is still present) and the Runtime API
+Check (when the diff uses a third-party API). The prompt only defines the scope.
 
 The verifier runs **after** the QA and is the independent executor: it **reproduces** the
 breaks proven by the QA (it runs the PoCs, it checks the static ones by grep). A PoC that
@@ -1185,35 +920,13 @@ verifier is the one who confirms.
   `lesson_save` with `target: "coder"`, building the payload with every field of
   **Lesson payload** above — the lesson is the implementation pattern that
   failed verification plus what the verifier confirmed passing.
-- **Maximum of iterations**: the `Max fix iterations` cell of this tier's column in the
-  **Track routing** table (step 6).
+- **Maximum of iterations**: the `Max fix iterations` of this tier's `routing` row (step 6).
   If it still fails after the limit, **do not mask it**: skip Phase 7 (no commit),
   go to Phase 8 and report the remaining failures/breaks to the user.
 
-Prompt of the coder in the fix:
-
-```
-## File handoff (contract — read first)
-ARTIFACT_PATH: <RUN_DIR>/04-implementation.md
-Read before acting (via Read):
-- `<RUN_DIR>/06-verification.md` — the last iteration (## Verification — iteration N): the
-  verifier's failures to fix.
-- `<RUN_DIR>/05-qa.md` — ## Proven breaks still open (pending).
-- `<RUN_DIR>/04-implementation.md` — ## Modified files so far.
-Rewrite `## Modified files` in ARTIFACT_PATH with the complete cumulative list via Write.
-Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open
-items — never file contents, never a diff. Do NOT paste the complete section.
-
-The verification failed. Fix exactly the failures/breaks reported in the
-06-verification.md and the pending ## Proven breaks of the 05-qa.md, without introducing
-a regression and keeping the project's standards. Make the PoCs pass by fixing the
-cause — never by altering or deleting the PoC.
-
-Repository: [CWD PATH]
-Project: [PROJECT — the name on the Project: line of the prompt]
-```
-
-Relaunch the coder agent with the prompt above. After it returns, run
+Prompt of the coder in the fix: `phase_prompt` with `target: "coder-fix"` and `note` = what the
+relaunch is about (the iteration and its failures, in one line). Relaunch the coder agent with the
+answered `subagent_type`, `model` and `prompt` verbatim. After it returns, run
 `nightqueue run check 04` (the artifact gate, step 5.2) before relaunching the verifier.
 
 **Manual acceptance never runs against the operator's own home.** Any manual run of a
@@ -1230,11 +943,11 @@ These rules govern Phases 5 and 6.5 and every subagent launched from them:
 **Real pull requests and nightqueue guards — hard rules.**
 
 - **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
-- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightqueue run pr`.
+- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightqueue run publish`, which opens it through the `nightqueue run pr` path.
 
 ### Phase 6.5 — Runtime validation (real execution)
 
-> Tier scoping: only the `complex` column of the **Track routing** table (step 6) lists this
+> Tier scoping: only the `phases` of the `complex` `routing` row (step 6) list this
 > phase; the fast tracks go from the verifier to Phase 7. A purely static change (typo,
 > config, rename, types, pure logic already covered by a test) → does not execute: the
 > Phase 6 checks are enough.
@@ -1247,28 +960,9 @@ The methodology — the cases (a)–(d2), the `Result` table and the `unavailabl
 environment` rule — lives in `verifier.md` (`Mode: RUNTIME`); this phase launches the lane and
 reads its verdict.
 
-Launch **1 verifier agent** (subagent_type="nightqueue:verifier", the `model` of the ✅ verifier
-row of the **Track routing** table, step 6), with the header
-`📱 RUNTIME · complex · <what it is about to run>`:
-
-```
-## File handoff (contract — read first)
-ARTIFACT_PATH: <RUN_DIR>/06-runtime.md
-Read before acting (via Read): <RUN_DIR>/01-triage.md (## Validated brief, ## Diagnosis on a bug) ·
-<RUN_DIR>/03-plan.md (## Usage coverage when present) · <RUN_DIR>/04-implementation.md · <RUN_DIR>/06-verification.md
-Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
-Return to the orchestrator AT MOST 10 lines: runtime verdict + the handoff file written + open
-items — never file contents, never a diff.
-
-Mode: RUNTIME
-Type: [bug/error | feature/refactor]
-Bug account: [the Brief's field]
-Expected outcome: [the Brief's field]
-Apply your Mode: RUNTIME cases (a)–(d2); every manual CLI/MCP run goes through `nightqueue sandbox <cmd>`.
-
-Repository: [CWD PATH]
-Project: [PROJECT — the name on the Project: line of the prompt]
-```
+Launch **1 verifier agent**: `phase_prompt` with `target: "runtime"`, then `Agent` with the
+answered `subagent_type` (`nightqueue:verifier`), `model` and `prompt` verbatim, with the header
+`📱 RUNTIME · complex · <what it is about to run>`.
 
 Run `nightqueue run check 06.5` (the artifact gate, step 5.2). The lane's verdict
 (`## Runtime verdict`) decides: `CONFIRMED` → Phase 7; `NOT-MET` → the Phase 6 coder loop (same
@@ -1312,51 +1006,43 @@ criteria in case (d)). If the verification failed after the fix iterations,
 or if the runtime validation showed the bug persisting, **do not commit** — go
 straight to Phase 8 and report.
 
-The two commands below own the mechanics — staging, the commit, the branch name, the push and
+The command below owns the mechanics — staging, the commit, the branch name, the push and
 `gh pr create`. What stays yours is the judgment: which files, which message, which body.
 
 1. **Decide what goes into the commit and write its message.**
    - The list is `## Modified files` of `<RUN_DIR>/04-implementation.md` plus the QA's
      real, hermetic tests that passed (including the bug's `*.regression.test.*`), each added with one
-     `--extra <pathspec>`; a PoC lives under `<RUN_DIR>/poc/` and is never committed (`run pr` refuses `*.poc.*`, `*SCRATCH*`, `*-QA-*`). Leave out Phase 6.5's screenshots/artifacts and anything Step 2.7 of
+     `--extra <pathspec>`; a PoC lives under `<RUN_DIR>/poc/` and is never committed (`run publish` refuses `*.poc.*`, `*SCRATCH*`, `*-QA-*`). Leave out Phase 6.5's screenshots/artifacts and anything Step 2.7 of
      the verifier flags; `.claude/`, `tmp/` and lockfiles the command refuses on its own. Check
      `git status --short` first: a file that is neither in `## Modified files` nor a QA test is
      left out and recorded as an ⚠️ open item — never opened, never included in the dark; a file
      IN the scope that mixes pre-existing unrequested hunks (read from the verifier's
      diff-hygiene finding in `06-verification.md`) → ask the user BEFORE committing.
-   - The message is yours: follow the convention the repository declares (the command prints
+   - The message is yours: follow the convention the repository declares (`run start` answered it as `commitConvention`; the command prints it again as
      `CONVENTION: <what it found>`) or, with none declared, **Conventional Commits** with the
      `<type>` of Phase 0. Include a body when the task is not trivial, with a `Tests:` line
      listing only the checks that actually passed and the tracker's canonical ID (e.g. `Fixes
      PROJ-123`) when the task came from one. No `Co-Authored-By` trailer, agent, model or
-     vendor name. Never write a `Refs:` trailer; `run commit` adds it.
+     vendor name. Never write a `Refs:` trailer; `run publish` adds it.
    - Write the message with Write to `<RUN_DIR>/commit-message.txt`, which lives outside the
      worktree and is therefore never committed.
 
-2. **Create the commit:** `nightqueue run commit --message-file <RUN_DIR>/commit-message.txt`,
-   with one `--extra <pathspec>` per file outside the artifact's list. It stages exactly that
-   list — never a blind `git add -A` — and answers `COMMITTED: <sha> (<n> files)`.
-   `REFUSED: <path> (<reason>)` names a path the pipeline never commits (`.claude/`, `tmp/`, a
-   lockfile, anything outside the worktree) and nothing was staged: `--extra` does not override
-   it — drop that path, commit the rest and record the refusal as an ⚠️ open item of Phase 8.
-
-3. **Before any external action, show the user and wait for confirmation — only when
+2. **Before any external action, show the user and wait for confirmation — only when
    `NIGHTQUEUE_JOB_ID` is unset:** the branch/worktree name, the complete commit message,
    `git diff --stat` and a status line (e.g. "QA ✅ · Verification ✅ · Runtime ✅"). Do not
    repeat the execution table here — it only reappears in the Phase 8 report if the run is not
    happy. Ask whether to go ahead with push + PR. Inside a queued job (`NIGHTQUEUE_JOB_ID`
-   set) there is no operator to answer: go straight to step 4.
+   set) there is no operator to answer: go straight to step 3.
 
-4. **Open the pull request:**
-   - Run `nightqueue run pr --template` first. It answers `TEMPLATE: repo (<path>)` or
-     `TEMPLATE: nightqueue (fallback)` and `HEADINGS: <the headings in order>`, and records
-     them as `prTemplate` in `state.json`: that is the template of the body — never decide it
-     yourself. The repository template is the `HEADINGS:` line `nightqueue run pr --template`
-     answers — never Read the repository's template file. Assemble the title and the body per `references/pr-template.md` for THAT
-     template, filling every section with this run's artifacts (`01-triage.md`, `03-plan.md`,
-     `04-implementation.md`, `05-qa.md`, `06-verification.md`). Invent nothing. In the PR
-     description, identify the automation, when needed, by the nickname `nightqueue` — never
-     an agent, model or vendor name, and no `Co-Authored-By` trailer.
+3. **Open the pull request** (one command, `nightqueue run publish`):
+   - The template of the body is the `prTemplate` `run start` answered — the repository's own
+     (`source: "repo"`, its `label`) or nightqueue's fallback — with its `headings` in order: never
+     decide it yourself, and never Read the repository's template file. Assemble the title and the
+     body per `references/pr-template.md` for THAT template, filling every section with this run's
+     artifacts (`01-triage.md`, `03-plan.md`, `04-implementation.md`, `05-qa.md`,
+     `06-verification.md`). Invent nothing. In the PR description, identify the automation, when
+     needed, by the nickname `nightqueue` — never an agent, model or vendor name, and no
+     `Co-Authored-By` trailer.
    - **How it was validated goes inside the template's own test section.** Nightqueue template:
      the `## QA` table, one row per method that really ran, each backed by a non-empty file
      under `<RUN_DIR>/evidence/<method>-<name>.<ext>` (`<method>` ∈ `automated`, `api`,
@@ -1373,28 +1059,37 @@ The two commands below own the mechanics — staging, the commit, the branch nam
      issue/PR and notifies it. A decision is named by its ref (`D-1`), never `#1`; the only
      `#<number>` allowed is a real issue of this repository in the `Fixes`/`Closes` line.
    - **No job ref (`J-24`), run slug, `Refs` line or `Opened by nightqueue` line in the body**
-     — `nightqueue run pr` appends the traceability footer from the job row and refuses a
+     — `nightqueue run publish` appends the traceability footer from the job row and refuses a
      body that carries one.
-   - Write the body with Write to `<RUN_DIR>/pr-body.md` and run
-     `nightqueue run pr --body-file <RUN_DIR>/pr-body.md`. The command checks the body,
-     renames the branch to its final name (a job's `worktree-<slug>` becomes
-     `<commit type>/<slug>`, the type read from the commit subject; an interactive
-     `worktree-<type>+<slug>` becomes `<type>/<slug>`), pushes it and opens the pull request, answering `BRANCH:`,
-     `PR: <url>` and `WORKTREE: <path>`. You never run `git branch -m`, `git push` or
-     `gh pr create` by hand.
+   - Write the body with Write to `<RUN_DIR>/pr-body.md` (outside the worktree, like the message
+     of step 1) and run
+     `nightqueue run publish --message-file <RUN_DIR>/commit-message.txt --body-file <RUN_DIR>/pr-body.md`,
+     with one `--extra <pathspec>` per file outside the artifact's list. It checks the body BEFORE
+     anything is committed, stages exactly the list — never a blind `git add -A` — and commits it
+     ONCE (a retry answers `COMMITTED: <sha> (already committed)`), renames the branch to its final
+     name (a job's `worktree-<slug>` becomes `<commit type>/<slug>`, the type read from the commit
+     subject; an interactive `worktree-<type>+<slug>` becomes `<type>/<slug>`), pushes it and opens
+     the pull request, answering `CONVENTION:`, `COMMITTED: <sha> (<n> files)`, `BRANCH:`,
+     `PR: <url>` and `WORKTREE: <path>`. You never run `git add`, `git commit`, `git branch -m`,
+     `git push` or `gh pr create` by hand.
+   - `REFUSED: <path> (<reason>)` names a path the pipeline never commits (`.claude/`, `tmp/`, a
+     lockfile, anything outside the worktree) and nothing was committed: `--extra` does not
+     override it — drop that path (with `--files-from` a list of your own under `<RUN_DIR>` when
+     it came from the artifact), call the command again and record the refusal as an ⚠️ open
+     item of Phase 8.
    - `REJECTED: <reason>` and `MISSING: <what>` (one line per violation; the evidence one
      reads `MISSING: evidence for QA row <method>`) mean the body failed the check of the
      template in effect (a heading missing or out of order, a nightqueue heading against a
      repository template, the `## QA` table or the `Not tested:` line, a bare `#<number>`, a
      placeholder or a leftover `<...>` example) and nothing was pushed. Fix the body or the
      evidence and call the command again.
-   - **The delivery is recorded by the command itself** — `nightqueue run pr` records
+   - **The delivery is recorded by the command itself** — `nightqueue run publish` records
      `status: "done"` the moment the pull request exists; do NOT call `run_outcome` for it.
      The pull request URL is not a parameter. No pull request opened → no outcome recorded.
    - If `gh` is not installed or could not open the pull request, the command says so with the
      branch already pushed: inform it and leave the pull request to be opened by hand.
 
-5. **Close the worktree immediately after the PR is created** (interactive `/resolve` only;
+4. **Close the worktree immediately after the PR is created** (interactive `/resolve` only;
    inside a queued job skip this step: the runtime removes the worktree after the finish when
    it is clean and pushed). Interactive (or after confirming that the commit stayed local):
    call `ExitWorktree` with `action: "delete"`. The branch is already on the remote via push
@@ -1403,7 +1098,7 @@ The two commands below own the mechanics — staging, the commit, the branch nam
      `<type>/<slug>` is on the remote — use `git checkout <type>/<slug>` or
      open a new worktree for new edits."**
 
-6. **Cycle closing belongs to the runtime, not to this pipeline.** The pipeline ends at an
+5. **Cycle closing belongs to the runtime, not to this pipeline.** The pipeline ends at an
    open PR. Merge, delivery (e.g. an over-the-air update, a deploy), the issue tracker /
    crash reporter (e.g. Sentry, Linear, GitHub Issues) and the executive notice → they belong
    to the runtime's closing flow — even if the user asked for "push, PR, merge and
@@ -1413,35 +1108,23 @@ The two commands below own the mechanics — staging, the commit, the branch nam
 
 Use the visual identity of the legend and the status icons throughout the report.
 
-**Fast tracks (trivial and simple)**: present it in 2–3 lines — what was
-changed, the result of the verification (✅/❌) and the PR link (if opened).
+**Open the report with `nightqueue run report`, pasted verbatim** (Bash, inside the job; outside
+one, with `--project <project> --slug <slug>`). It prints the `## 🗂️ Report — <slug>` header, then
+the summary table per step on the Standard Track (complex) — every step, a step the tier does not
+run marked ⏭️ — or, on the fast tracks (trivial and simple), the compact
+`Verification ✅/❌ · PR <url>` line; then the lesson-capture audit line and a
+`Happy: yes|no — <first failing gate>` line decided by the fail-safe rule below from the run's
+own records and, when the run is not happy, the complete execution table with the Time column the
+runtime measured and its `**Total:**`. Your judgment may only turn a `Happy: yes` into not
+happy — never the reverse — and then names the gate right below the pasted output.
 
-**Standard Track (complex)**: ALWAYS start with the **summary table per step** —
-it opens the report in any outcome. Steps that did not run in the tier → ⏭️.
-
-```
-## 🗂️ Report — <slug>
-
-| Step | Agent | Status | Highlight |
-|-------|--------|--------|----------|
-| 1 Triage        | 🔍 Triager      | ✅ | <bug: confirmed root cause (number of hypotheses tested) / feature: validated requirements> |
-| 2 Exploration   | 🧭 Explore      | ✅/⏭️ | <number of files / libs mapped> |
-| 3 Architecture  | 📐 Architect    | ✅ | <approach + libs consulted; number of risks 🔴🟡🟢> |
-| 4 Implementation| ⚙️ Coder        | ✅ | <summary of what it delivered> |
-| 5 QA            | 🛡️ QA-Guardian  | ✅/⚠️ | <proven breaks, risks attacked, PoCs generated> |
-| 6 Verification  | ✅ Verifier     | ✅/❌ | <checks; number of iterations 🔁> |
-| 6.5 Runtime     | 📱 Runtime      | ✅/⏭️/⚠️ | <real payload confirmed (a) / screenshot of the emulator (b) / verdict on a physical device (c); ⏭️ only if a static change of the trivial tier — if PASSED-STATIC with 6.5 unviable, use ⚠️ (open item), never ⏭️> |
-| 7 Commit/PR     | 🚀 Commit/PR    | ✅/⚠️ | <branch + PR link or pending state> |
-```
-
-**Lesson-capture audit line (mandatory on BOTH paths, printed right after this summary table; it
-does not count towards the ~30-line cap of the happy path — the same exemption the `## Notice`
-section already gets):** count every lesson successfully recorded during this run through the
-correction-loop capture points (Phase 5, Phase 6's fix loop, Phase 6.5's symptom-persisting
-loop, and the gate_stop block of Phase 1/Phase 3) and print one line: `Lessons saved: N
-(targets: <unique target list>)` when N > 0, or
-`Lessons saved: 0` when none were recorded. A failed capture call does not count towards N;
-record it as a separate open item and keep the run going, exactly like a `pipeline_log` failure.
+**Lesson-capture audit line (mandatory on BOTH paths; it does not count towards the ~30-line cap
+of the happy path — the same exemption the `## Notice` section already gets):** `run report`
+counts every lesson successfully recorded during this run through the correction-loop capture
+points (Phase 5, Phase 6's fix loop, Phase 6.5's symptom-persisting loop, and the gate_stop block
+of Phase 1/Phase 3) and prints `Lessons saved: N (targets: <unique target list>)` or
+`Lessons saved: 0`. A failed capture call does not count towards N; record it as a separate
+open item and keep the run going, exactly like a `pipeline_log` failure.
 
 **Decide the outcome before continuing — the fail-safe rule.** A **happy** run requires
 POSITIVE confirmation of a clean success in EACH gate below, by the real verdict
@@ -1457,7 +1140,7 @@ of them already makes the run **not happy**:
   only by the trivial tier/a purely static change — NEVER `⏭️` for a deferred/unviable 6.5
   (that case is always `⚠️`, even with an explicit decision by the user to commit
   without real execution).
-- Record 5.1: no line with the status `🔁` (no loop re-run).
+- Execution record: no line with the status `🔁` (no loop re-run).
 - Pipeline: `outcome` is `pr_opened` or `local_commit` (not `no_commit`) **and**
   no `gate_stop` was triggered.
 - A gate of a phase that does not run in this tier counts as satisfied (it is `⏭️`, never a
@@ -1593,7 +1276,7 @@ for `✅ Delivered — <what changed>` and adapt "What was happening" to
 "What was missing"; the rest of the model is the same.
 The header only ends with a `(<ID>)` when the task came from an issue tracker with a real ID; with no tracker — the v1 default — there is no parenthesis.
 
-**Happy path — output ≤~30 lines.** Print only the summary table above and,
+**Happy path — output ≤~30 lines.** Print only the `run report` output above and,
 right after, the section **🎯 Objective met**: repeat the `Expected outcome` of Phase 0
 and the concrete evidence that proves it was met (a without-fix/with-fix proof, a screenshot,
 or the acceptance gate item by item), closing with the PR link (or "local commit,
@@ -1601,31 +1284,15 @@ no PR" when applicable). Re-read only what is necessary for those lines —
 `01-triage.md` (## Validated brief, the Expected outcome field / ## Diagnosis if
 a bug) and the verification
 evidence in `06-verification.md`. Do NOT print the complete execution table
-nor the 🔍 Diagnosis / QA / Verification / 🛡️ Prevention sections — record 5.1
+nor the 🔍 Diagnosis / QA / Verification / 🛡️ Prevention sections — the phase records
 and the phase artifacts continue to exist and feed the telemetry below;
 only the display to the user is cut. Print also the `## Notice` section and the
 lesson-capture audit line (rules above); both are mandatory and do not enter the ~30-line cap.
 
 **Non-happy path (any ⚠️, ❌, 🔁 or gate_stop) — keep today's complete
-output:**
-
-Right after the summary table, the lesson-capture audit line (rules above), followed by the
-**complete execution table** (the record of step 5.1) — one line per agent launched, including
-loop re-entries (🔁), with Time:
-
-```
-| Step | Agent | Status | Summary | Time |
-|-------|--------|--------|--------|-------|
-... one line per agent, in the order in which they ran ...
-
-**Total:** ⏱️ the `total` line of `nightqueue run log`
-```
-
-**The Time column is read, never computed.** Run `nightqueue run log` (Bash, inside the job): it
-prints one tab-separated `<phase>  <model>  <status>  <duration>` line per phase plus a final
-`total  <duration>` line — paste each into its row and the total into the Total, leaving `-`
-where the runtime measured no lane. `nightqueue run log --json` answers the same rows with each
-phase's `at` stamp, when the report needs order instead of durations.
+output:** the `run report` output already carries, right after the summary, the lesson-capture
+audit line and the **complete execution table** — one line per phase recorded, including loop
+re-entries (🔁), with the Time column the runtime measured and its `**Total:**`.
 Never compute a duration and never write a timestamp: the times belong to the runtime.
 
 **Re-read the artifacts via Read when assembling the detail** — legitimate here because the
@@ -1657,7 +1324,7 @@ block right below the table.
 **A finding out of scope (a dedicated ticket to open) — mandatory on BOTH paths**, and it does
 not count towards the ~30-line cap of the happy path: when `05-qa.md`'s `## Suggestions` has an
 item with the literal `dedicated ticket: yes`, list it with `file:line` + 1 line of the risk —
-the runtime's closing flow opens the ticket, never this pipeline (Phase 7, step 6). The same
+the runtime's closing flow opens the ticket, never this pipeline (Phase 7, step 5). The same
 paragraph collects `unconfirmed decisions:` of the QA's `Usage coverage:` line, the `NOT MET /
 to confirm` lines of Phase 6.5 and, when Phase 3 saved a `## Proposed decision` block, one line
 `` Proposed decision <ref>: <title> — recorded as `proposed`; accept or reject it with `decision_update`. ``
@@ -1684,26 +1351,3 @@ The rest of the record is the runtime's, not yours:
   record afterwards; a `duration_s` assembled here would only be overwritten.
 
 A failure in `pipeline_log` does not block the report: record the ⚠️ open item and continue.
-
----
-
-## Appendix A — Routing rationale
-
-The routing table (Phase 0) is the source of truth. When changing it, decide the
-Claude model by these 3 questions — the **dominant** capability of the phase wins:
-
-| Question (YES →) | Model |
-| ---------------- | ------ |
-| Does it write/edit code or require deep design judgment? | `opus` (complex) / `sonnet` (simple) |
-| Does it require reasoning or a broad search without generating code in bulk? | `sonnet` (exploration, QA, complex triage) |
-| Is it a deterministic and cheap gate (it only runs commands and gives a verdict)? | `haiku` |
-
-Exceptions: **QA** does not edit source (it only writes PoCs) and its core is adversarial
-reasoning + regression analysis → `sonnet`, not `opus`. **Triager** does not edit,
-but reproduces the bug by running/instrumenting the
-code → `haiku` (simple) / `sonnet` (complex). Phases 0/7/8 run in the orchestrator
-(the skill's model, without routing).
-
-The `simple` tier has no architect and no qa-guardian: its safety net is the verifier's full
-test suite, not a second reviewer — a tier is raised to `complex` on evidence found, never on
-the shape of the change.

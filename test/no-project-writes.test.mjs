@@ -15,7 +15,7 @@ const LEGACY_SCAN_FILE = "src/cli/doctor.mjs";
 
 // The source files that both write files and name `.claude`, each with why none of its writes lands under a project's `.claude/`.
 const ALLOWED = {
-  "src/cli/run.mjs": "names `.claude` only in NEVER_COMMITTED_DIRS, the paths `run commit` refuses to stage; its two writes (the derived file list and the commit message copy) go under the run directory of the nightqueue home",
+  "src/cli/run-publish.mjs": "names `.claude` only in NEVER_COMMITTED_DIRS, the paths `run commit` and `run publish` refuse to stage; its one write (the commit message copy) goes under the run directory of the nightqueue home",
 };
 
 // Every file under a directory of the package whose name ends with the extension, as paths relative to the package root.

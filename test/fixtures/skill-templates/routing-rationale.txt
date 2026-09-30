@@ -1,0 +1,18 @@
+The routing table (Phase 0) is the source of truth. When changing it, decide the
+Claude model by these 3 questions — the **dominant** capability of the phase wins:
+
+| Question (YES →) | Model |
+| ---------------- | ------ |
+| Does it write/edit code or require deep design judgment? | `opus` (complex) / `sonnet` (simple) |
+| Does it require reasoning or a broad search without generating code in bulk? | `sonnet` (exploration, QA, complex triage) |
+| Is it a deterministic and cheap gate (it only runs commands and gives a verdict)? | `haiku` |
+
+Exceptions: **QA** does not edit source (it only writes PoCs) and its core is adversarial
+reasoning + regression analysis → `sonnet`, not `opus`. **Triager** does not edit,
+but reproduces the bug by running/instrumenting the
+code → `haiku` (simple) / `sonnet` (complex). Phases 0/7/8 run in the orchestrator
+(the skill's model, without routing).
+
+The `simple` tier has no architect and no qa-guardian: its safety net is the verifier's full
+test suite, not a second reviewer — a tier is raised to `complex` on evidence found, never on
+the shape of the change.

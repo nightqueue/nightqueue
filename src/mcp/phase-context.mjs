@@ -60,7 +60,7 @@ function memoryLine(memory) {
 }
 
 // One indexed file of a phase block, marked for revalidation when the checkout moved under it.
-function indexLine(file) {
+export function indexLine(file) {
   const mark = file.missing || file.stale ? " (REVALIDATE)" : "";
   return `- ${file.path} — ${clip(file.responsibility, LINE_MAX)}${mark}`;
 }

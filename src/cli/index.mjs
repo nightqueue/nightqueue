@@ -96,7 +96,7 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the twenty-eight memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the twenty-nine memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   hook session-start|prompt-context|reflect run a hook, reading the event JSON from stdin
   reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground
@@ -137,6 +137,9 @@ inside a job — each acts on the run of the job it is called from, never on the
   run log [--json]                         one line per phase of THIS run: model, status and duration
   run commit --message-file <path>          stage what 04-implementation.md listed and commit it; --extra adds a pathspec
   run pr --body-file <path>                 check the body, push THIS run's branch under its final name and open the PR
+  run start --tier --type --commit-type     record THIS run's tier and type; print its routing row, phases, tasks and PR template as JSON
+  run publish --message-file --body-file    check the body, commit the list once, push THIS run's branch and open the PR
+  run report [--json]                       the tables of THIS run's final report: steps, lessons saved, happy or not
 
 options:
   -h, --help                                show this help

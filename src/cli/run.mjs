@@ -1,31 +1,35 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { StoreUnavailableError, UserError } from "../config/errors.mjs";
-import { jobLogPath, runDir } from "../config/paths.mjs";
 import { resolveProjectRef } from "../config/projects.mjs";
-import { ghPrCreate } from "../host/gh.mjs";
 import { withMeasuredMtimes } from "../memory/index-paths.mjs";
-import { jobRef } from "../memory/refs.mjs";
-import { registeredProject } from "../memory/registry-access.mjs";
-import { runGit } from "../host/git.mjs";
-import { commitTypeOf, publishedBranchName } from "../queue/branch-name.mjs";
-import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
-import { formatDuration } from "../queue/narrate.mjs";
-import { defaultGitImpl } from "../queue/preflight.mjs";
-import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
-import { callerJobId } from "../queue/retry.mjs";
-import { itemRefOfJob, publishedBodyFile } from "../queue/pr-footer.mjs";
+import { FILE_LIST } from "../queue/file-list.mjs";
 import { resolveJobRun } from "../queue/job-run.mjs";
 import { appendPendingWrite, PENDING_KEYS } from "../queue/pending-writes.mjs";
-import { recordOutcome, recordPrTemplate, recordPrUrl, recordRunFields } from "../queue/run-state.mjs";
-import { phaseTelemetry, runDurationS } from "../queue/telemetry.mjs";
+import { defaultGitImpl } from "../queue/preflight.mjs";
+import { callerJobId } from "../queue/retry.mjs";
+import { recordPrTemplate } from "../queue/run-state.mjs";
+import { runDurationS } from "../queue/telemetry.mjs";
 import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { parseExploreArtifact } from "./explore-artifact.mjs";
 import { realPath } from "./paths.mjs";
-import { bodyProblems } from "./pr-body.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
-import { scratchFiles } from "./scratch-files.mjs";
+import { durationCell, phaseRows, readJobLog, readRequiredFile, requireRunState, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
+import {
+  bodyProblemLines,
+  commitPaths,
+  listedFromArtifact,
+  openPullRequest,
+  PUBLISH_USAGE,
+  refusedLines,
+  requireMessageFile,
+  runPublish,
+  scratchProblemLines,
+  stageable,
+} from "./run-publish.mjs";
+import { REPORT_USAGE, runReport } from "./run-report.mjs";
+import { START_USAGE, runStart } from "./run-start.mjs";
 import { SECRETS_SWEEP_USAGE, runSecretsSweep } from "./secrets-sweep.mjs";
 
 const USAGE = {
@@ -36,140 +40,14 @@ const USAGE = {
   pr: "nightqueue run pr --body-file <path> [--title <text>] [--remove-worktree] | --template",
   "index-save": "nightqueue run index-save <artifact> [--project <name>] [--repo-root <path>]",
   "secrets-sweep": SECRETS_SWEEP_USAGE,
+  start: START_USAGE,
+  publish: PUBLISH_USAGE,
+  report: REPORT_USAGE,
 };
 
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
-// The options every subcommand shares: outside a job they are the only way to say which run is meant.
-const RUN_OPTIONS = { project: { type: "string" }, slug: { type: "string" } };
-
-const BASE_REFS = ["refs/remotes/origin/HEAD", "origin/main", "origin/master", "main", "master"];
-
 const NOTHING_TO_PRINT = "no phase recorded yet";
-
-// Refuses to read another run from inside a job: the run of a job is the one its own row names, never one the prompt spelled out.
-function refuseNamedRun(own) {
-  throw new UserError(
-    `refusing to name a run from inside job \`${own}\`: \`nightqueue run\` acts on the run of the job it is called from; ` +
-      "drop `--project`/`--slug`, or run the command outside the queue",
-  );
-}
-
-// Refuses to work a run whose slug the row does not carry yet, instead of inventing one.
-function refuseMissingSlug(own) {
-  throw new UserError(
-    `job \`${own}\` has no run slug on its row yet: print \`SLUG: <slug>\` once, so the runtime binds the run directory, ` +
-      "then call this command again",
-  );
-}
-
-// The run of the job this process belongs to: its own row, or its job block on disk when the database is unavailable.
-async function jobRun(own, values, env) {
-  if (values.project !== undefined || values.slug !== undefined) refuseNamedRun(own);
-  const run = await resolveJobRun(own, env);
-  if (!isSafeSegment(run.slug)) refuseMissingSlug(own);
-  return { jobId: own, project: run.project, projectId: run.projectId, slug: run.slug };
-}
-
-// The run an operator names from outside a job, where nothing else can tell which one it is.
-function operatorRun(values, env) {
-  const project = (values.project ?? "").trim();
-  const slug = (values.slug ?? "").trim();
-  if (!project || !slug) {
-    throw new UserError(
-      "outside a job, `--project` (the registered NAME) and `--slug` (the `<slug>` of runs/<project_id>/<slug>) are both required",
-    );
-  }
-  if (!isSafeSegment(slug)) {
-    throw new UserError(`invalid slug \`${slug}\`: a run slug is one path segment of letters, digits and \`. _ + -\``);
-  }
-  const registered = registeredProject(project, env);
-  if (!registered) {
-    throw new UserError(`unknown project \`${project}\`: pass the registered project NAME; list them with \`nightqueue project list\``);
-  }
-  return { jobId: null, project: registered.name, projectId: registered.id, slug };
-}
-
-// The run every `nightqueue run` subcommand acts on: the caller's own job run inside the queue, the one an operator named outside it.
-async function resolveRun(values, ctx) {
-  const own = callerJobId(ctx.env);
-  const run = own === null ? operatorRun(values, ctx.env) : await jobRun(own, values, ctx.env);
-  return { ...run, runDir: runDir(run.projectId, run.slug, ctx.env) };
-}
-
-// Whether the pipeline has recorded anything into the run: a phase or an outcome, as opposed to the runtime's own job block alone.
-function pipelineStarted(state) {
-  return (Array.isArray(state.phases) && state.phases.length > 0) || isStateObject(state.outcome);
-}
-
-// The state.json of the run, refusing when nothing has been recorded into it yet or only the runtime created it.
-function requireRunState({ projectId, slug, runDir: dir }, env) {
-  const state = readRunState({ projectId, slug, env });
-  const path = join(dir, "state.json");
-  if (!isStateObject(state)) {
-    throw new UserError(`no run recorded at ${path}; the runtime writes it as the phases complete`);
-  }
-  if (isStateObject(state.job) && !pipelineStarted(state)) {
-    throw new UserError(`the runtime created this run at ${state.job.createdAt ?? "an unknown time"}; the pipeline has recorded no phase in ${path} yet`);
-  }
-  return state;
-}
-
-// The ref of the roadmap item the run's job came from: the job block of state.json first (null for a free-prompt job), the job row otherwise.
-async function runItemRef(run, env) {
-  const state = readRunState({ projectId: run.projectId, slug: run.slug, env });
-  const block = isStateObject(state) && isStateObject(state.job) ? state.job : null;
-  if (block !== null && run.jobId !== null && block.id === run.jobId) return block.itemRef ?? null;
-  return await itemRefOfJob(openStore(env), run.jobId);
-}
-
-// The accumulated stream of the job on disk, the only source of what the runtime measured; no log means nothing was measured.
-function readJobLog(jobId, env) {
-  if (jobId === null) return "";
-  try {
-    return readFileSync(jobLogPath(jobId, env), "utf8");
-  } catch {
-    return "";
-  }
-}
-
-// The lanes the runtime measured, grouped by phase name, so a phase that ran twice keeps one measure per run of it.
-function measuredByPhase(log) {
-  const byPhase = new Map();
-  for (const lane of phaseTelemetry(log)) {
-    const lanes = byPhase.get(lane.phase) ?? [];
-    lanes.push(lane);
-    byPhase.set(lane.phase, lanes);
-  }
-  return byPhase;
-}
-
-// How a recorded phase ended: the verdict the phase reported, or `ok` for a phase that was recorded without one.
-function phaseStatus(entry) {
-  const verdict = typeof entry?.verdict === "string" ? entry.verdict.trim() : "";
-  return verdict || "ok";
-}
-
-// One row per phase recorded in state.json, enriched with the model and the duration the runtime measured for its lane.
-function phaseRows(state, log) {
-  const measured = measuredByPhase(log);
-  const phases = Array.isArray(state.phases) ? state.phases : [];
-  return phases.map((entry) => {
-    const lane = measured.get(entry?.phase)?.shift() ?? null;
-    return {
-      phase: String(entry?.phase ?? "-"),
-      at: typeof entry?.at === "string" ? entry.at : null,
-      model: lane?.model ?? null,
-      status: phaseStatus(entry),
-      durationS: lane?.durationS ?? null,
-    };
-  });
-}
-
-// A duration as the report reads it, and a dash when the runtime measured none.
-function durationCell(seconds) {
-  return Number.isFinite(seconds) ? formatDuration(seconds * 1000) : "-";
-}
 
 // The tab-separated table the agent pastes: one line per phase, then the total of the whole run.
 function logLines(rows, totalS) {
@@ -200,6 +78,7 @@ const EVIDENCE_FIRST_LINE = {
 
 // The artifact of each phase and the sections its gate requires; a phase with no required section is checked for existence alone.
 const ARTIFACTS = new Map([
+  ["00", { file: "00-brief.md", sections: ["## Brief"] }],
   ["01", { file: "01-triage.md", sections: ["## Verdict"], firstLineUnder: EVIDENCE_FIRST_LINE }],
   ["02", { file: "02-explore.md", sections: [] }],
   ["03", { file: "03-plan.md", sections: ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"] }],
@@ -272,20 +151,6 @@ function changedFiles(cwd, gitImpl) {
   return [...new Set([...(tracked ?? []), ...(untracked ?? [])])].sort().map((file) => join(cwd, file));
 }
 
-// The checkout of the project of a run: the directory its worktrees were created from, and the only one that may remove them.
-function projectCheckout(project, env) {
-  const registered = registeredProject(project, env);
-  if (!registered?.path) throw new UserError(`unknown project \`${project}\`: it is no longer registered, so its checkout cannot be read`);
-  return registered.path;
-}
-
-// Where the code of this run lives: the worktree the pipeline recorded, or the project's own checkout when no worktree was created.
-function worktreeOf({ project, projectId, slug }, env) {
-  const state = readRunState({ projectId, slug, env });
-  const recorded = isStateObject(state) && typeof state.worktree === "string" ? state.worktree.trim() : "";
-  return recorded || projectCheckout(project, env);
-}
-
 // Whether the implementation artifact already lists at least one file, which is what its section exists for.
 function listsFiles(text) {
   const after = text.split(FILE_LIST).slice(1).join(FILE_LIST);
@@ -344,291 +209,22 @@ async function runCheck(argv, ctx) {
   return 0;
 }
 
-// Directories the pipeline never commits from, whoever asked for it: the host's own configuration and the scratch space of the run.
-const NEVER_COMMITTED_DIRS = [".claude", "tmp"];
-
-// Dependency lockfiles, which a pipeline run never owns: they are regenerated by the tool, never hand-edited into a pull request.
-const LOCKFILES = ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb"];
-
-// Said after every refusal, so `--extra` is read as what it is — a way to add files, never a way to force a refused one through.
-const EXTRA_IS_NOT_AN_OVERRIDE =
-  "`--extra` adds files to the list, it never overrides this refusal: stop here and record it as an open item of the report, " +
-  "instead of calling the command again with the same path";
-
-// Files a repository declares its commit convention in, the most explicit first.
-const CONVENTION_FILES = [
-  "commitlint.config.js",
-  "commitlint.config.cjs",
-  "commitlint.config.mjs",
-  "commitlint.config.ts",
-  ".commitlintrc",
-  ".commitlintrc.json",
-  ".commitlintrc.js",
-  ".commitlintrc.yml",
-  ".commitlintrc.yaml",
-  ".husky",
-  ".gitmessage",
-  "CONTRIBUTING.md",
-  "CONTRIBUTING",
-];
-
-const CONVENTIONAL_SUBJECT_RE = /^[a-z]+(\([^)]*\))?!?: \S/;
-
-// A `Refs:` trailer line, which `run commit` appends itself from the job row and refuses in the agent's message.
-const REFS_TRAILER = /^Refs\s*:/i;
-
-// The copy of the agent's message a roadmap job commits with, under the run directory.
-const COMMIT_MESSAGE_FILE = "commit-message.md";
-
-// The lines a host command answered on stdout, trimmed and without the empty ones.
-function outputLines(result) {
-  return String(result?.stdout ?? "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-// The one line of a failed host command worth showing, so an error message never carries a whole page of output.
-function failureLine(result) {
-  const text = `${result?.stderr ?? ""}\n${result?.stdout ?? ""}`.trim();
-  return text.split("\n")[0] || "the command answered nothing";
-}
-
-// A file the command cannot work without, read from where the caller pointed at it.
-function readRequiredFile(path, flag) {
-  try {
-    return readFileSync(path, "utf8");
-  } catch (error) {
-    throw new UserError(`could not read \`${flag}\` ${path}: ${error.message}`);
-  }
-}
-
-// The commit message the agent wrote, refused when it is missing or empty: the message is the agent's and the command never invents one.
-function requireMessageFile(path) {
-  if (!path) throw new UserError(`\`--message-file <path>\` is required: the commit message is the agent's; usage: ${USAGE.commit}`);
-  const absolute = resolve(path);
-  if (readRequiredFile(absolute, "--message-file").trim() === "") throw new UserError(`the commit message at ${absolute} is empty`);
-  return absolute;
-}
-
-// Why the pipeline refuses to commit a path, or null when it may be staged; the comparison folds the case, because the filesystem resolves `.Claude/hook.js` to the very `.claude/hook.js` this refusal exists for.
-function refusalReason(path) {
-  const segments = path.split("/").filter(Boolean).map((segment) => segment.toLowerCase());
-  const directory = segments.find((segment) => NEVER_COMMITTED_DIRS.includes(segment));
-  if (directory) return `under \`${directory}/\``;
-  return LOCKFILES.includes(segments.at(-1) ?? "") ? "a dependency lockfile" : null;
-}
-
-// Every path the command was pointed at, as git names it inside the worktree, carrying the reason it is refused when there is one.
-function candidates(cwd, paths) {
-  return paths.map((raw) => {
-    const path = relative(cwd, isAbsolute(raw) ? raw : join(cwd, raw));
-    if (!path || path.startsWith("..")) return { path: raw, reason: `outside the worktree ${cwd}` };
-    return { path, reason: refusalReason(path) };
-  });
-}
-
-// The files a `--extra` pathspec really matches, so the refusal list is checked against what would be staged and never against the pattern alone.
-function expandExtra(cwd, pathspec, env) {
-  const result = runGit({ args: ["ls-files", "--cached", "--others", "--exclude-standard", "--", pathspec], cwd, env });
-  if (!result.ok) throw new UserError(`git could not expand \`--extra ${pathspec}\`: ${failureLine(result)}`);
-  const files = outputLines(result);
-  if (files.length === 0) throw new UserError(`\`--extra ${pathspec}\` matches no file in ${cwd}`);
-  return files;
-}
-
-// What this commit may stage, or the paths it refuses: the listed files and the `--extra` pathspecs first, then everything those really match.
-function stageable({ cwd, listed, extras, env }) {
-  const files = candidates(cwd, listed);
-  const pathspecs = candidates(cwd, extras);
-  const asked = [...files, ...pathspecs].filter((entry) => entry.reason);
-  if (asked.length > 0) return { paths: [], refused: asked };
-  const matched = candidates(cwd, extras.flatMap((pathspec) => expandExtra(cwd, pathspec, env)));
-  const refused = matched.filter((entry) => entry.reason);
-  const paths = [...new Set([...files, ...matched].map((entry) => entry.path))];
-  return { paths: refused.length > 0 ? [] : paths, refused };
-}
-
-// The file of the repository that declares how a commit message is written, or null when no file does.
-function conventionFile(cwd) {
-  const declared = CONVENTION_FILES.find((name) => existsSync(join(cwd, name)));
-  if (declared) return declared;
-  try {
-    return "commitlint" in JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) ? "package.json (commitlint)" : null;
-  } catch {
-    return null;
-  }
-}
-
-// The shape the last commits of the repository really have, which is what the message must look like when no file declares it.
-function inferredConvention(cwd, env) {
-  const subjects = outputLines(runGit({ args: ["log", "--format=%s", "-30"], cwd, env }));
-  if (subjects.length === 0) return "no commit to read it from; follow the repository's own guidelines";
-  const conventional = subjects.filter((subject) => CONVENTIONAL_SUBJECT_RE.test(subject));
-  if (conventional.length * 2 >= subjects.length) {
-    return `conventional commits in ${conventional.length} of the last ${subjects.length} (e.g. \`${conventional[0]}\`)`;
-  }
-  return `free-form subjects in the last ${subjects.length} commits (e.g. \`${subjects[0]}\`)`;
-}
-
-// The commit convention of the worktree, as the agent needs to read it before writing the message.
-function commitConvention(cwd, env) {
-  const declared = conventionFile(cwd);
-  return `${declared ? `declared by ${declared}; ` : ""}${inferredConvention(cwd, env)}`;
-}
-
-// Stages exactly the list and commits it with the agent's own message; a git refusal is reported as it came, never guessed at.
-function commitFiles({ cwd, paths, messageFile, env }) {
-  const staged = runGit({ args: ["add", "--", ...paths], cwd, env });
-  if (!staged.ok) throw new UserError(`git could not stage the list in ${cwd}: ${failureLine(staged)}`);
-  const committed = runGit({ args: ["commit", "-F", messageFile], cwd, env });
-  if (!committed.ok) throw new UserError(`git could not commit in ${cwd}: ${failureLine(committed)}`);
-  const head = runGit({ args: ["rev-parse", "--short", "HEAD"], cwd, env });
-  return head.ok ? head.stdout.trim() : "HEAD";
-}
-
 // Runs `run commit`, which stages what the implementation artifact declared — and nothing the pipeline never commits — and commits it.
 async function runCommit(argv, ctx) {
   const options = { "files-from": { type: "string" }, extra: { type: "string", multiple: true }, "message-file": { type: "string" } };
   const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, ...options });
   checkArgs(positionals, { max: 0, usage: USAGE.commit });
-  const messageFile = requireMessageFile(values["message-file"]);
+  const messageFile = requireMessageFile(values["message-file"], USAGE.commit);
   const run = await resolveRun(values, ctx);
   const cwd = worktreeOf(run, ctx.env);
-  const artifact = resolve(values["files-from"] ?? join(run.runDir, "04-implementation.md"));
-  const listed = listedFiles(readRequiredFile(artifact, "--files-from"));
+  const { artifact, listed } = listedFromArtifact(run, values["files-from"]);
   const { paths, refused } = stageable({ cwd, listed, extras: values.extra ?? [], env: ctx.env });
   if (refused.length > 0) {
-    ctx.out(`REFUSED: ${refused.map((entry) => `${entry.path} (${entry.reason})`).join(", ")}`);
-    ctx.out(EXTRA_IS_NOT_AN_OVERRIDE);
+    for (const line of refusedLines(refused)) ctx.out(line);
     return 1;
   }
   if (paths.length === 0) throw new UserError(`${artifact} lists no file under \`${FILE_LIST}\`: there is nothing to commit`);
-  const trailer = refsTrailerLine(readRequiredFile(messageFile, "--message-file"));
-  if (trailer !== null) {
-    ctx.out(`REFUSED: line ${trailer.number} of the message is a \`Refs:\` trailer, which \`run commit\` appends from the job row: ${trailer.line}`);
-    return 1;
-  }
-  const committedMessage = await commitMessageFile({ messageFile, run, cwd, env: ctx.env });
-  ctx.out(`CONVENTION: ${commitConvention(cwd, ctx.env)}`);
-  ctx.out(`COMMITTED: ${commitFiles({ cwd, paths, messageFile: committedMessage, env: ctx.env })} (${paths.length} files)`);
-  return 0;
-}
-
-// The first line of the agent's message that is a `Refs:` trailer, or null when it carries none.
-function refsTrailerLine(message) {
-  const lines = message.split("\n");
-  const at = lines.findIndex((line) => REFS_TRAILER.test(line.trim()));
-  return at < 0 ? null : { number: at + 1, line: lines[at].trim() };
-}
-
-// The ref of the roadmap item the run's job came from, or null; a store that cannot answer stops the commit.
-async function commitItemRef(run, env) {
-  try {
-    return await runItemRef(run, env);
-  } catch (error) {
-    throw new UserError(`could not read the roadmap item of ${jobRef(run.jobId)}:${error?.message ?? String(error)}; nothing was committed`);
-  }
-}
-
-// Copies the agent's message into the run directory, so the trailer is added to the copy and never to the agent's own file.
-function copyMessage(messageFile, runDirectory) {
-  const copy = join(runDirectory, COMMIT_MESSAGE_FILE);
-  try {
-    mkdirSync(runDirectory, { recursive: true });
-    writeFileSync(copy, readFileSync(messageFile, "utf8"));
-    return copy;
-  } catch (error) {
-    throw new UserError(`could not copy the commit message to ${copy}: ${error?.message ?? String(error)}; nothing was committed`);
-  }
-}
-
-// The message file git commits: the agent's own, or for a roadmap job a copy whose trailer block ends with `Refs: <item ref>`.
-async function commitMessageFile({ messageFile, run, cwd, env }) {
-  const ref = await commitItemRef(run, env);
-  if (ref === null) return messageFile;
-  const copy = copyMessage(messageFile, run.runDir);
-  const added = runGit({ args: ["interpret-trailers", "--in-place", "--no-divider", "--trailer", `Refs: ${ref}`, copy], cwd, env });
-  if (!added.ok) throw new UserError(`git could not add the \`Refs: ${ref}\` trailer to ${copy}: ${failureLine(added)}; nothing was committed`);
-  return copy;
-}
-
-// One violation of the body as the command prints it, the rules being the template's own (`references/pr-template.md`).
-function problemLine(problem) {
-  return problem.missing === undefined ? `REJECTED: ${problem.rejected}` : `MISSING: ${problem.missing}`;
-}
-
-// The first ref among the remote and local default branches that exists in the worktree: the base the branch is compared with.
-function baseRef(cwd, env) {
-  const found = BASE_REFS.find((ref) => runGit({ args: ["rev-parse", "--verify", "--quiet", ref], cwd, env }).ok);
-  if (!found) throw new UserError(`no base branch (${BASE_REFS.join(", ")}) exists in ${cwd}: the files the branch adds cannot be checked for scratch`);
-  return found;
-}
-
-// The files the branch adds against its base, as repo-relative paths.
-function addedFiles(cwd, env) {
-  const added = runGit({ args: ["diff", "--name-only", "-z", "--no-renames", "--diff-filter=A", `${baseRef(cwd, env)}...HEAD`], cwd, env });
-  if (!added.ok) throw new UserError(`git could not list the files the branch adds: ${failureLine(added)}`);
-  return added.stdout.split("\0").filter(Boolean);
-}
-
-// One `REJECTED:` line per scratch file the branch adds, each naming the way out.
-function scratchProblemLines(cwd, run, env) {
-  return scratchFiles(addedFiles(cwd, env), { cwd, runDir: run.runDir }).map(
-    (path) => `REJECTED: scratch file ${path} — remove it, or promote it to a hermetic test with a real name, then commit and retry`,
-  );
-}
-
-// The title of the pull request: the one the caller passed, or the `# <title>` the body opens with.
-function prTitle(given, body) {
-  const asked = (given ?? "").trim();
-  if (asked) return asked;
-  const heading = body.split("\n").find((line) => /^#\s+\S/.test(line.trim()));
-  if (!heading) throw new UserError("pass `--title <text>`: the body carries no `# <title>` line to take one from");
-  return heading.trim().replace(/^#\s+/, "");
-}
-
-// The branch the worktree is on right now, which is the only name a push may trust.
-function currentBranch(cwd, env) {
-  const result = runGit({ args: ["rev-parse", "--abbrev-ref", "HEAD"], cwd, env });
-  const name = result.ok ? result.stdout.trim() : "";
-  if (!name || name === "HEAD") throw new UserError(`no branch is checked out in ${cwd}: ${failureLine(result)}`);
-  return name;
-}
-
-// The commit type the subject of HEAD declares, or null when git cannot read it or it follows no known type.
-function headCommitType(cwd, env) {
-  const subject = runGit({ args: ["log", "-1", "--format=%s"], cwd, env });
-  return subject.ok ? commitTypeOf(subject.stdout.trim()) : null;
-}
-
-// Renames the local branch to the name the remote should carry, which is what the push and the pull request then use.
-function renameBranch({ cwd, current, final, env }) {
-  if (final === current) return current;
-  const renamed = runGit({ args: ["branch", "-m", current, final], cwd, env });
-  if (!renamed.ok) throw new UserError(`git could not rename \`${current}\` to \`${final}\`: ${failureLine(renamed)}`);
-  return final;
-}
-
-// Publishes the branch and opens the pull request, then records the run as done with the URL gh answered and the branch it pushed: the record is written
-// here, at the point of publication, so a run driven outside the queue runner (a resumed session, another program) ends up
-// with the same state.json as one the runner watched. A value the record refuses is reported, never fatal.
-function publishBranch({ run, cwd, branch, title, bodyFile, env }) {
-  const pushed = runGit({ args: ["push", "-u", "origin", branch], cwd, env });
-  if (!pushed.ok) throw new UserError(`git could not push \`${branch}\`: ${failureLine(pushed)}`);
-  const created = ghPrCreate({ title, bodyFile, head: branch, cwd, env });
-  if (created.missing) throw new UserError(`\`${branch}\` is pushed, but the GitHub CLI is not installed: open the pull request by hand`);
-  if (!created.ok) throw new UserError(`\`${branch}\` is pushed, but gh could not open the pull request: ${failureLine(created)}`);
-  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", env });
-  const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: created.url, env });
-  const branchRecorded = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { branch }, env });
-  return { url: created.url, recorded, prRecorded, branchRecorded };
-}
-
-// Removes the worktree of the run from the checkout that owns it; the pull request is already open, so a refusal is reported, never fatal.
-function worktreeRemoval(run, path, env) {
-  const removed = runGit({ args: ["worktree", "remove", path], cwd: projectCheckout(run.project, env), env });
-  return removed.ok ? `WORKTREE REMOVED: ${path}` : `WORKTREE KEPT: ${failureLine(removed)}`;
+  return await commitPaths({ run, cwd, paths, messageFile, ctx });
 }
 
 // Refuses a `run pr` call that asks for nothing, or for both the template query and a publication at once.
@@ -663,27 +259,13 @@ async function runPr(argv, ctx) {
   if (values.template === true) return 0;
   const bodyFile = resolve(values["body-file"]);
   const body = readRequiredFile(bodyFile, "--body-file");
-  const problems = bodyProblems({ body, template, evidenceDir: join(run.runDir, "evidence"), slug: run.slug, jobId: run.jobId });
-  const lines = [...problems.map(problemLine), ...scratchProblemLines(cwd, run, ctx.env)];
+  const lines = [...bodyProblemLines({ run, template, body }), ...scratchProblemLines(cwd, run, ctx.env)];
   if (lines.length > 0) {
     for (const line of lines) ctx.out(line);
     ctx.out("nothing was pushed and no pull request was opened: fix the problems above and call `nightqueue run pr` again");
     return 1;
   }
-  const published = await publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, resolveItemRef: () => runItemRef(run, ctx.env) });
-  const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
-  const current = currentBranch(cwd, ctx.env);
-  const final = publishedBranchName(current, { type: state?.type, slug: run.slug, commitType: headCommitType(cwd, ctx.env) });
-  const branch = renameBranch({ cwd, current, final, env: ctx.env });
-  const { url, recorded, prRecorded, branchRecorded } = publishBranch({ run, cwd, branch, title: prTitle(values.title, body), bodyFile: published, env: ctx.env });
-  ctx.out(`BRANCH: ${branch}${branch === current ? "" : ` (renamed from ${current})`}`);
-  ctx.out(`PR: ${url ?? "opened"}`);
-  if (recorded.status !== "written") ctx.err(`nightqueue: the run was not recorded as done: ${recorded.reason}`);
-  if (prRecorded.status !== "written") ctx.err(`nightqueue: the pull request was not recorded on the run: ${prRecorded.reason}`);
-  if (branchRecorded.status !== "written") ctx.err(`nightqueue: the published branch was not recorded on the run: ${branchRecorded.reason}`);
-  ctx.out(`WORKTREE: ${cwd}`);
-  if (values["remove-worktree"] === true) ctx.out(worktreeRemoval(run, cwd, ctx.env));
-  return 0;
+  return await openPullRequest({ run, cwd, bodyFile, body, title: values.title, removeWorktree: values["remove-worktree"] === true, ctx });
 }
 
 // ---- Steps the subagents call: they act on a named artifact, never on the run of a job.
@@ -777,6 +359,9 @@ const SUBCOMMANDS = new Map([
   ["pr", runPr],
   ["index-save", runIndexSave],
   ["secrets-sweep", runSecretsSweep],
+  ["start", runStart],
+  ["publish", runPublish],
+  ["report", runReport],
 ]);
 
 const HELP = `usage: nightqueue run <subcommand> [options]

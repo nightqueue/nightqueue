@@ -287,7 +287,7 @@ test("the orchestrator's Bash outside the closed list is denied with the list an
   for (const command of commands) {
     const reason = denyReasonOf(runAgentForeground({ input: mainCall("Bash", { command }, worktree), env }));
     assert.ok(reason.startsWith(ORCHESTRATOR_REDIRECT), reason);
-    assert.match(reason, /closed command list \(git rev-parse, .*nightqueue run check\|dir\|log\|index-save\|commit\|pr\), each as the bare program name/);
+    assert.match(reason, /closed command list \(git rev-parse, .*nightqueue run check\|dir\|log\|index-save\|commit\|pr\|start\|publish\|report\), each as the bare program name/);
     assert.match(reason, /or use `git diff --stat`$/);
   }
 });

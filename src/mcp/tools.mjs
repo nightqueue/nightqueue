@@ -74,6 +74,7 @@ import {
 } from "../memory/runs.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
 import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons } from "./phase-context.mjs";
+import { phasePrompt, PROMPT_TARGETS } from "./phase-prompt.mjs";
 import { readVersion } from "../cli/version.mjs";
 import { newContractState, STALE_CONTRACT_ADVISORY, StaleContractError, TOOL_CONTRACT, upgradeOldShapes, withContract } from "./tool-contract.mjs";
 
@@ -699,7 +700,7 @@ async function queueCancelAnswer(args, env) {
   return { ok: true, ...(await stopAndCancelJob({ ...cancel, releaseWorktree: args.release_worktree === true })) };
 }
 
-// The twenty-eight tools of the plugin contract, with the parameter names the plugin actually sends.
+// The twenty-nine tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -760,6 +761,29 @@ function toolDefinitions(env, state) {
             env,
           ),
         ),
+    },
+    {
+      name: "phase_prompt",
+      config: {
+        description:
+          "The complete prompt of one /resolve subagent for THIS run, rendered by the runtime from the plugin's templates: the handoff contract, the Brief of `<RUN_DIR>/00-brief.md`, the routing of the run's tier, the context block and, for the architect, the standing decisions. " +
+          "Pass `prompt` to the `Agent` tool verbatim, with the answered `subagent_type` and `model`, then gate the answered `artifact` with `nightqueue run check <check>`. " +
+          "`coder` and `verifier` render the fast-track prompt on trivial/simple; `note` is relaunch context (a fix loop, a re-architect, a re-triage), `raw_evidence` is the bug's raw error block (triager only), `group` the hypotheses of one prover. " +
+          "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
+        inputSchema: {
+          target: z.enum(PROMPT_TARGETS),
+          query: optionalText,
+          stage: optionalText,
+          delivery_constraints: optionalText,
+          raw_evidence: optionalText,
+          group: optionalText,
+          note: optionalText,
+          artifact: optionalText,
+          project: optionalText,
+          slug: optionalText,
+        },
+      },
+      handler: async (args) => phasePrompt(args, { run: await callerRun(args, env), env }),
     },
     {
       name: "lesson_save",
@@ -1450,7 +1474,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the twenty-eight tools of the plugin contract.
+// Builds the MCP server with the twenty-nine tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     { name: SERVER_NAME, title: `nightqueue (tool contract ${TOOL_CONTRACT})`, version: readVersion() },

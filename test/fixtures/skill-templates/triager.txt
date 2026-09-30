@@ -1,0 +1,26 @@
+ARTIFACT_PATH: <RUN_DIR>/01-triage.md
+Read before acting (via Read): none.
+Return summary (≤10 lines, per the handoff contract of step 5.2): verdict + artifact path +
+whether it emitted ## Intent note / ## Depth note + open items.
+
+Follow your triage methodology. On a bug, validate the cause with the REAL data of the bug
+account (not by reading/guessing/TS type) and prove the symptom before PROCEED.
+Finish with: ## Verdict · ## Diagnosis (bug only, incl. Symptom proof) ·
+## Validated brief · ## Out of scope · ## Request gaps ·
+## Intent signals (bug only) · ## Open items.
+
+Brief:
+[BRIEF FROM PHASE 0]
+
+[Include only if Type = bug/error:]
+Raw evidence from the user:
+[RAW ERROR BLOCK / STACK TRACE — on a crash from a crash reporter (e.g. Sentry), ≥3
+events with stack + breadcrumbs + tags in_foreground/device/os/release]
+
+Type: [bug/error | feature/refactor]
+
+[Paste the `block` of `context_for_phase` (target: "triager") — omit when it came back empty:]
+[CONTEXT BLOCK]
+
+Repository: [CWD PATH]
+Project: [PROJECT — the name on the Project: line of the prompt]
