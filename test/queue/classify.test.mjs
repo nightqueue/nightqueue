@@ -355,6 +355,8 @@ test("only a transient provider failure is worth another attempt", () => {
   assert.equal(isTransientFailure("Error: connection error"), true);
   assert.equal(isTransientFailure("read ECONNRESET"), true);
   assert.equal(isTransientFailure("TypeError: fetch failed"), true);
+  assert.equal(isTransientFailure("getaddrinfo ENOTFOUND api.anthropic.com"), true);
+  assert.equal(isTransientFailure("Can't reach the API server"), true);
   assert.equal(isTransientFailure(failureStream()), false);
   assert.equal(isTransientFailure("HTTP 404 Not Found"), false);
   assert.equal(isTransientFailure(""), false);

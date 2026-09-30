@@ -201,7 +201,9 @@ export function isTransientFailure(log) {
     /connection error/i.test(text) ||
     /\bECONNRESET\b/.test(text) ||
     /\bETIMEDOUT\b/.test(text) ||
-    /fetch failed/i.test(text)
+    /fetch failed/i.test(text) ||
+    /\bENOTFOUND\b/.test(text) ||
+    /can't reach the API server/i.test(text)
   );
 }
 
