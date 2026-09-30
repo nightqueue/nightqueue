@@ -1547,7 +1547,14 @@ function toolHandler(tool, env) {
 // Builds the MCP server with the thirty tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
-    { name: SERVER_NAME, title: `nightqueue (tool contract ${TOOL_CONTRACT})`, version: readVersion() },
+    {
+      name: SERVER_NAME,
+      title: `nightqueue (tool contract ${TOOL_CONTRACT})`,
+      version: readVersion(),
+      websiteUrl: "https://nightqueue.github.io",
+      // MCP spec 2025-11-25: clients that support server icons render this next to the server name.
+      icons: [{ src: "https://nightqueue.github.io/avatar.png", mimeType: "image/png", sizes: ["1024x1024"] }],
+    },
     { instructions: SERVER_INSTRUCTIONS },
   );
   const state = newContractState();
