@@ -117,12 +117,20 @@ test("the handshake carries the instructions that teach the backlog model", asyn
     "backlog",
     "self-contained",
     "numbered stages",
-    "Do not start jobs as they are queued",
+    "Never queue a job on your own initiative",
+    "explicit go",
+    "MCP tools only - never the CLI, the database file, the home directory or the project's files",
     "`queue_run` without `job_id`",
-    "queue_retry",
-    "queue_status",
+    "read `notice_md` whole with `queue_status`",
+    "queue_retry` only after the person answers",
+    "`queue_close`",
+    "`roadmap_item_id`",
+    "settles a design question",
   ]) {
     assert.ok(instructions.includes(idea), `\`${idea}\` is missing from the instructions:\n${instructions}`);
+  }
+  for (const removed of ["Queue every task or plan the moment it comes up", "Do not start jobs as they are queued"]) {
+    assert.equal(instructions.includes(removed), false, `the removed line \`${removed}\` is back in the instructions`);
   }
 });
 
