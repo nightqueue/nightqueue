@@ -8,15 +8,24 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **The close merges the head GitHub shows, verified by its checks, instead of the head it
-  recorded.** A head that moved since the last step (an *Update branch*, a commit pushed to the
-  branch, a rebase by hand) no longer stops the close with `head-moved`: when CI reports on the
-  new head the step goes on - green at once, pending waited for, red `checks-red` - and the
-  merge pins that head with `--match-head-commit`, reading and merging once more if it moves
-  during the call. `head-moved` remains only for a head that moved after the close's own push
-  when no CI reports on it, since then the suite the close ran was the only verification;
-  `--force` takes any head. One run now closes a pull request updated from its base by the
-  operator; before, it took a second run for nothing.
+- **The close re-reads the head from GitHub and merges only a head it or CI verified (D-54).**
+  Every step works on the head GitHub shows now instead of the one it recorded; preflight and
+  conflict note a head that moved (an *Update branch*, a commit pushed to the branch, a rebase
+  by hand), and the merge step alone accepts a head: one the close's own green suite ran on
+  (`data.verifiedSha`, durable, never cleared), one CI reported all green on
+  (`data.ciGreenSha`), or one whose checks are green now or once waited for - red stops with
+  `checks-red`. With no check at all, a branch with GitHub workflows is waited on for about
+  60 s; with no workflows, or none reporting, the close runs the suite on that head in a
+  throwaway worktree and merges the head it verified, or stops with `suite-red` merging
+  nothing - on a first close whose head never moved too. Without CI, the close runs the suite
+  of the current head on your machine; a push by someone else to the job's branch runs that
+  person's code locally. A head that keeps changing during the merge step stops it with
+  `head-moved` after 2 loopbacks, nothing merged. Every merge is pinned with
+  `--match-head-commit` (`gh pr merge` is never run without it), an open pull request GitHub
+  answers without a head commit stops with `pr-unreadable` on every step, `--force` included,
+  and a checks read now carries the head it was read with (a read of another head is
+  `checks-unreadable`). `--force` still takes any other head. One run now closes a pull request
+  updated from its base by the operator; before, it took a second run for nothing.
 - **`queue status` reads `◐ closing` alone while a close holds the job.** The STATUS cell no
   longer says `done · closing`: a job under a live close is neither done nor closed yet, so it
   carries its own label, icon and color (cyan) until it reads `■ closed` - or, when the close

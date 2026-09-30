@@ -22,12 +22,14 @@ const MERGE_REREAD_GAP_MS = 2000;
 const CHECKS_POLL_MS = 10000;
 const CHECKS_POLL_MAX_MS = 60000;
 const CHECKS_WAIT_RESERVE_MS = 30000;
+const CI_EMPTY_WINDOW_MS = 60000;
 const PUSH_REREADS = 3;
 const PUSH_REREAD_GAP_MS = 2000;
 const MAX_LOOPBACKS = 2;
 const NAMES_SHOWN = 10;
 const SUITE_LINES_SHOWN = 20;
 const CONFLICTED_STATES = new Set(["CONFLICTING", "DIRTY"]);
+const MERGE_REOPEN = ["preflight", "conflict"];
 
 // A failed step result.
 function failed(reason, note, extra = {}) {
@@ -74,9 +76,15 @@ async function cleanupGit(deps, args, cwd) {
   }
 }
 
-// Reads the pull request of the close as GitHub has it now.
+// Tells whether a read shows an open pull request without the head commit a merge must be pinned to.
+function headlessOpenPr(pr) {
+  return Boolean(pr?.ok) && pr.state === "OPEN" && !String(pr.headRefOid ?? "").trim();
+}
+
+// Reads the pull request of the close as GitHub has it now; an open one without a head commit is unreadable.
 async function readPr(ctx, deps) {
-  return await deps.gh.prDetail(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
+  const pr = await deps.gh.prDetail(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
+  return headlessOpenPr(pr) ? { ok: false, error: "GitHub answered no head commit for the open pull request" } : pr;
 }
 
 // The failure of a pull request gh could not read.
@@ -86,7 +94,8 @@ function unreadablePr(ctx, pr) {
 
 // The data a close keeps about its pull request from one read.
 function prData(pr) {
-  return { prNumber: pr.number, title: pr.title, headBranch: pr.headRefName, baseBranch: pr.baseRefName, headSha: pr.headRefOid };
+  const data = { prNumber: pr.number, title: pr.title, headBranch: pr.headRefName, baseBranch: pr.baseRefName };
+  return pr.headRefOid ? { ...data, headSha: pr.headRefOid } : data;
 }
 
 // The data that records a merged pull request, as GitHub reports it, and who merged it: `nightqueue` or the `operator` outside a close.
@@ -144,11 +153,25 @@ function ignoredChecksNote(checks) {
   return `checks ignored with --force: ${said.join("; ")}`;
 }
 
-// Tells whether the checks of the pull request stop the close, and what they said; with --force they never stop it and the note names them.
-async function checksVerdict(ctx, deps) {
+// Reads the checks of the pull request; a read gh attributes to another head than the one judged is unreadable.
+async function readHeadChecks(ctx, deps, head) {
   const checks = await deps.gh.prChecks(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
+  if (!checks?.ok || !checks.headSha || !head || checks.headSha === head) return checks;
+  return { ok: false, checks: [], failing: [], pending: [], otherHead: checks.headSha, error: `the checks gh read belong to ${sha7(checks.headSha)}, not ${sha7(head)}` };
+}
+
+// The durable record of a head CI verified: only a non-empty all-green rollup, never under --force.
+function ciGreenData(ctx, checks, head) {
+  const green = checks?.ok && checks.checks.length > 0 && !checks.failing.length && !checks.pending.length;
+  return green && head && !ctx.force ? { ciGreenSha: head } : {};
+}
+
+// Tells whether the checks of the pull request stop the close, and what they said; with --force they never stop it and the note names them.
+async function checksVerdict(ctx, deps, head) {
+  const checks = await readHeadChecks(ctx, deps, head);
   const reading = checksReading(ctx, checks);
-  return reading.problem && ctx.force ? { note: ignoredChecksNote(checks) } : reading;
+  if (reading.problem) return ctx.force ? { note: ignoredChecksNote(checks) } : reading;
+  return { ...reading, data: ciGreenData(ctx, checks, head) };
 }
 
 // The paths `git status --porcelain -z` lists, renamed ones under both names.
@@ -206,10 +229,10 @@ function withAttributionNote(note, attribution) {
 // The checks verdict of preflight; checks still running are waited on within the close's budget instead of stopping it.
 async function checksOrWait(ctx, deps, data) {
   const waitsFirst = ctx.data.pushedBy === "close" && Boolean(data.headSha) && !ctx.force;
-  const checks = waitsFirst ? null : await checksVerdict(ctx, deps);
+  const checks = waitsFirst ? null : await checksVerdict(ctx, deps, data.headSha);
   if (checks && (checks.problem?.reason !== "checks-pending" || !data.headSha)) return checks;
   const waited = await waitForChecks(ctx, deps, { status: "done", note: "checks waited", data }, `checks still running on ${sha7(data.headSha)}`);
-  return waited.status === "done" ? { note: waited.note } : { problem: { ...waited, reopen: [] } };
+  return waited.status === "done" ? { note: waited.note, data: waited.data } : { problem: { ...waited, reopen: [] } };
 }
 
 // The tip of a branch as `git fetch` left it in the canonical checkout, or null when it cannot be told.
@@ -225,24 +248,33 @@ async function expectedPushedHead(ctx, deps, fetchedOk) {
   return ctx.data.headSha ?? (await remoteHead(ctx, deps, fetchedOk, ctx.data.headBranch));
 }
 
-// Whether the close goes on with a head other than the one it recorded: it does when CI reports on the new head (green now, or waited for),
-// and it stops with head-moved only when nothing but the suite this close ran ever verified the pull request. The head taken is recorded.
+// The note lead and data of a head GitHub shows other than the recorded one, or null when it did not move.
+function movedHead(ctx, pr) {
+  if (!headMoved(ctx, pr)) return null;
+  return { lead: `the head moved from ${sha7(ctx.data.headSha)} to ${sha7(pr.headRefOid)}`, data: { headSha: pr.headRefOid, pushedBy: null } };
+}
+
+// What CI says about one head: a stop, no check at all (`empty`), or green now or once waited for (`slow`).
+async function ciVerdict(ctx, deps, { head, lead, data, reopen }) {
+  const prefix = lead ? `${lead}; ` : "";
+  const checks = await readHeadChecks(ctx, deps, head);
+  if (!checks?.ok) return { problem: failed("checks-unreadable", `${prefix}gh could not read the checks of ${ctx.prUrl} (${checks?.error ?? "no answer"})`, { reopen }) };
+  if (checks.failing.length) return { problem: failed("checks-red", `${prefix}failing checks: ${namesNote(checks.failing)}`, { data, reopen }) };
+  if (!checks.checks.length) return { empty: true, note: lead, data };
+  if (!checks.pending.length) return { note: `${prefix}${checksGreenNote(checks, head)}`, data: { ...data, ...ciGreenData(ctx, checks, head) } };
+  const waiting = { status: "done", note: lead ?? `checks waited on ${sha7(head)}`, data: { ...data, headSha: head } };
+  const waited = await waitForChecks(ctx, deps, waiting, `checks still running on ${sha7(head)}`);
+  if (waited.status !== "done") return { problem: { ...waited, reopen } };
+  return { note: waited.note, data: waited.data, slow: true, changed: waited.headChanged === true };
+}
+
+// How preflight and conflict go on with a head other than the one recorded: they note it and what CI says; only the merge step accepts it.
 async function movedHeadVerdict(ctx, deps, pr, { reopen }) {
-  const from = ctx.data.headSha;
-  const to = pr.headRefOid;
-  const moved = `the head moved from ${sha7(from)} to ${sha7(to)}`;
-  const data = { headSha: to, pushedBy: null };
-  if (ctx.force) return { note: `${moved}; taken with --force`, data };
-  const checks = await deps.gh.prChecks(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
-  if (!checks?.ok) return { problem: failed("checks-unreadable", `${moved}; gh could not read the checks of ${ctx.prUrl} (${checks?.error ?? "no answer"})`, { reopen }) };
-  if (checks.failing.length) return { problem: failed("checks-red", `${moved}; failing checks: ${namesNote(checks.failing)}`, { data, reopen }) };
-  if (!checks.checks.length && ctx.data.pushedBy === "close") {
-    const note = `${moved} after this close pushed it, and no CI reports on ${sha7(to)}: only the suite this close ran verified ${sha7(from)}. Run the suite on ${sha7(to)} and push it, or close with --force`;
-    return { problem: failed("head-moved", note, { data: { pushedBy: null }, reopen }) };
-  }
-  if (!checks.pending.length) return { note: `${moved}; ${checksGreenNote(checks, to)}`, data };
-  const waited = await waitForChecks(ctx, deps, { status: "done", note: moved, data }, `checks still running on ${sha7(to)}`);
-  return waited.status === "done" ? { note: waited.note, data } : { problem: { ...waited, reopen } };
+  const { lead, data } = movedHead(ctx, pr);
+  const to = sha7(pr.headRefOid);
+  if (ctx.force) return { note: `${lead}; taken with --force`, data };
+  const verdict = await ciVerdict(ctx, deps, { head: pr.headRefOid, lead, data, reopen });
+  return verdict.empty ? { note: `${lead}; no CI reports on ${to} yet; the merge step verifies this head`, data } : verdict;
 }
 
 // Whether GitHub's read of a pull request this close pushed is confirmed, by the push record or by the branch tip git fetched; otherwise the stop.
@@ -253,7 +285,7 @@ async function pushedHeadVerdict(ctx, deps, { pr, expected, fetchedOk }) {
   if (gitAgrees && !ctx.data.headSha) return { pushedBy: "close" };
   if (gitAgrees) {
     const moved = await movedHeadVerdict(ctx, deps, pr, { reopen: ["conflict"] });
-    return moved.problem ? moved : { pushedBy: null, note: moved.note };
+    return moved.problem ? moved : { pushedBy: null, note: moved.note, data: moved.data };
   }
   const pushed = expected ?? head;
   const note = `this close pushed ${sha7(pushed)}, but GitHub still shows ${sha7(pr.headRefOid)} after ${PUSH_REREADS} reads; run again`;
@@ -281,8 +313,9 @@ async function preflightStep({ ctx, deps }) {
   if (attribution.problem) return { ...attribution.problem, data };
   if (pr.state === "CLOSED") return failed("pr-closed", `PR #${pr.number} was closed without being merged`, { data });
   if (pr.state === "MERGED") return { status: "done", note: withAttributionNote(`PR #${pr.number} already merged as ${sha7(pr.mergeSha)}`, attribution), data: { ...data, ...mergedData(pr, mergedByOf(ctx)) } };
-  const checks = verdict?.note ? { note: verdict.note } : await checksOrWait(ctx, deps, data);
+  const checks = verdict?.note ? verdict : await checksOrWait(ctx, deps, data);
   if (checks.problem) return { ...checks.problem, data };
+  Object.assign(data, checks.data ?? {});
   const checkout = await checkoutVerdict(ctx, deps, pr.baseRefName);
   if (checkout.problem) return { ...checkout.problem, data };
   return { status: "done", note: withAttributionNote(`PR #${pr.number} open; ${checks.note}; ${checkout.note}${pushedHeadNote(data)}`, attribution), data };
@@ -362,19 +395,46 @@ function checksProgress(sha, checks) {
   return `waiting for checks on ${sha7(sha)}: ${total - checks.pending.length}/${total} done`;
 }
 
-// Polls the checks of the updated head with a growing gap until they are all green, one is red or the close's time is nearly out.
-async function waitForChecks(ctx, deps, updated, stillRunning, { emptySettles = false } = {}) {
+// Tells whether a read shows no check at all on the head.
+function noChecksRead(checks) {
+  return Boolean(checks?.ok) && !checks.checks.length;
+}
+
+// The end of a wait whose checks gh reads on another head than the waited one or the one it replaced: the live head is judged again.
+function headChangedWait(updated, checks) {
+  const note = `${updated.note}; the checks now belong to ${sha7(checks.otherHead)}, not ${sha7(updated.data.headSha)}; the merge step judges the live head`;
+  return { ...updated, note, headChanged: true };
+}
+
+// The result one checks read settles a wait with, or null to keep waiting; `noCi` marks an empty rollup that outlasted its window.
+function settledWait(ctx, { updated, checks, emptySettles, windowOut }) {
   const { data } = updated;
-  const stop = { data, reopen: ["preflight"] };
+  if (checks?.otherHead && checks.otherHead !== data.headShaBefore) return headChangedWait(updated, checks);
+  if (!checks?.ok) return null;
+  if (checks.failing.length) return failed("checks-red", `failing checks: ${namesNote(checks.failing)}`, { data, reopen: ["preflight"] });
+  if (checks.pending.length) return null;
+  if (checks.checks.length || emptySettles) {
+    return { ...updated, note: `${updated.note}; ${checksGreenNote(checks, data.headSha)}`, data: { ...data, ...ciGreenData(ctx, checks, data.headSha) } };
+  }
+  return windowOut ? { ...updated, noCi: true } : null;
+}
+
+// Polls the checks of the updated head with a growing gap until they are all green, one is red or the close's time is nearly out.
+// With `emptyWindowMs`, an empty rollup is polled for that long at most and then answered as `noCi`.
+async function waitForChecks(ctx, deps, updated, stillRunning, { emptySettles = false, emptyWindowMs = 0 } = {}) {
+  const { data } = updated;
+  let waitedMs = 0;
   for (let attempt = 0, gap = CHECKS_POLL_MS; ; attempt += 1, gap = Math.min(gap * 2, CHECKS_POLL_MAX_MS)) {
-    const checks = await deps.gh.prChecks(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
-    if (checks?.ok && checks.failing.length) return failed("checks-red", `failing checks: ${namesNote(checks.failing)}`, stop);
-    if (checks?.ok && !checks.pending.length && (checks.checks.length || attempt > 0 || emptySettles)) {
-      return { ...updated, note: `${updated.note}; ${checksGreenNote(checks, data.headSha)}` };
-    }
+    const checks = await readHeadChecks(ctx, deps, data.headSha);
+    const settles = emptySettles || (attempt > 0 && !emptyWindowMs);
+    const settled = settledWait(ctx, { updated, checks, emptySettles: settles, windowOut: emptyWindowMs > 0 && waitedMs >= emptyWindowMs });
+    if (settled) return settled;
     await ctx.progress?.(checksProgress(data.headSha, checks) ?? `waiting for checks on ${sha7(data.headSha)}: not readable yet`);
-    if (ctx.remainingMs() <= CHECKS_WAIT_RESERVE_MS) return checksWaitStop(ctx, { checks, data, stillRunning, stop });
-    await pause(ctx, deps, Math.min(gap, ctx.remainingMs() - CHECKS_WAIT_RESERVE_MS));
+    if (ctx.remainingMs() <= CHECKS_WAIT_RESERVE_MS) return checksWaitStop(ctx, { checks, data, stillRunning, stop: { data, reopen: ["preflight"] } });
+    const windowLeft = emptyWindowMs && noChecksRead(checks) ? emptyWindowMs - waitedMs : gap;
+    const ms = Math.min(gap, windowLeft, ctx.remainingMs() - CHECKS_WAIT_RESERVE_MS);
+    await pause(ctx, deps, ms);
+    waitedMs += ms;
   }
 }
 
@@ -425,6 +485,11 @@ async function rebaseInThrowaway(ctx, deps, { head, base }) {
   }
 }
 
+// The stop of a step that finds the close aborted before an irreversible call, so a step the abort orphaned never pushes nor merges.
+function abortedBefore(action) {
+  return failed("interrupted", `the close was interrupted before the ${action}, which was not made`);
+}
+
 // Rebases in the throwaway worktree, runs the suite unless --force skips it, and pushes only when nothing stopped it.
 async function rebaseTestAndPush(ctx, deps, work) {
   const data = { headShaBefore: work.headShaBefore };
@@ -435,6 +500,7 @@ async function rebaseTestAndPush(ctx, deps, work) {
   if (markers.length) return failed("real-conflict", `conflict markers left in: ${namesNote(markers)}`, { data });
   const suite = ctx.force ? {} : await runSuite(ctx, deps, work.dir);
   if (suite.problem) return { ...suite.problem, data };
+  if (ctx.signal?.aborted) return { ...abortedBefore("push"), data };
   const pushed = await git(ctx, deps, ["push", `--force-with-lease=refs/heads/${work.head}:${work.headShaBefore}`, "origin", `HEAD:refs/heads/${work.head}`], { cwd: work.dir });
   if (!pushed.ok) return failed("push-refused", `git push to ${work.head} was refused (${firstLine(pushed.stderr)})`, { data });
   const after = await git(ctx, deps, ["rev-parse", "HEAD"], { cwd: work.dir });
@@ -445,7 +511,8 @@ async function rebaseTestAndPush(ctx, deps, work) {
   data.headSha = after.stdout.trim();
   const suiteNote = ctx.force ? "suite skipped with --force" : "suite green";
   const note = `rebased onto origin/${work.base}, ${suiteNote}, pushed ${sha7(work.headShaBefore)} -> ${sha7(data.headSha)}`;
-  return { status: "done", note, data: { ...data, pushedBy: "close" }, reopen: ["preflight"] };
+  const verified = ctx.force || !data.headSha ? {} : { verifiedSha: data.headSha };
+  return { status: "done", note, data: { ...data, pushedBy: "close", ...verified }, reopen: ["preflight"] };
 }
 
 // Records the conflict of a stopped rebase, aborts it and answers the failure naming the conflicted files.
@@ -533,28 +600,132 @@ async function confirmRecordedMerge(ctx, deps) {
   return mergeWithoutSha({ pr, call: null });
 }
 
-// Squash-merges the pull request at the head GitHub shows, verified by its checks, and proves the merge by re-reading its merge commit.
-// A head that moves between the read and the merge call is read and merged once more; a second move is left to the next run.
-async function mergeStep({ ctx, deps }, { retried = false } = {}) {
-  if (ctx.data.merged) return await confirmRecordedMerge(ctx, deps);
-  const pr = await readHeadPr(ctx, deps);
+// Tells whether the branch of the pull request carries GitHub workflows; a branch git cannot list counts as having them, so the close waits.
+async function hasWorkflows(ctx, deps, branch) {
+  if (!branch) return true;
+  const listed = await git(ctx, deps, ["ls-tree", "--name-only", `origin/${branch}`, ".github/workflows/"]);
+  if (!listed.ok) return true;
+  return linesOf(listed.stdout).some((line) => /\.ya?ml$/.test(line));
+}
+
+// The merge-time note of a head with no CI and no test script: nothing can verify it, so only --force merges it.
+function unverifiableHeadNote(ctx) {
+  return `the package.json of the pull request has no scripts.test, so this head cannot be verified; run queue close ${jobRef(ctx.jobId)} --force to merge it unverified`;
+}
+
+// Runs the suite on a head no CI verifies, rebased in the throwaway worktree, and takes the head it verified and pushed.
+async function suiteVerdict(ctx, deps, { pr, lead, data }) {
+  const prefix = `${lead ? `${lead}; ` : ""}no CI on ${sha7(pr.headRefOid)}: `;
+  const suite = await rebaseInThrowaway(ctx, deps, { head: pr.headRefName, base: pr.baseRefName });
+  if (suite.reason === "no-test-script") return { problem: { ...suite, note: `${prefix}${unverifiableHeadNote(ctx)}` } };
+  if (suite.status !== "done") return { problem: { ...suite, note: `${prefix}${suite.note}` } };
+  if (!suite.data?.verifiedSha) return { problem: failed("head-unreadable", `${prefix}the suite ran but the head it verified is unknown; run again`, { data: suite.data }) };
+  return { head: suite.data.verifiedSha, note: `${prefix}${suite.note}`, data: { ...data, ...suite.data }, slow: true, pushed: true };
+}
+
+// Verifies a head no check reports on: waits for CI when the branch has workflows, and runs the suite when there is no CI or it never reports.
+async function noCiVerdict(ctx, deps, { pr, lead, data }) {
+  const head = pr.headRefOid;
+  if (await hasWorkflows(ctx, deps, pr.headRefName)) {
+    const waiting = { status: "done", note: lead ?? `CI waited on ${sha7(head)}`, data: { ...data, headSha: head } };
+    const waited = await waitForChecks(ctx, deps, waiting, `no CI reports on ${sha7(head)} yet`, { emptyWindowMs: CI_EMPTY_WINDOW_MS });
+    if (waited.status !== "done") return { problem: { ...waited, reopen: MERGE_REOPEN } };
+    if (waited.headChanged) return { changed: true };
+    if (!waited.noCi) return { head, note: waited.note, data: waited.data, slow: true };
+  }
+  return await suiteVerdict(ctx, deps, { pr, lead, data });
+}
+
+// The head the merge step may merge: one this close's suite verified, one CI reports green on, any head under --force, or one verified now.
+async function mergeHeadVerdict(ctx, deps, pr, known) {
+  const head = pr.headRefOid;
+  const moved = movedHead(ctx, pr);
+  if (ctx.force) return { head, note: moved ? `${moved.lead}; taken with --force` : null, data: moved?.data ?? {} };
+  if (head === known.verifiedSha || head === known.ciGreenSha) return { head, note: null, data: {} };
+  const ci = await ciVerdict(ctx, deps, { head, lead: moved?.lead ?? null, data: moved?.data ?? {}, reopen: MERGE_REOPEN });
+  if (ci.problem || ci.changed) return ci;
+  if (ci.empty) return await noCiVerdict(ctx, deps, { pr, lead: ci.note, data: ci.data });
+  return { head, note: ci.note, data: moved || ci.slow ? ci.data : {}, slow: ci.slow === true };
+}
+
+// A merge step result carrying the verification data gathered so far, with the note of the head it went on with put first.
+function withMergeData(result, merge, lead = null) {
+  const note = lead ? `${lead}; ${result.note}` : result.note;
+  return { ...result, note, data: { ...merge.data, ...(result.data ?? {}) } };
+}
+
+// The result of a read that ends the merge step before any verdict: unreadable, merged or closed; null for an open pull request.
+async function endedPrResult(ctx, deps, pr) {
   if (!pr?.ok) return unreadablePr(ctx, pr);
   if (pr.state === "MERGED") return await madeMergeResult(ctx, deps, { pr, mergedBy: mergedByOf(ctx) });
   if (pr.state === "CLOSED") return failed("pr-closed", `PR #${pr.number} was closed without being merged`);
-  const moved = headMoved(ctx, pr) ? await movedHeadVerdict(ctx, deps, pr, { reopen: ["preflight", "conflict"] }) : null;
-  if (moved?.problem) return moved.problem;
-  if (CONFLICTED_STATES.has(pr.mergeable) || CONFLICTED_STATES.has(pr.mergeStateStatus)) {
-    return withMovedHead(moved, failed("not-mergeable", "the pull request conflicts with its base again; the next run rebases it", { reopen: ["conflict"] }));
-  }
-  const head = pr.headRefOid;
-  const call = await deps.gh.prMerge(ctx.prUrl, { matchHeadCommit: head, ...bounded(ctx, MERGE_TIMEOUT_MS) });
+  return null;
+}
+
+// Tells whether a read shows the pull request still open at the given head.
+function openAt(pr, head) {
+  return Boolean(pr?.ok) && pr.state === "OPEN" && pr.headRefOid === head;
+}
+
+// Folds an accepted verdict's data into what the merge step has verified.
+function recordVerdict(merge, verdict) {
+  Object.assign(merge.data, verdict.data ?? {});
+  merge.known = { verifiedSha: merge.data.verifiedSha ?? merge.known.verifiedSha, ciGreenSha: merge.data.ciGreenSha ?? merge.known.ciGreenSha };
+}
+
+// Merges the accepted head, pinned to it, and proves the merge by re-reading its commit; a failed call on a head that moved answers the new read.
+async function callMerge(ctx, deps, { verdict, merge }) {
+  if (ctx.signal?.aborted) return { result: withMergeData(abortedBefore("merge"), merge, verdict.note) };
+  const call = await deps.gh.prMerge(ctx.prUrl, { matchHeadCommit: verdict.head, ...bounded(ctx, MERGE_TIMEOUT_MS) });
   const reread = await rereadMerge(ctx, deps);
-  if (reread?.mergeSha && reread.state === "MERGED") return withMovedHead(moved, await mergedResult(ctx, deps, { pr: reread, note: "squash-merged", mergedBy: "nightqueue" }));
-  if (!call.ok && !retried && reread?.ok && reread.state === "OPEN" && reread.headRefOid !== head) {
-    const again = { ...ctx, data: { ...ctx.data, headSha: head, pushedBy: null } };
-    return withMovedHead(moved, await mergeStep({ ctx: again, deps }, { retried: true }));
+  if (reread?.mergeSha && reread.state === "MERGED") {
+    return { result: withMergeData(await mergedResult(ctx, deps, { pr: reread, note: "squash-merged", mergedBy: "nightqueue" }), merge, verdict.note) };
   }
-  return withMovedHead(moved, mergeWithoutSha({ pr: reread, call }));
+  if (!call.ok && reread?.ok && reread.state === "OPEN" && reread.headRefOid !== verdict.head) return { next: reread };
+  return { result: withMergeData(mergeWithoutSha({ pr: reread, call }), merge, verdict.note) };
+}
+
+// One pass of the merge over the head GitHub shows: its verdict, the conflict check and the merge call; answers the result or the read of a changed head.
+async function mergeTurn(ctx, deps, { pr, merge }) {
+  const verdict = await mergeHeadVerdict(ctx, deps, pr, merge.known);
+  if (verdict.problem) return { result: withMergeData(verdict.problem, merge) };
+  if (verdict.changed) return { next: await readPr(ctx, deps) };
+  recordVerdict(merge, verdict);
+  if (CONFLICTED_STATES.has(pr.mergeable) || CONFLICTED_STATES.has(pr.mergeStateStatus)) {
+    return { result: withMergeData(failed("not-mergeable", "the pull request conflicts with its base again; the next run rebases it", { reopen: ["conflict"] }), merge, verdict.note) };
+  }
+  if (verdict.slow) {
+    const reread = verdict.pushed ? await readPushedPr(ctx, deps, verdict.head) : await readPr(ctx, deps);
+    if (!openAt(reread, verdict.head) && !pushLag(reread, verdict)) return { next: reread };
+  }
+  return await callMerge(ctx, deps, { verdict, merge });
+}
+
+// Tells whether a read after the close's own push still shows the head it replaced: GitHub lags, the head did not change; the pinned merge stays safe.
+function pushLag(pr, verdict) {
+  return Boolean(verdict.pushed) && Boolean(pr?.ok) && pr.state === "OPEN" && pr.headRefOid === verdict.data?.headShaBefore;
+}
+
+// The stop of a head that kept changing during the close: nothing merged, and the last head read never recorded.
+function headKeptMoving(pr, merge) {
+  const note = `the head changed ${MAX_LOOPBACKS} times during the close; nothing was merged (last read ${sha7(pr.headRefOid)})`;
+  return withMergeData(failed("head-moved", note, { reopen: MERGE_REOPEN }), merge);
+}
+
+// Squash-merges the pull request at a head this close or CI verified, pinned to it, and proves the merge by re-reading its merge commit.
+// A head that changes during the step is judged again, at most MAX_LOOPBACKS times; then the step stops with head-moved.
+async function mergeStep({ ctx, deps }) {
+  if (ctx.data.merged) return await confirmRecordedMerge(ctx, deps);
+  const merge = { known: { verifiedSha: ctx.data.verifiedSha ?? null, ciGreenSha: ctx.data.ciGreenSha ?? null }, data: {} };
+  let pr = await readHeadPr(ctx, deps);
+  for (let changes = 0; ; changes += 1) {
+    const ended = await endedPrResult(ctx, deps, pr);
+    if (ended) return withMergeData(ended, merge);
+    if (changes > MAX_LOOPBACKS) return headKeptMoving(pr, merge);
+    const turn = await mergeTurn(ctx, deps, { pr, merge });
+    if (turn.result) return turn.result;
+    pr = turn.next;
+  }
 }
 
 // Prepares the close: the merge must be recorded with its commit, and the notice line is written from it.

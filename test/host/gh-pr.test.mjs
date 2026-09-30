@@ -95,11 +95,17 @@ test("ghPrChecks sorts the status check rollup into pass, pending and fail", asy
   ];
   const execFileImpl = fakeExecFile({ stdout: JSON.stringify({ statusCheckRollup: rollup }) });
   const checks = await ghPrChecks(URL, { env: {}, execFileImpl });
-  assert.deepEqual(execFileImpl.calls[0].args, ["pr", "view", URL, "--json", "statusCheckRollup"]);
+  assert.deepEqual(execFileImpl.calls[0].args, ["pr", "view", URL, "--json", "statusCheckRollup,headRefOid"]);
   assert.equal(checks.ok, true);
   assert.deepEqual(checks.failing, ["lint", "ci/deploy"]);
   assert.deepEqual(checks.pending, ["e2e", "ci/legacy"]);
   assert.equal(checks.checks.length, 7);
+  assert.equal("headSha" in checks, false, "a head gh never answered was invented");
+});
+
+test("ghPrChecks carries the head the checks were read with when gh answers it", async () => {
+  const execFileImpl = fakeExecFile({ stdout: JSON.stringify({ statusCheckRollup: [], headRefOid: "1111111aaaa" }) });
+  assert.deepEqual(await ghPrChecks(URL, { env: {}, execFileImpl }), { ok: true, checks: [], failing: [], pending: [], headSha: "1111111aaaa" });
 });
 
 test("ghPrChecks reads an empty rollup as green, parses stdout of a non-zero exit, and answers ok:false on a timeout", async () => {
@@ -117,8 +123,18 @@ test("ghPrMerge squashes, pins the head commit and never deletes the branch nor 
   const [call] = execFileImpl.calls;
   assert.deepEqual(call.args, ["pr", "merge", URL, "--squash", "--match-head-commit", "1111111aaaa"]);
   for (const flag of ["--delete-branch", "--admin", "--auto"]) assert.equal(call.args.includes(flag), false, flag);
-  const refused = await ghPrMerge(URL, { env: {}, execFileImpl: fakeExecFile({ err: exitError(1), stderr: "not mergeable" }) });
+  const refused = await ghPrMerge(URL, { env: {}, execFileImpl: fakeExecFile({ err: exitError(1), stderr: "not mergeable" }), matchHeadCommit: "1111111aaaa" });
   assert.deepEqual(refused, { ok: false, stderr: "not mergeable" });
+});
+
+test("ghPrMerge refuses to merge without a head commit to pin, never spawning gh", async () => {
+  for (const matchHeadCommit of [null, "", "  ", undefined]) {
+    const execFileImpl = fakeExecFile({ stdout: "" });
+    const refused = await ghPrMerge(URL, { env: {}, execFileImpl, matchHeadCommit });
+    assert.equal(refused.ok, false, JSON.stringify(matchHeadCommit));
+    assert.match(refused.stderr, /no head commit to pin/);
+    assert.equal(execFileImpl.calls.length, 0, "gh pr merge ran unpinned");
+  }
 });
 
 test("ghPrDiffNames lists the files of the pull request, and ok:false when gh fails", async () => {
