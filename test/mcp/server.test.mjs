@@ -10,12 +10,13 @@ import { homeDir, jobLogPath, logsDir, PACKAGE_NAME, queuePausedPath, runnersDir
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { packageRoot } from "../../src/host/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
+import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
 import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs";
-import { ensureProject, makeDir, makeHome, makeProject, projectIdOf, seedLegacyV8Home } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, orgIdOf, projectIdOf, seedLegacyV8Home } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 import * as registry from "../../src/memory/registry.mjs";
 
@@ -1382,4 +1383,62 @@ test("lesson_save with no title answers a one-line error, never the zod dump", a
   assert.match(text, /missing required field\(s\): title/);
   assert.equal(text.includes("\n"), false, `the error is not a single line: ${text}`);
   assert.doesNotMatch(text, /Invalid arguments for tool/, "the zod dump leaked through");
+});
+
+// A home with alpha and beta in org acme, holding a proposed and a rejected decision of alpha, one of beta and an accepted one of the org.
+function makeDecisionRecallHome(t, name) {
+  const env = makeHome(t, name);
+  makeProject(t, env, "alpha", { org: "acme" });
+  makeProject(t, env, "beta", { org: "acme" });
+  const alpha = { projectId: projectIdOf(env, "alpha") };
+  const job = addJob({ projectId: alpha.projectId, prompt: "propose a decision" }, env).id;
+  const text = (title, status) => ({ title, context: `context of ${title}`, decision: `decision of ${title}`, status });
+  const proposal = saveDecision({ ...alpha, ...text("alpha proposes a cache", "proposed") }, env);
+  openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(job, proposal.id);
+  saveDecision({ ...alpha, ...text("alpha drops the cache", "rejected") }, env);
+  saveDecision({ projectId: projectIdOf(env, "beta"), ...text("beta ships weekly", "accepted") }, env);
+  saveDecision({ orgId: orgIdOf(env, "acme"), ...text("every repo runs one node", "accepted") }, env);
+  return { env, job };
+}
+
+test("decision_recall with an id reads one decision whole whatever its status, and recalls only accepted ones without it", async (t) => {
+  const { env, job } = makeDecisionRecallHome(t, "mcp-recall-by-id");
+  const client = await connect(t, env);
+  const recall = (args) => client.callTool({ name: "decision_recall", arguments: args });
+
+  const proposed = payloadOf(await recall({ id: "D-1", project: "alpha" }));
+  assert.deepEqual(
+    [proposed.title, proposed.context, proposed.decision, proposed.status, proposed.job_ref, proposed.scope],
+    ["alpha proposes a cache", "context of alpha proposes a cache", "decision of alpha proposes a cache", "proposed", `J-${job}`, "project"],
+  );
+  assert.ok("superseded_by" in proposed && "consequences" in proposed && "updated_at" in proposed && "owner" in proposed);
+  const rejected = payloadOf(await recall({ id: "D-2", project: "alpha" }));
+  assert.deepEqual([rejected.status, rejected.job_ref], ["rejected", null]);
+
+  const orgRef = payloadOf(await recall({ id: "AM/D-1" }));
+  assert.deepEqual([orgRef.scope, orgRef.title], ["org", "every repo runs one node"]);
+
+  for (const extra of [{ query: "cache" }, { limit: 3 }]) {
+    const refused = await recall({ id: "D-1", project: "alpha", ...extra });
+    assert.equal(refused.isError, true);
+    assert.match(textOf(refused), /pass `id` alone/);
+  }
+  const unknown = await recall({ id: "D-99", project: "alpha" });
+  assert.equal(unknown.isError, true);
+  assert.match(textOf(unknown), /D-99/);
+
+  const accepted = payloadOf(await recall({ project: "alpha" }));
+  assert.deepEqual(accepted.map((row) => row.title), ["every repo runs one node"]);
+});
+
+test("decision_recall with an id inside a job reads its own project's and its org's decisions, and refuses a sibling's", async (t) => {
+  const { env, job } = makeDecisionRecallHome(t, "mcp-recall-by-id-job");
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job) });
+  const recall = (args) => client.callTool({ name: "decision_recall", arguments: args });
+
+  assert.equal(payloadOf(await recall({ id: "D-1" })).status, "proposed");
+  assert.equal(payloadOf(await recall({ id: "AM/D-1" })).scope, "org");
+  const refused = await recall({ id: "BT/D-1" });
+  assert.equal(refused.isError, true);
+  assert.match(textOf(refused), /only a decision of the job's project or of its org is readable/);
 });

@@ -271,7 +271,7 @@ The thirty MCP tools, with the parameters `nightqueue mcp` actually accepts:
 | `decision_save` | `project`, `title`, `context`, `decision`, `consequences?`, `status?` (`proposed`, `accepted`, `superseded`, `rejected`; default `accepted`) |
 | `decision_update` | `id` (a decision ref), `project?` (the owner of a `D-<n>`), `title?`, `context?`, `decision?`, `consequences?`, `status?`, `superseded_by?` (a decision ref) |
 | `decision_list` | `project`, `status?` |
-| `decision_recall` | `project`, `query?`, `limit?` (1-20) |
+| `decision_recall` | `project`, `query?`, `limit?` (1-20); or `id` (a decision ref) alone for one decision whole, whatever its status |
 | `roadmap_save` | `project`, `title`, `type` (`bug`, `feature`, `improvement`, `chore`, `incident`), `detail?`, `priority?` (1-9, default 5, 1 first), `status?` (default `todo`; `in_progress` is refused), `decision_id?` (a decision ref); `horizon` is refused by name |
 | `roadmap_update` | `id` (an item ref), `title?`, `detail?`, `type?`, `status?` (`backlog`, `todo`, `in_review`, `done`, `cancelled`; `in_progress` is refused), `priority?`, `position?`, `decision_id?` (a decision ref); `horizon` is refused by name |
 | `roadmap_get` | `project`, `status?` (list), `priority?` (list), `type?` (list); or `id` (an item ref) alone for one item with its comment thread |

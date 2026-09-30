@@ -21,7 +21,7 @@ const SCHEMAS = {
     required: ["id"],
   },
   decision_list: { properties: ["org", "project", "status"], required: [] },
-  decision_recall: { properties: ["limit", "org", "project", "query"], required: [] },
+  decision_recall: { properties: ["id", "limit", "org", "project", "query"], required: [] },
   roadmap_save: {
     properties: ["decision_id", "detail", "horizon", "org", "priority", "project", "status", "title", "type"],
     required: ["title", "type"],
