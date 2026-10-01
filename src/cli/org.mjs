@@ -6,10 +6,16 @@ import { checkArgs, parseCommand } from "./args.mjs";
 import { keyOption } from "./project.mjs";
 import { askKey } from "./prompt.mjs";
 
+// Formats one binding of an org: a slot's name, a list joined by commas, `-` when empty.
+function formatBinding(binding) {
+  const names = Array.isArray(binding) ? binding.join(",") : binding;
+  return names || "-";
+}
+
 // Formats the connection slots of an org for the text output.
 function formatSlots(connections) {
   return Object.entries(connections)
-    .map(([type, name]) => `${type}=${name ?? "-"}`)
+    .map(([type, binding]) => `${type}=${formatBinding(binding)}`)
     .join(" ");
 }
 

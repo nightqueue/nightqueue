@@ -273,6 +273,8 @@ nightqueue connection bind gh --org acme           # bind (or rebind) an org slo
 nightqueue connection test gh                      # prints login and scopes, never the token
 echo "$SENTRY_AUTH_TOKEN" | nightqueue connection add sn --type sentry --set org=acme [--set url=https://sentry.example.com]
 nightqueue connection test sn                      # prints org=<slug>, never the token
+echo "$DISCORD_WEBHOOK_URL" | nightqueue connection add team-chat --type discord   # reads the webhook's channel and guild, added to the org's list
+nightqueue connection test team-chat               # prints channel=<id> guild=<id>, never the URL
 nightqueue connection list --json
 nightqueue connection remove gh                    # unbinds from every org, then deletes the secret
 ```
@@ -285,6 +287,13 @@ against the fields the type declares before the secret is read: a `sentry` conne
 needs `org` (its organization slug) and takes an optional `url` (an https origin, default
 `https://sentry.io`, for a self-hosted Sentry); a missing required field, an unknown one or
 a malformed value is refused and nothing is stored. These fields are not secret.
+A `discord` connection is a channel webhook: its secret is the webhook URL
+(`https://discord.com/api/webhooks/<id>/<token>`), checked for that shape and read once at
+`add` to store the webhook's `channelId` and `guildId`; a URL of another shape or one the
+service does not answer is refused without being echoed, and nothing is stored. An org holds
+any number of discord webhooks: `add` appends the new one to the org's list and `bind` adds
+it to another org's list (`org list` shows `discord=team-chat,ops`); `remove` takes it out of
+every list. The URL is never listed, logged or written in a notice.
 
 **Project integrations.** `project integrations <project>` holds what a project does with the
 services its jobs come from, one setting per `<kind>.<key>` (a key may itself be dotted, stored

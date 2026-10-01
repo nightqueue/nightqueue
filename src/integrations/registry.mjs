@@ -1,7 +1,8 @@
+import { discord } from "./discord.mjs";
 import { github } from "./github.mjs";
 import { sentry } from "./sentry.mjs";
 
-const BUILT_IN = Object.freeze([github, sentry]);
+const BUILT_IN = Object.freeze([github, sentry, discord]);
 
 let active = BUILT_IN;
 

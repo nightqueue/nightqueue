@@ -1,6 +1,7 @@
 import {
   addConnection,
   bindConnection,
+  completeConnection,
   connectionExtras,
   hasConnection,
   listConnections,
@@ -91,7 +92,8 @@ async function runAdd(argv, ctx) {
     stdout: ctx.stdout,
     prompt: `${values.type} ${descriptor.secretLabel ?? "secret"} for \`${name}\`: `,
   });
-  const result = addConnection({ config, secrets, name, type: values.type, orgId: target.id, secret, extra });
+  const derived = await completeConnection({ type: values.type, secret, extra, fetchImpl: ctx.fetchImpl });
+  const result = addConnection({ config, secrets, name, type: values.type, orgId: target.id, secret, extra, derived });
   ctx.saveSecrets(result.secrets, ctx.env);
   saveConfigAfterSecret({ config: result.config, ctx, name, org });
   if (result.bound) {

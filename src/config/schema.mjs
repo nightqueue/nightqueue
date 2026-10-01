@@ -1,5 +1,5 @@
 import { UserError } from "./errors.mjs";
-import { slotTypes } from "../integrations/registry.mjs";
+import { manyTypes, slotTypes } from "../integrations/registry.mjs";
 
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 export const SCHEMA_VERSION = 1;
@@ -95,12 +95,24 @@ function assertSupportedVersion(fileName, raw) {
   }
 }
 
-// Normalizes the connection slots of an org.
+// Tells whether a value is a non-empty string.
+function isName(value) {
+  return typeof value === "string" && value !== "";
+}
+
+// Normalizes the binding list of a kind bound to many connections: its non-empty names, once each.
+function normalizeList(value) {
+  const names = Array.isArray(value) ? value : [value];
+  return [...new Set(names.filter(isName))];
+}
+
+// Normalizes the connection slots of an org: a name or null per single-slot kind, a list per many kind.
 function normalizeSlots(raw) {
   const slots = emptySlots();
   if (!isPlainObject(raw)) return slots;
+  const many = new Set(manyTypes());
   for (const [type, value] of Object.entries(raw)) {
-    slots[type] = typeof value === "string" && value ? value : null;
+    slots[type] = many.has(type) ? normalizeList(value) : isName(value) ? value : null;
   }
   return slots;
 }

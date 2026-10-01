@@ -118,6 +118,23 @@ headers or cookies - and the close's **origin** step marks the issue with that s
 a best-effort note `Fixed by <pr url>, merged as <sha7>` (a note that fails is a warning, the
 issue still counts as resolved). A short id is resolved to its issue id through the API first.
 
+**Discord.** A prompt with a Discord message link
+(`https://discord.com/channels/<guild>/<channel>/<message>`, also `ptb.`/`canary.` and
+`discordapp.com`) gets the origin `discord <guild>/<channel>/<message>`; `--origin
+discord:<guild>/<channel>/<message>` gives it explicitly. Discord works through channel
+webhooks only (`connection add --type discord`, many per org) and reads nothing at claim. The
+org webhook posting in the message's channel covers it; a message in a thread or another
+channel shows `none` with the thread probe the close will try. Once the project has any
+`discord` setting, the close's **origin** step replies `Fixed in <pr url> (merged as <sha7>) -
+<message link>`: through the webhook of the message's channel, otherwise through each org
+webhook of the same guild as a post into the thread until one is accepted (none accepted is a
+`skipped` line in the notice); `project integrations <project> set discord.replyToOrigin=false`
+turns the reply off (it is on by default). `set discord.log.connection=team-chat` makes the
+close's **log** step post `<job ref> closed - PR #<n> merged as <sha7>: <title>` and the PR link
+to that webhook, once per job, for the events of `discord.log.events` (`discord.log.events=closed`,
+the default and the only event). No message mentions anyone; a rate limit or a server error is
+a warning line, and the webhook URL never appears in a note, a notice or the job log.
+
 **`--tier` declares the risk of the job.** `queue add --tier trivial|simple|complex`
 (and the `tier` parameter of `queue_add`) records the tier on
 the job, and the unattended prompt carries it into the run as
