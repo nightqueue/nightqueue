@@ -410,10 +410,12 @@ detached, or one `{ job, outcome, decisions }` object in the foreground. A close
 again resumes at that step - never merging twice. A pull request closed without merge cancels
 the job instead (`J-<id> cancelled: PR #<n> was closed without being merged; nothing to
 close`), and one merged by hand is recorded as `merged outside a close`. `--force` skips the
-pull request checks and the rebase suite and nothing else: status, attribution
-(`pr-not-the-job-branch`) and real conflicts still stop the close. A second close of a closed
-job answers ``job `<id>` is already closed``. `queue.closeTimeoutS` (default `600`, range
-`60..3600`) bounds the whole close. The MCP tool `queue_close` (`job_id`, `force?`) starts the
+pull request checks and the rebase suite and nothing else: status and attribution
+(`pr-not-the-job-branch`) still stop the close, and a conflict always stops a forced close:
+the merger never runs under `--force`. Without it, a small textual conflict may be resolved by
+the bounded merger agent before the suite runs. A second close of a closed
+job answers ``job `<id>` is already closed``. `queue.closeTimeoutS` (default `1800`, range
+`60..3600`) bounds the whole close, the merger included. The MCP tool `queue_close` (`job_id`, `force?`) starts the
 same detached close. See [Queue](queue.md#closing-a-job) for the steps, the lease and what a
 close never does.
 

@@ -2,6 +2,7 @@ import { UserError } from "../config/errors.mjs";
 import { sameBranch } from "./branch-name.mjs";
 import { defaultCloseDeps } from "./close-deps.mjs";
 import { closedLine, parseCloseChecklist } from "./close-view.mjs";
+import { resolveConflictedRebase } from "./merger.mjs";
 import { releaseJobWorktree } from "./worktree.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
 import { jobRef } from "../memory/refs.mjs";
@@ -495,7 +496,12 @@ async function rebaseTestAndPush(ctx, deps, work) {
   const data = { headShaBefore: work.headShaBefore };
   deps.fs.linkNodeModules(ctx.checkout, work.dir);
   const rebased = await git(ctx, deps, ["rebase", `origin/${work.base}`], { cwd: work.dir });
-  if (!rebased.ok) return await stopConflictedRebase(ctx, deps, { ...work, data, stderr: rebased.stderr });
+  let resolution = null;
+  if (!rebased.ok) {
+    const stop = await stopConflictedRebase(ctx, deps, { ...work, data, stderr: rebased.stderr });
+    if (!stop.resolution) return stop;
+    resolution = stop.resolution;
+  }
   const markers = await leftoverMarkers(ctx, deps, work);
   if (markers.length) return failed("real-conflict", `conflict markers left in: ${namesNote(markers)}`, { data });
   const suite = ctx.force ? {} : await runSuite(ctx, deps, work.dir);
@@ -509,22 +515,44 @@ async function rebaseTestAndPush(ctx, deps, work) {
     return failed("head-unreadable", note, { data: { ...data, headSha: null, pushedBy: "close" }, reopen: ["preflight"] });
   }
   data.headSha = after.stdout.trim();
-  const suiteNote = ctx.force ? "suite skipped with --force" : "suite green";
-  const note = `rebased onto origin/${work.base}, ${suiteNote}, pushed ${sha7(work.headShaBefore)} -> ${sha7(data.headSha)}`;
+  const note = rebasePushNote(ctx, { work, resolution, headSha: data.headSha });
   const verified = ctx.force || !data.headSha ? {} : { verifiedSha: data.headSha };
   return { status: "done", note, data: { ...data, pushedBy: "close", ...verified }, reopen: ["preflight"] };
 }
 
-// Records the conflict of a stopped rebase, aborts it and answers the failure naming the conflicted files.
+// The note of a pushed rebase: the merger's resolution when it ran, else the plain rebase with or without the suite.
+function rebasePushNote(ctx, { work, resolution, headSha }) {
+  const pushed = `pushed ${sha7(work.headShaBefore)} -> ${sha7(headSha)}`;
+  if (resolution) return `resolved by merger: ${resolution.hunks} hunks in ${resolution.files.length} files (${namesNote(resolution.files)}); suite green; ${pushed}`;
+  const suiteNote = ctx.force ? "suite skipped with --force" : "suite green";
+  return `rebased onto origin/${work.base}, ${suiteNote}, ${pushed}`;
+}
+
+// The record of what the merger did with a conflict, kept in the step's data.
+function mergerRecord(merger) {
+  if (merger.resolved) return { status: "resolved", hunks: merger.hunks, files: merger.files };
+  if (!merger.eligible) return { status: "not-eligible", reason: merger.reason };
+  return { status: "unresolved", reason: merger.reason, hunks: merger.hunks, files: merger.files };
+}
+
+// Records the conflict of a stopped rebase and hands it to the merger; what the merger does not resolve is aborted and answered naming the conflicted files.
 async function stopConflictedRebase(ctx, deps, work) {
   const unmerged = await git(ctx, deps, ["diff", "--name-only", "--diff-filter=U"], { cwd: work.dir });
   const files = linesOf(unmerged.stdout);
   const prFiles = await deps.gh.prDiffNames(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
-  // Extension seam: a later conflict resolver runs here, while the throwaway worktree is still stopped in the rebase.
   work.data.conflict = { files, prFiles: prFiles?.ok ? prFiles.files : null, base: work.base, head: work.head, headSha: work.headShaBefore };
+  const merger = files.length ? await resolveConflictedRebase(ctx, deps, { ...work, files, reserveMs: TEST_RESERVE_MS }) : null;
+  if (merger) work.data.merger = mergerRecord(merger);
+  if (merger?.resolved) return { resolution: merger };
   await cleanupGit(deps, ["rebase", "--abort"], work.dir);
-  if (files.length) return failed("real-conflict", `rebase onto origin/${work.base} conflicts in: ${namesNote(files)}`, { data: work.data });
+  if (files.length) return failed("real-conflict", realConflictNote(work, { files, merger }), { data: work.data });
   return failed("rebase-failed", `git rebase origin/${work.base} failed (${firstLine(work.stderr)})`, { data: work.data });
+}
+
+// The note of a real conflict: the conflicted files, plus the merger's reason when it was eligible.
+function realConflictNote(work, { files, merger }) {
+  const note = `rebase onto origin/${work.base} conflicts in: ${namesNote(merger?.files ?? files)}`;
+  return merger?.eligible ? `${note}; merger: ${merger.reason}` : note;
 }
 
 // The files a clean rebase still left conflict markers in.

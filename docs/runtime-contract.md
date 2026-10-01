@@ -378,10 +378,26 @@ waiting for the merge: a `done` job with a pull request only, and every
 other status (``job `N` is already closed`` for a closed one), a job without a pull request or one
 already under a live close lease refused by name with nothing written; calling it again resumes a
 close that stopped at the step that failed. `force: true` skips the pull request checks and the
-rebase suite only - status, attribution and real conflicts still stop the close. A pull request
+rebase suite only - status and attribution still stop the close, and a conflict stops a forced
+close (the merger never runs under force). A pull request
 closed without merge ends the close by cancelling the job, one merged by hand is recorded as
 `merged outside a close`, and the settle step accepts the job's proposed decisions in the same write that closes it. Inside a job
 it is refused, like the CLI (see [Queue](queue.md#closing-a-job)).
+
+The conflict step is the one place a close runs an agent. When the rebase stops on conflicts
+that code finds eligible (no `--force`, a `scripts.test`, no risk-list or generated file, markers
+in every file, at most 12 hunks in 6 files summed over every stop, at least 60 s of merger time
+left), it spawns `nightqueue:merger` (sonnet, `--tools Read,Edit`, no MCP server, only the
+`merger-guard` PreToolUse hook, which allows Read inside the throwaway worktree and Edit on the
+conflicted files and denies everything else) in the stopped worktree, bounded by half of what
+the close has left after the suite's reserve, at most 20 min. Its last line must be `RESOLVED`
+or `UNRESOLVED: <reason>`. A resolution counts only after the runtime verifies it - no marker
+left, `git diff --name-only` limited to the conflicted files - continues the rebase and runs the
+suite green; then the push, with the note `resolved by merger: <n> hunks in <m> files (<names>);
+suite green; pushed <a> -> <b>`. Everything else aborts the rebase and stops the close with
+`real-conflict` and the files, exactly as before, the merger's reason appended to the note
+(`; merger: <reason>`) when it ran. The step's data keeps `conflict` and adds `merger`
+(`{ status: "resolved" | "unresolved" | "not-eligible", reason?, hunks?, files? }`).
 
 Inside a job, a tool that takes a free id only reaches its own: `queue_retry`
 retries the job it is running, and `decision_update` and `roadmap_update` accept

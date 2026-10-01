@@ -3,6 +3,8 @@ export const HEAD_SHA = "1111111aaaaaaaaa";
 export const PUSHED_SHA = "2222222bbbbbbbbb";
 export const MERGE_SHA = "abc1234def567890";
 
+const NO_MERGER_ANSWER = { exitCode: 0, timedOut: false, stopped: false, spawnError: null, resultText: "UNRESOLVED: no fake merger scripted" };
+
 const GIT_DEFAULTS = {
   "rev-parse --abbrev-ref HEAD": { ok: true, stdout: "main\n", stderr: "" },
   "rev-parse origin/": { ok: true, stdout: `${HEAD_SHA}\n`, stderr: "" },
@@ -68,9 +70,11 @@ export function fakeCloseDeps(changes = {}) {
     suite: { ok: true, output: "", timedOut: false },
     testScript: "node --test",
     exists: () => true,
+    files: {},
+    merger: async () => NO_MERGER_ANSWER,
     ...changes,
   };
-  const log = { git: [], prReads: 0, checkReads: 0, merges: [], tests: [], tempDirs: [], removedDirs: [], sleeps: [], linked: [] };
+  const log = { git: [], prReads: 0, checkReads: 0, merges: [], tests: [], tempDirs: [], removedDirs: [], sleeps: [], linked: [], mergers: [] };
   const deps = {
     git: async (args, options = {}) => {
       log.git.push({ args, cwd: options.cwd });
@@ -101,10 +105,15 @@ export function fakeCloseDeps(changes = {}) {
       removeDir: (dir) => log.removedDirs.push(dir),
       linkNodeModules: (checkout, dir) => log.linked.push({ checkout, dir }),
       readTestScript: () => world.testScript,
+      readText: (path) => world.files[path] ?? null,
     },
     runTest: async (options) => {
       log.tests.push(options);
       return world.suite;
+    },
+    merger: async (options) => {
+      log.mergers.push(options);
+      return await world.merger(options, world);
     },
     sleep: async (ms) => {
       log.sleeps.push(ms);

@@ -6,7 +6,24 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- **The close resolves a small textual conflict with a bounded merger agent (NQ-35).** When the
+  conflict step's rebase stops on conflicts that code finds eligible - no `--force`, a
+  `scripts.test`, no risk-list or generated file, markers in every file, at most 12 hunks in 6
+  files summed over every stop - it spawns `nightqueue:merger` (sonnet, Read and Edit only,
+  Edit fenced to the conflicted files by the new `merger-guard` hook) in the stopped worktree,
+  for half of what the close has left after the suite's reserve, at most 20 min. A `RESOLVED`
+  counts only once the runtime finds no marker left and no file touched outside the conflict,
+  continues the rebase and runs the suite green; the note reads `resolved by merger: <n> hunks
+  in <m> files (<names>); suite green; pushed <a> -> <b>`. Anything else stops with
+  `real-conflict` as before, with `; merger: <reason>` when the agent ran.
+
 ### Changed
+
+- **`queue.closeTimeoutS` defaults to 1800 instead of 600**, so a close has room for the merger
+  and the suite. A `config.json` written by an earlier setup pins `600` explicitly - edit it to
+  take the new default.
 
 - **The close re-reads the head from GitHub and merges only a head it or CI verified (D-54).**
   Every step works on the head GitHub shows now instead of the one it recorded; preflight and

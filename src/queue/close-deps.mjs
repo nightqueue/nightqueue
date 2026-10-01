@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge } from "../host/gh.mjs";
 import { runGitAsync } from "../host/git.mjs";
 import { runNpmAsync } from "../host/npm.mjs";
+import { runMerger } from "./merger-spawn.mjs";
 
 export const CLOSE_WORKER_ENV = "NIGHTQUEUE_CLOSE_WORKER";
 
@@ -33,6 +34,15 @@ function readTestScript(dir) {
   try {
     const script = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"))?.scripts?.test;
     return typeof script === "string" && script.trim() ? script : null;
+  } catch {
+    return null;
+  }
+}
+
+// The text of a file, or null when it cannot be read.
+function readText(path) {
+  try {
+    return readFileSync(path, "utf8");
   } catch {
     return null;
   }
@@ -70,8 +80,10 @@ export function defaultCloseDeps(env = process.env) {
       removeDir: (dir) => rmSync(dir, { recursive: true, force: true }),
       linkNodeModules,
       readTestScript,
+      readText,
     },
     runTest: ({ cwd, timeoutMs, signal }) => runNpmAsync(["test"], { cwd, env: testEnv(env), timeoutMs, signal }),
+    merger: (options) => runMerger({ ...options, env: testEnv(env) }),
     sleep,
   };
 }
