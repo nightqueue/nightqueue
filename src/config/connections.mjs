@@ -1,40 +1,8 @@
 import { UserError } from "./errors.mjs";
 import { assertName, emptySlots } from "./schema.mjs";
+import { connectionTypes } from "../integrations/registry.mjs";
 
-const GITHUB_API = "https://api.github.com";
-
-// Converts the GitHub API response into the connection test result.
-async function githubResult(res) {
-  const status = res.status;
-  if (status < 200 || status >= 300) return { ok: false, status, login: null, scopes: null, detail: `HTTP ${status}` };
-  const body = await res.json();
-  return {
-    ok: true,
-    status,
-    login: body?.login ?? null,
-    scopes: res.headers.get("x-oauth-scopes") ?? null,
-    detail: "ok",
-  };
-}
-
-// Validates the token of a GitHub connection, without exposing the value in the result.
-async function testGithub(secret, { fetchImpl = fetch, timeoutMs = 5000 } = {}) {
-  try {
-    const res = await fetchImpl(`${GITHUB_API}/user`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${secret.token}`, Accept: "application/vnd.github+json" },
-      redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    return await githubResult(res);
-  } catch (err) {
-    const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
-    const detail = timedOut ? `timeout (${Math.round(timeoutMs / 1000)}s)` : "network failure";
-    return { ok: false, status: null, login: null, scopes: null, detail };
-  }
-}
-
-export const CONNECTION_TYPES = new Map([["github", { secretFields: ["token"], extraFields: [], test: testGithub }]]);
+export const CONNECTION_TYPES = connectionTypes();
 
 // Returns the descriptor of a supported connection type.
 export function requireType(type) {

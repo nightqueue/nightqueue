@@ -121,6 +121,12 @@ async function runList(argv, ctx) {
   for (const connection of connections) ctx.out(formatConnection(connection));
 }
 
+// Describes a successful connection test with the summary its type declares.
+function testSummary(result) {
+  const summary = requireType(result.type).summary;
+  return typeof summary === "function" ? summary(result) : result.detail;
+}
+
 // Runs `connection test`.
 async function runTest(argv, ctx) {
   const { positionals } = parseCommand(argv);
@@ -132,7 +138,7 @@ async function runTest(argv, ctx) {
     fetchImpl: ctx.fetchImpl,
   });
   if (!result.ok) throw new UserError(`${name} (${result.type}): failed — ${result.detail}`);
-  ctx.out(`${name} (${result.type}): ok — login=${result.login ?? "(none)"} scopes=${result.scopes || "(none)"}`);
+  ctx.out(`${name} (${result.type}): ok — ${testSummary(result)}`);
 }
 
 // Runs `connection remove`.

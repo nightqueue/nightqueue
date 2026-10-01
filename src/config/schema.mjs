@@ -1,4 +1,5 @@
 import { UserError } from "./errors.mjs";
+import { slotTypes } from "../integrations/registry.mjs";
 
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 export const SCHEMA_VERSION = 1;
@@ -37,7 +38,7 @@ export function emptyMap() {
 // Creates the connection slots of an org, one per supported type.
 export function emptySlots() {
   const slots = emptyMap();
-  slots.github = null;
+  for (const kind of slotTypes()) slots[kind] = null;
   return slots;
 }
 
