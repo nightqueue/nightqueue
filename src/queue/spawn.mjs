@@ -121,10 +121,20 @@ export function resolveClaudeBin(env = process.env) {
   }
 }
 
+// Whether the prompt already holds this exact note as its own `## Operator note` section (a roadmap job queued with a note).
+function carriesNoteSection(prompt, note) {
+  const section = `## Operator note\n${note}`;
+  const text = String(prompt ?? "");
+  const at = text.indexOf(section);
+  if (at < 0) return false;
+  const after = text.slice(at + section.length);
+  return after === "" || after.startsWith("\n\n");
+}
+
 // Extra block appended to the prompt when the operator answered the gate of this job, the only thing that ever writes `operator_note` into a run.
-function operatorBlock(operatorNote) {
+function operatorBlock(operatorNote, prompt) {
   const note = typeof operatorNote === "string" ? operatorNote.trim() : "";
-  if (!note) return "";
+  if (!note || carriesNoteSection(prompt, note)) return "";
   return `\n\nOPERATOR ANSWER TO THE GATE: ${escapePromptMarkers(truncateByCodePoint(note, OPERATOR_NOTE_LIMIT))}`;
 }
 
@@ -266,7 +276,7 @@ export function buildPrompt({ job, handoff, openPrs, env = process.env } = {}) {
     "If you need a human decision, stop at the gate and print `## Requires user confirmation`.",
     "Shell rule: the worktree isolation refuses commands it cannot verify - one simple command per Bash call, no heredocs, no `\\` continuations, no `cd … && …`; longer snippets are files written with Write and run by path.",
   ].join("\n");
-  return `${base}${operatorBlock(job?.operator_note)}${resumeBlock(handoff)}${openPrsBlock(openPrs)}`;
+  return `${base}${operatorBlock(job?.operator_note, job?.prompt)}${resumeBlock(handoff)}${openPrsBlock(openPrs)}`;
 }
 
 // Builds the argv of the child: an array, never a shell, fenced off from the operator's own environment unless inheritUserEnvironment is true, with --resume only behind the session id gate.

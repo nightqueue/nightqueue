@@ -110,8 +110,14 @@ function withNote(line, note) {
   return text ? `${line}\n\n${text}` : line;
 }
 
+// The operator note and the prior run a job was queued with, as paragraphs, or an empty text.
+function queuedDetails(job) {
+  const note = typeof job.operator_note === "string" ? job.operator_note.trim() : "";
+  return [note, job.run_dir ? `Run dir: ${job.run_dir}` : ""].filter(Boolean).join("\n\n");
+}
+
 const COMMENT_BODIES = Object.freeze({
-  queued: (job) => `${jobRef(job.id)} queued`,
+  queued: (job) => withNote(`${jobRef(job.id)} queued`, queuedDetails(job)),
   retried: (job) => withNote(`${jobRef(job.id)} re-queued by retry`, job.operator_note),
   gate: (job) => withNote(`${jobRef(job.id)} stopped at a gate`, job.notice_md),
   done: (job) => withNote(job.pr_url ? `${jobRef(job.id)} done: ${job.pr_url}` : `${jobRef(job.id)} done without a pull request`, job.notice_md),

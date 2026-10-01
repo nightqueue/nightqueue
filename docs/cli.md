@@ -304,6 +304,7 @@ The full reference of `nightqueue queue` is [Queue](queue.md); these subcommands
 recent enough that this is their first mention here.
 
 ```sh
+nightqueue queue add --roadmap NQ-12 [--run-dir <dir>] ["<note>"]   # a roadmap item's job, with an operator note and/or a prior operator run
 nightqueue queue status J-42                          # one job, by its ref (or its plain id)
 nightqueue queue status https://github.com/acme/api/pull/7   # ...or by the pull request it opened
 nightqueue queue session 42                          # resume the session of a job's last attempt

@@ -12,7 +12,9 @@ import {
   renderDecisionText,
 } from "./decisions.mjs";
 import { PRIORITY_RANGE, addJob, cancelJob, truncateByCodePoint } from "./jobs.mjs";
-import { refuseMissingJob } from "./job-row.mjs";
+import { queuedCommentJob, refuseMissingJob } from "./job-row.mjs";
+import { runDir } from "../config/paths.mjs";
+import { priorRunBlock, resolveOperatorRunDir } from "../queue/operator-run.mjs";
 import { escapePromptMarkers } from "./prompt-safety.mjs";
 import { GLOBAL_KEY, decisionRef, itemRef, jobRef, parseRef } from "./refs.mjs";
 import { COMMENT_JOB_COLUMNS, insertComment, jobRefs, listComments } from "./roadmap-comments.mjs";
@@ -67,8 +69,6 @@ import {
 } from "./scope.mjs";
 
 export { MANUAL_STATUSES, ROADMAP_STATUSES, ROADMAP_TYPES } from "./roadmap-workflow.mjs";
-export const PROMPT_SOURCE_CONFLICT =
-  "pass either `prompt` or `roadmap_item_id`, never both: the roadmap item is what builds the prompt";
 export const PROMPT_SOURCE_MISSING = "queue_add needs `prompt`, or `roadmap_item_id` to build it from a roadmap item";
 
 export { ALL_PROJECTS };
@@ -475,15 +475,15 @@ export function queueableRoadmapItem(id, env = process.env) {
 export function linkRoadmapItemJob(id, jobId, env = process.env) {
   const db = openDb(env);
   const itemId = requireId(id);
-  const job = { id: requireId(jobId) };
   const statement = db.prepare(
     `UPDATE roadmap_items SET status = ?, job_id = ?, job_status_seen = 'pending', closed_at = NULL, updated_at = datetime('now')
       WHERE id = ? AND status IN (${sqlList(OPEN_STATUSES)})
         AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = roadmap_items.job_id AND j.status IN (${LIVE_JOB_LIST}))`,
   );
   return inTransaction(db, () => {
-    refuseMissingJob(db, job.id);
-    if (statement.run(JOB_TO_ROADMAP.queued.status, job.id, itemId).changes !== 1) return false;
+    refuseMissingJob(db, requireId(jobId));
+    if (statement.run(JOB_TO_ROADMAP.queued.status, jobId, itemId).changes !== 1) return false;
+    const job = queuedCommentJob(db, jobId, (projectId, slug) => runDir(projectId, slug, env));
     insertComment(db, { itemId, ...commentFor(job, "queued", jobRefs(db, job)) });
     return true;
   });
@@ -747,15 +747,21 @@ function tierOf(item, tier) {
   return TIER_BY_TYPE[item.type] ?? null;
 }
 
-// Prompt a roadmap item is queued with: the task, the decision it is linked to and the accepted decisions around it.
-export async function buildRoadmapPrompt({ item, embedder } = {}, env = process.env) {
+// The sections an operator adds right after the item block: their note, verbatim, then the prior run block.
+function operatorBlocks({ operatorNote, priorRun }) {
+  const note = typeof operatorNote === "string" ? operatorNote.trim() : "";
+  return [...(note ? [`## Operator note\n${note}`] : []), ...(priorRun ? [priorRun] : [])];
+}
+
+// Prompt a roadmap item is queued with: the task, the operator's note and prior run, the decision it is linked to and the accepted decisions around it.
+export async function buildRoadmapPrompt({ item, embedder, operatorNote, priorRun } = {}, env = process.env) {
   const linked = item.decision_id ? getDecision(item.decision_id, env) : null;
   const standing = titlesBlock(STANDING_HEADING, titlesOfStatus(item, "accepted", env));
   const proposed = titlesBlock(PROPOSED_HEADING, titlesOfStatus(item, "proposed", env));
   const related = await relatedDecisions(item, linked, embedder, env);
   const blocks = [`## Task\n${escapePromptMarkers(item.title)}`];
   if (item.detail) blocks.push(escapePromptMarkers(item.detail));
-  blocks.push(roadmapItemBlock(item));
+  blocks.push(roadmapItemBlock(item), ...operatorBlocks({ operatorNote, priorRun }));
   if (linked) blocks.push(`## Linked decision\n${renderDecisionText(linked)}`);
   if (standing) blocks.push(standing);
   if (proposed) blocks.push(proposed);
@@ -808,10 +814,10 @@ function allSkippedMessage(item, skipped) {
 
 // Queues the job an org item builds for each project it names, one per-project row linked to each job; the item's own
 // row keeps no job and its status is derived from the rows.
-async function queueOrgItem(item, { projectId, allProjects, embedder, ...limits }, env) {
+async function queueOrgItem(item, { projectId, allProjects, embedder, operatorNote, ...limits }, env) {
   const targets = orgTargets(openDb(env), item, { projectId, allProjects });
-  const prompt = await buildRoadmapPrompt({ item, embedder }, env);
-  const jobLimits = { ...limits, tier: tierOf(item, limits.tier) };
+  const prompt = await buildRoadmapPrompt({ item, embedder, operatorNote }, env);
+  const jobLimits = { ...limits, operatorNote, tier: tierOf(item, limits.tier) };
   const outcomes = targets.map((target) => queueOrgTarget(item, target, { prompt, limits: jobLimits }, env));
   const jobs = outcomes.filter((outcome) => outcome.job).map((outcome) => outcome.job);
   const skipped = outcomes.filter((outcome) => outcome.skipped).map((outcome) => outcome.skipped);
@@ -819,18 +825,31 @@ async function queueOrgItem(item, { projectId, allProjects, embedder, ...limits 
   return { job: jobs[0], jobs, skipped, item, targetProject: jobs.length === 1 ? jobs[0].project : null };
 }
 
+// The prior-run block and slug of the operator run a `run_dir` names, validated as for a free-prompt job; nothing when none was named.
+function priorRunSeed({ runDir: raw, projectId }, env) {
+  if (typeof raw !== "string" || raw.trim() === "") return { block: null, slug: null };
+  const project = projectById(openDb(env), projectId);
+  const run = resolveOperatorRunDir({ runDir: raw, project: project?.name ?? projectId, projectId, env });
+  return { block: priorRunBlock({ projectId, slug: run.slug, state: run.state, env }), slug: run.slug };
+}
+
 // Queues the job a roadmap item builds; a project item is linked to that job, an org item names the project id it goes to or `allProjects`.
 export async function queueRoadmapItem(
-  { id, projectId, allProjects = false, priority, maxAttempts, timeoutS, tier, embedder } = {},
+  { id, projectId, allProjects = false, priority, maxAttempts, timeoutS, tier, embedder, operatorNote, runDir: priorRunDir } = {},
   env = process.env,
 ) {
   const item = queueableRoadmapItem(id, env);
   if (item.scope === "org") {
-    return await queueOrgItem(item, { projectId, allProjects, priority, maxAttempts, timeoutS, tier, embedder }, env);
+    if (priorRunDir) throw new UserError("`run_dir` is not supported for an org roadmap item: a run belongs to one project, and an org item queues per project");
+    return await queueOrgItem(item, { projectId, allProjects, priority, maxAttempts, timeoutS, tier, embedder, operatorNote }, env);
   }
   const ownProjectId = itemProjectId(openDb(env), item, allProjects ? ALL_PROJECTS : projectId);
-  const prompt = await buildRoadmapPrompt({ item, embedder }, env);
-  const job = addJob({ projectId: ownProjectId, prompt, priority, maxAttempts, timeoutS, tier: tierOf(item, tier) }, env);
+  const seed = priorRunSeed({ runDir: priorRunDir, projectId: ownProjectId }, env);
+  const prompt = await buildRoadmapPrompt({ item, embedder, operatorNote, priorRun: seed.block }, env);
+  const job = addJob(
+    { projectId: ownProjectId, prompt, priority, maxAttempts, timeoutS, tier: tierOf(item, tier), slug: seed.slug, operatorNote },
+    env,
+  );
   if (linkRoadmapItemJob(item.id, job.id, env)) return { job, jobs: [job], skipped: [], item, targetProject: item.project };
   cancelJob(job.id, { reason: "roadmap item was queued by another caller" }, env);
   throw new UserError(

@@ -199,6 +199,11 @@ export function parseCloseColumn(text) {
   }
 }
 
+// The operator note a job is queued with, trimmed, or null when there is none.
+function optionalNote(value) {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+}
+
 // Requires the run slug a job starts bound to, when one was informed, as one safe path segment.
 function optionalRunSlug(value) {
   if (value === undefined || value === null) return null;
@@ -206,7 +211,7 @@ function optionalRunSlug(value) {
   throw new UserError(`invalid \`slug\`: \`${String(value)}\`; expected one safe path segment`);
 }
 
-const INSERT_JOB = "INSERT INTO jobs (project_id, prompt, priority, max_attempts, timeout_s, tier, slug) VALUES (?, ?, ?, ?, ?, ?, ?)";
+const INSERT_JOB = "INSERT INTO jobs (project_id, prompt, priority, max_attempts, timeout_s, tier, slug, operator_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
 
 // Requires the id of the project a job is queued for; a name never reaches the jobs table.
 function requireProjectId(projectId) {
@@ -249,7 +254,7 @@ function insertRunJob(db, { values, project }, env) {
 }
 
 // Enqueues a job for a project id, validating every range before the write; a run slug is refused while an open job is bound to it.
-export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tier, slug } = {}, env = process.env) {
+export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tier, slug, operatorNote } = {}, env = process.env) {
   const values = [
     requireProjectId(projectId),
     requireText("prompt", prompt),
@@ -258,6 +263,7 @@ export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tie
     optionalRangedInt("timeout_s", timeoutS, TIMEOUT_RANGE),
     optionalTier(tier),
     optionalRunSlug(slug),
+    optionalNote(operatorNote),
   ];
   const db = openDb(env);
   const project = requireJobProject(db, values[0]);
