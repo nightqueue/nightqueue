@@ -1,8 +1,8 @@
-// H1 · a missed/collapsed roadmap follow permanently drops the `pr` comment when a job goes
+// H1 · a missed/collapsed issue follow permanently drops the `pr` comment when a job goes
 // done→closed without a follow in between.
 //
 // Root cause: `followJobQuietly` (src/store/local.mjs:42-48) swallows any throw from
-// `roadmap.followJob` silently. If the follow for a job's `done` transition throws (a crashed
+// `issues.followJob` silently. If the follow for a job's `done` transition throws (a crashed
 // trigger, a lock, any exception inside `followLinkedItem`), the linked item's
 // `job_status_seen` is never advanced past whatever it was before `done` — the job write itself
 // still succeeds (finishJob is a plain JOB_STATUS_WRITER, not wrapped by `followingPassedStatus`).
@@ -29,7 +29,7 @@
 // on the same path.
 //
 // This test models "the `done` follow crashed" the same way
-// test/store/roadmap-follow-failure.test.mjs does (a BEFORE UPDATE trigger that raises), then
+// test/store/issue-follow-failure.test.mjs does (a BEFORE UPDATE trigger that raises), then
 // proves the `pr` comment is unrecoverable even after a normal settleClose through the store.
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -40,7 +40,7 @@ import { makeHome, makeProject, mergedChecklist, projectIdOf } from "../../test-
 const PR_URL = "https://github.com/acme/alpha/pull/9";
 
 const BREAK_ISSUE_WRITES = `CREATE TRIGGER issue_follow_boom BEFORE UPDATE ON issues
-  BEGIN SELECT RAISE(ABORT, 'roadmap follow forced to fail'); END;`;
+  BEGIN SELECT RAISE(ABORT, 'issue follow forced to fail'); END;`;
 
 // The kinds of the comments an item holds, oldest first.
 async function kindsOf(env, itemId) {
@@ -48,7 +48,7 @@ async function kindsOf(env, itemId) {
 }
 
 test("a done follow that crashed once is never recovered by a later settleClose — the `pr` comment is permanently lost", async (t) => {
-  const env = makeHome(t, "roadmap-collapsed-follow");
+  const env = makeHome(t, "issue-collapsed-follow");
   makeProject(t, env, "alpha");
   const store = openStore(env);
 
@@ -58,7 +58,7 @@ test("a done follow that crashed once is never recovered by a later settleClose 
   assert.equal((await store.issues.getIssue(item.id)).job_status_seen ?? null, "running", "setup: claim did not follow to running");
 
   // Model a crashed `done` follow: the write below still succeeds (finishJob is not wrapped by
-  // followingPassedStatus), but followJobQuietly's roadmap.followJob throws and is swallowed —
+  // followingPassedStatus), but followJobQuietly's issues.followJob throws and is swallowed —
   // job_status_seen never advances past "running", and the item never gets its `pr` comment.
   openDb(env).exec(BREAK_ISSUE_WRITES);
   assert.equal(await store.jobs.finishJob(job.id, { worker: "w1", status: "done", prUrl: PR_URL }), true, "setup: finishJob write itself must still succeed");
@@ -66,7 +66,7 @@ test("a done follow that crashed once is never recovered by a later settleClose 
   assert.equal((await store.issues.getIssue(item.id)).status, "in_progress", "setup: the follow for `done` must have been swallowed, leaving the item behind");
   openDb(env).exec("DROP TRIGGER issue_follow_boom");
 
-  // Now close the job normally through the store, with roadmap writes healthy again — exactly
+  // Now close the job normally through the store, with issue writes healthy again — exactly
   // what an operator/queue-close pipeline run does next.
   assert.ok(await store.jobs.acquireClose(job.id, { worker: "close-w", leaseS: 600 }), "setup: the close lease was refused");
   const checklist = mergedChecklist();

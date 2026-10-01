@@ -12,15 +12,15 @@ function runCli(env, args, cwd) {
   return spawnSync(process.execPath, [CLI, ...args], { env, cwd, encoding: "utf8" });
 }
 
-test("`nightqueue roadmap show <ref>` prints the item in full and its thread in order", async (t) => {
-  const env = makeHome(t, "cli-roadmap-show");
+test("`nightqueue issues show <ref>` prints the item in full and its thread in order", async (t) => {
+  const env = makeHome(t, "cli-issue-show");
   const cwd = makeProject(t, env, "alpha");
   const detail = `line one\n${"x".repeat(700)}`;
   const item = saveIssue({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "the worker leaks", detail }, env);
   const { job } = await queueIssue({ id: item.id }, env);
   addIssueComment({ id: item.id, body: "seen twice\nin prod" }, env);
 
-  const shown = runCli(env, ["roadmap", "show", item.ref], cwd);
+  const shown = runCli(env, ["issues", "show", item.ref], cwd);
   assert.equal(shown.status, 0, shown.stderr);
   const lines = shown.stdout.trimEnd().split("\n");
   assert.equal(lines[0], `${item.ref} [bug] in_progress p5`);
@@ -31,13 +31,13 @@ test("`nightqueue roadmap show <ref>` prints the item in full and its thread in 
   assert.match(thread[2], / operator note$/);
   assert.deepEqual(thread.slice(3), ["    seen twice", "    in prod"]);
 
-  const json = JSON.parse(runCli(env, ["roadmap", "show", item.ref, "--json"], cwd).stdout);
+  const json = JSON.parse(runCli(env, ["issues", "show", item.ref, "--json"], cwd).stdout);
   assert.deepEqual(json.comments.map((comment) => comment.kind), ["queued", "note"]);
 
-  const unknown = runCli(env, ["roadmap", "show", "AP-404"], cwd);
+  const unknown = runCli(env, ["issues", "show", "AP-404"], cwd);
   assert.equal(unknown.status, 1);
-  assert.match(unknown.stderr, /unknown roadmap item `AP-404`/);
-  const malformed = runCli(env, ["roadmap", "show", "one"], cwd);
+  assert.match(unknown.stderr, /unknown issue `AP-404`/);
+  const malformed = runCli(env, ["issues", "show", "one"], cwd);
   assert.equal(malformed.status, 1);
-  assert.match(malformed.stderr, /expected a roadmap item ref \(`<KEY>-<number>`\), got `one`/);
+  assert.match(malformed.stderr, /expected an issue ref \(`<KEY>-<number>`\), got `one`/);
 });

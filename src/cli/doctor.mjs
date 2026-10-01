@@ -409,9 +409,9 @@ function issueDriftEntry(row) {
   return `${row.ref}${where} ${row.status} (${jobRef(row.job_id)} ${row.job_status}, expected ${row.expected})`;
 }
 
-// The detail of the roadmap entries whose status disagrees with their job or their rows: how many, then each with its status and the expected one.
+// The detail of the issue entries whose status disagrees with their job or their rows: how many, then each with its status and the expected one.
 function issueDriftDetail(rows) {
-  const noun = rows.length === 1 ? "roadmap status out of step" : "roadmap statuses out of step";
+  const noun = rows.length === 1 ? "issue status out of step" : "issue statuses out of step";
   return `${rows.length} ${noun}: ${rows.map(issueDriftEntry).join(", ")}`;
 }
 
@@ -420,20 +420,20 @@ function issueDriftHint(rows) {
   const hints = [];
   if (rows.some((row) => row.job_id !== null)) hints.push("the next `nightqueue queue run` claim cycle re-syncs the ones behind a job");
   if (rows.some((row) => row.job_id === null)) {
-    hints.push("an org item is re-derived at its next project row change, or set its status with `roadmap_update`");
+    hints.push("an org item is re-derived at its next project row change, or set its status with `issue_update`");
   }
   return hints.join("; ");
 }
 
-// Reports the roadmap items and rows whose status disagrees with their linked job, and the org items whose status disagrees with their rows, reading read-only.
+// Reports the issues and rows whose status disagrees with their linked job, and the org items whose status disagrees with their rows, reading read-only.
 async function checkIssueWorkflow(ctx) {
   const store = openStoreReadOnly(ctx.env);
   try {
     const rows = await store.issues.issueDrift();
-    if (!rows.length) return check("roadmap workflow", "ok", "every linked item follows its job");
-    return check("roadmap workflow", "warn", issueDriftDetail(rows), issueDriftHint(rows));
+    if (!rows.length) return check("issue workflow", "ok", "every linked item follows its job");
+    return check("issue workflow", "warn", issueDriftDetail(rows), issueDriftHint(rows));
   } catch (err) {
-    return check("roadmap workflow", "warn", err?.message ?? String(err), `inspect ${dbPath(ctx.env)}`);
+    return check("issue workflow", "warn", err?.message ?? String(err), `inspect ${dbPath(ctx.env)}`);
   } finally {
     await store.close();
   }

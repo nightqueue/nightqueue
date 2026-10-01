@@ -26,7 +26,7 @@ function gitVars() {
   };
 }
 
-// A roadmap job bound to its slug with a real worktree, one file ready to commit.
+// An issue job bound to its slug with a real worktree, one file ready to commit.
 function issueRun(t, name) {
   const env = { ...makeHome(t, name), ...gitVars() };
   makeProject(t, env, "alpha");

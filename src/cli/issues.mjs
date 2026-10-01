@@ -7,8 +7,8 @@ import { checkArgs, parseCommand } from "./args.mjs";
 import { readOnlyQuery, resolveReadTarget } from "./decision.mjs";
 
 const USAGE = {
-  list: "nightqueue roadmap [--project <name> | --org <name>] [--status <s>]... [--priority <n>]... [--type <t>]... [--json]",
-  show: "nightqueue roadmap show <ref> [--json]",
+  list: "nightqueue issues [--project <name> | --org <name>] [--status <s>]... [--priority <n>]... [--type <t>]... [--json]",
+  show: "nightqueue issues show <ref> [--json]",
 };
 
 // Collapses the whitespace of operator free text, so a multi-line title never breaks the listing.
@@ -33,7 +33,7 @@ function projectStatusMark(item) {
   return item.project_status ? ` (${item.project_status})` : "";
 }
 
-// Lines of one roadmap item: its priority and reference first, its links and project rows indented under it.
+// Lines of one issue: its priority and reference first, its links and project rows indented under it.
 function itemLines(item) {
   const lines = [`  p${item.priority} ${item.ref} ${oneLine(item.title)}${projectStatusMark(item)}`];
   if (item.decision_number !== null) lines.push(`     decision ${item.decision_ref}`);
@@ -85,13 +85,13 @@ function detailLines(item) {
   return item.comments.length ? [...lines, ...item.comments.flatMap(commentLines)] : [...lines, "  (none)"];
 }
 
-// Runs `nightqueue roadmap show <ref>`, which reads one item and its thread and never writes.
+// Runs `nightqueue issues show <ref>`, which reads one item and its thread and never writes.
 async function runShow(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.show });
   const ref = positionals[0];
   const item = await readOnlyQuery(ctx, async (store) => store.issues.getIssueDetail(await store.issues.itemIdOfRef(ref)), null);
-  if (item === null) throw new UserError(`unknown roadmap item \`${ref}\``);
+  if (item === null) throw new UserError(`unknown issue \`${ref}\``);
   if (values.json) {
     ctx.out(JSON.stringify(item));
     return;
@@ -99,7 +99,7 @@ async function runShow(argv, ctx) {
   for (const line of detailLines(item)) ctx.out(line);
 }
 
-// Runs `nightqueue roadmap`, which reads the database and never writes to it; `show <ref>` reads one item in full.
+// Runs `nightqueue issues`, which reads the database and never writes to it; `show <ref>` reads one item in full.
 export async function run(argv, ctx) {
   if (argv[0] === "show") return await runShow(argv.slice(1), ctx);
   const { values, positionals } = parseCommand(argv, {
@@ -113,14 +113,14 @@ export async function run(argv, ctx) {
   checkArgs(positionals, { max: 0, usage: USAGE.list });
   const target = await resolveReadTarget(values, ctx);
   const filters = { status: values.status, priority: priorityFilter(values.priority), type: values.type };
-  const roadmap = await readOnlyQuery(
+  const listing = await readOnlyQuery(
     ctx,
     (store) => store.issues.listIssues(ownerRef(target), filters),
     emptyIssues(ownerNames(target)),
   );
   if (values.json) {
-    ctx.out(JSON.stringify(roadmap));
+    ctx.out(JSON.stringify(listing));
     return;
   }
-  for (const line of statusLines(roadmap.items)) ctx.out(line);
+  for (const line of statusLines(listing.items)) ctx.out(line);
 }

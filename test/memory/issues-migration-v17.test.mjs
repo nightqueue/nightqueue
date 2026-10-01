@@ -103,7 +103,7 @@ function indexColumns(db, name) {
 }
 
 test("the v17 migration maps every legacy status and horizon, bumps nightqueue #9 and #36, and drops the horizon", (t) => {
-  const env = legacyHome(t, "roadmap-v17-map");
+  const env = legacyHome(t, "issue-v17-map");
   const db = openDb(env);
 
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
@@ -119,13 +119,13 @@ test("the v17 migration maps every legacy status and horizon, bumps nightqueue #
 });
 
 test("a reopen of the migrated database changes nothing, and the v16 INDEXES still execute against the v20 shape it reached before v21", (t) => {
-  const env = legacyHome(t, "roadmap-v17-reopen");
+  const env = legacyHome(t, "issue-v17-reopen");
   const before = migratedRows(openDb(env));
   closeDb(env);
   const reopened = openDb(env);
   assert.deepEqual(migratedRows(reopened), before);
   assert.deepEqual(indexColumns(reopened, "issues_order_idx"), ["scope", "project_id", "org_id", "priority", "position"]);
-  const v20 = join(makeDir(t, "roadmap-v17-reopen-v20"), "nightqueue.db");
+  const v20 = join(makeDir(t, "issue-v17-reopen-v20"), "nightqueue.db");
   copyFileSync(preV21BackupPath(env), v20);
   const old = new DatabaseSync(v20);
   t.after(() => old.close());
@@ -134,7 +134,7 @@ test("a reopen of the migrated database changes nothing, and the v16 INDEXES sti
 });
 
 test("the migration keeps the id counter, so a new item never reuses the id of a deleted one", (t) => {
-  const env = makeHome(t, "roadmap-v17-sequence");
+  const env = makeHome(t, "issue-v17-sequence");
   makeProject(t, env, "alpha");
   seedLegacyV16Roadmap(env, { items: [{ id: 1, project: "alpha", horizon: "now", status: "open", position: 1 }], sequence: 40 });
 
@@ -143,7 +143,7 @@ test("the migration keeps the id counter, so a new item never reuses the id of a
 });
 
 test("an item #9 of another project keeps the default priority", (t) => {
-  const env = makeHome(t, "roadmap-v17-other-9");
+  const env = makeHome(t, "issue-v17-other-9");
   makeProject(t, env, "alpha");
   seedLegacyV16Roadmap(env, {
     items: [
@@ -159,7 +159,7 @@ test("an item #9 of another project keeps the default priority", (t) => {
 });
 
 test("a legacy queued item whose job already failed is re-synced to todo by the first follow of the drift", (t) => {
-  const env = legacyHome(t, "roadmap-v17-drift");
+  const env = legacyHome(t, "issue-v17-drift");
   const db = openDb(env);
   assert.equal(db.prepare("SELECT status FROM issues WHERE id = 5").get().status, "in_progress");
   assert.ok(followDriftedJobs(env) >= 1);
@@ -196,8 +196,8 @@ function spawnOpener(env, path) {
 }
 
 test("two processes opening the same legacy database both succeed and the rows are rebuilt once", async (t) => {
-  const env = legacyHome(t, "roadmap-v17-race");
-  const path = join(makeDir(t, "roadmap-v17-opener"), "opener.mjs");
+  const env = legacyHome(t, "issue-v17-race");
+  const path = join(makeDir(t, "issue-v17-opener"), "opener.mjs");
   writeFileSync(path, openerSource());
   const results = await Promise.all([spawnOpener(env, path), spawnOpener(env, path)]);
   for (const result of results) {
@@ -227,7 +227,7 @@ async function doctorReport(env) {
 }
 
 test("a v16 home is diagnosed read-only without a crash, then migrated for a read-only reader that lists the rebuilt rows", async (t) => {
-  const host = makeHostEnv(t, "roadmap-v17-read-only");
+  const host = makeHostEnv(t, "issue-v17-read-only");
   const { env } = host;
   makeProject(t, env, "alpha");
   seedLegacyV16Roadmap(env, { items: [{ id: 1, project: "alpha", horizon: "now", status: "open", position: 1, title: "legacy item" }] });
@@ -236,7 +236,7 @@ test("a v16 home is diagnosed read-only without a crash, then migrated for a rea
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
   assert.match(database.detail, new RegExp(`schema v16, expected v${DB_USER_VERSION}`));
-  assert.equal(report.checks.some((check) => check.name === "roadmap workflow"), false);
+  assert.equal(report.checks.some((check) => check.name === "issue workflow"), false);
   assert.equal(diskVersion(env), 16);
 
   await openStoreReadOnly(env).migrateIfOutdated();
@@ -248,8 +248,8 @@ test("a v16 home is diagnosed read-only without a crash, then migrated for a rea
   assert.equal(diskVersion(env), DB_USER_VERSION);
 });
 
-test("a legacy queued item whose job was closed (merged) needs no roadmap step: the sweep closes it with the merge sha", async (t) => {
-  const env = makeHome(t, "roadmap-v17-closed-job");
+test("a legacy queued item whose job was closed (merged) needs no issue step: the sweep closes it with the merge sha", async (t) => {
+  const env = makeHome(t, "issue-v17-closed-job");
   makeProject(t, env, "alpha");
   const jobId = seedClosedJob(env);
   seedLegacyV16Roadmap(env, { items: [{ id: 1, project: "alpha", horizon: "now", status: "queued", position: 1, job_id: jobId }] });

@@ -14,7 +14,7 @@ function parseOptions(argv) {
   return { dryRun: values["dry-run"] };
 }
 
-// Synthesizes the comments of the roadmap items linked to a job before comments existed, in the home NIGHTQUEUE_HOME names; answers the exit code.
+// Synthesizes the comments of the issues linked to a job before comments existed, in the home NIGHTQUEUE_HOME names; answers the exit code.
 export async function main(argv = process.argv.slice(2), env = process.env, io = console) {
   const { dryRun } = parseOptions(argv);
   requireExplicitHome(env);
@@ -34,7 +34,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       process.exitCode = code;
     },
     (err) => {
-      console.error(`roadmap-backfill: ${err?.message ?? String(err)}`);
+      console.error(`issue-backfill: ${err?.message ?? String(err)}`);
       process.exitCode = 1;
     },
   );

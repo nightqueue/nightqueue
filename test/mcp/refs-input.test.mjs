@@ -74,46 +74,46 @@ test("the item tools take a ref, old key included, and refuse an integer or an u
 
   assert.deepEqual([alphaItem.ref, orgItem.ref, globalItem.ref], ["AP-1", "AM-1", "G-1"]);
   for (const ref of ["NQ-1", "AP-1", "nq-1", " AP-1 "]) {
-    const detail = payloadOf(await client.callTool({ name: "roadmap_get", arguments: { id: ref } }));
+    const detail = payloadOf(await client.callTool({ name: "issue_get", arguments: { id: ref } }));
     assert.equal(detail.ref, "NQ-1", ref);
     assert.equal(detail.id, alphaItem.id, ref);
   }
-  assert.equal(payloadOf(await client.callTool({ name: "roadmap_get", arguments: { id: "AM-1" } })).ref, "AC-1");
-  assert.equal(payloadOf(await client.callTool({ name: "roadmap_get", arguments: { id: "G-1" } })).id, globalItem.id);
+  assert.equal(payloadOf(await client.callTool({ name: "issue_get", arguments: { id: "AM-1" } })).ref, "AC-1");
+  assert.equal(payloadOf(await client.callTool({ name: "issue_get", arguments: { id: "G-1" } })).id, globalItem.id);
 
-  assert.match(await refusalOf(client, "roadmap_get", { id: alphaItem.id }), /^your client has the tool definitions of an older nightqueue \(contract 1, this server is 2\)/);
-  assert.match(await refusalOf(client, "roadmap_get", { id: "D-1" }), /expected a roadmap item ref/);
-  assert.match(await refusalOf(client, "roadmap_get", { id: "J-1" }), /expected a roadmap item ref/);
-  assert.match(await refusalOf(client, "roadmap_get", { id: "NQ-9" }), /unknown roadmap item `NQ-9`/);
-  assert.match(await refusalOf(client, "roadmap_get", { id: "ZZ-1" }), /unknown roadmap item `ZZ-1`/);
+  assert.match(await refusalOf(client, "issue_get", { id: alphaItem.id }), /^your client has the tool definitions of an older nightqueue \(contract 2, this server is 3\)/);
+  assert.match(await refusalOf(client, "issue_get", { id: "D-1" }), /expected an issue ref/);
+  assert.match(await refusalOf(client, "issue_get", { id: "J-1" }), /expected an issue ref/);
+  assert.match(await refusalOf(client, "issue_get", { id: "NQ-9" }), /unknown issue `NQ-9`/);
+  assert.match(await refusalOf(client, "issue_get", { id: "ZZ-1" }), /unknown issue `ZZ-1`/);
 
-  const comment = payloadOf(await client.callTool({ name: "roadmap_comment", arguments: { id: "AP-1", body: "seen" } }));
+  const comment = payloadOf(await client.callTool({ name: "issue_comment", arguments: { id: "AP-1", body: "seen" } }));
   assert.equal(comment.comment.body, "seen");
-  assert.match(await refusalOf(client, "roadmap_comment", { id: 1, body: "x" }), /older nightqueue/);
+  assert.match(await refusalOf(client, "issue_comment", { id: 1, body: "x" }), /older nightqueue/);
 
-  const updated = payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: "AP-1", decision_id: "D-2" } }));
+  const updated = payloadOf(await client.callTool({ name: "issue_update", arguments: { id: "AP-1", decision_id: "D-2" } }));
   assert.deepEqual([updated.item.ref, updated.item.decision_ref], ["NQ-1", "D-2"]);
-  assert.match(await refusalOf(client, "roadmap_update", { id: 1, status: "cancelled" }), /older nightqueue/);
-  assert.match(await refusalOf(client, "roadmap_update", { id: "NQ-1", decision_id: 2 }), /older nightqueue/);
-  assert.match(await refusalOf(client, "roadmap_update", { id: "AC-1", decision_id: "D-1" }), /`D-1` names a decision of a project: pass the project, or write it `<KEY>\/D-1`/);
-  const orgLinked = payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: "AC-1", decision_id: "AM/D-1" } }));
+  assert.match(await refusalOf(client, "issue_update", { id: 1, status: "cancelled" }), /older nightqueue/);
+  assert.match(await refusalOf(client, "issue_update", { id: "NQ-1", decision_id: 2 }), /older nightqueue/);
+  assert.match(await refusalOf(client, "issue_update", { id: "AC-1", decision_id: "D-1" }), /`D-1` names a decision of a project: pass the project, or write it `<KEY>\/D-1`/);
+  const orgLinked = payloadOf(await client.callTool({ name: "issue_update", arguments: { id: "AC-1", decision_id: "AM/D-1" } }));
   assert.equal(orgLinked.item.decision_ref, "AC/D-1");
   assert.equal(getIssue(orgItem.id, env).decision_id, 4);
 
   const saved = payloadOf(
-    await client.callTool({ name: "roadmap_save", arguments: { project: "alpha", type: "feature", title: "cache it", decision_id: "AP/D-1" } }),
+    await client.callTool({ name: "issue_save", arguments: { project: "alpha", type: "feature", title: "cache it", decision_id: "AP/D-1" } }),
   );
   assert.equal(saved.ref, "NQ-2");
   assert.equal(getIssue(saved.id, env).decision_id, 1);
   assert.match(
-    await refusalOf(client, "roadmap_save", { project: "alpha", type: "feature", title: "x", decision_id: "BT/D-1" }),
+    await refusalOf(client, "issue_save", { project: "alpha", type: "feature", title: "x", decision_id: "BT/D-1" }),
     /belongs to project `beta`, not project `alpha`/,
   );
 
-  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: "AP-1" } }));
-  assert.equal(queued.roadmap_ref, "NQ-1");
-  assert.equal(queued.roadmapItemId, alphaItem.id);
-  assert.match(await refusalOf(client, "queue_add", { roadmap_item_id: 2 }), /older nightqueue/);
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { issue_id: "AP-1" } }));
+  assert.equal(queued.issue_ref, "NQ-1");
+  assert.equal(queued.issueId, alphaItem.id);
+  assert.match(await refusalOf(client, "queue_add", { issue_id: 2 }), /older nightqueue/);
 });
 
 test("decision_update takes a decision ref: `D-<n>` needs a project, `<KEY>/D-<n>` names its owner, old keys resolve", async (t) => {
@@ -202,11 +202,11 @@ test("inside a job a ref resolves to the same row as before, so another project'
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   assert.match(
-    await refusalOf(client, "roadmap_update", { id: "BT-1", status: "cancelled" }),
-    new RegExp(`refusing to update roadmap item \`BT-1\` from inside job \`${job.id}\`: it belongs to project \`beta\``),
+    await refusalOf(client, "issue_update", { id: "BT-1", status: "cancelled" }),
+    new RegExp(`refusing to update issue \`BT-1\` from inside job \`${job.id}\`: it belongs to project \`beta\``),
   );
   assert.equal(getIssue(betaItem.id, env).status, "todo", "the refused update reached beta's item");
-  assert.match(await refusalOf(client, "roadmap_comment", { id: "BT-1", body: "leak" }), /belongs to project `beta`, not project `alpha`/);
+  assert.match(await refusalOf(client, "issue_comment", { id: "BT-1", body: "leak" }), /belongs to project `beta`, not project `alpha`/);
   assert.equal(getIssueDetail(betaItem.id, {}, env).comments.length, 0, "the refused comment was written");
   assert.match(await refusalOf(client, "decision_update", { id: "BT/D-1", status: "rejected" }), /refusing to update decision `BT\/D-1`/);
   assert.equal(getDecision(3, env).status, "accepted", "the refused update reached beta's decision");
@@ -214,6 +214,6 @@ test("inside a job a ref resolves to the same row as before, so another project'
 
   const own = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: "D-1", status: "rejected" } }));
   assert.deepEqual([own.decision.ref, own.decision.status, own.decision.owner], ["D-1", "rejected", "alpha"]);
-  const ownItem = payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: "AP-1", status: "cancelled" } }));
+  const ownItem = payloadOf(await client.callTool({ name: "issue_update", arguments: { id: "AP-1", status: "cancelled" } }));
   assert.equal(ownItem.item.status, "cancelled");
 });

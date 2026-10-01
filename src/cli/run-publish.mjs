@@ -53,7 +53,7 @@ const CONVENTIONAL_SUBJECT_RE = /^[a-z]+(\([^)]*\))?!?: \S/;
 // A `Refs:` trailer line, which `run commit` appends itself from the job row and refuses in the agent's message.
 const REFS_TRAILER = /^Refs\s*:/i;
 
-// The copy of the agent's message a roadmap job commits with, under the run directory.
+// The copy of the agent's message an issue job commits with, under the run directory.
 const COMMIT_MESSAGE_FILE = "commit-message.md";
 
 // The commit message the agent wrote, refused when it is missing or empty: the message is the agent's and the command never invents one.
@@ -163,12 +163,12 @@ function refsTrailerLine(message) {
   return at < 0 ? null : { number: at + 1, line: lines[at].trim() };
 }
 
-// The ref of the roadmap item the run's job came from, or null; a store that cannot answer stops the commit.
+// The ref of the issue the run's job came from, or null; a store that cannot answer stops the commit.
 async function commitItemRef(run, env) {
   try {
     return await runItemRef(run, env);
   } catch (error) {
-    throw new UserError(`could not read the roadmap item of ${jobRef(run.jobId)}:${error?.message ?? String(error)}; nothing was committed`);
+    throw new UserError(`could not read the issue of ${jobRef(run.jobId)}:${error?.message ?? String(error)}; nothing was committed`);
   }
 }
 
@@ -184,7 +184,7 @@ function copyMessage(messageFile, runDirectory) {
   }
 }
 
-// The message file git commits: the agent's own, or for a roadmap job a copy whose trailer block ends with `Refs: <item ref>`.
+// The message file git commits: the agent's own, or for an issue job a copy whose trailer block ends with `Refs: <item ref>`.
 async function commitMessageFile({ messageFile, run, cwd, env }) {
   const ref = await commitItemRef(run, env);
   if (ref === null) return messageFile;

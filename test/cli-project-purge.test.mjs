@@ -165,7 +165,7 @@ test("purge of a project with a comment on an org item is refused and changes no
   const refused = await cli(env, ["project", "remove", "alpha", "--purge", "--yes"]);
 
   assert.equal(refused.code, 1);
-  assert.match(refused.err, /cannot purge project `alpha`: it wrote 1 comment\(s\) on roadmap items it does not own.*D-44.*nothing was removed/);
+  assert.match(refused.err, /cannot purge project `alpha`: it wrote 1 comment\(s\) on issues it does not own.*D-44.*nothing was removed/);
   assert.deepEqual(snapshot(), before);
   assert.match(guardBefore, /RAISE/);
   assert.equal(guard(), guardBefore);

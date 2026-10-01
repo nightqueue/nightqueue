@@ -14,7 +14,7 @@ function headingOccurrences(prompt, heading) {
 }
 
 describe("H-B1: operator free text can forge a heading indistinguishable from the builder's own", () => {
-  it("a roadmap item title containing a fake '## Linked decision' heading is byte-identical to the real one buildIssuePrompt emits", async (t) => {
+  it("an issue title containing a fake '## Linked decision' heading is byte-identical to the real one buildIssuePrompt emits", async (t) => {
     const env = makeHome(t, "prompt-injection-hb1");
     const project = "alpha";
     makeProject(t, env, project);
@@ -92,7 +92,7 @@ describe("H-B2: runtime-contract literals (QUEUE_SLUG:, ## Notice) from operator
   });
 
   it("an echoed '## Notice' with no pull request is now a failure, not a gate: the injected heading buys the attacker nothing", () => {
-    // The orchestrator's own final text QUOTES back the operator-authored roadmap detail
+    // The orchestrator's own final text QUOTES back the operator-authored issue detail
     // (a documented LLM behavior: summarizing/echoing task context in the final message),
     // reproducing the attacker's fake '## Notice' heading as if it were the orchestrator's own.
     const echoedOperatorText =

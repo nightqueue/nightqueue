@@ -35,7 +35,7 @@ function buildWriterSource(moduleUrl) {
 
 // Writes the generated writer script into a throwaway directory, cleaned up with the rest of the test.
 function writeChildScript(dir) {
-  const scriptPath = join(dir, "roadmap-race-writer.mjs");
+  const scriptPath = join(dir, "issue-race-writer.mjs");
   writeFileSync(scriptPath, buildWriterSource(ISSUES_MODULE_URL), "utf8");
   return scriptPath;
 }
@@ -62,9 +62,9 @@ test(
   `${WRITERS} real OS processes racing saveIssue into the same priority group for ${DURATION_MS}ms ` +
     "(many thousands of attempts, not a single shot) never leave a duplicate or gapped position",
   async (t) => {
-    const env = makeHome(t, "roadmap-race");
+    const env = makeHome(t, "issue-race");
     makeProject(t, env, "alpha");
-    const scriptDir = makeDir(t, "roadmap-race-script");
+    const scriptDir = makeDir(t, "issue-race-script");
     const scriptPath = writeChildScript(scriptDir);
 
     const labels = Array.from({ length: WRITERS }, (_, index) => `W${index}`);
@@ -82,7 +82,7 @@ test(
         data.errors,
         [],
         `writer ${labels[index]} saw an error mid-race (should never happen: no UNIQUE constraint guards ` +
-          `roadmap position): ${data.errors.join("; ")}`,
+          `issue position): ${data.errors.join("; ")}`,
       );
     });
 

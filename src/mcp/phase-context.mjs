@@ -81,17 +81,17 @@ async function indexSection({ target, projectId, repoRoot, query }, env) {
   return section("Structural index", rows, (row) => row);
 }
 
-// One roadmap line of the triager block: its reference, its title and where it stands.
+// One issue line of the triager block: its reference, its title and where it stands.
 function issueLine(item) {
   return `- [${item.ref}] ${clip(item.title, LINE_MAX)} [${item.status}, p${item.priority}, ${item.type}]`;
 }
 
-// The roadmap items the triager should know about before judging a request; any other phase, a run without an owner or a failed search gets nothing.
+// The issues the triager should know about before judging a request; any other phase, a run without an owner or a failed search gets nothing.
 async function issueSection({ target, projectId, query }, env) {
   if (target !== "triager" || !projectId || typeof query !== "string" || !query.trim()) return "";
   try {
     const items = await openStore(env).issues.searchIssues({ projectId, query });
-    return section("Related roadmap items", items, issueLine);
+    return section("Related issues", items, issueLine);
   } catch {
     return "";
   }

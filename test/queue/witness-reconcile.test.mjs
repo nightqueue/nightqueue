@@ -88,7 +88,7 @@ function witness(env, { slug = SLUG, status = "done", prUrl = PR_URL } = {}) {
   });
 }
 
-// Records a roadmap item as linked to a job, the link the reconciliation has to move.
+// Records an issue as linked to a job, the link the reconciliation has to move.
 function linkedItem(env, id, title) {
   const item = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title }, env);
   assert.equal(linkIssueJob(item.id, id, env), true, "setup: the item was not linked to its job");
@@ -167,8 +167,8 @@ test("a job the database lost is restored from its witness, with repairedFrom in
   assert.deepEqual(await reconcileFromWitness(env), { repaired: [], error: null }, "a job that already ended was repaired again");
 });
 
-test("the reconciliation puts in review the roadmap item of a job its witness says delivered, and sends the one of a failed witness to todo", async (t) => {
-  const env = makeQueue(t, "reconcile-roadmap");
+test("the reconciliation puts in review the issue of a job its witness says delivered, and sends the one of a failed witness to todo", async (t) => {
+  const env = makeQueue(t, "reconcile-issue");
   const delivered = lostFinish(env);
   const deliveredItem = linkedItem(env, delivered, "deliver the delivery");
 

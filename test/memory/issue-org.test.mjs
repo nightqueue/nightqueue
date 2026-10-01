@@ -12,7 +12,7 @@ import {
 } from "../../src/memory/issues.mjs";
 import { makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
-// Saves a roadmap item of an owner with the fields every test would otherwise repeat.
+// Saves an issue of an owner with the fields every test would otherwise repeat.
 function addItem(env, { project, org, title, detail, decision_id }) {
   return saveIssue({ type: "improvement", projectId: projectIdOf(env, project), orgId: orgIdOf(env, org), title, detail, decision_id }, env);
 }
@@ -26,9 +26,9 @@ function makeTwoOrgHome(t, name) {
   return env;
 }
 
-// Titles of a roadmap listing, in the order it returns them.
-function titlesOf(roadmap) {
-  return roadmap.items.map((item) => item.title);
+// Titles of an issue listing, in the order it returns them.
+function titlesOf(listing) {
+  return listing.items.map((item) => item.title);
 }
 
 // Positions an owner holds in a priority group, straight from the database.
@@ -42,7 +42,7 @@ function positionsOf(env, priority, { project = null, org = null }) {
 }
 
 test("positions are counted inside one owner: two orgs and a project share a priority without renumbering each other", (t) => {
-  const env = makeTwoOrgHome(t, "roadmap-org-position");
+  const env = makeTwoOrgHome(t, "issue-org-position");
   addItem(env, { org: "acme", title: "acme first" });
   const second = addItem(env, { org: "acme", title: "acme second" });
   addItem(env, { org: "orbit", title: "orbit first" });
@@ -58,8 +58,8 @@ test("positions are counted inside one owner: two orgs and a project share a pri
   assert.deepEqual(positionsOf(env, 5, { project: "acme-mobile-app" }), [["project first", 1]]);
 });
 
-test("a project roadmap shows its org's items first and never another org's", (t) => {
-  const env = makeTwoOrgHome(t, "roadmap-org-union");
+test("a project listing shows its org's items first and never another org's", (t) => {
+  const env = makeTwoOrgHome(t, "issue-org-union");
   addItem(env, { project: "acme-mobile-app", title: "deliver the app cache" });
   addItem(env, { org: "acme", title: "every repo delivers the cache" });
   addItem(env, { org: "orbit", title: "orbit delivers nothing" });
@@ -73,7 +73,7 @@ test("a project roadmap shows its org's items first and never another org's", (t
 });
 
 test("an item links a decision its owner sees: its own, or its org's for a project item, never a sibling project's", (t) => {
-  const env = makeTwoOrgHome(t, "roadmap-org-decision");
+  const env = makeTwoOrgHome(t, "issue-org-decision");
   const orgDecision = saveDecision({ orgId: orgIdOf(env, "acme"), title: "one queue", context: "c", decision: "d" }, env);
   const projectDecision = saveDecision({ projectId: projectIdOf(env, "acme-api"), title: "api caches", context: "c", decision: "d" }, env);
 
@@ -92,7 +92,7 @@ test("an item links a decision its owner sees: its own, or its org's for a proje
 });
 
 test("an org item queues one job per named project on its own row, stays unlinked itself, and refuses a project outside its org", async (t) => {
-  const env = makeTwoOrgHome(t, "roadmap-org-queue");
+  const env = makeTwoOrgHome(t, "issue-org-queue");
   const item = addItem(env, { org: "acme", title: "raise the node version" });
 
   await assert.rejects(() => queueIssue({ id: item.id }, env), /belongs to org `acme`.*--project <name\|all>/s);
@@ -116,7 +116,7 @@ test("an org item queues one job per named project on its own row, stays unlinke
 });
 
 test("a project item keeps its own queue path: it is linked, and a project that is not its own is still refused", async (t) => {
-  const env = makeTwoOrgHome(t, "roadmap-org-project-item");
+  const env = makeTwoOrgHome(t, "issue-org-project-item");
   const item = addItem(env, { project: "acme-mobile-app", title: "deliver the app cache" });
 
   await assert.rejects(

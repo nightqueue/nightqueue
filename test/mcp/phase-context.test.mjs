@@ -103,17 +103,17 @@ test("a project with nothing to say produces an empty block, not a header", asyn
   assert.equal(answer.block, "");
 });
 
-test("only the triager gets the related roadmap items of its project, in the ref-title-status line", async (t) => {
-  const { env, home } = makeRunningJob(t, "phase-context-roadmap");
+test("only the triager gets the related issues of its project, in the ref-title-status line", async (t) => {
+  const { env, home } = makeRunningJob(t, "phase-context-issue");
   const item = saveIssue({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "the runner drops its lease", priority: 2 }, home);
   saveIssue({ type: "chore", projectId: projectIdOf(env, "alpha"), title: "unrelated cleanup" }, home);
 
   const triager = await phaseContextBlock({ target: "triager", query: "runner lease" }, env);
   assert.ok(
-    triager.block.includes(`## Related roadmap items\n- [${item.ref}] the runner drops its lease [todo, p2, bug]`),
+    triager.block.includes(`## Related issues\n- [${item.ref}] the runner drops its lease [todo, p2, bug]`),
     triager.block,
   );
   assert.equal(triager.block.includes("unrelated cleanup"), false);
   const coder = await phaseContextBlock({ target: "coder", query: "runner lease" }, env);
-  assert.equal(coder.block.includes("## Related roadmap items"), false);
+  assert.equal(coder.block.includes("## Related issues"), false);
 });

@@ -51,17 +51,17 @@ function makeRefsHome(t, name) {
   return { env, cwd, elsewhere: makeDir(t, `${name}-elsewhere`), item };
 }
 
-test("roadmap show and queue add --roadmap take an item ref, old key included, and refuse an integer", (t) => {
+test("issues show and queue add --issue take an item ref, old key included, and refuse an integer", (t) => {
   const { env, cwd, elsewhere, item } = makeRefsHome(t, "cli-refs-items");
 
   for (const ref of ["NQ-1", "AP-1", "nq-1"]) {
-    assert.equal(ok(env, ["roadmap", "show", ref], elsewhere).split("\n")[0], "NQ-1 [bug] todo p5", ref);
+    assert.equal(ok(env, ["issues", "show", ref], elsewhere).split("\n")[0], "NQ-1 [bug] todo p5", ref);
   }
-  assert.match(refused(env, ["roadmap", "show", String(item.id)], elsewhere), /expected a roadmap item ref \(`<KEY>-<number>`\), got `1`/);
-  assert.match(refused(env, ["roadmap", "show", "NQ-7"], elsewhere), /unknown roadmap item `NQ-7`/);
+  assert.match(refused(env, ["issues", "show", String(item.id)], elsewhere), /expected an issue ref \(`<KEY>-<number>`\), got `1`/);
+  assert.match(refused(env, ["issues", "show", "NQ-7"], elsewhere), /unknown issue `NQ-7`/);
 
-  assert.match(refused(env, ["queue", "add", "--roadmap", "1"], cwd), /expected a roadmap item ref \(`<KEY>-<number>`\), got `1`/);
-  assert.match(ok(env, ["queue", "add", "--roadmap", "AP-1"], elsewhere), /roadmap item NQ-1 of `alpha` is now `in_progress`/);
+  assert.match(refused(env, ["queue", "add", "--issue", "1"], cwd), /expected an issue ref \(`<KEY>-<number>`\), got `1`/);
+  assert.match(ok(env, ["queue", "add", "--issue", "AP-1"], elsewhere), /issue NQ-1 of `alpha` is now `in_progress`/);
   assert.equal(getIssue(item.id, env).status, "in_progress");
 });
 

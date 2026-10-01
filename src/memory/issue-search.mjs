@@ -105,7 +105,7 @@ function rankedTextHits(db, spec) {
 export function searchIssues({ query, file, projectId, orgId, limit } = {}, env = process.env, db = null) {
   const text = optionalTerm(query);
   const path = optionalTerm(file);
-  if (text === null && path === null) throw new UserError("roadmap search needs `query`, `file` or both");
+  if (text === null && path === null) throw new UserError("issue search needs `query`, `file` or both");
   const connection = db ?? openDb(env);
   const target = requireScopeTarget(connection, { projectId, orgId });
   const size = searchLimit(limit);

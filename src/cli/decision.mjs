@@ -84,7 +84,7 @@ export async function resolveReadTarget(values, ctx) {
   throw new UserError(`no project registered for ${cwd}; run \`nightqueue init\` here, or pass --project <name>`);
 }
 
-// Reads the database on a connection that can never write a decision nor a roadmap item; a home with no database yet reads as an empty one, and one written by an older build is brought to this schema first.
+// Reads the database on a connection that can never write a decision nor an issue; a home with no database yet reads as an empty one, and one written by an older build is brought to this schema first.
 export async function readOnlyQuery(ctx, query, empty) {
   const path = dbPath(ctx.env);
   if (!existsSync(path)) return empty;

@@ -16,7 +16,7 @@
 /**
  * Every writer that can move a job's status (`JOB_STATUS_WRITERS` of `local.mjs`) is followed, once it
  * reports success, by `issues.followJob`: one reconciler reads the job's current row and moves each
- * linked roadmap item through the `JOB_TO_ISSUE` table of `issue-workflow.mjs`. A refused write
+ * linked issue through the `JOB_TO_ISSUE` table of `issue-workflow.mjs`. A refused write
  * follows nothing, a failure of the follow never costs the job write, and `sweepOrphans` re-syncs,
  * on every claim cycle, whatever a missed event left behind (`issues.followDriftedJobs`).
  * @typedef {object} JobsDomain
@@ -52,7 +52,7 @@
  * @property {(id: number, terminal: object) => Promise<boolean>} repairJobFromWitness
  * @property {(id: number, outcome: object) => Promise<boolean>} reclassifyJob the outcome re-derived from the job's own log
  * @property {(ids: number[]) => Promise<number[]>} existingJobIds the ids of the list that have a row, read-only
- * @property {(spec: object) => Promise<"recovered"|"exists"|"project-missing">} recoverJob recreates a lost row from its run on disk with a `result.recovered` marker; not a status writer, so no roadmap follow runs
+ * @property {(spec: object) => Promise<"recovered"|"exists"|"project-missing">} recoverJob recreates a lost row from its run on disk with a `result.recovered` marker; not a status writer, so no issue follow runs
  * @property {(id: number, spec: object) => Promise<boolean>} correctJobPrAttribution moves a job's pull request URL and swaps its one notice line in a single compare-and-swap; false means refused, nothing written
  * @property {() => Promise<boolean>} hasClaimablePending
  * @property {() => Promise<object|null>} peekNextJob

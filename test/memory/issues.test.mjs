@@ -13,12 +13,12 @@ import {
 } from "../../src/memory/issues.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
-// Saves a roadmap item of a project with the fields every test would otherwise repeat.
+// Saves an issue of a project with the fields every test would otherwise repeat.
 function addItem(env, { project = "alpha", priority, status, title, detail, decision_id }) {
   return saveIssue({ type: "improvement", projectId: projectIdOf(env, project), priority, status, title, detail, decision_id }, env);
 }
 
-// Titles of one priority group, in the order the roadmap returns them.
+// Titles of one priority group, in the order the issues listing returns them.
 function titlesOf(env, priority) {
   return listIssues(projectIdOf(env, "alpha"), {}, env)
     .items.filter((item) => item.priority === priority)
@@ -40,7 +40,7 @@ function assertContiguous(env, priority, total) {
 }
 
 test("an item is appended at the end of its priority group, and the listing puts priority 1 first", (t) => {
-  const env = makeHome(t, "roadmap-append");
+  const env = makeHome(t, "issue-append");
   makeProject(t, env, "alpha");
   const first = addItem(env, { title: "first p5" });
   assert.equal(first.position, 1);
@@ -49,16 +49,16 @@ test("an item is appended at the end of its priority group, and the listing puts
   assert.equal(addItem(env, { title: "second p5" }).position, 2);
   assert.equal(addItem(env, { priority: 2, title: "first p2" }).position, 1);
 
-  const roadmap = listIssues(projectIdOf(env, "alpha"), {}, env);
-  assert.equal(roadmap.project, "alpha");
-  assert.deepEqual(roadmap.items.map((item) => item.title), ["first p2", "first p5", "second p5"]);
-  assert.equal("horizon" in roadmap.items[0], false);
+  const listing = listIssues(projectIdOf(env, "alpha"), {}, env);
+  assert.equal(listing.project, "alpha");
+  assert.deepEqual(listing.items.map((item) => item.title), ["first p2", "first p5", "second p5"]);
+  assert.equal("horizon" in listing.items[0], false);
   assert.throws(() => addItem(env, { priority: 10, title: "x" }), /expected an integer 1-9/);
-  assert.throws(() => addItem(env, { title: "" }), /roadmap field `title` is required/);
+  assert.throws(() => addItem(env, { title: "" }), /issue field `title` is required/);
 });
 
 test("the retired horizon is refused by name on save and on update", (t) => {
-  const env = makeHome(t, "roadmap-horizon");
+  const env = makeHome(t, "issue-horizon");
   makeProject(t, env, "alpha");
   assert.throws(() => saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), horizon: "now", title: "x" }, env), /`horizon` was removed in schema v17: use `priority`/);
   const item = addItem(env, { title: "x" });
@@ -66,7 +66,7 @@ test("the retired horizon is refused by name on save and on update", (t) => {
 });
 
 test("the listing groups by workflow status and narrows only by the filters it is given", (t) => {
-  const env = makeHome(t, "roadmap-filters");
+  const env = makeHome(t, "issue-filters");
   makeProject(t, env, "alpha");
   addItem(env, { title: "delivered", status: "done" });
   addItem(env, { title: "later", status: "backlog", priority: 1 });
@@ -77,12 +77,12 @@ test("the listing groups by workflow status and narrows only by the filters it i
   assert.deepEqual(listIssues(projectIdOf(env, "alpha"), { status: ["todo", "done"] }, env).items.map((item) => item.title), ["next up", "delivered"]);
   assert.deepEqual(listIssues(projectIdOf(env, "alpha"), { priority: [1, 3] }, env).items.map((item) => item.title), ["later", "next up"]);
   assert.deepEqual(listIssues(projectIdOf(env, "alpha"), { status: [] }, env).items.length, 4);
-  assert.throws(() => listIssues(projectIdOf(env, "alpha"), { status: ["open"] }, env), /invalid roadmap `status` filter `open`/);
-  assert.throws(() => listIssues(projectIdOf(env, "alpha"), { priority: [0] }, env), /invalid roadmap `priority` filter `0`/);
+  assert.throws(() => listIssues(projectIdOf(env, "alpha"), { status: ["open"] }, env), /invalid issue `status` filter `open`/);
+  assert.throws(() => listIssues(projectIdOf(env, "alpha"), { priority: [0] }, env), /invalid issue `priority` filter `0`/);
 });
 
 test("moving an item inside its priority group renumbers the group to contiguous positions", (t) => {
-  const env = makeHome(t, "roadmap-move-within");
+  const env = makeHome(t, "issue-move-within");
   makeProject(t, env, "alpha");
   const first = addItem(env, { title: "a" });
   addItem(env, { title: "b" });
@@ -102,7 +102,7 @@ test("moving an item inside its priority group renumbers the group to contiguous
 });
 
 test("a priority change moves the item to the end of its new group and leaves both groups contiguous", (t) => {
-  const env = makeHome(t, "roadmap-move-across");
+  const env = makeHome(t, "issue-move-across");
   makeProject(t, env, "alpha");
   addItem(env, { title: "a" });
   const moved = addItem(env, { title: "b" });
@@ -124,12 +124,12 @@ test("a priority change moves the item to the end of its new group and leaves bo
 });
 
 test("by hand every status is accepted but in_progress, backwards moves included, and closed_at follows done", (t) => {
-  const env = makeHome(t, "roadmap-update");
+  const env = makeHome(t, "issue-update");
   makeProject(t, env, "alpha");
-  const item = addItem(env, { title: "deliver the roadmap", detail: "with priorities" });
+  const item = addItem(env, { title: "deliver the issues", detail: "with priorities" });
 
-  const updated = updateIssue(item.id, { title: "deliver the roadmap CLI", detail: null }, env);
-  assert.equal(updated.title, "deliver the roadmap CLI");
+  const updated = updateIssue(item.id, { title: "deliver the issues CLI", detail: null }, env);
+  assert.equal(updated.title, "deliver the issues CLI");
   assert.equal(updated.detail, "with priorities");
   for (const status of ["backlog", "todo", "in_review", "cancelled"]) {
     assert.equal(updateIssue(item.id, { status }, env).status, status);
@@ -143,12 +143,12 @@ test("by hand every status is accepted but in_progress, backwards moves included
   assert.equal(reopened.closed_at, null);
   assert.throws(() => updateIssue(item.id, { status: "in_progress" }, env), /`in_progress` is set only by a job/);
   assert.throws(() => updateIssue(item.id, { status: "open" }, env), /expected one of backlog\|todo\|in_review\|done\|cancelled/);
-  assert.throws(() => updateIssue(9999, { title: "x" }, env), /unknown roadmap item `9999`/);
+  assert.throws(() => updateIssue(9999, { title: "x" }, env), /unknown issue `9999`/);
   assert.throws(() => addItem(env, { title: "y", status: "in_progress" }), /`in_progress` is set only by a job/);
 });
 
 test("the linked decision must exist and belong to the project of the item", (t) => {
-  const env = makeHome(t, "roadmap-decision");
+  const env = makeHome(t, "issue-decision");
   makeProject(t, env, "alpha");
   makeProject(t, env, "beta");
   const decision = saveDecision({ projectId: projectIdOf(env, "alpha"), title: "one worktree per job", context: "races", decision: "split" }, env);
@@ -161,8 +161,8 @@ test("the linked decision must exist and belong to the project of the item", (t)
   assert.throws(() => updateIssue(item.id, { decision_id: 9999 }, env), /unknown decision `9999`/);
 });
 
-test("updateIssue answers the linked decision number and live job status the way roadmap_get does", (t) => {
-  const env = makeHome(t, "roadmap-update-view");
+test("updateIssue answers the linked decision number and live job status the way issue_get does", (t) => {
+  const env = makeHome(t, "issue-update-view");
   makeProject(t, env, "alpha");
   const decision = saveDecision({ projectId: projectIdOf(env, "alpha"), title: "one worktree per job", context: "races", decision: "split" }, env);
   const other = saveDecision({ projectId: projectIdOf(env, "alpha"), title: "second decision", context: "c", decision: "d" }, env);
@@ -183,10 +183,10 @@ test("updateIssue answers the linked decision number and live job status the way
 });
 
 test("an item is linked once, refused while its job is live, and refused again once closed", (t) => {
-  const env = makeHome(t, "roadmap-queue-link");
+  const env = makeHome(t, "issue-queue-link");
   makeProject(t, env, "alpha");
-  const item = addItem(env, { title: "deliver the roadmap" });
-  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "deliver the roadmap" }, env);
+  const item = addItem(env, { title: "deliver the issues" });
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "deliver the issues" }, env);
 
   assert.equal(queueableIssue(item.id, env).id, item.id);
   assert.equal(linkIssueJob(item.id, job.id, env), true);
@@ -204,5 +204,5 @@ test("an item is linked once, refused while its job is live, and refused again o
   assert.throws(() => queueableIssue(item.id, env), /is `done`; move it back to `todo`/);
   updateIssue(item.id, { status: "cancelled" }, env);
   assert.throws(() => queueableIssue(item.id, env), /is `cancelled`/);
-  assert.throws(() => queueableIssue(9999, env), /unknown roadmap item `9999`/);
+  assert.throws(() => queueableIssue(9999, env), /unknown issue `9999`/);
 });

@@ -7,9 +7,9 @@ import { makeHome, makeProject, mergedChecklist, projectIdOf } from "../../test-
 const PR_URL = "https://github.com/acme/alpha/pull/7";
 
 const BREAK_ISSUE_WRITES = `CREATE TRIGGER issue_follow_boom BEFORE UPDATE ON issues
-  BEGIN SELECT RAISE(ABORT, 'roadmap follow forced to fail'); END;`;
+  BEGIN SELECT RAISE(ABORT, 'issue follow forced to fail'); END;`;
 
-// A store whose one roadmap item is linked to a job the worker `w1` already claimed.
+// A store whose one issue is linked to a job the worker `w1` already claimed.
 async function claimedLinkedJob(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
@@ -21,7 +21,7 @@ async function claimedLinkedJob(t, name) {
 }
 
 test("a follow that throws never costs the job write, the drift is reported, and the sweep heals it", async (t) => {
-  const { env, store, item, job } = await claimedLinkedJob(t, "roadmap-follow-failure");
+  const { env, store, item, job } = await claimedLinkedJob(t, "issue-follow-failure");
   openDb(env).exec(BREAK_ISSUE_WRITES);
 
   assert.equal(await store.jobs.finishJob(job.id, { worker: "w1", status: "done" }), true);
@@ -51,7 +51,7 @@ async function closingJob(store, job) {
 }
 
 test("a follow that throws never costs the settleClose, the drift is reported, and the sweep heals it", async (t) => {
-  const { env, store, item, job } = await claimedLinkedJob(t, "roadmap-follow-failure-settle");
+  const { env, store, item, job } = await claimedLinkedJob(t, "issue-follow-failure-settle");
   await closingJob(store, job);
   assert.equal((await store.issues.getIssue(item.id)).status, "in_review");
   openDb(env).exec(BREAK_ISSUE_WRITES);
@@ -75,7 +75,7 @@ test("a follow that throws never costs the settleClose, the drift is reported, a
 });
 
 test("a settleClose refused for another worker writes no comment and leaves the item in review", async (t) => {
-  const { env, store, item, job } = await claimedLinkedJob(t, "roadmap-follow-refused-settle");
+  const { env, store, item, job } = await claimedLinkedJob(t, "issue-follow-refused-settle");
   await closingJob(store, job);
   const before = await kindsOf(env, item);
 
@@ -87,7 +87,7 @@ test("a settleClose refused for another worker writes no comment and leaves the 
 });
 
 test("a drift where the item already holds the expected status is not reported", async (t) => {
-  const { env, store, item, job } = await claimedLinkedJob(t, "roadmap-follow-quiet-drift");
+  const { env, store, item, job } = await claimedLinkedJob(t, "issue-follow-quiet-drift");
   openDb(env).prepare("UPDATE issues SET job_status_seen = 'pending' WHERE id = ?").run(item.id);
   assert.equal(await store.jobs.status(job.id), "running");
   assert.deepEqual(await withReadOnlyStore(env, (readOnly) => readOnly.issues.issueDrift()), []);

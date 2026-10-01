@@ -90,9 +90,9 @@ test("every domain of the store writes and reads back on a real home", async (t)
   assert.equal((await store.decisions.listDecisions({ projectId: projectIdOf(env, "alpha") })).length, 1);
 
   await store.issues.saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "close the boundary" });
-  const roadmap = await store.issues.listIssues(projectIdOf(env, "alpha"));
+  const listing = await store.issues.listIssues(projectIdOf(env, "alpha"));
   assert.deepEqual(
-    roadmap.items.map((item) => [item.title, item.status, item.priority]),
+    listing.items.map((item) => [item.title, item.status, item.priority]),
     [["close the boundary", "todo", 5]],
   );
   assert.deepEqual(await store.issues.issueDrift(), []);
@@ -122,7 +122,7 @@ test("listWithSlug answers the jobs a witness could speak for", async (t) => {
   );
 });
 
-// A store on a fresh home with one project and one roadmap item queued as a job of its own.
+// A store on a fresh home with one project and one issue queued as a job of its own.
 async function queuedItem(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
@@ -133,12 +133,12 @@ async function queuedItem(t, name) {
   return { store, item, job };
 }
 
-// The status the roadmap item carries right now.
+// The status the issue carries right now.
 async function itemStatus(store, item) {
   return (await store.issues.getIssue(item.id)).status;
 }
 
-test("a job the store finishes as done puts its roadmap item in review, and one that gates keeps it in progress", async (t) => {
+test("a job the store finishes as done puts its issue in review, and one that gates keeps it in progress", async (t) => {
   const gated = await queuedItem(t, "store-close-gate");
   await gated.store.jobs.claimJobById(gated.job.id, { worker: WORKER, cap: 4 });
   assert.equal(await gated.store.jobs.finishJob(gated.job.id, { worker: WORKER, status: "gate", noticeMd: "answer me" }), true);
@@ -187,7 +187,7 @@ test("followJob answers 0 for an unknown job, refuses a malformed id, and is ide
   const { store, item, job } = await queuedItem(t, "store-follow-job");
 
   assert.equal(await store.issues.followJob(4242), 0);
-  await assert.rejects(store.issues.followJob("not an id"), /positive integer roadmap item id/);
+  await assert.rejects(store.issues.followJob("not an id"), /positive integer issue id/);
   assert.equal(await itemStatus(store, item), "in_progress");
 
   await store.jobs.cancelJob(job.id, { reason: "not now" });

@@ -94,32 +94,32 @@ test("decision show prints the decision in full and refuses an unknown number", 
   assert.equal(runCli(env, ["decision", "show", "zero"], { cwd }).status, 1);
 });
 
-test("roadmap groups the items by status in workflow order, p1 first, with the linked decision and the job", (t) => {
-  const { env, cwd } = makeCliHome(t, "roadmap-list");
+test("issues groups the items by status in workflow order, p1 first, with the linked decision and the job", (t) => {
+  const { env, cwd } = makeCliHome(t, "issue-list");
   const decision = seedDecisions(env);
   const queued = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "Deliver the queue", decision_id: decision.id }, env);
   const dashboard = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "Write the dashboard" }, env);
   const urgent = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "Fix the crash", priority: 1 }, env);
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "deliver the queue" }, env);
   assert.equal(linkIssueJob(queued.id, job.id, env), true);
-  const result = runCli(env, ["roadmap"], { cwd });
+  const result = runCli(env, ["issues"], { cwd });
   assert.equal(result.status, 0);
   assert.ok(result.stdout.indexOf("todo:") < result.stdout.indexOf("in_progress:"), "the statuses are out of order");
   assert.ok(result.stdout.includes(`  p5 ${queued.ref} Deliver the queue\n     decision D-${decision.number}\n     J-${job.id} (pending)`));
   assert.ok(result.stdout.indexOf(`p1 ${urgent.ref} Fix the crash`) < result.stdout.indexOf(`p5 ${dashboard.ref} Write the dashboard`), "p1 is not first");
   assert.equal(result.stdout.includes("backlog:"), false, "a status with no item printed a heading");
 
-  const filtered = runCli(env, ["roadmap", "--status", "todo", "--priority", "1"], { cwd });
+  const filtered = runCli(env, ["issues", "--status", "todo", "--priority", "1"], { cwd });
   assert.equal(filtered.status, 0, filtered.stderr);
   assert.equal(filtered.stdout, `todo:\n  p1 ${urgent.ref} Fix the crash\n`);
-  const wrong = runCli(env, ["roadmap", "--priority", "high"], { cwd });
+  const wrong = runCli(env, ["issues", "--priority", "high"], { cwd });
   assert.equal(wrong.status, 1);
   assert.match(wrong.stderr, /invalid `--priority` `high`/);
 });
 
-test("roadmap of a project with nothing planned prints one empty line", (t) => {
-  const { env, cwd } = makeCliHome(t, "roadmap-empty");
-  const result = runCli(env, ["roadmap"], { cwd });
+test("issues of a project with nothing planned prints one empty line", (t) => {
+  const { env, cwd } = makeCliHome(t, "issue-empty");
+  const result = runCli(env, ["issues"], { cwd });
   assert.equal(result.status, 0);
   assert.equal(result.stdout, "(empty)\n");
 });
@@ -135,7 +135,7 @@ test("--project names the project, the current directory resolves it, and neithe
   assert.equal(runCli(env, ["decision", "list", "--project", "ghost"], { cwd }).status, 1);
   const projectsBefore = registeredNames(env);
   const databaseBefore = readFileSync(dbPath(env));
-  const unresolved = runCli(env, ["roadmap"], { cwd: outside });
+  const unresolved = runCli(env, ["issues"], { cwd: outside });
   assert.equal(unresolved.status, 1);
   assert.match(unresolved.stderr, /no project registered for .*; run `nightqueue init` here, or pass --project <name>/);
   assert.deepEqual(registeredNames(env), projectsBefore, "a read-only command registered a project");
@@ -155,9 +155,9 @@ test("the three commands never write the database, and a project with nothing sa
   assert.equal(json.status, 0, json.stderr);
   assert.deepEqual(JSON.parse(json.stdout), { project: "alpha", decisions: [] });
 
-  const roadmap = runCli(env, ["roadmap"], { cwd });
-  assert.equal(roadmap.status, 0, roadmap.stderr);
-  assert.equal(roadmap.stdout, "(empty)\n");
+  const listing = runCli(env, ["issues"], { cwd });
+  assert.equal(listing.status, 0, listing.stderr);
+  assert.equal(listing.stdout, "(empty)\n");
 
   const show = runCli(env, ["decision", "show", "1"], { cwd });
   assert.equal(show.status, 1);
@@ -171,7 +171,7 @@ test("a home with no database has no project to read, and the read commands neve
   const env = makeHome(t, "decision-no-database-at-all");
   const cwd = makeDir(t, "decision-no-database-cwd");
   mkdirSync(join(cwd, ".git"));
-  for (const argv of [["decision", "list"], ["roadmap"], ["decision", "show", "1"]]) {
+  for (const argv of [["decision", "list"], ["issues"], ["decision", "show", "1"]]) {
     const result = runCli(env, argv, { cwd });
     assert.equal(result.status, 1, result.stdout);
     assert.match(result.stderr, /no project registered for /);
@@ -179,11 +179,11 @@ test("a home with no database has no project to read, and the read commands neve
   assert.equal(existsSync(dbPath(env)), false, "a read-only command created the database");
 });
 
-test("--help lists the three read-only commands of the decisions and of the roadmap", (t) => {
+test("--help lists the three read-only commands of the decisions and of the issues", (t) => {
   const { env } = makeCliHome(t, "decision-help");
   const result = runCli(env, ["--help"]);
   assert.equal(result.status, 0);
-  for (const line of ["  decision list", "  decision show", "  decision export", "  decision import", "  roadmap ["]) {
+  for (const line of ["  decision list", "  decision show", "  decision export", "  decision import", "  issues ["]) {
     assert.ok(result.stdout.includes(line), `\`${line}\` is missing from the help`);
   }
 });

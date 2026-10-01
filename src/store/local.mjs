@@ -21,7 +21,7 @@ import { READ_ONLY_METHODS } from "./store.mjs";
 
 const READ_ONLY_ALLOWED = new Set(READ_ONLY_METHODS);
 
-// Every job method whose write can move a job's status; the roadmap follows each of them after the write succeeds.
+// Every job method whose write can move a job's status; the issues follow each of them after the write succeeds.
 export const JOB_STATUS_WRITERS = Object.freeze([
   "claimNextJob",
   "claimJobById",
@@ -38,14 +38,14 @@ export const JOB_STATUS_WRITERS = Object.freeze([
   "cancelOnClosedPr",
 ]);
 
-// Runs a write that moves a job out of a status the roadmap comments on in one transaction with the follow of the status it
+// Runs a write that moves a job out of a status the issues comment on in one transaction with the follow of the status it
 // left, so a writer racing the one that set it never skips its event; an id the write refuses anyway goes to the write alone.
 function followingPassedStatus({ jobId, write, fromKey }, env) {
   if (!Number.isInteger(jobId) || jobId < 1) return write();
   return issues.followJobWrite({ jobId, write, fromKey }, env);
 }
 
-// Brings the roadmap items of a job in line with its row; the bookkeeping never costs the job write it follows.
+// Brings the issues of a job in line with its row; the bookkeeping never costs the job write it follows.
 function followJobQuietly(jobId, env) {
   try {
     issues.followJob(jobId, env);
@@ -54,7 +54,7 @@ function followJobQuietly(jobId, env) {
   }
 }
 
-// Re-syncs every roadmap item whose job moved without it; the bookkeeping never costs the sweep it follows.
+// Re-syncs every issue whose job moved without it; the bookkeeping never costs the sweep it follows.
 function followDriftedQuietly(env) {
   try {
     issues.followDriftedJobs(env);
@@ -70,7 +70,7 @@ function writtenJobId(written, firstArg) {
   return Number.isInteger(firstArg) ? firstArg : null;
 }
 
-// Wraps every job-status writer so the roadmap follows the row the writer just committed.
+// Wraps every job-status writer so the issues follow the row the writer just committed.
 function followingJobWrites(domain, env) {
   for (const name of JOB_STATUS_WRITERS) {
     const write = domain[name];
@@ -84,7 +84,7 @@ function followingJobWrites(domain, env) {
   return domain;
 }
 
-// Sweeps the orphaned jobs and then re-syncs the roadmap items any missed event left behind.
+// Sweeps the orphaned jobs and then re-syncs the issues any missed event left behind.
 function sweepAndFollow(env, options) {
   const swept = jobs.sweepOrphans(env, options);
   followDriftedQuietly(env);
@@ -96,7 +96,7 @@ function jobsDomain(env, db) {
   return followingJobWrites(jobsMethods(env, db), env);
 }
 
-// The job methods as `src/memory/jobs.mjs` answers them, before the roadmap follow is wrapped around the writers.
+// The job methods as `src/memory/jobs.mjs` answers them, before the issue follow is wrapped around the writers.
 function jobsMethods(env, db) {
   return {
     addJob: async (spec) => jobs.addJob(spec, env),
@@ -227,7 +227,7 @@ function decisionsDomain(env, db) {
   };
 }
 
-// The roadmap; `listIssues`, `searchIssues`, `getIssueDetail`, `issueRefOfJob` and `issueDrift` take the store's own connection, which is what makes them work read-only.
+// The issues; `listIssues`, `searchIssues`, `getIssueDetail`, `issueRefOfJob` and `issueDrift` take the store's own connection, which is what makes them work read-only.
 function issuesDomain(env, db) {
   return {
     getIssue: async (id) => issues.getIssue(id, env),

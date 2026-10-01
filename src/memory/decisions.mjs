@@ -586,7 +586,7 @@ export function staleProposals(env = process.env, db = null) {
   return named(connection, rows);
 }
 
-// One title line of a decisions section, the single rendering the session block and the roadmap prompt share.
+// One title line of a decisions section, the single rendering the session block and the issue prompt share.
 export function decisionTitleLine(row) {
   const title = String(row?.title ?? "").replace(/\s+/g, " ").trim();
   return `- ${decisionRef(row)} ${escapePromptMarkers(truncateByCodePoint(title, TITLE_LINE_MAX))}`;

@@ -72,15 +72,15 @@ function finishedJob(env, { status = "gate", result = CLEAN_ENDING, log = interm
   return id;
 }
 
-// Records a roadmap item as linked to a job, the link the repair has to move.
+// Records an issue as linked to a job, the link the repair has to move.
 function linkedItem(env, id, title) {
   const item = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title }, env);
   assert.equal(linkIssueJob(item.id, id, env), true, "setup: the item was not linked to its job");
   return item.id;
 }
 
-test("`queue repair` puts in review the roadmap item of a job it turns into done, and sends the item of one that stays failed to todo", async (t) => {
-  const env = makeQueue(t, "repair-roadmap");
+test("`queue repair` puts in review the issue of a job it turns into done, and sends the item of one that stays failed to todo", async (t) => {
+  const env = makeQueue(t, "repair-issue");
   const delivered = finishedJob(env);
   const deliveredItem = linkedItem(env, delivered, "deliver the delivery");
   writeRunState(env);

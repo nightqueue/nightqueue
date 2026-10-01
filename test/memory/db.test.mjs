@@ -223,7 +223,7 @@ test("the migration is idempotent and keeps the data across a reopen", (t) => {
   assert.deepEqual(matchIds(second, "lessons_fts", '"migration"'), [id]);
 });
 
-test("the decisions and roadmap tables are created with their columns, defaults and indexes", (t) => {
+test("the decisions and issues tables are created with their columns, defaults and indexes", (t) => {
   const env = makeHome(t, "db-decisions");
   const db = openDb(env);
   assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
@@ -248,7 +248,7 @@ test("the decisions and roadmap tables are created with their columns, defaults 
     /CHECK constraint failed/,
   );
 
-  db.prepare("INSERT INTO issues (project_id, number, title, position) VALUES (?, 1, ?, 1)").run(null, "deliver the roadmap");
+  db.prepare("INSERT INTO issues (project_id, number, title, position) VALUES (?, 1, ?, 1)").run(null, "deliver the issues");
   assert.deepEqual(
     { ...db.prepare("SELECT status, priority, type FROM issues").get() },
     { status: "todo", priority: 5, type: "improvement" },

@@ -524,7 +524,7 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
   const web = listIssues({ projectId: projects.web.id }, {}, env).items;
   assert.deepEqual(web.map((item) => [item.owner, item.project_status]), [["acme", "todo"]]);
   assert.deepEqual(getIssueDetail(1, {}, env).projects.map((row) => row.project), ["api", "web"]);
-  assert.equal(saveIssue({ type: "bug", projectId: api.id, title: "t" }, env).id, 4, "a roadmap item id was reused");
+  assert.equal(saveIssue({ type: "bug", projectId: api.id, title: "t" }, env).id, 4, "an issue id was reused");
 
   const config = JSON.parse(readFileSync(configPath(env), "utf8"));
   const { projects: _projects, orgs: _orgs, ...kept } = v17Config;

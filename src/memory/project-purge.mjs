@@ -20,14 +20,14 @@ function keptCommentCount(db, projectId) {
 
 // The refusal of a purge that would need to delete comments of an item that survives.
 export function keptCommentsError(project, total) {
-  return new UserError(`cannot purge project \`${project.name}\`: it wrote ${total} comment(s) on roadmap items it does not own, and org roadmap history must stay (D-44: comments only go with their item); nothing was removed`);
+  return new UserError(`cannot purge project \`${project.name}\`: it wrote ${total} comment(s) on issues it does not own, and org issue history must stay (D-44: comments only go with their item); nothing was removed`);
 }
 
 // What a project owns, per table and only where there is any, plus the comments (flagged kept) that block a purge.
 export function projectFootprint(db, projectId) {
   const dependents = DEPENDENT_COUNTS.map(([table, sql]) => ({ table, total: db.prepare(sql).get(projectId).n }));
   const kept = keptCommentCount(db, projectId);
-  const blockers = kept > 0 ? [{ table: "roadmap_comments_on_org_items", total: kept, kept: true }] : [];
+  const blockers = kept > 0 ? [{ table: "issue_comments_on_org_items", total: kept, kept: true }] : [];
   return [...ownedRowCounts(db, { projectId }), ...dependents, ...blockers].filter((entry) => entry.total > 0);
 }
 

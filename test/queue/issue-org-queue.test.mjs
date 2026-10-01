@@ -46,7 +46,7 @@ function payloadOf(result) {
   return JSON.parse(textOf(result));
 }
 
-// A home with two projects of `acme`, one of `orbit`, and one org roadmap item every project has to do.
+// A home with two projects of `acme`, one of `orbit`, and one org issue every project has to do.
 function makeOrgItemHome(t, name) {
   const env = makeHome(t, name);
   const cwd = makeProject(t, env, "acme-mobile-app", { org: "acme" });
@@ -81,27 +81,27 @@ async function runTo(store, jobId, status, { prUrl } = {}) {
 }
 
 test("queue_add on an org item requires a project of that org or `all`, and links a project row, never the item", async (t) => {
-  const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-mcp");
+  const { env, item } = makeOrgItemHome(t, "issue-org-queue-mcp");
   const client = await connect(t, env);
 
-  const bare = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref } });
+  const bare = await client.callTool({ name: "queue_add", arguments: { issue_id: item.ref } });
   assert.equal(bare.isError, true);
   assert.match(textOf(bare), /belongs to org `acme`: name the project its job goes to, or `all`/);
-  const outside = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, project: "orbit-app" } });
+  const outside = await client.callTool({ name: "queue_add", arguments: { issue_id: item.ref, project: "orbit-app" } });
   assert.equal(outside.isError, true);
   assert.match(textOf(outside), /projects of `acme`: acme-mobile-app, acme-api/);
 
   const queued = payloadOf(
-    await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, project: "acme-mobile-app" } }),
+    await client.callTool({ name: "queue_add", arguments: { issue_id: item.ref, project: "acme-mobile-app" } }),
   );
   assert.equal(queued.project, "acme-mobile-app");
-  assert.equal(queued.roadmapItemId, item.id);
+  assert.equal(queued.issueId, item.id);
   assert.deepEqual(queued.jobs, [{ id: queued.id, ref: `J-${queued.id}`, project: "acme-mobile-app" }]);
   assert.deepEqual(queued.skipped, []);
   assert.match(queued.hint, /`in_progress` while any row is, `done` once every row is done or cancelled/);
   assert.equal(
     getJob(queued.id, env).prompt,
-    "## Task\nraise the node version\n\n## Roadmap item\nRoadmap: AM-1\nType: improvement\nCommit type: refactor or perf",
+    "## Task\nraise the node version\n\n## Issue\nIssue: AM-1\nType: improvement\nCommit type: refactor or perf",
   );
   const row = getIssue(item.id, env);
   assert.equal(row.status, "in_progress", "the org status is derived from its one in-progress row");
@@ -109,11 +109,11 @@ test("queue_add on an org item requires a project of that org or `all`, and link
   assert.deepEqual(rowStatuses(env, item.id), { "acme-mobile-app": "in_progress" });
   assert.equal(issueRefOfJob(queued.id, env), "AM-1");
 
-  const again = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, project: "acme-mobile-app" } });
+  const again = await client.callTool({ name: "queue_add", arguments: { issue_id: item.ref, project: "acme-mobile-app" } });
   assert.equal(again.isError, true);
   assert.match(textOf(again), /already queued for `acme-mobile-app` \(J-1, `pending`\)/);
 
-  const all = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, project: "all" } }));
+  const all = payloadOf(await client.callTool({ name: "queue_add", arguments: { issue_id: item.ref, project: "all" } }));
   assert.deepEqual(all.jobs.map((job) => job.project), ["acme-api"]);
   assert.deepEqual(all.skipped, [{ project: "acme-mobile-app", job_id: queued.id, job_status: "pending" }]);
   assert.match(all.hint, /Skipped, a live job already holds them: `acme-mobile-app`/);
@@ -121,7 +121,7 @@ test("queue_add on an org item requires a project of that org or `all`, and link
 });
 
 test("the prompt of an org item quotes the decisions of its org and nothing of another org", async (t) => {
-  const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-prompt");
+  const { env, item } = makeOrgItemHome(t, "issue-org-queue-prompt");
   const linked = saveDecision(
     {
       orgId: orgIdOf(env, "acme"),
@@ -134,25 +134,25 @@ test("the prompt of an org item quotes the decisions of its org and nothing of a
   );
   saveDecision({ orgId: orgIdOf(env, "orbit"), title: "orbit pins node too", context: "drift", decision: "pin it" }, env);
   const client = await connect(t, env);
-  payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: item.ref, decision_id: linked.ref } }));
+  payloadOf(await client.callTool({ name: "issue_update", arguments: { id: item.ref, decision_id: linked.ref } }));
 
   const queued = payloadOf(
-    await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, project: "acme-api" } }),
+    await client.callTool({ name: "queue_add", arguments: { issue_id: item.ref, project: "acme-api" } }),
   );
   const prompt = getJob(queued.id, env).prompt;
   assert.ok(prompt.includes("## Linked decision\nAM/D-1 every repo runs one node version (accepted)"), prompt);
   assert.equal(prompt.includes("orbit pins node too"), false, "a decision of another org reached the prompt");
 });
 
-test("nightqueue queue add --roadmap needs --project <name|all> for an org item, never the current directory", (t) => {
-  const { env, cwd, item } = makeOrgItemHome(t, "roadmap-org-queue-cli");
-  const elsewhere = makeDir(t, "roadmap-org-queue-cwd");
+test("nightqueue queue add --issue needs --project <name|all> for an org item, never the current directory", (t) => {
+  const { env, cwd, item } = makeOrgItemHome(t, "issue-org-queue-cli");
+  const elsewhere = makeDir(t, "issue-org-queue-cwd");
 
-  const fromCwd = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", item.ref], { env, cwd, encoding: "utf8" });
+  const fromCwd = spawnSync(process.execPath, [CLI, "queue", "add", "--issue", item.ref], { env, cwd, encoding: "utf8" });
   assert.equal(fromCwd.status, 1);
   assert.match(fromCwd.stderr, /--project <name\|all>/);
 
-  const runAll = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", item.ref, "--project", "all", "--run"], {
+  const runAll = spawnSync(process.execPath, [CLI, "queue", "add", "--issue", item.ref, "--project", "all", "--run"], {
     env,
     cwd: elsewhere,
     encoding: "utf8",
@@ -160,15 +160,15 @@ test("nightqueue queue add --roadmap needs --project <name|all> for an org item,
   assert.equal(runAll.status, 1);
   assert.match(runAll.stderr, /`--run` starts one job/);
 
-  const named = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", item.ref, "--project", "acme-api"], {
+  const named = spawnSync(process.execPath, [CLI, "queue", "add", "--issue", item.ref, "--project", "acme-api"], {
     env,
     cwd: elsewhere,
     encoding: "utf8",
   });
   assert.equal(named.status, 0, named.stderr);
-  assert.match(named.stdout, /roadmap item AM-1 of org `acme` queued for `acme-api`; its status is derived from its project rows/);
+  assert.match(named.stdout, /issue AM-1 of org `acme` queued for `acme-api`; its status is derived from its project rows/);
 
-  const all = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", item.ref, "--project", "all"], {
+  const all = spawnSync(process.execPath, [CLI, "queue", "add", "--issue", item.ref, "--project", "all"], {
     env,
     cwd: elsewhere,
     encoding: "utf8",
@@ -179,17 +179,17 @@ test("nightqueue queue add --roadmap needs --project <name|all> for an org item,
   assert.deepEqual(listJobs({ limit: 10 }, env).map((job) => job.project).sort(), ["acme-api", "acme-mobile-app"]);
   assert.equal(getIssue(item.id, env).status, "in_progress");
 
-  const matrix = spawnSync(process.execPath, [CLI, "roadmap", "--org", "acme"], { env, cwd: elsewhere, encoding: "utf8" });
+  const matrix = spawnSync(process.execPath, [CLI, "issues", "--org", "acme"], { env, cwd: elsewhere, encoding: "utf8" });
   assert.equal(matrix.status, 0, matrix.stderr);
   assert.match(matrix.stdout, /in_progress:\n {2}p5 AM-1 raise the node version\n {5}acme-api: in_progress J-1 \(pending\)\n {5}acme-mobile-app: in_progress J-2 \(pending\)/);
-  const project = spawnSync(process.execPath, [CLI, "roadmap", "--project", "acme-api"], { env, cwd: elsewhere, encoding: "utf8" });
+  const project = spawnSync(process.execPath, [CLI, "issues", "--project", "acme-api"], { env, cwd: elsewhere, encoding: "utf8" });
   assert.equal(project.status, 0, project.stderr);
   assert.match(project.stdout, /p5 AM-1 raise the node version \(in_progress\)/);
   assert.doesNotMatch(project.stdout, /acme-mobile-app/);
 });
 
 test("an org item queued for `all` derives its status from every row, and closes once the last job is closed", async (t) => {
-  const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-lifecycle");
+  const { env, item } = makeOrgItemHome(t, "issue-org-queue-lifecycle");
   const store = openStore(env);
   const queued = await store.issues.queueIssue({ id: item.id, allProjects: true });
   const [app, api] = ["acme-mobile-app", "acme-api"].map((name) => queued.jobs.find((job) => job.project === name));
@@ -225,7 +225,7 @@ test("an org item queued for `all` derives its status from every row, and closes
 });
 
 test("closing an org item by hand cancels its open rows with one comment each, and leaves a done row alone", async (t) => {
-  const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-manual-close");
+  const { env, item } = makeOrgItemHome(t, "issue-org-queue-manual-close");
   const store = openStore(env);
   const queued = await store.issues.queueIssue({ id: item.id, allProjects: true });
   const app = queued.jobs.find((job) => job.project === "acme-mobile-app");
@@ -245,7 +245,7 @@ test("closing an org item by hand cancels its open rows with one comment each, a
 });
 
 test("a project reads only its own row and its own comments of an org item; the org reads the whole matrix", async (t) => {
-  const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-visibility");
+  const { env, item } = makeOrgItemHome(t, "issue-org-queue-visibility");
   const store = openStore(env);
   await store.issues.queueIssue({ id: item.id, allProjects: true });
   await store.issues.addIssueComment({ id: item.id, body: "api only", author: "operator", viewer: projectIdOf(env, "acme-api") });
@@ -296,9 +296,9 @@ function runLinker(script, env, { itemId, jobId, projectId }) {
 }
 
 test("two processes linking their own job to the same project row at once leave one link and one queued comment", async (t) => {
-  const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-race");
+  const { env, item } = makeOrgItemHome(t, "issue-org-queue-race");
   const jobs = [1, 2].map(() => addJob({ projectId: ensureProject(env, "acme-api"), prompt: "raise node" }, env));
-  const script = join(makeDir(t, "roadmap-org-queue-race-script"), "linker.mjs");
+  const script = join(makeDir(t, "issue-org-queue-race-script"), "linker.mjs");
   writeFileSync(script, linkerSource(), "utf8");
 
   const results = await Promise.all(jobs.map((job) => runLinker(script, env, { itemId: item.id, jobId: job.id, projectId: projectIdOf(env, "acme-api") })));

@@ -41,7 +41,7 @@ const INJECTED_DETAIL = [
   "pick one",
 ].join("\n");
 
-// A prompt built from a roadmap item whose operator text tries to forge every literal the runtime parses.
+// A prompt built from an issue whose operator text tries to forge every literal the runtime parses.
 async function injectedPrompt(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
@@ -90,8 +90,8 @@ test("the escaper neutralises every control literal the runtime parses, and neit
   assert.equal(escapePromptMarkers(inline), inline, "an inline mention must never change");
 });
 
-test("the prompt of a roadmap item carries the builder's own headings once each, in order, and no forged literal", async (t) => {
-  const prompt = await injectedPrompt(t, "roadmap-escape-prompt");
+test("the prompt of an issue carries the builder's own headings once each, in order, and no forged literal", async (t) => {
+  const prompt = await injectedPrompt(t, "issue-escape-prompt");
   const lines = prompt.split("\n");
 
   for (const heading of ["## Task", "## Linked decision"]) {
@@ -112,7 +112,7 @@ test("the prompt of a roadmap item carries the builder's own headings once each,
 });
 
 test("a run that echoes that prompt back never turns the operator's text into the run's own notice or gate", async (t) => {
-  const prompt = await injectedPrompt(t, "roadmap-escape-echo");
+  const prompt = await injectedPrompt(t, "issue-escape-echo");
   const echoed = `Reviewed the task.\n\n${prompt}`;
   const log = toNdjson([
     systemInitEvent({ sessionId: SESSION_ID }),

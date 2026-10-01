@@ -198,12 +198,12 @@ function readyCommit(t, env, repo, name, message) {
 
 const CO_AUTHORED = "feat: ship it\n\nRefs are resolved at the edge.\n\nCo-Authored-By: Someone <someone@example.invalid>\n";
 
-test("`run commit` of a roadmap job adds `Refs: <item ref>` as the last trailer of the existing block, and the agent's file is untouched", async (t) => {
-  const env = makeQueue(t, "run-commit-roadmap");
+test("`run commit` of an issue job adds `Refs: <item ref>` as the last trailer of the existing block, and the agent's file is untouched", async (t) => {
+  const env = makeQueue(t, "run-commit-issue");
   const { id, repo } = boundRun(t, env);
   const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
   assert.equal(linkIssueJob(item.id, id, env), true);
-  const message = readyCommit(t, env, repo, "run-commit-roadmap-message", CO_AUTHORED);
+  const message = readyCommit(t, env, repo, "run-commit-issue-message", CO_AUTHORED);
 
   const { code, text } = await runCli(env, ["run", "commit", "--message-file", message], { jobId: id });
 

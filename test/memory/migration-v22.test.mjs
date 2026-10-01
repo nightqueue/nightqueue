@@ -349,5 +349,5 @@ test("doctor reads the tracker of a migrated v20 home whose links follow their j
   assert.equal(runCli(env, ["queue", "status"], cwd).status, 0);
   const report = runCli(env, ["doctor"], cwd).stdout;
   assert.match(report, /ok\s+database\s+schema v21/);
-  assert.match(report, new RegExp(`ok\\s+${OLD_WORD} workflow\\s+every linked item follows its job`));
+  assert.match(report, /ok\s+issue workflow\s+every linked item follows its job/);
 });

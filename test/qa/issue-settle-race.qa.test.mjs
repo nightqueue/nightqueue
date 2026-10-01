@@ -1,5 +1,5 @@
 // A close settling while other processes retry, cancel and sweep the same job: the settle is the only write that
-// lands, the job ends `closed` and never `pending`/`cancelled`, and the roadmap item follows it exactly once -
+// lands, the job ends `closed` and never `pending`/`cancelled`, and the issue follows it exactly once -
 // one `pr` and one `closed` comment carrying the merge sha, nothing from the refused retries or cancels.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -87,7 +87,7 @@ function runRacer(script, env, args) {
 
 // Writes the three racer scripts to a temporary directory and answers their paths.
 function writeScripts(t) {
-  const dir = makeDir(t, "roadmap-settle-race-scripts");
+  const dir = makeDir(t, "issue-settle-race-scripts");
   const scripts = { settler: join(dir, "settler.mjs"), retrier: join(dir, "retrier.mjs"), sweeper: join(dir, "sweeper.mjs") };
   writeFileSync(scripts.settler, settlerSource(), "utf8");
   writeFileSync(scripts.retrier, retrierSource(), "utf8");
@@ -106,7 +106,7 @@ async function closingItem(store, env, round) {
 }
 
 test("a settleClose racing retries, cancels and sweeps in other processes closes the job and its item exactly once", async (t) => {
-  const env = makeHome(t, "roadmap-settle-race");
+  const env = makeHome(t, "issue-settle-race");
   makeProject(t, env, "alpha");
   const store = openStore(env);
   t.after(() => store.close());

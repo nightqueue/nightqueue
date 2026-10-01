@@ -29,7 +29,7 @@ const DIRECT_EVENTS = Object.freeze(["running", "gate", "done", "failed", "cance
 const NO_TRANSITION = Object.freeze({ status: null, kind: null });
 const CLOSE_SOURCE = "done";
 
-// What each job event does to the roadmap item linked to the job: the status it lands on and the comment kind it leaves.
+// What each job event does to the issue linked to the job: the status it lands on and the comment kind it leaves.
 export const JOB_TO_ISSUE = Object.freeze({
   queued: Object.freeze({ status: "in_progress", kind: "queued" }),
   retried: Object.freeze({ status: "in_progress", kind: "queued" }),

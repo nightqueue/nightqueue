@@ -76,7 +76,7 @@ function runRacer(script, env, jobId, extraArg) {
 }
 
 test("a racing fail-then-retry across two writers never silently drops the failed comment or the retry", async (t) => {
-  const env = makeHome(t, "roadmap-followjob-race");
+  const env = makeHome(t, "issue-followjob-race");
   makeProject(t, env, "alpha");
   const store = openStore(env);
   t.after(() => store.close());
@@ -84,7 +84,7 @@ test("a racing fail-then-retry across two writers never silently drops the faile
   const item = await store.issues.saveIssue({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "race me" });
   const { job } = await store.issues.queueIssue({ id: item.id });
 
-  const dir = makeDir(t, "roadmap-followjob-race-scripts");
+  const dir = makeDir(t, "issue-followjob-race-scripts");
   const finishScript = join(dir, "finisher.mjs");
   const retryScript = join(dir, "retrier.mjs");
   writeFileSync(finishScript, finisherSource(), "utf8");

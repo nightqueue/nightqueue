@@ -38,7 +38,7 @@ function ids(hits) {
 }
 
 test("a search returns at most five hits, and the limit is clamped to 1..5", (t) => {
-  const env = makeSearchHome(t, "roadmap-search-limit");
+  const env = makeSearchHome(t, "issue-search-limit");
   for (let n = 0; n < 7; n += 1) item(env, { project: "alpha" }, `upgrade node step ${n}`);
   assert.equal(searchIssues({ projectId: projectIdOf(env, "alpha"), query: "node" }, env).length, 5);
   assert.equal(searchIssues({ projectId: projectIdOf(env, "alpha"), query: "node", limit: 2 }, env).length, 2);
@@ -47,7 +47,7 @@ test("a search returns at most five hits, and the limit is clamped to 1..5", (t)
 });
 
 test("a search matches the title, the detail and a comment, and names how it matched", (t) => {
-  const env = makeSearchHome(t, "roadmap-search-text");
+  const env = makeSearchHome(t, "issue-search-text");
   const titled = item(env, { project: "alpha" }, "rotate the webhook secret");
   const detailed = item(env, { project: "alpha" }, "security chores", "the webhook signing key must rotate");
   const commented = item(env, { project: "alpha" }, "unrelated title");
@@ -63,7 +63,7 @@ test("a search matches the title, the detail and a comment, and names how it mat
 });
 
 test("a file search matches a recorded path exactly or by prefix, first, and takes % and _ literally", (t) => {
-  const env = makeSearchHome(t, "roadmap-search-file");
+  const env = makeSearchHome(t, "issue-search-file");
   const touched = item(env, { project: "alpha" }, "the runner rewrite");
   comment(env, touched.id, { files: ["src/queue/runner.mjs", "src/ax.mjs"] });
   const texty = item(env, { project: "alpha" }, "mentions runner in text");
@@ -80,7 +80,7 @@ test("a file search matches a recorded path exactly or by prefix, first, and tak
 });
 
 test("a project finds its org's items but never another org's item nor a sibling project's comment", (t) => {
-  const env = makeSearchHome(t, "roadmap-search-visibility");
+  const env = makeSearchHome(t, "issue-search-visibility");
   const orgItem = item(env, { org: "acme" }, "pin the toolchain");
   const otherOrg = item(env, { org: "orbit" }, "pin the toolchain too");
   const sibling = item(env, { project: "beta" }, "pin beta toolchain");
@@ -98,7 +98,7 @@ test("a project finds its org's items but never another org's item nor a sibling
 });
 
 test("the FTS finds a legacy title right after the v17 migration", (t) => {
-  const env = makeSearchHome(t, "roadmap-search-legacy");
+  const env = makeSearchHome(t, "issue-search-legacy");
   seedLegacyV16Roadmap(env, {
     items: [{ id: 4, project: "alpha", horizon: "now", status: "open", position: 1, title: "legacy flamingo title" }],
   });
@@ -119,21 +119,21 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("roadmap_search inside a job reads only the job's project, and refuses another owner by name", async (t) => {
-  const env = makeSearchHome(t, "roadmap-search-mcp");
+test("issue_search inside a job reads only the job's project, and refuses another owner by name", async (t) => {
+  const env = makeSearchHome(t, "issue-search-mcp");
   const orgItem = item(env, { org: "acme" }, "shared cache layer");
   comment(env, orgItem.id, { body: "beta cache miss", project: "beta" });
   item(env, { project: "beta" }, "beta cache layer");
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "work" }, env);
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
-  const own = JSON.parse(textOf(await client.callTool({ name: "roadmap_search", arguments: { query: "cache" } })));
+  const own = JSON.parse(textOf(await client.callTool({ name: "issue_search", arguments: { query: "cache" } })));
   assert.equal(own.project, "alpha");
   assert.deepEqual(ids(own.hits), [orgItem.id]);
-  const miss = JSON.parse(textOf(await client.callTool({ name: "roadmap_search", arguments: { query: "miss" } })));
+  const miss = JSON.parse(textOf(await client.callTool({ name: "issue_search", arguments: { query: "miss" } })));
   assert.deepEqual(miss.hits, []);
 
-  const foreign = await client.callTool({ name: "roadmap_search", arguments: { query: "cache", project: "beta" } });
+  const foreign = await client.callTool({ name: "issue_search", arguments: { query: "cache", project: "beta" } });
   assert.equal(foreign.isError, true);
-  assert.match(textOf(foreign), /inside a job `roadmap_search` reads the job's project `alpha`/);
+  assert.match(textOf(foreign), /inside a job `issue_search` reads the job's project `alpha`/);
 });

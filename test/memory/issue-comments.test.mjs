@@ -14,7 +14,7 @@ const ISSUES_MODULE_URL = new URL("../../src/memory/issues.mjs", import.meta.url
 const PR_URL = "https://github.com/acme/alpha/pull/7";
 const MERGE_SHA = mergedChecklist().data.mergeSha;
 
-// A store on a fresh home whose one roadmap item is queued as a job through the store, the way queue_add links it.
+// A store on a fresh home whose one issue is queued as a job through the store, the way queue_add links it.
 async function linkedJob(t, name, type = "improvement") {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
@@ -35,8 +35,8 @@ function thread(env, item) {
   return getIssueDetail(item.id, {}, env).comments;
 }
 
-test("roadmap comments are append-only: an UPDATE or a DELETE is refused by the database", async (t) => {
-  const { env, item } = await linkedJob(t, "roadmap-comments-append-only");
+test("issue comments are append-only: an UPDATE or a DELETE is refused by the database", async (t) => {
+  const { env, item } = await linkedJob(t, "issue-comments-append-only");
   const db = openDb(env);
   assert.throws(() => db.prepare("UPDATE issue_comments SET body = 'rewritten' WHERE item_id = ?").run(item.id), /append-only/);
   assert.throws(() => db.prepare("DELETE FROM issue_comments WHERE item_id = ?").run(item.id), /append-only/);
@@ -44,7 +44,7 @@ test("roadmap comments are append-only: an UPDATE or a DELETE is refused by the 
 });
 
 test("queue, gate, retry, done and close leave queued, gate, queued, pr and closed, each signed by the job", async (t) => {
-  const { env, store, item, job } = await linkedJob(t, "roadmap-comments-lifecycle");
+  const { env, store, item, job } = await linkedJob(t, "issue-comments-lifecycle");
   await runTo(store, job, "gate", { noticeMd: "which base branch?" });
   await store.jobs.retryJob(job.id, { note: "use main" });
   await runTo(store, job, "done", { prUrl: PR_URL });
@@ -65,7 +65,7 @@ test("queue, gate, retry, done and close leave queued, gate, queued, pr and clos
 });
 
 test("running, a release and a park leave no comment", async (t) => {
-  const { env, store, item, job } = await linkedJob(t, "roadmap-comments-quiet");
+  const { env, store, item, job } = await linkedJob(t, "issue-comments-quiet");
   assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }));
   assert.equal(await store.jobs.releaseJob(job.id, { worker: "w1" }), true);
   assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }));
@@ -77,7 +77,7 @@ test("running, a release and a park leave no comment", async (t) => {
 });
 
 test("a cancel leaves `failed` with its reason", async (t) => {
-  const { env, store, item, job } = await linkedJob(t, "roadmap-comments-cancel");
+  const { env, store, item, job } = await linkedJob(t, "issue-comments-cancel");
   await store.jobs.cancelJob(job.id, { reason: "not now" });
   const comments = thread(env, item);
   assert.deepEqual(
@@ -90,7 +90,7 @@ test("a cancel leaves `failed` with its reason", async (t) => {
 });
 
 test("a close that finds its pull request closed without merge leaves `failed` and moves the item to todo", async (t) => {
-  const { env, store, item, job } = await linkedJob(t, "roadmap-comments-closed-pr");
+  const { env, store, item, job } = await linkedJob(t, "issue-comments-closed-pr");
   await runTo(store, job, "done", { prUrl: PR_URL });
   assert.ok(await store.jobs.acquireClose(job.id, { worker: "close-w", leaseS: 600 }), "setup: the close lease was refused");
   const close = { attempts: 1, steps: {}, data: { prNumber: 7, merged: false } };
@@ -109,7 +109,7 @@ test("a close that finds its pull request closed without merge leaves `failed` a
 });
 
 test("the refs of a comment carry the job's pull request, branch, merge sha, files and proposed decision", async (t) => {
-  const { env, store, item, job } = await linkedJob(t, "roadmap-comments-refs");
+  const { env, store, item, job } = await linkedJob(t, "issue-comments-refs");
   const decision = saveDecision({ projectId: projectIdOf(env, "alpha"), title: "t", context: "c", decision: "d", status: "proposed" }, env);
   openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(job.id, decision.id);
   assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }));
@@ -125,7 +125,7 @@ test("the refs of a comment carry the job's pull request, branch, merge sha, fil
 });
 
 test("a move back from review or done leaves `reopened`, signed by the operator unless a job moved it", async (t) => {
-  const { env, store, item, job } = await linkedJob(t, "roadmap-comments-reopened");
+  const { env, store, item, job } = await linkedJob(t, "issue-comments-reopened");
   await runTo(store, job, "done", { prUrl: PR_URL });
   updateIssue(item.id, { status: "todo" }, env);
   updateIssue(item.id, { status: "backlog" }, env);
@@ -142,7 +142,7 @@ test("a move back from review or done leaves `reopened`, signed by the operator 
 });
 
 test("a note is signed by its author, and a project viewer never comments nor reads an item it does not see", async (t) => {
-  const env = makeHome(t, "roadmap-comments-note");
+  const env = makeHome(t, "issue-comments-note");
   makeProject(t, env, "alpha");
   makeProject(t, env, "beta");
   const foreign = saveIssue({ type: "bug", projectId: projectIdOf(env, "beta"), title: "beta crashes" }, env);
@@ -151,13 +151,13 @@ test("a note is signed by its author, and a project viewer never comments nor re
 
   assert.throws(() => addIssueComment({ id: foreign.id, body: "x", author: "job:1", viewer: projectIdOf(env, "alpha") }, env), /belongs to project `beta`, not project `alpha`/);
   assert.throws(() => getIssueDetail(foreign.id, { viewer: projectIdOf(env, "alpha") }, env), /belongs to project `beta`/);
-  assert.throws(() => addIssueComment({ id: foreign.id, body: "x", author: "robot" }, env), /invalid roadmap comment author/);
+  assert.throws(() => addIssueComment({ id: foreign.id, body: "x", author: "robot" }, env), /invalid issue comment author/);
   assert.throws(() => addIssueComment({ id: foreign.id, body: "  " }, env), /`body` is required/);
   assert.equal(getIssueDetail(foreign.id, {}, env).comments.length, 1, "a refused comment was written");
 });
 
 test("a member project reads its org's item but never a sibling project's comment on it", (t) => {
-  const env = makeHome(t, "roadmap-comments-org-siblings");
+  const env = makeHome(t, "issue-comments-org-siblings");
   makeProject(t, env, "alpha", { org: "acme" });
   makeProject(t, env, "beta", { org: "acme" });
   makeProject(t, env, "gamma", { org: "other" });
@@ -173,7 +173,7 @@ test("a member project reads its org's item but never a sibling project's commen
 });
 
 test("the type is required on save, sets the default tier of the job, and an explicit tier wins", async (t) => {
-  const env = makeHome(t, "roadmap-comments-type");
+  const env = makeHome(t, "issue-comments-type");
   makeProject(t, env, "alpha");
   assert.throws(() => saveIssue({ projectId: projectIdOf(env, "alpha"), title: "x" }, env), /`type` is required: expected one of bug\|feature\|improvement\|chore\|incident/);
   assert.throws(() => saveIssue({ projectId: projectIdOf(env, "alpha"), title: "x", type: "epic" }, env), /`type` is required/);
@@ -187,7 +187,7 @@ test("the type is required on save, sets the default tier of the job, and an exp
   const bug = saveIssue({ projectId: projectIdOf(env, "alpha"), title: "an explicit tier", type: "bug" }, env);
   const { job } = await queueIssue({ id: bug.id, tier: "complex" }, env);
   assert.equal(getJob(job.id, env).tier, "complex");
-  assert.match(getJob(job.id, env).prompt, /## Roadmap item\nRoadmap: AP-\d+\nType: bug\nCommit type: fix/);
+  assert.match(getJob(job.id, env).prompt, /## Issue\nIssue: AP-\d+\nType: bug\nCommit type: fix/);
   assert.equal(updateIssue(bug.id, { type: "incident" }, env).type, "incident");
 });
 
@@ -216,9 +216,9 @@ function runFollower(script, env, jobId) {
 }
 
 test("two processes following the same job at once write its comment once", async (t) => {
-  const { env, item, job } = await linkedJob(t, "roadmap-comments-race");
+  const { env, item, job } = await linkedJob(t, "issue-comments-race");
   openDb(env).prepare("UPDATE jobs SET status = 'failed' WHERE id = ?").run(job.id);
-  const script = join(makeDir(t, "roadmap-comments-race-script"), "follower.mjs");
+  const script = join(makeDir(t, "issue-comments-race-script"), "follower.mjs");
   writeFileSync(script, followerSource(), "utf8");
 
   const results = await Promise.all([runFollower(script, env, job.id), runFollower(script, env, job.id)]);

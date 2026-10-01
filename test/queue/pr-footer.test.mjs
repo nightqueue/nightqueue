@@ -32,7 +32,7 @@ test("the footer is only `Opened by nightqueue · <ref>` for an item, and the ba
   assert.equal(footerOf(undefined), "Opened by nightqueue");
 });
 
-test("a roadmap job publishes a copy ending with its item's footer, the same on a second call, and the agent's file is unchanged", async (t) => {
+test("an issue job publishes a copy ending with its item's footer, the same on a second call, and the agent's file is unchanged", async (t) => {
   const { env, runDir, bodyFile, store } = makeFooterHome(t, "pr-footer-linked");
   const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
   const { job } = await queueIssue({ id: item.id }, env);

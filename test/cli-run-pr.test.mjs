@@ -212,12 +212,12 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
   assert.equal(existsSync(worktree), true);
 });
 
-test("`run pr` of a job queued from a roadmap item ends the published body with only `Opened by nightqueue · <ref>`", async (t) => {
-  const { env, id } = makeRun(t, "run-pr-roadmap");
+test("`run pr` of a job queued from an issue ends the published body with only `Opened by nightqueue · <ref>`", async (t) => {
+  const { env, id } = makeRun(t, "run-pr-issue");
   const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
   assert.equal(linkIssueJob(item.id, id, env), true);
 
-  const published = await publishedBody(t, { env, jobId: id, name: "run-pr-roadmap-body" });
+  const published = await publishedBody(t, { env, jobId: id, name: "run-pr-issue-body" });
 
   assert.equal(published, `${BODY.trimEnd()}\n\nOpened by nightqueue · AP-1\n`);
   assert.equal(published.includes("Refs"), false);

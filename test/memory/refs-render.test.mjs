@@ -24,7 +24,7 @@ function decide(env, owner, title) {
   return saveDecision({ ...owner, title, context: "c", decision: "d", status: "accepted" }, env);
 }
 
-// Saves one roadmap item of an owner.
+// Saves one issue of an owner.
 function plan(env, owner, title, extra = {}) {
   return saveIssue({ type: "improvement", ...owner, title, ...extra }, env);
 }
@@ -70,7 +70,7 @@ test("items, decisions and jobs render their refs for a project, an org and the 
   assert.equal(detail.item_ref, "NQ-2");
 });
 
-test("a key rename is read at once by the roadmap, the decisions, the job view and the item thread, and history text stays", async (t) => {
+test("a key rename is read at once by the issues, the decisions, the job view and the item thread, and history text stays", async (t) => {
   const { env, db, orgId, projectId } = makeKeyedHome(t, "refs-render-rename");
   decide(env, { orgId }, "one queue per product");
   const item = plan(env, { projectId }, "project item");

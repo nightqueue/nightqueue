@@ -56,7 +56,7 @@ function git(args) {
   return execFileSync("git", args, { encoding: "utf8", env: { ...process.env, ...gitVars() } });
 }
 
-// A roadmap job with a real worktree, a local bare remote and the fake gh installed.
+// An issue job with a real worktree, a local bare remote and the fake gh installed.
 function makeRun(t, name) {
   const remote = join(makeDir(t, `${name}-origin`), "origin.git");
   git(["-c", "init.defaultBranch=main", "init", "--bare", "-q", remote]);

@@ -5,7 +5,7 @@ import { JOB_STATUS_WRITERS } from "../../src/store/local.mjs";
 
 const JOBS_SOURCE = readFileSync(new URL("../../src/memory/jobs.mjs", import.meta.url), "utf8");
 
-// Job writers the store does not wrap in the roadmap follow, each with the reason it is safe.
+// Job writers the store does not wrap in the issue follow, each with the reason it is safe.
 const NOT_FOLLOWED = {
   addJob: "a new job has no linked item yet: queueIssue links it with linkIssueJob",
   sweepOrphans: "the store follows every drifted job right after the sweep (followDriftedJobs)",
@@ -33,7 +33,7 @@ function writesJobStatus(body, constants) {
   return inserted || setClauses.some((clause) => /(?<![\w.])status\s*=/.test(clause));
 }
 
-test("every job writer that can move a status is followed by the roadmap, or excluded with a reason", () => {
+test("every job writer that can move a status is followed by the issues, or excluded with a reason", () => {
   const constants = stringConstants(JOBS_SOURCE);
   const writers = exportedFunctions(JOBS_SOURCE)
     .filter((fn) => writesJobStatus(fn.body, constants))

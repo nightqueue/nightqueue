@@ -77,8 +77,8 @@ test("the runner writes the job block of a free-prompt job before the spawn, wit
   assert.deepEqual(stateAt(statePath).job, seen.job, "the block changed after the spawn");
 });
 
-test("the job block of a roadmap job carries the item ref and the decision the item links", async (t) => {
-  const { env } = makeBlockHome(t, "job-block-roadmap", [{ stdout: toNdjson([systemInitEvent(), resultEvent({ text: `Done. Pull request: ${PR_URL}` })]), exitCode: 0 }]);
+test("the job block of an issue job carries the item ref and the decision the item links", async (t) => {
+  const { env } = makeBlockHome(t, "job-block-issue", [{ stdout: toNdjson([systemInitEvent(), resultEvent({ text: `Done. Pull request: ${PR_URL}` })]), exitCode: 0 }]);
   const projectId = projectIdOf(env, "alpha");
   const decision = saveDecision({ projectId, title: "one queue", context: "c", decision: "d", consequences: "q" }, env);
   const item = saveIssue({ type: "feature", projectId, title: "fix the worker", decision_id: decision.id }, env);

@@ -32,7 +32,7 @@ test("a persisted org status agrees with its derivation when equal or when both 
   assert.equal(orgStatusAgrees("done", "in_review"), false);
 });
 
-// Every row of the job -> roadmap table: the job row, the status the item last followed, and what the item becomes.
+// Every row of the job -> issue table: the job row, the status the item last followed, and what the item becomes.
 const ROWS = [
   { name: "linked by queue_add", event: "queued", expected: { status: "in_progress", kind: "queued" } },
   { name: "retry from failed", job: { status: "pending" }, seen: "failed", expected: { status: "in_progress", kind: "queued" } },
@@ -49,7 +49,7 @@ const ROWS = [
 ];
 
 for (const row of ROWS) {
-  test(`job -> roadmap: ${row.name}`, () => {
+  test(`job -> issue: ${row.name}`, () => {
     const actual = row.event ? JOB_TO_ISSUE[row.event] : issueTransition(row.job, row.seen);
     assert.deepEqual({ status: actual.status, kind: actual.kind }, row.expected);
   });
@@ -79,7 +79,7 @@ test("a job status the table does not know moves nothing", () => {
   assert.deepEqual(issueTransition({ status: "bogus" }), { status: null, kind: null });
 });
 
-test("every status the table lands on is a roadmap status, and in_progress is the only one kept from the operator", () => {
+test("every status the table lands on is a issue status, and in_progress is the only one kept from the operator", () => {
   for (const { status } of Object.values(JOB_TO_ISSUE)) assert.ok(ISSUE_STATUSES.includes(status), status);
   assert.deepEqual(MANUAL_STATUSES, ["backlog", "todo", "in_review", "done", "cancelled"]);
   assert.deepEqual(OPEN_STATUSES, ["backlog", "todo", "in_progress", "in_review"]);

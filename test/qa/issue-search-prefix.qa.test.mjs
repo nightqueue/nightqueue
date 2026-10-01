@@ -30,7 +30,7 @@ function ids(hits) {
 }
 
 test("a file search for a directory prefix excludes a sibling directory that merely shares the prefix", (t) => {
-  const env = makeHome(t, "roadmap-search-prefix");
+  const env = makeHome(t, "issue-search-prefix");
   makeProject(t, env, "alpha", { org: "acme" });
 
   const sibling = item(env, "alpha", "unrelated report tool");

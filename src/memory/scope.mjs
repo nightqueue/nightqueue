@@ -5,7 +5,7 @@ import * as registry from "./registry.mjs";
 
 export { decisionRef };
 
-export const SCOPE_CONFLICT = "pass either `project` or `org`, never both: a decision or a roadmap item has one owner";
+export const SCOPE_CONFLICT = "pass either `project` or `org`, never both: a decision or an issue has one owner";
 export const SCOPE_MISSING = "pass `project` (the registered NAME) or `org` (a registered org) to name the owner";
 
 // The owner clause every write and every exact read of these two tables shares.

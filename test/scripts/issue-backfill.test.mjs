@@ -64,13 +64,13 @@ function datesOf(env, jobId) {
 }
 
 test("the backfill dry run counts what it would write and writes nothing", async (t) => {
-  const { env, db } = seedHome(t, "roadmap-backfill-dry");
+  const { env, db } = seedHome(t, "issue-backfill-dry");
   assert.match(await backfill(env, ["--dry-run"]), /^dry run .*: items=4 written=6 skipped=1$/);
   assert.equal(db.prepare("SELECT COUNT(*) AS total FROM issue_comments").get().total, 0);
 });
 
 test("the backfill dates each synthesized comment, gives a hand-closed item nothing, and a second run writes nothing", async (t) => {
-  const { env, jobs, items } = seedHome(t, "roadmap-backfill-run");
+  const { env, jobs, items } = seedHome(t, "issue-backfill-run");
   assert.match(await backfill(env, []), /: items=4 written=6 skipped=1$/);
   const closed = datesOf(env, jobs.closed);
   assert.deepEqual(threadOf(env, items.closed), [

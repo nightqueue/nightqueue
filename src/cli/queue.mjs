@@ -67,7 +67,7 @@ import { coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { originLabel } from "../integrations/origin.mjs";
 
 export const USAGE = {
-  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--origin <kind>:<ref>] [--roadmap <ref> [--project <name|all>] [--run-dir <dir>] [<note...>]]",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--origin <kind>:<ref>] [--issue <ref> [--project <name|all>] [--run-dir <dir>] [<note...>]]",
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
@@ -339,21 +339,21 @@ function refuseRunForAll(values) {
   }
 }
 
-// The lines the roadmap path answers with: a project item is now `in_progress`; an org item names each project row its jobs went to and the ones skipped.
+// The lines the issue path answers with: a project item is now `in_progress`; an org item names each project row its jobs went to and the ones skipped.
 function issueQueuedLines({ item, jobs, skipped }) {
-  if (item.scope !== "org") return [`roadmap item ${itemRef(item)} of \`${item.project}\` is now \`in_progress\``];
+  if (item.scope !== "org") return [`issue ${itemRef(item)} of \`${item.project}\` is now \`in_progress\``];
   const lines = [
-    `roadmap item ${itemRef(item)} of org \`${item.org}\` queued for ${jobs.map((job) => `\`${job.project}\``).join(", ")}; its status is derived from its project rows`,
+    `issue ${itemRef(item)} of org \`${item.org}\` queued for ${jobs.map((job) => `\`${job.project}\``).join(", ")}; its status is derived from its project rows`,
   ];
   for (const entry of skipped) lines.push(`skipped \`${entry.project}\`: ${jobRef(entry.job_id ?? "?")} (${entry.job_status ?? "unknown"}) still holds it`);
   return lines;
 }
 
-// Queues the job a roadmap item builds; a project item owns its project, an org item needs `--project <name|all>`.
+// Queues the job an issue builds; a project item owns its project, an org item needs `--project <name|all>`.
 async function addFromIssue(positionals, values, ctx) {
   refuseRunForAll(values);
   const store = openStore(ctx.env);
-  const id = await store.issues.itemIdOfRef(values.roadmap);
+  const id = await store.issues.itemIdOfRef(values.issue);
   const target = await issueQueueTarget(store, values.project);
   const queued = await store.issues.queueIssue({
     id,
@@ -366,7 +366,7 @@ async function addFromIssue(positionals, values, ctx) {
   return queued.jobs;
 }
 
-// Runs `queue add`, with the job built from the words of the command line or from the roadmap item `--roadmap` names.
+// Runs `queue add`, with the job built from the words of the command line or from the issue `--issue` names.
 async function runAdd(argv, ctx) {
   if (argv.length === 1 && ADD_HELP_FLAGS.has(argv[0])) {
     ctx.out(ADD_HELP);
@@ -375,7 +375,7 @@ async function runAdd(argv, ctx) {
   const { values, positionals } = parseAdd(argv);
   checkForegroundNeedsRun(values, USAGE.add);
   const jobs =
-    values.roadmap === undefined
+    values.issue === undefined
       ? [await addFromPrompt(positionals, values, ctx)]
       : await addFromIssue(positionals, values, ctx);
   const job = jobs[jobs.length - 1];
@@ -393,7 +393,7 @@ const ADD_OPTIONS = {
   run: { type: "boolean" },
   foreground: { type: "boolean" },
   yes: { type: "boolean" },
-  roadmap: { type: "string" },
+  issue: { type: "string" },
   "run-dir": { type: "string" },
   project: { type: "string" },
   tier: { type: "string" },
@@ -447,10 +447,10 @@ function splitAddArgv(argv) {
 function parseAdd(argv) {
   const { optionTokens, words } = splitAddArgv(argv);
   const { values } = parseCommand(optionTokens, ADD_OPTIONS);
-  if (values.roadmap === undefined && values["run-dir"] !== undefined) {
-    throw new UserError(`\`--run-dir\` goes with \`--roadmap\`; usage: ${USAGE.add}`);
+  if (values.issue === undefined && values["run-dir"] !== undefined) {
+    throw new UserError(`\`--run-dir\` goes with \`--issue\`; usage: ${USAGE.add}`);
   }
-  if (values.roadmap === undefined) checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
+  if (values.issue === undefined) checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
   return { values, positionals: words };
 }
 

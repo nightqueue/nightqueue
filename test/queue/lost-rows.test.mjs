@@ -48,7 +48,7 @@ async function runOnce(env, jobId) {
   return cycle.processed[0];
 }
 
-// A home where a done job and a roadmap gate job ran through the runner, then lost their rows; the rows as they were are kept for comparison.
+// A home where a done job and an issue gate job ran through the runner, then lost their rows; the rows as they were are kept for comparison.
 async function seedLostJobs(t, name) {
   const env = { ...makeHome(t, name), ...ISOLATED_GIT_VARS };
   registerCheckout(env, { path: initGitRepo(makeDir(t, `${name}-repo`)), name: "alpha" });
@@ -121,7 +121,7 @@ test("doctor --db lists the done and the gate job whose rows are gone, with proj
   );
 });
 
-test("queue repair --from-disk rebuilds both rows with the recovered marker and never writes the roadmap", async (t) => {
+test("queue repair --from-disk rebuilds both rows with the recovered marker and never writes the issues", async (t) => {
   const { env, projectId, doneId, gateId, before } = await seedLostJobs(t, "lost-repair");
   const issuesBefore = issueSnapshot(env);
 
@@ -140,7 +140,7 @@ test("queue repair --from-disk rebuilds both rows with the recovered marker and 
     assert.ok(!Number.isNaN(Date.parse(resultOf(row).recovered.at)));
     assert.equal(row.worker, null);
   }
-  assert.equal(issueSnapshot(env), issuesBefore, "the recovery wrote a roadmap row or comment");
+  assert.equal(issueSnapshot(env), issuesBefore, "the recovery wrote an issue row or comment");
   assert.match(readFileSync(jobLogPath(doneId, env), "utf8"), new RegExp(`recovered from disk: status=done prUrl=${PR_URL.replace(/[.]/g, "\\.")}\\n$`));
   assert.match(readFileSync(jobLogPath(gateId, env), "utf8"), /recovered from disk: status=gate prUrl=-\n$/);
 

@@ -16,7 +16,7 @@ function fakeGit() {
   return ({ args }) => `${answers[args[0]] ?? ""}\n`;
 }
 
-// A home with one registered project and one queueable roadmap item.
+// A home with one registered project and one queueable issue.
 function makeItemHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
@@ -48,8 +48,8 @@ function expireLease(env, jobId) {
 }
 
 test("finishJob returning false strands the item behind a phantom `running` job, but the refusal is actionable and the item self-heals once the stolen lease expires", async (t) => {
-  const { env, item } = makeItemHome(t, "roadmap-lost-finishjob-false");
-  const planPath = useFakeClaude(env, makeDir(t, "roadmap-lost-finishjob-false-plan"), [{ stdout: doneStream(), holdMs: 400, exitCode: 0 }]);
+  const { env, item } = makeItemHome(t, "issue-lost-finishjob-false");
+  const planPath = useFakeClaude(env, makeDir(t, "issue-lost-finishjob-false-plan"), [{ stdout: doneStream(), holdMs: 400, exitCode: 0 }]);
   const queued = await queueIssue({ id: item.id }, env);
 
   const cycle = runCycle({ jobId: queued.job.id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), stopSignalImpl: () => false } });
@@ -87,8 +87,8 @@ test("finishJob returning false strands the item behind a phantom `running` job,
 });
 
 test("runJob returning early via run.lost (ownership stolen mid-run, detected by the real poll) never reaches finalize, and lands in the exact same phantom-running limbo", async (t) => {
-  const { env, item } = makeItemHome(t, "roadmap-lost-run-lost");
-  const planPath = useFakeClaude(env, makeDir(t, "roadmap-lost-run-lost-plan"), [{ stdout: doneStream(), holdMs: 5000, exitCode: 0 }]);
+  const { env, item } = makeItemHome(t, "issue-lost-run-lost");
+  const planPath = useFakeClaude(env, makeDir(t, "issue-lost-run-lost-plan"), [{ stdout: doneStream(), holdMs: 5000, exitCode: 0 }]);
   const queued = await queueIssue({ id: item.id }, env);
 
   const cycle = runCycle({ jobId: queued.job.id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), stopPollMs: 200 } });
@@ -112,8 +112,8 @@ test("runJob returning early via run.lost (ownership stolen mid-run, detected by
 });
 
 test("runJob returning early via ctx.state.stopping (an interrupted runner) is NOT stranded: the job goes back to pending and later finishes the SAME item through the normal done hook", async (t) => {
-  const { env, item } = makeItemHome(t, "roadmap-lost-interrupted");
-  useFakeClaude(env, makeDir(t, "roadmap-lost-interrupted-plan"), [{ stdout: doneStream(), holdMs: 5000, exitCode: 0 }]);
+  const { env, item } = makeItemHome(t, "issue-lost-interrupted");
+  useFakeClaude(env, makeDir(t, "issue-lost-interrupted-plan"), [{ stdout: doneStream(), holdMs: 5000, exitCode: 0 }]);
   const queued = await queueIssue({ id: item.id }, env);
 
   const cycle = runCycle({ jobId: queued.job.id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), stopPollMs: 200 } });
@@ -136,8 +136,8 @@ test("runJob returning early via ctx.state.stopping (an interrupted runner) is N
 });
 
 test("a `gate` outcome keeps the item correctly in progress behind a retryable job; a `failed` outcome frees the item for a normal re-queue", async (t) => {
-  const { env: gateEnv, item: gateItem } = makeItemHome(t, "roadmap-lost-gate");
-  useFakeClaude(gateEnv, makeDir(t, "roadmap-lost-gate-plan"), [{ stdout: gateStream(), exitCode: 0 }, { stdout: doneStream(), exitCode: 0 }]);
+  const { env: gateEnv, item: gateItem } = makeItemHome(t, "issue-lost-gate");
+  useFakeClaude(gateEnv, makeDir(t, "issue-lost-gate-plan"), [{ stdout: gateStream(), exitCode: 0 }, { stdout: doneStream(), exitCode: 0 }]);
   const gateQueued = await queueIssue({ id: gateItem.id }, gateEnv);
   const gateCycle = await runCycle({ jobId: gateQueued.job.id, env: gateEnv, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
   assert.deepEqual(gateCycle.processed.map((entry) => entry.status), ["gate"]);
@@ -153,8 +153,8 @@ test("a `gate` outcome keeps the item correctly in progress behind a retryable j
   assert.deepEqual(gateRetryCycle.processed.map((entry) => entry.status), ["done"]);
   assert.equal(getIssue(gateItem.id, gateEnv).status, "in_review", "the intended path (queue_retry, not queue_add) resolves the SAME job and moves the SAME item; gate is recoverable by design");
 
-  const { env: failedEnv, item: failedItem } = makeItemHome(t, "roadmap-lost-failed");
-  useFakeClaude(failedEnv, makeDir(t, "roadmap-lost-failed-plan"), [{ stdout: failureStream(), exitCode: 1 }]);
+  const { env: failedEnv, item: failedItem } = makeItemHome(t, "issue-lost-failed");
+  useFakeClaude(failedEnv, makeDir(t, "issue-lost-failed-plan"), [{ stdout: failureStream(), exitCode: 1 }]);
   const failedQueued = await queueIssue({ id: failedItem.id }, failedEnv);
   const failedCycle = await runCycle({ jobId: failedQueued.job.id, env: failedEnv, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
   assert.deepEqual(failedCycle.processed.map((entry) => entry.status), ["failed"]);

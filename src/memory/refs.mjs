@@ -40,16 +40,16 @@ function requireRefParts(what, row, key) {
   }
 }
 
-// Picks the owner key a roadmap row renders with: its org, its project, or the global pseudo-key.
+// Picks the owner key an issue row renders with: its org, its project, or the global pseudo-key.
 function rowKey(row) {
   if (row?.scope === "org") return row.org_key;
   return (row?.project_id ?? null) === null ? GLOBAL_KEY : row.project_key;
 }
 
-// Renders the ref of a roadmap item (`<KEY>-<n>`).
+// Renders the ref of an issue (`<KEY>-<n>`).
 export function itemRef(row) {
   const key = rowKey(row);
-  requireRefParts("roadmap item", row, key);
+  requireRefParts("issue", row, key);
   return `${key}-${row.number}`;
 }
 
