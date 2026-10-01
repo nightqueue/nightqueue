@@ -9,11 +9,12 @@ import { logsDir } from "../config/paths.mjs";
 import { ensureHome, loadConfig } from "../config/store.mjs";
 import { packageRoot, spawnRoot } from "../host/paths.mjs";
 import { closeRefusal } from "../memory/jobs.mjs";
+import { sqliteToIso } from "../memory/schema.mjs";
 import { prStateKey } from "./pr-state.mjs";
 import { killProcess, ownRunnerRecord, pruneDeadRunners, removeOwnRunnerRecord, writeRunnerRecord } from "./registry.mjs";
 import { callerJobId } from "./retry.mjs";
 import { compactStamp } from "./runner.mjs";
-import { runClosePipeline, CLOSE_LEASE_SLACK_S } from "./close.mjs";
+import { runClosePipeline, postCloseStepsNamed, CLOSE_LEASE_SLACK_S, POST_CLOSE_TIMEOUT_S } from "./close.mjs";
 import { CLOSE_WORKER_ENV } from "./close-deps.mjs";
 import { parseCloseChecklist } from "./close-view.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
@@ -214,6 +215,31 @@ export async function runCloseHere({ store, id, force = false, env = process.env
   } finally {
     removeSignals();
     removeOwnRunnerRecord(env);
+  }
+}
+
+// Refuses a `--steps` re-run on a job that is not closed, or whose post-close steps another live process is running.
+function refusePostCloseTarget(id, job, names) {
+  if (!job) throw new UserError(`unknown job \`${id}\``);
+  if (job.status !== "closed") throw new UserError(`\`--steps ${names.join(",")}\` runs only on a closed job; close it first with nightqueue queue close ${jobRef(id)}`);
+  const until = Date.parse(sqliteToIso(job.close_lease_until));
+  if (job.close_worker && Number.isFinite(until) && until >= Date.now()) {
+    throw new UserError(`the post-close steps of ${jobRef(id)} are being run by \`${job.close_worker}\` until ${new Date(until).toISOString()}; follow it with nightqueue queue status ${jobRef(id)}`);
+  }
+}
+
+// Runs again, in this process, only the named post-close steps of a closed job; each step skips what it already did.
+export async function runPostCloseSteps({ store, id, names, env = process.env, deps = null, onStep = null }) {
+  refuseCloseInsideJob(env);
+  const steps = postCloseStepsNamed(names);
+  const job = await store.jobs.getJob(id);
+  refusePostCloseTarget(id, job, steps.map((step) => step.name));
+  const controller = new AbortController();
+  const removeSignals = abortOnSignals(controller);
+  try {
+    return await runClosePipeline({ store, job, worker: closeWorkerId(), env, deps, timeoutS: POST_CLOSE_TIMEOUT_S, signal: controller.signal, onStep, steps });
+  } finally {
+    removeSignals();
   }
 }
 

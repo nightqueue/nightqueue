@@ -38,6 +38,7 @@ const CONTRACT_TOOLS = [
   "memory_recall",
   "phase_prompt",
   "pipeline_log",
+  "project_integrations",
   "project_register",
   "queue_add",
   "queue_cancel",
@@ -86,12 +87,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the thirty tools of the contract", async (t) => {
+test("the server exposes exactly the thirty-one tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 30, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 31, "the contract list and the server disagree on how many tools there are");
 });
 
 test("the server migrates a v8 home to v9 once at boot, before it answers any tool", async (t) => {
@@ -475,7 +476,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
   assert.equal(second.hint, "queued J-2 for `alpha` (2 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.");
 
   const add = (await client.listTools()).tools.find((tool) => tool.name === "queue_add");
-  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "key", "max_attempts", "priority", "project", "prompt", "register", "roadmap_item_id", "run_dir", "tier", "timeout_s"]);
+  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "key", "max_attempts", "origin", "priority", "project", "prompt", "register", "roadmap_item_id", "run_dir", "tier", "timeout_s"]);
   assert.ok(add.description.includes("start the whole batch later with `queue_run`"), add.description);
 
   const byPath = await client.callTool({ name: "queue_add", arguments: { project: "/tmp/alpha", prompt: "fix the worker" } });

@@ -1,0 +1,359 @@
+import assert from "node:assert/strict";
+import { Readable } from "node:stream";
+import { test } from "node:test";
+import { defaultContext, run } from "../../src/cli/index.mjs";
+import { testConnection } from "../../src/config/connections.mjs";
+import { loadConfig, loadSecrets, saveSecrets } from "../../src/config/store.mjs";
+import { requestJson } from "../../src/integrations/http.mjs";
+import { detectOrigin, explicitOrigin } from "../../src/integrations/origin.mjs";
+import { discord } from "../../src/integrations/discord.mjs";
+import { acquireClose, getJob } from "../../src/memory/jobs.mjs";
+import { CLOSE_STEPS, runClosePipeline } from "../../src/queue/close.mjs";
+import { runPostCloseSteps } from "../../src/queue/close-start.mjs";
+import { openStore } from "../../src/store/open.mjs";
+import { makeHome, makeProject, projectIdOf, seedDoneJob } from "../../test-support/memory.mjs";
+import { orgOfProject, setIntegrations } from "../../test-support/origin-provider.mjs";
+
+const GUILD = "111";
+const CHAT_CHANNEL = "222";
+const OPS_CHANNEL = "333";
+const THREAD = "444";
+const MESSAGE = "555";
+const CHAT_TOKEN = "chatWebhookSecretToken-0123";
+const OPS_TOKEN = "opsWebhookSecretToken-4567";
+const FAR_TOKEN = "farWebhookSecretToken-8910";
+const CHAT_URL = `https://discord.com/api/webhooks/9001/${CHAT_TOKEN}`;
+const OPS_URL = `https://discord.com/api/webhooks/9002/${OPS_TOKEN}`;
+const FAR_URL = `https://discord.com/api/webhooks/9003/${FAR_TOKEN}`;
+const SECRETS = [CHAT_TOKEN, OPS_TOKEN, FAR_TOKEN];
+const MESSAGE_LINK = `https://discord.com/channels/${GUILD}/${CHAT_CHANNEL}/${MESSAGE}`;
+const MERGE_SHA = "abc1234def5678";
+const WORKER = "close:test:1:discord";
+const POST_STEPS = CLOSE_STEPS.filter((step) => step.required === false);
+const CHAT = { type: "discord", url: CHAT_URL, channelId: CHAT_CHANNEL, guildId: GUILD, mode: "webhook", name: "chat" };
+const OPS = { type: "discord", url: OPS_URL, channelId: OPS_CHANNEL, guildId: GUILD, mode: "webhook", name: "ops" };
+const FAR = { type: "discord", url: FAR_URL, channelId: "777", guildId: "999", mode: "webhook", name: "far" };
+const RESULT = { prUrl: "https://github.com/acme/api/pull/7", prNumber: 7, mergeSha: MERGE_SHA };
+const JOB = { id: 1, ref: "J-1", title: "fix the crash", project: "alpha" };
+
+// A fake fetch recording every call and answering by `METHOD url` route, 404 for a route it does not know.
+function fakeFetch(routes = {}) {
+  const calls = [];
+  const impl = async (url, options) => {
+    const method = options.method ?? "GET";
+    calls.push({ url, method, body: options.body ? JSON.parse(options.body) : null });
+    const route = routes[`${method} ${url}`] ?? { status: 404 };
+    return { status: route.status ?? 200, headers: new Map(), json: async () => route.body ?? {} };
+  };
+  return { impl, calls };
+}
+
+// The webhook GET routes of the fixture connections.
+function webhookRoutes() {
+  return {
+    [`GET ${CHAT_URL}`]: { body: { channel_id: CHAT_CHANNEL, guild_id: GUILD, token: CHAT_TOKEN } },
+    [`GET ${OPS_URL}`]: { body: { channel_id: OPS_CHANNEL, guild_id: GUILD, token: OPS_TOKEN } },
+    [`GET ${FAR_URL}`]: { body: { channel_id: "777", guild_id: "999", token: FAR_TOKEN } },
+  };
+}
+
+// The http a provider receives, bound to a fake fetch.
+function httpOf(fetch) {
+  return (url, options = {}) => requestJson(fetch.impl, url, options);
+}
+
+// Asserts no fixture webhook token appears in a value.
+function assertNoSecret(value) {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  for (const secret of SECRETS) assert.ok(!text.includes(secret), `a webhook token leaked: ${text}`);
+}
+
+// Runs the CLI in this process with a stdin and a fetch, collecting what it printed.
+async function runCli(env, argv, { input = "", fetch = fakeFetch(webhookRoutes()) } = {}) {
+  const out = [];
+  const err = [];
+  const stdin = Readable.from([input]);
+  const context = { ...defaultContext(), env, stdin, fetchImpl: fetch.impl, out: (line) => out.push(line), err: (line) => err.push(line) };
+  const code = await run(argv, context);
+  return { code, out, err };
+}
+
+// A home with project `alpha` whose org lists the discord webhooks `chat` and `ops`.
+async function discordHome(t, name) {
+  const env = makeHome(t, name);
+  const checkout = makeProject(t, env, "alpha");
+  const projectId = projectIdOf(env, "alpha");
+  for (const [hook, url] of [["chat", CHAT_URL], ["ops", OPS_URL]]) {
+    const added = await runCli(env, ["connection", "add", hook, "--type", "discord"], { input: `${url}\n` });
+    assert.equal(added.code, 0, added.err.join("\n"));
+  }
+  return { env, checkout, projectId, orgId: orgOfProject(env, projectId), store: openStore(env) };
+}
+
+// Pre-close steps that merge and settle without gh, so the real post-close steps run after a real settle.
+function fakePreSteps() {
+  const done = (note, data) => async () => ({ status: "done", note, data });
+  return [
+    { name: "preflight", run: done("checks green", { title: "fix the crash" }) },
+    { name: "conflict", run: async () => ({ status: "skipped", note: "mergeable" }) },
+    { name: "merge", run: done("merged", { merged: true, mergeSha: MERGE_SHA }) },
+    { name: "settle", run: async () => ({ status: "done", note: "ready", data: { noticeLine: "Closed: PR #7 merged as abc1234 on 2026-10-01" } }) },
+  ];
+}
+
+// Closes a done job queued from the discord message link with the fake pre-close steps and the real post-close ones.
+async function closeDiscordJob(home, fetch) {
+  const id = seedDoneJob(home.env, { prompt: `the bot crashes, reported in ${MESSAGE_LINK}` });
+  acquireClose(id, { worker: WORKER, leaseS: 660 }, home.env);
+  const outcome = await runClosePipeline({
+    store: home.store,
+    job: getJob(id, home.env),
+    worker: WORKER,
+    env: home.env,
+    deps: { fetch: fetch.impl },
+    timeoutS: 60,
+    signal: null,
+    onStep: () => {},
+    checkout: home.checkout,
+    steps: [...fakePreSteps(), ...POST_STEPS],
+  });
+  return { id, outcome, row: getJob(id, home.env) };
+}
+
+// Calls the provider's close action with the fixture job and merge.
+async function replyWith(routes, { ref = `${GUILD}/${CHAT_CHANNEL}/${MESSAGE}`, settings = {}, connections = [CHAT, OPS, FAR] } = {}) {
+  const fetch = fakeFetch(routes);
+  const answer = await discord.onClosed({ ref, job: JOB, result: RESULT, settings, slot: null, connections, http: httpOf(fetch) });
+  return { answer, calls: fetch.calls };
+}
+
+test("a discord message link is an origin `<guild>/<channel>/<message>`; a bare triple only when given explicitly", () => {
+  const parse = (text, options) => discord.origin.parse(text, options);
+  assert.equal(parse(`see ${MESSAGE_LINK}`), "111/222/555");
+  assert.equal(parse("https://ptb.discord.com/channels/1/2/3"), "1/2/3");
+  assert.equal(parse("https://canary.discordapp.com/channels/4/5/6"), "4/5/6");
+  assert.equal(parse("https://discord.com/channels/1/2"), null);
+  assert.equal(parse("https://notdiscord.com/channels/1/2/3"), null);
+  assert.equal(parse("ratio 1/2/3 in prose"), null);
+  assert.equal(parse("1/2/3", { explicit: true }), "1/2/3");
+  assert.deepEqual(detectOrigin(`the bot crashes, see ${MESSAGE_LINK}`), { kind: "discord", ref: "111/222/555" });
+  assert.deepEqual(explicitOrigin({ kind: "discord", ref: "111/222/555" }), { kind: "discord", ref: "111/222/555" });
+  assert.deepEqual(explicitOrigin({ kind: "discord", ref: MESSAGE_LINK }), { kind: "discord", ref: "111/222/555" });
+  assert.throws(() => explicitOrigin({ kind: "discord", ref: "general" }), /is not a discord reference/);
+});
+
+test("connection add --type discord derives the channel and guild, refuses a bad or unreadable URL without echoing it, and lists no URL", async (t) => {
+  const env = makeHome(t, "discord-connection-add");
+  makeProject(t, env, "alpha");
+  const badUrl = `https://example.com/api/webhooks/1/${CHAT_TOKEN}`;
+  const fetch = fakeFetch(webhookRoutes());
+  const bad = await runCli(env, ["connection", "add", "chat", "--type", "discord"], { input: `${badUrl}\n`, fetch });
+  assert.equal(bad.code, 1);
+  assert.match(bad.err.join("\n"), /the secret is not a Discord webhook URL .*; nothing was stored/);
+  assert.equal(fetch.calls.length, 0);
+  const unreadableUrl = `https://discord.com/api/webhooks/9999/${CHAT_TOKEN}`;
+  const unreadable = await runCli(env, ["connection", "add", "chat", "--type", "discord"], { input: `${unreadableUrl}\n` });
+  assert.equal(unreadable.code, 1);
+  assert.match(unreadable.err.join("\n"), /the Discord webhook could not be read \(HTTP 404\); nothing was stored/);
+  assert.equal(loadSecrets(env, { warn: () => {} }).connections.chat, undefined);
+
+  const added = await runCli(env, ["connection", "add", "chat", "--type", "discord"], { input: `${CHAT_URL}\n` });
+  assert.equal(added.code, 0, added.err.join("\n"));
+  assert.match(added.out.join("\n"), /stored connection `chat` \(discord\) and bound it to org `default`/);
+  assert.deepEqual(loadSecrets(env, { warn: () => {} }).connections.chat, { type: "discord", url: CHAT_URL, channelId: CHAT_CHANNEL, guildId: GUILD, mode: "webhook" });
+  const second = await runCli(env, ["connection", "add", "ops", "--type", "discord"], { input: `${OPS_URL}\n` });
+  assert.equal(second.code, 0, second.err.join("\n"));
+  assert.deepEqual(second.err, [], "a many type never warns about an occupied slot");
+
+  const list = await runCli(env, ["connection", "list"]);
+  const json = await runCli(env, ["connection", "list", "--json"]);
+  assert.deepEqual(list.out, ["chat  discord  orgs=default", "ops  discord  orgs=default"]);
+  assert.deepEqual(JSON.parse(json.out[0]).connections.map((row) => Object.keys(row)), [["name", "type", "present", "orgs"], ["name", "type", "present", "orgs"]]);
+  const orgs = await runCli(env, ["org", "list"]);
+  assert.match(orgs.out.join("\n"), /github=- sentry=- discord=chat,ops/);
+
+  const tested = await testConnection({ name: "chat", secrets: loadSecrets(env, { warn: () => {} }), fetchImpl: fakeFetch(webhookRoutes()).impl });
+  assert.deepEqual(tested, { type: "discord", ok: true, status: 200, channelId: CHAT_CHANNEL, guildId: GUILD, detail: "ok" });
+  assert.equal(discord.connection.summary(tested), `channel=${CHAT_CHANNEL} guild=${GUILD}`);
+  const testLine = await runCli(env, ["connection", "test", "chat"]);
+  assert.deepEqual(testLine.out, [`chat (discord): ok — channel=${CHAT_CHANNEL} guild=${GUILD}`]);
+  assertNoSecret([bad, unreadable, added, second, list, json, orgs, tested, testLine]);
+});
+
+test("a discord connection binds to many orgs once each, and removing it unbinds it from every list", async (t) => {
+  const env = makeHome(t, "discord-binding");
+  makeProject(t, env, "alpha");
+  assert.equal((await runCli(env, ["org", "add", "other", "--key", "OTH"])).code, 0);
+  await runCli(env, ["connection", "add", "chat", "--type", "discord"], { input: `${CHAT_URL}\n` });
+  await runCli(env, ["connection", "add", "ops", "--type", "discord"], { input: `${OPS_URL}\n` });
+  for (let round = 0; round < 2; round += 1) {
+    const bound = await runCli(env, ["connection", "bind", "ops", "--org", "other"]);
+    assert.deepEqual(bound.out, ["bound `ops` to org `other` (discord)"]);
+  }
+  const orgs = (await runCli(env, ["org", "list"])).out.join("\n");
+  assert.match(orgs, /default .*discord=chat,ops/);
+  assert.match(orgs, /other .*discord=ops /);
+
+  const removed = await runCli(env, ["connection", "remove", "ops"]);
+  assert.deepEqual(removed.out, ["removed connection `ops`; unbound from: default, other"]);
+  const lists = Object.values(loadConfig(env, { warn: () => {} }).orgConnections).map((slots) => slots.discord);
+  assert.deepEqual(lists, [["chat"], []]);
+  assert.match((await runCli(env, ["org", "list"])).out.join("\n"), /other .*discord=- /);
+});
+
+test("coverage names the org webhook posting in the message's channel, otherwise none with the thread probe", () => {
+  const visible = [CHAT, OPS, FAR].map(({ url, ...fields }) => fields);
+  assert.deepEqual(discord.covers(`${GUILD}/${CHAT_CHANNEL}/${MESSAGE}`, { slot: null, connections: visible }), { connection: "chat", detail: null });
+  assert.deepEqual(discord.covers(`${GUILD}/${THREAD}/${MESSAGE}`, { slot: null, connections: visible }), {
+    connection: null,
+    detail: `thread or other channel: probes the org's webhooks of guild ${GUILD} at close (2)`,
+  });
+});
+
+test("the reply posts in the matching channel, else probes the guild's webhooks as a thread until one posts, never mentioning anyone", async () => {
+  const byChannel = await replyWith({ [`POST ${CHAT_URL}?wait=true`]: {} });
+  assert.deepEqual(byChannel.answer, { status: "done", note: `replied in channel ${CHAT_CHANNEL} through chat` });
+  assert.deepEqual(byChannel.calls.map((call) => call.url), [`${CHAT_URL}?wait=true`]);
+  assert.deepEqual(byChannel.calls[0].body, {
+    content: `Fixed in ${RESULT.prUrl} (merged as abc1234) - ${MESSAGE_LINK}`,
+    allowed_mentions: { parse: [] },
+  });
+
+  const threadRef = `${GUILD}/${THREAD}/${MESSAGE}`;
+  const probed = await replyWith({ [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: { status: 400 }, [`POST ${OPS_URL}?wait=true&thread_id=${THREAD}`]: {} }, { ref: threadRef });
+  assert.deepEqual(probed.answer, { status: "done", note: `replied in thread ${THREAD} through ops` });
+  assert.deepEqual(probed.calls.map((call) => call.url), [`${CHAT_URL}?wait=true&thread_id=${THREAD}`, `${OPS_URL}?wait=true&thread_id=${THREAD}`]);
+
+  const firstWins = await replyWith({ [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: {} }, { ref: threadRef });
+  assert.equal(firstWins.calls.length, 1);
+
+  const refused = await replyWith({}, { ref: threadRef });
+  assert.deepEqual(refused.answer, { status: "skipped", note: `no webhook of the org can post in channel ${THREAD}`, notice: true });
+  assert.equal(refused.calls.length, 2, "the webhook of another guild is never tried");
+
+  const limited = await replyWith({ [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: { status: 429 } }, { ref: threadRef });
+  assert.deepEqual(limited.answer, { status: "warning", note: `reply in thread ${THREAD} not posted through chat (HTTP 429)` });
+  assert.equal(limited.calls.length, 1);
+  const failing = await replyWith({ [`POST ${CHAT_URL}?wait=true`]: { status: 502 } });
+  assert.deepEqual(failing.answer, { status: "warning", note: `reply in channel ${CHAT_CHANNEL} not posted through chat (HTTP 502)` });
+
+  const off = await replyWith({}, { settings: { replyToOrigin: false } });
+  assert.deepEqual(off.answer, { status: "skipped", note: "replyToOrigin is false" });
+  assert.equal(off.calls.length, 0);
+  assertNoSecret([byChannel.answer, probed.answer, refused.answer, limited.answer, failing.answer, off.answer]);
+});
+
+test("the log posts the closed job once to its webhook, cut to 2000 characters, and skips any other event", async () => {
+  const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
+  const logged = await discord.log({ event: "closed", job: JOB, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
+  assert.deepEqual(logged, { status: "done", note: "logged through ops" });
+  assert.deepEqual(fetch.calls[0].body, {
+    content: `J-1 closed - PR #7 merged as abc1234: fix the crash\n${RESULT.prUrl}`,
+    allowed_mentions: { parse: [] },
+  });
+  await discord.log({ event: "closed", job: { ...JOB, title: "x".repeat(5000) }, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
+  assert.equal(fetch.calls[1].body.content.length, 2000);
+  const other = await discord.log({ event: "failed", job: JOB, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
+  assert.equal(other.status, "skipped");
+  assert.equal(fetch.calls.length, 2);
+  const refused = await discord.log({ event: "closed", job: JOB, result: RESULT, settings: {}, connection: OPS, http: httpOf(fakeFetch()) });
+  assert.deepEqual(refused, { status: "warning", note: "log not posted through ops (HTTP 404)" });
+});
+
+test("closing a job queued from a discord link replies and logs once; a --steps re-run posts nothing again", async (t) => {
+  const home = await discordHome(t, "discord-close");
+  const set = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.connection=ops"]);
+  assert.equal(set.code, 0, set.err.join("\n"));
+
+  const fetch = fakeFetch({ [`POST ${CHAT_URL}?wait=true`]: {}, [`POST ${OPS_URL}?wait=true`]: {} });
+  const { id, outcome, row } = await closeDiscordJob(home, fetch);
+  assert.equal(outcome.status, "closed");
+  assert.deepEqual(outcome.postClose.steps, [
+    { name: "origin", status: "done", note: `replied in channel ${CHAT_CHANNEL} through chat` },
+    { name: "log", status: "done", note: "discord: logged through ops" },
+  ]);
+  assert.deepEqual(fetch.calls.map((call) => [call.method, call.url]), [["POST", `${CHAT_URL}?wait=true`], ["POST", `${OPS_URL}?wait=true`]]);
+  assert.match(fetch.calls[1].body.content, /^J-\d+ closed - PR #7 merged as abc1234/);
+  const checklist = JSON.parse(row.close);
+  assert.equal(checklist.data.originNotified, true);
+  assert.deepEqual(checklist.data.logged, { discord: true });
+  assert.equal(row.status, "closed");
+
+  const again = fakeFetch();
+  const rerun = await runPostCloseSteps({ store: home.store, id, names: ["log", "origin"], env: home.env, deps: { fetch: again.impl } });
+  assert.deepEqual(rerun.steps, [
+    { name: "origin", status: "done", note: "already notified" },
+    { name: "log", status: "done", note: "discord: already logged" },
+  ]);
+  assert.equal(again.calls.length, 0);
+  assertNoSecret([outcome, getJob(id, home.env)]);
+});
+
+test("discord.replyToOrigin=false sends no reply, and an unset replyToOrigin replies by default", async (t) => {
+  const home = await discordHome(t, "discord-reply-off");
+  setIntegrations(home.env, home.projectId, { discord: { replyToOrigin: false } });
+  const silent = fakeFetch();
+  const off = await closeDiscordJob(home, silent);
+  assert.deepEqual(off.outcome.postClose.steps, [
+    { name: "origin", status: "skipped", note: "replyToOrigin is false" },
+    { name: "log", status: "skipped", note: "no log destination" },
+  ]);
+  assert.equal(silent.calls.length, 0);
+  assert.equal(off.row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");
+
+  const unset = await runCli(home.env, ["project", "integrations", "alpha", "unset", "discord.replyToOrigin"]);
+  assert.deepEqual(unset.out, ["no integrations"]);
+  setIntegrations(home.env, home.projectId, { discord: { log: { events: ["closed"] } } });
+  const replying = fakeFetch({ [`POST ${CHAT_URL}?wait=true`]: {} });
+  const on = await closeDiscordJob(home, replying);
+  assert.equal(on.outcome.postClose.steps[0].status, "done");
+  assert.deepEqual(replying.calls.map((call) => call.url), [`${CHAT_URL}?wait=true`]);
+});
+
+test("a thread nobody of the org can post in leaves the job closed with a notice line and no URL", async (t) => {
+  const home = await discordHome(t, "discord-no-poster");
+  setIntegrations(home.env, home.projectId, { discord: { replyToOrigin: true } });
+  const id = seedDoneJob(home.env, { prompt: `see https://discord.com/channels/${GUILD}/${THREAD}/${MESSAGE}` });
+  acquireClose(id, { worker: WORKER, leaseS: 660 }, home.env);
+  const fetch = fakeFetch({ [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: { status: 400 }, [`POST ${OPS_URL}?wait=true&thread_id=${THREAD}`]: { status: 403 } });
+  const outcome = await runClosePipeline({
+    store: home.store,
+    job: getJob(id, home.env),
+    worker: WORKER,
+    env: home.env,
+    deps: { fetch: fetch.impl },
+    timeoutS: 60,
+    signal: null,
+    onStep: () => {},
+    checkout: home.checkout,
+    steps: [...fakePreSteps(), ...POST_STEPS],
+  });
+  const row = getJob(id, home.env);
+  assert.equal(outcome.status, "closed");
+  assert.equal(row.status, "closed");
+  assert.match(row.notice_md, new RegExp(`After close: origin skipped - no webhook of the org can post in channel ${THREAD}`));
+  assertNoSecret([outcome, row]);
+});
+
+test("project integrations takes the four discord keys and refuses a log connection of another type or another org", async (t) => {
+  const home = await discordHome(t, "discord-settings");
+  assert.equal((await runCli(home.env, ["org", "add", "other", "--key", "OTH"])).code, 0);
+  assert.equal((await runCli(home.env, ["connection", "add", "far", "--type", "discord", "--org", "other"], { input: `${FAR_URL}\n` })).code, 0);
+  const secrets = loadSecrets(home.env, { warn: () => {} });
+  secrets.connections.gh = { type: "github", token: "ghp_not_a_webhook" };
+  saveSecrets(secrets, home.env);
+
+  const set = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.connection=ops", "discord.log.events=closed", "discord.replyToOrigin=false"]);
+  assert.equal(set.code, 0, set.err.join("\n"));
+  assert.deepEqual(set.out, ["discord.log.connection=ops", "discord.log.events=closed", "discord.replyToOrigin=false"]);
+
+  const otherOrg = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.connection=far"]);
+  assert.equal(otherOrg.code, 1);
+  assert.match(otherOrg.err.join("\n"), /connection `far` is not bound to the project's org/);
+  const otherType = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.connection=gh"]);
+  assert.equal(otherType.code, 1);
+  assert.match(otherType.err.join("\n"), /`discord\.log\.connection` needs a discord connection; `gh` is a github connection/);
+  const badEvent = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.events=done"]);
+  assert.match(badEvent.err.join("\n"), /`discord\.log\.events` takes a comma-separated list of: closed/);
+  assertNoSecret([set, otherOrg, otherType, badEvent, await runCli(home.env, ["project", "integrations", "alpha", "show", "--json"])]);
+});

@@ -1,40 +1,8 @@
 import { UserError } from "./errors.mjs";
 import { assertName, emptySlots } from "./schema.mjs";
+import { connectionTypes } from "../integrations/registry.mjs";
 
-const GITHUB_API = "https://api.github.com";
-
-// Converts the GitHub API response into the connection test result.
-async function githubResult(res) {
-  const status = res.status;
-  if (status < 200 || status >= 300) return { ok: false, status, login: null, scopes: null, detail: `HTTP ${status}` };
-  const body = await res.json();
-  return {
-    ok: true,
-    status,
-    login: body?.login ?? null,
-    scopes: res.headers.get("x-oauth-scopes") ?? null,
-    detail: "ok",
-  };
-}
-
-// Validates the token of a GitHub connection, without exposing the value in the result.
-async function testGithub(secret, { fetchImpl = fetch, timeoutMs = 5000 } = {}) {
-  try {
-    const res = await fetchImpl(`${GITHUB_API}/user`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${secret.token}`, Accept: "application/vnd.github+json" },
-      redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    return await githubResult(res);
-  } catch (err) {
-    const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
-    const detail = timedOut ? `timeout (${Math.round(timeoutMs / 1000)}s)` : "network failure";
-    return { ok: false, status: null, login: null, scopes: null, detail };
-  }
-}
-
-export const CONNECTION_TYPES = new Map([["github", { secretFields: ["token"], extraFields: [], test: testGithub }]]);
+export const CONNECTION_TYPES = connectionTypes();
 
 // Returns the descriptor of a supported connection type.
 export function requireType(type) {
@@ -51,11 +19,29 @@ export function connectionFor(config, orgId, type) {
   return typeof name === "string" && name ? name : null;
 }
 
+// The connection names one binding holds: a slot's name, or the list of a kind bound to many connections.
+function boundNames(binding) {
+  if (Array.isArray(binding)) return binding.filter((name) => typeof name === "string" && name);
+  return typeof binding === "string" && binding ? [binding] : [];
+}
+
+// Tells whether a type binds an org to many connections instead of a single slot.
+function isManyType(type) {
+  return requireType(type).cardinality === "many";
+}
+
 // Lists the ids of the orgs pointing at a connection.
 export function orgsUsingConnection(config, name) {
   return Object.entries(config?.orgConnections ?? {})
-    .filter(([, slots]) => Object.values(slots ?? {}).includes(name))
+    .filter(([, slots]) => Object.values(slots ?? {}).some((binding) => boundNames(binding).includes(name)))
     .map(([orgId]) => orgId);
+}
+
+// Adds a connection to the org's list of a many type, once.
+function addToOrgList(config, orgId, type, name) {
+  const slots = slotsFor(config, orgId);
+  const names = boundNames(slots[type]);
+  slots[type] = names.includes(name) ? names : [...names, name];
 }
 
 // The slot map of an org id, created empty the first time a binding lands on it.
@@ -88,31 +74,79 @@ export function listConnections(config, secrets) {
     rows.set(name, { name, type: entry.type, present: true, orgs: orgsUsingConnection(config, name) });
   }
   for (const slots of Object.values(config?.orgConnections ?? {})) {
-    for (const [type, name] of Object.entries(slots ?? {})) {
-      if (!name || rows.has(name)) continue;
-      rows.set(name, { name, type, present: false, orgs: orgsUsingConnection(config, name) });
+    for (const [type, binding] of Object.entries(slots ?? {})) {
+      for (const name of boundNames(binding)) {
+        if (!rows.has(name)) rows.set(name, { name, type, present: false, orgs: orgsUsingConnection(config, name) });
+      }
     }
   }
   return [...rows.values()];
 }
 
-// Builds config and secrets with the new connection, binding it to the org's slot only when that slot is empty.
-export function addConnection({ config, secrets, name, type, orgId, secret }) {
+// Validates one extra field value against its declaration, answering the value or its declared default.
+function extraValue(type, field, given) {
+  if (given === undefined) {
+    if (field.required) throw new UserError(`a ${type} connection needs --set ${field.name}=<value> (${field.format ?? "a value"})`);
+    return field.default;
+  }
+  if (typeof given !== "string" || !given || (typeof field.check === "function" && !field.check(given))) {
+    throw new UserError(`\`--set ${field.name}\` of a ${type} connection takes ${field.format ?? "a value"}`);
+  }
+  return given;
+}
+
+// Validates the extra fields given for a connection type, filling the declared defaults; an undeclared field is refused.
+export function connectionExtras(type, extra = {}) {
+  const fields = requireType(type).extraFields ?? [];
+  const declared = fields.map((field) => field.name);
+  const unknown = Object.keys(extra ?? {}).find((name) => !declared.includes(name));
+  if (unknown !== undefined) {
+    throw new UserError(`a ${type} connection has no field \`${unknown}\`; fields: ${declared.length ? declared.join(", ") : "(none)"}`);
+  }
+  const values = {};
+  for (const field of fields) {
+    const value = extraValue(type, field, extra?.[field.name]);
+    if (value !== undefined) values[field.name] = value;
+  }
+  return values;
+}
+
+// The fields a type derives from its secret at `connection add` (asking its service), secret and type never among them.
+export async function completeConnection({ type, secret, extra = {}, fetchImpl = fetch, timeoutMs = 5000 }) {
+  const descriptor = requireType(type);
+  if (typeof descriptor.complete !== "function") return {};
+  if (typeof secret !== "string" || !secret) throw new UserError("empty secret; nothing was stored");
+  const secretField = descriptor.secretFields[0];
+  const completed = await descriptor.complete({ type, [secretField]: secret, ...extra }, { fetchImpl, timeoutMs });
+  const hidden = new Set(["type", ...descriptor.secretFields, ...Object.keys(extra)]);
+  return Object.fromEntries(Object.entries(completed ?? {}).filter(([field]) => !hidden.has(field)));
+}
+
+// Builds config and secrets with the new connection: bound to the org's slot only when that slot is empty, appended to the org's list for a many type.
+export function addConnection({ config, secrets, name, type, orgId, secret, extra = {}, derived = {} }) {
   assertName("connection", name);
   const descriptor = requireType(type);
+  const fields = connectionExtras(type, extra);
   if (typeof secret !== "string" || !secret) throw new UserError("empty secret; nothing was stored");
   if (hasConnection(secrets, name)) throw new UserError(`connection \`${name}\` already exists; remove it first`);
-  secrets.connections[name] = { type, [descriptor.secretFields[0]]: secret };
+  secrets.connections[name] = { type, [descriptor.secretFields[0]]: secret, ...fields, ...derived };
+  if (isManyType(type)) {
+    addToOrgList(config, orgId, type, name);
+    return { config, secrets, orgId, bound: true, occupiedBy: null };
+  }
   const occupiedBy = connectionFor(config, orgId, type);
   if (!occupiedBy) slotsFor(config, orgId)[type] = name;
   return { config, secrets, orgId, bound: !occupiedBy, occupiedBy };
 }
 
-// Binds (or rebinds) an existing connection to the slot of its type in an org.
+// Binds (or rebinds) an existing connection to the slot of its type in an org, or adds it to the org's list of a many type.
 export function bindConnection({ config, secrets, name, orgId }) {
   const type = typeOf(secrets, name);
   if (!type) throw new UserError(`unknown connection \`${name}\``);
-  requireType(type);
+  if (isManyType(type)) {
+    addToOrgList(config, orgId, type, name);
+    return { config, type, previous: null };
+  }
   const previous = connectionFor(config, orgId, type);
   slotsFor(config, orgId)[type] = name;
   return { config, type, previous };
@@ -124,7 +158,8 @@ export function removeConnection({ config, secrets, name }) {
   const unboundFrom = orgsUsingConnection(config, name);
   for (const slots of Object.values(config?.orgConnections ?? {})) {
     for (const [type, bound] of Object.entries(slots ?? {})) {
-      if (bound === name) slots[type] = null;
+      if (Array.isArray(bound)) slots[type] = bound.filter((listed) => listed !== name);
+      else if (bound === name) slots[type] = null;
     }
   }
   delete secrets.connections[name];

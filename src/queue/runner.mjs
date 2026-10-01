@@ -56,6 +56,8 @@ import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
 import { resolveWindow, windowPhase } from "./window.mjs";
 import { finishNotice, inspectRunWorktree, keptWorktreeLine, openJobWorktrees, removeRunWorktree } from "./worktree.mjs";
 import { jobRef } from "../memory/refs.mjs";
+import { enrichJobOrigin } from "../integrations/enrich.mjs";
+import { parseOriginColumn } from "../integrations/origin.mjs";
 
 // Interval between two cycles of `queue run --watch` when the operator gives no number.
 export const WATCH_INTERVAL_DEFAULT_S = 30;
@@ -853,6 +855,34 @@ function writeJobBlock(job, refs, env) {
   }
 }
 
+// The org and the integrations of a job's project, read from the store; an unavailable store is thrown to the backoff, any other failure answers null.
+async function readOriginFacts(job, ctx) {
+  try {
+    const [project, integrations] = await Promise.all([ctx.store.projects.byId(job.project_id), ctx.store.projects.integrations(job.project_id)]);
+    return { orgId: project?.org_id ?? null, integrations };
+  } catch (err) {
+    if (err instanceof StoreUnavailableError) throw err;
+    return { orgId: null, integrations: null };
+  }
+}
+
+// Logs the origin of a claimed job and lets its project's provider enrich the run with it; nothing here ever fails the job.
+async function enrichOrigin(job, ctx) {
+  const origin = parseOriginColumn(job.origin);
+  if (!origin) return null;
+  const facts = await untilStoreAnswers(ctx, () => readOriginFacts(job, ctx));
+  if (facts === OUTAGE_STOPPED) return OUTAGE_STOPPED;
+  const dir = isRunPath(job.project_id, job.slug) ? join(runDir(job.project_id, job.slug, ctx.env), "origin") : null;
+  const enrich = ctx.deps.enrichImpl ?? enrichJobOrigin;
+  const log = (line) => appendJobLog(job.id, line, ctx.env);
+  try {
+    await enrich({ origin, ...facts, dir, env: ctx.env, fetchImpl: ctx.deps.fetch ?? globalThis.fetch, log });
+  } catch {
+    log("origin enrichment skipped: the enrichment failed");
+  }
+  return null;
+}
+
 // Search key of a job: its slug once it has one, and otherwise the first significant words of its prompt, with no punctuation gh could read as syntax.
 export function prSearchKey(job) {
   const slug = typeof job?.slug === "string" ? job.slug.trim() : "";
@@ -913,6 +943,7 @@ async function prepareJob(claimed, ctx) {
   if (job === OUTAGE_STOPPED) return { report: stoppedInOutage(claimed, env) };
   ensureRunDir(job, env);
   if ((await recordJob(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
+  if ((await enrichOrigin(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
   const prepared = await deps.worktreeImpl({ job, checkout: check.cwd, baseBranch: check.branch, env, log: (line) => appendJobLog(job.id, line, env) });
   if (!prepared.ok) return { report: await gateJob(job, prepared, ctx) };
   if (!prepared.reused) await persistBranch(job, job.slug, ctx);

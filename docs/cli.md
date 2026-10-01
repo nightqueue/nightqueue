@@ -264,10 +264,17 @@ nightqueue project move api acme                   # move a project to another o
 nightqueue project move api --path ~/code/api      # give it a new checkout (or one it never had)
 nightqueue project remove api                      # refused while it owns rows, listing them and hinting --purge
 nightqueue project remove api --purge [--yes]      # delete it and every row it owns (jobs, lessons, memory, roadmap, runs dir); asks first, refused while a job runs or closes, or while it has comments on org roadmap items (they stay)
+nightqueue project integrations api show [--json] # one <kind>.<key>=<value> line per setting, or "no integrations"
+nightqueue project integrations api set <kind>.<key>=<value> ...   # validated against the provider that declares the key
+nightqueue project integrations api unset <kind>.<key> ...         # the last key removed leaves the project without integrations
 
 echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github
 nightqueue connection bind gh --org acme           # bind (or rebind) an org slot
 nightqueue connection test gh                      # prints login and scopes, never the token
+echo "$SENTRY_AUTH_TOKEN" | nightqueue connection add sn --type sentry --set org=acme [--set url=https://sentry.example.com]
+nightqueue connection test sn                      # prints org=<slug>, never the token
+echo "$DISCORD_WEBHOOK_URL" | nightqueue connection add team-chat --type discord   # reads the webhook's channel and guild, added to the org's list
+nightqueue connection test team-chat               # prints channel=<id> guild=<id>, never the URL
 nightqueue connection list --json
 nightqueue connection remove gh                    # unbinds from every org, then deletes the secret
 ```
@@ -275,6 +282,32 @@ nightqueue connection remove gh                    # unbinds from every org, the
 The secret is read from stdin when stdin is not a terminal, and asked for in a
 hidden prompt otherwise. It is never accepted as a command-line argument, and
 never printed back - not by `list`, not by `--json`, not by an error message.
+A type that needs more than its secret takes it as `--set <field>=<value>`, validated
+against the fields the type declares before the secret is read: a `sentry` connection
+needs `org` (its organization slug) and takes an optional `url` (an https origin, default
+`https://sentry.io`, for a self-hosted Sentry); a missing required field, an unknown one or
+a malformed value is refused and nothing is stored. These fields are not secret.
+A `discord` connection is a channel webhook: its secret is the webhook URL
+(`https://discord.com/api/webhooks/<id>/<token>`), checked for that shape and read once at
+`add` to store the webhook's `channelId` and `guildId`; a URL of another shape or one the
+service does not answer is refused without being echoed, and nothing is stored. An org holds
+any number of discord webhooks: `add` appends the new one to the org's list and `bind` adds
+it to another org's list (`org list` shows `discord=team-chat,ops`); `remove` takes it out of
+every list. The URL is never listed, logged or written in a notice. config.json keeps these
+lists under `orgConnectionLists`, apart from the single-slot `orgConnections`, so an older
+nightqueue that rewrites the file keeps them as they are instead of dropping them; a webhook an
+older build removes stays listed as missing until this build's `connection remove`.
+
+**Project integrations.** `project integrations <project>` holds what a project does with the
+services its jobs come from, one setting per `<kind>.<key>` (a key may itself be dotted, stored
+nested under the provider). The keys come from the providers of the build - `show --json` lists
+them under `providers` - and an unknown key is refused with the valid ones. Values are text: an
+enum takes one of its values, a boolean `true` or `false`, a list is comma-separated, and a
+connection value must name a stored connection of that provider bound to the project's org.
+`show` also prints `<kind>: org connection <name|none>` for each enabled provider with a single
+org slot. Several `set`/`unset` arguments are applied together: one invalid one changes nothing.
+Unsetting the last key leaves the project without integrations, behaving exactly as before.
+`set` and `unset` are refused from inside a job; the MCP tool `project_integrations` does the same.
 
 A path that starts with `-` has to come after `--` (`nightqueue init -- -weird-dir`),
 otherwise it is parsed as an unknown option and rejected.
@@ -316,6 +349,7 @@ nightqueue queue close 42 --foreground                # run the four steps in th
 nightqueue queue close 42 --foreground --json         # JSON on stdout, with the decisions the close accepted
 nightqueue queue close --merged                       # close every done job gh confirms merged, accepting each one's proposals
 nightqueue queue close 42 --force                     # skip the pull request checks and the rebase suite, nothing else
+nightqueue queue close 42 --steps origin,log          # re-run only the post-close steps of a closed job, in this process
 nightqueue queue cancel 42 --reason "abandoned"       # cancel a done or failed job and release its worktree
 
 nightqueue queue run --watch --from 22:00 --until 04:00   # watch only inside that window, local wall clock, then exit
@@ -415,7 +449,11 @@ pull request checks and the rebase suite and nothing else: status and attributio
 the merger never runs under `--force`. Without it, a small textual conflict may be resolved by
 the bounded merger agent before the suite runs. A second close of a closed
 job answers ``job `<id>` is already closed``. `queue.closeTimeoutS` (default `1800`, range
-`60..3600`) bounds the whole close, the merger included. The MCP tool `queue_close` (`job_id`, `force?`) starts the
+`60..3600`) bounds the whole close, the merger included. For a project with integrations, the
+post-close steps origin and log run after settle on the closed job and never stop it: a failure
+is an `After close: <step> warning - <note>` line in the notice; `queue close <id> --steps
+origin,log` re-runs only those steps (each skips what it already did) and exits `1` on a
+warning. The MCP tool `queue_close` (`job_id`, `force?`) starts the
 same detached close. See [Queue](queue.md#closing-a-job) for the steps, the lease and what a
 close never does.
 
@@ -522,6 +560,15 @@ outside its run or ran a Bash command outside its closed list - see
 [the queue](queue.md)) and every registered
 project. It exits `1` when any check fails, `0` otherwise - a `warn` never fails
 the run.
+
+Each stored connection gets one `connection <name>` line: doctor runs the same test as
+`nightqueue connection test <name>`, all connections in parallel, each within 5 seconds.
+`ok` reads `<type>: ok`. A test that fails or times out is a `warn`, `<type>: failed - <detail>`
+(an HTTP status, `timeout (5s)` or `network failure`, never the secret), with the hint
+`nightqueue connection test <name>`. A connection whose type this build does not know is a
+`warn`, `unknown type <type>`. These lines are never a `fail`, because a service outage says
+nothing about this host. A home with no stored connection prints no such line and makes no
+request.
 
 Three of the checks are about the storage under the home (see [Configuration](cli.md#configuration)):
 

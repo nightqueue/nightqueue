@@ -57,6 +57,24 @@ is dropped. The same live-lease refusal applies. Comments stay
 append-only - an UPDATE or a DELETE of a comment is still refused while its item
 exists - but they go away with their item.
 
+Schema v21 adds two nullable JSON text columns: `jobs.origin` (`{ "kind", "ref" }`, the
+service a job came from, set by `queue add`/`queue_add` - see [Queue](queue.md)) and
+`projects.integrations` (the project's integration settings, one object per provider
+kind; NULL is a project without integrations). Both are added on every open by an
+idempotent step (`src/memory/migration/v21.mjs`), never in the DDL the v18 and v19
+rebuilds copy into, so an older home of any version upgrades in one open with no copy
+and no rebuild. A read-only open of a v20 home reads both as absent instead of failing.
+
+**A job never migrates the runner's own home.** The installed nightqueue owns the schema of
+the home the runner uses. A process running inside a job (`NIGHTQUEUE_JOB_ID` set) that
+opens an existing database older than its build refuses before any statement changes the
+schema, when that home is the runner's: the `NIGHTQUEUE_JOB_HOME` the runner pinned, or the
+default `~/.nightqueue` when the runner pinned none and no `NIGHTQUEUE_HOME` was given. Read
+commands are covered too (`decision show` migrates through `migrateIfOutdated`). The
+refusal names the database and the fix: run the build against a temporary home with
+`nightqueue sandbox <command>` or `NIGHTQUEUE_HOME=$(mktemp -d)`. A temporary home, a fresh
+database, and every command outside a job migrate as before.
+
 **A sick database degrades, it does not kill.** The file can break under a live process - a
 home on a network or FUSE mount, a copy taken by hand, a second sqlite opened on the live
 file. Every open and every store call classifies what SQLite throws by its numeric `errcode`
@@ -162,7 +180,7 @@ persisted, so a failed run reprocesses the same slice instead of losing it.
 **Commands.**
 
 ```sh
-nightqueue mcp                     # start the stdio MCP server with the thirty tools
+nightqueue mcp                     # start the stdio MCP server with the thirty-one tools
 nightqueue mcp --http --port 4747 --token <t>   # serve the same tools over Streamable HTTP on 127.0.0.1
 nightqueue hook session-start      # run a hook, reading the event JSON from stdin
 nightqueue reflect --transcript <path>   # reflect on a transcript now, in the foreground

@@ -14,6 +14,7 @@ nightqueue queue add "fix the flaky worker"                    # same, for the p
 nightqueue queue add fix the flaky worker --run                # enqueue and start the runner on it, detached
 nightqueue queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
 nightqueue queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
+nightqueue queue add "fix it" --origin <kind>:<ref>            # name the service the job came from instead of detecting it
 nightqueue queue add --roadmap NQ-12 [--run-dir <dir>] "mind the slow disk"   # a roadmap item's job, with an operator note and/or a prior operator run
 nightqueue queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightqueue queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
@@ -30,6 +31,7 @@ nightqueue queue cancel 7 --reason "not needed"                # cancel a pendin
 nightqueue queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue (a preflight gate needs no --note)
 nightqueue queue repair 7 [--json]                             # re-classify a gated or failed job from its own log
 nightqueue queue close 7 [--force] [--foreground] [--json]      # merge a done job's pull request and close the job, detached
+nightqueue queue close 7 --steps origin,log [--json]             # re-run only the post-close steps of a closed job
 nightqueue queue close --merged [--json]                         # close every done job whose pull request is already merged
 nightqueue queue pause | nightqueue queue resume                    # stop claiming new jobs, or claim again
 ```
@@ -76,6 +78,65 @@ the brief and adds the words as a `## Operator note` section right after it; `--
 the job to a prior operator run (a project item only), checked as for a free prompt, its
 `## PRIOR RUN (operator)` block after the note. Section order: item, note, prior run, decisions.
 The note is recorded as the job's `operator_note` and in the item's `queued` comment, with the run dir.
+
+**A job records where it came from.** Every queued job gets an `origin` (`{kind, ref}`)
+when its prompt names a service a provider of this build recognizes - the first provider,
+in registry order, whose parser matches the prompt (or the item's prompt, on the roadmap
+path) - or the one `--origin <kind>:<ref>` (`queue_add`'s `origin: {kind, ref}`, on both
+the prompt and the `roadmap_item_id` branches) names explicitly, split on the first `:`.
+An explicit origin wins over detection; one whose kind no provider knows, or whose ref
+the provider does not read as its own, is refused and nothing is queued. A prompt that
+names no service queues a job with no origin, exactly as before. The answer names the
+origin and the org connection that covers it: `queue add` prints a line of its own,
+`origin: <kind> <ref> (connection: <name|none>)`, and `queue_add` answers
+`origin: {kind, ref, connection, detail?}` plus `Origin: ...` in its hint (`none` with the
+reason in `detail`, e.g. `project has no <kind> integration`). `queue status <id>` shows an
+`origin` line and the `--json`/`queue_status` detail carries `origin` (null when none).
+
+**The runner enriches the origin at claim.** A claimed job with an origin writes one
+`origin: <kind> <ref> (connection: <name|none>)` line in its job log (the narrated log
+shows it). When the project enabled that provider (`projects.integrations` has its kind),
+the provider can read, a connection of the org covers the origin and the run has no
+`origin/<kind>.md` yet, the runner fetches what the service knows about it (20 s in all)
+into `<run_dir>/origin/<kind>.md`, mode 0600, capped at 16 KiB (cut on a character, marked
+`[truncated]`). The fetch never fails the job: a refusal, a timeout or a network failure
+is one `origin enrichment skipped: <reason>` line, with a status and never a secret, URL
+or error text. The triager reads the file through `context_for_phase` as a `## Job origin`
+section, fenced and labelled as evidence, never instructions.
+
+**Sentry.** A prompt with a Sentry issue link (`https://acme.sentry.io/issues/4507/`,
+`https://sentry.io/organizations/acme/issues/4507/` or a regional `*.sentry.io` host) gets the
+origin `sentry 4507`; a short id counts only written in upper case, with a digit after the
+dash, right after the word sentry (`sentry API-12`, `Sentry: API-12`) or given as
+`--origin sentry:API-12` (any case, any suffix), never a bare `ABC-12` in prose (nightqueue's
+own `J-86`, `D-55` refs have that shape) nor a word such as `sentry error-handling`. The org's `sentry`
+connection (`connection add --type sentry --set org=<slug>`) covers it. With
+`project integrations <project> set sentry.onClosed=resolved` (or `resolvedInNextRelease`;
+`resolved` is the default) the runner writes `origin/sentry.md` at claim - the issue's title,
+culprit, level, status, counts and dates, then one line per recent event (up to 5: date, event
+id, title), then the latest event's exception, up to 30 frames
+(in-app first), the last 20 breadcrumbs and its allow-listed tags (environment, release,
+level, runtime, os, browser and the like); never its request, user, contexts, headers,
+cookies, nor tags such as `user`, `url` or `server_name` - and the close's **origin** step marks the issue with that status and leaves
+a best-effort note `Fixed by <pr url>, merged as <sha7>` (a note that fails is a warning, the
+issue still counts as resolved). A short id is resolved to its issue id through the API first.
+
+**Discord.** A prompt with a Discord message link
+(`https://discord.com/channels/<guild>/<channel>/<message>`, also `ptb.`/`canary.` and
+`discordapp.com`) gets the origin `discord <guild>/<channel>/<message>`; `--origin
+discord:<guild>/<channel>/<message>` gives it explicitly. Discord works through channel
+webhooks only (`connection add --type discord`, many per org) and reads nothing at claim. The
+org webhook posting in the message's channel covers it; a message in a thread or another
+channel shows `none` with the thread probe the close will try. Once the project has any
+`discord` setting, the close's **origin** step replies `Fixed in <pr url> (merged as <sha7>) -
+<message link>`: through the webhook of the message's channel, otherwise through each org
+webhook of the same guild as a post into the thread until one is accepted (none accepted is a
+`skipped` line in the notice); `project integrations <project> set discord.replyToOrigin=false`
+turns the reply off (it is on by default). `set discord.log.connection=team-chat` makes the
+close's **log** step post `<job ref> closed - PR #<n> merged as <sha7>: <title>` and the PR link
+to that webhook, once per job, for the events of `discord.log.events` (`discord.log.events=closed`,
+the default and the only event). No message mentions anyone; a rate limit or a server error is
+a warning line, and the webhook URL never appears in a note, a notice or the job log.
 
 **`--tier` declares the risk of the job.** `queue add --tier trivial|simple|complex`
 (and the `tier` parameter of `queue_add`) records the tier on
@@ -945,6 +1006,26 @@ agent, never a second job, never queue work:
 
 The job's status is untouched until settle: a close that stops leaves it `done`, except for a
 pull request closed without merge, which cancels it.
+
+**Post-close steps: origin and log.** After settle, two more steps run on the job that is
+now `closed`: **origin** tells the service the job came from (its recorded `origin`) that the
+pull request merged, through the provider of that kind, and **log** posts the close to every
+provider whose `<kind>.log.connection` the project set and whose `<kind>.log.events` (default
+`closed`) includes `closed`. They run only for a project with integrations (`nightqueue project
+integrations`): a project without them closes exactly as before, with no extra step, line or
+write. They never stop, fail or reopen a close and never change the job's status: each records
+`done`, `skipped` or `warning` (a failure, an exception or the budget is a `warning`) under a
+post-close lease held in `close_worker` (a closed row never carries a `close_status`), with a
+budget of its own of 60 s. A warning, and a skip worth telling (an origin with no connection in
+the org), appends `After close: <step> <status> - <note>` to the notice; a later success of the
+same step appends its own line. Both steps are idempotent: `data.originNotified` and
+`data.logged` (one flag per provider) make a re-run answer `already notified` / `already
+logged` without a request. `nightqueue queue close <id> --steps origin,log` re-runs only the
+named post-close steps of a closed job in this process (a pre-close step name, `--merged` or
+`--force` is refused, and so is a job that is not closed or whose post-close steps another
+process is running); it prints each step and `J-<id> post-close: origin done, log skipped`,
+and exits `1` when a step ended `warning`. No note, notice line or log carries a secret: the
+providers' HTTP never returns an error message, a URL or a header.
 
 **The close merges only a head it or CI verified (D-54).** Every step reads the pull request
 again and works on the head GitHub reports now; the recorded `data.headSha` is the head the

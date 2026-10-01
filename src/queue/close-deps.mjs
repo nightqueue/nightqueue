@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge } from "../host/gh.mjs";
 import { runGitAsync } from "../host/git.mjs";
 import { runNpmAsync } from "../host/npm.mjs";
+import { loadConfig, loadSecrets } from "../config/store.mjs";
 import { runMerger } from "./merger-spawn.mjs";
 
 export const CLOSE_WORKER_ENV = "NIGHTQUEUE_CLOSE_WORKER";
+const QUIET = { warn: () => {} };
 
 // Runs git with the close's abort signal wired into the child, never rejecting.
 function runGitSignalled(args, { cwd, timeoutMs, signal, env }) {
@@ -85,5 +87,7 @@ export function defaultCloseDeps(env = process.env) {
     runTest: ({ cwd, timeoutMs, signal }) => runNpmAsync(["test"], { cwd, env: testEnv(env), timeoutMs, signal }),
     merger: (options) => runMerger({ ...options, env: testEnv(env) }),
     sleep,
+    fetch: globalThis.fetch,
+    integrations: { config: () => loadConfig(env, QUIET), secrets: () => loadSecrets(env, QUIET) },
   };
 }

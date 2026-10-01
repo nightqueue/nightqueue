@@ -5,9 +5,11 @@ import { requireOrg } from "../config/orgs.mjs";
 import { registerProject as registerInStore, renameProject, requireGitPath, requireProject, setProjectKey } from "../config/projects.mjs";
 import { runsDir } from "../config/paths.mjs";
 import { loadConfig } from "../config/store.mjs";
+import { changeProjectIntegrations, integrationLines, integrationsView } from "../integrations/settings.mjs";
 import { keptCommentsError } from "../memory/project-purge.mjs";
 import { requireKey } from "../memory/refs.mjs";
-import { openRegistryReader, openStore } from "../store/open.mjs";
+import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
+import { openRegistryReader, openRegistryWriter, openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { askKey, choose } from "./prompt.mjs";
 
@@ -181,6 +183,57 @@ async function runMove(argv, ctx) {
   ctx.out(moveReport(project, moved, target));
 }
 
+const INTEGRATIONS_USAGE = "nightqueue project integrations <project> show [--json] | set <kind.key>=<value>... | unset <kind.key>...";
+
+// Reads `set` arguments written `<kind.key>=<value>`, split on the first `=`.
+function settingAssignments(args) {
+  return args.map((arg) => {
+    const at = arg.indexOf("=");
+    if (at <= 0) throw new UserError(`\`${arg}\` is not <kind.key>=<value>; usage: ${INTEGRATIONS_USAGE}`);
+    return { key: arg.slice(0, at), value: arg.slice(at + 1) };
+  });
+}
+
+// Prints a project's integrations, as lines or as the JSON answer.
+function printIntegrations(ctx, { project, integrations, json }) {
+  if (json) {
+    ctx.out(JSON.stringify(integrationsView(project, integrations)));
+    return;
+  }
+  for (const line of integrationLines(integrations, { orgId: project.org_id, env: ctx.env })) ctx.out(line);
+}
+
+// Runs `project integrations <project> show`: reads only, a home without a database knowing no project.
+async function showIntegrations(ctx, { name, json }) {
+  const store = await openRegistryReader(ctx.env);
+  if (!store) throw new UserError(`unknown project \`${name}\`; no project is registered yet`);
+  const project = await requireProject(store, name);
+  printIntegrations(ctx, { project, integrations: await store.projects.integrations(project.id), json });
+}
+
+// Runs `project integrations <project> set|unset`: every change validated before the one write, refused inside a job.
+async function changeIntegrations(ctx, { name, action, args, json }) {
+  refuseHomeWriteInsideJob(ctx.env);
+  const changes = action === "set" ? settingAssignments(args) : args.map((key) => ({ key }));
+  const store = await openRegistryWriter(ctx.env);
+  const project = await requireProject(store, name);
+  const integrations = await changeProjectIntegrations({ store, project, action, changes, env: ctx.env });
+  printIntegrations(ctx, { project, integrations, json });
+}
+
+// Runs `project integrations`: shows or changes the per-provider settings of a project.
+async function runIntegrations(argv, ctx) {
+  const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
+  checkArgs(positionals, { min: 2, max: Infinity, usage: INTEGRATIONS_USAGE });
+  const [name, action, ...args] = positionals;
+  if (action === "show") {
+    checkArgs(args, { max: 0, usage: INTEGRATIONS_USAGE });
+    return await showIntegrations(ctx, { name, json: values.json === true });
+  }
+  if (action !== "set" && action !== "unset") throw new UserError(`unknown integrations action \`${action}\`; usage: ${INTEGRATIONS_USAGE}`);
+  await changeIntegrations(ctx, { name, action, args, json: values.json === true });
+}
+
 const SUBCOMMANDS = new Map([
   ["add", runAdd],
   ["list", runList],
@@ -188,6 +241,7 @@ const SUBCOMMANDS = new Map([
   ["key", runKey],
   ["remove", runRemove],
   ["move", runMove],
+  ["integrations", runIntegrations],
 ]);
 
 // Dispatches the subcommands of `nightqueue project`.

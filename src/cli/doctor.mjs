@@ -23,7 +23,8 @@ import {
   shimNames,
   worktreesDir,
 } from "../config/paths.mjs";
-import { loadConfig, loadRawConfig, moveHomeFilesInto, removeHomeFiles } from "../config/store.mjs";
+import { CONNECTION_TYPES, testConnection } from "../config/connections.mjs";
+import { loadConfig, loadRawConfig, loadSecrets, moveHomeFilesInto, removeHomeFiles } from "../config/store.mjs";
 import { claudeBin } from "../host/claude.mjs";
 import { DESKTOP_LABEL, desktopState } from "../host/desktop.mjs";
 import { MCP_SERVER_NAME, readRegisteredServer, serverIsCurrent } from "../host/mcp.mjs";
@@ -53,6 +54,8 @@ import { runtimeLabel, runtimeLocation } from "./runtime-versions.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
 const COMMAND_TIMEOUT_MS = 5000;
+const CONNECTION_TEST_TIMEOUT_MS = 5000;
+const CONNECTION_TEST_GRACE_MS = 1000;
 const MIN_NODE_MAJOR = 22;
 const GITDIR_PREFIX = "gitdir:";
 
@@ -140,6 +143,45 @@ function checkSecrets(ctx) {
   return (mode & 0o077) === 0
     ? check("secrets", "ok", "mode 0600")
     : check("secrets", "fail", `mode 0${mode.toString(8).padStart(3, "0")}`, `run \`chmod 600 ${path}\``);
+}
+
+// The stored secrets, or none when secrets.json cannot be read (the secrets check already reports it).
+function readSecretsQuietly(ctx) {
+  try {
+    return loadSecrets(ctx.env, { warn: () => {} });
+  } catch {
+    return null;
+  }
+}
+
+// Runs the same test as `connection test`, answering a timeout once it outlives its own budget plus a grace.
+function testWithDeadline(ctx, { name, secrets, timeoutMs }) {
+  let timer;
+  const timedOut = { ok: false, detail: `timeout (${Math.round(timeoutMs / 1000)}s)` };
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(timedOut), timeoutMs + CONNECTION_TEST_GRACE_MS);
+  });
+  const tested = testConnection({ name, secrets, fetchImpl: ctx.fetchImpl, timeoutMs }).catch(() => ({ ok: false, detail: "the test threw" }));
+  return Promise.race([tested, deadline]).finally(() => clearTimeout(timer));
+}
+
+// One line per stored connection: its type answered, a failed test or a type this build does not know is a warning.
+async function connectionCheck(ctx, { name, secrets, timeoutMs }) {
+  const label = `connection ${name}`;
+  const type = secrets.connections[name].type;
+  if (!CONNECTION_TYPES.has(type)) return check(label, "warn", `unknown type ${type}`, `update nightqueue or run \`nightqueue connection remove ${name}\``);
+  const result = await testWithDeadline(ctx, { name, secrets, timeoutMs });
+  return result?.ok === true
+    ? check(label, "ok", `${type}: ok`)
+    : check(label, "warn", `${type}: failed - ${result?.detail ?? "no answer"}`, `nightqueue connection test ${name}`);
+}
+
+// Tests every stored connection in parallel, sorted by name; never a failure, since a service outage says nothing about this host.
+async function checkConnections(ctx) {
+  const secrets = readSecretsQuietly(ctx);
+  const names = Object.keys(secrets?.connections ?? {}).sort();
+  const timeoutMs = ctx.connectionTestTimeoutMs ?? CONNECTION_TEST_TIMEOUT_MS;
+  return Promise.all(names.map((name) => connectionCheck(ctx, { name, secrets, timeoutMs })));
 }
 
 // Checks that the host starts the MCP server from this very package.
@@ -1327,7 +1369,7 @@ function checkRegistry(ctx) {
   return check("registry", "warn", detail, "run `nightqueue update`");
 }
 
-// Asks the registry only when the user opted in, which is what keeps the diagnosis offline by default.
+// Asks the npm registry only when the user opted in; the stored connections are the only other services the diagnosis contacts.
 function checkUpdates(ctx, values) {
   return values["check-updates"] === true ? [checkRegistry(ctx)] : [];
 }
@@ -1341,6 +1383,7 @@ async function collect(ctx, values) {
     checkGh(ctx),
     checkConfig(ctx),
     checkSecrets(ctx),
+    ...(await checkConnections(ctx)),
     checkRuntime(ctx),
     checkToolContract(),
     ...checkShims(ctx),

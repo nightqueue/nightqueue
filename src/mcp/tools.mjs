@@ -80,6 +80,8 @@ import {
   PIPELINE_TIERS,
 } from "../memory/runs.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
+import { coverageField, coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
+import { changeProjectIntegrations, INTEGRATION_ACTIONS, integrationsView } from "../integrations/settings.mjs";
 import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons } from "./phase-context.mjs";
 import { phasePrompt, PROMPT_TARGETS } from "./phase-prompt.mjs";
 import { readVersion } from "../cli/version.mjs";
@@ -463,6 +465,34 @@ async function registerRepository(args, env) {
   return await withLock(env, () => registerRepositoryLocked(args, path, env));
 }
 
+// The answer of `project_integrations` show: the project's stored settings, read only.
+async function showProjectIntegrations(args, env) {
+  await ensureStoreExists(env);
+  return await withReadOnlyStore(env, async (store) => {
+    const project = await requireProject(store, args.project);
+    return integrationsView(project, await store.projects.integrations(project.id));
+  });
+}
+
+// The one change `project_integrations` set or unset asks for; a set needs a value.
+function integrationChange(args) {
+  if (!filled(args.key)) throw new UserError(`\`${args.action}\` needs \`key\`, written <kind>.<key>`);
+  if (args.action === "set" && !filled(args.value)) throw new UserError("`set` needs `value`");
+  return args.action === "set" ? { key: args.key, value: args.value } : { key: args.key };
+}
+
+// Applies `project_integrations` set or unset inside the configuration lock and answers the stored result; refused inside a job.
+async function changeProjectIntegrationsAnswer(args, env) {
+  refuseHomeWriteInsideJob(env);
+  const change = integrationChange(args);
+  return await withLock(env, async () => {
+    const store = openStore(env);
+    const project = await requireProject(store, args.project);
+    const integrations = await changeProjectIntegrations({ store, project, action: args.action, changes: [change], env });
+    return integrationsView(project, integrations);
+  });
+}
+
 // Tells whether `queue_add` was asked to seed the job from an operator run.
 function hasRunDir(args) {
   return typeof args.run_dir === "string" && args.run_dir.trim() !== "";
@@ -501,9 +531,12 @@ function queuedRunnerLine(env, jobId) {
 
 // The answer of `queue_add`: the job it recorded, and the roadmap item behind it when there is one.
 async function queuedAnswer({ job, registered = null, roadmapItem = null, note = "" }, env) {
-  const pending = (await openStore(env).jobs.countsByStatus()).pending;
+  const store = openStore(env);
+  const pending = (await store.jobs.countsByStatus()).pending;
   const done = registered ? `registered project \`${registered.name}\` (${registered.path}). ` : "";
   const stale = staleRuntimeHint(env);
+  const coverage = await jobOriginCoverage({ origin: job.origin, projectId: job.projectId, store, env });
+  const origin = coverage ? ` Origin: ${coverageLabel(coverage)}.` : "";
   return {
     ok: true,
     id: job.id,
@@ -513,7 +546,8 @@ async function queuedAnswer({ job, registered = null, roadmapItem = null, note =
     timeoutS: job.timeoutS,
     ...(roadmapItem === null ? {} : { roadmapItemId: roadmapItem.id, roadmap_ref: itemRef(roadmapItem) }),
     ...(job.tier ? { tier: job.tier } : {}),
-    hint: `${done}queued ${jobRef(job.id)} for \`${job.project}\` (${pending} pending).${note} ${queuedRunnerLine(env, job.id)}${stale ? ` ${stale}` : ""}`,
+    ...(coverage ? { origin: coverageField(coverage) } : {}),
+    hint: `${done}queued ${jobRef(job.id)} for \`${job.project}\` (${pending} pending).${note}${origin} ${queuedRunnerLine(env, job.id)}${stale ? ` ${stale}` : ""}`,
   };
 }
 
@@ -528,13 +562,19 @@ function roadmapNote({ item, jobs, skipped }) {
   );
 }
 
+// One job of an org item's answer, with its origin and the connection covering it when it has one.
+async function queuedJobEntry(job, env) {
+  const coverage = await jobOriginCoverage({ origin: job.origin, projectId: job.projectId, store: openStore(env), env });
+  return { id: job.id, ref: jobRef(job.id), project: job.project, ...(coverage ? { origin: coverageField(coverage) } : {}) };
+}
+
 // The answer of `queue_add` for a roadmap-built job: the first job as before, plus every job and every skipped project of an org item.
 async function roadmapQueuedAnswer(queued, env) {
   const answer = await queuedAnswer({ job: queued.job, roadmapItem: queued.item, note: roadmapNote(queued) }, env);
   if (queued.item.scope !== "org") return answer;
   return {
     ...answer,
-    jobs: queued.jobs.map((job) => ({ id: job.id, ref: jobRef(job.id), project: job.project })),
+    jobs: await Promise.all(queued.jobs.map((job) => queuedJobEntry(job, env))),
     skipped: queued.skipped,
   };
 }
@@ -780,7 +820,7 @@ async function queueCancelAnswer(args, env) {
   return { ok: true, ...(await stopAndCancelJob({ ...cancel, releaseWorktree: args.release_worktree === true })) };
 }
 
-// The thirty tools of the plugin contract, with the parameter names the plugin actually sends.
+// The thirty-one tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -1050,6 +1090,13 @@ function toolDefinitions(env, state) {
             .describe(
               "The RUN_DIR of an operator run (`~/.nightqueue/runs/<project_id>/<slug>`, as `nightqueue run dir` prints it, absolute or `~/`) this job continues: the job writes into that run, and the runtime places the `## PRIOR RUN (operator)` block right after the prompt's `## Brief` section (with `roadmap_item_id`: right after the item block, or after the operator note). Never write that block yourself. A run already bound to an open job is refused; `queue_retry --fresh` of the job discards the run.",
             ),
+          origin: z
+            .object({ kind: z.string(), ref: z.string() })
+            .nullable()
+            .optional()
+            .describe(
+              "The service the job came from, as `{kind, ref}`; omitted, the runtime detects it in the prompt with the registered providers. The answer carries `origin` with the org connection that covers it, or `none`.",
+            ),
         },
       },
       handler: async (args) => {
@@ -1060,6 +1107,7 @@ function toolDefinitions(env, state) {
             ...(await roadmapQueueTarget(store, args.project)),
             operatorNote: args.prompt,
             runDir: hasRunDir(args) ? args.run_dir : undefined,
+            origin: args.origin,
             priority: args.priority,
             maxAttempts: args.max_attempts,
             timeoutS: args.timeout_s,
@@ -1080,6 +1128,7 @@ function toolDefinitions(env, state) {
           timeoutS: args.timeout_s,
           tier: args.tier,
           slug: seeded.slug,
+          origin: args.origin,
         });
         return await queuedAnswer({ job, registered }, env);
       },
@@ -1100,6 +1149,22 @@ function toolDefinitions(env, state) {
         },
       },
       handler: async (args) => await registerRepository(args, env),
+    },
+    {
+      name: "project_integrations",
+      config: {
+        description:
+          "Shows or changes the per-provider integration settings of a registered project - what the runtime does with the service a job came from and where it posts after a close. " +
+          "`action` `show` reads; `set` stores `value` under `key`, validated against the provider that declares it (a connection value must be a stored connection of that provider bound to the project's org); `unset` removes `key`, and removing the last one leaves the project without integrations, behaving exactly as before. " +
+          "`key` is `<kind>.<setting>` as listed in `providers` of every answer. Answers `{project, integrations, providers: [{kind, keys}]}`; never a secret. `set` and `unset` change the operator's home: call them only after the person said yes, and they are refused from inside a job.",
+        inputSchema: {
+          project: z.string().describe("The registered project name."),
+          action: z.enum(INTEGRATION_ACTIONS).describe("`show`, `set` or `unset`."),
+          key: optionalText.describe("The setting, `<kind>.<setting>`; required by `set` and `unset`."),
+          value: optionalText.describe("The value `set` stores, as text: a list is comma-separated, a boolean is `true` or `false`."),
+        },
+      },
+      handler: async (args) => (args.action === "show" ? await showProjectIntegrations(args, env) : await changeProjectIntegrationsAnswer(args, env)),
     },
     {
       name: "queue_status",
@@ -1200,7 +1265,7 @@ function toolDefinitions(env, state) {
       guardsHome: true,
       config: {
         description:
-          "Closes a job: takes its open pull request to merged and the job to `closed`, through the code pipeline preflight, conflict, merge, settle - run by code, never by an agent; the conflict step may hand a small textual conflict to the bounded merger agent (see the runtime contract). `closed` always means the pull request was merged through this pipeline. " +
+          "Closes a job: takes its open pull request to merged and the job to `closed`, through the code pipeline preflight, conflict, merge, settle, then the post-close steps origin and log, which never stop a close (a failure is a line in `notice_md`) - run by code, never by an agent; the conflict step may hand a small textual conflict to the bounded merger agent (see the runtime contract). `closed` always means the pull request was merged through this pipeline. " +
           "It starts DETACHED and returns immediately with the pid and the log path; it never waits for the merge. Follow it with `queue_status` and the job id. " +
           "Only a `done` job with a pull request is closed. `closed`, `running`, `pending`, `gate`, `failed`, `cancelled`, a `done` job with no pull request and a job already being closed under a live lease are refused by name, and nothing is written. Refused inside an unattended run. " +
           "A close that stopped keeps its checklist and its reason on the job (`close`, `close_status: failed`); calling this tool again resumes it at the step that failed. " +
@@ -1577,7 +1642,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the thirty tools of the plugin contract.
+// Builds the MCP server with the thirty-one tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {

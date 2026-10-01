@@ -1,6 +1,8 @@
 import {
   addConnection,
   bindConnection,
+  completeConnection,
+  connectionExtras,
   hasConnection,
   listConnections,
   removeConnection,
@@ -52,10 +54,27 @@ function saveSecretsAfterConfig({ secrets, ctx, name }) {
   }
 }
 
+// Reads the `--set <field>=<value>` options of `connection add` into an object; a field given twice is refused.
+function parseExtraFields(assignments, usage) {
+  const extra = Object.create(null);
+  for (const assignment of assignments ?? []) {
+    const at = assignment.indexOf("=");
+    const field = at > 0 ? assignment.slice(0, at).trim() : "";
+    if (!field) throw new UserError(`\`--set\` takes <field>=<value>; usage: ${usage}`);
+    if (field in extra) throw new UserError(`\`--set ${field}\` given twice`);
+    extra[field] = assignment.slice(at + 1).trim();
+  }
+  return extra;
+}
+
 // Runs `connection add`, reading the secret from stdin and never from argv.
 async function runAdd(argv, ctx) {
-  const usage = "nightqueue connection add <name> --type <type> [--org <name>]";
-  const { values, positionals } = parseCommand(argv, { type: { type: "string" }, org: { type: "string" } });
+  const usage = "nightqueue connection add <name> --type <type> [--org <name>] [--set <field>=<value>]...";
+  const { values, positionals } = parseCommand(argv, {
+    type: { type: "string" },
+    org: { type: "string" },
+    set: { type: "string", multiple: true },
+  });
   checkArgs(positionals, { min: 1, usage });
   const name = positionals[0];
   if (!values.type) throw new UserError(`\`connection add\` requires --type <type>; usage: ${usage}`);
@@ -63,16 +82,18 @@ async function runAdd(argv, ctx) {
   const config = loadConfig(ctx.env, { warn: ctx.err });
   const secrets = loadSecrets(ctx.env, { warn: ctx.err });
   assertName("connection", name);
-  requireType(values.type);
+  const descriptor = requireType(values.type);
+  const extra = connectionExtras(values.type, parseExtraFields(values.set, usage));
   const target = values.org === undefined ? await defaultOrg(store, config) : await requireOrg(store, values.org);
   const org = target.name;
   if (hasConnection(secrets, name)) throw new UserError(`connection \`${name}\` already exists; remove it first`);
   const secret = await readSecret({
     stdin: ctx.stdin,
     stdout: ctx.stdout,
-    prompt: `${values.type} secret for \`${name}\`: `,
+    prompt: `${values.type} ${descriptor.secretLabel ?? "secret"} for \`${name}\`: `,
   });
-  const result = addConnection({ config, secrets, name, type: values.type, orgId: target.id, secret });
+  const derived = await completeConnection({ type: values.type, secret, extra, fetchImpl: ctx.fetchImpl });
+  const result = addConnection({ config, secrets, name, type: values.type, orgId: target.id, secret, extra, derived });
   ctx.saveSecrets(result.secrets, ctx.env);
   saveConfigAfterSecret({ config: result.config, ctx, name, org });
   if (result.bound) {
@@ -121,6 +142,12 @@ async function runList(argv, ctx) {
   for (const connection of connections) ctx.out(formatConnection(connection));
 }
 
+// Describes a successful connection test with the summary its type declares.
+function testSummary(result) {
+  const summary = requireType(result.type).summary;
+  return typeof summary === "function" ? summary(result) : result.detail;
+}
+
 // Runs `connection test`.
 async function runTest(argv, ctx) {
   const { positionals } = parseCommand(argv);
@@ -132,7 +159,7 @@ async function runTest(argv, ctx) {
     fetchImpl: ctx.fetchImpl,
   });
   if (!result.ok) throw new UserError(`${name} (${result.type}): failed — ${result.detail}`);
-  ctx.out(`${name} (${result.type}): ok — login=${result.login ?? "(none)"} scopes=${result.scopes || "(none)"}`);
+  ctx.out(`${name} (${result.type}): ok — ${testSummary(result)}`);
 }
 
 // Runs `connection remove`.

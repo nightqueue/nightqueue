@@ -3,11 +3,13 @@ import { sqliteToIso } from "../memory/schema.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
 export const CLOSE_STEP_NAMES = ["preflight", "conflict", "merge", "settle"];
+export const POST_CLOSE_STEP_NAMES = ["origin", "log"];
 export const CLOSED_PREFIX = "Closed: ";
+export const POST_CLOSE_PREFIX = "After close: ";
 
 const PASSED_STEP_STATUSES = new Set(["done", "skipped"]);
-export const CLOSE_STEP_ICONS = { done: "✓", skipped: "-", failed: "✗", reopened: "↺" };
-const LABELLED_STATUSES = new Set(["skipped", "reopened"]);
+export const CLOSE_STEP_ICONS = { done: "✓", skipped: "-", failed: "✗", reopened: "↺", warning: "!" };
+const LABELLED_STATUSES = new Set(["skipped", "reopened", "warning"]);
 const STATUS_SUFFIXES = { stalled: " · close stalled" };
 export const CLOSING_LABEL = "closing";
 
@@ -109,7 +111,17 @@ export function closeChecklistLines(job, nowMs = Date.now()) {
   const header = `${"close".padEnd(16)}${state}, attempt ${close.attempts ?? 0}`;
   const steps = CLOSE_STEP_NAMES.map((name) => checklistLine(name, close.steps?.[name]));
   const stopped = closeStoppedLine(job);
-  return [header, ...steps, ...(stopped ? [stopped] : [])];
+  return [header, ...steps, ...postCloseLines(close), ...(stopped ? [stopped] : [])];
+}
+
+// The checklist lines of the post-close steps a close actually recorded; a close without them shows none.
+function postCloseLines(close) {
+  return POST_CLOSE_STEP_NAMES.filter((name) => close.steps?.[name]).map((name) => checklistLine(name, close.steps[name]));
+}
+
+// The notice line a post-close step appends: `After close: <step> <status> - <note>`.
+export function postCloseLine(name, { status, note }) {
+  return `${POST_CLOSE_PREFIX}${name} ${status} - ${note}`;
 }
 
 // Whether a registered runner is a close rather than a worker of the queue.

@@ -52,9 +52,9 @@ test("listOrgs marks the default org, carries the bindings by id and counts proj
   const orgs = await listOrgs(store, config);
   assert.deepEqual(orgs.map((org) => org.name), ["default", "acme"]);
   assert.equal(orgs[0].isDefault, true);
-  assert.deepEqual(orgs[0].connections, { github: null });
+  assert.deepEqual(orgs[0].connections, { github: null, sentry: null });
   assert.equal(orgs[0].projects, 1);
-  assert.deepEqual(orgs[1].connections, { github: "gh" });
+  assert.deepEqual(orgs[1].connections, { github: "gh", sentry: null });
   assert.equal(orgs[1].projects, 1);
   assert.equal((await defaultOrg(store, { ...config, defaultOrg: acme.id })).name, "acme");
 });

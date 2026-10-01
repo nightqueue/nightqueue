@@ -835,19 +835,19 @@ function priorRunSeed({ runDir: raw, projectId }, env) {
 
 // Queues the job a roadmap item builds; a project item is linked to that job, an org item names the project id it goes to or `allProjects`.
 export async function queueRoadmapItem(
-  { id, projectId, allProjects = false, priority, maxAttempts, timeoutS, tier, embedder, operatorNote, runDir: priorRunDir } = {},
+  { id, projectId, allProjects = false, priority, maxAttempts, timeoutS, tier, embedder, operatorNote, runDir: priorRunDir, origin } = {},
   env = process.env,
 ) {
   const item = queueableRoadmapItem(id, env);
   if (item.scope === "org") {
     if (priorRunDir) throw new UserError("`run_dir` is not supported for an org roadmap item: a run belongs to one project, and an org item queues per project");
-    return await queueOrgItem(item, { projectId, allProjects, priority, maxAttempts, timeoutS, tier, embedder, operatorNote }, env);
+    return await queueOrgItem(item, { projectId, allProjects, priority, maxAttempts, timeoutS, tier, embedder, operatorNote, origin }, env);
   }
   const ownProjectId = itemProjectId(openDb(env), item, allProjects ? ALL_PROJECTS : projectId);
   const seed = priorRunSeed({ runDir: priorRunDir, projectId: ownProjectId }, env);
   const prompt = await buildRoadmapPrompt({ item, embedder, operatorNote, priorRun: seed.block }, env);
   const job = addJob(
-    { projectId: ownProjectId, prompt, priority, maxAttempts, timeoutS, tier: tierOf(item, tier), slug: seed.slug, operatorNote },
+    { projectId: ownProjectId, prompt, priority, maxAttempts, timeoutS, tier: tierOf(item, tier), slug: seed.slug, operatorNote, origin },
     env,
   );
   if (linkRoadmapItemJob(item.id, job.id, env)) return { job, jobs: [job], skipped: [], item, targetProject: item.project };

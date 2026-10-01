@@ -41,7 +41,7 @@ test("normalizeConfig fills defaults over a partial, hand-edited file", () => {
   const config = normalizeConfig({ defaultOrg: "01J0000000000000000000ACME", orgConnections: { "01J0000000000000000000ACME": {} } });
   assert.equal(config.version, 1);
   assert.equal(config.defaultOrg, "01J0000000000000000000ACME");
-  assert.deepEqual({ ...config.orgConnections["01J0000000000000000000ACME"] }, { github: null });
+  assert.deepEqual({ ...config.orgConnections["01J0000000000000000000ACME"] }, { github: null, sentry: null });
   assert.equal(emptyConfig().defaultOrg, null);
   assert.deepEqual({ ...emptyConfig().orgConnections }, {});
   assert.deepEqual(config.queue, {
