@@ -12,6 +12,12 @@ export function orgConnectionsOf(config, orgId, kind) {
   return Array.isArray(list) ? list.filter((name) => typeof name === "string" && name) : [];
 }
 
+// Tells whether the org uses the named connection of a kind, through its slot or its list.
+export function orgUsesConnection({ config, orgId, kind, name }) {
+  if (!name || !orgId) return false;
+  return orgSlot(config, orgId, kind) === name || orgConnectionsOf(config, orgId, kind).includes(name);
+}
+
 // A connection record without its secret fields.
 export function publicFields(record, descriptor) {
   const secretFields = new Set(descriptor?.secretFields ?? []);

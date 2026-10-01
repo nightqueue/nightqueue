@@ -45,7 +45,7 @@ function httpOf(fetch) {
 
 // The latest event of the fixture issue: 40 frames, 25 breadcrumbs, tags, and private request/user data.
 function latestEvent({ extraTags = 0 } = {}) {
-  const padding = Array.from({ length: extraTags }, (_, at) => ({ key: `tag${at}`, value: "é".repeat(40) }));
+  const padding = Array.from({ length: extraTags }, () => ({ key: "release", value: "é".repeat(40) }));
   const frames = Array.from({ length: 40 }, (_, at) => ({ filename: `src/f${at}.js`, function: `fn${at}`, lineNo: at, inApp: at % 2 === 0 }));
   const crumbs = Array.from({ length: 25 }, (_, at) => ({ category: "http", message: `call ${at}` }));
   return {
@@ -54,7 +54,15 @@ function latestEvent({ extraTags = 0 } = {}) {
       { type: "breadcrumbs", data: { values: crumbs } },
       { type: "request", data: { url: "https://app.example/login", cookies: PRIVATE_MARK, headers: [["Authorization", PRIVATE_MARK]] } },
     ],
-    tags: [{ key: "release", value: "1.2.3" }, { key: "browser", value: "Firefox" }, ...padding],
+    tags: [
+      { key: "release", value: "1.2.3" },
+      { key: "browser", value: "Firefox" },
+      { key: "user", value: `id:${PRIVATE_MARK}` },
+      { key: "url", value: `https://app.example/reset?token=${PRIVATE_MARK}` },
+      { key: "server_name", value: PRIVATE_MARK },
+      { key: "user.ip", value: PRIVATE_MARK },
+      ...padding,
+    ],
     user: { email: PRIVATE_MARK },
     contexts: { device: { name: PRIVATE_MARK } },
   };
@@ -145,7 +153,12 @@ test("a sentry link or a short id named after the word sentry is an origin; a ba
   assert.equal(parse("https://sentry.io/organizations/acme/issues/88/?project=1"), "88");
   assert.equal(parse("https://us.sentry.io/organizations/acme/issues/99"), "99");
   assert.equal(parse("crash reported in sentry API-12 yesterday"), "API-12");
-  assert.equal(parse("Sentry: api-12"), "API-12");
+  assert.equal(parse("Sentry: PROJ-1A2"), "PROJ-1A2");
+  assert.equal(parse("SENTRY#API-12"), "API-12");
+  assert.equal(parse("Sentry: api-12"), null);
+  assert.equal(parse("wire the sentry error-handling into the sentry web-app"), null);
+  assert.equal(parse("configure sentry API-KEY rotation"), null);
+  assert.equal(detectOrigin("add sentry error-handling to the worker"), null);
   assert.equal(parse("fix J-86 for D-55, see NQ-7 and API-12"), null);
   assert.equal(parse("https://notsentry.io/issues/1"), null);
   assert.equal(parse("4507"), null);
@@ -205,6 +218,8 @@ test("enrichment reads the issue, its recent events and its latest event into ma
   assert.match(markdown, /- events: 42, users: 3/);
   assert.match(markdown, /- TypeError: x is undefined/);
   assert.match(markdown, /- release=1\.2\.3/);
+  assert.match(markdown, /- browser=Firefox/);
+  assert.ok(!/^- (user|url|server_name|user\.ip)=/m.test(markdown), "only allow-listed tag keys are written");
   const frames = markdown.split("\n").filter((line) => /^- src\/f\d+\.js:/.test(line));
   assert.equal(frames.length, 30);
   assert.equal(frames[0], "- src/f38.js:fn38:38");

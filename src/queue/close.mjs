@@ -1130,8 +1130,8 @@ async function recordPostStep(run, name, noticeLine) {
   try {
     if (await run.store.jobs.recordPostCloseStep(run.job.id, { worker: run.worker, close: run.checklist, noticeLine })) return true;
     run.onStep?.({ name, status: "warning", note: "post-close lease lost; the remaining steps were not run", earlier: false });
-  } catch (err) {
-    run.onStep?.({ name, status: "warning", note: `the post-close checklist could not be written: ${err?.message ?? String(err)}`, earlier: false });
+  } catch {
+    run.onStep?.({ name, status: "warning", note: "the post-close checklist could not be written", earlier: false });
   }
   return false;
 }
@@ -1145,8 +1145,19 @@ async function releasePostLease(run) {
   }
 }
 
-// Runs the post-close steps of a closed job under their own lease and budget; nothing here ever changes the job's status.
+// Runs the post-close phase, turning any throw into a `failed` answer so a closed job's close never rejects after settle.
 async function runPostClose(base, steps, signal) {
+  try {
+    return await runPostClosePhase(base, steps, signal);
+  } catch {
+    const note = "post-close steps not run: the store could not be read or written";
+    base.onStep?.({ name: "post-close", status: "warning", note, earlier: false });
+    return { status: "failed", note, steps: [] };
+  }
+}
+
+// Runs the post-close steps of a closed job under their own lease and budget; nothing here ever changes the job's status.
+async function runPostClosePhase(base, steps, signal) {
   const facts = await postCloseFacts(base.store, base.job);
   if (!facts) return { status: "nothing", note: "the project has no integrations", steps: [] };
   const job = await base.store.jobs.acquirePostClose(base.job.id, { worker: base.worker, leaseS: POST_CLOSE_TIMEOUT_S + CLOSE_LEASE_SLACK_S });

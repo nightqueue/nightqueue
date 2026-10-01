@@ -1,5 +1,5 @@
 import { UserError } from "../config/errors.mjs";
-import { orgConnectionsOf, orgSlot } from "./connections.mjs";
+import { orgSlot, orgUsesConnection } from "./connections.mjs";
 import { quietFiles } from "./coverage.mjs";
 import { providerOf, providers } from "./registry.mjs";
 
@@ -98,13 +98,6 @@ function parseList(setting, text) {
   const wrong = entries.filter((entry) => !allowed.includes(entry));
   if (entries.length && !wrong.length) return entries;
   throw new UserError(`\`${setting.key}\` takes a comma-separated list of: ${allowed.join(", ")}; got \`${text}\``);
-}
-
-// Tells whether the org of the project uses the connection, through its slot or its list.
-function orgUsesConnection({ kind, name, orgId, config }) {
-  const cardinality = providerOf(kind)?.connection?.cardinality;
-  if (cardinality === "many") return orgConnectionsOf(config, orgId, kind).includes(name);
-  return orgSlot(config, orgId, kind) === name;
 }
 
 // Validates a `connection` value: a stored connection of the provider's type that the project's org uses.

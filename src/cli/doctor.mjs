@@ -1369,7 +1369,7 @@ function checkRegistry(ctx) {
   return check("registry", "warn", detail, "run `nightqueue update`");
 }
 
-// Asks the registry only when the user opted in, which is what keeps the diagnosis offline by default.
+// Asks the npm registry only when the user opted in; the stored connections are the only other services the diagnosis contacts.
 function checkUpdates(ctx, values) {
   return values["check-updates"] === true ? [checkRegistry(ctx)] : [];
 }

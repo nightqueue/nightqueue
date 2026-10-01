@@ -234,8 +234,34 @@ test("a post-close checklist write that fails is reported as a line and the clos
     const { outcome, reported, row } = await closeOnce(home, { fetch: fakeFetch(), store });
     assert.equal(outcome.status, "closed");
     assert.equal(row.status, "closed");
-    assert.ok(reported.some((step) => step.status === "warning" && step.note.includes("could not be written: database is locked")));
+    assert.ok(reported.some((step) => step.status === "warning" && step.note === "the post-close checklist could not be written"));
+    assert.ok(reported.every((step) => !String(step.note).includes("database is locked")), "the store's error text is never copied");
     assert.equal(outcome.postClose.steps.length, 1, "the steps after a failed write are not run");
+  });
+});
+
+test("a log connection the project's org no longer uses is a noticed skip with no request to it", async (t) => {
+  await withProviders([closingProvider()], async () => {
+    const home = postHome(t, "post-log-other-org", { bind: false, integrations: { tracker: { log: { connection: "other" } } } });
+    bindTrackerConnection(home.env, home.projectId, { name: "other" });
+    bindTrackerConnection(home.env, home.projectId, { name: "trk" });
+    const fetch = fakeFetch();
+    const { outcome, row } = await closeOnce(home, { fetch });
+    assert.equal(row.status, "closed");
+    assert.deepEqual(outcome.postClose.steps.find((step) => step.name === "log"), { name: "log", status: "skipped", note: "tracker: log connection other is not bound to the project's org" });
+    assert.ok(fetch.calls.every((call) => !call.url.includes("/api/log")));
+  });
+});
+
+test("a store that throws when the post-close phase starts never rejects the close of a job already closed", async (t) => {
+  await withProviders([closingProvider()], async () => {
+    const home = postHome(t, "post-acquire-throws");
+    const store = { ...home.store, jobs: { ...home.store.jobs, acquirePostClose: async () => { throw new Error("database is locked"); } } };
+    const { outcome, reported, row } = await closeOnce(home, { fetch: fakeFetch(), store });
+    assert.equal(row.status, "closed");
+    assert.equal(outcome.status, "closed");
+    assert.equal(outcome.postClose.status, "failed");
+    assert.ok(reported.some((step) => step.name === "post-close" && step.status === "warning" && !step.note.includes("database is locked")));
   });
 });
 

@@ -1,4 +1,4 @@
-import { connectionRecord, resolveForClose } from "./connections.mjs";
+import { connectionRecord, orgUsesConnection, resolveForClose } from "./connections.mjs";
 import { quietFiles } from "./coverage.mjs";
 import { requestJson } from "./http.mjs";
 import { providerOf, providers } from "./registry.mjs";
@@ -89,6 +89,9 @@ async function logTo(provider, { ctx, deps, files, logged }) {
   const name = getSetting(ctx.integrations, kind, "log.connection");
   const connection = connectionRecord({ secrets: files.secrets, name, kind });
   if (!connection) return answer("skipped", `${kind}: log connection ${name} not found`, { notice: true });
+  if (!orgUsesConnection({ config: files.config, orgId: ctx.orgId, kind, name })) {
+    return answer("skipped", `${kind}: log connection ${name} is not bound to the project's org`, { notice: true });
+  }
   if (ctx.signal.aborted) return answer("warning", `${kind}: interrupted before the log`);
   const settings = ctx.integrations[kind];
   const result = await callProvider(kind, "log", () => provider.log({ event: CLOSE_EVENT, ...closeFacts(ctx), settings, connection, http: boundHttp(ctx, deps) }));

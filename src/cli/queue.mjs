@@ -1360,7 +1360,7 @@ async function runCloseSteps(positionals, values, ctx) {
   const result = await runPostCloseSteps({ store, id, names: stepNames(values.steps), env: ctx.env, deps: ctx.closeDeps ?? null, onStep });
   if (values.json) ctx.out(JSON.stringify({ job: jobView(await store.jobs.getJob(id), { full: true }), steps: result.steps }));
   else ctx.out(postCloseSummaryLine(id, result));
-  return result.status !== "refused" && result.steps.every((step) => step.status !== "warning") ? 0 : 1;
+  return result.status !== "refused" && result.status !== "failed" && result.steps.every((step) => step.status !== "warning") ? 0 : 1;
 }
 
 // Runs `queue close`: the closing pipeline on one done job with a pull request, detached unless --foreground, or `--merged` for every done job the pull request state confirms merged.

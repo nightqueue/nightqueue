@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { homeDir } from "./paths.mjs";
 
@@ -16,10 +17,19 @@ export function pinnedPath(env, key) {
   return raw ? resolve(raw) : "";
 }
 
+// The real path of a directory, following symlinks, or the path as given when it cannot be resolved.
+function realPathOf(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 // Tells whether the home this environment resolves is the runner's own; a job spawned by an older runner pinned nothing, so the default home is read as the operator's.
 export function isRunnerHome(env) {
   const pinned = pinnedPath(env, JOB_HOME_ENV);
-  if (pinned) return pinned === homeDir(env);
+  if (pinned) return pinned === homeDir(env) || realPathOf(pinned) === realPathOf(homeDir(env));
   const asked = typeof env?.NIGHTQUEUE_HOME === "string" ? env.NIGHTQUEUE_HOME.trim() : "";
   return asked === "";
 }

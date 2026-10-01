@@ -3,7 +3,8 @@ import { requestJson } from "./http.mjs";
 const DEFAULT_URL = "https://sentry.io";
 const CLOSE_STATUSES = Object.freeze(["resolved", "resolvedInNextRelease"]);
 const ISSUE_LINK = /https:\/\/(?:[a-z0-9-]+\.)*sentry\.io\/(?:organizations\/[\w.-]+\/)?issues\/(\d+)/i;
-const NAMED_SHORT_ID = /\bsentry[\s:#]+([A-Z][A-Z0-9_]*-[A-Z0-9]+)\b/i;
+const NAMED_SHORT_ID = /\b[Ss][Ee][Nn][Tt][Rr][Yy][\s:#]+([A-Z][A-Z0-9_]*-[A-Z0-9]*[0-9][A-Z0-9]*)\b/;
+const TAG_KEYS = new Set(["environment", "release", "dist", "level", "logger", "handled", "mechanism", "runtime", "runtime.name", "os", "os.name", "browser", "browser.name", "device.family", "sdk.name"]);
 const SHORT_ID = /^[A-Z][A-Z0-9_]*-[A-Z0-9]+$/i;
 const ORG_SLUG = /^[a-z0-9][a-z0-9_-]*$/i;
 const HTTPS_ORIGIN = /^https:\/\/[a-z0-9.-]+(?::\d+)?\/?$/i;
@@ -93,11 +94,17 @@ function topFrames(exceptions) {
   return ordered.slice(0, MAX_FRAMES);
 }
 
-// The exception, frames, breadcrumbs and tags of the latest event as markdown lines; request, user and contexts are never read.
+// The tags of an event whose key is on the allow-list: user, url, server and address tags never pass.
+function safeTags(event) {
+  const tags = Array.isArray(event?.tags) ? event.tags : [];
+  return tags.filter((tag) => typeof tag?.key === "string" && TAG_KEYS.has(tag.key));
+}
+
+// The exception, frames, breadcrumbs and allowed tags of the latest event as markdown lines; request, user and contexts are never read.
 function eventLines(event) {
   const exceptions = exceptionValues(event);
   const crumbs = entriesOf(event, "breadcrumbs").flatMap((data) => (Array.isArray(data?.values) ? data.values : []));
-  const tags = Array.isArray(event?.tags) ? event.tags : [];
+  const tags = safeTags(event);
   return [
     "",
     "## Exception",

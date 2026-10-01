@@ -293,7 +293,10 @@ A `discord` connection is a channel webhook: its secret is the webhook URL
 service does not answer is refused without being echoed, and nothing is stored. An org holds
 any number of discord webhooks: `add` appends the new one to the org's list and `bind` adds
 it to another org's list (`org list` shows `discord=team-chat,ops`); `remove` takes it out of
-every list. The URL is never listed, logged or written in a notice.
+every list. The URL is never listed, logged or written in a notice. config.json keeps these
+lists under `orgConnectionLists`, apart from the single-slot `orgConnections`, so an older
+nightqueue that rewrites the file keeps them as they are instead of dropping them; a webhook an
+older build removes stays listed as missing until this build's `connection remove`.
 
 **Project integrations.** `project integrations <project>` holds what a project does with the
 services its jobs come from, one setting per `<kind>.<key>` (a key may itself be dotted, stored

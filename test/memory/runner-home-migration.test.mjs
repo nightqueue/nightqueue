@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -88,6 +88,16 @@ test("a job may still create a fresh database in the home it was pinned to", (t)
   closeDb(env);
   assert.ok(existsSync(dbPath(env)));
   assert.equal(diskState(env).version, DB_USER_VERSION);
+});
+
+test("a NIGHTQUEUE_HOME symlinked to the pinned runner home is still the runner's home and is refused", (t) => {
+  const env = makeV20Home(t, "runner-home-symlink");
+  const link = join(makeDir(t, "runner-home-link"), "home-link");
+  symlinkSync(env.NIGHTQUEUE_HOME, link);
+  const linked = { ...jobEnv(env, env.NIGHTQUEUE_HOME), NIGHTQUEUE_HOME: link };
+  assert.equal(isRunnerHome(linked), true);
+  assert.throws(() => openDb(linked), /refused/);
+  assert.deepEqual(diskState(env), { version: 20, origin: false });
 });
 
 test("a job with no pinned home and no NIGHTQUEUE_HOME reads the default home as the runner's", () => {

@@ -8,7 +8,7 @@ export const SCHEMA_VERSION = 1;
 export const DEFAULT_ORG_NAME = "default";
 
 // The keys config.json owns and normalizes; every other top-level key is kept verbatim.
-const OWNED_KEYS = new Set(["version", "defaultOrg", "orgConnections", "queue", "embedding"]);
+const OWNED_KEYS = new Set(["version", "defaultOrg", "orgConnections", "orgConnectionLists", "queue", "embedding"]);
 
 // Seconds between two lease heartbeats of a runner; the upper bound keeps three heartbeats inside the lease grace.
 export const LEASE_HEARTBEAT_DEFAULT_S = 5;
@@ -106,23 +106,56 @@ function normalizeList(value) {
   return [...new Set(names.filter(isName))];
 }
 
-// Normalizes the connection slots of an org: a name or null per single-slot kind, a list per many kind.
-function normalizeSlots(raw) {
+// Normalizes the connection slots of an org: a name or null per single-slot kind, a list per many kind, merged from both keys of the file.
+function normalizeSlots(raw, rawLists) {
   const slots = emptySlots();
-  if (!isPlainObject(raw)) return slots;
+  const single = isPlainObject(raw) ? raw : {};
+  const lists = isPlainObject(rawLists) ? rawLists : {};
   const many = new Set(manyTypes());
-  for (const [type, value] of Object.entries(raw)) {
+  for (const [type, value] of Object.entries(single)) {
     slots[type] = many.has(type) ? normalizeList(value) : isName(value) ? value : null;
+  }
+  for (const [type, value] of Object.entries(lists)) {
+    if (many.has(type)) slots[type] = normalizeList([...normalizeList(slots[type]), ...normalizeList(value)]);
   }
   return slots;
 }
 
-// Normalizes the connection bindings, one slot map per org id.
-function normalizeOrgConnections(raw) {
+// Normalizes the connection bindings, one slot map per org id, from `orgConnections` and the many-kind lists of `orgConnectionLists`.
+function normalizeOrgConnections(raw, rawLists) {
   const bindings = emptyMap();
-  if (!isPlainObject(raw)) return bindings;
-  for (const [orgId, slots] of Object.entries(raw)) bindings[orgId] = normalizeSlots(slots);
+  const single = isPlainObject(raw) ? raw : {};
+  const lists = isPlainObject(rawLists) ? rawLists : {};
+  for (const orgId of new Set([...Object.keys(single), ...Object.keys(lists)])) {
+    bindings[orgId] = normalizeSlots(single[orgId], lists[orgId]);
+  }
   return bindings;
+}
+
+// Splits the slots of one org into its single-slot bindings and its many-kind lists.
+function splitSlots(slots, many) {
+  const single = {};
+  const lists = {};
+  for (const [type, value] of Object.entries(isPlainObject(slots) ? slots : {})) {
+    if (!many.has(type)) single[type] = value;
+    else if (Array.isArray(value)) lists[type] = value;
+  }
+  return { single, lists };
+}
+
+// The config as written to disk: many-kind lists move to `orgConnectionLists`, a key an older build keeps verbatim instead of nulling the non-string slot.
+export function diskConfig(config) {
+  if (!isPlainObject(config) || !isPlainObject(config.orgConnections)) return config;
+  const many = new Set(manyTypes());
+  const orgConnections = {};
+  const orgConnectionLists = {};
+  for (const [orgId, slots] of Object.entries(config.orgConnections)) {
+    const { single, lists } = splitSlots(slots, many);
+    orgConnections[orgId] = single;
+    if (Object.keys(lists).length) orgConnectionLists[orgId] = lists;
+  }
+  const { orgConnectionLists: _stale, ...rest } = config;
+  return Object.keys(orgConnectionLists).length ? { ...rest, orgConnections, orgConnectionLists } : { ...rest, orgConnections };
 }
 
 // The top-level keys config.json does not own, kept verbatim so no write ever drops what it does not understand.
@@ -169,7 +202,7 @@ export function normalizeConfig(raw) {
   return {
     version: SCHEMA_VERSION,
     defaultOrg: typeof raw.defaultOrg === "string" && raw.defaultOrg ? raw.defaultOrg : null,
-    orgConnections: normalizeOrgConnections(raw.orgConnections),
+    orgConnections: normalizeOrgConnections(raw.orgConnections, raw.orgConnectionLists),
     queue: {
       maxConcurrent: Number.isInteger(maxConcurrent) && maxConcurrent > 0 ? maxConcurrent : null,
       resumeSession: raw.queue?.resumeSession === true,

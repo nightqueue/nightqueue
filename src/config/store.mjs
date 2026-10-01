@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, write
 import { join } from "node:path";
 import { UserError } from "./errors.mjs";
 import { configPath, homeDir, secretsPath } from "./paths.mjs";
-import { emptyConfig, emptySecrets, normalizeConfig, normalizeSecrets } from "./schema.mjs";
+import { diskConfig, emptyConfig, emptySecrets, normalizeConfig, normalizeSecrets } from "./schema.mjs";
 
 const SECRETS_MODE = 0o600;
 const HOME_MODE = 0o700;
@@ -115,7 +115,7 @@ export function loadRawConfig(env = process.env) {
 // Writes config.json atomically, creating the home directory when it is missing.
 export function saveConfig(config, env = process.env) {
   ensureHome(env);
-  writeFileAtomic(configPath(env), serialize(config));
+  writeFileAtomic(configPath(env), serialize(diskConfig(config)));
 }
 
 // Loads secrets.json, warning when the file mode is too open.
