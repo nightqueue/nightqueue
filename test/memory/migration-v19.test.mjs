@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { dbPath, preV18BackupPath, preV19BackupPath } from "../../src/config/paths.mjs";
 import { closeDb, DB_USER_VERSION, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { projectFromCwd, registeredProject } from "../../src/memory/registry-access.mjs";
-import { buildLegacyHome, preV21Name } from "../../test-support/legacy-home.mjs";
+import { buildLegacyHome, preV22Name } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { buildV18Home } from "../../test-support/v18-home.mjs";
 
@@ -66,7 +66,7 @@ function schemaOf(db) {
 test("a v18 home migrates to v19: row counts kept, items numbered per owner, keys unique, decision numbers unchanged, a pre-v19 copy", (t) => {
   const { env, ids, fixture } = v18Home(t, "v19-migrate");
   const before = readRaw(dbPath(env), (raw) => ({
-    counts: counts(raw, preV21Name),
+    counts: counts(raw, preV22Name),
     decisions: raw.prepare("SELECT id, number FROM decisions ORDER BY id").all().map((row) => ({ ...row })),
   }));
   const db = openDb(env);

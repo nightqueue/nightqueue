@@ -77,7 +77,7 @@ function v19Home(t, name, options = {}) {
   return { env, ids, fixture: readFileSync(dbPath(env)) };
 }
 
-// Migrates a home to v20 on a raw connection, never `openDb`, which would chain on to v21, and answers that connection.
+// Migrates a home to v20 on a raw connection, never `openDb`, which would chain on to v22, and answers that connection.
 function migrateV20(t, env) {
   const db = new DatabaseSync(dbPath(env));
   t.after(() => db.isOpen && db.close());

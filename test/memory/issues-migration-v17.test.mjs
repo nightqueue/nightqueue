@@ -4,7 +4,7 @@ import { copyFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
-import { preV21BackupPath } from "../../src/config/paths.mjs";
+import { preV22BackupPath } from "../../src/config/paths.mjs";
 import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { followDriftedJobs, getIssueDetail, saveIssue } from "../../src/memory/issues.mjs";
 import { openStore, openStoreReadOnly, withReadOnlyStore } from "../../src/store/open.mjs";
@@ -118,7 +118,7 @@ test("the v17 migration maps every legacy status and horizon, bumps nightqueue #
   assert.deepEqual(indexColumns(db, "issues_job_idx"), ["job_id"]);
 });
 
-test("a reopen of the migrated database changes nothing, and the v16 INDEXES still execute against the v20 shape it reached before v21", (t) => {
+test("a reopen of the migrated database changes nothing, and the v16 INDEXES still execute against the v20 shape it reached before v22", (t) => {
   const env = legacyHome(t, "issue-v17-reopen");
   const before = migratedRows(openDb(env));
   closeDb(env);
@@ -126,7 +126,7 @@ test("a reopen of the migrated database changes nothing, and the v16 INDEXES sti
   assert.deepEqual(migratedRows(reopened), before);
   assert.deepEqual(indexColumns(reopened, "issues_order_idx"), ["scope", "project_id", "org_id", "priority", "position"]);
   const v20 = join(makeDir(t, "issue-v17-reopen-v20"), "nightqueue.db");
-  copyFileSync(preV21BackupPath(env), v20);
+  copyFileSync(preV22BackupPath(env), v20);
   const old = new DatabaseSync(v20);
   t.after(() => old.close());
   assert.equal(schemaVersionOn(old), 20);

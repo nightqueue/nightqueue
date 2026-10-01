@@ -7,7 +7,7 @@ import {
   sqlList,
 } from "../issue-workflow.mjs";
 
-// The frozen v20 shapes of the tracker tables, under their pre-v21 names: the v18, v19 and v20 migrations build them, and v21
+// The frozen v20 shapes of the tracker tables, under their pre-v22 names: the v18, v19 and v20 migrations build them, and v22
 // renames them.
 
 const ROADMAP_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ISSUE_TYPE}' CHECK(type IN (${sqlList(ISSUE_TYPES)}))`;

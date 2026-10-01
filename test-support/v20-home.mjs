@@ -18,7 +18,7 @@ function seedV20Scratch(db, { orgs, projects }) {
   db.prepare("DELETE FROM roadmap_items WHERE id = ?").run(itemId);
 }
 
-// Builds a REAL v20 home: a v19 home migrated by the v20 step on a raw connection (never `openDb`, which would chain to v21),
+// Builds a REAL v20 home: a v19 home migrated by the v20 step on a raw connection (never `openDb`, which would chain to v22),
 // with deleted highest rows in every tracker table. `extra(db, ids)` seeds more rows, orphans included, before the connection closes.
 export function buildV20Home(env, { checkout = null, extra = null } = {}) {
   const ids = buildV19Home(env, { checkout });

@@ -5,8 +5,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 /**
- * The tracker is named issues (v21). Only the migration modules, the published decisions and the tests that build or
- * inspect a pre-v21 database, or replay a recording, may still spell its old name - each of those at a pinned line count,
+ * The tracker is named issues (v22). Only the migration modules, the published decisions and the tests that build or
+ * inspect a pre-v22 database, or replay a recording, may still spell its old name - each of those at a pinned line count,
  * so a new occurrence fails and so does a stale exemption.
  */
 
@@ -29,7 +29,7 @@ const TEST_EXEMPT = Object.freeze({
   "test/queue/fixtures/job-49/attempt1-abandoned-command-tail.jsonl": { count: 1, reason: "recorded transcript, kept verbatim" },
 });
 
-// Lists every file under a path of the repository, as a path relative to its root.
+// Lists every file under a path of the repository, as a path relative to its root; a symbolic link is skipped, never followed.
 function filesUnder(path) {
   const absolute = join(ROOT, path);
   let entries;
@@ -39,7 +39,9 @@ function filesUnder(path) {
     if (error.code === "ENOTDIR") return [path];
     throw new Error(`cannot walk ${path}: ${error.message}`);
   }
-  return entries.flatMap((entry) => (entry.isDirectory() ? filesUnder(join(path, entry.name)) : [join(path, entry.name)]));
+  return entries
+    .filter((entry) => !entry.isSymbolicLink())
+    .flatMap((entry) => (entry.isDirectory() ? filesUnder(join(path, entry.name)) : [join(path, entry.name)]));
 }
 
 // Counts the lines of one file that spell the old name.

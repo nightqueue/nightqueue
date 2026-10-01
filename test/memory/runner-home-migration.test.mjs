@@ -9,17 +9,21 @@ import { dbPath } from "../../src/config/paths.mjs";
 import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { openRegistryReader } from "../../src/store/open.mjs";
+import { restorePreV22Names } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const REFUSAL = /refused: the database at .* is the runner's home at schema v20, and this build \(v\d+\) would migrate it from inside J-7; nothing was changed - run this build against a temporary home \(`nightqueue sandbox <command>` or NIGHTQUEUE_HOME=\$\(mktemp -d\)\)/;
 
-// A temporary home stamped v20 with the project `alpha` and one job.
+// A temporary home stamped v20 with the project `alpha`, one job and the tracker under its pre-v22 names.
 function makeV20Home(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   addJob({ projectId: projectIdOf(env, "alpha"), prompt: "fix the worker" }, env);
-  openDb(env).exec("ALTER TABLE jobs DROP COLUMN origin; ALTER TABLE projects DROP COLUMN integrations; PRAGMA user_version = 20;");
+  const db = openDb(env);
+  db.exec("ALTER TABLE jobs DROP COLUMN origin; ALTER TABLE projects DROP COLUMN integrations");
+  restorePreV22Names(db);
+  db.exec("PRAGMA user_version = 20");
   closeDb(env);
   return env;
 }

@@ -20,11 +20,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
     keys `roadmapItemId` / `roadmap_ref` are `issueId` / `issue_ref`.
   - **Tool contract 3: restart the MCP clients** (start a new Claude Code session, reopen Claude
     Desktop and Cowork conversations, restart a running `nq open`). A client that cached the old
-    definitions gets "tool not found" for a `roadmap_*` tool.
+    definitions gets "tool not found" for a `roadmap_*` tool, and its `queue_add` with
+    `roadmap_item_id` is refused with the stale-contract line instead of queuing a job without
+    its issue.
   - A job queued from an issue gets an `## Issue` block with `Issue: <ref>` in its prompt, and the
     triager's phase context a `## Related issues` block. Prompts already stored keep their text.
-  - **The database migrates once to schema v21**, on the first command that opens it: a copy is
-    left beside it as `nightqueue.db.pre-v21`, then one transaction copies `roadmap_items`,
+  - **The database migrates once to schema v22** (from v20 or v21, the v21 columns `jobs.origin`
+    and `projects.integrations` kept as they are), on the first command that opens it: a copy is
+    left beside it as `nightqueue.db.pre-v22`, then one transaction copies `roadmap_items`,
     `roadmap_item_projects` and `roadmap_comments` into `issues`, `issue_projects` and
     `issue_comments` with every row, counter and delete rule kept, and rebuilds the search
     mirrors as `issues_fts` and `issue_comments_fts`. It refuses while a runner holds a live
@@ -32,6 +35,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
     a row that does not exist, with nothing written.
   - `nightqueue doctor` names its check `issue workflow`, and a project purge blocked by comments
     on org items reports `issue_comments_on_org_items`.
+  - The maintenance script `scripts/roadmap-backfill.mjs` is `scripts/issue-backfill.mjs`.
 
 ### Added
 

@@ -16,7 +16,7 @@ import * as registry from "../../src/memory/registry.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { sharedSlugPending } from "../../src/memory/shared-slug-migration.mjs";
 import { decideResume, ownRunState, resumeHandoff } from "../../src/queue/resume.mjs";
-import { buildLegacyHome, legacyConfig, preV21Name } from "../../test-support/legacy-home.mjs";
+import { buildLegacyHome, legacyConfig, preV22Name } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
@@ -482,7 +482,7 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
 
   for (const table of ALL_TABLES) {
     const count = (connection, name) => connection.prepare(`SELECT COUNT(*) AS n FROM ${name}`).get().n;
-    assert.equal(count(db, table), count(before, preV21Name(table)), `${table} lost or gained rows`);
+    assert.equal(count(db, table), count(before, preV22Name(table)), `${table} lost or gained rows`);
     const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name);
     assert.equal(columns.includes("project") || columns.includes("org"), false, `${table} still owns rows by name`);
   }
@@ -492,7 +492,7 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
   const withoutV19Number = (table, rows) => (table === "issues" ? rows.map(({ number: _number, ...row }) => row) : rows);
   for (const table of ALL_TABLES) {
     const unchanged = (rows) => rows.filter((row) => row.id !== detached.id || table !== "jobs");
-    assert.deepEqual(unchanged(withoutV19Number(table, ownerNamedRows(db, table))), unchanged(rowsOf(before, preV21Name(table))), `${table} changed in the rebuild`);
+    assert.deepEqual(unchanged(withoutV19Number(table, ownerNamedRows(db, table))), unchanged(rowsOf(before, preV22Name(table))), `${table} changed in the rebuild`);
   }
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   assert.equal(sharedSlugPending(db), false);

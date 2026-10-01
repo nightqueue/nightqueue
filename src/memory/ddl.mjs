@@ -8,7 +8,7 @@ import {
 } from "./issue-workflow.mjs";
 import { CLOSED_REQUIRES_MERGE } from "./schema.mjs";
 
-// The current (v21) schema of the memory database: one source for a fresh creation and for the v21 migration; the frozen
+// The current (v22) schema of the memory database: one source for a fresh creation and for the v22 migration; the frozen
 // v18, v19 and v20 shapes the earlier migrations build live under `migration/`.
 
 const ISSUE_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ISSUE_TYPE}' CHECK(type IN (${sqlList(ISSUE_TYPES)}))`;

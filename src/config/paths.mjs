@@ -56,9 +56,9 @@ export function preV20BackupPath(env = process.env) {
   return `${dbPath(env)}.pre-v20`;
 }
 
-// Path of the copy of the database taken right before its one-shot migration to schema v21.
-export function preV21BackupPath(env = process.env) {
-  return `${dbPath(env)}.pre-v21`;
+// Path of the copy of the database taken right before its one-shot migration to schema v22.
+export function preV22BackupPath(env = process.env) {
+  return `${dbPath(env)}.pre-v22`;
 }
 
 // Path of the shared-memory index of the WAL, the file every open connection of the database maps.

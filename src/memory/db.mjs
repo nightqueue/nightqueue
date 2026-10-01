@@ -8,7 +8,7 @@ import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schema
 import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
 import { isPendingV20, migrateToV20, refuseOrphans } from "./migration/v20.mjs";
 import { migrateV21Columns } from "./migration/v21.mjs";
-import { isPendingV21, migrateToV21 } from "./migration/v22.mjs";
+import { isPendingV22, migrateToV22 } from "./migration/v22.mjs";
 import { jobRef } from "./refs.mjs";
 import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
@@ -58,7 +58,7 @@ const ONE_SHOT_STEPS = Object.freeze([
   { pending: (db) => schemaState(db) === "legacy", run: migrateToV18 },
   { pending: isPendingV19, run: migrateToV19 },
   { pending: isPendingV20, run: migrateToV20 },
-  { pending: isPendingV21, run: migrateToV21 },
+  { pending: isPendingV22, run: migrateToV22 },
 ]);
 
 // Runs every pending one-shot step in order, each gate read after the step before it committed; the orphans the last step
@@ -92,7 +92,7 @@ function migrate(db) {
   const version = db.prepare("PRAGMA user_version").get().user_version;
   if (version === 18) throw new UserError("the v19 migration did not run; nothing was stamped");
   if (version === 19) throw new UserError("the v20 migration did not run; nothing was stamped");
-  if (version === 20) throw new UserError("the v21 migration did not run; nothing was stamped");
+  if (version === 20 || version === 21) throw new UserError("the v22 migration did not run; nothing was stamped");
   if (sharedSlugPending(db)) inTransaction(db, () => migrateSharedSlugs(db));
   db.exec(INDEXES);
   db.exec(FTS);

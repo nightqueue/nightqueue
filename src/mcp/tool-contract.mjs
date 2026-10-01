@@ -8,10 +8,17 @@ export const TOOL_CONTRACT = 3;
 
 const INTEGER_ID_CONTRACT = 1;
 
-// While true an old integer id that resolves safely is accepted with a `deprecated_input` warning; remove in the next minor release (or set false to refuse it now).
+// While true an old integer id that resolves safely is accepted with a `deprecated_input` warning; set it false to refuse that id too (0.6.0 kept the grace, its removal is a release of its own).
 export const GRACE_OLD_CONTRACT = true;
 
 export const STALE_CONTRACT_ADVISORY = "this client's tool contract is older than the server";
+
+const OLD_TRACKER_WORD = ["road", "map"].join("");
+
+// Inputs an older contract named and a newer one renamed, by tool: only a client with cached old definitions still sends them.
+const RENAMED_FIELDS = {
+  queue_add: [`${OLD_TRACKER_WORD}_item_id`],
+};
 
 // Inputs that took an internal integer id under contract 1 and take a ref now, by tool.
 const OLD_ID_FIELDS = {
@@ -39,6 +46,15 @@ export class StaleContractError extends UserError {
   constructor() {
     super(staleContractLine());
   }
+}
+
+// Refuses a call carrying an input its tool renamed, before validation would strip it, and notes the old shape in the server's state.
+export function refuseRenamedFields(name, args, state) {
+  if (args === null || typeof args !== "object") return;
+  const fields = RENAMED_FIELDS[name] ?? [];
+  if (!fields.some((field) => Object.hasOwn(args, field))) return;
+  state.sawOldShape = true;
+  throw new StaleContractError();
 }
 
 // What one server instance remembers about the clients it served; in memory only, never in the database.

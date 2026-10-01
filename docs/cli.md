@@ -206,9 +206,9 @@ A v19 database then goes to v20 in the same open, with its copy
 row pointing at a row that does not exist refuses the migration, naming the row,
 with nothing written - checked before the first pending step, so an older home
 stays at its version too; `nightqueue doctor` reports such rows.
-A v20 database then goes to v21 in the same open, with its copy
-`nightqueue.db.pre-v21`: the tracker tables are renamed to `issues`, `issue_projects`
-and `issue_comments`, every row, counter and ref kept.
+A v20 or v21 database then goes to v22 in the same open, with its copy
+`nightqueue.db.pre-v22`: the tracker tables are renamed to `issues`, `issue_projects`
+and `issue_comments`, every row, counter and ref kept, and the v21 columns untouched.
 `nightqueue run dir --project <name> --slug <slug>` prints the directory of a
 run, so nothing has to build the path from a project name.
 

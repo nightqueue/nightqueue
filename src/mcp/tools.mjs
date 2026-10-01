@@ -85,7 +85,15 @@ import { changeProjectIntegrations, INTEGRATION_ACTIONS, integrationsView } from
 import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons } from "./phase-context.mjs";
 import { phasePrompt, PROMPT_TARGETS } from "./phase-prompt.mjs";
 import { readVersion } from "../cli/version.mjs";
-import { newContractState, STALE_CONTRACT_ADVISORY, StaleContractError, TOOL_CONTRACT, upgradeOldShapes, withContract } from "./tool-contract.mjs";
+import {
+  newContractState,
+  refuseRenamedFields,
+  STALE_CONTRACT_ADVISORY,
+  StaleContractError,
+  TOOL_CONTRACT,
+  upgradeOldShapes,
+  withContract,
+} from "./tool-contract.mjs";
 
 const SERVER_NAME = "nightqueue";
 const SERVER_INSTRUCTIONS = [
@@ -1663,6 +1671,9 @@ export function createServer(env = process.env) {
     server.registerTool(tool.name, tool.config, guard(tool.name, toolHandler(tool, env), session));
   }
   // The SDK validates the call before the handler and refuses with one issue; this refusal carries every issue, the whole contract and what was received, which is what lets an agent fix the next call instead of repeating the same payload.
-  server.validateToolInput = async (tool, args, toolName) => validateArgs(toolName, schemas.get(toolName) ?? tool.inputSchema, args);
+  server.validateToolInput = async (tool, args, toolName) => {
+    refuseRenamedFields(toolName, args, state);
+    return validateArgs(toolName, schemas.get(toolName) ?? tool.inputSchema, args);
+  };
   return server;
 }

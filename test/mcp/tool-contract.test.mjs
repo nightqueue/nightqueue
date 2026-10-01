@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { saveDecision } from "../../src/memory/decisions.mjs";
-import { addJob } from "../../src/memory/jobs.mjs";
+import { addJob, listJobs } from "../../src/memory/jobs.mjs";
 import { saveIssue } from "../../src/memory/issues.mjs";
 import { STALE_CONTRACT_ADVISORY, TOOL_CONTRACT } from "../../src/mcp/tool-contract.mjs";
 import { makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
@@ -125,6 +125,20 @@ test("a foreign or unknown id of another owner is the stale line, never a guess"
   assert.equal(await refusal(client, "decision_update", { id: 99999, project: "alpha", status: "rejected" }), STALE_LINE);
   assert.equal(await refusal(client, "queue_add", { project: "alpha", issue_id: items.beta.id }), STALE_LINE);
   assert.equal(await refusal(client, "decision_update", { id: decisions.beta.id, project: "alpha", status: "rejected" }), STALE_LINE);
+});
+
+test("queue_add with the issue field a contract-2 client still sends is the stale line, never a plain job without its issue", async (t) => {
+  const { env, items } = makeContractHome(t, "contract-renamed-field");
+  const client = await connect(t, env);
+  const renamedField = `${["road", "map"].join("")}_item_id`;
+  const jobsBefore = listJobs({}, env).length;
+
+  assert.equal(await refusal(client, "queue_add", { project: "alpha", prompt: "operator note", [renamedField]: items.alpha.ref }), STALE_LINE);
+  assert.equal(await refusal(client, "queue_add", { project: "alpha", [renamedField]: items.alpha.ref }), STALE_LINE);
+  assert.equal(listJobs({}, env).length, jobsBefore, "a refused call queued a job");
+  assert.equal((await answer(client, "queue_status", {})).advisories.includes(STALE_CONTRACT_ADVISORY), true);
+  const queued = await answer(client, "queue_add", { project: "alpha", prompt: "operator note", issue_id: items.alpha.ref });
+  assert.equal(queued.issue_ref, items.alpha.ref);
 });
 
 test("queue_status advises about the older contract once the server saw an old shape", async (t) => {

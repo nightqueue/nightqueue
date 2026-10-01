@@ -4,7 +4,7 @@ import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly } from "../../src/memo
 import { addJob, getJob, jobView } from "../../src/memory/jobs.mjs";
 import { projectIntegrations } from "../../src/memory/registry.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { buildLegacyHome } from "../../test-support/legacy-home.mjs";
+import { buildLegacyHome, preV22Name, restorePreV22Names } from "../../test-support/legacy-home.mjs";
 import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 // The column names of a table.
@@ -12,19 +12,22 @@ function columnsOf(db, table) {
   return db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name);
 }
 
-// A home stamped v20: the project `alpha`, one job, and neither v21 column.
+// A home stamped v20: the project `alpha`, one job, neither v21 column, and the tracker under its pre-v22 names.
 function makeV20Home(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const projectId = projectIdOf(env, "alpha");
   addJob({ projectId, prompt: "fix the worker" }, env);
-  openDb(env).exec("ALTER TABLE jobs DROP COLUMN origin; ALTER TABLE projects DROP COLUMN integrations; PRAGMA user_version = 20;");
+  const db = openDb(env);
+  db.exec("ALTER TABLE jobs DROP COLUMN origin; ALTER TABLE projects DROP COLUMN integrations");
+  restorePreV22Names(db);
+  db.exec("PRAGMA user_version = 20");
   closeDb(env);
   return { env, projectId };
 }
 
-test("the schema is v21", () => {
-  assert.equal(DB_USER_VERSION, 21);
+test("the schema is past v21, so every home carries the v21 columns", () => {
+  assert.ok(DB_USER_VERSION > 21);
 });
 
 test("a v20 home gains jobs.origin and projects.integrations once, keeping every row, on every open", (t) => {
@@ -62,15 +65,15 @@ test("a stored integrations value reads as an object, an empty or broken one as 
   }
 });
 
-test("a v17 home reaches v21 in one open with both columns", (t) => {
+test("a v17 home reaches the current schema in one open with both columns", (t) => {
   const env = makeHome(t, "migration-v21-from-v17");
   buildLegacyHome(env, {
-    seed: (db) => db.prepare("INSERT INTO roadmap_items (scope, project, title, position) VALUES ('project', 'alpha', 'old item', 1)").run(),
+    seed: (db) => db.prepare(`INSERT INTO ${preV22Name("issues")} (scope, project, title, position) VALUES ('project', 'alpha', 'old item', 1)`).run(),
   });
   const db = openDb(env);
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.ok(columnsOf(db, "jobs").includes("origin"));
   assert.ok(columnsOf(db, "projects").includes("integrations"));
-  assert.deepEqual(db.prepare("SELECT title FROM roadmap_items").all().map((row) => row.title), ["old item"]);
+  assert.deepEqual(db.prepare("SELECT title FROM issues").all().map((row) => row.title), ["old item"]);
   assert.equal(jobView(getJob(addJob({ projectId: projectIdOf(env, "alpha"), prompt: "x" }, env).id, env)).origin, null);
 });

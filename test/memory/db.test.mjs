@@ -14,7 +14,7 @@ import {
 import { resolveProjectRef } from "../../src/config/projects.mjs";
 import { listDecisions, saveDecision } from "../../src/memory/decisions.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { buildLegacyHome, legacyConfig, restorePreV21Names } from "../../test-support/legacy-home.mjs";
+import { buildLegacyHome, legacyConfig, restorePreV22Names } from "../../test-support/legacy-home.mjs";
 import { DOWNGRADE_TO_V5, makeDir, makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
 const LESSON_COLUMNS = [
@@ -763,11 +763,11 @@ test("a v10 database gains decisions.job_id and its index, keeping every decisio
   makeProject(t, env, "alpha");
   const first = openDb(env);
   const saved = saveDecision({ projectId: projectIdOf(env, "alpha"), title: "t", context: "c", decision: "d" }, env);
-  restorePreV21Names(first);
+  restorePreV22Names(first);
   first.exec("DROP INDEX decisions_job_idx; ALTER TABLE decisions DROP COLUMN job_id; PRAGMA user_version = 10;");
   closeDb(env);
 
-  assert.equal(DB_USER_VERSION, 21);
+  assert.equal(DB_USER_VERSION, 22);
   for (const pass of [1, 2]) {
     const db = openDb(env);
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION, `pass ${pass}`);
