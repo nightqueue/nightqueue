@@ -175,6 +175,7 @@
  * @property {(name: string) => Promise<object|null>} byName
  * @property {(id: string) => Promise<object|null>} byId
  * @property {(id: string) => Promise<object|null>} integrations the project's `integrations` (schema v21 column) as an object; null when it has none or the column is not there yet
+ * @property {(id: string, value: object|null) => Promise<object|null>} setIntegrations writes the project's `integrations`; null or an empty object stores NULL, the project without integrations again
  * @property {(cwd: string) => Promise<object|null>} at the project whose checkout contains the directory
  * @property {(orgId: string) => Promise<object[]>} ofOrg
  * @property {(spec: {name: string, path: string|null, orgId: string, key?: string|null}) => Promise<object>} add the key asked for, or a free one derived from the name
@@ -342,7 +343,7 @@ export const STORE_CONTRACT = Object.freeze({
     "queueRoadmapItem",
   ],
   orgs: ["list", "byName", "byId", "add", "rename", "setKey", "suggestKey", "keyAliases", "remove"],
-  projects: ["list", "byName", "byId", "integrations", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
+  projects: ["list", "byName", "byId", "integrations", "setIntegrations", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
   db: ["files", "quickCheck", "quickCheckMainAlone", "integrityCheck", "checkpointTruncate"],
   "": ["health", "connect", "close", "checkpoint", "migrateIfOutdated"],
 });

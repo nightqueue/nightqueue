@@ -81,6 +81,7 @@ import {
 } from "../memory/runs.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
 import { coverageField, coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
+import { changeProjectIntegrations, INTEGRATION_ACTIONS, integrationsView } from "../integrations/settings.mjs";
 import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons } from "./phase-context.mjs";
 import { phasePrompt, PROMPT_TARGETS } from "./phase-prompt.mjs";
 import { readVersion } from "../cli/version.mjs";
@@ -464,6 +465,34 @@ async function registerRepository(args, env) {
   return await withLock(env, () => registerRepositoryLocked(args, path, env));
 }
 
+// The answer of `project_integrations` show: the project's stored settings, read only.
+async function showProjectIntegrations(args, env) {
+  await ensureStoreExists(env);
+  return await withReadOnlyStore(env, async (store) => {
+    const project = await requireProject(store, args.project);
+    return integrationsView(project, await store.projects.integrations(project.id));
+  });
+}
+
+// The one change `project_integrations` set or unset asks for; a set needs a value.
+function integrationChange(args) {
+  if (!filled(args.key)) throw new UserError(`\`${args.action}\` needs \`key\`, written <kind>.<key>`);
+  if (args.action === "set" && !filled(args.value)) throw new UserError("`set` needs `value`");
+  return args.action === "set" ? { key: args.key, value: args.value } : { key: args.key };
+}
+
+// Applies `project_integrations` set or unset inside the configuration lock and answers the stored result; refused inside a job.
+async function changeProjectIntegrationsAnswer(args, env) {
+  refuseHomeWriteInsideJob(env);
+  const change = integrationChange(args);
+  return await withLock(env, async () => {
+    const store = openStore(env);
+    const project = await requireProject(store, args.project);
+    const integrations = await changeProjectIntegrations({ store, project, action: args.action, changes: [change], env });
+    return integrationsView(project, integrations);
+  });
+}
+
 // Tells whether `queue_add` was asked to seed the job from an operator run.
 function hasRunDir(args) {
   return typeof args.run_dir === "string" && args.run_dir.trim() !== "";
@@ -791,7 +820,7 @@ async function queueCancelAnswer(args, env) {
   return { ok: true, ...(await stopAndCancelJob({ ...cancel, releaseWorktree: args.release_worktree === true })) };
 }
 
-// The thirty tools of the plugin contract, with the parameter names the plugin actually sends.
+// The thirty-one tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -1120,6 +1149,22 @@ function toolDefinitions(env, state) {
         },
       },
       handler: async (args) => await registerRepository(args, env),
+    },
+    {
+      name: "project_integrations",
+      config: {
+        description:
+          "Shows or changes the per-provider integration settings of a registered project - what the runtime does with the service a job came from and where it posts after a close. " +
+          "`action` `show` reads; `set` stores `value` under `key`, validated against the provider that declares it (a connection value must be a stored connection of that provider bound to the project's org); `unset` removes `key`, and removing the last one leaves the project without integrations, behaving exactly as before. " +
+          "`key` is `<kind>.<setting>` as listed in `providers` of every answer. Answers `{project, integrations, providers: [{kind, keys}]}`; never a secret. `set` and `unset` change the operator's home: call them only after the person said yes, and they are refused from inside a job.",
+        inputSchema: {
+          project: z.string().describe("The registered project name."),
+          action: z.enum(INTEGRATION_ACTIONS).describe("`show`, `set` or `unset`."),
+          key: optionalText.describe("The setting, `<kind>.<setting>`; required by `set` and `unset`."),
+          value: optionalText.describe("The value `set` stores, as text: a list is comma-separated, a boolean is `true` or `false`."),
+        },
+      },
+      handler: async (args) => (args.action === "show" ? await showProjectIntegrations(args, env) : await changeProjectIntegrationsAnswer(args, env)),
     },
     {
       name: "queue_status",
@@ -1597,7 +1642,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the thirty tools of the plugin contract.
+// Builds the MCP server with the thirty-one tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {

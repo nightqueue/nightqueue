@@ -38,6 +38,7 @@ const CONTRACT_TOOLS = [
   "memory_recall",
   "phase_prompt",
   "pipeline_log",
+  "project_integrations",
   "project_register",
   "queue_add",
   "queue_cancel",
@@ -86,12 +87,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the thirty tools of the contract", async (t) => {
+test("the server exposes exactly the thirty-one tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 30, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 31, "the contract list and the server disagree on how many tools there are");
 });
 
 test("the server migrates a v8 home to v9 once at boot, before it answers any tool", async (t) => {

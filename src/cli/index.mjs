@@ -91,12 +91,13 @@ commands:
   project key <name> <KEY>                  change a project's key; the old key keeps resolving
   project remove <name> [--purge [--yes]]   unregister a project; --purge also deletes every row it owns (asks first)
   project move <name> [<org>] [--path <p>]  move a project to another org and/or give it a new checkout
+  project integrations <name> show|set|unset  show or change the project's per-provider settings (set <kind.key>=<value>, unset <kind.key>)
   connection add <name> --type <type>       store a secret read from stdin and bind it to a free org slot
   connection bind <name> --org <name>       bind (or rebind) a stored connection to an org slot
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the thirty memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the thirty-one memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   hook <name>                               run a hook (session-start, prompt-context, reflect, agent-foreground, merger-guard), reading the event JSON from stdin
   reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground

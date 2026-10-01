@@ -269,6 +269,7 @@ function projectsDomain(db) {
     byName: async (name) => registry.projectByName(db(), name),
     byId: async (id) => registry.projectById(db(), id),
     integrations: async (id) => registry.projectIntegrations(db(), id),
+    setIntegrations: async (id, value) => registry.setProjectIntegrations(db(), { id, value }),
     at: async (cwd) => registry.projectAt(db(), cwd),
     ofOrg: async (orgId) => registry.projectsOfOrg(db(), orgId),
     add: async (spec) => registry.insertProject(db(), spec),

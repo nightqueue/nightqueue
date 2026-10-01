@@ -128,16 +128,29 @@ export function projectIntegrations(db, id) {
   return parseIntegrations(row?.integrations);
 }
 
+// Tells whether a value is a plain object with at least one key.
+function isFilledObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0;
+}
+
 // A stored integrations value as a non-empty plain object, or null.
 function parseIntegrations(text) {
   if (typeof text !== "string" || !text) return null;
   try {
     const parsed = JSON.parse(text);
-    const isObject = parsed && typeof parsed === "object" && !Array.isArray(parsed);
-    return isObject && Object.keys(parsed).length ? parsed : null;
+    return isFilledObject(parsed) ? parsed : null;
   } catch {
     return null;
   }
+}
+
+// Writes a project's integrations as JSON text; null or an empty object stores NULL.
+export function setProjectIntegrations(db, { id, value }) {
+  if (!projectById(db, id)) throw new UserError(`unknown project id \`${id}\``);
+  const isEmpty = value === null || value === undefined || (typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0);
+  if (!isEmpty && !isFilledObject(value)) throw new UserError("project integrations must be an object of settings per provider");
+  db.prepare("UPDATE projects SET integrations = ? WHERE id = ?").run(isEmpty ? null : JSON.stringify(value), String(id));
+  return projectIntegrations(db, id);
 }
 
 // Every project, path-less ones included, in the order they were registered.

@@ -264,6 +264,9 @@ nightqueue project move api acme                   # move a project to another o
 nightqueue project move api --path ~/code/api      # give it a new checkout (or one it never had)
 nightqueue project remove api                      # refused while it owns rows, listing them and hinting --purge
 nightqueue project remove api --purge [--yes]      # delete it and every row it owns (jobs, lessons, memory, roadmap, runs dir); asks first, refused while a job runs or closes, or while it has comments on org roadmap items (they stay)
+nightqueue project integrations api show [--json] # one <kind>.<key>=<value> line per setting, or "no integrations"
+nightqueue project integrations api set <kind>.<key>=<value> ...   # validated against the provider that declares the key
+nightqueue project integrations api unset <kind>.<key> ...         # the last key removed leaves the project without integrations
 
 echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github
 nightqueue connection bind gh --org acme           # bind (or rebind) an org slot
@@ -275,6 +278,17 @@ nightqueue connection remove gh                    # unbinds from every org, the
 The secret is read from stdin when stdin is not a terminal, and asked for in a
 hidden prompt otherwise. It is never accepted as a command-line argument, and
 never printed back - not by `list`, not by `--json`, not by an error message.
+
+**Project integrations.** `project integrations <project>` holds what a project does with the
+services its jobs come from, one setting per `<kind>.<key>` (a key may itself be dotted, stored
+nested under the provider). The keys come from the providers of the build - `show --json` lists
+them under `providers` - and an unknown key is refused with the valid ones. Values are text: an
+enum takes one of its values, a boolean `true` or `false`, a list is comma-separated, and a
+connection value must name a stored connection of that provider bound to the project's org.
+`show` also prints `<kind>: org connection <name|none>` for each enabled provider with a single
+org slot. Several `set`/`unset` arguments are applied together: one invalid one changes nothing.
+Unsetting the last key leaves the project without integrations, behaving exactly as before.
+`set` and `unset` are refused from inside a job; the MCP tool `project_integrations` does the same.
 
 A path that starts with `-` has to come after `--` (`nightqueue init -- -weird-dir`),
 otherwise it is parsed as an unknown option and rejected.

@@ -9,7 +9,8 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const PACKED_DIRS = ["bin", "src", "plugin", ".claude-plugin"];
 const DEV_PREFIXES = ["test/", "test-support/", "docs/", "scripts/", ".claude/", ".github/"];
-const MAX_UNPACKED_BYTES = 2 * 1024 * 1024;
+// Raised from 2 MiB to 2.5 MiB for the D-55 integrations providers (src/integrations/).
+const MAX_UNPACKED_BYTES = 2.5 * 1024 * 1024;
 
 // Description of the tarball npm would publish, or null when npm is not installed on this machine.
 function packedTarball() {
@@ -81,7 +82,7 @@ test("every versioned file of the published directories is in the tarball", (t) 
   }
 });
 
-test("the unpacked package stays under two megabytes", (t) => {
+test("the unpacked package stays under two and a half megabytes", (t) => {
   const tarball = packedTarball();
   if (!tarball) return t.skip("npm did not answer `pack --dry-run`");
   const { unpackedSize } = tarball;

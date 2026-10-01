@@ -247,7 +247,7 @@ Writes the job cannot make meanwhile go to its `pending-writes.jsonl` (above); a
 could not be recorded keeps the worktree and writes the witness, and the report says
 `unrecorded` with the pending path.
 
-The thirty MCP tools, with the parameters `nightqueue mcp` actually accepts:
+The thirty-one MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -261,6 +261,7 @@ The thirty MCP tools, with the parameters `nightqueue mcp` actually accepts:
 | `pipeline_log` | `outcome`, `project?`, `slug?`, `tier?`, `tier_operator?`, `tier_raise_reason?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?}]` |
 | `queue_add` | `project?` (for an org roadmap item: a project of the org, or `all`), `prompt?`, `roadmap_item_id?` (an item ref), `cwd?`, `register?`, `key?` (with `register`), `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`), `origin?` (`{kind, ref}`) |
 | `project_register` | `cwd`, `name?`, `key?`, `org?` (registers the repository of `cwd`, a linked worktree as its main checkout, only after the person said yes; answers `{registered, project, key, org, path, hint}`; nothing is queued) |
+| `project_integrations` | `project`, `action` (`show`, `set`, `unset`), `key?` (`<kind>.<setting>`, required by `set`/`unset`), `value?` (text, required by `set`) (answers `{project, integrations, providers: [{kind, keys}]}` with the settings each provider of the build declares; `set` validates against the provider, `unset` of the last key leaves the project without integrations; `set`/`unset` refused from inside a job; never a secret) |
 | `queue_status` | `job_id?`, `pr_url?` (never with `job_id`), `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_stop` | `pid?` |
