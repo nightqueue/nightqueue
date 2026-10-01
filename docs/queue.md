@@ -1034,12 +1034,13 @@ with `--json` it prints one `{ job, outcome, decisions }` object and nothing els
 timeout of the whole close; a close that passes it, or that `queue run --stop` ends, stops
 with `timeout` or `interrupted` and resumes on the next run.
 
-**Decisions the job proposed.** Once a close in the foreground (or `--merged`) closed the job,
-it settles the decisions the job proposed and nobody settled: on a terminal it asks accept /
-reject / keep for each, `--decisions accept|reject|keep` answers all of them without asking,
-and `--json` or no terminal keeps them `proposed`. A detached close has no terminal: it hands
-`--decisions` to its child when you give it, and otherwise keeps every proposal `proposed` -
-`nightqueue doctor` lists them afterwards. The MCP `queue_close` never settles a proposal.
+**Decisions the job proposed.** The settle step accepts every decision with `status: proposed`
+and the job's id, in the same transaction that sets the job `closed`; there is no flag and no
+question. The close prints one `accepted D-n: <title>` line per decision (`--json` carries them
+in `decisions`), and the `Closed:` notice line and the roadmap item's `closed` comment end with
+`, accepted D-60, D-61`. A close that fails before settle, and a job that ends `cancelled` or
+`failed`, write no decision. `--decisions` is refused with the usage line. The MCP `queue_close`
+does the same, with no parameter for it.
 
 **What `--force` does.** `--force` (`force: true` over MCP) means "do not hold me back for
 tests", nothing more: preflight notes the pull request's red, pending or unreadable checks

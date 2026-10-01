@@ -116,8 +116,8 @@ nightqueue queue log <id> [--follow]
 nightqueue queue session <id> [--print]
 nightqueue queue retry <id> --note "<answer>"
 nightqueue queue cancel <id> --reason "<why>"
-nightqueue queue close <id> [--force] [--foreground] [--decisions accept|reject|keep] [--json]
-nightqueue queue close --merged [--decisions accept|reject|keep] [--json]
+nightqueue queue close <id> [--force] [--foreground] [--json]
+nightqueue queue close --merged [--json]
 nightqueue queue pause | resume
 
 # memory

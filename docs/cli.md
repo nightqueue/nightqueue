@@ -313,8 +313,8 @@ nightqueue queue session 42 --json                    # session, attempt and cwd
 
 nightqueue queue close 42                             # merge a done job's pull request and close the job, detached
 nightqueue queue close 42 --foreground                # run the four steps in this process, one line per step
-nightqueue queue close 42 --decisions keep --json     # keep the job's open proposals; JSON on stdout
-nightqueue queue close --merged --decisions accept    # close every done job gh confirms merged, accepting each proposal
+nightqueue queue close 42 --foreground --json         # JSON on stdout, with the decisions the close accepted
+nightqueue queue close --merged                       # close every done job gh confirms merged, accepting each one's proposals
 nightqueue queue close 42 --force                     # skip the pull request checks and the rebase suite, nothing else
 nightqueue queue cancel 42 --reason "abandoned"       # cancel a done or failed job and release its worktree
 
@@ -382,15 +382,10 @@ nightqueue queue close --merged again` when some could not be checked within the
 deadline. A `failed`, `gate` or `cancelled` job is never closed, whatever its pull request
 says: retry it, or cancel it.
 
-Once a job closed in this process (`--foreground`, or `--merged`), the command settles the
-decisions the job proposed and never settled: on a TTY, without `--decisions`, it asks
-`decision <D-ref> "<title>" of J-<id>: accept / reject / keep? [keep]` for each open proposal
-in turn; `--decisions accept|reject|keep` answers every one of them without asking, and no
-terminal (or `--json`) leaves every proposal `kept (proposed)`, so a script's behaviour never
-changes underneath it. Each settled proposal prints `decision <label> <title>:
-accepted|rejected|kept (proposed)`, and `--json` carries them under `decisions`. A detached
-close has no terminal to ask on: it hands `--decisions` to its child when given, and otherwise
-keeps every proposal `proposed` for `nightqueue doctor` to list.
+The settle step accepts every decision the job proposed, in the same transaction that closes
+the job. Each one prints `accepted <D-ref>: <title>`, and `--json` carries them under
+`decisions`; the detached child does the same into its log. `--decisions` no longer exists and
+is refused with the usage line.
 
 `queue cancel <id>` accepts a `pending`, gated, orphaned, `done` or `failed` job. For a `done`
 or `failed` one it also releases the job's worktree, printing `worktree removed: <path>` or
@@ -652,8 +647,7 @@ and nothing is listed; when git cannot list the worktrees of a checkout, one
 One more `warn` row, `decision proposals`, names every decision a queue job proposed and nobody
 settled before its job was closed, by number and job - settle it with `decision_update`
 (`status: accepted|rejected`) or `nightqueue decision update <number> --status
-accepted|rejected`, or, next time, settle it in the same call with `nightqueue queue
-close <id> --decisions accept|reject`.
+accepted|rejected`.
 
 On a database at the current schema, the `roadmap workflow` row names every roadmap item or org
 project row whose status disagrees with what its linked job's row means (for example `NQ-12

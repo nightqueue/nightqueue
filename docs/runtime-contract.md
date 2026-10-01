@@ -380,7 +380,7 @@ already under a live close lease refused by name with nothing written; calling i
 close that stopped at the step that failed. `force: true` skips the pull request checks and the
 rebase suite only - status, attribution and real conflicts still stop the close. A pull request
 closed without merge ends the close by cancelling the job, one merged by hand is recorded as
-`merged outside a close`, and the tool never settles the job's proposed decisions. Inside a job
+`merged outside a close`, and the settle step accepts the job's proposed decisions in the same write that closes it. Inside a job
 it is refused, like the CLI (see [Queue](queue.md#closing-a-job)).
 
 Inside a job, a tool that takes a free id only reaches its own: `queue_retry`

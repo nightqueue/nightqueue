@@ -3,14 +3,12 @@ import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { openDb } from "../../src/memory/db.mjs";
+import { commentFor } from "../../src/memory/roadmap-workflow.mjs";
 import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
-import { settleJobProposals } from "../../src/queue/proposals.mjs";
-import { openStore } from "../../src/store/open.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
-import { fakeCloseDeps, mergedPr, CLOSE_PR_URL } from "../../test-support/close.mjs";
+import { fakeCloseDeps, mergedPr, openPr, CLOSE_PR_URL } from "../../test-support/close.mjs";
 
-const QUESTION_MARK = "accept / reject / keep? [keep] ";
 const CHILD_PID = 4242;
 
 // A home with project `alpha` registered.
@@ -34,22 +32,6 @@ function proposal(env, { jobId, title }) {
   return saved;
 }
 
-// A terminal double: stdin says it is a TTY and answers each proposal question with the next answer, ending the input when none is left.
-function answeringTerminal(answers) {
-  const stdin = new PassThrough();
-  stdin.isTTY = true;
-  const stdout = new PassThrough();
-  const asked = [];
-  stdout.on("data", (chunk) => {
-    const text = String(chunk);
-    if (!text.endsWith(QUESTION_MARK)) return;
-    asked.push(text);
-    const next = answers.shift();
-    setImmediate(() => (next === undefined ? stdin.end() : stdin.write(`${next}\n`)));
-  });
-  return { stdin, stdout, asked };
-}
-
 // A spawn double recording every call and answering with a child that has a pid.
 function fakeSpawn(calls) {
   return (file, args, options) => {
@@ -58,18 +40,18 @@ function fakeSpawn(calls) {
   };
 }
 
-// Runs `nightqueue queue close ...` in this process over a merged pull request, with the stdin/stdout the test gives, capturing out and err.
-async function runQueueClose(env, argv, { stdin = { isTTY: false }, stdout = new PassThrough(), calls = [] } = {}) {
+// Runs `nightqueue queue close ...` in this process over the given pull request, capturing out and err.
+async function runQueueClose(env, argv, { calls = [], pr = mergedPr() } = {}) {
   const out = [];
   const err = [];
   const ctx = {
     ...defaultContext(),
     env,
-    stdin,
-    stdout,
+    stdin: { isTTY: false },
+    stdout: new PassThrough(),
     out: (line) => out.push(line),
     err: (line) => err.push(line),
-    closeDeps: fakeCloseDeps({ pr: mergedPr() }).deps,
+    closeDeps: fakeCloseDeps({ pr }).deps,
     spawnImpl: fakeSpawn(calls),
     killImpl: () => true,
   };
@@ -77,9 +59,9 @@ async function runQueueClose(env, argv, { stdin = { isTTY: false }, stdout = new
   return { code, out, err };
 }
 
-// The lines a close printed about the proposals it settled or kept.
-function decisionLines(out) {
-  return out.filter((line) => line.startsWith("decision "));
+// The lines a close printed about the decisions it accepted.
+function acceptedLines(out) {
+  return out.filter((line) => line.startsWith("accepted "));
 }
 
 // The stored status of a decision.
@@ -87,64 +69,48 @@ function statusOf(env, id) {
   return getDecision(id, env).status;
 }
 
-test("close --decisions accept flips every proposal of the closed job, and says so one line each", async (t) => {
+test("close accepts every proposal of the closed job in one go, says so one line each, and names them in the notice", async (t) => {
   const env = makeDecisionsHome(t, "close-decisions-accept");
   const job = doneJob(env);
+  const other = doneJob(env, "another job");
   const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
   const second = proposal(env, { jobId: job, title: "runners register in one table" });
-
-  const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground", "--decisions", "accept"]);
-
-  assert.equal(result.code, 0, result.err.join("\n"));
-  assert.equal(getJob(job, env).status, "closed");
-  assert.equal(statusOf(env, first.id), "accepted");
-  assert.equal(statusOf(env, second.id), "accepted");
-  assert.ok(result.out.includes(`J-${job} closed: PR #7 merged as abc1234`), result.out.join("\n"));
-  assert.deepEqual(decisionLines(result.out), [
-    `decision D-${first.number} leases are renewed by their owner: accepted`,
-    `decision D-${second.number} runners register in one table: accepted`,
-  ]);
-});
-
-test("close --decisions reject rejects the proposal, and leaves the proposal of another job alone", async (t) => {
-  const env = makeDecisionsHome(t, "close-decisions-reject");
-  const job = doneJob(env);
-  const other = doneJob(env, "another job");
-  const mine = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
-  const theirs = proposal(env, { jobId: other, title: "runners register in one table" });
-
-  const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground", "--decisions", "reject"]);
-
-  assert.equal(result.code, 0, result.err.join("\n"));
-  assert.equal(statusOf(env, mine.id), "rejected");
-  assert.equal(statusOf(env, theirs.id), "proposed");
-  assert.deepEqual(decisionLines(result.out), [`decision D-${mine.number} leases are renewed by their owner: rejected`]);
-});
-
-test("without the flag and without a terminal the proposals stay proposed and are listed as kept", async (t) => {
-  const env = makeDecisionsHome(t, "close-decisions-default");
-  const job = doneJob(env);
-  const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
+  const theirs = proposal(env, { jobId: other, title: "heartbeats are configuration" });
 
   const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground"]);
 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.equal(getJob(job, env).status, "closed");
-  assert.equal(statusOf(env, first.id), "proposed");
-  assert.deepEqual(decisionLines(result.out), [`decision D-${first.number} leases are renewed by their owner: kept (proposed)`]);
+  assert.equal(statusOf(env, first.id), "accepted");
+  assert.equal(statusOf(env, second.id), "accepted");
+  assert.equal(statusOf(env, theirs.id), "proposed");
+  assert.ok(result.out.includes(`J-${job} closed: PR #7 merged as abc1234`), result.out.join("\n"));
+  assert.deepEqual(acceptedLines(result.out), [
+    `accepted D-${first.number}: leases are renewed by their owner`,
+    `accepted D-${second.number}: runners register in one table`,
+  ]);
+  assert.match(getJob(job, env).notice_md, new RegExp(`^Closed: PR #7 merged as abc1234 on \\d{4}-\\d{2}-\\d{2}, accepted D-${first.number}, D-${second.number}$`, "m"));
 });
 
-test("a detached close settles nothing itself and hands its --decisions choice to the child, which settles by it", async (t) => {
+test("the roadmap item's closed comment names the accepted refs, and only when there are some", () => {
+  const withRefs = { id: 9, notice_md: "gate text\n\nClosed: PR #7 merged as abc1234 on 2026-09-30, accepted D-60, D-61" };
+  const without = { id: 9, notice_md: "Closed: PR #7 merged as abc1234 on 2026-09-30" };
+
+  assert.equal(commentFor(withRefs, "closed", []).body, "J-9 closed, accepted D-60, D-61");
+  assert.equal(commentFor(without, "closed", []).body, "J-9 closed");
+});
+
+test("a detached close hands nothing down and its child accepts the proposals", async (t) => {
   const env = makeDecisionsHome(t, "close-decisions-detached");
   const job = doneJob(env);
   const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
   const calls = [];
 
-  const started = await runQueueClose(env, ["queue", "close", String(job), "--decisions", "accept"], { calls, stdin: answeringTerminal([]).stdin });
+  const started = await runQueueClose(env, ["queue", "close", String(job)], { calls });
 
   assert.equal(started.code, 0, started.err.join("\n"));
-  assert.deepEqual(calls[0].args.slice(1), ["queue", "close", String(job), "--foreground", "--decisions", "accept"]);
-  assert.equal(statusOf(env, first.id), "proposed", "the parent of a detached close settled a proposal");
+  assert.deepEqual(calls[0].args.slice(1), ["queue", "close", String(job), "--foreground"]);
+  assert.equal(statusOf(env, first.id), "proposed", "the parent of a detached close accepted a proposal");
   const token = calls[0].options.env.NIGHTQUEUE_CLOSE_WORKER;
   const child = await runQueueClose({ ...env, NIGHTQUEUE_CLOSE_WORKER: token }, calls[0].args.slice(1));
   assert.equal(child.code, 0, child.err.join("\n"));
@@ -152,158 +118,88 @@ test("a detached close settles nothing itself and hands its --decisions choice t
   assert.equal(statusOf(env, first.id), "accepted");
 });
 
-test("a detached close without --decisions keeps the proposals: its child has no terminal to ask", async (t) => {
-  const env = makeDecisionsHome(t, "close-decisions-detached-keep");
-  const job = doneJob(env);
-  const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
-  const calls = [];
-
-  await runQueueClose(env, ["queue", "close", String(job)], { calls });
-  assert.deepEqual(calls[0].args.slice(1), ["queue", "close", String(job), "--foreground"]);
-  const token = calls[0].options.env.NIGHTQUEUE_CLOSE_WORKER;
-  const child = await runQueueClose({ ...env, NIGHTQUEUE_CLOSE_WORKER: token }, calls[0].args.slice(1));
-
-  assert.equal(child.code, 0, child.err.join("\n"));
-  assert.equal(getJob(job, env).status, "closed");
-  assert.equal(statusOf(env, first.id), "proposed");
-});
-
-test("a closed job with no proposal prints no decision line and answers an empty `decisions` under --json", async (t) => {
+test("a closed job with no proposal prints no accepted line and answers an empty `decisions` under --json", async (t) => {
   const env = makeDecisionsHome(t, "close-decisions-none");
   const text = doneJob(env);
   const json = doneJob(env, "second");
 
-  const textResult = await runQueueClose(env, ["queue", "close", String(text), "--foreground", "--decisions", "accept"]);
+  const textResult = await runQueueClose(env, ["queue", "close", String(text), "--foreground"]);
   const jsonResult = await runQueueClose(env, ["queue", "close", String(json), "--foreground", "--json"]);
 
-  assert.deepEqual(decisionLines(textResult.out), []);
+  assert.deepEqual(acceptedLines(textResult.out), []);
   assert.equal(jsonResult.out.length, 1, jsonResult.out.join("\n"));
   assert.deepEqual(JSON.parse(jsonResult.out[0]).decisions, []);
 });
 
-test("close --json on a terminal never prompts, keeps the proposals and prints one parseable line carrying them", async (t) => {
+test("close --json prints one parseable line carrying the accepted decisions", async (t) => {
   const env = makeDecisionsHome(t, "close-decisions-json");
   const job = doneJob(env);
   const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
-  const tty = answeringTerminal(["accept"]);
 
-  const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground", "--json"], tty);
+  const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground", "--json"]);
 
   assert.equal(result.code, 0, result.err.join("\n"));
-  assert.deepEqual(tty.asked, [], "a --json close asked on the terminal");
   assert.equal(result.out.length, 1, result.out.join("\n"));
   const payload = JSON.parse(result.out[0]);
   assert.equal(payload.job.status, "closed");
-  assert.deepEqual(payload.decisions, [
-    { job_id: job, id: first.id, number: first.number, label: `D-${first.number}`, ref: `D-${first.number}`, title: "leases are renewed by their owner", action: "kept" },
-  ]);
-  assert.equal(statusOf(env, first.id), "proposed");
-});
-
-test("close --json --decisions accept flips the proposals and still prints one parseable line", async (t) => {
-  const env = makeDecisionsHome(t, "close-decisions-json-accept");
-  const job = doneJob(env);
-  const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
-
-  const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground", "--json", "--decisions", "accept"]);
-
-  assert.equal(result.code, 0, result.err.join("\n"));
-  assert.equal(result.out.length, 1, result.out.join("\n"));
-  assert.deepEqual(JSON.parse(result.out[0]).decisions.map((entry) => entry.action), ["accepted"]);
+  assert.deepEqual(payload.decisions, [{ job_id: job, ref: `D-${first.number}`, title: "leases are renewed by their owner" }]);
   assert.equal(statusOf(env, first.id), "accepted");
 });
 
-test("an invalid --decisions is refused before anything closes, detached or not", async (t) => {
-  const env = makeDecisionsHome(t, "close-decisions-invalid");
+test("--decisions is refused with the usage line, detached or not, and nothing closes", async (t) => {
+  const env = makeDecisionsHome(t, "close-decisions-removed");
   const job = doneJob(env);
   const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
 
   for (const flags of [[], ["--foreground"]]) {
     const calls = [];
-    const result = await runQueueClose(env, ["queue", "close", String(job), ...flags, "--decisions", "maybe"], { calls });
+    const result = await runQueueClose(env, ["queue", "close", String(job), ...flags, "--decisions", "accept"], { calls });
     assert.equal(result.code, 1);
-    assert.match(result.err.join("\n"), /invalid decisions choice `maybe`; expected one of accept\|reject\|keep/);
-    assert.deepEqual(calls, [], "an invalid choice spawned a close");
+    assert.match(result.err.join("\n"), /`--decisions` no longer exists.*usage: nightqueue queue close <id>/);
+    assert.deepEqual(calls, [], "a refused flag spawned a close");
   }
   assert.equal(getJob(job, env).status, "done");
-  assert.equal(getJob(job, env).close_status, null);
   assert.equal(statusOf(env, first.id), "proposed");
 });
 
-test("on a terminal each proposal is asked by number, title and job; an empty or unknown answer keeps it", async (t) => {
-  const env = makeDecisionsHome(t, "close-decisions-tty");
-  const job = doneJob(env);
-  const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
-  const second = proposal(env, { jobId: job, title: "runners register in one table" });
-  const third = proposal(env, { jobId: job, title: "heartbeats are configuration" });
-  const tty = answeringTerminal(["Reject", "", "later"]);
-
-  const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground"], tty);
-
-  assert.equal(result.code, 0, result.err.join("\n"));
-  assert.deepEqual(tty.asked, [
-    `decision D-${first.number} "leases are renewed by their owner" of J-${job}: ${QUESTION_MARK}`,
-    `decision D-${second.number} "runners register in one table" of J-${job}: ${QUESTION_MARK}`,
-    `decision D-${third.number} "heartbeats are configuration" of J-${job}: ${QUESTION_MARK}`,
-  ]);
-  assert.equal(statusOf(env, first.id), "rejected");
-  assert.equal(statusOf(env, second.id), "proposed");
-  assert.equal(statusOf(env, third.id), "proposed");
-});
-
-test("on a terminal whose input ends before an answer, the proposal is kept", async (t) => {
-  const env = makeDecisionsHome(t, "close-decisions-tty-eof");
-  const job = doneJob(env);
-  const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
-  const tty = answeringTerminal([]);
-
-  const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground"], tty);
-
-  assert.equal(result.code, 0, result.err.join("\n"));
-  assert.equal(tty.asked.length, 1);
-  assert.equal(statusOf(env, first.id), "proposed");
-  assert.deepEqual(decisionLines(result.out), [`decision D-${first.number} leases are renewed by their owner: kept (proposed)`]);
-});
-
-test("a proposal that cannot be settled is reported on stderr and never undoes the close", async (t) => {
-  const env = makeDecisionsHome(t, "close-decisions-settle-fails");
-  const job = doneJob(env);
-  const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
-  openDb(env).exec("CREATE TRIGGER no_decision_update BEFORE UPDATE ON decisions BEGIN SELECT RAISE(ABORT, 'decisions are frozen'); END;");
-
-  const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground", "--decisions", "accept"]);
-
-  assert.equal(result.code, 0, result.err.join("\n"));
-  assert.equal(getJob(job, env).status, "closed");
-  assert.deepEqual(decisionLines(result.out), []);
-  assert.equal(result.err.length, 1, result.err.join("\n"));
-  assert.match(result.err[0], new RegExp(`^decisions of J-${job} not settled: .*decisions are frozen`));
-  assert.equal(statusOf(env, first.id), "proposed");
-});
-
-test("a close that stops before the merge settles no proposal", async (t) => {
+test("a close that stops before the merge writes no decision", async (t) => {
   const env = makeDecisionsHome(t, "close-decisions-stopped");
   const job = doneJob(env);
   const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
   const out = [];
   const ctx = { ...defaultContext(), env, out: (line) => out.push(line), err: () => {}, closeDeps: fakeCloseDeps({ checks: { ok: true, checks: [], failing: ["lint"], pending: [] } }).deps };
 
-  const code = await run(["queue", "close", String(job), "--foreground", "--decisions", "accept"], ctx);
+  const code = await run(["queue", "close", String(job), "--foreground"], ctx);
 
   assert.equal(code, 1);
   assert.equal(getJob(job, env).status, "done");
   assert.equal(statusOf(env, first.id), "proposed");
-  assert.deepEqual(decisionLines(out), []);
+  assert.deepEqual(acceptedLines(out), []);
 });
 
-test("settleJobProposals refuses an answer outside accept, reject and keep without touching the proposal", async (t) => {
-  const env = makeDecisionsHome(t, "close-decisions-bad-chooser");
+test("a job that ends cancelled because its pull request was closed touches no decision", async (t) => {
+  const env = makeDecisionsHome(t, "close-decisions-cancelled");
   const job = doneJob(env);
   const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
 
-  await assert.rejects(
-    settleJobProposals({ store: openStore(env), jobId: job, choose: async () => "later" }),
-    /invalid decisions choice `later`/,
-  );
+  const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground"], { pr: openPr({ state: "CLOSED" }) });
+
+  assert.equal(result.code, 1);
+  assert.equal(getJob(job, env).status, "cancelled");
   assert.equal(statusOf(env, first.id), "proposed");
+  assert.deepEqual(acceptedLines(result.out), []);
+});
+
+test("a decision write that fails rolls the close back: the job stays done and the proposal stays proposed", async (t) => {
+  const env = makeDecisionsHome(t, "close-decisions-write-fails");
+  const job = doneJob(env);
+  const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
+  openDb(env).exec("CREATE TRIGGER no_decision_update BEFORE UPDATE ON decisions BEGIN SELECT RAISE(ABORT, 'decisions are frozen'); END;");
+
+  const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground"]);
+
+  assert.equal(result.code, 1);
+  assert.equal(getJob(job, env).status, "done");
+  assert.equal(statusOf(env, first.id), "proposed");
+  assert.deepEqual(acceptedLines(result.out), []);
 });

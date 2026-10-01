@@ -71,7 +71,7 @@ async function attemptClose(job, store, env, deps) {
     const outcome = await closeInProcess({ store, id: job.id, env, deps });
     if (outcome.status !== "closed") return { ok: false, id: job.id, reason: `${outcome.step}: ${outcome.reason}` };
     const closed = jobView(await store.jobs.getJob(job.id));
-    return { ok: true, job: closed, worktree: worktreeEntry(closed, outcome.worktree) };
+    return { ok: true, job: closed, worktree: worktreeEntry(closed, outcome.worktree), accepted: outcome.accepted ?? [] };
   } catch (err) {
     return { ok: false, id: job.id, reason: err?.message ?? String(err) };
   }
@@ -92,11 +92,13 @@ export async function closeMerged({ store, prStates, env, deps = null, limit = C
   const closed = [];
   const refused = [];
   const worktrees = [];
+  const decisions = [];
   for (const job of toClose) {
     const result = await attemptClose(job, store, env, deps);
     if (result.ok) closed.push(result.job);
     else refused.push({ id: result.id, reason: result.reason });
     if (result.worktree) worktrees.push(result.worktree);
+    if (result.accepted) decisions.push(...result.accepted.map((entry) => ({ job_id: job.id, ...entry })));
   }
-  return { closed, refused, undetermined: stillUndetermined, worktrees };
+  return { closed, refused, undetermined: stillUndetermined, worktrees, decisions };
 }

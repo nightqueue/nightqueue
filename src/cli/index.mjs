@@ -116,7 +116,7 @@ commands:
   queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)
   queue run [--job | --watch] [--max]       start the runner detached, one job at a time; --max <n> exits after n jobs, --foreground runs it here, --stop ends a watcher
   queue cancel <id> [--reason "..."]        cancel a pending, gated, done, failed or orphaned job; a done or failed one also releases its worktree
-  queue close <id> | --merged               merge a done job's pull request and close the job: preflight, conflict, merge, settle; detached unless --foreground; --merged closes every done job whose pull request is merged; --decisions accept|reject|keep settles the decisions they proposed
+  queue close <id> | --merged               merge a done job's pull request and close the job: preflight, conflict, merge, settle; detached unless --foreground; --merged closes every done job whose pull request is merged; the decisions a job proposed are accepted as it closes
   queue retry <id> [--note] [--fresh]       send a gated, failed or cancelled job back to the queue; --run starts it detached
   queue repair [<id>] [--from-disk]         re-classify a gated or failed job from its own log; corrects a lost PR link; bare, replays every run's pending writes; --from-disk recreates the jobs the table lost from their runs on disk
   queue pause | resume                      stop claiming new jobs, or claim again

@@ -8,7 +8,6 @@ import { launchOperator } from "../host/operator.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { ALL_PROJECTS } from "../memory/roadmap.mjs";
-import { decisionRef } from "../memory/scope.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
@@ -36,11 +35,6 @@ import {
   noticeNarration,
 } from "../queue/narrate.mjs";
 import { blockerLines, claimBlocker } from "../queue/claim.mjs";
-import {
-  PROPOSAL_CHOICES,
-  requireProposalChoice,
-  settleJobProposals,
-} from "../queue/proposals.mjs";
 import { worktreeLine } from "../queue/close.mjs";
 import { cancelJobAndWorktree } from "../queue/cancel.mjs";
 import { closeMerged, CLOSE_MERGED_DEADLINE_MS } from "../queue/close-merged.mjs";
@@ -66,7 +60,7 @@ import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue
 import { parseWallClock } from "../queue/window.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { keyOption, registerProject } from "./project.mjs";
-import { choose, confirm } from "./prompt.mjs";
+import { confirm } from "./prompt.mjs";
 import { runtimeLabel } from "./runtime-versions.mjs";
 import { itemRef, jobRef, parseJobRef } from "../memory/refs.mjs";
 
@@ -75,7 +69,7 @@ export const USAGE = {
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
-  close: "nightqueue queue close <id> [--force] [--foreground] [--decisions accept|reject|keep] [--json], or nightqueue queue close --merged [--decisions accept|reject|keep] [--json]",
+  close: "nightqueue queue close <id> [--force] [--foreground] [--json], or nightqueue queue close --merged [--json]",
   retry: "nightqueue queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
   repair: "nightqueue queue repair [<id>] [--from-disk] [--json]",
   pause: "nightqueue queue pause",
@@ -1164,42 +1158,11 @@ async function runCancel(argv, ctx) {
   if (worktree) ctx.out(worktreeLine(worktree));
 }
 
-const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" }, decisions: { type: "string" }, force: { type: "boolean" }, foreground: { type: "boolean" } };
+const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" }, force: { type: "boolean" }, foreground: { type: "boolean" } };
 
-// The question a terminal is asked for one open proposal of a job it just closed.
-function proposalQuestion(row) {
-  return `decision ${decisionRef(row)} "${row.title}" of ${jobRef(row.job_id)}: accept / reject / keep? [keep] `;
-}
-
-// How each proposal of a closed job is settled: the `--decisions` choice, the terminal outside `--json`, or kept.
-function chooserFor(values, ctx) {
-  if (values.decisions !== undefined) {
-    const choice = requireProposalChoice(values.decisions);
-    return async () => choice;
-  }
-  if (ctx.stdin?.isTTY === true && values.json !== true) {
-    return (row) => choose({ stdin: ctx.stdin, stdout: ctx.stdout, question: proposalQuestion(row), choices: PROPOSAL_CHOICES, fallback: "keep" });
-  }
-  return async () => "keep";
-}
-
-// Settles the proposals of every closed job in turn; a failure is reported on stderr and never undoes a close.
-async function settleClosedJobs({ store, closed, choose: chooser, ctx }) {
-  const decisions = [];
-  for (const job of closed) {
-    try {
-      decisions.push(...(await settleJobProposals({ store, jobId: job.id, choose: chooser })));
-    } catch (err) {
-      ctx.err(`decisions of ${jobRef(job.id)} not settled: ${err?.message ?? String(err)}`);
-    }
-  }
-  return decisions;
-}
-
-// The text line a close prints for one proposal it settled or kept.
-function proposalLine(entry) {
-  const outcome = entry.action === "kept" ? "kept (proposed)" : entry.action;
-  return `decision ${entry.label} ${entry.title}: ${outcome}`;
+// The text line a close prints for one decision it accepted.
+function acceptedLine(entry) {
+  return `accepted ${entry.ref}: ${entry.title}`;
 }
 
 // One `closed job #N` line per closed job, each followed by the line of the worktree it released, when it had one.
@@ -1229,25 +1192,23 @@ function closeMergedLines({ closed, refused, undetermined, worktrees, decisions 
     ...closedJobLines(closed, worktrees),
     ...refused.map(({ id, reason }) => `${jobRef(id)} not closed: ${reason}`),
     ...undetermined.map(({ id, reason }) => `${jobRef(id)} not closed: ${reason}`),
-    ...decisions.map(proposalLine),
+    ...decisions.map(acceptedLine),
   ];
   const unchecked = undetermined.filter(isUnchecked);
   if (unchecked.length) lines.push(`${unchecked.length} job${unchecked.length === 1 ? "" : "s"} left unchecked; run nightqueue queue close --merged again`);
   return lines;
 }
 
-// Runs `queue close --merged`, which closes every done job the cache and, for the gap, gh itself confirm merged, then settles their proposals; it never fails because one pull request could not be read.
-async function runCloseMerged(values, ctx, chooser) {
+// Runs `queue close --merged`, which closes every done job the cache and, for the gap, gh itself confirm merged, accepting their proposals; it never fails because one pull request could not be read.
+async function runCloseMerged(values, ctx) {
   const prStates = ctx.prStates ?? createPrStateCache();
   try {
     const store = openStore(ctx.env);
     const deadlineMs = ctx.closeMergedDeadlineMs ?? CLOSE_MERGED_DEADLINE_MS;
     const deps = ctx.closeDeps ?? null;
     const merged = await closeMerged({ store, prStates, env: ctx.env, deps, deadlineMs, onChecking: (n) => reportChecking(n, values, ctx) });
-    const decisions = await settleClosedJobs({ store, closed: merged.closed, choose: chooser, ctx });
-    const result = { ...merged, decisions };
-    if (values.json) ctx.out(JSON.stringify(result));
-    else for (const line of closeMergedLines(result)) ctx.out(line);
+    if (values.json) ctx.out(JSON.stringify(merged));
+    else for (const line of closeMergedLines(merged)) ctx.out(line);
   } finally {
     prStates.dispose();
   }
@@ -1311,28 +1272,26 @@ export function closeStepPrinter(say, tty) {
   };
 }
 
-// Prints how a foreground close ended, plus the proposals it settled, and answers 0 only when it closed the job.
-function reportCloseOutcome(id, result, values, ctx, decisions) {
-  const { status, step = null, reason = null, mergeSha = null } = result.outcome;
+// Prints how a foreground close ended, plus the decisions it accepted, and answers 0 only when it closed the job.
+function reportCloseOutcome(id, result, values, ctx) {
+  const { status, step = null, reason = null, mergeSha = null, accepted = [] } = result.outcome;
+  const decisions = accepted.map((entry) => ({ job_id: id, ...entry }));
   if (values.json) {
     ctx.out(JSON.stringify({ job: jobView(result.job, { full: true }), outcome: { status, step, reason, mergeSha }, decisions }));
   } else {
     ctx.out(closeOutcomeLine(id, result));
-    for (const entry of decisions) ctx.out(proposalLine(entry));
+    for (const entry of decisions) ctx.out(acceptedLine(entry));
   }
   return status === "closed" ? 0 : 1;
 }
 
-// Runs the closing pipeline of one job in this process and, once it closed, settles the job's proposals.
+// Runs the closing pipeline of one job in this process, which accepts the job's proposals as it closes it.
 async function runCloseForeground(id, values, ctx) {
-  const chooser = chooserFor(values, ctx);
   const result = await closeInThisProcess(id, values, ctx);
-  const closed = result.outcome.status === "closed" ? [jobView(result.job)] : [];
-  const decisions = await settleClosedJobs({ store: openStore(ctx.env), closed, choose: chooser, ctx });
-  return reportCloseOutcome(id, result, values, ctx, decisions);
+  return reportCloseOutcome(id, result, values, ctx);
 }
 
-// Starts the close of a job detached, handing the child the `--decisions` choice when one was given, and says how to follow it.
+// Starts the close of a job detached and says how to follow it.
 async function runCloseDetached(id, values, ctx) {
   const started = await startCloseDetached({
     store: openStore(ctx.env),
@@ -1341,7 +1300,6 @@ async function runCloseDetached(id, values, ctx) {
     env: ctx.env,
     spawnImpl: ctx.spawnImpl,
     killImpl: ctx.killImpl,
-    decisions: values.decisions === undefined ? null : requireProposalChoice(values.decisions),
   });
   if (values.json) {
     ctx.out(JSON.stringify({ started: true, jobId: id, pid: started.pid, logPath: started.logPath }));
@@ -1354,10 +1312,13 @@ async function runCloseDetached(id, values, ctx) {
 
 // Runs `queue close`: the closing pipeline on one done job with a pull request, detached unless --foreground, or `--merged` for every done job the pull request state confirms merged.
 async function runClose(argv, ctx) {
+  if (argv.some((arg) => arg === "--decisions" || arg.startsWith("--decisions="))) {
+    throw new UserError(`\`--decisions\` no longer exists: a close accepts the decisions its job proposed; usage: ${USAGE.close}`);
+  }
   const { values, positionals } = parseCommand(argv, CLOSE_OPTIONS);
   if (values.merged === true) {
     checkArgs(positionals, { max: 0, usage: USAGE.close });
-    return await runCloseMerged(values, ctx, chooserFor(values, ctx));
+    return await runCloseMerged(values, ctx);
   }
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.close });
   const id = parseJobRef(positionals[0]);
