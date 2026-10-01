@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { getDecision, getDecisionByNumber, saveDecision } from "../src/memory/decisions.mjs";
 import { addJob, getJob } from "../src/memory/jobs.mjs";
-import { getRoadmapItem, saveRoadmapItem } from "../src/memory/roadmap.mjs";
+import { getIssue, saveIssue } from "../src/memory/issues.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, orgIdOf, projectIdOf, seedDoneJob } from "../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
@@ -45,24 +45,24 @@ function makeRefsHome(t, name) {
   saveDecision(decision(alpha, "alpha logs as json"), env);
   saveDecision(decision({ projectId: projectIdOf(env, "beta") }, "beta ships weekly"), env);
   saveDecision(decision({ orgId: orgIdOf(env, "acme") }, "every repo runs one node"), env);
-  const item = saveRoadmapItem({ type: "bug", ...alpha, title: "alpha crashes" }, env);
+  const item = saveIssue({ type: "bug", ...alpha, title: "alpha crashes" }, env);
   ok(env, ["project", "key", "alpha", "NQ"], cwd);
   ok(env, ["org", "key", "acme", "AC"], cwd);
   return { env, cwd, elsewhere: makeDir(t, `${name}-elsewhere`), item };
 }
 
-test("roadmap show and queue add --roadmap take an item ref, old key included, and refuse an integer", (t) => {
+test("issues show and queue add --issue take an item ref, old key included, and refuse an integer", (t) => {
   const { env, cwd, elsewhere, item } = makeRefsHome(t, "cli-refs-items");
 
   for (const ref of ["NQ-1", "AP-1", "nq-1"]) {
-    assert.equal(ok(env, ["roadmap", "show", ref], elsewhere).split("\n")[0], "NQ-1 [bug] todo p5", ref);
+    assert.equal(ok(env, ["issues", "show", ref], elsewhere).split("\n")[0], "NQ-1 [bug] todo p5", ref);
   }
-  assert.match(refused(env, ["roadmap", "show", String(item.id)], elsewhere), /expected a roadmap item ref \(`<KEY>-<number>`\), got `1`/);
-  assert.match(refused(env, ["roadmap", "show", "NQ-7"], elsewhere), /unknown roadmap item `NQ-7`/);
+  assert.match(refused(env, ["issues", "show", String(item.id)], elsewhere), /expected an issue ref \(`<KEY>-<number>`\), got `1`/);
+  assert.match(refused(env, ["issues", "show", "NQ-7"], elsewhere), /unknown issue `NQ-7`/);
 
-  assert.match(refused(env, ["queue", "add", "--roadmap", "1"], cwd), /expected a roadmap item ref \(`<KEY>-<number>`\), got `1`/);
-  assert.match(ok(env, ["queue", "add", "--roadmap", "AP-1"], elsewhere), /roadmap item NQ-1 of `alpha` is now `in_progress`/);
-  assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
+  assert.match(refused(env, ["queue", "add", "--issue", "1"], cwd), /expected an issue ref \(`<KEY>-<number>`\), got `1`/);
+  assert.match(ok(env, ["queue", "add", "--issue", "AP-1"], elsewhere), /issue NQ-1 of `alpha` is now `in_progress`/);
+  assert.equal(getIssue(item.id, env).status, "in_progress");
 });
 
 test("decision show, export and update take a number, `D-<n>` or `<KEY>/D-<n>`, old keys included", (t) => {

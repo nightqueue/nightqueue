@@ -18,7 +18,7 @@ import * as org from "./org.mjs";
 import * as project from "./project.mjs";
 import * as queue from "./queue.mjs";
 import * as reflect from "./reflect.mjs";
-import * as roadmap from "./roadmap.mjs";
+import * as issues from "./issues.mjs";
 import * as runCommand from "./run.mjs";
 import * as sandbox from "./sandbox.mjs";
 import * as setup from "./setup.mjs";
@@ -41,7 +41,7 @@ const COMMANDS = new Map([
   ["embed", embed.run],
   ["memory", memory.run],
   ["decision", decision.run],
-  ["roadmap", roadmap.run],
+  ["issues", issues.run],
   ["queue", queue.run],
   ["verify", verify.run],
   ["sandbox", sandbox.run],
@@ -54,7 +54,7 @@ const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
 const HELP_OPTIONS = new Set(["--help", "-h"]);
 
-const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "roadmap", "verify", "sandbox", "libs", "open"]);
+const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "issues", "verify", "sandbox", "libs", "open"]);
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
@@ -110,8 +110,8 @@ commands:
   decision export <number|ref> [--dir] [--force]  write one decision as a markdown file (default: docs, folder decisions, of the current directory); never writes the database
   decision import <file.md> [--status] [--superseded-by <n|ref>] [--supersedes <n|ref,...>] [--unrelated <n|ref,...>]  save a markdown decision file, reviewed like decision_save, and stamp its row number into it
   decision update <number|ref> --status accepted|rejected|superseded [--superseded-by <n|ref>]  accept, reject or supersede a decision, same as decision_update
-  roadmap [--project|--org] [--status] [--priority] [--type]  print the roadmap of a project and of its org, grouped by status, p1 first; --org adds each item's project rows
-  roadmap show <ref> [--json]              print one roadmap item in full with its comment thread
+  issues [--project|--org] [--status] [--priority] [--type]  print the issues of a project and of its org, grouped by status, p1 first; --org adds each item's project rows
+  issues show <ref> [--json]               print one issue in full with its comment thread
   queue add [project] <prompt...> [--run]   enqueue an unattended /nightqueue:resolve run; --run starts it detached
   queue status [J-<id>|<PR URL>] [--json]  show one job or the table of the queue plus the counts per status
   queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)
@@ -160,7 +160,7 @@ export function onStdoutError(err) {
   stdoutClosed = true;
 }
 
-// Turns a reader that closed the pipe (`nightqueue roadmap | head`) into dropped output instead of an uncaught error; any other stream error still surfaces.
+// Turns a reader that closed the pipe (`nightqueue issues | head`) into dropped output instead of an uncaught error; any other stream error still surfaces.
 function installStdoutGuard() {
   if (stdoutGuarded) return;
   stdoutGuarded = true;

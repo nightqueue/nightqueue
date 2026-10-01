@@ -2,12 +2,12 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSy
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { jobLogPath, queuePausedPath, queueResumePath } from "../config/paths.mjs";
-import { registrationOffer, roadmapQueueTarget } from "../config/projects.mjs";
+import { registrationOffer, issueQueueTarget } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { launchOperator } from "../host/operator.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
-import { ALL_PROJECTS } from "../memory/roadmap.mjs";
+import { ALL_PROJECTS } from "../memory/issues.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
@@ -67,7 +67,7 @@ import { coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { originLabel } from "../integrations/origin.mjs";
 
 export const USAGE = {
-  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--origin <kind>:<ref>] [--roadmap <ref> [--project <name|all>] [--run-dir <dir>] [<note...>]]",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--origin <kind>:<ref>] [--issue <ref> [--project <name|all>] [--run-dir <dir>] [<note...>]]",
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
@@ -339,34 +339,34 @@ function refuseRunForAll(values) {
   }
 }
 
-// The lines the roadmap path answers with: a project item is now `in_progress`; an org item names each project row its jobs went to and the ones skipped.
-function roadmapQueuedLines({ item, jobs, skipped }) {
-  if (item.scope !== "org") return [`roadmap item ${itemRef(item)} of \`${item.project}\` is now \`in_progress\``];
+// The lines the issue path answers with: a project item is now `in_progress`; an org item names each project row its jobs went to and the ones skipped.
+function issueQueuedLines({ item, jobs, skipped }) {
+  if (item.scope !== "org") return [`issue ${itemRef(item)} of \`${item.project}\` is now \`in_progress\``];
   const lines = [
-    `roadmap item ${itemRef(item)} of org \`${item.org}\` queued for ${jobs.map((job) => `\`${job.project}\``).join(", ")}; its status is derived from its project rows`,
+    `issue ${itemRef(item)} of org \`${item.org}\` queued for ${jobs.map((job) => `\`${job.project}\``).join(", ")}; its status is derived from its project rows`,
   ];
   for (const entry of skipped) lines.push(`skipped \`${entry.project}\`: ${jobRef(entry.job_id ?? "?")} (${entry.job_status ?? "unknown"}) still holds it`);
   return lines;
 }
 
-// Queues the job a roadmap item builds; a project item owns its project, an org item needs `--project <name|all>`.
-async function addFromRoadmap(positionals, values, ctx) {
+// Queues the job an issue builds; a project item owns its project, an org item needs `--project <name|all>`.
+async function addFromIssue(positionals, values, ctx) {
   refuseRunForAll(values);
   const store = openStore(ctx.env);
-  const id = await store.roadmap.itemIdOfRef(values.roadmap);
-  const target = await roadmapQueueTarget(store, values.project);
-  const queued = await store.roadmap.queueRoadmapItem({
+  const id = await store.issues.itemIdOfRef(values.issue);
+  const target = await issueQueueTarget(store, values.project);
+  const queued = await store.issues.queueIssue({
     id,
     ...target,
     ...addLimits(values),
     operatorNote: positionals.join(" ").trim() || undefined,
     runDir: values["run-dir"],
   });
-  for (const line of roadmapQueuedLines(queued)) ctx.out(line);
+  for (const line of issueQueuedLines(queued)) ctx.out(line);
   return queued.jobs;
 }
 
-// Runs `queue add`, with the job built from the words of the command line or from the roadmap item `--roadmap` names.
+// Runs `queue add`, with the job built from the words of the command line or from the issue `--issue` names.
 async function runAdd(argv, ctx) {
   if (argv.length === 1 && ADD_HELP_FLAGS.has(argv[0])) {
     ctx.out(ADD_HELP);
@@ -375,9 +375,9 @@ async function runAdd(argv, ctx) {
   const { values, positionals } = parseAdd(argv);
   checkForegroundNeedsRun(values, USAGE.add);
   const jobs =
-    values.roadmap === undefined
+    values.issue === undefined
       ? [await addFromPrompt(positionals, values, ctx)]
-      : await addFromRoadmap(positionals, values, ctx);
+      : await addFromIssue(positionals, values, ctx);
   const job = jobs[jobs.length - 1];
   for (const earlier of jobs.slice(0, -1)) ctx.out(`queued ${jobRef(earlier.id)} for \`${earlier.project}\``);
   ctx.out(await addedLine(job, values.run === true, ctx));
@@ -393,7 +393,7 @@ const ADD_OPTIONS = {
   run: { type: "boolean" },
   foreground: { type: "boolean" },
   yes: { type: "boolean" },
-  roadmap: { type: "string" },
+  issue: { type: "string" },
   "run-dir": { type: "string" },
   project: { type: "string" },
   tier: { type: "string" },
@@ -447,10 +447,10 @@ function splitAddArgv(argv) {
 function parseAdd(argv) {
   const { optionTokens, words } = splitAddArgv(argv);
   const { values } = parseCommand(optionTokens, ADD_OPTIONS);
-  if (values.roadmap === undefined && values["run-dir"] !== undefined) {
-    throw new UserError(`\`--run-dir\` goes with \`--roadmap\`; usage: ${USAGE.add}`);
+  if (values.issue === undefined && values["run-dir"] !== undefined) {
+    throw new UserError(`\`--run-dir\` goes with \`--issue\`; usage: ${USAGE.add}`);
   }
-  if (values.roadmap === undefined) checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
+  if (values.issue === undefined) checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
   return { values, positionals: words };
 }
 

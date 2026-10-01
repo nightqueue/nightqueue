@@ -23,7 +23,7 @@ function realisticTitle(i, min, max) {
     "decision numbers are scoped per owner, never global, so a project and its org never collide on the same integer",
     "the session start hook reads from the same store the CLI writes to, no separate cache that can drift out of sync",
     "a lesson is only marked injected after the block that carries it was actually returned to the caller, not before",
-    "the roadmap prompt and the session hook share one query for accepted titles so the two never disagree about scope",
+    "the issue prompt and the session hook share one query for accepted titles so the two never disagree about scope",
     "supersede is refused inside a queue job because a running job cannot see decisions another parallel job just wrote",
     "the gate reviews every overlapping proposed or accepted decision of the same owner before a save is allowed to land",
   ];

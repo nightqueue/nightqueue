@@ -6,14 +6,14 @@ import { test } from "node:test";
 import { dbPath, preV18BackupPath, preV19BackupPath } from "../../src/config/paths.mjs";
 import { closeDb, DB_USER_VERSION, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { projectFromCwd, registeredProject } from "../../src/memory/registry-access.mjs";
-import { buildLegacyHome } from "../../test-support/legacy-home.mjs";
+import { buildLegacyHome, preV22Name } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { buildV18Home } from "../../test-support/v18-home.mjs";
 
 const { DatabaseSync } = await import("node:sqlite");
 
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
-const TABLES = ["orgs", "projects", "roadmap_items", "roadmap_comments", "roadmap_item_projects", "decisions", "jobs", "lessons", "memory"];
+const TABLES = ["orgs", "projects", "issues", "issue_comments", "issue_projects", "decisions", "jobs", "lessons", "memory"];
 
 // A checkout directory the fixture registers for `nightqueue`.
 function checkout(t) {
@@ -40,9 +40,9 @@ function readRaw(file, read) {
   }
 }
 
-// The row count of every table the fixture seeds.
-function counts(db) {
-  return Object.fromEntries(TABLES.map((table) => [table, db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n]));
+// The row count of every table the fixture seeds, each read under the name the database gives it.
+function counts(db, nameOf = (table) => table) {
+  return Object.fromEntries(TABLES.map((table) => [table, db.prepare(`SELECT COUNT(*) AS n FROM ${nameOf(table)}`).get().n]));
 }
 
 // The schema version of the database on disk, read without migrating it.
@@ -66,17 +66,17 @@ function schemaOf(db) {
 test("a v18 home migrates to v19: row counts kept, items numbered per owner, keys unique, decision numbers unchanged, a pre-v19 copy", (t) => {
   const { env, ids, fixture } = v18Home(t, "v19-migrate");
   const before = readRaw(dbPath(env), (raw) => ({
-    counts: counts(raw),
+    counts: counts(raw, preV22Name),
     decisions: raw.prepare("SELECT id, number FROM decisions ORDER BY id").all().map((row) => ({ ...row })),
   }));
   const db = openDb(env);
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.deepEqual(counts(db), before.counts, "a table lost or gained rows");
 
-  const numbers = db.prepare("SELECT id, number FROM roadmap_items ORDER BY id").all().map((row) => [row.id, row.number]);
+  const numbers = db.prepare("SELECT id, number FROM issues ORDER BY id").all().map((row) => [row.id, row.number]);
   assert.deepEqual(numbers, [[1, 1], [2, 1], [3, 1], [5, 2], [6, 2], [7, 2], [8, 3]]);
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM (SELECT project_id, number FROM roadmap_items WHERE scope = 'project' GROUP BY project_id, number HAVING COUNT(*) > 1)").get().n, 0);
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM (SELECT org_id, number FROM roadmap_items WHERE scope = 'org' GROUP BY org_id, number HAVING COUNT(*) > 1)").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM (SELECT project_id, number FROM issues WHERE scope = 'project' GROUP BY project_id, number HAVING COUNT(*) > 1)").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM (SELECT org_id, number FROM issues WHERE scope = 'org' GROUP BY org_id, number HAVING COUNT(*) > 1)").get().n, 0);
 
   const keys = Object.fromEntries(db.prepare("SELECT id, key FROM projects UNION ALL SELECT id, key FROM orgs").all().map((row) => [row.id, row.key]));
   assert.deepEqual(
@@ -89,19 +89,19 @@ test("a v18 home migrates to v19: row counts kept, items numbered per owner, key
   assert.ok(readFileSync(preV19BackupPath(env)).equals(fixture), "the pre-v19 copy is not the v18 database byte for byte");
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
-  assert.deepEqual(db.prepare("SELECT rowid FROM roadmap_items_fts WHERE roadmap_items_fts MATCH 'item'").all().length, 7);
+  assert.deepEqual(db.prepare("SELECT rowid FROM issues_fts WHERE issues_fts MATCH 'item'").all().length, 7);
 });
 
 test("a second open of a migrated home changes nothing and takes no second copy", (t) => {
   const { env } = v18Home(t, "v19-reopen");
   const db = openDb(env);
   const schema = schemaOf(db);
-  const rows = db.prepare("SELECT * FROM roadmap_items ORDER BY id").all().map((row) => ({ ...row }));
+  const rows = db.prepare("SELECT * FROM issues ORDER BY id").all().map((row) => ({ ...row }));
   const copied = statSync(preV19BackupPath(env)).mtimeMs;
   closeDb(env);
   const again = openDb(env);
   assert.deepEqual(schemaOf(again), schema);
-  assert.deepEqual(again.prepare("SELECT * FROM roadmap_items ORDER BY id").all().map((row) => ({ ...row })), rows);
+  assert.deepEqual(again.prepare("SELECT * FROM issues ORDER BY id").all().map((row) => ({ ...row })), rows);
   assert.equal(again.prepare("SELECT total_changes() AS n").get().n, 0, "a second open wrote to the database");
   assert.equal(statSync(preV19BackupPath(env)).mtimeMs, copied, "a second open took another copy");
 });
@@ -138,7 +138,7 @@ test("a v17 home reaches v19 in one open, keeping both the pre-v18 and the pre-v
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.equal(readRaw(preV18BackupPath(env), (raw) => schemaVersionOn(raw)), 17);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
-  assert.deepEqual(db.prepare("SELECT number FROM roadmap_items ORDER BY id").all().map((row) => row.number), [1, 2]);
+  assert.deepEqual(db.prepare("SELECT number FROM issues ORDER BY id").all().map((row) => row.number), [1, 2]);
   assert.equal(db.prepare("SELECT key FROM projects WHERE name = 'alpha'").get().key, "AP");
 });
 

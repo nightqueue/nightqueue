@@ -15,10 +15,10 @@
 
 /**
  * Every writer that can move a job's status (`JOB_STATUS_WRITERS` of `local.mjs`) is followed, once it
- * reports success, by `roadmap.followJob`: one reconciler reads the job's current row and moves each
- * linked roadmap item through the `JOB_TO_ROADMAP` table of `roadmap-workflow.mjs`. A refused write
+ * reports success, by `issues.followJob`: one reconciler reads the job's current row and moves each
+ * linked issue through the `JOB_TO_ISSUE` table of `issue-workflow.mjs`. A refused write
  * follows nothing, a failure of the follow never costs the job write, and `sweepOrphans` re-syncs,
- * on every claim cycle, whatever a missed event left behind (`roadmap.followDriftedJobs`).
+ * on every claim cycle, whatever a missed event left behind (`issues.followDriftedJobs`).
  * @typedef {object} JobsDomain
  * @property {(spec: object) => Promise<object>} addJob the job's project by `projectId`; a `slug` binds the job to a run, refused in the same transaction while a job not yet closed is bound to it; an `origin` `{kind, ref}` is validated, otherwise one is detected in the prompt, stored in `jobs.origin` (v21) and answered as `origin`
  * @property {(spec: object) => Promise<object|null>} claimNextJob
@@ -52,7 +52,7 @@
  * @property {(id: number, terminal: object) => Promise<boolean>} repairJobFromWitness
  * @property {(id: number, outcome: object) => Promise<boolean>} reclassifyJob the outcome re-derived from the job's own log
  * @property {(ids: number[]) => Promise<number[]>} existingJobIds the ids of the list that have a row, read-only
- * @property {(spec: object) => Promise<"recovered"|"exists"|"project-missing">} recoverJob recreates a lost row from its run on disk with a `result.recovered` marker; not a status writer, so no roadmap follow runs
+ * @property {(spec: object) => Promise<"recovered"|"exists"|"project-missing">} recoverJob recreates a lost row from its run on disk with a `result.recovered` marker; not a status writer, so no issue follow runs
  * @property {(id: number, spec: object) => Promise<boolean>} correctJobPrAttribution moves a job's pull request URL and swaps its one notice line in a single compare-and-swap; false means refused, nothing written
  * @property {() => Promise<boolean>} hasClaimablePending
  * @property {() => Promise<object|null>} peekNextJob
@@ -137,24 +137,24 @@
  */
 
 /**
- * @typedef {object} RoadmapDomain
- * @property {(id: number) => Promise<object|null>} getRoadmapItem
- * @property {(id: number, options?: {viewer?: string|null}) => Promise<object>} getRoadmapItemDetail one item untruncated with its comment thread; a project viewer (by id) reads only what its project sees
- * @property {(item?: object) => Promise<object>} saveRoadmapItem `type` is required
- * @property {(id: number, patch?: object) => Promise<object>} updateRoadmapItem a move back from review or done appends `reopened`, signed by `patch.author` (the operator by default)
- * @property {(spec: {id: number, body: string, author?: string, viewer?: string|null}) => Promise<object>} addRoadmapComment (viewer: a project id) appends a `note`; comments are append-only
- * @property {(jobId: number) => Promise<string|null>} roadmapRefOfJob `<KEY>-<number>` of the item a job was queued from, or null
+ * @typedef {object} IssuesDomain
+ * @property {(id: number) => Promise<object|null>} getIssue
+ * @property {(id: number, options?: {viewer?: string|null}) => Promise<object>} getIssueDetail one item untruncated with its comment thread; a project viewer (by id) reads only what its project sees
+ * @property {(item?: object) => Promise<object>} saveIssue `type` is required
+ * @property {(id: number, patch?: object) => Promise<object>} updateIssue a move back from review or done appends `reopened`, signed by `patch.author` (the operator by default)
+ * @property {(spec: {id: number, body: string, author?: string, viewer?: string|null}) => Promise<object>} addIssueComment (viewer: a project id) appends a `note`; comments are append-only
+ * @property {(jobId: number) => Promise<string|null>} issueRefOfJob `<KEY>-<number>` of the item a job was queued from, or null
  * @property {(ref: string) => Promise<number>} itemIdOfRef the id of the item a ref (`<KEY>-<number>`, current or old key) names, refusing an unknown one
- * @property {(options?: {dryRun?: boolean}) => Promise<{items: number, written: number, skipped: number}>} backfillRoadmap the one-off synthesis of the comments of items linked before comments existed; idempotent
- * @property {(owner: object, filters?: {status?: string[], priority?: number[], type?: string[]}) => Promise<object>} listRoadmap every item the owner sees, in workflow order, then org first, then priority (1 first) and position; an org item carries `project_status` (a project's own row) or `projects` (the org's matrix)
- * @property {(spec: {query?: string, file?: string, projectId?: string|null, orgId?: string, limit?: number}) => Promise<object[]>} searchRoadmap up to five items the owner sees matching the text or a file path its jobs touched
- * @property {(id: number) => Promise<object>} queueableRoadmapItem
- * @property {(id: number, jobId: number) => Promise<boolean>} linkRoadmapItemJob links an open item to its job and moves it to `in_progress`; false means a concurrent caller linked it first
+ * @property {(options?: {dryRun?: boolean}) => Promise<{items: number, written: number, skipped: number}>} backfillIssues the one-off synthesis of the comments of items linked before comments existed; idempotent
+ * @property {(owner: object, filters?: {status?: string[], priority?: number[], type?: string[]}) => Promise<object>} listIssues every item the owner sees, in workflow order, then org first, then priority (1 first) and position; an org item carries `project_status` (a project's own row) or `projects` (the org's matrix)
+ * @property {(spec: {query?: string, file?: string, projectId?: string|null, orgId?: string, limit?: number}) => Promise<object[]>} searchIssues up to five items the owner sees matching the text or a file path its jobs touched
+ * @property {(id: number) => Promise<object>} queueableIssue
+ * @property {(id: number, jobId: number) => Promise<boolean>} linkIssueJob links an open item to its job and moves it to `in_progress`; false means a concurrent caller linked it first
  * @property {(jobId: number) => Promise<number>} followJob moves the items and org project rows linked to a job by what its current row means, re-deriving each org item; idempotent, it returns how many moved
  * @property {() => Promise<number>} followDriftedJobs follows every job whose linked items or rows missed its last status
- * @property {() => Promise<object[]>} roadmapDrift the linked items and rows whose status disagrees with their job's row, and the org items whose status disagrees with their rows, read without writing
- * @property {(spec?: object) => Promise<string>} buildRoadmapPrompt
- * @property {(spec?: object) => Promise<object>} queueRoadmapItem `{job, jobs, skipped, item, targetProject}`: an org item queued for `all` fathers one job per project
+ * @property {() => Promise<object[]>} issueDrift the linked items and rows whose status disagrees with their job's row, and the org items whose status disagrees with their rows, read without writing
+ * @property {(spec?: object) => Promise<string>} buildIssuePrompt
+ * @property {(spec?: object) => Promise<object>} queueIssue `{job, jobs, skipped, item, targetProject}`: an org item queued for `all` fathers one job per project
  */
 
 /**
@@ -222,7 +222,7 @@
  * @property {MemoryDomain} memory
  * @property {IndexDomain} index
  * @property {DecisionsDomain} decisions
- * @property {RoadmapDomain} roadmap
+ * @property {IssuesDomain} issues
  * @property {OrgsDomain} orgs
  * @property {ProjectsDomain} projects
  * @property {DbDomain} db
@@ -329,24 +329,24 @@ export const STORE_CONTRACT = Object.freeze({
     "searchDecisionsSemantic",
     "recallDecisions",
   ],
-  roadmap: [
-    "getRoadmapItem",
-    "getRoadmapItemDetail",
-    "saveRoadmapItem",
-    "updateRoadmapItem",
-    "addRoadmapComment",
-    "roadmapRefOfJob",
+  issues: [
+    "getIssue",
+    "getIssueDetail",
+    "saveIssue",
+    "updateIssue",
+    "addIssueComment",
+    "issueRefOfJob",
     "itemIdOfRef",
-    "backfillRoadmap",
-    "listRoadmap",
-    "searchRoadmap",
-    "queueableRoadmapItem",
-    "linkRoadmapItemJob",
+    "backfillIssues",
+    "listIssues",
+    "searchIssues",
+    "queueableIssue",
+    "linkIssueJob",
     "followJob",
     "followDriftedJobs",
-    "roadmapDrift",
-    "buildRoadmapPrompt",
-    "queueRoadmapItem",
+    "issueDrift",
+    "buildIssuePrompt",
+    "queueIssue",
   ],
   orgs: ["list", "byName", "byId", "add", "rename", "setKey", "suggestKey", "keyAliases", "remove"],
   projects: ["list", "byName", "byId", "integrations", "setIntegrations", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
@@ -383,12 +383,12 @@ export const READ_ONLY_METHODS = Object.freeze([
   "decisions.getDecisionByNumber",
   "decisions.decisionOfRef",
   "decisions.decisionIdOfRef",
-  "roadmap.listRoadmap",
-  "roadmap.getRoadmapItemDetail",
-  "roadmap.roadmapRefOfJob",
-  "roadmap.itemIdOfRef",
-  "roadmap.roadmapDrift",
-  "roadmap.searchRoadmap",
+  "issues.listIssues",
+  "issues.getIssueDetail",
+  "issues.issueRefOfJob",
+  "issues.itemIdOfRef",
+  "issues.issueDrift",
+  "issues.searchIssues",
   "orgs.list",
   "orgs.byName",
   "orgs.byId",

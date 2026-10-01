@@ -9,7 +9,7 @@ import { detectOrigin, explicitOrigin, parseOriginColumn } from "../../src/integ
 import { withProviders } from "../../src/integrations/registry.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, getJob, jobView } from "../../src/memory/jobs.mjs";
-import { queueRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { queueIssue, saveIssue } from "../../src/memory/issues.mjs";
 import { createServer } from "../../src/mcp/tools.mjs";
 import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import {
@@ -109,14 +109,14 @@ test("an unreadable origin column reads as no origin", () => {
   assert.equal(parseOriginColumn(undefined), null);
 });
 
-test("the roadmap path records the explicit origin and detects one in the item", async (t) => {
-  const { env, projectId } = makeOriginHome(t, "origin-roadmap");
+test("the issue path records the explicit origin and detects one in the item", async (t) => {
+  const { env, projectId } = makeOriginHome(t, "origin-issue");
   await withProviders(originProviders(), async () => {
-    const plain = saveRoadmapItem({ type: "bug", projectId, title: "fix the worker" }, env);
-    const explicit = await queueRoadmapItem({ id: plain.id, origin: { kind: "tracker", ref: "7" } }, env);
+    const plain = saveIssue({ type: "bug", projectId, title: "fix the worker" }, env);
+    const explicit = await queueIssue({ id: plain.id, origin: { kind: "tracker", ref: "7" } }, env);
     assert.deepEqual(explicit.job.origin, { kind: "tracker", ref: "7" });
-    const linked = saveRoadmapItem({ type: "bug", projectId, title: "crash on boot", detail: `reported at ${TRACKER_URL}` }, env);
-    const detected = await queueRoadmapItem({ id: linked.id }, env);
+    const linked = saveIssue({ type: "bug", projectId, title: "crash on boot", detail: `reported at ${TRACKER_URL}` }, env);
+    const detected = await queueIssue({ id: linked.id }, env);
     assert.deepEqual(detected.job.origin, { kind: "tracker", ref: "4507" });
     assert.deepEqual(jobView(getJob(detected.job.id, env)).origin, { kind: "tracker", ref: "4507" });
   });
@@ -195,12 +195,12 @@ test("queue_add with `key` and no `register` answers exactly as without it", asy
   assert.equal(Object.hasOwn(withKey, "origin"), false);
 });
 
-test("queue_add on the roadmap branch forwards an explicit origin", async (t) => {
-  const { env, projectId } = makeOriginHome(t, "origin-queue-add-roadmap");
-  const item = saveRoadmapItem({ type: "bug", projectId, title: "fix the worker" }, env);
+test("queue_add on the issue branch forwards an explicit origin", async (t) => {
+  const { env, projectId } = makeOriginHome(t, "origin-queue-add-issue");
+  const item = saveIssue({ type: "bug", projectId, title: "fix the worker" }, env);
   const client = await connectInProcess(t, env);
   await withProviders(originProviders(), async () => {
-    const answer = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, origin: { kind: "tracker", ref: "77" } } }));
+    const answer = payloadOf(await client.callTool({ name: "queue_add", arguments: { issue_id: item.ref, origin: { kind: "tracker", ref: "77" } } }));
     assert.deepEqual(answer.origin, { kind: "tracker", ref: "77", connection: "none", detail: "project has no tracker integration" });
     assert.deepEqual(jobView(getJob(answer.id, env)).origin, { kind: "tracker", ref: "77" });
   });

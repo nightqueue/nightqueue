@@ -96,7 +96,7 @@ test("a build whose providers declare no settings shows no integrations and refu
 
     const client = await connectInProcess(t, env);
     const answer = payloadOf(await client.callTool({ name: "project_integrations", arguments: { project: "alpha", action: "show" } }));
-    assert.deepEqual(answer, { project: "alpha", integrations: null, providers: [{ kind: "github", keys: [] }], contract: 2 });
+    assert.deepEqual(answer, { project: "alpha", integrations: null, providers: [{ kind: "github", keys: [] }], contract: 3 });
     const mcpRefused = await client.callTool({ name: "project_integrations", arguments: { project: "alpha", action: "set", key: "github.x", value: "y" } });
     assert.equal(mcpRefused.isError, true);
     assert.ok(textOf(mcpRefused).includes(NO_SETTINGS), textOf(mcpRefused));

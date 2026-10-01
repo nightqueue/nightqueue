@@ -4,8 +4,8 @@ import { lockPath, runIfLockFree } from "../../config/lock.mjs";
 import { configPath } from "../../config/paths.mjs";
 import { loadRawConfig, serialize, writeFileAtomic } from "../../config/store.mjs";
 import { hasColumn } from "../columns.mjs";
-import { DATA_TABLES } from "../ddl.mjs";
 import * as registry from "../registry.mjs";
+import { DATA_TABLES_V20 } from "./v20-shape.mjs";
 
 // The registry a v17 `config.json` carried (`projects`, `orgs`, `defaultOrg` by name), read with the v17 normalization, and
 // the two things done with it: the import into the database and, once imported, the strip of the file.
@@ -98,7 +98,7 @@ function historyOrgNames(db) {
 
 // The project names the data rows own something under, in table order.
 function historyProjectNames(db) {
-  return DATA_TABLES.filter((table) => hasColumn(db, table, "project")).flatMap((table) =>
+  return DATA_TABLES_V20.filter((table) => hasColumn(db, table, "project")).flatMap((table) =>
     db.prepare(`SELECT project FROM ${table} WHERE project IS NOT NULL GROUP BY project ORDER BY MIN(rowid)`).all().map((row) => row.project),
   );
 }

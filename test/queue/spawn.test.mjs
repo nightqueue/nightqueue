@@ -172,7 +172,7 @@ test("the prompt asks for the pipeline, the slug line and the gate, and carries 
 });
 
 test("a note the prompt already carries as its Operator note section is not repeated as a gate answer", () => {
-  const prompt = "## Task\nfix it\n\n## Operator note\nkeep the API\n\n## Roadmap item\nRoadmap: x";
+  const prompt = "## Task\nfix it\n\n## Operator note\nkeep the API\n\n## Issue\nIssue: x";
   const queued = buildPrompt({ job: { ...JOB, prompt, operator_note: "keep the API" } });
   assert.equal(queued.split("keep the API").length - 1, 1);
   assert.equal(queued.includes("OPERATOR ANSWER TO THE GATE"), false);

@@ -18,6 +18,7 @@ import {
   preV18BackupPath,
   preV19BackupPath,
   preV20BackupPath,
+  preV22BackupPath,
   queuePausedPath,
   secretsPath,
   shimNames,
@@ -402,37 +403,37 @@ async function checkDatabase(ctx) {
 }
 
 // One drifted entry: an item or a project row behind its job, or an org item whose status disagrees with its rows.
-function roadmapDriftEntry(row) {
+function issueDriftEntry(row) {
   if (row.job_id === null) return `${row.ref} ${row.status} (derived from its project rows: ${row.expected})`;
   const where = row.project ? ` row ${row.project}` : "";
   return `${row.ref}${where} ${row.status} (${jobRef(row.job_id)} ${row.job_status}, expected ${row.expected})`;
 }
 
-// The detail of the roadmap entries whose status disagrees with their job or their rows: how many, then each with its status and the expected one.
-function roadmapDriftDetail(rows) {
-  const noun = rows.length === 1 ? "roadmap status out of step" : "roadmap statuses out of step";
-  return `${rows.length} ${noun}: ${rows.map(roadmapDriftEntry).join(", ")}`;
+// The detail of the issue entries whose status disagrees with their job or their rows: how many, then each with its status and the expected one.
+function issueDriftDetail(rows) {
+  const noun = rows.length === 1 ? "issue status out of step" : "issue statuses out of step";
+  return `${rows.length} ${noun}: ${rows.map(issueDriftEntry).join(", ")}`;
 }
 
 // What to do about the drift: the claim cycle re-syncs what is behind a job; an org item is re-derived at its next row change or set by hand.
-function roadmapDriftHint(rows) {
+function issueDriftHint(rows) {
   const hints = [];
   if (rows.some((row) => row.job_id !== null)) hints.push("the next `nightqueue queue run` claim cycle re-syncs the ones behind a job");
   if (rows.some((row) => row.job_id === null)) {
-    hints.push("an org item is re-derived at its next project row change, or set its status with `roadmap_update`");
+    hints.push("an org item is re-derived at its next project row change, or set its status with `issue_update`");
   }
   return hints.join("; ");
 }
 
-// Reports the roadmap items and rows whose status disagrees with their linked job, and the org items whose status disagrees with their rows, reading read-only.
-async function checkRoadmapWorkflow(ctx) {
+// Reports the issues and rows whose status disagrees with their linked job, and the org items whose status disagrees with their rows, reading read-only.
+async function checkIssueWorkflow(ctx) {
   const store = openStoreReadOnly(ctx.env);
   try {
-    const rows = await store.roadmap.roadmapDrift();
-    if (!rows.length) return check("roadmap workflow", "ok", "every linked item follows its job");
-    return check("roadmap workflow", "warn", roadmapDriftDetail(rows), roadmapDriftHint(rows));
+    const rows = await store.issues.issueDrift();
+    if (!rows.length) return check("issue workflow", "ok", "every linked item follows its job");
+    return check("issue workflow", "warn", issueDriftDetail(rows), issueDriftHint(rows));
   } catch (err) {
-    return check("roadmap workflow", "warn", err?.message ?? String(err), `inspect ${dbPath(ctx.env)}`);
+    return check("issue workflow", "warn", err?.message ?? String(err), `inspect ${dbPath(ctx.env)}`);
   } finally {
     await store.close();
   }
@@ -442,7 +443,7 @@ async function checkRoadmapWorkflow(ctx) {
 async function checkDatabaseAndRows(ctx) {
   const database = await checkDatabase(ctx);
   if (database.status !== "ok") return [database];
-  return [database, await checkRoadmapWorkflow(ctx)];
+  return [database, await checkIssueWorkflow(ctx)];
 }
 
 const ORPHAN_PREFIXES = [".fuse_hidden", ".nfs"];
@@ -716,9 +717,9 @@ function quarantinedFiles(env) {
   }
 }
 
-// Every backup of the home: the copies taken before the v18, v19 and v20 migrations, then the files of each quarantine.
+// Every backup of the home: the copies taken before the v18, v19, v20 and v22 migrations, then the files of each quarantine.
 function homeBackups(env) {
-  const copies = [preV18BackupPath(env), preV19BackupPath(env), preV20BackupPath(env)];
+  const copies = [preV18BackupPath(env), preV19BackupPath(env), preV20BackupPath(env), preV22BackupPath(env)];
   return [...copies, ...quarantinedFiles(env)].map(backupEntry).filter(Boolean);
 }
 

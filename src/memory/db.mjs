@@ -3,11 +3,12 @@ import { StoreUnavailableError, UserError } from "../config/errors.mjs";
 import { callerJobId, isRunnerHome } from "../config/job-home.mjs";
 import { dbPath, homeDir } from "../config/paths.mjs";
 import { ensureHome, loadRawConfig } from "../config/store.mjs";
-import { FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ROADMAP_FTS, ROADMAP_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
+import { FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ISSUE_FTS, ISSUE_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
 import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schemaState } from "./migration/v18.mjs";
 import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
 import { isPendingV20, migrateToV20, refuseOrphans } from "./migration/v20.mjs";
 import { migrateV21Columns } from "./migration/v21.mjs";
+import { isPendingV22, migrateToV22 } from "./migration/v22.mjs";
 import { jobRef } from "./refs.mjs";
 import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
@@ -57,12 +58,13 @@ const ONE_SHOT_STEPS = Object.freeze([
   { pending: (db) => schemaState(db) === "legacy", run: migrateToV18 },
   { pending: isPendingV19, run: migrateToV19 },
   { pending: isPendingV20, run: migrateToV20 },
+  { pending: isPendingV22, run: migrateToV22 },
 ]);
 
 // Runs every pending one-shot step in order, each gate read after the step before it committed; the orphans the last step
 // refuses are refused before the first step, so a refusal leaves an older home exactly as it was.
 function runOneShotSteps(db, env) {
-  if (ONE_SHOT_STEPS.some((step) => step.pending(db))) refuseOrphans(db, env);
+  if (ONE_SHOT_STEPS.some((step) => step.pending(db))) refuseOrphans(db, env, DB_USER_VERSION);
   for (const step of ONE_SHOT_STEPS) {
     if (step.pending(db)) step.run(db, env);
   }
@@ -72,7 +74,7 @@ function runOneShotSteps(db, env) {
 function createSchema(db) {
   db.exec(REGISTRY);
   db.exec(SCHEMA);
-  db.exec(ROADMAP_NUMBER_INDEXES);
+  db.exec(ISSUE_NUMBER_INDEXES);
   db.exec(OWNER_KEY_GUARDS);
 }
 
@@ -90,11 +92,12 @@ function migrate(db) {
   const version = db.prepare("PRAGMA user_version").get().user_version;
   if (version === 18) throw new UserError("the v19 migration did not run; nothing was stamped");
   if (version === 19) throw new UserError("the v20 migration did not run; nothing was stamped");
+  if (version === 20 || version === 21) throw new UserError("the v22 migration did not run; nothing was stamped");
   if (sharedSlugPending(db)) inTransaction(db, () => migrateSharedSlugs(db));
   db.exec(INDEXES);
   db.exec(FTS);
-  db.exec(ROADMAP_FTS);
-  db.exec(ROADMAP_NUMBER_INDEXES);
+  db.exec(ISSUE_FTS);
+  db.exec(ISSUE_NUMBER_INDEXES);
   db.exec(OWNER_KEY_GUARDS);
   migrateV21Columns(db);
   ensureDefaultOrg(db);

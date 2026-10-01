@@ -40,8 +40,8 @@ test("refs render from the row's current key and number", () => {
 });
 
 test("a ref is never rendered without its key or number", () => {
-  assert.throws(() => itemRef({ id: 9, scope: "project", project_id: "p1", number: 1 }), /roadmap item 9: its owner key or number is missing/);
-  assert.throws(() => itemRef({ id: 9, scope: "project", project_id: "p1", project_key: "NQ" }), /roadmap item 9/);
+  assert.throws(() => itemRef({ id: 9, scope: "project", project_id: "p1", number: 1 }), /issue 9: its owner key or number is missing/);
+  assert.throws(() => itemRef({ id: 9, scope: "project", project_id: "p1", project_key: "NQ" }), /issue 9/);
   assert.throws(() => decisionRef({ id: 4, scope: "org", org_id: "o1", number: 1 }), /decision 4/);
 });
 

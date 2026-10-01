@@ -51,7 +51,7 @@ Nothing leaves it.
   written notice; you answer it with one command and the job goes back to the
   queue.
 - **Orgs and projects.** One home, many repositories, grouped by org, each with
-  its own decisions log and roadmap.
+  its own decisions log and issues.
 
 ## How a job runs
 
@@ -126,8 +126,8 @@ nightqueue decision list | show <number|ref>     [--project <name> | --org <name
 nightqueue decision export <number|ref> [--dir <path>] [--force]
 nightqueue decision import <file.md> [--status <s>] [--superseded-by <n|ref>] [--supersedes <n|ref,...>] [--unrelated <n|ref,...>]
 nightqueue decision update <number|ref> --status accepted|rejected|superseded [--superseded-by <n|ref>]
-nightqueue roadmap                            [--project <name> | --org <name>]
-nightqueue roadmap show <ref>                 # NQ-12, DLW-3
+nightqueue issues                             [--project <name> | --org <name>]
+nightqueue issues show <ref>                  # NQ-12, DLW-3
 
 # home
 nightqueue org add|list|rename|key|remove|repair
@@ -175,7 +175,7 @@ follows the [code of conduct](CODE_OF_CONDUCT.md).
 |---|---|
 | [Install](docs/install.md) | `init`, what it sets up, updating, trying without installing |
 | [Queue](docs/queue.md) | jobs, runners, tiers, gates, logs, writing a job |
-| [Memory](docs/memory.md) | lessons, recall, decisions and roadmap, the MCP tools |
+| [Memory](docs/memory.md) | lessons, recall, decisions and issues, the MCP tools |
 | [CLI](docs/cli.md) | every command, configuration, `doctor` |
 | [Runtime contract](docs/runtime-contract.md) | what the pipeline and the runner promise each other |
 | [Developing](docs/developing.md) | tests, releases, contributing |

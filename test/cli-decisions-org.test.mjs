@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dbPath } from "../src/config/paths.mjs";
 import { closeDb } from "../src/memory/db.mjs";
 import { saveDecision } from "../src/memory/decisions.mjs";
-import { saveRoadmapItem } from "../src/memory/roadmap.mjs";
+import { saveIssue } from "../src/memory/issues.mjs";
 import { buildLegacyHome, legacyConfig } from "../test-support/legacy-home.mjs";
 import { DOWNGRADE_TO_V5, makeDir, makeHome, makeOrg, makeProject, orgIdOf, projectIdOf } from "../test-support/memory.mjs";
 
@@ -19,7 +19,7 @@ function runCli(env, args, { cwd } = {}) {
   return spawnSync(process.execPath, [CLI, ...args], { env, cwd, encoding: "utf8" });
 }
 
-// A home with one project of `acme`, one project of `orbit`, and one decision plus one roadmap item at each level.
+// A home with one project of `acme`, one project of `orbit`, and one decision plus one issue at each level.
 function makeOrgHome(t, name) {
   const env = makeHome(t, name);
   const cwd = makeProject(t, env, "acme-mobile-app", { org: "acme" });
@@ -27,12 +27,12 @@ function makeOrgHome(t, name) {
   saveDecision({ projectId: projectIdOf(env, "acme-mobile-app"), title: "the app owns its cache", context: "c", decision: "d", status: "accepted" }, env);
   saveDecision({ orgId: orgIdOf(env, "acme"), title: "one queue per product", context: "c", decision: "d", status: "accepted" }, env);
   saveDecision({ orgId: orgIdOf(env, "orbit"), title: "orbit decides alone", context: "c", decision: "d", status: "accepted" }, env);
-  saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "acme-mobile-app"), title: "deliver the app cache" }, env);
-  saveRoadmapItem({ type: "improvement", orgId: orgIdOf(env, "acme"), title: "raise the node version" }, env);
+  saveIssue({ type: "improvement", projectId: projectIdOf(env, "acme-mobile-app"), title: "deliver the app cache" }, env);
+  saveIssue({ type: "improvement", orgId: orgIdOf(env, "acme"), title: "raise the node version" }, env);
   return { env, cwd };
 }
 
-// A home whose database is exactly what the build before the owner scope wrote: three decisions, one roadmap item, no `scope`/`org` column, user_version 5.
+// A home whose database is exactly what the build before the owner scope wrote: three decisions, one issue, no `scope`/`org` column, user_version 5.
 function makeV5Home(t, name) {
   const env = makeHome(t, name);
   const cwd = makeDir(t, `${name}-alpha`);
@@ -51,7 +51,7 @@ function makeV5Home(t, name) {
           `old decision ${number}`,
         );
       }
-      db.prepare("INSERT INTO roadmap_items (project, title, position) VALUES (?, ?, 1)").run("alpha", "legacy roadmap item");
+      db.prepare("INSERT INTO roadmap_items (project, title, position) VALUES (?, ?, 1)").run("alpha", "legacy issue");
       db.exec(DOWNGRADE_TO_V5);
       assert.equal(
         db.prepare("PRAGMA table_info(decisions)").all().some((column) => column.name === "scope"),
@@ -76,11 +76,11 @@ test("the read commands migrate a database written before the owner scope, with 
   assert.equal(shown.status, 0, shown.stderr);
   assert.ok(shown.stdout.includes("D-2 legacy decision 2 (accepted)"), shown.stdout);
 
-  const roadmap = runCli(env, ["roadmap", "--project", "alpha"], { cwd });
-  assert.equal(roadmap.status, 0, roadmap.stderr);
-  assert.ok(roadmap.stdout.includes("todo:\n  p5 AP-1 legacy roadmap item"), roadmap.stdout);
+  const listing = runCli(env, ["issues", "--project", "alpha"], { cwd });
+  assert.equal(listing.status, 0, listing.stderr);
+  assert.ok(listing.stdout.includes("todo:\n  p5 AP-1 legacy issue"), listing.stdout);
 
-  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v21/);
+  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v22/);
 });
 
 test("a v5 database that cannot be migrated answers with the schema, never with a raw missing column", (t) => {
@@ -91,7 +91,7 @@ test("a v5 database that cannot be migrated answers with the schema, never with 
 
   const listed = runCli(env, ["decision", "list", "--project", "alpha"], { cwd });
   assert.equal(listed.status, 1, listed.stdout);
-  assert.match(listed.stderr, /schema v5 and this build needs v21/);
+  assert.match(listed.stderr, /schema v5 and this build needs v22/);
   assert.equal(listed.stderr.includes("no such column"), false, listed.stderr);
 });
 
@@ -125,17 +125,17 @@ test("decision list --org and decision show --org read one org alone, and --proj
   assert.match(unknown.stderr, /unknown org `ghost`/);
 });
 
-test("roadmap prints the org items with their owner, and --org reads that org alone", (t) => {
-  const { env, cwd } = makeOrgHome(t, "roadmap-org-list");
-  const result = runCli(env, ["roadmap"], { cwd });
+test("issues prints the org items with their owner, and --org reads that org alone", (t) => {
+  const { env, cwd } = makeOrgHome(t, "issue-org-list");
+  const result = runCli(env, ["issues"], { cwd });
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.includes("  p5 AM-1 raise the node version"), result.stdout);
   assert.ok(result.stdout.includes("  p5 AMA-1 deliver the app cache"), result.stdout);
 
-  const org = runCli(env, ["roadmap", "--org", "acme"], { cwd });
+  const org = runCli(env, ["issues", "--org", "acme"], { cwd });
   assert.equal(org.status, 0, org.stderr);
   assert.ok(org.stdout.includes("  p5 AM-1 raise the node version"));
-  assert.equal(org.stdout.includes("deliver the app cache"), false, "a project item reached an org roadmap");
+  assert.equal(org.stdout.includes("deliver the app cache"), false, "a project item reached an org listing");
 });
 
 test("a short org name stays in the NUMBER column and a long one is never glued to the status", (t) => {
@@ -161,9 +161,9 @@ test("the org read commands never create the database: a home with none has no o
   const listed = runCli(env, ["decision", "list", "--org", "acme"], { cwd });
   assert.equal(listed.status, 1, listed.stdout);
   assert.match(listed.stderr, /unknown org `acme`; existing orgs: \(none\)/);
-  const roadmap = runCli(env, ["roadmap", "--org", "acme"], { cwd });
-  assert.equal(roadmap.status, 1, roadmap.stdout);
-  assert.match(roadmap.stderr, /unknown org `acme`/);
+  const listing = runCli(env, ["issues", "--org", "acme"], { cwd });
+  assert.equal(listing.status, 1, listing.stdout);
+  assert.match(listing.stderr, /unknown org `acme`/);
   assert.equal(existsSync(dbPath(env)), false, "a read-only command created the database");
 });
 
@@ -175,25 +175,25 @@ test("the org read commands of a home with a database read an empty org without 
   const listed = runCli(env, ["decision", "list", "--org", "acme"], { cwd });
   assert.equal(listed.status, 0, listed.stderr);
   assert.equal(listed.stdout.trim(), "no decisions for org `acme`");
-  const roadmap = runCli(env, ["roadmap", "--org", "acme"], { cwd });
-  assert.equal(roadmap.status, 0, roadmap.stderr);
-  assert.equal(roadmap.stdout, "(empty)\n");
+  const listing = runCli(env, ["issues", "--org", "acme"], { cwd });
+  assert.equal(listing.status, 0, listing.stderr);
+  assert.equal(listing.stdout, "(empty)\n");
 });
 
-test("org rename carries the decisions and the roadmap items of the org with it", (t) => {
+test("org rename carries the decisions and the issues of the org with it", (t) => {
   const { env, cwd } = makeOrgHome(t, "org-rename-rows");
   const renamed = runCli(env, ["org", "rename", "acme", "acmeweb"], { cwd });
   assert.equal(renamed.status, 0, renamed.stderr);
   const listed = runCli(env, ["decision", "list", "--org", "acmeweb"], { cwd });
   assert.equal(listed.status, 0, listed.stderr);
   assert.ok(listed.stdout.includes("one queue per product"), listed.stdout);
-  assert.ok(runCli(env, ["roadmap", "--org", "acmeweb"], { cwd }).stdout.includes("raise the node version"));
+  assert.ok(runCli(env, ["issues", "--org", "acmeweb"], { cwd }).stdout.includes("raise the node version"));
   assert.equal(runCli(env, ["decision", "list", "--org", "acme"], { cwd }).status, 1);
 
   assert.ok(runCli(env, ["decision", "list", "--org", "orbit"], { cwd }).stdout.includes("orbit decides alone"));
 });
 
-test("an org with no project is still refused a removal while it owns decisions or roadmap items", (t) => {
+test("an org with no project is still refused a removal while it owns decisions or issues", (t) => {
   const { env, cwd } = makeOrgHome(t, "org-remove-rows");
   makeOrg(env, "solo");
   saveDecision({ orgId: orgIdOf(env, "solo"), title: "solo decides", context: "c", decision: "d" }, env);

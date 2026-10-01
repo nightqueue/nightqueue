@@ -89,13 +89,13 @@ test("every domain of the store writes and reads back on a real home", async (t)
   });
   assert.equal((await store.decisions.listDecisions({ projectId: projectIdOf(env, "alpha") })).length, 1);
 
-  await store.roadmap.saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "close the boundary" });
-  const roadmap = await store.roadmap.listRoadmap(projectIdOf(env, "alpha"));
+  await store.issues.saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "close the boundary" });
+  const listing = await store.issues.listIssues(projectIdOf(env, "alpha"));
   assert.deepEqual(
-    roadmap.items.map((item) => [item.title, item.status, item.priority]),
+    listing.items.map((item) => [item.title, item.status, item.priority]),
     [["close the boundary", "todo", 5]],
   );
-  assert.deepEqual(await store.roadmap.roadmapDrift(), []);
+  assert.deepEqual(await store.issues.issueDrift(), []);
 
   const acme = await store.orgs.add("acme");
   assert.equal((await store.orgs.byName("acme")).id, acme.id);
@@ -122,23 +122,23 @@ test("listWithSlug answers the jobs a witness could speak for", async (t) => {
   );
 });
 
-// A store on a fresh home with one project and one roadmap item queued as a job of its own.
+// A store on a fresh home with one project and one issue queued as a job of its own.
 async function queuedItem(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const store = createLocalStore(env);
-  const item = await store.roadmap.saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "deliver the thing" });
+  const item = await store.issues.saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "deliver the thing" });
   const job = await store.jobs.addJob({ projectId: projectIdOf(env, "alpha"), prompt: "deliver the thing" });
-  assert.equal(await store.roadmap.linkRoadmapItemJob(item.id, job.id), true, "setup: the item was not linked to its job");
+  assert.equal(await store.issues.linkIssueJob(item.id, job.id), true, "setup: the item was not linked to its job");
   return { store, item, job };
 }
 
-// The status the roadmap item carries right now.
+// The status the issue carries right now.
 async function itemStatus(store, item) {
-  return (await store.roadmap.getRoadmapItem(item.id)).status;
+  return (await store.issues.getIssue(item.id)).status;
 }
 
-test("a job the store finishes as done puts its roadmap item in review, and one that gates keeps it in progress", async (t) => {
+test("a job the store finishes as done puts its issue in review, and one that gates keeps it in progress", async (t) => {
   const gated = await queuedItem(t, "store-close-gate");
   await gated.store.jobs.claimJobById(gated.job.id, { worker: WORKER, cap: 4 });
   assert.equal(await gated.store.jobs.finishJob(gated.job.id, { worker: WORKER, status: "gate", noticeMd: "answer me" }), true);
@@ -186,13 +186,13 @@ test("a write another worker owns reports false and moves nothing", async (t) =>
 test("followJob answers 0 for an unknown job, refuses a malformed id, and is idempotent", async (t) => {
   const { store, item, job } = await queuedItem(t, "store-follow-job");
 
-  assert.equal(await store.roadmap.followJob(4242), 0);
-  await assert.rejects(store.roadmap.followJob("not an id"), /positive integer roadmap item id/);
+  assert.equal(await store.issues.followJob(4242), 0);
+  await assert.rejects(store.issues.followJob("not an id"), /positive integer issue id/);
   assert.equal(await itemStatus(store, item), "in_progress");
 
   await store.jobs.cancelJob(job.id, { reason: "not now" });
   assert.equal(await itemStatus(store, item), "todo");
-  assert.equal(await store.roadmap.followJob(job.id), 0, "a second follow moved the item again");
+  assert.equal(await store.issues.followJob(job.id), 0, "a second follow moved the item again");
 });
 
 test("health answers the raw numbers of a diagnosis, never an exception", async (t) => {

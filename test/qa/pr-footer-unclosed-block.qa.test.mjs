@@ -8,7 +8,7 @@ import { runDir } from "../../src/config/paths.mjs";
 import { ghBin } from "../../src/host/gh.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { linkRoadmapItemJob, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { linkIssueJob, saveIssue } from "../../src/memory/issues.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
@@ -56,7 +56,7 @@ function git(args) {
   return execFileSync("git", args, { encoding: "utf8", env: { ...process.env, ...gitVars() } });
 }
 
-// A roadmap job with a real worktree, a local bare remote and the fake gh installed.
+// An issue job with a real worktree, a local bare remote and the fake gh installed.
 function makeRun(t, name) {
   const remote = join(makeDir(t, `${name}-origin`), "origin.git");
   git(["-c", "init.defaultBranch=main", "init", "--bare", "-q", remote]);
@@ -75,8 +75,8 @@ function makeRun(t, name) {
   writeFileSync(join(evidence, "automated-verification.md"), "## Verification: PASSED\n\nnpm test: 12 passed\n");
   assert.equal(ghBin(env), env.NIGHTQUEUE_GH_BIN);
   assert.ok(existsSync(env.NIGHTQUEUE_GH_BIN) && (statSync(env.NIGHTQUEUE_GH_BIN).mode & 0o111) !== 0);
-  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
-  assert.equal(linkRoadmapItemJob(item.id, id, env), true);
+  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
+  assert.equal(linkIssueJob(item.id, id, env), true);
   return { env, id };
 }
 

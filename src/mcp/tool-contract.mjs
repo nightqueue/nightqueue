@@ -3,21 +3,30 @@ import { decisionRef, itemRef } from "../memory/refs.mjs";
 import { openStore } from "../store/open.mjs";
 import { callerContext } from "./phase-context.mjs";
 
-// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs).
-export const TOOL_CONTRACT = 2;
+// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the issue_* names).
+export const TOOL_CONTRACT = 3;
 
-// While true an old integer id that resolves safely is accepted with a `deprecated_input` warning; remove in the next minor release (or set false to refuse it now).
+const INTEGER_ID_CONTRACT = 1;
+
+// While true an old integer id that resolves safely is accepted with a `deprecated_input` warning; set it false to refuse that id too (0.6.0 kept the grace, its removal is a release of its own).
 export const GRACE_OLD_CONTRACT = true;
 
 export const STALE_CONTRACT_ADVISORY = "this client's tool contract is older than the server";
 
+const OLD_TRACKER_WORD = ["road", "map"].join("");
+
+// Inputs an older contract named and a newer one renamed, by tool: only a client with cached old definitions still sends them.
+const RENAMED_FIELDS = {
+  queue_add: [`${OLD_TRACKER_WORD}_item_id`],
+};
+
 // Inputs that took an internal integer id under contract 1 and take a ref now, by tool.
 const OLD_ID_FIELDS = {
-  queue_add: [{ field: "roadmap_item_id", kind: "item" }],
-  roadmap_get: [{ field: "id", kind: "item" }],
-  roadmap_comment: [{ field: "id", kind: "item" }],
-  roadmap_save: [{ field: "decision_id", kind: "decision" }],
-  roadmap_update: [
+  queue_add: [{ field: "issue_id", kind: "item" }],
+  issue_get: [{ field: "id", kind: "item" }],
+  issue_comment: [{ field: "id", kind: "item" }],
+  issue_save: [{ field: "decision_id", kind: "decision" }],
+  issue_update: [
     { field: "id", kind: "item" },
     { field: "decision_id", kind: "decision" },
   ],
@@ -37,6 +46,15 @@ export class StaleContractError extends UserError {
   constructor() {
     super(staleContractLine());
   }
+}
+
+// Refuses a call carrying an input its tool renamed, before validation would strip it, and notes the old shape in the server's state.
+export function refuseRenamedFields(name, args, state) {
+  if (args === null || typeof args !== "object") return;
+  const fields = RENAMED_FIELDS[name] ?? [];
+  if (!fields.some((field) => Object.hasOwn(args, field))) return;
+  state.sawOldShape = true;
+  throw new StaleContractError();
 }
 
 // What one server instance remembers about the clients it served; in memory only, never in the database.
@@ -82,7 +100,7 @@ function qualifiedDecisionRef(row) {
 // The ref of the row an old integer id names when the caller owns it, or null.
 async function refOfOldId({ kind, id }, owner, store) {
   try {
-    const row = kind === "item" ? await store.roadmap.getRoadmapItem(id) : await store.decisions.getDecision(id);
+    const row = kind === "item" ? await store.issues.getIssue(id) : await store.decisions.getDecision(id);
     if (!row || !ownedByCaller(row, owner)) return null;
     return kind === "item" ? itemRef(row) : qualifiedDecisionRef(row);
   } catch {
@@ -104,7 +122,7 @@ export async function upgradeOldShapes(name, args, { env, state }) {
     const ref = owner ? await refOfOldId({ kind, id: args[field] }, owner, store) : null;
     if (ref === null) throw new StaleContractError();
     upgraded[field] = ref;
-    deprecated.push(`\`${field}\` ${args[field]} is an internal id of contract ${TOOL_CONTRACT - 1} and resolved to ${ref}; send the ref, the id will be refused after the grace release`);
+    deprecated.push(`\`${field}\` ${args[field]} is an internal id of contract ${INTEGER_ID_CONTRACT} and resolved to ${ref}; send the ref, the id will be refused after the grace release`);
   }
   return { args: upgraded, deprecated };
 }

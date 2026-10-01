@@ -82,7 +82,7 @@ export function requireRunState({ projectId, slug, runDir: dir }, env) {
   return state;
 }
 
-// The ref of the roadmap item the run's job came from: the job block of state.json first (null for a free-prompt job), the job row otherwise.
+// The ref of the issue the run's job came from: the job block of state.json first (null for a free-prompt job), the job row otherwise.
 export async function runItemRef(run, env) {
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env });
   const block = isStateObject(state) && isStateObject(state.job) ? state.job : null;

@@ -10,7 +10,7 @@ const SERVER = read("src/mcp/tools.mjs");
 const ARCHITECT_PROMPT = read("plugin/skills/resolve/references/prompts/architect.md");
 const PHASE_PROMPT = read("src/mcp/phase-prompt.mjs");
 
-// Reflect files the pipeline must keep away from the decisions and roadmap tables.
+// Reflect files the pipeline must keep away from the decisions and issues tables.
 const REFLECT_FILES = ["src/hooks/reflect.mjs", "src/hooks/reflect-worker.mjs", "src/cli/reflect.mjs", "src/memory/dedup.mjs"];
 
 test("the Phase 0 preflight pings only lesson_recall and takes the decisions from the session block", () => {
@@ -139,10 +139,10 @@ test("every decisions tool the pipeline markdown names is a tool the server real
   }
 });
 
-test("the reflect worker stays out of the decisions and roadmap tables", () => {
+test("the reflect worker stays out of the decisions and issues tables", () => {
   for (const file of REFLECT_FILES) {
     const source = read(file);
     assert.equal(source.includes("decisions.mjs"), false, `${file} imports the decisions module`);
-    assert.equal(source.includes("roadmap.mjs"), false, `${file} imports the roadmap module`);
+    assert.equal(source.includes("issues.mjs"), false, `${file} imports the issues module`);
   }
 });

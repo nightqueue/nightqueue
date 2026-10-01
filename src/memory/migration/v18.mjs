@@ -2,12 +2,8 @@ import { UserError } from "../../config/errors.mjs";
 import { preV18BackupPath } from "../../config/paths.mjs";
 import { loadRawConfig } from "../../config/store.mjs";
 import {
-  DATA_TABLES,
   FTS,
-  FTS_MIRRORS,
-  INDEXES,
   OWNER_CHECK,
-  ROADMAP_FTS,
   jobsDdl,
   lessonsDdl,
   memoryDdl,
@@ -26,6 +22,7 @@ import {
   roadmapCommentsDdlV19,
   roadmapItemProjectsDdlV19,
 } from "./v19-shape.mjs";
+import { DATA_TABLES_V20, FTS_MIRRORS_V20, INDEXES_V20, ROADMAP_FTS_V20 } from "./v20-shape.mjs";
 
 export { hasLegacyRegistry, importLegacyRegistry, readV17Registry } from "./legacy-config.mjs";
 export { MigrationRefused } from "./one-shot.mjs";
@@ -52,7 +49,7 @@ export const REBUILT_TABLES = Object.freeze([
 // Where the database stands: `current` at v18 or later, `legacy` below it with data tables, `fresh` with none.
 export function schemaState(db) {
   if (userVersion(db) >= V18) return "current";
-  return DATA_TABLES.some((table) => hasTable(db, table)) ? "legacy" : "fresh";
+  return DATA_TABLES_V20.some((table) => hasTable(db, table)) ? "legacy" : "fresh";
 }
 
 // How a v17 table's rows read in v18 terms: every v18 column as an expression over `t`, the owner names joined to their ids.
@@ -120,11 +117,11 @@ function refuseUnmappable(db, table, source) {
 
 // Creates every index, trigger and lexical mirror of the v18 schema, re-indexes the mirrors and stamps v18.
 function finishSchema(db, violationsBefore) {
-  db.exec(INDEXES);
+  db.exec(INDEXES_V20);
   db.exec(ROADMAP_COMMENT_GUARDS_V19);
   db.exec(FTS);
-  db.exec(ROADMAP_FTS);
-  for (const mirror of FTS_MIRRORS) db.exec(`INSERT INTO ${mirror}(${mirror}) VALUES('rebuild')`);
+  db.exec(ROADMAP_FTS_V20);
+  for (const mirror of FTS_MIRRORS_V20) db.exec(`INSERT INTO ${mirror}(${mirror}) VALUES('rebuild')`);
   const violations = foreignKeyViolations(db);
   if (violations > violationsBefore) throw new UserError(`${violations - violationsBefore} row(s) break a foreign key after the rebuild`);
   db.exec(`PRAGMA user_version = ${V18}`);

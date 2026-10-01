@@ -1,0 +1,858 @@
+import { UserError } from "../config/errors.mjs";
+import { ALL_PROJECTS } from "../config/projects.mjs";
+import { inTransaction, openDb, sqliteToIso, withWriteRetry } from "./db.mjs";
+import { attachNames, ownerByKey, projectById, projectsOfOrg } from "./registry.mjs";
+import {
+  PROPOSED_HEADING,
+  STANDING_HEADING,
+  decisionTitleLine,
+  decisionTitles,
+  getDecision,
+  recallDecisions,
+  renderDecisionText,
+} from "./decisions.mjs";
+import { PRIORITY_RANGE, addJob, cancelJob, truncateByCodePoint } from "./jobs.mjs";
+import { queuedCommentJob, refuseMissingJob } from "./job-row.mjs";
+import { runDir } from "../config/paths.mjs";
+import { priorRunBlock, resolveOperatorRunDir } from "../queue/operator-run.mjs";
+import { escapePromptMarkers } from "./prompt-safety.mjs";
+import { GLOBAL_KEY, decisionRef, itemRef, jobRef, parseRef } from "./refs.mjs";
+import { COMMENT_JOB_COLUMNS, insertComment, jobRefs, listComments } from "./issue-comments.mjs";
+import {
+  cancelOpenRows,
+  closesOrgItem,
+  driftedRowJobIds,
+  followJobRows,
+  linkOrgRow,
+  liveRowJob,
+  orgItemOfJob,
+  projectRowsByItem,
+  projectRowsDrift,
+} from "./issue-projects.mjs";
+import {
+  CLOSED_STATUSES,
+  COMMIT_TYPE_BY_TYPE,
+  HORIZON_REMOVED,
+  JOB_TO_ISSUE,
+  LIVE_JOB_STATUSES,
+  MANUAL_STATUSES,
+  OPEN_STATUSES,
+  OPERATOR_AUTHOR,
+  ISSUE_STATUSES,
+  ISSUE_TYPES,
+  STATUS_ASSIGNMENT,
+  TIER_BY_TYPE,
+  commentFor,
+  followThroughCloseSource,
+  isCommentAuthor,
+  isReopening,
+  jobEvent,
+  resultField,
+  issueTransition,
+  sqlList,
+  statusRankSql,
+} from "./issue-workflow.mjs";
+import {
+  OWNER_CLAUSE,
+  ownerDescription,
+  ownerNames,
+  ownerOf,
+  ownerRef,
+  ownerValues,
+  projectScope,
+  requireOwnerTarget,
+  requireScopeTarget,
+  rowOwner,
+  rowTarget,
+  seesRow,
+  visibility,
+} from "./scope.mjs";
+
+export { MANUAL_STATUSES, ISSUE_STATUSES, ISSUE_TYPES } from "./issue-workflow.mjs";
+export const PROMPT_SOURCE_MISSING = "queue_add needs `prompt`, or `issue_id` to build it from an issue";
+
+export { ALL_PROJECTS };
+
+const RELATED_RECALL_LIMIT = 9;
+const RELATED_PROMPT_LIMIT = 8;
+const LIVE_JOB_LIST = sqlList(LIVE_JOB_STATUSES);
+
+// Requires a non-empty text field, because the column is NOT NULL and a raw SQLite error helps nobody.
+function requireText(field, value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) throw new UserError(`issue field \`${field}\` is required and cannot be empty`);
+  return text;
+}
+
+// Requires a positive integer id, so a malformed reference never reaches the database.
+function requireId(id) {
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new UserError(`expected a positive integer issue id, got \`${String(id)}\``);
+  }
+  return id;
+}
+
+// Returns the trimmed string, or null when there is nothing to store.
+function optionalText(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text ? text : null;
+}
+
+// Refuses the retired `horizon` field by name, so a caller of an older contract learns what replaced it.
+function refuseHorizon(fields) {
+  if (fields?.horizon !== undefined) throw new UserError(HORIZON_REMOVED);
+}
+
+// Requires a priority in the job range (1 runs first), naming the range in the error.
+function requirePriority(priority) {
+  if (Number.isInteger(priority) && priority >= PRIORITY_RANGE.min && priority <= PRIORITY_RANGE.max) return priority;
+  throw new UserError(
+    `invalid issue \`priority\`: \`${String(priority)}\`; expected an integer ${PRIORITY_RANGE.min}-${PRIORITY_RANGE.max} (${PRIORITY_RANGE.min} first, like a job's)`,
+  );
+}
+
+// Requires a status an operator may set by hand: `in_progress` is reached only through a job.
+function requireManualStatus(status) {
+  if (MANUAL_STATUSES.includes(status)) return status;
+  if (status === "in_progress") {
+    throw new UserError(
+      "`in_progress` is set only by a job: queue the item with `queue_add` and `issue_id`",
+    );
+  }
+  throw new UserError(
+    `invalid issue \`status\`: \`${String(status)}\`; expected one of ${MANUAL_STATUSES.join("|")}`,
+  );
+}
+
+// Requires one of the five item types, naming them all in the error.
+function requireType(type) {
+  if (ISSUE_TYPES.includes(type)) return type;
+  throw new UserError(`issue field \`type\` is required: expected one of ${ISSUE_TYPES.join("|")}, got \`${String(type)}\``);
+}
+
+// Requires a comment author: `operator`, or `job:<id>` for a job.
+function requireAuthor(author) {
+  if (isCommentAuthor(author)) return author;
+  throw new UserError(`invalid issue comment author \`${String(author)}\`; expected \`${OPERATOR_AUTHOR}\` or \`job:<id>\``);
+}
+
+// Requires a positive integer position, because the column orders a group and has no room for a placeholder.
+function requirePosition(position) {
+  if (!Number.isInteger(position) || position <= 0) {
+    throw new UserError(`expected a positive integer issue \`position\`, got \`${String(position)}\``);
+  }
+  return position;
+}
+
+// Tells whether a patch carries a value for a field: an explicit null is treated exactly like an absent key.
+function hasValue(patch, field) {
+  return patch[field] !== undefined && patch[field] !== null;
+}
+
+// Requires `decision_id` to point at a decision the item's owner sees: its own and, for a project item, its org's.
+function requireDecisionId(target, value, env) {
+  const id = requireId(value);
+  const decision = getDecision(id, env);
+  if (!decision) throw new UserError(`unknown decision \`${id}\``);
+  if (!seesRow(target, decision)) {
+    throw new UserError(`decision \`${id}\` belongs to ${ownerDescription(decision)}, not ${ownerDescription(target)}`);
+  }
+  return id;
+}
+
+// One row with the current names of its owner attached as `project` and `org`, or null.
+function namedRow(db, row) {
+  return row ? attachNames(db, [row])[0] : null;
+}
+
+// Returns the row of an issue, its owner's names attached, or null.
+export function getIssue(id, env = process.env) {
+  const db = openDb(env);
+  return namedRow(db, db.prepare("SELECT * FROM issues WHERE id = ?").get(requireId(id)));
+}
+
+// The columns and joins every read that carries a linked decision number and live job status shares.
+const ISSUE_VIEW_QUERY = `SELECT r.*, d.number AS decision_number, d.scope AS decision_scope,
+              d.project_id AS decision_project_id, d.org_id AS decision_org_id, j.status AS job_status
+       FROM issues r
+       LEFT JOIN decisions d ON d.id = r.decision_id
+       LEFT JOIN jobs j ON j.id = r.job_id`;
+
+// The ref of the decision a joined item row links, rendered from its owner's current key, or null.
+function linkedDecisionRef(db, row) {
+  if (row.decision_number === null || row.decision_number === undefined) return null;
+  const [decision] = attachNames(db, [
+    { scope: row.decision_scope, project_id: row.decision_project_id, org_id: row.decision_org_id, number: row.decision_number },
+  ]);
+  return decisionRef(decision);
+}
+
+// Joined item rows with their owner names and the ref of their linked decision attached.
+function namedViewRows(db, rows) {
+  return attachNames(db, rows).map((row) => Object.assign(row, { decision_ref: linkedDecisionRef(db, row) }));
+}
+
+// Returns the joined row of an issue — its linked decision number, live job status and owner names included — or null.
+function getIssueJoined(id, env = process.env) {
+  const db = openDb(env);
+  const row = db.prepare(`${ISSUE_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id));
+  return row ? namedViewRows(db, [row])[0] : null;
+}
+
+// Inserts an issue at the end of its priority group, in one statement so no concurrent save collides.
+export function saveIssue(
+  { projectId, orgId, title, detail, decision_id, priority, status, type, ...rest } = {},
+  env = process.env,
+) {
+  refuseHorizon(rest);
+  const kind = requireType(type);
+  const db = openDb(env);
+  const target = requireScopeTarget(db, { projectId, orgId });
+  const owner = ownerValues(target);
+  const group = priority === undefined || priority === null ? PRIORITY_RANGE.fallback : requirePriority(priority);
+  const state = status === undefined || status === null ? "todo" : requireManualStatus(status);
+  const values = [
+    ...owner,
+    group,
+    kind,
+    state,
+    state,
+    requireText("title", title),
+    optionalText(detail),
+    decision_id === undefined || decision_id === null ? null : requireDecisionId(target, decision_id, env),
+    ...owner,
+    group,
+    ...owner,
+  ];
+  const statement = db.prepare(
+    `INSERT INTO issues (scope, project_id, org_id, priority, type, status, closed_at, title, detail, decision_id, position, number)
+     VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? = 'done' THEN datetime('now') END, ?, ?, ?,
+             (SELECT COALESCE(MAX(position), 0) + 1 FROM issues WHERE ${OWNER_CLAUSE} AND priority = ?),
+             (SELECT COALESCE(MAX(number), 0) + 1 FROM issues WHERE ${OWNER_CLAUSE}))
+     RETURNING id, position, number`,
+  );
+  const row = withWriteRetry(() => statement.get(...values));
+  const [scope, ownerProjectId, ownerOrgId] = owner;
+  return {
+    id: Number(row.id),
+    ref: itemRef({ scope, project_id: ownerProjectId, project_key: target.key, org_key: target.key, number: row.number }),
+    number: Number(row.number),
+    position: Number(row.position),
+    priority: group,
+    type: kind,
+    status: state,
+    scope,
+    project: scope === "org" ? null : target.project,
+    org: scope === "org" ? target.org : null,
+    projectId: ownerProjectId,
+    orgId: ownerOrgId,
+  };
+}
+
+// Renumbers a priority group of one owner to contiguous positions 1..N, ordered by the positions it currently holds.
+function renumberGroup(db, owner, priority) {
+  db.prepare(
+    `WITH ordered AS (
+       SELECT id, ROW_NUMBER() OVER (ORDER BY position, id) AS rn
+       FROM issues WHERE ${OWNER_CLAUSE} AND priority = ?
+     )
+     UPDATE issues SET position = (SELECT rn FROM ordered WHERE ordered.id = issues.id)
+     WHERE id IN (SELECT id FROM ordered)`,
+  ).run(...ownerValues(owner), priority);
+}
+
+// How many items a priority group of one owner holds.
+function countGroup(db, owner, priority) {
+  return db
+    .prepare(`SELECT COUNT(*) AS total FROM issues WHERE ${OWNER_CLAUSE} AND priority = ?`)
+    .get(...ownerValues(owner), priority).total;
+}
+
+// Position the move aims at: the asked one clamped to the group, or the end of the destination priority group.
+function targetPosition(row, patch, { sameGroup, size }) {
+  const max = Math.max(1, sameGroup ? size : size + 1);
+  const wanted = hasValue(patch, "position") ? requirePosition(patch.position) : sameGroup ? row.position : max;
+  return Math.min(Math.max(wanted, 1), max);
+}
+
+// Moves an item to a priority and a position, renumbering every affected group inside one transaction.
+function moveIssue(row, patch, env) {
+  const db = openDb(env);
+  const priority = hasValue(patch, "priority") ? requirePriority(patch.priority) : row.priority;
+  const write = db.prepare(
+    "UPDATE issues SET priority = ?, position = ?, updated_at = datetime('now') WHERE id = ?",
+  );
+  const owner = rowOwner(row);
+  inTransaction(db, () => {
+    const sameGroup = priority === row.priority;
+    const wanted = targetPosition(row, patch, { sameGroup, size: countGroup(db, owner, priority) });
+    const tentative = sameGroup && wanted > row.position ? wanted + 0.5 : wanted - 0.5;
+    write.run(priority, tentative, row.id);
+    renumberGroup(db, owner, priority);
+    if (!sameGroup) renumberGroup(db, owner, row.priority);
+  });
+}
+
+// Column assignments of an update patch, validating every present field the way the insert does.
+function updateAssignments(patch, row, env) {
+  const columns = [];
+  const values = [];
+  if (hasValue(patch, "title")) {
+    columns.push("title = ?");
+    values.push(requireText("title", patch.title));
+  }
+  if (hasValue(patch, "detail")) {
+    columns.push("detail = ?");
+    values.push(optionalText(patch.detail));
+  }
+  if (hasValue(patch, "status")) {
+    const status = requireManualStatus(patch.status);
+    columns.push(STATUS_ASSIGNMENT);
+    values.push(status, status);
+  }
+  if (hasValue(patch, "type")) {
+    columns.push("type = ?");
+    values.push(requireType(patch.type));
+  }
+  if (hasValue(patch, "decision_id")) {
+    columns.push("decision_id = ?");
+    values.push(requireDecisionId(rowTarget(openDb(env), row), patch.decision_id, env));
+  }
+  return { columns, values };
+}
+
+// Writes the columns of an update, in one transaction with what the new status implies: closing an org item cancels its
+// open project rows, and going back from review or done leaves the `reopened` comment.
+function writeUpdate(row, { columns, values, status, author }, env) {
+  const db = openDb(env);
+  const statement = db.prepare(`UPDATE issues SET ${columns.join(", ")}, updated_at = datetime('now') WHERE id = ?`);
+  inTransaction(db, () => {
+    const before = db.prepare("SELECT status FROM issues WHERE id = ?").get(row.id)?.status ?? null;
+    statement.run(...values, row.id);
+    if (closesOrgItem(row, status)) cancelOpenRows(db, { itemId: row.id, status, author });
+    if (status === null || !isReopening(before, status)) return;
+    const body = author === OPERATOR_AUTHOR ? "reopened by operator" : `reopened by ${author}`;
+    insertComment(db, { itemId: row.id, kind: "reopened", author, body });
+  });
+}
+
+// Updates the fields present in the patch and returns the stored row; `priority` or `position` also renumbers, and
+// `author` (the operator by default) signs the comment a move back from review or done leaves.
+export function updateIssue(id, patch = {}, env = process.env) {
+  const changes = patch ?? {};
+  refuseHorizon(changes);
+  const row = getIssue(id, env);
+  if (!row) throw new UserError(`unknown issue \`${id}\``);
+  if (hasValue(changes, "priority")) requirePriority(changes.priority);
+  const author = hasValue(changes, "author") ? requireAuthor(changes.author) : OPERATOR_AUTHOR;
+  const { columns, values } = updateAssignments(changes, row, env);
+  if (columns.length) {
+    const status = hasValue(changes, "status") ? changes.status : null;
+    writeUpdate(row, { columns, values, status, author }, env);
+  }
+  if (hasValue(changes, "priority") || hasValue(changes, "position")) moveIssue(row, changes, env);
+  return getIssueJoined(row.id, env);
+}
+
+// Public shape of an issue: free text truncated like the queue views truncate it.
+export function issueView(row) {
+  return {
+    id: row.id,
+    ref: issueRef(row),
+    number: row.number,
+    scope: row.scope,
+    owner: ownerOf(row),
+    title: truncateByCodePoint(row.title),
+    detail: truncateByCodePoint(row.detail ?? null),
+    status: row.status,
+    priority: row.priority,
+    type: row.type,
+    position: row.position,
+    decision_number: row.decision_number ?? null,
+    decision_ref: row.decision_ref ?? null,
+    job_id: row.job_id ?? null,
+    job_ref: row.job_id ? jobRef(row.job_id) : null,
+    job_status: row.job_status ?? null,
+    closed_at: sqliteToIso(row.closed_at ?? null),
+    updated_at: sqliteToIso(row.updated_at),
+  };
+}
+
+// The values a listing filter keeps, each validated; an absent list keeps everything.
+function filterValues(field, list, { isValid, expected }) {
+  if (list === undefined || list === null) return [];
+  const values = Array.isArray(list) ? list : [list];
+  const invalid = values.find((value) => !isValid(value));
+  if (invalid !== undefined) {
+    throw new UserError(`invalid issue \`${field}\` filter \`${String(invalid)}\`; expected ${expected}`);
+  }
+  return values;
+}
+
+// The SQL of the opt-in status, priority and type filters of a listing, and the values it binds.
+function listFilterSql({ status, priority, type } = {}) {
+  const statuses = filterValues("status", status, {
+    isValid: (value) => ISSUE_STATUSES.includes(value),
+    expected: ISSUE_STATUSES.join("|"),
+  });
+  const priorities = filterValues("priority", priority, {
+    isValid: (value) => Number.isInteger(value) && value >= PRIORITY_RANGE.min && value <= PRIORITY_RANGE.max,
+    expected: `an integer ${PRIORITY_RANGE.min}-${PRIORITY_RANGE.max}`,
+  });
+  const types = filterValues("type", type, { isValid: (value) => ISSUE_TYPES.includes(value), expected: ISSUE_TYPES.join("|") });
+  const inClause = (column, values) => (values.length ? ` AND ${column} IN (${values.map(() => "?").join(", ")})` : "");
+  return {
+    sql: `${inClause("r.status", statuses)}${inClause("r.priority", priorities)}${inClause("r.type", types)}`,
+    values: [...statuses, ...priorities, ...types],
+  };
+}
+
+// The issues of an owner with nothing planned.
+export function emptyIssues(owner = {}) {
+  return { ...owner, items: [] };
+}
+
+// Every item an owner sees, in workflow order, then org items first, then by priority (1 first) and position; `db` lets a read-only caller bring its own connection.
+export function listIssues(owner, filters = {}, env = process.env, db = null) {
+  const connection = db ?? openDb(env);
+  const target = requireOwnerTarget(connection, owner);
+  const visible = visibility(target, "r");
+  const filter = listFilterSql(filters ?? {});
+  const rows = connection
+    .prepare(
+      `${ISSUE_VIEW_QUERY}
+       WHERE ${visible.clause}${filter.sql}
+       ORDER BY ${statusRankSql("r.status")}, CASE WHEN r.scope = 'org' THEN 0 ELSE 1 END,
+                r.priority ASC, r.position ASC, r.id ASC`,
+    )
+    .all(...visible.values, ...filter.values);
+  const items = namedViewRows(connection, rows).map(issueView);
+  return { ...ownerNames(target), items: withProjectRows(connection, target, items) };
+}
+
+// The org items of a listing with their project rows: a project reads only its own row's status, an org reads the whole matrix.
+function withProjectRows(db, target, items) {
+  const orgIds = items.filter((item) => item.scope === "org").map((item) => item.id);
+  const matrix = target.scope === "org";
+  const rows = projectRowsByItem(db, orgIds, matrix ? null : (target.projectId ?? ""));
+  return items.map((item) => {
+    if (item.scope !== "org") return item;
+    const own = rows.get(item.id) ?? [];
+    return matrix ? { ...item, projects: own } : { ...item, project_status: own[0]?.status ?? null };
+  });
+}
+
+// The job still holding an issue, or null when its link is history.
+function liveJobOf(row, env) {
+  if (!row.job_id) return null;
+  return (
+    openDb(env)
+      .prepare(`SELECT id, status FROM jobs WHERE id = ? AND status IN (${LIVE_JOB_LIST})`)
+      .get(row.job_id) ?? null
+  );
+}
+
+// Returns the item a queue_add may build a job from, or explains why queueing it is refused.
+export function queueableIssue(id, env = process.env) {
+  const row = getIssue(id, env);
+  if (!row) throw new UserError(`unknown issue \`${id}\``);
+  if (CLOSED_STATUSES.includes(row.status)) {
+    throw new UserError(
+      `issue \`${row.id}\` is \`${row.status}\`; move it back to \`todo\` with \`issue_update\` before queueing it`,
+    );
+  }
+  const live = liveJobOf(row, env);
+  if (live) {
+    throw new UserError(
+      `issue \`${row.id}\` is already queued as ${jobRef(live.id)} (\`${live.status}\`); cancel that job first`,
+    );
+  }
+  return row;
+}
+
+// Links an issue to the job built from it, moves it to `in_progress` and leaves the `queued` comment, in one
+// transaction; false means a concurrent caller queued it first.
+export function linkIssueJob(id, jobId, env = process.env) {
+  const db = openDb(env);
+  const itemId = requireId(id);
+  const statement = db.prepare(
+    `UPDATE issues SET status = ?, job_id = ?, job_status_seen = 'pending', closed_at = NULL, updated_at = datetime('now')
+      WHERE id = ? AND status IN (${sqlList(OPEN_STATUSES)})
+        AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = issues.job_id AND j.status IN (${LIVE_JOB_LIST}))`,
+  );
+  return inTransaction(db, () => {
+    refuseMissingJob(db, requireId(jobId));
+    if (statement.run(JOB_TO_ISSUE.queued.status, jobId, itemId).changes !== 1) return false;
+    const job = queuedCommentJob(db, jobId, (projectId, slug) => runDir(projectId, slug, env));
+    insertComment(db, { itemId, ...commentFor(job, "queued", jobRefs(db, job)) });
+    return true;
+  });
+}
+
+// Applies to one linked item what its job's current row means, replaying first the `done` a missed follow of a close skipped.
+function followLinkedItem(db, item, job) {
+  return followThroughCloseSource({ target: item, job, apply: (target, row) => applyJobRowToItem(db, target, row) });
+}
+
+// Applies to one linked item what the given row of its job means and leaves the event's comment, recording the job status it now reflects.
+function applyJobRowToItem(db, item, job) {
+  const event = jobEvent(job, item.job_status_seen);
+  const { status } = issueTransition(job, item.job_status_seen);
+  db.prepare("UPDATE issues SET job_status_seen = ? WHERE id = ?").run(job.status, item.id);
+  const comment = commentFor(job, event, jobRefs(db, job));
+  if (comment) insertComment(db, { itemId: item.id, ...comment });
+  if (status === null || status === item.status) return false;
+  db.prepare(`UPDATE issues SET ${STATUS_ASSIGNMENT}, updated_at = datetime('now') WHERE id = ?`).run(status, status, item.id);
+  return true;
+}
+
+// The job's row as the issues read it, or null when the job does not exist.
+function jobRowOf(db, id) {
+  return db.prepare(`SELECT ${COMMENT_JOB_COLUMNS} FROM jobs WHERE id = ?`).get(id) ?? null;
+}
+
+// Brings every item and project row linked to a job in line with the given row of the job, inside the caller's transaction.
+function followJobRow(db, job) {
+  const items = db
+    .prepare("SELECT id, status, job_status_seen FROM issues WHERE job_id = ? AND job_status_seen IS NOT ?")
+    .all(job.id, job.status);
+  let moved = 0;
+  for (const item of items) if (followLinkedItem(db, item, job)) moved += 1;
+  return moved + followJobRows(db, job);
+}
+
+// Brings every item linked to a job in line with the job's current row, in one transaction; it returns how many items moved.
+export function followJob(jobId, env = process.env) {
+  const id = requireId(jobId);
+  const db = openDb(env);
+  return inTransaction(db, () => {
+    const job = jobRowOf(db, id);
+    return job ? followJobRow(db, job) : 0;
+  });
+}
+
+// Follows first the status a write recorded it moved the job out of, then the job's current row, so that status leaves its event.
+function followPassedStatus(db, id, fromKey) {
+  const job = jobRowOf(db, id);
+  if (!job) return;
+  const from = resultField(job.result, fromKey);
+  if (typeof from === "string" && from !== job.status) followJobRow(db, { ...job, status: from });
+  followJobRow(db, job);
+}
+
+// Runs a follow inside a savepoint, so a follow that fails is undone alone and never costs the write around it.
+function followQuietlyIn(db, follow) {
+  db.exec("SAVEPOINT issue_follow");
+  try {
+    follow();
+  } catch {
+    db.exec("ROLLBACK TO issue_follow");
+  }
+  db.exec("RELEASE issue_follow");
+}
+
+// Runs a synchronous job write that records in `result[fromKey]` the status it moved the job out of, and follows that status
+// and the new row in the same transaction, so a follow racing the write can never skip the status it left; a refused write
+// throws and writes nothing.
+export function followJobWrite({ jobId, write, fromKey }, env = process.env) {
+  const id = requireId(jobId);
+  const db = openDb(env);
+  return inTransaction(db, () => {
+    const written = write();
+    followQuietlyIn(db, () => followPassedStatus(db, id, fromKey));
+    return written;
+  });
+}
+
+// Follows every job whose linked items or project rows have not seen its current status yet, the repair of a missed
+// event; it returns how many items and rows moved.
+export function followDriftedJobs(env = process.env) {
+  const db = openDb(env);
+  const itemJobIds = db
+    .prepare(
+      `SELECT DISTINCT r.job_id AS id FROM issues r JOIN jobs j ON j.id = r.job_id
+        WHERE r.job_status_seen IS NOT j.status`,
+    )
+    .all()
+    .map((row) => row.id);
+  const jobIds = new Set([...itemJobIds, ...driftedRowJobIds(db)]);
+  return [...jobIds].reduce((moved, jobId) => moved + followJob(jobId, env), 0);
+}
+
+// The linked items and project rows whose status disagrees with what their job's current row means, and the org items
+// whose status disagrees with the one their rows derive, read without writing anything.
+export function issueDrift(env = process.env, db = null) {
+  const connection = db ?? openDb(env);
+  return [...linkedItemDrift(connection), ...projectRowsDrift(connection)];
+}
+
+// The linked items whose status disagrees with what their job's current row means.
+function linkedItemDrift(connection) {
+  const rows = connection
+    .prepare(
+      `SELECT r.id, r.scope, r.project_id, r.org_id, r.number, r.status, r.job_id, r.job_status_seen,
+              j.status AS job_status, j.result
+         FROM issues r JOIN jobs j ON j.id = r.job_id
+        WHERE r.job_status_seen IS NOT j.status
+        ORDER BY r.id`,
+    )
+    .all();
+  return attachNames(connection, rows)
+    .map((row) => ({ row, expected: issueTransition({ ...row, status: row.job_status }, row.job_status_seen).status }))
+    .filter(({ row, expected }) => expected !== null && expected !== row.status)
+    .map(({ row, expected }) => ({
+      id: row.id,
+      ref: issueRef(row),
+      scope: row.scope,
+      owner: ownerOf(row),
+      status: row.status,
+      expected,
+      job_id: row.job_id,
+      job_status: row.job_status,
+    }));
+}
+
+// Refuses an item a project viewer (by id) does not see: its own project's and its org's only; no viewer is the operator, who sees them all.
+function requireVisibleTo(db, row, viewer) {
+  if (viewer === null) return;
+  const target = projectScope(db, viewer);
+  if (seesRow(target, row)) return;
+  throw new UserError(`issue \`${row.id}\` belongs to ${ownerDescription(row)}, not project \`${target.project ?? "global"}\``);
+}
+
+// The ref of an item the way a pull request or a prompt quotes it: `<KEY>-<number>`.
+export function issueRef(row) {
+  return itemRef(row);
+}
+
+// The owner target an item ref's key names: the global owner for `G`, otherwise the project or org holding it now or before, or null.
+function itemRefOwner(db, key) {
+  return key === GLOBAL_KEY ? projectScope(db, null) : ownerByKey(db, key);
+}
+
+// Resolves an item ref (`<KEY>-<number>`, the key current or old) to the id of the issue it names; `db` lets a read-only caller bring its own connection.
+export function itemIdOfRef(value, env = process.env, db = null) {
+  const ref = parseRef(value);
+  if (ref?.kind !== "item") throw new UserError(`expected an issue ref (\`<KEY>-<number>\`), got \`${String(value)}\``);
+  const connection = db ?? openDb(env);
+  const owner = itemRefOwner(connection, ref.key);
+  const row = owner
+    ? connection.prepare(`SELECT id FROM issues WHERE ${OWNER_CLAUSE} AND number = ?`).get(...ownerValues(owner), ref.number)
+    : null;
+  if (!row) throw new UserError(`unknown issue \`${ref.key}-${ref.number}\``);
+  return Number(row.id);
+}
+
+// One item with its text untruncated and its comment thread in chronological order; a project `viewer` (by id) reads only
+// what its project sees, and `db` lets a read-only caller bring its own connection.
+export function getIssueDetail(id, { viewer = null } = {}, env = process.env, db = null) {
+  const connection = db ?? openDb(env);
+  const found = connection.prepare(`${ISSUE_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id));
+  if (!found) throw new UserError(`unknown issue \`${id}\``);
+  const [row] = namedViewRows(connection, [found]);
+  requireVisibleTo(connection, row, viewer);
+  const detail = {
+    ...issueView(row),
+    title: row.title,
+    detail: row.detail ?? null,
+    comments: listComments(connection, row.id, viewer),
+  };
+  if (row.scope !== "org") return detail;
+  return { ...detail, projects: projectRowsByItem(connection, [row.id], viewer).get(row.id) };
+}
+
+// Appends a `note` to an item's thread, signed by `author`; a project `viewer` (a job's project id) may only comment an item it sees, and owns its comment.
+export function addIssueComment({ id, body, author = OPERATOR_AUTHOR, viewer = null } = {}, env = process.env) {
+  const signer = requireAuthor(author);
+  const text = requireText("body", body);
+  const row = getIssue(id, env);
+  if (!row) throw new UserError(`unknown issue \`${id}\``);
+  const db = openDb(env);
+  requireVisibleTo(db, row, viewer);
+  return withWriteRetry(() => insertComment(db, { itemId: row.id, kind: "note", author: signer, body: text, projectId: viewer }));
+}
+
+// The reference of the item a job was queued from — a project item it is linked to, or an org item through its project
+// row — or null when the job carries no issue; `db` lets a read-only caller bring its own connection.
+export function issueRefOfJob(jobId, env = process.env, connection = null) {
+  const row = itemOfJob(connection ?? openDb(env), requireId(jobId));
+  return row ? issueRef(row) : null;
+}
+
+// The issue a job was queued from, with its owner names and linked decision id, or null.
+function itemOfJob(db, id) {
+  const own = db
+    .prepare("SELECT id, scope, project_id, org_id, number, decision_id FROM issues WHERE job_id = ? ORDER BY id DESC LIMIT 1")
+    .get(id);
+  return namedRow(db, own) ?? orgItemOfJob(db, id);
+}
+
+// The ref of the decision an item links, as a one-entry list, or an empty list when it links none.
+function linkedDecisionRefs(db, item) {
+  if (!item?.decision_id) return [];
+  const row = db.prepare("SELECT id, scope, project_id, org_id, number FROM decisions WHERE id = ?").get(item.decision_id);
+  return row ? [decisionRef(namedRow(db, row))] : [];
+}
+
+// The refs the runtime records in a run's job block before its spawn: the job's project key, its issue ref and the item's linked decision.
+export function jobSpawnRefs(jobId, env = process.env, connection = null) {
+  const db = connection ?? openDb(env);
+  const id = requireId(jobId);
+  const job = namedRow(db, db.prepare("SELECT id, project_id FROM jobs WHERE id = ?").get(id));
+  if (!job) throw new UserError(`unknown job \`${id}\``);
+  const item = itemOfJob(db, id);
+  return { projectKey: job.project_key ?? null, itemRef: item ? issueRef(item) : null, decisionRefs: linkedDecisionRefs(db, item) };
+}
+
+// Accepted decisions worth quoting next to an item; a row marked `fallback` did not match the title and is dropped.
+async function relatedDecisions(item, linked, embedder, env) {
+  try {
+    const rows = await recallDecisions(
+      { ...ownerRef(rowOwner(item)), query: item.title, limit: RELATED_RECALL_LIMIT, embedder },
+      env,
+    );
+    return rows
+      .filter((row) => row.via !== "fallback" && row.id !== linked?.id)
+      .slice(0, RELATED_PROMPT_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+// Every title of one status the item's owner sees; a failure of the decisions store costs the block, never the prompt.
+function titlesOfStatus(item, status, env) {
+  try {
+    return decisionTitles({ ...ownerRef(rowOwner(item)), status }, env);
+  } catch {
+    return [];
+  }
+}
+
+// One titles-only block of the prompt, or null when there is no title to list.
+function titlesBlock(heading, rows) {
+  return rows.length ? `## ${heading}\n${rows.map(decisionTitleLine).join("\n")}` : null;
+}
+
+// The block naming the item the job comes from, its type and the commit type the job's commits use.
+function issueBlock(item) {
+  const type = ISSUE_TYPES.includes(item.type) ? item.type : null;
+  const lines = [`Issue: ${issueRef(item)}`];
+  if (type) lines.push(`Type: ${type}`, `Commit type: ${COMMIT_TYPE_BY_TYPE[type]}`);
+  return `## Issue\n${lines.join("\n")}`;
+}
+
+// The tier of a job built from an item: the caller's when given, else the default of the item's type.
+function tierOf(item, tier) {
+  if (tier !== undefined && tier !== null) return tier;
+  return TIER_BY_TYPE[item.type] ?? null;
+}
+
+// The sections an operator adds right after the item block: their note, verbatim, then the prior run block.
+function operatorBlocks({ operatorNote, priorRun }) {
+  const note = typeof operatorNote === "string" ? operatorNote.trim() : "";
+  return [...(note ? [`## Operator note\n${note}`] : []), ...(priorRun ? [priorRun] : [])];
+}
+
+// Prompt an issue is queued with: the task, the operator's note and prior run, the decision it is linked to and the accepted decisions around it.
+export async function buildIssuePrompt({ item, embedder, operatorNote, priorRun } = {}, env = process.env) {
+  const linked = item.decision_id ? getDecision(item.decision_id, env) : null;
+  const standing = titlesBlock(STANDING_HEADING, titlesOfStatus(item, "accepted", env));
+  const proposed = titlesBlock(PROPOSED_HEADING, titlesOfStatus(item, "proposed", env));
+  const related = await relatedDecisions(item, linked, embedder, env);
+  const blocks = [`## Task\n${escapePromptMarkers(item.title)}`];
+  if (item.detail) blocks.push(escapePromptMarkers(item.detail));
+  blocks.push(issueBlock(item), ...operatorBlocks({ operatorNote, priorRun }));
+  if (linked) blocks.push(`## Linked decision\n${renderDecisionText(linked)}`);
+  if (standing) blocks.push(standing);
+  if (proposed) blocks.push(proposed);
+  if (related.length) blocks.push(`## Related decisions\n${related.map(renderDecisionText).join("\n\n")}`);
+  return blocks.join("\n\n");
+}
+
+// The project id a project item's job goes to: its own, refusing another project (a project item decides where its job goes) and a global item.
+function itemProjectId(db, item, projectId) {
+  if (projectId !== undefined && projectId !== null && projectId !== item.project_id) {
+    const named = projectById(db, projectId)?.name ?? projectId;
+    throw new UserError(`issue \`${item.id}\` belongs to project \`${item.project ?? "global"}\`, not \`${named}\`; queue it by its id alone`);
+  }
+  if (!item.project_id) {
+    throw new UserError(`issue \`${item.id}\` belongs to no project, so no job can be built from it; save it under a registered project`);
+  }
+  return item.project_id;
+}
+
+// The projects an org item is queued for: one project of its org with a checkout, or every one of them for `all`; a job is always a project's.
+function orgTargets(db, item, { projectId, allProjects }) {
+  const members = projectsOfOrg(db, item.org_id).filter((member) => member.path);
+  if (allProjects && members.length) return members;
+  const found = !allProjects && projectId ? projectById(db, projectId) : null;
+  if (found?.path && found.org_id === item.org_id) return [found];
+  throw new UserError(
+    `issue \`${item.id}\` belongs to org \`${item.org}\`: name the project its job goes to, or \`${ALL_PROJECTS}\` for every ` +
+      `project of the org, with \`--project <name|${ALL_PROJECTS}>\` (\`project\` in queue_add); projects of \`${item.org}\`: ` +
+      `${members.length ? members.map((member) => member.name).join(", ") : "(none)"}`,
+  );
+}
+
+// Queues and links the job of an org item for one project row, or reports the live job that already holds that project's row.
+function queueOrgTarget(item, project, { prompt, limits }, env) {
+  const db = openDb(env);
+  const live = liveRowJob(db, item.id, project.id);
+  if (live) return { skipped: { project: project.name, job_id: live.id, job_status: live.status } };
+  const job = addJob({ projectId: project.id, prompt, ...limits }, env);
+  if (linkOrgRow(db, { itemId: item.id, projectId: project.id, jobId: job.id })) return { job };
+  cancelJob(job.id, { reason: "issue was queued for this project by another caller" }, env);
+  const holder = liveRowJob(db, item.id, project.id);
+  return { skipped: { project: project.name, job_id: holder?.id ?? null, job_status: holder?.status ?? null, cancelled_job_id: job.id } };
+}
+
+// Why nothing was queued for an org item: every project it was asked for already has a live job for it.
+function allSkippedMessage(item, skipped) {
+  const held = skipped.map((entry) => `\`${entry.project}\` (${entry.job_id ? jobRef(entry.job_id) : "no job"}, \`${entry.job_status ?? "?"}\`)`);
+  return `issue \`${item.id}\` is already queued for ${held.join(", ")}; cancel that job first`;
+}
+
+// Queues the job an org item builds for each project it names, one per-project row linked to each job; the item's own
+// row keeps no job and its status is derived from the rows.
+async function queueOrgItem(item, { projectId, allProjects, embedder, operatorNote, ...limits }, env) {
+  const targets = orgTargets(openDb(env), item, { projectId, allProjects });
+  const prompt = await buildIssuePrompt({ item, embedder, operatorNote }, env);
+  const jobLimits = { ...limits, operatorNote, tier: tierOf(item, limits.tier) };
+  const outcomes = targets.map((target) => queueOrgTarget(item, target, { prompt, limits: jobLimits }, env));
+  const jobs = outcomes.filter((outcome) => outcome.job).map((outcome) => outcome.job);
+  const skipped = outcomes.filter((outcome) => outcome.skipped).map((outcome) => outcome.skipped);
+  if (!jobs.length) throw new UserError(allSkippedMessage(item, skipped));
+  return { job: jobs[0], jobs, skipped, item, targetProject: jobs.length === 1 ? jobs[0].project : null };
+}
+
+// The prior-run block and slug of the operator run a `run_dir` names, validated as for a free-prompt job; nothing when none was named.
+function priorRunSeed({ runDir: raw, projectId }, env) {
+  if (typeof raw !== "string" || raw.trim() === "") return { block: null, slug: null };
+  const project = projectById(openDb(env), projectId);
+  const run = resolveOperatorRunDir({ runDir: raw, project: project?.name ?? projectId, projectId, env });
+  return { block: priorRunBlock({ projectId, slug: run.slug, state: run.state, env }), slug: run.slug };
+}
+
+// Queues the job an issue builds; a project item is linked to that job, an org item names the project id it goes to or `allProjects`.
+export async function queueIssue(
+  { id, projectId, allProjects = false, priority, maxAttempts, timeoutS, tier, embedder, operatorNote, runDir: priorRunDir, origin } = {},
+  env = process.env,
+) {
+  const item = queueableIssue(id, env);
+  if (item.scope === "org") {
+    if (priorRunDir) throw new UserError("`run_dir` is not supported for an org issue: a run belongs to one project, and an org item queues per project");
+    return await queueOrgItem(item, { projectId, allProjects, priority, maxAttempts, timeoutS, tier, embedder, operatorNote, origin }, env);
+  }
+  const ownProjectId = itemProjectId(openDb(env), item, allProjects ? ALL_PROJECTS : projectId);
+  const seed = priorRunSeed({ runDir: priorRunDir, projectId: ownProjectId }, env);
+  const prompt = await buildIssuePrompt({ item, embedder, operatorNote, priorRun: seed.block }, env);
+  const job = addJob(
+    { projectId: ownProjectId, prompt, priority, maxAttempts, timeoutS, tier: tierOf(item, tier), slug: seed.slug, operatorNote, origin },
+    env,
+  );
+  if (linkIssueJob(item.id, job.id, env)) return { job, jobs: [job], skipped: [], item, targetProject: item.project };
+  cancelJob(job.id, { reason: "issue was queued by another caller" }, env);
+  throw new UserError(
+    `issue \`${item.id}\` was queued by another caller; ${jobRef(job.id)} was cancelled and nothing else changed`,
+  );
+}

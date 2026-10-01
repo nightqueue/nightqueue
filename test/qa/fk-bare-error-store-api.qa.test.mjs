@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { UserError } from "../../src/config/errors.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { linkPipelineRun } from "../../src/memory/jobs.mjs";
-import { linkRoadmapItemJob, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { linkIssueJob, saveIssue } from "../../src/memory/issues.mjs";
 import { ensureProject, makeHome } from "../../test-support/memory.mjs";
 
 // H3: a store writer fed a job that does not exist must answer a UserError naming the job, never the bare engine text.
@@ -20,11 +20,11 @@ function assertNamedRefusal(fn) {
   assert.ok(caught instanceof UserError, `expected UserError, got ${caught.constructor.name}`);
 }
 
-test("linkRoadmapItemJob names a missing job instead of a bare FOREIGN KEY error", (t) => {
+test("linkIssueJob names a missing job instead of a bare FOREIGN KEY error", (t) => {
   const env = makeHome(t, "fk-h3-item");
   const projectId = ensureProject(env, "alpha");
-  const item = saveRoadmapItem({ type: "improvement", projectId, priority: 2, title: "x" }, env);
-  assertNamedRefusal(() => linkRoadmapItemJob(item.id, 999, env));
+  const item = saveIssue({ type: "improvement", projectId, priority: 2, title: "x" }, env);
+  assertNamedRefusal(() => linkIssueJob(item.id, 999, env));
 });
 
 test("linkPipelineRun names a missing job instead of a bare FOREIGN KEY error", (t) => {

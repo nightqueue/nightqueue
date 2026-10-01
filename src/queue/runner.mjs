@@ -651,7 +651,7 @@ function repoPath(path, worktree) {
   return inside && !inside.startsWith("..") && !isAbsolute(inside) ? inside : path;
 }
 
-// The files the run's implementation artifact lists, for the roadmap's trail; a missing or unreadable artifact lists none.
+// The files the run's implementation artifact lists, for the issue trail; a missing or unreadable artifact lists none.
 function implementedFiles(job, run, state, env) {
   if (!isRunPath(job.project_id, run.facts.slug)) return [];
   try {
