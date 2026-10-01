@@ -104,6 +104,20 @@ is one `origin enrichment skipped: <reason>` line, with a status and never a sec
 or error text. The triager reads the file through `context_for_phase` as a `## Job origin`
 section, fenced and labelled as evidence, never instructions.
 
+**Sentry.** A prompt with a Sentry issue link (`https://acme.sentry.io/issues/4507/`,
+`https://sentry.io/organizations/acme/issues/4507/` or a regional `*.sentry.io` host) gets the
+origin `sentry 4507`; a short id counts only written right after the word sentry
+(`sentry API-12`, `Sentry: API-12`) or given as `--origin sentry:API-12`, never a bare
+`ABC-12` in prose (nightqueue's own `J-86`, `D-55` refs have that shape). The org's `sentry`
+connection (`connection add --type sentry --set org=<slug>`) covers it. With
+`project integrations <project> set sentry.onClosed=resolved` (or `resolvedInNextRelease`;
+`resolved` is the default) the runner writes `origin/sentry.md` at claim - the issue's title,
+culprit, level, status, counts and dates, then the latest event's exception, up to 30 frames
+(in-app first), the last 20 breadcrumbs and its tags; never its request, user, contexts,
+headers or cookies - and the close's **origin** step marks the issue with that status and leaves
+a best-effort note `Fixed by <pr url>, merged as <sha7>` (a note that fails is a warning, the
+issue still counts as resolved). A short id is resolved to its issue id through the API first.
+
 **`--tier` declares the risk of the job.** `queue add --tier trivial|simple|complex`
 (and the `tier` parameter of `queue_add`) records the tier on
 the job, and the unattended prompt carries it into the run as

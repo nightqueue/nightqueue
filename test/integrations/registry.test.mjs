@@ -20,23 +20,23 @@ import { requestJson } from "../../src/integrations/http.mjs";
 const INTEGRATIONS_DIR = fileURLToPath(new URL("../../src/integrations/", import.meta.url));
 const SECRET = "ghp_registrytestsecret0000000000000000";
 
-test("the registry lists github first and only github in this build", () => {
-  assert.deepEqual(providers().map((provider) => provider.kind), ["github"]);
+test("the registry lists github first, then sentry, in this build", () => {
+  assert.deepEqual(providers().map((provider) => provider.kind), ["github", "sentry"]);
   assert.equal(providerOf("github").kind, "github");
   assert.equal(providerOf("nope"), null);
-  assert.deepEqual(slotTypes(), ["github"]);
+  assert.deepEqual(slotTypes(), ["github", "sentry"]);
   assert.deepEqual(manyTypes(), []);
-  assert.deepEqual(originProviders(), []);
+  assert.deepEqual(originProviders().map((provider) => provider.kind), ["sentry"]);
 });
 
 test("emptySlots is derived from the one-cardinality providers", () => {
-  assert.deepEqual({ ...emptySlots() }, { github: null });
+  assert.deepEqual({ ...emptySlots() }, { github: null, sentry: null });
   assert.equal(Object.getPrototypeOf(emptySlots()), null);
 });
 
 test("CONNECTION_TYPES is the registry's map with the github descriptor", () => {
   assert.ok(CONNECTION_TYPES instanceof Map);
-  assert.deepEqual([...CONNECTION_TYPES.keys()], ["github"]);
+  assert.deepEqual([...CONNECTION_TYPES.keys()], ["github", "sentry"]);
   const github = CONNECTION_TYPES.get("github");
   assert.deepEqual(github.secretFields, ["token"]);
   assert.deepEqual(github.extraFields, []);
@@ -59,7 +59,7 @@ test("withProviders swaps the list for the callback and restores it after a thro
     assert.deepEqual({ ...emptySlots() }, {});
   });
   await assert.rejects(() => withProviders([fake], () => Promise.reject(new Error("boom"))), /boom/);
-  assert.deepEqual(providers().map((provider) => provider.kind), ["github"]);
+  assert.deepEqual(providers().map((provider) => provider.kind), ["github", "sentry"]);
   await assert.rejects(() => withProviders("fake", () => null), TypeError);
 });
 

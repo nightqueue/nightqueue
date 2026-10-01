@@ -1,6 +1,7 @@
 import {
   addConnection,
   bindConnection,
+  connectionExtras,
   hasConnection,
   listConnections,
   removeConnection,
@@ -52,10 +53,27 @@ function saveSecretsAfterConfig({ secrets, ctx, name }) {
   }
 }
 
+// Reads the `--set <field>=<value>` options of `connection add` into an object; a field given twice is refused.
+function parseExtraFields(assignments, usage) {
+  const extra = Object.create(null);
+  for (const assignment of assignments ?? []) {
+    const at = assignment.indexOf("=");
+    const field = at > 0 ? assignment.slice(0, at).trim() : "";
+    if (!field) throw new UserError(`\`--set\` takes <field>=<value>; usage: ${usage}`);
+    if (field in extra) throw new UserError(`\`--set ${field}\` given twice`);
+    extra[field] = assignment.slice(at + 1).trim();
+  }
+  return extra;
+}
+
 // Runs `connection add`, reading the secret from stdin and never from argv.
 async function runAdd(argv, ctx) {
-  const usage = "nightqueue connection add <name> --type <type> [--org <name>]";
-  const { values, positionals } = parseCommand(argv, { type: { type: "string" }, org: { type: "string" } });
+  const usage = "nightqueue connection add <name> --type <type> [--org <name>] [--set <field>=<value>]...";
+  const { values, positionals } = parseCommand(argv, {
+    type: { type: "string" },
+    org: { type: "string" },
+    set: { type: "string", multiple: true },
+  });
   checkArgs(positionals, { min: 1, usage });
   const name = positionals[0];
   if (!values.type) throw new UserError(`\`connection add\` requires --type <type>; usage: ${usage}`);
@@ -63,16 +81,17 @@ async function runAdd(argv, ctx) {
   const config = loadConfig(ctx.env, { warn: ctx.err });
   const secrets = loadSecrets(ctx.env, { warn: ctx.err });
   assertName("connection", name);
-  requireType(values.type);
+  const descriptor = requireType(values.type);
+  const extra = connectionExtras(values.type, parseExtraFields(values.set, usage));
   const target = values.org === undefined ? await defaultOrg(store, config) : await requireOrg(store, values.org);
   const org = target.name;
   if (hasConnection(secrets, name)) throw new UserError(`connection \`${name}\` already exists; remove it first`);
   const secret = await readSecret({
     stdin: ctx.stdin,
     stdout: ctx.stdout,
-    prompt: `${values.type} secret for \`${name}\`: `,
+    prompt: `${values.type} ${descriptor.secretLabel ?? "secret"} for \`${name}\`: `,
   });
-  const result = addConnection({ config, secrets, name, type: values.type, orgId: target.id, secret });
+  const result = addConnection({ config, secrets, name, type: values.type, orgId: target.id, secret, extra });
   ctx.saveSecrets(result.secrets, ctx.env);
   saveConfigAfterSecret({ config: result.config, ctx, name, org });
   if (result.bound) {

@@ -64,13 +64,42 @@ export function listConnections(config, secrets) {
   return [...rows.values()];
 }
 
+// Validates one extra field value against its declaration, answering the value or its declared default.
+function extraValue(type, field, given) {
+  if (given === undefined) {
+    if (field.required) throw new UserError(`a ${type} connection needs --set ${field.name}=<value> (${field.format ?? "a value"})`);
+    return field.default;
+  }
+  if (typeof given !== "string" || !given || (typeof field.check === "function" && !field.check(given))) {
+    throw new UserError(`\`--set ${field.name}\` of a ${type} connection takes ${field.format ?? "a value"}`);
+  }
+  return given;
+}
+
+// Validates the extra fields given for a connection type, filling the declared defaults; an undeclared field is refused.
+export function connectionExtras(type, extra = {}) {
+  const fields = requireType(type).extraFields ?? [];
+  const declared = fields.map((field) => field.name);
+  const unknown = Object.keys(extra ?? {}).find((name) => !declared.includes(name));
+  if (unknown !== undefined) {
+    throw new UserError(`a ${type} connection has no field \`${unknown}\`; fields: ${declared.length ? declared.join(", ") : "(none)"}`);
+  }
+  const values = {};
+  for (const field of fields) {
+    const value = extraValue(type, field, extra?.[field.name]);
+    if (value !== undefined) values[field.name] = value;
+  }
+  return values;
+}
+
 // Builds config and secrets with the new connection, binding it to the org's slot only when that slot is empty.
-export function addConnection({ config, secrets, name, type, orgId, secret }) {
+export function addConnection({ config, secrets, name, type, orgId, secret, extra = {} }) {
   assertName("connection", name);
   const descriptor = requireType(type);
+  const fields = connectionExtras(type, extra);
   if (typeof secret !== "string" || !secret) throw new UserError("empty secret; nothing was stored");
   if (hasConnection(secrets, name)) throw new UserError(`connection \`${name}\` already exists; remove it first`);
-  secrets.connections[name] = { type, [descriptor.secretFields[0]]: secret };
+  secrets.connections[name] = { type, [descriptor.secretFields[0]]: secret, ...fields };
   const occupiedBy = connectionFor(config, orgId, type);
   if (!occupiedBy) slotsFor(config, orgId)[type] = name;
   return { config, secrets, orgId, bound: !occupiedBy, occupiedBy };

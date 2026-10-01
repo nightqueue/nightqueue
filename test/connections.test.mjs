@@ -158,5 +158,5 @@ test("testConnection turns a timeout and a network error into a detail string", 
 test("testConnection and requireType refuse unknown inputs", async () => {
   await assert.rejects(() => testConnection({ name: "nope", secrets: emptySecrets() }), UserError);
   assert.equal(requireType("github").secretFields[0], "token");
-  assert.throws(() => requireType("sentry"), UserError);
+  assert.throws(() => requireType("nope"), UserError);
 });

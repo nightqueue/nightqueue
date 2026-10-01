@@ -2,9 +2,9 @@ import { UserError } from "../config/errors.mjs";
 import { originProviders, providerOf } from "./registry.mjs";
 
 // Parses a text with one provider's origin parser, turning a parser that throws or answers nothing into null.
-function parseWith(provider, text) {
+function parseWith(provider, text, { explicit = false } = {}) {
   try {
-    const ref = provider.origin.parse(text);
+    const ref = provider.origin.parse(text, { explicit });
     return typeof ref === "string" && ref ? ref : null;
   } catch {
     return null;
@@ -35,7 +35,7 @@ export function explicitOrigin(origin) {
   if (!provider || typeof provider.origin?.parse !== "function") {
     throw new UserError(`unknown origin kind \`${kind}\`; known origin kinds: ${knownOriginKinds()}`);
   }
-  const parsed = ref ? parseWith(provider, ref) : null;
+  const parsed = ref ? parseWith(provider, ref, { explicit: true }) : null;
   if (!parsed) throw new UserError(`\`${ref}\` is not a ${kind} reference; known origin kinds: ${knownOriginKinds()}`);
   return { kind, ref: parsed };
 }

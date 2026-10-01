@@ -76,7 +76,9 @@ test("an explicit origin is validated by its provider, and an unknown kind or a 
     assert.throws(() => explicitOrigin({ kind: "tracker", ref: "not an issue" }), /`not an issue` is not a tracker reference; known origin kinds: tracker/);
     assert.throws(() => explicitOrigin({ kind: "github", ref: "1" }), /unknown origin kind `github`; known origin kinds: tracker/);
   });
-  assert.throws(() => explicitOrigin({ kind: "tracker", ref: "42" }), /unknown origin kind `tracker`; known origin kinds: \(none\)/);
+  await withProviders([originProviders()[0]], () => {
+    assert.throws(() => explicitOrigin({ kind: "tracker", ref: "42" }), /unknown origin kind `tracker`; known origin kinds: \(none\)/);
+  });
 });
 
 test("addJob records an explicit origin over the detected one, detects one when none is given, and stores none when nothing matches", async (t) => {

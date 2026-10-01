@@ -271,6 +271,8 @@ nightqueue project integrations api unset <kind>.<key> ...         # the last ke
 echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github
 nightqueue connection bind gh --org acme           # bind (or rebind) an org slot
 nightqueue connection test gh                      # prints login and scopes, never the token
+echo "$SENTRY_AUTH_TOKEN" | nightqueue connection add sn --type sentry --set org=acme [--set url=https://sentry.example.com]
+nightqueue connection test sn                      # prints org=<slug>, never the token
 nightqueue connection list --json
 nightqueue connection remove gh                    # unbinds from every org, then deletes the secret
 ```
@@ -278,6 +280,11 @@ nightqueue connection remove gh                    # unbinds from every org, the
 The secret is read from stdin when stdin is not a terminal, and asked for in a
 hidden prompt otherwise. It is never accepted as a command-line argument, and
 never printed back - not by `list`, not by `--json`, not by an error message.
+A type that needs more than its secret takes it as `--set <field>=<value>`, validated
+against the fields the type declares before the secret is read: a `sentry` connection
+needs `org` (its organization slug) and takes an optional `url` (an https origin, default
+`https://sentry.io`, for a self-hosted Sentry); a missing required field, an unknown one or
+a malformed value is refused and nothing is stored. These fields are not secret.
 
 **Project integrations.** `project integrations <project>` holds what a project does with the
 services its jobs come from, one setting per `<kind>.<key>` (a key may itself be dotted, stored

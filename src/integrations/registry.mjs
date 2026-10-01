@@ -1,6 +1,7 @@
 import { github } from "./github.mjs";
+import { sentry } from "./sentry.mjs";
 
-const BUILT_IN = Object.freeze([github]);
+const BUILT_IN = Object.freeze([github, sentry]);
 
 let active = BUILT_IN;
 

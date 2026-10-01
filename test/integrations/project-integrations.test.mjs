@@ -84,22 +84,23 @@ function payloadOf(result) {
 
 test("a build whose providers declare no settings shows no integrations and refuses every key", async (t) => {
   const { env, projectId } = makeSettingsHome(t, "integrations-no-settings");
+  await withProviders([originProviders()[0]], async () => {
+    const shown = await runCli(env, ["project", "integrations", "alpha", "show"]);
+    assert.equal(shown.code, 0, shown.err.join("\n"));
+    assert.deepEqual(shown.out, ["no integrations"]);
 
-  const shown = await runCli(env, ["project", "integrations", "alpha", "show"]);
-  assert.equal(shown.code, 0, shown.err.join("\n"));
-  assert.deepEqual(shown.out, ["no integrations"]);
+    const refused = await runCli(env, ["project", "integrations", "alpha", "set", "tracker.onClosed=resolved"]);
+    assert.equal(refused.code, 1);
+    assert.ok(refused.err.join("\n").includes(NO_SETTINGS), refused.err.join("\n"));
+    assert.equal(storedColumn(env, projectId), null);
 
-  const refused = await runCli(env, ["project", "integrations", "alpha", "set", "tracker.onClosed=resolved"]);
-  assert.equal(refused.code, 1);
-  assert.ok(refused.err.join("\n").includes(NO_SETTINGS), refused.err.join("\n"));
-  assert.equal(storedColumn(env, projectId), null);
-
-  const client = await connectInProcess(t, env);
-  const answer = payloadOf(await client.callTool({ name: "project_integrations", arguments: { project: "alpha", action: "show" } }));
-  assert.deepEqual(answer, { project: "alpha", integrations: null, providers: [{ kind: "github", keys: [] }], contract: 2 });
-  const mcpRefused = await client.callTool({ name: "project_integrations", arguments: { project: "alpha", action: "set", key: "github.x", value: "y" } });
-  assert.equal(mcpRefused.isError, true);
-  assert.ok(textOf(mcpRefused).includes(NO_SETTINGS), textOf(mcpRefused));
+    const client = await connectInProcess(t, env);
+    const answer = payloadOf(await client.callTool({ name: "project_integrations", arguments: { project: "alpha", action: "show" } }));
+    assert.deepEqual(answer, { project: "alpha", integrations: null, providers: [{ kind: "github", keys: [] }], contract: 2 });
+    const mcpRefused = await client.callTool({ name: "project_integrations", arguments: { project: "alpha", action: "set", key: "github.x", value: "y" } });
+    assert.equal(mcpRefused.isError, true);
+    assert.ok(textOf(mcpRefused).includes(NO_SETTINGS), textOf(mcpRefused));
+  });
 });
 
 test("set stores dotted keys nested under the provider, show prints them, and unsetting the last key leaves NULL", async (t) => {
