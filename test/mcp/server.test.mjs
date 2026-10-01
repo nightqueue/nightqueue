@@ -954,6 +954,45 @@ test("queue_status answers with the nudge that matches the state of the queue, l
   assert.match(added.hint, /1 runner online - it will be picked up\.$/, "queue_add did not report the live watcher");
 });
 
+test("queue_add and queue_status do not promise a pickup to a once runner bound to another job", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-hint-once");
+  addJob({ projectId: ensureProject(env, "alpha"), prompt: "the job the once runner holds" }, env);
+  const startedAt = new Date().toISOString();
+  writeRunnerRecord({ pid: process.pid, startedAt, mode: "once", jobId: 1, logPath: "/tmp/once.log" }, env);
+  const client = await connect(t, env);
+
+  const other = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the parser" } }));
+  assert.match(other.hint, /1 runner online in once mode for J-1 - it will not pick this job; start a drain with queue_run \(no job_id\)\.$/);
+  const status = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.match(status.hint, /^1 runner online: 1 once \(J-1\) - /);
+
+  writeRunnerRecord({ pid: process.ppid, startedAt, mode: "drain", logPath: "/tmp/drain.log" }, env);
+  const mixed = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the lexer" } }));
+  assert.match(mixed.hint, /1 runner online - it will be picked up\.$/, "the once runner of another job was counted beside the drain");
+  const split = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
+  assert.match(split.hint, /^2 runners online: 1 drain, 1 once \(J-1\) - /);
+});
+
+test("queue_retry says who will pick the job up: a drain, a once runner of another job, and a once runner bound to it", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-retry-hint");
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env).id;
+  const client = await connect(t, env);
+  const startedAt = new Date().toISOString();
+  const retryAfterCancel = async () => {
+    await client.callTool({ name: "queue_cancel", arguments: { job_id: id } });
+    return payloadOf(await client.callTool({ name: "queue_retry", arguments: { job_id: id } })).hint;
+  };
+
+  writeRunnerRecord({ pid: process.pid, startedAt, mode: "drain", logPath: "/tmp/r.log" }, env);
+  assert.equal(await retryAfterCancel(), "1 runner online - it will be picked up.");
+
+  writeRunnerRecord({ pid: process.pid, startedAt, mode: "once", jobId: id + 40, logPath: "/tmp/r.log" }, env);
+  assert.match(await retryAfterCancel(), new RegExp(`^1 runner online in once mode for J-${id + 40} - it will not pick this job; start a drain with queue_run \\(no job_id\\)\\.$`));
+
+  writeRunnerRecord({ pid: process.pid, startedAt, mode: "once", jobId: id, logPath: "/tmp/r.log" }, env);
+  assert.equal(await retryAfterCancel(), "1 runner online - it will be picked up.");
+});
+
 // The pause region of a runner of this home, as the runner itself would have merged it into its own registration.
 function pauseRegion(resetsAt) {
   return {
@@ -1318,6 +1357,7 @@ test("queue_retry answers a gate, refuses one without a note and only starts a r
   assert.equal(retried.job.slug, "fix-the-worker", "a retry without `fresh` gave up the slug of the run");
   assert.equal(retried.runDir, null);
   assert.equal(retried.runner, null, "the tool started a runner nobody asked for");
+  assert.match(retried.hint, /^0 runners online - pending jobs will wait until `nightqueue queue run` starts one\.$/);
   assert.equal(getJob(gated, env).finished_at, null);
 
   const unknown = await client.callTool({ name: "queue_retry", arguments: { job_id: 4242, note: "go" } });

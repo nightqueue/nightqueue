@@ -4,15 +4,18 @@ import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, countActiveJobs, countsByStatus, LEASE_GRACE_S } from "../../src/memory/jobs.mjs";
 import {
   advisoryLines,
+  claimingRunners,
   clockLabel,
   isQueueIdle,
   noRunnerWait,
+  onceOnlyLine,
   parkedBacklogLine,
   parkedJobLabel,
   pausedRunnerLine,
   pendingJobs,
   runnerPauseLabel,
   runnersOnline,
+  runnersOnlineSplit,
   windowCadenceLabel,
   windowClosedLine,
   windowWaitingLine,
@@ -249,4 +252,19 @@ test("what the surfaces say instead of `start the batch` is the furthest pause o
   assert.equal(pausedRunnerLine([free], NOW), null);
   assert.equal(pausedRunnerLine([], NOW), null);
   assert.equal(pausedRunnerLine(undefined, NOW), null, "a listing that is not a list threw instead of answering");
+});
+
+test("a once runner counts only for its own job and the status hint splits the count by mode", () => {
+  const drain = { running: true, pid: 1, mode: "drain", jobId: null };
+  const onceOther = { running: true, pid: 2, mode: "once", jobId: 108 };
+  const onceOwn = { running: true, pid: 3, mode: "once", jobId: 109 };
+  const onceMore = { running: true, pid: 4, mode: "once", jobId: 112 };
+
+  assert.deepEqual(claimingRunners([drain, onceOther, onceOwn], 109), [drain, onceOwn]);
+  assert.deepEqual(claimingRunners([onceOther], 109), [], "a once runner of another job was counted as able to claim");
+  assert.equal(onceOnlyLine([onceOther]), "1 runner online in once mode for J-108 - it will not pick this job; start a drain with queue_run (no job_id)");
+  assert.equal(onceOnlyLine([onceOther, onceMore]), "2 runners online in once mode for J-108, J-112 - they will not pick this job; start a drain with queue_run (no job_id)");
+  assert.equal(runnersOnlineSplit([drain, drain]), "2 runners online");
+  assert.equal(runnersOnlineSplit([drain, onceOther]), "2 runners online: 1 drain, 1 once (J-108)");
+  assert.equal(runnersOnlineSplit([onceOther, onceMore]), "2 runners online: 2 once (J-108, J-112)");
 });
