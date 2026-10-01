@@ -7,7 +7,7 @@ import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { launchOperator } from "../host/operator.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
-import { ALL_PROJECTS, PROMPT_SOURCE_CONFLICT } from "../memory/roadmap.mjs";
+import { ALL_PROJECTS } from "../memory/roadmap.mjs";
 import { decisionRef } from "../memory/scope.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
@@ -69,7 +69,7 @@ import { runtimeLabel } from "./runtime-versions.mjs";
 import { itemRef, jobRef, parseJobRef } from "../memory/refs.mjs";
 
 export const USAGE = {
-  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--roadmap <ref> [--project <name|all>]]",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--roadmap <ref> [--project <name|all>] [--run-dir <dir>] [<note...>]]",
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
@@ -336,12 +336,17 @@ function roadmapQueuedLines({ item, jobs, skipped }) {
 
 // Queues the job a roadmap item builds; a project item owns its project, an org item needs `--project <name|all>`.
 async function addFromRoadmap(positionals, values, ctx) {
-  if (positionals.length) throw new UserError(PROMPT_SOURCE_CONFLICT);
   refuseRunForAll(values);
   const store = openStore(ctx.env);
   const id = await store.roadmap.itemIdOfRef(values.roadmap);
   const target = await roadmapQueueTarget(store, values.project);
-  const queued = await store.roadmap.queueRoadmapItem({ id, ...target, ...addLimits(values) });
+  const queued = await store.roadmap.queueRoadmapItem({
+    id,
+    ...target,
+    ...addLimits(values),
+    operatorNote: positionals.join(" ").trim() || undefined,
+    runDir: values["run-dir"],
+  });
   for (const line of roadmapQueuedLines(queued)) ctx.out(line);
   return queued.jobs;
 }
@@ -372,6 +377,7 @@ const ADD_OPTIONS = {
   foreground: { type: "boolean" },
   yes: { type: "boolean" },
   roadmap: { type: "string" },
+  "run-dir": { type: "string" },
   project: { type: "string" },
   tier: { type: "string" },
   key: { type: "string" },
@@ -423,6 +429,9 @@ function splitAddArgv(argv) {
 function parseAdd(argv) {
   const { optionTokens, words } = splitAddArgv(argv);
   const { values } = parseCommand(optionTokens, ADD_OPTIONS);
+  if (values.roadmap === undefined && values["run-dir"] !== undefined) {
+    throw new UserError(`\`--run-dir\` goes with \`--roadmap\`; usage: ${USAGE.add}`);
+  }
   if (values.roadmap === undefined) checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
   return { values, positionals: words };
 }

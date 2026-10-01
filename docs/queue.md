@@ -14,6 +14,7 @@ nightqueue queue add "fix the flaky worker"                    # same, for the p
 nightqueue queue add fix the flaky worker --run                # enqueue and start the runner on it, detached
 nightqueue queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
 nightqueue queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
+nightqueue queue add --roadmap NQ-12 [--run-dir <dir>] "mind the slow disk"   # a roadmap item's job, with an operator note and/or a prior operator run
 nightqueue queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightqueue queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
 nightqueue queue status --blocked                              # only the gated jobs a preflight block stopped
@@ -68,6 +69,13 @@ with the reason on the line `J-<id> did not start (<reason>); it stays in the qu
 in the queue. `--foreground` on a command that was not given `--run` is a usage
 error, never a silent no-op. An explicit job id ignores the pause sentinel, so
 `--run` runs even on a paused queue.
+
+**A roadmap item's job takes a note and a run.** `queue add --roadmap <ref> [--run-dir <dir>]
+["<note>"]` (`queue_add` with `roadmap_item_id`, `prompt` and `run_dir`) keeps the item as
+the brief and adds the words as a `## Operator note` section right after it; `--run-dir` binds
+the job to a prior operator run (a project item only), checked as for a free prompt, its
+`## PRIOR RUN (operator)` block after the note. Section order: item, note, prior run, decisions.
+The note is recorded as the job's `operator_note` and in the item's `queued` comment, with the run dir.
 
 **`--tier` declares the risk of the job.** `queue add --tier trivial|simple|complex`
 (and the `tier` parameter of `queue_add`) records the tier on

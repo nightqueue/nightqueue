@@ -343,7 +343,13 @@ instead of failing, and only a second call carrying `register: true` (after the
 user confirmed it) registers the repository and queues the job. An unattended run
 never registers anything: inside a job the call is refused. `prompt` is required
 unless `roadmap_item_id` names a roadmap item, which builds the prompt and owns
-the project (see [Decisions and roadmap](memory.md#decisions-and-roadmap)); passing both is refused.
+the project (see [Decisions and roadmap](memory.md#decisions-and-roadmap)). With
+`roadmap_item_id`, `prompt` is an optional operator note, written verbatim as a
+`## Operator note` section right after the item block and recorded as the job's
+`operator_note` and in the item's `queued` comment, and `run_dir` (a project item
+only) binds the job to a prior operator run, resolved and refused exactly as for a free
+prompt, its `## PRIOR RUN (operator)` block going right after the note; the item stays
+the brief and is never replaced.
 `queue_status` never returns the prompt of a job and truncates `notice_md` and `result` at 500
 characters in a listing; a row whose text was cut carries `notice_truncated: true` or
 `result_truncated: true` (the key is absent when the text fits, and the detail of one job by

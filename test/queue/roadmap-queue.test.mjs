@@ -19,6 +19,7 @@ import {
 } from "../../src/memory/roadmap.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
+import { recordPhaseDone, recordRunFields } from "../../src/queue/run-state.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { fakeEmbedder, makeDir, makeHome, makeProject, mergedChecklist, projectIdOf, settleThroughStore, ensureProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
@@ -132,14 +133,10 @@ test("an item with no detail and no linked decision queues the task alone", asyn
   assert.equal(getJob(queued.id, env).prompt, "## Task\nindex the logs\n\n## Roadmap item\nRoadmap: AP-1\nType: chore\nCommit type: chore");
 });
 
-test("queue_add refuses two prompt sources, none at all, and a project that is not the item's", async (t) => {
+test("queue_add refuses no prompt source at all, and a project that is not the item's", async (t) => {
   const { env, item } = makeRoadmapHome(t, "roadmap-queue-refusals");
   makeProject(t, env, "beta");
   const client = await connect(t, env);
-
-  const both = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, prompt: "fix the worker" } });
-  assert.equal(both.isError, true);
-  assert.match(textOf(both), /pass either `prompt` or `roadmap_item_id`, never both/);
 
   const neither = await client.callTool({ name: "queue_add", arguments: { project: "alpha" } });
   assert.equal(neither.isError, true);
@@ -238,14 +235,6 @@ test("nightqueue queue add --roadmap builds the same prompt as the tool, from an
   assert.equal(getJob(1, env).prompt, EXPECTED_PROMPT);
   assert.equal(getRoadmapItem(item.id, env).job_id, 1);
 
-  const both = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", "AP-1", "fix", "the", "worker"], {
-    env,
-    cwd: elsewhere,
-    encoding: "utf8",
-  });
-  assert.equal(both.status, 1);
-  assert.match(both.stderr, /pass either `prompt` or `roadmap_item_id`, never both/);
-
   const malformed = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", "zero"], { env, cwd: elsewhere, encoding: "utf8" });
   assert.equal(malformed.status, 1);
   assert.match(malformed.stderr, /expected a roadmap item ref \(`<KEY>-<number>`\), got `zero`/);
@@ -270,6 +259,112 @@ test("a job built from a roadmap item carries the operator's tier, through the t
   });
   assert.equal(added.status, 0, added.stderr);
   assert.equal(getJob(getRoadmapItem(item.id, env).job_id, env).tier, "complex");
+});
+
+const RUN_SLUG = "hunt-the-notice";
+const NOTE = "mind the slow disk; keep the lease renewal in one place";
+const ITEM_END = "Commit type: refactor or perf\n\n";
+
+// The expected prompt with `sections` placed right after the item block and before the decisions.
+function promptWith(...sections) {
+  return EXPECTED_PROMPT.replace(ITEM_END, () => `${ITEM_END}${sections.map((section) => `${section}\n\n`).join("")}`);
+}
+
+// An operator run of `alpha` with its triage done, and the block the runtime writes for it.
+function makeOperatorRun(env) {
+  const projectId = ensureProject(env, "alpha");
+  recordRunFields({ projectId, slug: RUN_SLUG, fields: { origin: "operator", type: "bug/error", evidenceLevel: 3 }, env });
+  recordPhaseDone({ projectId, slug: RUN_SLUG, phase: "triage", artifact: "01-triage.md", verdict: "PROCEED", env });
+  const dir = runDir(projectId, RUN_SLUG, env);
+  const block = ["## PRIOR RUN (operator)", `RUN_DIR: ${dir}`, "Last completed phase: triage", "Evidence level: 3", "Resume from phase: explore"].join("\n");
+  return { dir, block };
+}
+
+// The `queued` comment of an item, newest last.
+function queuedComments(env, item) {
+  return getRoadmapItemDetail(item.id, {}, env).comments.filter((comment) => comment.kind === "queued");
+}
+
+test("queue_add from a roadmap item with a note puts it verbatim after the item block and records it on the row and the comment", async (t) => {
+  const { env, item } = makeRoadmapHome(t, "roadmap-queue-note");
+  const client = await connect(t, env);
+
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, prompt: NOTE } }));
+
+  const job = getJob(queued.id, env);
+  assert.equal(job.prompt, promptWith(`## Operator note\n${NOTE}`));
+  assert.equal(job.operator_note, NOTE);
+  assert.equal(job.slug, null);
+  assert.equal(queuedComments(env, item)[0].body, `J-${queued.id} queued\n\n${NOTE}`);
+});
+
+test("queue_add from a roadmap item with a run_dir binds the run and places its block right after the item block", async (t) => {
+  const { env, item } = makeRoadmapHome(t, "roadmap-queue-run-dir");
+  const { dir, block } = makeOperatorRun(env);
+  const client = await connect(t, env);
+
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, run_dir: dir } }));
+
+  const job = getJob(queued.id, env);
+  assert.equal(job.prompt, promptWith(block));
+  assert.equal(job.slug, RUN_SLUG);
+  assert.equal(job.operator_note, null);
+  assert.equal(queuedComments(env, item)[0].body, `J-${queued.id} queued\n\nRun dir: ${dir}`);
+});
+
+test("queue_add from a roadmap item with a note and a run_dir orders item, note, prior run, decisions", async (t) => {
+  const { env, item } = makeRoadmapHome(t, "roadmap-queue-note-run-dir");
+  const { dir, block } = makeOperatorRun(env);
+  const client = await connect(t, env);
+
+  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, prompt: NOTE, run_dir: dir } }));
+
+  const job = getJob(queued.id, env);
+  assert.equal(job.prompt, promptWith(`## Operator note\n${NOTE}`, block));
+  assert.equal(job.slug, RUN_SLUG);
+  assert.equal(job.operator_note, NOTE);
+  assert.equal(queuedComments(env, item)[0].body, `J-${queued.id} queued\n\n${NOTE}\n\nRun dir: ${dir}`);
+});
+
+test("queue_add from a roadmap item refuses a run_dir as for a free prompt, and queues nothing", async (t) => {
+  const { env, item } = makeRoadmapHome(t, "roadmap-queue-run-dir-refusals");
+  const { dir } = makeOperatorRun(env);
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: "plain-run", fields: { type: "bug/error" }, env });
+  const client = await connect(t, env);
+  const refuse = async (run_dir) => {
+    const result = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, run_dir } });
+    assert.equal(result.isError, true, textOf(result));
+    return textOf(result);
+  };
+
+  assert.match(await refuse(join(env.NIGHTQUEUE_HOME, "elsewhere", RUN_SLUG)), /`run_dir` must be `/);
+  assert.match(await refuse(runDir(ensureProject(env, "alpha"), "plain-run", env)), /is not an operator run/);
+  assert.match(await refuse("runs/alpha/x"), /must be an absolute or `~\/` path/);
+  assert.equal(getRoadmapItem(item.id, env).status, "todo");
+
+  const first = payloadOf(await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, run_dir: dir } }));
+  const other = saveRoadmapItem({ type: "chore", projectId: projectIdOf(env, "alpha"), title: "index the logs" }, env);
+  const taken = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: other.ref, run_dir: dir } });
+  assert.equal(taken.isError, true);
+  assert.match(textOf(taken), new RegExp(`J-${first.id} already runs from `));
+  assert.equal(getRoadmapItem(other.id, env).status, "todo");
+});
+
+test("nightqueue queue add --roadmap takes a note and a --run-dir", async (t) => {
+  const { env, item } = makeRoadmapHome(t, "roadmap-queue-cli-note");
+  const { dir, block } = makeOperatorRun(env);
+
+  const added = spawnSync(process.execPath, [CLI, "queue", "add", "--roadmap", item.ref, "--run-dir", dir, NOTE], { env, encoding: "utf8" });
+
+  assert.equal(added.status, 0, added.stderr);
+  const job = getJob(1, env);
+  assert.equal(job.prompt, promptWith(`## Operator note\n${NOTE}`, block));
+  assert.equal(job.operator_note, NOTE);
+  assert.equal(job.slug, RUN_SLUG);
+
+  const alone = spawnSync(process.execPath, [CLI, "queue", "add", "--run-dir", dir, "fix it"], { env, encoding: "utf8" });
+  assert.equal(alone.status, 1);
+  assert.match(alone.stderr, /`--run-dir` goes with `--roadmap`/);
 });
 
 const RELATED_HEADING = "## Related decisions";

@@ -1,5 +1,5 @@
 import { inTransaction } from "./db.mjs";
-import { refuseMissingJob } from "./job-row.mjs";
+import { queuedCommentJob, refuseMissingJob } from "./job-row.mjs";
 import { attachNames } from "./registry.mjs";
 import { insertComment, jobRefs } from "./roadmap-comments.mjs";
 import {
@@ -50,7 +50,6 @@ export function syncOrgStatus(db, itemId, author) {
 // Links the row of an org item for one project to the job built for it, moves it to `in_progress`, leaves the `queued`
 // comment and re-derives the item, in one transaction; false means a live job already holds that row.
 export function linkOrgRow(db, { itemId, projectId, jobId }) {
-  const job = { id: jobId };
   const statement = db.prepare(
     `INSERT INTO roadmap_item_projects (item_id, project_id, status, job_id, job_status_seen)
      VALUES (?, ?, ?, ?, 'pending')
@@ -61,6 +60,7 @@ export function linkOrgRow(db, { itemId, projectId, jobId }) {
   return inTransaction(db, () => {
     refuseMissingJob(db, jobId);
     if (statement.run(itemId, projectId, JOB_TO_ROADMAP.queued.status, jobId).changes !== 1) return false;
+    const job = queuedCommentJob(db, jobId);
     insertComment(db, { itemId, projectId, ...commentFor(job, "queued", jobRefs(db, job)) });
     syncOrgStatus(db, itemId, jobAuthor(jobId));
     return true;

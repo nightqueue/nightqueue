@@ -37,7 +37,6 @@ import { memoryView } from "../memory/memory.mjs";
 import { itemRef, jobRef, parseJobRef, requireKey } from "../memory/refs.mjs";
 import { ROADMAP_SEARCH_LIMIT } from "../memory/roadmap-search.mjs";
 import {
-  PROMPT_SOURCE_CONFLICT,
   PROMPT_SOURCE_MISSING,
   MANUAL_STATUSES,
   ROADMAP_STATUSES,
@@ -476,11 +475,10 @@ function operatorRunSeed({ args, project, env }) {
   return { prompt: withPriorRun(args.prompt, block), slug: run.slug };
 }
 
-// Requires exactly one source for the prompt of a job: the text itself, or the roadmap item that builds it.
+// Requires a source for the prompt of a job: the roadmap item that builds it (its `prompt` is then an operator note), or the text itself.
 function wantsRoadmapItem(args) {
   const hasPrompt = typeof args.prompt === "string" && args.prompt.trim() !== "";
   const hasItem = args.roadmap_item_id !== undefined && args.roadmap_item_id !== null;
-  if (hasPrompt && hasItem) throw new UserError(PROMPT_SOURCE_CONFLICT);
   if (!hasPrompt && !hasItem) throw new UserError(PROMPT_SOURCE_MISSING);
   return hasItem;
 }
@@ -1007,7 +1005,7 @@ function toolDefinitions(env, state) {
           "Enqueues an unattended /nightqueue:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
           "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. The hint reports how many runners are live right now, and a job queued with none online waits until `nightqueue queue run` starts one. " +
           "With `project` omitted, `cwd` (the absolute working directory of the caller) resolves the project. When no project is registered for it, the answer is `needs_registration`: ask the user to confirm, then call again with the same `cwd` and `register: true`. Registration never happens without `register: true`. " +
-          "With `roadmap_item_id` (the item's ref, `NQ-12`) and no `prompt`, the job prompt is built from that roadmap item, its linked decision and the accepted decisions related to it; a project item moves to `in_progress` and then follows its job: `in_review` once the job is done, `done` once the job is closed - its pull request merged through `queue_close` - and back to `todo` when the job fails or is cancelled (a close that finds the pull request closed without merge cancels the job)." +
+          "With `roadmap_item_id` (the item's ref, `NQ-12`), the job prompt is built from that roadmap item, its linked decision and the accepted decisions related to it; the item stays the brief. An optional `prompt` is then an operator note, written verbatim as a `## Operator note` section right after the item (recorded as the job's `operator_note` and in the item's `queued` comment), and an optional `run_dir` (a project item only) binds the job to a prior operator run, its `## PRIOR RUN (operator)` block going right after the note; a project item moves to `in_progress` and then follows its job: `in_review` once the job is done, `done` once the job is closed - its pull request merged through `queue_close` - and back to `todo` when the job fails or is cancelled (a close that finds the pull request closed without merge cancels the job)." +
           "An ORG roadmap item needs an explicit `project` of that org, or `all` for every project of the org, because a job is always one project's: each project gets its own row linked to its own job (a project whose row still has a live job is skipped and reported in `skipped`; the answer lists every job in `jobs`), and the item's status is derived from its rows - `in_progress` while any row is, `done` once every row is done or cancelled, otherwise the lowest open row status. Closing it by hand cancels its open rows.",
         inputSchema: {
           project: z.string().nullable().optional(),
@@ -1029,7 +1027,7 @@ function toolDefinitions(env, state) {
             .nullable()
             .optional()
             .describe(
-              "The whole request, as prose. One self-contained deliverable that can be reviewed and merged on its own; large work goes here as ONE prompt with numbered stages (`Stages: 1) ... 2) ...`), never as several jobs that depend on each other.",
+              "The whole request, as prose (with `roadmap_item_id`: an operator note added to the item, never replacing it). One self-contained deliverable that can be reviewed and merged on its own; large work goes here as ONE prompt with numbered stages (`Stages: 1) ... 2) ...`), never as several jobs that depend on each other.",
             ),
           roadmap_item_id: itemRefInput
             .nullable()
@@ -1048,17 +1046,18 @@ function toolDefinitions(env, state) {
             .nullable()
             .optional()
             .describe(
-              "The RUN_DIR of an operator run (`~/.nightqueue/runs/<project_id>/<slug>`, as `nightqueue run dir` prints it, absolute or `~/`) this job continues: the job writes into that run, and the runtime places the `## PRIOR RUN (operator)` block right after the prompt's `## Brief` section. Never write that block yourself. A run already bound to an open job is refused; `queue_retry --fresh` of the job discards the run.",
+              "The RUN_DIR of an operator run (`~/.nightqueue/runs/<project_id>/<slug>`, as `nightqueue run dir` prints it, absolute or `~/`) this job continues: the job writes into that run, and the runtime places the `## PRIOR RUN (operator)` block right after the prompt's `## Brief` section (with `roadmap_item_id`: right after the item block, or after the operator note). Never write that block yourself. A run already bound to an open job is refused; `queue_retry --fresh` of the job discards the run.",
             ),
         },
       },
       handler: async (args) => {
         if (wantsRoadmapItem(args)) {
-          if (hasRunDir(args)) throw new UserError("`run_dir` needs the operator's `prompt`: it cannot seed a job built from `roadmap_item_id`");
           const store = openStore(env);
           const queued = await store.roadmap.queueRoadmapItem({
             id: await store.roadmap.itemIdOfRef(args.roadmap_item_id),
             ...(await roadmapQueueTarget(store, args.project)),
+            operatorNote: args.prompt,
+            runDir: hasRunDir(args) ? args.run_dir : undefined,
             priority: args.priority,
             maxAttempts: args.max_attempts,
             timeoutS: args.timeout_s,
