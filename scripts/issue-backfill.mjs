@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 import { dbPath, requireExplicitHome } from "../src/config/paths.mjs";
 import { openStore } from "../src/store/open.mjs";
 
-const USAGE = "usage: node scripts/roadmap-backfill.mjs [--dry-run]";
+const USAGE = "usage: node scripts/issue-backfill.mjs [--dry-run]";
 
 // Reads the command line: `--dry-run` counts what would be written without writing it.
 function parseOptions(argv) {
@@ -20,7 +20,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
   requireExplicitHome(env);
   const store = openStore(env);
   try {
-    const tally = await store.roadmap.backfillRoadmap({ dryRun });
+    const tally = await store.issues.backfillIssues({ dryRun });
     io.log(`${dryRun ? "dry run " : ""}${dbPath(env)}: items=${tally.items} written=${tally.written} skipped=${tally.skipped}`);
     return 0;
   } finally {

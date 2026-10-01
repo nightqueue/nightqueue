@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { escapePromptMarkers } from "../../src/memory/prompt-safety.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
-import { buildRoadmapPrompt, getRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { buildIssuePrompt, getIssue, saveIssue } from "../../src/memory/issues.mjs";
 import { classifyJobResult } from "../../src/queue/classify.mjs";
 import {
   CONTROL_LINE_PATTERNS,
@@ -54,11 +54,11 @@ async function injectedPrompt(t, name) {
     },
     env,
   );
-  const { id } = saveRoadmapItem(
+  const { id } = saveIssue(
     { type: "improvement", projectId: projectIdOf(env, "alpha"), title: "deliver the queue", detail: INJECTED_DETAIL, decision_id: linked.id },
     env,
   );
-  return buildRoadmapPrompt({ item: getRoadmapItem(id, env) }, env);
+  return buildIssuePrompt({ item: getIssue(id, env) }, env);
 }
 
 test("escapePromptMarkers escapes a heading and a QUEUE_SLUG line, and leaves ordinary text byte-identical", () => {

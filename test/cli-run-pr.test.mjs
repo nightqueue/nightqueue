@@ -10,7 +10,7 @@ import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { ghBin } from "../src/host/gh.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
-import { linkRoadmapItemJob, queueRoadmapItem, saveRoadmapItem } from "../src/memory/roadmap.mjs";
+import { linkIssueJob, queueIssue, saveIssue } from "../src/memory/issues.mjs";
 import { readRunState } from "../src/queue/resume.mjs";
 import { recordJobBlock, recordRunFields } from "../src/queue/run-state.mjs";
 import { openStore } from "../src/store/open.mjs";
@@ -214,8 +214,8 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
 
 test("`run pr` of a job queued from a roadmap item ends the published body with only `Opened by nightqueue · <ref>`", async (t) => {
   const { env, id } = makeRun(t, "run-pr-roadmap");
-  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
-  assert.equal(linkRoadmapItemJob(item.id, id, env), true);
+  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
+  assert.equal(linkIssueJob(item.id, id, env), true);
 
   const published = await publishedBody(t, { env, jobId: id, name: "run-pr-roadmap-body" });
 
@@ -225,8 +225,8 @@ test("`run pr` of a job queued from a roadmap item ends the published body with 
 
 test("`run pr` inside a job with a job block publishes on an unavailable database, the footer built from state.json", async (t) => {
   const { env, id } = makeRun(t, "run-pr-sick-home");
-  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
-  assert.equal(linkRoadmapItemJob(item.id, id, env), true);
+  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
+  assert.equal(linkIssueJob(item.id, id, env), true);
   const block = { id, projectKey: "AP", itemRef: item.ref, createdAt: new Date().toISOString() };
   assert.equal(recordJobBlock({ projectId: ensureProject(env, "alpha"), slug: SLUG, block, env }).status, "written");
   const published = publishedPath(env);
@@ -243,8 +243,8 @@ test("`run pr` inside a job with a job block publishes on an unavailable databas
 
 test("`run pr` of a job queued from an org item ends with the org item's ref", async (t) => {
   const { env, id } = makeRun(t, "run-pr-org-item", { org: "dlweb" });
-  const item = saveRoadmapItem({ type: "chore", orgId: orgIdOf(env, "dlweb"), title: "pin node" }, env);
-  const { jobs } = await queueRoadmapItem({ id: item.id, allProjects: true }, env);
+  const item = saveIssue({ type: "chore", orgId: orgIdOf(env, "dlweb"), title: "pin node" }, env);
+  const { jobs } = await queueIssue({ id: item.id, allProjects: true }, env);
   assert.equal(jobs.length, 1);
   const db = openDb(env);
   db.prepare("UPDATE jobs SET slug = NULL WHERE id = ?").run(id);
@@ -270,8 +270,8 @@ test("`run pr` of a free-prompt job, or outside the queue, ends with only `Opene
 
 test("after `project key` renames the key, the footer carries the new key", async (t) => {
   const { env, id } = makeRun(t, "run-pr-renamed-key");
-  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
-  assert.equal(linkRoadmapItemJob(item.id, id, env), true);
+  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
+  assert.equal(linkIssueJob(item.id, id, env), true);
   await openStore(env).projects.setKey(projectIdOf(env, "alpha"), "NX");
 
   const published = await publishedBody(t, { env, jobId: id, name: "run-pr-renamed-key-body" });

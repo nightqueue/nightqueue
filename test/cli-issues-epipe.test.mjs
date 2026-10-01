@@ -4,17 +4,17 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { onStdoutError } from "../src/cli/index.mjs";
 import { closeDb } from "../src/memory/db.mjs";
-import { saveRoadmapItem } from "../src/memory/roadmap.mjs";
+import { saveIssue } from "../src/memory/issues.mjs";
 import { makeHome, makeProject, projectIdOf } from "./../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const LONG_TITLE = "keep the roadmap readable when a reader closes the pipe early ".repeat(4);
 
 // A home whose project roadmap holds `count` items with long titles.
-function roadmapHome(t, name, count) {
+function issuesHome(t, name, count) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  for (let index = 0; index < count; index += 1) saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: `${LONG_TITLE}${index}` }, env);
+  for (let index = 0; index < count; index += 1) saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: `${LONG_TITLE}${index}` }, env);
   closeDb(env);
   return env;
 }
@@ -39,7 +39,7 @@ function readFirstChunkOnly(env) {
 }
 
 test("nightqueue roadmap survives a reader that closes the pipe after more than 64KB of output", async (t) => {
-  const env = roadmapHome(t, "roadmap-epipe-large", 2000);
+  const env = issuesHome(t, "roadmap-epipe-large", 2000);
   const { code, first, stderr } = await readFirstChunkOnly(env);
   assert.match(first, /^todo:/);
   assert.doesNotMatch(stderr, /EPIPE/);
@@ -53,7 +53,7 @@ test("the stdout guard drops output for a reader gone with EPIPE, ENOTCONN or EC
 });
 
 test("nightqueue roadmap with a small output still exits 0 when the reader closes early", async (t) => {
-  const env = roadmapHome(t, "roadmap-epipe-small", 3);
+  const env = issuesHome(t, "roadmap-epipe-small", 3);
   const { code, first, stderr } = await readFirstChunkOnly(env);
   assert.match(first, /^todo:/);
   assert.doesNotMatch(stderr, /EPIPE/);

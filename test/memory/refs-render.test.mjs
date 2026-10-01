@@ -5,7 +5,7 @@ import { decisionView, listDecisions, saveDecision } from "../../src/memory/deci
 import { addJob } from "../../src/memory/jobs.mjs";
 import { decisionRef } from "../../src/memory/refs.mjs";
 import * as registry from "../../src/memory/registry.mjs";
-import { getRoadmapItemDetail, linkRoadmapItemJob, listRoadmap, roadmapRefOfJob, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { getIssueDetail, linkIssueJob, listIssues, issueRefOfJob, saveIssue } from "../../src/memory/issues.mjs";
 import { jobDetailView } from "../../src/queue/view.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
@@ -26,7 +26,7 @@ function decide(env, owner, title) {
 
 // Saves one roadmap item of an owner.
 function plan(env, owner, title, extra = {}) {
-  return saveRoadmapItem({ type: "improvement", ...owner, title, ...extra }, env);
+  return saveIssue({ type: "improvement", ...owner, title, ...extra }, env);
 }
 
 // The refs of a listing, keyed by title.
@@ -53,8 +53,8 @@ test("items, decisions and jobs render their refs for a project, an org and the 
   });
 
   const job = addJob({ projectId, prompt: "deliver the second item" }, env);
-  assert.equal(linkRoadmapItemJob(second.id, job.id, env), true);
-  const items = listRoadmap({ projectId }, {}, env).items;
+  assert.equal(linkIssueJob(second.id, job.id, env), true);
+  const items = listIssues({ projectId }, {}, env).items;
   assert.deepEqual(refsByTitle(items), {
     "first project item": "NQ-1",
     "second project item": "NQ-2",
@@ -75,17 +75,17 @@ test("a key rename is read at once by the roadmap, the decisions, the job view a
   decide(env, { orgId }, "one queue per product");
   const item = plan(env, { projectId }, "project item");
   const job = addJob({ projectId, prompt: "deliver it" }, env);
-  assert.equal(linkRoadmapItemJob(item.id, job.id, env), true);
+  assert.equal(linkIssueJob(item.id, job.id, env), true);
 
   registry.setProjectKey(db, { id: projectId, key: "NX" });
   registry.setOrgKey(db, { id: orgId, key: "DLX" });
 
-  assert.deepEqual(listRoadmap({ projectId }, {}, env).items.map((row) => row.ref), ["NX-1"]);
+  assert.deepEqual(listIssues({ projectId }, {}, env).items.map((row) => row.ref), ["NX-1"]);
   assert.deepEqual(listDecisions({ projectId }, env).map(decisionRef), ["DLX/D-1"]);
-  assert.equal(roadmapRefOfJob(job.id, env), "NX-1");
+  assert.equal(issueRefOfJob(job.id, env), "NX-1");
   assert.equal((await jobDetailView(openStore(env), job.id)).item_ref, "NX-1");
 
-  const detail = getRoadmapItemDetail(item.id, {}, env);
+  const detail = getIssueDetail(item.id, {}, env);
   assert.equal(detail.ref, "NX-1");
   assert.deepEqual(detail.comments.map((comment) => comment.body), [`J-${job.id} queued`]);
 });

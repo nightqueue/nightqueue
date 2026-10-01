@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { openDb } from "../../src/memory/db.mjs";
 import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { getRoadmapItem, getRoadmapItemDetail, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { getIssue, getIssueDetail, saveIssue } from "../../src/memory/issues.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
@@ -238,7 +238,7 @@ function makeTwoProjectHome(t, name) {
   makeProject(t, env, "beta");
   const own = saveDecision({ ...DECISION, projectId: projectIdOf(env, "alpha"), status: "accepted" }, env);
   const foreign = saveDecision({ ...DECISION, projectId: projectIdOf(env, "beta"), title: "beta keeps its own log", status: "accepted" }, env);
-  const foreignItem = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "beta"), title: "beta delivers its dashboard" }, env);
+  const foreignItem = saveIssue({ type: "improvement", projectId: projectIdOf(env, "beta"), title: "beta delivers its dashboard" }, env);
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "rewrite the runner" }, env);
   return { env, own, foreign, foreignItem, job };
 }
@@ -257,7 +257,7 @@ test("inside a job, decision_update and roadmap_update refuse a row of another p
   assert.match(textOf(item), new RegExp(`refusing to update roadmap item \`BT-1\` from inside job \`${job.id}\``));
 
   assert.equal(getDecision(foreign.id, env).status, "accepted", "the refused update reached the other project's decision");
-  assert.equal(getRoadmapItem(foreignItem.id, env).status, "todo", "the refused update reached the other project's item");
+  assert.equal(getIssue(foreignItem.id, env).status, "todo", "the refused update reached the other project's item");
 
   const mine = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: "D-1", status: "rejected" } }));
   assert.equal(mine.decision.status, "rejected", "a job must still update its own project");
@@ -337,7 +337,7 @@ test("inside a job missing from this database decision_save is refused naming th
 
 test("inside a job roadmap_comment and roadmap_get by id refuse another project's item and sign the job's own comments", async (t) => {
   const { env, foreignItem, job } = makeTwoProjectHome(t, "mcp-roadmap-comment-job");
-  const own = saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "alpha crashes" }, env);
+  const own = saveIssue({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "alpha crashes" }, env);
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const refused = await client.callTool({ name: "roadmap_comment", arguments: { id: foreignItem.ref, body: "leak" } });
@@ -346,7 +346,7 @@ test("inside a job roadmap_comment and roadmap_get by id refuse another project'
   const unreadable = await client.callTool({ name: "roadmap_get", arguments: { id: foreignItem.ref } });
   assert.equal(unreadable.isError, true);
   assert.match(textOf(unreadable), /belongs to project `beta`/);
-  assert.equal(getRoadmapItemDetail(foreignItem.id, {}, env).comments.length, 0, "the refused comment was written");
+  assert.equal(getIssueDetail(foreignItem.id, {}, env).comments.length, 0, "the refused comment was written");
 
   const written = payloadOf(await client.callTool({ name: "roadmap_comment", arguments: { id: own.ref, body: "reproduced" } }));
   assert.deepEqual([written.comment.kind, written.comment.author, written.comment.project], ["note", `job:${job.id}`, "alpha"]);

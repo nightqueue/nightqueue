@@ -1,6 +1,6 @@
 import { openDb } from "../src/memory/db.mjs";
 
-const ROADMAP_TABLES = ["roadmap_items", "roadmap_item_projects", "roadmap_comments"];
+const ISSUE_TABLES = ["roadmap_items", "roadmap_item_projects", "roadmap_comments"];
 
 // Deletes job rows through the memory connection, the way a lost write-ahead log leaves a job on disk with no row.
 export function dropJobRows(env, ids) {
@@ -12,9 +12,9 @@ export function dropJobRows(env, ids) {
 }
 
 // Every roadmap row and comment of a home as one string, so a test can prove a write left them byte-identical.
-export function roadmapSnapshot(env) {
+export function issueSnapshot(env) {
   const db = openDb(env);
-  return JSON.stringify(ROADMAP_TABLES.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
+  return JSON.stringify(ISSUE_TABLES.map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
 }
 
 // The row of a job as the table holds it, or null when there is none.

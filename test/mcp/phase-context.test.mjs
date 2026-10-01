@@ -7,7 +7,7 @@ import { saveProjectIndex } from "../../src/memory/index.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
-import { saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { saveIssue } from "../../src/memory/issues.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const WORKER = "host:4242";
@@ -105,8 +105,8 @@ test("a project with nothing to say produces an empty block, not a header", asyn
 
 test("only the triager gets the related roadmap items of its project, in the ref-title-status line", async (t) => {
   const { env, home } = makeRunningJob(t, "phase-context-roadmap");
-  const item = saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "the runner drops its lease", priority: 2 }, home);
-  saveRoadmapItem({ type: "chore", projectId: projectIdOf(env, "alpha"), title: "unrelated cleanup" }, home);
+  const item = saveIssue({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "the runner drops its lease", priority: 2 }, home);
+  saveIssue({ type: "chore", projectId: projectIdOf(env, "alpha"), title: "unrelated cleanup" }, home);
 
   const triager = await phaseContextBlock({ target: "triager", query: "runner lease" }, env);
   assert.ok(

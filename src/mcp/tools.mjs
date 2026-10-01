@@ -12,7 +12,7 @@ import {
   registrationOffer,
   requireProject,
   resolveProjectRef,
-  roadmapQueueTarget,
+  issueQueueTarget,
   suggestName,
 } from "../config/projects.mjs";
 import { loadConfig, saveConfig } from "../config/store.mjs";
@@ -35,15 +35,15 @@ import {
 import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
 import { itemRef, jobRef, parseJobRef, requireKey } from "../memory/refs.mjs";
-import { ROADMAP_SEARCH_LIMIT } from "../memory/roadmap-search.mjs";
+import { ISSUE_SEARCH_LIMIT } from "../memory/issue-search.mjs";
 import {
   PROMPT_SOURCE_MISSING,
   MANUAL_STATUSES,
-  ROADMAP_STATUSES,
-  ROADMAP_TYPES,
-  roadmapItemView,
-} from "../memory/roadmap.mjs";
-import { OPERATOR_AUTHOR, TIER_BY_TYPE, jobAuthor } from "../memory/roadmap-workflow.mjs";
+  ISSUE_STATUSES,
+  ISSUE_TYPES,
+  issueView,
+} from "../memory/issues.mjs";
+import { OPERATOR_AUTHOR, TIER_BY_TYPE, jobAuthor } from "../memory/issue-workflow.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { claimingRunners, noRunnerWait, onceOnlyLine, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline, runnersOnlineSplit, staleRuntimeHint, windowWaitingLine } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
@@ -119,17 +119,17 @@ const itemRefInput = z.union([z.string(), z.number().int()]);
 const decisionRefInput = z.union([z.string(), z.number().int()]);
 const optionalDecisionStatus = z.enum(DECISION_STATUSES).nullable().optional();
 const looseDecisionStatus = z.string().nullable().optional();
-const optionalManualRoadmapStatus = z
-  .enum(ROADMAP_STATUSES)
+const optionalManualIssueStatus = z
+  .enum(ISSUE_STATUSES)
   .nullable()
   .optional()
   .describe(`Set by hand: ${MANUAL_STATUSES.join("|")}; \`in_progress\` is refused, only a job sets it.`);
-const optionalRoadmapPriority = z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).nullable().optional();
+const optionalIssuePriority = z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).nullable().optional();
 const retiredHorizon = z.unknown().optional().describe("Removed in schema v17 and refused by name: use `priority` and `position`.");
-const roadmapType = z
-  .enum(ROADMAP_TYPES)
+const issueType = z
+  .enum(ISSUE_TYPES)
   .describe(
-    `What the item is; it sets the default tier of its job (${ROADMAP_TYPES.map((type) => `${type}→${TIER_BY_TYPE[type]}`).join(", ")}) and the commit type the job uses.`,
+    `What the item is; it sets the default tier of its job (${ISSUE_TYPES.map((type) => `${type}→${TIER_BY_TYPE[type]}`).join(", ")}) and the commit type the job uses.`,
   );
 
 const phaseSchema = z.object({
@@ -177,7 +177,7 @@ async function requireOwnProject({ kind, id, row }, env) {
 }
 
 // Who is reading or writing the roadmap: the operator outside a job, or the job and the project (by id) it runs for, which bounds what it sees.
-async function roadmapCaller(env) {
+async function issueCaller(env) {
   const own = callerJobId(env);
   if (own === null) return { author: OPERATOR_AUTHOR, viewer: null, viewerName: null };
   const mine = await callerProject(own, env);
@@ -506,7 +506,7 @@ function operatorRunSeed({ args, project, env }) {
 }
 
 // Requires a source for the prompt of a job: the roadmap item that builds it (its `prompt` is then an operator note), or the text itself.
-function wantsRoadmapItem(args) {
+function wantsIssue(args) {
   const hasPrompt = typeof args.prompt === "string" && args.prompt.trim() !== "";
   const hasItem = args.roadmap_item_id !== undefined && args.roadmap_item_id !== null;
   if (!hasPrompt && !hasItem) throw new UserError(PROMPT_SOURCE_MISSING);
@@ -552,7 +552,7 @@ async function queuedAnswer({ job, registered = null, roadmapItem = null, note =
 }
 
 // What the answer of a roadmap-built job adds: an org item fathers one job per project, each on its own project row, and its status is derived from the rows.
-function roadmapNote({ item, jobs, skipped }) {
+function issueNote({ item, jobs, skipped }) {
   if (item.scope !== "org") return "";
   const queued = jobs.map((job) => `${jobRef(job.id)} for \`${job.project}\``).join(", ");
   const held = skipped.length ? ` Skipped, a live job already holds them: ${skipped.map((entry) => `\`${entry.project}\``).join(", ")}.` : "";
@@ -569,8 +569,8 @@ async function queuedJobEntry(job, env) {
 }
 
 // The answer of `queue_add` for a roadmap-built job: the first job as before, plus every job and every skipped project of an org item.
-async function roadmapQueuedAnswer(queued, env) {
-  const answer = await queuedAnswer({ job: queued.job, roadmapItem: queued.item, note: roadmapNote(queued) }, env);
+async function issueQueuedAnswer(queued, env) {
+  const answer = await queuedAnswer({ job: queued.job, roadmapItem: queued.item, note: issueNote(queued) }, env);
   if (queued.item.scope !== "org") return answer;
   return {
     ...answer,
@@ -607,17 +607,17 @@ async function decisionDetail(args, env) {
 }
 
 // The one item `roadmap_get` reads by `id`, as the caller may see it; an owner beside the id is refused, because the id already names the item.
-async function roadmapItemDetail(args, env) {
+async function issueDetail(args, env) {
   const named = [args.project, args.org].some((value) => typeof value === "string" && value.trim() !== "");
   if (named) throw new UserError("pass `id` alone to read one roadmap item, or `project`/`org` without `id` to list a roadmap");
-  const { viewer } = await roadmapCaller(env);
+  const { viewer } = await issueCaller(env);
   const store = openStore(env);
-  return await store.roadmap.getRoadmapItemDetail(await store.roadmap.itemIdOfRef(args.id), { viewer });
+  return await store.issues.getIssueDetail(await store.issues.itemIdOfRef(args.id), { viewer });
 }
 
 // The owner `roadmap_search` reads: the named one outside a job; inside a job always the job's own project, refusing any other owner.
-async function roadmapSearchOwner(args, env) {
-  const { viewer, viewerName } = await roadmapCaller(env);
+async function issueSearchOwner(args, env) {
+  const { viewer, viewerName } = await issueCaller(env);
   if (viewer === null) return ownerArgs(args, env);
   const named = [args.project, args.org].filter((value) => typeof value === "string" && value.trim() !== "");
   if (named.some((value) => value.trim() !== viewerName)) {
@@ -1100,11 +1100,11 @@ function toolDefinitions(env, state) {
         },
       },
       handler: async (args) => {
-        if (wantsRoadmapItem(args)) {
+        if (wantsIssue(args)) {
           const store = openStore(env);
-          const queued = await store.roadmap.queueRoadmapItem({
-            id: await store.roadmap.itemIdOfRef(args.roadmap_item_id),
-            ...(await roadmapQueueTarget(store, args.project)),
+          const queued = await store.issues.queueIssue({
+            id: await store.issues.itemIdOfRef(args.roadmap_item_id),
+            ...(await issueQueueTarget(store, args.project)),
             operatorNote: args.prompt,
             runDir: hasRunDir(args) ? args.run_dir : undefined,
             origin: args.origin,
@@ -1113,7 +1113,7 @@ function toolDefinitions(env, state) {
             timeoutS: args.timeout_s,
             tier: args.tier,
           });
-          return await roadmapQueuedAnswer(queued, env);
+          return await issueQueuedAnswer(queued, env);
         }
         const target = await resolveQueueTarget(args, env);
         if (target.offer && args.register !== true) return needsRegistration(target);
@@ -1422,24 +1422,24 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Adds one intent to a roadmap, at the end of its `priority` group (1-9, default 5, 1 first like a job's). Owned by `project` or by `org`, never both: an org item is work every project of the org has to do, and names the project its job goes to at queue time. " +
-          `\`type\` (${ROADMAP_TYPES.join("|")}) is required. ` +
+          `\`type\` (${ISSUE_TYPES.join("|")}) is required. ` +
           `\`status\` defaults to \`todo\`; by hand it may be ${MANUAL_STATUSES.join("|")}, never \`in_progress\`, which only a job sets. ` +
           "`decision_id` links it to the decision that motivated it, by its ref (`D-7` of the item's project, `DLW/D-3`). `horizon` was removed in schema v17 and is refused by name.",
         inputSchema: {
           project: optionalText,
           org: optionalText,
           title: z.string(),
-          type: roadmapType,
+          type: issueType,
           detail: optionalText,
-          priority: optionalRoadmapPriority,
-          status: optionalManualRoadmapStatus,
+          priority: optionalIssuePriority,
+          status: optionalManualIssueStatus,
           decision_id: decisionRefInput.nullable().optional(),
           horizon: retiredHorizon,
         },
       },
       handler: async (args) => {
         const owner = await ownerArgs(args, env);
-        const saved = await openStore(env).roadmap.saveRoadmapItem({
+        const saved = await openStore(env).issues.saveIssue({
           ...ownerRef(owner),
           title: args.title,
           type: args.type,
@@ -1465,9 +1465,9 @@ function toolDefinitions(env, state) {
           id: itemRefInput,
           title: optionalText,
           detail: optionalText,
-          type: roadmapType.nullable().optional(),
-          status: optionalManualRoadmapStatus,
-          priority: optionalRoadmapPriority,
+          type: issueType.nullable().optional(),
+          status: optionalManualIssueStatus,
+          priority: optionalIssuePriority,
           position: optionalId,
           decision_id: decisionRefInput.nullable().optional(),
           horizon: retiredHorizon,
@@ -1475,11 +1475,11 @@ function toolDefinitions(env, state) {
       },
       handler: async (args) => {
         const store = openStore(env);
-        const id = await store.roadmap.itemIdOfRef(args.id);
-        const current = await store.roadmap.getRoadmapItem(id);
+        const id = await store.issues.itemIdOfRef(args.id);
+        const current = await store.issues.getIssue(id);
         if (current) await requireOwnProject({ kind: "roadmap item", id: String(args.id).trim(), row: current }, env);
-        const { author } = await roadmapCaller(env);
-        const row = await store.roadmap.updateRoadmapItem(id, {
+        const { author } = await issueCaller(env);
+        const row = await store.issues.updateIssue(id, {
           title: args.title,
           detail: args.detail,
           type: args.type,
@@ -1490,7 +1490,7 @@ function toolDefinitions(env, state) {
           horizon: args.horizon,
           author,
         });
-        return { ok: true, item: roadmapItemView(row) };
+        return { ok: true, item: issueView(row) };
       },
     },
     {
@@ -1505,14 +1505,14 @@ function toolDefinitions(env, state) {
           id: itemRefInput.nullable().optional(),
           project: optionalText,
           org: optionalText,
-          status: z.array(z.enum(ROADMAP_STATUSES)).nullable().optional(),
+          status: z.array(z.enum(ISSUE_STATUSES)).nullable().optional(),
           priority: z.array(z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max)).nullable().optional(),
-          type: z.array(z.enum(ROADMAP_TYPES)).nullable().optional(),
+          type: z.array(z.enum(ISSUE_TYPES)).nullable().optional(),
         },
       },
       handler: async (args) => {
-        if (args.id !== undefined && args.id !== null) return await roadmapItemDetail(args, env);
-        return await openStore(env).roadmap.listRoadmap(ownerRef(await ownerArgs(args, env)), {
+        if (args.id !== undefined && args.id !== null) return await issueDetail(args, env);
+        return await openStore(env).issues.listIssues(ownerRef(await ownerArgs(args, env)), {
           status: args.status,
           priority: args.priority,
           type: args.type,
@@ -1528,10 +1528,10 @@ function toolDefinitions(env, state) {
         inputSchema: { id: itemRefInput, body: z.string() },
       },
       handler: async (args) => {
-        const { author, viewer } = await roadmapCaller(env);
+        const { author, viewer } = await issueCaller(env);
         const store = openStore(env);
-        const id = await store.roadmap.itemIdOfRef(args.id);
-        const comment = await store.roadmap.addRoadmapComment({ id, body: args.body, author, viewer });
+        const id = await store.issues.itemIdOfRef(args.id);
+        const comment = await store.issues.addIssueComment({ id, body: args.body, author, viewer });
         return { ok: true, comment };
       },
     },
@@ -1539,7 +1539,7 @@ function toolDefinitions(env, state) {
       name: "roadmap_search",
       config: {
         description:
-          `Finds at most ${ROADMAP_SEARCH_LIMIT} roadmap items an owner sees: \`query\` matches their title, detail and comment thread; \`file\` matches a path a job of theirs touched, exactly or as a directory above it (\`src/queue\` never matches \`src/queue2/\`).` +
+          `Finds at most ${ISSUE_SEARCH_LIMIT} roadmap items an owner sees: \`query\` matches their title, detail and comment thread; \`file\` matches a path a job of theirs touched, exactly or as a directory above it (\`src/queue\` never matches \`src/queue2/\`).` +
           "File matches come first, then by relevance; each hit is `{id, ref, title, status, priority, type, via}`. " +
           "Outside a job name the owner with `project` or `org`; inside a job the search always reads the job's own project and its org's items, never a sibling project's comments.",
         inputSchema: {
@@ -1547,12 +1547,12 @@ function toolDefinitions(env, state) {
           file: optionalText,
           project: optionalText,
           org: optionalText,
-          limit: z.number().int().min(1).max(ROADMAP_SEARCH_LIMIT).nullable().optional(),
+          limit: z.number().int().min(1).max(ISSUE_SEARCH_LIMIT).nullable().optional(),
         },
       },
       handler: async (args) => {
-        const owner = await roadmapSearchOwner(args, env);
-        const hits = await openStore(env).roadmap.searchRoadmap({ ...ownerRef(owner), query: args.query, file: args.file, limit: args.limit });
+        const owner = await issueSearchOwner(args, env);
+        const hits = await openStore(env).issues.searchIssues({ ...ownerRef(owner), query: args.query, file: args.file, limit: args.limit });
         return { ...ownerNames(owner), hits };
       },
     },

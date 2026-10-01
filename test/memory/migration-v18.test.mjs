@@ -8,7 +8,7 @@ import { configPath, dbPath, homeDir, preV18BackupPath, runDir, runsIdMarkerPath
 import { closeDb, DB_USER_VERSION, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { listDecisions, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
-import { getRoadmapItemDetail, listRoadmap, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { getIssueDetail, listIssues, saveIssue } from "../../src/memory/issues.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recentMemories } from "../../src/memory/memory.mjs";
 import { finishV18, migrateToV18 } from "../../src/memory/migration/v18.mjs";
@@ -521,10 +521,10 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
     "a project reads its own decisions, its org's first, and the global ones, never another org's",
   );
   assert.equal(saveDecision({ projectId: api.id, title: "t", context: "c", decision: "d" }, env).id, 6, "a decision id was reused");
-  const web = listRoadmap({ projectId: projects.web.id }, {}, env).items;
+  const web = listIssues({ projectId: projects.web.id }, {}, env).items;
   assert.deepEqual(web.map((item) => [item.owner, item.project_status]), [["acme", "todo"]]);
-  assert.deepEqual(getRoadmapItemDetail(1, {}, env).projects.map((row) => row.project), ["api", "web"]);
-  assert.equal(saveRoadmapItem({ type: "bug", projectId: api.id, title: "t" }, env).id, 4, "a roadmap item id was reused");
+  assert.deepEqual(getIssueDetail(1, {}, env).projects.map((row) => row.project), ["api", "web"]);
+  assert.equal(saveIssue({ type: "bug", projectId: api.id, title: "t" }, env).id, 4, "a roadmap item id was reused");
 
   const config = JSON.parse(readFileSync(configPath(env), "utf8"));
   const { projects: _projects, orgs: _orgs, ...kept } = v17Config;

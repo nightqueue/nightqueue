@@ -7,7 +7,7 @@ import { runDir } from "../../src/config/paths.mjs";
 import { run } from "../../src/cli/index.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { linkRoadmapItemJob, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { linkIssueJob, saveIssue } from "../../src/memory/issues.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
@@ -27,15 +27,15 @@ function gitVars() {
 }
 
 // A roadmap job bound to its slug with a real worktree, one file ready to commit.
-function roadmapRun(t, name) {
+function issueRun(t, name) {
   const env = { ...makeHome(t, name), ...gitVars() };
   makeProject(t, env, "alpha");
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
   const repo = initGitRepo(makeDir(t, "worktree"));
   recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { worktree: repo }, env });
-  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
-  assert.equal(linkRoadmapItemJob(item.id, id, env), true);
+  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
+  assert.equal(linkIssueJob(item.id, id, env), true);
   mkdirSync(join(repo, "src"), { recursive: true });
   writeFileSync(join(repo, "src/a.mjs"), "content\n");
   const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
@@ -46,7 +46,7 @@ function roadmapRun(t, name) {
 
 // Commits the message as the job and returns what git recorded.
 async function commitWith(t, name, message) {
-  const { env, id, repo } = roadmapRun(t, name);
+  const { env, id, repo } = issueRun(t, name);
   const file = join(makeDir(t, `${name}-msg`), "message.txt");
   writeFileSync(file, message);
   const out = [];

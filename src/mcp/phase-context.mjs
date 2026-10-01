@@ -82,16 +82,16 @@ async function indexSection({ target, projectId, repoRoot, query }, env) {
 }
 
 // One roadmap line of the triager block: its reference, its title and where it stands.
-function roadmapLine(item) {
+function issueLine(item) {
   return `- [${item.ref}] ${clip(item.title, LINE_MAX)} [${item.status}, p${item.priority}, ${item.type}]`;
 }
 
 // The roadmap items the triager should know about before judging a request; any other phase, a run without an owner or a failed search gets nothing.
-async function roadmapSection({ target, projectId, query }, env) {
+async function issueSection({ target, projectId, query }, env) {
   if (target !== "triager" || !projectId || typeof query !== "string" || !query.trim()) return "";
   try {
-    const items = await openStore(env).roadmap.searchRoadmap({ projectId, query });
-    return section("Related roadmap items", items, roadmapLine);
+    const items = await openStore(env).issues.searchIssues({ projectId, query });
+    return section("Related roadmap items", items, issueLine);
   } catch {
     return "";
   }
@@ -148,7 +148,7 @@ export async function phaseContextBlock({ target, query, project, repoRoot, excl
     section("Applicable lessons", lessons, lessonLine),
     section("Project memory", memories, memoryLine),
     await indexSection({ target, projectId: owner.id, repoRoot, query }, env),
-    await roadmapSection({ target, projectId: owner.id, query }, env),
+    await issueSection({ target, projectId: owner.id, query }, env),
     originSection({ target, caller }, env),
   ].filter(Boolean);
   return { project: owner.name, block: sections.join("\n\n") };

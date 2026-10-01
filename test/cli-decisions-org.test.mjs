@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dbPath } from "../src/config/paths.mjs";
 import { closeDb } from "../src/memory/db.mjs";
 import { saveDecision } from "../src/memory/decisions.mjs";
-import { saveRoadmapItem } from "../src/memory/roadmap.mjs";
+import { saveIssue } from "../src/memory/issues.mjs";
 import { buildLegacyHome, legacyConfig } from "../test-support/legacy-home.mjs";
 import { DOWNGRADE_TO_V5, makeDir, makeHome, makeOrg, makeProject, orgIdOf, projectIdOf } from "../test-support/memory.mjs";
 
@@ -27,8 +27,8 @@ function makeOrgHome(t, name) {
   saveDecision({ projectId: projectIdOf(env, "acme-mobile-app"), title: "the app owns its cache", context: "c", decision: "d", status: "accepted" }, env);
   saveDecision({ orgId: orgIdOf(env, "acme"), title: "one queue per product", context: "c", decision: "d", status: "accepted" }, env);
   saveDecision({ orgId: orgIdOf(env, "orbit"), title: "orbit decides alone", context: "c", decision: "d", status: "accepted" }, env);
-  saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "acme-mobile-app"), title: "deliver the app cache" }, env);
-  saveRoadmapItem({ type: "improvement", orgId: orgIdOf(env, "acme"), title: "raise the node version" }, env);
+  saveIssue({ type: "improvement", projectId: projectIdOf(env, "acme-mobile-app"), title: "deliver the app cache" }, env);
+  saveIssue({ type: "improvement", orgId: orgIdOf(env, "acme"), title: "raise the node version" }, env);
   return { env, cwd };
 }
 

@@ -1,17 +1,17 @@
 import {
   COMMENT_KINDS,
-  DEFAULT_ROADMAP_TYPE,
+  DEFAULT_ISSUE_TYPE,
   OPERATOR_AUTHOR,
-  ROADMAP_STATUSES,
-  ROADMAP_TYPES,
+  ISSUE_STATUSES,
+  ISSUE_TYPES,
   sqlList,
-} from "./roadmap-workflow.mjs";
+} from "./issue-workflow.mjs";
 import { CLOSED_REQUIRES_MERGE } from "./schema.mjs";
 
 // The current (v20) schema of the memory database: one source for a fresh creation and for the v20 migration; the frozen
 // v18 and v19 shapes the earlier migrations build live under `migration/`.
 
-const ROADMAP_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ROADMAP_TYPE}' CHECK(type IN (${sqlList(ROADMAP_TYPES)}))`;
+const ISSUE_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ISSUE_TYPE}' CHECK(type IN (${sqlList(ISSUE_TYPES)}))`;
 
 const PROJECT_ID = "project_id TEXT REFERENCES projects(id) ON DELETE RESTRICT";
 const REQUIRED_PROJECT_ID = "project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT";
@@ -23,7 +23,7 @@ export const OWNER_CHECK =
   "(scope = 'project' AND org_id IS NULL) OR (scope = 'org' AND org_id IS NOT NULL AND project_id IS NULL)";
 
 // The append-only comment thread of the roadmap items, under a given name; a comment under a project carries its id.
-export function roadmapCommentsDdl(name) {
+export function issueCommentsDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id INTEGER NOT NULL REFERENCES roadmap_items(id) ON DELETE CASCADE,
@@ -37,7 +37,7 @@ export function roadmapCommentsDdl(name) {
 }
 
 // The triggers that keep the comment thread append-only: every UPDATE is refused; a DELETE is refused while its item exists, so a comment only ends with its item.
-export const ROADMAP_COMMENT_GUARDS = `
+export const ISSUE_COMMENT_GUARDS = `
 CREATE TRIGGER IF NOT EXISTS roadmap_comments_no_update BEFORE UPDATE ON roadmap_comments BEGIN
   SELECT RAISE(ABORT, 'roadmap comments are append-only');
 END;
@@ -48,12 +48,12 @@ END;
 `;
 
 // The per-project rows of an org item under a given name: one per project it was queued for, each linked to that project's job.
-export function roadmapItemProjectsDdl(name) {
+export function issueProjectsDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id INTEGER NOT NULL REFERENCES roadmap_items(id) ON DELETE CASCADE,
   ${REQUIRED_PROJECT_ID},
-  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
+  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ISSUE_STATUSES)})),
   job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
   job_status_seen TEXT,
   closed_at TEXT,
@@ -64,7 +64,7 @@ export function roadmapItemProjectsDdl(name) {
 }
 
 // The lexical mirrors of the roadmap: item title and detail follow every write, comments follow inserts and the deletes their item's removal makes.
-export const ROADMAP_FTS = `
+export const ISSUE_FTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS roadmap_items_fts USING fts5(
   title, detail,
   content='roadmap_items', content_rowid='id'
@@ -92,7 +92,7 @@ END;
 `;
 
 // The `roadmap_items` table under a given name: owned by a project id (NULL for a global item) or by an org id, numbered per owner.
-export function roadmapItemsDdl(name) {
+export function issuesDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ${SCOPE_COLUMN},
@@ -101,9 +101,9 @@ export function roadmapItemsDdl(name) {
   number INTEGER NOT NULL CHECK(number > 0),
   title TEXT NOT NULL,
   detail TEXT,
-  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
+  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ISSUE_STATUSES)})),
   priority INTEGER NOT NULL DEFAULT 5 CHECK(priority BETWEEN 1 AND 9),
-  type ${ROADMAP_TYPE_COLUMN},
+  type ${ISSUE_TYPE_COLUMN},
   position INTEGER NOT NULL,
   decision_id INTEGER REFERENCES decisions(id) ON DELETE SET NULL,
   job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
@@ -389,10 +389,10 @@ CREATE TABLE IF NOT EXISTS pipeline_phases (
   FOREIGN KEY (run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
 );
 ${decisionsDdl("decisions")}
-${roadmapItemsDdl("roadmap_items")}
-${roadmapCommentsDdl("roadmap_comments")}
-${ROADMAP_COMMENT_GUARDS}
-${roadmapItemProjectsDdl("roadmap_item_projects")}
+${issuesDdl("roadmap_items")}
+${issueCommentsDdl("roadmap_comments")}
+${ISSUE_COMMENT_GUARDS}
+${issueProjectsDdl("roadmap_item_projects")}
 `;
 
 export const INDEXES = `
@@ -430,7 +430,7 @@ export const REFERENCED_COLUMNS = Object.freeze([
 ]);
 
 // The per-owner uniqueness of roadmap item numbers, kept out of INDEXES because the v18 migration builds v18-shaped tables.
-export const ROADMAP_NUMBER_INDEXES = `
+export const ISSUE_NUMBER_INDEXES = `
 CREATE UNIQUE INDEX IF NOT EXISTS roadmap_items_number_idx ON roadmap_items(project_id, number) WHERE scope = 'project';
 CREATE UNIQUE INDEX IF NOT EXISTS roadmap_items_org_number_idx ON roadmap_items(org_id, number) WHERE scope = 'org';
 CREATE UNIQUE INDEX IF NOT EXISTS roadmap_items_global_number_idx ON roadmap_items(number) WHERE scope = 'project' AND project_id IS NULL;

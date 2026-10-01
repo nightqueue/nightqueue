@@ -7,7 +7,7 @@ import {
   FTS_MIRRORS,
   INDEXES,
   OWNER_CHECK,
-  ROADMAP_FTS,
+  ISSUE_FTS,
   jobsDdl,
   lessonsDdl,
   memoryDdl,
@@ -123,7 +123,7 @@ function finishSchema(db, violationsBefore) {
   db.exec(INDEXES);
   db.exec(ROADMAP_COMMENT_GUARDS_V19);
   db.exec(FTS);
-  db.exec(ROADMAP_FTS);
+  db.exec(ISSUE_FTS);
   for (const mirror of FTS_MIRRORS) db.exec(`INSERT INTO ${mirror}(${mirror}) VALUES('rebuild')`);
   const violations = foreignKeyViolations(db);
   if (violations > violationsBefore) throw new UserError(`${violations - violationsBefore} row(s) break a foreign key after the rebuild`);

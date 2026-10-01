@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { jobLogPath, logsDir, runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob, getJob } from "../../src/memory/jobs.mjs";
-import { getRoadmapItem, linkRoadmapItemJob, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { getIssue, linkIssueJob, saveIssue } from "../../src/memory/issues.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { reclassifyFromLog } from "../../src/queue/repair.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
@@ -74,8 +74,8 @@ function finishedJob(env, { status = "gate", result = CLEAN_ENDING, log = interm
 
 // Records a roadmap item as linked to a job, the link the repair has to move.
 function linkedItem(env, id, title) {
-  const item = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title }, env);
-  assert.equal(linkRoadmapItemJob(item.id, id, env), true, "setup: the item was not linked to its job");
+  const item = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title }, env);
+  assert.equal(linkIssueJob(item.id, id, env), true, "setup: the item was not linked to its job");
   return item.id;
 }
 
@@ -88,7 +88,7 @@ test("`queue repair` puts in review the roadmap item of a job it turns into done
   const repaired = runCli(env, ["queue", "repair", String(delivered)]);
   assert.equal(repaired.status, 0, repaired.stderr);
   assert.equal(getJob(delivered, env).status, "done");
-  assert.equal(getRoadmapItem(deliveredItem, env).status, "in_review", "`queue repair` left the item of a delivered job in progress forever");
+  assert.equal(getIssue(deliveredItem, env).status, "in_review", "`queue repair` left the item of a delivered job in progress forever");
 
   const failedSlug = "still-failing";
   const failed = finishedJob(env, { status: "failed", result: { ...CLEAN_ENDING, status: "failed", exitCode: 1 }, slug: failedSlug });
@@ -97,7 +97,7 @@ test("`queue repair` puts in review the roadmap item of a job it turns into done
 
   const outcome = await reclassifyFromLog({ id: failed, env });
   assert.deepEqual({ to: outcome.to, changed: outcome.changed }, { to: "failed", changed: true }, "setup: the row was not rewritten at all");
-  assert.equal(getRoadmapItem(failedItem, env).status, "todo", "a re-classification that kept the failure did not send the item back to todo");
+  assert.equal(getIssue(failedItem, env).status, "todo", "a re-classification that kept the failure did not send the item back to todo");
 });
 
 test("`queue repair` turns a job that really opened a pull request into done, and rewrites the witness to match", (t) => {

@@ -9,7 +9,7 @@ import { closeDb, openDb } from "../src/memory/db.mjs";
 import { getDecisionByNumber, saveDecision } from "../src/memory/decisions.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { listProjects } from "../src/memory/registry.mjs";
-import { linkRoadmapItemJob, saveRoadmapItem } from "../src/memory/roadmap.mjs";
+import { linkIssueJob, saveIssue } from "../src/memory/issues.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
 
 // The names of the projects the registry of a home holds.
@@ -97,11 +97,11 @@ test("decision show prints the decision in full and refuses an unknown number", 
 test("roadmap groups the items by status in workflow order, p1 first, with the linked decision and the job", (t) => {
   const { env, cwd } = makeCliHome(t, "roadmap-list");
   const decision = seedDecisions(env);
-  const queued = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "Deliver the queue", decision_id: decision.id }, env);
-  const dashboard = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "Write the dashboard" }, env);
-  const urgent = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "Fix the crash", priority: 1 }, env);
+  const queued = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "Deliver the queue", decision_id: decision.id }, env);
+  const dashboard = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "Write the dashboard" }, env);
+  const urgent = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "Fix the crash", priority: 1 }, env);
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "deliver the queue" }, env);
-  assert.equal(linkRoadmapItemJob(queued.id, job.id, env), true);
+  assert.equal(linkIssueJob(queued.id, job.id, env), true);
   const result = runCli(env, ["roadmap"], { cwd });
   assert.equal(result.status, 0);
   assert.ok(result.stdout.indexOf("todo:") < result.stdout.indexOf("in_progress:"), "the statuses are out of order");

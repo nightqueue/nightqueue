@@ -4,14 +4,14 @@ import {
   FTS,
   INDEXES,
   REFERENCED_COLUMNS,
-  ROADMAP_COMMENT_GUARDS,
-  ROADMAP_FTS,
-  ROADMAP_NUMBER_INDEXES,
+  ISSUE_COMMENT_GUARDS,
+  ISSUE_FTS,
+  ISSUE_NUMBER_INDEXES,
   decisionsDdl,
   pipelineRunsDdl,
-  roadmapCommentsDdl,
-  roadmapItemProjectsDdl,
-  roadmapItemsDdl,
+  issueCommentsDdl,
+  issueProjectsDdl,
+  issuesDdl,
 } from "../ddl.mjs";
 import { hasColumn } from "../columns.mjs";
 import { MigrationRefused, foreignKeyViolations, hasTable, rebuildTable, runOneShot, userVersion } from "./one-shot.mjs";
@@ -25,9 +25,9 @@ const MAX_LISTED_ORPHANS = 20;
 
 const REBUILT = Object.freeze([
   { table: "decisions", ddl: decisionsDdl },
-  { table: "roadmap_items", ddl: roadmapItemsDdl },
-  { table: "roadmap_item_projects", ddl: roadmapItemProjectsDdl },
-  { table: "roadmap_comments", ddl: roadmapCommentsDdl },
+  { table: "roadmap_items", ddl: issuesDdl },
+  { table: "roadmap_item_projects", ddl: issueProjectsDdl },
+  { table: "roadmap_comments", ddl: issueCommentsDdl },
   { table: "pipeline_runs", ddl: pipelineRunsDdl },
 ]);
 
@@ -119,10 +119,10 @@ function describeViolation(db) {
 // Recreates what the rebuilt tables dropped, re-indexes their mirrors, checks the result and stamps v20.
 function finishSchema(db, violationsBefore) {
   db.exec(INDEXES);
-  db.exec(ROADMAP_COMMENT_GUARDS);
+  db.exec(ISSUE_COMMENT_GUARDS);
   db.exec(FTS);
-  db.exec(ROADMAP_FTS);
-  db.exec(ROADMAP_NUMBER_INDEXES);
+  db.exec(ISSUE_FTS);
+  db.exec(ISSUE_NUMBER_INDEXES);
   for (const mirror of MIRRORS) db.exec(`INSERT INTO ${mirror}(${mirror}) VALUES('rebuild')`);
   const violations = foreignKeyViolations(db);
   if (violations > violationsBefore) {

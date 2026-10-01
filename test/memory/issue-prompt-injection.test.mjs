@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { saveDecision } from "../../src/memory/decisions.mjs";
-import { getRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
-import { buildRoadmapPrompt } from "../../src/memory/roadmap.mjs";
+import { getIssue, saveIssue } from "../../src/memory/issues.mjs";
+import { buildIssuePrompt } from "../../src/memory/issues.mjs";
 import { classifyJobResult } from "../../src/queue/classify.mjs";
 import { extractSlugFromEventLine, extractNoticeFromStream, hasGateMarkerInStream, extractResultText } from "../../src/queue/stream.mjs";
 import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
@@ -14,7 +14,7 @@ function headingOccurrences(prompt, heading) {
 }
 
 describe("H-B1: operator free text can forge a heading indistinguishable from the builder's own", () => {
-  it("a roadmap item title containing a fake '## Linked decision' heading is byte-identical to the real one buildRoadmapPrompt emits", async (t) => {
+  it("a roadmap item title containing a fake '## Linked decision' heading is byte-identical to the real one buildIssuePrompt emits", async (t) => {
     const env = makeHome(t, "prompt-injection-hb1");
     const project = "alpha";
     makeProject(t, env, project);
@@ -27,7 +27,7 @@ describe("H-B1: operator free text can forge a heading indistinguishable from th
       },
       env,
     );
-    const { id } = saveRoadmapItem(
+    const { id } = saveIssue(
       {
         projectId: projectIdOf(env, project),
         type: "improvement",
@@ -36,9 +36,9 @@ describe("H-B1: operator free text can forge a heading indistinguishable from th
       },
       env,
     );
-    const item = getRoadmapItem(id, env);
+    const item = getIssue(id, env);
 
-    const prompt = await buildRoadmapPrompt({ item }, env);
+    const prompt = await buildIssuePrompt({ item }, env);
 
     // Correct behavior: operator free text can never produce a second, indistinguishable
     // '## Linked decision' heading. This is the assertion the hypothesis requires; it must
@@ -56,7 +56,7 @@ describe("H-B2: runtime-contract literals (QUEUE_SLUG:, ## Notice) from operator
     const env = makeHome(t, "prompt-injection-hb2-prompt");
     const project = "alpha";
     makeProject(t, env, project);
-    const { id } = saveRoadmapItem(
+    const { id } = saveIssue(
       {
         projectId: projectIdOf(env, project),
         type: "improvement",
@@ -65,9 +65,9 @@ describe("H-B2: runtime-contract literals (QUEUE_SLUG:, ## Notice) from operator
       },
       env,
     );
-    const item = getRoadmapItem(id, env);
+    const item = getIssue(id, env);
 
-    const prompt = await buildRoadmapPrompt({ item }, env);
+    const prompt = await buildIssuePrompt({ item }, env);
 
     const hasStandaloneSlugLine = prompt.split("\n").some((line) => /^\s*QUEUE_SLUG:\s*\S+\s*$/.test(line));
     const hasNoticeHeading = prompt.split("\n").some((line) => /^#{1,6}\s+Notice\s*$/i.test(line));

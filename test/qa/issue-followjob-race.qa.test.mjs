@@ -8,15 +8,15 @@
 // `ensureDurable` concludes the write was "lost" and calls `reapplyFinish`, which does an unconditional
 // `UPDATE jobs SET status = 'failed', ... WHERE id = ?` (no status guard) — silently reverting the job's own
 // legitimate retry back to `failed`. This also starves `followJobQuietly` (src/store/local.mjs:35-41) of the
-// intermediate event: `roadmap-workflow.mjs`'s `jobEvent()` (line 66) never sees the job pass through
+// intermediate event: `issue-workflow.mjs`'s `jobEvent()` (line 66) never sees the job pass through
 // `pending` cleanly, so the item's `failed`-kind comment can be silently dropped from the thread, breaking
-// the one-comment-per-job-event contract `roadmap-comments.test.mjs`'s sequential lifecycle test enforces.
+// the one-comment-per-job-event contract `issue-comments.test.mjs`'s sequential lifecycle test enforces.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { getRoadmapItemDetail } from "../../src/memory/roadmap.mjs";
+import { getIssueDetail } from "../../src/memory/issues.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
@@ -81,8 +81,8 @@ test("a racing fail-then-retry across two writers never silently drops the faile
   const store = openStore(env);
   t.after(() => store.close());
 
-  const item = await store.roadmap.saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "race me" });
-  const { job } = await store.roadmap.queueRoadmapItem({ id: item.id });
+  const item = await store.issues.saveIssue({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "race me" });
+  const { job } = await store.issues.queueIssue({ id: item.id });
 
   const dir = makeDir(t, "roadmap-followjob-race-scripts");
   const finishScript = join(dir, "finisher.mjs");
@@ -117,7 +117,7 @@ test("a racing fail-then-retry across two writers never silently drops the faile
     // The correct behavior, from the operator's point of view: every fail event this loop caused the job to
     // pass through must be visible, right now, as a `failed`-kind comment on the item's thread — a fail
     // interruption can never be silently swallowed by a race with a retry, no matter how tight the timing.
-    const kinds = getRoadmapItemDetail(item.id, {}, env).comments.map((comment) => comment.kind);
+    const kinds = getIssueDetail(item.id, {}, env).comments.map((comment) => comment.kind);
     const failedCount = kinds.filter((kind) => kind === "failed").length;
     assert.equal(
       failedCount,

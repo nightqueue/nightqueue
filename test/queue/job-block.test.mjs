@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { jobLogPath, runDir } from "../../src/config/paths.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, getJob, retryJob } from "../../src/memory/jobs.mjs";
-import { queueRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { queueIssue, saveIssue } from "../../src/memory/issues.mjs";
 import { diskJobRun, resolveJobRun } from "../../src/queue/job-run.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { recordJobBlock, recordOutcome, recordPhaseDone, recordRunFields, RUNTIME_ONLY_KEYS } from "../../src/queue/run-state.mjs";
@@ -81,8 +81,8 @@ test("the job block of a roadmap job carries the item ref and the decision the i
   const { env } = makeBlockHome(t, "job-block-roadmap", [{ stdout: toNdjson([systemInitEvent(), resultEvent({ text: `Done. Pull request: ${PR_URL}` })]), exitCode: 0 }]);
   const projectId = projectIdOf(env, "alpha");
   const decision = saveDecision({ projectId, title: "one queue", context: "c", decision: "d", consequences: "q" }, env);
-  const item = saveRoadmapItem({ type: "feature", projectId, title: "fix the worker", decision_id: decision.id }, env);
-  const { job } = await queueRoadmapItem({ id: item.id }, env);
+  const item = saveIssue({ type: "feature", projectId, title: "fix the worker", decision_id: decision.id }, env);
+  const { job } = await queueIssue({ id: item.id }, env);
   assert.equal(getJob(job.id, env).slug ?? null, null, "setup: the job should start without a slug");
 
   await runJobCycle(env, job.id);

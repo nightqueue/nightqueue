@@ -11,9 +11,9 @@ import * as memory from "../memory/memory.mjs";
 import { orphansOf } from "../memory/migration/v20.mjs";
 import * as purge from "../memory/project-purge.mjs";
 import * as registry from "../memory/registry.mjs";
-import * as roadmap from "../memory/roadmap.mjs";
-import * as roadmapBackfill from "../memory/roadmap-backfill.mjs";
-import * as roadmapSearch from "../memory/roadmap-search.mjs";
+import * as issues from "../memory/issues.mjs";
+import * as issueBackfill from "../memory/issue-backfill.mjs";
+import * as issueSearch from "../memory/issue-search.mjs";
 import * as runs from "../memory/runs.mjs";
 import * as search from "../memory/search.mjs";
 import { classifyStoreError } from "../memory/store-error.mjs";
@@ -42,13 +42,13 @@ export const JOB_STATUS_WRITERS = Object.freeze([
 // left, so a writer racing the one that set it never skips its event; an id the write refuses anyway goes to the write alone.
 function followingPassedStatus({ jobId, write, fromKey }, env) {
   if (!Number.isInteger(jobId) || jobId < 1) return write();
-  return roadmap.followJobWrite({ jobId, write, fromKey }, env);
+  return issues.followJobWrite({ jobId, write, fromKey }, env);
 }
 
 // Brings the roadmap items of a job in line with its row; the bookkeeping never costs the job write it follows.
 function followJobQuietly(jobId, env) {
   try {
-    roadmap.followJob(jobId, env);
+    issues.followJob(jobId, env);
   } catch {
     return;
   }
@@ -57,7 +57,7 @@ function followJobQuietly(jobId, env) {
 // Re-syncs every roadmap item whose job moved without it; the bookkeeping never costs the sweep it follows.
 function followDriftedQuietly(env) {
   try {
-    roadmap.followDriftedJobs(env);
+    issues.followDriftedJobs(env);
   } catch {
     return;
   }
@@ -121,7 +121,7 @@ function jobsMethods(env, db) {
     retryJob: async (id, options) =>
       followingPassedStatus({ jobId: id, write: () => jobs.retryJob(id, options, env), fromKey: "retriedFrom" }, env),
     getJob: async (id) => jobs.getJob(id, env, db()),
-    jobSpawnRefs: async (id) => roadmap.jobSpawnRefs(id, env, db()),
+    jobSpawnRefs: async (id) => issues.jobSpawnRefs(id, env, db()),
     listJobs: async (options) => jobs.listJobs(options, env, db()),
     countsByStatus: async () => jobs.countsByStatus(env, db()),
     countBlockedGates: async () => jobs.countBlockedGates(env, db()),
@@ -227,26 +227,26 @@ function decisionsDomain(env, db) {
   };
 }
 
-// The roadmap; `listRoadmap`, `searchRoadmap`, `getRoadmapItemDetail`, `roadmapRefOfJob` and `roadmapDrift` take the store's own connection, which is what makes them work read-only.
-function roadmapDomain(env, db) {
+// The roadmap; `listIssues`, `searchIssues`, `getIssueDetail`, `issueRefOfJob` and `issueDrift` take the store's own connection, which is what makes them work read-only.
+function issuesDomain(env, db) {
   return {
-    getRoadmapItem: async (id) => roadmap.getRoadmapItem(id, env),
-    getRoadmapItemDetail: async (id, options) => roadmap.getRoadmapItemDetail(id, options, env, db()),
-    saveRoadmapItem: async (item) => roadmap.saveRoadmapItem(item, env),
-    updateRoadmapItem: async (id, patch) => roadmap.updateRoadmapItem(id, patch, env),
-    addRoadmapComment: async (spec) => roadmap.addRoadmapComment(spec, env),
-    roadmapRefOfJob: async (jobId) => roadmap.roadmapRefOfJob(jobId, env, db()),
-    itemIdOfRef: async (ref) => roadmap.itemIdOfRef(ref, env, db()),
-    backfillRoadmap: async (options) => roadmapBackfill.backfillRoadmap(options, env),
-    listRoadmap: async (owner, filters) => roadmap.listRoadmap(owner, filters, env, db()),
-    searchRoadmap: async (spec) => roadmapSearch.searchRoadmap(spec, env, db()),
-    queueableRoadmapItem: async (id) => roadmap.queueableRoadmapItem(id, env),
-    linkRoadmapItemJob: async (id, jobId) => roadmap.linkRoadmapItemJob(id, jobId, env),
-    followJob: async (jobId) => roadmap.followJob(jobId, env),
-    followDriftedJobs: async () => roadmap.followDriftedJobs(env),
-    roadmapDrift: async () => roadmap.roadmapDrift(env, db()),
-    buildRoadmapPrompt: async (spec) => roadmap.buildRoadmapPrompt(spec, env),
-    queueRoadmapItem: async (spec) => roadmap.queueRoadmapItem(spec, env),
+    getIssue: async (id) => issues.getIssue(id, env),
+    getIssueDetail: async (id, options) => issues.getIssueDetail(id, options, env, db()),
+    saveIssue: async (item) => issues.saveIssue(item, env),
+    updateIssue: async (id, patch) => issues.updateIssue(id, patch, env),
+    addIssueComment: async (spec) => issues.addIssueComment(spec, env),
+    issueRefOfJob: async (jobId) => issues.issueRefOfJob(jobId, env, db()),
+    itemIdOfRef: async (ref) => issues.itemIdOfRef(ref, env, db()),
+    backfillIssues: async (options) => issueBackfill.backfillIssues(options, env),
+    listIssues: async (owner, filters) => issues.listIssues(owner, filters, env, db()),
+    searchIssues: async (spec) => issueSearch.searchIssues(spec, env, db()),
+    queueableIssue: async (id) => issues.queueableIssue(id, env),
+    linkIssueJob: async (id, jobId) => issues.linkIssueJob(id, jobId, env),
+    followJob: async (jobId) => issues.followJob(jobId, env),
+    followDriftedJobs: async () => issues.followDriftedJobs(env),
+    issueDrift: async () => issues.issueDrift(env, db()),
+    buildIssuePrompt: async (spec) => issues.buildIssuePrompt(spec, env),
+    queueIssue: async (spec) => issues.queueIssue(spec, env),
   };
 }
 
@@ -426,7 +426,7 @@ export function createLocalStore(env = process.env, { readOnly = false, onClose 
     memory: memoryDomain(env),
     index: indexDomain(env),
     decisions: decisionsDomain(env, db),
-    roadmap: roadmapDomain(env, db),
+    issues: issuesDomain(env, db),
     orgs: orgsDomain(db),
     projects: projectsDomain(db),
     db: dbDomain(env),

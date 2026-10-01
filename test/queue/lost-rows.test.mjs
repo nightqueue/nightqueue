@@ -10,7 +10,7 @@ import { createServer } from "../../src/mcp/tools.mjs";
 import { dbPath, dbWalPath, homeDir, jobLogPath, logsDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob, getJob } from "../../src/memory/jobs.mjs";
-import { addRoadmapComment, queueRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { addIssueComment, queueIssue, saveIssue } from "../../src/memory/issues.mjs";
 import { findLostJobs } from "../../src/queue/lost-rows.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { recoverFromDisk } from "../../src/queue/repair.mjs";
@@ -18,7 +18,7 @@ import { recordJobBlock } from "../../src/queue/run-state.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
-import { dropJobRows, jobRow, roadmapSnapshot } from "../../test-support/lost-rows.mjs";
+import { dropJobRows, jobRow, issueSnapshot } from "../../test-support/lost-rows.mjs";
 import { ensureProject, makeDir, makeHome, registerCheckout } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { makeSickHome } from "../../test-support/sick-home.mjs";
@@ -58,11 +58,11 @@ async function seedLostJobs(t, name) {
   ]);
   const projectId = ensureProject(env, "alpha");
   const doneId = addJob({ projectId, prompt: "fix the worker", slug: DONE_SLUG }, env).id;
-  const item = saveRoadmapItem({ type: "feature", projectId, title: "drop the column" }, env);
-  const gateId = (await queueRoadmapItem({ id: item.id }, env)).job.id;
+  const item = saveIssue({ type: "feature", projectId, title: "drop the column" }, env);
+  const gateId = (await queueIssue({ id: item.id }, env)).job.id;
   assert.equal((await runOnce(env, doneId)).status, "done");
   assert.equal((await runOnce(env, gateId)).status, "gate");
-  addRoadmapComment({ id: item.id, body: "the operator reads this" }, env);
+  addIssueComment({ id: item.id, body: "the operator reads this" }, env);
   const before = { done: getJob(doneId, env), gate: getJob(gateId, env) };
   dropJobRows(env, [doneId, gateId]);
   return { env, projectId, doneId, gateId, before };
@@ -123,7 +123,7 @@ test("doctor --db lists the done and the gate job whose rows are gone, with proj
 
 test("queue repair --from-disk rebuilds both rows with the recovered marker and never writes the roadmap", async (t) => {
   const { env, projectId, doneId, gateId, before } = await seedLostJobs(t, "lost-repair");
-  const roadmapBefore = roadmapSnapshot(env);
+  const issuesBefore = issueSnapshot(env);
 
   const answer = JSON.parse(cli(env, ["queue", "repair", "--from-disk", "--json"]));
 
@@ -140,7 +140,7 @@ test("queue repair --from-disk rebuilds both rows with the recovered marker and 
     assert.ok(!Number.isNaN(Date.parse(resultOf(row).recovered.at)));
     assert.equal(row.worker, null);
   }
-  assert.equal(roadmapSnapshot(env), roadmapBefore, "the recovery wrote a roadmap row or comment");
+  assert.equal(issueSnapshot(env), issuesBefore, "the recovery wrote a roadmap row or comment");
   assert.match(readFileSync(jobLogPath(doneId, env), "utf8"), new RegExp(`recovered from disk: status=done prUrl=${PR_URL.replace(/[.]/g, "\\.")}\\n$`));
   assert.match(readFileSync(jobLogPath(gateId, env), "utf8"), /recovered from disk: status=gate prUrl=-\n$/);
 

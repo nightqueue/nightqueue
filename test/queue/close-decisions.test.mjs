@@ -3,7 +3,7 @@ import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { commentFor } from "../../src/memory/roadmap-workflow.mjs";
+import { commentFor } from "../../src/memory/issue-workflow.mjs";
 import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";

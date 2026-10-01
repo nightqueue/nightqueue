@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
-import { insertComment } from "../../src/memory/roadmap-comments.mjs";
-import { searchRoadmap } from "../../src/memory/roadmap-search.mjs";
-import { saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { insertComment } from "../../src/memory/issue-comments.mjs";
+import { searchIssues } from "../../src/memory/issue-search.mjs";
+import { saveIssue } from "../../src/memory/issues.mjs";
 import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
-// H-A1: fileHits (src/memory/roadmap-search.mjs:38-43) does a raw `substr` prefix
+// H-A1: fileHits (src/memory/issue-search.mjs:38-43) does a raw `substr` prefix
 // comparison with no path-boundary check, so a query for "src/queue" also matches a
 // sibling directory whose name merely starts with the same characters, e.g.
 // "src/queue2/report.mjs". This PoC proves that over-match from the user's point of
@@ -15,7 +15,7 @@ import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mj
 
 // Saves one improvement item of the given project.
 function item(env, project, title) {
-  return saveRoadmapItem({ projectId: projectIdOf(env, project), type: "improvement", title }, env);
+  return saveIssue({ projectId: projectIdOf(env, project), type: "improvement", title }, env);
 }
 
 // Appends a runtime-shaped comment to an item with the given recorded file paths.
@@ -39,7 +39,7 @@ test("a file search for a directory prefix excludes a sibling directory that mer
   const real = item(env, "alpha", "queue rewrite");
   comment(env, real.id, ["src/queue/x.mjs"]);
 
-  const hits = searchRoadmap({ projectId: projectIdOf(env, "alpha"), file: "src/queue" }, env);
+  const hits = searchIssues({ projectId: projectIdOf(env, "alpha"), file: "src/queue" }, env);
 
   assert.equal(ids(hits).includes(sibling.id), false, "src/queue2/report.mjs must not match a search for src/queue");
   assert.deepEqual(ids(hits), [real.id]);

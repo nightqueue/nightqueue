@@ -14,7 +14,7 @@ export function footerOf(itemRef) {
 // The ref of the roadmap item the job was queued from, or null outside a job or for a free-prompt job; a store failure is thrown.
 export async function itemRefOfJob(store, jobId) {
   if (jobId === null || jobId === undefined) return null;
-  return (await store.roadmap.roadmapRefOfJob(jobId)) ?? null;
+  return (await store.issues.issueRefOfJob(jobId)) ?? null;
 }
 
 // The body file `run pr` publishes: a copy of the agent's body in the run directory ending with the footer of the item ref the caller resolves.

@@ -10,21 +10,21 @@ import { openDb } from "../../src/memory/db.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, getJob, listJobs } from "../../src/memory/jobs.mjs";
 import {
-  getRoadmapItem,
-  getRoadmapItemDetail,
-  listRoadmap,
-  roadmapDrift,
-  roadmapRefOfJob,
-  saveRoadmapItem,
-  updateRoadmapItem,
-} from "../../src/memory/roadmap.mjs";
+  getIssue,
+  getIssueDetail,
+  listIssues,
+  issueDrift,
+  issueRefOfJob,
+  saveIssue,
+  updateIssue,
+} from "../../src/memory/issues.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, orgIdOf, projectIdOf, settleThroughStore } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const PR_URL = "https://github.com/acme/alpha/pull/7";
 const DB_MODULE_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
-const PROJECTS_MODULE_URL = new URL("../../src/memory/roadmap-projects.mjs", import.meta.url).href;
+const PROJECTS_MODULE_URL = new URL("../../src/memory/issue-projects.mjs", import.meta.url).href;
 
 // Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connect(t, env) {
@@ -52,7 +52,7 @@ function makeOrgItemHome(t, name) {
   const cwd = makeProject(t, env, "acme-mobile-app", { org: "acme" });
   makeProject(t, env, "acme-api", { org: "acme" });
   makeProject(t, env, "orbit-app", { org: "orbit" });
-  const item = saveRoadmapItem({ type: "improvement", orgId: orgIdOf(env, "acme"), title: "raise the node version" }, env);
+  const item = saveIssue({ type: "improvement", orgId: orgIdOf(env, "acme"), title: "raise the node version" }, env);
   return { env, cwd, item };
 }
 
@@ -103,11 +103,11 @@ test("queue_add on an org item requires a project of that org or `all`, and link
     getJob(queued.id, env).prompt,
     "## Task\nraise the node version\n\n## Roadmap item\nRoadmap: AM-1\nType: improvement\nCommit type: refactor or perf",
   );
-  const row = getRoadmapItem(item.id, env);
+  const row = getIssue(item.id, env);
   assert.equal(row.status, "in_progress", "the org status is derived from its one in-progress row");
   assert.equal(row.job_id, null, "the org item's own row never carries a job");
   assert.deepEqual(rowStatuses(env, item.id), { "acme-mobile-app": "in_progress" });
-  assert.equal(roadmapRefOfJob(queued.id, env), "AM-1");
+  assert.equal(issueRefOfJob(queued.id, env), "AM-1");
 
   const again = await client.callTool({ name: "queue_add", arguments: { roadmap_item_id: item.ref, project: "acme-mobile-app" } });
   assert.equal(again.isError, true);
@@ -177,7 +177,7 @@ test("nightqueue queue add --roadmap needs --project <name|all> for an org item,
   assert.match(all.stdout, /queued for `acme-mobile-app`/);
   assert.match(all.stdout, /skipped `acme-api`: J-1 \(pending\) still holds it/);
   assert.deepEqual(listJobs({ limit: 10 }, env).map((job) => job.project).sort(), ["acme-api", "acme-mobile-app"]);
-  assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
+  assert.equal(getIssue(item.id, env).status, "in_progress");
 
   const matrix = spawnSync(process.execPath, [CLI, "roadmap", "--org", "acme"], { env, cwd: elsewhere, encoding: "utf8" });
   assert.equal(matrix.status, 0, matrix.stderr);
@@ -191,32 +191,32 @@ test("nightqueue queue add --roadmap needs --project <name|all> for an org item,
 test("an org item queued for `all` derives its status from every row, and closes once the last job is closed", async (t) => {
   const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-lifecycle");
   const store = openStore(env);
-  const queued = await store.roadmap.queueRoadmapItem({ id: item.id, allProjects: true });
+  const queued = await store.issues.queueIssue({ id: item.id, allProjects: true });
   const [app, api] = ["acme-mobile-app", "acme-api"].map((name) => queued.jobs.find((job) => job.project === name));
   assert.equal(queued.jobs.length, 2);
-  assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
+  assert.equal(getIssue(item.id, env).status, "in_progress");
 
   await runTo(store, app.id, "done", { prUrl: PR_URL });
   assert.deepEqual(rowStatuses(env, item.id), { "acme-api": "in_progress", "acme-mobile-app": "in_review" });
-  assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
+  assert.equal(getIssue(item.id, env).status, "in_progress");
 
   await runTo(store, api.id, "failed");
   assert.deepEqual(rowStatuses(env, item.id), { "acme-api": "todo", "acme-mobile-app": "in_review" });
-  assert.equal(getRoadmapItem(item.id, env).status, "todo", "the lowest open row status");
+  assert.equal(getIssue(item.id, env).status, "todo", "the lowest open row status");
 
   await store.jobs.retryJob(api.id, {});
-  assert.equal(getRoadmapItem(item.id, env).status, "in_progress");
+  assert.equal(getIssue(item.id, env).status, "in_progress");
   await runTo(store, api.id, "done", { prUrl: PR_URL });
-  assert.equal(getRoadmapItem(item.id, env).status, "in_review");
+  assert.equal(getIssue(item.id, env).status, "in_review");
 
   await settleThroughStore(store, app.id);
-  assert.equal(getRoadmapItem(item.id, env).status, "in_review");
+  assert.equal(getIssue(item.id, env).status, "in_review");
   await settleThroughStore(store, api.id);
-  const closed = getRoadmapItem(item.id, env);
+  const closed = getIssue(item.id, env);
   assert.equal(closed.status, "done");
   assert.notEqual(closed.closed_at, null);
   assert.equal(closed.job_id, null);
-  assert.deepEqual(roadmapDrift(env), []);
+  assert.deepEqual(issueDrift(env), []);
 
   const trail = commentTrail(env, item.id);
   assert.ok(trail.includes("queued acme-api") && trail.includes("queued acme-mobile-app"), trail.join(", "));
@@ -227,13 +227,13 @@ test("an org item queued for `all` derives its status from every row, and closes
 test("closing an org item by hand cancels its open rows with one comment each, and leaves a done row alone", async (t) => {
   const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-manual-close");
   const store = openStore(env);
-  const queued = await store.roadmap.queueRoadmapItem({ id: item.id, allProjects: true });
+  const queued = await store.issues.queueIssue({ id: item.id, allProjects: true });
   const app = queued.jobs.find((job) => job.project === "acme-mobile-app");
   await runTo(store, app.id, "done", { prUrl: PR_URL });
   await settleThroughStore(store, app.id);
   assert.deepEqual(rowStatuses(env, item.id), { "acme-api": "in_progress", "acme-mobile-app": "done" });
 
-  const cancelled = updateRoadmapItem(item.id, { status: "cancelled" }, env);
+  const cancelled = updateIssue(item.id, { status: "cancelled" }, env);
   assert.equal(cancelled.status, "cancelled");
   assert.deepEqual(rowStatuses(env, item.id), { "acme-api": "cancelled", "acme-mobile-app": "done" });
   const closing = openDb(env)
@@ -241,26 +241,26 @@ test("closing an org item by hand cancels its open rows with one comment each, a
     .all(item.id);
   assert.deepEqual(closing.map((row) => [row.author, row.project]), [["operator", "acme-api"]]);
   assert.match(closing[0].body, /set to `cancelled` by the operator/);
-  assert.deepEqual(roadmapDrift(env), [], "a hand-cancelled item whose rows are all closed agrees with its derivation");
+  assert.deepEqual(issueDrift(env), [], "a hand-cancelled item whose rows are all closed agrees with its derivation");
 });
 
 test("a project reads only its own row and its own comments of an org item; the org reads the whole matrix", async (t) => {
   const { env, item } = makeOrgItemHome(t, "roadmap-org-queue-visibility");
   const store = openStore(env);
-  await store.roadmap.queueRoadmapItem({ id: item.id, allProjects: true });
-  await store.roadmap.addRoadmapComment({ id: item.id, body: "api only", author: "operator", viewer: projectIdOf(env, "acme-api") });
+  await store.issues.queueIssue({ id: item.id, allProjects: true });
+  await store.issues.addIssueComment({ id: item.id, body: "api only", author: "operator", viewer: projectIdOf(env, "acme-api") });
 
-  const api = listRoadmap({ projectId: projectIdOf(env, "acme-api") }, {}, env).items[0];
+  const api = listIssues({ projectId: projectIdOf(env, "acme-api") }, {}, env).items[0];
   assert.equal(api.project_status, "in_progress");
   assert.equal(api.projects, undefined);
-  const org = listRoadmap({ orgId: orgIdOf(env, "acme") }, {}, env).items[0];
+  const org = listIssues({ orgId: orgIdOf(env, "acme") }, {}, env).items[0];
   assert.deepEqual(org.projects.map((row) => row.project), ["acme-api", "acme-mobile-app"]);
 
-  const seenByApp = getRoadmapItemDetail(item.id, { viewer: projectIdOf(env, "acme-mobile-app") }, env);
+  const seenByApp = getIssueDetail(item.id, { viewer: projectIdOf(env, "acme-mobile-app") }, env);
   assert.deepEqual(seenByApp.projects.map((row) => row.project), ["acme-mobile-app"]);
   assert.ok(seenByApp.comments.every((comment) => comment.project === null || comment.project === "acme-mobile-app"));
   assert.equal(seenByApp.comments.some((comment) => comment.body === "api only"), false);
-  const operator = getRoadmapItemDetail(item.id, {}, env);
+  const operator = getIssueDetail(item.id, {}, env);
   assert.equal(operator.projects.length, 2);
   assert.ok(operator.comments.some((comment) => comment.body === "api only"));
 });

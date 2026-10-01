@@ -8,18 +8,18 @@
 // still succeeds (finishJob is a plain JOB_STATUS_WRITER, not wrapped by `followingPassedStatus`).
 // When the job later reaches `closed` (settleClose, also a plain JOB_STATUS_WRITER — see
 // `src/store/local.mjs` JOB_STATUS_WRITERS), `followJobQuietly` runs again, but `jobEvent`
-// (src/memory/roadmap-workflow.mjs:54-58) only ever compares the item's stale `job_status_seen`
+// (src/memory/issue-workflow.mjs:54-58) only ever compares the item's stale `job_status_seen`
 // against the job's CURRENT row: every status in DIRECT_EVENTS (`running, gate, done, failed,
 // cancelled, closed`) is unconditionally direct. So the follow jumps straight from the stale seen
 // value to `closed`, permanently skipping the `pr` comment/`in_review` step. The item's status
-// still ends up `done` (matching `roadmapDrift`'s accounting), but the operator-facing comment
+// still ends up `done` (matching `issueDrift`'s accounting), but the operator-facing comment
 // thread never documents that the job passed through review.
 //
 // BASELINE (proof by reading, not by running — do not check out the ref):
 // `git show 8738547:src/store/local.mjs` (the pre-rebase branch) wraps its equivalent close
 // writer with `followingPassedStatus`, and `git show 8738547:src/memory/jobs.mjs` shows that
 // writer's own UPDATE recording, in the job's result, the status it left in the same statement.
-// `followingPassedStatus`/`followJobWrite` (src/memory/roadmap.mjs `followPassedStatus`) then
+// `followingPassedStatus`/`followJobWrite` (src/memory/issues.mjs `followPassedStatus`) then
 // replays that recorded source status FIRST (producing the missed `pr` comment) before
 // following the job's current (`closed`) row — so on the pre-rebase branch, even a job that
 // missed its `done` follow would recover the `pr` comment the moment it closed. On the rebased
@@ -39,12 +39,12 @@ import { makeHome, makeProject, mergedChecklist, projectIdOf } from "../../test-
 
 const PR_URL = "https://github.com/acme/alpha/pull/9";
 
-const BREAK_ROADMAP_WRITES = `CREATE TRIGGER roadmap_follow_boom BEFORE UPDATE ON roadmap_items
+const BREAK_ISSUE_WRITES = `CREATE TRIGGER roadmap_follow_boom BEFORE UPDATE ON roadmap_items
   BEGIN SELECT RAISE(ABORT, 'roadmap follow forced to fail'); END;`;
 
 // The kinds of the comments an item holds, oldest first.
 async function kindsOf(env, itemId) {
-  return withReadOnlyStore(env, async (readOnly) => (await readOnly.roadmap.getRoadmapItemDetail(itemId, {})).comments.map((c) => c.kind));
+  return withReadOnlyStore(env, async (readOnly) => (await readOnly.issues.getIssueDetail(itemId, {})).comments.map((c) => c.kind));
 }
 
 test("a done follow that crashed once is never recovered by a later settleClose — the `pr` comment is permanently lost", async (t) => {
@@ -52,18 +52,18 @@ test("a done follow that crashed once is never recovered by a later settleClose 
   makeProject(t, env, "alpha");
   const store = openStore(env);
 
-  const item = await store.roadmap.saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "collapsed follow repro" });
-  const { job } = await store.roadmap.queueRoadmapItem({ id: item.id });
+  const item = await store.issues.saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "collapsed follow repro" });
+  const { job } = await store.issues.queueIssue({ id: item.id });
   assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }), "setup: the job was not claimed");
-  assert.equal((await store.roadmap.getRoadmapItem(item.id)).job_status_seen ?? null, "running", "setup: claim did not follow to running");
+  assert.equal((await store.issues.getIssue(item.id)).job_status_seen ?? null, "running", "setup: claim did not follow to running");
 
   // Model a crashed `done` follow: the write below still succeeds (finishJob is not wrapped by
   // followingPassedStatus), but followJobQuietly's roadmap.followJob throws and is swallowed —
   // job_status_seen never advances past "running", and the item never gets its `pr` comment.
-  openDb(env).exec(BREAK_ROADMAP_WRITES);
+  openDb(env).exec(BREAK_ISSUE_WRITES);
   assert.equal(await store.jobs.finishJob(job.id, { worker: "w1", status: "done", prUrl: PR_URL }), true, "setup: finishJob write itself must still succeed");
   assert.equal(await store.jobs.status(job.id), "done");
-  assert.equal((await store.roadmap.getRoadmapItem(item.id)).status, "in_progress", "setup: the follow for `done` must have been swallowed, leaving the item behind");
+  assert.equal((await store.issues.getIssue(item.id)).status, "in_progress", "setup: the follow for `done` must have been swallowed, leaving the item behind");
   openDb(env).exec("DROP TRIGGER roadmap_follow_boom");
 
   // Now close the job normally through the store, with roadmap writes healthy again — exactly

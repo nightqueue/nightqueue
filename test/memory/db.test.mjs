@@ -58,7 +58,7 @@ const DECISION_COLUMNS = [
   "embedding_model",
 ];
 
-const ROADMAP_COLUMNS = [
+const ISSUE_COLUMNS = [
   "id",
   "scope",
   "project_id",
@@ -227,14 +227,14 @@ test("the decisions and roadmap tables are created with their columns, defaults 
   const env = makeHome(t, "db-decisions");
   const db = openDb(env);
   assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
-  assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
+  assert.deepEqual(columnsOf(db, "roadmap_items"), ISSUE_COLUMNS);
   const decisionIndexes = db.prepare("PRAGMA index_list(decisions)").all();
   const unique = decisionIndexes.find((index) => index.name === "decisions_number_idx");
   assert.ok(unique, `number index missing: ${decisionIndexes.map((index) => index.name).join(", ")}`);
   assert.equal(unique.unique, 1);
-  const roadmapIndexes = db.prepare("PRAGMA index_list(roadmap_items)").all().map((index) => index.name);
-  assert.ok(roadmapIndexes.includes("roadmap_items_order_idx"), `order index missing: ${roadmapIndexes.join(", ")}`);
-  assert.ok(roadmapIndexes.includes("roadmap_items_job_idx"), `job index missing: ${roadmapIndexes.join(", ")}`);
+  const issueIndexes = db.prepare("PRAGMA index_list(roadmap_items)").all().map((index) => index.name);
+  assert.ok(issueIndexes.includes("roadmap_items_order_idx"), `order index missing: ${issueIndexes.join(", ")}`);
+  assert.ok(issueIndexes.includes("roadmap_items_job_idx"), `job index missing: ${issueIndexes.join(", ")}`);
 
   db.prepare("INSERT INTO decisions (project_id, number, title, context, decision) VALUES (?, 1, ?, ?, ?)").run(
     null,
@@ -284,7 +284,7 @@ test("the migration from user_version 2 keeps every row and adds the decisions s
     const db = openDb(env);
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
-    assert.deepEqual(columnsOf(db, "roadmap_items"), ROADMAP_COLUMNS);
+    assert.deepEqual(columnsOf(db, "roadmap_items"), ISSUE_COLUMNS);
     assert.ok(columnsOf(db, "jobs").includes("tier"), `jobs.tier missing on pass ${pass}`);
     assert.ok(columnsOf(db, "pipeline_runs").includes("tier_operator"), `pipeline_runs.tier_operator missing on pass ${pass}`);
     assert.ok(
@@ -625,7 +625,7 @@ test("the migration from user_version 5 gives every existing row the project sco
   const db = openDb(env);
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
-  assert.deepEqual(columnsOf(db, "roadmap_items").sort(), [...ROADMAP_COLUMNS].sort());
+  assert.deepEqual(columnsOf(db, "roadmap_items").sort(), [...ISSUE_COLUMNS].sort());
   const alphaId = projectIdOf(env, "alpha");
   assert.equal(
     db.prepare("SELECT COUNT(*) AS total FROM decisions WHERE scope = 'project' AND project_id = ? AND org_id IS NULL").get(alphaId).total,

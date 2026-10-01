@@ -6,11 +6,11 @@ import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
 import { getJob } from "../../src/memory/jobs.mjs";
-import { addRoadmapComment, getRoadmapItemDetail, queueRoadmapItem, saveRoadmapItem, updateRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { addIssueComment, getIssueDetail, queueIssue, saveIssue, updateIssue } from "../../src/memory/issues.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { makeDir, makeHome, makeProject, mergedChecklist, orgIdOf, projectIdOf, settleThroughStore } from "../../test-support/memory.mjs";
 
-const ROADMAP_MODULE_URL = new URL("../../src/memory/roadmap.mjs", import.meta.url).href;
+const ISSUES_MODULE_URL = new URL("../../src/memory/issues.mjs", import.meta.url).href;
 const PR_URL = "https://github.com/acme/alpha/pull/7";
 const MERGE_SHA = mergedChecklist().data.mergeSha;
 
@@ -19,8 +19,8 @@ async function linkedJob(t, name, type = "improvement") {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const store = openStore(env);
-  const item = await store.roadmap.saveRoadmapItem({ type, projectId: projectIdOf(env, "alpha"), title: "follow the job" });
-  const { job } = await store.roadmap.queueRoadmapItem({ id: item.id });
+  const item = await store.issues.saveIssue({ type, projectId: projectIdOf(env, "alpha"), title: "follow the job" });
+  const { job } = await store.issues.queueIssue({ id: item.id });
   return { env, store, item, job };
 }
 
@@ -32,7 +32,7 @@ async function runTo(store, job, status, extra = {}) {
 
 // The comment thread of an item, as the operator reads it.
 function thread(env, item) {
-  return getRoadmapItemDetail(item.id, {}, env).comments;
+  return getIssueDetail(item.id, {}, env).comments;
 }
 
 test("roadmap comments are append-only: an UPDATE or a DELETE is refused by the database", async (t) => {
@@ -61,7 +61,7 @@ test("queue, gate, retry, done and close leave queued, gate, queued, pr and clos
   assert.match(comments[3].body, new RegExp(`done: ${PR_URL}`));
   assert.equal(comments[4].body, `J-${job.id} closed`);
   assert.deepEqual([comments[4].refs.pr, comments[4].refs.sha], [PR_URL, MERGE_SHA]);
-  assert.equal(getRoadmapItemDetail(item.id, {}, env).status, "done");
+  assert.equal(getIssueDetail(item.id, {}, env).status, "done");
 });
 
 test("running, a release and a park leave no comment", async (t) => {
@@ -105,7 +105,7 @@ test("a close that finds its pull request closed without merge leaves `failed` a
       ["failed", `J-${job.id} cancelled\n\nPR #7 was closed without merge`],
     ],
   );
-  assert.equal(getRoadmapItemDetail(item.id, {}, env).status, "todo");
+  assert.equal(getIssueDetail(item.id, {}, env).status, "todo");
 });
 
 test("the refs of a comment carry the job's pull request, branch, merge sha, files and proposed decision", async (t) => {
@@ -127,10 +127,10 @@ test("the refs of a comment carry the job's pull request, branch, merge sha, fil
 test("a move back from review or done leaves `reopened`, signed by the operator unless a job moved it", async (t) => {
   const { env, store, item, job } = await linkedJob(t, "roadmap-comments-reopened");
   await runTo(store, job, "done", { prUrl: PR_URL });
-  updateRoadmapItem(item.id, { status: "todo" }, env);
-  updateRoadmapItem(item.id, { status: "backlog" }, env);
-  updateRoadmapItem(item.id, { status: "done" }, env);
-  updateRoadmapItem(item.id, { status: "in_review", author: "job:9" }, env);
+  updateIssue(item.id, { status: "todo" }, env);
+  updateIssue(item.id, { status: "backlog" }, env);
+  updateIssue(item.id, { status: "done" }, env);
+  updateIssue(item.id, { status: "in_review", author: "job:9" }, env);
   const reopened = thread(env, item).filter((comment) => comment.kind === "reopened");
   assert.deepEqual(
     reopened.map((comment) => [comment.author, comment.body]),
@@ -145,15 +145,15 @@ test("a note is signed by its author, and a project viewer never comments nor re
   const env = makeHome(t, "roadmap-comments-note");
   makeProject(t, env, "alpha");
   makeProject(t, env, "beta");
-  const foreign = saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "beta"), title: "beta crashes" }, env);
-  const note = addRoadmapComment({ id: foreign.id, body: "seen in prod" }, env);
+  const foreign = saveIssue({ type: "bug", projectId: projectIdOf(env, "beta"), title: "beta crashes" }, env);
+  const note = addIssueComment({ id: foreign.id, body: "seen in prod" }, env);
   assert.deepEqual([note.kind, note.author, note.body, note.project], ["note", "operator", "seen in prod", null]);
 
-  assert.throws(() => addRoadmapComment({ id: foreign.id, body: "x", author: "job:1", viewer: projectIdOf(env, "alpha") }, env), /belongs to project `beta`, not project `alpha`/);
-  assert.throws(() => getRoadmapItemDetail(foreign.id, { viewer: projectIdOf(env, "alpha") }, env), /belongs to project `beta`/);
-  assert.throws(() => addRoadmapComment({ id: foreign.id, body: "x", author: "robot" }, env), /invalid roadmap comment author/);
-  assert.throws(() => addRoadmapComment({ id: foreign.id, body: "  " }, env), /`body` is required/);
-  assert.equal(getRoadmapItemDetail(foreign.id, {}, env).comments.length, 1, "a refused comment was written");
+  assert.throws(() => addIssueComment({ id: foreign.id, body: "x", author: "job:1", viewer: projectIdOf(env, "alpha") }, env), /belongs to project `beta`, not project `alpha`/);
+  assert.throws(() => getIssueDetail(foreign.id, { viewer: projectIdOf(env, "alpha") }, env), /belongs to project `beta`/);
+  assert.throws(() => addIssueComment({ id: foreign.id, body: "x", author: "robot" }, env), /invalid roadmap comment author/);
+  assert.throws(() => addIssueComment({ id: foreign.id, body: "  " }, env), /`body` is required/);
+  assert.equal(getIssueDetail(foreign.id, {}, env).comments.length, 1, "a refused comment was written");
 });
 
 test("a member project reads its org's item but never a sibling project's comment on it", (t) => {
@@ -161,40 +161,40 @@ test("a member project reads its org's item but never a sibling project's commen
   makeProject(t, env, "alpha", { org: "acme" });
   makeProject(t, env, "beta", { org: "acme" });
   makeProject(t, env, "gamma", { org: "other" });
-  const item = saveRoadmapItem({ type: "chore", orgId: orgIdOf(env, "acme"), title: "raise node" }, env);
-  addRoadmapComment({ id: item.id, body: "org-wide note" }, env);
-  addRoadmapComment({ id: item.id, body: "beta only", author: "job:2", viewer: projectIdOf(env, "beta") }, env);
+  const item = saveIssue({ type: "chore", orgId: orgIdOf(env, "acme"), title: "raise node" }, env);
+  addIssueComment({ id: item.id, body: "org-wide note" }, env);
+  addIssueComment({ id: item.id, body: "beta only", author: "job:2", viewer: projectIdOf(env, "beta") }, env);
 
-  const bodies = (viewer) => getRoadmapItemDetail(item.id, { viewer: projectIdOf(env, viewer) }, env).comments.map((comment) => comment.body);
+  const bodies = (viewer) => getIssueDetail(item.id, { viewer: projectIdOf(env, viewer) }, env).comments.map((comment) => comment.body);
   assert.deepEqual(bodies("alpha"), ["org-wide note"]);
   assert.deepEqual(bodies("beta"), ["org-wide note", "beta only"]);
   assert.deepEqual(bodies(null), ["org-wide note", "beta only"]);
-  assert.throws(() => getRoadmapItemDetail(item.id, { viewer: projectIdOf(env, "gamma") }, env), /belongs to org `acme`, not project `gamma`/);
+  assert.throws(() => getIssueDetail(item.id, { viewer: projectIdOf(env, "gamma") }, env), /belongs to org `acme`, not project `gamma`/);
 });
 
 test("the type is required on save, sets the default tier of the job, and an explicit tier wins", async (t) => {
   const env = makeHome(t, "roadmap-comments-type");
   makeProject(t, env, "alpha");
-  assert.throws(() => saveRoadmapItem({ projectId: projectIdOf(env, "alpha"), title: "x" }, env), /`type` is required: expected one of bug\|feature\|improvement\|chore\|incident/);
-  assert.throws(() => saveRoadmapItem({ projectId: projectIdOf(env, "alpha"), title: "x", type: "epic" }, env), /`type` is required/);
+  assert.throws(() => saveIssue({ projectId: projectIdOf(env, "alpha"), title: "x" }, env), /`type` is required: expected one of bug\|feature\|improvement\|chore\|incident/);
+  assert.throws(() => saveIssue({ projectId: projectIdOf(env, "alpha"), title: "x", type: "epic" }, env), /`type` is required/);
 
   const expected = { bug: "simple", feature: "complex", improvement: "simple", chore: "trivial", incident: "simple" };
   for (const [type, tier] of Object.entries(expected)) {
-    const item = saveRoadmapItem({ projectId: projectIdOf(env, "alpha"), title: `a ${type}`, type }, env);
-    const { job } = await queueRoadmapItem({ id: item.id }, env);
+    const item = saveIssue({ projectId: projectIdOf(env, "alpha"), title: `a ${type}`, type }, env);
+    const { job } = await queueIssue({ id: item.id }, env);
     assert.equal(getJob(job.id, env).tier, tier, type);
   }
-  const bug = saveRoadmapItem({ projectId: projectIdOf(env, "alpha"), title: "an explicit tier", type: "bug" }, env);
-  const { job } = await queueRoadmapItem({ id: bug.id, tier: "complex" }, env);
+  const bug = saveIssue({ projectId: projectIdOf(env, "alpha"), title: "an explicit tier", type: "bug" }, env);
+  const { job } = await queueIssue({ id: bug.id, tier: "complex" }, env);
   assert.equal(getJob(job.id, env).tier, "complex");
   assert.match(getJob(job.id, env).prompt, /## Roadmap item\nRoadmap: AP-\d+\nType: bug\nCommit type: fix/);
-  assert.equal(updateRoadmapItem(bug.id, { type: "incident" }, env).type, "incident");
+  assert.equal(updateIssue(bug.id, { type: "incident" }, env).type, "incident");
 });
 
 // Source of a child process that follows one job over and over for a while, generated so no PoC lives on disk.
 function followerSource() {
   return [
-    `import { followJob } from ${JSON.stringify(ROADMAP_MODULE_URL)};`,
+    `import { followJob } from ${JSON.stringify(ISSUES_MODULE_URL)};`,
     "const [, , jobRaw, durationRaw] = process.argv;",
     "const deadline = Date.now() + Number(durationRaw);",
     "let calls = 0;",

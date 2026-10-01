@@ -1,21 +1,21 @@
 import { addColumnIfMissing, dropColumnIfPresent, hasColumn } from "../columns.mjs";
 import {
   COMMENT_KINDS,
-  DEFAULT_ROADMAP_TYPE,
+  DEFAULT_ISSUE_TYPE,
   LIVE_JOB_STATUSES,
   OPERATOR_AUTHOR,
-  ROADMAP_STATUSES,
-  ROADMAP_TYPES,
+  ISSUE_STATUSES,
+  ISSUE_TYPES,
   legacyStatusSql,
   sqlList,
-} from "../roadmap-workflow.mjs";
+} from "../issue-workflow.mjs";
 import { carriesOperatorSeed } from "../shared-slug-migration.mjs";
 import { closeMigrationPending, migrateCloseColumns } from "./close-columns.mjs";
 
 // The frozen v17 schema and the steps that brought any older database to it, in the order the v17 build ran them.
 // Nothing here follows the live schema: a v17 database is read by name, and only the v18 migration reads it.
 
-const ROADMAP_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ROADMAP_TYPE}' CHECK(type IN (${sqlList(ROADMAP_TYPES)}))`;
+const ROADMAP_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ISSUE_TYPE}' CHECK(type IN (${sqlList(ISSUE_TYPES)}))`;
 
 const ROADMAP_COMMENTS = `
 CREATE TABLE IF NOT EXISTS roadmap_comments (
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS roadmap_item_projects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id INTEGER NOT NULL,
   project TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
+  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ISSUE_STATUSES)})),
   job_id INTEGER,
   job_status_seen TEXT,
   closed_at TEXT,
@@ -60,7 +60,7 @@ function roadmapItemsDdl(name) {
   org TEXT,
   title TEXT NOT NULL,
   detail TEXT,
-  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
+  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ISSUE_STATUSES)})),
   priority INTEGER NOT NULL DEFAULT 5 CHECK(priority BETWEEN 1 AND 9),
   type ${ROADMAP_TYPE_COLUMN},
   position INTEGER NOT NULL,

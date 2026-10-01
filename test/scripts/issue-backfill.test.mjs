@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { main } from "../../scripts/roadmap-backfill.mjs";
+import { main } from "../../scripts/issue-backfill.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob, getJob } from "../../src/memory/jobs.mjs";
-import { getRoadmapItemDetail } from "../../src/memory/roadmap.mjs";
+import { getIssueDetail } from "../../src/memory/issues.mjs";
 import { sqliteToIso } from "../../src/memory/schema.mjs";
 import { ensureProject, makeHome, makeProject, mergedChecklist, seedClosedJob, seedDoneJob } from "../../test-support/memory.mjs";
 
@@ -54,7 +54,7 @@ async function backfill(env, argv) {
 
 // The kinds and dates of an item's thread.
 function threadOf(env, id) {
-  return getRoadmapItemDetail(id, {}, env).comments.map((comment) => [comment.kind, comment.created_at]);
+  return getIssueDetail(id, {}, env).comments.map((comment) => [comment.kind, comment.created_at]);
 }
 
 // The dates a job's history is synthesized from, in the form a comment carries them.
@@ -85,7 +85,7 @@ test("the backfill dates each synthesized comment, gives a hand-closed item noth
   ]);
   assert.deepEqual(threadOf(env, items.closedByHand), []);
   assert.deepEqual(threadOf(env, items.queued), [["queued", datesOf(env, jobs.pending).queued]]);
-  const close = getRoadmapItemDetail(items.closed, {}, env).comments.at(-1);
+  const close = getIssueDetail(items.closed, {}, env).comments.at(-1);
   assert.equal(close.author, `job:${jobs.closed}`);
   assert.equal(close.body, `J-${jobs.closed} closed`);
   assert.deepEqual([close.refs.pr, close.refs.sha], [PR_URL, mergedChecklist().data.mergeSha]);

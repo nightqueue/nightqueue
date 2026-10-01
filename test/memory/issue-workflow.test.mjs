@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  JOB_TO_ROADMAP,
+  JOB_TO_ISSUE,
   MANUAL_STATUSES,
   OPEN_STATUSES,
-  ROADMAP_STATUSES,
+  ISSUE_STATUSES,
   deriveOrgStatus,
   jobEvent,
   missedCloseSource,
   orgStatusAgrees,
   resultField,
-  roadmapTransition,
-} from "../../src/memory/roadmap-workflow.mjs";
+  issueTransition,
+} from "../../src/memory/issue-workflow.mjs";
 
 test("an org item's status derives from its project rows, one assertion per rule", () => {
   assert.equal(deriveOrgStatus([]), null, "no rows keeps the item's own status");
@@ -50,7 +50,7 @@ const ROWS = [
 
 for (const row of ROWS) {
   test(`job -> roadmap: ${row.name}`, () => {
-    const actual = row.event ? JOB_TO_ROADMAP[row.event] : roadmapTransition(row.job, row.seen);
+    const actual = row.event ? JOB_TO_ISSUE[row.event] : issueTransition(row.job, row.seen);
     assert.deepEqual({ status: actual.status, kind: actual.kind }, row.expected);
   });
 }
@@ -76,11 +76,11 @@ test("a close whose `done` the follow never saw replays it, and only then", () =
 test("a job status the table does not know moves nothing", () => {
   assert.equal(jobEvent({ status: "merged" }), null);
   assert.equal(jobEvent(null), null);
-  assert.deepEqual(roadmapTransition({ status: "bogus" }), { status: null, kind: null });
+  assert.deepEqual(issueTransition({ status: "bogus" }), { status: null, kind: null });
 });
 
 test("every status the table lands on is a roadmap status, and in_progress is the only one kept from the operator", () => {
-  for (const { status } of Object.values(JOB_TO_ROADMAP)) assert.ok(ROADMAP_STATUSES.includes(status), status);
+  for (const { status } of Object.values(JOB_TO_ISSUE)) assert.ok(ISSUE_STATUSES.includes(status), status);
   assert.deepEqual(MANUAL_STATUSES, ["backlog", "todo", "in_review", "done", "cancelled"]);
   assert.deepEqual(OPEN_STATUSES, ["backlog", "todo", "in_progress", "in_review"]);
 });

@@ -6,14 +6,14 @@ import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
 import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
-const ROADMAP_MODULE_URL = new URL("../../src/memory/roadmap.mjs", import.meta.url).href;
+const ISSUES_MODULE_URL = new URL("../../src/memory/issues.mjs", import.meta.url).href;
 const WRITERS = 4;
 const DURATION_MS = 1500;
 
 // Source of the child-process script, generated (not checked in) so this file stays the only PoC on disk.
 function buildWriterSource(moduleUrl) {
   return [
-    `import { saveRoadmapItem } from ${JSON.stringify(moduleUrl)};`,
+    `import { saveIssue } from ${JSON.stringify(moduleUrl)};`,
     "",
     "const [, , project, priorityRaw, label, durationRaw] = process.argv;",
     "const deadline = Date.now() + Number(durationRaw);",
@@ -22,7 +22,7 @@ function buildWriterSource(moduleUrl) {
     "const errors = [];",
     "while (Date.now() < deadline) {",
     "  try {",
-    "    const row = saveRoadmapItem({ type: 'improvement', projectId: project, priority: Number(priorityRaw), title: `${label}-${written}` }, process.env);",
+    "    const row = saveIssue({ type: 'improvement', projectId: project, priority: Number(priorityRaw), title: `${label}-${written}` }, process.env);",
     "    positions.push(row.position);",
     "    written += 1;",
     "  } catch (err) {",
@@ -36,11 +36,11 @@ function buildWriterSource(moduleUrl) {
 // Writes the generated writer script into a throwaway directory, cleaned up with the rest of the test.
 function writeChildScript(dir) {
   const scriptPath = join(dir, "roadmap-race-writer.mjs");
-  writeFileSync(scriptPath, buildWriterSource(ROADMAP_MODULE_URL), "utf8");
+  writeFileSync(scriptPath, buildWriterSource(ISSUES_MODULE_URL), "utf8");
   return scriptPath;
 }
 
-// Spawns one real OS process hammering saveRoadmapItem into the same (project, priority) group.
+// Spawns one real OS process hammering saveIssue into the same (project, priority) group.
 function runWriter(scriptPath, env, project, priority, label, durationMs) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [scriptPath, project, String(priority), label, String(durationMs)], {
@@ -59,7 +59,7 @@ function runWriter(scriptPath, env, project, priority, label, durationMs) {
 }
 
 test(
-  `${WRITERS} real OS processes racing saveRoadmapItem into the same priority group for ${DURATION_MS}ms ` +
+  `${WRITERS} real OS processes racing saveIssue into the same priority group for ${DURATION_MS}ms ` +
     "(many thousands of attempts, not a single shot) never leave a duplicate or gapped position",
   async (t) => {
     const env = makeHome(t, "roadmap-race");

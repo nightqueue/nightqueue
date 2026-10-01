@@ -183,9 +183,9 @@ function withoutRuntimeAppendedLines(notice) {
 
 // The ref of the roadmap item a job was queued from; null when it carries none or the roadmap cannot be read, which never fails the view.
 async function itemRefOfJob(readStore, jobId) {
-  if (typeof readStore?.roadmap?.roadmapRefOfJob !== "function") return null;
+  if (typeof readStore?.issues?.issueRefOfJob !== "function") return null;
   try {
-    return await readStore.roadmap.roadmapRefOfJob(jobId);
+    return await readStore.issues.issueRefOfJob(jobId);
   } catch {
     return null;
   }

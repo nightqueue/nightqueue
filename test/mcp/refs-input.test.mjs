@@ -7,7 +7,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { setOrgKey, setProjectKey } from "../../src/memory/registry.mjs";
-import { getRoadmapItem, getRoadmapItemDetail, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { getIssue, getIssueDetail, saveIssue } from "../../src/memory/issues.mjs";
 import { ensureProject, makeHome, makeProject, orgIdOf, projectIdOf, seedDoneJob } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
@@ -57,10 +57,10 @@ function makeRefsHome(t, name) {
   saveDecision(decision(beta, "beta ships weekly"), env);
   saveDecision(decision(acme, "every repo runs one node"), env);
   const rows = {
-    alphaItem: saveRoadmapItem({ type: "bug", ...alpha, title: "alpha crashes" }, env),
-    betaItem: saveRoadmapItem({ type: "bug", ...beta, title: "beta crashes" }, env),
-    orgItem: saveRoadmapItem({ type: "chore", ...acme, title: "raise node" }, env),
-    globalItem: saveRoadmapItem({ type: "chore", projectId: null, title: "a global chore" }, env),
+    alphaItem: saveIssue({ type: "bug", ...alpha, title: "alpha crashes" }, env),
+    betaItem: saveIssue({ type: "bug", ...beta, title: "beta crashes" }, env),
+    orgItem: saveIssue({ type: "chore", ...acme, title: "raise node" }, env),
+    globalItem: saveIssue({ type: "chore", projectId: null, title: "a global chore" }, env),
   };
   const db = openDb(env);
   setProjectKey(db, { id: alpha.projectId, key: "NQ" });
@@ -98,13 +98,13 @@ test("the item tools take a ref, old key included, and refuse an integer or an u
   assert.match(await refusalOf(client, "roadmap_update", { id: "AC-1", decision_id: "D-1" }), /`D-1` names a decision of a project: pass the project, or write it `<KEY>\/D-1`/);
   const orgLinked = payloadOf(await client.callTool({ name: "roadmap_update", arguments: { id: "AC-1", decision_id: "AM/D-1" } }));
   assert.equal(orgLinked.item.decision_ref, "AC/D-1");
-  assert.equal(getRoadmapItem(orgItem.id, env).decision_id, 4);
+  assert.equal(getIssue(orgItem.id, env).decision_id, 4);
 
   const saved = payloadOf(
     await client.callTool({ name: "roadmap_save", arguments: { project: "alpha", type: "feature", title: "cache it", decision_id: "AP/D-1" } }),
   );
   assert.equal(saved.ref, "NQ-2");
-  assert.equal(getRoadmapItem(saved.id, env).decision_id, 1);
+  assert.equal(getIssue(saved.id, env).decision_id, 1);
   assert.match(
     await refusalOf(client, "roadmap_save", { project: "alpha", type: "feature", title: "x", decision_id: "BT/D-1" }),
     /belongs to project `beta`, not project `alpha`/,
@@ -205,9 +205,9 @@ test("inside a job a ref resolves to the same row as before, so another project'
     await refusalOf(client, "roadmap_update", { id: "BT-1", status: "cancelled" }),
     new RegExp(`refusing to update roadmap item \`BT-1\` from inside job \`${job.id}\`: it belongs to project \`beta\``),
   );
-  assert.equal(getRoadmapItem(betaItem.id, env).status, "todo", "the refused update reached beta's item");
+  assert.equal(getIssue(betaItem.id, env).status, "todo", "the refused update reached beta's item");
   assert.match(await refusalOf(client, "roadmap_comment", { id: "BT-1", body: "leak" }), /belongs to project `beta`, not project `alpha`/);
-  assert.equal(getRoadmapItemDetail(betaItem.id, {}, env).comments.length, 0, "the refused comment was written");
+  assert.equal(getIssueDetail(betaItem.id, {}, env).comments.length, 0, "the refused comment was written");
   assert.match(await refusalOf(client, "decision_update", { id: "BT/D-1", status: "rejected" }), /refusing to update decision `BT\/D-1`/);
   assert.equal(getDecision(3, env).status, "accepted", "the refused update reached beta's decision");
   assert.match(await refusalOf(client, "decision_update", { id: "AC/D-1", status: "rejected" }), /it belongs to org `acme`/);

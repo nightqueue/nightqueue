@@ -1,8 +1,8 @@
-import { DEFAULT_ROADMAP_TYPE, ROADMAP_STATUSES, ROADMAP_TYPES, sqlList } from "../roadmap-workflow.mjs";
+import { DEFAULT_ISSUE_TYPE, ISSUE_STATUSES, ISSUE_TYPES, sqlList } from "../issue-workflow.mjs";
 
 // The frozen v18 shapes of the two DDLs v19 changed: only the v18 migration builds them, so it never reaches a v19 column.
 
-const ROADMAP_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ROADMAP_TYPE}' CHECK(type IN (${sqlList(ROADMAP_TYPES)}))`;
+const ROADMAP_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ISSUE_TYPE}' CHECK(type IN (${sqlList(ISSUE_TYPES)}))`;
 
 // The v18 registry of orgs and projects: names and ids, no keys.
 export const REGISTRY_V18 = `
@@ -30,7 +30,7 @@ export function roadmapItemsDdlV18(name) {
   org_id TEXT REFERENCES orgs(id) ON DELETE RESTRICT,
   title TEXT NOT NULL,
   detail TEXT,
-  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
+  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ISSUE_STATUSES)})),
   priority INTEGER NOT NULL DEFAULT 5 CHECK(priority BETWEEN 1 AND 9),
   type ${ROADMAP_TYPE_COLUMN},
   position INTEGER NOT NULL,

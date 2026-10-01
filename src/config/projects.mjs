@@ -125,7 +125,7 @@ export async function requireProject(store, name) {
 }
 
 // The project a roadmap-built job names, resolved at the edge: none, `all` (every project of an org item's org), or a registered NAME.
-export async function roadmapQueueTarget(store, project) {
+export async function issueQueueTarget(store, project) {
   const named = typeof project === "string" ? project.trim() : "";
   if (!named) return { projectId: null, allProjects: false };
   if (named === ALL_PROJECTS) return { projectId: null, allProjects: true };

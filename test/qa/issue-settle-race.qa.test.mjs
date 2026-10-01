@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { getRoadmapItemDetail } from "../../src/memory/roadmap.mjs";
+import { getIssueDetail } from "../../src/memory/issues.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { makeDir, makeHome, makeProject, mergedChecklist, projectIdOf } from "../../test-support/memory.mjs";
 
@@ -97,8 +97,8 @@ function writeScripts(t) {
 
 // Queues a fresh item, runs its job to `done` with a pull request and takes the close lease for `close-w`, all through the store.
 async function closingItem(store, env, round) {
-  const item = await store.roadmap.saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "alpha"), title: `settle race ${round}` });
-  const { job } = await store.roadmap.queueRoadmapItem({ id: item.id });
+  const item = await store.issues.saveIssue({ type: "bug", projectId: projectIdOf(env, "alpha"), title: `settle race ${round}` });
+  const { job } = await store.issues.queueIssue({ id: item.id });
   assert.ok(await store.jobs.claimJobById(job.id, { worker: "w1", cap: null }), `round ${round}: setup: the job was not claimed`);
   assert.equal(await store.jobs.finishJob(job.id, { worker: "w1", status: "done", prUrl: PR_URL }), true, `round ${round}: setup: not finished`);
   assert.ok(await store.jobs.acquireClose(job.id, { worker: "close-w", leaseS: 600 }), `round ${round}: setup: the close lease was refused`);
@@ -127,7 +127,7 @@ test("a settleClose racing retries, cancels and sweeps in other processes closes
     assert.equal(retrier.stdout, "0", `round ${round}: a retry or a cancel landed on a job being closed`);
     assert.equal(await store.jobs.status(job.id), "closed", `round ${round}: the job did not end closed`);
 
-    const detail = getRoadmapItemDetail(item.id, {}, env);
+    const detail = getIssueDetail(item.id, {}, env);
     const kinds = detail.comments.map((comment) => comment.kind);
     assert.equal(detail.status, "done", `round ${round}: the item did not end done (kinds: ${kinds})`);
     assert.deepEqual(kinds, ["queued", "pr", "closed"], `round ${round}: the thread is not one pr and one closed`);

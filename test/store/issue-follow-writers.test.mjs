@@ -7,7 +7,7 @@ const JOBS_SOURCE = readFileSync(new URL("../../src/memory/jobs.mjs", import.met
 
 // Job writers the store does not wrap in the roadmap follow, each with the reason it is safe.
 const NOT_FOLLOWED = {
-  addJob: "a new job has no linked item yet: queueRoadmapItem links it with linkRoadmapItemJob",
+  addJob: "a new job has no linked item yet: queueIssue links it with linkIssueJob",
   sweepOrphans: "the store follows every drifted job right after the sweep (followDriftedJobs)",
 };
 

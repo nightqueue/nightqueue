@@ -143,6 +143,6 @@ test("the reflect worker stays out of the decisions and roadmap tables", () => {
   for (const file of REFLECT_FILES) {
     const source = read(file);
     assert.equal(source.includes("decisions.mjs"), false, `${file} imports the decisions module`);
-    assert.equal(source.includes("roadmap.mjs"), false, `${file} imports the roadmap module`);
+    assert.equal(source.includes("issues.mjs"), false, `${file} imports the roadmap module`);
   }
 });

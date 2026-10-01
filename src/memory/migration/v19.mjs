@@ -4,8 +4,8 @@ import {
   INDEXES,
   OWNER_KEY_GUARDS,
   REGISTRY,
-  ROADMAP_FTS,
-  ROADMAP_NUMBER_INDEXES,
+  ISSUE_FTS,
+  ISSUE_NUMBER_INDEXES,
   orgsDdl,
   projectsDdl,
 } from "../ddl.mjs";
@@ -78,8 +78,8 @@ function refuseRepeatedKeys(db) {
 function finishSchema(db, violationsBefore) {
   db.exec(REGISTRY);
   db.exec(INDEXES);
-  db.exec(ROADMAP_FTS);
-  db.exec(ROADMAP_NUMBER_INDEXES);
+  db.exec(ISSUE_FTS);
+  db.exec(ISSUE_NUMBER_INDEXES);
   db.exec(OWNER_KEY_GUARDS);
   db.exec("INSERT INTO roadmap_items_fts(roadmap_items_fts) VALUES('rebuild')");
   const violations = foreignKeyViolations(db);

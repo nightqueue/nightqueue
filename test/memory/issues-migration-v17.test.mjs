@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
-import { followDriftedJobs, getRoadmapItemDetail, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { followDriftedJobs, getIssueDetail, saveIssue } from "../../src/memory/issues.mjs";
 import { openStore, openStoreReadOnly, withReadOnlyStore } from "../../src/store/open.mjs";
 import { makeHostEnv } from "../../test-support/host.mjs";
 import { makeDir, makeHome, makeOrg, makeProject, projectIdOf, seedClosedJob, seedLegacyV16Roadmap } from "../../test-support/memory.mjs";
@@ -130,7 +130,7 @@ test("the migration keeps the id counter, so a new item never reuses the id of a
   makeProject(t, env, "alpha");
   seedLegacyV16Roadmap(env, { items: [{ id: 1, project: "alpha", horizon: "now", status: "open", position: 1 }], sequence: 40 });
 
-  const saved = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "new" }, env);
+  const saved = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "new" }, env);
   assert.equal(saved.id, 41);
 });
 
@@ -232,7 +232,7 @@ test("a v16 home is diagnosed read-only without a crash, then migrated for a rea
   assert.equal(diskVersion(env), 16);
 
   await openStoreReadOnly(env).migrateIfOutdated();
-  const listed = await withReadOnlyStore(env, (store) => store.roadmap.listRoadmap(projectIdOf(env, "alpha"), {}));
+  const listed = await withReadOnlyStore(env, (store) => store.issues.listIssues(projectIdOf(env, "alpha"), {}));
   assert.deepEqual(
     listed.items.map((item) => ({ id: item.id, status: item.status, priority: item.priority })),
     [{ id: 1, status: "todo", priority: 5 }],
@@ -250,7 +250,7 @@ test("a legacy queued item whose job was closed (merged) needs no roadmap step: 
   assert.deepEqual({ ...migrated }, { status: "in_progress", job_status_seen: null });
 
   await openStore(env).jobs.sweepOrphans();
-  const item = getRoadmapItemDetail(1, {}, env);
+  const item = getIssueDetail(1, {}, env);
   assert.equal(item.status, "done");
   assert.ok(item.closed_at, "closed_at is set");
   const closed = item.comments.filter((comment) => comment.kind === "closed");

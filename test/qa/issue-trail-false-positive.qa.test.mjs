@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { queueRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { queueIssue, saveIssue } from "../../src/memory/issues.mjs";
 import { itemRefOfJob, publishedBodyFile } from "../../src/queue/pr-footer.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
@@ -17,8 +17,8 @@ test("a PR body whose prose merely starts like a trail line still gets exactly o
   writeFileSync(bodyFile, "Roadmap: this PR is step one of the migration roadmap.\n\nRefs are resolved at the edge.\n\n## Report\n\nthe thing is done.\n");
   const store = openStore(env);
 
-  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
-  const { job } = await queueRoadmapItem({ id: item.id }, env);
+  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
+  const { job } = await queueIssue({ id: item.id }, env);
 
   const text = readFileSync(await publishedBodyFile({ bodyFile, runDir, jobId: job.id, resolveItemRef: () => itemRefOfJob(store, job.id) }), "utf8");
 

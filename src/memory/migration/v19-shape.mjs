@@ -1,15 +1,15 @@
 import {
   COMMENT_KINDS,
-  DEFAULT_ROADMAP_TYPE,
+  DEFAULT_ISSUE_TYPE,
   OPERATOR_AUTHOR,
-  ROADMAP_STATUSES,
-  ROADMAP_TYPES,
+  ISSUE_STATUSES,
+  ISSUE_TYPES,
   sqlList,
-} from "../roadmap-workflow.mjs";
+} from "../issue-workflow.mjs";
 
 // The frozen v19 shapes of the DDLs v20 changed: only the v18 and v19 migrations build them, so they never reach a v20 foreign key.
 
-const ROADMAP_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ROADMAP_TYPE}' CHECK(type IN (${sqlList(ROADMAP_TYPES)}))`;
+const ROADMAP_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ISSUE_TYPE}' CHECK(type IN (${sqlList(ISSUE_TYPES)}))`;
 
 const PROJECT_ID = "project_id TEXT REFERENCES projects(id) ON DELETE RESTRICT";
 const REQUIRED_PROJECT_ID = "project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT";
@@ -47,7 +47,7 @@ export function roadmapItemProjectsDdlV19(name) {
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id INTEGER NOT NULL,
   ${REQUIRED_PROJECT_ID},
-  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
+  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ISSUE_STATUSES)})),
   job_id INTEGER,
   job_status_seen TEXT,
   closed_at TEXT,
@@ -67,7 +67,7 @@ export function roadmapItemsDdlV19(name) {
   number INTEGER NOT NULL CHECK(number > 0),
   title TEXT NOT NULL,
   detail TEXT,
-  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ROADMAP_STATUSES)})),
+  status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ISSUE_STATUSES)})),
   priority INTEGER NOT NULL DEFAULT 5 CHECK(priority BETWEEN 1 AND 9),
   type ${ROADMAP_TYPE_COLUMN},
   position INTEGER NOT NULL,

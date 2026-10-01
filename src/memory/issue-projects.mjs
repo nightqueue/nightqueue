@@ -1,10 +1,10 @@
 import { inTransaction } from "./db.mjs";
 import { queuedCommentJob, refuseMissingJob } from "./job-row.mjs";
 import { attachNames } from "./registry.mjs";
-import { insertComment, jobRefs } from "./roadmap-comments.mjs";
+import { insertComment, jobRefs } from "./issue-comments.mjs";
 import {
   CLOSED_STATUSES,
-  JOB_TO_ROADMAP,
+  JOB_TO_ISSUE,
   LIVE_JOB_STATUSES,
   OPEN_STATUSES,
   OPERATOR_AUTHOR,
@@ -15,9 +15,9 @@ import {
   jobAuthor,
   jobEvent,
   orgStatusAgrees,
-  roadmapTransition,
+  issueTransition,
   sqlList,
-} from "./roadmap-workflow.mjs";
+} from "./issue-workflow.mjs";
 import { itemRef } from "./refs.mjs";
 import { ownerOf } from "./scope.mjs";
 
@@ -59,7 +59,7 @@ export function linkOrgRow(db, { itemId, projectId, jobId }) {
   );
   return inTransaction(db, () => {
     refuseMissingJob(db, jobId);
-    if (statement.run(itemId, projectId, JOB_TO_ROADMAP.queued.status, jobId).changes !== 1) return false;
+    if (statement.run(itemId, projectId, JOB_TO_ISSUE.queued.status, jobId).changes !== 1) return false;
     const job = queuedCommentJob(db, jobId);
     insertComment(db, { itemId, projectId, ...commentFor(job, "queued", jobRefs(db, job)) });
     syncOrgStatus(db, itemId, jobAuthor(jobId));
@@ -75,7 +75,7 @@ function followLinkedRow(db, row, job) {
 // Applies to one project row what the given row of its job means and leaves the event's comment under that project.
 function applyJobRowToRow(db, row, job) {
   const event = jobEvent(job, row.job_status_seen);
-  const { status } = roadmapTransition(job, row.job_status_seen);
+  const { status } = issueTransition(job, row.job_status_seen);
   db.prepare("UPDATE roadmap_item_projects SET job_status_seen = ? WHERE id = ?").run(job.status, row.id);
   const comment = commentFor(job, event, jobRefs(db, job));
   if (comment) insertComment(db, { itemId: row.item_id, projectId: row.project_id, ...comment });
@@ -174,7 +174,7 @@ function rowJobDrift(db) {
         ORDER BY p.item_id, row_owner.name`,
     )
     .all()
-    .map((row) => ({ row, expected: roadmapTransition({ ...row, status: row.job_status }, row.job_status_seen).status }))
+    .map((row) => ({ row, expected: issueTransition({ ...row, status: row.job_status }, row.job_status_seen).status }))
     .filter(({ row, expected }) => expected !== null && expected !== row.status)
     .map(({ row, expected }) => ({
       id: row.id,

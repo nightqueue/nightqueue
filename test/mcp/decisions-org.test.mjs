@@ -5,7 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { getRoadmapItem, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { getIssue, saveIssue } from "../../src/memory/issues.mjs";
 import { ensureProject, makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
@@ -124,7 +124,7 @@ test("decision_list, decision_recall and roadmap_get answer the union for a proj
 test("inside a job, an org row is refused by name while the job's own project is still writable", async (t) => {
   const env = makeOrgHome(t, "mcp-org-write-guard");
   const orgDecision = saveDecision({ ...ORG_DECISION, orgId: orgIdOf(env, "acme"), status: "accepted" }, env);
-  const orgItem = saveRoadmapItem({ type: "improvement", orgId: orgIdOf(env, "acme"), title: "raise node" }, env);
+  const orgItem = saveIssue({ type: "improvement", orgId: orgIdOf(env, "acme"), title: "raise node" }, env);
   const own = saveDecision(
     { projectId: projectIdOf(env, "acme-mobile-app"), title: "the app caches", context: "c", decision: "d", status: "accepted" },
     env,
@@ -140,7 +140,7 @@ test("inside a job, an org row is refused by name while the job's own project is
   assert.match(textOf(item), /it belongs to org `acme`/);
 
   assert.equal(getDecision(orgDecision.id, env).status, "accepted", "the refused update reached the org decision");
-  assert.equal(getRoadmapItem(orgItem.id, env).status, "todo", "the refused update reached the org item");
+  assert.equal(getIssue(orgItem.id, env).status, "todo", "the refused update reached the org item");
   const mine = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: own.ref, status: "rejected" } }));
   assert.equal(mine.decision.status, "rejected", "a job must still update its own project");
 

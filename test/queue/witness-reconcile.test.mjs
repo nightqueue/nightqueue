@@ -9,7 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { jobLogPath, runDir } from "../../src/config/paths.mjs";
 import { openDb, sqliteToIso } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
-import { getRoadmapItem, linkRoadmapItemJob, saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { getIssue, linkIssueJob, saveIssue } from "../../src/memory/issues.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { clearRunTerminal, readRunState, writeRunTerminal } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
@@ -90,8 +90,8 @@ function witness(env, { slug = SLUG, status = "done", prUrl = PR_URL } = {}) {
 
 // Records a roadmap item as linked to a job, the link the reconciliation has to move.
 function linkedItem(env, id, title) {
-  const item = saveRoadmapItem({ type: "improvement", projectId: projectIdOf(env, "alpha"), title }, env);
-  assert.equal(linkRoadmapItemJob(item.id, id, env), true, "setup: the item was not linked to its job");
+  const item = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title }, env);
+  assert.equal(linkIssueJob(item.id, id, env), true, "setup: the item was not linked to its job");
   return item.id;
 }
 
@@ -179,8 +179,8 @@ test("the reconciliation puts in review the roadmap item of a job its witness sa
   assert.deepEqual((await reconcileFromWitness(env)).repaired.sort(), [delivered, failed].sort());
   assert.equal(getJob(delivered, env).status, "done");
   assert.equal(getJob(failed, env).status, "failed");
-  assert.equal(getRoadmapItem(deliveredItem, env).status, "in_review", "the reconciliation left the item of a delivered job in progress forever");
-  assert.equal(getRoadmapItem(failedItem, env).status, "todo", "a failed witness left the item of a job that delivered nothing in progress");
+  assert.equal(getIssue(deliveredItem, env).status, "in_review", "the reconciliation left the item of a delivered job in progress forever");
+  assert.equal(getIssue(failedItem, env).status, "todo", "a failed witness left the item of a job that delivered nothing in progress");
 });
 
 test("the reconciliation never touches a job a live runner owns, a row that already ended, or a job that never ran", async (t) => {

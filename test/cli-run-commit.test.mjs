@@ -7,7 +7,7 @@ import { runDir } from "../src/config/paths.mjs";
 import { run } from "../src/cli/index.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
-import { linkRoadmapItemJob, saveRoadmapItem } from "../src/memory/roadmap.mjs";
+import { linkIssueJob, saveIssue } from "../src/memory/issues.mjs";
 import { recordJobBlock, recordRunFields } from "../src/queue/run-state.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
 import { makeSickHome } from "../test-support/sick-home.mjs";
@@ -201,8 +201,8 @@ const CO_AUTHORED = "feat: ship it\n\nRefs are resolved at the edge.\n\nCo-Autho
 test("`run commit` of a roadmap job adds `Refs: <item ref>` as the last trailer of the existing block, and the agent's file is untouched", async (t) => {
   const env = makeQueue(t, "run-commit-roadmap");
   const { id, repo } = boundRun(t, env);
-  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
-  assert.equal(linkRoadmapItemJob(item.id, id, env), true);
+  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
+  assert.equal(linkIssueJob(item.id, id, env), true);
   const message = readyCommit(t, env, repo, "run-commit-roadmap-message", CO_AUTHORED);
 
   const { code, text } = await runCli(env, ["run", "commit", "--message-file", message], { jobId: id });
@@ -218,8 +218,8 @@ test("`run commit` of a roadmap job adds `Refs: <item ref>` as the last trailer 
 test("`run commit` inside a job with a job block commits on an unavailable database, with the `Refs:` trailer read from state.json", async (t) => {
   const env = makeQueue(t, "run-commit-sick-home");
   const { id, repo } = boundRun(t, env);
-  const item = saveRoadmapItem({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
-  assert.equal(linkRoadmapItemJob(item.id, id, env), true);
+  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
+  assert.equal(linkIssueJob(item.id, id, env), true);
   const block = { id, projectKey: "AP", itemRef: item.ref, createdAt: new Date().toISOString() };
   assert.equal(recordJobBlock({ projectId: ensureProject(env, "alpha"), slug: SLUG, block, env }).status, "written");
   const message = readyCommit(t, env, repo, "run-commit-sick-home-message", "feat: ship it\n");

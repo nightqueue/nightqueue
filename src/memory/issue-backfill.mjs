@@ -1,7 +1,7 @@
 import { inTransaction, openDb } from "./db.mjs";
 import { jobRef } from "./refs.mjs";
-import { COMMENT_JOB_COLUMNS, insertComment, jobRefs } from "./roadmap-comments.mjs";
-import { CLOSED_STATUSES, jobAuthor } from "./roadmap-workflow.mjs";
+import { COMMENT_JOB_COLUMNS, insertComment, jobRefs } from "./issue-comments.mjs";
+import { CLOSED_STATUSES, jobAuthor } from "./issue-workflow.mjs";
 
 const JOB_COLUMNS = COMMENT_JOB_COLUMNS.split(", ")
   .map((column) => `j.${column}`)
@@ -46,7 +46,7 @@ function hasComment(db, { itemId, kind, refs }) {
 
 // Synthesizes the `queued`/`pr`/`closed` comments of every item linked to a job before comments existed; idempotent,
 // and a dry run counts what it would write without writing it.
-export function backfillRoadmap({ dryRun = false } = {}, env = process.env) {
+export function backfillIssues({ dryRun = false } = {}, env = process.env) {
   const db = openDb(env);
   const run = () => {
     const rows = db.prepare(LINKED_ITEMS).all();

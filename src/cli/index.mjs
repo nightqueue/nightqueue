@@ -18,7 +18,7 @@ import * as org from "./org.mjs";
 import * as project from "./project.mjs";
 import * as queue from "./queue.mjs";
 import * as reflect from "./reflect.mjs";
-import * as roadmap from "./roadmap.mjs";
+import * as issues from "./issues.mjs";
 import * as runCommand from "./run.mjs";
 import * as sandbox from "./sandbox.mjs";
 import * as setup from "./setup.mjs";
@@ -41,7 +41,7 @@ const COMMANDS = new Map([
   ["embed", embed.run],
   ["memory", memory.run],
   ["decision", decision.run],
-  ["roadmap", roadmap.run],
+  ["roadmap", issues.run],
   ["queue", queue.run],
   ["verify", verify.run],
   ["sandbox", sandbox.run],

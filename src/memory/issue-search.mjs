@@ -1,19 +1,19 @@
 import { UserError } from "../config/errors.mjs";
 import { openDb } from "./db.mjs";
 import { truncateByCodePoint } from "./jobs.mjs";
-import { roadmapRef } from "./roadmap.mjs";
+import { issueRef } from "./issues.mjs";
 import { attachNames } from "./registry.mjs";
 import { requireScopeTarget, visibility } from "./scope.mjs";
 import { ftsMatch } from "./search.mjs";
 
-export const ROADMAP_SEARCH_LIMIT = 5;
+export const ISSUE_SEARCH_LIMIT = 5;
 
 const FTS_CANDIDATES = 50;
 
 // The number of hits a search returns: the asked one clamped to 1..5, or 5.
 function searchLimit(limit) {
-  if (!Number.isInteger(limit)) return ROADMAP_SEARCH_LIMIT;
-  return Math.min(Math.max(limit, 1), ROADMAP_SEARCH_LIMIT);
+  if (!Number.isInteger(limit)) return ISSUE_SEARCH_LIMIT;
+  return Math.min(Math.max(limit, 1), ISSUE_SEARCH_LIMIT);
 }
 
 // The trimmed text of an optional search field, or null.
@@ -83,7 +83,7 @@ function commentTextHits(db, { target, match }) {
 function hitView(row, via) {
   return {
     id: row.id,
-    ref: roadmapRef(row),
+    ref: issueRef(row),
     title: truncateByCodePoint(row.title),
     status: row.status,
     priority: row.priority,
@@ -102,7 +102,7 @@ function rankedTextHits(db, spec) {
 }
 
 // Up to five items an owner sees that match a query (title, detail, comment) or a file path its jobs touched; file matches come first, then by relevance.
-export function searchRoadmap({ query, file, projectId, orgId, limit } = {}, env = process.env, db = null) {
+export function searchIssues({ query, file, projectId, orgId, limit } = {}, env = process.env, db = null) {
   const text = optionalTerm(query);
   const path = optionalTerm(file);
   if (text === null && path === null) throw new UserError("roadmap search needs `query`, `file` or both");

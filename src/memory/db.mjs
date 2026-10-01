@@ -3,7 +3,7 @@ import { StoreUnavailableError, UserError } from "../config/errors.mjs";
 import { callerJobId, isRunnerHome } from "../config/job-home.mjs";
 import { dbPath, homeDir } from "../config/paths.mjs";
 import { ensureHome, loadRawConfig } from "../config/store.mjs";
-import { FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ROADMAP_FTS, ROADMAP_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
+import { FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ISSUE_FTS, ISSUE_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
 import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schemaState } from "./migration/v18.mjs";
 import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
 import { isPendingV20, migrateToV20, refuseOrphans } from "./migration/v20.mjs";
@@ -72,7 +72,7 @@ function runOneShotSteps(db, env) {
 function createSchema(db) {
   db.exec(REGISTRY);
   db.exec(SCHEMA);
-  db.exec(ROADMAP_NUMBER_INDEXES);
+  db.exec(ISSUE_NUMBER_INDEXES);
   db.exec(OWNER_KEY_GUARDS);
 }
 
@@ -93,8 +93,8 @@ function migrate(db) {
   if (sharedSlugPending(db)) inTransaction(db, () => migrateSharedSlugs(db));
   db.exec(INDEXES);
   db.exec(FTS);
-  db.exec(ROADMAP_FTS);
-  db.exec(ROADMAP_NUMBER_INDEXES);
+  db.exec(ISSUE_FTS);
+  db.exec(ISSUE_NUMBER_INDEXES);
   db.exec(OWNER_KEY_GUARDS);
   migrateV21Columns(db);
   ensureDefaultOrg(db);

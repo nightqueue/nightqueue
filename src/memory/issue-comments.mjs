@@ -1,7 +1,7 @@
 import { sqliteToIso } from "./db.mjs";
 import { parseCloseColumn } from "./jobs.mjs";
 import { attachNames, projectIdOrNull } from "./registry.mjs";
-import { fileRefs, resultField } from "./roadmap-workflow.mjs";
+import { fileRefs, resultField } from "./issue-workflow.mjs";
 
 // The columns of a job every comment the runtime writes about it reads.
 export const COMMENT_JOB_COLUMNS = "id, status, result, close, pr_url, branch, notice_md, operator_note";

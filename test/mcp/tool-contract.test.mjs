@@ -5,7 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { saveRoadmapItem } from "../../src/memory/roadmap.mjs";
+import { saveIssue } from "../../src/memory/issues.mjs";
 import { STALE_CONTRACT_ADVISORY, TOOL_CONTRACT } from "../../src/mcp/tool-contract.mjs";
 import { makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
@@ -48,7 +48,7 @@ function makeContractHome(t, name) {
   const owners = { alpha: { projectId: projectIdOf(env, "alpha") }, beta: { projectId: projectIdOf(env, "beta") }, acme: { orgId: orgIdOf(env, "acme") } };
   const decide = (owner, title) => saveDecision({ ...owner, title, context: title, decision: title, status: "accepted" }, env);
   const decisions = { alpha: decide(owners.alpha, "alpha one"), alphaTwo: decide(owners.alpha, "alpha two"), beta: decide(owners.beta, "beta one"), acme: decide(owners.acme, "acme one") };
-  const item = (owner, title) => saveRoadmapItem({ type: "bug", ...owner, title }, env);
+  const item = (owner, title) => saveIssue({ type: "bug", ...owner, title }, env);
   const items = { alpha: item(owners.alpha, "alpha crashes"), beta: item(owners.beta, "beta crashes"), acme: item(owners.acme, "raise node") };
   const job = addJob({ projectId: owners.alpha.projectId, prompt: "work" }, env);
   return { env, decisions, items, job };

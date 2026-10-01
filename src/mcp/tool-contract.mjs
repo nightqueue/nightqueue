@@ -82,7 +82,7 @@ function qualifiedDecisionRef(row) {
 // The ref of the row an old integer id names when the caller owns it, or null.
 async function refOfOldId({ kind, id }, owner, store) {
   try {
-    const row = kind === "item" ? await store.roadmap.getRoadmapItem(id) : await store.decisions.getDecision(id);
+    const row = kind === "item" ? await store.issues.getIssue(id) : await store.decisions.getDecision(id);
     if (!row || !ownedByCaller(row, owner)) return null;
     return kind === "item" ? itemRef(row) : qualifiedDecisionRef(row);
   } catch {

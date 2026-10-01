@@ -1,6 +1,6 @@
 import { UserError } from "../config/errors.mjs";
-import { emptyRoadmap } from "../memory/roadmap.mjs";
-import { ROADMAP_STATUSES } from "../memory/roadmap-workflow.mjs";
+import { emptyIssues } from "../memory/issues.mjs";
+import { ISSUE_STATUSES } from "../memory/issue-workflow.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { ownerNames, ownerRef } from "../memory/scope.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -44,7 +44,7 @@ function itemLines(item) {
 // Lines of the whole listing, one heading per status that holds items, in workflow order.
 function statusLines(items) {
   if (!items.length) return ["(empty)"];
-  return ROADMAP_STATUSES.flatMap((status) => {
+  return ISSUE_STATUSES.flatMap((status) => {
     const group = items.filter((item) => item.status === status);
     return group.length ? [`${status}:`, ...group.flatMap(itemLines)] : [];
   });
@@ -90,7 +90,7 @@ async function runShow(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { json: { type: "boolean" } });
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.show });
   const ref = positionals[0];
-  const item = await readOnlyQuery(ctx, async (store) => store.roadmap.getRoadmapItemDetail(await store.roadmap.itemIdOfRef(ref)), null);
+  const item = await readOnlyQuery(ctx, async (store) => store.issues.getIssueDetail(await store.issues.itemIdOfRef(ref)), null);
   if (item === null) throw new UserError(`unknown roadmap item \`${ref}\``);
   if (values.json) {
     ctx.out(JSON.stringify(item));
@@ -115,8 +115,8 @@ export async function run(argv, ctx) {
   const filters = { status: values.status, priority: priorityFilter(values.priority), type: values.type };
   const roadmap = await readOnlyQuery(
     ctx,
-    (store) => store.roadmap.listRoadmap(ownerRef(target), filters),
-    emptyRoadmap(ownerNames(target)),
+    (store) => store.issues.listIssues(ownerRef(target), filters),
+    emptyIssues(ownerNames(target)),
   );
   if (values.json) {
     ctx.out(JSON.stringify(roadmap));

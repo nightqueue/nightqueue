@@ -2,12 +2,12 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSy
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { jobLogPath, queuePausedPath, queueResumePath } from "../config/paths.mjs";
-import { registrationOffer, roadmapQueueTarget } from "../config/projects.mjs";
+import { registrationOffer, issueQueueTarget } from "../config/projects.mjs";
 import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
 import { launchOperator } from "../host/operator.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
-import { ALL_PROJECTS } from "../memory/roadmap.mjs";
+import { ALL_PROJECTS } from "../memory/issues.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
@@ -340,7 +340,7 @@ function refuseRunForAll(values) {
 }
 
 // The lines the roadmap path answers with: a project item is now `in_progress`; an org item names each project row its jobs went to and the ones skipped.
-function roadmapQueuedLines({ item, jobs, skipped }) {
+function issueQueuedLines({ item, jobs, skipped }) {
   if (item.scope !== "org") return [`roadmap item ${itemRef(item)} of \`${item.project}\` is now \`in_progress\``];
   const lines = [
     `roadmap item ${itemRef(item)} of org \`${item.org}\` queued for ${jobs.map((job) => `\`${job.project}\``).join(", ")}; its status is derived from its project rows`,
@@ -350,19 +350,19 @@ function roadmapQueuedLines({ item, jobs, skipped }) {
 }
 
 // Queues the job a roadmap item builds; a project item owns its project, an org item needs `--project <name|all>`.
-async function addFromRoadmap(positionals, values, ctx) {
+async function addFromIssue(positionals, values, ctx) {
   refuseRunForAll(values);
   const store = openStore(ctx.env);
-  const id = await store.roadmap.itemIdOfRef(values.roadmap);
-  const target = await roadmapQueueTarget(store, values.project);
-  const queued = await store.roadmap.queueRoadmapItem({
+  const id = await store.issues.itemIdOfRef(values.roadmap);
+  const target = await issueQueueTarget(store, values.project);
+  const queued = await store.issues.queueIssue({
     id,
     ...target,
     ...addLimits(values),
     operatorNote: positionals.join(" ").trim() || undefined,
     runDir: values["run-dir"],
   });
-  for (const line of roadmapQueuedLines(queued)) ctx.out(line);
+  for (const line of issueQueuedLines(queued)) ctx.out(line);
   return queued.jobs;
 }
 
@@ -377,7 +377,7 @@ async function runAdd(argv, ctx) {
   const jobs =
     values.roadmap === undefined
       ? [await addFromPrompt(positionals, values, ctx)]
-      : await addFromRoadmap(positionals, values, ctx);
+      : await addFromIssue(positionals, values, ctx);
   const job = jobs[jobs.length - 1];
   for (const earlier of jobs.slice(0, -1)) ctx.out(`queued ${jobRef(earlier.id)} for \`${earlier.project}\``);
   ctx.out(await addedLine(job, values.run === true, ctx));

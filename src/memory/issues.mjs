@@ -17,7 +17,7 @@ import { runDir } from "../config/paths.mjs";
 import { priorRunBlock, resolveOperatorRunDir } from "../queue/operator-run.mjs";
 import { escapePromptMarkers } from "./prompt-safety.mjs";
 import { GLOBAL_KEY, decisionRef, itemRef, jobRef, parseRef } from "./refs.mjs";
-import { COMMENT_JOB_COLUMNS, insertComment, jobRefs, listComments } from "./roadmap-comments.mjs";
+import { COMMENT_JOB_COLUMNS, insertComment, jobRefs, listComments } from "./issue-comments.mjs";
 import {
   cancelOpenRows,
   closesOrgItem,
@@ -28,18 +28,18 @@ import {
   orgItemOfJob,
   projectRowsByItem,
   projectRowsDrift,
-} from "./roadmap-projects.mjs";
+} from "./issue-projects.mjs";
 import {
   CLOSED_STATUSES,
   COMMIT_TYPE_BY_TYPE,
   HORIZON_REMOVED,
-  JOB_TO_ROADMAP,
+  JOB_TO_ISSUE,
   LIVE_JOB_STATUSES,
   MANUAL_STATUSES,
   OPEN_STATUSES,
   OPERATOR_AUTHOR,
-  ROADMAP_STATUSES,
-  ROADMAP_TYPES,
+  ISSUE_STATUSES,
+  ISSUE_TYPES,
   STATUS_ASSIGNMENT,
   TIER_BY_TYPE,
   commentFor,
@@ -48,10 +48,10 @@ import {
   isReopening,
   jobEvent,
   resultField,
-  roadmapTransition,
+  issueTransition,
   sqlList,
   statusRankSql,
-} from "./roadmap-workflow.mjs";
+} from "./issue-workflow.mjs";
 import {
   OWNER_CLAUSE,
   ownerDescription,
@@ -68,7 +68,7 @@ import {
   visibility,
 } from "./scope.mjs";
 
-export { MANUAL_STATUSES, ROADMAP_STATUSES, ROADMAP_TYPES } from "./roadmap-workflow.mjs";
+export { MANUAL_STATUSES, ISSUE_STATUSES, ISSUE_TYPES } from "./issue-workflow.mjs";
 export const PROMPT_SOURCE_MISSING = "queue_add needs `prompt`, or `roadmap_item_id` to build it from a roadmap item";
 
 export { ALL_PROJECTS };
@@ -126,8 +126,8 @@ function requireManualStatus(status) {
 
 // Requires one of the five item types, naming them all in the error.
 function requireType(type) {
-  if (ROADMAP_TYPES.includes(type)) return type;
-  throw new UserError(`roadmap field \`type\` is required: expected one of ${ROADMAP_TYPES.join("|")}, got \`${String(type)}\``);
+  if (ISSUE_TYPES.includes(type)) return type;
+  throw new UserError(`roadmap field \`type\` is required: expected one of ${ISSUE_TYPES.join("|")}, got \`${String(type)}\``);
 }
 
 // Requires a comment author: `operator`, or `job:<id>` for a job.
@@ -166,13 +166,13 @@ function namedRow(db, row) {
 }
 
 // Returns the row of a roadmap item, its owner's names attached, or null.
-export function getRoadmapItem(id, env = process.env) {
+export function getIssue(id, env = process.env) {
   const db = openDb(env);
   return namedRow(db, db.prepare("SELECT * FROM roadmap_items WHERE id = ?").get(requireId(id)));
 }
 
 // The columns and joins every read that carries a linked decision number and live job status shares.
-const ROADMAP_ITEM_VIEW_QUERY = `SELECT r.*, d.number AS decision_number, d.scope AS decision_scope,
+const ISSUE_VIEW_QUERY = `SELECT r.*, d.number AS decision_number, d.scope AS decision_scope,
               d.project_id AS decision_project_id, d.org_id AS decision_org_id, j.status AS job_status
        FROM roadmap_items r
        LEFT JOIN decisions d ON d.id = r.decision_id
@@ -193,14 +193,14 @@ function namedViewRows(db, rows) {
 }
 
 // Returns the joined row of a roadmap item — its linked decision number, live job status and owner names included — or null.
-function getRoadmapItemJoined(id, env = process.env) {
+function getIssueJoined(id, env = process.env) {
   const db = openDb(env);
-  const row = db.prepare(`${ROADMAP_ITEM_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id));
+  const row = db.prepare(`${ISSUE_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id));
   return row ? namedViewRows(db, [row])[0] : null;
 }
 
 // Inserts a roadmap item at the end of its priority group, in one statement so no concurrent save collides.
-export function saveRoadmapItem(
+export function saveIssue(
   { projectId, orgId, title, detail, decision_id, priority, status, type, ...rest } = {},
   env = process.env,
 ) {
@@ -276,7 +276,7 @@ function targetPosition(row, patch, { sameGroup, size }) {
 }
 
 // Moves an item to a priority and a position, renumbering every affected group inside one transaction.
-function moveRoadmapItem(row, patch, env) {
+function moveIssue(row, patch, env) {
   const db = openDb(env);
   const priority = hasValue(patch, "priority") ? requirePriority(patch.priority) : row.priority;
   const write = db.prepare(
@@ -338,10 +338,10 @@ function writeUpdate(row, { columns, values, status, author }, env) {
 
 // Updates the fields present in the patch and returns the stored row; `priority` or `position` also renumbers, and
 // `author` (the operator by default) signs the comment a move back from review or done leaves.
-export function updateRoadmapItem(id, patch = {}, env = process.env) {
+export function updateIssue(id, patch = {}, env = process.env) {
   const changes = patch ?? {};
   refuseHorizon(changes);
-  const row = getRoadmapItem(id, env);
+  const row = getIssue(id, env);
   if (!row) throw new UserError(`unknown roadmap item \`${id}\``);
   if (hasValue(changes, "priority")) requirePriority(changes.priority);
   const author = hasValue(changes, "author") ? requireAuthor(changes.author) : OPERATOR_AUTHOR;
@@ -350,15 +350,15 @@ export function updateRoadmapItem(id, patch = {}, env = process.env) {
     const status = hasValue(changes, "status") ? changes.status : null;
     writeUpdate(row, { columns, values, status, author }, env);
   }
-  if (hasValue(changes, "priority") || hasValue(changes, "position")) moveRoadmapItem(row, changes, env);
-  return getRoadmapItemJoined(row.id, env);
+  if (hasValue(changes, "priority") || hasValue(changes, "position")) moveIssue(row, changes, env);
+  return getIssueJoined(row.id, env);
 }
 
 // Public shape of a roadmap item: free text truncated like the queue views truncate it.
-export function roadmapItemView(row) {
+export function issueView(row) {
   return {
     id: row.id,
-    ref: roadmapRef(row),
+    ref: issueRef(row),
     number: row.number,
     scope: row.scope,
     owner: ownerOf(row),
@@ -392,14 +392,14 @@ function filterValues(field, list, { isValid, expected }) {
 // The SQL of the opt-in status, priority and type filters of a listing, and the values it binds.
 function listFilterSql({ status, priority, type } = {}) {
   const statuses = filterValues("status", status, {
-    isValid: (value) => ROADMAP_STATUSES.includes(value),
-    expected: ROADMAP_STATUSES.join("|"),
+    isValid: (value) => ISSUE_STATUSES.includes(value),
+    expected: ISSUE_STATUSES.join("|"),
   });
   const priorities = filterValues("priority", priority, {
     isValid: (value) => Number.isInteger(value) && value >= PRIORITY_RANGE.min && value <= PRIORITY_RANGE.max,
     expected: `an integer ${PRIORITY_RANGE.min}-${PRIORITY_RANGE.max}`,
   });
-  const types = filterValues("type", type, { isValid: (value) => ROADMAP_TYPES.includes(value), expected: ROADMAP_TYPES.join("|") });
+  const types = filterValues("type", type, { isValid: (value) => ISSUE_TYPES.includes(value), expected: ISSUE_TYPES.join("|") });
   const inClause = (column, values) => (values.length ? ` AND ${column} IN (${values.map(() => "?").join(", ")})` : "");
   return {
     sql: `${inClause("r.status", statuses)}${inClause("r.priority", priorities)}${inClause("r.type", types)}`,
@@ -408,25 +408,25 @@ function listFilterSql({ status, priority, type } = {}) {
 }
 
 // The roadmap of an owner with nothing planned.
-export function emptyRoadmap(owner = {}) {
+export function emptyIssues(owner = {}) {
   return { ...owner, items: [] };
 }
 
 // Every item an owner sees, in workflow order, then org items first, then by priority (1 first) and position; `db` lets a read-only caller bring its own connection.
-export function listRoadmap(owner, filters = {}, env = process.env, db = null) {
+export function listIssues(owner, filters = {}, env = process.env, db = null) {
   const connection = db ?? openDb(env);
   const target = requireOwnerTarget(connection, owner);
   const visible = visibility(target, "r");
   const filter = listFilterSql(filters ?? {});
   const rows = connection
     .prepare(
-      `${ROADMAP_ITEM_VIEW_QUERY}
+      `${ISSUE_VIEW_QUERY}
        WHERE ${visible.clause}${filter.sql}
        ORDER BY ${statusRankSql("r.status")}, CASE WHEN r.scope = 'org' THEN 0 ELSE 1 END,
                 r.priority ASC, r.position ASC, r.id ASC`,
     )
     .all(...visible.values, ...filter.values);
-  const items = namedViewRows(connection, rows).map(roadmapItemView);
+  const items = namedViewRows(connection, rows).map(issueView);
   return { ...ownerNames(target), items: withProjectRows(connection, target, items) };
 }
 
@@ -453,8 +453,8 @@ function liveJobOf(row, env) {
 }
 
 // Returns the item a queue_add may build a job from, or explains why queueing it is refused.
-export function queueableRoadmapItem(id, env = process.env) {
-  const row = getRoadmapItem(id, env);
+export function queueableIssue(id, env = process.env) {
+  const row = getIssue(id, env);
   if (!row) throw new UserError(`unknown roadmap item \`${id}\``);
   if (CLOSED_STATUSES.includes(row.status)) {
     throw new UserError(
@@ -472,7 +472,7 @@ export function queueableRoadmapItem(id, env = process.env) {
 
 // Links a roadmap item to the job built from it, moves it to `in_progress` and leaves the `queued` comment, in one
 // transaction; false means a concurrent caller queued it first.
-export function linkRoadmapItemJob(id, jobId, env = process.env) {
+export function linkIssueJob(id, jobId, env = process.env) {
   const db = openDb(env);
   const itemId = requireId(id);
   const statement = db.prepare(
@@ -482,7 +482,7 @@ export function linkRoadmapItemJob(id, jobId, env = process.env) {
   );
   return inTransaction(db, () => {
     refuseMissingJob(db, requireId(jobId));
-    if (statement.run(JOB_TO_ROADMAP.queued.status, jobId, itemId).changes !== 1) return false;
+    if (statement.run(JOB_TO_ISSUE.queued.status, jobId, itemId).changes !== 1) return false;
     const job = queuedCommentJob(db, jobId, (projectId, slug) => runDir(projectId, slug, env));
     insertComment(db, { itemId, ...commentFor(job, "queued", jobRefs(db, job)) });
     return true;
@@ -497,7 +497,7 @@ function followLinkedItem(db, item, job) {
 // Applies to one linked item what the given row of its job means and leaves the event's comment, recording the job status it now reflects.
 function applyJobRowToItem(db, item, job) {
   const event = jobEvent(job, item.job_status_seen);
-  const { status } = roadmapTransition(job, item.job_status_seen);
+  const { status } = issueTransition(job, item.job_status_seen);
   db.prepare("UPDATE roadmap_items SET job_status_seen = ? WHERE id = ?").run(job.status, item.id);
   const comment = commentFor(job, event, jobRefs(db, job));
   if (comment) insertComment(db, { itemId: item.id, ...comment });
@@ -581,7 +581,7 @@ export function followDriftedJobs(env = process.env) {
 
 // The linked items and project rows whose status disagrees with what their job's current row means, and the org items
 // whose status disagrees with the one their rows derive, read without writing anything.
-export function roadmapDrift(env = process.env, db = null) {
+export function issueDrift(env = process.env, db = null) {
   const connection = db ?? openDb(env);
   return [...linkedItemDrift(connection), ...projectRowsDrift(connection)];
 }
@@ -598,11 +598,11 @@ function linkedItemDrift(connection) {
     )
     .all();
   return attachNames(connection, rows)
-    .map((row) => ({ row, expected: roadmapTransition({ ...row, status: row.job_status }, row.job_status_seen).status }))
+    .map((row) => ({ row, expected: issueTransition({ ...row, status: row.job_status }, row.job_status_seen).status }))
     .filter(({ row, expected }) => expected !== null && expected !== row.status)
     .map(({ row, expected }) => ({
       id: row.id,
-      ref: roadmapRef(row),
+      ref: issueRef(row),
       scope: row.scope,
       owner: ownerOf(row),
       status: row.status,
@@ -621,7 +621,7 @@ function requireVisibleTo(db, row, viewer) {
 }
 
 // The ref of an item the way a pull request or a prompt quotes it: `<KEY>-<number>`.
-export function roadmapRef(row) {
+export function issueRef(row) {
   return itemRef(row);
 }
 
@@ -645,14 +645,14 @@ export function itemIdOfRef(value, env = process.env, db = null) {
 
 // One item with its text untruncated and its comment thread in chronological order; a project `viewer` (by id) reads only
 // what its project sees, and `db` lets a read-only caller bring its own connection.
-export function getRoadmapItemDetail(id, { viewer = null } = {}, env = process.env, db = null) {
+export function getIssueDetail(id, { viewer = null } = {}, env = process.env, db = null) {
   const connection = db ?? openDb(env);
-  const found = connection.prepare(`${ROADMAP_ITEM_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id));
+  const found = connection.prepare(`${ISSUE_VIEW_QUERY} WHERE r.id = ?`).get(requireId(id));
   if (!found) throw new UserError(`unknown roadmap item \`${id}\``);
   const [row] = namedViewRows(connection, [found]);
   requireVisibleTo(connection, row, viewer);
   const detail = {
-    ...roadmapItemView(row),
+    ...issueView(row),
     title: row.title,
     detail: row.detail ?? null,
     comments: listComments(connection, row.id, viewer),
@@ -662,10 +662,10 @@ export function getRoadmapItemDetail(id, { viewer = null } = {}, env = process.e
 }
 
 // Appends a `note` to an item's thread, signed by `author`; a project `viewer` (a job's project id) may only comment an item it sees, and owns its comment.
-export function addRoadmapComment({ id, body, author = OPERATOR_AUTHOR, viewer = null } = {}, env = process.env) {
+export function addIssueComment({ id, body, author = OPERATOR_AUTHOR, viewer = null } = {}, env = process.env) {
   const signer = requireAuthor(author);
   const text = requireText("body", body);
-  const row = getRoadmapItem(id, env);
+  const row = getIssue(id, env);
   if (!row) throw new UserError(`unknown roadmap item \`${id}\``);
   const db = openDb(env);
   requireVisibleTo(db, row, viewer);
@@ -674,9 +674,9 @@ export function addRoadmapComment({ id, body, author = OPERATOR_AUTHOR, viewer =
 
 // The reference of the item a job was queued from — a project item it is linked to, or an org item through its project
 // row — or null when the job carries no roadmap item; `db` lets a read-only caller bring its own connection.
-export function roadmapRefOfJob(jobId, env = process.env, connection = null) {
+export function issueRefOfJob(jobId, env = process.env, connection = null) {
   const row = itemOfJob(connection ?? openDb(env), requireId(jobId));
-  return row ? roadmapRef(row) : null;
+  return row ? issueRef(row) : null;
 }
 
 // The roadmap item a job was queued from, with its owner names and linked decision id, or null.
@@ -701,7 +701,7 @@ export function jobSpawnRefs(jobId, env = process.env, connection = null) {
   const job = namedRow(db, db.prepare("SELECT id, project_id FROM jobs WHERE id = ?").get(id));
   if (!job) throw new UserError(`unknown job \`${id}\``);
   const item = itemOfJob(db, id);
-  return { projectKey: job.project_key ?? null, itemRef: item ? roadmapRef(item) : null, decisionRefs: linkedDecisionRefs(db, item) };
+  return { projectKey: job.project_key ?? null, itemRef: item ? issueRef(item) : null, decisionRefs: linkedDecisionRefs(db, item) };
 }
 
 // Accepted decisions worth quoting next to an item; a row marked `fallback` did not match the title and is dropped.
@@ -734,9 +734,9 @@ function titlesBlock(heading, rows) {
 }
 
 // The block naming the item the job comes from, its type and the commit type the job's commits use.
-function roadmapItemBlock(item) {
-  const type = ROADMAP_TYPES.includes(item.type) ? item.type : null;
-  const lines = [`Roadmap: ${roadmapRef(item)}`];
+function issueBlock(item) {
+  const type = ISSUE_TYPES.includes(item.type) ? item.type : null;
+  const lines = [`Roadmap: ${issueRef(item)}`];
   if (type) lines.push(`Type: ${type}`, `Commit type: ${COMMIT_TYPE_BY_TYPE[type]}`);
   return `## Roadmap item\n${lines.join("\n")}`;
 }
@@ -754,14 +754,14 @@ function operatorBlocks({ operatorNote, priorRun }) {
 }
 
 // Prompt a roadmap item is queued with: the task, the operator's note and prior run, the decision it is linked to and the accepted decisions around it.
-export async function buildRoadmapPrompt({ item, embedder, operatorNote, priorRun } = {}, env = process.env) {
+export async function buildIssuePrompt({ item, embedder, operatorNote, priorRun } = {}, env = process.env) {
   const linked = item.decision_id ? getDecision(item.decision_id, env) : null;
   const standing = titlesBlock(STANDING_HEADING, titlesOfStatus(item, "accepted", env));
   const proposed = titlesBlock(PROPOSED_HEADING, titlesOfStatus(item, "proposed", env));
   const related = await relatedDecisions(item, linked, embedder, env);
   const blocks = [`## Task\n${escapePromptMarkers(item.title)}`];
   if (item.detail) blocks.push(escapePromptMarkers(item.detail));
-  blocks.push(roadmapItemBlock(item), ...operatorBlocks({ operatorNote, priorRun }));
+  blocks.push(issueBlock(item), ...operatorBlocks({ operatorNote, priorRun }));
   if (linked) blocks.push(`## Linked decision\n${renderDecisionText(linked)}`);
   if (standing) blocks.push(standing);
   if (proposed) blocks.push(proposed);
@@ -816,7 +816,7 @@ function allSkippedMessage(item, skipped) {
 // row keeps no job and its status is derived from the rows.
 async function queueOrgItem(item, { projectId, allProjects, embedder, operatorNote, ...limits }, env) {
   const targets = orgTargets(openDb(env), item, { projectId, allProjects });
-  const prompt = await buildRoadmapPrompt({ item, embedder, operatorNote }, env);
+  const prompt = await buildIssuePrompt({ item, embedder, operatorNote }, env);
   const jobLimits = { ...limits, operatorNote, tier: tierOf(item, limits.tier) };
   const outcomes = targets.map((target) => queueOrgTarget(item, target, { prompt, limits: jobLimits }, env));
   const jobs = outcomes.filter((outcome) => outcome.job).map((outcome) => outcome.job);
@@ -834,23 +834,23 @@ function priorRunSeed({ runDir: raw, projectId }, env) {
 }
 
 // Queues the job a roadmap item builds; a project item is linked to that job, an org item names the project id it goes to or `allProjects`.
-export async function queueRoadmapItem(
+export async function queueIssue(
   { id, projectId, allProjects = false, priority, maxAttempts, timeoutS, tier, embedder, operatorNote, runDir: priorRunDir, origin } = {},
   env = process.env,
 ) {
-  const item = queueableRoadmapItem(id, env);
+  const item = queueableIssue(id, env);
   if (item.scope === "org") {
     if (priorRunDir) throw new UserError("`run_dir` is not supported for an org roadmap item: a run belongs to one project, and an org item queues per project");
     return await queueOrgItem(item, { projectId, allProjects, priority, maxAttempts, timeoutS, tier, embedder, operatorNote, origin }, env);
   }
   const ownProjectId = itemProjectId(openDb(env), item, allProjects ? ALL_PROJECTS : projectId);
   const seed = priorRunSeed({ runDir: priorRunDir, projectId: ownProjectId }, env);
-  const prompt = await buildRoadmapPrompt({ item, embedder, operatorNote, priorRun: seed.block }, env);
+  const prompt = await buildIssuePrompt({ item, embedder, operatorNote, priorRun: seed.block }, env);
   const job = addJob(
     { projectId: ownProjectId, prompt, priority, maxAttempts, timeoutS, tier: tierOf(item, tier), slug: seed.slug, operatorNote, origin },
     env,
   );
-  if (linkRoadmapItemJob(item.id, job.id, env)) return { job, jobs: [job], skipped: [], item, targetProject: item.project };
+  if (linkIssueJob(item.id, job.id, env)) return { job, jobs: [job], skipped: [], item, targetProject: item.project };
   cancelJob(job.id, { reason: "roadmap item was queued by another caller" }, env);
   throw new UserError(
     `roadmap item \`${item.id}\` was queued by another caller; ${jobRef(job.id)} was cancelled and nothing else changed`,

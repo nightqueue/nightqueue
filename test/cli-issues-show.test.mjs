@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { addRoadmapComment, queueRoadmapItem, saveRoadmapItem } from "../src/memory/roadmap.mjs";
+import { addIssueComment, queueIssue, saveIssue } from "../src/memory/issues.mjs";
 import { makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
@@ -16,9 +16,9 @@ test("`nightqueue roadmap show <ref>` prints the item in full and its thread in 
   const env = makeHome(t, "cli-roadmap-show");
   const cwd = makeProject(t, env, "alpha");
   const detail = `line one\n${"x".repeat(700)}`;
-  const item = saveRoadmapItem({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "the worker leaks", detail }, env);
-  const { job } = await queueRoadmapItem({ id: item.id }, env);
-  addRoadmapComment({ id: item.id, body: "seen twice\nin prod" }, env);
+  const item = saveIssue({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "the worker leaks", detail }, env);
+  const { job } = await queueIssue({ id: item.id }, env);
+  addIssueComment({ id: item.id, body: "seen twice\nin prod" }, env);
 
   const shown = runCli(env, ["roadmap", "show", item.ref], cwd);
   assert.equal(shown.status, 0, shown.stderr);
