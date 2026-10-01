@@ -105,7 +105,7 @@ runtime measured no lane for prints `-`.
 Modified files` (`--files-from <path>` reads the list somewhere else) plus every
 file a `--extra <pathspec>` really matches, and commits them with `git commit -F
 <the --message-file>` - the message stays the agent's, and an empty or missing
-one is refused before anything is staged. For a job queued from a roadmap item
+one is refused before anything is staged. For a job queued from an issue
 it commits a copy of the message with a `Refs: <KEY>-<n>` trailer added from the
 job row; a message that already carries a `Refs:` line is refused. It prints `COMMITTED: <sha> (<n>
 files)`. Anything under
@@ -140,7 +140,7 @@ for every subsection. Both: no bare `#<number>` outside a `Fixes`/`Closes` line,
 traceability the runtime appends itself - an `Opened by nightqueue` line, a whole
 `Refs` line, a job ref or the run slug. It then publishes a copy of the body with
 the footer read from the job row (`Opened by nightqueue ·
-<KEY>-<n>` for a roadmap job, `Opened by nightqueue` otherwise; see
+<KEY>-<n>` for an issue's job, `Opened by nightqueue` otherwise; see
 [Runtime contract](runtime-contract.md)). A body that
 fails prints one `REJECTED: <reason>` or `MISSING: <what>` line per violation
 and exits `1` with nothing pushed. Otherwise it renames the branch
@@ -199,13 +199,16 @@ beside it as `nightqueue.db.pre-v18`. While a runner holds a live lease on a job
 the migration refuses and asks to stop the runners first
 (`nightqueue queue run --stop`); nothing is written until it succeeds. A v18 database
 then goes to v19 the same way, in the same open, with its own copy
-`nightqueue.db.pre-v19`: every project and org gets a key (below), and every roadmap
-item gets its number within its owner, in the order the items were created.
+`nightqueue.db.pre-v19`: every project and org gets a key (below), and every issue
+gets its number within its owner, in the order the issues were created.
 A v19 database then goes to v20 in the same open, with its copy
 `nightqueue.db.pre-v20`: every reference to another row gets a foreign key, and a
 row pointing at a row that does not exist refuses the migration, naming the row,
 with nothing written - checked before the first pending step, so an older home
 stays at its version too; `nightqueue doctor` reports such rows.
+A v20 database then goes to v21 in the same open, with its copy
+`nightqueue.db.pre-v21`: the tracker tables are renamed to `issues`, `issue_projects`
+and `issue_comments`, every row, counter and ref kept.
 `nightqueue run dir --project <name> --slug <slug>` prints the directory of a
 run, so nothing has to build the path from a project name.
 
@@ -263,7 +266,7 @@ nightqueue project rename api api-v2               # one row: its jobs, decision
 nightqueue project move api acme                   # move a project to another org
 nightqueue project move api --path ~/code/api      # give it a new checkout (or one it never had)
 nightqueue project remove api                      # refused while it owns rows, listing them and hinting --purge
-nightqueue project remove api --purge [--yes]      # delete it and every row it owns (jobs, lessons, memory, roadmap, runs dir); asks first, refused while a job runs or closes, or while it has comments on org roadmap items (they stay)
+nightqueue project remove api --purge [--yes]      # delete it and every row it owns (jobs, lessons, memory, issues, runs dir); asks first, refused while a job runs or closes, or while it has comments on org issues (they stay)
 nightqueue project integrations api show [--json] # one <kind>.<key>=<value> line per setting, or "no integrations"
 nightqueue project integrations api set <kind>.<key>=<value> ...   # validated against the provider that declares the key
 nightqueue project integrations api unset <kind>.<key> ...         # the last key removed leaves the project without integrations
@@ -323,7 +326,7 @@ ref written with it still resolves and no other owner can take it. Everything th
 prints names things by ref, and every command and tool that takes one accepts it:
 
 - a job is `J-<id>` (the plain id is still accepted);
-- a roadmap item is `<KEY>-<n>`, numbered within its project or org (`NQ-12`, `DLW-3`);
+- an issue is `<KEY>-<n>`, numbered within its project or org (`NQ-12`, `DLW-3`);
 - a decision is `D-<n>` inside its project, `<ORGKEY>/D-<n>` for an org decision, and
   `<KEY>/D-<n>` anywhere else;
 - a row with no owner uses the key `G` (`G-4`, `G/D-2`).
@@ -374,7 +377,7 @@ stream's `## Notice`, the pull request, slug and branch; the row carries
 line per job, where the result is `recovered as <status>`, `exists` (the row is there - a second
 run, or the loser of two concurrent ones), `skipped: still running` or `project-missing`, then
 the tail of the job logs no run explains, which cannot be rebuilt. Nothing is written to the
-roadmap or to the decisions. A recovered row is a record, not a task: its prompt was not kept on
+issues or to the decisions. A recovered row is a record, not a task: its prompt was not kept on
 disk, so `queue retry` (and `queue_retry`) refuses it with ``J-<n> was rebuilt from disk by
 `nightqueue queue repair --from-disk` and its prompt was not kept, so it cannot run again; queue
 the task anew with `nightqueue queue add` ``.
@@ -698,23 +701,23 @@ settled before its job was closed, by number and job - settle it with `decision_
 (`status: accepted|rejected`) or `nightqueue decision update <number> --status
 accepted|rejected`.
 
-On a database at the current schema, the `roadmap workflow` row names every roadmap item or org
+On a database at the current schema, the `issue workflow` row names every issue or org
 project row whose status disagrees with what its linked job's row means (for example `NQ-12
 in_progress (J-40 done, expected in_review)`, or `DLW-7 row api ...` for an org item's row): a job
-write whose roadmap follow failed. The next `nightqueue queue run` claim cycle re-syncs those on its
+write whose issue follow failed. The next `nightqueue queue run` claim cycle re-syncs those on its
 own. It also names every org item whose persisted status disagrees with what its project rows derive
 (for example `DLW-7 todo (derived from its project rows: in_progress)`), re-derived at its next row
-change or set by hand with `roadmap_update`. It is a `warn`, never a failure.
+change or set by hand with `issue_update`. It is a `warn`, never a failure.
 
-`nightqueue roadmap [--project <name> | --org <name>] [--status <s>]... [--priority <n>]...
-[--type <t>]... [--json]` prints the roadmap grouped by status in workflow order (`backlog`, `todo`,
+`nightqueue issues [--project <name> | --org <name>] [--status <s>]... [--priority <n>]...
+[--type <t>]... [--json]` prints the issues grouped by status in workflow order (`backlog`, `todo`,
 `in_progress`, `in_review`, `done`, `cancelled`), one `p<priority> <REF> <title>` line per item (`NQ-12` for a
 project item, `DLW-7` for an org item: the ref carries its owner's key), p1 first. `--status`, `--priority` and `--type` repeat to keep several values. Read by a
 project, an org item shows the status of that project's own row in parentheses; read with `--org`,
 each org item lists its project rows under it (`<project>: <status> J-<id> (<job status>)`), the
 item × project matrix. It survives a reader
-that closes the pipe early (`nightqueue roadmap | head`): the CLI stops writing instead of
-crashing with `EPIPE` (or `ENOTCONN`/`ECONNRESET`, the same closed reader on a socket). `nightqueue roadmap show <ref> [--json]` prints one item in full - its
+that closes the pipe early (`nightqueue issues | head`): the CLI stops writing instead of
+crashing with `EPIPE` (or `ENOTCONN`/`ECONNRESET`, the same closed reader on a socket). `nightqueue issues show <ref> [--json]` prints one issue in full - its
 ref, type, status and priority, its untruncated title and detail, an org item's project
 rows under `projects:` - and then its comment thread in chronological order, one `<when> <author> <kind>` line per comment with its body
 indented under it. Both read the database and never write to it.
@@ -860,7 +863,7 @@ A fresh session opens with the operator's greeting: who it is (the nightqueue op
 the project), what it does, what it never does, and where to start - in the language the
 repository suggests. A resumed session is not greeted again. The `nightqueue` MCP tools are
 pre-approved for the session (`permissions.allow: ["mcp__nightqueue__*"]` in the settings it
-is started with), so the operator never asks before reading the queue, the roadmap or the
+is started with), so the operator never asks before reading the queue, the issues or the
 memory; every other tool keeps Claude Code's own prompts.
 
 ## Libs
