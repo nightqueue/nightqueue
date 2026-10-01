@@ -1200,11 +1200,11 @@ function toolDefinitions(env, state) {
       guardsHome: true,
       config: {
         description:
-          "Closes a job: takes its open pull request to merged and the job to `closed`, through the code pipeline preflight, conflict, merge, settle - never an agent. `closed` always means the pull request was merged through this pipeline. " +
+          "Closes a job: takes its open pull request to merged and the job to `closed`, through the code pipeline preflight, conflict, merge, settle - run by code, never by an agent; the conflict step may hand a small textual conflict to the bounded merger agent (see the runtime contract). `closed` always means the pull request was merged through this pipeline. " +
           "It starts DETACHED and returns immediately with the pid and the log path; it never waits for the merge. Follow it with `queue_status` and the job id. " +
           "Only a `done` job with a pull request is closed. `closed`, `running`, `pending`, `gate`, `failed`, `cancelled`, a `done` job with no pull request and a job already being closed under a live lease are refused by name, and nothing is written. Refused inside an unattended run. " +
           "A close that stopped keeps its checklist and its reason on the job (`close`, `close_status: failed`); calling this tool again resumes it at the step that failed. " +
-          "`force` skips the pull request checks and the rebase test suite only; conflicts, a pull request that is not the job's own and the job's status still stop the close. " +
+          "`force` skips the pull request checks and the rebase test suite only, and never runs the merger; conflicts, a pull request that is not the job's own and the job's status still stop the close. " +
           "A pull request closed without merge cancels the job and releases its worktree; one merged by hand is recorded as `merged outside a close`. " +
           "The settle step accepts every decision the job proposed, in the same write that closes it, and the closed notice names their refs.",
         inputSchema: { job_id: jobIdField, force: z.boolean().nullable().optional() },

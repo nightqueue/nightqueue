@@ -367,13 +367,14 @@ export function spawnClaude({
   holdJobAwakeImpl = holdJobAwake,
   bashTimeoutS = BASH_TIMEOUT_DEFAULT,
   inheritUserEnvironment = false,
+  args: argsOverride = null,
 } = {}) {
   return new Promise((settle) => {
     const stream = openAttemptLog(logPath, attempt);
     const logClosed = new Promise((done) => stream.once("close", done));
     stream.on("error", (err) => reportLogFailure(logPath, err));
     const resolved = resolveBinImpl(env);
-    const args = buildArgs({ prompt, resumeSessionId, env, jobId, inheritUserEnvironment });
+    const args = argsOverride ?? buildArgs({ prompt, resumeSessionId, env, jobId, inheritUserEnvironment });
     const runtimeEnv = { ...BG_WAIT_CEILING_ENV, ...noOrphanTaskEnv(bashTimeoutS), [PLUGIN_DIR_ENV]: pluginDir() };
     const childEnv = jobId === null ? { ...env, ...runtimeEnv } : { ...env, ...jobIdentity(env, jobId), ...runtimeEnv };
     const child = spawnImpl(resolved?.bin ?? "claude", args, { cwd, env: childEnv, stdio: SPAWN_STDIO });

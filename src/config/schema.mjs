@@ -21,7 +21,7 @@ export const KEEP_AWAKE_DEFAULT = "auto";
 export const BASH_TIMEOUT_DEFAULT = Object.freeze({ default: 900, max: 3600 });
 
 // Hard timeout of one `queue close` attempt, in seconds.
-export const CLOSE_TIMEOUT_DEFAULT_S = 600;
+export const CLOSE_TIMEOUT_DEFAULT_S = 1800;
 export const CLOSE_TIMEOUT_RANGE = { min: 60, max: 3600 };
 
 // Tells whether the value is a plain object usable as a map.

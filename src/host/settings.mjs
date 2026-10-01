@@ -154,6 +154,12 @@ export function jobSettings(env = process.env) {
   return { hooks: data.hooks, claudeMdExcludes: [join(claudeConfigDir(env), "CLAUDE.md")] };
 }
 
+// The `--settings` payload of the close's merger agent: only the guard fencing its tools, no memory hook, plus the exclude of the operator's own CLAUDE.md.
+export function mergerSettings(env = process.env) {
+  const guard = { type: "command", command: hookCommand("merger-guard", env), timeout: 5 };
+  return { hooks: { PreToolUse: [{ matcher: "*", hooks: [guard] }] }, claudeMdExcludes: [join(claudeConfigDir(env), "CLAUDE.md")] };
+}
+
 // Writes the settings back, keeping a backup and the permission bits the user had set on the file.
 export function writeHostSettings(env, { path, existed, data }) {
   mkdirSync(claudeConfigDir(env), { recursive: true });

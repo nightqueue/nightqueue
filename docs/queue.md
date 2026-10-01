@@ -890,10 +890,34 @@ agent, never a second job, never queue work:
    directory, with the checkout's `node_modules` linked in), the project's `npm test` must
    pass there, and only then the rebased head is pushed with
    `--force-with-lease` against the head the close read (with `--force`, the push follows the
-   rebase without running the suite). A rebase that stops on real
-   conflicts is aborted and the close stops with `real-conflict` and the conflicted files -
-   a close never resolves a real conflict. The throwaway worktree is removed whatever
-   happens. A pull request `BEHIND` its base (mergeable, but GitHub refuses to merge it
+   rebase without running the suite). A rebase that stops on conflicts may be handed, while
+   it is still stopped, to the bounded **merger** agent (`plugin/agents/merger.md`, sonnet,
+   Read and Edit only, Edit fenced to the conflicted files by the `merger-guard` hook, no
+   shell, no MCP server). Code decides first whether the conflict is eligible: never under
+   `--force`; the project has a `scripts.test`; no file on the risk list (`package.json`,
+   `package-lock.json`, `*.lock`, `src/memory/schema.mjs`, `src/memory/migration/**`); no
+   generated file (`pnpm-lock.yaml`, `npm-shrinkwrap.json`, `bun.lockb`, a path under
+   `dist/`, `build/`, `generated/`, `__generated__/`, `vendor/`, `node_modules/` or
+   `coverage/`, a `.min.js`, `.min.css`, `.map` or `.snap` file, a file `.gitattributes`
+   marks `linguist-generated`, or one whose first five lines say `@generated` or `DO NOT
+   EDIT`); every file carries conflict markers (a delete, rename or binary conflict is not
+   eligible); and at most 12 hunks in 6 files, summed over every stop of the rebase. The
+   merger's timeout is recomputed at each stop as half of what the close has left after
+   the suite's 90 s reserve, at most 20 min; below 60 s the conflict is not handed over and
+   the note says `merger: not enough of the close's timeout left for the merger and the
+   suite; raise queue.closeTimeoutS`. After the agent answers `RESOLVED`, the runtime
+   verifies that no conflict marker is left and that `git diff --name-only` lists only the
+   conflicted files, then runs `git add` and `git rebase --continue` (the next stop goes
+   through the same checks within the same budget). The rebased head then goes through the
+   usual leftover-marker check, `npm test` and push with lease, and the step note reads
+   `resolved by merger: <n> hunks in <m> files (<names>); suite green; pushed <a> -> <b>`;
+   a red suite stops with `suite-red` and pushes nothing. Anything else - not eligible,
+   `UNRESOLVED: <reason>`, a timeout, markers left, a file touched outside the conflict -
+   aborts the rebase and stops the close with `real-conflict` and the conflicted files,
+   exactly as before; when the merger ran, the note ends with `; merger: <reason>`. The
+   step's data records `merger` (`resolved`, `unresolved` or `not-eligible`, with the
+   reason), and each run of the agent logs to `logs/merger-<job>-<stamp>.log` in the home.
+   The throwaway worktree is removed whatever happens. A pull request `BEHIND` its base (mergeable, but GitHub refuses to merge it
    while it is not up to date) goes through the same rebase, suite and push, records
    `pushed <old> -> <new>`, and then waits in the same run for the checks of the new head:
    `gh pr checks` is polled with a growing gap (10 s up to 60 s), the checklist and a
@@ -1030,9 +1054,14 @@ promised to it. `--foreground` runs the steps in this process, prints one line p
 a final `J-<id> closed: PR #<n> merged as <sha7>` (plus what happened to
 the worktree) or the `⛔ close stopped ...` line, and exits `0` only when the job closed;
 with `--json` it prints one `{ job, outcome, decisions }` object and nothing else on stdout.
-`queue.closeTimeoutS` (default `600`, accepted range `60..3600` seconds) is the hard
+`queue.closeTimeoutS` (default `1800`, accepted range `60..3600` seconds) is the hard
 timeout of the whole close; a close that passes it, or that `queue run --stop` ends, stops
-with `timeout` or `interrupted` and resumes on the next run.
+with `timeout` or `interrupted` and resumes on the next run. The merger gets at most half
+of what is left after the suite's reserve, with a 20 min ceiling, and a conflict found with
+less than 60 s of merger time stops as `real-conflict`; raise `queue.closeTimeoutS` for
+larger merges. A `config.json` that already carries `"closeTimeoutS": 600` (setup writes
+every default) keeps 600 until you edit it. The close lease lasts the timeout plus 60 s, so a
+close killed hard blocks the next one for up to that long.
 
 **Decisions the job proposed.** The settle step accepts every decision with `status: proposed`
 and the job's id, in the same transaction that sets the job `closed`; there is no flag and no
@@ -1048,7 +1077,7 @@ tests", nothing more: preflight notes the pull request's red, pending or unreada
 conflict step rebases and pushes without running the project's `npm test` (`suite skipped with
 --force`). A forced close prints first `J-<id>: --force: pull request checks and the rebase
 suite are skipped; conflicts, attribution and status still stop the close`, and the checklist
-records `forced: true` for good. It never opens another status, never lifts
+records `forced: true` for good. It never runs the merger, never opens another status, never lifts
 `pr-not-the-job-branch`, a real conflict, leftover conflict markers, uncommitted files the pull
 would touch, a missing checkout or a closed pull request.
 
@@ -1067,7 +1096,7 @@ An unattended run never closes: inside a job the command and the tool are refuse
 to close from inside job `N` ...``); the operator runs the close.
 
 **What it never does.** It never stashes, never deletes a branch (`--delete-branch`),
-never resolves a real conflict, never retries the run that produced the pull request and
+never resolves a conflict beyond what the bounded merger may (above), never retries the run that produced the pull request and
 never closes on its own - the operator decides when to close. Closes of one project share its
 checkout (the fetch, the throwaway worktrees, the pull), so they are best run one after
 the other; a collision fails the close safely (`fetch-failed`, `worktree-failed`) and it
