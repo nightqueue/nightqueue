@@ -876,7 +876,7 @@ async function checkDecisionProposals(ctx) {
       "decision proposals",
       "warn",
       staleProposalsDetail(rows),
-      "accept or reject each with `decision_update` (`status: accepted|rejected`) or `nightqueue decision update <number> --status accepted|rejected`; next time settle them with `nightqueue queue close <id> --decisions accept|reject`",
+      "accept or reject each with `decision_update` (`status: accepted|rejected`) or `nightqueue decision update <number> --status accepted|rejected`",
     );
   } catch (err) {
     return check("decision proposals", "warn", err?.message ?? String(err), QUEUE_JOBS_MIGRATE_HINT);

@@ -110,6 +110,12 @@ function withNote(line, note) {
   return text ? `${line}\n\n${text}` : line;
 }
 
+// The `, accepted D-1, D-2` a close line of the notice carries, or an empty string.
+function acceptedSuffix(notice) {
+  const match = /^Closed: .*?(, accepted .+)$/m.exec(String(notice ?? ""));
+  return match ? match[1] : "";
+}
+
 // The operator note and the prior run a job was queued with, as paragraphs, or an empty text.
 function queuedDetails(job) {
   const note = typeof job.operator_note === "string" ? job.operator_note.trim() : "";
@@ -123,7 +129,7 @@ const COMMENT_BODIES = Object.freeze({
   done: (job) => withNote(job.pr_url ? `${jobRef(job.id)} done: ${job.pr_url}` : `${jobRef(job.id)} done without a pull request`, job.notice_md),
   failed: (job) => withNote(`${jobRef(job.id)} failed`, job.notice_md),
   cancelled: (job) => withNote(`${jobRef(job.id)} cancelled`, job.operator_note),
-  closed: (job) => `${jobRef(job.id)} closed`,
+  closed: (job) => `${jobRef(job.id)} closed${acceptedSuffix(job.notice_md)}`,
 });
 
 // The comment a job event leaves on its linked item, or null when the event leaves none.

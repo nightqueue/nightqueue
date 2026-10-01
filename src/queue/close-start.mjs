@@ -79,9 +79,9 @@ async function claimClose({ store, id, force, env }) {
   return { ...target, worker, row };
 }
 
-// Arguments of the detached close: `--foreground` is what makes the child run the steps instead of detaching again, and the `--decisions` choice is handed down.
-function detachedCloseArgs({ id, force, runtimeDir, decisions }) {
-  const flags = [...(force ? ["--force"] : []), ...(decisions ? ["--decisions", decisions] : [])];
+// Arguments of the detached close: `--foreground` is what makes the child run the steps instead of detaching again.
+function detachedCloseArgs({ id, force, runtimeDir }) {
+  const flags = force ? ["--force"] : [];
   return [join(runtimeDir, "bin", "nightqueue.mjs"), "queue", "close", String(id), "--foreground", ...flags];
 }
 
@@ -95,14 +95,14 @@ function recordSpawnFailure(logPath, err) {
 }
 
 // Spawns the detached close on its own log, handing it the lease token through its environment.
-function launchDetachedClose({ id, force, worker, env, spawnImpl, decisions }) {
+function launchDetachedClose({ id, force, worker, env, spawnImpl }) {
   ensureHome(env);
   mkdirSync(logsDir(env), { recursive: true });
   const logPath = join(logsDir(env), `close-${id}-${compactStamp()}.log`);
   const runtimeDir = spawnRoot(env);
   const fd = openSync(logPath, "a");
   try {
-    const args = detachedCloseArgs({ id, force, runtimeDir, decisions });
+    const args = detachedCloseArgs({ id, force, runtimeDir });
     const child = spawnImpl(process.execPath, args, { detached: true, stdio: ["ignore", fd, fd], env: { ...env, [CLOSE_WORKER_ENV]: worker } });
     child?.on?.("error", (err) => recordSpawnFailure(logPath, err));
     child?.unref?.();
@@ -121,9 +121,9 @@ function registerClose({ pid, id, detached, logPath, runtimeDir }, env) {
 }
 
 // Spawns the detached close and registers it, inside one hold of the home lock.
-function spawnAndRegisterClose({ id, force, worker, env, spawnImpl, killImpl, decisions }) {
+function spawnAndRegisterClose({ id, force, worker, env, spawnImpl, killImpl }) {
   pruneDeadRunners(env, killImpl);
-  const { pid, logPath, runtimeDir } = launchDetachedClose({ id, force, worker, env, spawnImpl, decisions });
+  const { pid, logPath, runtimeDir } = launchDetachedClose({ id, force, worker, env, spawnImpl });
   if (!Number.isInteger(pid) || pid <= 0) throw new Error("the detached close did not report a pid");
   registerClose({ pid, id, detached: true, logPath, runtimeDir }, env);
   return { pid, logPath };
@@ -141,10 +141,10 @@ async function failCloseStart({ store, id, worker, row }) {
 }
 
 // Starts the close of a job detached: validate, take the lease, spawn and register; a spawn that fails releases the lease as a failed close.
-export async function startCloseDetached({ store, id, force = false, env = process.env, spawnImpl = spawn, killImpl = killProcess, decisions = null }) {
+export async function startCloseDetached({ store, id, force = false, env = process.env, spawnImpl = spawn, killImpl = killProcess }) {
   const claimed = await claimClose({ store, id, force, env });
   try {
-    const started = await withLock(env, () => spawnAndRegisterClose({ id, force, worker: claimed.worker, env, spawnImpl, killImpl, decisions }));
+    const started = await withLock(env, () => spawnAndRegisterClose({ id, force, worker: claimed.worker, env, spawnImpl, killImpl }));
     return { started: true, jobId: id, pid: started.pid, logPath: started.logPath, worker: claimed.worker, forced: claimed.forced, status: claimed.job.status };
   } catch (err) {
     await failCloseStart({ store, id, worker: claimed.worker, row: claimed.row });

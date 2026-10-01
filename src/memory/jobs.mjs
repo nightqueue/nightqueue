@@ -11,7 +11,8 @@ import {
   withWriteRetry,
 } from "./db.mjs";
 import { refuseMissingJob } from "./job-row.mjs";
-import { jobRef } from "./refs.mjs";
+import { proposalsOfJob } from "./decisions.mjs";
+import { decisionRef, jobRef } from "./refs.mjs";
 import * as registry from "./registry.mjs";
 import { ACTIVE_JOB_PREDICATE, LEASE_GRACE_S, RESULT_OBJECT_BASE } from "./schema.mjs";
 import { isSafeSegment } from "../queue/resume.mjs";
@@ -979,9 +980,15 @@ export function failClose(id, { worker, close } = {}, env = process.env) {
   return writeCloseDurably({ id, statement, values, witness: closeWitness(CLOSE_WITNESS_COLUMNS, owner), env }) !== null;
 }
 
-// Closes a done job whose merge its checklist records, releases the lease and appends the settled line to its notice, in one statement; null means the WHERE refused it, and the schema refuses a checklist with no merge.
+// The notice line of a close, naming the decisions it accepted when there were any.
+function closeLineWith(noticeLine, accepted) {
+  return accepted.length ? `${noticeLine}, accepted ${accepted.map((entry) => entry.ref).join(", ")}` : noticeLine;
+}
+
+// Closes a done job whose merge its checklist records, accepts the decisions it proposed, releases the lease and appends the settled line to its notice, in one transaction; null means the WHERE refused it and no decision was written.
 export function settleClose(id, { worker, close, noticeLine } = {}, env = process.env) {
-  const statement = openDb(env).prepare(
+  const db = openDb(env);
+  const statement = db.prepare(
     `UPDATE jobs
         SET status = 'closed',
             close_status = NULL,
@@ -995,10 +1002,22 @@ export function settleClose(id, { worker, close, noticeLine } = {}, env = proces
       RETURNING *`,
   );
   const owner = requireText("worker", worker);
-  const line = requireText("noticeLine", noticeLine);
-  const values = [requireCloseText(close), line, line, requireId(id), owner];
-  const row = writeCloseDurably({ id, statement, values, witness: closeWitness(TERMINAL_CLOSE_WITNESS_COLUMNS, owner), env });
-  return row ? jobView(withProjectFacts(openDb(env), row), { full: true }) : null;
+  const base = requireText("noticeLine", noticeLine);
+  const jobId = requireId(id);
+  const closeText = requireCloseText(close);
+  let accepted = [];
+  const settle = {
+    get: () => {
+      const proposals = proposalsOfJob(jobId, env, db).map((row) => ({ ref: decisionRef(row), title: row.title }));
+      const line = closeLineWith(base, proposals);
+      const row = statement.get(closeText, line, line, jobId, owner) ?? null;
+      if (row) db.prepare("UPDATE decisions SET status = 'accepted', updated_at = datetime('now') WHERE job_id = ? AND status = 'proposed'").run(jobId);
+      accepted = row ? proposals : [];
+      return row;
+    },
+  };
+  const row = writeCloseDurably({ id, statement: settle, values: [], witness: closeWitness(TERMINAL_CLOSE_WITNESS_COLUMNS, owner), env });
+  return row ? { ...jobView(withProjectFacts(db, row), { full: true }), accepted_decisions: accepted } : null;
 }
 
 // Cancels a done job whose pull request a close step read closed without merge, keeping the checklist and releasing the lease, in one statement; null means the lease is not this worker's any more.

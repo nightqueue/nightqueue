@@ -732,7 +732,7 @@ test("the decision proposals check warns on a proposal of a closed job, never on
   const { report: one } = await diagnose(host.env);
   assert.equal(proposalsCheck(one).status, "warn");
   assert.equal(proposalsCheck(one).detail, `1 proposed decision of closed jobs: D-${first.number} (J-${closed})`);
-  assert.match(proposalsCheck(one).hint, /nightqueue queue close <id> --decisions accept\|reject/);
+  assert.doesNotMatch(proposalsCheck(one).hint, /--decisions/);
 
   const second = proposedByJob(host.env, { title: "and a second one from it", jobId: closed });
   closeDb(host.env);

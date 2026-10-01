@@ -417,14 +417,12 @@ report lists it among the open items for the operator to accept or reject with
 continues without the section and records it as an open item.
 
 **A proposal ends when its job is closed.** The proposal a job saved carries
-that job's id. `nightqueue queue close <id>` and `nightqueue queue close --merged`
-list the open proposals of every job they closed and, on a terminal, ask
-`accept / reject / keep` for each; `--decisions accept|reject|keep` answers for
-all of them without asking, and without the flag and without a terminal (or
-under `--json`) every proposal is kept, so scripts do not change. Each one
-prints a `decision #n <title>: accepted|rejected|kept (proposed)` line, and
-`--json` carries them in `decisions`. The MCP `queue_close` closes the job and
-leaves its proposals alone. A proposal still open on a closed job is a warning
+that job's id: proposed by a job, accepted when the job closes. The settle step of
+`nightqueue queue close <id>`, `nightqueue queue close --merged` and the MCP `queue_close`
+accepts every proposal of the job in the transaction that closes it, prints an
+`accepted D-n: <title>` line for each, and `--json` carries them in `decisions`. A job that
+ends cancelled or failed accepts nothing. A proposal still open on a closed job (from before
+this rule) is a warning
 of the `decision proposals` line of `nightqueue doctor`, which names each by
 number and job.
 
