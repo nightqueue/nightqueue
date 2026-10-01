@@ -35,7 +35,7 @@ function titlesOf(roadmap) {
 function positionsOf(env, priority, { project = null, org = null }) {
   return openDb(env)
     .prepare(
-      "SELECT title, position FROM roadmap_items WHERE project_id IS ? AND org_id IS ? AND priority = ? ORDER BY position",
+      "SELECT title, position FROM issues WHERE project_id IS ? AND org_id IS ? AND priority = ? ORDER BY position",
     )
     .all(projectIdOf(env, project), orgIdOf(env, org), priority)
     .map((row) => [row.title, row.position]);

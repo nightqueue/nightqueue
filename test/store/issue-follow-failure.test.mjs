@@ -6,7 +6,7 @@ import { makeHome, makeProject, mergedChecklist, projectIdOf } from "../../test-
 
 const PR_URL = "https://github.com/acme/alpha/pull/7";
 
-const BREAK_ISSUE_WRITES = `CREATE TRIGGER roadmap_follow_boom BEFORE UPDATE ON roadmap_items
+const BREAK_ISSUE_WRITES = `CREATE TRIGGER issue_follow_boom BEFORE UPDATE ON issues
   BEGIN SELECT RAISE(ABORT, 'roadmap follow forced to fail'); END;`;
 
 // A store whose one roadmap item is linked to a job the worker `w1` already claimed.
@@ -33,7 +33,7 @@ test("a follow that throws never costs the job write, the drift is reported, and
     { id: item.id, ref: item.ref, scope: "project", owner: "alpha", status: "in_progress", expected: "in_review", job_id: job.id, job_status: "done" },
   ]);
 
-  openDb(env).exec("DROP TRIGGER roadmap_follow_boom");
+  openDb(env).exec("DROP TRIGGER issue_follow_boom");
   await store.jobs.sweepOrphans();
   assert.equal((await store.issues.getIssue(item.id)).status, "in_review");
   assert.deepEqual(await withReadOnlyStore(env, (readOnly) => readOnly.issues.issueDrift()), []);
@@ -65,7 +65,7 @@ test("a follow that throws never costs the settleClose, the drift is reported, a
     { id: item.id, ref: item.ref, scope: "project", owner: "alpha", status: "in_review", expected: "done", job_id: job.id, job_status: "closed" },
   ]);
 
-  openDb(env).exec("DROP TRIGGER roadmap_follow_boom");
+  openDb(env).exec("DROP TRIGGER issue_follow_boom");
   await store.jobs.sweepOrphans();
   assert.equal((await store.issues.getIssue(item.id)).status, "done");
   assert.deepEqual(await withReadOnlyStore(env, (readOnly) => readOnly.issues.issueDrift()), []);
@@ -88,7 +88,7 @@ test("a settleClose refused for another worker writes no comment and leaves the 
 
 test("a drift where the item already holds the expected status is not reported", async (t) => {
   const { env, store, item, job } = await claimedLinkedJob(t, "roadmap-follow-quiet-drift");
-  openDb(env).prepare("UPDATE roadmap_items SET job_status_seen = 'pending' WHERE id = ?").run(item.id);
+  openDb(env).prepare("UPDATE issues SET job_status_seen = 'pending' WHERE id = ?").run(item.id);
   assert.equal(await store.jobs.status(job.id), "running");
   assert.deepEqual(await withReadOnlyStore(env, (readOnly) => readOnly.issues.issueDrift()), []);
 });

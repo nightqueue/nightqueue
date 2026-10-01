@@ -8,8 +8,8 @@ import {
 } from "./issue-workflow.mjs";
 import { CLOSED_REQUIRES_MERGE } from "./schema.mjs";
 
-// The current (v20) schema of the memory database: one source for a fresh creation and for the v20 migration; the frozen
-// v18 and v19 shapes the earlier migrations build live under `migration/`.
+// The current (v21) schema of the memory database: one source for a fresh creation and for the v21 migration; the frozen
+// v18, v19 and v20 shapes the earlier migrations build live under `migration/`.
 
 const ISSUE_TYPE_COLUMN = `TEXT NOT NULL DEFAULT '${DEFAULT_ISSUE_TYPE}' CHECK(type IN (${sqlList(ISSUE_TYPES)}))`;
 
@@ -18,15 +18,15 @@ const REQUIRED_PROJECT_ID = "project_id TEXT NOT NULL REFERENCES projects(id) ON
 const ORG_ID = "org_id TEXT REFERENCES orgs(id) ON DELETE RESTRICT";
 const SCOPE_COLUMN = "scope TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))";
 
-// The one owner a decision or a roadmap item has: a project row (or a global one) carries no org, an org row no project.
+// The one owner a decision or an issue has: a project row (or a global one) carries no org, an org row no project.
 export const OWNER_CHECK =
   "(scope = 'project' AND org_id IS NULL) OR (scope = 'org' AND org_id IS NOT NULL AND project_id IS NULL)";
 
-// The append-only comment thread of the roadmap items, under a given name; a comment under a project carries its id.
+// The append-only comment thread of the issues, under a given name; a comment under a project carries its id.
 export function issueCommentsDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  item_id INTEGER NOT NULL REFERENCES roadmap_items(id) ON DELETE CASCADE,
+  item_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
   kind TEXT NOT NULL CHECK(kind IN (${sqlList(COMMENT_KINDS)})),
   author TEXT NOT NULL CHECK(author = '${OPERATOR_AUTHOR}' OR author GLOB 'job:[0-9]*'),
   body TEXT NOT NULL,
@@ -38,12 +38,12 @@ export function issueCommentsDdl(name) {
 
 // The triggers that keep the comment thread append-only: every UPDATE is refused; a DELETE is refused while its item exists, so a comment only ends with its item.
 export const ISSUE_COMMENT_GUARDS = `
-CREATE TRIGGER IF NOT EXISTS roadmap_comments_no_update BEFORE UPDATE ON roadmap_comments BEGIN
-  SELECT RAISE(ABORT, 'roadmap comments are append-only');
+CREATE TRIGGER IF NOT EXISTS issue_comments_no_update BEFORE UPDATE ON issue_comments BEGIN
+  SELECT RAISE(ABORT, 'issue comments are append-only');
 END;
-CREATE TRIGGER IF NOT EXISTS roadmap_comments_no_delete BEFORE DELETE ON roadmap_comments
-WHEN EXISTS (SELECT 1 FROM roadmap_items WHERE id = OLD.item_id) BEGIN
-  SELECT RAISE(ABORT, 'roadmap comments are append-only');
+CREATE TRIGGER IF NOT EXISTS issue_comments_no_delete BEFORE DELETE ON issue_comments
+WHEN EXISTS (SELECT 1 FROM issues WHERE id = OLD.item_id) BEGIN
+  SELECT RAISE(ABORT, 'issue comments are append-only');
 END;
 `;
 
@@ -51,7 +51,7 @@ END;
 export function issueProjectsDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  item_id INTEGER NOT NULL REFERENCES roadmap_items(id) ON DELETE CASCADE,
+  item_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
   ${REQUIRED_PROJECT_ID},
   status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (${sqlList(ISSUE_STATUSES)})),
   job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
@@ -63,35 +63,35 @@ export function issueProjectsDdl(name) {
 );`;
 }
 
-// The lexical mirrors of the roadmap: item title and detail follow every write, comments follow inserts and the deletes their item's removal makes.
+// The lexical mirrors of the issues: item title and detail follow every write, comments follow inserts and the deletes their item's removal makes.
 export const ISSUE_FTS = `
-CREATE VIRTUAL TABLE IF NOT EXISTS roadmap_items_fts USING fts5(
+CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
   title, detail,
-  content='roadmap_items', content_rowid='id'
+  content='issues', content_rowid='id'
 );
-CREATE TRIGGER IF NOT EXISTS roadmap_items_fts_ai AFTER INSERT ON roadmap_items BEGIN
-  INSERT INTO roadmap_items_fts(rowid, title, detail) VALUES (new.id, new.title, new.detail);
+CREATE TRIGGER IF NOT EXISTS issues_fts_ai AFTER INSERT ON issues BEGIN
+  INSERT INTO issues_fts(rowid, title, detail) VALUES (new.id, new.title, new.detail);
 END;
-CREATE TRIGGER IF NOT EXISTS roadmap_items_fts_ad AFTER DELETE ON roadmap_items BEGIN
-  INSERT INTO roadmap_items_fts(roadmap_items_fts, rowid, title, detail) VALUES ('delete', old.id, old.title, old.detail);
+CREATE TRIGGER IF NOT EXISTS issues_fts_ad AFTER DELETE ON issues BEGIN
+  INSERT INTO issues_fts(issues_fts, rowid, title, detail) VALUES ('delete', old.id, old.title, old.detail);
 END;
-CREATE TRIGGER IF NOT EXISTS roadmap_items_fts_au AFTER UPDATE OF title, detail ON roadmap_items BEGIN
-  INSERT INTO roadmap_items_fts(roadmap_items_fts, rowid, title, detail) VALUES ('delete', old.id, old.title, old.detail);
-  INSERT INTO roadmap_items_fts(rowid, title, detail) VALUES (new.id, new.title, new.detail);
+CREATE TRIGGER IF NOT EXISTS issues_fts_au AFTER UPDATE OF title, detail ON issues BEGIN
+  INSERT INTO issues_fts(issues_fts, rowid, title, detail) VALUES ('delete', old.id, old.title, old.detail);
+  INSERT INTO issues_fts(rowid, title, detail) VALUES (new.id, new.title, new.detail);
 END;
-CREATE VIRTUAL TABLE IF NOT EXISTS roadmap_comments_fts USING fts5(
+CREATE VIRTUAL TABLE IF NOT EXISTS issue_comments_fts USING fts5(
   body,
-  content='roadmap_comments', content_rowid='id'
+  content='issue_comments', content_rowid='id'
 );
-CREATE TRIGGER IF NOT EXISTS roadmap_comments_fts_ai AFTER INSERT ON roadmap_comments BEGIN
-  INSERT INTO roadmap_comments_fts(rowid, body) VALUES (new.id, new.body);
+CREATE TRIGGER IF NOT EXISTS issue_comments_fts_ai AFTER INSERT ON issue_comments BEGIN
+  INSERT INTO issue_comments_fts(rowid, body) VALUES (new.id, new.body);
 END;
-CREATE TRIGGER IF NOT EXISTS roadmap_comments_fts_ad AFTER DELETE ON roadmap_comments BEGIN
-  INSERT INTO roadmap_comments_fts(roadmap_comments_fts, rowid, body) VALUES ('delete', old.id, old.body);
+CREATE TRIGGER IF NOT EXISTS issue_comments_fts_ad AFTER DELETE ON issue_comments BEGIN
+  INSERT INTO issue_comments_fts(issue_comments_fts, rowid, body) VALUES ('delete', old.id, old.body);
 END;
 `;
 
-// The `roadmap_items` table under a given name: owned by a project id (NULL for a global item) or by an org id, numbered per owner.
+// The `issues` table under a given name: owned by a project id (NULL for a global item) or by an org id, numbered per owner.
 export function issuesDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -227,13 +227,10 @@ export const DATA_TABLES = Object.freeze([
   "pipeline_runs",
   "jobs",
   "decisions",
-  "roadmap_items",
-  "roadmap_item_projects",
-  "roadmap_comments",
+  "issues",
+  "issue_projects",
+  "issue_comments",
 ]);
-
-// The lexical mirrors a rebuilt content table needs indexed again.
-export const FTS_MIRRORS = Object.freeze(["lessons_fts", "memory_fts", "decisions_fts", "roadmap_items_fts", "roadmap_comments_fts"]);
 
 // The `lessons` table under a given name: owned by a project id, NULL for a global lesson.
 export function lessonsDdl(name) {
@@ -389,10 +386,10 @@ CREATE TABLE IF NOT EXISTS pipeline_phases (
   FOREIGN KEY (run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
 );
 ${decisionsDdl("decisions")}
-${issuesDdl("roadmap_items")}
-${issueCommentsDdl("roadmap_comments")}
+${issuesDdl("issues")}
+${issueCommentsDdl("issue_comments")}
 ${ISSUE_COMMENT_GUARDS}
-${issueProjectsDdl("roadmap_item_projects")}
+${issueProjectsDdl("issue_projects")}
 `;
 
 export const INDEXES = `
@@ -405,35 +402,23 @@ CREATE INDEX IF NOT EXISTS pipeline_phases_run_idx ON pipeline_phases(run_id, se
 CREATE INDEX IF NOT EXISTS jobs_claim_idx ON jobs(status, priority, created_at);
 CREATE INDEX IF NOT EXISTS jobs_project_slug_idx ON jobs(project_id, slug);
 CREATE UNIQUE INDEX IF NOT EXISTS decisions_number_idx ON decisions(project_id, number);
-CREATE INDEX IF NOT EXISTS roadmap_items_order_idx ON roadmap_items(scope, project_id, org_id, priority, position);
-CREATE INDEX IF NOT EXISTS roadmap_items_job_idx ON roadmap_items(job_id);
+CREATE INDEX IF NOT EXISTS issues_order_idx ON issues(scope, project_id, org_id, priority, position);
+CREATE INDEX IF NOT EXISTS issues_job_idx ON issues(job_id);
 CREATE UNIQUE INDEX IF NOT EXISTS decisions_org_number_idx ON decisions(org_id, number) WHERE scope = 'org';
-CREATE INDEX IF NOT EXISTS roadmap_items_org_order_idx ON roadmap_items(org_id, priority, position) WHERE scope = 'org';
+CREATE INDEX IF NOT EXISTS issues_org_order_idx ON issues(org_id, priority, position) WHERE scope = 'org';
 CREATE INDEX IF NOT EXISTS decisions_job_idx ON decisions(job_id) WHERE job_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS roadmap_comments_item_idx ON roadmap_comments(item_id, id);
-CREATE INDEX IF NOT EXISTS roadmap_item_projects_job_idx ON roadmap_item_projects(job_id);
+CREATE INDEX IF NOT EXISTS issue_comments_item_idx ON issue_comments(item_id, id);
+CREATE INDEX IF NOT EXISTS issue_projects_job_idx ON issue_projects(job_id);
 CREATE INDEX IF NOT EXISTS pipeline_runs_job_idx ON pipeline_runs(job_id);
-CREATE INDEX IF NOT EXISTS roadmap_items_decision_idx ON roadmap_items(decision_id);
+CREATE INDEX IF NOT EXISTS issues_decision_idx ON issues(decision_id);
 CREATE INDEX IF NOT EXISTS decisions_superseded_idx ON decisions(superseded_by);
 `;
 
-// The columns that hold another row's id with a foreign key since v20, as `{ table, column, parent }`; the v20 migration checks them.
-export const REFERENCED_COLUMNS = Object.freeze([
-  { table: "roadmap_comments", column: "item_id", parent: "roadmap_items" },
-  { table: "roadmap_item_projects", column: "item_id", parent: "roadmap_items" },
-  { table: "roadmap_item_projects", column: "job_id", parent: "jobs" },
-  { table: "roadmap_items", column: "job_id", parent: "jobs" },
-  { table: "roadmap_items", column: "decision_id", parent: "decisions" },
-  { table: "decisions", column: "job_id", parent: "jobs" },
-  { table: "decisions", column: "superseded_by", parent: "decisions" },
-  { table: "pipeline_runs", column: "job_id", parent: "jobs" },
-]);
-
-// The per-owner uniqueness of roadmap item numbers, kept out of INDEXES because the v18 migration builds v18-shaped tables.
+// The per-owner uniqueness of issue numbers, kept out of INDEXES so a fresh creation builds it with the issues table.
 export const ISSUE_NUMBER_INDEXES = `
-CREATE UNIQUE INDEX IF NOT EXISTS roadmap_items_number_idx ON roadmap_items(project_id, number) WHERE scope = 'project';
-CREATE UNIQUE INDEX IF NOT EXISTS roadmap_items_org_number_idx ON roadmap_items(org_id, number) WHERE scope = 'org';
-CREATE UNIQUE INDEX IF NOT EXISTS roadmap_items_global_number_idx ON roadmap_items(number) WHERE scope = 'project' AND project_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS issues_number_idx ON issues(project_id, number) WHERE scope = 'project';
+CREATE UNIQUE INDEX IF NOT EXISTS issues_org_number_idx ON issues(org_id, number) WHERE scope = 'org';
+CREATE UNIQUE INDEX IF NOT EXISTS issues_global_number_idx ON issues(number) WHERE scope = 'project' AND project_id IS NULL;
 `;
 
 export const FTS = `

@@ -168,13 +168,13 @@ function namedRow(db, row) {
 // Returns the row of a roadmap item, its owner's names attached, or null.
 export function getIssue(id, env = process.env) {
   const db = openDb(env);
-  return namedRow(db, db.prepare("SELECT * FROM roadmap_items WHERE id = ?").get(requireId(id)));
+  return namedRow(db, db.prepare("SELECT * FROM issues WHERE id = ?").get(requireId(id)));
 }
 
 // The columns and joins every read that carries a linked decision number and live job status shares.
 const ISSUE_VIEW_QUERY = `SELECT r.*, d.number AS decision_number, d.scope AS decision_scope,
               d.project_id AS decision_project_id, d.org_id AS decision_org_id, j.status AS job_status
-       FROM roadmap_items r
+       FROM issues r
        LEFT JOIN decisions d ON d.id = r.decision_id
        LEFT JOIN jobs j ON j.id = r.job_id`;
 
@@ -225,10 +225,10 @@ export function saveIssue(
     ...owner,
   ];
   const statement = db.prepare(
-    `INSERT INTO roadmap_items (scope, project_id, org_id, priority, type, status, closed_at, title, detail, decision_id, position, number)
+    `INSERT INTO issues (scope, project_id, org_id, priority, type, status, closed_at, title, detail, decision_id, position, number)
      VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? = 'done' THEN datetime('now') END, ?, ?, ?,
-             (SELECT COALESCE(MAX(position), 0) + 1 FROM roadmap_items WHERE ${OWNER_CLAUSE} AND priority = ?),
-             (SELECT COALESCE(MAX(number), 0) + 1 FROM roadmap_items WHERE ${OWNER_CLAUSE}))
+             (SELECT COALESCE(MAX(position), 0) + 1 FROM issues WHERE ${OWNER_CLAUSE} AND priority = ?),
+             (SELECT COALESCE(MAX(number), 0) + 1 FROM issues WHERE ${OWNER_CLAUSE}))
      RETURNING id, position, number`,
   );
   const row = withWriteRetry(() => statement.get(...values));
@@ -254,9 +254,9 @@ function renumberGroup(db, owner, priority) {
   db.prepare(
     `WITH ordered AS (
        SELECT id, ROW_NUMBER() OVER (ORDER BY position, id) AS rn
-       FROM roadmap_items WHERE ${OWNER_CLAUSE} AND priority = ?
+       FROM issues WHERE ${OWNER_CLAUSE} AND priority = ?
      )
-     UPDATE roadmap_items SET position = (SELECT rn FROM ordered WHERE ordered.id = roadmap_items.id)
+     UPDATE issues SET position = (SELECT rn FROM ordered WHERE ordered.id = issues.id)
      WHERE id IN (SELECT id FROM ordered)`,
   ).run(...ownerValues(owner), priority);
 }
@@ -264,7 +264,7 @@ function renumberGroup(db, owner, priority) {
 // How many items a priority group of one owner holds.
 function countGroup(db, owner, priority) {
   return db
-    .prepare(`SELECT COUNT(*) AS total FROM roadmap_items WHERE ${OWNER_CLAUSE} AND priority = ?`)
+    .prepare(`SELECT COUNT(*) AS total FROM issues WHERE ${OWNER_CLAUSE} AND priority = ?`)
     .get(...ownerValues(owner), priority).total;
 }
 
@@ -280,7 +280,7 @@ function moveIssue(row, patch, env) {
   const db = openDb(env);
   const priority = hasValue(patch, "priority") ? requirePriority(patch.priority) : row.priority;
   const write = db.prepare(
-    "UPDATE roadmap_items SET priority = ?, position = ?, updated_at = datetime('now') WHERE id = ?",
+    "UPDATE issues SET priority = ?, position = ?, updated_at = datetime('now') WHERE id = ?",
   );
   const owner = rowOwner(row);
   inTransaction(db, () => {
@@ -325,9 +325,9 @@ function updateAssignments(patch, row, env) {
 // open project rows, and going back from review or done leaves the `reopened` comment.
 function writeUpdate(row, { columns, values, status, author }, env) {
   const db = openDb(env);
-  const statement = db.prepare(`UPDATE roadmap_items SET ${columns.join(", ")}, updated_at = datetime('now') WHERE id = ?`);
+  const statement = db.prepare(`UPDATE issues SET ${columns.join(", ")}, updated_at = datetime('now') WHERE id = ?`);
   inTransaction(db, () => {
-    const before = db.prepare("SELECT status FROM roadmap_items WHERE id = ?").get(row.id)?.status ?? null;
+    const before = db.prepare("SELECT status FROM issues WHERE id = ?").get(row.id)?.status ?? null;
     statement.run(...values, row.id);
     if (closesOrgItem(row, status)) cancelOpenRows(db, { itemId: row.id, status, author });
     if (status === null || !isReopening(before, status)) return;
@@ -476,9 +476,9 @@ export function linkIssueJob(id, jobId, env = process.env) {
   const db = openDb(env);
   const itemId = requireId(id);
   const statement = db.prepare(
-    `UPDATE roadmap_items SET status = ?, job_id = ?, job_status_seen = 'pending', closed_at = NULL, updated_at = datetime('now')
+    `UPDATE issues SET status = ?, job_id = ?, job_status_seen = 'pending', closed_at = NULL, updated_at = datetime('now')
       WHERE id = ? AND status IN (${sqlList(OPEN_STATUSES)})
-        AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = roadmap_items.job_id AND j.status IN (${LIVE_JOB_LIST}))`,
+        AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = issues.job_id AND j.status IN (${LIVE_JOB_LIST}))`,
   );
   return inTransaction(db, () => {
     refuseMissingJob(db, requireId(jobId));
@@ -498,11 +498,11 @@ function followLinkedItem(db, item, job) {
 function applyJobRowToItem(db, item, job) {
   const event = jobEvent(job, item.job_status_seen);
   const { status } = issueTransition(job, item.job_status_seen);
-  db.prepare("UPDATE roadmap_items SET job_status_seen = ? WHERE id = ?").run(job.status, item.id);
+  db.prepare("UPDATE issues SET job_status_seen = ? WHERE id = ?").run(job.status, item.id);
   const comment = commentFor(job, event, jobRefs(db, job));
   if (comment) insertComment(db, { itemId: item.id, ...comment });
   if (status === null || status === item.status) return false;
-  db.prepare(`UPDATE roadmap_items SET ${STATUS_ASSIGNMENT}, updated_at = datetime('now') WHERE id = ?`).run(status, status, item.id);
+  db.prepare(`UPDATE issues SET ${STATUS_ASSIGNMENT}, updated_at = datetime('now') WHERE id = ?`).run(status, status, item.id);
   return true;
 }
 
@@ -514,7 +514,7 @@ function jobRowOf(db, id) {
 // Brings every item and project row linked to a job in line with the given row of the job, inside the caller's transaction.
 function followJobRow(db, job) {
   const items = db
-    .prepare("SELECT id, status, job_status_seen FROM roadmap_items WHERE job_id = ? AND job_status_seen IS NOT ?")
+    .prepare("SELECT id, status, job_status_seen FROM issues WHERE job_id = ? AND job_status_seen IS NOT ?")
     .all(job.id, job.status);
   let moved = 0;
   for (const item of items) if (followLinkedItem(db, item, job)) moved += 1;
@@ -542,13 +542,13 @@ function followPassedStatus(db, id, fromKey) {
 
 // Runs a follow inside a savepoint, so a follow that fails is undone alone and never costs the write around it.
 function followQuietlyIn(db, follow) {
-  db.exec("SAVEPOINT roadmap_follow");
+  db.exec("SAVEPOINT issue_follow");
   try {
     follow();
   } catch {
-    db.exec("ROLLBACK TO roadmap_follow");
+    db.exec("ROLLBACK TO issue_follow");
   }
-  db.exec("RELEASE roadmap_follow");
+  db.exec("RELEASE issue_follow");
 }
 
 // Runs a synchronous job write that records in `result[fromKey]` the status it moved the job out of, and follows that status
@@ -570,7 +570,7 @@ export function followDriftedJobs(env = process.env) {
   const db = openDb(env);
   const itemJobIds = db
     .prepare(
-      `SELECT DISTINCT r.job_id AS id FROM roadmap_items r JOIN jobs j ON j.id = r.job_id
+      `SELECT DISTINCT r.job_id AS id FROM issues r JOIN jobs j ON j.id = r.job_id
         WHERE r.job_status_seen IS NOT j.status`,
     )
     .all()
@@ -592,7 +592,7 @@ function linkedItemDrift(connection) {
     .prepare(
       `SELECT r.id, r.scope, r.project_id, r.org_id, r.number, r.status, r.job_id, r.job_status_seen,
               j.status AS job_status, j.result
-         FROM roadmap_items r JOIN jobs j ON j.id = r.job_id
+         FROM issues r JOIN jobs j ON j.id = r.job_id
         WHERE r.job_status_seen IS NOT j.status
         ORDER BY r.id`,
     )
@@ -637,7 +637,7 @@ export function itemIdOfRef(value, env = process.env, db = null) {
   const connection = db ?? openDb(env);
   const owner = itemRefOwner(connection, ref.key);
   const row = owner
-    ? connection.prepare(`SELECT id FROM roadmap_items WHERE ${OWNER_CLAUSE} AND number = ?`).get(...ownerValues(owner), ref.number)
+    ? connection.prepare(`SELECT id FROM issues WHERE ${OWNER_CLAUSE} AND number = ?`).get(...ownerValues(owner), ref.number)
     : null;
   if (!row) throw new UserError(`unknown roadmap item \`${ref.key}-${ref.number}\``);
   return Number(row.id);
@@ -682,7 +682,7 @@ export function issueRefOfJob(jobId, env = process.env, connection = null) {
 // The roadmap item a job was queued from, with its owner names and linked decision id, or null.
 function itemOfJob(db, id) {
   const own = db
-    .prepare("SELECT id, scope, project_id, org_id, number, decision_id FROM roadmap_items WHERE job_id = ? ORDER BY id DESC LIMIT 1")
+    .prepare("SELECT id, scope, project_id, org_id, number, decision_id FROM issues WHERE job_id = ? ORDER BY id DESC LIMIT 1")
     .get(id);
   return namedRow(db, own) ?? orgItemOfJob(db, id);
 }

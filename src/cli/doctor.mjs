@@ -18,6 +18,7 @@ import {
   preV18BackupPath,
   preV19BackupPath,
   preV20BackupPath,
+  preV21BackupPath,
   queuePausedPath,
   secretsPath,
   shimNames,
@@ -716,9 +717,9 @@ function quarantinedFiles(env) {
   }
 }
 
-// Every backup of the home: the copies taken before the v18, v19 and v20 migrations, then the files of each quarantine.
+// Every backup of the home: the copies taken before the v18, v19, v20 and v21 migrations, then the files of each quarantine.
 function homeBackups(env) {
-  const copies = [preV18BackupPath(env), preV19BackupPath(env), preV20BackupPath(env)];
+  const copies = [preV18BackupPath(env), preV19BackupPath(env), preV20BackupPath(env), preV21BackupPath(env)];
   return [...copies, ...quarantinedFiles(env)].map(backupEntry).filter(Boolean);
 }
 

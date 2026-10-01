@@ -75,9 +75,9 @@ test("a row naming an unknown project or org id is refused by the foreign key", 
   const ghost = "0".repeat(26);
   assert.throws(() => db.prepare("INSERT INTO decisions (scope, project_id, number, title, context, decision) VALUES ('project', ?, 1, 't', 'c', 'd')").run(ghost), /FOREIGN KEY/);
   assert.throws(() => db.prepare("INSERT INTO decisions (scope, org_id, number, title, context, decision) VALUES ('org', ?, 1, 't', 'c', 'd')").run(ghost), /FOREIGN KEY/);
-  assert.throws(() => db.prepare("INSERT INTO roadmap_items (scope, org_id, number, title, position) VALUES ('org', ?, 1, 't', 1)").run(ghost), /FOREIGN KEY/);
-  assert.throws(() => db.prepare("INSERT INTO roadmap_item_projects (item_id, project_id) VALUES (1, ?)").run(ghost), /FOREIGN KEY/);
-  assert.throws(() => db.prepare("INSERT INTO roadmap_comments (item_id, kind, author, body, project_id) VALUES (1, 'note', 'operator', 'b', ?)").run(ghost), /FOREIGN KEY/);
+  assert.throws(() => db.prepare("INSERT INTO issues (scope, org_id, number, title, position) VALUES ('org', ?, 1, 't', 1)").run(ghost), /FOREIGN KEY/);
+  assert.throws(() => db.prepare("INSERT INTO issue_projects (item_id, project_id) VALUES (1, ?)").run(ghost), /FOREIGN KEY/);
+  assert.throws(() => db.prepare("INSERT INTO issue_comments (item_id, kind, author, body, project_id) VALUES (1, 'note', 'operator', 'b', ?)").run(ghost), /FOREIGN KEY/);
   assert.throws(() => db.prepare("INSERT INTO lessons (project_id, title, root_cause, solution, prevention) VALUES (?, 't', 'r', 's', 'p')").run(ghost), /FOREIGN KEY/);
   assert.throws(
     () => db.prepare("INSERT INTO decisions (scope, project_id, org_id, number, title, context, decision) VALUES ('project', NULL, ?, 1, 't', 'c', 'd')").run(registry.earliestOrg(db).id),

@@ -11,7 +11,7 @@ const JOB_COLUMNS = COMMENT_JOB_COLUMNS.split(", ")
 const LINKED_ITEMS = `SELECT r.id AS item_id, r.status AS item_status, ${JOB_COLUMNS},
        j.created_at AS queued_at,
        COALESCE(j.finished_at, (SELECT MIN(p.created_at) FROM pipeline_runs p WHERE p.job_id = j.id), j.created_at) AS finished_at
-  FROM roadmap_items r JOIN jobs j ON j.id = r.job_id
+  FROM issues r JOIN jobs j ON j.id = r.job_id
  ORDER BY r.id`;
 
 // Tells whether an item was closed by hand: it is done or cancelled while its job never closed, and such an item gets nothing.
@@ -39,7 +39,7 @@ function historyComments(db, row) {
 function hasComment(db, { itemId, kind, refs }) {
   return Boolean(
     db
-      .prepare("SELECT 1 FROM roadmap_comments WHERE item_id = ? AND kind = ? AND json_extract(refs, '$.job_id') = ? LIMIT 1")
+      .prepare("SELECT 1 FROM issue_comments WHERE item_id = ? AND kind = ? AND json_extract(refs, '$.job_id') = ? LIMIT 1")
       .get(itemId, kind, refs.job_id),
   );
 }

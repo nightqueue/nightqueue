@@ -1,20 +1,18 @@
 import { UserError } from "../../config/errors.mjs";
 import { dbPath, preV20BackupPath } from "../../config/paths.mjs";
-import {
-  FTS,
-  INDEXES,
-  REFERENCED_COLUMNS,
-  ISSUE_COMMENT_GUARDS,
-  ISSUE_FTS,
-  ISSUE_NUMBER_INDEXES,
-  decisionsDdl,
-  pipelineRunsDdl,
-  issueCommentsDdl,
-  issueProjectsDdl,
-  issuesDdl,
-} from "../ddl.mjs";
+import { FTS, decisionsDdl, pipelineRunsDdl } from "../ddl.mjs";
 import { hasColumn } from "../columns.mjs";
 import { MigrationRefused, foreignKeyViolations, hasTable, rebuildTable, runOneShot, userVersion } from "./one-shot.mjs";
+import {
+  INDEXES_V20,
+  REFERENCED_COLUMNS_V20,
+  ROADMAP_COMMENT_GUARDS_V20,
+  ROADMAP_FTS_V20,
+  ROADMAP_NUMBER_INDEXES_V20,
+  roadmapCommentsDdlV20,
+  roadmapItemProjectsDdlV20,
+  roadmapItemsDdlV20,
+} from "./v20-shape.mjs";
 
 // The one-shot, version-gated migration of a v19 database to v20: every column holding another row's id gets its foreign key.
 // A row pointing at a missing row refuses it before anything is written; otherwise a byte copy stays beside it as `nightqueue.db.pre-v20`.
@@ -25,9 +23,9 @@ const MAX_LISTED_ORPHANS = 20;
 
 const REBUILT = Object.freeze([
   { table: "decisions", ddl: decisionsDdl },
-  { table: "roadmap_items", ddl: issuesDdl },
-  { table: "roadmap_item_projects", ddl: issueProjectsDdl },
-  { table: "roadmap_comments", ddl: issueCommentsDdl },
+  { table: "roadmap_items", ddl: roadmapItemsDdlV20 },
+  { table: "roadmap_item_projects", ddl: roadmapItemProjectsDdlV20 },
+  { table: "roadmap_comments", ddl: roadmapCommentsDdlV20 },
   { table: "pipeline_runs", ddl: pipelineRunsDdl },
 ]);
 
@@ -57,7 +55,7 @@ function danglingRows(db, { table, column, parent }) {
 // Every row whose reference names a row that does not exist, as `{ table, column, parent, row, missing }` in audit order.
 export function orphansOf(db) {
   const orphans = [];
-  for (const reference of REFERENCED_COLUMNS) {
+  for (const reference of REFERENCED_COLUMNS_V20) {
     for (const { row, missing } of danglingRows(db, reference)) orphans.push({ ...reference, row, missing: printable(missing) });
   }
   return orphans;
@@ -72,12 +70,12 @@ function orphanList(orphans) {
   return rest > 0 ? `${named.join("; ")}; and ${rest} more` : named.join("; ");
 }
 
-// Refuses the migration while any row points at a row that does not exist, naming them; the refusal writes nothing.
-export function refuseOrphans(db, env) {
+// Refuses the migration to a version while any row points at a row that does not exist, naming them; the refusal writes nothing.
+export function refuseOrphans(db, env, version = V20) {
   const orphans = orphansOf(db);
   if (!orphans.length) return;
   throw new MigrationRefused(
-    `the database must migrate to v${V20}, but ${orphans.length} row(s) point at a row that does not exist: ${orphanList(orphans)}; fix or clear them with sqlite3 on ${dbPath(env)} and run the command again; nothing was written`,
+    `the database must migrate to v${version}, but ${orphans.length} row(s) point at a row that does not exist: ${orphanList(orphans)}; fix or clear them with sqlite3 on ${dbPath(env)} and run the command again; nothing was written`,
   );
 }
 
@@ -118,11 +116,11 @@ function describeViolation(db) {
 
 // Recreates what the rebuilt tables dropped, re-indexes their mirrors, checks the result and stamps v20.
 function finishSchema(db, violationsBefore) {
-  db.exec(INDEXES);
-  db.exec(ISSUE_COMMENT_GUARDS);
+  db.exec(INDEXES_V20);
+  db.exec(ROADMAP_COMMENT_GUARDS_V20);
   db.exec(FTS);
-  db.exec(ISSUE_FTS);
-  db.exec(ISSUE_NUMBER_INDEXES);
+  db.exec(ROADMAP_FTS_V20);
+  db.exec(ROADMAP_NUMBER_INDEXES_V20);
   for (const mirror of MIRRORS) db.exec(`INSERT INTO ${mirror}(${mirror}) VALUES('rebuild')`);
   const violations = foreignKeyViolations(db);
   if (violations > violationsBefore) {

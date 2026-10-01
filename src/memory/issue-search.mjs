@@ -40,9 +40,9 @@ function fileHits(db, { target, file, limit }) {
   const under = directoryPrefix(file);
   return db
     .prepare(
-      `SELECT r.* FROM roadmap_items r
+      `SELECT r.* FROM issues r
         WHERE ${visible.clause}
-          AND EXISTS (SELECT 1 FROM roadmap_comments c, json_each(c.refs, '$.files') f
+          AND EXISTS (SELECT 1 FROM issue_comments c, json_each(c.refs, '$.files') f
                        WHERE c.item_id = r.id AND ${comments.clause}
                          AND (json_extract(f.value, '$.path') = ?
                               OR substr(json_extract(f.value, '$.path'), 1, length(?)) = ?))
@@ -56,9 +56,9 @@ function itemTextHits(db, { target, match }) {
   const visible = visibility(target, "r");
   return db
     .prepare(
-      `SELECT r.*, bm25(roadmap_items_fts) AS rank FROM roadmap_items_fts
-         JOIN roadmap_items r ON r.id = roadmap_items_fts.rowid
-        WHERE roadmap_items_fts MATCH ? AND ${visible.clause}
+      `SELECT r.*, bm25(issues_fts) AS rank FROM issues_fts
+         JOIN issues r ON r.id = issues_fts.rowid
+        WHERE issues_fts MATCH ? AND ${visible.clause}
         ORDER BY rank LIMIT ${FTS_CANDIDATES}`,
     )
     .all(match, ...visible.values);
@@ -70,10 +70,10 @@ function commentTextHits(db, { target, match }) {
   const comments = commentRule(target);
   return db
     .prepare(
-      `SELECT r.*, bm25(roadmap_comments_fts) AS rank FROM roadmap_comments_fts
-         JOIN roadmap_comments c ON c.id = roadmap_comments_fts.rowid
-         JOIN roadmap_items r ON r.id = c.item_id
-        WHERE roadmap_comments_fts MATCH ? AND ${visible.clause} AND ${comments.clause}
+      `SELECT r.*, bm25(issue_comments_fts) AS rank FROM issue_comments_fts
+         JOIN issue_comments c ON c.id = issue_comments_fts.rowid
+         JOIN issues r ON r.id = c.item_id
+        WHERE issue_comments_fts MATCH ? AND ${visible.clause} AND ${comments.clause}
         ORDER BY rank LIMIT ${FTS_CANDIDATES}`,
     )
     .all(match, ...visible.values, ...comments.values);

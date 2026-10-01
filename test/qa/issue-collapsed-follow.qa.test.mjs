@@ -39,7 +39,7 @@ import { makeHome, makeProject, mergedChecklist, projectIdOf } from "../../test-
 
 const PR_URL = "https://github.com/acme/alpha/pull/9";
 
-const BREAK_ISSUE_WRITES = `CREATE TRIGGER roadmap_follow_boom BEFORE UPDATE ON roadmap_items
+const BREAK_ISSUE_WRITES = `CREATE TRIGGER issue_follow_boom BEFORE UPDATE ON issues
   BEGIN SELECT RAISE(ABORT, 'roadmap follow forced to fail'); END;`;
 
 // The kinds of the comments an item holds, oldest first.
@@ -64,7 +64,7 @@ test("a done follow that crashed once is never recovered by a later settleClose 
   assert.equal(await store.jobs.finishJob(job.id, { worker: "w1", status: "done", prUrl: PR_URL }), true, "setup: finishJob write itself must still succeed");
   assert.equal(await store.jobs.status(job.id), "done");
   assert.equal((await store.issues.getIssue(item.id)).status, "in_progress", "setup: the follow for `done` must have been swallowed, leaving the item behind");
-  openDb(env).exec("DROP TRIGGER roadmap_follow_boom");
+  openDb(env).exec("DROP TRIGGER issue_follow_boom");
 
   // Now close the job normally through the store, with roadmap writes healthy again — exactly
   // what an operator/queue-close pipeline run does next.

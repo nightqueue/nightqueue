@@ -38,8 +38,8 @@ function thread(env, item) {
 test("roadmap comments are append-only: an UPDATE or a DELETE is refused by the database", async (t) => {
   const { env, item } = await linkedJob(t, "roadmap-comments-append-only");
   const db = openDb(env);
-  assert.throws(() => db.prepare("UPDATE roadmap_comments SET body = 'rewritten' WHERE item_id = ?").run(item.id), /append-only/);
-  assert.throws(() => db.prepare("DELETE FROM roadmap_comments WHERE item_id = ?").run(item.id), /append-only/);
+  assert.throws(() => db.prepare("UPDATE issue_comments SET body = 'rewritten' WHERE item_id = ?").run(item.id), /append-only/);
+  assert.throws(() => db.prepare("DELETE FROM issue_comments WHERE item_id = ?").run(item.id), /append-only/);
   assert.equal(thread(env, item).length, 1);
 });
 

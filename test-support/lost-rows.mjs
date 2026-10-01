@@ -1,6 +1,6 @@
 import { openDb } from "../src/memory/db.mjs";
 
-const ISSUE_TABLES = ["roadmap_items", "roadmap_item_projects", "roadmap_comments"];
+const ISSUE_TABLES = ["issues", "issue_projects", "issue_comments"];
 
 // Deletes job rows through the memory connection, the way a lost write-ahead log leaves a job on disk with no row.
 export function dropJobRows(env, ids) {

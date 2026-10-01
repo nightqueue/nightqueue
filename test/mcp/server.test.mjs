@@ -223,7 +223,7 @@ test("the lesson, memory, index, phase and pipeline tools refuse an unknown proj
   assert.equal(count("project_index"), 0, "a refused index_save wrote a row");
   assert.equal(count("pipeline_runs"), 0, "a refused pipeline_log wrote a row");
   assert.equal(count("decisions"), 0, "a refused decision_save wrote a row");
-  assert.equal(count("roadmap_items"), 0, "a refused roadmap_save wrote a row");
+  assert.equal(count("issues"), 0, "a refused roadmap_save wrote a row");
 
   mkdirSync(join(alpha, "src"));
   const inside = payloadOf(await client.callTool({ name: "lesson_save", arguments: { ...LESSON, project: join(alpha, "src") } }));

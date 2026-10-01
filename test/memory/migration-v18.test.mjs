@@ -16,7 +16,7 @@ import * as registry from "../../src/memory/registry.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { sharedSlugPending } from "../../src/memory/shared-slug-migration.mjs";
 import { decideResume, ownRunState, resumeHandoff } from "../../src/queue/resume.mjs";
-import { buildLegacyHome, legacyConfig } from "../../test-support/legacy-home.mjs";
+import { buildLegacyHome, legacyConfig, preV21Name } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
@@ -439,7 +439,7 @@ function seedAcceptanceRows(db) {
   seedOwnedRows(db);
 }
 
-const ALL_TABLES = [...PROJECT_TABLES, "jobs", "decisions", "roadmap_items", "roadmap_item_projects", "roadmap_comments", "pipeline_phases"];
+const ALL_TABLES = [...PROJECT_TABLES, "jobs", "decisions", "issues", "issue_projects", "issue_comments", "pipeline_phases"];
 
 // The rows of a v18 table with every owner id swapped for the name it resolves to, the shape a v17 table had.
 function ownerNamedRows(db, table) {
@@ -481,18 +481,18 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
   assert.ok(readFileSync(preV18BackupPath(env)).equals(fixture), "the pre-v18 copy is not the v17 database byte for byte");
 
   for (const table of ALL_TABLES) {
-    const count = (connection) => connection.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
-    assert.equal(count(db), count(before), `${table} lost or gained rows`);
+    const count = (connection, name) => connection.prepare(`SELECT COUNT(*) AS n FROM ${name}`).get().n;
+    assert.equal(count(db, table), count(before, preV21Name(table)), `${table} lost or gained rows`);
     const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name);
     assert.equal(columns.includes("project") || columns.includes("org"), false, `${table} still owns rows by name`);
   }
   const detached = rowsOf(db, "jobs").find((row) => row.prompt === "shared second");
   assert.equal(detached.slug, null, "the shared slug was not detached");
   assert.equal(JSON.parse(detached.result).runSlugDetached, "same-run");
-  const withoutV19Number = (table, rows) => (table === "roadmap_items" ? rows.map(({ number: _number, ...row }) => row) : rows);
+  const withoutV19Number = (table, rows) => (table === "issues" ? rows.map(({ number: _number, ...row }) => row) : rows);
   for (const table of ALL_TABLES) {
     const unchanged = (rows) => rows.filter((row) => row.id !== detached.id || table !== "jobs");
-    assert.deepEqual(unchanged(withoutV19Number(table, ownerNamedRows(db, table))), unchanged(rowsOf(before, table)), `${table} changed in the rebuild`);
+    assert.deepEqual(unchanged(withoutV19Number(table, ownerNamedRows(db, table))), unchanged(rowsOf(before, preV21Name(table))), `${table} changed in the rebuild`);
   }
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   assert.equal(sharedSlugPending(db), false);
@@ -509,10 +509,10 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
   const match = (mirror, word) => db.prepare(`SELECT rowid FROM ${mirror} WHERE ${mirror} MATCH ?`).all(word).map((row) => row.rowid);
   assert.deepEqual(match("lessons_fts", "zebracrossing"), [1]);
   assert.deepEqual(match("decisions_fts", "zebradecision"), [1]);
-  assert.deepEqual(match("roadmap_items_fts", "zebraitem"), [1]);
-  assert.deepEqual(match("roadmap_comments_fts", "zebracomment"), [1]);
-  assert.throws(() => db.prepare("UPDATE roadmap_comments SET body = 'x' WHERE id = 1").run(), /append-only/);
-  assert.throws(() => db.prepare("DELETE FROM roadmap_comments WHERE id = 1").run(), /append-only/);
+  assert.deepEqual(match("issues_fts", "zebraitem"), [1]);
+  assert.deepEqual(match("issue_comments_fts", "zebracomment"), [1]);
+  assert.throws(() => db.prepare("UPDATE issue_comments SET body = 'x' WHERE id = 1").run(), /append-only/);
+  assert.throws(() => db.prepare("DELETE FROM issue_comments WHERE id = 1").run(), /append-only/);
 
   const api = projects.api;
   assert.deepEqual(

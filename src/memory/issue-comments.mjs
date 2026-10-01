@@ -33,7 +33,7 @@ export function jobRefs(db, job) {
 export function insertComment(db, { itemId, kind, author, body, refs = null, projectId = null, createdAt = null }) {
   const row = db
     .prepare(
-      `INSERT INTO roadmap_comments (item_id, kind, author, body, refs, project_id, created_at)
+      `INSERT INTO issue_comments (item_id, kind, author, body, refs, project_id, created_at)
        VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
        RETURNING *`,
     )
@@ -68,6 +68,6 @@ export function commentView(row) {
 export function listComments(db, itemId, viewer = null) {
   const filter = viewer === null ? "" : " AND (project_id IS NULL OR project_id = ?)";
   const values = viewer === null ? [itemId] : [itemId, viewer];
-  const rows = db.prepare(`SELECT * FROM roadmap_comments WHERE item_id = ?${filter} ORDER BY created_at, id`).all(...values);
+  const rows = db.prepare(`SELECT * FROM issue_comments WHERE item_id = ?${filter} ORDER BY created_at, id`).all(...values);
   return attachNames(db, rows).map(commentView);
 }

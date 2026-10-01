@@ -52,7 +52,7 @@ const PATTERNS = [
     positive: [
       "INSERT INTO jobs (project, prompt)",
       "insert into decisions(scope, project, org)",
-      "INSERT INTO roadmap_comments (item_id, kind, project)",
+      "INSERT INTO issue_comments (item_id, kind, project)",
       "INSERT INTO t (org)",
     ],
     negative: ["INSERT INTO jobs (project_id, prompt)", "INSERT INTO decisions (scope, project_id, org_id)", "INSERT INTO projects (id, name)"],

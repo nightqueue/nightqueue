@@ -341,7 +341,7 @@ test("the roadmap workflow check is ok when every linked item follows its job an
   const host = makeHostEnv(t, "doctor-roadmap-workflow");
   const db = openDb(host.env);
   const job = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "deliver it" }, host.env);
-  db.prepare("INSERT INTO roadmap_items (project_id, number, title, position, status, job_id, job_status_seen) VALUES (?, 1, 'deliver it', 1, 'in_progress', ?, 'pending')").run(projectIdOf(host.env, "alpha"), job.id);
+  db.prepare("INSERT INTO issues (project_id, number, title, position, status, job_id, job_status_seen) VALUES (?, 1, 'deliver it', 1, 'in_progress', ?, 'pending')").run(projectIdOf(host.env, "alpha"), job.id);
   closeDb(host.env);
 
   const quiet = await diagnose(host.env);
@@ -359,14 +359,14 @@ test("the roadmap workflow check is ok when every linked item follows its job an
 test("the roadmap workflow check flags an org item whose status disagrees with its project rows", async (t) => {
   const host = makeHostEnv(t, "doctor-roadmap-org-derived");
   const db = openDb(host.env);
-  db.prepare("INSERT INTO roadmap_items (scope, org_id, number, title, position, status) VALUES ('org', ?, 1, 'raise node', 1, 'in_progress')").run(orgIdOf(host.env, makeOrg(host.env, "acme")));
-  db.prepare("INSERT INTO roadmap_item_projects (item_id, project_id, status) VALUES (1, ?, 'done'), (1, ?, 'in_progress')").run(ensureProject(host.env, "api"), ensureProject(host.env, "app"));
+  db.prepare("INSERT INTO issues (scope, org_id, number, title, position, status) VALUES ('org', ?, 1, 'raise node', 1, 'in_progress')").run(orgIdOf(host.env, makeOrg(host.env, "acme")));
+  db.prepare("INSERT INTO issue_projects (item_id, project_id, status) VALUES (1, ?, 'done'), (1, ?, 'in_progress')").run(ensureProject(host.env, "api"), ensureProject(host.env, "app"));
   closeDb(host.env);
 
   const quiet = await diagnose(host.env);
   assert.equal(statusOf(quiet.report, "roadmap workflow"), "ok");
 
-  openDb(host.env).prepare("UPDATE roadmap_items SET status = 'todo' WHERE id = 1").run();
+  openDb(host.env).prepare("UPDATE issues SET status = 'todo' WHERE id = 1").run();
   closeDb(host.env);
   const { report } = await diagnose(host.env);
   const check = report.checks.find((entry) => entry.name === "roadmap workflow");

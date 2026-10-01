@@ -28,7 +28,7 @@ export function liveRowJob(db, itemId, projectId) {
   return (
     db
       .prepare(
-        `SELECT j.id, j.status FROM roadmap_item_projects p JOIN jobs j ON j.id = p.job_id
+        `SELECT j.id, j.status FROM issue_projects p JOIN jobs j ON j.id = p.job_id
           WHERE p.item_id = ? AND p.project_id = ? AND j.status IN (${LIVE_JOB_LIST})`,
       )
       .get(itemId, projectId) ?? null
@@ -37,11 +37,11 @@ export function liveRowJob(db, itemId, projectId) {
 
 // Re-derives an org item's status from its rows and, when it changed, persists it with an org-level comment signed by `author`.
 export function syncOrgStatus(db, itemId, author) {
-  const statuses = db.prepare("SELECT status FROM roadmap_item_projects WHERE item_id = ?").all(itemId).map((row) => row.status);
+  const statuses = db.prepare("SELECT status FROM issue_projects WHERE item_id = ?").all(itemId).map((row) => row.status);
   const derived = deriveOrgStatus(statuses);
-  const item = db.prepare("SELECT status FROM roadmap_items WHERE id = ? AND scope = 'org'").get(itemId);
+  const item = db.prepare("SELECT status FROM issues WHERE id = ? AND scope = 'org'").get(itemId);
   if (!item || orgStatusAgrees(item.status, derived)) return false;
-  db.prepare(`UPDATE roadmap_items SET ${STATUS_ASSIGNMENT}, updated_at = datetime('now') WHERE id = ?`).run(derived, derived, itemId);
+  db.prepare(`UPDATE issues SET ${STATUS_ASSIGNMENT}, updated_at = datetime('now') WHERE id = ?`).run(derived, derived, itemId);
   const body = `status derived from its projects: ${item.status} → ${derived}`;
   insertComment(db, { itemId, kind: derived === "done" ? "closed" : "note", author, body });
   return true;
@@ -51,11 +51,11 @@ export function syncOrgStatus(db, itemId, author) {
 // comment and re-derives the item, in one transaction; false means a live job already holds that row.
 export function linkOrgRow(db, { itemId, projectId, jobId }) {
   const statement = db.prepare(
-    `INSERT INTO roadmap_item_projects (item_id, project_id, status, job_id, job_status_seen)
+    `INSERT INTO issue_projects (item_id, project_id, status, job_id, job_status_seen)
      VALUES (?, ?, ?, ?, 'pending')
      ON CONFLICT(item_id, project_id) DO UPDATE SET status = excluded.status, job_id = excluded.job_id,
         job_status_seen = 'pending', closed_at = NULL, updated_at = datetime('now')
-      WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = roadmap_item_projects.job_id AND j.status IN (${LIVE_JOB_LIST}))`,
+      WHERE NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = issue_projects.job_id AND j.status IN (${LIVE_JOB_LIST}))`,
   );
   return inTransaction(db, () => {
     refuseMissingJob(db, jobId);
@@ -76,11 +76,11 @@ function followLinkedRow(db, row, job) {
 function applyJobRowToRow(db, row, job) {
   const event = jobEvent(job, row.job_status_seen);
   const { status } = issueTransition(job, row.job_status_seen);
-  db.prepare("UPDATE roadmap_item_projects SET job_status_seen = ? WHERE id = ?").run(job.status, row.id);
+  db.prepare("UPDATE issue_projects SET job_status_seen = ? WHERE id = ?").run(job.status, row.id);
   const comment = commentFor(job, event, jobRefs(db, job));
   if (comment) insertComment(db, { itemId: row.item_id, projectId: row.project_id, ...comment });
   if (status === null || status === row.status) return false;
-  db.prepare(`UPDATE roadmap_item_projects SET ${STATUS_ASSIGNMENT}, updated_at = datetime('now') WHERE id = ?`).run(
+  db.prepare(`UPDATE issue_projects SET ${STATUS_ASSIGNMENT}, updated_at = datetime('now') WHERE id = ?`).run(
     status,
     status,
     row.id,
@@ -92,7 +92,7 @@ function applyJobRowToRow(db, row, job) {
 export function followJobRows(db, job) {
   const rows = db
     .prepare(
-      "SELECT id, item_id, project_id, status, job_status_seen FROM roadmap_item_projects WHERE job_id = ? AND job_status_seen IS NOT ?",
+      "SELECT id, item_id, project_id, status, job_status_seen FROM issue_projects WHERE job_id = ? AND job_status_seen IS NOT ?",
     )
     .all(job.id, job.status);
   let moved = 0;
@@ -105,7 +105,7 @@ export function followJobRows(db, job) {
 export function driftedRowJobIds(db) {
   return db
     .prepare(
-      `SELECT DISTINCT p.job_id AS id FROM roadmap_item_projects p JOIN jobs j ON j.id = p.job_id
+      `SELECT DISTINCT p.job_id AS id FROM issue_projects p JOIN jobs j ON j.id = p.job_id
         WHERE p.job_status_seen IS NOT j.status`,
     )
     .all()
@@ -116,7 +116,7 @@ export function driftedRowJobIds(db) {
 export function cancelOpenRows(db, { itemId, status, author = OPERATOR_AUTHOR }) {
   const projectIds = db
     .prepare(
-      `UPDATE roadmap_item_projects SET status = 'cancelled', closed_at = NULL, updated_at = datetime('now')
+      `UPDATE issue_projects SET status = 'cancelled', closed_at = NULL, updated_at = datetime('now')
         WHERE item_id = ? AND status IN (${sqlList(OPEN_STATUSES)}) RETURNING project_id`,
     )
     .all(itemId)
@@ -137,7 +137,7 @@ export function projectRowsByItem(db, itemIds, viewer = null) {
   const rows = db
     .prepare(
       `SELECT p.item_id, owner.name AS project, p.status, p.job_id, p.closed_at, j.status AS job_status
-         FROM roadmap_item_projects p LEFT JOIN jobs j ON j.id = p.job_id LEFT JOIN projects owner ON owner.id = p.project_id
+         FROM issue_projects p LEFT JOIN jobs j ON j.id = p.job_id LEFT JOIN projects owner ON owner.id = p.project_id
         WHERE p.item_id IN (${ids.map(() => "?").join(", ")})${filter}
         ORDER BY p.item_id, owner.name`,
     )
@@ -152,7 +152,7 @@ export function projectRowsByItem(db, itemIds, viewer = null) {
 export function orgItemOfJob(db, jobId) {
   const row = db
     .prepare(
-      `SELECT r.id, r.scope, r.project_id, r.org_id, r.number, r.decision_id FROM roadmap_item_projects p JOIN roadmap_items r ON r.id = p.item_id
+      `SELECT r.id, r.scope, r.project_id, r.org_id, r.number, r.decision_id FROM issue_projects p JOIN issues r ON r.id = p.item_id
         WHERE p.job_id = ? ORDER BY p.id DESC LIMIT 1`,
     )
     .get(jobId);
@@ -166,7 +166,7 @@ function rowJobDrift(db) {
       `SELECT p.item_id AS id, r.scope, r.project_id, r.number, item_project.name AS project, item_project.key AS project_key,
               item_org.name AS org, item_org.key AS org_key, row_owner.name AS row_project,
               p.status, p.job_id, p.job_status_seen, j.status AS job_status, j.result
-         FROM roadmap_item_projects p JOIN jobs j ON j.id = p.job_id JOIN roadmap_items r ON r.id = p.item_id
+         FROM issue_projects p JOIN jobs j ON j.id = p.job_id JOIN issues r ON r.id = p.item_id
          LEFT JOIN projects row_owner ON row_owner.id = p.project_id
          LEFT JOIN projects item_project ON item_project.id = r.project_id
          LEFT JOIN orgs item_org ON item_org.id = r.org_id
@@ -193,8 +193,8 @@ function rowJobDrift(db) {
 function orgDerivationDrift(db) {
   const rows = db
     .prepare(
-      `SELECT r.id, r.scope, r.project_id, r.number, item_org.name AS org, item_org.key AS org_key, r.status, p.status AS row_status FROM roadmap_items r
-         JOIN roadmap_item_projects p ON p.item_id = r.id LEFT JOIN orgs item_org ON item_org.id = r.org_id
+      `SELECT r.id, r.scope, r.project_id, r.number, item_org.name AS org, item_org.key AS org_key, r.status, p.status AS row_status FROM issues r
+         JOIN issue_projects p ON p.item_id = r.id LEFT JOIN orgs item_org ON item_org.id = r.org_id
         WHERE r.scope = 'org' ORDER BY r.id`,
     )
     .all();

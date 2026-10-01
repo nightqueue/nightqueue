@@ -14,7 +14,7 @@ const DEPENDENT_COUNTS = [
 
 // The comments the project wrote on items it does not own: the append-only guard keeps them while their item exists.
 function keptCommentCount(db, projectId) {
-  const sql = "SELECT COUNT(*) AS n FROM roadmap_comments WHERE project_id = ? AND item_id NOT IN (SELECT id FROM roadmap_items WHERE project_id = ?)";
+  const sql = "SELECT COUNT(*) AS n FROM issue_comments WHERE project_id = ? AND item_id NOT IN (SELECT id FROM issues WHERE project_id = ?)";
   return db.prepare(sql).get(projectId, projectId).n;
 }
 
@@ -43,8 +43,8 @@ function requireNoActiveJob(db, project) {
 
 // Deletes every row of the project, then the project, in the order the foreign keys accept.
 function deleteOwnedRows(db, projectId) {
-  db.prepare("DELETE FROM roadmap_item_projects WHERE project_id = ?").run(projectId);
-  db.prepare("DELETE FROM roadmap_items WHERE project_id = ?").run(projectId);
+  db.prepare("DELETE FROM issue_projects WHERE project_id = ?").run(projectId);
+  db.prepare("DELETE FROM issues WHERE project_id = ?").run(projectId);
   db.prepare(`UPDATE decisions SET superseded_by = NULL WHERE superseded_by IN (${OWN_DECISIONS})`).run(projectId);
   db.prepare("DELETE FROM decisions WHERE project_id = ?").run(projectId);
   for (const table of ["pipeline_runs", "lessons", "memory", "project_index", "project_libs", "jobs", "project_key_aliases"]) {

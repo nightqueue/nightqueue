@@ -1,17 +1,10 @@
 import { UserError } from "../../config/errors.mjs";
 import { preV19BackupPath } from "../../config/paths.mjs";
-import {
-  INDEXES,
-  OWNER_KEY_GUARDS,
-  REGISTRY,
-  ISSUE_FTS,
-  ISSUE_NUMBER_INDEXES,
-  orgsDdl,
-  projectsDdl,
-} from "../ddl.mjs";
+import { OWNER_KEY_GUARDS, REGISTRY, orgsDdl, projectsDdl } from "../ddl.mjs";
 import { suggestKeyUnbounded } from "../refs.mjs";
 import { foreignKeyViolations, rebuildTable, runOneShot, userVersion } from "./one-shot.mjs";
 import { roadmapItemsDdlV19 } from "./v19-shape.mjs";
+import { INDEXES_V20, ROADMAP_FTS_V20, ROADMAP_NUMBER_INDEXES_V20 } from "./v20-shape.mjs";
 
 // The one-shot, version-gated migration of a v18 database to v19: every project and org gets a key, every roadmap item a
 // per-owner number, built in the frozen v19 shape. Nothing is written unless the whole of it commits, and a byte copy stays
@@ -77,9 +70,9 @@ function refuseRepeatedKeys(db) {
 // Recreates what the rebuilt tables dropped, re-indexes the roadmap mirror, checks the result and stamps v19.
 function finishSchema(db, violationsBefore) {
   db.exec(REGISTRY);
-  db.exec(INDEXES);
-  db.exec(ISSUE_FTS);
-  db.exec(ISSUE_NUMBER_INDEXES);
+  db.exec(INDEXES_V20);
+  db.exec(ROADMAP_FTS_V20);
+  db.exec(ROADMAP_NUMBER_INDEXES_V20);
   db.exec(OWNER_KEY_GUARDS);
   db.exec("INSERT INTO roadmap_items_fts(roadmap_items_fts) VALUES('rebuild')");
   const violations = foreignKeyViolations(db);

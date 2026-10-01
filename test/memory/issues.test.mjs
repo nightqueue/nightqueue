@@ -28,7 +28,7 @@ function titlesOf(env, priority) {
 // Positions a priority group holds in the database, plus the SQLite type of each one.
 function positionsOf(env, priority) {
   return openDb(env)
-    .prepare("SELECT position, typeof(position) AS kind FROM roadmap_items WHERE project_id IS ? AND priority = ? ORDER BY position")
+    .prepare("SELECT position, typeof(position) AS kind FROM issues WHERE project_id IS ? AND priority = ? ORDER BY position")
     .all(projectIdOf(env, "alpha"), priority);
 }
 

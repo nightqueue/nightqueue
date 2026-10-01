@@ -60,7 +60,7 @@ function makeOrgItemHome(t, name) {
 function rowStatuses(env, itemId) {
   return Object.fromEntries(
     openDb(env)
-      .prepare("SELECT p.name AS project, r.status FROM roadmap_item_projects r JOIN projects p ON p.id = r.project_id WHERE r.item_id = ? ORDER BY p.name")
+      .prepare("SELECT p.name AS project, r.status FROM issue_projects r JOIN projects p ON p.id = r.project_id WHERE r.item_id = ? ORDER BY p.name")
       .all(itemId)
       .map((row) => [row.project, row.status]),
   );
@@ -69,7 +69,7 @@ function rowStatuses(env, itemId) {
 // The comments of an item as `kind project`, in order.
 function commentTrail(env, itemId) {
   return openDb(env)
-    .prepare("SELECT c.kind, p.name AS project FROM roadmap_comments c LEFT JOIN projects p ON p.id = c.project_id WHERE c.item_id = ? ORDER BY c.id")
+    .prepare("SELECT c.kind, p.name AS project FROM issue_comments c LEFT JOIN projects p ON p.id = c.project_id WHERE c.item_id = ? ORDER BY c.id")
     .all(itemId)
     .map((row) => `${row.kind} ${row.project ?? "-"}`);
 }
@@ -237,7 +237,7 @@ test("closing an org item by hand cancels its open rows with one comment each, a
   assert.equal(cancelled.status, "cancelled");
   assert.deepEqual(rowStatuses(env, item.id), { "acme-api": "cancelled", "acme-mobile-app": "done" });
   const closing = openDb(env)
-    .prepare("SELECT c.author, p.name AS project, c.body FROM roadmap_comments c LEFT JOIN projects p ON p.id = c.project_id WHERE c.item_id = ? AND c.kind = 'closed' AND c.author = 'operator'")
+    .prepare("SELECT c.author, p.name AS project, c.body FROM issue_comments c LEFT JOIN projects p ON p.id = c.project_id WHERE c.item_id = ? AND c.kind = 'closed' AND c.author = 'operator'")
     .all(item.id);
   assert.deepEqual(closing.map((row) => [row.author, row.project]), [["operator", "acme-api"]]);
   assert.match(closing[0].body, /set to `cancelled` by the operator/);
@@ -304,7 +304,7 @@ test("two processes linking their own job to the same project row at once leave 
   const results = await Promise.all(jobs.map((job) => runLinker(script, env, { itemId: item.id, jobId: job.id, projectId: projectIdOf(env, "acme-api") })));
   for (const result of results) assert.equal(result.code, 0, result.stderr);
   assert.equal(results.reduce((sum, result) => sum + result.linked, 0), 1, "exactly one process linked the row");
-  const rows = openDb(env).prepare("SELECT job_id FROM roadmap_item_projects WHERE item_id = ?").all(item.id);
+  const rows = openDb(env).prepare("SELECT job_id FROM issue_projects WHERE item_id = ?").all(item.id);
   assert.equal(rows.length, 1);
   assert.ok(jobs.some((job) => job.id === rows[0].job_id));
   assert.deepEqual(commentTrail(env, item.id), ["queued acme-api", "note -"], "one queued comment, one derived move to in_progress");

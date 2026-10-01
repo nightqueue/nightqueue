@@ -94,7 +94,7 @@ test(
 
     const db = openDb(env);
     const rows = db
-      .prepare("SELECT position FROM roadmap_items WHERE project_id IS ? AND priority = ? ORDER BY position")
+      .prepare("SELECT position FROM issues WHERE project_id IS ? AND priority = ? ORDER BY position")
       .all(projectIdOf(env, "alpha"), 5);
     assert.equal(
       rows.length,

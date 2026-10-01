@@ -39,19 +39,19 @@ function seedProject(db, { id, orgId, tag, jobStatus = "cancelled", orgComment =
   db.prepare("INSERT INTO project_key_aliases (key, project_id) VALUES (?, ?)").run(`OLD${tag.toUpperCase()}`.slice(0, 5), id);
   const decision = db.prepare("INSERT INTO decisions (scope, project_id, number, title, context, decision, job_id) VALUES ('project', ?, 1, ?, 'c', 'd', ?) RETURNING id").get(id, `${tag}decision`, job).id;
   const orgDecision = db.prepare("INSERT INTO decisions (scope, org_id, title, context, decision, status, superseded_by) VALUES ('org', ?, ?, 'c', 'd', 'superseded', ?) RETURNING id").get(orgId, `${tag}orgdecision`, decision).id;
-  const item = db.prepare("INSERT INTO roadmap_items (scope, project_id, number, title, position, decision_id, job_id) VALUES ('project', ?, 1, ?, 1, ?, ?) RETURNING id").get(id, `${tag}item`, decision, job).id;
-  db.prepare("INSERT INTO roadmap_comments (item_id, kind, author, body) VALUES (?, 'note', 'operator', ?)").run(item, `${tag}comment`);
-  const orgItem = db.prepare("INSERT INTO roadmap_items (scope, org_id, number, title, position) VALUES ('org', ?, ?, ?, 1) RETURNING id").get(orgId, tag === "a" ? 1 : 2, `${tag}orgitem`).id;
-  db.prepare("INSERT INTO roadmap_item_projects (item_id, project_id, job_id) VALUES (?, ?, ?)").run(orgItem, id, job);
-  if (orgComment) db.prepare("INSERT INTO roadmap_comments (item_id, kind, author, body, project_id) VALUES (?, 'note', 'operator', ?, ?)").run(orgItem, `${tag}orgcomment`, id);
+  const item = db.prepare("INSERT INTO issues (scope, project_id, number, title, position, decision_id, job_id) VALUES ('project', ?, 1, ?, 1, ?, ?) RETURNING id").get(id, `${tag}item`, decision, job).id;
+  db.prepare("INSERT INTO issue_comments (item_id, kind, author, body) VALUES (?, 'note', 'operator', ?)").run(item, `${tag}comment`);
+  const orgItem = db.prepare("INSERT INTO issues (scope, org_id, number, title, position) VALUES ('org', ?, ?, ?, 1) RETURNING id").get(orgId, tag === "a" ? 1 : 2, `${tag}orgitem`).id;
+  db.prepare("INSERT INTO issue_projects (item_id, project_id, job_id) VALUES (?, ?, ?)").run(orgItem, id, job);
+  if (orgComment) db.prepare("INSERT INTO issue_comments (item_id, kind, author, body, project_id) VALUES (?, 'note', 'operator', ?, ?)").run(orgItem, `${tag}orgcomment`, id);
   return { orgDecision, orgItem };
 }
 
 // The rows of every table that point at a project id.
 function rowsOf(db, projectId) {
-  const tables = [...DATA_TABLES, "project_key_aliases"].filter((table) => table !== "roadmap_comments");
+  const tables = [...DATA_TABLES, "project_key_aliases"].filter((table) => table !== "issue_comments");
   const counts = Object.fromEntries(tables.map((table) => [table, db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE project_id = ?`).get(projectId).n]));
-  counts.roadmap_comments = db.prepare("SELECT COUNT(*) AS n FROM roadmap_comments WHERE project_id = ? OR item_id IN (SELECT id FROM roadmap_items WHERE project_id = ?)").get(projectId, projectId).n;
+  counts.issue_comments = db.prepare("SELECT COUNT(*) AS n FROM issue_comments WHERE project_id = ? OR item_id IN (SELECT id FROM issues WHERE project_id = ?)").get(projectId, projectId).n;
   counts.pipeline_phases = db.prepare("SELECT COUNT(*) AS n FROM pipeline_phases WHERE run_id IN (SELECT id FROM pipeline_runs WHERE project_id = ?)").get(projectId).n;
   return counts;
 }
@@ -91,14 +91,14 @@ test("project remove --purge --yes deletes the project and every row it owns, an
   assert.deepEqual(rowsOf(db, ids.b), beforeB);
   assert.equal(existsSync(join(runsDir(env), ids.a)), false);
   assert.equal(existsSync(join(runsDir(env), ids.b, "slug", "state.json")), true);
-  for (const [table, word] of [["lessons_fts", "alesson"], ["memory_fts", "amemory"], ["decisions_fts", "adecision"], ["roadmap_items_fts", "aitem"], ["roadmap_comments_fts", "acomment"]]) {
+  for (const [table, word] of [["lessons_fts", "alesson"], ["memory_fts", "amemory"], ["decisions_fts", "adecision"], ["issues_fts", "aitem"], ["issue_comments_fts", "acomment"]]) {
     assert.equal(ftsHits(db, table, word), 0, `${table} keeps no ${word}`);
   }
   assert.equal(ftsHits(db, "lessons_fts", "blesson"), 1);
-  assert.equal(ftsHits(db, "roadmap_comments_fts", "borgcomment"), 1);
+  assert.equal(ftsHits(db, "issue_comments_fts", "borgcomment"), 1);
   assert.equal(db.prepare("SELECT superseded_by FROM decisions WHERE title = 'aorgdecision'").get().superseded_by, null);
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM roadmap_items WHERE title = 'aorgitem'").get().n, 1);
-  assert.match(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'roadmap_comments_no_delete'").get().sql, /RAISE/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM issues WHERE title = 'aorgitem'").get().n, 1);
+  assert.match(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'issue_comments_no_delete'").get().sql, /RAISE/);
 });
 
 test("purge is refused while the project has a running or a closing job, and removes nothing", async (t) => {
@@ -159,7 +159,7 @@ test("purge of a project with a comment on an org item is refused and changes no
   const tables = [...DATA_TABLES, "projects", "project_key_aliases", "pipeline_phases"];
   const snapshot = () => Object.fromEntries(tables.map((table) => [table, db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n]));
   const before = snapshot();
-  const guard = () => db.prepare("SELECT sql FROM sqlite_master WHERE name = 'roadmap_comments_no_delete'").get()?.sql;
+  const guard = () => db.prepare("SELECT sql FROM sqlite_master WHERE name = 'issue_comments_no_delete'").get()?.sql;
   const guardBefore = guard();
 
   const refused = await cli(env, ["project", "remove", "alpha", "--purge", "--yes"]);

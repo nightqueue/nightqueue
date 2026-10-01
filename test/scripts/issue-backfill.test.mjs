@@ -20,7 +20,7 @@ function seedFailedJob(env) {
 // Inserts an item already linked to a job, the way items were linked before comments existed.
 function insertItem(db, { status, jobId }) {
   return db
-    .prepare("INSERT INTO roadmap_items (project_id, number, title, status, position, job_id, job_status_seen) VALUES ((SELECT id FROM projects WHERE name = 'alpha'), (SELECT COALESCE(MAX(number), 0) + 1 FROM roadmap_items), 't', ?, 1, ?, NULL) RETURNING id")
+    .prepare("INSERT INTO issues (project_id, number, title, status, position, job_id, job_status_seen) VALUES ((SELECT id FROM projects WHERE name = 'alpha'), (SELECT COALESCE(MAX(number), 0) + 1 FROM issues), 't', ?, 1, ?, NULL) RETURNING id")
     .get(status, jobId).id;
 }
 
@@ -66,7 +66,7 @@ function datesOf(env, jobId) {
 test("the backfill dry run counts what it would write and writes nothing", async (t) => {
   const { env, db } = seedHome(t, "roadmap-backfill-dry");
   assert.match(await backfill(env, ["--dry-run"]), /^dry run .*: items=4 written=6 skipped=1$/);
-  assert.equal(db.prepare("SELECT COUNT(*) AS total FROM roadmap_comments").get().total, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS total FROM issue_comments").get().total, 0);
 });
 
 test("the backfill dates each synthesized comment, gives a hand-closed item nothing, and a second run writes nothing", async (t) => {
