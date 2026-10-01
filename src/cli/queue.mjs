@@ -13,8 +13,10 @@ import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } fr
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog, readLogTail } from "../queue/follow.mjs";
 import {
+  claimingRunners,
   isQueueIdle,
   noRunnerWait,
+  onceOnlyLine,
   parkedBacklogLine,
   parkedJobLabel,
   pausedRunnerLine,
@@ -282,19 +284,21 @@ function checkForegroundNeedsRun(values, usage) {
 }
 
 // The closing sentence of `queue add` when the job is not about to run: what happens to it given who is online right now.
-function queuedRunnerLine(ctx) {
+function queuedRunnerLine(ctx, jobId) {
   const { runners, error } = liveRunnersReport(ctx.env, ctx.killImpl);
   if (error !== null) return "Start the batch: nightqueue queue run";
   const workers = queueWorkers(runners);
-  if (workers.length === 0) return `${noRunnerWait()}.`;
-  return `${runnersOnline(workers.length)} - it will be picked up.`;
+  const claimers = claimingRunners(workers, jobId);
+  if (workers.length > 0 && claimers.length === 0) return `${onceOnlyLine(workers)}.`;
+  if (claimers.length === 0) return `${noRunnerWait()}.`;
+  return `${runnersOnline(claimers.length)} - it will be picked up.`;
 }
 
 // The line `queue add` answers with: the old confirmation when the job is about to run, the backlog nudge otherwise.
 async function addedLine(job, willRun, ctx) {
   if (willRun) return `queued ${jobRef(job.id)} for project \`${job.project}\` (priority ${job.priority}, timeout ${job.timeoutS}s)`;
   const counts = await openStore(ctx.env).jobs.countsByStatus();
-  return `queued ${jobRef(job.id)} for \`${job.project}\` (${counts.pending} pending). ${queuedRunnerLine(ctx)}`;
+  return `queued ${jobRef(job.id)} for \`${job.project}\` (${counts.pending} pending). ${queuedRunnerLine(ctx, job.id)}`;
 }
 
 // The knobs of a `queue add` that reach the job: priority, attempts, timeout and the operator's tier.
@@ -1367,6 +1371,12 @@ function reportRunDir(discarded, ctx) {
   ctx.out(`run directory kept (${discarded.reason}): ${discarded.dir ?? "no safe path"}`);
 }
 
+// The line `queue retry` answers with: the job is pending again, plus what happens to it when no runner is started for it.
+function retriedLine(job, values, ctx) {
+  const line = `${jobRef(job.id)} is pending again${values.fresh === true ? ", starting from phase 0" : ""}`;
+  return values.run === true ? line : `${line}. ${queuedRunnerLine(ctx, job.id)}`;
+}
+
 // Runs `queue retry`, which sends a gated, failed or cancelled job back to the queue; a gated one only moves with a note, unless a preflight block gated it.
 async function runRetry(argv, ctx) {
   const { values, positionals } = parseCommand(argv, {
@@ -1385,7 +1395,7 @@ async function runRetry(argv, ctx) {
     env: ctx.env,
   });
   if (values.json) ctx.out(JSON.stringify({ job }));
-  else ctx.out(`${jobRef(job.id)} is pending again${values.fresh === true ? ", starting from phase 0" : ""}`);
+  else ctx.out(retriedLine(job, values, ctx));
   reportRunDir(runDir, ctx);
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }

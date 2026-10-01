@@ -110,6 +110,16 @@ test("queue add takes the registered NAME and reports the job it queued", (t) =>
   assert.equal(withTwoRunners.status, 0, withTwoRunners.stderr);
   assert.match(withTwoRunners.stdout, /2 runners online - it will be picked up\./);
 
+  const onceEnv = makeCliHome(t, "cli-add-once");
+  writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "once", jobId: 41, logPath: "/tmp/c.log" }, onceEnv);
+  const withOnceOnly = runCli(onceEnv, ["queue", "add", "alpha", "fix the worker"], { cwd: outside });
+  assert.equal(withOnceOnly.status, 0, withOnceOnly.stderr);
+  assert.match(withOnceOnly.stdout, /1 runner online in once mode for J-41 - it will not pick this job; start a drain with queue_run \(no job_id\)\./);
+
+  writeRunnerRecord({ pid: process.ppid, startedAt: new Date().toISOString(), mode: "drain", logPath: "/tmp/d.log" }, onceEnv);
+  const withDrainToo = runCli(onceEnv, ["queue", "add", "alpha", "fix the worker"], { cwd: outside });
+  assert.match(withDrainToo.stdout, /1 runner online - it will be picked up\./);
+
   const byPath = runCli(env, ["queue", "add", "/tmp/alpha", "fix the worker"], { cwd: outside });
   assert.equal(byPath.status, 1);
   assert.match(byPath.stderr, /no project registered for .*; run `nightqueue init` here, or pass the project NAME/);
@@ -770,7 +780,7 @@ test("queue retry answers the gate, sends the job back to the queue and keeps wh
 
   const retried = runCli(env, ["queue", "retry", "1", "--note", "rename the column"]);
   assert.equal(retried.status, 0, retried.stderr);
-  assert.match(retried.stdout, /J-1 is pending again$/m);
+  assert.match(retried.stdout, /J-1 is pending again\. 0 runners online - pending jobs will wait until `nightqueue queue run` starts one\./);
 
   const row = getJob(1, env);
   assert.equal(row.status, "pending");
@@ -778,6 +788,27 @@ test("queue retry answers the gate, sends the job back to the queue and keeps wh
   assert.equal(row.slug, gated.slug);
   assert.equal(row.finished_at, null);
   assert.equal(JSON.parse(row.result).retriedFrom, "gate");
+});
+
+test("queue retry says who will pick the job up: a drain, a once runner of another job, and a once runner bound to it", (t) => {
+  const env = makeCliHome(t, "cli-retry-hint");
+  assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker"]).status, 0);
+  const retryAfterCancel = () => {
+    assert.equal(runCli(env, ["queue", "cancel", "1"]).status, 0);
+    const retried = runCli(env, ["queue", "retry", "1"]);
+    assert.equal(retried.status, 0, retried.stderr);
+    return retried.stdout;
+  };
+  const startedAt = new Date().toISOString();
+
+  writeRunnerRecord({ pid: process.pid, startedAt, mode: "drain", logPath: "/tmp/r.log" }, env);
+  assert.match(retryAfterCancel(), /J-1 is pending again\. 1 runner online - it will be picked up\./);
+
+  writeRunnerRecord({ pid: process.pid, startedAt, mode: "once", jobId: 41, logPath: "/tmp/r.log" }, env);
+  assert.match(retryAfterCancel(), /1 runner online in once mode for J-41 - it will not pick this job; start a drain with queue_run \(no job_id\)\./);
+
+  writeRunnerRecord({ pid: process.pid, startedAt, mode: "once", jobId: 1, logPath: "/tmp/r.log" }, env);
+  assert.match(retryAfterCancel(), /J-1 is pending again\. 1 runner online - it will be picked up\./);
 });
 
 test("queue retry --fresh starts from phase 0 and drops the run directory of the previous attempt", (t) => {

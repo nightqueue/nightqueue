@@ -25,6 +25,31 @@ export function runnersOnline(count) {
   return `${count} runner${count === 1 ? "" : "s"} online`;
 }
 
+// The runners that can claim a job: any claiming mode but once, and a once runner only for its own job.
+export function claimingRunners(runners, jobId) {
+  return runners.filter((runner) => runner.mode !== "once" || String(runner.jobId) === String(jobId));
+}
+
+// The refs of the jobs the once runners are bound to, as `J-108, J-112`.
+function onceJobRefs(runners) {
+  return runners.map((runner) => `J-${runner.jobId}`).join(", ");
+}
+
+// The closing sentence when only once runners of other jobs are live: they never claim this job, so a drain is needed.
+export function onceOnlyLine(runners) {
+  const pronoun = runners.length === 1 ? "it" : "they";
+  return `${runnersOnline(runners.length)} in once mode for ${onceJobRefs(runners)} - ${pronoun} will not pick this job; start a drain with queue_run (no job_id)`;
+}
+
+// The live-runner count of queue_status: split by mode when a once runner is live, the plain count otherwise.
+export function runnersOnlineSplit(runners) {
+  const once = runners.filter((runner) => runner.mode === "once");
+  if (once.length === 0) return runnersOnline(runners.length);
+  const others = runners.length - once.length;
+  const parts = [...(others > 0 ? [`${others} drain`] : []), `${once.length} once (${onceJobRefs(once)})`];
+  return `${runnersOnline(runners.length)}: ${parts.join(", ")}`;
+}
+
 // The sentence every hint closes with when no runner is live: pending jobs wait for a drain.
 export function noRunnerWait() {
   return `${runnersOnline(0)} - pending jobs will wait until \`nightqueue queue run\` starts one`;

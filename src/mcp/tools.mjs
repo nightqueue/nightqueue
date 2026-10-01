@@ -45,7 +45,7 @@ import {
 } from "../memory/roadmap.mjs";
 import { OPERATOR_AUTHOR, TIER_BY_TYPE, jobAuthor } from "../memory/roadmap-workflow.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
-import { noRunnerWait, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline, staleRuntimeHint, windowWaitingLine } from "../queue/hints.mjs";
+import { claimingRunners, noRunnerWait, onceOnlyLine, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline, runnersOnlineSplit, staleRuntimeHint, windowWaitingLine } from "../queue/hints.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { blockerLines } from "../queue/claim.mjs";
 import { lastMaintenance } from "../queue/maintenance.mjs";
@@ -485,10 +485,12 @@ function wantsRoadmapItem(args) {
 
 // The closing sentence of the `queue_add` hint: what happens to the job given who is online right now - and, when the
 // live runner is waiting out a rate limit, that wait instead of a promise it will be picked up before the reset.
-function queuedRunnerLine(env) {
+function queuedRunnerLine(env, jobId) {
   const report = liveRunnersReport(env);
   if (report.error !== null) return "Start the batch with queue_run when you are ready.";
-  const runners = queueWorkers(report.runners);
+  const workers = queueWorkers(report.runners);
+  const runners = claimingRunners(workers, jobId);
+  if (workers.length > 0 && runners.length === 0) return `${onceOnlyLine(workers)}.`;
   if (runners.length === 0) return `${noRunnerWait()}.`;
   const paused = pausedRunnerLine(runners);
   if (paused) return `${runnersOnline(runners.length)} - nothing to start: ${paused}; it claims again by itself when the limit resets.`;
@@ -511,7 +513,7 @@ async function queuedAnswer({ job, registered = null, roadmapItem = null, note =
     timeoutS: job.timeoutS,
     ...(roadmapItem === null ? {} : { roadmapItemId: roadmapItem.id, roadmap_ref: itemRef(roadmapItem) }),
     ...(job.tier ? { tier: job.tier } : {}),
-    hint: `${done}queued ${jobRef(job.id)} for \`${job.project}\` (${pending} pending).${note} ${queuedRunnerLine(env)}${stale ? ` ${stale}` : ""}`,
+    hint: `${done}queued ${jobRef(job.id)} for \`${job.project}\` (${pending} pending).${note} ${queuedRunnerLine(env, job.id)}${stale ? ` ${stale}` : ""}`,
   };
 }
 
@@ -678,9 +680,9 @@ function queueHint({ activeJobs, counts, runners: registered, jobs = [] }) {
   const paused = pausedRunnerLine(runners);
   if (paused) {
     const backlog = counts.pending === 0 ? "nothing is pending" : `${pendingJobs(counts.pending)} waiting`;
-    return `${runnersOnline(runners.length)} - ${backlog} — ${paused}.`;
+    return `${runnersOnlineSplit(runners)} - ${backlog} — ${paused}.`;
   }
-  if (runners.length > 0) return `${runnersOnline(runners.length)} - ${counts.pending} pending after this one`;
+  if (runners.length > 0) return `${runnersOnlineSplit(runners)} - ${counts.pending} pending after this one`;
   if (activeJobs > 0) {
     return `${runnersOnline(0)} - a job is running under a one-shot runner, nothing will pick up the pending jobs after it - start a drain with \`nightqueue queue run\``;
   }
@@ -1230,7 +1232,8 @@ function toolDefinitions(env, state) {
       handler: async (args) => {
         const { job, runDir } = await applyRetry({ id: parseJobRef(args.job_id), note: args.note, fresh: args.fresh === true, env });
         const started = args.run === true ? await startQueueRunner({ jobId: job.id, env }) : null;
-        return { ok: true, job, runDir, ...(started ? runnerAnswer(started, env, await startAdvisoryLines({ env })) : { runner: null }) };
+        const answer = started ? runnerAnswer(started, env, await startAdvisoryLines({ env })) : { runner: null, hint: queuedRunnerLine(env, job.id) };
+        return { ok: true, job, runDir, ...answer };
       },
     },
     {
