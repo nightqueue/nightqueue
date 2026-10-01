@@ -1,13 +1,16 @@
 import { UserError } from "../config/errors.mjs";
 import { sameBranch } from "./branch-name.mjs";
 import { defaultCloseDeps } from "./close-deps.mjs";
-import { closedLine, parseCloseChecklist } from "./close-view.mjs";
+import { closedLine, parseCloseChecklist, postCloseLine } from "./close-view.mjs";
 import { resolveConflictedRebase } from "./merger.mjs";
 import { releaseJobWorktree } from "./worktree.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
 import { jobRef } from "../memory/refs.mjs";
+import { parseOriginColumn } from "../integrations/origin.mjs";
+import { logStep, originStep } from "../integrations/post-close.mjs";
 
 export const CLOSE_LEASE_SLACK_S = 60;
+export const POST_CLOSE_TIMEOUT_S = 60;
 export const PR_CLOSED_NOTE = "pull request closed without merge";
 const STEP_STATUSES = new Set(["done", "skipped", "failed"]);
 const ABORTED = Symbol("aborted");
@@ -768,8 +771,28 @@ export const CLOSE_STEPS = [
   { name: "conflict", run: conflictStep },
   { name: "merge", run: mergeStep },
   { name: "settle", run: settleStep },
+  { name: "origin", run: originStep, required: false },
+  { name: "log", run: logStep, required: false },
 ];
-const CLOSE_STEP_SET = new Set(CLOSE_STEPS.map((step) => step.name));
+
+// Tells whether a step runs after the job is closed and can never stop or reopen the close.
+function isPostCloseStep(step) {
+  return step?.required === false;
+}
+
+const CLOSE_STEP_SET = new Set(CLOSE_STEPS.filter((step) => !isPostCloseStep(step)).map((step) => step.name));
+const POST_CLOSE_NAMES = CLOSE_STEPS.filter(isPostCloseStep).map((step) => step.name);
+
+// The post-close steps a `--steps` re-run names, deduplicated and in close order; any other name is refused with the valid ones.
+export function postCloseStepsNamed(names) {
+  const list = Array.isArray(names) ? names : [];
+  const unknown = list.find((name) => !POST_CLOSE_NAMES.includes(name));
+  if (!list.length || unknown !== undefined) {
+    const named = unknown === undefined ? "no step" : `\`${String(unknown)}\``;
+    throw new UserError(`${named} is not a post-close step; valid steps: ${POST_CLOSE_NAMES.join(", ")}`);
+  }
+  return CLOSE_STEPS.filter((step) => list.includes(step.name));
+}
 
 export { conflictStep, mergeStep, preflightStep, settleStep };
 
@@ -847,8 +870,8 @@ function buildContext(run, stepName) {
 }
 
 // Tells whether a step answered the step contract.
-function isStepResult(result) {
-  return Boolean(result) && typeof result === "object" && STEP_STATUSES.has(result.status);
+function isStepResult(result, statuses = STEP_STATUSES) {
+  return Boolean(result) && typeof result === "object" && statuses.has(result.status);
 }
 
 // The failure of a result that reopens something other than a close step, keeping its data; null when its reopen is valid.
@@ -863,7 +886,7 @@ function reopenProblem(stepName, result) {
 }
 
 // Runs one step raced against the deadline; a throw, an invalid answer or the deadline becomes a failed result, never an exception.
-async function runStepRaced(step, { ctx, deps, deadline }) {
+async function runStepRaced(step, { ctx, deps, deadline, statuses = STEP_STATUSES }) {
   if (deadline.state.reason) return abortedResult(deadline.state.reason);
   let onAbort = null;
   const aborted = new Promise((resolve) => {
@@ -873,7 +896,7 @@ async function runStepRaced(step, { ctx, deps, deadline }) {
   try {
     const result = await Promise.race([Promise.resolve().then(() => step.run({ ctx, deps })), aborted]);
     if (result === ABORTED) return abortedResult(deadline.state.reason);
-    if (!isStepResult(result)) return { status: "failed", reason: "step-crashed", note: `the ${step.name} step answered an invalid result` };
+    if (!isStepResult(result, statuses)) return { status: "failed", reason: "step-crashed", note: `the ${step.name} step answered an invalid result` };
     return reopenProblem(step.name, result) ?? result;
   } catch (err) {
     if (deadline.state.reason) return abortedResult(deadline.state.reason);
@@ -1038,17 +1061,129 @@ async function walkSteps(run, steps) {
   return await stopClose(run, { step: "settle", reason: "not-settled" });
 }
 
-// Runs one attempt of a close over its steps, resuming from the stored checklist; a step failure is an outcome, never an exception.
+// The project facts the post-close steps read: its org and its integrations, null when it has none or they cannot be read.
+async function postCloseFacts(store, job) {
+  try {
+    const [project, integrations] = await Promise.all([store.projects.byId(job.project_id), store.projects.integrations(job.project_id)]);
+    return integrations && Object.keys(integrations).length ? { orgId: project?.org_id ?? null, integrations } : null;
+  } catch {
+    return null;
+  }
+}
+
+// The origin of a job, from a parsed view or the raw column.
+function originOf(job) {
+  const origin = job?.origin;
+  return origin && typeof origin === "object" ? origin : parseOriginColumn(origin);
+}
+
+// The context a post-close step reads: the close's own, plus the job's origin, the project's integrations and the merge.
+function postCloseContext(run, stepName) {
+  const { job, checklist, facts } = run;
+  return {
+    ...buildContext(run, stepName),
+    progress: (note) => run.onStep?.({ name: stepName, status: "running", note, earlier: false }),
+    env: run.env,
+    jobRef: jobRef(job.id),
+    origin: originOf(job),
+    integrations: facts.integrations,
+    orgId: facts.orgId,
+    title: checklist.data.title ?? null,
+    mergeSha: checklist.data.mergeSha ?? null,
+    mergedAt: checklist.data.mergedAt ?? null,
+  };
+}
+
+const POST_RESULT_STATUSES = new Set(["done", "skipped", "warning", "failed"]);
+
+// A post-close step result as recorded: `done`, `skipped` or `warning`; a failure, a throw or the budget becomes a warning.
+function postCloseResult(name, result) {
+  if (result.status !== "failed") return { status: result.status, note: String(result.note ?? ""), data: result.data, notice: result.notice === true };
+  if (result.reason === "timeout") return { status: "warning", note: `passed the post-close budget of ${POST_CLOSE_TIMEOUT_S}s` };
+  if (result.reason === "interrupted") return { status: "warning", note: "interrupted" };
+  if (result.reason === "step-crashed") return { status: "warning", note: `the ${name} step failed` };
+  return { status: "warning", note: String(result.note ?? result.reason ?? "failed"), data: result.data };
+}
+
+// The notice line a post-close result appends: a warning, a skip worth telling, or a success after one of those.
+function postNoticeLine(name, result, previous) {
+  const noticed = result.status === "warning" || (result.status === "skipped" && result.notice) || (result.status === "done" && previous?.noticed === true);
+  return noticed ? postCloseLine(name, result) : null;
+}
+
+// Runs one post-close step and records it with its notice line; answers false when the post-close lease was lost.
+async function runPostStep(run, step) {
+  const previous = run.checklist.steps[step.name];
+  const ctx = postCloseContext(run, step.name);
+  const result = postCloseResult(step.name, await runStepRaced(step, { ctx, deps: run.deps, deadline: run.deadline, statuses: POST_RESULT_STATUSES }));
+  if (result.data && typeof result.data === "object") Object.assign(run.checklist.data, result.data);
+  const noticeLine = postNoticeLine(step.name, result, previous);
+  const noticed = noticeLine !== null && result.status !== "done";
+  run.checklist.steps[step.name] = { status: result.status, note: result.note, at: new Date(run.now()).toISOString(), ...(noticed ? { noticed: true } : {}) };
+  run.onStep?.({ name: step.name, status: result.status, note: result.note, earlier: false });
+  run.results.push({ name: step.name, status: result.status, note: result.note });
+  return await recordPostStep(run, step.name, noticeLine);
+}
+
+// Writes the checklist after a post-close step; a failed write is reported as a line, never as a change of the closed job.
+async function recordPostStep(run, name, noticeLine) {
+  try {
+    if (await run.store.jobs.recordPostCloseStep(run.job.id, { worker: run.worker, close: run.checklist, noticeLine })) return true;
+    run.onStep?.({ name, status: "warning", note: "post-close lease lost; the remaining steps were not run", earlier: false });
+  } catch (err) {
+    run.onStep?.({ name, status: "warning", note: `the post-close checklist could not be written: ${err?.message ?? String(err)}`, earlier: false });
+  }
+  return false;
+}
+
+// Releases the post-close lease quietly: a lease left behind expires on its own.
+async function releasePostLease(run) {
+  try {
+    await run.store.jobs.releasePostClose(run.job.id, { worker: run.worker });
+  } catch {
+    return;
+  }
+}
+
+// Runs the post-close steps of a closed job under their own lease and budget; nothing here ever changes the job's status.
+async function runPostClose(base, steps, signal) {
+  const facts = await postCloseFacts(base.store, base.job);
+  if (!facts) return { status: "nothing", note: "the project has no integrations", steps: [] };
+  const job = await base.store.jobs.acquirePostClose(base.job.id, { worker: base.worker, leaseS: POST_CLOSE_TIMEOUT_S + CLOSE_LEASE_SLACK_S });
+  if (!job) {
+    const note = "post-close steps skipped: held by another process";
+    base.onStep?.({ name: "post-close", status: "skipped", note, earlier: false });
+    return { status: "refused", note, steps: [] };
+  }
+  const deadline = armDeadline({ timeoutS: POST_CLOSE_TIMEOUT_S, signal, now: base.now });
+  const run = { ...base, job, facts, deadline, checklist: startingChecklist(job), results: [] };
+  try {
+    for (const step of steps) if (!(await runPostStep(run, step))) break;
+    return { status: "ran", note: null, steps: run.results };
+  } finally {
+    deadline.disarm();
+    await releasePostLease(run);
+  }
+}
+
+// Runs one attempt of a close over its steps, resuming from the stored checklist, then its post-close steps once the job is closed; a step failure is an outcome, never an exception.
 export async function runClosePipeline({ store, job, worker, env = process.env, deps = null, timeoutS, signal = null, now = Date.now, onStep = null, checkout, force = false, steps = CLOSE_STEPS }) {
   if (!job) throw new UserError("runClosePipeline needs the job it closes");
+  const pre = steps.filter((step) => !isPostCloseStep(step));
+  const post = steps.filter(isPostCloseStep);
+  const base = { store, job, worker, env, deps: deps ?? defaultCloseDeps(env), now, onStep, force, checkout: checkout ?? resolveCheckout(job, env) };
+  if (!pre.length && post.length) return await runPostClose(base, post, signal);
   const deadline = armDeadline({ timeoutS: requireTimeoutS(timeoutS), signal, now });
-  const checklist = startingChecklist(job);
-  const run = { store, job, worker, env, deps: deps ?? defaultCloseDeps(env), now, onStep, checklist, deadline, force, checkout: checkout ?? resolveCheckout(job, env) };
+  const run = { ...base, checklist: startingChecklist(job), deadline };
+  let outcome;
   try {
-    return await walkSteps(run, steps);
+    outcome = await walkSteps(run, pre);
   } finally {
     deadline.disarm();
   }
+  if (outcome.status !== "closed" || !post.length) return outcome;
+  const postClose = await runPostClose(base, post, signal);
+  return postClose.status === "nothing" ? outcome : { ...outcome, postClose };
 }
 
 // The settle step's write: closes the job in one store write and only then releases its worktree; a refused settle touches nothing on disk.

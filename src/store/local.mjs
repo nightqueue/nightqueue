@@ -148,6 +148,9 @@ function jobsMethods(env, db) {
     settleClose: async (id, spec) => jobs.settleClose(id, spec, env),
     cancelOnClosedPr: async (id, spec) => jobs.cancelOnClosedPr(id, spec, env),
     noteCloseWorktree: async (id, spec) => jobs.noteCloseWorktree(id, spec, env),
+    acquirePostClose: async (id, spec) => jobs.acquirePostClose(id, spec, env),
+    recordPostCloseStep: async (id, spec) => jobs.recordPostCloseStep(id, spec, env),
+    releasePostClose: async (id, spec) => jobs.releasePostClose(id, spec, env),
     listCloses: async () => jobs.listCloses(env, db()),
   };
 }

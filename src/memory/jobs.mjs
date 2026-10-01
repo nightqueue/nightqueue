@@ -1047,6 +1047,45 @@ export function cancelOnClosedPr(id, { worker, close, note } = {}, env = process
   return row ? jobView(withProjectFacts(openDb(env), row), { full: true }) : null;
 }
 
+const POST_CLOSE_WITNESS_COLUMNS = ["close", "close_worker", "close_lease_until", "notice_md"];
+
+// Takes the post-close lease of a closed job in one compare-and-swap, held in `close_worker` alone since a closed row never carries a `close_status`; null means another live process holds it.
+export function acquirePostClose(id, { worker, leaseS } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs SET close_worker = ?, close_lease_until = ${CLOSE_LEASE_EXPRESSION}
+      WHERE id = ? AND status = 'closed' AND close_status IS NULL
+        AND (close_worker IS NULL OR close_lease_until IS NULL OR datetime(close_lease_until) < datetime('now'))
+      RETURNING *`,
+  );
+  const values = [requireText("worker", worker), requireLeaseSeconds(leaseS), requireId(id)];
+  return withProjectFacts(openDb(env), withWriteRetry(() => statement.get(...values)) ?? null);
+}
+
+// Records the checklist after a post-close step and appends its notice line when it has one, under the post-close lease; false means the lease is not this worker's any more.
+export function recordPostCloseStep(id, { worker, close, noticeLine = null } = {}, env = process.env) {
+  const statement = openDb(env).prepare(
+    `UPDATE jobs
+        SET close = ?,
+            notice_md = CASE
+              WHEN ? IS NULL THEN notice_md
+              WHEN notice_md IS NULL OR trim(notice_md) = '' THEN ?
+              ELSE rtrim(notice_md, ' ' || char(10)) || char(10) || char(10) || ? END
+      WHERE id = ? AND status = 'closed' AND close_worker = ?
+      RETURNING ${POST_CLOSE_WITNESS_COLUMNS.join(", ")}`,
+  );
+  const owner = requireText("worker", worker);
+  const line = noticeLine === null || noticeLine === undefined ? null : requireText("noticeLine", noticeLine);
+  const values = [requireCloseText(close), line, line, line, requireId(id), owner];
+  return writeCloseDurably({ id, statement, values, witness: closeWitness(POST_CLOSE_WITNESS_COLUMNS, owner), env }) !== null;
+}
+
+// Releases the post-close lease of a closed job; false means it was not this worker's.
+export function releasePostClose(id, { worker } = {}, env = process.env) {
+  const statement = openDb(env).prepare("UPDATE jobs SET close_worker = NULL, close_lease_until = NULL WHERE id = ? AND status = 'closed' AND close_worker = ?");
+  const values = [requireId(id), requireText("worker", worker)];
+  return withWriteRetry(() => statement.run(...values)).changes === 1;
+}
+
 // Records where the settled close left the job's worktree; best effort, a failure never costs the close that already happened.
 export function noteCloseWorktree(id, { worktree } = {}, env = process.env) {
   try {

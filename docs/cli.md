@@ -330,6 +330,7 @@ nightqueue queue close 42 --foreground                # run the four steps in th
 nightqueue queue close 42 --foreground --json         # JSON on stdout, with the decisions the close accepted
 nightqueue queue close --merged                       # close every done job gh confirms merged, accepting each one's proposals
 nightqueue queue close 42 --force                     # skip the pull request checks and the rebase suite, nothing else
+nightqueue queue close 42 --steps origin,log          # re-run only the post-close steps of a closed job, in this process
 nightqueue queue cancel 42 --reason "abandoned"       # cancel a done or failed job and release its worktree
 
 nightqueue queue run --watch --from 22:00 --until 04:00   # watch only inside that window, local wall clock, then exit
@@ -429,7 +430,11 @@ pull request checks and the rebase suite and nothing else: status and attributio
 the merger never runs under `--force`. Without it, a small textual conflict may be resolved by
 the bounded merger agent before the suite runs. A second close of a closed
 job answers ``job `<id>` is already closed``. `queue.closeTimeoutS` (default `1800`, range
-`60..3600`) bounds the whole close, the merger included. The MCP tool `queue_close` (`job_id`, `force?`) starts the
+`60..3600`) bounds the whole close, the merger included. For a project with integrations, the
+post-close steps origin and log run after settle on the closed job and never stop it: a failure
+is an `After close: <step> warning - <note>` line in the notice; `queue close <id> --steps
+origin,log` re-runs only those steps (each skips what it already did) and exits `1` on a
+warning. The MCP tool `queue_close` (`job_id`, `force?`) starts the
 same detached close. See [Queue](queue.md#closing-a-job) for the steps, the lease and what a
 close never does.
 

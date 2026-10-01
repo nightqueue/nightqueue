@@ -31,6 +31,7 @@ nightqueue queue cancel 7 --reason "not needed"                # cancel a pendin
 nightqueue queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue (a preflight gate needs no --note)
 nightqueue queue repair 7 [--json]                             # re-classify a gated or failed job from its own log
 nightqueue queue close 7 [--force] [--foreground] [--json]      # merge a done job's pull request and close the job, detached
+nightqueue queue close 7 --steps origin,log [--json]             # re-run only the post-close steps of a closed job
 nightqueue queue close --merged [--json]                         # close every done job whose pull request is already merged
 nightqueue queue pause | nightqueue queue resume                    # stop claiming new jobs, or claim again
 ```
@@ -971,6 +972,26 @@ agent, never a second job, never queue work:
 
 The job's status is untouched until settle: a close that stops leaves it `done`, except for a
 pull request closed without merge, which cancels it.
+
+**Post-close steps: origin and log.** After settle, two more steps run on the job that is
+now `closed`: **origin** tells the service the job came from (its recorded `origin`) that the
+pull request merged, through the provider of that kind, and **log** posts the close to every
+provider whose `<kind>.log.connection` the project set and whose `<kind>.log.events` (default
+`closed`) includes `closed`. They run only for a project with integrations (`nightqueue project
+integrations`): a project without them closes exactly as before, with no extra step, line or
+write. They never stop, fail or reopen a close and never change the job's status: each records
+`done`, `skipped` or `warning` (a failure, an exception or the budget is a `warning`) under a
+post-close lease held in `close_worker` (a closed row never carries a `close_status`), with a
+budget of its own of 60 s. A warning, and a skip worth telling (an origin with no connection in
+the org), appends `After close: <step> <status> - <note>` to the notice; a later success of the
+same step appends its own line. Both steps are idempotent: `data.originNotified` and
+`data.logged` (one flag per provider) make a re-run answer `already notified` / `already
+logged` without a request. `nightqueue queue close <id> --steps origin,log` re-runs only the
+named post-close steps of a closed job in this process (a pre-close step name, `--merged` or
+`--force` is refused, and so is a job that is not closed or whose post-close steps another
+process is running); it prints each step and `J-<id> post-close: origin done, log skipped`,
+and exits `1` when a step ended `warning`. No note, notice line or log carries a secret: the
+providers' HTTP never returns an error message, a URL or a header.
 
 **The close merges only a head it or CI verified (D-54).** Every step reads the pull request
 again and works on the head GitHub reports now; the recorded `data.headSha` is the head the

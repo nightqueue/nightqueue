@@ -8,7 +8,7 @@ import { isQueueIdle } from "./hints.mjs";
 import { prStateKey } from "./pr-state.mjs";
 import { liveRunnersReport } from "./registry.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./runner.mjs";
-import { CLOSED_PREFIX, closeLines, closeState, closesSummary } from "./close-view.mjs";
+import { CLOSED_PREFIX, POST_CLOSE_PREFIX, closeLines, closeState, closesSummary } from "./close-view.mjs";
 import { extractNoticeFromStream } from "./stream.mjs";
 import { KEPT_PREFIX } from "./worktree.mjs";
 
@@ -163,7 +163,7 @@ function runNoticeOf(job) {
 }
 
 // The lines the runtime itself appends to a row's notice after a run finishes, never text a run wrote.
-const RUNTIME_APPENDED_LINE_PREFIXES = [KEPT_PREFIX, ABANDONED_COMMAND_PREFIX, DISABLED_BACKGROUND_ESCAPE_LINE, CLOSED_PREFIX, NOTHING_TO_CLOSE_LINE];
+const RUNTIME_APPENDED_LINE_PREFIXES = [KEPT_PREFIX, ABANDONED_COMMAND_PREFIX, DISABLED_BACKGROUND_ESCAPE_LINE, CLOSED_PREFIX, POST_CLOSE_PREFIX, NOTHING_TO_CLOSE_LINE];
 
 // Whether a trailing paragraph is one the runtime itself appends to a row's notice.
 function isRuntimeAppendedLine(paragraph) {

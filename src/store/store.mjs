@@ -68,6 +68,9 @@
  * @property {(id: number, spec: object) => Promise<object|null>} settleClose closes a done job whose checklist records the merge, releases the lease and appends the settled line to its notice, witnessed on disk
  * @property {(id: number, spec: object) => Promise<object|null>} cancelOnClosedPr cancels a done job whose pull request a close step read closed without merge, keeping the checklist and releasing the lease, witnessed on disk
  * @property {(id: number, spec: object) => Promise<boolean>} noteCloseWorktree records where the settled close left the job's worktree, best effort
+ * @property {(id: number, spec: object) => Promise<object|null>} acquirePostClose takes the post-close lease of a closed job (`close_worker` + `close_lease_until`, `close_status` stays NULL) in one compare-and-swap; null means another live process holds it
+ * @property {(id: number, spec: object) => Promise<boolean>} recordPostCloseStep writes the checklist after a post-close step and appends its `After close:` notice line when given, witnessed on disk; never changes the job's status
+ * @property {(id: number, spec: object) => Promise<boolean>} releasePostClose releases the post-close lease of a closed job
  * @property {() => Promise<object[]>} listCloses the closes in flight, failed or stalled, with the liveness of each lease
  */
 
@@ -284,6 +287,9 @@ export const STORE_CONTRACT = Object.freeze({
     "settleClose",
     "cancelOnClosedPr",
     "noteCloseWorktree",
+    "acquirePostClose",
+    "recordPostCloseStep",
+    "releasePostClose",
     "listCloses",
   ],
   runs: ["logPipelineRun", "logPipelineRunOnce", "updateRunTelemetry", "latestRunOutcome"],

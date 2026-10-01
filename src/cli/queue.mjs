@@ -54,7 +54,7 @@ import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
 import { stopReport, stopRunners } from "../queue/stop.mjs";
-import { runCloseHere, startCloseDetached } from "../queue/close-start.mjs";
+import { runCloseHere, runPostCloseSteps, startCloseDetached } from "../queue/close-start.mjs";
 import { CLOSE_STEP_ICONS, CLOSING_LABEL, closeChecklistLines, closeLastCell, closeStoppedLine, queueWorkers, statusLabel } from "../queue/close-view.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
@@ -71,7 +71,7 @@ export const USAGE = {
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
-  close: "nightqueue queue close <id> [--force] [--foreground] [--json], or nightqueue queue close --merged [--json]",
+  close: "nightqueue queue close <id> [--force] [--foreground] [--json], nightqueue queue close <id> --steps origin,log [--json], or nightqueue queue close --merged [--json]",
   retry: "nightqueue queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
   repair: "nightqueue queue repair [<id>] [--from-disk] [--json]",
   pause: "nightqueue queue pause",
@@ -1183,7 +1183,7 @@ async function runCancel(argv, ctx) {
   if (worktree) ctx.out(worktreeLine(worktree));
 }
 
-const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" }, force: { type: "boolean" }, foreground: { type: "boolean" } };
+const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" }, force: { type: "boolean" }, foreground: { type: "boolean" }, steps: { type: "string" } };
 
 // The text line a close prints for one decision it accepted.
 function acceptedLine(entry) {
@@ -1335,12 +1335,41 @@ async function runCloseDetached(id, values, ctx) {
   return 0;
 }
 
+// The step names a `--steps` value lists, split on commas.
+function stepNames(text) {
+  return String(text ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+// The summary line of a `--steps` re-run: each step with its status, or why nothing ran.
+function postCloseSummaryLine(id, result) {
+  if (!result.steps.length) return `${jobRef(id)} post-close: nothing run - ${result.note}`;
+  return `${jobRef(id)} post-close: ${result.steps.map(({ name, status }) => `${name} ${status}`).join(", ")}`;
+}
+
+// Runs `queue close <id> --steps <a,b>`: only the named post-close steps of a closed job, in this process; 1 when any of them warned or nothing could run.
+async function runCloseSteps(positionals, values, ctx) {
+  if (values.merged === true || values.force === true) throw new UserError(`\`--steps\` cannot be combined with --merged or --force; usage: ${USAGE.close}`);
+  checkArgs(positionals, { min: 1, max: 1, usage: USAGE.close });
+  const id = parseJobRef(positionals[0]);
+  const say = values.json === true ? ctx.err : ctx.out;
+  const store = openStore(ctx.env);
+  const onStep = closeStepPrinter(say, values.json === true ? null : ctx.stdout);
+  const result = await runPostCloseSteps({ store, id, names: stepNames(values.steps), env: ctx.env, deps: ctx.closeDeps ?? null, onStep });
+  if (values.json) ctx.out(JSON.stringify({ job: jobView(await store.jobs.getJob(id), { full: true }), steps: result.steps }));
+  else ctx.out(postCloseSummaryLine(id, result));
+  return result.status !== "refused" && result.steps.every((step) => step.status !== "warning") ? 0 : 1;
+}
+
 // Runs `queue close`: the closing pipeline on one done job with a pull request, detached unless --foreground, or `--merged` for every done job the pull request state confirms merged.
 async function runClose(argv, ctx) {
   if (argv.some((arg) => arg === "--decisions" || arg.startsWith("--decisions="))) {
     throw new UserError(`\`--decisions\` no longer exists: a close accepts the decisions its job proposed; usage: ${USAGE.close}`);
   }
   const { values, positionals } = parseCommand(argv, CLOSE_OPTIONS);
+  if (values.steps !== undefined) return await runCloseSteps(positionals, values, ctx);
   if (values.merged === true) {
     checkArgs(positionals, { max: 0, usage: USAGE.close });
     return await runCloseMerged(values, ctx);
