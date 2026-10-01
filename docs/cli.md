@@ -558,6 +558,15 @@ outside its run or ran a Bash command outside its closed list - see
 project. It exits `1` when any check fails, `0` otherwise - a `warn` never fails
 the run.
 
+Each stored connection gets one `connection <name>` line: doctor runs the same test as
+`nightqueue connection test <name>`, all connections in parallel, each within 5 seconds.
+`ok` reads `<type>: ok`. A test that fails or times out is a `warn`, `<type>: failed - <detail>`
+(an HTTP status, `timeout (5s)` or `network failure`, never the secret), with the hint
+`nightqueue connection test <name>`. A connection whose type this build does not know is a
+`warn`, `unknown type <type>`. These lines are never a `fail`, because a service outage says
+nothing about this host. A home with no stored connection prints no such line and makes no
+request.
+
 Three of the checks are about the storage under the home (see [Configuration](cli.md#configuration)):
 
 - `db shm` warns when the shared-memory index of the WAL was replaced under a

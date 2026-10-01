@@ -9,6 +9,7 @@ const ORG_SLUG = /^[a-z0-9][a-z0-9_-]*$/i;
 const HTTPS_ORIGIN = /^https:\/\/[a-z0-9.-]+(?::\d+)?\/?$/i;
 const MAX_FRAMES = 30;
 const MAX_BREADCRUMBS = 20;
+const MAX_RECENT_EVENTS = 5;
 const MAX_FIELD = 300;
 
 // Reads a Sentry reference: an issue link, a short id written right after the word sentry, or (explicitly given) a bare id.
@@ -113,16 +114,28 @@ function eventLines(event) {
   ];
 }
 
-// Fetches the issue and its latest event as markdown, or answers the reason it could not.
+// The most recent events of the issue, one summary line each; only date, id and title are read.
+function recentEventLines(answer) {
+  if (!answer.ok) return ["", `Recent events not read (${answer.detail}).`];
+  const events = Array.isArray(answer.body) ? answer.body.slice(0, MAX_RECENT_EVENTS) : [];
+  return [
+    "",
+    `## Recent events (up to ${MAX_RECENT_EVENTS})`,
+    ...events.map((event) => `- ${oneLine(event?.dateCreated)} ${oneLine(event?.eventID)}: ${oneLine(event?.title || event?.message)}`),
+  ];
+}
+
+// Fetches the issue, its most recent events and its latest event in detail as markdown, or answers the reason it could not.
 async function enrichSentry(ref, { connection, http }) {
   const resolved = await issueIdOf(ref, { record: connection, http });
   if (!resolved.id) return { detail: resolved.detail };
   const issueUrl = `${apiRoot(connection)}/issues/${resolved.id}/`;
   const issue = await http(issueUrl, { headers: authHeaders(connection) });
   if (!issue.ok) return { detail: `issue ${resolved.id} not read (${issue.detail})` };
+  const recent = await http(`${issueUrl}events/?per_page=${MAX_RECENT_EVENTS}`, { headers: authHeaders(connection) });
   const event = await http(`${issueUrl}events/latest/`, { headers: authHeaders(connection) });
   const tail = event.ok ? eventLines(event.body) : ["", `Latest event not read (${event.detail}).`];
-  return `${[...issueLines(ref, issue.body ?? {}), ...tail].join("\n")}\n`;
+  return `${[...issueLines(ref, issue.body ?? {}), ...recentEventLines(recent), ...tail].join("\n")}\n`;
 }
 
 // The status a close sets on the issue: the project's `onClosed` setting, `resolved` when unset or unknown.

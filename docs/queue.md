@@ -112,7 +112,8 @@ origin `sentry 4507`; a short id counts only written right after the word sentry
 connection (`connection add --type sentry --set org=<slug>`) covers it. With
 `project integrations <project> set sentry.onClosed=resolved` (or `resolvedInNextRelease`;
 `resolved` is the default) the runner writes `origin/sentry.md` at claim - the issue's title,
-culprit, level, status, counts and dates, then the latest event's exception, up to 30 frames
+culprit, level, status, counts and dates, then one line per recent event (up to 5: date, event
+id, title), then the latest event's exception, up to 30 frames
 (in-app first), the last 20 breadcrumbs and its tags; never its request, user, contexts,
 headers or cookies - and the close's **origin** step marks the issue with that status and leaves
 a best-effort note `Fixed by <pr url>, merged as <sha7>` (a note that fails is a warning, the

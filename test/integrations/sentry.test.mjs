@@ -60,12 +60,24 @@ function latestEvent({ extraTags = 0 } = {}) {
   };
 }
 
-// The issue routes of the fixture: the issue, its latest event, its status update and its note.
-function issueRoutes({ put = 200, note = 201, event = 200, title = "TypeError: x is undefined", extraTags = 0 } = {}) {
+// Seven recent events of the fixture issue, newest first, each carrying private user data and tags.
+function recentEvents() {
+  return Array.from({ length: 7 }, (_, at) => ({
+    eventID: `e${at}`,
+    dateCreated: `2026-09-30T1${at}:00:00Z`,
+    title: `TypeError: x is undefined #${at}`,
+    user: { email: PRIVATE_MARK },
+    tags: [{ key: "user.email", value: PRIVATE_MARK }],
+  }));
+}
+
+// The issue routes of the fixture: the issue, its recent events, its latest event, its status update and its note.
+function issueRoutes({ put = 200, note = 201, event = 200, events = 200, title = "TypeError: x is undefined", extraTags = 0 } = {}) {
   return {
     [`GET ${API}/issues/4507/`]: {
       body: { shortId: "API-12", title, culprit: "boot()", level: "error", status: "unresolved", count: "42", userCount: 3, firstSeen: "2026-09-01", lastSeen: "2026-09-30", permalink: ISSUE_URL },
     },
+    [`GET ${API}/issues/4507/events/?per_page=5`]: { status: events, body: recentEvents() },
     [`GET ${API}/issues/4507/events/latest/`]: { status: event, body: latestEvent({ extraTags }) },
     [`PUT ${API}/issues/4507/`]: { status: put },
     [`POST ${API}/issues/4507/comments/`]: { status: note },
@@ -176,14 +188,18 @@ test("connection add --type sentry takes --set org and an optional url, refuses 
   assert.deepEqual(refused, { type: "sentry", ok: false, status: 404, org: null, detail: "HTTP 404" });
 });
 
-test("enrichment reads the issue and its latest event into markdown with no private data, resolving a short id first", async () => {
+test("enrichment reads the issue, its recent events and its latest event into markdown with no private data, resolving a short id first", async () => {
   const fetch = fakeFetch(issueRoutes());
   const markdown = await sentry.origin.enrich("API-12", { connection: { ...RECORD, name: "sn" }, http: httpOf(fetch) });
   assert.deepEqual(fetch.calls.map((call) => [call.method, call.url]), [
     ["GET", `${API}/shortids/API-12/`],
     ["GET", `${API}/issues/4507/`],
+    ["GET", `${API}/issues/4507/events/?per_page=5`],
     ["GET", `${API}/issues/4507/events/latest/`],
   ]);
+  const recent = markdown.split("\n").filter((line) => / e\d: TypeError/.test(line));
+  assert.deepEqual([recent.length, recent[0], recent.at(-1)], [5, "- 2026-09-30T10:00:00Z e0: TypeError: x is undefined #0", "- 2026-09-30T14:00:00Z e4: TypeError: x is undefined #4"]);
+  assert.ok(markdown.indexOf("## Recent events (up to 5)") < markdown.indexOf("## Exception"));
   assert.ok(fetch.calls.every((call) => call.auth === `Bearer ${TOKEN}`));
   assert.match(markdown, /^# Sentry issue API-12: TypeError: x is undefined/);
   assert.match(markdown, /- events: 42, users: 3/);
@@ -199,8 +215,10 @@ test("enrichment reads the issue and its latest event into markdown with no priv
   assert.ok(!markdown.includes(PRIVATE_MARK));
   assert.ok(!markdown.includes(TOKEN));
 
-  const partial = await sentry.origin.enrich("4507", { connection: RECORD, http: httpOf(fakeFetch(issueRoutes({ event: 403 }))) });
+  const partial = await sentry.origin.enrich("4507", { connection: RECORD, http: httpOf(fakeFetch(issueRoutes({ event: 403, events: 500 }))) });
   assert.match(partial, /Latest event not read \(HTTP 403\)\./);
+  assert.match(partial, /Recent events not read \(HTTP 500\)\./);
+  assert.match(partial, /^# Sentry issue API-12/);
   const missing = await sentry.origin.enrich("NOPE-1", { connection: RECORD, http: httpOf(fakeFetch()) });
   assert.deepEqual(missing, { detail: "short id NOPE-1 not resolved (HTTP 404)" });
 });
