@@ -136,6 +136,7 @@ const JOB_COLUMNS = [
   "close",
   "close_lease_until",
   "close_worker",
+  "origin",
 ];
 
 // Everything a database written by the schema version before the merge sweep does NOT have yet.
@@ -767,7 +768,7 @@ test("a v10 database gains decisions.job_id and its index, keeping every decisio
   );
   closeDb(env);
 
-  assert.equal(DB_USER_VERSION, 20);
+  assert.equal(DB_USER_VERSION, 21);
   for (const pass of [1, 2]) {
     const db = openDb(env);
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION, `pass ${pass}`);

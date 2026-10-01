@@ -6,6 +6,7 @@ import { FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ROADMAP_FTS, ROADMAP_NUMBER_I
 import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schemaState } from "./migration/v18.mjs";
 import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
 import { isPendingV20, migrateToV20, refuseOrphans } from "./migration/v20.mjs";
+import { migrateV21Columns } from "./migration/v21.mjs";
 import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
 import { migrateSharedSlugs, sharedSlugPending } from "./shared-slug-migration.mjs";
@@ -93,6 +94,7 @@ function migrate(db) {
   db.exec(ROADMAP_FTS);
   db.exec(ROADMAP_NUMBER_INDEXES);
   db.exec(OWNER_KEY_GUARDS);
+  migrateV21Columns(db);
   ensureDefaultOrg(db);
   if (version < DB_USER_VERSION) db.exec(`PRAGMA user_version = ${DB_USER_VERSION}`);
 }

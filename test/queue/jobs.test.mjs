@@ -74,7 +74,7 @@ test("addJob refuses an empty prompt and every value outside the accepted ranges
   assert.throws(() => enqueue(env, { maxAttempts: 99 }), /invalid `max_attempts`/);
   assert.throws(() => enqueue(env, { timeoutS: 30 }), /invalid `timeout_s`/);
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "  fix the worker  " }, env);
-  assert.deepEqual({ ...job, id: undefined }, { id: undefined, projectId: ensureProject(env, "alpha"), project: "alpha", priority: 5, maxAttempts: 1, timeoutS: 14400, tier: null });
+  assert.deepEqual({ ...job, id: undefined }, { id: undefined, projectId: ensureProject(env, "alpha"), project: "alpha", priority: 5, maxAttempts: 1, timeoutS: 14400, tier: null, origin: null });
   assert.equal(getJob(job.id, env).prompt, "fix the worker");
 });
 

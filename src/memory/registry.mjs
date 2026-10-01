@@ -121,6 +121,25 @@ export function projectById(db, id) {
   return db.prepare(`${PROJECT_VIEW} WHERE p.id = ?`).get(String(id ?? "")) ?? null;
 }
 
+// The integrations of a project as an object, or null when it has none, its value is unreadable or the column is not there yet.
+export function projectIntegrations(db, id) {
+  if (!hasColumn(db, "projects", "integrations")) return null;
+  const row = db.prepare("SELECT integrations FROM projects WHERE id = ?").get(String(id ?? ""));
+  return parseIntegrations(row?.integrations);
+}
+
+// A stored integrations value as a non-empty plain object, or null.
+function parseIntegrations(text) {
+  if (typeof text !== "string" || !text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    const isObject = parsed && typeof parsed === "object" && !Array.isArray(parsed);
+    return isObject && Object.keys(parsed).length ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 // Every project, path-less ones included, in the order they were registered.
 export function listProjects(db) {
   return db.prepare(`${PROJECT_VIEW} ORDER BY p.rowid`).all();

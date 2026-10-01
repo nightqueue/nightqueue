@@ -153,7 +153,7 @@ export function orgsDdl(name) {
 );`;
 }
 
-// The `projects` table under a given name: an id, a renamable name and key, an optional checkout path and its org.
+// The `projects` table under a given name: an id, a renamable name and key, an optional checkout path and its org (`integrations` is added per open by migration/v21.mjs).
 export function projectsDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id TEXT PRIMARY KEY NOT NULL CHECK(length(id) = 26),
@@ -319,7 +319,7 @@ export function pipelineRunsDdl(name) {
 );`;
 }
 
-// The `jobs` table under a given name: the queue, every job owned by a project id, a closed job always carrying its merge.
+// The `jobs` table under a given name: the queue, every job owned by a project id, a closed job always carrying its merge (`origin` is added per open by migration/v21.mjs).
 export function jobsDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

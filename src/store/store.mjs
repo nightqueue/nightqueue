@@ -20,7 +20,7 @@
  * follows nothing, a failure of the follow never costs the job write, and `sweepOrphans` re-syncs,
  * on every claim cycle, whatever a missed event left behind (`roadmap.followDriftedJobs`).
  * @typedef {object} JobsDomain
- * @property {(spec: object) => Promise<object>} addJob the job's project by `projectId`; a `slug` binds the job to a run, refused in the same transaction while a job not yet closed is bound to it
+ * @property {(spec: object) => Promise<object>} addJob the job's project by `projectId`; a `slug` binds the job to a run, refused in the same transaction while a job not yet closed is bound to it; an `origin` `{kind, ref}` is validated, otherwise one is detected in the prompt, stored in `jobs.origin` (v21) and answered as `origin`
  * @property {(spec: object) => Promise<object|null>} claimNextJob
  * @property {(id: number, spec: object) => Promise<object|null>} claimJobById
  * @property {(id: number, spec: object) => Promise<boolean>} releaseJob
@@ -174,6 +174,7 @@
  * @property {() => Promise<object[]>} list every project, path-less ones included, with its org name
  * @property {(name: string) => Promise<object|null>} byName
  * @property {(id: string) => Promise<object|null>} byId
+ * @property {(id: string) => Promise<object|null>} integrations the project's `integrations` (schema v21 column) as an object; null when it has none or the column is not there yet
  * @property {(cwd: string) => Promise<object|null>} at the project whose checkout contains the directory
  * @property {(orgId: string) => Promise<object[]>} ofOrg
  * @property {(spec: {name: string, path: string|null, orgId: string, key?: string|null}) => Promise<object>} add the key asked for, or a free one derived from the name
@@ -341,7 +342,7 @@ export const STORE_CONTRACT = Object.freeze({
     "queueRoadmapItem",
   ],
   orgs: ["list", "byName", "byId", "add", "rename", "setKey", "suggestKey", "keyAliases", "remove"],
-  projects: ["list", "byName", "byId", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
+  projects: ["list", "byName", "byId", "integrations", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
   db: ["files", "quickCheck", "quickCheckMainAlone", "integrityCheck", "checkpointTruncate"],
   "": ["health", "connect", "close", "checkpoint", "migrateIfOutdated"],
 });
@@ -388,6 +389,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "projects.list",
   "projects.byName",
   "projects.byId",
+  "projects.integrations",
   "projects.at",
   "projects.ofOrg",
   "projects.keyAliases",

@@ -63,9 +63,11 @@ import { keyOption, registerProject } from "./project.mjs";
 import { confirm } from "./prompt.mjs";
 import { runtimeLabel } from "./runtime-versions.mjs";
 import { itemRef, jobRef, parseJobRef } from "../memory/refs.mjs";
+import { coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
+import { originLabel } from "../integrations/origin.mjs";
 
 export const USAGE = {
-  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--roadmap <ref> [--project <name|all>] [--run-dir <dir>] [<note...>]]",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--origin <kind>:<ref>] [--roadmap <ref> [--project <name|all>] [--run-dir <dir>] [<note...>]]",
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
@@ -295,14 +297,29 @@ async function addedLine(job, willRun, ctx) {
   return `queued ${jobRef(job.id)} for \`${job.project}\` (${counts.pending} pending). ${queuedRunnerLine(ctx, job.id)}`;
 }
 
-// The knobs of a `queue add` that reach the job: priority, attempts, timeout and the operator's tier.
+// The origin `--origin <kind>:<ref>` names, split on the first colon; undefined when the option is absent.
+function originOption(value) {
+  if (value === undefined) return undefined;
+  const colon = value.indexOf(":");
+  if (colon <= 0 || colon === value.length - 1) throw new UserError(`\`--origin\` expects <kind>:<ref>, got \`${value}\`; usage: ${USAGE.add}`);
+  return { kind: value.slice(0, colon), ref: value.slice(colon + 1) };
+}
+
+// The knobs of a `queue add` that reach the job: priority, attempts, timeout, the operator's tier and the origin.
 function addLimits(values) {
   return {
     priority: requireInt("--priority", values.priority),
     maxAttempts: requireInt("--max-attempts", values["max-attempts"]),
     timeoutS: requireInt("--timeout", values.timeout),
     tier: values.tier,
+    origin: originOption(values.origin),
   };
+}
+
+// The line naming where a queued job came from and the connection covering it, or null when it has no origin.
+async function originLine(job, ctx) {
+  const coverage = await jobOriginCoverage({ origin: job.origin, projectId: job.projectId, store: openStore(ctx.env), env: ctx.env });
+  return coverage ? `origin: ${coverageLabel(coverage)}` : null;
 }
 
 // Queues the job the words of the command line describe, with the project taken from them or from the current directory.
@@ -364,6 +381,8 @@ async function runAdd(argv, ctx) {
   const job = jobs[jobs.length - 1];
   for (const earlier of jobs.slice(0, -1)) ctx.out(`queued ${jobRef(earlier.id)} for \`${earlier.project}\``);
   ctx.out(await addedLine(job, values.run === true, ctx));
+  const origin = await originLine(job, ctx);
+  if (origin) ctx.out(origin);
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }
 
@@ -379,6 +398,7 @@ const ADD_OPTIONS = {
   project: { type: "string" },
   tier: { type: "string" },
   key: { type: "string" },
+  origin: { type: "string" },
 };
 
 // Tells whether a token is written as an option, the only shape the edges of `queue add` read as one.
@@ -649,11 +669,16 @@ function formatBlocked(job) {
 // The fields the detail view prints as blocks of their own instead of one key/value line.
 const DETAIL_BLOCK_KEYS = new Set(["notice_md", "run_notice", "close"]);
 
+// The text one detail field prints: the origin as `<kind> <ref>`, any other value as it is.
+function detailValue(key, value) {
+  return key === "origin" ? originLabel(value) : value;
+}
+
 // Detail block of a single job, one field per line, with the reason it stopped spelled out instead of dumped on one line.
 function formatDetail(job) {
   const fields = Object.entries(job)
     .filter(([key, value]) => !DETAIL_BLOCK_KEYS.has(key) && value !== null && value !== undefined)
-    .map(([key, value]) => `${key.padEnd(15)} ${value}`);
+    .map(([key, value]) => `${key.padEnd(15)} ${detailValue(key, value)}`);
   const at = fields.findIndex((line) => line.startsWith("status".padEnd(16)));
   const suggestion = closeSuggestion([job]);
   const extra = [

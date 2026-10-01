@@ -363,9 +363,9 @@ function seedProjectRows(db) {
   for (const [runId, seq, name] of [[1, 1, "triage"], [1, 2, "coder"], [2, 1, "triage"]]) phase.run(runId, seq, name);
 }
 
-// Every row of a table in id order, keyed by column, from a raw connection.
+// Every row of a table in id order, keyed by column, from a raw connection, without the v21 `origin` column a v17 row never had.
 function rowsOf(db, table) {
-  return db.prepare(`SELECT * FROM ${table} ORDER BY id`).all().map((row) => ({ ...row }));
+  return db.prepare(`SELECT * FROM ${table} ORDER BY id`).all().map(({ origin: _origin, ...row }) => ({ ...row }));
 }
 
 // The rows of a v18 table with their owner id swapped for the name it resolves to, the shape a v17 table had.

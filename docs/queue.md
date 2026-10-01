@@ -14,6 +14,7 @@ nightqueue queue add "fix the flaky worker"                    # same, for the p
 nightqueue queue add fix the flaky worker --run                # enqueue and start the runner on it, detached
 nightqueue queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
 nightqueue queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
+nightqueue queue add "fix it" --origin <kind>:<ref>            # name the service the job came from instead of detecting it
 nightqueue queue add --roadmap NQ-12 [--run-dir <dir>] "mind the slow disk"   # a roadmap item's job, with an operator note and/or a prior operator run
 nightqueue queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightqueue queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
@@ -76,6 +77,31 @@ the brief and adds the words as a `## Operator note` section right after it; `--
 the job to a prior operator run (a project item only), checked as for a free prompt, its
 `## PRIOR RUN (operator)` block after the note. Section order: item, note, prior run, decisions.
 The note is recorded as the job's `operator_note` and in the item's `queued` comment, with the run dir.
+
+**A job records where it came from.** Every queued job gets an `origin` (`{kind, ref}`)
+when its prompt names a service a provider of this build recognizes - the first provider,
+in registry order, whose parser matches the prompt (or the item's prompt, on the roadmap
+path) - or the one `--origin <kind>:<ref>` (`queue_add`'s `origin: {kind, ref}`, on both
+the prompt and the `roadmap_item_id` branches) names explicitly, split on the first `:`.
+An explicit origin wins over detection; one whose kind no provider knows, or whose ref
+the provider does not read as its own, is refused and nothing is queued. A prompt that
+names no service queues a job with no origin, exactly as before. The answer names the
+origin and the org connection that covers it: `queue add` prints a line of its own,
+`origin: <kind> <ref> (connection: <name|none>)`, and `queue_add` answers
+`origin: {kind, ref, connection, detail?}` plus `Origin: ...` in its hint (`none` with the
+reason in `detail`, e.g. `project has no <kind> integration`). `queue status <id>` shows an
+`origin` line and the `--json`/`queue_status` detail carries `origin` (null when none).
+
+**The runner enriches the origin at claim.** A claimed job with an origin writes one
+`origin: <kind> <ref> (connection: <name|none>)` line in its job log (the narrated log
+shows it). When the project enabled that provider (`projects.integrations` has its kind),
+the provider can read, a connection of the org covers the origin and the run has no
+`origin/<kind>.md` yet, the runner fetches what the service knows about it (20 s in all)
+into `<run_dir>/origin/<kind>.md`, mode 0600, capped at 16 KiB (cut on a character, marked
+`[truncated]`). The fetch never fails the job: a refusal, a timeout or a network failure
+is one `origin enrichment skipped: <reason>` line, with a status and never a secret, URL
+or error text. The triager reads the file through `context_for_phase` as a `## Job origin`
+section, fenced and labelled as evidence, never instructions.
 
 **`--tier` declares the risk of the job.** `queue add --tier trivial|simple|complex`
 (and the `tier` parameter of `queue_add`) records the tier on

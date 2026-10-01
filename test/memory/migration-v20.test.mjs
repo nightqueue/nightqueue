@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { dbPath, preV18BackupPath, preV19BackupPath, preV20BackupPath } from "../../src/config/paths.mjs";
-import { closeDb, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
+import { closeDb, DB_USER_VERSION, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { DATA_TABLES } from "../../src/memory/ddl.mjs";
 import { MigrationRefused } from "../../src/memory/migration/one-shot.mjs";
 import { buildLegacyHome } from "../../test-support/legacy-home.mjs";
@@ -131,7 +131,7 @@ function assertNothingWritten(env, fixture) {
 test("a v19 home migrates to v20: every row and counter kept, every reference enforced, the mirrors reindexed, a pre-v20 copy", (t) => {
   const { env, fixture } = v19Home(t, "v20-migrate");
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 20);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 
   assert.ok(readFileSync(preV20BackupPath(env)).equals(fixture), "the pre-v20 copy is not the v19 database byte for byte");
@@ -232,7 +232,7 @@ test("an expired lease of a crashed runner does not block the v20 migration", (t
     db.prepare("INSERT INTO jobs (project_id, prompt, status, worker, lease_until, started_at) VALUES (?, 'p', 'running', 'w', datetime('now', '-1 hour'), datetime('now', '-2 hours'))").run(projects.api);
   };
   const { env } = v19Home(t, "v20-expired-lease", { extra: expired });
-  assert.equal(openDb(env).prepare("PRAGMA user_version").get().user_version, 20);
+  assert.equal(openDb(env).prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.ok(existsSync(preV20BackupPath(env)));
 });
 
@@ -242,7 +242,7 @@ test("a v17 home reaches v20 in one open, keeping the pre-v18, pre-v19 and pre-v
     seed: (db) => db.prepare("INSERT INTO roadmap_items (scope, project, title, position) VALUES ('project', 'alpha', 'old item', 1)").run(),
   });
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 20);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.equal(readRaw(preV18BackupPath(env), (raw) => schemaVersionOn(raw)), 17);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
   assert.equal(readRaw(preV20BackupPath(env), (raw) => schemaVersionOn(raw)), 19);
@@ -254,7 +254,7 @@ test("a v18 home reaches v20 in one open, keeping the pre-v19 and pre-v20 copies
   const env = makeHome(t, "v20-from-v18");
   buildV18Home(env);
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 20);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
   assert.equal(readRaw(preV20BackupPath(env), (raw) => schemaVersionOn(raw)), 19);
   assert.equal(foreignKeyOf(db, "roadmap_items", "job_id"), "jobs SET NULL");
@@ -446,7 +446,7 @@ test("a v20 migration killed right after it rebuilt roadmap_items leaves v19 int
   assert.deepEqual(state.rows, before);
 
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 20);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   for (const table of REBUILT_TABLES) assert.deepEqual(rowsOf(db, table), before[table], `${table} changed a row`);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 });

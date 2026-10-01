@@ -80,6 +80,7 @@ import {
   PIPELINE_TIERS,
 } from "../memory/runs.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
+import { coverageField, coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons } from "./phase-context.mjs";
 import { phasePrompt, PROMPT_TARGETS } from "./phase-prompt.mjs";
 import { readVersion } from "../cli/version.mjs";
@@ -501,9 +502,12 @@ function queuedRunnerLine(env, jobId) {
 
 // The answer of `queue_add`: the job it recorded, and the roadmap item behind it when there is one.
 async function queuedAnswer({ job, registered = null, roadmapItem = null, note = "" }, env) {
-  const pending = (await openStore(env).jobs.countsByStatus()).pending;
+  const store = openStore(env);
+  const pending = (await store.jobs.countsByStatus()).pending;
   const done = registered ? `registered project \`${registered.name}\` (${registered.path}). ` : "";
   const stale = staleRuntimeHint(env);
+  const coverage = await jobOriginCoverage({ origin: job.origin, projectId: job.projectId, store, env });
+  const origin = coverage ? ` Origin: ${coverageLabel(coverage)}.` : "";
   return {
     ok: true,
     id: job.id,
@@ -513,7 +517,8 @@ async function queuedAnswer({ job, registered = null, roadmapItem = null, note =
     timeoutS: job.timeoutS,
     ...(roadmapItem === null ? {} : { roadmapItemId: roadmapItem.id, roadmap_ref: itemRef(roadmapItem) }),
     ...(job.tier ? { tier: job.tier } : {}),
-    hint: `${done}queued ${jobRef(job.id)} for \`${job.project}\` (${pending} pending).${note} ${queuedRunnerLine(env, job.id)}${stale ? ` ${stale}` : ""}`,
+    ...(coverage ? { origin: coverageField(coverage) } : {}),
+    hint: `${done}queued ${jobRef(job.id)} for \`${job.project}\` (${pending} pending).${note}${origin} ${queuedRunnerLine(env, job.id)}${stale ? ` ${stale}` : ""}`,
   };
 }
 
@@ -528,13 +533,19 @@ function roadmapNote({ item, jobs, skipped }) {
   );
 }
 
+// One job of an org item's answer, with its origin and the connection covering it when it has one.
+async function queuedJobEntry(job, env) {
+  const coverage = await jobOriginCoverage({ origin: job.origin, projectId: job.projectId, store: openStore(env), env });
+  return { id: job.id, ref: jobRef(job.id), project: job.project, ...(coverage ? { origin: coverageField(coverage) } : {}) };
+}
+
 // The answer of `queue_add` for a roadmap-built job: the first job as before, plus every job and every skipped project of an org item.
 async function roadmapQueuedAnswer(queued, env) {
   const answer = await queuedAnswer({ job: queued.job, roadmapItem: queued.item, note: roadmapNote(queued) }, env);
   if (queued.item.scope !== "org") return answer;
   return {
     ...answer,
-    jobs: queued.jobs.map((job) => ({ id: job.id, ref: jobRef(job.id), project: job.project })),
+    jobs: await Promise.all(queued.jobs.map((job) => queuedJobEntry(job, env))),
     skipped: queued.skipped,
   };
 }
@@ -1050,6 +1061,13 @@ function toolDefinitions(env, state) {
             .describe(
               "The RUN_DIR of an operator run (`~/.nightqueue/runs/<project_id>/<slug>`, as `nightqueue run dir` prints it, absolute or `~/`) this job continues: the job writes into that run, and the runtime places the `## PRIOR RUN (operator)` block right after the prompt's `## Brief` section (with `roadmap_item_id`: right after the item block, or after the operator note). Never write that block yourself. A run already bound to an open job is refused; `queue_retry --fresh` of the job discards the run.",
             ),
+          origin: z
+            .object({ kind: z.string(), ref: z.string() })
+            .nullable()
+            .optional()
+            .describe(
+              "The service the job came from, as `{kind, ref}`; omitted, the runtime detects it in the prompt with the registered providers. The answer carries `origin` with the org connection that covers it, or `none`.",
+            ),
         },
       },
       handler: async (args) => {
@@ -1060,6 +1078,7 @@ function toolDefinitions(env, state) {
             ...(await roadmapQueueTarget(store, args.project)),
             operatorNote: args.prompt,
             runDir: hasRunDir(args) ? args.run_dir : undefined,
+            origin: args.origin,
             priority: args.priority,
             maxAttempts: args.max_attempts,
             timeoutS: args.timeout_s,
@@ -1080,6 +1099,7 @@ function toolDefinitions(env, state) {
           timeoutS: args.timeout_s,
           tier: args.tier,
           slug: seeded.slug,
+          origin: args.origin,
         });
         return await queuedAnswer({ job, registered }, env);
       },

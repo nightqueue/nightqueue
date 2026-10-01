@@ -57,6 +57,14 @@ is dropped. The same live-lease refusal applies. Comments stay
 append-only - an UPDATE or a DELETE of a comment is still refused while its item
 exists - but they go away with their item.
 
+Schema v21 adds two nullable JSON text columns: `jobs.origin` (`{ "kind", "ref" }`, the
+service a job came from, set by `queue add`/`queue_add` - see [Queue](queue.md)) and
+`projects.integrations` (the project's integration settings, one object per provider
+kind; NULL is a project without integrations). Both are added on every open by an
+idempotent step (`src/memory/migration/v21.mjs`), never in the DDL the v18 and v19
+rebuilds copy into, so an older home of any version upgrades in one open with no copy
+and no rebuild. A read-only open of a v20 home reads both as absent instead of failing.
+
 **A sick database degrades, it does not kill.** The file can break under a live process - a
 home on a network or FUSE mount, a copy taken by hand, a second sqlite opened on the live
 file. Every open and every store call classifies what SQLite throws by its numeric `errcode`

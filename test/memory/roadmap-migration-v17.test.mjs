@@ -227,7 +227,7 @@ test("a v16 home is diagnosed read-only without a crash, then migrated for a rea
   const report = await doctorReport(env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v16, expected v20/);
+  assert.match(database.detail, new RegExp(`schema v16, expected v${DB_USER_VERSION}`));
   assert.equal(report.checks.some((check) => check.name === "roadmap workflow"), false);
   assert.equal(diskVersion(env), 16);
 

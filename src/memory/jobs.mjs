@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, logsDir, runDir } from "../config/paths.mjs";
+import { parseOriginColumn, resolveOrigin } from "../integrations/origin.mjs";
 import {
   finishVerificationReport,
   isoToSqlite,
@@ -186,6 +187,7 @@ export function jobView(row, { full = false } = {}) {
     if (view[column] !== whole) view[TRUNCATION_FLAGS[column]] = true;
   }
   view.close = parseCloseColumn(row.close);
+  view.origin = parseOriginColumn(row.origin);
   return view;
 }
 
@@ -212,7 +214,8 @@ function optionalRunSlug(value) {
   throw new UserError(`invalid \`slug\`: \`${String(value)}\`; expected one safe path segment`);
 }
 
-const INSERT_JOB = "INSERT INTO jobs (project_id, prompt, priority, max_attempts, timeout_s, tier, slug, operator_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+const INSERT_JOB =
+  "INSERT INTO jobs (project_id, prompt, priority, max_attempts, timeout_s, tier, slug, operator_note, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 // Requires the id of the project a job is queued for; a name never reaches the jobs table.
 function requireProjectId(projectId) {
@@ -255,7 +258,8 @@ function insertRunJob(db, { values, project }, env) {
 }
 
 // Enqueues a job for a project id, validating every range before the write; a run slug is refused while an open job is bound to it.
-export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tier, slug, operatorNote } = {}, env = process.env) {
+export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tier, slug, operatorNote, origin } = {}, env = process.env) {
+  const resolvedOrigin = resolveOrigin({ origin, prompt });
   const values = [
     requireProjectId(projectId),
     requireText("prompt", prompt),
@@ -265,6 +269,7 @@ export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tie
     optionalTier(tier),
     optionalRunSlug(slug),
     optionalNote(operatorNote),
+    resolvedOrigin ? JSON.stringify(resolvedOrigin) : null,
   ];
   const db = openDb(env);
   const project = requireJobProject(db, values[0]);
@@ -277,6 +282,7 @@ export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tie
     maxAttempts: values[3],
     timeoutS: values[4],
     tier: values[5],
+    origin: resolvedOrigin,
   };
 }
 
