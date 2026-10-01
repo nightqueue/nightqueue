@@ -65,6 +65,16 @@ idempotent step (`src/memory/migration/v21.mjs`), never in the DDL the v18 and v
 rebuilds copy into, so an older home of any version upgrades in one open with no copy
 and no rebuild. A read-only open of a v20 home reads both as absent instead of failing.
 
+**A job never migrates the runner's own home.** The installed nightqueue owns the schema of
+the home the runner uses. A process running inside a job (`NIGHTQUEUE_JOB_ID` set) that
+opens an existing database older than its build refuses before any statement changes the
+schema, when that home is the runner's: the `NIGHTQUEUE_JOB_HOME` the runner pinned, or the
+default `~/.nightqueue` when the runner pinned none and no `NIGHTQUEUE_HOME` was given. Read
+commands are covered too (`decision show` migrates through `migrateIfOutdated`). The
+refusal names the database and the fix: run the build against a temporary home with
+`nightqueue sandbox <command>` or `NIGHTQUEUE_HOME=$(mktemp -d)`. A temporary home, a fresh
+database, and every command outside a job migrate as before.
+
 **A sick database degrades, it does not kill.** The file can break under a live process - a
 home on a network or FUSE mount, a copy taken by hand, a second sqlite opened on the live
 file. Every open and every store call classifies what SQLite throws by its numeric `errcode`

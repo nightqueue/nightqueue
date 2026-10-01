@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { StoreUnavailableError, UserError } from "../config/errors.mjs";
+import { callerJobId, isRunnerHome } from "../config/job-home.mjs";
 import { dbPath, homeDir } from "../config/paths.mjs";
 import { ensureHome, loadRawConfig } from "../config/store.mjs";
 import { FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ROADMAP_FTS, ROADMAP_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
@@ -7,6 +8,7 @@ import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schema
 import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
 import { isPendingV20, migrateToV20, refuseOrphans } from "./migration/v20.mjs";
 import { migrateV21Columns } from "./migration/v21.mjs";
+import { jobRef } from "./refs.mjs";
 import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
 import { migrateSharedSlugs, sharedSlugPending } from "./shared-slug-migration.mjs";
@@ -121,6 +123,17 @@ function assertSchemaNotNewer(db, path) {
   );
 }
 
+// Refuses, from inside a job, to migrate an existing database of the runner's own home: the installed nightqueue owns that schema, never a job's build.
+function refuseRunnerHomeMigration(db, { env, path }) {
+  const own = callerJobId(env);
+  if (own === null) return;
+  const version = schemaVersionOn(db);
+  if (version >= DB_USER_VERSION || schemaState(db) === "fresh" || !isRunnerHome(env)) return;
+  throw new MigrationRefused(
+    `refused: the database at ${path} is the runner's home at schema v${version}, and this build (v${DB_USER_VERSION}) would migrate it from inside ${jobRef(own)}; nothing was changed - run this build against a temporary home (\`nightqueue sandbox <command>\` or NIGHTQUEUE_HOME=$(mktemp -d)), and leave the runner's home to the installed nightqueue`,
+  );
+}
+
 // Applies the pragmas and brings the schema of a freshly opened connection up to date: the one-shot steps first, in order
 // and before WAL is switched on, then the per-open steps.
 function initConnection(db, path, env) {
@@ -207,6 +220,7 @@ export function openDb(env = process.env) {
     withWriteRetry(() => {
       db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
       assertSchemaNotNewer(db, path);
+      refuseRunnerHomeMigration(db, { env, path });
       initConnection(db, path, env);
     });
   } catch (err) {

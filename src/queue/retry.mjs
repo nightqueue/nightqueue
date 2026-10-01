@@ -1,13 +1,10 @@
 import { UserError } from "../config/errors.mjs";
+import { callerJobId } from "../config/job-home.mjs";
 import { openStore } from "../store/open.mjs";
 import { clearRunTerminal, discardRunDir } from "./resume.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
-// Job this process is running inside, when the queue spawned it; null in a session of the operator.
-export function callerJobId(env) {
-  const raw = typeof env?.NIGHTQUEUE_JOB_ID === "string" ? env.NIGHTQUEUE_JOB_ID.trim() : "";
-  return /^[1-9]\d*$/.test(raw) ? Number(raw) : null;
-}
+export { callerJobId };
 
 // Refuses a retry aimed at another job from inside an unattended run: the note becomes a human answer in the next prompt of that job, and the run directory of that job would be deleted.
 function requireOwnJob(id, env) {
