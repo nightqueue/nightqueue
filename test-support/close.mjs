@@ -113,6 +113,22 @@ export function fakeCloseDeps(changes = {}) {
   return { deps, world, log };
 }
 
+export const NO_CHECKS = { ok: true, checks: [], failing: [], pending: [] };
+
+// The fake git answer of a branch that carries a GitHub workflow, so the close waits for CI instead of running the suite.
+export const WORKFLOWS = { "ls-tree": gitOk(".github/workflows/ci.yml\n") };
+
+// Scripts the fake git so a suite run in the throwaway worktree verifies and pushes the given head, which GitHub then shows.
+export function suiteVerifies(fake, sha) {
+  fake.world.git["rev-parse origin/"] = gitOk(`${sha}\n`);
+  fake.world.git["rev-parse HEAD"] = gitOk(`${sha}\n`);
+  fake.world.git.push = () => {
+    fake.world.pr = openPr({ headRefOid: sha });
+    return gitOk();
+  };
+  return fake;
+}
+
 // The git command lines a fake close ran, optionally only those run in one directory.
 export function gitLines(log, cwd) {
   return log.git.filter((call) => cwd === undefined || call.cwd === cwd).map((call) => call.args.join(" "));

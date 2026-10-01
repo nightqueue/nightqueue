@@ -159,20 +159,22 @@ function parsePrChecks(text) {
   if (!Array.isArray(rollup)) return null;
   const checks = rollup.map((item) => ({ name: textOrNull(item?.name) ?? textOrNull(item?.context) ?? "unnamed check", bucket: checkBucket(item) }));
   const named = (bucket) => checks.filter((check) => check.bucket === bucket).map((check) => check.name);
-  return { ok: true, checks, failing: named("fail"), pending: named("pending") };
+  const head = textOrNull(payload.headRefOid);
+  return { ok: true, checks, failing: named("fail"), pending: named("pending"), ...(head ? { headSha: head } : {}) };
 }
 
-// The checks of one pull request, parsed from what gh printed even when it exited non-zero; never rejects.
+// The checks of one pull request and the head they were read with, parsed from what gh printed even when it exited non-zero; never rejects.
 export async function ghPrChecks(url, { env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
-  const result = await runGhAsync(["pr", "view", String(url ?? ""), "--json", "statusCheckRollup"], { env, execFileImpl, timeoutMs, signal });
+  const result = await runGhAsync(["pr", "view", String(url ?? ""), "--json", "statusCheckRollup,headRefOid"], { env, execFileImpl, timeoutMs, signal });
   const parsed = parsePrChecks(result.stdout);
   return parsed ?? { ok: false, checks: [], failing: [], pending: [], error: firstLine(result.stderr) };
 }
 
-// Squash-merges one pull request, never deleting its branch; the answer is only reported, the merge is proven by a re-read.
+// Squash-merges one pull request pinned to its head commit, never deleting its branch; an unpinned merge is refused without calling gh.
 export async function ghPrMerge(url, { matchHeadCommit = null, env = process.env, execFileImpl = execFile, timeoutMs = MERGE_TIMEOUT_MS, signal } = {}) {
-  const args = ["pr", "merge", String(url ?? ""), "--squash"];
-  if (textOrNull(matchHeadCommit)) args.push("--match-head-commit", textOrNull(matchHeadCommit));
+  const pin = textOrNull(matchHeadCommit);
+  if (!pin) return { ok: false, stderr: "refused: no head commit to pin with --match-head-commit" };
+  const args = ["pr", "merge", String(url ?? ""), "--squash", "--match-head-commit", pin];
   const result = await runGhAsync(args, { env, execFileImpl, timeoutMs, signal });
   return { ok: result.ok, stderr: result.stderr };
 }

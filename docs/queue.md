@@ -871,7 +871,9 @@ agent, never a second job, never queue work:
    line as the `BEHIND` wait below, out of the one `queue.closeTimeoutS` budget the whole
    close shares (a later `BEHIND` wait spends only what is left of it); when the budget is
    nearly out it stops with `checks-pending` - `checks still running on <sha> - run queue
-   close N again` - and the next run continues. A pull request with no checks reported goes on.
+   close N again` - and the next run continues. A pull request with no checks reported goes on
+   to the merge step, which verifies its head (see *The close merges only a head it or CI
+   verified* below).
    Uncommitted files in the checkout only stop it when the pull that follows the merge
    would touch them (`checkout-dirty` names up to ten): nightqueue never stashes, so they are
    yours to commit or stash.
@@ -895,7 +897,8 @@ agent, never a second job, never queue work:
    as mergeable: a pull request GitHub reports mergeable but `BLOCKED` waits the same way for
    the checks of the verified head (`merge state BLOCKED on <sha>; N checks green on <sha>`),
    then goes on to merge. With `--force` both waits are skipped.
-3. **merge** - `gh pr merge --squash --match-head-commit <the verified head>`, never
+3. **merge** - verifies the head GitHub shows (below), then `gh pr merge --squash
+   --match-head-commit <that head>`; no merge is ever issued without the pin, and never with
    `--delete-branch`, `--admin` or `--auto`. gh's exit code is never the evidence: the pull
    request is re-read until GitHub reports it merged with its merge commit, and that
    commit is what is recorded, with `data.mergedBy: "nightqueue"`. When the pull request was
@@ -911,26 +914,54 @@ agent, never a second job, never queue work:
 The job's status is untouched until settle: a close that stops leaves it `done`, except for a
 pull request closed without merge, which cancels it.
 
-**The close verifies the head it merges.** Any push by the close (a rebase of a conflicting
-head or the update of a `BEHIND` one) records `data.pushedBy: "close"` and reopens
-preflight, which runs again in the same run on the pushed head - the checks of that head are
-waited for, even when none is registered yet - and its note ends `head <sha7> pushed by this
-close`. GitHub can answer the old head for a few seconds after a push, so every read of the
-pull request after the close's push is retried (3 reads, 2 s apart) until it shows the
-pushed head with its mergeability computed; only a head that still differs is `head-moved`.
-One run is enough after a rebase or a branch update. After a push, preflight accepts only
-the pushed head, or the branch tip `git fetch` shows when GitHub agrees with it; it never
+**The close merges only a head it or CI verified (D-54).** Every step reads the pull request
+again and works on the head GitHub reports now; the recorded `data.headSha` is the head the
+last step took, never a condition. An open pull request GitHub answers without a head commit
+stops every step with `pr-unreadable`, `--force` included, and no merge is ever issued without
+`--match-head-commit`. Two durable records say what was verified: `data.verifiedSha`, the head
+the close's own green suite ran on in the throwaway worktree (written only when the step
+returns, never under `--force`), and `data.ciGreenSha`, a head CI reported all green on (a
+non-empty rollup, read together with that same head). Neither is ever cleared, and
+`data.pushedBy` decides nothing: it only makes the reads after the close's own push wait for
+GitHub to show it. Preflight and conflict note a head that differs from the recorded one (an
+*Update branch*, a commit pushed to the branch, a rebase by hand) - `the head moved from <old>
+to <new>`, with what CI says on it, red checks stopping with `checks-red` - and only the merge
+step accepts a head:
+- a head equal to `verifiedSha` or `ciGreenSha` is merged at once;
+- otherwise its checks are read on that head: green merges, pending ones are waited for within
+  the close's time, red ones stop with `checks-red`, and a read gh attributes to another head
+  stops with `checks-unreadable`;
+- with no check at all, a head branch that carries `.github/workflows/*.yml` (or `.yaml`) is
+  waited on for about 60 s (polls 10, 20 and 30 s apart), and checks that show up are handled
+  as above. With no workflows, or none reporting after that window, the repository has no CI
+  and **the close is the CI**: it runs the suite on that head in the throwaway worktree (rebased
+  onto the base; an up-to-date head pushes nothing new), records `verifiedSha` and merges that
+  head, or stops with `suite-red` merging nothing. This applies to the first close of a pull
+  request whose head never moved, too. Without CI, the close runs the suite of the current head
+  on your machine; a push by someone else to the job's branch runs that person's code locally.
+- `--force` takes any non-empty head without reading its checks.
+
+After a verdict that waited or ran the suite, the pull request is read again before the merge
+call. A head that changes during the step (on that read, or under a failed pinned merge call)
+is judged again; after 2 such loopbacks the step stops with `head-moved` - `the head changed 2
+times during the close; nothing was merged` - and the last head read is neither merged nor
+recorded.
+
+Any push by the close reopens preflight, which runs again in the same run on the pushed head
+- the checks of that head are waited for, even when none is registered yet - and its note ends
+`head <sha7> pushed by this close`. GitHub can answer the old head for a few seconds after a
+push, so every read of the pull request after the close's push is retried (3 reads, 2 s apart)
+until it shows the pushed head with its mergeability computed; only then is a differing head a
+moved one. One run is enough after a rebase or a branch update. After a push, preflight never
 records a head GitHub may be answering stale:
-- GitHub still showing another head after 3 reads stops with `head-not-visible`, keeping
-  the pushed head, and the next run checks again;
-- a push by someone else after the close's own (the fetched tip is the head GitHub shows)
-  stops with `head-moved` and re-runs conflict on the next run;
+- GitHub still showing another head after 3 reads, with `git fetch` not agreeing with it,
+  stops with `head-not-visible`, keeping the pushed head, and the next run checks again;
+- a push by someone else after the close's own (the fetched tip is the head GitHub shows) is
+  noted with what CI says on it, and the merge step verifies it as above;
 - a push whose new head cannot be read stops with `head-unreadable`, and the next run
   takes the head from the fetched branch tip;
-- `BLOCKED` on a head other than the recorded one stops with `head-moved`, even with
-  `--force`, before any checks are read;
-- `BLOCKED` with no checks at all goes straight to the merge
-  (`no checks reported on <sha>`), and GitHub decides;
+- `BLOCKED` waits for the checks of the head GitHub shows; with no checks at all it goes
+  straight to the merge step (`no checks reported on <sha>`), which verifies that head as above;
 - a checks wait whose reads only ever failed stops with `checks-unreadable`, never
   `checks-pending`.
 

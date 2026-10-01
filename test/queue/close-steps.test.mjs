@@ -12,7 +12,7 @@ import { closeChecklistLines, closeStoppedLine } from "../../src/queue/close-vie
 import { jobDetailView } from "../../src/queue/view.mjs";
 import { openStore, withReadOnlyStore } from "../../src/store/open.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
-import { fakeCloseDeps, gitFail, gitLines, gitOk, HEAD_SHA, MERGE_SHA, mergedPr, openPr, PUSHED_SHA, CLOSE_PR_URL } from "../../test-support/close.mjs";
+import { fakeCloseDeps, gitFail, gitLines, gitOk, HEAD_SHA, MERGE_SHA, mergedPr, openPr, PUSHED_SHA, CLOSE_PR_URL, suiteVerifies, WORKFLOWS } from "../../test-support/close.mjs";
 import { doneStream } from "../../test-support/streams.mjs";
 import { addWorktree, gitVars, publishedCheckout } from "../../test-support/worktrees.mjs";
 
@@ -268,7 +268,7 @@ test("a conflicting pull request is rebased in a throwaway worktree, tested and 
   const result = await conflictStep({ ctx: ctxFor(), deps: fake.deps });
   const [dir] = fake.log.tempDirs;
   assert.equal(result.status, "done", result.note);
-  assert.deepEqual(result.data, { headShaBefore: HEAD_SHA, headSha: PUSHED_SHA, pushedBy: "close" });
+  assert.deepEqual(result.data, { headShaBefore: HEAD_SHA, headSha: PUSHED_SHA, pushedBy: "close", verifiedSha: PUSHED_SHA });
   assert.deepEqual(result.reopen, ["preflight"], "a close push did not reopen preflight");
   assert.deepEqual(gitLines(fake.log, dir), [
     "rebase origin/main",
@@ -468,10 +468,54 @@ test("conflict and merge record a pull request they read already merged as the o
   assert.equal((await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: racedGh.deps })).data.mergedBy, "nightqueue");
 });
 
-test("merge refuses a head that moved and a pull request that conflicts again, reopening the steps to check", async () => {
-  const moved = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: fakeCloseDeps({ pr: openPr({ headRefOid: "9999999" }) }).deps });
-  assert.equal(moved.reason, "head-moved");
-  assert.deepEqual(moved.reopen, ["preflight", "conflict"]);
+test("merge takes a head that moved when CI reports on it, and runs the suite on it first when no CI does", async () => {
+  const green = fakeCloseDeps({ pr: openPr({ headRefOid: "9999999" }) });
+  const taken = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: green.deps });
+  assert.equal(taken.status, "done", taken.note);
+  assert.match(taken.note, /^the head moved from 1111111 to 9999999; 1 checks green on 9999999; squash-merged as abc1234; /);
+  assert.deepEqual(green.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: "9999999" }]);
+  assert.equal(taken.data.headSha, "9999999");
+  assert.equal(taken.data.pushedBy, null);
+
+  const waited = fakeCloseDeps({ pr: openPr({ headRefOid: "9999999" }), checkReads: [HALF, HALF, GREEN] });
+  const afterWait = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: waited.deps });
+  assert.equal(afterWait.status, "done", afterWait.note);
+  assert.match(afterWait.note, /^the head moved from 1111111 to 9999999; 2 checks green on 9999999; squash-merged/);
+  assert.deepEqual(waited.log.sleeps, [10000]);
+  assert.equal(waited.log.checkReads, 3);
+
+  const red = fakeCloseDeps({ pr: openPr({ headRefOid: "9999999" }), checks: RED });
+  const stopped = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: red.deps });
+  assert.equal(stopped.reason, "checks-red");
+  assert.equal(red.log.merges.length, 0);
+
+  const none = suiteVerifies(fakeCloseDeps({ pr: openPr({ headRefOid: "9999999" }), checks: NO_CHECKS }), "9999999");
+  const unverified = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA, pushedBy: "close" }), deps: none.deps });
+  assert.equal(unverified.status, "done", unverified.note);
+  assert.equal(none.log.tests.length, 1, "a moved head no CI reports on was merged without the suite");
+  assert.equal(unverified.data.verifiedSha, "9999999");
+  assert.match(unverified.note, /^the head moved from 1111111 to 9999999; no CI on 9999999: rebased onto origin\/main, suite green/);
+  assert.deepEqual(none.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: "9999999" }]);
+
+  const trusted = suiteVerifies(fakeCloseDeps({ pr: openPr({ headRefOid: "9999999" }), checks: NO_CHECKS }), "9999999");
+  const noSuite = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: trusted.deps });
+  assert.equal(noSuite.status, "done", noSuite.note);
+  assert.equal(trusted.log.tests.length, 1, "a moved head without CI was merged without running the suite on it");
+  assert.equal(noSuite.data.verifiedSha, "9999999");
+  assert.deepEqual(trusted.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: "9999999" }]);
+
+  const redSuite = suiteVerifies(fakeCloseDeps({ pr: openPr({ headRefOid: "9999999" }), checks: NO_CHECKS, suite: { ok: false, output: "not ok 1", timedOut: false } }), "9999999");
+  const refused = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: redSuite.deps });
+  assert.equal(refused.reason, "suite-red");
+  assert.equal(redSuite.log.merges.length, 0);
+  assert.equal("verifiedSha" in refused.data, false, "a red suite recorded a verified head");
+
+  const forced = fakeCloseDeps({ pr: openPr({ headRefOid: "9999999" }), checks: NO_CHECKS });
+  const withForce = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA, pushedBy: "close" }, "/work/alpha", { force: true }), deps: forced.deps });
+  assert.equal(withForce.status, "done");
+  assert.match(withForce.note, /taken with --force/);
+  assert.equal(forced.log.checkReads, 0);
+
   const conflicted = fakeCloseDeps({ pr: openPr(CONFLICTING) });
   const again = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: conflicted.deps });
   assert.equal(again.reason, "not-mergeable");
@@ -541,6 +585,7 @@ test("settle closes the job, releases its worktree, appends the Closed line to t
 const GREEN = { ok: true, checks: [{ name: "a", bucket: "pass" }, { name: "b", bucket: "pass" }], failing: [], pending: [] };
 const HALF = { ok: true, checks: [{ name: "a", bucket: "pass" }, { name: "b", bucket: "pending" }], failing: [], pending: ["b"] };
 const RED = { ok: true, checks: [{ name: "a", bucket: "pass" }, { name: "b", bucket: "fail" }], failing: ["b"], pending: [] };
+const NO_CHECKS = { ok: true, checks: [], failing: [], pending: [] };
 
 // A fake close of a BEHIND pull request whose push moves the head, with a clock the fake sleep advances.
 function behindWorld(changes = {}) {
@@ -655,22 +700,56 @@ test("after a close push, merge re-reads a stale head and an UNKNOWN mergeabilit
   assert.equal(merged.status, "done", "a stale conflicting read failed the merge");
 });
 
-test("after a close push, a head that still differs after three reads is head-moved; without a push merge reads once", async () => {
+test("after a close push, a head that still differs after three reads is merged at the head GitHub shows; without a push merge reads once", async () => {
   const moved = fakeCloseDeps();
   const result = await mergeStep({ ctx: ctxFor(PUSHED), deps: moved.deps });
-  assert.equal(result.reason, "head-moved");
-  assert.deepEqual(result.reopen, ["preflight", "conflict"]);
-  assert.equal(moved.log.prReads, 3);
+  assert.equal(result.status, "done", result.note);
+  assert.equal(moved.log.prReads, 4, "three reads waiting for the pushed head, one proving the merge");
   assert.deepEqual(moved.log.sleeps, [2000, 2000]);
-  assert.equal(moved.log.merges.length, 0);
+  assert.deepEqual(moved.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: HEAD_SHA }]);
 
   const plain = fakeCloseDeps({ pr: openPr({ headRefOid: "9999999" }) });
-  assert.equal((await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: plain.deps })).reason, "head-moved");
-  assert.equal(plain.log.prReads, 1);
+  assert.equal((await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: plain.deps })).status, "done");
+  assert.equal(plain.log.prReads, 2, "one read of the head, one proving the merge");
   assert.deepEqual(plain.log.sleeps, []);
 });
 
-test("conflict never reads a BLOCKED head as mergeable: it waits for the checks of the recorded head, and --force skips the wait", async () => {
+test("merge judges and merges once more when the head moves during the merge call, and stops with head-moved when it keeps moving", async () => {
+  const once = fakeCloseDeps({
+    pr: openPr(),
+    merge: (world, calls = once.log.merges.length) => {
+      if (calls === 1) {
+        world.pr = openPr({ headRefOid: "9999999" });
+        return { ok: false, stderr: "head ref oid does not match" };
+      }
+      world.pr = mergedPr();
+      return { ok: true, stderr: "" };
+    },
+  });
+  const result = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: once.deps });
+  assert.equal(result.status, "done", result.note);
+  assert.deepEqual(once.log.merges.map((call) => call.matchHeadCommit), [HEAD_SHA, "9999999"]);
+  assert.match(result.note, /^the head moved from 1111111 to 9999999; 1 checks green on 9999999; squash-merged/);
+
+  let tip = 0;
+  const twice = fakeCloseDeps({
+    pr: openPr(),
+    merge: (world) => {
+      tip += 1;
+      world.pr = openPr({ headRefOid: `888888${tip}` });
+      return { ok: false, stderr: "head ref oid does not match" };
+    },
+  });
+  const left = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: twice.deps });
+  assert.equal(left.status, "failed");
+  assert.equal(left.reason, "head-moved");
+  assert.match(left.note, /changed 2 times during the close; nothing was merged/);
+  assert.deepEqual(left.reopen, ["preflight", "conflict"]);
+  assert.equal(twice.log.merges.length, 3);
+  assert.notEqual(left.data.headSha, "8888883", "the last head read was recorded");
+});
+
+test("conflict never reads a BLOCKED head as mergeable: it waits for the checks of the head GitHub shows, and --force skips the wait", async () => {
   const blocked = openPr({ mergeStateStatus: "BLOCKED" });
   const green = fakeCloseDeps({ pr: blocked, checkReads: [HALF, GREEN] });
   const result = await conflictStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: green.deps });
@@ -684,13 +763,25 @@ test("conflict never reads a BLOCKED head as mergeable: it waits for the checks 
   assert.equal(noChecks.note, "merge state BLOCKED on 1111111; no checks reported on 1111111");
   assert.deepEqual(none.log.sleeps, [], "a BLOCKED head with no checks paid a poll");
 
-  for (const force of [false, true]) {
-    const moved = fakeCloseDeps({ pr: openPr({ mergeStateStatus: "BLOCKED", headRefOid: "9999999" }) });
-    const stoppedMoved = await conflictStep({ ctx: ctxFor({ headSha: HEAD_SHA }, "/work/alpha", { force }), deps: moved.deps });
-    assert.equal(stoppedMoved.reason, "head-moved", `force=${force}`);
-    assert.deepEqual(stoppedMoved.reopen, ["preflight"]);
-    assert.equal(moved.log.checkReads, 0, "the checks of another head were attributed to the recorded one");
-  }
+  const moved = fakeCloseDeps({ pr: openPr({ mergeStateStatus: "BLOCKED", headRefOid: "9999999" }), checkReads: [HALF, GREEN, GREEN] });
+  const taken = await conflictStep({ ctx: ctxFor({ headSha: HEAD_SHA, pushedBy: "close" }), deps: moved.deps });
+  assert.equal(taken.status, "done", taken.note);
+  assert.match(taken.note, /^the head moved from 1111111 to 9999999; 2 checks green on 9999999; merge state BLOCKED on 9999999; 2 checks green on 9999999$/);
+  assert.equal(taken.data.headSha, "9999999");
+  assert.equal(taken.data.pushedBy, null);
+
+  const unverified = fakeCloseDeps({ pr: openPr({ mergeStateStatus: "BLOCKED", headRefOid: "9999999" }), checks: NO_CHECKS });
+  const notedMoved = await conflictStep({ ctx: ctxFor({ headSha: HEAD_SHA, pushedBy: "close" }), deps: unverified.deps });
+  assert.equal(notedMoved.status, "done", notedMoved.note);
+  assert.match(notedMoved.note, /no CI reports on 9999999 yet/);
+  assert.equal(notedMoved.reopen, undefined);
+  assert.equal(unverified.log.tests.length, 0, "conflict ran the suite the merge step owns");
+
+  const movedForced = fakeCloseDeps({ pr: openPr({ mergeStateStatus: "BLOCKED", headRefOid: "9999999" }), checks: NO_CHECKS });
+  const forcedMoved = await conflictStep({ ctx: ctxFor({ headSha: HEAD_SHA, pushedBy: "close" }, "/work/alpha", { force: true }), deps: movedForced.deps });
+  assert.equal(forcedMoved.status, "skipped", forcedMoved.note);
+  assert.equal(forcedMoved.data.headSha, "9999999");
+  assert.equal(movedForced.log.checkReads, 0);
 
   const red = fakeCloseDeps({ pr: blocked, checkReads: [RED] });
   const stopped = await conflictStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: red.deps });
@@ -703,15 +794,24 @@ test("conflict never reads a BLOCKED head as mergeable: it waits for the checks 
   assert.equal(forced.log.checkReads, 0);
 });
 
-test("after a close push, preflight never records a stale head: head-moved when git confirms another tip, head-not-visible when it cannot", async () => {
+test("after a close push, preflight never records a stale head: another tip git confirms is taken on its checks, head-not-visible when it cannot", async () => {
   const stale = () => fakeCloseDeps({ reads: [openPr(), openPr(), openPr()] });
   const moved = stale();
   const movedResult = await preflightStep({ ctx: ctxFor({ ...PUSHED }), deps: moved.deps });
-  assert.equal(movedResult.reason, "head-moved");
+  assert.equal(movedResult.status, "done", movedResult.note);
+  assert.match(movedResult.note, /^PR #7 open; the head moved from 2222222 to 1111111; 1 checks green on 1111111; canonical checkout clean$/);
   assert.equal(movedResult.data.pushedBy, null);
-  assert.equal("headSha" in movedResult.data, false, "a stale head was recorded");
-  assert.deepEqual(movedResult.reopen, ["conflict"]);
+  assert.equal(movedResult.data.headSha, HEAD_SHA);
   assert.deepEqual(moved.log.sleeps, [2000, 2000]);
+
+  const unverified = fakeCloseDeps({ reads: [openPr(), openPr(), openPr()], checks: NO_CHECKS });
+  const notedResult = await preflightStep({ ctx: ctxFor({ ...PUSHED }), deps: unverified.deps });
+  assert.equal(notedResult.status, "done", notedResult.note);
+  assert.equal(notedResult.data.pushedBy, null);
+  assert.equal(notedResult.data.headSha, HEAD_SHA);
+  assert.match(notedResult.note, /no CI reports on 1111111 yet/);
+  assert.equal(notedResult.reopen, undefined);
+  assert.equal("ciGreenSha" in notedResult.data, false, "a head no CI reports on was recorded as CI-verified");
 
   const invisible = stale();
   invisible.world.git["rev-parse origin/"] = gitOk(`${PUSHED_SHA}\n`);
@@ -814,4 +914,117 @@ test("a CLEAN pull request is neither updated nor waited on", async (t) => {
   assert.equal(fake.log.tempDirs.length, 0);
   assert.equal(fake.log.checkReads, 1);
   assert.deepEqual(fake.log.sleeps, []);
+});
+
+test("merge takes a head this close verified or CI reported green on without reading the checks again", async () => {
+  for (const data of [{ headSha: HEAD_SHA, verifiedSha: HEAD_SHA }, { headSha: HEAD_SHA, ciGreenSha: HEAD_SHA }]) {
+    const fake = fakeCloseDeps({ checks: NO_CHECKS });
+    const result = await mergeStep({ ctx: ctxFor(data), deps: fake.deps });
+    assert.equal(result.status, "done", result.note);
+    assert.equal(fake.log.checkReads, 0, JSON.stringify(data));
+    assert.equal(fake.log.tests.length, 0);
+    assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: HEAD_SHA }]);
+  }
+});
+
+test("a head that never stops moving stops the merge with head-moved after two loopbacks, merging nothing", async () => {
+  let tip = 0;
+  const fake = fakeCloseDeps({ checks: NO_CHECKS, git: { "rev-parse origin/": gitOk("5555555\n"), "rev-parse HEAD": gitOk("5555555\n") } });
+  fake.world.git.push = () => {
+    tip += 1;
+    fake.world.pr = openPr({ headRefOid: `777777${tip}` });
+    return gitOk();
+  };
+  const result = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: fake.deps });
+  assert.equal(result.reason, "head-moved");
+  assert.match(result.note, /^the head changed 2 times during the close; nothing was merged/);
+  assert.equal(fake.log.merges.length, 0);
+  assert.equal(fake.log.tests.length, 3);
+  assert.notEqual(result.data.headSha, "7777773", "the last head read was recorded");
+});
+
+test("a close interrupted while the suite runs records no verified head, and the next run runs the suite again before merging", async (t) => {
+  const home = closeHome(t, "close-steps-abort-suite");
+  const controller = new AbortController();
+  const fake = fakeCloseDeps({ checks: NO_CHECKS, git: { "rev-parse HEAD": gitOk(`${HEAD_SHA}\n`) } });
+  const runTest = fake.deps.runTest;
+  fake.deps.runTest = async (options) => {
+    const answer = await runTest(options);
+    if (fake.log.tests.length > 1) return answer;
+    controller.abort();
+    return { ok: true, output: "green", timedOut: false };
+  };
+  const outcome = await runClosePipeline({ store: home.store, job: getJob(home.id, home.env), worker: home.worker, env: home.env, deps: fake.deps, timeoutS: 600, checkout: home.checkout, signal: controller.signal });
+  assert.equal(outcome.reason, "interrupted");
+  for (let turn = 0; turn < 50; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(JSON.parse(getJob(home.id, home.env).close).data.verifiedSha, undefined, "an interrupted suite recorded a verified head");
+  assert.equal(fake.log.merges.length, 0, "the step the abort orphaned merged");
+  assert.equal(gitLines(fake.log).filter((line) => line.startsWith("push")).length, 0, "the step the abort orphaned pushed");
+
+  const second = await close(reacquire(home, "close:test:2:bbbb"), fake);
+  assert.equal(second.outcome.status, "closed", JSON.stringify(second.outcome));
+  assert.equal(fake.log.tests.length, 2, "the resumed close merged without running the suite again");
+  assert.equal(second.checklist.data.verifiedSha, HEAD_SHA);
+  assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: HEAD_SHA }]);
+});
+
+test("a branch with workflows waits for CI and never runs the suite when checks show up; a branch without workflows runs the suite at once", async () => {
+  const withCi = fakeCloseDeps({ git: { ...WORKFLOWS }, checkReads: [NO_CHECKS, NO_CHECKS, NO_CHECKS, GREEN] });
+  const waited = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: withCi.deps });
+  assert.equal(waited.status, "done", waited.note);
+  assert.deepEqual(withCi.log.sleeps, [10000, 20000]);
+  assert.equal(withCi.log.tests.length, 0, "a repository with CI ran the local suite");
+  assert.equal(waited.data.ciGreenSha, HEAD_SHA);
+  assert.deepEqual(withCi.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: HEAD_SHA }]);
+
+  const noCi = suiteVerifies(fakeCloseDeps({ checks: NO_CHECKS }), HEAD_SHA);
+  const tested = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: noCi.deps });
+  assert.equal(tested.status, "done", tested.note);
+  assert.equal(noCi.log.tests.length, 1);
+  assert.deepEqual(noCi.log.sleeps, []);
+  assert.match(tested.note, /^no CI on 1111111: rebased onto origin\/main, suite green/);
+  assert.deepEqual(noCi.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: HEAD_SHA }]);
+});
+
+test("a branch with workflows whose checks never show up is waited on for about 60 s, then the suite runs", async () => {
+  const silent = suiteVerifies(fakeCloseDeps({ git: { ...WORKFLOWS }, checks: NO_CHECKS }), HEAD_SHA);
+  const result = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: silent.deps });
+  assert.equal(result.status, "done", result.note);
+  assert.deepEqual(silent.log.sleeps, [10000, 20000, 30000]);
+  assert.equal(silent.log.tests.length, 1);
+  assert.equal(result.data.verifiedSha, HEAD_SHA);
+});
+
+test("a branch with workflows and no checks yet stops at checks-pending when the budget runs out, never running the suite", async () => {
+  const fake = fakeCloseDeps({ git: { ...WORKFLOWS }, checks: NO_CHECKS });
+  const result = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }, "/work/alpha", { remainingMs: () => 30000 }), deps: fake.deps });
+  assert.equal(result.reason, "checks-pending");
+  assert.match(result.note, /no CI reports on 1111111 yet - run queue close J-3 again/);
+  assert.equal(fake.log.tests.length, 0);
+  assert.equal(fake.log.merges.length, 0);
+});
+
+test("without CI and too little of the close's time left for the suite, the merge stops at timeout and merges nothing", async () => {
+  const fake = fakeCloseDeps({ checks: NO_CHECKS });
+  const result = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }, "/work/alpha", { remainingMs: () => 60000 }), deps: fake.deps });
+  assert.equal(result.reason, "timeout");
+  assert.equal(fake.log.tests.length, 0);
+  assert.equal(fake.log.merges.length, 0);
+});
+
+test("without CI and without a test script, the merge stops at no-test-script saying the head cannot be verified and naming --force", async () => {
+  const fake = fakeCloseDeps({ checks: NO_CHECKS, testScript: null });
+  const result = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: fake.deps });
+  assert.equal(result.reason, "no-test-script");
+  assert.match(result.note, /cannot be verified; run queue close J-3 --force/);
+  assert.doesNotMatch(result.note, /never pushed/);
+  assert.equal(fake.log.merges.length, 0);
+});
+
+test("checks gh read on another head than the one judged are unreadable, and nothing is merged", async () => {
+  const fake = fakeCloseDeps({ checks: { ...GREEN, headSha: "9999999" } });
+  const result = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA }), deps: fake.deps });
+  assert.equal(result.reason, "checks-unreadable");
+  assert.match(result.note, /belong to 9999999, not 1111111/);
+  assert.equal(fake.log.merges.length, 0);
 });
