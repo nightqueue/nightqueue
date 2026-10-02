@@ -9,11 +9,13 @@ import { createPrStateCache } from "../../src/queue/pr-state.mjs";
 import { pruneDeadRunners, writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "../../src/queue/runner.mjs";
 import { closedLine } from "../../src/queue/close-view.mjs";
-import { closeSuggestion, failedCoreSection, jobDetailView, prUrlsOf, queueView, truncationSuggestion } from "../../src/queue/view.mjs";
+import { closeSuggestion, failedCoreSection, jobDetailView, liveBlock, prUrlsOf, queueView, truncationSuggestion } from "../../src/queue/view.mjs";
 import { KEPT_PREFIX } from "../../src/queue/worktree.mjs";
 import { withReadOnlyStore } from "../../src/store/open.mjs";
 import { ensureProject, makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
-import { doneStream } from "../../test-support/streams.mjs";
+import { readAttemptTail } from "../../src/queue/follow.mjs";
+import { partialTokens } from "../../src/queue/stream.mjs";
+import { agentToolUseEvent, assistantEvent, attemptMarker, doneStream, LANE_TOOL_USE_ID, secondsIntoAttempt, taskStartedEvent, toNdjson } from "../../test-support/streams.mjs";
 
 const DEAD_PID = 999_999;
 
@@ -302,10 +304,66 @@ test("queueView gives a running job its live block from the log tail, every othe
   assert.equal(byId.get(withLog).live.source, "log-tail");
   assert.ok(byId.get(withLog).live.tokens.in > 0);
   assert.equal(byId.get(withLog).live.tokens_estimated, false);
+  assert.equal(byId.get(withLog).live.truncated, false);
   assert.equal(byId.get(withoutLog).live, null);
   assert.equal(view.jobs.filter((job) => job.status === "pending").every((job) => job.live === null), true);
   const section = view.sections.find((entry) => entry.name === "live");
   assert.equal(section.ok, false);
   assert.equal(section.jobs, 1);
   assert.match(section.error, /missing or unreadable/);
+});
+
+// The log of one attempt: the marker, the coder's lane opening and enough lane turns to pass 64 KB.
+function bigAttemptLog(attempt, turns = 40) {
+  const opening = [
+    agentToolUseEvent({ subagentType: "nightqueue:coder", description: "apply the plan", model: "opus", timestamp: secondsIntoAttempt(1) }),
+    taskStartedEvent({ subagentType: "nightqueue:coder", description: "apply the plan" }),
+  ];
+  const lane = Array.from({ length: turns }, (_, index) => assistantEvent(`turn ${index} ${"x".repeat(2000)}`, { parentToolUseId: LANE_TOOL_USE_ID, usage: { tokensIn: 3, tokensOut: 7 }, timestamp: secondsIntoAttempt(2 + index) }));
+  return `${attemptMarker(attempt)}\n${toNdjson([...opening, ...lane])}`;
+}
+
+// Runs queueView over a home whose single running job has the given log, answering that job's live block.
+async function liveOfLog(t, name, log) {
+  const env = seedHome(t, name, [{ status: "running" }]);
+  const id = openDb(env).prepare("SELECT id FROM jobs WHERE status = 'running'").get().id;
+  mkdirSync(logsDir(env), { recursive: true });
+  writeFileSync(jobLogPath(id, env), log);
+  const view = await withReadOnlyStore(env, (store) => queueView(store, { env, killImpl: deadKill }));
+  return view.jobs.find((job) => job.id === id).live;
+}
+
+test("the live block of a single attempt past 64 KB still names the attempt, the coder, its model and intent, and counts the whole attempt's tokens", async (t) => {
+  const log = bigAttemptLog(1);
+  assert.ok(Buffer.byteLength(log) > 64 * 1024, "the fixture does not pass the tail window");
+  const live = await liveOfLog(t, "view-live-big", log);
+  assert.equal(live.attempt, 1);
+  assert.equal(live.agent, "coder");
+  assert.equal(live.model, "opus");
+  assert.equal(live.intent, "apply the plan");
+  assert.equal(live.truncated, false);
+  assert.equal(live.tokens.out, partialTokens(log).out);
+});
+
+test("the live block of a job with two attempts counts only the second", async (t) => {
+  const first = bigAttemptLog(1, 10);
+  const second = bigAttemptLog(2, 40);
+  const live = await liveOfLog(t, "view-live-two", `${first}${second}`);
+  assert.equal(live.attempt, 2);
+  assert.equal(live.tokens.out, partialTokens(second).out);
+});
+
+test("readAttemptTail above maxBytes answers truncated, and the live block of it has no identity but keeps its last event", (t) => {
+  const env = makeHome(t, "view-live-truncated");
+  mkdirSync(logsDir(env), { recursive: true });
+  const path = jobLogPath(1, env);
+  writeFileSync(path, bigAttemptLog(1));
+  const { text, truncated } = readAttemptTail(path, { maxBytes: 16 * 1024 });
+  assert.equal(truncated, true);
+  const live = liveBlock(text, { truncated });
+  assert.equal(live.truncated, true);
+  assert.equal(live.agent, null);
+  assert.equal(live.model, null);
+  assert.equal(live.intent, null);
+  assert.equal(live.last.kind, "text");
 });

@@ -499,6 +499,19 @@ test("queue status keeps the shape of its json when a job is running with a log"
   assert.deepEqual(payload.counts, { pending: 0, running: 1, done: 0, gate: 0, failed: 0, cancelled: 0, closed: 0 });
 });
 
+test("the TOKENS cell of a running job is the estimated total with cache, prefixed with ~", (t) => {
+  const env = makeCliHome(t, "cli-status-tokens-cache");
+  const id = enqueue(env);
+  claimJobById(id, { worker: "host:4242", cap: 4 }, env);
+  const path = jobLogPath(id, env);
+  mkdirSync(dirname(path), { recursive: true });
+  const event = assistantEvent("Reading the runner.", { messageId: "msg_cache", usage: { tokensIn: 10, tokensOut: 5, cacheRead: 2_000_000, cacheCreation: 10_000 } });
+  writeFileSync(path, [`=== attempt 1 @ ${new Date().toISOString()} ===`, JSON.stringify(event), ""].join("\n"));
+  const table = runCli(env, ["queue", "status"]);
+  assert.equal(table.status, 0, table.stderr);
+  assert.match(tableLine(table.stdout, id), /^J-1\s+● running\s+\d+s\s+~2\.0M\s+alpha\s/, "the cell dropped the cache or the estimate prefix");
+});
+
 test("a log that cannot be read leaves the row of a running job without a narration, never without a table", (t) => {
   const env = makeCliHome(t, "cli-status-unreadable-log");
   const id = enqueue(env);

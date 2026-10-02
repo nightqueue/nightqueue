@@ -11,7 +11,7 @@ import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./runner.mjs";
 import { CLOSED_PREFIX, POST_CLOSE_PREFIX, closeLines, closeState, closesSummary } from "./close-view.mjs";
 import { jobLogPath } from "../config/paths.mjs";
 import { liveState } from "./narrate.mjs";
-import { readLogTail } from "./follow.mjs";
+import { readAttemptTail } from "./follow.mjs";
 import { extractNoticeFromStream, partialTokens } from "./stream.mjs";
 import { KEPT_PREFIX } from "./worktree.mjs";
 
@@ -121,11 +121,12 @@ function readRunners(env, killImpl) {
 }
 
 // The live block of a running job, derived from the tail of its log: the narrator's state plus the partial tokens of the attempt.
-export function liveBlock(tail, { tier = null } = {}) {
+export function liveBlock(tail, { tier = null, truncated = false } = {}) {
   const tokens = partialTokens(tail);
   return {
     source: "log-tail",
     ...liveState(tail, { tier }),
+    truncated: truncated === true,
     tokens: tokens ? { in: tokens.in, out: tokens.out, cache_read: tokens.cache_read, cache_creation: tokens.cache_creation } : null,
     tokens_estimated: tokens ? tokens.estimated : null,
   };
@@ -133,9 +134,9 @@ export function liveBlock(tail, { tier = null } = {}) {
 
 // The live block of one job read from its log tail, or the reason it could not be read.
 function readLiveOf(job, env) {
-  const tail = readLogTail(jobLogPath(job.id, env));
-  if (tail === null) return { live: null, error: `the log of ${jobRef(job.id)} is missing or unreadable` };
-  return { live: liveBlock(tail, { tier: job.tier }), error: null };
+  const attempt = readAttemptTail(jobLogPath(job.id, env));
+  if (attempt === null) return { live: null, error: `the log of ${jobRef(job.id)} is missing or unreadable` };
+  return { live: liveBlock(attempt.text, { tier: job.tier, truncated: attempt.truncated }), error: null };
 }
 
 // Gives every running job its `live` block and every other job `live: null`, with the section that reports how the read went; a log that cannot be read leaves only its own job at null.

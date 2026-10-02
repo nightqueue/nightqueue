@@ -42,6 +42,43 @@ export function readLogTail(path, limitBytes = TAIL_LIMIT_BYTES) {
   }
 }
 
+const ATTEMPT_CHUNK_BYTES = 64 * 1024;
+export const ATTEMPT_MAX_BYTES = 8 * 1024 * 1024;
+const ATTEMPT_LINE_BYTES = Buffer.from("\n=== attempt ");
+const ATTEMPT_START_BYTES = Buffer.from("=== attempt ");
+
+// Offset where the last attempt marker line starts inside a region read from `from`, or -1 when it holds none.
+function lastMarkerOffset(region, from) {
+  const hit = region.lastIndexOf(ATTEMPT_LINE_BYTES);
+  if (hit >= 0) return hit + 1;
+  return from === 0 && region.subarray(0, ATTEMPT_START_BYTES.length).equals(ATTEMPT_START_BYTES) ? 0 : -1;
+}
+
+// The log from its last `=== attempt N @ ... ===` line to the end, read backwards and capped at `maxBytes`; a cap hit before the marker answers what was read, truncated. Null when nothing could be read.
+export function readAttemptTail(path, { maxBytes = ATTEMPT_MAX_BYTES } = {}) {
+  try {
+    let end = statSync(path)?.size;
+    if (!Number.isFinite(end) || end <= 0) return { text: "", truncated: false };
+    const chunks = [];
+    let read = 0;
+    while (end > 0 && read < maxBytes) {
+      const length = Math.min(ATTEMPT_CHUNK_BYTES, end, maxBytes - read);
+      const from = end - length;
+      const chunk = readChunkSync(path, from, length);
+      const seam = chunks.length ? chunks[0].subarray(0, ATTEMPT_LINE_BYTES.length) : Buffer.alloc(0);
+      const marker = lastMarkerOffset(Buffer.concat([chunk, seam]), from);
+      if (marker >= 0) return { text: Buffer.concat([chunk.subarray(marker), ...chunks]).toString("utf8"), truncated: false };
+      chunks.unshift(chunk);
+      read += length;
+      end = from;
+    }
+    const text = Buffer.concat(chunks).toString("utf8");
+    return end > 0 ? { text: afterFirstLine(text), truncated: true } : { text, truncated: false };
+  } catch {
+    return null;
+  }
+}
+
 // The poll of a file that could not be read at all: the failing side of the tri-state.
 function readFailure(error) {
   return { ok: false, message: error?.message ?? String(error), size: null, lines: [], truncated: false };

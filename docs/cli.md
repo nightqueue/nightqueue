@@ -344,6 +344,7 @@ recent enough that this is their first mention here.
 nightqueue queue add --issue NQ-12 [--run-dir <dir>] ["<note>"]     # an issue's job, with an operator note and/or a prior operator run
 nightqueue queue status J-42                          # one job, by its ref (or its plain id)
 nightqueue queue status https://github.com/acme/api/pull/7   # ...or by the pull request it opened
+nightqueue queue status                               # the table; TOKENS is the total including cache (see below)
 nightqueue queue session 42                          # resume the session of a job's last attempt
 nightqueue queue session 42 --print                   # print the resume command instead of running it
 nightqueue queue session 42 --json                    # session, attempt and cwd, as the only thing on stdout
@@ -364,6 +365,14 @@ nightqueue queue repair [--json]                      # replay the pending write
 nightqueue queue repair 42 [--json]                   # re-classify a gated or failed job from its own log
 nightqueue queue repair --from-disk [42] [--json]     # recreate the jobs the table lost, from their runs on disk
 ```
+
+The TOKENS column of `queue status` is the total including cache: input + output +
+cache read + cache creation. While a job runs, the cell is the estimate read from the
+streamed assistant usage and carries a `~` prefix (`~66.9M`); it loses the prefix once the
+result reports. The cache counters stream faithfully (within 1% of the result), but the
+output tokens of subagents never reach the orchestrator stream, so a partial input + output
+total would be useless mid-run, while the total with cache is a good proxy that converges.
+`queue status <id>` keeps the four counters separate; no cost is ever estimated.
 
 `queue repair` has three forms. Bare, it replays every `pending-writes.jsonl` a run left while
 the database was unavailable (see [Runtime contract](runtime-contract.md)) and prints one

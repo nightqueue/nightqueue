@@ -511,8 +511,10 @@ function liveLaneOf(state, parent) {
   if (state.lanes.has(parent)) return state.lanes.get(parent);
   if (state.closed.has(parent)) return null;
   liveOpenLane(state, { id: parent, subagentType: null, description: null, model: null });
-  state.lanes.get(parent).openedMs = null;
-  return state.lanes.get(parent);
+  const lane = state.lanes.get(parent);
+  lane.agent = null;
+  lane.openedMs = null;
+  return lane;
 }
 
 // Records the last tool or text event of a lane, or of the orchestrator when the event belongs to no lane.
