@@ -9,7 +9,10 @@ import { prStateKey } from "./pr-state.mjs";
 import { liveRunnersReport } from "./registry.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./runner.mjs";
 import { CLOSED_PREFIX, POST_CLOSE_PREFIX, closeLines, closeState, closesSummary } from "./close-view.mjs";
-import { extractNoticeFromStream } from "./stream.mjs";
+import { jobLogPath } from "../config/paths.mjs";
+import { liveState } from "./narrate.mjs";
+import { readLogTail } from "./follow.mjs";
+import { extractNoticeFromStream, partialTokens } from "./stream.mjs";
 import { KEPT_PREFIX } from "./worktree.mjs";
 
 // The state of the pull request of a job as the cache holds it right now: null without a GitHub pull request, `unknown` on a miss.
@@ -117,6 +120,38 @@ function readRunners(env, killImpl) {
   return report.runners;
 }
 
+// The live block of a running job, derived from the tail of its log: the narrator's state plus the partial tokens of the attempt.
+export function liveBlock(tail, { tier = null } = {}) {
+  const tokens = partialTokens(tail);
+  return {
+    source: "log-tail",
+    ...liveState(tail, { tier }),
+    tokens: tokens ? { in: tokens.in, out: tokens.out, cache_read: tokens.cache_read, cache_creation: tokens.cache_creation } : null,
+    tokens_estimated: tokens ? tokens.estimated : null,
+  };
+}
+
+// The live block of one job read from its log tail, or the reason it could not be read.
+function readLiveOf(job, env) {
+  const tail = readLogTail(jobLogPath(job.id, env));
+  if (tail === null) return { live: null, error: `the log of ${jobRef(job.id)} is missing or unreadable` };
+  return { live: liveBlock(tail, { tier: job.tier }), error: null };
+}
+
+// Gives every running job its `live` block and every other job `live: null`, with the section that reports how the read went; a log that cannot be read leaves only its own job at null.
+function withLive(jobs, env, now) {
+  const startedAt = now();
+  const errors = [];
+  const withBlocks = jobs.map((job) => {
+    if (job.status !== "running") return { ...job, live: null };
+    const { live, error } = readLiveOf(job, env);
+    if (error) errors.push(error);
+    return { ...job, live };
+  });
+  const section = { name: "live", ok: errors.length === 0, ms: Math.max(0, Math.round(now() - startedAt)), error: errors[0] ?? null, jobs: withBlocks.filter((job) => job.live !== null).length };
+  return { jobs: withBlocks, section };
+}
+
 // The data of the queue view in timed sections, read from SELECTs and pure file reads alone; a failed section never fails the view.
 export async function queueView(readStore, { env = process.env, limit, blockedOnly = false, prStates = null, killImpl, now = () => performance.now() } = {}) {
   const jobsPart = await timedSection("jobs", async () => (await readStore.jobs.listJobs({ limit, blockedOnly })).map(jobView), now);
@@ -126,9 +161,10 @@ export async function queueView(readStore, { env = process.env, limit, blockedOn
   const registryError = runnersPart.ok ? null : runnersPart.error;
   const advisoriesPart = await timedSection("advisories", async () => (runnersPart.ok ? await advisoryLinesFor({ store: readStore, runners, env, killImpl }) : []), now);
   const closesPart = await timedSection("closes", async () => closesSummary(await readStore.jobs.listCloses(), runners), now);
-  const jobs = (jobsPart.value ?? []).map((job) => withPrState(job, prStates));
+  const { jobs, section: liveSection } = withLive((jobsPart.value ?? []).map((job) => withPrState(job, prStates)), env, now);
   const { counts, blockedGates, activeJobs } = countsPart.value ?? { counts: zeroCounts(), blockedGates: 0, activeJobs: 0 };
-  const sections = [jobsPart, countsPart, runnersPart, advisoriesPart, closesPart].map(({ name, ok, ms, error, unavailable }) => ({ name, ok, ms, error, ...(unavailable ? { unavailable } : {}) }));
+  const timedSections = [jobsPart, countsPart, runnersPart, advisoriesPart, closesPart].map(({ name, ok, ms, error, unavailable }) => ({ name, ok, ms, error, ...(unavailable ? { unavailable } : {}) }));
+  const sections = [...timedSections, liveSection];
   const advisories = advisoriesPart.value ?? [];
   const closes = closesPart.value ?? { inFlight: [], failed: [], stalled: [] };
   const suggestions = [closeSuggestion(jobs), truncationSuggestion(jobs), ...unknownStatusAdvisories(jobs), ...closeLines(closes)].filter(Boolean);
@@ -194,10 +230,11 @@ async function itemRefOfJob(readStore, jobId) {
 // One job in full with the state of its pull request, or null when the row is gone. When the run's own notice (read fresh
 // from its log) really differs from the row's `notice_md` - once the lines the runtime itself appends to the row are set
 // aside - both are carried: `notice` is the row's, `run_notice` the run's whole own.
-export async function jobDetailView(readStore, id, { prStates = null } = {}) {
+export async function jobDetailView(readStore, id, { prStates = null, env = process.env } = {}) {
   const job = jobView(await readStore.jobs.getJob(id), { full: true });
   if (!job) return null;
-  const withState = { ...withPrState(job, prStates), item_ref: await itemRefOfJob(readStore, job.id) };
+  const live = job.status === "running" ? readLiveOf(job, env).live : null;
+  const withState = { ...withPrState(job, prStates), item_ref: await itemRefOfJob(readStore, job.id), live };
   const runNotice = runNoticeOf(job);
   const rowNotice = withoutRuntimeAppendedLines(job.notice_md).trim();
   return runNotice && runNotice.trim() !== rowNotice ? { ...withState, run_notice: runNotice } : withState;

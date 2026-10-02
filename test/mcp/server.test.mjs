@@ -878,7 +878,7 @@ test("queue_status never writes a delivered job whose pull request is merged, an
   const first = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(first.jobs[0].pr_state, "unknown", "the first answer waited for gh instead of answering from the cache");
   assert.deepEqual(first.suggestions, []);
-  assert.deepEqual(first.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories", "closes"]);
+  assert.deepEqual(first.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories", "closes", "live"]);
   assert.ok(first.sections.every((section) => section.ok && Number.isInteger(section.ms)), JSON.stringify(first.sections));
 
   const listed = await pollPrState(client, "merged");

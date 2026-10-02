@@ -758,8 +758,8 @@ function warningAnswer(warning) {
 }
 
 // The answer of `queue_status` for one job: the job in full with the state of its pull request.
-async function jobStatusAnswer(id, { store, warning }) {
-  const job = await jobDetailView(store, id, { prStates: serverPrStates });
+async function jobStatusAnswer(id, { store, warning, env }) {
+  const job = await jobDetailView(store, id, { prStates: serverPrStates, env });
   if (!job) throw new UserError(`unknown job \`${id}\``);
   return { job, ...warningAnswer(warning) };
 }
@@ -776,8 +776,8 @@ function statusJobAsked(args) {
 // The answer of `queue_status` for the tail of the queue, mapped from the one queue view every surface renders.
 async function queueStatusAnswer(args, { store, warning, env, state }) {
   const asked = statusJobAsked(args);
-  if (asked.jobId !== undefined) return await jobStatusAnswer(asked.jobId, { store, warning });
-  if (asked.prUrl !== undefined) return await jobStatusAnswer(await jobIdOfPrUrl(store, asked.prUrl), { store, warning });
+  if (asked.jobId !== undefined) return await jobStatusAnswer(asked.jobId, { store, warning, env });
+  if (asked.prUrl !== undefined) return await jobStatusAnswer(await jobIdOfPrUrl(store, asked.prUrl), { store, warning, env });
   const view = await queueView(store, { env, limit: jobLimit(args.limit), prStates: serverPrStates });
   const unread = failedCoreSection(view);
   if (unread?.unavailable) throw unread.unavailable;
@@ -1182,6 +1182,7 @@ function toolDefinitions(env, state) {
           "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`; a gate with `blocked_code` is a preflight block: fix the cause and `queue_retry` it with no note. " +
           "The listing cuts `notice_md` and `result` at 500 characters and marks a cut row with `notice_truncated: true` or `result_truncated: true` (the key is absent when the text fits); call again with that `job_id` for the whole text. " +
           "`sections` carries each part of the read with `ok`, `error` and elapsed `ms`, and `pr_state` of each job comes from a cache refreshed outside the answer (`unknown` until gh answered); " +
+          "a `running` job carries `live` (agent, lane intent, last action, partial tokens, `source: \"log-tail\"`), every other job `live: null`, and `sections` has a `live` entry; " +
           "a merged pull request on a `done` job is listed in `suggestions`, and closing it is `queue_close`. `closes` groups the closes in flight, failed and stalled.",
         inputSchema: {
           job_id: jobRefInput.nullable().optional().describe("One job by its ref (`J-77`) or its plain id."),

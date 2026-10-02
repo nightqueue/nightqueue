@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createNarrator, formatNarration, lastNarratedLine, narrateLog } from "../../src/queue/narrate.mjs";
+import { createNarrator, formatNarration, lastNarratedLine, liveState, narrateLog } from "../../src/queue/narrate.mjs";
 import {
   agentToolUseEvent,
   assistantEvent,
@@ -364,4 +364,67 @@ test("a lane still open at the end of the log is in progress while the job runs,
   assert.equal(running.some((line) => line.startsWith("laneOrphan:")), false, "a running job was called an orphan");
   const over = narrateLog(`${task}\n`).map((event) => `${event.kind}:${event.text}`);
   assert.ok(over.some((line) => /^laneOrphan:qa-guardian.*never reported back$/.test(line)), over.join("\n"));
+});
+
+const LIVE_NOW_MS = Date.parse(secondsIntoAttempt(30));
+
+// The live state of a log of one attempt, read 30 seconds into it.
+function live(events, tier = "complex") {
+  return liveState(attemptLog(events), { tier, nowMs: LIVE_NOW_MS });
+}
+
+test("liveState inside a lane names the agent, its model and intent, and the last event of that lane", () => {
+  const state = live([
+    assistantEvent("Planning the run.", { timestamp: secondsIntoAttempt(1) }),
+    agentToolUseEvent({ subagentType: "nightqueue:coder", description: "implement stage 1", model: "opus", timestamp: secondsIntoAttempt(2) }),
+    toolUseEvent({ name: "Edit", id: "toolu_e", input: { file_path: "/x/view.mjs" }, parentToolUseId: LANE_TOOL_USE_ID, timestamp: secondsIntoAttempt(20) }),
+  ]);
+  assert.equal(state.attempt, 1);
+  assert.equal(state.agent, "coder");
+  assert.equal(state.model, "opus");
+  assert.equal(state.intent, "implement stage 1");
+  assert.deepEqual(state.last, { kind: "tool", text: "Edit view.mjs", at: secondsIntoAttempt(20) });
+  assert.equal(state.lane_opened_at, secondsIntoAttempt(2));
+  assert.equal(state.quiet_s, 10);
+  assert.deepEqual([state.phase, state.phases], [5, 9]);
+});
+
+test("liveState between lanes and before the first lane belongs to the orchestrator", () => {
+  const before = live([assistantEvent("Reading the ticket.", { timestamp: secondsIntoAttempt(5) })]);
+  assert.equal(before.agent, "orchestrator");
+  assert.equal(before.intent, "Reading the ticket.");
+  assert.equal(before.lane_opened_at, null);
+  assert.deepEqual([before.phase, before.phases], [1, 9]);
+  const between = live([
+    agentToolUseEvent({ timestamp: secondsIntoAttempt(2) }),
+    taskNotificationEvent(),
+    assistantEvent("Triage is done.", { timestamp: secondsIntoAttempt(10) }),
+  ], "simple");
+  assert.equal(between.agent, "orchestrator");
+  assert.equal(between.intent, "Triage is done.");
+  assert.deepEqual(between.last, { kind: "text", text: "Triage is done.", at: secondsIntoAttempt(10) });
+  assert.deepEqual([between.phase, between.phases], [2, 6]);
+});
+
+test("liveState follows the nightqueue run markers of the orchestrator Bash, with or without a description", () => {
+  const publish = live([toolUseEvent({ input: { command: "nightqueue run publish --slug x", description: "open the PR" }, timestamp: secondsIntoAttempt(3) })]);
+  assert.equal(publish.last.text, "open the PR — Bash nightqueue run publish --slug x");
+  assert.deepEqual([publish.phase, publish.phases], [8, 9]);
+  const report = live([toolUseEvent({ input: { command: "nightqueue run report" }, timestamp: secondsIntoAttempt(3) })]);
+  assert.equal(report.last.text, "Bash nightqueue run report");
+  assert.equal(report.phase, 9);
+});
+
+test("liveState of a lane opened before the window has no intent but keeps its last event", () => {
+  const state = live([toolUseEvent({ name: "Read", id: "toolu_r", input: { file_path: "/x/a.mjs" }, parentToolUseId: "toolu_old", timestamp: secondsIntoAttempt(9) })]);
+  assert.equal(state.agent, "subagent");
+  assert.equal(state.intent, null);
+  assert.equal(state.lane_opened_at, null);
+  assert.equal(state.last.text, "Read a.mjs");
+  assert.equal(state.quiet_s, 21);
+});
+
+test("liveState of an unknown tier or an empty tail answers nulls, never a throw", () => {
+  const state = liveState("", { tier: null, nowMs: LIVE_NOW_MS });
+  assert.deepEqual([state.attempt, state.last, state.quiet_s, state.phase, state.phases], [null, null, null, null, null]);
 });

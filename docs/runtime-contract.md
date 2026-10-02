@@ -363,7 +363,35 @@ characters in a listing; a row whose text was cut carries `notice_truncated: tru
 `job_id` is never cut), and `suggestions` plus the `hint` gain one line naming
 `nightqueue queue status J-<id>`, where the whole text is. It answers with the state of the runner next to the jobs; it is a pure read
 that never repairs nor prunes on call, and reports the last repair warning of the server's
-maintenance (once at start, then every 60 s, never inside a job) as `warning`. `queue_run`
+maintenance (once at start, then every 60 s, never inside a job) as `warning`. Every `running` job carries a `live` block and every other job `live: null`; `sections` gains
+`{ name: "live", ok, error, ms, jobs }`, where `jobs` counts the blocks filled and a log that is
+missing or unreadable sets `ok: false` and leaves only its own job at `live: null`. The block is
+derived on demand from the tail of the job log, never stored (not on the jobs row, in
+`state.json` nor in pending-writes), adds no column and keeps `contract` at 2:
+
+```json
+{
+  "source": "log-tail",
+  "attempt": 1,
+  "agent": "coder",
+  "model": "sonnet",
+  "phase": 3,
+  "phases": 6,
+  "intent": "Implement stage 2",
+  "last": { "kind": "tool", "text": "Edit view.mjs", "at": "2026-01-01T00:00:00.000Z" },
+  "lane_opened_at": "2026-01-01T00:00:00.000Z",
+  "quiet_s": 4,
+  "tokens": { "in": 10, "out": 20, "cache_read": 0, "cache_creation": 0 },
+  "tokens_estimated": true
+}
+```
+
+`agent` is the subagent lane still open, or `orchestrator` outside one (then `phase` follows
+the `nightqueue run start|publish|report` commands and `model`, `lane_opened_at` are `null`);
+`phase` is the 1-based position of the current phase in the tier's track and `phases` the size of
+that track (both `null` when the tier or the phase is unknown); `last.kind` is `tool` or `text`;
+`tokens` are the partial usage of the running attempt, estimated from the assistant turns until
+the result event reports them, and no cost is ever estimated. `queue_run`
 starts the runner detached and answers right away with the path of its log,
 `queue_cancel` cancels a `pending`, `gate`, orphaned, `done` or `failed` job and answers `{ ok,
 job, worktree }` - `worktree` is `{ path, status, reason? }` when cancelling a `done` or `failed`

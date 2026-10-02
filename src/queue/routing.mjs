@@ -139,6 +139,22 @@ export function phasesFor(tier, type) {
   return [...phases];
 }
 
+// The numbers of the pipeline phases the tier's track runs, read from its "Phases that run" cell; null for a tier outside the pipeline.
+export function trackPhaseNumbers(tier) {
+  if (!PIPELINE_TIERS.includes(tier)) return null;
+  const cell = cellOf("Phases that run", tier);
+  if (cell.startsWith("every phase")) return Array.from({ length: 9 }, (_, number) => number);
+  return cell.split("·").map((part) => Number.parseInt(part, 10));
+}
+
+// The emoji of an agent's row in the routing table, or null for a name with no row (the orchestrator).
+export function agentGlyph(agent) {
+  const name = String(agent ?? "").toLowerCase();
+  if (!name) return null;
+  const row = TRACK_ROUTING.find(([label]) => label.split(" ").slice(1).join(" ").toLowerCase() === name);
+  return row ? row[0].split(" ")[0] : null;
+}
+
 // The TaskCreate subjects' phase prefixes of a run: one task per phase that runs.
 export function tasksFor(tier, type) {
   return phasesFor(tier, type);
