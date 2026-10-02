@@ -6,7 +6,7 @@ import { testConnection } from "../../src/config/connections.mjs";
 import { loadConfig, loadSecrets, saveSecrets } from "../../src/config/store.mjs";
 import { requestJson } from "../../src/integrations/http.mjs";
 import { detectOrigin, explicitOrigin } from "../../src/integrations/origin.mjs";
-import { discord } from "../../src/integrations/discord.mjs";
+import { discord, isWeakHeadline, noticeSummary } from "../../src/integrations/discord.mjs";
 import { acquireClose, getJob } from "../../src/memory/jobs.mjs";
 import { CLOSE_STEPS, runClosePipeline } from "../../src/queue/close.mjs";
 import { runPostCloseSteps } from "../../src/queue/close-start.mjs";
@@ -218,7 +218,7 @@ test("the reply posts in the matching channel, else probes the guild's webhooks 
     content: "",
     embeds: [{
       title: "Fixed · J-1",
-      description: "fix the crash",
+      description: "Fix the crash",
       url: RESULT.prUrl,
       fields: [{ name: "Reported", value: `[message](${MESSAGE_LINK})` }],
       footer: { text: "merged as abc1234" },
@@ -256,13 +256,13 @@ test("the reply posts in the matching channel, else probes the guild's webhooks 
 
 test("the log posts the closed job once to its webhook as one embed, cut to Discord's limits, and skips any other event", async () => {
   const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
-  const logged = await discord.log({ event: "closed", job: { ...JOB, title: "fix(crash): the crash" }, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
+  const logged = await discord.log({ event: "closed", job: { ...JOB, title: "fix(crash): the crash", slug: "the-crash" }, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
   assert.deepEqual(logged, { status: "done", note: "logged through ops" });
   assert.deepEqual(fetch.calls[0].body, {
     content: "",
     embeds: [{
-      title: "J-1 closed · fix(crash)",
-      description: "the crash",
+      title: "J-1 closed · the-crash",
+      description: "The crash",
       url: RESULT.prUrl,
       fields: [
         { name: "PR", value: `[#7](${RESULT.prUrl})`, inline: true },
@@ -276,8 +276,10 @@ test("the log posts the closed job once to its webhook as one embed, cut to Disc
   });
   assert.doesNotMatch(fetch.calls[0].body.content, /http/);
   assert.equal(fetch.calls[0].body.embeds[0].url, RESULT.prUrl);
-  await discord.log({ event: "closed", job: { ...JOB, title: "x".repeat(5000) }, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
+  await discord.log({ event: "closed", job: { ...JOB, slug: "x".repeat(5000), title: "x".repeat(5000) }, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
   assert.equal(fetch.calls[1].body.embeds[0].title.length, 256);
+  assert.ok(fetch.calls[1].body.embeds[0].title.endsWith("…"));
+  assert.equal(fetch.calls[1].body.embeds[0].description.length, 4096);
   const bare = await discord.log({ event: "closed", job: JOB, result: {}, settings: {}, connection: OPS, http: httpOf(fetch) });
   assert.equal(bare.status, "done");
   const [degraded] = fetch.calls[2].body.embeds;
@@ -290,6 +292,95 @@ test("the log posts the closed job once to its webhook as one embed, cut to Disc
   assert.equal(fetch.calls.length, 3);
   const refused = await discord.log({ event: "closed", job: JOB, result: RESULT, settings: {}, connection: OPS, http: httpOf(fakeFetch()) });
   assert.deepEqual(refused, { status: "warning", note: "log not posted through ops (HTTP 404)" });
+});
+
+// A notice in the real shape: headline, other paragraphs, "What was done:", and the closing lines.
+function noticeOf(header, done) {
+  return `${header}\n\nWhat was missing: something.\n\nWhat was done: ${done}\n\nHow it was validated: tests.\n\nRecord: • PR https://x/pull/1\nClosed: PR #1 merged as abc1234 on 2026-10-02`;
+}
+
+const CLOSED_JOBS = [
+  { ref: "J-115", slug: "tracker-renamed-to-issues-across", title: "refactor(memory): the issues rename migrates as schema v22", pr: 38,
+    header: "✅ Delivered — the project tracker is now called \"issues\" everywhere, and existing databases migrate in place",
+    done: "the tracker is now \"issues\" in the command line, the assistant tools, the prompts and the docs, released as 0.6.0 with a Breaking note. Existing databases are converted on first open.",
+    headline: "the project tracker is now called \"issues\" everywhere, and existing databases migrate in place",
+    firstDone: "the tracker is now \"issues\" in the command line, the assistant tools, the prompts and the docs, released as 0.6.0 with a Breaking note." },
+  { ref: "J-116", slug: "migrate-only-in-setup-update", title: "fix(store): migrate the home schema only in setup/update, never on open", pr: 41,
+    header: "✅ Fixed — goes out in the next release",
+    done: "opening the database never upgrades it now. An older database is refused untouched.",
+    headline: "goes out in the next release", firstDone: "opening the database never upgrades it now.",
+    line1: "Migrate the home schema only in setup/update, never on open" },
+  { ref: "J-117", slug: "task-queue-status-carries-a-derived", title: "refactor(queue): queue_status carries a derived live block per running job", pr: 42,
+    header: "✅ Delivered — the queue status now shows what each running job is doing right now",
+    done: "one shared calculation, read on demand from the job's log, now feeds both the terminal and the tool. Running jobs carry the live view.",
+    headline: "the queue status now shows what each running job is doing right now",
+    firstDone: "one shared calculation, read on demand from the job's log, now feeds both the terminal and the tool." },
+  { ref: "J-118", slug: "discord-embeds", title: "chore(discord): webhook posts are embeds, not text with bare links", pr: 43,
+    header: "✅ Delivered — Discord posts are now cards instead of text with bare links",
+    done: "both messages are now one compact card each. The card has a clickable title.",
+    headline: "Discord posts are now cards instead of text with bare links", firstDone: "both messages are now one compact card each." },
+  { ref: "J-119", slug: "close-steps-again", title: "chore(close): queue close --steps --again re-runs post-close steps", pr: 44,
+    header: "✅ Delivered — closing a job can now re-send its follow-up messages on request",
+    done: "a new \"again\" option, used together with the list of steps to re-run, sends those steps' messages one more time. A later re-run without it stays silent again.",
+    headline: "closing a job can now re-send its follow-up messages on request",
+    firstDone: "a new \"again\" option, used together with the list of steps to re-run, sends those steps' messages one more time." },
+];
+
+test("noticeSummary reads the headline and first sentence of the five closed jobs J-115..J-119", () => {
+  for (const job of CLOSED_JOBS) {
+    assert.deepEqual(noticeSummary(noticeOf(job.header, job.done)), { headline: job.headline, firstDone: job.firstDone }, job.ref);
+  }
+});
+
+test("noticeSummary: no What was done paragraph, blank notice, a Partially fixed header and the e.g. abbreviation", () => {
+  assert.deepEqual(noticeSummary("✅ Fixed — the crash is gone for every user"), { headline: "the crash is gone for every user", firstDone: null });
+  assert.deepEqual(noticeSummary("✅ Partially fixed — the crash is gone for most users\n\nWhat was done: a guard."), { headline: "the crash is gone for most users", firstDone: "a guard." });
+  assert.equal(noticeSummary(""), null);
+  assert.equal(noticeSummary("  \n \n"), null);
+  assert.equal(noticeSummary(undefined), null);
+  assert.deepEqual(noticeSummary("✅ Delivered — a headline with enough words\n\nWhat was done: fields such as e.g. the title are cut."), { headline: "a headline with enough words", firstDone: "fields such as e.g." });
+  assert.equal(noticeSummary("✅ Delivered — a headline with enough words\n\nWhat was done: is it? yes!").firstDone, "is it?");
+});
+
+test("isWeakHeadline flags short headlines and release-time statements only", () => {
+  assert.equal(isWeakHeadline("goes out in the next release"), true);
+  assert.equal(isWeakHeadline("the fix is live"), true);
+  assert.equal(isWeakHeadline("too short here"), true);
+  assert.equal(isWeakHeadline(""), true);
+  assert.equal(isWeakHeadline("the queue status now shows what each job does"), false);
+});
+
+test("the closed card of J-117 is titled by ref and slug, described by headline and first sentence, with no commit type(scope)", async () => {
+  const [, , j117] = CLOSED_JOBS;
+  const job = { id: 2, ref: j117.ref, slug: j117.slug, title: j117.title, project: "nightqueue", notice_md: noticeOf(j117.header, j117.done) };
+  const result = { prUrl: "https://github.com/acme/nightqueue/pull/42", prNumber: 42, mergeSha: "2e2e7aa1234", mergedAt: "2026-10-02T10:00:00.000Z" };
+  const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
+  await discord.log({ event: "closed", job, result, settings: {}, connection: OPS, http: httpOf(fetch) });
+  const [embed] = fetch.calls[0].body.embeds;
+  assert.equal(embed.title, "J-117 closed · task-queue-status-carries-a-derived");
+  assert.equal(embed.url, result.prUrl);
+  assert.equal(embed.description, "The queue status now shows what each running job is doing right now\nOne shared calculation, read on demand from the job's log, now feeds both the terminal and the tool.");
+  assert.deepEqual(embed.fields.map((field) => [field.name, field.value, field.inline]), [["PR", `[#42](${result.prUrl})`, true], ["Project", "nightqueue", true]]);
+  assert.equal(embed.footer.text, "merged as 2e2e7aa");
+  assert.equal(embed.timestamp, result.mergedAt);
+  assert.doesNotMatch(JSON.stringify(embed), /refactor|\(queue\)/);
+});
+
+test("the closed card falls back to the commit subject for a weak headline, a missing notice, a notice without What was done, and a missing slug", async () => {
+  const [, j116] = CLOSED_JOBS;
+  const describe = async (job) => {
+    const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
+    await discord.log({ event: "closed", job: { ...JOB, ...job }, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
+    return fetch.calls[0].body.embeds[0];
+  };
+  const weak = await describe({ title: j116.title, notice_md: noticeOf(j116.header, j116.done) });
+  assert.equal(weak.description, "Migrate the home schema only in setup/update, never on open\nOpening the database never upgrades it now.");
+  assert.equal(weak.title, "J-1 closed");
+  const noNotice = await describe({ title: j116.title, slug: "migrate-only-in-setup-update" });
+  assert.equal(noNotice.description, "Migrate the home schema only in setup/update, never on open");
+  assert.equal(noNotice.title, "J-1 closed · migrate-only-in-setup-update");
+  const noDone = await describe({ title: "fix the crash", notice_md: "✅ Fixed — the crash is gone for every user" });
+  assert.equal(noDone.description, "Fix the crash");
 });
 
 test("closing a job queued from a discord link replies and logs once; a --steps re-run posts nothing again", async (t) => {
@@ -305,7 +396,7 @@ test("closing a job queued from a discord link replies and logs once; a --steps 
     { name: "log", status: "done", note: "discord: logged through ops" },
   ]);
   assert.deepEqual(fetch.calls.map((call) => [call.method, call.url]), [["POST", `${CHAT_URL}?wait=true`], ["POST", `${OPS_URL}?wait=true`]]);
-  assert.match(fetch.calls[1].body.embeds[0].title, /^J-\d+ closed · /);
+  assert.match(fetch.calls[1].body.embeds[0].title, /^J-\d+ closed/);
   assert.doesNotMatch(fetch.calls[1].body.content, /http/);
   assert.equal(fetch.calls[1].body.embeds[0].url, RESULT.prUrl);
   const checklist = JSON.parse(row.close);
