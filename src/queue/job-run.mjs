@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { StoreUnavailableError } from "../config/errors.mjs";
+import { isStoreOutage } from "../config/errors.mjs";
 import { runsDir } from "../config/paths.mjs";
 import { openStore } from "../store/open.mjs";
 import { isStateObject, readRunState } from "./resume.mjs";
@@ -44,7 +44,7 @@ export async function resolveJobRun(jobId, env = process.env) {
     const row = await openStore(env).jobs.getJob(jobId);
     return { project: row?.project ?? null, projectId: row?.project_id ?? null, slug: row?.slug ?? null, source: "db" };
   } catch (err) {
-    if (!(err instanceof StoreUnavailableError)) throw err;
+    if (!isStoreOutage(err)) throw err;
     const found = diskJobRun(jobId, env);
     if (found === null) throw err;
     return found;

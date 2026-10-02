@@ -194,7 +194,7 @@ test("queue status --json answers with the jobs and the counts, and never with t
   assert.equal(payload.jobs[0].pr_state, null, "a job without a pull request carries a pull request state");
   assert.equal(payload.counts.merged, undefined, "the retired merged status is still counted");
   assert.deepEqual(payload.suggestions, []);
-  assert.deepEqual(payload.sections.map((section) => [section.name, section.ok]), [["jobs", true], ["counts", true], ["runners", true], ["advisories", true], ["closes", true]]);
+  assert.deepEqual(payload.sections.map((section) => [section.name, section.ok]), [["jobs", true], ["counts", true], ["runners", true], ["advisories", true], ["closes", true], ["live", true]]);
 
   const one = JSON.parse(runCli(env, ["queue", "status", String(first), "--json"]).stdout);
   assert.deepEqual({ id: one.job.id, status: one.job.status, project: one.job.project }, { id: first, status: "pending", project: "alpha" });
@@ -628,8 +628,8 @@ test("queue status leads with the rate limit a runner is waiting out, and never 
   assert.equal(lastLine(paused.stdout), `1 pending job waiting - the runner is paused until ${clock} (5h limit, resets in 1h00)`);
 
   const json = JSON.parse(runCli(env, ["queue", "status", "--json"]).stdout);
-  assert.deepEqual(json.runner.rateLimit, { type: "five_hour", resetsAt: resetsAt.toISOString(), utilization: 0.99 });
-  assert.equal(json.runner.pausedUntil, new Date(resetsAt.getTime() + 60_000).toISOString());
+  assert.deepEqual(json.runners[0].rateLimit, { type: "five_hour", resetsAt: resetsAt.toISOString(), utilization: 0.99 });
+  assert.equal(json.runners[0].pausedUntil, new Date(resetsAt.getTime() + 60_000).toISOString());
 });
 
 test("queue status shows a watch runner's window before it opens, and the backlog names the wait for it", (t) => {

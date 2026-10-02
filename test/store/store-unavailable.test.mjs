@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { StoreUnavailableError, UserError } from "../../src/config/errors.mjs";
 import { dbPath, homeDir } from "../../src/config/paths.mjs";
-import { closeDb, hasCachedWriteConnection, migrateIfOutdated, openDb, retireConnection } from "../../src/memory/db.mjs";
+import { closeDb, hasCachedWriteConnection, openDb, requireCurrentSchema, retireConnection } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { projectFromCwd, registeredProject } from "../../src/memory/registry-access.mjs";
 import { classifyStoreError } from "../../src/memory/store-error.mjs";
@@ -221,11 +221,11 @@ test("health() never throws on fixture (iii) and names the unavailable store", a
   await openStoreReadOnly(env).close();
 });
 
-test("migrateIfOutdated keeps the class on fixture (iii), in memory and through the store", async (t) => {
+test("requireCurrentSchema keeps the class on fixture (iii), in memory and through the store", async (t) => {
   const env = seededHome(t, "migrate-notadb", 0);
   makeSickHome(env);
-  assertNotADatabase(thrownBy(() => migrateIfOutdated(env)), env);
-  await assert.rejects(openStoreReadOnly(env).migrateIfOutdated(), (err) => assertNotADatabase(err, env));
+  assertNotADatabase(thrownBy(() => requireCurrentSchema(env)), env);
+  await assert.rejects(openStoreReadOnly(env).requireCurrentSchema(), (err) => assertNotADatabase(err, env));
   await openStoreReadOnly(env).close();
 });
 

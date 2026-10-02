@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { STORE_UNAVAILABLE_HINT, StoreUnavailableError, UserError } from "../config/errors.mjs";
+import { STORE_UNAVAILABLE_HINT, StoreUnavailableError, UserError, isStoreOutage } from "../config/errors.mjs";
 import { jobLogPath, jobWorktreePath, logsDir, runDir } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { ghPrList } from "../host/gh.mjs";
@@ -139,7 +139,7 @@ async function heartbeat(job, ctx) {
     await ctx.outage.recovered(ctx.state);
     return owned;
   } catch (err) {
-    if (!(err instanceof StoreUnavailableError)) throw err;
+    if (!isStoreOutage(err)) throw err;
     ctx.outage.note(err);
     return null;
   }
@@ -168,7 +168,7 @@ async function bindSlugOrNull(job, slug, { store, outage }) {
   try {
     return await store.jobs.bindRunSlug(job.id, { worker: job.worker, candidates: [slug] });
   } catch (err) {
-    if (!(err instanceof StoreUnavailableError)) throw err;
+    if (!isStoreOutage(err)) throw err;
     outage?.note(err);
     return null;
   }
@@ -283,7 +283,7 @@ async function writeOrQueue(job, slug, record, { write, env }) {
   try {
     return await write();
   } catch (err) {
-    if (!(err instanceof StoreUnavailableError)) throw err;
+    if (!isStoreOutage(err)) throw err;
     queueRecord(job, slug, record, env);
     return null;
   }
@@ -350,7 +350,7 @@ async function sessionRecorded(job, slug, session, { store, env }) {
     await store.jobs.persistRunFacts(job.id, facts);
     return true;
   } catch (err) {
-    if (!(err instanceof StoreUnavailableError)) throw err;
+    if (!isStoreOutage(err)) throw err;
     const record = { kind: "session", key: PENDING_KEYS.session(job.id, session.attempts), payload: session };
     return queueRecord(job, slug, record, env) !== null;
   }
@@ -530,7 +530,7 @@ async function witnessTarget(job, runSlug, store) {
     const row = await store.jobs.getJob(job.id);
     return { row, slug: row?.slug ?? job.slug };
   } catch (err) {
-    if (!(err instanceof StoreUnavailableError)) throw err;
+    if (!isStoreOutage(err)) throw err;
     return { row: null, slug: isSafeSegment(runSlug) ? runSlug : job.slug };
   }
 }
@@ -576,7 +576,7 @@ async function tryFinish(job, { write, slug, spec }, env) {
       appendFileSync(jobLogPath(job.id, env), `finish verification failed\nthe finish of ${jobRef(job.id)} did not commit: ${message}\n`);
       process.stderr.write(`${jobRef(job.id)}: the finish did not commit: ${message}\n`);
     } catch {}
-    const pending = err instanceof StoreUnavailableError ? queueRecord(job, slug, { kind: "finish", key: PENDING_KEYS.finish(job.id, job.worker), payload: spec }, env) : null;
+    const pending = isStoreOutage(err) ? queueRecord(job, slug, { kind: "finish", key: PENDING_KEYS.finish(job.id, job.worker), payload: spec }, env) : null;
     return { written: false, error: message, pending };
   }
 }
@@ -1123,7 +1123,7 @@ function remainingBudget(max, passes) {
 // job already running when it closes always finishes - the window never kills or shortens a job's own timeout.
 export async function runCycle({ jobId = null, max = null, dry = false, env = process.env, deps = {}, window = null, keepAwake = true } = {}) {
   if (dry) {
-    await openStoreReadOnly(env).migrateIfOutdated();
+    await openStoreReadOnly(env).requireCurrentSchema();
     return await dryReport({ jobId, cap: concurrencyCap(env), max, env });
   }
   const cap = concurrencyCap(env);
@@ -1131,8 +1131,8 @@ export async function runCycle({ jobId = null, max = null, dry = false, env = pr
   const ctx = { env, store: openStore(env), deps: merged, state: { stopping: false }, outage: runnerOutage(merged) };
   const uninstall = installShutdown(ctx.state);
   try {
-    const migrated = await untilStoreAnswers(ctx, () => openStoreReadOnly(env).migrateIfOutdated());
-    if (migrated === OUTAGE_STOPPED) return { processed: [], reason: "stopped", cap, stopped: true };
+    const current = await untilStoreAnswers(ctx, () => openStoreReadOnly(env).requireCurrentSchema());
+    if (current === OUTAGE_STOPPED) return { processed: [], reason: "stopped", cap, stopped: true };
     if (keepAwake) ctx.deps.keepAwakeImpl({ pid: process.pid, env });
     const upkeep = await ctx.deps.maintenanceImpl({ env });
     if (upkeep?.warning) process.stderr.write(`warning: ${upkeep.warning}\n`);

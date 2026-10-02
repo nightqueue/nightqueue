@@ -22,7 +22,34 @@ export class StoreUnavailableError extends UserError {
   }
 }
 
+export const SCHEMA_UPDATE_HINT = "nightqueue update";
+
+// The phrase every refusal of an older database carries, naming both versions and the one command that migrates it.
+export function schemaOutdatedPhrase(fileVersion, codeVersion) {
+  return `database at v${fileVersion}, this nightqueue expects v${codeVersion}: run \`${SCHEMA_UPDATE_HINT}\``;
+}
+
+// The home database is at an older schema than this build: nothing opens it until `nightqueue update` migrates it.
+export class SchemaOutdatedError extends StoreUnavailableError {
+  constructor({ fileVersion, codeVersion, home, path }) {
+    const detail = schemaOutdatedPhrase(fileVersion, codeVersion);
+    super({ code: "SCHEMA_OUTDATED", detail, home, path });
+    this.message = `${detail} (${path}); when the installed nightqueue is already current, a second \`${SCHEMA_UPDATE_HINT}\` finishes the migration`;
+    this.name = "SchemaOutdatedError";
+    this.hint = SCHEMA_UPDATE_HINT;
+    this.fileVersion = fileVersion;
+    this.codeVersion = codeVersion;
+  }
+}
+
+// Tells whether a failure is a store outage that may heal by waiting or queuing: an unavailable store, never an older schema, which only `nightqueue update` heals.
+export function isStoreOutage(err) {
+  return err instanceof StoreUnavailableError && !(err instanceof SchemaOutdatedError);
+}
+
 // The one warning line a degraded surface (MCP context, SessionStart hook) prints instead of its content.
 export function storeWarningLine(err) {
-  return `nightqueue memory unavailable (${err?.code ?? "unknown"} at ${err?.home ?? "unknown home"}): run \`${STORE_UNAVAILABLE_HINT}\``;
+  const where = `${err?.code ?? "unknown"} at ${err?.home ?? "unknown home"}`;
+  if (err instanceof SchemaOutdatedError) return `nightqueue memory unavailable (${where}): ${err.detail}`;
+  return `nightqueue memory unavailable (${where}): run \`${err?.hint ?? STORE_UNAVAILABLE_HINT}\``;
 }

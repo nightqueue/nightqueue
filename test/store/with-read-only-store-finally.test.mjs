@@ -32,10 +32,10 @@ test("calling store.close() twice on a real read-only store never dispatches a s
   makeProject(t, env, "alpha");
   addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env);
 
-  let realCloseCalls = 0;
+  const closesByConnection = new Map();
   const originalClose = DatabaseSync.prototype.close;
   DatabaseSync.prototype.close = function spy(...args) {
-    realCloseCalls += 1;
+    closesByConnection.set(this, (closesByConnection.get(this) ?? 0) + 1);
     return originalClose.apply(this, args);
   };
   t.after(() => {
@@ -48,7 +48,9 @@ test("calling store.close() twice on a real read-only store never dispatches a s
     await store.close();
   });
 
-  assert.equal(realCloseCalls, 1, `readOnlyConnection's release() dispatched the real close() ${realCloseCalls} times; a second real dispatch is exactly what would let a genuine close failure mask fn's error`);
+  const realCloseCalls = Math.max(0, ...closesByConnection.values());
+  assert.ok(closesByConnection.size >= 1, "the store never closed its connection");
+  assert.equal(realCloseCalls, 1, `readOnlyConnection's release() dispatched the real close() ${realCloseCalls} times on one connection; a second real dispatch is exactly what would let a genuine close failure mask fn's error`);
 });
 
 // End-to-end: even when `fn` itself already closed the store before throwing (so the wrapper's own `finally`

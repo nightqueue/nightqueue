@@ -1,6 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { packageRoot } from "../host/paths.mjs";
+import { openStoreReadOnly } from "../store/open.mjs";
 import { claimBlocker } from "./claim.mjs";
 import { inheritablePause } from "./rate-limit.mjs";
 import { killProcess, ownRunnerRecord, pruneDeadRunners, writeRunnerRecord } from "./registry.mjs";
@@ -49,8 +50,9 @@ function registerRunner({ pid, jobId, watchIntervalS, logPath, detached, killImp
   }
 }
 
-// Spawns the detached child and registers it, the critical section that must not be split by another process.
-function spawnAndRegister({ jobId, max, watchIntervalS, from, until, env, spawnImpl, killImpl }) {
+// Spawns the detached child and registers it, the critical section that must not be split by another process; a home whose database is older than this build gets no runner at all.
+async function spawnAndRegister({ jobId, max, watchIntervalS, from, until, env, spawnImpl, killImpl }) {
+  await openStoreReadOnly(env).requireCurrentSchema();
   pruneDeadRunners(env, killImpl);
   const { pid, logPath, runtimeDir } = launchDetachedRunner({ jobId, max, watchIntervalS, from, until, env, spawnImpl });
   if (!Number.isInteger(pid) || pid <= 0) throw new UserError("the detached runner did not report a pid; nothing was started");
@@ -69,7 +71,8 @@ export async function startQueueRunner({ jobId = null, max = null, watchInterval
 export async function registerForegroundRunner({ jobId = null, watchIntervalS = null, from = null, until = null, env = process.env, killImpl = killProcess } = {}) {
   const registered = ownRunnerRecord(env);
   if (registered) return { registered: true, self: false, pid: process.pid, mode: registered.mode ?? null };
-  return await withLock(env, () => {
+  return await withLock(env, async () => {
+    await openStoreReadOnly(env).requireCurrentSchema();
     const own = ownRunnerRecord(env);
     if (own) return { registered: true, self: false, pid: process.pid, mode: own.mode ?? null };
     pruneDeadRunners(env, killImpl);

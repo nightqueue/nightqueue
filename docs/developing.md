@@ -44,9 +44,19 @@ write lock that the step is still pending, refuse while a runner holds a live le
 migrateInside }`; the older shapes it rebuilds FROM are frozen copies under
 `migration/` (`v18-shape.mjs`), never the current DDL. `initConnection` runs the steps
 of `ONE_SHOT_STEPS` in order, each gate read after the previous step, so a v17 home goes
-to v18 and then v19 in one open, leaving both copies. A new step appends to that list,
+to v18 and then v19 in one migration, leaving both copies. A new step appends to that list,
 freezes the shapes it changes, and adds a test that a migrated database has exactly the
 `sqlite_master` of a fresh one (`test/memory/migration-v19.test.mjs` is the model).
+
+`initConnection` migrates only when `migrateHomeDatabase` called it (the single migrating entry,
+reached by `nightqueue update --schema-only`); every other open refuses an older database with
+`SchemaOutdatedError` before writing anything. A test that builds an older fixture therefore
+migrates it explicitly with `migrateTestHome(env)` from `test-support/migrate.mjs` (backup, then
+migration, then the writable connection), never by opening it; an assertion about what a plain
+open does on an older file expects the `SCHEMA_OUTDATED` refusal. A per-open step must write
+nothing on a current database (`test/memory/db-outdated-refusal.test.mjs` opens a migrated home
+twice and compares the file and its sidecars byte for byte): one that needs a write belongs in
+the migration.
 
 `scripts/` is not part of the published tarball. How to contribute — branches, commits,
 the pull request template, what is off the table — is in [CONTRIBUTING.md](../CONTRIBUTING.md).

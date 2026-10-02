@@ -9,7 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { homeDir, jobLogPath, logsDir, PACKAGE_NAME, queuePausedPath, runnersDir, runtimeCurrentLink, runtimeDir, runtimeVersionsDir } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { packageRoot } from "../../src/host/paths.mjs";
-import { openDb } from "../../src/memory/db.mjs";
+import { closeDb, openDb, openDbReadOnly } from "../../src/memory/db.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
 import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
@@ -95,18 +95,25 @@ test("the server exposes exactly the thirty-one tools of the contract", async (t
   assert.equal(names.length, 31, "the contract list and the server disagree on how many tools there are");
 });
 
-test("the server migrates a v8 home to v9 once at boot, before it answers any tool", async (t) => {
+test("the server never migrates a v8 home: a tool answers store-unavailable with the update message and the file stays v8", async (t) => {
   const env = makeHome(t, "mcp-v9-migration");
   makeProject(t, env, "alpha");
   seedLegacyV8Home(env, { rows: 1 });
+  closeDb(env);
   const client = await connect(t, env);
 
-  const status = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(status.jobs[0].status, "closed", "the boot never migrated the v8 home");
+  const result = await client.callTool({ name: "queue_status", arguments: {} });
+  const status = JSON.parse(result.content[0].text);
+  assert.equal(result.isError, true);
+  assert.equal(status.error, "store-unavailable");
+  assert.equal(status.code, "SCHEMA_OUTDATED");
+  assert.equal(status.hint, "nightqueue update");
+  assert.match(status.message, /database at v8, this nightqueue expects v22: run `nightqueue update`/);
 
-  const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
-  assert.equal(db.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "pr_checked_at"), false);
+  const db = openDbReadOnly(env, { anySchema: true });
+  t.after(() => db.close());
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 8);
+  assert.equal(DB_USER_VERSION, 22);
 });
 
 test("the handshake carries the instructions that teach the backlog model", async (t) => {
@@ -703,27 +710,15 @@ test("queue_status never returns the prompt and truncates the free text at five 
   assert.equal("notice_truncated" in one.job, false, "the detail of one job was flagged as cut");
   assert.equal(listed.counts.pending, 2);
   for (const job of listed.jobs) assert.equal("prompt" in job, false, "the listing leaked a prompt");
-  assert.deepEqual(listed.runner, {
-    running: false,
-    pid: null,
-    mode: null,
-    jobId: null,
-    intervalS: null,
-    startedAt: null,
-    logPath: null,
-    runtimeDir: null,
-    detached: null,
-    pausedUntil: null,
-    rateLimit: null,
-    window: null,
-  });
+  assert.equal("runner" in listed, false, "the deprecated singular `runner` key is back on queue_status");
+  assert.equal(listed.runnersOnline, 0);
   assert.deepEqual(listed.runners, [], "a home with no runner answered with one");
 
   const startedAt = "2026-09-08T21:04:11.000Z";
   const runtimeDir = "/tmp/runtime/versions/1.0.0-20260911T031500Z";
   writeRunnerRecord({ pid: process.pid, startedAt, mode: "watch", intervalS: 30, logPath: "/tmp/runner.log", runtimeDir }, env);
   const watched = payloadOf(await client.callTool({ name: "queue_status", arguments: { limit: null, job_id: null } }));
-  assert.deepEqual(watched.runner, {
+  assert.deepEqual(watched.runners, [{
     running: true,
     pid: process.pid,
     mode: "watch",
@@ -736,8 +731,9 @@ test("queue_status never returns the prompt and truncates the free text at five 
     pausedUntil: null,
     rateLimit: null,
     window: null,
-  });
-  assert.deepEqual(watched.runners, [watched.runner], "the deprecated `runner` key is not the first entry of `runners`");
+  }]);
+  assert.equal(watched.runnersOnline, 1);
+  assert.equal("runner" in watched, false, "the deprecated singular `runner` key is back on queue_status");
   assert.equal("runner" in payloadOf(await client.callTool({ name: "queue_status", arguments: { job_id: id } })), false, "the detail of a job grew a runner");
 
   const unknown = await client.callTool({ name: "queue_status", arguments: { job_id: 99 } });
@@ -882,7 +878,7 @@ test("queue_status never writes a delivered job whose pull request is merged, an
   const first = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(first.jobs[0].pr_state, "unknown", "the first answer waited for gh instead of answering from the cache");
   assert.deepEqual(first.suggestions, []);
-  assert.deepEqual(first.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories", "closes"]);
+  assert.deepEqual(first.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories", "closes", "live"]);
   assert.ok(first.sections.every((section) => section.ok && Number.isInteger(section.ms)), JSON.stringify(first.sections));
 
   const listed = await pollPrState(client, "merged");
@@ -1017,7 +1013,7 @@ test("a runner waiting out a rate limit is what queue_status and queue_add say, 
 
   const empty = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(empty.hint, `1 runner online - nothing is pending — ${pause}.`);
-  assert.equal(empty.runner.pausedUntil, new Date(resetsAt.getTime() + 60_000).toISOString());
+  assert.equal(empty.runners[0].pausedUntil, new Date(resetsAt.getTime() + 60_000).toISOString());
 
   const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker" } }));
   assert.equal(queued.hint, `queued J-1 for \`alpha\` (1 pending). 1 runner online - nothing to start: ${pause}; it claims again by itself when the limit resets.`);
@@ -1041,7 +1037,7 @@ test("a runner still waiting for its window is what queue_add says, and a paused
   assert.equal(queued.hint, `queued J-1 for \`alpha\` (1 pending). ${waiting}; it claims once the window opens.`);
 
   const status = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.deepEqual(status.runner.window, window, "queue_status did not carry the window of the live runner");
+  assert.deepEqual(status.runners[0].window, window, "queue_status did not carry the window of the live runner");
 
   const resetsAt = new Date(Date.now() + 1800_000);
   writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "watch", intervalS: 30, logPath: "/tmp/runner.log", window, rateLimit: pauseRegion(resetsAt) }, env);
@@ -1060,7 +1056,7 @@ test("a backlog parked by a rate limit is what queue_status says, instead of ask
 
   const waiting = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
 
-  assert.equal(waiting.runner.running, false, "the fixture left a live runner behind, so the nudge is not the one under test");
+  assert.equal(waiting.runnersOnline, 0, "the fixture left a live runner behind, so the nudge is not the one under test");
   assert.equal(waiting.hint, `0 runners online - 1 pending job waiting — the rate limit resets at ${clockLabel(Date.parse(notBefore))} (in 1h00); a batch started now claims nothing before that.`);
 
   addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env);
@@ -1147,7 +1143,7 @@ test("queue_run starts a runner even while another one is live, and queue_status
   assert.equal(Number.isInteger(started.pid), true);
   const listed = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
   assert.equal(listed.runners.some((runner) => runner.pid === process.pid), true, "the live runner left the listing");
-  assert.equal(listed.runner.pid, listed.runners[0].pid);
+  assert.equal("runner" in listed, false, "the deprecated singular `runner` key is back on queue_status");
 });
 
 // Writes a minimal installed version of this package under `runtime/versions/<name>`, holding only the entry point the resolver checks for.

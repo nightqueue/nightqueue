@@ -8,11 +8,20 @@ someone else, and every transaction starts as `BEGIN IMMEDIATE` instead of being
 promoted from a read. A write that is still refused after the retries comes back
 as a message asking to run the command again, never as a raw SQLite error.
 Only the `nightqueue` runtime opens it: the plugin talks to the MCP tools, never to
-the file. The schema is created and migrated on first use, and reopening an
-existing database is a no-op.
+the file. The schema is created on first use, and reopening a current database writes
+nothing. **Only `nightqueue update` and `nightqueue setup` migrate an existing database** (see
+[Install](install.md)): every other open - CLI, runner, MCP server, hooks - refuses a database
+older than its build before writing a byte, with `database at v<file>, this nightqueue expects
+v<code>: run \`nightqueue update\``. The version is read from the file's header (`user_version`,
+offset 60), so the refusal opens no connection and creates no `-wal`/`-shm`; only a home whose
+write-ahead log holds frames not yet folded in is read through one short read-only connection.
+The migration copies the database to `nightqueue.db.pre-v<N>` (`VACUUM INTO`, never over an
+earlier copy) before its first step. The idempotent per-open steps below (indexes, full-text
+mirrors, the default org, the v21 columns) still run on every open of a CURRENT database, and
+write nothing there; they bring a database to the current schema only inside the migration.
 
 Schema v18 identifies orgs and projects by id instead of by name. A database
-from an older build migrates once, the first time a command opens it
+from an older build migrates once, in `nightqueue update`
 (`nightqueue doctor` only reports that it is pending), in a single transaction: before touching it the runtime copies the file to
 `nightqueue.db.pre-v18` beside it, moves the orgs and projects of `config.json`
 into the `orgs` and `projects` tables (a project name found only in history rows
@@ -60,25 +69,25 @@ exists - but they go away with their item.
 Schema v21 adds two nullable JSON text columns: `jobs.origin` (`{ "kind", "ref" }`, the
 service a job came from, set by `queue add`/`queue_add` - see [Queue](queue.md)) and
 `projects.integrations` (the project's integration settings, one object per provider
-kind; NULL is a project without integrations). Both are added on every open by an
-idempotent step (`src/memory/migration/v21.mjs`), never in the DDL the v18 and v19
-rebuilds copy into, so an older home of any version upgrades in one open with no copy
-and no rebuild. A read-only open of a v20 home reads both as absent instead of failing.
+kind; NULL is a project without integrations). Both are added by an idempotent step
+(`src/memory/migration/v21.mjs`), never in the DDL the v18 and v19 rebuilds copy into, so an
+older home of any version upgrades in one migration with no rebuild. The diagnosis read of
+`nightqueue doctor` on a v20 home reads both as absent instead of failing.
 
 **A job never migrates the runner's own home.** The installed nightqueue owns the schema of
-the home the runner uses. A process running inside a job (`NIGHTQUEUE_JOB_ID` set) that
-opens an existing database older than its build refuses before any statement changes the
-schema, when that home is the runner's: the `NIGHTQUEUE_JOB_HOME` the runner pinned, or the
-default `~/.nightqueue` when the runner pinned none and no `NIGHTQUEUE_HOME` was given. Read
-commands are covered too (`decision show` migrates through `migrateIfOutdated`). The
-refusal names the database and the fix: run the build against a temporary home with
-`nightqueue sandbox <command>` or `NIGHTQUEUE_HOME=$(mktemp -d)`. A temporary home, a fresh
-database, and every command outside a job migrate as before.
+the home the runner uses. No open migrates at all, inside a job or outside one, whatever its
+environment; on top of that, the migration itself (`nightqueue update --schema-only`) run from
+inside a job (`NIGHTQUEUE_JOB_ID` set) refuses before any statement changes the schema when
+that home is the runner's: the `NIGHTQUEUE_JOB_HOME` the runner pinned, or the default
+`~/.nightqueue` when the runner pinned none and no `NIGHTQUEUE_HOME` was given. That refusal
+names the database and the fix: run the build against a temporary home with
+`nightqueue sandbox <command>` or `NIGHTQUEUE_HOME=$(mktemp -d)`.
 
 Schema v22 gives the tracker its name: its tables are `issues`, `issue_projects`
 and `issue_comments`, with the mirrors `issues_fts` and `issue_comments_fts`. A v20
-or v21 database migrates once, in the same open as the earlier steps when they are
-pending: a copy `nightqueue.db.pre-v22` first, then one transaction that copies
+or v21 database migrates once, in `nightqueue update` (or `setup`) and in the same migration
+as the earlier steps when they are pending: a copy `nightqueue.db.pre-v22` first (the one
+`update` takes, kept as it is when it is already there), then one transaction that copies
 every row into the new tables, keeps their counters, foreign keys and delete
 rules, rebuilds the search mirrors and drops the old tables. Refs (`NQ-12`), the
 `item_id` columns, the v21 columns and text written before are untouched. The same
@@ -95,7 +104,7 @@ an error that merely echoes one of those phrases is never classified; busy, lock
 SQL error are never classified either. A classified error is one
 `StoreUnavailableError` with `code`, `home`, `path` and the hint `nightqueue doctor --fix`: it is
 never retried as busy, the CLI prints it as one line, the MCP tools answer
-`{ ok: false, error: "store-unavailable", code, home, hint }`, `context_for_phase` and the
+`{ ok: false, error: "store-unavailable", code, home, hint, message }`, `context_for_phase` and the
 SessionStart hook answer an empty block and one warning line, the MCP server still starts, and
 the runner backs off (see [Runtime contract](runtime-contract.md)). The connection that failed is
 retired - dropped from the cache so the next call opens a fresh one, and never closed, because
@@ -106,6 +115,14 @@ of the rows are gone). Neither throws; `nightqueue doctor --db` is what finds th
 sizes, `quick_check`, and the `lost jobs` whose run is on disk and whose row is not - and
 `nightqueue queue repair --from-disk` rebuilds those rows. To inspect the database, `cp` it
 first: never open a second sqlite on the live file.
+
+A database older than the build is the same class with the code `SCHEMA_OUTDATED`, the hint
+`nightqueue update` and the message `database at v<file>, this nightqueue expects v<code>: run
+\`nightqueue update\``: the MCP tools answer it as `store-unavailable`, the SessionStart hook
+and the MCP server's startup print `nightqueue memory unavailable (SCHEMA_OUTDATED at <home>):
+database at v20, this nightqueue expects v22: run \`nightqueue update\``, and `doctor` names
+`nightqueue update`. It is never an outage: the runner does not back off on it, it stops with
+the message, since waiting never brings an older schema up to date.
 
 **Keys and refs.** A key is 2 to 5 uppercase letters or digits starting with a
 letter, unique across projects and orgs together; the database refuses a

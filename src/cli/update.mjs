@@ -2,8 +2,9 @@ import { UserError } from "../config/errors.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { guardIdleRuntime } from "./install-guard.mjs";
-import { setupRuntime } from "./install-steps.mjs";
+import { migrateSchemaStep, setupRuntime } from "./install-steps.mjs";
 import { makeReport } from "./report.mjs";
+import { migrateHomeSchema } from "./schema-migrate.mjs";
 import { finish, registerHost } from "./setup.mjs";
 
 const USAGE = "nightqueue update [<version>] [--from <dir>] [--force]";
@@ -21,16 +22,31 @@ function wantedVersion(positionals, from) {
   return asked;
 }
 
-// Runs `nightqueue update`: reinstalls the runtime and re-points the host at it, never touching config, secrets or database; a runtime that could not be reinstalled is the whole job of this command, so it is an exit code.
+// Runs the internal `update --schema-only` step: the database migration alone, which takes no version, source nor `--force`.
+async function schemaOnly(values, positionals, ctx) {
+  if (positionals.length || values.from !== undefined || values.force !== undefined) {
+    throw new UserError("`--schema-only` migrates the database alone and takes no version, `--from` nor `--force`; usage: nightqueue update --schema-only");
+  }
+  await migrateHomeSchema(ctx);
+  return 0;
+}
+
+// Runs `nightqueue update`: reinstalls the runtime, migrates the database with it, and re-points the host at it, never touching config or secrets; a runtime that could not be reinstalled or a database that could not be migrated is an exit code.
 export async function run(argv, ctx) {
-  const { values, positionals } = parseCommand(argv, { from: { type: "string" }, force: { type: "boolean" } });
+  const { values, positionals } = parseCommand(argv, {
+    from: { type: "string" },
+    force: { type: "boolean" },
+    "schema-only": { type: "boolean" },
+  });
+  if (values["schema-only"] === true) return await schemaOnly(values, positionals, ctx);
   checkArgs(positionals, { max: 1, usage: USAGE });
   const version = wantedVersion(positionals, values.from);
   await guardIdleRuntime(ctx, { force: values.force });
   const report = makeReport(ctx);
   ensureHome(ctx.env);
   const ready = setupRuntime(ctx, report, { from: values.from, force: true, version });
+  const schemaOk = migrateSchemaStep(ctx, report, { ready });
   registerHost(ctx, report, { ready });
   const code = finish(ctx, report);
-  return ready ? code : 1;
+  return ready && schemaOk ? code : 1;
 }

@@ -21,6 +21,7 @@ import * as reflect from "./reflect.mjs";
 import * as issues from "./issues.mjs";
 import * as runCommand from "./run.mjs";
 import * as sandbox from "./sandbox.mjs";
+import { borrowsParentLock } from "./schema-migrate.mjs";
 import * as setup from "./setup.mjs";
 import * as update from "./update.mjs";
 import * as verify from "./verify.mjs";
@@ -193,12 +194,14 @@ export function defaultContext() {
   };
 }
 
-// Tells whether the command runs without the configuration write lock: it only reads, or it owns its own concurrency control.
-function skipsLock(command, subcommand) {
+// Tells whether the command runs without the configuration write lock: it only reads, owns its own concurrency control, or is
+// the schema child of an update/setup that already holds the lock for it (taking it again would wait out the timeout).
+export function skipsLock(command, rest, env) {
   if (READ_ONLY_COMMANDS.has(command)) return true;
   if (SELF_LOCKING_COMMANDS.has(command)) return true;
+  if (command === "update" && rest.includes("--schema-only")) return borrowsParentLock(env);
   if (command === "setup" || command === "init" || command === "update") return false;
-  return READ_ONLY_SUBCOMMANDS.has(subcommand);
+  return READ_ONLY_SUBCOMMANDS.has(rest[0]);
 }
 
 // Tells whether the command writes the configuration home, and whether it registers the host too.
@@ -234,7 +237,7 @@ export async function main(argv, ctx) {
   const handler = COMMANDS.get(command);
   if (!handler) throw new UserError(`unknown command \`${command}\`; run \`nightqueue --help\``);
   guardOperatorHome(command, rest, ctx.env);
-  if (skipsLock(command, rest[0])) return await handler(rest, ctx);
+  if (skipsLock(command, rest, ctx.env)) return await handler(rest, ctx);
   return await withLock(ctx.env, () => handler(rest, ctx));
 }
 

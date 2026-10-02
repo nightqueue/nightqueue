@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { TRACK_ROUTING, phasesFor, routingRow, routingTable, tasksFor } from "../../src/queue/routing.mjs";
+import { TRACK_ROUTING, agentGlyph, phasesFor, routingRow, routingTable, tasksFor, trackPhaseNumbers } from "../../src/queue/routing.mjs";
 
 const TABLE = readFileSync(new URL("../fixtures/skill-templates/routing-table.txt", import.meta.url), "utf8");
 const RATIONALE = readFileSync(new URL("../fixtures/skill-templates/routing-rationale.txt", import.meta.url), "utf8");
@@ -100,4 +100,16 @@ test("the phases of a run follow its tier, and the simple tier triages a bug onl
 test("an unknown tier or type is refused with the accepted values", () => {
   assert.throws(() => routingRow("huge"), /unknown tier `huge`; accepted: trivial, simple, complex/);
   assert.throws(() => phasesFor("simple", "chore"), /unknown type `chore`; accepted: bug\/error, feature\/refactor/);
+});
+
+test("the phase numbers of a track and the glyph of an agent are read from the routing table", () => {
+  assert.deepEqual(trackPhaseNumbers("trivial"), [0, 4, 6, 7, 8]);
+  assert.deepEqual(trackPhaseNumbers("simple"), [0, 1, 4, 6, 7, 8]);
+  assert.deepEqual(trackPhaseNumbers("complex"), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.equal(trackPhaseNumbers("nope"), null);
+  assert.equal(agentGlyph("coder"), "⚙️");
+  assert.equal(agentGlyph("explore"), "🧭");
+  assert.equal(agentGlyph("qa-guardian"), "🛡️");
+  assert.equal(agentGlyph("orchestrator"), null);
+  assert.equal(agentGlyph(""), null);
 });

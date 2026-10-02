@@ -332,8 +332,8 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, expected v22/);
-  assert.match(database.hint, /run `nightqueue queue status` once to migrate it/);
+  assert.match(database.detail, /schema v8, this nightqueue expects v22/);
+  assert.equal(database.hint, "run `nightqueue update`");
   assert.doesNotMatch(database.hint, /nightqueue memory stats/);
 });
 
@@ -590,7 +590,7 @@ test("the closes check warns with the migrate hint on a database without the clo
   const { report } = await diagnose(host.env);
   const row = report.checks.find((entry) => entry.name === "closes");
   assert.equal(row.status, "warn");
-  assert.match(row.hint, /nightqueue memory stats/);
+  assert.match(row.hint, /run `nightqueue update` to migrate the database/);
   const raw = new DatabaseSync(dbPath(host.env), { readOnly: true });
   t.after(() => raw.close());
   assert.equal(raw.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "close_status"), false, "the doctor migrated the database");
@@ -752,7 +752,7 @@ test("the decision proposals check warns with the migrate hint on a database wit
   const { report } = await diagnose(host.env);
 
   assert.equal(proposalsCheck(report).status, "warn");
-  assert.match(proposalsCheck(report).hint, /nightqueue memory stats/);
+  assert.match(proposalsCheck(report).hint, /run `nightqueue update` to migrate the database/);
   const raw = new DatabaseSync(dbPath(host.env), { readOnly: true });
   t.after(() => raw.close());
   const columns = raw.prepare("SELECT name FROM pragma_table_info('decisions')").all().map((row) => row.name);

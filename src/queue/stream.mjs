@@ -650,6 +650,13 @@ export function extractUsage(log) {
   return { ...total, costUsd: attemptCost(sessions.values()), sessions: sessions.size, estimated: anyEstimated && !anyReported };
 }
 
+// Partial tokens of the attempt a log tail is in the middle of, or null before any usage was written; a cost is never estimated.
+export function partialTokens(tail) {
+  const usage = extractUsage(lastAttemptStream(tail));
+  if (!usage) return null;
+  return { in: usage.tokensIn, out: usage.tokensOut, cache_read: usage.cacheRead, cache_creation: usage.cacheCreation, estimated: usage.estimated };
+}
+
 // Consolidates the usage of several attempts into one total; nulls are ignored and an empty list stays null.
 export function sumUsage(usages) {
   const list = (Array.isArray(usages) ? usages : []).filter((usage) => usage && typeof usage === "object");

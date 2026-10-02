@@ -61,6 +61,11 @@ export function preV22BackupPath(env = process.env) {
   return `${dbPath(env)}.pre-v22`;
 }
 
+// Path of the copy of the database `nightqueue update` takes right before it migrates the home to schema `version`.
+export function preVersionBackupPath(env = process.env, version) {
+  return `${dbPath(env)}.pre-v${version}`;
+}
+
 // Path of the shared-memory index of the WAL, the file every open connection of the database maps.
 export function dbShmPath(env = process.env) {
   return `${dbPath(env)}-shm`;

@@ -1,4 +1,4 @@
-import { STORE_UNAVAILABLE_HINT, StoreUnavailableError } from "../config/errors.mjs";
+import { STORE_UNAVAILABLE_HINT, isStoreOutage } from "../config/errors.mjs";
 
 // First wait of an outage and the ceiling the doubling stops at.
 export const OUTAGE_BASE_MS = 30_000;
@@ -37,12 +37,12 @@ function stderrLine(line) {
   process.stderr.write(`${line}\n`);
 }
 
-// Runs a store step, answering its value or the StoreUnavailableError it threw; any other failure is the caller's.
+// Runs a store step, answering its value or the StoreUnavailableError it threw; an older schema never heals by waiting, so it and any other failure are the caller's.
 async function settle(fn) {
   try {
     return { ok: true, value: await fn() };
   } catch (err) {
-    if (err instanceof StoreUnavailableError) return { ok: false, error: err };
+    if (isStoreOutage(err)) return { ok: false, error: err };
     throw err;
   }
 }

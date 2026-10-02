@@ -198,6 +198,7 @@ test("followJob answers 0 for an unknown job, refuses a malformed id, and is ide
 test("health answers the raw numbers of a diagnosis, never an exception", async (t) => {
   const env = makeHome(t, "store-health");
   const store = createLocalStore(env);
+  await store.connect();
 
   assert.deepEqual(await store.health(), {
     schemaVersion: DB_USER_VERSION,

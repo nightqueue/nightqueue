@@ -7,7 +7,7 @@ import { releaseJobWorktree } from "./worktree.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { parseOriginColumn } from "../integrations/origin.mjs";
-import { logStep, originStep } from "../integrations/post-close.mjs";
+import { forgetLogged, forgetOrigin, logStep, originStep } from "../integrations/post-close.mjs";
 
 export const CLOSE_LEASE_SLACK_S = 60;
 export const POST_CLOSE_TIMEOUT_S = 60;
@@ -771,8 +771,8 @@ export const CLOSE_STEPS = [
   { name: "conflict", run: conflictStep },
   { name: "merge", run: mergeStep },
   { name: "settle", run: settleStep },
-  { name: "origin", run: originStep, required: false },
-  { name: "log", run: logStep, required: false },
+  { name: "origin", run: originStep, forget: forgetOrigin, required: false },
+  { name: "log", run: logStep, forget: forgetLogged, required: false },
 ];
 
 // Tells whether a step runs after the job is closed and can never stop or reopen the close.
@@ -1113,6 +1113,7 @@ function postNoticeLine(name, result, previous) {
 
 // Runs one post-close step and records it with its notice line; answers false when the post-close lease was lost.
 async function runPostStep(run, step) {
+  if (run.again) step.forget?.(run.checklist.data, run.facts.integrations);
   const previous = run.checklist.steps[step.name];
   const ctx = postCloseContext(run, step.name);
   const result = postCloseResult(step.name, await runStepRaced(step, { ctx, deps: run.deps, deadline: run.deadline, statuses: POST_RESULT_STATUSES }));
@@ -1178,11 +1179,11 @@ async function runPostClosePhase(base, steps, signal) {
 }
 
 // Runs one attempt of a close over its steps, resuming from the stored checklist, then its post-close steps once the job is closed; a step failure is an outcome, never an exception.
-export async function runClosePipeline({ store, job, worker, env = process.env, deps = null, timeoutS, signal = null, now = Date.now, onStep = null, checkout, force = false, steps = CLOSE_STEPS }) {
+export async function runClosePipeline({ store, job, worker, env = process.env, deps = null, timeoutS, signal = null, now = Date.now, onStep = null, checkout, force = false, steps = CLOSE_STEPS, again = false }) {
   if (!job) throw new UserError("runClosePipeline needs the job it closes");
   const pre = steps.filter((step) => !isPostCloseStep(step));
   const post = steps.filter(isPostCloseStep);
-  const base = { store, job, worker, env, deps: deps ?? defaultCloseDeps(env), now, onStep, force, checkout: checkout ?? resolveCheckout(job, env) };
+  const base = { store, job, worker, env, deps: deps ?? defaultCloseDeps(env), now, onStep, force, again, checkout: checkout ?? resolveCheckout(job, env) };
   if (!pre.length && post.length) return await runPostClose(base, post, signal);
   const deadline = armDeadline({ timeoutS: requireTimeoutS(timeoutS), signal, now });
   const run = { ...base, checklist: startingChecklist(job), deadline };

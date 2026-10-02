@@ -15,10 +15,6 @@ import {
   homeDir,
   legacyHomeDir,
   operatorQaDir,
-  preV18BackupPath,
-  preV19BackupPath,
-  preV20BackupPath,
-  preV22BackupPath,
   queuePausedPath,
   secretsPath,
   shimNames,
@@ -367,12 +363,12 @@ function refusedMigration(health) {
 
 // The hint that lists and fixes the rows a pending migration refuses.
 function danglingHint(path) {
-  return `run \`nightqueue queue status\` to list them (it writes nothing), then fix or clear them with sqlite3 on ${path}`;
+  return `run \`nightqueue update\` to list them (a refused migration writes nothing), then fix or clear them with sqlite3 on ${path}`;
 }
 
-// A row for a database SQLite refuses (not a database, corrupt, I/O error, read-only): a warning naming the code, with the one fix.
-function unavailableCheck(name, { code, detail }) {
-  return check(name, "warn", `${code}: ${detail}`, STORE_UNAVAILABLE_HINT);
+// A row for a database SQLite refuses (not a database, corrupt, I/O error, read-only) or that is older than this build: a warning naming the code, with its one fix.
+function unavailableCheck(name, { code, detail, hint }) {
+  return check(name, "warn", `${code}: ${detail}`, hint ?? STORE_UNAVAILABLE_HINT);
 }
 
 // Checks the memory database, opening it read-only so the diagnosis never creates nor migrates it; a database SQLite refuses only warns.
@@ -387,13 +383,9 @@ async function checkDatabase(ctx) {
     if (errors.schemaVersion !== null) return check("database", "fail", errors.schemaVersion, `inspect ${path}`);
     if (schemaVersion === DB_USER_VERSION) return check("database", "ok", `schema v${schemaVersion}`);
     const refusal = refusedMigration(health);
-    if (refusal) return check("database", "warn", `schema v${schemaVersion}, expected v${DB_USER_VERSION}; ${refusal}`, danglingHint(path));
-    return check(
-      "database",
-      "warn",
-      `schema v${schemaVersion}, expected v${DB_USER_VERSION}`,
-      "run `nightqueue queue status` once to migrate it",
-    );
+    const outdated = `schema v${schemaVersion}, this nightqueue expects v${DB_USER_VERSION}`;
+    if (refusal) return check("database", "warn", `${outdated}; ${refusal}`, danglingHint(path));
+    return check("database", "warn", outdated, "run `nightqueue update`");
   } catch (err) {
     if (err instanceof StoreUnavailableError) return unavailableCheck("database", err);
     return check("database", "fail", err?.message ?? String(err), `inspect ${path}`);
@@ -717,10 +709,27 @@ function quarantinedFiles(env) {
   }
 }
 
-// Every backup of the home: the copies taken before the v18, v19, v20 and v22 migrations, then the files of each quarantine.
+const PRE_VERSION_BACKUP = /^nightqueue\.db\.pre-v(\d+)(\.(?!.*\.tmp$).+)?$/;
+
+// The copies taken before each schema migration (`nightqueue.db.pre-v<N>`, stamped ones included), oldest version first; a half-written `.tmp` copy is no backup.
+function preVersionCopies(env) {
+  const home = homeDir(env);
+  let names;
+  try {
+    names = readdirSync(home);
+  } catch {
+    return [];
+  }
+  return names
+    .map((name) => ({ name, match: PRE_VERSION_BACKUP.exec(name) }))
+    .filter(({ match }) => match !== null)
+    .sort((a, b) => Number(a.match[1]) - Number(b.match[1]) || a.name.localeCompare(b.name))
+    .map(({ name }) => join(home, name));
+}
+
+// Every backup of the home: the copies taken before each schema migration, then the files of each quarantine.
 function homeBackups(env) {
-  const copies = [preV18BackupPath(env), preV19BackupPath(env), preV20BackupPath(env), preV22BackupPath(env)];
-  return [...copies, ...quarantinedFiles(env)].map(backupEntry).filter(Boolean);
+  return [...preVersionCopies(env), ...quarantinedFiles(env)].map(backupEntry).filter(Boolean);
 }
 
 // One backup as the report names it: path, size and last change.
@@ -884,7 +893,7 @@ function checkJobEnvironment(ctx) {
   );
 }
 
-const QUEUE_JOBS_MIGRATE_HINT = "run `nightqueue memory stats` once to let the runtime migrate the database";
+const QUEUE_JOBS_MIGRATE_HINT = "run `nightqueue update` to migrate the database";
 
 // Counts the jobs left `running` by a runner that died, reading the database read-only.
 async function checkQueueJobs(ctx) {
@@ -1110,7 +1119,7 @@ async function registeredCheckouts(ctx) {
     if (Number.isInteger(schemaVersion) && schemaVersion < DB_USER_VERSION) {
       const refusal = refusedMigration(health);
       if (refusal) return { pending: `database is at v${schemaVersion}; ${refusal}`, hint: danglingHint(dbPath(ctx.env)) };
-      return { pending: `database is at v${schemaVersion}; it migrates to v${DB_USER_VERSION} on the next command that writes` };
+      return { pending: `database is at v${schemaVersion}; run \`nightqueue update\` to migrate it to v${DB_USER_VERSION}` };
     }
     const projects = (await store.projects.list()).filter((project) => project.path);
     return { projects: projects.map((project) => ({ ...project, exists: existsSync(project.path) })) };

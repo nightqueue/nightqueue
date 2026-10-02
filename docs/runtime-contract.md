@@ -227,8 +227,8 @@ claimed right now answers `waiting` with the reason and starts nothing, because 
 would run one cycle and exit without claiming; `queue_run` and `queue_retry` answer the same
 thing as `{ "started": false, "waiting": { "reason": "cap-reached" }, "message": ... }`, a
 reason that only happens when `queue.maxConcurrent` is set, since there is no ceiling by
-default. `queue_status` answers `runners` with every live runner, and keeps `runner` as an
-alias of the first for one release. `queue_status`, `queue_run` and `queue_retry` also answer
+default. `queue_status` answers `runners` with every live runner; the singular `runner` key
+of 0.2.0 is gone since 0.7.0. `queue_status`, `queue_run` and `queue_retry` also answer
 `advisories`, the advisory lines described in [Queue](queue.md); they never block a start.
 
 **A runner outlives an unavailable database.** When the database answers a classified error
@@ -330,8 +330,11 @@ never recorded is not inserted.
 
 When the database is unavailable (see [Memory](memory.md)) a tool answers `isError` with the
 JSON `{ "ok": false, "error": "store-unavailable", "code", "home", "hint": "nightqueue doctor
---fix", "contract" }`, and the same server answers the next call normally once the database is
-back. `context_for_phase` is not an error there: it answers `block: ""` and one `warning`
+--fix", "message", "contract" }`, and the same server answers the next call normally once the database is
+back. A database older than the server's build answers the same shape with `"code":
+"SCHEMA_OUTDATED"`, `"hint": "nightqueue update"` and the `message` `database at v<file>, this
+nightqueue expects v<code>: run \`nightqueue update\` (...)`: the server never migrates it, and
+it answers normally once `nightqueue update` did. `context_for_phase` is not an error there: it answers `block: ""` and one `warning`
 line. Inside a job whose `state.json` carries its `job` block, the four `run_*` tools keep
 working from that file. `pipeline_log` whose run resolves (from that block inside a job) queues
 its fully resolved row in the run's `pending-writes.jsonl` and answers `{ "ok": true, "queued": true, "warning": "recorded in
@@ -360,7 +363,35 @@ characters in a listing; a row whose text was cut carries `notice_truncated: tru
 `job_id` is never cut), and `suggestions` plus the `hint` gain one line naming
 `nightqueue queue status J-<id>`, where the whole text is. It answers with the state of the runner next to the jobs; it is a pure read
 that never repairs nor prunes on call, and reports the last repair warning of the server's
-maintenance (once at start, then every 60 s, never inside a job) as `warning`. `queue_run`
+maintenance (once at start, then every 60 s, never inside a job) as `warning`. Every `running` job carries a `live` block and every other job `live: null`; `sections` gains
+`{ name: "live", ok, error, ms, jobs }`, where `jobs` counts the blocks filled and a log that is
+missing or unreadable sets `ok: false` and leaves only its own job at `live: null`. The block is
+derived on demand from the tail of the job log, never stored (not on the jobs row, in
+`state.json` nor in pending-writes), adds no column and keeps `contract` at 2:
+
+```json
+{
+  "source": "log-tail",
+  "attempt": 1,
+  "agent": "coder",
+  "model": "sonnet",
+  "phase": 3,
+  "phases": 6,
+  "intent": "Implement stage 2",
+  "last": { "kind": "tool", "text": "Edit view.mjs", "at": "2026-01-01T00:00:00.000Z" },
+  "lane_opened_at": "2026-01-01T00:00:00.000Z",
+  "quiet_s": 4,
+  "tokens": { "in": 10, "out": 20, "cache_read": 0, "cache_creation": 0 },
+  "tokens_estimated": true
+}
+```
+
+`agent` is the subagent lane still open, or `orchestrator` outside one (then `phase` follows
+the `nightqueue run start|publish|report` commands and `model`, `lane_opened_at` are `null`);
+`phase` is the 1-based position of the current phase in the tier's track and `phases` the size of
+that track (both `null` when the tier or the phase is unknown); `last.kind` is `tool` or `text`;
+`tokens` are the partial usage of the running attempt, estimated from the assistant turns until
+the result event reports them, and no cost is ever estimated. `queue_run`
 starts the runner detached and answers right away with the path of its log,
 `queue_cancel` cancels a `pending`, `gate`, orphaned, `done` or `failed` job and answers `{ ok,
 job, worktree }` - `worktree` is `{ path, status, reason? }` when cancelling a `done` or `failed`

@@ -32,7 +32,7 @@ test("doctor on a v19 home with an orphan job_id does not promise a clean migrat
   const projects = report.checks.find((check) => check.name === "projects");
   assert.ok(projects, "no projects check");
 
-  const db = openDbReadOnly(host.env);
+  const db = openDbReadOnly(host.env, { anySchema: true });
   try {
     assert.equal(schemaVersionOn(db), 19, "doctor must not migrate");
   } finally {
