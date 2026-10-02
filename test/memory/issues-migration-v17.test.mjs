@@ -10,8 +10,9 @@ import { followDriftedJobs, getIssueDetail, saveIssue } from "../../src/memory/i
 import { openStore, openStoreReadOnly, withReadOnlyStore } from "../../src/store/open.mjs";
 import { makeHostEnv } from "../../test-support/host.mjs";
 import { makeDir, makeHome, makeOrg, makeProject, projectIdOf, seedClosedJob, seedLegacyV16Roadmap } from "../../test-support/memory.mjs";
+import { migrateTestHome } from "../../test-support/migrate.mjs";
 
-const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
+const MIGRATE_URL = new URL("../../test-support/migrate.mjs", import.meta.url).href;
 
 const { DatabaseSync } = await import("node:sqlite");
 
@@ -104,7 +105,7 @@ function indexColumns(db, name) {
 
 test("the v17 migration maps every legacy status and horizon, bumps nightqueue #9 and #36, and drops the horizon", (t) => {
   const env = legacyHome(t, "issue-v17-map");
-  const db = openDb(env);
+  const db = migrateTestHome(env);
 
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   const columns = db.prepare("PRAGMA table_info(issues)").all().map((column) => column.name);
@@ -120,9 +121,9 @@ test("the v17 migration maps every legacy status and horizon, bumps nightqueue #
 
 test("a reopen of the migrated database changes nothing, and the v16 INDEXES still execute against the v20 shape it reached before v22", (t) => {
   const env = legacyHome(t, "issue-v17-reopen");
-  const before = migratedRows(openDb(env));
+  const before = migratedRows(migrateTestHome(env));
   closeDb(env);
-  const reopened = openDb(env);
+  const reopened = migrateTestHome(env);
   assert.deepEqual(migratedRows(reopened), before);
   assert.deepEqual(indexColumns(reopened, "issues_order_idx"), ["scope", "project_id", "org_id", "priority", "position"]);
   const v20 = join(makeDir(t, "issue-v17-reopen-v20"), "nightqueue.db");
@@ -137,6 +138,7 @@ test("the migration keeps the id counter, so a new item never reuses the id of a
   const env = makeHome(t, "issue-v17-sequence");
   makeProject(t, env, "alpha");
   seedLegacyV16Roadmap(env, { items: [{ id: 1, project: "alpha", horizon: "now", status: "open", position: 1 }], sequence: 40 });
+  migrateTestHome(env);
 
   const saved = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "new" }, env);
   assert.equal(saved.id, 41);
@@ -151,7 +153,7 @@ test("an item #9 of another project keeps the default priority", (t) => {
       { id: 36, project: "alpha", horizon: "now", status: "open", position: 2 },
     ],
   });
-  const rows = openDb(env).prepare("SELECT id, priority FROM issues ORDER BY id").all();
+  const rows = migrateTestHome(env).prepare("SELECT id, priority FROM issues ORDER BY id").all();
   assert.deepEqual(rows.map((row) => ({ id: row.id, priority: row.priority })), [
     { id: 9, priority: 5 },
     { id: 36, priority: 5 },
@@ -160,7 +162,7 @@ test("an item #9 of another project keeps the default priority", (t) => {
 
 test("a legacy queued item whose job already failed is re-synced to todo by the first follow of the drift", (t) => {
   const env = legacyHome(t, "issue-v17-drift");
-  const db = openDb(env);
+  const db = migrateTestHome(env);
   assert.equal(db.prepare("SELECT status FROM issues WHERE id = 5").get().status, "in_progress");
   assert.ok(followDriftedJobs(env) >= 1);
   const row = db.prepare("SELECT status, job_status_seen FROM issues WHERE id = 5").get();
@@ -172,8 +174,8 @@ test("a legacy queued item whose job already failed is re-synced to todo by the 
 // Source of a child process that opens the database and reports what it found.
 function openerSource() {
   return [
-    `import { openDb } from ${JSON.stringify(DB_URL)};`,
-    "const db = openDb(process.env);",
+    `import { migrateTestHome } from ${JSON.stringify(MIGRATE_URL)};`,
+    "const db = migrateTestHome(process.env);",
     'const version = db.prepare("PRAGMA user_version").get().user_version;',
     'const horizon = db.prepare("PRAGMA table_info(issues)").all().some((c) => c.name === "horizon");',
     'const total = db.prepare("SELECT COUNT(*) AS n FROM issues").get().n;',
@@ -204,12 +206,12 @@ test("two processes opening the same legacy database both succeed and the rows a
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), { version: DB_USER_VERSION, horizon: false, total: ITEMS.length });
   }
-  assert.deepEqual(migratedRows(openDb(env)), EXPECTED);
+  assert.deepEqual(migratedRows(migrateTestHome(env)), EXPECTED);
 });
 
 // Schema version of the home's database on disk, read without migrating it.
 function diskVersion(env) {
-  const db = openDbReadOnly(env);
+  const db = openDbReadOnly(env, { anySchema: true });
   try {
     return schemaVersionOn(db);
   } finally {
@@ -235,11 +237,13 @@ test("a v16 home is diagnosed read-only without a crash, then migrated for a rea
   const report = await doctorReport(env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, new RegExp(`schema v16, expected v${DB_USER_VERSION}`));
+  assert.match(database.detail, new RegExp(`schema v16, this nightqueue expects v${DB_USER_VERSION}`));
+  assert.equal(database.hint, "run `nightqueue update`");
   assert.equal(report.checks.some((check) => check.name === "issue workflow"), false);
   assert.equal(diskVersion(env), 16);
 
-  await openStoreReadOnly(env).migrateIfOutdated();
+  await assert.rejects(openStoreReadOnly(env).requireCurrentSchema(), (err) => err.code === "SCHEMA_OUTDATED");
+  migrateTestHome(env);
   const listed = await withReadOnlyStore(env, (store) => store.issues.listIssues(projectIdOf(env, "alpha"), {}));
   assert.deepEqual(
     listed.items.map((item) => ({ id: item.id, status: item.status, priority: item.priority })),
@@ -254,7 +258,7 @@ test("a legacy queued item whose job was closed (merged) needs no issue step: th
   const jobId = seedClosedJob(env);
   seedLegacyV16Roadmap(env, { items: [{ id: 1, project: "alpha", horizon: "now", status: "queued", position: 1, job_id: jobId }] });
 
-  const migrated = openDb(env).prepare("SELECT status, job_status_seen FROM issues WHERE id = 1").get();
+  const migrated = migrateTestHome(env).prepare("SELECT status, job_status_seen FROM issues WHERE id = 1").get();
   assert.deepEqual({ ...migrated }, { status: "in_progress", job_status_seen: null });
 
   await openStore(env).jobs.sweepOrphans();

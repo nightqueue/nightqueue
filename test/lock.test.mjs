@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -84,6 +84,32 @@ test("a lock abandoned by a dead process is taken over after the age limit", asy
   const env = makeEnv(t);
   const path = lockPath(env);
   mkdirSync(path, { recursive: true });
+  const longAgo = new Date(Date.now() - 600000);
+  utimesSync(path, longAgo, longAgo);
+  assert.equal(await withLock(env, async () => "acquired", { timeoutMs: 100, staleAfterMs: 300000 }), "acquired");
+  assert.equal(existsSync(path), false);
+});
+
+test("a lock past the age limit whose recorded owner is alive is never taken over", async (t) => {
+  const env = makeEnv(t);
+  const path = lockPath(env);
+  let entered = false;
+  await withLock(env, async () => {
+    assert.equal(readFileSync(join(path, "owner"), "utf8"), String(process.pid));
+    const longAgo = new Date(Date.now() - 600000);
+    utimesSync(path, longAgo, longAgo);
+    await assert.rejects(withLock(env, async () => (entered = true), { timeoutMs: 100, staleAfterMs: 300000 }), UserError);
+    assert.equal(existsSync(path), true, "the live owner's lock was removed");
+  });
+  assert.equal(entered, false);
+});
+
+test("a lock past the age limit whose recorded owner died is taken over", async (t) => {
+  const env = makeEnv(t);
+  const path = lockPath(env);
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+  mkdirSync(path, { recursive: true });
+  writeFileSync(join(path, "owner"), String(dead));
   const longAgo = new Date(Date.now() - 600000);
   utimesSync(path, longAgo, longAgo);
   assert.equal(await withLock(env, async () => "acquired", { timeoutMs: 100, staleAfterMs: 300000 }), "acquired");

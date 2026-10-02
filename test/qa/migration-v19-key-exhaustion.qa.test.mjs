@@ -4,6 +4,7 @@ import { newId } from "../../src/config/ids.mjs";
 import { closeDb, openDb } from "../../src/memory/db.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 import { buildV18Home } from "../../test-support/v18-home.mjs";
+import { migrateTestHome } from "../../test-support/migrate.mjs";
 
 // A five-letter name c?e?q derives the base key `CE` whatever the two `?` are.
 function sameBaseName(n) {
@@ -20,7 +21,7 @@ test("v19 migrates a home where 30 projects derive the same base key", (t) => {
     },
   });
   try {
-    const db = openDb(env);
+    const db = migrateTestHome(env);
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, 22);
     const keys = db.prepare("SELECT key FROM projects UNION ALL SELECT key FROM orgs").all().map((row) => row.key);
     assert.equal(new Set(keys).size, keys.length, "keys are not unique");

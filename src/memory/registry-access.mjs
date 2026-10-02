@@ -1,25 +1,24 @@
 import { existsSync } from "node:fs";
 import { dbPath, homeDir } from "../config/paths.mjs";
 import { loadRawConfig } from "../config/store.mjs";
-import { hasCachedWriteConnection, openDb, openDbReadOnly, retireConnection, schemaVersionOn } from "./db.mjs";
+import { hasCachedWriteConnection, openDb, openDbReadOnly, retireConnection } from "./db.mjs";
 import { hasLegacyRegistry } from "./migration/v18.mjs";
 import * as registry from "./registry.mjs";
-import { DB_USER_VERSION } from "./schema.mjs";
 import { classifyStoreError } from "./store-error.mjs";
 
-// Runs a registry read on a short-lived read-only connection when the database is current, answering null when it is not.
+// Runs a registry read on a short-lived read-only connection; an older database is refused by the open itself.
 function readCurrent(env, read) {
   const db = openDbReadOnly(env);
   try {
-    return schemaVersionOn(db) >= DB_USER_VERSION ? { value: read(db) } : null;
+    return read(db);
   } finally {
     db.close();
   }
 }
 
 // Runs a registry read on the connection it can use without writing anything it should not: the process's writable one when
-// open, a short-lived read-only one on a current database, the writable one when there is something to migrate or import, and
-// none (null) on a home with no database and nothing to import.
+// open, a short-lived read-only one on an existing database (an older one refuses with the `nightqueue update` message), the
+// writable one when a v17 registry is due for import, and none (null) on a home with no database and nothing to import.
 export function withRegistry(env, read) {
   try {
     return readRegistry(env, read);
@@ -32,7 +31,7 @@ export function withRegistry(env, read) {
 function readRegistry(env, read) {
   if (hasCachedWriteConnection(env)) return read(openDb(env));
   if (!existsSync(dbPath(env))) return hasLegacyRegistry(loadRawConfig(env)) ? read(openDb(env)) : read(null);
-  return (readCurrent(env, read) ?? { value: read(openDb(env)) }).value;
+  return readCurrent(env, read);
 }
 
 // The error a failed registry read throws: classified when the database is unusable, retiring the cached writable connection it failed on.

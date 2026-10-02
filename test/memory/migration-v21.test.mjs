@@ -6,6 +6,7 @@ import { projectIntegrations } from "../../src/memory/registry.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { buildLegacyHome, preV22Name, restorePreV22Names } from "../../test-support/legacy-home.mjs";
 import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { migrateTestHome } from "../../test-support/migrate.mjs";
 
 // The column names of a table.
 function columnsOf(db, table) {
@@ -33,7 +34,7 @@ test("the schema is past v21, so every home carries the v21 columns", () => {
 test("a v20 home gains jobs.origin and projects.integrations once, keeping every row, on every open", (t) => {
   const { env } = makeV20Home(t, "migration-v21");
   for (const pass of [1, 2]) {
-    const db = openDb(env);
+    const db = migrateTestHome(env);
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION, `pass ${pass}`);
     assert.equal(columnsOf(db, "jobs").filter((column) => column === "origin").length, 1, `pass ${pass}`);
     assert.equal(columnsOf(db, "projects").filter((column) => column === "integrations").length, 1, `pass ${pass}`);
@@ -42,9 +43,10 @@ test("a v20 home gains jobs.origin and projects.integrations once, keeping every
   }
 });
 
-test("a read-only open of a v20 home reads no origin and no integrations instead of throwing", async (t) => {
+test("a diagnosis read of a v20 home reads no origin and no integrations instead of throwing, where a plain read-only open refuses", async (t) => {
   const { env, projectId } = makeV20Home(t, "migration-v21-read-only");
-  const db = openDbReadOnly(env);
+  assert.throws(() => openDbReadOnly(env), (err) => err.code === "SCHEMA_OUTDATED");
+  const db = openDbReadOnly(env, { anySchema: true });
   t.after(() => db.close());
   assert.equal(projectIntegrations(db, projectId), null);
   assert.equal(jobView(db.prepare("SELECT * FROM jobs WHERE id = 1").get()).origin, null);
@@ -70,7 +72,7 @@ test("a v17 home reaches the current schema in one open with both columns", (t) 
   buildLegacyHome(env, {
     seed: (db) => db.prepare(`INSERT INTO ${preV22Name("issues")} (scope, project, title, position) VALUES ('project', 'alpha', 'old item', 1)`).run(),
   });
-  const db = openDb(env);
+  const db = migrateTestHome(env);
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.ok(columnsOf(db, "jobs").includes("origin"));
   assert.ok(columnsOf(db, "projects").includes("integrations"));

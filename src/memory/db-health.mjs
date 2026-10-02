@@ -31,7 +31,7 @@ function checkVerdict(db, pragma) {
 
 // Runs a check pragma on a read-only connection to the live database.
 function checkLive(env, pragma) {
-  const db = openDbReadOnly(env);
+  const db = openDbReadOnly(env, { anySchema: true });
   try {
     return checkVerdict(db, pragma);
   } finally {
@@ -68,7 +68,7 @@ export function quickCheckMainAlone(env = process.env) {
 
 // Folds the whole write-ahead log into the database and truncates it (a passive pass first counts the frames, which a truncate reports as zero), behind a read-only pin so the close of the writable handle never deletes the sidecars.
 export function checkpointTruncate(env = process.env) {
-  const pin = openDbReadOnly(env);
+  const pin = openDbReadOnly(env, { anySchema: true });
   try {
     const db = openBareDb({ path: dbPath(env), env });
     try {

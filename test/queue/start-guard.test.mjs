@@ -9,6 +9,7 @@ import { lockPath } from "../../src/config/lock.mjs";
 import { runnerRegistryPath, runtimeVersionsDir } from "../../src/config/paths.mjs";
 import { ensureHome } from "../../src/config/store.mjs";
 import { packageRoot } from "../../src/host/paths.mjs";
+import { closeDb, openDb } from "../../src/memory/db.mjs";
 import { addJob, cancelJob, getJob } from "../../src/memory/jobs.mjs";
 import { liveRunners, writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { registerForegroundRunner } from "../../src/queue/start.mjs";
@@ -181,4 +182,44 @@ test("a registration no live process answers for never blocks a start, and is cl
   assert.equal(started.code, 0, started.stderr);
   assert.deepEqual(liveRunners(env, fakeKill(new Set([CHILD_PID]))).map((runner) => runner.pid), [CHILD_PID]);
   assert.equal(existsSync(runnerRegistryPath(LIVE_PID, env)), false, "the stale registration survived the start that pruned it");
+});
+
+// A queue home stamped v20, folded and closed so the file alone is the database.
+function v20QueueHome(t, name) {
+  const env = makeQueueHome(t, name);
+  const db = openDb(env);
+  db.exec("ALTER TABLE jobs DROP COLUMN origin; ALTER TABLE projects DROP COLUMN integrations; PRAGMA user_version = 20;");
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  closeDb(env);
+  return env;
+}
+
+test("a v20 home gets no runner: `queue run` refuses with the update message, spawns nothing and registers nothing", async (t) => {
+  const env = v20QueueHome(t, "start-outdated-detached");
+
+  const started = await runCli(env, ["queue", "run", "--watch", "10"]);
+
+  assert.equal(started.code, 1);
+  assert.match(started.stderr, /database at v20, this nightqueue expects v22: run `nightqueue update`/);
+  assert.equal(started.calls.length, 0, "a runner was spawned on an older database");
+  assert.deepEqual(liveRunners(env, fakeKill(new Set([CHILD_PID]))), []);
+});
+
+test("a foreground runner on a v20 home refuses before it registers itself", async (t) => {
+  const env = v20QueueHome(t, "start-outdated-foreground");
+
+  await assert.rejects(registerForegroundRunner({ env, killImpl: (pid) => pid === process.pid }), (err) => err.code === "SCHEMA_OUTDATED");
+
+  assert.equal(existsSync(runnerRegistryPath(process.pid, env)), false, "the foreground runner registered on an older database");
+});
+
+test("a close on a v20 home refuses with the update message and registers no close process", async (t) => {
+  const env = v20QueueHome(t, "start-outdated-close");
+
+  const closed = await runCli(env, ["queue", "close", "1"]);
+
+  assert.equal(closed.code, 1);
+  assert.match(closed.stderr, /database at v20, this nightqueue expects v22: run `nightqueue update`/);
+  assert.equal(closed.calls.length, 0, "a close was spawned on an older database");
+  assert.deepEqual(liveRunners(env, fakeKill(new Set([CHILD_PID]))), []);
 });

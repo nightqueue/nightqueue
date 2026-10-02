@@ -3,11 +3,12 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { closeDb, DB_USER_VERSION, openDb } from "../../src/memory/db.mjs";
+import { closeDb, DB_USER_VERSION } from "../../src/memory/db.mjs";
 import { buildLegacyHome } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
+import { migrateTestHome } from "../../test-support/migrate.mjs";
 
-const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
+const MIGRATE_URL = new URL("../../test-support/migrate.mjs", import.meta.url).href;
 const PR = (n) => `https://github.com/acme/api/pull/${n}`;
 const SHIPPED_LINE = "Shipped: PR #1 merged as abc1234 on 2026-09-20";
 const OTHER_LINE = "Shipped: PR #10 merged as abc1234 on 2026-09-20";
@@ -117,11 +118,11 @@ function rowOf(db, id) {
 // Source of a child process that opens the home, then reports the changes its own open wrote and every row it reads.
 function openerSource() {
   return [
-    `import { openDb } from ${JSON.stringify(DB_URL)};`,
+    `import { migrateTestHome } from ${JSON.stringify(MIGRATE_URL)};`,
     "const startAt = Number(process.argv[2] ?? 0);",
     "while (Date.now() < startAt) {}",
     "try {",
-    "  const db = openDb(process.env);",
+    "  const db = migrateTestHome(process.env);",
     '  const changes = db.prepare("SELECT total_changes() AS n").get().n;',
     '  const rows = db.prepare("SELECT * FROM jobs ORDER BY id").all().map((row) => ({ ...row }));',
     '  const version = db.prepare("PRAGMA user_version").get().user_version;',
@@ -155,14 +156,14 @@ function openerPath(t) {
 test("a v15 home opens at the current schema with the close columns, no ship column, and the closed invariant in the schema", (t) => {
   const env = makeHome(t, "close-migration-schema");
   seedV15Home(env);
-  const db = openDb(env);
+  const db = migrateTestHome(env);
 
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   const columns = db.prepare("PRAGMA table_info(jobs)").all().map((column) => column.name);
   for (const column of ["close_status", "close", "close_lease_until", "close_worker"]) assert.ok(columns.includes(column), `${column} is missing`);
   for (const column of LEGACY_COLUMNS) assert.equal(columns.includes(column), false, `${column} survived the migration`);
   const fresh = makeHome(t, "close-migration-schema-fresh");
-  for (const home of [db, openDb(fresh)]) {
+  for (const home of [db, migrateTestHome(fresh)]) {
     const sql = home.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'").get().sql;
     assert.match(sql, /close_worker TEXT,(?: origin TEXT,)?\s+CHECK \(status <> 'closed' OR \(pr_url IS NOT NULL AND trim\(pr_url\) <> '' AND close_status IS NULL/);
     assert.match(sql, /json_extract\(close, '\$\.data\.merged'\) END\) IS 1/);
@@ -172,7 +173,7 @@ test("a v15 home opens at the current schema with the close columns, no ship col
 test("every v15 row lands on its migration branch, lossless, and every closed row satisfies the invariant", (t) => {
   const env = makeHome(t, "close-migration-rows");
   const ids = seedV15Home(env);
-  const db = openDb(env);
+  const db = migrateTestHome(env);
 
   const shipped = rowOf(db, ids.shipped);
   assert.deepEqual([shipped.status, shipped.close_status, shipped.close_lease_until], ["closed", null, null]);
@@ -242,7 +243,7 @@ test("every v15 row lands on its migration branch, lossless, and every closed ro
 test("the invariant refuses a closed row with no recorded merge once the home is migrated", (t) => {
   const env = makeHome(t, "close-migration-check");
   const ids = seedV15Home(env);
-  const db = openDb(env);
+  const db = migrateTestHome(env);
   assert.throws(() => db.prepare("UPDATE jobs SET status = 'closed' WHERE id = ?").run(ids.shipFailed), /CHECK constraint failed/);
   assert.throws(() => db.prepare("UPDATE jobs SET close = NULL WHERE id = ?").run(ids.shipped), /CHECK constraint failed/);
   assert.throws(() => db.prepare("UPDATE jobs SET close_status = 'closing' WHERE id = ?").run(ids.shipped), /CHECK constraint failed/);
@@ -251,7 +252,7 @@ test("the invariant refuses a closed row with no recorded merge once the home is
 test("a second open in a fresh process writes nothing and reads the rows byte-identical", async (t) => {
   const env = makeHome(t, "close-migration-noop");
   seedV15Home(env);
-  const before = allRows(openDb(env));
+  const before = allRows(migrateTestHome(env));
   closeDb(env);
 
   const reopened = await runOpener(env, openerPath(t));
@@ -276,5 +277,5 @@ test("two processes migrating the same v15 file both succeed and agree on every 
     assert.equal(racer.version, DB_USER_VERSION);
   }
   assert.deepEqual(first.rows, second.rows);
-  assert.deepEqual(allRows(openDb(env)), first.rows);
+  assert.deepEqual(allRows(migrateTestHome(env)), first.rows);
 });

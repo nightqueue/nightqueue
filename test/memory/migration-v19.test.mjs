@@ -4,15 +4,16 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileS
 import { join } from "node:path";
 import { test } from "node:test";
 import { dbPath, preV18BackupPath, preV19BackupPath } from "../../src/config/paths.mjs";
-import { closeDb, DB_USER_VERSION, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
+import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { projectFromCwd, registeredProject } from "../../src/memory/registry-access.mjs";
 import { buildLegacyHome, preV22Name } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
+import { migrateTestHome } from "../../test-support/migrate.mjs";
 import { buildV18Home } from "../../test-support/v18-home.mjs";
 
 const { DatabaseSync } = await import("node:sqlite");
 
-const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
+const MIGRATE_URL = new URL("../../test-support/migrate.mjs", import.meta.url).href;
 const TABLES = ["orgs", "projects", "issues", "issue_comments", "issue_projects", "decisions", "jobs", "lessons", "memory"];
 
 // A checkout directory the fixture registers for `nightqueue`.
@@ -47,7 +48,7 @@ function counts(db, nameOf = (table) => table) {
 
 // The schema version of the database on disk, read without migrating it.
 function diskVersion(env) {
-  const db = openDbReadOnly(env);
+  const db = openDbReadOnly(env, { anySchema: true });
   try {
     return schemaVersionOn(db);
   } finally {
@@ -69,7 +70,7 @@ test("a v18 home migrates to v19: row counts kept, items numbered per owner, key
     counts: counts(raw, preV22Name),
     decisions: raw.prepare("SELECT id, number FROM decisions ORDER BY id").all().map((row) => ({ ...row })),
   }));
-  const db = openDb(env);
+  const db = migrateTestHome(env);
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.deepEqual(counts(db), before.counts, "a table lost or gained rows");
 
@@ -94,12 +95,12 @@ test("a v18 home migrates to v19: row counts kept, items numbered per owner, key
 
 test("a second open of a migrated home changes nothing and takes no second copy", (t) => {
   const { env } = v18Home(t, "v19-reopen");
-  const db = openDb(env);
+  const db = migrateTestHome(env);
   const schema = schemaOf(db);
   const rows = db.prepare("SELECT * FROM issues ORDER BY id").all().map((row) => ({ ...row }));
   const copied = statSync(preV19BackupPath(env)).mtimeMs;
   closeDb(env);
-  const again = openDb(env);
+  const again = migrateTestHome(env);
   assert.deepEqual(schemaOf(again), schema);
   assert.deepEqual(again.prepare("SELECT * FROM issues ORDER BY id").all().map((row) => ({ ...row })), rows);
   assert.equal(again.prepare("SELECT total_changes() AS n").get().n, 0, "a second open wrote to the database");
@@ -112,8 +113,8 @@ test("a runner holding a live lease refuses the v19 migration with one line, and
   };
   const { env, fixture } = v18Home(t, "v19-live-lease", { extra: live });
   const refusal = /^the database must migrate to v19, but a runner holds a live lease on J-3: stop the runners \(`nightqueue queue run --stop`\) and run the command again$/;
-  assert.throws(() => openDb(env), (err) => refusal.test(err.message));
-  await assert.rejects(async () => migrateIfOutdated(env), (err) => refusal.test(err.message));
+  assert.throws(() => migrateTestHome(env), (err) => refusal.test(err.message));
+  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED");
   assert.equal(diskVersion(env), 18);
   assert.equal(existsSync(preV19BackupPath(env)), false, "a refused migration published a copy");
   assert.ok(readFileSync(dbPath(env)).equals(fixture), "a refused migration wrote to the database");
@@ -121,8 +122,8 @@ test("a runner holding a live lease refuses the v19 migration with one line, and
 
 test("a migrated database has exactly the schema of a fresh one, table by table and trigger by trigger", (t) => {
   const { env } = v18Home(t, "v19-shape");
-  const migrated = schemaOf(openDb(env));
-  const fresh = schemaOf(openDb(makeHome(t, "v19-fresh")));
+  const migrated = schemaOf(migrateTestHome(env));
+  const fresh = schemaOf(migrateTestHome(makeHome(t, "v19-fresh")));
   assert.deepEqual(migrated, fresh);
 });
 
@@ -134,7 +135,7 @@ test("a v17 home reaches v19 in one open, keeping both the pre-v18 and the pre-v
       db.prepare("INSERT INTO roadmap_items (scope, project, title, position) VALUES ('project', 'alpha', 'next item', 1)").run();
     },
   });
-  const db = openDb(env);
+  const db = migrateTestHome(env);
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.equal(readRaw(preV18BackupPath(env), (raw) => schemaVersionOn(raw)), 17);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
@@ -145,11 +146,11 @@ test("a v17 home reaches v19 in one open, keeping both the pre-v18 and the pre-v
 // Source of a process that opens the home's database and prints the version and the keys it found.
 function openerSource() {
   return [
-    `import { openDb } from ${JSON.stringify(DB_URL)};`,
+    `import { migrateTestHome } from ${JSON.stringify(MIGRATE_URL)};`,
     "const startAt = Number(process.argv[2]);",
     "while (Date.now() < startAt) {}",
     "try {",
-    "  const db = openDb(process.env);",
+    "  const db = migrateTestHome(process.env);",
     '  const version = db.prepare("PRAGMA user_version").get().user_version;',
     '  const keys = db.prepare("SELECT key FROM projects ORDER BY rowid").all().map((row) => row.key);',
     '  process.stdout.write(JSON.stringify({ version, keys, error: null }) + "\\n");',
@@ -185,7 +186,7 @@ test("two processes opening one v18 home at once end with one migration and the 
 
 test("the read-only registry paths answer with the key on a v18 home once it is migrated", (t) => {
   const { env, path } = v18Home(t, "v19-read-only");
-  migrateIfOutdated(env);
+  migrateTestHome(env);
   closeDb(env);
   assert.equal(diskVersion(env), DB_USER_VERSION);
   assert.equal(registeredProject("nightqueue", env).key, "NQ");

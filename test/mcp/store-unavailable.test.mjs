@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -8,6 +10,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { homeDir } from "../../src/config/paths.mjs";
 import { createServer } from "../../src/mcp/tools.mjs";
 import { TOOL_CONTRACT } from "../../src/mcp/tool-contract.mjs";
+import { closeDb, openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
 import { recordJobBlock } from "../../src/queue/run-state.mjs";
@@ -52,6 +55,7 @@ function assertStoreUnavailable(result, env) {
     code: "SQLITE_NOTADB",
     home: homeDir(env),
     hint: "nightqueue doctor --fix",
+    message: `the nightqueue database at ${join(homeDir(env), "nightqueue.db")} is unavailable (SQLITE_NOTADB: file is not a database); run \`nightqueue doctor --fix\``,
     contract: TOOL_CONTRACT,
   });
 }
@@ -188,4 +192,46 @@ test("run_set, run_phase_done and run_outcome inside a job with a job block answ
     const args = { run_set: { type: "bug/error" }, run_phase_done: { phase: "triage" }, run_outcome: { status: "done" } }[name];
     assertStoreUnavailable(await outside.callTool({ name, arguments: args }), env);
   }
+});
+
+// A home stamped v20 with the project `alpha`, closed so the file alone is the whole database.
+function v20Home(t, name) {
+  const env = makeHome(t, name);
+  const repo = makeProject(t, env, "alpha");
+  openDb(env).exec("ALTER TABLE jobs DROP COLUMN origin; ALTER TABLE projects DROP COLUMN integrations; PRAGMA user_version = 20;");
+  closeDb(env);
+  return { env, repo };
+}
+
+const OUTDATED_WARNING = /^nightqueue memory unavailable \(SCHEMA_OUTDATED at .+\): database at v20, this nightqueue expects v22: run `nightqueue update`$/;
+
+test("a nightqueue mcp subprocess on a v20 home warns once with the update message, answers SCHEMA_OUTDATED, and never migrates", async (t) => {
+  const { env } = v20Home(t, "mcp-outdated-subprocess");
+  const before = readFileSync(join(homeDir(env), "nightqueue.db"));
+  const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, stderr: "pipe" });
+  let stderr = "";
+  transport.stderr?.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const client = new Client({ name: "nightqueue-tests-outdated-stdio", version: "0.0.0" });
+  await client.connect(transport);
+  t.after(() => client.close());
+
+  const result = await client.callTool({ name: "queue_status", arguments: {} });
+  const payload = JSON.parse(textOf(result));
+  assert.equal(result.isError, true);
+  assert.deepEqual({ error: payload.error, code: payload.code, hint: payload.hint }, { error: "store-unavailable", code: "SCHEMA_OUTDATED", hint: "nightqueue update" });
+  assert.match(payload.message, /database at v20, this nightqueue expects v22: run `nightqueue update`/);
+  assert.equal(stderr.split("\n").filter((line) => OUTDATED_WARNING.test(line)).length, 1, stderr);
+  assert.ok(readFileSync(join(homeDir(env), "nightqueue.db")).equals(before), "the MCP server wrote to an older database");
+});
+
+test("nightqueue hook session-start on a v20 home prints the one warning line naming `nightqueue update` and exits 0", (t) => {
+  const { env, repo } = v20Home(t, "hook-outdated-session-start");
+  const input = JSON.stringify({ cwd: repo, session_id: "outdated-session" });
+  const result = spawnSync(process.execPath, [CLI, "hook", "session-start"], { env, input, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.stdout.split("\n").filter((line) => line.trim());
+  assert.equal(lines.length, 1, result.stdout);
+  assert.match(lines[0], OUTDATED_WARNING);
 });

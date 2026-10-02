@@ -1,11 +1,12 @@
-import { mkdirSync, rmSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { UserError } from "./errors.mjs";
 import { homeDir } from "./paths.mjs";
 
 const ACQUIRE_TIMEOUT_MS = 5000;
 const RETRY_INTERVAL_MS = 50;
 const STALE_AFTER_MS = 300000;
+const OWNER_FILE = "owner";
 
 // A synchronous holder keeps the lock for a single read and write, so it is asked for again almost immediately.
 const SYNC_RETRY_INTERVAL_MS = 1;
@@ -20,22 +21,54 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Records this process as the owner of a lock just taken; a lock whose owner could not be written falls back to the age rule alone.
+function writeOwner(path) {
+  try {
+    writeFileSync(join(path, OWNER_FILE), String(process.pid));
+  } catch {
+    return;
+  }
+}
+
+// The pid recorded as the owner of a lock, or null for a lock that names none.
+export function lockOwnerPid(path) {
+  try {
+    const pid = Number(readFileSync(join(path, OWNER_FILE), "utf8").trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+// Tells whether a process is still alive; one this user may not signal is alive too.
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === "EPERM";
+  }
+}
+
 // Tries to create the lock directory, returning false when it already belongs to another process.
 function tryCreate(path) {
   mkdirSync(dirname(path), { recursive: true });
   try {
     mkdirSync(path);
-    return true;
   } catch (err) {
     if (err?.code === "EEXIST") return false;
     throw err;
   }
+  writeOwner(path);
+  return true;
 }
 
-// Drops a lock old enough that it can only have been abandoned by a dead process.
+// Drops a lock old enough that it can only have been abandoned by a dead process; a lock whose recorded owner is alive is never stale, however long it is held.
 function dropStale(path, staleAfterMs) {
   const stats = statSync(path, { throwIfNoEntry: false });
   if (!stats || Date.now() - stats.mtimeMs < staleAfterMs) return false;
+  const owner = lockOwnerPid(path);
+  if (owner !== null && isAlive(owner)) return false;
   rmSync(path, { recursive: true, force: true });
   return true;
 }

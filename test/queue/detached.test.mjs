@@ -227,7 +227,7 @@ test("queue status opens with one line per live runner, in the table and in the 
   const stopped = await runCli(env, ["queue", "status"]);
   assert.equal(stopped.out[0], "0 runners online - pending jobs will wait until `nightqueue queue run` starts one", stopped.stderr);
   const none = JSON.parse((await runCli(env, ["queue", "status", "--json"])).stdout);
-  assert.equal(none.runner.running, false);
+  assert.equal("runner" in none, false, "the deprecated singular `runner` key is back");
   assert.deepEqual(none.runners, []);
   assert.equal(none.runnersOnline, 0);
 
@@ -241,7 +241,7 @@ test("queue status opens with one line per live runner, in the table and in the 
   assert.match(table.stdout, /J-1\s+○ pending\s+-\s+-\s+alpha/, "the runner line took the place of the table");
 
   const payload = JSON.parse((await runCli(env, ["queue", "status", "--json"], { alive })).stdout);
-  assert.deepEqual(payload.runner, {
+  assert.deepEqual(payload.runners[0], {
     running: true,
     pid: CHILD_PID,
     mode: "watch",
@@ -255,7 +255,7 @@ test("queue status opens with one line per live runner, in the table and in the 
     rateLimit: null,
     window: null,
   });
-  assert.deepEqual(payload.runners, [payload.runner], "the deprecated `runner` key is not the first entry of `runners`");
+  assert.equal("runner" in payload, false, "the deprecated singular `runner` key is back");
   assert.equal(payload.runnersOnline, 1);
   assert.equal(payload.jobs.length, 1);
   assert.equal(payload.counts.pending, 1);
@@ -263,7 +263,6 @@ test("queue status opens with one line per live runner, in the table and in the 
   writeRunnerRecord({ pid: LIVE_PID, startedAt: "2026-09-08T21:05:00.000Z", mode: "drain", intervalS: null, logPath: null, detached: false }, env);
   const two = JSON.parse((await runCli(env, ["queue", "status", "--json"], { alive: new Set([CHILD_PID, LIVE_PID]) })).stdout);
   assert.deepEqual(two.runners.map((runner) => runner.pid), [CHILD_PID, LIVE_PID]);
-  assert.deepEqual(two.runner, two.runners[0], "the alias stopped naming the first registered runner");
   assert.equal(two.runnersOnline, 2);
 
   const foreground = await runCli(env, ["queue", "status"], { alive: new Set([LIVE_PID]) });

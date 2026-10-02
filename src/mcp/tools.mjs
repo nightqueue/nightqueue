@@ -692,7 +692,7 @@ function validateArgs(name, inputSchema, args) {
 
 // The machine-readable error a tool answers when the home database cannot be used at all.
 function storeUnavailableAnswer(err) {
-  const payload = withContract({ ok: false, error: "store-unavailable", code: err.code, home: err.home, hint: err.hint });
+  const payload = withContract({ ok: false, error: "store-unavailable", code: err.code, home: err.home, hint: err.hint, message: err.message });
   return { content: [{ type: "text", text: JSON.stringify(payload) }], isError: true };
 }
 

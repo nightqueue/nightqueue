@@ -4,6 +4,7 @@ import { dbPath } from "../../src/config/paths.mjs";
 import { closeDb, openDb } from "../../src/memory/db.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 import { buildV19Home } from "../../test-support/v19-home.mjs";
+import { migrateTestHome } from "../../test-support/migrate.mjs";
 
 const { DatabaseSync } = await import("node:sqlite");
 
@@ -19,7 +20,7 @@ test("v20 does not silently drop an operator column of a v19 table", (t) => {
 
   let refusal = null;
   try {
-    openDb(env);
+    migrateTestHome(env);
   } catch (error) {
     refusal = error;
   } finally {

@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { dbPath, preV18BackupPath, preV19BackupPath, preV20BackupPath } from "../../src/config/paths.mjs";
-import { DB_USER_VERSION, migrateIfOutdated, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
+import { DB_USER_VERSION, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { MigrationRefused } from "../../src/memory/migration/one-shot.mjs";
 import { migrateToV20 } from "../../src/memory/migration/v20.mjs";
 import { DATA_TABLES_V20 } from "../../src/memory/migration/v20-shape.mjs";
@@ -12,6 +12,7 @@ import { buildLegacyHome } from "../../test-support/legacy-home.mjs";
 import { ensureProject, makeDir, makeHome } from "../../test-support/memory.mjs";
 import { buildV18Home } from "../../test-support/v18-home.mjs";
 import { buildV19Home, V19_LINKS } from "../../test-support/v19-home.mjs";
+import { migrateTestHome } from "../../test-support/migrate.mjs";
 
 const { DatabaseSync } = await import("node:sqlite");
 
@@ -98,7 +99,7 @@ function readRaw(file, read) {
 
 // The schema version of the database on disk, read without migrating it.
 function diskVersion(env) {
-  const db = openDbReadOnly(env);
+  const db = openDbReadOnly(env, { anySchema: true });
   try {
     return schemaVersionOn(db);
   } finally {
@@ -136,7 +137,7 @@ function leftoverTmps(env) {
 function refusalOf(env) {
   let caught = null;
   try {
-    openDb(env);
+    migrateTestHome(env);
   } catch (err) {
     caught = err;
   }
@@ -212,7 +213,7 @@ for (const orphan of ORPHANS) {
     assert.ok(message.includes(`\`${orphan.table}\` row ${orphan.row} has ${orphan.column} 999 (no \`${orphan.parent}\` row 999)`), message);
     assert.ok(message.includes(dbPath(env)), message);
     assert.ok(message.endsWith("nothing was written"), message);
-    await assert.rejects(async () => migrateIfOutdated(env), (err) => err.message === message);
+    assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED");
     assertNothingWritten(env, fixture);
   });
 }
@@ -248,7 +249,7 @@ test("a runner holding a live lease refuses the v20 migration with one line and 
   };
   const { env, fixture } = v19Home(t, "v20-live-lease", { extra: live });
   assert.match(refusalOf(env), LEASE_REFUSAL);
-  await assert.rejects(async () => migrateIfOutdated(env), (err) => LEASE_REFUSAL.test(err.message));
+  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED");
   assertNothingWritten(env, fixture);
 });
 
@@ -266,7 +267,7 @@ test("a v17 home reaches the current schema in one open, keeping the pre-v18, pr
   buildLegacyHome(env, {
     seed: (db) => db.prepare("INSERT INTO roadmap_items (scope, project, title, position) VALUES ('project', 'alpha', 'old item', 1)").run(),
   });
-  const db = openDb(env);
+  const db = migrateTestHome(env);
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.equal(readRaw(preV18BackupPath(env), (raw) => schemaVersionOn(raw)), 17);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
@@ -278,7 +279,7 @@ test("a v17 home reaches the current schema in one open, keeping the pre-v18, pr
 test("a v18 home reaches the current schema in one open, keeping the pre-v19 and pre-v20 copies", (t) => {
   const env = makeHome(t, "v20-from-v18");
   buildV18Home(env);
-  const db = openDb(env);
+  const db = migrateTestHome(env);
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
   assert.equal(readRaw(preV20BackupPath(env), (raw) => schemaVersionOn(raw)), 19);
@@ -319,7 +320,7 @@ test("a v17 home with an orphan is refused before its v18 step, and nothing is w
 test("a v19 column the v20 shape lacks refuses the migration naming it, and its data stays", (t) => {
   const plant = (db) => db.exec("ALTER TABLE decisions ADD COLUMN operator_note TEXT; UPDATE decisions SET operator_note = 'keep me' WHERE id = 1");
   const { env } = v19Home(t, "v20-extra-column", { extra: plant });
-  assert.throws(() => openDb(env), /the v20 shape has no decisions\.operator_note, so its data would be lost/);
+  assert.throws(() => migrateTestHome(env), /the v20 shape has no decisions\.operator_note, so its data would be lost/);
   assert.equal(diskVersion(env), 19);
   const note = readRaw(dbPath(env), (raw) => raw.prepare("SELECT operator_note AS v FROM decisions WHERE id = 1").get().v);
   assert.equal(note, "keep me");
@@ -328,7 +329,7 @@ test("a v19 column the v20 shape lacks refuses the migration naming it, and its 
 // Seeds, on a fresh home at the current schema, the same links the v19 fixture carries, and names them the same way.
 function seedFreshLinks(env) {
   const projectId = ensureProject(env, "alpha");
-  const db = openDb(env);
+  const db = migrateTestHome(env);
   const orgId = db.prepare("SELECT org_id FROM projects WHERE id = ?").get(projectId).org_id;
   const insert = (sql, ...params) => Number(db.prepare(sql).run(...params).lastInsertRowid);
   const job = insert("INSERT INTO jobs (project_id, prompt) VALUES (?, 'linked job')", projectId);

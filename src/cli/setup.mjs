@@ -36,6 +36,7 @@ import {
 import { checkArgs, flagChoice, parseCommand } from "./args.mjs";
 import { guardIdleRuntime } from "./install-guard.mjs";
 import {
+  migrateSchemaStep,
   removeInstalledDirs,
   removePathStep,
   removeShimStep,
@@ -289,16 +290,18 @@ export function finish(ctx, report) {
   return 0;
 }
 
-// Installs everything the host needs to run nightqueue, one idempotent step at a time; `force` only ever overrides the refusal to install under a live runner.
+// Installs everything the host needs to run nightqueue, one idempotent step at a time, migrating the database with the installed runtime; `force` only ever overrides the refusal to swap the runtime under a live runner, never the migration gate.
 export async function install(ctx, { embedding, path, from, force, shortcuts, desktop } = {}) {
   await guardIdleRuntime(ctx, { force });
   const report = makeReport(ctx);
   setupHome(ctx, report);
   const ready = setupRuntime(ctx, report, { from });
+  const schemaOk = migrateSchemaStep(ctx, report, { ready });
   registerHost(ctx, report, { ready, shortcuts, desktop });
   await setupPath(ctx, report, { path });
   await setupEmbedding(ctx, report, { embedding });
-  return finish(ctx, report);
+  const code = finish(ctx, report);
+  return schemaOk ? code : 1;
 }
 
 // Takes the registrations of this package out of the host, keeping the configuration home unless `--purge` says otherwise.

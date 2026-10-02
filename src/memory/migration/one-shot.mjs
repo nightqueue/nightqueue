@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, fsyncSync, openSync, renameSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, openSync, renameSync, rmSync, statSync } from "node:fs";
 import { UserError } from "../../config/errors.mjs";
 import { dbPath } from "../../config/paths.mjs";
 import { jobRef } from "../refs.mjs";
@@ -82,6 +82,16 @@ function copyDatabase(env, step) {
   }
 }
 
+// Publishes the copy under the step's name. A copy already there is kept, never overwritten: `nightqueue update` takes its own
+// copy of the file under that name before the steps run, and an earlier migration's copy is a backup too.
+function publishCopy(tmp, path) {
+  if (existsSync(path)) {
+    rmSync(tmp, { force: true });
+    return;
+  }
+  renameSync(tmp, path);
+}
+
 // The verdict of the checks made once the write lock is held: another process migrated it, wrote after the copy, or it may go.
 function verdictUnderLock(db, env, { tmp, step }) {
   if (!step.isPending(db)) return "skipped";
@@ -134,7 +144,7 @@ function migrateFromCopy(db, env, { step, tmp, hooks }) {
         return verdict;
       }
       progress.version = userVersion(db);
-      renameSync(tmp, step.backupPath(env));
+      publishCopy(tmp, step.backupPath(env));
       step.migrateInside(db, env, { hooks, progress });
       db.exec("COMMIT");
     } catch (err) {
