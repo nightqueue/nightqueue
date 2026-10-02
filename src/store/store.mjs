@@ -230,7 +230,7 @@
  * @property {() => Promise<void>} connect opens the connection now, for the caller that needs it to exist before it reads anything
  * @property {() => Promise<void>} close releases this instance; a read-write one never closes the shared connection
  * @property {() => Promise<boolean>} checkpoint folds the write-ahead log back into the database file
- * @property {() => Promise<void>} migrateIfOutdated brings a database written by an older build up to this schema
+ * @property {() => Promise<void>} requireCurrentSchema refuses, with the `nightqueue update` message, a database older than this build; it never migrates
  */
 
 /**
@@ -351,7 +351,7 @@ export const STORE_CONTRACT = Object.freeze({
   orgs: ["list", "byName", "byId", "add", "rename", "setKey", "suggestKey", "keyAliases", "remove"],
   projects: ["list", "byName", "byId", "integrations", "setIntegrations", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
   db: ["files", "quickCheck", "quickCheckMainAlone", "integrityCheck", "checkpointTruncate"],
-  "": ["health", "connect", "close", "checkpoint", "migrateIfOutdated"],
+  "": ["health", "connect", "close", "checkpoint", "requireCurrentSchema"],
 });
 
 /**
@@ -406,5 +406,5 @@ export const READ_ONLY_METHODS = Object.freeze([
   "db.integrityCheck",
   "health",
   "close",
-  "migrateIfOutdated",
+  "requireCurrentSchema",
 ]);

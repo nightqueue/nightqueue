@@ -1,6 +1,6 @@
 import { UserError } from "../config/errors.mjs";
 import { dbPath, homeDir } from "../config/paths.mjs";
-import { checkpointWal, migrateIfOutdated, openDb, openDbReadOnly, retireConnection, schemaVersionOn } from "../memory/db.mjs";
+import { checkpointWal, openDb, openDbReadOnly, requireCurrentSchema, retireConnection, schemaVersionOn } from "../memory/db.mjs";
 import * as dbHealth from "../memory/db-health.mjs";
 import * as decisions from "../memory/decisions.mjs";
 import * as dedup from "../memory/dedup.mjs";
@@ -313,8 +313,18 @@ function unavailableBlock({ code, errcode, detail, home, path, hint }) {
   return { code, errcode, detail, home, path, hint };
 }
 
+// The raw numbers of a diagnosis on a read-only connection of its own that reads any schema, so an older database is still diagnosed and never migrated.
+function readHealth(env) {
+  const connection = readOnlyConnection(env, { anySchema: true });
+  try {
+    return readHealthOn({ db: () => connection.get(), env });
+  } finally {
+    connection.drop();
+  }
+}
+
 // The raw numbers of a diagnosis, each field resolved on its own so one broken read never poisons the other and nothing ever throws.
-function readHealth({ db, env, connection }) {
+function readHealthOn({ db, env }) {
   const errors = { schemaVersion: null, orphanJobs: null, danglingReferences: null };
   const health = { schemaVersion: null, orphanJobs: null, danglingReferences: null, errors, unavailable: null };
   const readers = {
@@ -331,7 +341,6 @@ function readHealth({ db, env, connection }) {
       if (unavailable) health.unavailable ??= unavailableBlock(unavailable);
     }
   }
-  if (health.unavailable) connection.drop();
   return health;
 }
 
@@ -349,11 +358,11 @@ function closeQuietly(db) {
   }
 }
 
-// The read-only connection of the store, opened only when a method needs it: `openDbReadOnly` throws on a home with no database, and every read-only caller guards around its own open.
-function readOnlyConnection(env) {
+// The read-only connection of the store, opened only when a method needs it: `openDbReadOnly` throws on a home with no database (or an older one, unless `anySchema`), and every read-only caller guards around its own open.
+function readOnlyConnection(env, { anySchema = false } = {}) {
   let db = null;
   return {
-    get: () => (db ??= openDbReadOnly(env)),
+    get: () => (db ??= openDbReadOnly(env, { anySchema })),
     release: () => {
       const open = db;
       db = null;
@@ -430,7 +439,7 @@ export function createLocalStore(env = process.env, { readOnly = false, onClose 
     orgs: orgsDomain(db),
     projects: projectsDomain(db),
     db: dbDomain(env),
-    health: async () => readHealth({ db, env, connection }),
+    health: async () => readHealth(env),
     connect: async () => {
       db();
     },
@@ -439,7 +448,7 @@ export function createLocalStore(env = process.env, { readOnly = false, onClose 
       onClose();
     },
     checkpoint: async () => checkpointWal(env),
-    migrateIfOutdated: async () => migrateIfOutdated(env),
+    requireCurrentSchema: async () => requireCurrentSchema(env),
   }, { env, connection });
   return readOnly ? fenceReadOnly(store) : store;
 }

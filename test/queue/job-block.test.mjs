@@ -4,7 +4,9 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { isStoreOutage } from "../../src/config/errors.mjs";
 import { jobLogPath, runDir } from "../../src/config/paths.mjs";
+import { closeDb, openDb } from "../../src/memory/db.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, getJob, retryJob } from "../../src/memory/jobs.mjs";
 import { queueIssue, saveIssue } from "../../src/memory/issues.mjs";
@@ -206,4 +208,20 @@ test("the run of a job resolves from its row while the database answers, and fro
   assert.deepEqual(await resolveJobRun(id, env), { project: "AP", projectId, slug: "the-retry", source: "disk" });
   assert.equal(diskJobRun(id + 7, env), null);
   await assert.rejects(resolveJobRun(id + 7, env), { name: "StoreUnavailableError", code: "SQLITE_NOTADB" });
+});
+
+test("an older database is never read as an outage: the run of a job is refused with the update message, not resolved from disk", async (t) => {
+  const env = makeHome(t, "job-block-outdated");
+  makeProject(t, env, "alpha");
+  const projectId = ensureProject(env, "alpha");
+  const id = addJob({ projectId, prompt: "fix the worker", slug: "the-run" }, env).id;
+  assert.equal(recordJobBlock({ projectId, slug: "the-run", block: { id, projectKey: "AP", createdAt: "2026-01-01T00:00:00.000Z" }, env }).status, "written");
+  openDb(env).exec("ALTER TABLE jobs DROP COLUMN origin; ALTER TABLE projects DROP COLUMN integrations; PRAGMA user_version = 20;");
+  closeDb(env);
+  const outdated = (err) => err?.name === "SchemaOutdatedError" && err.code === "SCHEMA_OUTDATED";
+  await assert.rejects(resolveJobRun(id, env), outdated);
+  await assert.rejects(resolveJobRun(id, env).catch((err) => {
+    assert.equal(isStoreOutage(err), false);
+    throw err;
+  }), outdated);
 });

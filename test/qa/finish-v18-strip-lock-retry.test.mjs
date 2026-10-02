@@ -11,6 +11,7 @@ import { closeDb, openDb } from "../../src/memory/db.mjs";
 import * as registry from "../../src/memory/registry.mjs";
 import { buildLegacyHome, legacyConfig } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
+import { migrateTestHome } from "../../test-support/migrate.mjs";
 
 // A checkout directory a v17 config registers.
 function checkout(t, name) {
@@ -34,7 +35,7 @@ test("the config strip deferred by a busy home lock during one open still leaves
   let db;
   try {
     // This open must not throw even though the config strip's own lock attempt cannot proceed.
-    db = openDb(env);
+    db = migrateTestHome(env);
   } finally {
     rmSync(lock, { recursive: true, force: true });
   }

@@ -984,7 +984,7 @@ async function printStatus(argv, ctx) {
   const intervalS = values.follow === undefined ? null : Math.max(1, requireInt("--follow", values.follow));
   if (intervalS !== null && values.json) throw new UserError(`\`--follow\` cannot be used with \`--json\`; usage: ${USAGE.status}`);
   if (intervalS !== null && positionals.length) throw new UserError(`\`--follow\` shows the whole queue, not one job; usage: ${USAGE.status}`);
-  await openStoreReadOnly(ctx.env).migrateIfOutdated();
+  await openStoreReadOnly(ctx.env).requireCurrentSchema();
   const prStates = ctx.prStates ?? createPrStateCache();
   if (intervalS !== null) return await followStatus(values, intervalS, ctx, prStates);
   try {

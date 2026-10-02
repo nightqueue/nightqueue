@@ -9,7 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { homeDir, jobLogPath, logsDir, PACKAGE_NAME, queuePausedPath, runnersDir, runtimeCurrentLink, runtimeDir, runtimeVersionsDir } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { packageRoot } from "../../src/host/paths.mjs";
-import { openDb } from "../../src/memory/db.mjs";
+import { closeDb, openDb, openDbReadOnly } from "../../src/memory/db.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
 import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
@@ -95,18 +95,25 @@ test("the server exposes exactly the thirty-one tools of the contract", async (t
   assert.equal(names.length, 31, "the contract list and the server disagree on how many tools there are");
 });
 
-test("the server migrates a v8 home to v9 once at boot, before it answers any tool", async (t) => {
+test("the server never migrates a v8 home: a tool answers store-unavailable with the update message and the file stays v8", async (t) => {
   const env = makeHome(t, "mcp-v9-migration");
   makeProject(t, env, "alpha");
   seedLegacyV8Home(env, { rows: 1 });
+  closeDb(env);
   const client = await connect(t, env);
 
-  const status = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
-  assert.equal(status.jobs[0].status, "closed", "the boot never migrated the v8 home");
+  const result = await client.callTool({ name: "queue_status", arguments: {} });
+  const status = JSON.parse(result.content[0].text);
+  assert.equal(result.isError, true);
+  assert.equal(status.error, "store-unavailable");
+  assert.equal(status.code, "SCHEMA_OUTDATED");
+  assert.equal(status.hint, "nightqueue update");
+  assert.match(status.message, /database at v8, this nightqueue expects v22: run `nightqueue update`/);
 
-  const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
-  assert.equal(db.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "pr_checked_at"), false);
+  const db = openDbReadOnly(env, { anySchema: true });
+  t.after(() => db.close());
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 8);
+  assert.equal(DB_USER_VERSION, 22);
 });
 
 test("the handshake carries the instructions that teach the backlog model", async (t) => {

@@ -6,7 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { dbPath } from "../../src/config/paths.mjs";
 import { ensureHome } from "../../src/config/store.mjs";
-import { DB_USER_VERSION, migrateIfOutdated, openDb, openDbReadOnly } from "../../src/memory/db.mjs";
+import { DB_USER_VERSION, openDb, openDbReadOnly, requireCurrentSchema } from "../../src/memory/db.mjs";
 import { createServer } from "../../src/mcp/tools.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 
@@ -66,12 +66,12 @@ test("openDbReadOnly refuses a database newer than this build's schema, closed a
   assertUntouched(path, expectedHash);
 });
 
-test("migrateIfOutdated refuses a database newer than this build's schema, closed and untouched", (t) => {
+test("requireCurrentSchema refuses a database newer than this build's schema, closed and untouched", (t) => {
   const env = makeFutureHome(t, "db-newer-migrate");
   const path = dbPath(env);
   const expectedHash = hashOf(path);
 
-  assert.throws(() => migrateIfOutdated(env), (err) => {
+  assert.throws(() => requireCurrentSchema(env), (err) => {
     assert.equal(err.message, refusalLine(path));
     return true;
   });

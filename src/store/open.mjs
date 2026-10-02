@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { dbPath } from "../config/paths.mjs";
 import { loadRawConfig } from "../config/store.mjs";
-import { hasRetiredConnection, releaseCachedConnection } from "../memory/db.mjs";
+import { diskSchema, hasRetiredConnection, migrateHomeDatabase, releaseCachedConnection } from "../memory/db.mjs";
 import { hasLegacyRegistry } from "../memory/migration/v18.mjs";
+import { homeActivity as readHomeActivity } from "../memory/schema-gate.mjs";
 import { createLocalStore } from "./local.mjs";
 
 const readWriteStores = new Map();
@@ -39,12 +40,28 @@ export async function withReadOnlyStore(env, fn) {
 }
 
 // The store a READ command reads the registry through, never creating a database for nothing: null on a home with none and no
-// v17 registry in config.json to import; the writable store when that import is due, the read-only one (migrated first) otherwise.
+// v17 registry in config.json to import; the writable store when that import is due, the read-only one otherwise - refusing an older
+// database with the `nightqueue update` message, never migrating it.
 export async function openRegistryReader(env = process.env) {
   if (!existsSync(dbPath(env))) return hasLegacyRegistry(loadRawConfig(env)) ? openStore(env) : null;
   const store = openStoreReadOnly(env);
-  await store.migrateIfOutdated();
+  await store.requireCurrentSchema();
   return store;
+}
+
+// The schema of the home's database on disk, read from its header without opening it: `{ exists, version, fresh, unknown }`.
+export async function homeSchema(env = process.env) {
+  return diskSchema(env);
+}
+
+// What uses the home's database right now, read on any schema: the jobs and closes holding a live lease, and the `running` rows whose lease expired.
+export async function homeActivity(env = process.env) {
+  return readHomeActivity(env);
+}
+
+// Backs up the home's older database to `backupPath`, then migrates it to this build's schema; only `nightqueue update --schema-only` calls it.
+export async function migrateHome(env = process.env, { backupPath } = {}) {
+  return migrateHomeDatabase(env, { backupPath });
 }
 
 // The writable store of a command that then reads config.json: opened first, so a v17 registry still in the file is imported and its

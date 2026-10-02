@@ -78,8 +78,8 @@ are there: a `# nightqueue` you wrote for your own reason, followed by lines tha
 to look like ours, is never rewritten and never removed.
 
 `nightqueue update` reinstalls the runtime from the registry at the newest
-version and re-points the host at it; config, secrets and the database stay
-untouched. `nightqueue update 0.2.0` asks the registry for that exact version
+version, migrates the database with it, and re-points the host at it; config and
+secrets stay untouched. `nightqueue update 0.2.0` asks the registry for that exact version
 instead (a tag such as `next` works too), and `--from <dir|tgz>` installs a local
 source instead of asking the registry at all (see [Developing](developing.md)); a
 version and `--from` together are a usage error, because they are two different
@@ -89,6 +89,50 @@ installed into, as in `runtime: updated (v0.1.0 -> v0.2.0 at
 `update` refuses while a runner is live, exactly as `setup` and `init` do. `update` is the
 only command that reaches the registry to install, and a runtime it could not
 reinstall is an exit code, never a quiet degraded line.
+
+**The database schema changes only in `nightqueue update` and `nightqueue setup`.** No other
+command, runner, MCP server or hook ever migrates the database: opening one written by an
+older build is refused before a single byte is written, with
+
+```
+nightqueue: database at v20, this nightqueue expects v22: run `nightqueue update` (~/.nightqueue/nightqueue.db); when the installed nightqueue is already current, a second `nightqueue update` finishes the migration
+```
+
+The MCP tools answer `store-unavailable` with code `SCHEMA_OUTDATED` and that message, the
+SessionStart hook prints its one warning line naming `nightqueue update`, a runner refuses to
+start (and is never registered), and `nightqueue doctor` warns `schema v20, this nightqueue
+expects v22` with the hint `run nightqueue update`. A database newer than the build is refused
+as before.
+
+After installing the runtime, `update` (and `setup`) runs the migration with the runtime it
+just installed - a child `nightqueue update --schema-only` born from it, since only that build
+knows the target schema - under the home lock the parent holds. The step prints one line:
+`database schema: ok (v20 -> v22 (backup at ~/.nightqueue/nightqueue.db.pre-v22))`, `ok (v22
+(current))` or `ok (no database yet)`. Before it writes anything it refuses, naming each one,
+while:
+
+- a runner or a close process is registered under `$NIGHTQUEUE_HOME/runners/` (`pid <n>`);
+- a job holds a live lease (`J-<n> (live lease)`);
+- a close holds a live close lease, in flight or the post-close hold of a closed job
+  (`close J-<n> (live close lease)`).
+
+The refusal exits `1` and ends `nothing was written`; stop the runners (`nightqueue queue run
+--stop`), wait for the close, and run `nightqueue update` again. `--force` never bypasses it: it
+only lets the runtime be swapped under a live runner. A job left `running` with an expired lease
+(a runner that crashed) does not block it: it is named in a `warning:` line and the first runner
+after the migration recovers it. When nothing blocks it, the migration copies the database
+(write-ahead log included, through `VACUUM INTO`) to `nightqueue.db.pre-v<N>` first - beside an
+earlier copy with a timestamp suffix, never over it - then migrates. A database file that is
+not readable SQLite is left as it is for `nightqueue doctor --db`, so it never blocks the
+install that may repair it. A step that migrated prints one more line asking to restart every
+MCP client, so no server started by the old build keeps a connection to the migrated file. The
+home lock records the pid that holds it, so however long the migration takes, no other command
+treats the lock as abandoned while that process is alive.
+
+**Upgrading from 0.5.x or earlier takes two updates, once.** The first `nightqueue update` runs
+the update of the OLD build, which installs the new runtime but does not know the schema step;
+every command then refuses with the message above. A second `nightqueue update` (or one
+`nightqueue setup`) runs the new build's update, which migrates the database.
 
 `nightqueue init` is `nightqueue setup` plus the project registration, always in that
 order: every step below first, then the repository of the current directory (or
@@ -246,7 +290,8 @@ The refusal exits `1` and has two causes: a job holding a live lease, or any run
 registered under `$NIGHTQUEUE_HOME/runners/`. A job left behind by a crash
 does not count - its lease is dead, so it never blocks the command that repairs
 the installation. `nightqueue update --force` overrides both, for when you know
-the state of the machine better than the registry does.
+the state of the machine better than the registry does - for the runtime swap only: the
+database migration that follows still refuses while anything uses the home (see above).
 
 `NIGHTQUEUE_NO_UPDATE_CHECK=1` turns the check off entirely: no cache read, no
 request, no line, on every surface.

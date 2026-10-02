@@ -192,21 +192,21 @@ run directory points at the id, so a rename touches one row. `config.json` keeps
 only what is not identity - the queue and embedding settings, the connection
 bound to each org (`orgConnections`, keyed by org id) and `defaultOrg` (an org
 id) - and any top-level key it does not know is kept as it is. A home written by
-an older build migrates once, on the first command that opens its database: the
+an older build migrates once, in `nightqueue update` (or `setup`), never on an open: the
 orgs and projects of `config.json` move into the database, `runs/<project>/` is
 moved to `runs/<project_id>/`, and a copy of the database as it was is left
 beside it as `nightqueue.db.pre-v18`. While a runner holds a live lease on a job
 the migration refuses and asks to stop the runners first
 (`nightqueue queue run --stop`); nothing is written until it succeeds. A v18 database
-then goes to v19 the same way, in the same open, with its own copy
+then goes to v19 the same way, in the same migration, with its own copy
 `nightqueue.db.pre-v19`: every project and org gets a key (below), and every issue
 gets its number within its owner, in the order the issues were created.
-A v19 database then goes to v20 in the same open, with its copy
+A v19 database then goes to v20 in the same migration, with its copy
 `nightqueue.db.pre-v20`: every reference to another row gets a foreign key, and a
 row pointing at a row that does not exist refuses the migration, naming the row,
 with nothing written - checked before the first pending step, so an older home
 stays at its version too; `nightqueue doctor` reports such rows.
-A v20 or v21 database then goes to v22 in the same open, with its copy
+A v20 or v21 database then goes to v22 in the same migration, with its copy
 `nightqueue.db.pre-v22`: the tracker tables are renamed to `issues`, `issue_projects`
 and `issue_comments`, every row, counter and ref kept, and the v21 columns untouched.
 `nightqueue run dir --project <name> --slug <slug>` prints the directory of a
@@ -242,8 +242,9 @@ the same path or name either way).
 ```sh
 nightqueue setup                                   # install the runtime and register everything in the host
 nightqueue setup --remove --purge                  # undo the registrations, or delete the home as well
-nightqueue update                                  # reinstall the runtime and re-point the host at it
+nightqueue update                                  # reinstall the runtime, migrate the database with it, and re-point the host at it
 nightqueue update 0.2.0                            # ...at one exact version from the registry
+nightqueue update --schema-only                    # internal: the database migration alone, run by update/setup from the installed runtime
 nightqueue doctor --json                           # check the host and the home, exit 1 on any failure
 nightqueue doctor --check-updates                  # ...and ask the registry for the newest version
 nightqueue doctor --fix                            # ...and git worktree repair the job worktrees whose checkout or home moved, and repair the database files
@@ -596,7 +597,7 @@ Three of the checks are about the storage under the home (see [Configuration](cl
   line states an unknown rather than a pass.
 
 The `database` check compares the schema version on disk with the one this build expects: a
-database one version behind is a `warn` (`run nightqueue queue status once to let it migrate`),
+database behind is a `warn` (`schema v20, this nightqueue expects v22`, hint `run nightqueue update`),
 and a database written by a NEWER version is a `fail` (upgrade nightqueue to the version that
 wrote it). A database SQLite itself cannot read - `SQLITE_NOTADB`, `SQLITE_CORRUPT`,
 `SQLITE_IOERR` or `SQLITE_READONLY` (see [Memory](memory.md)) - is a `warn`, never a `fail`:
@@ -645,7 +646,7 @@ place that meets a sick database prints.
     `this doctor process holds a broken connection; run \`nightqueue doctor --fix\` again`;
   - the main file itself is broken: a `fail` - the one database row that fails, because
     `--fix` was asked and could not act. Nothing moves; the detail lists every backup in the
-    home with its size and time (`nightqueue.db.pre-v18`, `pre-v19`, `pre-v20` and the files of
+    home with its size and time (every `nightqueue.db.pre-v<N>` copy, stamped ones included, and the files of
     each `_broken-*` directory), or `no backup found in <home>`, and the hint is
     `stop every nightqueue process (runners and MCP clients), then: cp '<newest backup>' '<db path>'`.
 

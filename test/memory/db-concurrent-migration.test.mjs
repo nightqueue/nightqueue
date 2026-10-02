@@ -10,7 +10,7 @@ import { buildLegacyHome } from "../../test-support/legacy-home.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 import { buildV19Home } from "../../test-support/v19-home.mjs";
 
-const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
+const MIGRATE_URL = new URL("../../test-support/migrate.mjs", import.meta.url).href;
 const BARRIER_MS = 300;
 const ITERATIONS = 12;
 const RACERS = 6;
@@ -27,14 +27,14 @@ PRAGMA user_version = 9;
 // Source of a racer process: opens the SAME v9 database from a real separate OS process, at a shared instant.
 function racerSource() {
   return [
-    `import { openDb } from ${JSON.stringify(DB_URL)};`,
+    `import { migrateTestHome } from ${JSON.stringify(MIGRATE_URL)};`,
     "",
     "async function main() {",
     "  const startAt = Number(process.argv[2]);",
     "  while (Date.now() < startAt) {",
     "    // busy-wait: keeps every racer inside the SAME migration window instead of drifting on setTimeout granularity",
     "  }",
-    "  const db = openDb(process.env);",
+    "  const db = migrateTestHome(process.env);",
     '  const version = db.prepare("PRAGMA user_version").get().user_version;',
     '  const columns = db.prepare("PRAGMA table_info(jobs)").all().map((c) => c.name);',
     '  const statuses = db.prepare("SELECT status FROM jobs ORDER BY id").all().map((row) => row.status);',

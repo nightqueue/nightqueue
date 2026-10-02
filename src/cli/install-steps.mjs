@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { LEGACY_SHIM_NAME, LEGACY_SHIM_NAMES, binDir, embeddingDir, homeDir, legacyShimPath, runtimeDir, runtimeVersionsDir, shimPath } from "../config/paths.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { npmInstall, npmPack } from "../host/npm.mjs";
-import { packageRoot } from "../host/paths.mjs";
+import { packageRoot, spawnRoot } from "../host/paths.mjs";
 import {
   packageVersion,
   prefixVersion,
@@ -20,11 +20,16 @@ import { EMBEDDING_PACKAGE, EMBEDDING_PACKAGE_RANGE, embeddingLibraryEntry, warm
 import { confirm } from "./prompt.mjs";
 import { firstLine } from "./report.mjs";
 import { finishVersion, pruneVersions, runtimeLocation, stageInstall, switchCurrent, versionStamp } from "./runtime-versions.mjs";
+import { SCHEMA_LABEL, SCHEMA_PARENT_ENV } from "./schema-migrate.mjs";
 
 const RUNTIME_LABEL = "runtime";
 const OLD_RUNTIMES_LABEL = "old runtimes";
 const RUNTIME_CHECK_LABEL = "runtime check";
 const SHIM_CHECK_TIMEOUT_MS = 15000;
+const SCHEMA_TIMEOUT_MS = 30 * 60 * 1000;
+const MIGRATED_DETAIL = /^v\d+ -> v\d+/;
+const RESTART_CLIENTS_NOTICE =
+  "the database schema changed: restart every MCP client (Claude Code sessions, Claude Desktop, a running `nq open`), so no server started by the old nightqueue keeps a connection to it";
 const SHIM_LABEL = "shim";
 const LEGACY_SHIM_LABEL = "legacy shim";
 const PATH_LABEL = "PATH";
@@ -126,6 +131,51 @@ export function setupRuntime(ctx, report, { from, force, version } = {}) {
     rmSync(staging, { recursive: true, force: true });
     source.cleanup();
   }
+}
+
+// The report detail of a schema child that succeeded: its last stdout line without the label it already carries.
+function schemaDetail(stdout) {
+  const lines = String(stdout ?? "").trim().split("\n").filter(Boolean);
+  return (lines.at(-1) ?? "").replace(`${SCHEMA_LABEL}: `, "");
+}
+
+// Why the schema child failed, short enough for a report line: its refusal line, else how it exited.
+function schemaFailure(result) {
+  const refusal = String(result?.stderr ?? "").split("\n").find((line) => line.startsWith("nightqueue: "));
+  return firstLine(result?.error?.message ?? refusal?.slice("nightqueue: ".length)) || `exit ${result?.status ?? "?"}`;
+}
+
+// Relays every line a schema child printed on stderr (its warnings, its whole refusal) to the operator, unshortened.
+function relayStderr(ctx, stderr) {
+  for (const line of String(stderr ?? "").split("\n")) {
+    if (line.trim()) ctx.err(line);
+  }
+}
+
+// Migrates the home's database with the runtime just installed (`update --schema-only` in a child born from it), since only that build knows the target schema; the parent holds the home lock and the child borrows it. Without a ready runtime there is no build to migrate with.
+export function migrateSchemaStep(ctx, report, { ready } = {}) {
+  if (ready === false) {
+    report.step(SCHEMA_LABEL, "skipped", "the runtime is not ready");
+    return true;
+  }
+  const entry = join(spawnRoot(ctx.env), "bin", "nightqueue.mjs");
+  const env = { ...ctx.env, [SCHEMA_PARENT_ENV]: String(process.pid) };
+  let result;
+  try {
+    result = ctx.spawnSyncImpl(process.execPath, [entry, "update", "--schema-only"], { env, encoding: "utf8", timeout: SCHEMA_TIMEOUT_MS });
+  } catch (err) {
+    report.degrade(SCHEMA_LABEL, firstLine(err?.message ?? String(err)), "nightqueue update");
+    return false;
+  }
+  relayStderr(ctx, result?.stderr);
+  if (result?.error || result?.status !== 0) {
+    report.degrade(SCHEMA_LABEL, schemaFailure(result), "nightqueue update");
+    return false;
+  }
+  const detail = schemaDetail(result.stdout);
+  report.step(SCHEMA_LABEL, "ok", detail);
+  if (MIGRATED_DETAIL.test(detail)) report.note(RESTART_CLIENTS_NOTICE);
+  return true;
 }
 
 // Reason the shim could not prove itself, short enough for a report line.

@@ -9,6 +9,7 @@ import { insertComment } from "../../src/memory/issue-comments.mjs";
 import { searchIssues } from "../../src/memory/issue-search.mjs";
 import { saveIssue } from "../../src/memory/issues.mjs";
 import { ensureProject, makeHome, makeProject, orgIdOf, ownerIdsOf, projectIdOf, seedLegacyV16Roadmap } from "../../test-support/memory.mjs";
+import { migrateTestHome } from "../../test-support/migrate.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
@@ -102,6 +103,7 @@ test("the FTS finds a legacy title right after the v17 migration", (t) => {
   seedLegacyV16Roadmap(env, {
     items: [{ id: 4, project: "alpha", horizon: "now", status: "open", position: 1, title: "legacy flamingo title" }],
   });
+  migrateTestHome(env);
   assert.deepEqual(ids(searchIssues({ projectId: projectIdOf(env, "alpha"), query: "flamingo" }, env)), [4]);
 });
 

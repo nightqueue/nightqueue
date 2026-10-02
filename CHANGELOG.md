@@ -6,6 +6,28 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Breaking
+
+- **The database schema changes only in `nightqueue update` and `nightqueue setup`.** No other
+  open migrates it any more - not a read command, a runner, the MCP server nor a hook, inside a
+  job or outside one: a database older than the build is refused before a byte is written
+  (sidecars included) with `database at v<file>, this nightqueue expects v<code>: run
+  \`nightqueue update\``. The MCP tools answer `store-unavailable` with code `SCHEMA_OUTDATED`,
+  hint `nightqueue update` and a new `message` field; hooks print their one warning line; a
+  runner is never started nor registered; `doctor` warns and names `nightqueue update`. A read
+  from a job worktree without `NIGHTQUEUE_HOME` used to migrate the operator's home under the
+  installed build, which then refused it and stopped every runner.
+- **`update`/`setup` migrate with the runtime they just installed, and only on an idle home.**
+  After the runtime swap they run `nightqueue update --schema-only` from the new runtime under
+  the home lock; it refuses, naming each one, while a runner or close is registered, a job holds
+  a live lease or a close holds a live close lease (`--force` never bypasses it), then copies
+  the database to `nightqueue.db.pre-v<N>` (never over an earlier copy) and migrates. A job left
+  `running` with an expired lease only warns.
+- **Upgrading from 0.5.x takes two updates, once.** The first `nightqueue update` runs the old
+  build's update, which installs the new runtime without the schema step, and every command
+  then refuses with the message above; a second `nightqueue update` (or `nightqueue setup`)
+  migrates the database.
+
 ### Removed
 
 - The singular `runner` key of `nightqueue queue status --json` and of the MCP `queue_status`

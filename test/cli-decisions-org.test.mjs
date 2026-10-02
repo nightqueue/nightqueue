@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, realpathSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import { saveDecision } from "../src/memory/decisions.mjs";
 import { saveIssue } from "../src/memory/issues.mjs";
 import { buildLegacyHome, legacyConfig } from "../test-support/legacy-home.mjs";
 import { DOWNGRADE_TO_V5, makeDir, makeHome, makeOrg, makeProject, orgIdOf, projectIdOf } from "../test-support/memory.mjs";
+import { migrateTestHome } from "../test-support/migrate.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const LONG_ORG = "acme-platform-group";
@@ -63,8 +64,18 @@ function makeV5Home(t, name) {
   return { env, cwd };
 }
 
-test("the read commands migrate a database written before the owner scope, with no manual step", (t) => {
+test("the read commands refuse a database written before the owner scope until `nightqueue update` migrates it, then read it", (t) => {
   const { env, cwd } = makeV5Home(t, "decision-v5-read");
+  const before = readFileSync(dbPath(env));
+
+  const refused = runCli(env, ["decision", "list", "--project", "alpha"], { cwd });
+  assert.equal(refused.status, 1, refused.stdout);
+  assert.match(refused.stderr, /database at v5, this nightqueue expects v22: run `nightqueue update`/);
+  assert.ok(readFileSync(dbPath(env)).equals(before), "a refused read wrote to the database");
+  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /warn\s+database\s+schema v5, this nightqueue expects v22/);
+
+  migrateTestHome(env);
+  closeDb(env);
 
   const listed = runCli(env, ["decision", "list", "--project", "alpha"], { cwd });
   assert.equal(listed.status, 0, listed.stderr);
@@ -83,7 +94,7 @@ test("the read commands migrate a database written before the owner scope, with 
   assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v22/);
 });
 
-test("a v5 database that cannot be migrated answers with the schema, never with a raw missing column", (t) => {
+test("a read-only v5 database answers with the update message, never with a raw missing column", (t) => {
   const { env, cwd } = makeV5Home(t, "decision-v5-readonly");
   const path = dbPath(env);
   chmodSync(path, 0o444);
@@ -91,7 +102,7 @@ test("a v5 database that cannot be migrated answers with the schema, never with 
 
   const listed = runCli(env, ["decision", "list", "--project", "alpha"], { cwd });
   assert.equal(listed.status, 1, listed.stdout);
-  assert.match(listed.stderr, /schema v5 and this build needs v22/);
+  assert.match(listed.stderr, /database at v5, this nightqueue expects v22: run `nightqueue update`/);
   assert.equal(listed.stderr.includes("no such column"), false, listed.stderr);
 });
 

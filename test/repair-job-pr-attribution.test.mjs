@@ -145,7 +145,7 @@ test("the store's compare-and-swap refuses a moved URL, a missing line and a dou
   }
 });
 
-test("a dry run on a database an older build wrote never migrates it", async (t) => {
+test("a dry run on a database an older build wrote refuses with the update message and never migrates it", async (t) => {
   const env = makeHome(t, "repair-attr-older");
   buildLegacyHome(env, {
     version: 14,
@@ -157,11 +157,9 @@ test("a dry run on a database an older build wrote never migrates it", async (t)
       ).run(JOB_ID, FROM_URL, NOTICE_BEFORE);
     },
   });
-  const { out, io } = capture();
-  assert.equal(await main(["--job", "57"], env, io), 0);
-  assert.equal(out.at(-1), "dry run: nothing written; re-run with --apply to write these two changes.");
-  assert.ok(out.includes("    prNumber: (none)"));
-  const readOnly = openDbReadOnly(env);
+  const { io } = capture();
+  await assert.rejects(main(["--job", "57"], env, io), /database at v14, this nightqueue expects v22: run `nightqueue update`/);
+  const readOnly = openDbReadOnly(env, { anySchema: true });
   t.after(() => readOnly.close());
   assert.equal(schemaVersionOn(readOnly), 14);
   const columns = readOnly.prepare("PRAGMA table_info(jobs)").all().map((column) => column.name);

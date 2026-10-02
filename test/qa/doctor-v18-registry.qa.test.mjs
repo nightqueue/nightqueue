@@ -33,7 +33,7 @@ test("doctor on a v18 home names the pending v19 migration and does not migrate"
   assert.match(projects.detail, /v18/);
   assert.match(projects.detail, /v22/);
 
-  const db = openDbReadOnly(host.env);
+  const db = openDbReadOnly(host.env, { anySchema: true });
   try {
     assert.equal(schemaVersionOn(db), 18, "doctor must not migrate");
   } finally {

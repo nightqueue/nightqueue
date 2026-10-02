@@ -1,9 +1,10 @@
-import { existsSync } from "node:fs";
-import { StoreUnavailableError, UserError } from "../config/errors.mjs";
+import { closeSync, existsSync, fsyncSync, openSync, readSync, renameSync, rmSync, statSync } from "node:fs";
+import { SchemaOutdatedError, UserError } from "../config/errors.mjs";
 import { callerJobId, isRunnerHome } from "../config/job-home.mjs";
-import { dbPath, homeDir } from "../config/paths.mjs";
+import { dbPath, dbWalPath, homeDir } from "../config/paths.mjs";
 import { ensureHome, loadRawConfig } from "../config/store.mjs";
-import { FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ISSUE_FTS, ISSUE_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
+import { DATA_TABLES, FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ISSUE_FTS, ISSUE_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
+import { hasTable } from "./migration/one-shot.mjs";
 import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schemaState } from "./migration/v18.mjs";
 import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
 import { isPendingV20, migrateToV20, refuseOrphans } from "./migration/v20.mjs";
@@ -15,6 +16,7 @@ import { DB_USER_VERSION } from "./schema.mjs";
 import { migrateSharedSlugs, sharedSlugPending } from "./shared-slug-migration.mjs";
 import { classifyStoreError } from "./store-error.mjs";
 import { inTransaction, withWriteRetry } from "./tx.mjs";
+import { walUserVersion } from "./wal-header.mjs";
 
 export { DB_USER_VERSION, isoToSqlite, sqliteToIso } from "./schema.mjs";
 export { inTransaction, isBusyError, withWriteRetry } from "./tx.mjs";
@@ -121,7 +123,12 @@ function migrateOrExplain(db) {
 function assertSchemaNotNewer(db, path) {
   const version = db.prepare("PRAGMA user_version").get()?.user_version ?? 0;
   if (version <= DB_USER_VERSION) return;
-  throw new UserError(
+  throw newerSchemaError(path, version);
+}
+
+// The refusal of a database written by a newer build, which this one must never touch.
+function newerSchemaError(path, version) {
+  return new UserError(
     `the database at ${path} is at schema v${version}, newer than this nightqueue (v${DB_USER_VERSION}): update nightqueue / restart the client that runs the old version`,
   );
 }
@@ -211,19 +218,129 @@ function classifiedOpenError(err, env, path) {
   return classifyStoreError(err, { home: homeDir(env), path }) ?? err;
 }
 
-// Opens the database of this NIGHTQUEUE_HOME, creating and migrating it on first use.
-export function openDb(env = process.env) {
+const SQLITE_MAGIC = "SQLite format 3\0";
+const HEADER_BYTES = 100;
+const USER_VERSION_OFFSET = 60;
+
+// The first bytes of a database file, read with a plain read-only file descriptor that SQLite never sees.
+function readHeader(path) {
+  const fd = openSync(path, "r");
+  try {
+    const buffer = Buffer.alloc(HEADER_BYTES);
+    const read = readSync(fd, buffer, 0, HEADER_BYTES, 0);
+    return buffer.subarray(0, read);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// Runs one read on a short read-only connection to a database file, for a probe the header alone cannot answer.
+function readBySql(path, read) {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    return withWriteRetry(() => read(db));
+  } finally {
+    closeHalfOpened(db);
+  }
+}
+
+// Tells whether a database holds rows in any data table: a version-0 file that does is an unstamped legacy home, one that does not is still being created.
+function holdsDataRows(db) {
+  return DATA_TABLES.some((table) => hasTable(db, table) && Boolean(db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get()));
+}
+
+// Version of a file whose write-ahead log holds frames the header may not reflect yet: SQLite's answer, else the last page 1 the log committed (a read-only directory with no `-shm` refuses SQLite), else the header's.
+function pendingWalVersion(env, path, header) {
+  try {
+    return readBySql(path, schemaVersionOn);
+  } catch {
+    return walUserVersion(dbWalPath(env)) ?? header.readUInt32BE(USER_VERSION_OFFSET);
+  }
+}
+
+// The schema of a database file by its version: version 0 is a database being created (every nightqueue release stamps one), unless it already holds data, which makes it an unstamped legacy home.
+function schemaOfVersion(path, version) {
+  const fresh = version === 0 && !readBySql(path, holdsDataRows);
+  return { exists: true, version, fresh, unknown: false };
+}
+
+// Tells whether the write-ahead log of a database holds frames the main file's header may not reflect yet.
+function hasPendingWal(env) {
+  return (statSync(dbWalPath(env), { throwIfNoEntry: false })?.size ?? 0) > 0;
+}
+
+// The schema a connection this process already holds reports, so the probe never opens a plain descriptor beside it.
+function schemaOfHeld(db) {
+  const version = schemaVersionOn(db);
+  return { exists: true, version, fresh: version === 0 && !holdsDataRows(db), unknown: false };
+}
+
+// The schema of the database on disk, read from its header without creating, opening for write or migrating anything: `{ exists, version, fresh, unknown }`.
+// While this process holds a connection to the file, that connection answers instead: closing ANY plain descriptor of the
+// file would drop the POSIX locks of every connection of this process (`readHeader` opens and closes one), and another
+// process then takes the home for idle and folds and deletes the sidecars under the live connections.
+export function diskSchema(env = process.env) {
+  const path = dbPath(env);
+  const held = connections.get(path) ?? walPins.get(path);
+  if (held) return schemaOfHeld(held);
+  if (!existsSync(path)) return { exists: false, version: null, fresh: false, unknown: false };
+  try {
+    const header = readHeader(path);
+    if (header.length === 0) return { exists: true, version: 0, fresh: true, unknown: false };
+    if (header.length < HEADER_BYTES || header.toString("latin1", 0, 16) !== SQLITE_MAGIC) {
+      return { exists: true, version: null, fresh: false, unknown: true };
+    }
+    const version = hasPendingWal(env) ? pendingWalVersion(env, path, header) : header.readUInt32BE(USER_VERSION_OFFSET);
+    return schemaOfVersion(path, version);
+  } catch {
+    return { exists: true, version: null, fresh: false, unknown: true };
+  }
+}
+
+// Tells whether a database on disk is older than this build and is not a fresh one this build would simply create.
+function isOutdated(disk) {
+  return disk.exists && !disk.fresh && !disk.unknown && disk.version < DB_USER_VERSION;
+}
+
+// The refusal an older database gets from every open: only `nightqueue update` migrates it.
+function outdatedError(env, path, version) {
+  return new SchemaOutdatedError({ fileVersion: version, codeVersion: DB_USER_VERSION, home: homeDir(env), path });
+}
+
+// Refuses an older database before any connection, sidecar or home directory is created; a missing, fresh, newer or unreadable file passes.
+function refuseOutdated(env, path) {
+  const disk = diskSchema(env);
+  if (isOutdated(disk)) throw outdatedError(env, path, disk.version);
+}
+
+// Refuses an older database on a connection already open, before `initConnection` writes anything to it.
+function refuseOutdatedOn(db, { env, path }) {
+  const version = schemaVersionOn(db);
+  if (version >= DB_USER_VERSION || (version === 0 && !holdsDataRows(db))) return;
+  throw outdatedError(env, path, version);
+}
+
+// Runs the checks of a writable open that come before `initConnection`: newer refused always, older refused unless this is the migration.
+function guardOpen(db, { env, path, migrate }) {
+  assertSchemaNotNewer(db, path);
+  if (migrate) refuseRunnerHomeMigration(db, { env, path });
+  else refuseOutdatedOn(db, { env, path });
+}
+
+// Opens the cached writable connection of a home; only `migrateHomeDatabase` passes `migrate: true`, every other open refuses an older file.
+function openConnection(env, { migrate }) {
   const path = dbPath(env);
   const cached = connections.get(path);
   if (cached) return cached;
+  if (!migrate) refuseOutdated(env, path);
   ensureHome(env);
   let db = null;
   try {
     db = new DatabaseSync(path);
     withWriteRetry(() => {
       db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-      assertSchemaNotNewer(db, path);
-      refuseRunnerHomeMigration(db, { env, path });
+      guardOpen(db, { env, path, migrate });
       initConnection(db, path, env);
     });
   } catch (err) {
@@ -236,9 +353,15 @@ export function openDb(env = process.env) {
   return db;
 }
 
-// Opens the database read-only and outside the connection cache, for a caller that must never create or migrate it.
-export function openDbReadOnly(env = process.env) {
+// Opens the database of this NIGHTQUEUE_HOME, creating it on first use; an older database is refused, never migrated.
+export function openDb(env = process.env) {
+  return openConnection(env, { migrate: false });
+}
+
+// Opens the database read-only and outside the connection cache, for a caller that must never create or migrate it; only a diagnosis passes `anySchema` to read an older file.
+export function openDbReadOnly(env = process.env, { anySchema = false } = {}) {
   const path = dbPath(env);
+  if (!anySchema) refuseOutdated(env, path);
   let db = null;
   try {
     db = new DatabaseSync(path, { readOnly: true });
@@ -270,31 +393,64 @@ export function schemaVersionOn(db) {
   return db.prepare("PRAGMA user_version").get()?.user_version ?? 0;
 }
 
-// Schema version of the database already on disk, read without creating nor migrating it.
-function schemaVersion(env) {
-  const db = openDbReadOnly(env);
+// Opens a file whose header could not be read as a database read-only, so SQLite names what is wrong with it (NOTADB, CANTOPEN) as a StoreUnavailableError.
+function surfaceUnreadable(env) {
+  openDbReadOnly(env, { anySchema: true }).close();
+}
+
+// Refuses a database on disk at another schema than this build's - an older one with the `nightqueue update` message, a newer one as every open does; a missing one passes, nothing is ever written.
+export function requireCurrentSchema(env = process.env) {
+  const path = dbPath(env);
+  const disk = diskSchema(env);
+  if (disk.unknown) return surfaceUnreadable(env);
+  if (isOutdated(disk)) throw outdatedError(env, path, disk.version);
+  if (!disk.unknown && disk.version > DB_USER_VERSION) throw newerSchemaError(path, disk.version);
+}
+
+// Removes a half-written backup copy without letting the cleanup mask the failure that interrupted it.
+function dropPartialCopy(path) {
   try {
-    return schemaVersionOn(db);
-  } finally {
-    db.close();
+    rmSync(path, { force: true });
+  } catch {
+    return;
   }
 }
 
-// Brings a database written by an older build up to this build's schema, so a read-only caller never selects a column the pending migration has not added yet.
-export function migrateIfOutdated(env = process.env) {
-  const path = dbPath(env);
-  if (!existsSync(path)) return;
-  const version = schemaVersion(env);
-  if (version >= DB_USER_VERSION) return;
+// Flushes a finished copy to disk so the rename that publishes it never names an empty file after a crash.
+function fsyncFile(path) {
+  const fd = openSync(path, "r");
   try {
-    openDb(env);
-  } catch (err) {
-    if (err instanceof MigrationRefused || err instanceof StoreUnavailableError) throw err;
-    const detail = err instanceof UserError ? err.message : (err?.message ?? String(err));
-    throw new UserError(
-      `the memory database at ${path} is at schema v${version} and this build needs v${DB_USER_VERSION}, but it could not be migrated: ${detail}; make the database writable and run \`nightqueue queue status\` again`,
-    );
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
   }
+}
+
+// Copies the live database, write-ahead log included, into `backupPath` through `VACUUM INTO`, published by a rename only once it is complete.
+function backupDatabase(env, backupPath) {
+  if (existsSync(backupPath)) throw new UserError(`refused: the backup ${backupPath} already exists; nothing was written`);
+  const partial = `${backupPath}.${process.pid}.tmp`;
+  const db = openBareDb({ path: dbPath(env), env });
+  try {
+    db.prepare("VACUUM INTO ?").run(partial);
+    fsyncFile(partial);
+    renameSync(partial, backupPath);
+  } catch (err) {
+    dropPartialCopy(partial);
+    throw new UserError(`the backup of ${dbPath(env)} into ${backupPath} failed (${err?.message ?? String(err)}); nothing was migrated`);
+  } finally {
+    closeHalfOpened(db);
+  }
+}
+
+// The only migrating entry of the module: copies an older database to `backupPath`, then brings it to this build's schema; the caller holds the home lock and has checked that nothing else uses the home.
+export function migrateHomeDatabase(env = process.env, { backupPath } = {}) {
+  const disk = diskSchema(env);
+  if (!isOutdated(disk)) return { migrated: false, version: disk.version };
+  if (typeof backupPath !== "string" || !backupPath) throw new UserError("migrateHomeDatabase: a backup path is required");
+  backupDatabase(env, backupPath);
+  openConnection(env, { migrate: true });
+  return { migrated: true, from: disk.version, to: DB_USER_VERSION, backup: backupPath };
 }
 
 // Tells whether this process holds a cached WRITABLE connection to a home. It exists for the TESTS that assert a

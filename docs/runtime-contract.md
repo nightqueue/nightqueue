@@ -330,8 +330,11 @@ never recorded is not inserted.
 
 When the database is unavailable (see [Memory](memory.md)) a tool answers `isError` with the
 JSON `{ "ok": false, "error": "store-unavailable", "code", "home", "hint": "nightqueue doctor
---fix", "contract" }`, and the same server answers the next call normally once the database is
-back. `context_for_phase` is not an error there: it answers `block: ""` and one `warning`
+--fix", "message", "contract" }`, and the same server answers the next call normally once the database is
+back. A database older than the server's build answers the same shape with `"code":
+"SCHEMA_OUTDATED"`, `"hint": "nightqueue update"` and the `message` `database at v<file>, this
+nightqueue expects v<code>: run \`nightqueue update\` (...)`: the server never migrates it, and
+it answers normally once `nightqueue update` did. `context_for_phase` is not an error there: it answers `block: ""` and one `warning`
 line. Inside a job whose `state.json` carries its `job` block, the four `run_*` tools keep
 working from that file. `pipeline_log` whose run resolves (from that block inside a job) queues
 its fully resolved row in the run's `pending-writes.jsonl` and answers `{ "ok": true, "queued": true, "warning": "recorded in

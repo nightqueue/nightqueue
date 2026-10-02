@@ -2,17 +2,17 @@ import { existsSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { dbPath } from "../config/paths.mjs";
 import { liveRunnersReport } from "../queue/registry.mjs";
-import { openStore } from "../store/open.mjs";
+import { homeActivity } from "../store/open.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
 const REFUSAL_TAIL =
   "the runtime cannot be replaced while it runs; stop it with nightqueue queue run --stop or wait for the queue to drain";
 
-// Job holding a live lease, or null when there is no queue database or it could not be read: an install is the repair path, so a database it cannot open never blocks it, and a home without one is never created by a check.
+// Job holding a live lease, or null when there is no queue database or it could not be read: an install is the repair path, so a database it cannot open never blocks it, a home without one is never created by a check, and an older one is read without being refused.
 async function activeJobId(env) {
   if (!existsSync(dbPath(env))) return null;
   try {
-    return await openStore(env).jobs.firstActiveJobId();
+    return (await homeActivity(env)).liveJobs[0] ?? null;
   } catch {
     return null;
   }
