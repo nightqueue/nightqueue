@@ -289,6 +289,49 @@ test("--steps re-runs only the named steps; a step already done makes no request
   });
 });
 
+test("--steps log --again posts once more and re-marks logged; without --again it stays idempotent", async (t) => {
+  await withProviders([closingProvider()], async () => {
+    const home = postHome(t, "post-again");
+    await closeOnce(home, { fetch: fakeFetch() });
+
+    const idle = fakeFetch();
+    const plain = await runPostCloseSteps({ store: home.store, id: home.id, names: ["log"], env: home.env, deps: { fetch: idle.impl } });
+    assert.deepEqual(plain.steps, [{ name: "log", status: "done", note: "tracker: already logged" }]);
+    assert.equal(idle.calls.length, 0);
+
+    const repost = fakeFetch();
+    const again = await runPostCloseSteps({ store: home.store, id: home.id, names: ["log"], again: true, env: home.env, deps: { fetch: repost.impl } });
+    assert.deepEqual(again.steps, [{ name: "log", status: "done", note: "tracker: posted" }]);
+    assert.deepEqual(repost.calls.map((call) => call.method), ["POST"]);
+
+    const after = fakeFetch();
+    const last = await runPostCloseSteps({ store: home.store, id: home.id, names: ["log"], env: home.env, deps: { fetch: after.impl } });
+    assert.equal(last.steps[0].note, "tracker: already logged");
+    assert.equal(after.calls.length, 0);
+  });
+});
+
+test("queue close --again is refused without --steps and with --merged or --force, and marks the summary with (again)", async (t) => {
+  await withProviders([closingProvider()], async () => {
+    const env = makeHome(t, "post-again-cli");
+    makeProject(t, env, "alpha");
+    const projectId = projectIdOf(env, "alpha");
+    seedClosedJob(env, { prompt: PROMPT });
+    bindTrackerConnection(env, projectId);
+    setIntegrations(env, projectId, LOGGING);
+
+    for (const argv of [["J-1", "--again"], ["--merged", "--again"], ["J-1", "--steps", "log", "--again", "--force"], ["J-1", "--steps", "log", "--again", "--merged"]]) {
+      const refused = await runCli(env, ["queue", "close", ...argv], {});
+      assert.notEqual(refused.code, 0, argv.join(" "));
+      assert.match(refused.err.join("\n"), /usage: nightqueue queue close/, argv.join(" "));
+    }
+    await runCli(env, ["queue", "close", "J-1", "--steps", "log"], { fetch: fakeFetch().impl });
+    const again = await runCli(env, ["queue", "close", "J-1", "--steps", "log", "--again"], { fetch: fakeFetch().impl });
+    assert.equal(again.code, 0);
+    assert.equal(again.out.at(-1), "J-1 post-close: log done (again)");
+  });
+});
+
 test("--steps refuses a pre-close or unknown step, a job not closed, a run inside a job and a live post-close lease", async (t) => {
   await withProviders([closingProvider()], async () => {
     assert.throws(() => postCloseStepsNamed(["merge"]), /`merge` is not a post-close step; valid steps: origin, log/);

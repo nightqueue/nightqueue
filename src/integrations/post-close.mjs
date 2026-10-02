@@ -82,6 +82,17 @@ function logTargets(integrations) {
   });
 }
 
+// Clears the mark that the origin was notified, so the origin step posts again.
+export function forgetOrigin(data) {
+  delete data.originNotified;
+}
+
+// Clears the logged mark of every provider the project logs to, so the log step posts again.
+export function forgetLogged(data, integrations) {
+  if (!data.logged || typeof data.logged !== "object" || Array.isArray(data.logged)) return;
+  for (const provider of logTargets(integrations)) delete data.logged[provider.kind];
+}
+
 // Logs the close to one provider unless it already did, answering a result whose note names the provider.
 async function logTo(provider, { ctx, deps, files, logged }) {
   const kind = provider.kind;
