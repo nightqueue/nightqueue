@@ -415,9 +415,10 @@ test("liveState follows the nightqueue run markers of the orchestrator Bash, wit
   assert.equal(report.phase, 9);
 });
 
-test("liveState of a lane opened before the window has no intent but keeps its last event", () => {
+test("liveState of a lane opened before the window has no identity but keeps its last event", () => {
   const state = live([toolUseEvent({ name: "Read", id: "toolu_r", input: { file_path: "/x/a.mjs" }, parentToolUseId: "toolu_old", timestamp: secondsIntoAttempt(9) })]);
-  assert.equal(state.agent, "subagent");
+  assert.equal(state.agent, null);
+  assert.equal(state.model, null);
   assert.equal(state.intent, null);
   assert.equal(state.lane_opened_at, null);
   assert.equal(state.last.text, "Read a.mjs");

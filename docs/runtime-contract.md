@@ -382,9 +382,15 @@ derived on demand from the tail of the job log, never stored (not on the jobs ro
   "lane_opened_at": "2026-01-01T00:00:00.000Z",
   "quiet_s": 4,
   "tokens": { "in": 10, "out": 20, "cache_read": 0, "cache_creation": 0 },
-  "tokens_estimated": true
+  "tokens_estimated": true,
+  "truncated": false
 }
 ```
+
+The block is read from the whole current attempt (the log from its last `=== attempt N @ ... ===`
+line to the end), read backwards and capped at 8 MB. `truncated` is `true` when the cap was hit
+before that marker: the lane's opening is then unknown, so `agent`, `model` and `intent` are `null`
+(`last` still comes from the events read) and `tokens` cover only what was read; it is `false` otherwise.
 
 `agent` is the subagent lane still open, or `orchestrator` outside one (then `phase` follows
 the `nightqueue run start|publish|report` commands and `model`, `lane_opened_at` are `null`);

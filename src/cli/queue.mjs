@@ -537,13 +537,21 @@ function formatDurationCell(job, nowMs) {
   return formatDuration((Number.isFinite(finishedMs) ? finishedMs : nowMs) - startedMs);
 }
 
-// Tokens the job spent, in and out, compact: `374k`, `1.2M`, `-` before the first usage report.
+// The four token counters of a job: the live estimate while it runs and has one, the recorded columns otherwise.
+function tokenCountersOf(job) {
+  const live = job.status === "running" ? job.live?.tokens : null;
+  if (live) return [live.in, live.out, live.cache_read, live.cache_creation];
+  return [job.tokens_in, job.tokens_out, job.cache_read, job.cache_creation];
+}
+
+// Tokens the job spent, cache included, compact: `374k`, `1.2M`, `~66.9M` while estimated, `-` before the first usage report.
 function formatTokens(job) {
-  const total = (job.tokens_in ?? 0) + (job.tokens_out ?? 0);
-  if (!Number.isFinite(total) || total <= 0) return "-";
-  if (total < 1000) return String(total);
-  if (total < 1_000_000) return `${Math.round(total / 1000)}k`;
-  return `${(total / 1_000_000).toFixed(1)}M`;
+  const total = tokenCountersOf(job).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+  if (total <= 0) return "-";
+  const estimated = job.status === "running" && job.live?.tokens && job.live.tokens_estimated === true ? "~" : "";
+  if (total < 1000) return `${estimated}${total}`;
+  if (total < 1_000_000) return `${estimated}${Math.round(total / 1000)}k`;
+  return `${estimated}${(total / 1_000_000).toFixed(1)}M`;
 }
 
 // The pull request of a job as its plain URL plus its derived state: terminals turn a bare URL into a link on their own, which an escape sequence cannot count on.
