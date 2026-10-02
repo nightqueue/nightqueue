@@ -11,6 +11,7 @@ const EMBED_DESCRIPTION_MAX = 4096;
 const EMBED_FIELD_MAX = 1024;
 const EMBED_FOOTER_MAX = 2048;
 const MERGED_COLOR = 0x2ECC71;
+const DONE_LABEL = "What was done:";
 
 // Reads a Discord reference `<guild>/<channel>/<message>`: a message link, or (explicitly given) the bare triple.
 function parseDiscord(text, { explicit = false } = {}) {
@@ -83,9 +84,49 @@ function postMessage(http, connection, { embeds, threadId }) {
   return http(`${connection.url}?wait=true${thread}`, { method: "POST", body: messageBody({ embeds }) });
 }
 
-// A text cut to a Discord embed limit.
+// A text truncated to a Discord embed limit, ending in `…` when it was cut.
 function cut(text, limit) {
-  return String(text ?? "").slice(0, limit);
+  const value = String(text ?? "");
+  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
+}
+
+// The text with its first character upper-cased.
+function capitalise(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// The headline and first "What was done:" sentence of a job notice, or null for a blank notice; a sentence ends at `.`, `!` or `?` followed by whitespace or the end, so an abbreviation like `e.g.` cuts it there.
+export function noticeSummary(noticeMd) {
+  const text = String(noticeMd ?? "");
+  const first = text.split("\n").map((line) => line.trim()).find((line) => line !== "");
+  if (!first) return null;
+  const headline = first.replace(/^[\p{Extended_Pictographic}️\s]+/u, "").replace(/^(?:Delivered|(?:Partially )?fixed)\s+—\s*/i, "").trim();
+  const labelAt = text.indexOf(DONE_LABEL);
+  const paragraph = labelAt === -1 ? "" : text.slice(labelAt + DONE_LABEL.length).split(/\n\s*\n/)[0].trim();
+  const sentence = /^[\s\S]*?(?:[.!?](?=\s|$)|$)/.exec(paragraph)[0].trim();
+  return { headline, firstDone: sentence || null };
+}
+
+// Tells whether a headline is too short or states a release time rather than a change.
+export function isWeakHeadline(headline) {
+  const words = String(headline ?? "").split(/\s+/).filter(Boolean).length;
+  return words < 5 || /^goes out\b|next release|\blive\b/i.test(headline);
+}
+
+// The commit subject of a job title: what follows the first `: `, the whole title when none.
+function commitSubject(title) {
+  const text = String(title ?? "");
+  const at = text.indexOf(": ");
+  return (at === -1 ? text : text.slice(at + 2)).trim();
+}
+
+// The two-line description of a closed job: notice headline and first sentence, or the commit subject when the headline is weak or the notice lacks them.
+function closedDescription(job) {
+  const summary = noticeSummary(job?.notice_md);
+  const subject = capitalise(commitSubject(job?.title));
+  if (!summary?.firstDone) return cut(subject, EMBED_DESCRIPTION_MAX);
+  const headline = isWeakHeadline(summary.headline) ? subject : capitalise(summary.headline);
+  return cut(`${headline}\n${capitalise(summary.firstDone)}`, EMBED_DESCRIPTION_MAX);
 }
 
 // The embed parts both messages share: pull request link, merge footer, merge time and color.
@@ -114,7 +155,7 @@ function replyContent(ref, result, job) {
   return {
     ...mergeEmbed(result),
     title: cut(`Fixed · ${job?.ref ?? "job"}`, EMBED_TITLE_MAX),
-    description: cut(job?.title, EMBED_DESCRIPTION_MAX),
+    description: closedDescription(job),
     fields: [{ name: "Reported", value: cut(jump, EMBED_FIELD_MAX) }],
   };
 }
@@ -143,16 +184,13 @@ async function replyToOrigin({ ref, job, result, settings, connections, http }) 
   return { status: "warning", note: `reply in channel ${channel} not posted through ${match.name} (${answer.detail})` };
 }
 
-// The log embed of a closed job: its title up to the first colon heads it, the rest describes it.
+// The log embed of a closed job: titled by its ref and slug, described by its notice.
 function closedLogContent(job, result) {
-  const full = String(job?.title ?? "");
-  const colon = full.indexOf(":");
-  const heading = colon === -1 ? full : full.slice(0, colon);
-  const rest = colon === -1 ? "" : full.slice(colon + 1).trim();
+  const ref = job?.ref ?? "job";
   return {
     ...mergeEmbed(result),
-    title: cut(`${job?.ref ?? "job"} closed · ${heading.trim()}`, EMBED_TITLE_MAX),
-    description: cut(rest, EMBED_DESCRIPTION_MAX),
+    title: cut(job?.slug ? `${ref} closed · ${job.slug}` : `${ref} closed`, EMBED_TITLE_MAX),
+    description: closedDescription(job),
     fields: [
       { name: "PR", value: cut(pullRequestLink(result), EMBED_FIELD_MAX), inline: true },
       { name: "Project", value: cut(job?.project ?? "unknown", EMBED_FIELD_MAX), inline: true },
