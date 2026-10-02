@@ -3,6 +3,7 @@ import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { clockLabel } from "./hints.mjs";
 import { extractNotice, extractPrUrl, hasGateMarker, laneName, parseEventLine, parseSlugLine } from "./stream.mjs";
 import { jobRef } from "../memory/refs.mjs";
+import { trackPhaseNumbers } from "./routing.mjs";
 
 const ATTEMPT_LINE_RE = /^=== attempt (\d+) @ (\S+) ===$/;
 const RATE_PAUSE_LINE_RE = /^=== rate limit until (\S+) @ (\S+) ===$/;
@@ -482,6 +483,137 @@ export function lastNarratedLine(text) {
     last = `${GLYPHS[event.kind] ?? GLYPHS.tool} ${label}${event.text ?? ""}`;
   }
   return last;
+}
+
+const ORCHESTRATOR = "orchestrator";
+const PHASE_MARKERS = [
+  [/nightqueue run start\b/, 0],
+  [/nightqueue run publish\b/, 7],
+  [/nightqueue run report\b/, 8],
+];
+
+// A fresh reading of one attempt of the log: no lane open, the orchestrator before its first marker.
+function freshLiveState(attempt, clockMs) {
+  return { attempt, clockMs, lanes: new Map(), closed: new Set(), bashTasks: new Set(), orchPhase: 0, orchIntent: null, orchLast: null };
+}
+
+// Opens a lane in the live reading; a lane already open is left as the event that opened it first described it.
+function liveOpenLane(state, { id, subagentType, description, model }) {
+  if (!id || state.lanes.has(id)) return;
+  const lane = { agent: laneName(subagentType), model: clip(model, MODEL_LIMIT) || null, intent: clip(description, DESCRIPTION_LIMIT) || null, openedMs: state.clockMs, last: null };
+  state.lanes.set(id, lane);
+  state.orchPhase = PHASES.get(lane.agent) ?? state.orchPhase;
+}
+
+// The open lane an event of the stream belongs to; a parent never seen opening is a lane that opened before the window of the tail.
+function liveLaneOf(state, parent) {
+  if (typeof parent !== "string" || !parent) return null;
+  if (state.lanes.has(parent)) return state.lanes.get(parent);
+  if (state.closed.has(parent)) return null;
+  liveOpenLane(state, { id: parent, subagentType: null, description: null, model: null });
+  state.lanes.get(parent).openedMs = null;
+  return state.lanes.get(parent);
+}
+
+// Records the last tool or text event of a lane, or of the orchestrator when the event belongs to no lane.
+function liveRecord(state, lane, kind, text) {
+  const entry = { kind, text, atMs: state.clockMs };
+  if (lane) lane.last = entry;
+  else state.orchLast = entry;
+}
+
+// Moves the orchestrator to the phase a `nightqueue run start|publish|report` command marks.
+function livePhaseMarker(state, command) {
+  const marker = PHASE_MARKERS.find(([pattern]) => pattern.test(String(command ?? "")));
+  if (marker) state.orchPhase = marker[1];
+}
+
+// One block of a message in the live reading: a text or a tool call; a subagent launch opens a lane.
+function liveBlock(state, block, lane) {
+  if (block?.type === "text") {
+    const text = clip(firstLine(block.text), TEXT_LIMIT);
+    if (!text) return;
+    if (!lane) state.orchIntent = text;
+    liveRecord(state, lane, "text", text);
+    return;
+  }
+  if (block?.type !== "tool_use") return;
+  const input = block.input;
+  if (typeof input?.subagent_type === "string" && input.subagent_type.trim()) {
+    liveOpenLane(state, { id: block.id, subagentType: input.subagent_type, description: input.description, model: input.model });
+    return;
+  }
+  if (!lane && block.name === "Bash") livePhaseMarker(state, input?.command);
+  liveRecord(state, lane, "tool", toolNarration(String(block.name ?? "").trim() || "tool", input).text);
+}
+
+// A `system` event of the live reading: a subagent task starting opens its lane, its notification closes it.
+function liveSystem(state, event) {
+  const id = typeof event.tool_use_id === "string" ? event.tool_use_id : "";
+  if (event.subtype === "task_started" && event.task_type === "local_bash") state.bashTasks.add(id);
+  else if (event.subtype === "task_started") liveOpenLane(state, { id, subagentType: event.subagent_type, description: event.description, model: null });
+  else if (event.subtype === "task_notification" && !state.bashTasks.has(id) && id) {
+    state.lanes.delete(id);
+    state.closed.add(id);
+  }
+}
+
+// Applies one parsed event of the stream to the live reading.
+function liveEvent(state, event) {
+  const stamp = isoMs(event.timestamp);
+  if (stamp !== null) state.clockMs = stamp;
+  if (event.type === "system") return liveSystem(state, event);
+  if (event.type !== "assistant" && event.type !== "user") return;
+  const parent = event.parent_tool_use_id;
+  const lane = liveLaneOf(state, parent);
+  if (typeof parent === "string" && parent && !lane) return;
+  const blocks = Array.isArray(event.message?.content) ? event.message.content : [];
+  for (const block of blocks) liveBlock(state, block, lane);
+}
+
+// Reads the tail of a log into the state of its last attempt.
+function readLiveTail(tail) {
+  let state = freshLiveState(null, null);
+  for (const line of String(tail ?? "").split("\n")) {
+    const attempt = ATTEMPT_LINE_RE.exec(line);
+    if (attempt) state = freshLiveState(Number(attempt[1]), isoMs(attempt[2]));
+    else {
+      const event = parseEventLine(line);
+      if (event) liveEvent(state, event);
+    }
+  }
+  return state;
+}
+
+// ISO instant of a clock reading, null when none was seen.
+function isoOf(ms) {
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+// Position of a pipeline phase in the tier's track as { phase, phases }, null parts when the tier or the phase is unknown.
+function trackPosition(tier, number) {
+  const numbers = trackPhaseNumbers(tier);
+  if (!numbers) return { phase: null, phases: null };
+  const index = Number.isFinite(number) ? numbers.indexOf(number) : -1;
+  return { phase: index >= 0 ? index + 1 : null, phases: numbers.length };
+}
+
+// What a running job is doing right now, derived on demand from the tail of its log and never stored.
+export function liveState(tail, { tier = null, nowMs = Date.now() } = {}) {
+  const state = readLiveTail(tail);
+  const lane = [...state.lanes.values()].pop() ?? null;
+  const last = lane ? lane.last : state.orchLast;
+  const number = lane ? PHASES.get(lane.agent) : state.orchPhase;
+  return {
+    attempt: state.attempt,
+    agent: lane ? lane.agent : ORCHESTRATOR,
+    model: lane ? lane.model : null,
+    ...trackPosition(tier, number),
+    intent: lane ? lane.intent : state.orchIntent,
+    last: last ? { kind: last.kind, text: last.text, at: isoOf(last.atMs) } : null,
+    lane_opened_at: lane ? isoOf(lane.openedMs) : null,
+    quiet_s: last && Number.isFinite(last.atMs) && Number.isFinite(nowMs) ? Math.max(0, Math.round((nowMs - last.atMs) / 1000)) : null,
+  };
 }
 
 // Wraps a text in an SGR color, or returns it untouched when there is no color to apply.

@@ -184,7 +184,7 @@ test("queueView on a read-only store never prunes: a dead runner's registration 
 test("sections name jobs, counts, runners, advisories and closes, each read with an integer elapsed time", async (t) => {
   const env = seedHome(t, "view-sections", [{ status: "pending" }]);
   const view = await withReadOnlyStore(env, (store) => queueView(store, { env, killImpl: deadKill }));
-  assert.deepEqual(view.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories", "closes"]);
+  assert.deepEqual(view.sections.map((section) => section.name), ["jobs", "counts", "runners", "advisories", "closes", "live"]);
   for (const section of view.sections) {
     assert.equal(section.ok, true, `${section.name}: ${section.error}`);
     assert.equal(section.error, null);
@@ -290,4 +290,22 @@ test("jobDetailView hides run_notice when only trailing whitespace tells the row
 
   const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
   assert.equal("run_notice" in detail, false, "trailing whitespace alone made the notices look different");
+});
+
+test("queueView gives a running job its live block from the log tail, every other job live null, and a missing log only fails the live section", async (t) => {
+  const env = seedHome(t, "view-live", [{ status: "running" }, { status: "running" }, { status: "pending" }]);
+  const [withLog, withoutLog] = openDb(env).prepare("SELECT id FROM jobs WHERE status = 'running' ORDER BY id").all().map((row) => row.id);
+  mkdirSync(logsDir(env), { recursive: true });
+  writeFileSync(jobLogPath(withLog, env), doneStream());
+  const view = await withReadOnlyStore(env, (store) => queueView(store, { env, killImpl: deadKill }));
+  const byId = new Map(view.jobs.map((job) => [job.id, job]));
+  assert.equal(byId.get(withLog).live.source, "log-tail");
+  assert.ok(byId.get(withLog).live.tokens.in > 0);
+  assert.equal(byId.get(withLog).live.tokens_estimated, false);
+  assert.equal(byId.get(withoutLog).live, null);
+  assert.equal(view.jobs.filter((job) => job.status === "pending").every((job) => job.live === null), true);
+  const section = view.sections.find((entry) => entry.name === "live");
+  assert.equal(section.ok, false);
+  assert.equal(section.jobs, 1);
+  assert.match(section.error, /missing or unreadable/);
 });

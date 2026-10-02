@@ -10,7 +10,8 @@ import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { ALL_PROJECTS } from "../memory/issues.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
-import { followLog, readLogTail } from "../queue/follow.mjs";
+import { followLog } from "../queue/follow.mjs";
+import { agentGlyph } from "../queue/routing.mjs";
 import {
   claimingRunners,
   isQueueIdle,
@@ -30,7 +31,6 @@ import {
   createNarrator,
   formatDuration,
   formatNarration,
-  lastNarratedLine,
   narrateLog,
   noticeNarration,
 } from "../queue/narrate.mjs";
@@ -556,11 +556,13 @@ function formatPr(job) {
 function prWidth(jobs) {
   return jobs.reduce((width, job) => Math.max(width, formatPr(job).length), "PR".length);
 }
-// Last narrated line of the log of a job, as `queue log` would print it; a log that is missing or unreadable says so instead of inventing one.
-function lastNarration(id, env) {
-  const tail = readLogTail(jobLogPath(id, env));
-  const line = typeof tail === "string" ? lastNarratedLine(tail) : "";
-  return line || "-";
+
+// What a running job is doing as the table says it: the agent glyph, its intent, then the last action; a job without a readable log shows `-`.
+function liveCell(live) {
+  if (!live) return "-";
+  const glyph = agentGlyph(live.agent) ?? "»";
+  const parts = [live.intent, live.last?.text].filter((part, index, all) => part && all.indexOf(part) === index);
+  return parts.length ? `${glyph} ${parts.join(" — ")}` : "-";
 }
 
 // First line of the notice of a job, the reason it stopped, for the table.
@@ -590,8 +592,8 @@ function blockedOf(job) {
 
 // What SLUG/LAST says about a job: what it is doing while it runs, why the preflight stopped it, why it stopped at the
 // gate, which reset it waits for when a rate limit parked it, its slug otherwise.
-function lastCell(job, env) {
-  if (job.status === "running") return lastNarration(job.id, env);
+function lastCell(job) {
+  if (job.status === "running") return liveCell(job.live);
   const close = closeLastCell(job);
   if (close) return close;
   const blocked = blockedOf(job);
@@ -601,20 +603,20 @@ function lastCell(job, env) {
 }
 
 // Cells of one row of the table, before any cut or paint.
-function rowCells(job, nowMs, env) {
+function rowCells(job, nowMs) {
   return {
     id: jobRef(job.id),
     status: statusCellOf(job, nowMs),
     duration: formatDurationCell(job, nowMs),
     tokens: formatTokens(job),
     project: String(job.project),
-    last: lastCell(job, env),
+    last: lastCell(job),
   };
 }
 
 // One row of the table: fixed columns padded to their width, SLUG/LAST cut to what is left, the status painted on a terminal.
-function formatRow(job, { nowMs, env, width, color, columns }) {
-  const cells = rowCells(job, nowMs, env);
+function formatRow(job, { nowMs, width, color, columns }) {
+  const cells = rowCells(job, nowMs);
   const fixed = columns.map((column) => {
     const cell = fit(cells[column.key], column.width - 1).padEnd(column.width);
     return column.key === "status" ? paint(cell, rowStyleOf(job, nowMs).color, color) : cell;
@@ -632,7 +634,7 @@ function formatHeader({ width, color, columns }) {
 function formatTable(jobs, ctx) {
   const nowMs = Date.now();
   const columns = columnsFor(jobs, nowMs);
-  const layout = { nowMs, env: ctx.env, width: lastWidth(ctx, prWidth(jobs), columns), color: useColor(ctx), columns };
+  const layout = { nowMs, width: lastWidth(ctx, prWidth(jobs), columns), color: useColor(ctx), columns };
   return [...formatHeader(layout), ...jobs.map((job) => formatRow(job, layout))];
 }
 
@@ -665,8 +667,14 @@ function formatBlocked(job) {
   return [`${"blocked".padEnd(16)}${label}`];
 }
 
+// The whole live block of a running job, one field per line; nothing for a job that has none.
+function formatLive(job) {
+  if (!job.live) return [];
+  return ["live", ...Object.entries(job.live).map(([key, value]) => `  ${key.padEnd(16)} ${value !== null && typeof value === "object" ? JSON.stringify(value) : value}`)];
+}
+
 // The fields the detail view prints as blocks of their own instead of one key/value line.
-const DETAIL_BLOCK_KEYS = new Set(["notice_md", "run_notice", "close"]);
+const DETAIL_BLOCK_KEYS = new Set(["notice_md", "run_notice", "close", "live"]);
 
 // The text one detail field prints: the origin as `<kind> <ref>`, any other value as it is.
 function detailValue(key, value) {
@@ -683,6 +691,7 @@ function formatDetail(job) {
   const extra = [
     ...closeChecklistLines(job),
     ...formatBlocked(job),
+    ...formatLive(job),
     ...(suggestion ? [suggestion] : []),
     ...formatNotice(job),
     ...formatRunNotice(job),
@@ -944,7 +953,7 @@ async function oneShotMaintenance(ctx) {
 async function printJobDetail(id, values, ctx, prStates) {
   const store = openStore(ctx.env);
   await primePrStates(prStates, prUrlsOf([await store.jobs.getJob(id)]), ctx.env);
-  const job = await jobDetailView(store, id, { prStates });
+  const job = await jobDetailView(store, id, { prStates, env: ctx.env });
   if (!job) throw new UserError(`unknown job \`${id}\``);
   if (values.json) ctx.out(JSON.stringify({ job }));
   else for (const line of formatDetail(job)) ctx.out(line);
