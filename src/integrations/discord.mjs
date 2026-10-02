@@ -6,7 +6,11 @@ const MESSAGE_LINK = /https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/chann
 const BARE_REF = /^(\d+)\/(\d+)\/(\d+)$/;
 const SNOWFLAKE = /^\d+$/;
 const LOG_EVENTS = Object.freeze(["closed"]);
-const MAX_CONTENT = 2000;
+const EMBED_TITLE_MAX = 256;
+const EMBED_DESCRIPTION_MAX = 4096;
+const EMBED_FIELD_MAX = 1024;
+const EMBED_FOOTER_MAX = 2048;
+const MERGED_COLOR = 0x2ECC71;
 
 // Reads a Discord reference `<guild>/<channel>/<message>`: a message link, or (explicitly given) the bare triple.
 function parseDiscord(text, { explicit = false } = {}) {
@@ -68,15 +72,34 @@ function shortSha(sha) {
   return typeof sha === "string" && sha ? sha.slice(0, 7) : "unknown";
 }
 
-// A message body that pings nobody, cut to Discord's content limit.
-function messageBody(content) {
-  return { content: content.slice(0, MAX_CONTENT), allowed_mentions: { parse: [] } };
+// A message body of embeds only, so no bare URL gets a link preview, that pings nobody.
+function messageBody({ embeds }) {
+  return { content: "", embeds, allowed_mentions: { parse: [] } };
 }
 
 // Posts a message through a webhook, into a thread of its channel when one is named.
-function postMessage(http, connection, { content, threadId }) {
+function postMessage(http, connection, { embeds, threadId }) {
   const thread = threadId ? `&thread_id=${encodeURIComponent(threadId)}` : "";
-  return http(`${connection.url}?wait=true${thread}`, { method: "POST", body: messageBody(content) });
+  return http(`${connection.url}?wait=true${thread}`, { method: "POST", body: messageBody({ embeds }) });
+}
+
+// A text cut to a Discord embed limit.
+function cut(text, limit) {
+  return String(text ?? "").slice(0, limit);
+}
+
+// The embed parts both messages share: pull request link, merge footer, merge time and color.
+function mergeEmbed(result) {
+  const embed = { footer: { text: cut(`merged as ${shortSha(result?.mergeSha)}`, EMBED_FOOTER_MAX) }, color: MERGED_COLOR };
+  if (result?.prUrl) embed.url = result.prUrl;
+  if (result?.mergedAt) embed.timestamp = result.mergedAt;
+  return embed;
+}
+
+// The pull request as a masked link, or plain text when its url or number is missing.
+function pullRequestLink(result) {
+  if (!result?.prUrl || !result?.prNumber) return "the merged pull request";
+  return `[#${result.prNumber}](${result.prUrl})`;
 }
 
 // Tells whether a refused post is worth trying through another webhook: a client refusal other than rate limiting.
@@ -85,17 +108,22 @@ function isProbeRefusal(answer) {
 }
 
 // The reply posted under the message the job came from.
-function replyContent(ref, result) {
+function replyContent(ref, result, job) {
   const { guild, channel, message } = refParts(ref);
-  const jump = `https://discord.com/channels/${guild}/${channel}/${message}`;
-  return `Fixed in ${result?.prUrl ?? "the merged pull request"} (merged as ${shortSha(result?.mergeSha)}) - ${jump}`;
+  const jump = `[message](https://discord.com/channels/${guild}/${channel}/${message})`;
+  return {
+    ...mergeEmbed(result),
+    title: cut(`Fixed · ${job?.ref ?? "job"}`, EMBED_TITLE_MAX),
+    description: cut(job?.title, EMBED_DESCRIPTION_MAX),
+    fields: [{ name: "Reported", value: cut(jump, EMBED_FIELD_MAX) }],
+  };
 }
 
 // Tries the org's other webhooks of the guild as posters into the channel as a thread, stopping on the first that posts.
-async function probeThread({ ref, content, connections, post }) {
+async function probeThread({ ref, embeds, connections, post }) {
   const { guild, channel } = refParts(ref);
   for (const connection of connections.filter((candidate) => candidate.guildId === guild && candidate.channelId !== channel)) {
-    const answer = await post(connection, { content, threadId: channel });
+    const answer = await post(connection, { embeds, threadId: channel });
     if (answer.ok) return { status: "done", note: `replied in thread ${channel} through ${connection.name}` };
     if (!isProbeRefusal(answer)) return { status: "warning", note: `reply in thread ${channel} not posted through ${connection.name} (${answer.detail})` };
   }
@@ -103,30 +131,39 @@ async function probeThread({ ref, content, connections, post }) {
 }
 
 // Replies to the message the job came from: in its channel when an org webhook posts there, otherwise as a thread probe.
-async function replyToOrigin({ ref, result, settings, connections, http }) {
+async function replyToOrigin({ ref, job, result, settings, connections, http }) {
   if (settings?.replyToOrigin === false) return { status: "skipped", note: "replyToOrigin is false" };
-  const content = replyContent(ref, result);
+  const embeds = [replyContent(ref, result, job)];
   const post = (connection, message) => postMessage(http, connection, message);
   const { channel } = refParts(ref);
   const match = connections.find((connection) => connection.channelId === channel);
-  if (!match) return probeThread({ ref, content, connections, post });
-  const answer = await post(match, { content });
+  if (!match) return probeThread({ ref, embeds, connections, post });
+  const answer = await post(match, { embeds });
   if (answer.ok) return { status: "done", note: `replied in channel ${channel} through ${match.name}` };
   return { status: "warning", note: `reply in channel ${channel} not posted through ${match.name} (${answer.detail})` };
 }
 
-// The log line of a closed job.
+// The log embed of a closed job: its title up to the first colon heads it, the rest describes it.
 function closedLogContent(job, result) {
-  const pr = result?.prNumber ? `PR #${result.prNumber}` : "PR";
-  const title = job?.title ? `: ${job.title}` : "";
-  const link = result?.prUrl ? `\n${result.prUrl}` : "";
-  return `${job?.ref ?? "job"} closed - ${pr} merged as ${shortSha(result?.mergeSha)}${title}${link}`;
+  const full = String(job?.title ?? "");
+  const colon = full.indexOf(":");
+  const heading = colon === -1 ? full : full.slice(0, colon);
+  const rest = colon === -1 ? "" : full.slice(colon + 1).trim();
+  return {
+    ...mergeEmbed(result),
+    title: cut(`${job?.ref ?? "job"} closed · ${heading.trim()}`, EMBED_TITLE_MAX),
+    description: cut(rest, EMBED_DESCRIPTION_MAX),
+    fields: [
+      { name: "PR", value: cut(pullRequestLink(result), EMBED_FIELD_MAX), inline: true },
+      { name: "Project", value: cut(job?.project ?? "unknown", EMBED_FIELD_MAX), inline: true },
+    ],
+  };
 }
 
 // Posts a job event to the project's log webhook.
 async function logToDiscord({ event, job, result, connection, http }) {
   if (event !== "closed") return { status: "skipped", note: `no log for the event ${event}` };
-  const answer = await postMessage(http, connection, { content: closedLogContent(job, result) });
+  const answer = await postMessage(http, connection, { embeds: [closedLogContent(job, result)] });
   if (answer.ok) return { status: "done", note: `logged through ${connection.name}` };
   return { status: "warning", note: `log not posted through ${connection.name} (${answer.detail})` };
 }
