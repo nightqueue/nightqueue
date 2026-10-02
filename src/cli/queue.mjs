@@ -70,7 +70,7 @@ export const USAGE = {
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
-  close: "nightqueue queue close <id> [--force] [--foreground] [--json], nightqueue queue close <id> --steps origin,log [--json], or nightqueue queue close --merged [--json]",
+  close: "nightqueue queue close <id> [--force] [--foreground] [--json], nightqueue queue close <id> --steps origin,log [--again] [--json], or nightqueue queue close --merged [--json]",
   retry: "nightqueue queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
   repair: "nightqueue queue repair [<id>] [--from-disk] [--json]",
   pause: "nightqueue queue pause",
@@ -1191,7 +1191,7 @@ async function runCancel(argv, ctx) {
   if (worktree) ctx.out(worktreeLine(worktree));
 }
 
-const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" }, force: { type: "boolean" }, foreground: { type: "boolean" }, steps: { type: "string" } };
+const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" }, force: { type: "boolean" }, foreground: { type: "boolean" }, steps: { type: "string" }, again: { type: "boolean" } };
 
 // The text line a close prints for one decision it accepted.
 function acceptedLine(entry) {
@@ -1352,22 +1352,24 @@ function stepNames(text) {
 }
 
 // The summary line of a `--steps` re-run: each step with its status, or why nothing ran.
-function postCloseSummaryLine(id, result) {
+function postCloseSummaryLine(id, result, again) {
   if (!result.steps.length) return `${jobRef(id)} post-close: nothing run - ${result.note}`;
-  return `${jobRef(id)} post-close: ${result.steps.map(({ name, status }) => `${name} ${status}`).join(", ")}`;
+  const mark = again ? " (again)" : "";
+  return `${jobRef(id)} post-close: ${result.steps.map(({ name, status }) => `${name} ${status}${mark}`).join(", ")}`;
 }
 
 // Runs `queue close <id> --steps <a,b>`: only the named post-close steps of a closed job, in this process; 1 when any of them warned or nothing could run.
 async function runCloseSteps(positionals, values, ctx) {
   if (values.merged === true || values.force === true) throw new UserError(`\`--steps\` cannot be combined with --merged or --force; usage: ${USAGE.close}`);
+  const again = values.again === true;
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.close });
   const id = parseJobRef(positionals[0]);
   const say = values.json === true ? ctx.err : ctx.out;
   const store = openStore(ctx.env);
   const onStep = closeStepPrinter(say, values.json === true ? null : ctx.stdout);
-  const result = await runPostCloseSteps({ store, id, names: stepNames(values.steps), env: ctx.env, deps: ctx.closeDeps ?? null, onStep });
+  const result = await runPostCloseSteps({ store, id, names: stepNames(values.steps), again, env: ctx.env, deps: ctx.closeDeps ?? null, onStep });
   if (values.json) ctx.out(JSON.stringify({ job: jobView(await store.jobs.getJob(id), { full: true }), steps: result.steps }));
-  else ctx.out(postCloseSummaryLine(id, result));
+  else ctx.out(postCloseSummaryLine(id, result, again));
   return result.status !== "refused" && result.status !== "failed" && result.steps.every((step) => step.status !== "warning") ? 0 : 1;
 }
 
@@ -1377,6 +1379,7 @@ async function runClose(argv, ctx) {
     throw new UserError(`\`--decisions\` no longer exists: a close accepts the decisions its job proposed; usage: ${USAGE.close}`);
   }
   const { values, positionals } = parseCommand(argv, CLOSE_OPTIONS);
+  if (values.again === true && values.steps === undefined) throw new UserError(`\`--again\` is valid only with --steps; usage: ${USAGE.close}`);
   if (values.steps !== undefined) return await runCloseSteps(positionals, values, ctx);
   if (values.merged === true) {
     checkArgs(positionals, { max: 0, usage: USAGE.close });

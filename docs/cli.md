@@ -354,6 +354,7 @@ nightqueue queue close 42 --foreground --json         # JSON on stdout, with the
 nightqueue queue close --merged                       # close every done job gh confirms merged, accepting each one's proposals
 nightqueue queue close 42 --force                     # skip the pull request checks and the rebase suite, nothing else
 nightqueue queue close 42 --steps origin,log          # re-run only the post-close steps of a closed job, in this process
+nightqueue queue close 42 --steps log --again         # clear the named steps' done marks first, so they post again (only with --steps)
 nightqueue queue cancel 42 --reason "abandoned"       # cancel a done or failed job and release its worktree
 
 nightqueue queue run --watch --from 22:00 --until 04:00   # watch only inside that window, local wall clock, then exit
@@ -457,7 +458,8 @@ job answers ``job `<id>` is already closed``. `queue.closeTimeoutS` (default `18
 post-close steps origin and log run after settle on the closed job and never stop it: a failure
 is an `After close: <step> warning - <note>` line in the notice; `queue close <id> --steps
 origin,log` re-runs only those steps (each skips what it already did) and exits `1` on a
-warning. The MCP tool `queue_close` (`job_id`, `force?`) starts the
+warning; `--again` (only with `--steps`, never with `--merged` or `--force`) clears those steps'
+done marks first so they post again, and the summary says `(again)` after each. The MCP tool `queue_close` (`job_id`, `force?`) starts the
 same detached close. See [Queue](queue.md#closing-a-job) for the steps, the lease and what a
 close never does.
 

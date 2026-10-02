@@ -229,7 +229,7 @@ function refusePostCloseTarget(id, job, names) {
 }
 
 // Runs again, in this process, only the named post-close steps of a closed job; each step skips what it already did.
-export async function runPostCloseSteps({ store, id, names, env = process.env, deps = null, onStep = null }) {
+export async function runPostCloseSteps({ store, id, names, again = false, env = process.env, deps = null, onStep = null }) {
   refuseCloseInsideJob(env);
   const steps = postCloseStepsNamed(names);
   const job = await store.jobs.getJob(id);
@@ -237,7 +237,7 @@ export async function runPostCloseSteps({ store, id, names, env = process.env, d
   const controller = new AbortController();
   const removeSignals = abortOnSignals(controller);
   try {
-    return await runClosePipeline({ store, job, worker: closeWorkerId(), env, deps, timeoutS: POST_CLOSE_TIMEOUT_S, signal: controller.signal, onStep, steps });
+    return await runClosePipeline({ store, job, worker: closeWorkerId(), env, deps, timeoutS: POST_CLOSE_TIMEOUT_S, signal: controller.signal, onStep, steps, again });
   } finally {
     removeSignals();
   }
