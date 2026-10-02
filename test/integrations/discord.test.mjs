@@ -33,7 +33,7 @@ const POST_STEPS = CLOSE_STEPS.filter((step) => step.required === false);
 const CHAT = { type: "discord", url: CHAT_URL, channelId: CHAT_CHANNEL, guildId: GUILD, mode: "webhook", name: "chat" };
 const OPS = { type: "discord", url: OPS_URL, channelId: OPS_CHANNEL, guildId: GUILD, mode: "webhook", name: "ops" };
 const FAR = { type: "discord", url: FAR_URL, channelId: "777", guildId: "999", mode: "webhook", name: "far" };
-const RESULT = { prUrl: "https://github.com/acme/api/pull/7", prNumber: 7, mergeSha: MERGE_SHA };
+const RESULT = { prUrl: "https://github.com/acme/api/pull/7", prNumber: 7, mergeSha: MERGE_SHA, mergedAt: "2026-05-01T10:00:00.000Z" };
 const JOB = { id: 1, ref: "J-1", title: "fix the crash", project: "alpha" };
 
 // A fake fetch recording every call and answering by `METHOD url` route, 404 for a route it does not know.
@@ -215,9 +215,20 @@ test("the reply posts in the matching channel, else probes the guild's webhooks 
   assert.deepEqual(byChannel.answer, { status: "done", note: `replied in channel ${CHAT_CHANNEL} through chat` });
   assert.deepEqual(byChannel.calls.map((call) => call.url), [`${CHAT_URL}?wait=true`]);
   assert.deepEqual(byChannel.calls[0].body, {
-    content: `Fixed in ${RESULT.prUrl} (merged as abc1234) - ${MESSAGE_LINK}`,
+    content: "",
+    embeds: [{
+      title: "Fixed · J-1",
+      description: "fix the crash",
+      url: RESULT.prUrl,
+      fields: [{ name: "Reported", value: `[message](${MESSAGE_LINK})` }],
+      footer: { text: "merged as abc1234" },
+      timestamp: RESULT.mergedAt,
+      color: 0x2ECC71,
+    }],
     allowed_mentions: { parse: [] },
   });
+  assert.doesNotMatch(byChannel.calls[0].body.content, /http/);
+  assert.equal(byChannel.calls[0].body.embeds[0].url, RESULT.prUrl);
 
   const threadRef = `${GUILD}/${THREAD}/${MESSAGE}`;
   const probed = await replyWith({ [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: { status: 400 }, [`POST ${OPS_URL}?wait=true&thread_id=${THREAD}`]: {} }, { ref: threadRef });
@@ -243,19 +254,40 @@ test("the reply posts in the matching channel, else probes the guild's webhooks 
   assertNoSecret([byChannel.answer, probed.answer, refused.answer, limited.answer, failing.answer, off.answer]);
 });
 
-test("the log posts the closed job once to its webhook, cut to 2000 characters, and skips any other event", async () => {
+test("the log posts the closed job once to its webhook as one embed, cut to Discord's limits, and skips any other event", async () => {
   const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
-  const logged = await discord.log({ event: "closed", job: JOB, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
+  const logged = await discord.log({ event: "closed", job: { ...JOB, title: "fix(crash): the crash" }, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
   assert.deepEqual(logged, { status: "done", note: "logged through ops" });
   assert.deepEqual(fetch.calls[0].body, {
-    content: `J-1 closed - PR #7 merged as abc1234: fix the crash\n${RESULT.prUrl}`,
+    content: "",
+    embeds: [{
+      title: "J-1 closed · fix(crash)",
+      description: "the crash",
+      url: RESULT.prUrl,
+      fields: [
+        { name: "PR", value: `[#7](${RESULT.prUrl})`, inline: true },
+        { name: "Project", value: "alpha", inline: true },
+      ],
+      footer: { text: "merged as abc1234" },
+      timestamp: RESULT.mergedAt,
+      color: 0x2ECC71,
+    }],
     allowed_mentions: { parse: [] },
   });
+  assert.doesNotMatch(fetch.calls[0].body.content, /http/);
+  assert.equal(fetch.calls[0].body.embeds[0].url, RESULT.prUrl);
   await discord.log({ event: "closed", job: { ...JOB, title: "x".repeat(5000) }, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
-  assert.equal(fetch.calls[1].body.content.length, 2000);
+  assert.equal(fetch.calls[1].body.embeds[0].title.length, 256);
+  const bare = await discord.log({ event: "closed", job: JOB, result: {}, settings: {}, connection: OPS, http: httpOf(fetch) });
+  assert.equal(bare.status, "done");
+  const [degraded] = fetch.calls[2].body.embeds;
+  assert.equal(degraded.url, undefined);
+  assert.equal(degraded.timestamp, undefined);
+  assert.equal(degraded.fields[0].value, "the merged pull request");
+  assert.equal(degraded.footer.text, "merged as unknown");
   const other = await discord.log({ event: "failed", job: JOB, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
   assert.equal(other.status, "skipped");
-  assert.equal(fetch.calls.length, 2);
+  assert.equal(fetch.calls.length, 3);
   const refused = await discord.log({ event: "closed", job: JOB, result: RESULT, settings: {}, connection: OPS, http: httpOf(fakeFetch()) });
   assert.deepEqual(refused, { status: "warning", note: "log not posted through ops (HTTP 404)" });
 });
@@ -273,7 +305,9 @@ test("closing a job queued from a discord link replies and logs once; a --steps 
     { name: "log", status: "done", note: "discord: logged through ops" },
   ]);
   assert.deepEqual(fetch.calls.map((call) => [call.method, call.url]), [["POST", `${CHAT_URL}?wait=true`], ["POST", `${OPS_URL}?wait=true`]]);
-  assert.match(fetch.calls[1].body.content, /^J-\d+ closed - PR #7 merged as abc1234/);
+  assert.match(fetch.calls[1].body.embeds[0].title, /^J-\d+ closed · /);
+  assert.doesNotMatch(fetch.calls[1].body.content, /http/);
+  assert.equal(fetch.calls[1].body.embeds[0].url, RESULT.prUrl);
   const checklist = JSON.parse(row.close);
   assert.equal(checklist.data.originNotified, true);
   assert.deepEqual(checklist.data.logged, { discord: true });
