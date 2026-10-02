@@ -51,7 +51,7 @@ import { blockerLines } from "../queue/claim.mjs";
 import { lastMaintenance } from "../queue/maintenance.mjs";
 import { jobIdOfPrUrl } from "../queue/pr-lookup.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
-import { liveRunnersReport, STOPPED_RUNNER, unreadableRegistry } from "../queue/registry.mjs";
+import { liveRunnersReport, unreadableRegistry } from "../queue/registry.mjs";
 import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
 import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume.mjs";
 import { resolveJobRun } from "../queue/job-run.mjs";
@@ -787,7 +787,6 @@ async function queueStatusAnswer(args, { store, warning, env, state }) {
   const stale = staleRuntimeHint(env);
   const advisoriesWithStale = [...advisories, ...(stale ? [stale] : []), ...(state.sawOldShape ? [STALE_CONTRACT_ADVISORY] : [])];
   return {
-    runner: runners[0] ?? STOPPED_RUNNER,
     runners,
     runnersOnline: runners.length,
     advisories: advisoriesWithStale,
@@ -1178,7 +1177,7 @@ function toolDefinitions(env, state) {
       name: "queue_status",
       config: {
         description:
-          "State of the queue: one job by `job_id` (its ref `J-77` or plain id) or by `pr_url` (the pull request it opened), or the most recent ones plus the counts per status and every live runner in `runners` (`runner` is the first of them, kept for one release; `runnersOnline` is the count of `runners`). The `hint` leads with the live-runner count, and says that a job queued with none online waits until `nightqueue queue run` starts one. " +
+          "State of the queue: one job by `job_id` (its ref `J-77` or plain id) or by `pr_url` (the pull request it opened), or the most recent ones plus the counts per status and every live runner in `runners` (`runnersOnline` is the count of `runners`; there is no singular `runner` key). The `hint` leads with the live-runner count, and says that a job queued with none online waits until `nightqueue queue run` starts one. " +
           "The `hint` ends with the advisory lines when they apply - a five-hour window close to its limit while runners are live, or two or more runners on one repository - also listed under `advisories`; they never block anything. Never returns the prompt. " +
           "`notice_md` is the reason a job stopped - a job in `gate` always carries one; answer it with `queue_retry`; a gate with `blocked_code` is a preflight block: fix the cause and `queue_retry` it with no note. " +
           "The listing cuts `notice_md` and `result` at 500 characters and marks a cut row with `notice_truncated: true` or `result_truncated: true` (the key is absent when the text fits); call again with that `job_id` for the whole text. " +

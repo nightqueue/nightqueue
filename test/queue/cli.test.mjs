@@ -628,8 +628,8 @@ test("queue status leads with the rate limit a runner is waiting out, and never 
   assert.equal(lastLine(paused.stdout), `1 pending job waiting - the runner is paused until ${clock} (5h limit, resets in 1h00)`);
 
   const json = JSON.parse(runCli(env, ["queue", "status", "--json"]).stdout);
-  assert.deepEqual(json.runner.rateLimit, { type: "five_hour", resetsAt: resetsAt.toISOString(), utilization: 0.99 });
-  assert.equal(json.runner.pausedUntil, new Date(resetsAt.getTime() + 60_000).toISOString());
+  assert.deepEqual(json.runners[0].rateLimit, { type: "five_hour", resetsAt: resetsAt.toISOString(), utilization: 0.99 });
+  assert.equal(json.runners[0].pausedUntil, new Date(resetsAt.getTime() + 60_000).toISOString());
 });
 
 test("queue status shows a watch runner's window before it opens, and the backlog names the wait for it", (t) => {

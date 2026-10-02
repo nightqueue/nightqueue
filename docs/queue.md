@@ -373,9 +373,8 @@ answers with the same fields as before plus `suggestions` and `sections` - one
 - or, when none is registered, ``0 runners online - pending jobs will wait until
 `nightqueue queue run` starts one`` in place of the per-runner lines. The advisory lines, when
 they apply, follow the runner lines. `--json` carries
-`runnersOnline` (the count) next to the whole list under `runners`, `advisories`, plus the singular
-`runner`: it is `runners[0]` (or the same all-null object as before when the list is
-empty), kept for one release and removed in the next minor - read `runners`.
+`runnersOnline` (the count) next to the whole list under `runners` and `advisories`. The singular
+`runner` key (deprecated in 0.2.0) is gone since 0.7.0 - read `runners[0]`.
 
 **A cut text says so, and says where the rest is.** A listing (the table, `--follow`,
 `--json`, the MCP `queue_status` without `job_id`, and the job each of `queue_cancel`,

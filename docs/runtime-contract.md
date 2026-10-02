@@ -227,8 +227,8 @@ claimed right now answers `waiting` with the reason and starts nothing, because 
 would run one cycle and exit without claiming; `queue_run` and `queue_retry` answer the same
 thing as `{ "started": false, "waiting": { "reason": "cap-reached" }, "message": ... }`, a
 reason that only happens when `queue.maxConcurrent` is set, since there is no ceiling by
-default. `queue_status` answers `runners` with every live runner, and keeps `runner` as an
-alias of the first for one release. `queue_status`, `queue_run` and `queue_retry` also answer
+default. `queue_status` answers `runners` with every live runner; the singular `runner` key
+of 0.2.0 is gone since 0.7.0. `queue_status`, `queue_run` and `queue_retry` also answer
 `advisories`, the advisory lines described in [Queue](queue.md); they never block a start.
 
 **A runner outlives an unavailable database.** When the database answers a classified error

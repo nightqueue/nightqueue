@@ -46,7 +46,6 @@ import {
   liveRunnersReport,
   removeOwnRunnerRecord,
   stampRunnerDbWitness,
-  STOPPED_RUNNER,
 } from "../queue/registry.mjs";
 import { logOnlyTail } from "../queue/lost-rows.mjs";
 import { reclassifyFromLog, recoverFromDisk, replayPending } from "../queue/repair.mjs";
@@ -968,7 +967,7 @@ async function printQueueView(values, ctx, prStates) {
     throw new UserError(`the runner registry cannot be listed (${view.registryError}); \`--json\` will not answer that no runner is running for a registry it could not read`);
   }
   const { runners, advisories, jobs, counts, suggestions, sections } = view;
-  ctx.out(JSON.stringify({ runner: runners[0] ?? STOPPED_RUNNER, runners, runnersOnline: runners.length, advisories, jobs, counts, suggestions, sections }));
+  ctx.out(JSON.stringify({ runners, runnersOnline: runners.length, advisories, jobs, counts, suggestions, sections }));
   return true;
 }
 

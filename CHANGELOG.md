@@ -4,6 +4,16 @@ Every notable change of this project is recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Removed
+
+- The singular `runner` key of `nightqueue queue status --json` and of the MCP `queue_status`
+  answer, deprecated in 0.2.0 as an alias of `runners[0]` and promised gone in the next minor.
+  It carried the same object twice in every answer. Read `runners` (`runners[0]` for the
+  first live runner, `runnersOnline` for the count). `runnerAnswer.runner` of `queue_run`,
+  `queue_retry` and `queue_stop` is unrelated and stays.
+
 ## 0.6.0 - 2026-10-01
 
 ### Breaking
