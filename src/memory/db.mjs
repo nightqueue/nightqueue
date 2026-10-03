@@ -15,7 +15,7 @@ import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
 import { migrateSharedSlugs, sharedSlugPending } from "./shared-slug-migration.mjs";
 import { classifyStoreError } from "./store-error.mjs";
-import { inTransaction, withWriteRetry } from "./tx.mjs";
+import { inTransaction, sleepSync, withWriteRetry } from "./tx.mjs";
 import { walUserVersion } from "./wal-header.mjs";
 
 export { DB_USER_VERSION, isoToSqlite, sqliteToIso } from "./schema.mjs";
@@ -310,13 +310,33 @@ function outdatedError(env, path, version) {
 
 // Refuses an older database before any connection, sidecar or home directory is created; a missing, fresh, newer or unreadable file passes.
 function refuseOutdated(env, path) {
-  const disk = diskSchema(env);
+  const disk = settledDisk(env);
+  if (disk.version === 0 && hasPendingWal(env)) return;
   if (isOutdated(disk)) throw outdatedError(env, path, disk.version);
+}
+
+const CREATOR_GRACE_MS = 3000;
+const CREATOR_POLL_MS = 20;
+
+// Reads until the answer stops looking like an unstamped legacy home: a creator commits its tables and rows before it stamps the version, so version 0 with data is only a legacy home once it stays that way for the grace period.
+function settleWhile(read, stillUnstamped) {
+  const deadline = Date.now() + CREATOR_GRACE_MS;
+  let answer = read();
+  while (stillUnstamped(answer) && Date.now() < deadline) {
+    sleepSync(CREATOR_POLL_MS);
+    answer = read();
+  }
+  return answer;
+}
+
+// The disk schema once a creator in another process has had the chance to stamp it.
+function settledDisk(env) {
+  return settleWhile(() => diskSchema(env), (disk) => disk.exists && disk.version === 0 && !disk.fresh && !disk.unknown);
 }
 
 // Refuses an older database on a connection already open, before `initConnection` writes anything to it.
 function refuseOutdatedOn(db, { env, path }) {
-  const version = schemaVersionOn(db);
+  const version = settleWhile(() => schemaVersionOn(db), (read) => read === 0 && holdsDataRows(db));
   if (version >= DB_USER_VERSION || (version === 0 && !holdsDataRows(db))) return;
   throw outdatedError(env, path, version);
 }

@@ -60,9 +60,9 @@ function failedReason(checklist) {
   return String(parseCloseChecklist(checklist)?.failed?.reason ?? "unknown");
 }
 
-// The suffix the STATUS cell adds for a close that stopped: ` · close stalled` or ` · close failed at <step>`.
+// The suffix the STATUS cell adds for a close that stopped: ` · close stalled` or ` · close failed at <step>: <reason>`.
 function closeSuffix(job, state) {
-  if (state === "failed") return ` · close failed at ${currentCloseStep(job.close)}`;
+  if (state === "failed") return ` · close failed at ${currentCloseStep(job.close)}: ${failedReason(job.close)}`;
   return STATUS_SUFFIXES[state] ?? "";
 }
 

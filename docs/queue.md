@@ -1099,7 +1099,7 @@ time; a `reopened` entry keeps the note and time of the run it reopens, is shown
 `↺ <step> reopened: <earlier note>` and counts as not passed) and
 the data the steps read (pull request number, head, merge commit, who merged it). `queue status` shows it:
 the STATUS cell reads `closing` alone while a close is in progress and `closed` alone once
-it closed, a stopped close adds ` · close failed at <step>` or ` · close stalled` to the job's status,
+it closed, a stopped close adds ` · close failed at <step>: <reason>` or ` · close stalled` to the job's status,
 `SLUG/LAST` names the current step or the stop, and `queue status <id>` prints the whole
 checklist under the status line; `--json` and the MCP `queue_status` carry `close_status`,
 `close_worker`, `close_lease_until` and `close`. A close that stops prints, in the listing, the

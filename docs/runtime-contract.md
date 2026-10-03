@@ -424,7 +424,10 @@ it is asked for `--foreground`. `queue_close` answers `{ ok, started, job_id, pi
 waiting for the merge: a `done` job with a pull request only, and every
 other status (``job `N` is already closed`` for a closed one), a job without a pull request or one
 already under a live close lease refused by name with nothing written; calling it again resumes a
-close that stopped at the step that failed. `force: true` skips the pull request checks and the
+close that stopped at the step that failed. A clean rebase (no conflict, no merger) of a head that had
+at least one check (`checksOnHead` in the preflight data) skips the local suite and leaves CI to
+gate the new head, with the note `rebased onto origin/<base>, suite skipped (CI gates the head),
+pushed <a> -> <b>`; with no checks, or after a merger resolution, the suite runs. `force: true` skips the pull request checks and the
 rebase suite only - status and attribution still stop the close, and a conflict stops a forced
 close (the merger never runs under force). A pull request
 closed without merge ends the close by cancelling the job, one merged by hand is recorded as

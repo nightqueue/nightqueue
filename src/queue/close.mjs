@@ -167,7 +167,7 @@ async function readHeadChecks(ctx, deps, head) {
 // The durable record of a head CI verified: only a non-empty all-green rollup, never under --force.
 function ciGreenData(ctx, checks, head) {
   const green = checks?.ok && checks.checks.length > 0 && !checks.failing.length && !checks.pending.length;
-  return green && head && !ctx.force ? { ciGreenSha: head } : {};
+  return green && head && !ctx.force ? { ciGreenSha: head, checksOnHead: checks.checks.length } : {};
 }
 
 // Tells whether the checks of the pull request stop the close, and what they said; with --force they never stop it and the note names them.
@@ -507,7 +507,8 @@ async function rebaseTestAndPush(ctx, deps, work) {
   }
   const markers = await leftoverMarkers(ctx, deps, work);
   if (markers.length) return failed("real-conflict", `conflict markers left in: ${namesNote(markers)}`, { data });
-  const suite = ctx.force ? {} : await runSuite(ctx, deps, work.dir);
+  const ciGates = ciGatesRebase(ctx, resolution);
+  const suite = ctx.force || ciGates ? {} : await runSuite(ctx, deps, work.dir);
   if (suite.problem) return { ...suite.problem, data };
   if (ctx.signal?.aborted) return { ...abortedBefore("push"), data };
   const pushed = await git(ctx, deps, ["push", `--force-with-lease=refs/heads/${work.head}:${work.headShaBefore}`, "origin", `HEAD:refs/heads/${work.head}`], { cwd: work.dir });
@@ -518,16 +519,21 @@ async function rebaseTestAndPush(ctx, deps, work) {
     return failed("head-unreadable", note, { data: { ...data, headSha: null, pushedBy: "close" }, reopen: ["preflight"] });
   }
   data.headSha = after.stdout.trim();
-  const note = rebasePushNote(ctx, { work, resolution, headSha: data.headSha });
+  const note = rebasePushNote(ctx, { work, resolution, headSha: data.headSha, ciGates });
   const verified = ctx.force || !data.headSha ? {} : { verifiedSha: data.headSha };
   return { status: "done", note, data: { ...data, pushedBy: "close", ...verified }, reopen: ["preflight"] };
 }
 
+// Tells whether CI gates a clean rebase: no merger resolution and at least one check read on the previous head.
+function ciGatesRebase(ctx, resolution) {
+  return resolution === null && Number(ctx.data.checksOnHead) >= 1;
+}
+
 // The note of a pushed rebase: the merger's resolution when it ran, else the plain rebase with or without the suite.
-function rebasePushNote(ctx, { work, resolution, headSha }) {
+function rebasePushNote(ctx, { work, resolution, headSha, ciGates }) {
   const pushed = `pushed ${sha7(work.headShaBefore)} -> ${sha7(headSha)}`;
   if (resolution) return `resolved by merger: ${resolution.hunks} hunks in ${resolution.files.length} files (${namesNote(resolution.files)}); suite green; ${pushed}`;
-  const suiteNote = ctx.force ? "suite skipped with --force" : "suite green";
+  const suiteNote = ctx.force ? "suite skipped with --force" : ciGates ? "suite skipped (CI gates the head)" : "suite green";
   return `rebased onto origin/${work.base}, ${suiteNote}, ${pushed}`;
 }
 
