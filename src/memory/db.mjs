@@ -15,7 +15,7 @@ import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION } from "./schema.mjs";
 import { migrateSharedSlugs, sharedSlugPending } from "./shared-slug-migration.mjs";
 import { classifyStoreError } from "./store-error.mjs";
-import { inTransaction, sleepSync, withWriteRetry } from "./tx.mjs";
+import { inTransaction, withWriteRetry } from "./tx.mjs";
 import { walUserVersion } from "./wal-header.mjs";
 
 export { DB_USER_VERSION, isoToSqlite, sqliteToIso } from "./schema.mjs";
@@ -250,19 +250,22 @@ function holdsDataRows(db) {
   return DATA_TABLES.some((table) => hasTable(db, table) && Boolean(db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get()));
 }
 
-// Version of a file whose write-ahead log holds frames the header may not reflect yet: SQLite's answer, else the last page 1 the log committed (a read-only directory with no `-shm` refuses SQLite), else the header's.
-function pendingWalVersion(env, path, header) {
+// Reads the version and, for version 0 only, the data-row presence of a database, both from ONE WAL snapshot (a deferred read transaction, unless the connection already holds one).
+export function schemaProbe(db) {
+  const ownsTransaction = !db.isTransaction;
+  if (ownsTransaction) db.exec("BEGIN DEFERRED");
   try {
-    return readBySql(path, schemaVersionOn);
-  } catch {
-    return walUserVersion(dbWalPath(env)) ?? header.readUInt32BE(USER_VERSION_OFFSET);
+    const version = schemaVersionOn(db);
+    return { version, holdsData: version === 0 && holdsDataRows(db) };
+  } finally {
+    if (ownsTransaction) db.exec("COMMIT");
   }
 }
 
-// The schema of a database file by its version: version 0 is a database being created (every nightqueue release stamps one), unless it already holds data, which makes it an unstamped legacy home.
-function schemaOfVersion(path, version) {
-  const fresh = version === 0 && !readBySql(path, holdsDataRows);
-  return { exists: true, version, fresh, unknown: false };
+// The probe, read once more when it shows version 0 with data: a creator that stamped between two probes is no legacy home.
+export function confirmedSchemaProbe(db) {
+  const probe = schemaProbe(db);
+  return probe.version === 0 && probe.holdsData ? schemaProbe(db) : probe;
 }
 
 // Tells whether the write-ahead log of a database holds frames the main file's header may not reflect yet.
@@ -270,10 +273,27 @@ function hasPendingWal(env) {
   return (statSync(dbWalPath(env), { throwIfNoEntry: false })?.size ?? 0) > 0;
 }
 
+// The schema a probe reports: version 0 is a database being created (every nightqueue release stamps one), unless it already holds data, which makes it an unstamped legacy home.
+function schemaOfProbe({ version, holdsData }) {
+  return { exists: true, version, fresh: version === 0 && !holdsData, unknown: false };
+}
+
+// The schema of a file with a readable header: SQLite's one-snapshot answer when the log may be ahead of the header or the version is 0, else the header's version.
+function schemaOfFile(env, path, header) {
+  const headerVersion = header.readUInt32BE(USER_VERSION_OFFSET);
+  if (headerVersion !== 0 && !hasPendingWal(env)) return schemaOfProbe({ version: headerVersion, holdsData: false });
+  try {
+    return schemaOfProbe(readBySql(path, confirmedSchemaProbe));
+  } catch (error) {
+    const version = walUserVersion(dbWalPath(env)) ?? headerVersion;
+    if (version === 0) throw error;
+    return schemaOfProbe({ version, holdsData: false });
+  }
+}
+
 // The schema a connection this process already holds reports, so the probe never opens a plain descriptor beside it.
 function schemaOfHeld(db) {
-  const version = schemaVersionOn(db);
-  return { exists: true, version, fresh: version === 0 && !holdsDataRows(db), unknown: false };
+  return schemaOfProbe(confirmedSchemaProbe(db));
 }
 
 // The schema of the database on disk, read from its header without creating, opening for write or migrating anything: `{ exists, version, fresh, unknown }`.
@@ -291,8 +311,7 @@ export function diskSchema(env = process.env) {
     if (header.length < HEADER_BYTES || header.toString("latin1", 0, 16) !== SQLITE_MAGIC) {
       return { exists: true, version: null, fresh: false, unknown: true };
     }
-    const version = hasPendingWal(env) ? pendingWalVersion(env, path, header) : header.readUInt32BE(USER_VERSION_OFFSET);
-    return schemaOfVersion(path, version);
+    return schemaOfFile(env, path, header);
   } catch {
     return { exists: true, version: null, fresh: false, unknown: true };
   }
@@ -310,34 +329,14 @@ function outdatedError(env, path, version) {
 
 // Refuses an older database before any connection, sidecar or home directory is created; a missing, fresh, newer or unreadable file passes.
 function refuseOutdated(env, path) {
-  const disk = settledDisk(env);
-  if (disk.version === 0 && hasPendingWal(env)) return;
+  const disk = diskSchema(env);
   if (isOutdated(disk)) throw outdatedError(env, path, disk.version);
-}
-
-const CREATOR_GRACE_MS = 3000;
-const CREATOR_POLL_MS = 20;
-
-// Reads until the answer stops looking like an unstamped legacy home: a creator commits its tables and rows before it stamps the version, so version 0 with data is only a legacy home once it stays that way for the grace period.
-function settleWhile(read, stillUnstamped) {
-  const deadline = Date.now() + CREATOR_GRACE_MS;
-  let answer = read();
-  while (stillUnstamped(answer) && Date.now() < deadline) {
-    sleepSync(CREATOR_POLL_MS);
-    answer = read();
-  }
-  return answer;
-}
-
-// The disk schema once a creator in another process has had the chance to stamp it.
-function settledDisk(env) {
-  return settleWhile(() => diskSchema(env), (disk) => disk.exists && disk.version === 0 && !disk.fresh && !disk.unknown);
 }
 
 // Refuses an older database on a connection already open, before `initConnection` writes anything to it.
 function refuseOutdatedOn(db, { env, path }) {
-  const version = settleWhile(() => schemaVersionOn(db), (read) => read === 0 && holdsDataRows(db));
-  if (version >= DB_USER_VERSION || (version === 0 && !holdsDataRows(db))) return;
+  const { version, holdsData } = confirmedSchemaProbe(db);
+  if (version >= DB_USER_VERSION || (version === 0 && !holdsData)) return;
   throw outdatedError(env, path, version);
 }
 
