@@ -175,7 +175,7 @@ function withoutRuntimeHeader(text) {
 }
 
 // The text a provisional slug is taken from: the brief of the prompt when it has one, the whole prompt otherwise, never a runtime header.
-function slugSource(prompt) {
+export function slugSource(prompt) {
   const brief = withoutRuntimeHeader(briefBody(prompt));
   return brief.trim() ? brief : withoutRuntimeHeader(prompt);
 }

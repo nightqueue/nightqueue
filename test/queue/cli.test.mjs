@@ -8,6 +8,7 @@ import { jobLogPath, queuePausedPath, queueResumePath, runDir } from "../../src/
 import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
+import { linkIssueJob, saveIssue } from "../../src/memory/issues.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
@@ -482,8 +483,8 @@ test("queue status shows the elapsed time and the last narration of a running jo
   assert.match(noLog, /^J-2\s+● running\s+\d+s\s+-\s+beta\s+-\s+-$/);
   assert.equal(existsSync(jobLogPath(silent, env)), false, "the job without a log had one");
 
-  assert.match(tableLine(table.stdout, finished), /^J-3\s+⊘ cancelled\s+-\s+-\s+alpha\s+-\s+-$/, "a job in a final state changed shape");
-  assert.match(table.stdout, /^ID\s+STATUS\s+DURATION\s+TOKENS\s+PROJECT\s+SLUG\/LAST\s+PR$/m, "the table has no header");
+  assert.match(tableLine(table.stdout, finished), /^J-3\s+⊘ cancelled\s+-\s+-\s+alpha\s+fix the docs\s+-$/, "a job in a final state changed shape");
+  assert.match(table.stdout, /^ID\s+STATUS\s+DURATION\s+TOKENS\s+PROJECT\s+TITLE\/LAST\s+PR$/m, "the table has no header");
   assert.equal(/\u001b\[/.test(table.stdout), false, "a piped table carried ANSI color");
   assert.match(table.stdout, /running=2/);
 });
@@ -1106,7 +1107,7 @@ test("queue status names a job the preflight gated, with its code, and says the 
   openDb(env).prepare("UPDATE jobs SET status = 'gate', finished_at = datetime('now'), notice_md = 'Rename the column?' WHERE id = ?").run(agentGate);
   const table = runCli(env, ["queue", "status"]);
   assert.equal(table.status, 0, table.stderr);
-  assert.match(tableLine(table.stdout, id), /gate\s+.*alpha\s+⛔ dirty-checkout: \/repo has uncommitted changes/);
+  assert.match(tableLine(table.stdout, id), /gate\s+.*alpha\s+fix the worker — ⛔ dirty-checkout: /);
   assert.match(table.stdout, /gate=2 \(1 blocked\)/, "the counts line did not break the blocked gates out of the total");
   assert.match(table.stdout, new RegExp(`1 job blocked \\(dirty-checkout\\) - fix the cause, then: nightqueue queue retry J-${id}$`, "m"));
 
@@ -1132,4 +1133,24 @@ test("`--blocked` with no blocked job says so instead of claiming the queue itse
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /no blocked job in the queue/);
   assert.equal(result.stdout.includes("no jobs in the queue"), false, "a non-empty queue was reported as empty under --blocked");
+});
+
+test("queue status shows a readable title on the pending issue job, the pending free-prompt job and the closed job", (t) => {
+  const env = makeCliHome(t, "cli-status-title");
+  const projectId = ensureProject(env, "alpha");
+  const fromIssue = addJob({ projectId, prompt: "## Brief\n\nprompt of the issue job" }, env).id;
+  const free = addJob({ projectId, prompt: "# Task\n\nfree prompt title" }, env).id;
+  const closed = seedClosedJob(env);
+  const item = saveIssue({ type: "bug", projectId, title: "Issue title wins" }, env);
+  assert.equal(linkIssueJob(item.id, fromIssue, env), true);
+
+  const table = runCli(env, ["queue", "status"]);
+  assert.equal(table.status, 0, table.stderr);
+  assert.match(tableLine(table.stdout, fromIssue), /Issue title wins/);
+  assert.match(tableLine(table.stdout, free), /free prompt title/);
+  assert.match(tableLine(table.stdout, closed), /^J-\d+\s+■ closed/);
+  assert.equal(tableLine(table.stdout, closed).includes("TITLE"), false);
+  const payload = JSON.parse(runCli(env, ["queue", "status", "--json"]).stdout);
+  assert.equal(payload.jobs.every((job) => job.title === null || typeof job.title === "string"), true);
+  assert.equal(payload.jobs.find((job) => job.id === fromIssue).title, "Issue title wins");
 });

@@ -14,6 +14,7 @@ import { liveState } from "./narrate.mjs";
 import { readAttemptTail } from "./follow.mjs";
 import { extractNoticeFromStream, partialTokens } from "./stream.mjs";
 import { KEPT_PREFIX } from "./worktree.mjs";
+import { slugSource } from "./spawn.mjs";
 
 // The state of the pull request of a job as the cache holds it right now: null without a GitHub pull request, `unknown` on a miss.
 function prStateOf(url, prStates) {
@@ -153,9 +154,41 @@ function withLive(jobs, env, now) {
   return { jobs: withBlocks, section };
 }
 
+const TITLE_LIMIT = 120;
+const HEADING_MARKER = /^#{1,6}\s+/;
+const BARE_HEADINGS = new Set(["brief", "task"]);
+
+// Whether a prompt line is a heading that only names a section (`## Brief`, `# Task`) and says nothing itself.
+function isBareHeading(line) {
+  return HEADING_MARKER.test(line) && BARE_HEADINGS.has(line.replace(HEADING_MARKER, "").trim().toLowerCase());
+}
+
+// Cuts a title to the limit, the ellipsis included in it.
+function clipTitle(text) {
+  const points = Array.from(text);
+  return points.length <= TITLE_LIMIT ? text : `${points.slice(0, TITLE_LIMIT - 1).join("")}…`;
+}
+
+// The readable title of a job, derived on read: its issue's title, else the first meaningful line of its prompt, else null.
+export function jobTitle(job, issue) {
+  const issueTitle = typeof issue?.title === "string" ? issue.title.trim() : "";
+  if (issueTitle) return clipTitle(issueTitle.replace(/\s+/g, " "));
+  const line = slugSource(job?.prompt)
+    .split("\n")
+    .map((entry) => entry.trim())
+    .find((entry) => entry !== "" && !isBareHeading(entry));
+  const title = line?.replace(HEADING_MARKER, "").trim();
+  return title ? clipTitle(title) : null;
+}
+
+// A public job view carrying its derived title, from the raw row that still holds the prompt and the joined issue title.
+function jobViewWithTitle(row) {
+  return { ...jobView(row), title: jobTitle(row, { title: row.issue_title }) };
+}
+
 // The data of the queue view in timed sections, read from SELECTs and pure file reads alone; a failed section never fails the view.
 export async function queueView(readStore, { env = process.env, limit, blockedOnly = false, prStates = null, killImpl, now = () => performance.now() } = {}) {
-  const jobsPart = await timedSection("jobs", async () => (await readStore.jobs.listJobs({ limit, blockedOnly })).map(jobView), now);
+  const jobsPart = await timedSection("jobs", async () => (await readStore.jobs.listJobs({ limit, blockedOnly })).map(jobViewWithTitle), now);
   const countsPart = await timedSection("counts", () => readCounts(readStore), now);
   const runnersPart = await timedSection("runners", () => readRunners(env, killImpl), now);
   const runners = runnersPart.value ?? [];
@@ -232,7 +265,8 @@ async function itemRefOfJob(readStore, jobId) {
 // from its log) really differs from the row's `notice_md` - once the lines the runtime itself appends to the row are set
 // aside - both are carried: `notice` is the row's, `run_notice` the run's whole own.
 export async function jobDetailView(readStore, id, { prStates = null, env = process.env } = {}) {
-  const job = jobView(await readStore.jobs.getJob(id), { full: true });
+  const row = await readStore.jobs.getJob(id);
+  const job = row ? { ...jobView(row, { full: true }), title: jobTitle(row, { title: row.issue_title }) } : null;
   if (!job) return null;
   const live = job.status === "running" ? readLiveOf(job, env).live : null;
   const withState = { ...withPrState(job, prStates), item_ref: await itemRefOfJob(readStore, job.id), live };

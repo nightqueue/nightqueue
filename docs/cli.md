@@ -374,6 +374,14 @@ output tokens of subagents never reach the orchestrator stream, so a partial inp
 total would be useless mid-run, while the total with cache is a good proxy that converges.
 `queue status <id>` keeps the four counters separate; no cost is ever estimated.
 
+The last column of the `queue status` table is `TITLE/LAST` (it was `SLUG/LAST`). A running
+job shows what it is doing, as before. Every other job shows its title, then ` — ` and the
+reason it stands there (notice first line, close note, parked label) when the width allows.
+The title is derived on read and never stored: the title of the issue the job was queued
+from, otherwise the first non-empty line of the prompt's brief without its heading marker
+(a bare `## Brief` or `# Task` heading yields to the next line), clipped at 120 characters
+with `…` counted in them. The slug no longer sits in the table; `queue status <id>` prints it.
+
 `queue repair` has three forms. Bare, it replays every `pending-writes.jsonl` a run left while
 the database was unavailable (see [Runtime contract](runtime-contract.md)) and prints one
 `<project_id>/<slug>: applied <n>, filled <n>, superseded <n>, refused <n>` line per run
