@@ -73,6 +73,20 @@ export interface IssueSummary {
   decision_ref: string | null;
 }
 
+export type IssueStatus = "backlog" | "todo" | "in_progress" | "in_review" | "done" | "cancelled";
+
+export interface IssueItem {
+  ref: string;
+  title: string;
+  type: string | null;
+  priority: number | null;
+  status: IssueStatus;
+  scope: "project" | "org";
+  job_ref: string | null;
+  project_status?: IssueStatus | null;
+  project_job_ref?: string | null;
+}
+
 export interface Runner {
   running: boolean;
   pid: number;
@@ -125,8 +139,10 @@ export interface TimelinePhase {
   name: string;
   model: string | null;
   state: "done" | "now" | "gate" | "pending" | "skip";
-  offsetMs: number | null;
   durationMs: number | null;
+  liveSinceMs: number | null;
+  tokens: number;
+  tokens_label: string;
 }
 
 export interface Timeline {
@@ -140,7 +156,45 @@ export interface JobMeta {
   log_path: string;
   artifacts: string[];
   files: string[] | null;
-  baseline: { n: number; turns: number | null; ctx: number | null; cost: number | null } | null;
+  tier: string | null;
+  baseline:{ n: number; turns: number | null; ctx: number | null; cost: number | null } | null;
+}
+
+export interface DiffstatFile {
+  path: string;
+  added: number | null;
+  deleted: number | null;
+  untracked?: boolean;
+}
+
+export interface Diffstat {
+  source: "worktree" | "recorded" | "none";
+  base: string | null;
+  files: DiffstatFile[];
+  totals: { added: number; deleted: number } | null;
+  note: string | null;
+}
+
+export interface RecallResult {
+  ref: string | null;
+  title: string | null;
+}
+
+export interface Recall {
+  id: string | null;
+  tool: "lesson_recall" | "memory_recall" | "decision_recall" | "index_recall";
+  query: string | null;
+  input: { project?: string; target?: string };
+  attempt: number;
+  pending: boolean;
+  results: RecallResult[];
+  error: string | null;
+}
+
+export interface RecallGroup {
+  phase: number | null;
+  agent: string;
+  recalls: Recall[];
 }
 
 export interface StudioInfo {

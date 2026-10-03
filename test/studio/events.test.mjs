@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { test } from "node:test";
 import { dbPath, jobLogPath } from "../../src/config/paths.mjs";
-import { addJob, claimJobById, countsByStatus, finishJob } from "../../src/memory/jobs.mjs";
+import { addJob, bindRunSlug, claimJobById, countsByStatus, finishJob } from "../../src/memory/jobs.mjs";
+import { saveRunState } from "../../src/queue/resume.mjs";
 import { snapshotPatch } from "../../src/studio/events.mjs";
 import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
-import { agentToolUseEvent, attemptMarker, LANE_TOOL_USE_ID, resultEvent, secondsIntoAttempt, systemInitEvent, taskNotificationEvent, toNdjson, toolUseEvent } from "../../test-support/streams.mjs";
+import { agentToolUseEvent, assistantEvent, attemptMarker, LANE_TOOL_USE_ID, resultEvent, secondsIntoAttempt, systemInitEvent, taskNotificationEvent, toNdjson, toolResultEvent, toolUseEvent } from "../../test-support/streams.mjs";
 import { readEvents, startStudio, studioCookie } from "../../test-support/studio.mjs";
 
 // Waits the given number of milliseconds.
@@ -115,11 +116,118 @@ test("a job stream narrates the current attempt with structured fields, its time
   const timeline = events.filter((event) => event.name === "timeline").at(-1).data;
   assert.equal(timeline.track, "Standard");
   const coder = timeline.phases.find((phase) => phase.number === 4);
-  assert.deepEqual([coder.state, coder.offsetMs, coder.durationMs, coder.model], ["done", 10000, 60000, "opus"]);
+  assert.deepEqual([coder.state, coder.durationMs, coder.model], ["done", 60000, "opus"]);
   assert.equal(timeline.phases.find((phase) => phase.number === 7).state, "done");
   assert.equal(timeline.phases.find((phase) => phase.number === 2).state, "skip");
   assert.deepEqual(events.find((event) => event.name === "files").data, ["worker.mjs"]);
   assert.equal(events.at(-1).data.status, "done");
+});
+
+const SECOND_ATTEMPT_ISO = "2026-09-07T21:00:00.000Z";
+
+// The log of a resumed job: attempt 1 triages and explores then dies, attempt 2 codes and publishes.
+function writeTwoAttemptLog(env, id) {
+  const path = jobLogPath(id, env);
+  mkdirSync(dirname(path), { recursive: true });
+  const first = [
+    systemInitEvent(),
+    agentToolUseEvent({ id: "toolu_tri", subagentType: "nightqueue:triager", timestamp: secondsIntoAttempt(5) }),
+    assistantEvent("triaging", { messageId: "msg_tri", usage: { tokensIn: 3000 }, parentToolUseId: "toolu_tri", timestamp: secondsIntoAttempt(6) }),
+    taskNotificationEvent({ toolUseId: "toolu_tri", durationMs: 40000 }),
+    agentToolUseEvent({ id: "toolu_exp", subagentType: "nightqueue:explore", timestamp: secondsIntoAttempt(50) }),
+    taskNotificationEvent({ toolUseId: "toolu_exp", durationMs: 30000 }),
+    resultEvent({ subtype: "error_during_execution" }),
+  ];
+  const second = [
+    systemInitEvent(),
+    agentToolUseEvent({ id: "toolu_cod", subagentType: "nightqueue:coder", timestamp: secondsIntoAttempt(10, SECOND_ATTEMPT_ISO) }),
+    taskNotificationEvent({ toolUseId: "toolu_cod", durationMs: 60000 }),
+    toolUseEvent({ name: "Bash", id: "toolu_pub", input: { command: "nightqueue run publish --message-file m.txt" }, timestamp: secondsIntoAttempt(80, SECOND_ATTEMPT_ISO) }),
+    resultEvent(),
+  ];
+  writeFileSync(path, `${attemptMarker(1)}\n${toNdjson(first)}${attemptMarker(2, SECOND_ATTEMPT_ISO)}\n${toNdjson(second)}`);
+}
+
+test("a resumed job streams only its current attempt as narration, while its timeline keeps the phases of the earlier one and the run's tier", async (t) => {
+  const env = makeHome(t, "studio-events-resumed");
+  makeProject(t, env, "alpha");
+  const projectId = ensureProject(env, "alpha");
+  const id = addJob({ projectId, prompt: "fix the worker" }, env).id;
+  claimJobById(id, { worker: "host:1", cap: 4 }, env);
+  bindRunSlug(id, { worker: "host:1", candidates: ["fix-the-worker"] }, env);
+  saveRunState({ projectId, slug: "fix-the-worker", env, state: { tier: "complex" } });
+  writeTwoAttemptLog(env, id);
+  finishJob(id, { worker: "host:1", status: "done", prUrl: "https://github.com/acme/api/pull/8" }, env);
+  const { port } = await startStudio(t, env);
+  const events = await readEvents(port, { path: `/events?job=J-${id}`, headers: { cookie: studioCookie(port) }, until: (list) => list.some((event) => event.name === "end") });
+  assert.equal(events[0].data.tier, "complex", "the run's tier stands in for the row's null tier");
+  const narration = events.filter((event) => event.name === "narration").flatMap((event) => event.data);
+  assert.deepEqual([narration[0].kind, narration[0].text], ["attempt", "attempt 2"]);
+  assert.equal(narration.some((event) => event.agent === "triager" || event.kind === "usage"), false);
+  const timeline = events.filter((event) => event.name === "timeline").at(-1).data;
+  assert.equal(timeline.track, "Standard");
+  const phase = (number) => timeline.phases.find((entry) => entry.number === number);
+  assert.deepEqual([phase(1).state, phase(1).durationMs, phase(1).tokens_label], ["done", 40000, "~3k"]);
+  assert.deepEqual([phase(2).state, phase(2).durationMs], ["done", 30000]);
+  assert.deepEqual([phase(4).state, phase(4).durationMs], ["done", 60000]);
+  assert.equal(phase(3).state, "skip");
+});
+
+const LARGE_HISTORY_BYTES = 48 * 1024 * 1024;
+const MAX_LOOP_GAP_MS = 150;
+
+// The log of a resumed job whose first attempt carries tens of megabytes of triager chatter before it dies.
+function writeLargeTwoAttemptLog(env, id) {
+  const path = jobLogPath(id, env);
+  mkdirSync(dirname(path), { recursive: true });
+  const chatter = toNdjson([
+    toolUseEvent({ name: "Read", id: "toolu_read", input: { file_path: `/repo/${"x".repeat(200)}` }, parentToolUseId: "toolu_tri", timestamp: secondsIntoAttempt(6) }),
+    toolResultEvent({ toolUseId: "toolu_read", content: "y".repeat(600), parentToolUseId: "toolu_tri" }),
+    assistantEvent("z ".repeat(150), { messageId: "msg_tri", usage: { tokensIn: 3000 }, parentToolUseId: "toolu_tri", timestamp: secondsIntoAttempt(6) }),
+  ]);
+  const filler = chatter.repeat(Math.ceil(LARGE_HISTORY_BYTES / chatter.length));
+  const opening = [systemInitEvent(), agentToolUseEvent({ id: "toolu_tri", subagentType: "nightqueue:triager", timestamp: secondsIntoAttempt(5) })];
+  const closing = [taskNotificationEvent({ toolUseId: "toolu_tri", durationMs: 40000 }), resultEvent({ subtype: "error_during_execution" })];
+  const second = [
+    systemInitEvent(),
+    agentToolUseEvent({ id: "toolu_cod", subagentType: "nightqueue:coder", timestamp: secondsIntoAttempt(10, SECOND_ATTEMPT_ISO) }),
+    taskNotificationEvent({ toolUseId: "toolu_cod", durationMs: 60000 }),
+    resultEvent(),
+  ];
+  writeFileSync(path, `${attemptMarker(1)}\n${toNdjson(opening)}${filler}${toNdjson(closing)}${attemptMarker(2, SECOND_ATTEMPT_ISO)}\n${toNdjson(second)}`);
+}
+
+// Measures the longest stall of the event loop until `stop` is called.
+function loopLagProbe() {
+  let last = performance.now();
+  let worst = 0;
+  const timer = setInterval(() => {
+    const now = performance.now();
+    worst = Math.max(worst, now - last);
+    last = now;
+  }, 10);
+  return () => {
+    clearInterval(timer);
+    return Math.max(worst, performance.now() - last);
+  };
+}
+
+test("a resumed job with a large earlier attempt streams its full timeline without stalling the server's event loop", async (t) => {
+  const env = makeHome(t, "studio-events-large-log");
+  makeProject(t, env, "alpha");
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", tier: "complex" }, env).id;
+  claimJobById(id, { worker: "host:1", cap: 4 }, env);
+  writeLargeTwoAttemptLog(env, id);
+  finishJob(id, { worker: "host:1", status: "done", prUrl: "https://github.com/acme/api/pull/9" }, env);
+  const { port } = await startStudio(t, env);
+  const stopProbe = loopLagProbe();
+  const events = await readEvents(port, { path: `/events?job=J-${id}`, headers: { cookie: studioCookie(port) }, until: (list) => list.some((event) => event.name === "end"), timeoutMs: 60000 });
+  const worstGap = stopProbe();
+  assert.ok(worstGap < MAX_LOOP_GAP_MS, `the event loop stalled ${Math.round(worstGap)} ms while the history replayed`);
+  const timeline = events.filter((event) => event.name === "timeline").at(-1).data;
+  const phase = (number) => timeline.phases.find((entry) => entry.number === number);
+  assert.deepEqual([phase(1).state, phase(1).durationMs, phase(1).tokens_label], ["done", 40000, "~3k"]);
+  assert.deepEqual([phase(4).state, phase(4).durationMs], ["done", 60000]);
 });
 
 test("a job stream for an unknown job is a 404, and one for a malformed ref a 400", async (t) => {

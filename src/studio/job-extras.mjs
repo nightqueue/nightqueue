@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { jobLogPath, runDir } from "../config/paths.mjs";
 import { recordedFiles } from "../queue/file-list.mjs";
-import { isSafeSegment } from "../queue/resume.mjs";
+import { isSafeSegment, readRunState } from "../queue/resume.mjs";
 
 const IMPLEMENTATION_ARTIFACT = "04-implementation.md";
 
@@ -33,25 +33,34 @@ function recordedFilesOf(dir) {
   }
 }
 
-// The baseline of the job's tier, or null when the store cannot answer it; a failed read never fails the stream.
-async function baselineOf(job, store) {
-  if (!job?.tier) return null;
+// The baseline of a tier, or null when the store cannot answer it; a failed read never fails the stream.
+async function baselineOf(tier, store) {
+  if (!tier) return null;
   try {
-    return await store.jobs.tierBaseline(job.tier);
+    return await store.jobs.tierBaseline(tier);
   } catch {
     return null;
   }
 }
 
-// What the job screen shows beside the row: the run paths, its artifact names, the recorded files and the tier baseline; pure reads only.
+// The tier the run executed: the one its state.json records, else the row's; null while neither knows it.
+export function runTierOf(job, env) {
+  const recorded = readRunState({ projectId: job?.project_id, slug: job?.slug, env })?.tier;
+  if (typeof recorded === "string" && recorded.trim()) return recorded.trim();
+  return job?.tier ?? null;
+}
+
+// What the job screen shows beside the row: the run paths, its artifact names, the recorded files, the run tier and its baseline; pure reads only.
 export async function jobExtras(job, { env, store }) {
   const dir = runDirOf(job, env);
+  const tier = runTierOf(job, env);
   return {
     run_dir: dir,
     state_json: dir ? join(dir, "state.json") : null,
     log_path: jobLogPath(job.id, env),
     artifacts: dir ? artifactNames(dir) : [],
     files: dir ? recordedFilesOf(dir) : null,
-    baseline: await baselineOf(job, store),
+    tier,
+    baseline: await baselineOf(tier, store),
   };
 }

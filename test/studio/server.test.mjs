@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startStudioServer } from "../../src/studio/server.mjs";
-import { makeHome } from "../../test-support/memory.mjs";
+import { addJob } from "../../src/memory/jobs.mjs";
+import { jobLogPath } from "../../src/config/paths.mjs";
+import { attemptMarker, toolResultEvent, toolUseEvent } from "../../test-support/streams.mjs";
+import { ensureProject, makeHome } from "../../test-support/memory.mjs";
 import { APP_JS, INDEX_HTML, makeDist, send, sendRaw, startStudio, STUDIO_TOKEN, studioCookie } from "../../test-support/studio.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
@@ -14,6 +19,8 @@ const GATED_REQUESTS = [
   { method: "GET", path: "/" },
   { method: "GET", path: "/assets/app.js" },
   { method: "GET", path: "/api/info" },
+  { method: "GET", path: "/api/jobs/J-1/diffstat" },
+  { method: "GET", path: "/api/jobs/J-1/recalls" },
   { method: "GET", path: "/events" },
   { method: "POST", path: "/mcp", headers: { "content-type": "application/json" }, body: "{}" },
 ];
@@ -95,6 +102,22 @@ test("cookie-authorised reads are served with the CSP and nosniff headers", asyn
   }
 });
 
+test("the favicon and the web manifest are served with their own types, behind the cookie", async (t) => {
+  const env = makeHome(t, "studio-icons");
+  const distDir = makeDist(t);
+  writeFileSync(`${distDir}/favicon.ico`, Buffer.from([0, 0, 1, 0]));
+  writeFileSync(`${distDir}/site.webmanifest`, "{}");
+  const { port } = await startStudio(t, env, { distDir });
+  const headers = { cookie: studioCookie(port) };
+  const icon = await send(port, { path: "/favicon.ico", headers });
+  assert.equal(icon.status, 200);
+  assert.equal(icon.headers["content-type"], "image/x-icon");
+  const manifest = await send(port, { path: "/site.webmanifest", headers });
+  assert.equal(manifest.status, 200);
+  assert.equal(manifest.headers["content-type"], "application/manifest+json");
+  assert.equal((await send(port, { path: "/favicon.ico" })).status, 401);
+});
+
 test("a cookie write needs the studio's exact origin, port included, and then MCP works through the SDK client", async (t) => {
   const env = makeHome(t, "studio-cookie-writes");
   const { port, origin } = await startStudio(t, env);
@@ -167,6 +190,36 @@ test("the API refuses a write body that is not JSON, and an unknown job log is a
   assert.match(JSON.parse(drain.body).error, /queue_run/);
   assert.equal((await send(port, { path: "/api/jobs/J-999/log", headers })).status, 404);
   assert.equal((await send(port, { path: "/api/jobs/nope/log", headers })).status, 400);
+  assert.equal((await send(port, { path: "/api/jobs/J-999/diffstat", headers })).status, 404);
+  assert.equal((await send(port, { path: "/api/jobs/nope/diffstat", headers })).status, 400);
+  assert.equal((await send(port, { path: "/api/jobs/J-999/recalls", headers })).status, 404);
+  assert.equal((await send(port, { path: "/api/jobs/nope/recalls", headers })).status, 400);
+});
+
+test("the recalls of a job read its whole log, and a job with no log answers no groups", async (t) => {
+  const env = makeHome(t, "studio-api-recalls");
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
+  const { port } = await startStudio(t, env);
+  const headers = { cookie: studioCookie(port) };
+  const empty = await send(port, { path: `/api/jobs/J-${id}/recalls`, headers });
+  assert.deepEqual([empty.status, JSON.parse(empty.body)], [200, { groups: [] }]);
+  const call = toolUseEvent({ name: "mcp__nightqueue__lesson_recall", id: "r1", input: { query: "worker" } });
+  const answer = toolResultEvent({ toolUseId: "r1", content: [{ type: "text", text: JSON.stringify([{ id: 5, title: "Guard it" }]) }] });
+  mkdirSync(dirname(jobLogPath(id, env)), { recursive: true });
+  writeFileSync(jobLogPath(id, env), [attemptMarker(1), JSON.stringify(call), attemptMarker(2), JSON.stringify(answer)].join("\n"));
+  const full = JSON.parse((await send(port, { path: `/api/jobs/J-${id}/recalls`, headers })).body);
+  assert.equal(full.groups[0].agent, "orchestrator");
+  assert.deepEqual(full.groups[0].recalls[0].results, [{ ref: "L5", title: "Guard it" }]);
+});
+
+test("the diffstat of a job with no worktree and no recorded files answers none", async (t) => {
+  const env = makeHome(t, "studio-api-diffstat");
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
+  const { port } = await startStudio(t, env);
+  const answer = await send(port, { path: `/api/jobs/J-${id}/diffstat`, headers: { cookie: studioCookie(port) } });
+  assert.equal(answer.status, 200);
+  const body = JSON.parse(answer.body);
+  assert.deepEqual([body.source, body.files, body.totals], ["none", [], null]);
 });
 
 // Spawns `nightqueue studio` on an ephemeral port in a temporary home and resolves the URL it printed.

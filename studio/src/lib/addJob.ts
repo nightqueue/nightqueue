@@ -2,48 +2,41 @@ import { announceRunner, errorText, type RunnerStart } from "./actions";
 import { callTool } from "./mcp";
 import { showToast } from "./toast";
 
-export const TIERS = ["trivial", "simple", "complex"] as const;
+export const TIERS = ["auto", "trivial", "simple", "complex"] as const;
 
 export type Tier = (typeof TIERS)[number];
-
-export type AddSource = "issue" | "free";
 
 export const PRIORITIES = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 export const DEFAULT_PRIORITY = 5;
 
 export interface AddJobForm {
-  source: AddSource;
   project: string;
   issueRef: string | null;
-  prompt: string;
-  note: string;
+  text: string;
   tier: Tier;
   priority: number;
-  runDir: string;
 }
 
-export const EMPTY_ADD_FORM: AddJobForm = { source: "issue", project: "", issueRef: null, prompt: "", note: "", tier: "simple", priority: DEFAULT_PRIORITY, runDir: "" };
+export const EMPTY_ADD_FORM: AddJobForm = { project: "", issueRef: null, text: "", tier: "auto", priority: DEFAULT_PRIORITY };
 
 interface QueuedAnswer {
   ref?: unknown;
   project?: unknown;
 }
 
-// The exact arguments `queue_add` gets from the form: from an issue (the note as `prompt`) or from a free brief.
+// The exact arguments `queue_add` gets from the form: the issue with the text as its note, or the text as a free brief; `auto` sends no tier.
 export function buildAddArgs(form: AddJobForm): Record<string, unknown> {
-  const runDir = form.runDir.trim();
-  const optionalRunDir = runDir ? { run_dir: runDir } : {};
-  if (form.source === "free") return { project: form.project, prompt: form.prompt.trim(), tier: form.tier, priority: form.priority, ...optionalRunDir };
-  const note = form.note.trim();
-  return { project: form.project, issue_id: form.issueRef, ...(note ? { prompt: note } : {}), tier: form.tier, priority: form.priority, ...optionalRunDir };
+  const text = form.text.trim();
+  const tier = form.tier === "auto" ? {} : { tier: form.tier };
+  if (form.issueRef) return { project: form.project, issue_id: form.issueRef, ...(text ? { prompt: text } : {}), ...tier, priority: form.priority };
+  return { project: form.project, prompt: text, ...tier, priority: form.priority };
 }
 
 // What still keeps the form from being queued, or null when it is complete.
 export function addFormProblem(form: AddJobForm): string | null {
   if (!form.project) return "choose a project";
-  if (form.source === "issue" && !form.issueRef) return "choose the issue to queue";
-  if (form.source === "free" && form.prompt.trim() === "") return "write the brief";
+  if (!form.issueRef && form.text.trim() === "") return "choose an issue or write the brief";
   if (!Number.isInteger(form.priority) || !PRIORITIES.includes(form.priority)) return "choose a priority from 1 to 9";
   return null;
 }

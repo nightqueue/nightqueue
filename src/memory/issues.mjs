@@ -76,6 +76,7 @@ export { ALL_PROJECTS };
 const RELATED_RECALL_LIMIT = 9;
 const RELATED_PROMPT_LIMIT = 8;
 const LIVE_JOB_LIST = sqlList(LIVE_JOB_STATUSES);
+const STARTED_STATUSES = ["in_progress", "in_review"];
 
 // Requires a non-empty text field, because the column is NOT NULL and a raw SQLite error helps nobody.
 function requireText(field, value) {
@@ -430,7 +431,7 @@ export function listIssues(owner, filters = {}, env = process.env, db = null) {
   return { ...ownerNames(target), items: withProjectRows(connection, target, items) };
 }
 
-// The org items of a listing with their project rows: a project reads only its own row's status, an org reads the whole matrix.
+// The org items of a listing with their project rows: a project reads only its own row's status and job, an org reads the whole matrix.
 function withProjectRows(db, target, items) {
   const orgIds = items.filter((item) => item.scope === "org").map((item) => item.id);
   const matrix = target.scope === "org";
@@ -438,8 +439,14 @@ function withProjectRows(db, target, items) {
   return items.map((item) => {
     if (item.scope !== "org") return item;
     const own = rows.get(item.id) ?? [];
-    return matrix ? { ...item, projects: own } : { ...item, project_status: own[0]?.status ?? null };
+    return matrix ? { ...item, projects: own } : { ...item, ...ownProjectRow(own[0], item) };
   });
+}
+
+// The status and job ref of a project's own row of an org item; with no row, a started item is still `todo` for this project.
+function ownProjectRow(row, item) {
+  if (!row) return { project_status: STARTED_STATUSES.includes(item.status) ? "todo" : null, project_job_ref: null };
+  return { project_status: row.status ?? null, project_job_ref: row.job_id ? jobRef(row.job_id) : null };
 }
 
 // The job still holding an issue, or null when its link is history.

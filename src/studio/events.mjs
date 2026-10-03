@@ -8,16 +8,15 @@ import { readQueueStatus, refreshAnsweredPrStates } from "../mcp/tools.mjs";
 import { readAttemptTail } from "../queue/follow.mjs";
 import { formatElapsed, GLYPHS } from "../queue/narrate.mjs";
 import { narrateJob } from "../queue/narrated-tail.mjs";
-import { phaseTimeline } from "../queue/timeline.mjs";
+import { createTimeline } from "../queue/timeline.mjs";
 import { withReadOnlyStore } from "../store/open.mjs";
-import { jobExtras } from "./job-extras.mjs";
+import { jobExtras, runTierOf } from "./job-extras.mjs";
 import { decorateSnapshot } from "./rows.mjs";
 
 export const QUEUE_POLL_MS = 1000;
 const KEEPALIVE_MS = 15000;
 const NARRATION_FLUSH_MS = 100;
 const QUEUE_LIMIT = 50;
-const TIMELINE_KINDS = new Set(["laneOpen", "laneClose", "tool", "attempt", "resultEnd"]);
 
 // Opens a server-sent events response, with the headers that keep every proxy from buffering it.
 function openStream(res) {
@@ -185,37 +184,58 @@ function attemptOffset(id, env) {
   return readAttemptTail(jobLogPath(id, env))?.offset ?? 0;
 }
 
-// The state of one job stream: the events so far, the touched files and the batch waiting to be flushed.
-function createJobState({ res, job, extras }) {
-  return { res, job, recordedFiles: extras.files, files: new Set(), events: [], pending: [], timer: null, status: job.status };
+// The state of one job stream: the timeline of every attempt, the touched files and the batch waiting to be flushed.
+function createJobState({ res, env, job, extras }) {
+  return { res, env, job, tier: extras.tier ?? job.tier ?? null, timeline: createTimeline(), timelineDirty: false, recordedFiles: extras.files, files: new Set(), pending: [], timer: null, status: job.status };
 }
 
-// Sends the waiting narration batch, then the timeline and the touched files when the batch moved them.
+// Sends the timeline as it stands, re-reading the run tier while it is still unknown.
+function sendTimeline(state) {
+  if (!state.tier) state.tier = runTierOf(state.job, state.env);
+  sendEvent(state.res, "timeline", state.timeline.snapshot({ tier: state.tier, status: state.status }));
+}
+
+// Sends the waiting narration batch with the files it touched, then the timeline when anything moved it.
 function flushJobState(state) {
   state.timer = null;
-  if (!state.pending.length) return;
-  const batch = state.pending;
-  state.pending = [];
-  sendEvent(state.res, "narration", batch.map(narrationWire));
-  if (batch.some((event) => TIMELINE_KINDS.has(event.kind))) sendEvent(state.res, "timeline", phaseTimeline(state.events, { tier: state.job.tier, status: state.status }));
-  const before = state.files.size;
-  for (const event of batch) if (event.file) state.files.add(event.file);
-  if (state.recordedFiles === null && state.files.size !== before) sendEvent(state.res, "files", [...state.files].sort());
+  if (state.pending.length) {
+    const batch = state.pending;
+    state.pending = [];
+    sendEvent(state.res, "narration", batch.map(narrationWire));
+    const before = state.files.size;
+    for (const event of batch) if (event.file) state.files.add(event.file);
+    if (state.recordedFiles === null && state.files.size !== before) sendEvent(state.res, "files", [...state.files].sort());
+  }
+  if (!state.timelineDirty) return;
+  state.timelineDirty = false;
+  sendTimeline(state);
 }
 
-// Queues one narration event for the next flush.
-function pushJobEvent(state, event) {
-  state.events.push(event);
-  state.pending.push(event);
+// Arms the next flush unless one is already waiting.
+function scheduleFlush(state) {
   if (!state.timer) state.timer = setTimeout(() => flushJobState(state), NARRATION_FLUSH_MS);
+}
+
+// Folds one event into the timeline alone: an earlier attempt's event or a usage report, never a narration line.
+function pushTimelineEvent(state, event) {
+  state.timeline.push(event);
+  state.timelineDirty = true;
+  scheduleFlush(state);
+}
+
+// Queues one narration event of the current attempt for the next flush, and folds it into the timeline.
+function pushJobEvent(state, event) {
+  state.pending.push(event);
+  pushTimelineEvent(state, event);
 }
 
 // Ends a job stream once the follow ended: the last batch, the final timeline and the status it ended on; the response stays open for the client.
 function endJobState(state, result) {
   if (state.timer) clearTimeout(state.timer);
   state.status = result?.status ?? state.status;
+  state.timelineDirty = false;
   flushJobState(state);
-  sendEvent(state.res, "timeline", phaseTimeline(state.events, { tier: state.job.tier, status: state.status }));
+  sendTimeline(state);
   sendEvent(state.res, "end", { status: state.status, reason: result?.reason ?? null });
 }
 
@@ -238,9 +258,9 @@ export async function streamJob(req, res, { env, ref }) {
   if (closed) return;
   openStream(res);
   stopKeepAlive = keepAlive(res);
-  const state = createJobState({ res, ...found });
+  const state = createJobState({ res, env, ...found });
   sendEvent(res, "meta", found.extras);
-  sendEvent(res, "timeline", phaseTimeline([], { tier: found.job.tier, status: found.job.status }));
+  sendTimeline(state);
   if (found.extras.files !== null) sendEvent(res, "files", found.extras.files);
   if (!existsSync(jobLogPath(id, env))) return endJobState(state, { status: found.job.status, reason: "the job has no log yet" });
   const result = await narrateJob({
@@ -248,6 +268,9 @@ export async function streamJob(req, res, { env, ref }) {
     env,
     follow: true,
     fromOffset: attemptOffset(id, env),
+    historyFrom: 0,
+    onHistory: (event) => pushTimelineEvent(state, event),
+    onUsage: (event) => pushTimelineEvent(state, event),
     onEvent: (event) => pushJobEvent(state, event),
     stopReason: () => (closed ? "client closed" : null),
     readJob: async (jobId) => await withReadOnlyStore(env, (store) => store.jobs.getJob(jobId)),

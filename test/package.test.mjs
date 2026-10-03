@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { parsePackOutput } from "../src/host/npm.mjs";
@@ -69,6 +70,13 @@ test("the tarball carries the CLI, the plugin and the manifest, and no test at a
   }
   assert.equal(tarball.files.includes("bin/shift.mjs"), false, "the tarball still carries the entry of the previous command name");
   assert.deepEqual(tarball.files.filter((path) => DEV_PREFIXES.some((prefix) => path.startsWith(prefix))), []);
+});
+
+test("a built studio ships its favicon in the tarball", (t) => {
+  if (!existsSync(join(ROOT, "studio/dist/index.html"))) return t.skip("the studio is not built");
+  const tarball = packedTarball();
+  if (!tarball) return t.skip("npm did not answer `pack --dry-run`");
+  assert.ok(tarball.files.includes("studio/dist/favicon.ico"), "studio/dist/favicon.ico is missing from the tarball");
 });
 
 test("every versioned file of the published directories is in the tarball", (t) => {

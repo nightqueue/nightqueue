@@ -1,23 +1,26 @@
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { CancelJobDialog } from "../components/CancelJobDialog";
+import { CloseJobDialog } from "../components/CloseJobDialog";
 import { CostCard } from "../components/job/CostCard";
 import { FilesCard } from "../components/job/FilesCard";
 import { GateCard } from "../components/job/GateCard";
-import { Breadcrumb, JobHeader } from "../components/job/JobHeader";
+import { Breadcrumb, type CloseState, JobHeader } from "../components/job/JobHeader";
 import { JobSkeleton } from "../components/job/JobSkeleton";
 import { LiveLog } from "../components/job/LiveLog";
+import { MemoryCard } from "../components/job/MemoryCard";
 import { NoteCard } from "../components/job/NoteCard";
 import { NoticeCard } from "../components/job/NoticeCard";
 import { PhaseTimeline } from "../components/job/PhaseTimeline";
 import { PrCard } from "../components/job/PrCard";
 import { RunCard } from "../components/job/RunCard";
-import { errorText } from "../lib/actions";
+import { closeJob, closesWithoutConfirm, errorText } from "../lib/actions";
 import { type JobStreamState, useJobStream } from "../lib/events";
 import { isoMs } from "../lib/format";
-import { lastElapsed, useIssueSummary, useJobDetail, useQueueRowOf } from "../lib/job";
+import { useIssueSummary, useJobDetail, useQueueRowOf } from "../lib/job";
 import { jobRef } from "../lib/queue";
 import type { Job, JobDetail } from "../lib/types";
+import { useAction } from "../lib/useAction";
 import { useNow } from "../lib/useNow";
 
 // What the screen says when the job cannot be read.
@@ -35,26 +38,39 @@ function LiveTimeline({ job, stream, reason }: { job: JobDetail; stream: JobStre
   const now = useNow();
   const started = isoMs(job.started_at);
   const runElapsedMs = job.status === "running" && started !== null ? now - started : null;
-  return <PhaseTimeline timeline={stream.timeline} status={job.status} reason={reason} runElapsedMs={runElapsedMs} lastEventMs={lastElapsed(stream.events)} />;
+  return <PhaseTimeline timeline={stream.timeline} status={job.status} reason={reason} runElapsedMs={runElapsedMs} />;
 }
 
-// The right column: notice (unless the gate card shows it), pull request, cost, note, files and run paths.
+// The right column: notice (unless the gate card shows it), pull request, cost, note, files, memory and run paths.
 function SideCards({ job, stream }: { job: JobDetail; stream: JobStreamState }) {
   return (
     <div className="flex min-w-0 flex-col gap-4">
       {job.status !== "gate" && <NoticeCard job={job} />}
       <PrCard job={job} />
-      <CostCard job={job} baseline={stream.meta?.baseline} />
+      <CostCard job={job} baseline={stream.meta?.baseline} timeline={stream.timeline} />
       <NoteCard note={job.operator_note} />
-      <FilesCard files={stream.files} />
+      <FilesCard jobRef={jobRef(job.id)} running={job.status === "running"} />
+      <MemoryCard jobRef={jobRef(job.id)} running={job.status === "running"} />
       <RunCard job={job} meta={stream.meta} />
     </div>
   );
 }
 
+const byJob = (job: JobDetail) => String(job.id);
+
+// The header's close: one click on a merged pull request, a confirm before merging any other, the row's progress while closing.
+function useCloseState(job: JobDetail, row: Job | undefined): { close: CloseState; confirming: boolean; endConfirm: () => void } {
+  const [confirming, setConfirming] = useState(false);
+  const closeMerged = useAction(closeJob, byJob);
+  const onClose = () => (closesWithoutConfirm(job) ? closeMerged(job) : setConfirming(true));
+  const close: CloseState = { closing: row?.studio.closing === true, closingText: row?.studio.reason ?? null, onClose };
+  return { close, confirming, endConfirm: () => setConfirming(false) };
+}
+
 // The loaded job screen: header, track, the gate card when gated, then the log beside the cards.
 function JobScreen({ job, row, runnersOnline }: { job: JobDetail; row: Job | undefined; runnersOnline: number | null }) {
   const [cancelling, setCancelling] = useState(false);
+  const { close, confirming, endConfirm } = useCloseState(job, row);
   const stream = useJobStream(jobRef(job.id), job.started_at ?? "never-started");
   const issue = useIssueSummary(job.item_ref);
   const gatePhase = stream.timeline?.phases.find((phase) => phase.state === "gate")?.number ?? null;
@@ -62,7 +78,7 @@ function JobScreen({ job, row, runnersOnline }: { job: JobDetail; row: Job | und
   return (
     <>
       <Breadcrumb jobRefText={jobRef(job.id)} />
-      <JobHeader job={job} statusLabel={row?.studio.status_label || job.status} issue={issue.data} onCancel={() => setCancelling(true)} />
+      <JobHeader job={job} statusLabel={row?.studio.status_label || job.status} issue={issue.data} runTier={stream.meta?.tier ?? null} close={close} onCancel={() => setCancelling(true)} />
       <LiveTimeline job={job} stream={stream} reason={reason} />
       {job.status === "gate" && <GateCard job={job} runnersOnline={runnersOnline} gatePhase={gatePhase} />}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -70,6 +86,7 @@ function JobScreen({ job, row, runnersOnline }: { job: JobDetail; row: Job | und
         <SideCards job={job} stream={stream} />
       </div>
       {cancelling && <CancelJobDialog job={job} onClose={() => setCancelling(false)} />}
+      {confirming && <CloseJobDialog job={job} onClose={endConfirm} />}
     </>
   );
 }

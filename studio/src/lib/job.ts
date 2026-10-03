@@ -106,12 +106,3 @@ export function narrationTone(event: NarrationEvent): string {
 export function noticeOf(job: Pick<JobDetail, "notice_md" | "run_notice">): string {
   return job.run_notice?.trim() || job.notice_md?.trim() || "";
 }
-
-// The elapsed offset of the last narration event, the instant the run reached so far.
-export function lastElapsed(events: NarrationEvent[]): number | null {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const elapsed = events[index].elapsedMs;
-    if (elapsed !== null && Number.isFinite(elapsed)) return elapsed;
-  }
-  return null;
-}
