@@ -104,7 +104,7 @@ function printNextSteps(ctx, { registered } = {}) {
 async function runInstallSteps(ctx, report, { embedding, path, from, force, shortcuts, desktop } = {}) {
   await guardIdleRuntime(ctx, { force });
   requireStep(createHome(ctx, report), "home");
-  requireStep(setupRuntime(ctx, report, { from }), "runtime");
+  requireStep(await setupRuntime(ctx, report, { from }), "runtime");
   requireStep(installShims(ctx, report, { shortcuts }), "shim");
   requireStep(verifyShim(ctx, report), "runtime check");
   registerHostServices(ctx, report, { desktop });

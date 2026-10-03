@@ -81,7 +81,9 @@ to look like ours, is never rewritten and never removed.
 version, migrates the database with it, and re-points the host at it; config and
 secrets stay untouched. `nightqueue update 0.2.0` asks the registry for that exact version
 instead (a tag such as `next` works too), and `--from <dir|tgz>` installs a local
-source instead of asking the registry at all (see [Developing](developing.md)); a
+source instead of asking the registry at all (a directory gets its studio built
+first when `studio/dist` is missing or stale: run `npm ci` there once, then
+`nq update --from .`; see [Developing](developing.md)); a
 version and `--from` together are a usage error, because they are two different
 sources. The runtime line names both versions and the directory the new one was
 installed into, as in `runtime: updated (v0.1.0 -> v0.2.0 at

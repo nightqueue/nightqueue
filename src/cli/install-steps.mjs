@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { LEGACY_SHIM_NAME, LEGACY_SHIM_NAMES, binDir, embeddingDir, homeDir, legacyShimPath, runtimeDir, runtimeVersionsDir, shimPath } from "../config/paths.mjs";
 import { loadConfig } from "../config/store.mjs";
-import { npmInstall, npmPack } from "../host/npm.mjs";
+import { npmInstall, npmPack, runNpmAsync } from "../host/npm.mjs";
 import { packageRoot, spawnRoot } from "../host/paths.mjs";
 import {
   packageVersion,
@@ -17,6 +17,7 @@ import {
 } from "../host/runtime.mjs";
 import { PATH_MARK, addPathLine, binDirInPath, pathBlock, rcFilePath, removePathLine } from "../host/shell.mjs";
 import { EMBEDDING_PACKAGE, EMBEDDING_PACKAGE_RANGE, embeddingLibraryEntry, warmupModel } from "../memory/embedding.mjs";
+import { checkStudioStamp } from "../studio/stamp.mjs";
 import { confirm } from "./prompt.mjs";
 import { firstLine } from "./report.mjs";
 import { finishVersion, pruneVersions, runtimeLocation, stageInstall, switchCurrent, versionStamp } from "./runtime-versions.mjs";
@@ -25,6 +26,11 @@ import { SCHEMA_LABEL, SCHEMA_PARENT_ENV } from "./schema-migrate.mjs";
 const RUNTIME_LABEL = "runtime";
 const OLD_RUNTIMES_LABEL = "old runtimes";
 const RUNTIME_CHECK_LABEL = "runtime check";
+const STUDIO_LABEL = "studio";
+const STUDIO_TOOLS = ["tsc", "vite"];
+const STUDIO_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
+const STUDIO_TAIL_LINES = 5;
+const STUDIO_HASH_CHARS = 12;
 const SHIM_CHECK_TIMEOUT_MS = 15000;
 const SCHEMA_TIMEOUT_MS = 30 * 60 * 1000;
 const MIGRATED_DETAIL = /^v\d+ -> v\d+/;
@@ -71,8 +77,58 @@ function packDirectory(ctx, report, dir) {
   return { ok: false, cleanup: () => {} };
 }
 
+// The stamp check of a source directory; a source that cannot be read is a stale one, never a thrown error.
+function readStudioStamp(dir) {
+  try {
+    return checkStudioStamp(dir);
+  } catch (err) {
+    return { ok: false, hash: null, reason: firstLine(err?.message ?? String(err)) };
+  }
+}
+
+// Tells whether both binaries the studio build runs are installed in the directory.
+function studioToolsInstalled(dir) {
+  return STUDIO_TOOLS.every((tool) => existsSync(join(dir, "node_modules", ".bin", tool)));
+}
+
+// Runs `npm run studio:build` in the directory, streaming what it prints as it prints it; `{ ok, detail }` says how it ended.
+async function runStudioBuild(ctx, dir) {
+  const result = await runNpmAsync(["run", "studio:build"], {
+    cwd: dir,
+    env: ctx.env,
+    timeoutMs: STUDIO_BUILD_TIMEOUT_MS,
+    spawnImpl: ctx.spawnImpl,
+    echo: (text) => relayStderr(ctx, text),
+  });
+  if (result.ok) return { ok: true, detail: "" };
+  const tail = result.output.split("\n").map((line) => line.trim()).filter(Boolean).slice(-STUDIO_TAIL_LINES).join(" | ");
+  const how = result.timedOut ? "timed out" : result.missing ? "npm not found" : `exit ${result.status ?? "?"}`;
+  return { ok: false, detail: `${how}${tail ? `: ${tail}` : ""}` };
+}
+
+// Builds the studio of a local source directory unless its dist is already fresh, so an install from a checkout never ships without one; false refuses the whole install.
+export async function studioBuildStep(ctx, report, dir) {
+  const stamp = readStudioStamp(dir);
+  if (stamp.ok) {
+    report.step(STUDIO_LABEL, "up to date", stamp.hash.slice(0, STUDIO_HASH_CHARS));
+    return true;
+  }
+  if (!studioToolsInstalled(dir)) {
+    report.degrade(STUDIO_LABEL, `the studio devDependencies are not installed in ${dir}: run npm ci there`, `cd ${dir} && npm ci`);
+    return false;
+  }
+  const build = await runStudioBuild(ctx, dir);
+  const built = build.ok ? readStudioStamp(dir) : null;
+  if (built?.ok) {
+    report.step(STUDIO_LABEL, `built from ${dir}`, built.hash.slice(0, STUDIO_HASH_CHARS));
+    return true;
+  }
+  report.degrade(STUDIO_LABEL, `the studio build failed in ${dir}: ${build.ok ? built.reason : build.detail}`, `cd ${dir} && npm run studio:build`);
+  return false;
+}
+
 // Where the runtime comes from: the package this process runs from, the directory or tarball of `--from`, the registry only when an update forces it.
-function openRuntimeSource(ctx, report, { from, force, version } = {}) {
+async function openRuntimeSource(ctx, report, { from, force, version } = {}) {
   const target = typeof from === "string" && from.trim() ? resolve(from.trim()) : "";
   if (!target) {
     if (force === true) return { ok: true, spec: registrySpec(version), cleanup: () => {} };
@@ -83,7 +139,10 @@ function openRuntimeSource(ctx, report, { from, force, version } = {}) {
     report.degrade(RUNTIME_LABEL, `no directory or tarball at ${target}`, `ls ${target}`);
     return { ok: false, cleanup: () => {} };
   }
-  if (stat.isDirectory()) return packDirectory(ctx, report, target);
+  if (stat.isDirectory()) {
+    if (!(await studioBuildStep(ctx, report, target))) return { ok: false, cleanup: () => {} };
+    return packDirectory(ctx, report, target);
+  }
   return { ok: true, spec: target, cleanup: () => {} };
 }
 
@@ -105,14 +164,14 @@ function publishVersion(ctx, report, { staging, installed, stamp }) {
 }
 
 // Installs the package into a new version directory and swaps `current` onto it, so a process already running keeps executing the tree it loaded from.
-export function setupRuntime(ctx, report, { from, force, version } = {}) {
+export async function setupRuntime(ctx, report, { from, force, version } = {}) {
   const wanted = packageVersion();
   const current = runtimeVersion(ctx.env);
   if (!force && !from && current && current === wanted) {
     report.step(RUNTIME_LABEL, "already present", `v${current} at ${runtimeLocation(ctx.env)}`);
     return runtimeReady(ctx.env);
   }
-  const source = openRuntimeSource(ctx, report, { from, force, version });
+  const source = await openRuntimeSource(ctx, report, { from, force, version });
   if (!source.ok) return false;
   const stamp = versionStamp();
   const staging = stageInstall(ctx.env, stamp);

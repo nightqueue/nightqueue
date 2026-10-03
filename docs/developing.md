@@ -49,6 +49,14 @@ stamp or a stamp of other sources, and checks that the tarball carries
 `studio/dist/index.html` and no studio source. The release workflow builds the studio
 before that check.
 
+The contributor flow is `npm ci` once, then `nq update --from .`: a `--from <dir>`
+install (on `update`, `setup` and `init`) checks the stamp of that directory first,
+builds nothing when `studio/dist` is fresh, and otherwise runs `npm run studio:build`
+there before anything is packed or installed. Without `node_modules/.bin/tsc` and
+`vite` it refuses with `run npm ci there`; a failed or timed-out build refuses with
+the tail of its output. `--force` does not skip the check. Tarballs and the registry
+are installed as they are.
+
 ## Schema steps that rewrite tables
 
 A schema change that only adds (a table, an index, a column with a default) goes in
