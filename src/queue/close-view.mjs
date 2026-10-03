@@ -79,11 +79,18 @@ export function closeStoppedLine(job) {
   return `⛔ close stopped at ${currentCloseStep(job.close)}: ${failedReason(job.close)} - run again with: nightqueue queue close ${jobRef(job.id)}`;
 }
 
+// The `closing: <step>` cell, with the running step's note after an em dash when it has one.
+function closingCell(checklist) {
+  const step = currentCloseStep(checklist);
+  const note = String(parseCloseChecklist(checklist)?.steps?.[step]?.note ?? "").trim();
+  return note ? `closing: ${step} — ${note}` : `closing: ${step}`;
+}
+
 // What SLUG/LAST says about a job's close, or null when the close has nothing to say there.
 export function closeLastCell(job, nowMs = Date.now()) {
   const state = closeState(job, nowMs);
   if (state === "failed") return `⛔ close stopped at ${currentCloseStep(job.close)}: ${failedReason(job.close)}`;
-  if (state === "closing") return `closing: ${currentCloseStep(job.close)}`;
+  if (state === "closing") return closingCell(job.close);
   if (state === "stalled") return `close lease expired at ${leaseIso(job.close_lease_until)} - run again with: nightqueue queue close ${jobRef(job.id)}`;
   return null;
 }

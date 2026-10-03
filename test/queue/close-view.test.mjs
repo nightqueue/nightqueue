@@ -8,6 +8,7 @@ import {
   currentCloseStep,
   queueWorkers,
   closeChecklistLines,
+  closeLastCell,
   closeLines,
   closedLine,
   closeState,
@@ -69,6 +70,16 @@ test("the status label, the current step and the stopped line follow the checkli
   assert.equal(currentCloseStep(JSON.stringify({ steps: {} })), "preflight");
   assert.equal(closeStoppedLine(failed), "⛔ close stopped at merge: merge-without-sha - run again with: nightqueue queue close J-12");
   assert.equal(closeStoppedLine(closeRow({ status: "closed", close: { data: { merged: true } } })), null);
+});
+
+test("a closing row carries the running step's note after an em dash, and the short form without one", () => {
+  const live = { close_status: "closing", close_lease_until: LATER };
+  const note = "waiting for checks on efbebd6: 0/3 done";
+  const withNote = closeRow({ ...live, close: { steps: { preflight: { status: "done" }, conflict: { status: "running", note, at: "t1" } } } });
+  const noNote = closeRow({ ...live, close: { steps: { preflight: { status: "done" }, conflict: { status: "running", note: "  " } } } });
+  assert.equal(closeLastCell(withNote, NOW), `closing: conflict — ${note}`);
+  assert.equal(closeLastCell(noNote, NOW), "closing: conflict");
+  assert.equal(closeLastCell(closeRow(live), NOW), "closing: preflight");
 });
 
 test("the checklist block prints every step in order, with the ones not reached marked", () => {
