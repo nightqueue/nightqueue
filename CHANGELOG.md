@@ -28,6 +28,18 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   then refuses with the message above; a second `nightqueue update` (or `nightqueue setup`)
   migrates the database.
 
+### Added
+
+- **`nightqueue studio`, the local web cockpit.** It serves the built page (`studio/dist`,
+  shipped in the package), the same stateless `/mcp` endpoint as `mcp --http`, a small `/api`
+  (info, projects, watch/window runner start, queue pause/resume, raw job log) and `/events`
+  (the diff of `queue_status` every second, and the narrated current attempt of one job) on
+  127.0.0.1 only. Every request needs the per-start token: the printed `?t=` URL trades it
+  once for an HttpOnly per-port cookie, `Authorization: Bearer` keeps working, and a write
+  authorised by the cookie must also carry the studio's exact Origin. `--api-only` with
+  `npm run studio:dev` serves the page through Vite instead; `npm run studio:build` builds
+  and stamps the dist, and `release:check` refuses a missing or stale one.
+
 ### Removed
 
 - The singular `runner` key of `nightqueue queue status --json` and of the MCP `queue_status`

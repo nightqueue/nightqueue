@@ -23,6 +23,7 @@ import * as runCommand from "./run.mjs";
 import * as sandbox from "./sandbox.mjs";
 import { borrowsParentLock } from "./schema-migrate.mjs";
 import * as setup from "./setup.mjs";
+import * as studio from "./studio.mjs";
 import * as update from "./update.mjs";
 import * as verify from "./verify.mjs";
 import * as version from "./version.mjs";
@@ -37,6 +38,7 @@ const COMMANDS = new Map([
   ["project", project.run],
   ["connection", connection.run],
   ["mcp", mcp.run],
+  ["studio", studio.run],
   ["hook", hook.run],
   ["reflect", reflect.run],
   ["embed", embed.run],
@@ -59,7 +61,7 @@ const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "issues", "
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
-const SELF_LOCKING_COMMANDS = new Set(["mcp", "hook", "reflect", "embed", "memory", "queue", "run"]);
+const SELF_LOCKING_COMMANDS = new Set(["mcp", "studio", "hook", "reflect", "embed", "memory", "queue", "run"]);
 
 const HOME_WRITE_COMMANDS = new Set(["init", "setup", "update"]);
 
@@ -100,6 +102,7 @@ commands:
   connection remove <name>                  unbind a connection from every org and delete its secret
   mcp                                       start the stdio MCP server that exposes the thirty-one memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
+  studio [--port <n>] [--api-only] [--no-open]  serve nightqueue studio, the local web cockpit, on 127.0.0.1
   hook <name>                               run a hook (session-start, prompt-context, reflect, agent-foreground, merger-guard), reading the event JSON from stdin
   reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground
   embed install                             install the embedding library into the home and download its weights

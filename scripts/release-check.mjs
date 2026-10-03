@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stepLine } from "../src/cli/report.mjs";
 import { npmCommandLine, parsePackOutput, runNpm } from "../src/host/npm.mjs";
+import { checkStudioStamp } from "./studio-stamp.mjs";
 import { unreleasedContent, versionMismatches } from "./versions.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -70,6 +71,21 @@ function checkVersions() {
   return manifest;
 }
 
+// Checks that the built studio exists and was built from the studio sources on disk, and returns the prefix of their hash.
+function checkStudioDist() {
+  const result = checkStudioStamp(ROOT);
+  if (!result.ok) throw new Error(result.reason);
+  return result.hash.slice(0, 12);
+}
+
+// Checks that the tarball ships the built studio and none of its sources.
+function checkStudioFiles(files) {
+  const paths = Array.isArray(files) ? files.map((file) => file?.path) : [];
+  if (!paths.includes("studio/dist/index.html")) throw new Error("npm would publish no studio/dist/index.html; run `npm run studio:build`");
+  const sources = paths.filter((path) => typeof path === "string" && path.startsWith("studio/") && !path.startsWith("studio/dist/"));
+  if (sources.length) throw new Error(`npm would publish studio sources:\n${sources.join("\n")}`);
+}
+
 // Checks that npm can still build the tarball without correcting the manifest, and returns its name and its unpacked size.
 // A "was invalid and removed" warning means npm publishes a manifest that differs from the one in the repository -
 // for `bin` that publishes a package with no command at all - so any such warning fails the check.
@@ -78,9 +94,10 @@ function checkPack() {
   if (!result.ok) throw new Error(`${result.stderr.trim() || `exit ${result.status}`}\nrun \`${npmCommandLine(PACK_ARGS)}\` by hand`);
   const corrected = result.stderr.split("\n").filter((line) => /auto-corrected|was invalid and removed/i.test(line));
   if (corrected.length) throw new Error(`npm would correct package.json at publish time:\n${corrected.join("\n")}\nrun \`npm pkg fix\`, review the diff and commit it`);
-  const { name, filename, unpackedSize } = packedTarball(result.stdout);
+  const { name, filename, unpackedSize, files } = packedTarball(result.stdout);
   const declared = manifestName(readRootFile("package.json"));
   if (name !== declared) throw new Error(`npm would publish ${name}, package.json declares ${declared}`);
+  checkStudioFiles(files);
   return `${name}, ${filename}, ${unpackedSize} bytes unpacked`;
 }
 
@@ -89,6 +106,7 @@ function main() {
   try {
     process.stdout.write(`${stepLine("tree", "ok", checkTree())}\n`);
     process.stdout.write(`${stepLine("versions", "ok", checkVersions())}\n`);
+    process.stdout.write(`${stepLine("studio", "ok", checkStudioDist())}\n`);
     process.stdout.write(`${stepLine("pack", "ok", checkPack())}\n`);
   } catch (err) {
     process.stderr.write(`release:check failed\n${err?.message ?? String(err)}\n`);

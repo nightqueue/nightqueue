@@ -29,7 +29,13 @@ const PHASES = new Map([
   ["verifier", 6],
 ]);
 
-const GLYPHS = {
+const PHASE_MARKERS = [
+  [/nightqueue run start\b/, 0],
+  [/nightqueue run publish\b/, 7],
+  [/nightqueue run report\b/, 8],
+];
+
+export const GLYPHS = {
   ratePause: "⏸",
   rateResume: "▶",
   attempt: "═",
@@ -156,15 +162,36 @@ function elapsedOf(state) {
   return elapsedBetween(state.anchorMs, state.clockMs);
 }
 
-// One narration line, already carrying its relative time and the lane it belongs to.
-function narrationEvent(state, kind, text, { indent = false, lane = null, dim = "" } = {}) {
-  return { kind, text, indent, lane, dim, elapsedMs: elapsedOf(state) };
+// One narration line, already carrying its relative time, the lane it belongs to and the structured fields a renderer reads instead of the text.
+function narrationEvent(state, kind, text, { indent = false, lane = null, dim = "", fields = {} } = {}) {
+  return { kind, text, indent, lane, dim, elapsedMs: elapsedOf(state), ...fields };
 }
 
 // One narration line of a lane child, labelled only when more than one lane is open at that moment.
-function laneLine(state, kind, text, lane, { dim = "" } = {}) {
-  if (!lane) return narrationEvent(state, kind, text, { dim });
-  return narrationEvent(state, kind, text, { indent: true, lane: state.lanes.size > 1 ? lane.name : null, dim });
+function laneLine(state, kind, text, lane, { dim = "", fields = {} } = {}) {
+  if (!lane) return narrationEvent(state, kind, text, { dim, fields });
+  return narrationEvent(state, kind, text, { indent: true, lane: state.lanes.size > 1 ? lane.name : null, dim, fields });
+}
+
+// The structured fields of a lane event: the agent, its pipeline phase and the model, each null when unknown.
+function laneFields(lane) {
+  const agent = lane?.name ?? null;
+  return { agent, phase: PHASES.get(agent) ?? null, model: lane?.model ?? null };
+}
+
+// The phase an orchestrator Bash command marks (`nightqueue run start|publish|report`), or null.
+function markedPhase(command) {
+  const marker = PHASE_MARKERS.find(([pattern]) => pattern.test(String(command ?? "")));
+  return marker ? marker[1] : null;
+}
+
+// The structured fields of a tool call: its label, the file an edit touched and the phase an orchestrator command marks.
+function toolFields(name, input, lane) {
+  const fields = { tool: toolLabel(name) };
+  if (EDIT_TOOLS.has(name) && typeof input?.file_path === "string" && input.file_path.trim()) fields.file = basename(input.file_path.trim());
+  const phase = !lane && name === "Bash" ? markedPhase(input?.command) : null;
+  if (phase !== null) fields.phase = phase;
+  return fields;
 }
 
 // Moves the clock forward, anchoring the first timestamp when no attempt marker anchored it first.
@@ -290,10 +317,10 @@ function narrateText(state, raw, lane) {
 
 // Opens a lane for a subagent, the only event that indents everything reported under it.
 function openLane(state, { toolUseId, subagentType, description, model = null }) {
-  const lane = { name: laneName(subagentType), label: laneLabel(subagentType, model), openMs: state.clockMs, tools: 0, edits: 0 };
+  const lane = { name: laneName(subagentType), label: laneLabel(subagentType, model), model: clip(model, MODEL_LIMIT) || null, openMs: state.clockMs, tools: 0, edits: 0 };
   if (toolUseId) state.lanes.set(toolUseId, lane);
   const detail = clip(description, DESCRIPTION_LIMIT);
-  return narrationEvent(state, "laneOpen", detail ? `${lane.label} — ${detail}` : lane.label);
+  return narrationEvent(state, "laneOpen", detail ? `${lane.label} — ${detail}` : lane.label, { fields: laneFields(lane) });
 }
 
 // A tool call: the one that carries a `subagent_type` opens a lane, whatever the tool happens to be named.
@@ -310,7 +337,7 @@ function narrateToolUse(state, block, lane) {
     if (EDIT_TOOLS.has(name)) lane.edits += 1;
   }
   const narration = toolNarration(name, block.input);
-  return [laneLine(state, "tool", narration.text, lane, { dim: narration.dim })];
+  return [laneLine(state, "tool", narration.text, lane, { dim: narration.dim, fields: toolFields(name, block.input, lane) })];
 }
 
 // First readable text of a tool result, which the CLI writes either as a string or as blocks.
@@ -325,7 +352,7 @@ function narrateToolResult(state, block, lane) {
   if (block?.is_error !== true) return [];
   const name = state.tools.get(block.tool_use_id) ?? "tool";
   const detail = clip(firstLine(resultContentText(block.content)), TEXT_LIMIT);
-  return [laneLine(state, "toolError", detail ? `${name} failed: ${detail}` : `${name} failed`, lane)];
+  return [laneLine(state, "toolError", detail ? `${name} failed: ${detail}` : `${name} failed`, lane, { fields: { tool: name } })];
 }
 
 // One block of a message, which is a text, a tool call, a tool result or something the narration ignores.
@@ -352,9 +379,14 @@ function narrateMessage(state, event) {
   return out;
 }
 
+// How long a finished lane ran: the duration it reported, else the clock since it opened, null when neither is known.
+function laneDurationMs(state, lane, usage) {
+  return Number.isFinite(usage?.duration_ms) ? usage.duration_ms : elapsedBetween(lane?.openMs, state.clockMs);
+}
+
 // What is known about a finished lane; anything the narrator did not observe is reported as unknown.
 function laneSummary(state, lane, usage) {
-  const durationMs = Number.isFinite(usage?.duration_ms) ? usage.duration_ms : elapsedBetween(lane?.openMs, state.clockMs);
+  const durationMs = laneDurationMs(state, lane, usage);
   const reported = Number.isFinite(usage?.tool_uses) ? usage.tool_uses : null;
   const tools = reported ?? lane?.tools ?? null;
   const observed = lane !== null && (lane.tools > 0 || (reported ?? 0) === 0);
@@ -368,10 +400,11 @@ function closeLane(state, event) {
   const id = typeof event.tool_use_id === "string" ? event.tool_use_id : "";
   const lane = state.lanes.get(id) ?? null;
   state.lanes.delete(id);
-  if (id) state.closedLanes.set(id, lane ?? { name: "subagent", label: "subagent", openMs: null, tools: 0, edits: 0 });
+  if (id) state.closedLanes.set(id, lane ?? { name: "subagent", label: "subagent", model: null, openMs: null, tools: 0, edits: 0 });
   const status = typeof event.status === "string" && event.status ? event.status : "finished";
   const label = lane?.label ?? "subagent";
-  return [narrationEvent(state, "laneClose", `${label} ${status} (${laneSummary(state, lane, event.usage)})`)];
+  const fields = { ...laneFields(lane), durationMs: laneDurationMs(state, lane, event.usage) };
+  return [narrationEvent(state, "laneClose", `${label} ${status} (${laneSummary(state, lane, event.usage)})`, { fields })];
 }
 
 // A `system` event: only the two that open and close a subagent lane say anything to the operator, and a background Bash task is no subagent.
@@ -435,7 +468,8 @@ function narrateLine(state, rawLine) {
 function finishNarration(state, { running = false } = {}) {
   const out = [];
   for (const lane of state.lanes.values()) {
-    out.push(running ? narrationEvent(state, "laneOpen", `${lane.label} still running`) : narrationEvent(state, "laneOrphan", `${lane.label} never reported back`));
+    const options = { fields: laneFields(lane) };
+    out.push(running ? narrationEvent(state, "laneOpen", `${lane.label} still running`, options) : narrationEvent(state, "laneOrphan", `${lane.label} never reported back`, options));
   }
   state.lanes.clear();
   return [...out, ...flushSkipped(state)];
@@ -486,11 +520,6 @@ export function lastNarratedLine(text) {
 }
 
 const ORCHESTRATOR = "orchestrator";
-const PHASE_MARKERS = [
-  [/nightqueue run start\b/, 0],
-  [/nightqueue run publish\b/, 7],
-  [/nightqueue run report\b/, 8],
-];
 
 // A fresh reading of one attempt of the log: no lane open, the orchestrator before its first marker.
 function freshLiveState(attempt, clockMs) {
@@ -526,8 +555,8 @@ function liveRecord(state, lane, kind, text) {
 
 // Moves the orchestrator to the phase a `nightqueue run start|publish|report` command marks.
 function livePhaseMarker(state, command) {
-  const marker = PHASE_MARKERS.find(([pattern]) => pattern.test(String(command ?? "")));
-  if (marker) state.orchPhase = marker[1];
+  const phase = markedPhase(command);
+  if (phase !== null) state.orchPhase = phase;
 }
 
 // One block of a message in the live reading: a text or a tool call; a subagent launch opens a lane.

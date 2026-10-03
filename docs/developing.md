@@ -31,6 +31,24 @@ Publishing itself is a pushed tag, never a local `npm publish`:
 [RELEASING.md](RELEASING.md) has the four-step flow and the one-time npmjs.com setup that
 the release workflow depends on.
 
+## The studio
+
+The studio's page is a Vite/React/TypeScript app under `studio/`; its build,
+`studio/dist`, is git-ignored and shipped in the package. Its toolchain is
+devDependencies only: the runtime dependencies stay the MCP SDK and zod.
+
+```sh
+npm run studio:dev     # the API-only studio on 127.0.0.1:4747 plus Vite with HMR on http://127.0.0.1:5173
+npm run studio:build   # typecheck, build studio/dist and stamp it with the hash of the studio sources
+```
+
+`studio:build` writes `studio/dist/.stamp.json` with a sha256 of `studio/index.html`,
+`studio/src/**`, the Vite and TypeScript configs and the installed devDependency
+versions. `npm run release:check` recomputes it and refuses a missing dist, a missing
+stamp or a stamp of other sources, and checks that the tarball carries
+`studio/dist/index.html` and no studio source. The release workflow builds the studio
+before that check.
+
 ## Schema steps that rewrite tables
 
 A schema change that only adds (a table, an index, a column with a default) goes in

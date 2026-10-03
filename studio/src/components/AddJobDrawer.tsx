@@ -1,0 +1,157 @@
+import { type ReactNode, useState } from "react";
+import { type AddJobForm, type AddSource, addFormProblem, buildAddArgs, DEFAULT_PRIORITY, EMPTY_ADD_FORM, PRIORITIES, queueJob, TIERS, type Tier } from "../lib/addJob";
+import { useProjects } from "../lib/api";
+import { runnersOnlineLabel } from "../lib/queue";
+import type { Project } from "../lib/types";
+import { useEscape } from "../lib/useEscape";
+import { useSubmit } from "../lib/useSubmit";
+import { IssuePicker } from "./IssuePicker";
+import { Button, FIELD_CLASS, Segmented } from "./ui";
+
+interface AddJobDrawerProps {
+  runnersOnline: number;
+  onClose: () => void;
+}
+
+type SetField = <K extends keyof AddJobForm>(key: K, value: AddJobForm[K]) => void;
+
+const INPUT_CLASS = `${FIELD_CLASS} min-h-9 w-full px-2.5`;
+
+const SOURCES = [
+  { value: "issue", label: "From issue" },
+  { value: "free", label: "Free brief" },
+] as const;
+
+const TIER_OPTIONS = TIERS.map((tier) => ({ value: tier, label: tier }));
+
+// A labelled field of the drawer, with an optional dim aside after the label.
+function Field({ id, label, aside, children }: { id?: string; label: string; aside?: string; children: ReactNode }) {
+  return (
+    <div>
+      <label htmlFor={id} className="mb-1 block text-sm text-muted">
+        {label} {aside && <span className="text-dim">{aside}</span>}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+// The project select of the drawer, with its loading and failed states.
+function ProjectField({ projects, value, onChange }: { projects: ReturnType<typeof useProjects>; value: string; onChange: (name: string) => void }) {
+  if (projects.isPending) return <div className="h-9 animate-pulse rounded-md bg-row-line" aria-label="loading projects" />;
+  if (projects.isError) return <p className="m-0 text-sm text-red">The projects cannot be read; reload the page.</p>;
+  if (projects.data.length === 0) return <p className="m-0 text-sm text-muted">No project is registered in this home.</p>;
+  return (
+    <select id="add-project" className={INPUT_CLASS} value={value} onChange={(event) => onChange(event.target.value)}>
+      {projects.data.map((project: Project) => (
+        <option key={project.id} value={project.name}>
+          {project.path ? `${project.name} · ${project.path}` : project.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// The brief part of the form: the issue picker and the operator note, or the free brief.
+function BriefFields({ form, set }: { form: AddJobForm; set: SetField }) {
+  if (form.source === "free") {
+    return (
+      <Field id="add-prompt" label="Brief" aside="(the whole request, as prose)">
+        <textarea id="add-prompt" rows={8} className={`${INPUT_CLASS} resize-y py-2`} value={form.prompt} onChange={(event) => set("prompt", event.target.value)} />
+      </Field>
+    );
+  }
+  return (
+    <>
+      <Field id="add-issue" label="Issue">
+        <IssuePicker project={form.project} selected={form.issueRef} onSelect={(ref) => set("issueRef", ref)} />
+      </Field>
+      <Field id="add-note" label="Operator note" aside="(one-off, after the item block)">
+        <textarea id="add-note" rows={3} className={`${INPUT_CLASS} resize-y py-2`} value={form.note} onChange={(event) => set("note", event.target.value)} />
+      </Field>
+    </>
+  );
+}
+
+// Tier, priority and prior run dir, shared by both sources.
+function RunFields({ form, set }: { form: AddJobForm; set: SetField }) {
+  return (
+    <>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Tier">
+          <Segmented<Tier> label="tier" options={TIER_OPTIONS} value={form.tier} onChange={(tier) => set("tier", tier)} />
+        </Field>
+        <Field id="add-priority" label="Priority">
+          <select id="add-priority" className={INPUT_CLASS} value={form.priority} onChange={(event) => set("priority", Number(event.target.value))}>
+            {PRIORITIES.map((priority) => (
+              <option key={priority} value={priority}>
+                {priority === 1 ? "1 · urgent" : priority === DEFAULT_PRIORITY ? `${priority} · default` : priority}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <Field id="add-run-dir" label="Prior run dir" aside="(optional · becomes ## PRIOR RUN)">
+        <input id="add-run-dir" className={INPUT_CLASS} placeholder="~/.nightqueue/runs/<project>/<slug>/" value={form.runDir} onChange={(event) => set("runDir", event.target.value)} />
+      </Field>
+    </>
+  );
+}
+
+// The mono footer: the exact `queue_add` call the form sends, and what the runners will do with it.
+function CallPreview({ args, runnersOnline, problem }: { args: Record<string, unknown>; runnersOnline: number; problem: string | null }) {
+  return (
+    <div className="flex flex-col gap-1 rounded-md border border-button-line bg-header px-3 py-2.5 text-sm text-muted">
+      <div className="max-h-24 overflow-auto font-mono break-all">queue_add {JSON.stringify(args)}</div>
+      <div>{runnersOnline === 0 ? "0 runners online — the job will wait. Start one from the banner after queueing." : `${runnersOnlineLabel(runnersOnline)} — one claims the job when it frees.`}</div>
+      {problem && <div className="text-amber">To queue: {problem}.</div>}
+    </div>
+  );
+}
+
+// The Add job drawer: from an issue or a free brief, with tier, priority, note and run dir; queues with `queue_add`, optionally starting a runner.
+export function AddJobDrawer({ runnersOnline, onClose }: AddJobDrawerProps) {
+  const projects = useProjects();
+  const [draft, setDraft] = useState<AddJobForm>(EMPTY_ADD_FORM);
+  const form: AddJobForm = { ...draft, project: draft.project || projects.data?.[0]?.name || "" };
+  const set: SetField = (key, value) => setDraft((current) => ({ ...current, project: form.project, [key]: value }));
+  const changeProject = (project: string) => setDraft((current) => ({ ...current, project, issueRef: null }));
+  const args = buildAddArgs(form);
+  const problem = addFormProblem(form);
+  const submit = useSubmit(queueJob, onClose);
+  useEscape(onClose);
+  return (
+    <div className="fixed inset-0 z-40">
+      <div className="absolute inset-0 bg-[rgba(5,7,10,.55)]" onMouseDown={onClose} aria-hidden="true" />
+      <aside aria-label="Add job" className="absolute top-0 right-0 bottom-0 flex w-full flex-col border-l border-line bg-surface text-[14px] leading-[1.45] text-fg shadow-[-20px_0_60px_rgba(0,0,0,.5)] sm:w-[480px]">
+        <div className="flex flex-wrap items-center gap-3 border-b border-line px-5 py-4">
+          <div className="text-base font-semibold">Add job</div>
+          <div className="ml-auto">
+            <Segmented<AddSource> label="source" options={SOURCES} value={form.source} onChange={(source) => set("source", source)} />
+          </div>
+        </div>
+        <div className="flex grow flex-col gap-4 overflow-auto p-5">
+          <Field id="add-project" label="Project">
+            <ProjectField projects={projects} value={form.project} onChange={changeProject} />
+          </Field>
+          <BriefFields form={form} set={set} />
+          <RunFields form={form} set={set} />
+          <CallPreview args={args} runnersOnline={runnersOnline} problem={problem} />
+        </div>
+        <div className="flex flex-wrap gap-2 border-t border-line px-5 py-4">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <div className="ml-auto flex flex-wrap gap-2">
+            <Button disabled={problem !== null || submit.isPending} onClick={() => submit.mutate({ args, start: false })}>
+              Queue
+            </Button>
+            <Button variant="primary" disabled={problem !== null || submit.isPending} onClick={() => submit.mutate({ args, start: true })}>
+              {submit.isPending ? "Queueing…" : "Queue and start runner"}
+            </Button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  );
+}

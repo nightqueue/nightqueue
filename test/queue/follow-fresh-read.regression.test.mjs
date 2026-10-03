@@ -17,6 +17,7 @@ import { ensureProject, makeHome, makeProject, mergedChecklist } from "../../tes
 
 const QUEUE_SRC = fileURLToPath(new URL("../../src/cli/queue.mjs", import.meta.url));
 const MCP_SRC = fileURLToPath(new URL("../../src/mcp/tools.mjs", import.meta.url));
+const NARRATED_SRC = fileURLToPath(new URL("../../src/queue/narrated-tail.mjs", import.meta.url));
 const PR_URL = "https://github.com/acme/api/pull/7";
 
 // Runs `queue status --follow --until-idle` in this process with an injected sleep, exactly the entry point an operator watches.
@@ -172,8 +173,9 @@ function queueStatusToolSource() {
 test("every long-lived reader takes its store from withReadOnlyStore, never from the process-wide cached one", () => {
   const cases = [
     ["followStatus", functionSource(QUEUE_SRC, "async function followStatus")],
-    ["jobStatusReader", functionSource(QUEUE_SRC, "function jobStatusReader")],
+    ["jobStatusReader", functionSource(NARRATED_SRC, "function jobStatusReader")],
     ["the MCP queue_status handler", queueStatusToolSource()],
+    ["readQueueStatus", functionSource(MCP_SRC, "async function readQueueStatus")],
   ];
   for (const [name, source] of cases) {
     assert.match(

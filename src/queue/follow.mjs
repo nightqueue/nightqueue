@@ -54,11 +54,18 @@ function lastMarkerOffset(region, from) {
   return from === 0 && region.subarray(0, ATTEMPT_START_BYTES.length).equals(ATTEMPT_START_BYTES) ? 0 : -1;
 }
 
-// The log from its last `=== attempt N @ ... ===` line to the end, read backwards and capped at `maxBytes`; a cap hit before the marker answers what was read, truncated. Null when nothing could be read.
+// Byte offset where the text of a capped read starts once its partial first line is dropped.
+function afterFirstLineOffset(buffer, start) {
+  const cut = buffer.indexOf(0x0a);
+  return cut === -1 ? start + buffer.length : start + cut + 1;
+}
+
+// The log from its last `=== attempt N @ ... ===` line to the end, read backwards and capped at `maxBytes`; a cap hit before the marker answers what was read, truncated.
+// `offset` is the byte position in the file where the returned text starts. Null when nothing could be read.
 export function readAttemptTail(path, { maxBytes = ATTEMPT_MAX_BYTES } = {}) {
   try {
     let end = statSync(path)?.size;
-    if (!Number.isFinite(end) || end <= 0) return { text: "", truncated: false };
+    if (!Number.isFinite(end) || end <= 0) return { text: "", truncated: false, offset: 0 };
     const chunks = [];
     let read = 0;
     while (end > 0 && read < maxBytes) {
@@ -67,13 +74,14 @@ export function readAttemptTail(path, { maxBytes = ATTEMPT_MAX_BYTES } = {}) {
       const chunk = readChunkSync(path, from, length);
       const seam = chunks.length ? chunks[0].subarray(0, ATTEMPT_LINE_BYTES.length) : Buffer.alloc(0);
       const marker = lastMarkerOffset(Buffer.concat([chunk, seam]), from);
-      if (marker >= 0) return { text: Buffer.concat([chunk.subarray(marker), ...chunks]).toString("utf8"), truncated: false };
+      if (marker >= 0) return { text: Buffer.concat([chunk.subarray(marker), ...chunks]).toString("utf8"), truncated: false, offset: from + marker };
       chunks.unshift(chunk);
       read += length;
       end = from;
     }
-    const text = Buffer.concat(chunks).toString("utf8");
-    return end > 0 ? { text: afterFirstLine(text), truncated: true } : { text, truncated: false };
+    const buffer = Buffer.concat(chunks);
+    const text = buffer.toString("utf8");
+    return end > 0 ? { text: afterFirstLine(text), truncated: true, offset: afterFirstLineOffset(buffer, end) } : { text, truncated: false, offset: 0 };
   } catch {
     return null;
   }

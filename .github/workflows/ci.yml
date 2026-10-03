@@ -24,6 +24,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - run: npm run studio:build
+        if: matrix.node == '22'
       - run: npm test
 
   test-worktree:

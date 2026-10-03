@@ -71,6 +71,7 @@ test("--help lists every command and exits 0", () => {
     "project",
     "connection",
     "mcp",
+    "studio",
     "hook",
     "reflect",
     "embed",
@@ -84,6 +85,16 @@ test("--help lists every command and exits 0", () => {
     assert.match(result.stdout, new RegExp(`^  ${command}`, "m"));
   }
   assert.equal(runCli(tmpdir(), []).status, 0);
+});
+
+test("studio refuses a dev origin outside the API-only mode, and a bad port, before serving anything", (t) => {
+  const home = join(makeDir(t, "studio-flags"), "home");
+  const devOrigin = runCli(home, ["studio", "--dev-origin", "http://127.0.0.1:5173", "--no-open"]);
+  assert.equal(devOrigin.status, 1);
+  assert.match(devOrigin.stderr, /`--dev-origin` only applies with `--api-only`/);
+  const port = runCli(home, ["studio", "--port", "nope", "--api-only"]);
+  assert.equal(port.status, 1);
+  assert.match(port.stderr, /`--port` expects an integer/);
 });
 
 test("--version and version print the package version and exit 0", () => {

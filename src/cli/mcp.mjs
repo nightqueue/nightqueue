@@ -7,7 +7,7 @@ import { checkArgs, parseCommand } from "./args.mjs";
 const USAGE = "nightqueue mcp [--http] [--port <n>] [--token <t>]";
 
 // The port the http transport binds, where `0` asks the operating system for a free one.
-function requirePort(raw) {
+export function requirePort(raw) {
   if (raw === undefined) return DEFAULT_HTTP_PORT;
   if (!/^\d+$/.test(raw) || Number(raw) > 65535) {
     throw new UserError(`\`--port\` expects an integer between 0 and 65535, got \`${raw}\``);
