@@ -20,6 +20,12 @@ const POC_FILE_RE = /\.(poc|fuzz|regression)\.(test|spec)\.[A-Za-z0-9]+$/;
 const IGNORED_DIRS = new Set(["node_modules", "dist", "build", "target", "vendor", "coverage"]);
 const POC_WALK_DEPTH = 4;
 
+// The package manager that owns a lockfile of that file name (any case), or null when the name is no lockfile.
+export function managerOfLockfile(fileName) {
+  const lower = String(fileName).toLowerCase();
+  return LOCKFILES.find(([file]) => file.toLowerCase() === lower)?.[1] ?? null;
+}
+
 // Package manager the lockfiles of a directory name; a Node project with no lockfile is an npm project.
 export function detectPackageManager(dir) {
   for (const [file, manager] of LOCKFILES) {
