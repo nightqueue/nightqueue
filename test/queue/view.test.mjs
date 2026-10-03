@@ -9,7 +9,8 @@ import { createPrStateCache } from "../../src/queue/pr-state.mjs";
 import { pruneDeadRunners, writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "../../src/queue/runner.mjs";
 import { closedLine } from "../../src/queue/close-view.mjs";
-import { closeSuggestion, failedCoreSection, jobDetailView, liveBlock, prUrlsOf, queueView, truncationSuggestion } from "../../src/queue/view.mjs";
+import { closeSuggestion, failedCoreSection, jobDetailView, liveBlock, prUrlsOf, queueView, truncationSuggestion, jobTitle } from "../../src/queue/view.mjs";
+import { linkIssueJob, saveIssue } from "../../src/memory/issues.mjs";
 import { KEPT_PREFIX } from "../../src/queue/worktree.mjs";
 import { withReadOnlyStore } from "../../src/store/open.mjs";
 import { ensureProject, makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
@@ -366,4 +367,34 @@ test("readAttemptTail above maxBytes answers truncated, and the live block of it
   assert.equal(live.model, null);
   assert.equal(live.intent, null);
   assert.equal(live.last.kind, "text");
+});
+
+test("jobTitle derives the issue title, else the first meaningful prompt line clipped at 120 with the ellipsis inside", () => {
+  assert.equal(jobTitle({ prompt: "whatever" }, { title: "Fix the worker" }), "Fix the worker");
+  assert.equal(jobTitle({ prompt: "## Brief\n\nFix the parser\nmore" }, null), "Fix the parser");
+  assert.equal(jobTitle({ prompt: "# Task\n\n## Fix the lexer" }, null), "Fix the lexer");
+  assert.equal(jobTitle({ prompt: "\n\nplain first line\nsecond" }, null), "plain first line");
+  const clipped = jobTitle({ prompt: "x".repeat(300) }, null);
+  assert.equal(Array.from(clipped).length, 120);
+  assert.ok(clipped.endsWith("…"));
+  assert.equal(jobTitle({ prompt: "x".repeat(120) }, null), "x".repeat(120));
+  assert.equal(jobTitle({ prompt: "" }, null), null);
+  assert.equal(jobTitle({ prompt: "## Brief\n\n" }, null), null);
+});
+
+test("queue_status jobs carry the title of their issue through one join, and of their prompt otherwise", async (t) => {
+  const env = makeHome(t, "view-title-join");
+  makeProject(t, env, "alpha");
+  const projectId = ensureProject(env, "alpha");
+  const fromIssue = addJob({ projectId, prompt: "## Brief\n\nprompt words" }, env).id;
+  const free = addJob({ projectId, prompt: "## Brief\n\nfree prompt words" }, env).id;
+  const item = saveIssue({ type: "bug", projectId, title: "Readable issue title" }, env);
+  assert.equal(linkIssueJob(item.id, fromIssue, env), true);
+  await withReadOnlyStore(env, async (store) => {
+    const view = await queueView(store, { env });
+    const titles = Object.fromEntries(view.jobs.map((job) => [job.id, job.title]));
+    assert.deepEqual(titles, { [fromIssue]: "Readable issue title", [free]: "free prompt words" });
+    assert.equal((await jobDetailView(store, fromIssue, { env })).title, "Readable issue title");
+    assert.equal((await jobDetailView(store, free, { env })).title, "free prompt words");
+  });
 });

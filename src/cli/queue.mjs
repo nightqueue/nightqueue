@@ -458,7 +458,7 @@ const PR_PRIME_DEADLINE_MS = 5000;
 const DEFAULT_WIDTH = 120;
 const MIN_LAST_WIDTH = 20;
 
-// Fixed columns of the table of `queue status`, in the order of the cockpit; SLUG/LAST takes whatever width is left and PR closes the row.
+// Fixed columns of the table of `queue status`, in the order of the cockpit; TITLE/LAST takes whatever width is left and PR closes the row.
 const COLUMNS = [
   { key: "id", title: "ID", width: 6 },
   { key: "status", title: "STATUS", width: 13 },
@@ -500,7 +500,7 @@ function terminalWidth(ctx) {
   return Number.isInteger(columns) && columns > 40 ? columns : DEFAULT_WIDTH;
 }
 
-// Width left for SLUG/LAST once the fixed columns and PR took theirs; never below the minimum, so a narrow terminal still shows something.
+// Width left for TITLE/LAST once the fixed columns and PR took theirs; never below the minimum, so a narrow terminal still shows something.
 function lastWidth(ctx, pr, columns) {
   const fixed = columns.reduce((total, column) => total + column.width, 0) + pr + 1;
   return Math.max(MIN_LAST_WIDTH, terminalWidth(ctx) - fixed);
@@ -598,16 +598,20 @@ function blockedOf(job) {
   return { code, message: blockedMessage(job, code) };
 }
 
-// What SLUG/LAST says about a job: what it is doing while it runs, why the preflight stopped it, why it stopped at the
-// gate, which reset it waits for when a rate limit parked it, its slug otherwise.
-function lastCell(job) {
-  if (job.status === "running") return liveCell(job.live);
+// Why a job that is not running stands where it does (close note, preflight block, gate notice, parked reset), or null.
+function stoppedReason(job) {
   const close = closeLastCell(job);
   if (close) return close;
   const blocked = blockedOf(job);
   if (blocked) return blocked.message ? `⛔ ${blocked.code}: ${blocked.message}` : `⛔ ${blocked.code}`;
-  if (job.status === "gate" || job.status === "failed") return firstNoticeLine(job) ?? job.slug ?? "-";
-  return parkedJobLabel(job) ?? job.slug ?? "-";
+  if (job.status === "gate" || job.status === "failed") return firstNoticeLine(job);
+  return parkedJobLabel(job);
+}
+
+// What TITLE/LAST says about a job: the live view while it runs, otherwise its title followed by the reason above.
+function lastCell(job) {
+  if (job.status === "running") return liveCell(job.live);
+  return [job.title, stoppedReason(job)].filter(Boolean).join(" — ") || "-";
 }
 
 // Cells of one row of the table, before any cut or paint.
@@ -622,7 +626,7 @@ function rowCells(job, nowMs) {
   };
 }
 
-// One row of the table: fixed columns padded to their width, SLUG/LAST cut to what is left, the status painted on a terminal.
+// One row of the table: fixed columns padded to their width, TITLE/LAST cut to what is left, the status painted on a terminal.
 function formatRow(job, { nowMs, width, color, columns }) {
   const cells = rowCells(job, nowMs);
   const fixed = columns.map((column) => {
@@ -635,7 +639,7 @@ function formatRow(job, { nowMs, width, color, columns }) {
 
 // Header of the table and the rule under it, dimmed on a terminal.
 function formatHeader({ width, color, columns }) {
-  const titles = `${columns.map((column) => column.title.padEnd(column.width)).join("")}${"SLUG/LAST".padEnd(width)}PR`;
+  const titles = `${columns.map((column) => column.title.padEnd(column.width)).join("")}${"TITLE/LAST".padEnd(width)}PR`;
   return [paint(titles, "2", color), paint("─".repeat(titles.length), "2", color)];
 }
 // The whole table: header, one row per job, nothing else.

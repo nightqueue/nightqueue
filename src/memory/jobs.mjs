@@ -1119,9 +1119,15 @@ function withProjectFacts(db, row) {
   return row;
 }
 
-// Returns the raw row of a job with its project facts, or null.
+// The job columns plus `issue_title`, the title of the issue the job was queued from (its own item, or an org item through its project row), read in the same statement.
+const JOB_WITH_ISSUE_TITLE = `SELECT jobs.*, COALESCE(
+    (SELECT i.title FROM issues AS i WHERE i.job_id = jobs.id ORDER BY i.id DESC LIMIT 1),
+    (SELECT r.title FROM issue_projects AS p JOIN issues AS r ON r.id = p.item_id WHERE p.job_id = jobs.id ORDER BY p.id DESC LIMIT 1)
+  ) AS issue_title FROM jobs`;
+
+// Returns the raw row of a job with its project facts and issue title, or null.
 export function getJob(id, env = process.env, db = openDb(env)) {
-  return withProjectFacts(db, db.prepare("SELECT * FROM jobs WHERE id = ?").get(requireId(id)) ?? null);
+  return withProjectFacts(db, db.prepare(`${JOB_WITH_ISSUE_TITLE} WHERE jobs.id = ?`).get(requireId(id)) ?? null);
 }
 
 const BLOCKED_GATE_PREDICATE = "status = 'gate' AND blocked_code IS NOT NULL";
@@ -1130,7 +1136,7 @@ const BLOCKED_GATE_PREDICATE = "status = 'gate' AND blocked_code IS NOT NULL";
 export function listJobs({ limit, blockedOnly } = {}, env = process.env, db = openDb(env)) {
   const clamped = optionalRangedInt("limit", limit, LIST_LIMIT_RANGE);
   const where = blockedOnly === true ? `WHERE ${BLOCKED_GATE_PREDICATE} ` : "";
-  return db.prepare(`SELECT * FROM jobs ${where}ORDER BY id DESC LIMIT ?`).all(clamped).map((row) => withProjectFacts(db, row));
+  return db.prepare(`${JOB_WITH_ISSUE_TITLE} ${where}ORDER BY jobs.id DESC LIMIT ?`).all(clamped).map((row) => withProjectFacts(db, row));
 }
 
 // Done jobs that carry a pull request url, the candidates `queue close --merged` may confirm and close.
