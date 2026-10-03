@@ -840,6 +840,50 @@ under `.claude/`, a lockfile or `tmp/` appears in the working tree, with the
 intruding paths listed under the summary. Outside a git repository the check is
 `SKIPPED`.
 
+## Studio
+
+```sh
+nightqueue studio                        # serve the studio on 127.0.0.1:4747 and open it in the browser
+nightqueue studio --port 0 --no-open     # any free port, print the URL only
+nightqueue studio --api-only --port 4747 --token <t> --dev-origin http://127.0.0.1:5173   # what `npm run studio:dev` starts
+```
+
+`nightqueue studio [--port <n>] [--token <t>] [--api-only] [--dev-origin <url>] [--no-open]`
+serves nightqueue studio, the local web cockpit, on `127.0.0.1` only. One process answers:
+
+- the built page, `studio/dist` of the installed package (a missing dist is refused with
+  `studio/dist is missing — run \`npm run studio:build\``);
+- `/mcp`, the same stateless Streamable HTTP endpoint as `nightqueue mcp --http`;
+- `/api`: `GET /api/info`, `GET /api/projects`, `POST /api/runners/start` (a watch runner,
+  with an optional `from`/`until` window), `POST /api/queue/pause|resume` and
+  `GET /api/jobs/<ref>/log` (the last mebibyte of the job's log, as text);
+- `/events`: a server-sent event stream with the `queue_status` snapshot and, every second,
+  the patch of what changed; `/events?job=J-<n>` streams the narrated current attempt of one
+  job, its phase timeline and its touched files.
+
+The process also runs the maintenance timer of the home, as `mcp --http` does; the
+`/events` poll itself only reads.
+
+**Token.** `--token`, else `NIGHTQUEUE_STUDIO_TOKEN`, else a random one per start. The
+command prints `studio listening on http://127.0.0.1:<port>/?t=<token>` and opens that URL
+unless `--no-open` (or `--api-only`) is given. The first load trades `?t=` for an HttpOnly,
+`SameSite=Strict` cookie named `nq_studio_<port>` and redirects to the same page without the
+token. From then on every request - page, asset, `/api`, `/events`, `/mcp` - is refused
+with 401 unless it carries that cookie or `Authorization: Bearer <token>`. A restart needs
+the new URL.
+
+**Security.** The `Host` must be loopback and any `Origin` must be loopback (a repeated
+one is refused), as for `mcp --http`. A request that changes state (`POST /mcp`, `POST
+/api/*`) authorised by the cookie must also carry the studio's own origin exactly, port
+included, so a page served on another local port cannot drive the queue. No response
+carries CORS headers, and every one carries a strict `Content-Security-Policy`,
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
+
+**Development.** `--api-only` serves no page; `--dev-origin <url>` (only with `--api-only`,
+a loopback `http://host:port`) is the second origin the write rule accepts.
+`npm run studio:dev` starts both sides: this API on port 4747 and the Vite dev server on
+`http://127.0.0.1:5173`, whose proxy adds the bearer token.
+
 ## Sandbox
 
 ```sh

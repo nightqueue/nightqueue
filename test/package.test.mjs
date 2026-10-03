@@ -8,9 +8,9 @@ import { parsePackOutput } from "../src/host/npm.mjs";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const PACKED_DIRS = ["bin", "src", "plugin", ".claude-plugin"];
-const DEV_PREFIXES = ["test/", "test-support/", "docs/", "scripts/", ".claude/", ".github/"];
-// Raised from 2 MiB to 2.5 MiB for the D-55 integrations providers (src/integrations/).
-const MAX_UNPACKED_BYTES = 2.5 * 1024 * 1024;
+const DEV_PREFIXES = ["test/", "test-support/", "docs/", "scripts/", ".claude/", ".github/", "studio/src/"];
+// Raised from 2 MiB to 2.5 MiB for the D-55 integrations providers (src/integrations/), then to 3.5 MiB for the built studio (studio/dist, about 0.75 MiB).
+const MAX_UNPACKED_BYTES = 3.5 * 1024 * 1024;
 
 // Description of the tarball npm would publish, or null when npm is not installed on this machine.
 function packedTarball() {
@@ -37,7 +37,7 @@ test("`nightqueue` is the only command name npm installs and the embedding libra
   assert.deepEqual(MANIFEST.bin, { nightqueue: "bin/nightqueue.mjs" });
   assert.equal(MANIFEST.optionalDependencies, undefined);
   assert.equal(Object.hasOwn(MANIFEST.dependencies, "@huggingface/transformers"), false);
-  assert.deepEqual(MANIFEST.files, [".claude-plugin", "bin", "plugin", "src", "README.md", "LICENSE", "CHANGELOG.md"]);
+  assert.deepEqual(MANIFEST.files, [".claude-plugin", "bin", "plugin", "src", "studio/dist", "README.md", "LICENSE", "CHANGELOG.md"]);
 });
 
 test("the manifest carries the metadata a published package needs, and the engine and the dependencies it always had", () => {
@@ -82,7 +82,7 @@ test("every versioned file of the published directories is in the tarball", (t) 
   }
 });
 
-test("the unpacked package stays under two and a half megabytes", (t) => {
+test("the unpacked package stays under three and a half megabytes", (t) => {
   const tarball = packedTarball();
   if (!tarball) return t.skip("npm did not answer `pack --dry-run`");
   const { unpackedSize } = tarball;

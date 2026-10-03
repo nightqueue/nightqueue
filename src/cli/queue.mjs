@@ -1,9 +1,9 @@
-import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
-import { jobLogPath, queuePausedPath, queueResumePath } from "../config/paths.mjs";
+import { jobLogPath } from "../config/paths.mjs";
 import { registrationOffer, issueQueueTarget } from "../config/projects.mjs";
-import { ensureHome, loadConfig, writeFileAtomic } from "../config/store.mjs";
+import { loadConfig } from "../config/store.mjs";
 import { launchOperator } from "../host/operator.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
@@ -11,14 +11,15 @@ import { ALL_PROJECTS } from "../memory/issues.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog } from "../queue/follow.mjs";
-import { agentGlyph } from "../queue/routing.mjs";
+import { blockedOf, formatTokens, lastCell } from "../queue/last-cell.mjs";
+import { jobStatusReader, narrateJob, readingLog } from "../queue/narrated-tail.mjs";
+import { pauseQueue, resumeQueue } from "../queue/pause.mjs";
 import {
   claimingRunners,
   isQueueIdle,
   noRunnerWait,
   onceOnlyLine,
   parkedBacklogLine,
-  parkedJobLabel,
   pausedRunnerLine,
   pendingJobs,
   runnerPauseLabel,
@@ -27,13 +28,7 @@ import {
   windowClosedLine,
   windowWaitingLine,
 } from "../queue/hints.mjs";
-import {
-  createNarrator,
-  formatDuration,
-  formatNarration,
-  narrateLog,
-  noticeNarration,
-} from "../queue/narrate.mjs";
+import { formatDuration, formatNarration } from "../queue/narrate.mjs";
 import { blockerLines, claimBlocker } from "../queue/claim.mjs";
 import { worktreeLine } from "../queue/close.mjs";
 import { cancelJobAndWorktree } from "../queue/cancel.mjs";
@@ -54,7 +49,7 @@ import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue
 import { resolveJobSession } from "../queue/session.mjs";
 import { stopReport, stopRunners } from "../queue/stop.mjs";
 import { runCloseHere, runPostCloseSteps, startCloseDetached } from "../queue/close-start.mjs";
-import { CLOSE_STEP_ICONS, CLOSING_LABEL, closeChecklistLines, closeLastCell, closeStoppedLine, queueWorkers, statusLabel } from "../queue/close-view.mjs";
+import { CLOSE_STEP_ICONS, CLOSING_LABEL, closeChecklistLines, closeStoppedLine, queueWorkers, statusLabel } from "../queue/close-view.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -537,23 +532,6 @@ function formatDurationCell(job, nowMs) {
   return formatDuration((Number.isFinite(finishedMs) ? finishedMs : nowMs) - startedMs);
 }
 
-// The four token counters of a job: the live estimate while it runs and has one, the recorded columns otherwise.
-function tokenCountersOf(job) {
-  const live = job.status === "running" ? job.live?.tokens : null;
-  if (live) return [live.in, live.out, live.cache_read, live.cache_creation];
-  return [job.tokens_in, job.tokens_out, job.cache_read, job.cache_creation];
-}
-
-// Tokens the job spent, cache included, compact: `374k`, `1.2M`, `~66.9M` while estimated, `-` before the first usage report.
-function formatTokens(job) {
-  const total = tokenCountersOf(job).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
-  if (total <= 0) return "-";
-  const estimated = job.status === "running" && job.live?.tokens && job.live.tokens_estimated === true ? "~" : "";
-  if (total < 1000) return `${estimated}${total}`;
-  if (total < 1_000_000) return `${estimated}${Math.round(total / 1000)}k`;
-  return `${estimated}${(total / 1_000_000).toFixed(1)}M`;
-}
-
 // The pull request of a job as its plain URL plus its derived state: terminals turn a bare URL into a link on their own, which an escape sequence cannot count on.
 function formatPr(job) {
   if (!job.pr_url) return "-";
@@ -563,55 +541,6 @@ function formatPr(job) {
 // Width of the PR column for this listing: the longest URL present, never less than the header.
 function prWidth(jobs) {
   return jobs.reduce((width, job) => Math.max(width, formatPr(job).length), "PR".length);
-}
-
-// What a running job is doing as the table says it: the agent glyph, its intent, then the last action; a job without a readable log shows `-`.
-function liveCell(live) {
-  if (!live) return "-";
-  const glyph = agentGlyph(live.agent) ?? "»";
-  const parts = [live.intent, live.last?.text].filter((part, index, all) => part && all.indexOf(part) === index);
-  return parts.length ? `${glyph} ${parts.join(" — ")}` : "-";
-}
-
-// First line of the notice of a job, the reason it stopped, for the table.
-function firstNoticeLine(job) {
-  const line = String(job.notice_md ?? "").split("\n").find((entry) => entry.trim());
-  return line ? line.trim() : null;
-}
-
-// The human message of a block, read from the JSON result only while it still names the same code the column carries;
-// a truncated or stale result never breaks the render, it just leaves the message out.
-function blockedMessage(job, code) {
-  try {
-    const parsed = typeof job.result === "string" ? JSON.parse(job.result) : job.result;
-    const blocked = parsed?.blocked;
-    return blocked?.code === code ? String(blocked.message ?? "") : "";
-  } catch {
-    return "";
-  }
-}
-
-// The preflight block a gated job carries in its `blocked_code` column, or null: the reason the runner did not start it.
-function blockedOf(job) {
-  if (job.status !== "gate" || !job.blocked_code) return null;
-  const code = String(job.blocked_code);
-  return { code, message: blockedMessage(job, code) };
-}
-
-// Why a job that is not running stands where it does (close note, preflight block, gate notice, parked reset), or null.
-function stoppedReason(job) {
-  const close = closeLastCell(job);
-  if (close) return close;
-  const blocked = blockedOf(job);
-  if (blocked) return blocked.message ? `⛔ ${blocked.code}: ${blocked.message}` : `⛔ ${blocked.code}`;
-  if (job.status === "gate" || job.status === "failed") return firstNoticeLine(job);
-  return parkedJobLabel(job);
-}
-
-// What TITLE/LAST says about a job: the live view while it runs, otherwise its title followed by the reason above.
-function lastCell(job) {
-  if (job.status === "running") return liveCell(job.live);
-  return [job.title, stoppedReason(job)].filter(Boolean).join(" — ") || "-";
 }
 
 // Cells of one row of the table, before any cut or paint.
@@ -1491,8 +1420,7 @@ async function runRepair(argv, ctx) {
 async function runPause(argv, ctx) {
   const { positionals } = parseCommand(argv);
   checkArgs(positionals, { max: 0, usage: USAGE.pause });
-  ensureHome(ctx.env);
-  writeFileAtomic(queuePausedPath(ctx.env), `${new Date().toISOString()}\n`);
+  pauseQueue(ctx.env);
   ctx.out("queue paused; running jobs finish normally");
 }
 
@@ -1500,19 +1428,8 @@ async function runPause(argv, ctx) {
 async function runResume(argv, ctx) {
   const { positionals } = parseCommand(argv);
   checkArgs(positionals, { max: 0, usage: USAGE.resume });
-  ensureHome(ctx.env);
-  rmSync(queuePausedPath(ctx.env), { force: true });
-  writeFileAtomic(queueResumePath(ctx.env), `${new Date().toISOString()}\n`);
+  resumeQueue(ctx.env);
   ctx.out("queue resumed");
-}
-
-// Runs a read of the log file, turning an I/O failure into a message for the operator instead of a stack.
-function readingLog(path, read) {
-  try {
-    return read();
-  } catch (err) {
-    throw new UserError(`could not read the log at ${path}: ${err?.message ?? String(err)}`);
-  }
 }
 
 // Prints the part of the file after the given offset and returns the new offset.
@@ -1534,11 +1451,6 @@ function printFrom(path, offset, ctx) {
 // Tells whether the narration may paint its lines: only a real terminal, and never with NO_COLOR set.
 function useColor(ctx) {
   return ctx.stdout?.isTTY === true && !ctx.env?.NO_COLOR;
-}
-
-// Reads the status of a job for the follow loop, on a connection opened for that poll alone; a job whose row is gone has no status at all.
-function jobStatusReader(id, env) {
-  return async () => await withReadOnlyStore(env, (store) => store.jobs.status(id));
 }
 
 // Watches the output of the process, so a closed pipe ends the follow instead of crashing it.
@@ -1585,54 +1497,20 @@ async function runLogRaw(path, id, follow, ctx) {
   reportStop(result, ctx);
 }
 
-// Turns a notice of the follow loop into a narration line, a warning on stderr, or the debug trace of one poll.
-function narrateNotice(notice, { narrator, print, trace, warn }) {
-  if (notice.kind === "poll") trace?.(notice);
-  if (notice.kind === "error") warn(notice.message);
-  if (notice.kind === "truncated") print(narrator.note("truncated", "log truncated; narration restarted"));
-  if (notice.kind === "quiet") print(narrator.note("quiet", `still running (${Math.round(notice.silentMs / 1000)}s quiet)`));
-}
-
-// Prints the reason the job is stopped when the stream itself never carried one, so a gate is never narrated in silence.
-async function printJobNotice(id, { narrator, print, sawNotice }, ctx) {
-  if (sawNotice()) return;
-  const notice = jobView(await openStore(ctx.env).jobs.getJob(id), { full: true })?.notice_md;
-  if (!notice) return;
-  print(narrator.note("notice", noticeNarration(notice, { jobId: id })));
-}
-
 // Runs `queue log` in narrated mode, the default: one line for each relevant event of the stream.
-async function runLogNarrated(path, id, { follow, all }, ctx) {
+async function runLogNarrated(id, { follow, all }, ctx) {
   const color = useColor(ctx);
-  let seen = false;
-  const print = (event) => {
-    if (event.kind === "notice") seen = true;
-    ctx.out(formatNarration(event, { color }));
-  };
-  const narrator = createNarrator({ all, jobId: id });
-  const tail = { narrator, print, sawNotice: () => seen };
-  if (!follow) {
-    const text = readingLog(path, () => readFileSync(path, "utf8"));
-    const running = (await openStore(ctx.env).jobs.getJob(id))?.status === "running";
-    for (const event of narrateLog(text, { all, running, jobId: id })) print(event);
-    await printJobNotice(id, tail, ctx);
-    return;
-  }
-  const trace = pollTracer(ctx);
-  const result = await followLog({
-    path,
-    readStatus: jobStatusReader(id, ctx.env),
-    stopReason: watchOutputClosed(ctx),
-    onLine: (line) => {
-      for (const event of narrator.push(line)) print(event);
-    },
-    onNotice: (notice) => narrateNotice(notice, { narrator, print, trace, warn: (message) => ctx.err(message) }),
+  const result = await narrateJob({
+    id,
+    env: ctx.env,
+    follow,
+    all,
+    onEvent: (event) => ctx.out(formatNarration(event, { color })),
+    stopReason: follow ? watchOutputClosed(ctx) : undefined,
+    trace: follow ? pollTracer(ctx) : null,
+    warn: (message) => ctx.err(message),
   });
-  for (const event of narrator.finish()) print(event);
-  if (result.logError) print(narrator.note("toolError", `${result.logError}; this narration is missing the tail of the log`));
-  await printJobNotice(id, tail, ctx);
-  if (result.status) print(narrator.note("resultEnd", `${jobRef(id)} ${result.status}`));
-  reportStop(result, ctx);
+  if (result) reportStop(result, ctx);
 }
 
 // Runs `queue log`, which narrates the stream of a job by default and can keep following it.
@@ -1645,7 +1523,7 @@ async function runLog(argv, ctx) {
   if (!existsSync(path)) throw new UserError(`no log for job \`${id}\`; expected ${path}`);
   const follow = values.follow === true;
   if (values.raw) return await runLogRaw(path, id, follow, ctx);
-  return await runLogNarrated(path, id, { follow, all: values.all === true }, ctx);
+  return await runLogNarrated(id, { follow, all: values.all === true }, ctx);
 }
 
 const SESSION_OPTIONS = { print: { type: "boolean" }, json: { type: "boolean" } };

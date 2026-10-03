@@ -805,6 +805,21 @@ function answeredPrUrls(answer) {
   return prUrlsOf(answer.job ? [answer.job] : answer.jobs);
 }
 
+// Reads the queue answer of `queue_status` on a store opened read-only for this read alone; `decorate` runs on the same store before it closes.
+// It never creates the store, and never refreshes the pull request cache: the caller does that outside its own frame.
+export async function readQueueStatus(env, { limit, decorate = null } = {}) {
+  const warning = lastMaintenance(env)?.warning ?? null;
+  return await withReadOnlyStore(env, async (store) => {
+    const answer = await queueStatusAnswer({ limit }, { store, warning, env, state: newContractState() });
+    return decorate ? await decorate(answer, store) : answer;
+  });
+}
+
+// Refreshes the pull request cache about the URLs an answer showed, outside the frame of that answer.
+export function refreshAnsweredPrStates(answer, env) {
+  return serverPrStates.refresh(answeredPrUrls(answer), env);
+}
+
 // The answer of `queue_stop`: one `{ outcome, pid, message }` per runner, with the CLI's `--stop` line as the message.
 async function queueStopAnswer(args, env) {
   const reports = await stopRunners({ pid: Number.isInteger(args.pid) ? args.pid : null, env });
@@ -1196,7 +1211,7 @@ function toolDefinitions(env, state) {
         await ensureStoreExists(env);
         const warning = lastMaintenance(env)?.warning ?? null;
         const answer = await withReadOnlyStore(env, (store) => queueStatusAnswer(args, { store, warning, env, state }));
-        void serverPrStates.refresh(answeredPrUrls(answer), env);
+        void refreshAnsweredPrStates(answer, env);
         return answer;
       },
     },

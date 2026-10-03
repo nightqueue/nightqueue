@@ -1205,6 +1205,32 @@ export function recentOrchestratorCounts(env = process.env, db = openDb(env)) {
     .all(...TERMINAL_STATUSES);
 }
 
+// The median of a list of finite numbers, null when the list is empty.
+function median(values) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+// The medians of the orchestrator turns, last context and cost of the newest delivered jobs of a tier, the baseline a job's cost card compares against.
+export function tierBaseline(tier, { limit = HOST_COMMANDS_SAMPLE_SIZE } = {}, env = process.env, db = openDb(env)) {
+  const size = Number.isInteger(limit) && limit > 0 ? limit : HOST_COMMANDS_SAMPLE_SIZE;
+  const rows = db
+    .prepare(
+      `SELECT orch_turns, orch_ctx_last, cost_usd FROM jobs
+        WHERE tier = ? AND status IN ('done', 'closed') AND orch_turns IS NOT NULL
+        ORDER BY id DESC LIMIT ${size}`,
+    )
+    .all(String(tier ?? ""));
+  return {
+    n: rows.length,
+    turns: median(rows.map((row) => row.orch_turns)),
+    ctx: median(rows.map((row) => row.orch_ctx_last)),
+    cost: median(rows.map((row) => row.cost_usd)),
+  };
+}
+
 // Counts the gated jobs a preflight block stopped, the number the queue view shows next to `gate`.
 export function countBlockedGates(env = process.env, db = openDb(env)) {
   return db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE ${BLOCKED_GATE_PREDICATE}`).get().n;

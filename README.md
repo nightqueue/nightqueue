@@ -119,6 +119,7 @@ nightqueue queue cancel <id> --reason "<why>"
 nightqueue queue close <id> [--force] [--foreground] [--json]
 nightqueue queue close --merged [--json]
 nightqueue queue pause | resume
+nightqueue studio [--port <n>] [--no-open]    # the queue in the browser, on 127.0.0.1
 
 # memory
 nightqueue memory stats

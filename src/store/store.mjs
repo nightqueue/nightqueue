@@ -60,6 +60,7 @@
  * @property {() => Promise<object[]>} listOpenJobs every job that is not closed and already named its run, the owners of the worktrees `nightqueue doctor` reports
  * @property {() => Promise<object[]>} recentHostCommandCounts the host-command counters of the most recently finished jobs, the sample `nightqueue doctor` sums
  * @property {() => Promise<object[]>} recentOrchestratorCounts the orchestrator counters of the most recently finished jobs, the sample `nightqueue doctor` sums
+ * @property {(tier: string, options?: {limit?: number}) => Promise<{n: number, turns: number|null, ctx: number|null, cost: number|null}>} tierBaseline the medians of turns, last context and cost of the newest delivered jobs of a tier, read-only
  * @property {(id: number) => Promise<string|null>} status the status column of one job, or null when the row is gone
  * @property {(id: number, spec: object) => Promise<object|null>} acquireClose takes the close lease of a job in one compare-and-swap and re-arms its checklist; null means refused, nothing written
  * @property {(id: number, spec: object) => Promise<boolean>} adoptClose confirms the close lease is this worker's and renews it
@@ -279,6 +280,7 @@ export const STORE_CONTRACT = Object.freeze({
     "listOpenJobs",
     "recentHostCommandCounts",
     "recentOrchestratorCounts",
+    "tierBaseline",
     "status",
     "acquireClose",
     "adoptClose",
@@ -374,6 +376,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.countActiveJobsByProject",
   "jobs.recentHostCommandCounts",
   "jobs.recentOrchestratorCounts",
+  "jobs.tierBaseline",
   "jobs.listCloses",
   "jobs.jobsWithPrNumber",
   "decisions.listDecisions",

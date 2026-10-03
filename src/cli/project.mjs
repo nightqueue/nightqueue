@@ -65,7 +65,7 @@ function projectLine(project) {
 }
 
 // Every registered project in its listing shape; a home with no database yet has none.
-async function listedProjects(ctx) {
+export async function listedProjects(ctx) {
   const store = await openRegistryReader(ctx.env);
   if (!store) return [];
   const aliases = await store.projects.keyAliases();

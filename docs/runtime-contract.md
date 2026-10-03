@@ -247,6 +247,20 @@ Writes the job cannot make meanwhile go to its `pending-writes.jsonl` (above); a
 could not be recorded keeps the worktree and writes the witness, and the report says
 `unrecorded` with the pending path.
 
+The HTTP surfaces - `nightqueue mcp --http` and `nightqueue studio` - bind `127.0.0.1` only
+and share one gate: the `Host` must be a single loopback authority, an `Origin`, when sent,
+must be a single loopback origin, and then the per-start token is required on every request.
+`mcp --http` takes the token only as `Authorization: Bearer <token>`. The studio also takes it
+as a cookie, because a page load, its assets and `EventSource` cannot send that header: the
+URL it prints carries the token once as `?t=<token>`, and a GET with a valid `t` answers
+`303` to the same target without `t` and `Set-Cookie: nq_studio_<port>=<token>; Path=/;
+HttpOnly; SameSite=Strict` (one cookie name per port, so two studios on one host never share
+one). A request that changes state (`POST /mcp`, `POST /api/*`) authorised by that cookie must
+also carry an `Origin` equal to the studio's own `http://127.0.0.1:<port>` - or the
+`--dev-origin` of an `--api-only` studio - exactly, port included, since `SameSite` does not
+tell two loopback ports apart; a bearer request keeps the loopback rule alone. The `/mcp`
+endpoint stays stateless either way: the cookie is one more header checked in front of it.
+
 The thirty-one MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
 | tool | parameters |

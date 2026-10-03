@@ -140,6 +140,7 @@ function jobsMethods(env, db) {
     listOpenJobs: async () => jobs.listOpenJobs(env, db()),
     recentHostCommandCounts: async () => jobs.recentHostCommandCounts(env, db()),
     recentOrchestratorCounts: async () => jobs.recentOrchestratorCounts(env, db()),
+    tierBaseline: async (tier, options) => jobs.tierBaseline(tier, options, env, db()),
     status: async (id) => jobs.jobStatus(id, env, db()),
     acquireClose: async (id, spec) => jobs.acquireClose(id, spec, env),
     adoptClose: async (id, spec) => jobs.adoptClose(id, spec, env),
