@@ -357,6 +357,12 @@ the project (see [Decisions and issues](memory.md#decisions-and-issues)). With
 only) binds the job to a prior operator run, resolved and refused exactly as for a free
 prompt, its `## PRIOR RUN (operator)` block going right after the note; the item stays
 the brief and is never replaced.
+Every job `queue_status` answers (listing and one job) carries `title`, a string or `null`,
+derived on read and never stored: the title of the issue the job was queued from (one join
+with `issues` in the listing query), otherwise the first non-empty line of the prompt's brief
+with its leading markdown heading marker stripped (a bare `## Brief` or `# Task` heading
+yields to the next line), clipped at 120 characters with the `…` counted in the 120; `null`
+for an empty prompt without an issue. The field is additive: `contract` is unchanged.
 `queue_status` never returns the prompt of a job and truncates `notice_md` and `result` at 500
 characters in a listing; a row whose text was cut carries `notice_truncated: true` or
 `result_truncated: true` (the key is absent when the text fits, and the detail of one job by

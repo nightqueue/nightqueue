@@ -134,7 +134,8 @@ test("queue status shows `closing` alone while a close holds the job, `done · c
   const closing = await runCli(env, ["queue", "status"]);
   assert.match(closing.stdout, /^ID {4}STATUS {7}DURATION/m, "STATUS changed width for the `closing` label");
   assert.match(closing.stdout, new RegExp(`^J-${id} +◐ closing +-`, "m"));
-  assert.match(closing.stdout, /closing: preflight/);
+  const closingDetail = await runCli(env, ["queue", "status", String(id)]);
+  assert.ok(closingDetail.out.some((line) => /^close\s+closing/.test(line)), closingDetail.stdout);
   assert.ok(closing.out.includes(`close in flight: J-${id} at preflight - follow with: nightqueue queue status J-${id}`), closing.stdout);
 
   failClose(id, { worker: WORKER, close: { attempts: 1, steps: {}, data: {}, failed: { step: "conflict", reason: "suite-red" } } }, env);
