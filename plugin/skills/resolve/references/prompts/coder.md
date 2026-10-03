@@ -15,6 +15,10 @@ Stage: {{STAGE}}
 {{/STAGE}}
 Apply the plan following the project's standards (CLAUDE.md). The simplest possible
 solution. Write ARTIFACT_PATH per your Required output.
+A change that adds or bumps a dependency regenerates the lockfile with the manager's own install
+(`npm install`) and lists `package.json` and the lockfile together under `## Modified files`:
+`run publish` includes a lockfile only when the manifest changed too and the frozen install
+(`npm ci --ignore-scripts`) passes from it.
 
 {{>_context}}
 {{>_shell-rule}}

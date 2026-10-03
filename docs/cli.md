@@ -109,8 +109,9 @@ one is refused before anything is staged. For a job queued from an issue
 it commits a copy of the message with a `Refs: <KEY>-<n>` trailer added from the
 job row; a message that already carries a `Refs:` line is refused. It prints `COMMITTED: <sha> (<n>
 files)`. Anything under
-`.claude/` or `tmp/`, any dependency lockfile and any path outside the run's
-worktree is refused: the command prints `REFUSED: <path> (<reason>)`, stages
+`.claude/` or `tmp/`, a dependency lockfile that is not paired with a changed
+manifest and a green frozen install (see the runtime contract) and any path
+outside the run's worktree is refused: the command prints `REFUSED: <path> (<reason>)`, stages
 nothing and exits `1`. `--extra` adds files to the list, it never overrides that
 refusal. Before committing it prints `CONVENTION: <...>` - the file that
 declares the repository's commit convention (a commitlint config, `.husky/`,

@@ -515,6 +515,18 @@ queued from an issue gets a `## Issue` block in its prompt
 type (`bug`/`improvement`/`incident` → `simple`, `feature` → `complex`, `chore` →
 `trivial`; an explicit tier wins).
 
+**A lockfile is published only when it is proved reproducible.** `run publish` (and
+`run commit`) refuse every lockfile (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`,
+`bun.lockb`, `bun.lock`) EXCEPT when all three hold: (1) the `package.json` of the same
+directory is in the publish set and differs from the base branch; (2) the lockfile differs
+from the base branch; (3) the manager's frozen install - `npm ci --ignore-scripts`, or
+`yarn`/`pnpm`/`bun install --frozen-lockfile --ignore-scripts` - run by the runtime in the
+lockfile's directory succeeds, under `queue.bashTimeoutS.default`. A lockfile with no changed
+manifest is refused as `a dependency lockfile`; (1) without (2) is refused as `manifest
+changed but the lockfile did not: run <manager> install`; a failing install is refused with
+the tail of its output. Every refusal keeps the `--extra` sentence, and `nightqueue verify`
+still treats a lockfile as an intruder (it never installs).
+
 **Traceability is the runtime's, never the agent's.** `nightqueue run pr`
 publishes a copy of the body, `<RUN_DIR>/pr-body.published.md` (the agent's file
 untouched), ending in a footer read from the job row: `Opened by nightqueue · <KEY>-<n>` for a job queued from an issue
