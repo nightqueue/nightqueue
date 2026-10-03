@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { AddJobDrawer } from "../components/AddJobDrawer";
 import { CancelJobDialog } from "../components/CancelJobDialog";
-import { ConfirmDialog } from "../components/ConfirmDialog";
+import { CloseJobDialog } from "../components/CloseJobDialog";
+import { IssuesSection } from "../components/IssuesSection";
 import type { RowActions, RowContext } from "../components/JobCells";
 import { QueueCards } from "../components/QueueCard";
 import { QueueSkeleton } from "../components/QueueSkeleton";
@@ -11,9 +12,9 @@ import { RowMenu, type RowMenuPick } from "../components/RowMenu";
 import { type RunnerActions, RunnerBanner } from "../components/RunnerBanner";
 import { Toolbar } from "../components/Toolbar";
 import { Kbd } from "../components/ui";
-import { closeJob, runJob, setQueuePaused, startRunner, stopRunner } from "../lib/actions";
+import { closeJob, closesWithoutConfirm, runJob, setQueuePaused, startRunner, stopRunner } from "../lib/actions";
 import { useQueueSnapshot } from "../lib/events";
-import { ALL_PROJECTS, filterJobs, jobRef, normalizeSnapshot, totalCount } from "../lib/queue";
+import { ALL_PROJECTS, filterJobs, normalizeSnapshot, totalCount } from "../lib/queue";
 import type { Job, QueueFilters, Runner, RunnerChoice } from "../lib/types";
 import { useAction } from "../lib/useAction";
 
@@ -22,6 +23,8 @@ const INITIAL_FILTERS: QueueFilters = { status: "all", projectId: ALL_PROJECTS, 
 type Dialog = { pick: RowMenuPick; job: Job } | null;
 
 type Menu = { job: Job; anchor: HTMLElement } | null;
+
+type Drawer = { issueRef?: string; project?: string } | null;
 
 const byJob = (job: Job) => String(job.id);
 
@@ -42,15 +45,8 @@ function useRunnerActions(): RunnerActions {
 // The dialog a menu pick opens: retry with a note, cancel, or close, each confirmed before its tool runs.
 function RowDialog({ dialog, runnersOnline, onClose }: { dialog: NonNullable<Dialog>; runnersOnline: number; onClose: () => void }) {
   const { pick, job } = dialog;
-  const ref = jobRef(job.id);
   if (pick === "retry") return <RetryDialog job={job} runnersOnline={runnersOnline} onClose={onClose} />;
-  if (pick === "close") {
-    return (
-      <ConfirmDialog title={`Close ${ref}`} confirmLabel="Close and merge" onConfirm={() => closeJob(job)} onClose={onClose}>
-        The close pipeline merges the pull request of {ref} and closes the job. It runs detached; the row follows it.
-      </ConfirmDialog>
-    );
-  }
+  if (pick === "close") return <CloseJobDialog job={job} onClose={onClose} />;
   return <CancelJobDialog job={job} onClose={onClose} />;
 }
 
@@ -97,29 +93,35 @@ export function QueuePage() {
   const [filters, setFilters] = useState<QueueFilters>(INITIAL_FILTERS);
   const [menu, setMenu] = useState<Menu>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
-  const [adding, setAdding] = useState(false);
+  const [drawer, setDrawer] = useState<Drawer>(null);
   const onRun = useAction(runJob, byJob);
-  const onClose = useAction(closeJob, byJob);
+  const closeMerged = useAction(closeJob, byJob);
   const runnerActions = useRunnerActions();
   const rowActions = useMemo<RowActions>(
-    () => ({ onRun, onClose, onMenu: (job, anchor) => setMenu((current) => (current?.job.id === job.id ? null : { job, anchor })) }),
-    [onRun, onClose],
+    () => ({
+      onRun,
+      onClose: (job) => (closesWithoutConfirm(job) ? closeMerged(job) : setDialog({ pick: "close", job })),
+      onMenu: (job, anchor) => setMenu((current) => (current?.job.id === job.id ? null : { job, anchor })),
+    }),
+    [onRun, closeMerged],
   );
   const closeMenu = useCallback(() => setMenu(null), []);
   const closeDialog = useCallback(() => setDialog(null), []);
-  const closeDrawer = useCallback(() => setAdding(false), []);
+  const closeDrawer = useCallback(() => setDrawer(null), []);
+  const queueIssue = useCallback(({ ref, project }: { ref: string; project: string }) => setDrawer({ issueRef: ref, project }), []);
   const snapshot = useMemo(() => (raw ? normalizeSnapshot(raw) : undefined), [raw]);
   const shown = useMemo(() => (snapshot ? filterJobs(snapshot.jobs, filters) : []), [snapshot, filters]);
   if (!snapshot) return <QueueSkeleton />;
   const context: RowContext = { runnersOnline: snapshot.runnersOnline, actions: rowActions };
   return (
     <>
-      <Toolbar counts={snapshot.counts} filters={filters} onFilters={setFilters} onAddJob={() => setAdding(true)} />
+      <Toolbar counts={snapshot.counts} filters={filters} onFilters={setFilters} onAddJob={() => setDrawer({})} />
       <RunnerBanner snapshot={snapshot} actions={runnerActions} />
       <JobsSection jobs={shown} total={totalCount(snapshot.counts)} context={context} queueEmpty={snapshot.jobs.length === 0} />
+      <IssuesSection projectId={filters.projectId} onQueue={queueIssue} />
       {menu && <RowMenu job={menu.job} anchor={menu.anchor} onPick={(pick, job) => setDialog({ pick, job })} onClose={closeMenu} />}
       {dialog && <RowDialog dialog={dialog} runnersOnline={snapshot.runnersOnline} onClose={closeDialog} />}
-      {adding && <AddJobDrawer runnersOnline={snapshot.runnersOnline} onClose={closeDrawer} />}
+      {drawer && <AddJobDrawer runnersOnline={snapshot.runnersOnline} onClose={closeDrawer} initialIssue={drawer.issueRef} initialProject={drawer.project} />}
     </>
   );
 }

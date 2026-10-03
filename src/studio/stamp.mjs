@@ -4,6 +4,7 @@ import { join, relative, sep } from "node:path";
 
 const STUDIO_FILES = ["studio/index.html", "studio/vite.config.mts", "studio/tsconfig.json"];
 const STUDIO_SOURCE_DIR = "studio/src";
+const STUDIO_PUBLIC_DIR = "studio/public";
 const DIST_DIR = "studio/dist";
 const STAMP_FILE = "studio/dist/.stamp.json";
 
@@ -24,9 +25,13 @@ function devDependencyVersions(root) {
   return names.map((name) => `${name}@${lock.packages?.[`node_modules/${name}`]?.version ?? "missing"}`);
 }
 
-// The sha256 of the studio sources (index.html, src/**, the Vite and TypeScript configs) and the devDependency versions, stable across checkouts.
+// The sha256 of the studio sources (index.html, src/**, public/**, the Vite and TypeScript configs) and the devDependency versions, stable across checkouts.
 export function studioSourceHash(root) {
-  const files = [...STUDIO_FILES.filter((file) => existsSync(join(root, file))), ...filesUnder(root, STUDIO_SOURCE_DIR)].sort();
+  const files = [
+    ...STUDIO_FILES.filter((file) => existsSync(join(root, file))),
+    ...filesUnder(root, STUDIO_SOURCE_DIR),
+    ...filesUnder(root, STUDIO_PUBLIC_DIR),
+  ].sort();
   const hash = createHash("sha256");
   for (const file of files) {
     hash.update(`${file}\0`);

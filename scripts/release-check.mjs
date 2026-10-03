@@ -82,6 +82,7 @@ function checkStudioDist() {
 function checkStudioFiles(files) {
   const paths = Array.isArray(files) ? files.map((file) => file?.path) : [];
   if (!paths.includes("studio/dist/index.html")) throw new Error("npm would publish no studio/dist/index.html; run `npm run studio:build`");
+  if (!paths.includes("studio/dist/favicon.ico")) throw new Error("npm would publish no studio/dist/favicon.ico; run `npm run studio:build`");
   const sources = paths.filter((path) => typeof path === "string" && path.startsWith("studio/") && !path.startsWith("studio/dist/"));
   if (sources.length) throw new Error(`npm would publish studio sources:\n${sources.join("\n")}`);
 }

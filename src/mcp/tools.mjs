@@ -1521,7 +1521,7 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "The issues of an owner as one list of `items`, in workflow order (backlog, todo, in_progress, in_review, done, cancelled), then org items first, then by `priority` (1 first) and `position`; each item carries its linked decision, the status of the job it was queued as and `closed_at`. " +
-          "With `project`, the project's items plus its org's, each carrying its `scope` and its `owner`, and each org item the `project_status` of that project's own row; with `org`, only that org's items, each with `projects` (every project row: `project`, `status`, `job_id`, `job_status`). " +
+          "With `project`, the project's items plus its org's, each carrying its `scope` and its `owner`, and each org item the `project_status` and `project_job_ref` of that project's own row; with `org`, only that org's items, each with `projects` (every project row: `project`, `status`, `job_id`, `job_status`). " +
           "`status`, `priority` and `type` narrow the list to the values given; without them every item is returned. " +
           "With `id` alone (the item's ref, `NQ-12`), that one item with its text untruncated and its comment thread in chronological order (the job events the runtime recorded and the notes); inside a job only an item of the job's project or of its org is readable.",
         inputSchema: {

@@ -105,12 +105,26 @@ export function TitleLast({ job, runnersOnline }: { job: Job; runnersOnline: num
   return <TwoLines first={jobTitle(job)} second={job.studio.reason} />;
 }
 
-// Tells whether a job shows the inline Close: done, its PR merged, and no close already running.
+export const NO_PR_TOOLTIP ="no pull request — nothing to close";
+
+// Tells whether a job shows the inline Close: done, and no close already running.
 function closable(job: Job): boolean {
-  return job.status === "done" && job.pr_state === "merged" && !job.studio.closing;
+  return job.status === "done" && !job.studio.closing;
 }
 
-// The actions cell: inline ▶ Run on pending rows, inline Close on merged done rows, and the ⋯ menu.
+// The inline Close of a done row, disabled with a tooltip when the job has no pull request.
+function InlineClose({ job, onClose }: { job: Job; onClose?: (job: Job) => void }) {
+  const noPr = !job.pr_url;
+  return (
+    <span title={noPr ? NO_PR_TOOLTIP : undefined}>
+      <Button size="sm" aria-label={`close ${jobRef(job.id)}`} disabled={noPr || !onClose} onClick={() => onClose?.(job)}>
+        Close
+      </Button>
+    </span>
+  );
+}
+
+// The actions cell: inline ▶ Run on pending rows, inline Close on done rows, and the ⋯ menu.
 export function JobActions({ job, actions }: { job: Job; actions: RowActions }) {
   const ref = jobRef(job.id);
   return (
@@ -120,11 +134,7 @@ export function JobActions({ job, actions }: { job: Job; actions: RowActions }) 
           ▶ Run
         </Button>
       )}
-      {closable(job) && (
-        <Button size="sm" aria-label={`close ${ref}`} disabled={!actions.onClose} onClick={() => actions.onClose?.(job)}>
-          Close
-        </Button>
-      )}
+      {closable(job) && <InlineClose job={job} onClose={actions.onClose} />}
       <Button variant="ghost" size="sm" aria-label={`actions for ${ref}`} disabled={!actions.onMenu} onClick={(event) => actions.onMenu?.(job, event.currentTarget)}>
         ⋯
       </Button>

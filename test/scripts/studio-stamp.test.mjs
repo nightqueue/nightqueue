@@ -36,6 +36,15 @@ test("the source hash is stable, and changes with a source file or a devDependen
   assert.notEqual(studioSourceHash(root), edited);
 });
 
+test("a changed public asset changes the source hash", (t) => {
+  const root = makeRoot(t);
+  mkdirSync(join(root, "studio", "public"), { recursive: true });
+  writeFileSync(join(root, "studio", "public", "favicon.ico"), "one");
+  const first = studioSourceHash(root);
+  writeFileSync(join(root, "studio", "public", "favicon.ico"), "two");
+  assert.notEqual(studioSourceHash(root), first);
+});
+
 test("a fresh build checks ok, and each refusal names its reason", (t) => {
   const root = makeRoot(t);
   assert.match(checkStudioStamp(root).reason, /missing/);

@@ -18,6 +18,7 @@ import {
   saveIssue,
   updateIssue,
 } from "../../src/memory/issues.mjs";
+import { jobRef } from "../../src/memory/refs.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, orgIdOf, projectIdOf, settleThroughStore } from "../../test-support/memory.mjs";
 
@@ -247,11 +248,12 @@ test("closing an org item by hand cancels its open rows with one comment each, a
 test("a project reads only its own row and its own comments of an org item; the org reads the whole matrix", async (t) => {
   const { env, item } = makeOrgItemHome(t, "issue-org-queue-visibility");
   const store = openStore(env);
-  await store.issues.queueIssue({ id: item.id, allProjects: true });
+  const queued = await store.issues.queueIssue({ id: item.id, allProjects: true });
   await store.issues.addIssueComment({ id: item.id, body: "api only", author: "operator", viewer: projectIdOf(env, "acme-api") });
 
   const api = listIssues({ projectId: projectIdOf(env, "acme-api") }, {}, env).items[0];
   assert.equal(api.project_status, "in_progress");
+  assert.equal(api.project_job_ref, jobRef(queued.jobs.find((job) => job.project === "acme-api").id), "a project reads its own row's job, never another project's");
   assert.equal(api.projects, undefined);
   const org = listIssues({ orgId: orgIdOf(env, "acme") }, {}, env).items[0];
   assert.deepEqual(org.projects.map((row) => row.project), ["acme-api", "acme-mobile-app"]);
@@ -263,6 +265,19 @@ test("a project reads only its own row and its own comments of an org item; the 
   const operator = getIssueDetail(item.id, {}, env);
   assert.equal(operator.projects.length, 2);
   assert.ok(operator.comments.some((comment) => comment.body === "api only"));
+});
+
+test("a project with no row of a started org item reads it as todo with no job, never the derived status", async (t) => {
+  const { env, item } = makeOrgItemHome(t, "issue-org-queue-no-row");
+  const store = openStore(env);
+  await store.issues.queueIssue({ id: item.id, projectId: projectIdOf(env, "acme-api") });
+
+  const app = listIssues({ projectId: projectIdOf(env, "acme-mobile-app") }, {}, env).items[0];
+  assert.equal(app.status, "in_progress");
+  assert.equal(app.project_status, "todo");
+  assert.equal(app.project_job_ref, null);
+  const forApp = await store.issues.queueIssue({ id: item.id, projectId: projectIdOf(env, "acme-mobile-app") });
+  assert.deepEqual(forApp.jobs.map((job) => job.project), ["acme-mobile-app"]);
 });
 
 // Source of a child process that tries, for a while, to link its own job to the same project row of an org item.
