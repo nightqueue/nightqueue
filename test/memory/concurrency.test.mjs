@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { isBusyError, openDb, withWriteRetry } from "../../src/memory/db.mjs";
+import { confirmedSchemaProbe, isBusyError, openDb, schemaProbe, withWriteRetry } from "../../src/memory/db.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 
 const WRITER = fileURLToPath(new URL("../../test-support/concurrent-writer.mjs", import.meta.url));
@@ -60,13 +63,59 @@ test("two real node processes logging pipeline runs at the same time keep every 
 });
 
 test("two real node processes opening one fresh home never see the database refused as outdated", async (t) => {
-  for (let round = 0; round < 12; round += 1) {
+  for (let round = 0; round < 30; round += 1) {
     const env = makeHome(t, `concurrent-fresh-${round}`);
     const [a, b] = await Promise.all([writerAsync(env, "lesson", "A", 50), writerAsync(env, "lesson", "B", 50)]);
     assert.doesNotMatch(`${a.stderr}${b.stderr}`, /expects v/, `round ${round}: a fresh home was refused as outdated: ${a.stderr}${b.stderr}`);
     assert.equal(a.code, 0, `round ${round}: writer A exited ${a.code} (stderr: ${a.stderr})`);
     assert.equal(b.code, 0, `round ${round}: writer B exited ${b.code} (stderr: ${b.stderr})`);
   }
+});
+
+// Two connections to one WAL file in a temp home: `creator` writes, `reader` only probes.
+function connectionPair(t, name) {
+  const home = makeHome(t, name).NIGHTQUEUE_HOME;
+  mkdirSync(home, { recursive: true });
+  const file = join(home, "probe.db");
+  const creator = new DatabaseSync(file);
+  creator.exec("PRAGMA journal_mode = WAL");
+  const reader = new DatabaseSync(file);
+  t.after(() => {
+    reader.close();
+    creator.close();
+  });
+  return { creator, reader };
+}
+
+test("a probe on another connection never reads version 0 with data once the stamping transaction committed", (t) => {
+  const { creator, reader } = connectionPair(t, "probe-atomic");
+  assert.deepEqual(schemaProbe(reader), { version: 0, holdsData: false });
+  creator.exec("BEGIN IMMEDIATE");
+  creator.exec("CREATE TABLE lessons (id INTEGER PRIMARY KEY)");
+  creator.exec("INSERT INTO lessons (id) VALUES (1)");
+  creator.exec("PRAGMA user_version = 22");
+  assert.deepEqual(schemaProbe(reader), { version: 0, holdsData: false });
+  creator.exec("COMMIT");
+  assert.deepEqual(schemaProbe(reader), { version: 22, holdsData: false });
+});
+
+test("a stale version 0 read followed by rows is probed again before it can refuse", (t) => {
+  const { creator, reader } = connectionPair(t, "probe-reprobe");
+  creator.exec("CREATE TABLE lessons (id INTEGER PRIMARY KEY)");
+  creator.exec("INSERT INTO lessons (id) VALUES (1)");
+  let stamped = false;
+  const racing = {
+    exec: (sql) => reader.exec(sql),
+    prepare: (sql) => {
+      const statement = reader.prepare(sql);
+      if (!stamped && sql.startsWith("SELECT 1 FROM lessons")) {
+        stamped = true;
+        creator.exec("PRAGMA user_version = 22");
+      }
+      return statement;
+    },
+  };
+  assert.deepEqual(confirmedSchemaProbe(racing), { version: 22, holdsData: false });
 });
 
 test("a write refused by the lock is retried instead of surfacing to the caller", () => {
