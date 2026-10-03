@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 
@@ -161,6 +162,14 @@ function runAudit() {
   if (total > 0) process.exit(1);
 }
 
+// Emulates `npm run <script>`: runs the script line of the package.json in the working directory through the shell.
+function runScript(rest) {
+  const line = readJson(join(process.cwd(), "package.json")).scripts?.[rest[0]];
+  if (typeof line !== "string") return fail(`missing script: ${rest[0]}`);
+  const result = spawnSync(line, { shell: true, stdio: "inherit" });
+  process.exit(result.status ?? 1);
+}
+
 // Applies the call, emulating only the subcommands the installation uses.
 function main() {
   logCall();
@@ -172,6 +181,7 @@ function main() {
   if (command === "pack") return runPack(rest);
   if (command === "view") return runView(rest);
   if (command === "audit") return runAudit();
+  if (command === "run") return runScript(rest);
   return fail(`unknown command \`${args.join(" ")}\``);
 }
 

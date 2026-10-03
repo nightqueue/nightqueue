@@ -295,7 +295,7 @@ export async function install(ctx, { embedding, path, from, force, shortcuts, de
   await guardIdleRuntime(ctx, { force });
   const report = makeReport(ctx);
   setupHome(ctx, report);
-  const ready = setupRuntime(ctx, report, { from });
+  const ready = await setupRuntime(ctx, report, { from });
   const schemaOk = migrateSchemaStep(ctx, report, { ready });
   registerHost(ctx, report, { ready, shortcuts, desktop });
   await setupPath(ctx, report, { path });

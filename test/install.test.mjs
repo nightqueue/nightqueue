@@ -7,10 +7,10 @@ import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
 import { resolvedRuntimeDir } from "../src/config/paths.mjs";
 import { PATH_MARK, pathBlock } from "../src/host/shell.mjs";
+import { writeStudioStamp } from "../src/studio/stamp.mjs";
 import { assertIsolatedEnv, makeHostEnv, readSettingsFile, writeLegacyShim } from "../test-support/host.mjs";
 import { makeDir } from "../test-support/memory.mjs";
 
-const CHECKOUT = fileURLToPath(new URL("../", import.meta.url));
 const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const THIRD_PARTY = 'export PATH="/opt/x:$PATH"';
 
@@ -85,16 +85,89 @@ test("init outside a repository installs the whole host and only skips the proje
   assert.equal(existsSync(join(host.home, "nightqueue.db")), false, "init outside a repository registered something");
 });
 
+// Fake source checkout: its package.json, a studio source, a stub `studio:build` script and (optionally) a fresh dist and the build tools.
+function makeStudioSource(t, name, { built = false, tools = true, script = "node build.mjs" } = {}) {
+  const dir = makeDir(t, name);
+  const stampModule = fileURLToPath(new URL("../src/studio/stamp.mjs", import.meta.url));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "nightqueue", version: VERSION, scripts: { "studio:build": script } }));
+  writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ packages: {} }));
+  mkdirSync(join(dir, "studio", "src"), { recursive: true });
+  writeFileSync(join(dir, "studio", "index.html"), "<html></html>");
+  writeFileSync(join(dir, "studio", "src", "main.ts"), "export {};");
+  const buildBody = `import { mkdirSync, writeFileSync } from "node:fs";\nimport { writeStudioStamp } from ${JSON.stringify(stampModule)};\nmkdirSync("studio/dist", { recursive: true });\nwriteFileSync("studio/dist/index.html", "built");\nwriteStudioStamp(process.cwd());\nconsole.log("studio built by the stub");\n`;
+  writeFileSync(join(dir, "build.mjs"), buildBody);
+  if (tools) {
+    mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true });
+    for (const tool of ["tsc", "vite"]) writeFileSync(join(dir, "node_modules", ".bin", tool), "");
+  }
+  if (built) {
+    mkdirSync(join(dir, "studio", "dist"), { recursive: true });
+    writeFileSync(join(dir, "studio", "dist", "index.html"), "built");
+    writeStudioStamp(dir);
+  }
+  return dir;
+}
+
+// The npm calls of the run that ran a script instead of installing or packing.
+function scriptRuns(host) {
+  return host.npmCalls().filter((call) => call[0] === "run");
+}
+
+test("--from a directory whose studio stamp matches builds nothing and reports it up to date", async (t) => {
+  const host = makeHostEnv(t, "install-from-studio-fresh");
+  const source = makeStudioSource(t, "studio-fresh-src", { built: true, tools: false });
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["setup", "--from", source, "--no-path", "--no-embedding"], ctx), 0);
+  assert.deepEqual(scriptRuns(host), [], "a fresh dist was built again");
+  assert.ok(out.some((line) => /^studio: up to date \([0-9a-f]{12}\)$/.test(line)), out.join("\n"));
+  assert.equal(installsInto(host, host.runtimeDir).length, 1);
+});
+
+test("--from a directory without dist builds the studio first, then installs", async (t) => {
+  const host = makeHostEnv(t, "install-from-studio-build");
+  const source = makeStudioSource(t, "studio-build-src");
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["update", "--from", source], ctx), 0, out.join("\n"));
+  assert.deepEqual(scriptRuns(host), [["run", "studio:build"]]);
+  assert.ok(out.some((line) => new RegExp(`^studio: built from ${source} \\([0-9a-f]{12}\\)$`).test(line)), out.join("\n"));
+  const kinds = host.npmCalls().map((call) => call[0]);
+  assert.ok(kinds.indexOf("run") < kinds.indexOf("pack") && kinds.indexOf("pack") < kinds.indexOf("install"), kinds.join(","));
+});
+
+test("--from a directory without tsc or vite is refused before any install, with the npm ci hint", async (t) => {
+  const host = makeHostEnv(t, "install-from-studio-no-tools");
+  const source = makeStudioSource(t, "studio-no-tools-src", { tools: false });
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["update", "--from", source, "--force"], ctx), 1);
+  assert.ok(out.includes(`studio: failed (the studio devDependencies are not installed in ${source}: run npm ci there)`), out.join("\n"));
+  assert.deepEqual(host.npmCalls(), [], "a refused update still reached npm");
+});
+
+test("--from a directory whose studio build fails is refused before any install, with the tail of the output", async (t) => {
+  const host = makeHostEnv(t, "install-from-studio-fails");
+  const source = makeStudioSource(t, "studio-fails-src", { script: "echo compiling >&2; echo TS2322 type mismatch >&2; exit 2" });
+  const { ctx, out, err } = makeCtx(host.env);
+
+  assert.equal(await run(["update", "--from", source], ctx), 1);
+  assert.ok(err.includes("TS2322 type mismatch"), "the build output was not streamed to the operator");
+  assert.ok(out.some((line) => line.startsWith("studio: failed (") && line.includes("exit 2") && line.includes("TS2322 type mismatch")), out.join("\n"));
+  assert.deepEqual(host.npmCalls().map((call) => call[0]), ["run"], "the refused update packed or installed something");
+});
+
 test("--from packs the given checkout and reinstalls even when the version already matches", async (t) => {
   const host = makeHostEnv(t, "install-from");
+  const checkout = makeStudioSource(t, "install-from-src", { built: true, tools: false });
   const first = makeCtx(host.env);
-  assert.equal(await run(["init", "--from", CHECKOUT, "--no-path", "--no-embedding", "--no-gh"], first.ctx), 0);
-  assert.deepEqual(packedDirs(host), [CHECKOUT.replace(/\/$/, "")]);
+  assert.equal(await run(["init", "--from", checkout, "--no-path", "--no-embedding", "--no-gh"], first.ctx), 0);
+  assert.deepEqual(packedDirs(host), [checkout]);
   assert.deepEqual(specsInto(host, host.runtimeDir).map((spec) => spec.endsWith(".tgz")), [true], "--from installed a directory instead of a tarball of it");
   assert.equal(JSON.parse(readFileSync(join(host.runtimePackage, "package.json"), "utf8")).version, VERSION);
 
   const second = makeCtx(host.env);
-  assert.equal(await run(["init", "--from", CHECKOUT, "--no-path", "--no-embedding", "--no-gh"], second.ctx), 0);
+  assert.equal(await run(["init", "--from", checkout, "--no-path", "--no-embedding", "--no-gh"], second.ctx), 0);
   assert.equal(installsInto(host, host.runtimeDir).length, 2, "--from short-circuited instead of reinstalling");
 });
 

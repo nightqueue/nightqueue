@@ -44,7 +44,7 @@ export async function run(argv, ctx) {
   await guardIdleRuntime(ctx, { force: values.force });
   const report = makeReport(ctx);
   ensureHome(ctx.env);
-  const ready = setupRuntime(ctx, report, { from: values.from, force: true, version });
+  const ready = await setupRuntime(ctx, report, { from: values.from, force: true, version });
   const schemaOk = migrateSchemaStep(ctx, report, { ready });
   registerHost(ctx, report, { ready });
   const code = finish(ctx, report);
