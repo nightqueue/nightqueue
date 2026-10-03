@@ -62,7 +62,7 @@ test("the status label, the current step and the stopped line follow the checkli
   assert.equal(statusLabel(closeRow({}), NOW), "done");
   assert.equal(statusLabel(closeRow({ close_status: "closing", close_lease_until: LATER }), NOW), "closing");
   assert.equal(statusLabel(closeRow({ close_status: "closing", close_lease_until: EARLIER }), NOW), "done · close stalled");
-  assert.equal(statusLabel(failed, NOW), "done · close failed at merge");
+  assert.equal(statusLabel(failed, NOW), "done · close failed at merge: merge-without-sha");
   assert.equal(statusLabel(closeRow({ status: "closed", close: { data: { merged: true } } }), NOW), "closed");
   assert.equal(statusLabel(closeRow({ status: "closed" }), NOW), "closed");
   assert.equal(currentCloseStep({ steps }), "merge");
@@ -139,8 +139,8 @@ test("queue status shows `closing` alone while a close holds the job, `done · c
 
   failClose(id, { worker: WORKER, close: { attempts: 1, steps: {}, data: {}, failed: { step: "conflict", reason: "suite-red" } } }, env);
   const failed = await runCli(env, ["queue", "status"]);
-  assert.match(failed.stdout, /^ID {4}STATUS {28}DURATION/m, "STATUS did not grow to the stopped close's label");
-  assert.match(failed.stdout, /✓ done · close failed at conflict /);
+  assert.match(failed.stdout, /^ID {4}STATUS {39}DURATION/m, "STATUS did not grow to the stopped close's label");
+  assert.match(failed.stdout, /✓ done · close failed at conflict: suite-red /);
   assert.ok(failed.out.includes(`⛔ close stopped at conflict: suite-red - run again with: nightqueue queue close J-${id}`), failed.stdout);
 
   const detail = await runCli(env, ["queue", "status", String(id)]);

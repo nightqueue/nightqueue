@@ -14,9 +14,9 @@ function busyError() {
 }
 
 // Spawns the writer as a real child process; stays async so both writers really overlap.
-function writerAsync(env, mode, label) {
+function writerAsync(env, mode, label, durationMs = DURATION_MS) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [WRITER, mode, label, String(DURATION_MS)], {
+    const child = spawn(process.execPath, [WRITER, mode, label, String(durationMs)], {
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -57,6 +57,16 @@ test("two real node processes logging pipeline runs at the same time keep every 
   assert.equal(runs.n, expected, `expected ${expected} runs, found ${runs.n} (lost commit under concurrency)`);
   const phases = db.prepare("SELECT COUNT(*) AS n FROM pipeline_phases").get();
   assert.equal(phases.n, expected * 2, "a committed run lost its phases");
+});
+
+test("two real node processes opening one fresh home never see the database refused as outdated", async (t) => {
+  for (let round = 0; round < 12; round += 1) {
+    const env = makeHome(t, `concurrent-fresh-${round}`);
+    const [a, b] = await Promise.all([writerAsync(env, "lesson", "A", 50), writerAsync(env, "lesson", "B", 50)]);
+    assert.doesNotMatch(`${a.stderr}${b.stderr}`, /expects v/, `round ${round}: a fresh home was refused as outdated: ${a.stderr}${b.stderr}`);
+    assert.equal(a.code, 0, `round ${round}: writer A exited ${a.code} (stderr: ${a.stderr})`);
+    assert.equal(b.code, 0, `round ${round}: writer B exited ${b.code} (stderr: ${b.stderr})`);
+  }
 });
 
 test("a write refused by the lock is retried instead of surfacing to the caller", () => {

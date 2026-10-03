@@ -289,6 +289,29 @@ test("a conflicting pull request is rebased in a throwaway worktree, tested and 
   assertCanonicalUntouched(fake.log, "/work/alpha");
 });
 
+test("a clean rebase of a head that had checks skips the suite and pushes, leaving CI to gate the new head", async () => {
+  const fake = fakeCloseDeps({ pr: openPr(CONFLICTING), suite: { ok: false, output: "never run", timedOut: false } });
+  const result = await conflictStep({ ctx: ctxFor({ checksOnHead: 3 }), deps: fake.deps });
+  assert.equal(result.status, "done", result.note);
+  assert.equal(result.note, `rebased onto origin/main, suite skipped (CI gates the head), pushed ${HEAD_SHA.slice(0, 7)} -> ${PUSHED_SHA.slice(0, 7)}`);
+  assert.deepEqual(fake.log.tests, [], "a repository with CI ran the local suite on a clean rebase");
+  assert.ok(gitLines(fake.log).some((line) => line.startsWith("push")), "the clean rebase was never pushed");
+});
+
+test("a clean rebase of a head with no checks runs the suite", async () => {
+  const fake = fakeCloseDeps({ pr: openPr(CONFLICTING) });
+  const result = await conflictStep({ ctx: ctxFor({ checksOnHead: 0 }), deps: fake.deps });
+  assert.equal(result.status, "done", result.note);
+  assert.match(result.note, /suite green/);
+  assert.equal(fake.log.tests.length, 1);
+});
+
+test("preflight records how many checks the previous head had as checksOnHead", async () => {
+  const result = await preflightStep({ ctx: ctxFor(), deps: fakeCloseDeps().deps });
+  assert.equal(result.status, "done", result.note);
+  assert.equal(result.data.checksOnHead, 1);
+});
+
 test("a rebase that stops on conflicts is aborted, records the conflict at the seam and fails real-conflict, pushing nothing", async () => {
   const fake = fakeCloseDeps({
     pr: openPr(CONFLICTING),

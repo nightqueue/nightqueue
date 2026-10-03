@@ -66,6 +66,13 @@ test("an eligible conflict is resolved by the merger, verified, continued, teste
   assert.equal(fake.log.tests.length, 1, "the suite did not run after the resolution");
 });
 
+test("a merger resolution runs the suite even when the previous head had checks", async () => {
+  const fake = conflictWorld({ "src/a.mjs": 1 });
+  const result = await conflictStep({ ctx: ctxFor({ remaining: 1_700_000 }, { data: { checksOnHead: 4 } }), deps: fake.deps });
+  assert.equal(result.status, "done", result.note);
+  assert.equal(fake.log.tests.length, 1, "the suite was skipped after a merger resolution");
+});
+
 test("the merger's timeout is half of what the suite's reserve leaves, capped at 20 min", async () => {
   const fake = conflictWorld({ "src/a.mjs": 1 });
   await conflictStep({ ctx: ctxFor({ remaining: 3_600_000 }), deps: fake.deps });
