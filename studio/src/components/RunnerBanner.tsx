@@ -47,7 +47,7 @@ function HeldJob({ jobId, jobs }: { jobId: number | null; jobs: Job[] }) {
   const job = jobs.find((candidate) => candidate.id === jobId);
   const ref = jobRef(jobId);
   return (
-    <span className="min-w-0 truncate">
+    <span className="min-w-0 flex-1 truncate">
       on{" "}
       <Link to="/jobs/$ref" params={{ ref }} className="font-mono">
         {ref}
@@ -60,14 +60,16 @@ function HeldJob({ jobId, jobs }: { jobId: number | null; jobs: Job[] }) {
 // One runner line: pid, mode chip, held job, start time and exit rule, and `Stop`.
 function RunnerLine({ runner, jobs, onStop }: { runner: Runner; jobs: Job[]; onStop?: (runner: Runner) => void }) {
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-row-line px-4 py-2 text-[13px]">
-      <span className="w-[70px] font-mono text-muted">{runner.pid}</span>
-      <Tag>{runnerModeLabel(runner)}</Tag>
+    <div className="flex min-w-0 items-center gap-x-4 border-t border-row-line px-4 py-2 text-[13px]">
+      <span className="w-[70px] shrink-0 font-mono text-muted">{runner.pid}</span>
+      <span className="shrink-0">
+        <Tag>{runnerModeLabel(runner)}</Tag>
+      </span>
       <HeldJob jobId={runner.job_id} jobs={jobs} />
-      <span className="ml-auto text-sm text-muted">
+      <span className="ml-auto hidden shrink-0 whitespace-nowrap text-sm text-muted sm:inline">
         started {hhmmUtc(runner.startedAt)} UTC · {runnerExitRule(runner)}
       </span>
-      <Button variant="ghost" size="sm" disabled={!onStop} onClick={() => onStop?.(runner)} aria-label={`stop runner ${runner.pid}`}>
+      <Button variant="ghost" size="sm" className="shrink-0" disabled={!onStop} onClick={() => onStop?.(runner)} aria-label={`stop runner ${runner.pid}`}>
         Stop
       </Button>
     </div>
@@ -102,15 +104,15 @@ function OnlineBanner({ snapshot, actions }: BannerProps) {
   const advisories = (snapshot.advisories ?? []).join(" · ");
   return (
     <section aria-label="runners" className="flex flex-col rounded-lg border border-line bg-surface">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5">
-        <span className="inline-block size-2 rounded-full bg-accent shadow-[0_0_0_4px_#1b2a21]" aria-hidden="true" />
-        <span className="font-medium">{runnersOnlineLabel(snapshot.runnersOnline)}</span>
-        <span className="min-w-0 text-sm break-words text-muted">
+      <div className="flex items-center gap-x-3 px-4 py-2.5">
+        <span className="inline-block size-2 shrink-0 rounded-full bg-accent shadow-[0_0_0_4px_#1b2a21]" aria-hidden="true" />
+        <span className="shrink-0 font-medium whitespace-nowrap">{runnersOnlineLabel(snapshot.runnersOnline)}</span>
+        <span className="min-w-0 truncate text-sm text-muted">
           <RuntimeLabel />
           {advisories && ` · ${advisories}`}
         </span>
         <PausedNote paused={snapshot.queue_paused} />
-        <div className="ml-auto flex flex-wrap gap-2">
+        <div className="ml-auto flex shrink-0 gap-2">
           <PauseQueueButton paused={snapshot.queue_paused} onToggle={actions.onPauseToggle} />
           <Button variant="ghost" aria-expanded={panel === "logs"} onClick={() => toggle("logs")}>
             Runner logs

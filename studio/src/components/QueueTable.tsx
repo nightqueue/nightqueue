@@ -58,11 +58,12 @@ function QueueRow({ job, context }: { job: Job; context: RowContext }) {
 // The queue table for wide screens: the CLI's columns, one row per job.
 export function QueueTable({ jobs, context }: { jobs: Job[]; context: RowContext }) {
   return (
+    <div className="max-h-[560px] overflow-y-auto">
     <table className="w-full table-fixed border-collapse">
       <thead>
         <tr>
           {COLUMNS.map((column, index) => (
-            <th key={index} className={`border-b border-line px-3 py-2 text-sm font-medium text-muted ${column.width ?? ""} ${column.right ? "text-right" : "text-left"}`}>
+            <th key={index} className={`sticky top-0 z-10 bg-surface border-b border-line px-3 py-2 text-sm font-medium text-muted ${column.width ?? ""} ${column.right ? "text-right" : "text-left"}`}>
               {column.label}
             </th>
           ))}
@@ -74,5 +75,6 @@ export function QueueTable({ jobs, context }: { jobs: Job[]; context: RowContext
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
