@@ -25,8 +25,15 @@ interface JobHeaderProps {
   statusLabel: string;
   issue: IssueSummary | undefined;
   runTier: string | null;
-  close: CloseState;
+  actions: HeaderStatusActions;
   onCancel: () => void;
+}
+
+export interface HeaderStatusActions {
+  close: CloseState;
+  onRun: () => void;
+  onRetry: () => void;
+  retryReady: boolean;
 }
 
 export interface CloseState {
@@ -106,6 +113,25 @@ function CloseAction({ job, close }: { job: JobDetail; close: CloseState }) {
   );
 }
 
+// The one status action beside Cancel job: Run when pending, Retry when stopped, Close job when done, none while running.
+function StatusAction({ job, actions }: { job: JobDetail; actions: HeaderStatusActions }) {
+  if (job.status === "pending") {
+    return (
+      <Button variant="primary" onClick={actions.onRun}>
+        Run
+      </Button>
+    );
+  }
+  if (job.status === "gate" || job.status === "failed" || job.status === "cancelled") {
+    return (
+      <Button variant="primary" disabled={!actions.retryReady} onClick={actions.onRetry}>
+        Retry
+      </Button>
+    );
+  }
+  return <CloseAction job={job} close={actions.close} />;
+}
+
 // Resumes the job's session in a studio terminal, disabled with its reason while the status does not allow it.
 function ResumeInTerminal({ job }: { job: JobDetail }) {
   return (
@@ -116,7 +142,7 @@ function ResumeInTerminal({ job }: { job: JobDetail }) {
 }
 
 // The header actions: raw log, resume in a terminal, copy the session command, close, cancel.
-function HeaderActions({ job, close, onCancel }: { job: JobDetail; close: CloseState; onCancel: () => void }) {
+function HeaderActions({ job, actions, onCancel }: { job: JobDetail; actions: HeaderStatusActions; onCancel: () => void }) {
   return (
     <div className="flex shrink-0 flex-wrap gap-2 md:ml-auto">
       {hasLog(job) ? (
@@ -132,7 +158,7 @@ function HeaderActions({ job, close, onCancel }: { job: JobDetail; close: CloseS
       <Button disabled={!hasSession(job)} onClick={() => void copyText(sessionCommand(job), "the session command")}>
         Copy session cmd
       </Button>
-      <CloseAction job={job} close={close} />
+      <StatusAction job={job} actions={actions} />
       <Button variant="danger" disabled={!canCancel(job)} onClick={onCancel}>
         Cancel job
       </Button>
@@ -141,7 +167,7 @@ function HeaderActions({ job, close, onCancel }: { job: JobDetail; close: CloseS
 }
 
 // The job header: ref, title, status and chips; origin line; timing line; actions.
-export function JobHeader({ job, statusLabel, issue, runTier, close, onCancel }: JobHeaderProps) {
+export function JobHeader({ job, statusLabel, issue, runTier, actions, onCancel }: JobHeaderProps) {
   const tier = job.tier ?? runTier;
   return (
     <section aria-label="job header" className="flex flex-col gap-4 md:flex-row md:items-start">
@@ -159,7 +185,7 @@ export function JobHeader({ job, statusLabel, issue, runTier, close, onCancel }:
           <TimingLine job={job} />
         </div>
       </div>
-      <HeaderActions job={job} close={close} onCancel={onCancel} />
+      <HeaderActions job={job} actions={actions} onCancel={onCancel} />
     </section>
   );
 }

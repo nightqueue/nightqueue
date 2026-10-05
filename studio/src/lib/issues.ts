@@ -77,6 +77,32 @@ export function issueCounts(items: IssueItem[]): Record<IssueStatus, number> {
   return counts;
 }
 
+// Splits the items into the open ones and the done or cancelled ones, each keeping its order.
+export function splitClosedIssues(items: IssueItem[]): { open: IssueItem[]; closed: IssueItem[] } {
+  const isClosed = (item: IssueItem) => shownStatus(item) === "done" || shownStatus(item) === "cancelled";
+  return { open: items.filter((item) => !isClosed(item)), closed: items.filter(isClosed) };
+}
+
+const DONE_GROUP_KEY = "nightqueue.issues.doneGroupOpen";
+
+// Reads whether the `Done` group was left expanded in this session; a blocked storage reads as collapsed.
+export function readDoneGroupOpen(): boolean {
+  try {
+    return window.sessionStorage.getItem(DONE_GROUP_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+// Remembers for the session whether the `Done` group is expanded; a blocked storage is ignored.
+export function writeDoneGroupOpen(open: boolean): void {
+  try {
+    window.sessionStorage.setItem(DONE_GROUP_KEY, open ? "1" : "0");
+  } catch {
+    return;
+  }
+}
+
 // The items whose shown status passes the pill filter.
 export function filterIssues(items: IssueItem[], filter: IssueStatusFilter): IssueItem[] {
   return filter === "all" ? items : items.filter((item) => shownStatus(item) === filter);

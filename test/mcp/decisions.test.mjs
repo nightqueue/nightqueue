@@ -231,6 +231,25 @@ test("the issue tools order a project by status and priority, refuse in_progress
   assert.match(textOf(unknownProject), /unknown project `ghost`; known projects: /);
 });
 
+test("issue_update refuses to edit a done or cancelled issue, names the way out, and the reopen path works", async (t) => {
+  const env = makeDecisionHome(t, "mcp-issue-closed-guard");
+  const client = await connect(t, env);
+  const item = payloadOf(await client.callTool({ name: "issue_save", arguments: { type: "feature", project: "alpha", title: "ship it" } }));
+  for (const status of ["done", "cancelled"]) {
+    await client.callTool({ name: "issue_update", arguments: { id: item.ref, status } });
+    const refused = await client.callTool({ name: "issue_update", arguments: { id: item.ref, detail: "rewritten" } });
+    assert.equal(refused.isError, true);
+    assert.match(textOf(refused), new RegExp(`is \`${status}\`.*\`detail\`.*reopen it first: issue_update \\{ id, status: "todo" \\}`));
+    const combined = await client.callTool({ name: "issue_update", arguments: { id: item.ref, status: "todo", title: "new" } });
+    assert.equal(combined.isError, true);
+    const reopened = payloadOf(await client.callTool({ name: "issue_update", arguments: { id: item.ref, status: "todo" } }));
+    assert.equal(reopened.item.status, "todo");
+    assert.equal(reopened.item.title, "ship it");
+  }
+  const edited = payloadOf(await client.callTool({ name: "issue_update", arguments: { id: item.ref, title: "ship it now" } }));
+  assert.equal(edited.item.title, "ship it now");
+});
+
 // A home with two projects, each carrying one decision and one issue, plus a job of the first one.
 function makeTwoProjectHome(t, name) {
   const env = makeHome(t, name);

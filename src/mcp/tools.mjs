@@ -1483,6 +1483,7 @@ function toolDefinitions(env, state) {
           `By hand the status may be ${MANUAL_STATUSES.join("|")}; \`in_progress\` is refused because only a job sets it, and moving back from \`in_review\` or \`done\` is allowed and leaves a \`reopened\` comment. ` +
           "A linked item follows its job: `in_progress` while it runs or waits at a gate, `in_review` once it is done, `done` once it is closed - its pull request merged through `queue_close` - and `todo` when it fails or is cancelled (a close that finds the pull request closed without merge cancels the job)." +
           "An org item's status is derived from its project rows; setting it to `done` or `cancelled` by hand cancels every open row, with a `closed` comment per row. " +
+          "An issue that is `done` or `cancelled` refuses `title`, `detail`, `type`, `priority` and `decision_id`: reopen it first with `status: \"todo\"`, alone. " +
           "`horizon` was removed in schema v17 and is refused by name.",
         inputSchema: {
           id: itemRefInput,
