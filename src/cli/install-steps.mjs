@@ -17,7 +17,6 @@ import {
 } from "../host/runtime.mjs";
 import { PATH_MARK, addPathLine, binDirInPath, pathBlock, rcFilePath, removePathLine } from "../host/shell.mjs";
 import { EMBEDDING_PACKAGE, EMBEDDING_PACKAGE_RANGE, embeddingLibraryEntry, warmupModel } from "../memory/embedding.mjs";
-import { checkStudioStamp } from "../studio/stamp.mjs";
 import { confirm } from "./prompt.mjs";
 import { firstLine } from "./report.mjs";
 import { finishVersion, pruneVersions, runtimeLocation, stageInstall, switchCurrent, versionStamp } from "./runtime-versions.mjs";
@@ -31,6 +30,9 @@ const STUDIO_TOOLS = ["tsc", "vite"];
 const STUDIO_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 const STUDIO_TAIL_LINES = 5;
 const STUDIO_HASH_CHARS = 12;
+const STUDIO_STAMP_SCRIPT = join("scripts", "studio-stamp.mjs");
+const STUDIO_STAMP_TIMEOUT_MS = 60 * 1000;
+const STUDIO_OK = /^studio ok ([0-9a-f]+)$/m;
 const SHIM_CHECK_TIMEOUT_MS = 15000;
 const SCHEMA_TIMEOUT_MS = 30 * 60 * 1000;
 const MIGRATED_DETAIL = /^v\d+ -> v\d+/;
@@ -77,13 +79,21 @@ function packDirectory(ctx, report, dir) {
   return { ok: false, cleanup: () => {} };
 }
 
-// The stamp check of a source directory; a source that cannot be read is a stale one, never a thrown error.
-function readStudioStamp(dir) {
+// The stamp check of a source directory, run by the source's own `scripts/studio-stamp.mjs check`: the source that wrote the stamp is the one that judges it, so the runtime's idea of the hash never has to match. A source without the script, or one that cannot be run, is a stale one, never a thrown error.
+function readStudioStamp(ctx, dir) {
+  const script = join(dir, STUDIO_STAMP_SCRIPT);
+  if (!existsSync(script)) return { ok: false, hash: null, reason: `${dir} has no ${STUDIO_STAMP_SCRIPT}` };
+  let result;
   try {
-    return checkStudioStamp(dir);
+    result = ctx.spawnSyncImpl(process.execPath, [script, "check"], { cwd: dir, env: ctx.env, encoding: "utf8", timeout: STUDIO_STAMP_TIMEOUT_MS });
   } catch (err) {
     return { ok: false, hash: null, reason: firstLine(err?.message ?? String(err)) };
   }
+  const stdout = typeof result?.stdout === "string" ? result.stdout : "";
+  const match = result?.status === 0 ? STUDIO_OK.exec(stdout) : null;
+  if (match) return { ok: true, hash: match[1], reason: null };
+  const said = firstLine(stdout.trim() || (typeof result?.stderr === "string" ? result.stderr.trim() : "") || result?.error?.message || "");
+  return { ok: false, hash: null, reason: said || `${STUDIO_STAMP_SCRIPT} check exited ${result?.status ?? "?"}` };
 }
 
 // Tells whether both binaries the studio build runs are installed in the directory.
@@ -108,7 +118,7 @@ async function runStudioBuild(ctx, dir) {
 
 // Builds the studio of a local source directory unless its dist is already fresh, so an install from a checkout never ships without one; false refuses the whole install.
 export async function studioBuildStep(ctx, report, dir) {
-  const stamp = readStudioStamp(dir);
+  const stamp = readStudioStamp(ctx, dir);
   if (stamp.ok) {
     report.step(STUDIO_LABEL, "up to date", stamp.hash.slice(0, STUDIO_HASH_CHARS));
     return true;
@@ -118,7 +128,7 @@ export async function studioBuildStep(ctx, report, dir) {
     return false;
   }
   const build = await runStudioBuild(ctx, dir);
-  const built = build.ok ? readStudioStamp(dir) : null;
+  const built = build.ok ? readStudioStamp(ctx, dir) : null;
   if (built?.ok) {
     report.step(STUDIO_LABEL, `built from ${dir}`, built.hash.slice(0, STUDIO_HASH_CHARS));
     return true;

@@ -96,6 +96,10 @@ function makeStudioSource(t, name, { built = false, tools = true, script = "node
   writeFileSync(join(dir, "studio", "src", "main.ts"), "export {};");
   const buildBody = `import { mkdirSync, writeFileSync } from "node:fs";\nimport { writeStudioStamp } from ${JSON.stringify(stampModule)};\nmkdirSync("studio/dist", { recursive: true });\nwriteFileSync("studio/dist/index.html", "built");\nwriteStudioStamp(process.cwd());\nconsole.log("studio built by the stub");\n`;
   writeFileSync(join(dir, "build.mjs"), buildBody);
+  // The source's own stamp checker, the one the install runs: the real script, re-rooted at this fake checkout.
+  mkdirSync(join(dir, "scripts"), { recursive: true });
+  const checkBody = `import { checkStudioStamp } from ${JSON.stringify(stampModule)};\nconst result = checkStudioStamp(process.cwd());\nprocess.stdout.write(result.ok ? \`studio ok \${result.hash.slice(0, 12)}\\n\` : \`\${result.reason}\\n\`);\nprocess.exitCode = result.ok ? 0 : 1;\n`;
+  writeFileSync(join(dir, "scripts", "studio-stamp.mjs"), checkBody);
   if (tools) {
     mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true });
     for (const tool of ["tsc", "vite"]) writeFileSync(join(dir, "node_modules", ".bin", tool), "");
@@ -144,6 +148,17 @@ test("--from a directory without tsc or vite is refused before any install, with
   assert.equal(await run(["update", "--from", source, "--force"], ctx), 1);
   assert.ok(out.includes(`studio: failed (the studio devDependencies are not installed in ${source}: run npm ci there)`), out.join("\n"));
   assert.deepEqual(host.npmCalls(), [], "a refused update still reached npm");
+});
+
+test("--from a directory lets the source's own stamp checker judge the build, so the runtime's hash never has to match", async (t) => {
+  const host = makeHostEnv(t, "install-from-studio-own-checker");
+  const source = makeStudioSource(t, "studio-own-checker-src", { built: true, tools: false });
+  writeFileSync(join(source, "scripts", "studio-stamp.mjs"), 'process.stdout.write("studio/dist was built by a different checker\\n"); process.exitCode = 1;\n');
+  const { ctx, out } = makeCtx(host.env, { cwd: source });
+
+  assert.equal(await run(["update", "--from", source], ctx), 1);
+  assert.ok(out.includes(`studio: failed (the studio devDependencies are not installed in ${source}: run npm ci there)`), out.join("\n"));
+  assert.equal(existsSync(join(host.runtimePackage, "package.json")), false, "a refused studio still installed the runtime");
 });
 
 test("--from a directory whose studio build fails is refused before any install, with the tail of the output", async (t) => {
