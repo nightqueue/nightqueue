@@ -82,7 +82,7 @@ function JobScreen({ job, row, runnersOnline }: { job: JobDetail; row: Job | und
   return (
     <>
       <Breadcrumb jobRefText={jobRef(job.id)} />
-      <JobHeader job={job} statusLabel={row?.studio.status_label || job.status} issue={issue.data} runTier={stream.meta?.tier ?? null} actions={actions} onCancel={() => setCancelling(true)} />
+      <JobHeader job={job} statusLabel={row?.studio.status_label || job.status} closeState={row?.studio.close_state ?? null} issue={issue.data} runTier={stream.meta?.tier ?? null} actions={actions} onCancel={() => setCancelling(true)} />
       <LiveTimeline job={job} stream={stream} reason={reason} />
       {job.status === "gate" && <GateCard job={job} runnersOnline={runnersOnline} gatePhase={gatePhase} />}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">

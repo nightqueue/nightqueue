@@ -465,7 +465,7 @@ merge (`gh pr merge --squash`, confirmed by re-reading the merge commit) and set
 job and append `Closed: PR #<n> merged as <sha7> on <date>` to its notice). It starts detached
 and prints the pid and its log, `<home>/logs/close-<id>-<stamp>.log`; `--foreground` runs it here
 and exits `0` only when the job closed; `--json` prints `{ started, jobId, pid, logPath }`
-detached, or one `{ job, outcome, decisions }` object in the foreground. A close that stops shows ` · close failed at <step>: <reason>` in the STATUS cell and prints `⛔ close stopped at <step>:
+detached, or one `{ job, outcome, decisions }` object in the foreground. A close that stops shows `close failed` in the STATUS cell (the step and reason are in LAST) and prints `⛔ close stopped at <step>:
 <reason> - run again with: nightqueue queue close J-<id>`, leaves the job `done`, and running it
 again resumes at that step - never merging twice. A pull request closed without merge cancels
 the job instead (`J-<id> cancelled: PR #<n> was closed without being merged; nothing to

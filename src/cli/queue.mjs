@@ -49,7 +49,7 @@ import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue
 import { resolveJobSession } from "../queue/session.mjs";
 import { stopReport, stopRunners } from "../queue/stop.mjs";
 import { runCloseHere, runPostCloseSteps, startCloseDetached } from "../queue/close-start.mjs";
-import { CLOSE_STEP_ICONS, CLOSING_LABEL, closeChecklistLines, closeStoppedLine, queueWorkers, statusLabel } from "../queue/close-view.mjs";
+import { CLOSE_FAILED_LABEL, CLOSE_STALLED_LABEL, CLOSE_STEP_ICONS, CLOSING_LABEL, closeChecklistLines, closeStoppedLine, queueWorkers, statusLabel } from "../queue/close-view.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -507,9 +507,11 @@ function columnsFor(jobs, nowMs) {
   return COLUMNS.map((column) => (column.key === "status" ? { ...column, width: Math.max(column.width, statusCell) } : column));
 }
 
-// The style a row renders with: the closing one while a live close holds the job, its status's otherwise.
+// The style a row renders with: the failed one for a failed close, the closing one for a live or stalled close, its status's otherwise.
 function rowStyleOf(job, nowMs) {
-  return statusLabel(job, nowMs) === CLOSING_LABEL ? CLOSING_STYLE : statusStyleOf(job.status);
+  const label = statusLabel(job, nowMs);
+  if (label === CLOSE_FAILED_LABEL) return statusStyleOf("failed");
+  return label === CLOSING_LABEL || label === CLOSE_STALLED_LABEL ? CLOSING_STYLE : statusStyleOf(job.status);
 }
 
 // The STATUS cell of a job: the icon of its row style and the label the close view gives it.

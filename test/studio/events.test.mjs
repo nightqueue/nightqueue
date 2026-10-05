@@ -39,7 +39,7 @@ test("the first event is the decorated snapshot: jobs with their studio cells, r
   assert.equal(snapshot.queue_paused, false);
   const job = snapshot.jobs.find((entry) => entry.id === id);
   assert.equal(job.title, "fix the worker");
-  assert.deepEqual(job.studio, { status_label: "pending", closing: false, reason: null, tokens_label: "-", glyph: null, item_ref: null });
+  assert.deepEqual(job.studio, { status_label: "pending", close_state: null, closing: false, reason: null, tokens_label: "-", glyph: null, item_ref: null });
 });
 
 test("a job added while a client listens arrives as a patch that upserts exactly that row", async (t) => {

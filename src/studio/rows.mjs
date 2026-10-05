@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { queuePausedPath } from "../config/paths.mjs";
 import { localWorkerPid } from "../queue/claim.mjs";
-import { CLOSING_LABEL, statusLabel } from "../queue/close-view.mjs";
+import { CLOSING_LABEL, closeState, statusLabel } from "../queue/close-view.mjs";
 import { formatTokens, stoppedReason } from "../queue/last-cell.mjs";
 import { agentGlyph } from "../queue/routing.mjs";
 
@@ -23,6 +23,7 @@ async function studioCells(job, context, nowMs) {
   const label = statusLabel(job, nowMs);
   return {
     status_label: label,
+    close_state: closeState(job, nowMs),
     closing: label === CLOSING_LABEL,
     reason: job.status === "running" ? null : stoppedReason(job),
     tokens_label: formatTokens(job),

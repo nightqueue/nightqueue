@@ -55,6 +55,12 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - `nightqueue open` and `nightqueue queue session` take `--prompt <text>`: the session starts
   with that request (refused when it starts with `-`).
 
+### Fixed
+
+- The STATUS cell of a job whose close stopped reads `close failed` (red `✗`) or `close stalled`
+  (`◐`) instead of `done · close failed at <step>: <reason>`, which ran over DURATION in the
+  Studio and widened the CLI column. The step and reason stay in TITLE/LAST.
+
 ### Removed
 
 - The singular `runner` key of `nightqueue queue status --json` and of the MCP `queue_status`
