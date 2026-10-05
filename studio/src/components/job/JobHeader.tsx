@@ -4,7 +4,7 @@ import { copyText } from "../../lib/clipboard";
 import { durationLabel, hhmmssUtc, hhmmUtc, isoMs, timeoutLabel } from "../../lib/format";
 import { jobRef, jobTitle } from "../../lib/queue";
 import { sessionBlockReason } from "../../lib/terminals";
-import type { IssueSummary, JobDetail, JobStatus } from "../../lib/types";
+import type { CloseState as JobCloseState, IssueSummary, JobDetail, JobStatus } from "../../lib/types";
 import { useNow } from "../../lib/useNow";
 import { NO_PR_TOOLTIP } from "../JobCells";
 import { TerminalLaunchButton } from "../TerminalLaunchButton";
@@ -23,6 +23,7 @@ const PILL_STYLE: Record<JobStatus, string> = {
 interface JobHeaderProps {
   job: JobDetail;
   statusLabel: string;
+  closeState: JobCloseState | null;
   issue: IssueSummary | undefined;
   runTier: string | null;
   actions: HeaderStatusActions;
@@ -51,9 +52,16 @@ export function Breadcrumb({ jobRefText }: { jobRefText: string }) {
   );
 }
 
-// The status pill of the header, coloured by status.
-function StatusPill({ status, label }: { status: JobStatus; label: string }) {
-  return <span className={`inline-block rounded-full px-2 py-0.5 text-sm leading-[18px] font-medium ${PILL_STYLE[status] ?? PILL_STYLE.pending}`}>{label}</span>;
+// The pill colour: the close state first (failed red, stalled or live close purple), the job status otherwise.
+function pillStyleOf(status: JobStatus, closeState: JobCloseState | null) {
+  if (closeState === "failed") return PILL_STYLE.failed;
+  if (closeState === "stalled" || closeState === "closing") return PILL_STYLE.closed;
+  return PILL_STYLE[status] ?? PILL_STYLE.pending;
+}
+
+// The status pill of the header, coloured by close state then status.
+function StatusPill({ status, closeState, label }: { status: JobStatus; closeState: JobCloseState | null; label: string }) {
+  return <span className={`inline-block rounded-full px-2 py-0.5 text-sm leading-[18px] font-medium ${pillStyleOf(status, closeState)}`}>{label}</span>;
 }
 
 // A static caption chip of the header (tier, priority, attempt).
@@ -167,7 +175,7 @@ function HeaderActions({ job, actions, onCancel }: { job: JobDetail; actions: He
 }
 
 // The job header: ref, title, status and chips; origin line; timing line; actions.
-export function JobHeader({ job, statusLabel, issue, runTier, actions, onCancel }: JobHeaderProps) {
+export function JobHeader({ job, statusLabel, closeState, issue, runTier, actions, onCancel }: JobHeaderProps) {
   const tier = job.tier ?? runTier;
   return (
     <section aria-label="job header" className="flex flex-col gap-4 md:flex-row md:items-start">
@@ -175,7 +183,7 @@ export function JobHeader({ job, statusLabel, issue, runTier, actions, onCancel 
         <div className="flex flex-wrap items-center gap-2.5">
           <span className="font-mono text-xl font-medium">{jobRef(job.id)}</span>
           <span className="min-w-0 text-xl font-semibold break-words">{jobTitle(job)}</span>
-          <StatusPill status={job.status} label={statusLabel} />
+          <StatusPill status={job.status} closeState={closeState} label={statusLabel} />
           {tier && <HeaderChip>{tier}</HeaderChip>}
           <HeaderChip>{`p${job.priority}`}</HeaderChip>
           <HeaderChip>{`attempt ${job.attempts} / ${job.max_attempts}`}</HeaderChip>

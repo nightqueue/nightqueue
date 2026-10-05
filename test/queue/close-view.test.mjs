@@ -62,8 +62,8 @@ test("the status label, the current step and the stopped line follow the checkli
   const failed = closeRow({ close_status: "failed", close: { steps, failed: { step: "merge", reason: "merge-without-sha" } } });
   assert.equal(statusLabel(closeRow({}), NOW), "done");
   assert.equal(statusLabel(closeRow({ close_status: "closing", close_lease_until: LATER }), NOW), "closing");
-  assert.equal(statusLabel(closeRow({ close_status: "closing", close_lease_until: EARLIER }), NOW), "done · close stalled");
-  assert.equal(statusLabel(failed, NOW), "done · close failed at merge: merge-without-sha");
+  assert.equal(statusLabel(closeRow({ close_status: "closing", close_lease_until: EARLIER }), NOW), "close stalled");
+  assert.equal(statusLabel(failed, NOW), "close failed");
   assert.equal(statusLabel(closeRow({ status: "closed", close: { data: { merged: true } } }), NOW), "closed");
   assert.equal(statusLabel(closeRow({ status: "closed" }), NOW), "closed");
   assert.equal(currentCloseStep({ steps }), "merge");
@@ -136,7 +136,7 @@ test("the Closed line names the pull request, the short sha and the day it merge
   assert.equal(closedLine({ number: 7, sha: "abc1234def5678", at: "2026-09-21T23:59:00Z" }), "Closed: PR #7 merged as abc1234 on 2026-09-21");
 });
 
-test("queue status shows `closing` alone while a close holds the job, `done · close failed at <step>` once it stopped, and prints the close hint lines", async (t) => {
+test("queue status shows `closing` alone while a close holds the job, `close failed` once it stopped, and prints the close hint lines", async (t) => {
   const { env, id } = closeHome(t, "close-view-render");
   const before = await runCli(env, ["queue", "status"]);
   assert.match(before.out[1], /^ID {4}STATUS {7}DURATION/, "a listing with no close changed its STATUS width");
@@ -151,8 +151,9 @@ test("queue status shows `closing` alone while a close holds the job, `done · c
 
   failClose(id, { worker: WORKER, close: { attempts: 1, steps: {}, data: {}, failed: { step: "conflict", reason: "suite-red" } } }, env);
   const failed = await runCli(env, ["queue", "status"]);
-  assert.match(failed.stdout, /^ID {4}STATUS {39}DURATION/m, "STATUS did not grow to the stopped close's label");
-  assert.match(failed.stdout, /✓ done · close failed at conflict: suite-red /);
+  assert.match(failed.stdout, /^ID {4}STATUS {9}DURATION/m, "STATUS did not fit the short `close failed` label");
+  assert.match(failed.stdout, /✗ close failed /);
+  assert.equal(failed.stdout.includes("close failed at"), false, "the step leaked into the STATUS cell");
   assert.ok(failed.out.includes(`⛔ close stopped at conflict: suite-red - run again with: nightqueue queue close J-${id}`), failed.stdout);
 
   const detail = await runCli(env, ["queue", "status", String(id)]);

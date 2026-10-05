@@ -469,7 +469,10 @@ it is asked for `--foreground`. `queue_close` answers `{ ok, started, job_id, pi
 waiting for the merge: a `done` job with a pull request only, and every
 other status (``job `N` is already closed`` for a closed one), a job without a pull request or one
 already under a live close lease refused by name with nothing written; calling it again resumes a
-close that stopped at the step that failed. A clean rebase (no conflict, no merger) of a head that had
+close that stopped at the step that failed. The STATUS cell of a job whose close holds or stopped
+reads `closing`, `close failed` or `close stalled` alone (the step and the reason stay in the LAST cell and
+in `queue status <id>`); the studio rows carry the same as `studio.status_label` plus
+`studio.close_state` (`null`, `closing`, `stalled`, `failed` or `closed`), which styles the cell. A clean rebase (no conflict, no merger) of a head that had
 at least one check (`checksOnHead` in the preflight data) skips the local suite and leaves CI to
 gate the new head, with the note `rebased onto origin/<base>, suite skipped (CI gates the head),
 pushed <a> -> <b>`; with no checks, or after a merger resolution, the suite runs. `force: true` skips the pull request checks and the

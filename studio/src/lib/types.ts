@@ -16,8 +16,11 @@ export interface LiveBlock {
   tokens_estimated: boolean | null;
 }
 
+export type CloseState = "closing" | "stalled" | "failed" | "closed";
+
 export interface StudioCells {
   status_label: string;
+  close_state: CloseState | null;
   closing: boolean;
   reason: string | null;
   tokens_label: string;
