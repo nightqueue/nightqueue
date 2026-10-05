@@ -34,7 +34,7 @@ function boundHttp(ctx, deps) {
 // What a provider is told about the closed job and the merge that closed it.
 function closeFacts(ctx) {
   return {
-    job: { id: ctx.jobId, ref: ctx.jobRef, title: ctx.title, project: ctx.project },
+    job: { id: ctx.jobId, ref: ctx.jobRef, slug: ctx.slug, title: ctx.title, project: ctx.project, notice_md: ctx.noticeMd },
     result: { prUrl: ctx.prUrl, prNumber: ctx.prNumber, mergeSha: ctx.mergeSha, mergedAt: ctx.mergedAt },
   };
 }

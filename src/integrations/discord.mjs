@@ -107,26 +107,12 @@ export function noticeSummary(noticeMd) {
   return { headline, firstDone: sentence || null };
 }
 
-// Tells whether a headline is too short or states a release time rather than a change.
-export function isWeakHeadline(headline) {
-  const words = String(headline ?? "").split(/\s+/).filter(Boolean).length;
-  return words < 5 || /^goes out\b|next release|\blive\b/i.test(headline);
-}
-
-// The commit subject of a job title: what follows the first `: `, the whole title when none.
-function commitSubject(title) {
-  const text = String(title ?? "");
-  const at = text.indexOf(": ");
-  return (at === -1 ? text : text.slice(at + 2)).trim();
-}
-
-// The two-line description of a closed job: notice headline and first sentence, or the commit subject when the headline is weak or the notice lacks them.
+// The two-line description of a closed job: the pull request title as GitHub holds it (prefix and all), then the first "What was done:" sentence of the notice; the notice headline stands in for a job whose title is unknown.
 function closedDescription(job) {
   const summary = noticeSummary(job?.notice_md);
-  const subject = capitalise(commitSubject(job?.title));
-  if (!summary?.firstDone) return cut(subject, EMBED_DESCRIPTION_MAX);
-  const headline = isWeakHeadline(summary.headline) ? subject : capitalise(summary.headline);
-  return cut(`${headline}\n${capitalise(summary.firstDone)}`, EMBED_DESCRIPTION_MAX);
+  const title = String(job?.title ?? "").trim() || capitalise(summary?.headline ?? "");
+  if (!summary?.firstDone) return cut(title, EMBED_DESCRIPTION_MAX);
+  return cut(`${title}\n${capitalise(summary.firstDone)}`, EMBED_DESCRIPTION_MAX);
 }
 
 // The embed parts both messages share: pull request link, merge footer, merge time and color.

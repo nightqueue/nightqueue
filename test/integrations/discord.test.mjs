@@ -6,7 +6,7 @@ import { testConnection } from "../../src/config/connections.mjs";
 import { loadConfig, loadSecrets, saveSecrets } from "../../src/config/store.mjs";
 import { requestJson } from "../../src/integrations/http.mjs";
 import { detectOrigin, explicitOrigin } from "../../src/integrations/origin.mjs";
-import { discord, isWeakHeadline, noticeSummary } from "../../src/integrations/discord.mjs";
+import { discord, noticeSummary } from "../../src/integrations/discord.mjs";
 import { acquireClose, getJob } from "../../src/memory/jobs.mjs";
 import { CLOSE_STEPS, runClosePipeline } from "../../src/queue/close.mjs";
 import { runPostCloseSteps } from "../../src/queue/close-start.mjs";
@@ -103,7 +103,11 @@ function fakePreSteps() {
 
 // Closes a done job queued from the discord message link with the fake pre-close steps and the real post-close ones.
 async function closeDiscordJob(home, fetch) {
-  const id = seedDoneJob(home.env, { prompt: `the bot crashes, reported in ${MESSAGE_LINK}` });
+  const id = seedDoneJob(home.env, {
+    prompt: `the bot crashes, reported in ${MESSAGE_LINK}`,
+    slug: "bot-crash",
+    noticeMd: "✅ Fixed — the bot no longer crashes on an empty message\n\nWhat was done: an empty message is now ignored. Nothing else changed.",
+  });
   acquireClose(id, { worker: WORKER, leaseS: 660 }, home.env);
   const outcome = await runClosePipeline({
     store: home.store,
@@ -218,7 +222,7 @@ test("the reply posts in the matching channel, else probes the guild's webhooks 
     content: "",
     embeds: [{
       title: "Fixed · J-1",
-      description: "Fix the crash",
+      description: "fix the crash",
       url: RESULT.prUrl,
       fields: [{ name: "Reported", value: `[message](${MESSAGE_LINK})` }],
       footer: { text: "merged as abc1234" },
@@ -262,7 +266,7 @@ test("the log posts the closed job once to its webhook as one embed, cut to Disc
     content: "",
     embeds: [{
       title: "J-1 closed · the-crash",
-      description: "The crash",
+      description: "fix(crash): the crash",
       url: RESULT.prUrl,
       fields: [
         { name: "PR", value: `[#7](${RESULT.prUrl})`, inline: true },
@@ -342,15 +346,7 @@ test("noticeSummary: no What was done paragraph, blank notice, a Partially fixed
   assert.equal(noticeSummary("✅ Delivered — a headline with enough words\n\nWhat was done: is it? yes!").firstDone, "is it?");
 });
 
-test("isWeakHeadline flags short headlines and release-time statements only", () => {
-  assert.equal(isWeakHeadline("goes out in the next release"), true);
-  assert.equal(isWeakHeadline("the fix is live"), true);
-  assert.equal(isWeakHeadline("too short here"), true);
-  assert.equal(isWeakHeadline(""), true);
-  assert.equal(isWeakHeadline("the queue status now shows what each job does"), false);
-});
-
-test("the closed card of J-117 is titled by ref and slug, described by headline and first sentence, with no commit type(scope)", async () => {
+test("the closed card of J-117 is titled by ref and slug, described by the full PR title and the first sentence", async () => {
   const [, , j117] = CLOSED_JOBS;
   const job = { id: 2, ref: j117.ref, slug: j117.slug, title: j117.title, project: "nightqueue", notice_md: noticeOf(j117.header, j117.done) };
   const result = { prUrl: "https://github.com/acme/nightqueue/pull/42", prNumber: 42, mergeSha: "2e2e7aa1234", mergedAt: "2026-10-02T10:00:00.000Z" };
@@ -359,14 +355,13 @@ test("the closed card of J-117 is titled by ref and slug, described by headline 
   const [embed] = fetch.calls[0].body.embeds;
   assert.equal(embed.title, "J-117 closed · task-queue-status-carries-a-derived");
   assert.equal(embed.url, result.prUrl);
-  assert.equal(embed.description, "The queue status now shows what each running job is doing right now\nOne shared calculation, read on demand from the job's log, now feeds both the terminal and the tool.");
+  assert.equal(embed.description, "refactor(queue): queue_status carries a derived live block per running job\nOne shared calculation, read on demand from the job's log, now feeds both the terminal and the tool.");
   assert.deepEqual(embed.fields.map((field) => [field.name, field.value, field.inline]), [["PR", `[#42](${result.prUrl})`, true], ["Project", "nightqueue", true]]);
   assert.equal(embed.footer.text, "merged as 2e2e7aa");
   assert.equal(embed.timestamp, result.mergedAt);
-  assert.doesNotMatch(JSON.stringify(embed), /refactor|\(queue\)/);
 });
 
-test("the closed card falls back to the commit subject for a weak headline, a missing notice, a notice without What was done, and a missing slug", async () => {
+test("the closed card keeps the full PR title for a weak headline, a missing notice, a notice without What was done, and a missing slug", async () => {
   const [, j116] = CLOSED_JOBS;
   const describe = async (job) => {
     const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
@@ -374,13 +369,13 @@ test("the closed card falls back to the commit subject for a weak headline, a mi
     return fetch.calls[0].body.embeds[0];
   };
   const weak = await describe({ title: j116.title, notice_md: noticeOf(j116.header, j116.done) });
-  assert.equal(weak.description, "Migrate the home schema only in setup/update, never on open\nOpening the database never upgrades it now.");
+  assert.equal(weak.description, "fix(store): migrate the home schema only in setup/update, never on open\nOpening the database never upgrades it now.");
   assert.equal(weak.title, "J-1 closed");
   const noNotice = await describe({ title: j116.title, slug: "migrate-only-in-setup-update" });
-  assert.equal(noNotice.description, "Migrate the home schema only in setup/update, never on open");
+  assert.equal(noNotice.description, "fix(store): migrate the home schema only in setup/update, never on open");
   assert.equal(noNotice.title, "J-1 closed · migrate-only-in-setup-update");
   const noDone = await describe({ title: "fix the crash", notice_md: "✅ Fixed — the crash is gone for every user" });
-  assert.equal(noDone.description, "Fix the crash");
+  assert.equal(noDone.description, "fix the crash");
 });
 
 test("closing a job queued from a discord link replies and logs once; a --steps re-run posts nothing again", async (t) => {
@@ -396,7 +391,9 @@ test("closing a job queued from a discord link replies and logs once; a --steps 
     { name: "log", status: "done", note: "discord: logged through ops" },
   ]);
   assert.deepEqual(fetch.calls.map((call) => [call.method, call.url]), [["POST", `${CHAT_URL}?wait=true`], ["POST", `${OPS_URL}?wait=true`]]);
-  assert.match(fetch.calls[1].body.embeds[0].title, /^J-\d+ closed/);
+  assert.match(fetch.calls[1].body.embeds[0].title, /^J-\d+ closed · bot-crash$/);
+  assert.equal(fetch.calls[1].body.embeds[0].description, "fix the crash\nAn empty message is now ignored.");
+  assert.equal(fetch.calls[0].body.embeds[0].description, "fix the crash\nAn empty message is now ignored.");
   assert.doesNotMatch(fetch.calls[1].body.content, /http/);
   assert.equal(fetch.calls[1].body.embeds[0].url, RESULT.prUrl);
   const checklist = JSON.parse(row.close);
@@ -424,7 +421,7 @@ test("discord.replyToOrigin=false sends no reply, and an unset replyToOrigin rep
     { name: "log", status: "skipped", note: "no log destination" },
   ]);
   assert.equal(silent.calls.length, 0);
-  assert.equal(off.row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");
+  assert.match(off.row.notice_md, /\n\nClosed: PR #7 merged as abc1234 on 2026-10-01$/);
 
   const unset = await runCli(home.env, ["project", "integrations", "alpha", "unset", "discord.replyToOrigin"]);
   assert.deepEqual(unset.out, ["no integrations"]);

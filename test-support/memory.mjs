@@ -178,11 +178,11 @@ export function mergedChecklist(prNumber = 7) {
 }
 
 // Seeds a job that ended `done` with a pull request, through the real store writes, and answers its id.
-export function seedDoneJob(env, { project = "alpha", prompt = "seeded job", prUrl = "https://github.com/acme/api/pull/7", slug = null } = {}) {
+export function seedDoneJob(env, { project = "alpha", prompt = "seeded job", prUrl = "https://github.com/acme/api/pull/7", slug = null, noticeMd = null } = {}) {
   const { id } = addJob({ projectId: ensureProject(env, project), prompt }, env);
   claimJobById(id, { worker: SEED_WORKER, cap: null }, env);
   if (slug) persistRunFacts(id, { worker: SEED_WORKER, slug }, env);
-  if (!finishJob(id, { worker: SEED_WORKER, status: "done", prUrl }, env)) throw new Error(`seedDoneJob: job #${id} could not be finished`);
+  if (!finishJob(id, { worker: SEED_WORKER, status: "done", prUrl, noticeMd }, env)) throw new Error(`seedDoneJob: job #${id} could not be finished`);
   return id;
 }
 

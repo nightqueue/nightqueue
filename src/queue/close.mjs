@@ -1095,6 +1095,7 @@ function postCloseContext(run, stepName) {
     integrations: facts.integrations,
     orgId: facts.orgId,
     title: checklist.data.title ?? null,
+    noticeMd: job.notice_md ?? null,
     mergeSha: checklist.data.mergeSha ?? null,
     mergedAt: checklist.data.mergedAt ?? null,
   };
