@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge } from "../host/gh.mjs";
+import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge, ghRunRerun } from "../host/gh.mjs";
 import { runGitAsync } from "../host/git.mjs";
 import { runNpmAsync } from "../host/npm.mjs";
 import { loadConfig, loadSecrets } from "../config/store.mjs";
@@ -74,6 +74,7 @@ export function defaultCloseDeps(env = process.env) {
       prDetail: (url, options = {}) => ghPrDetail(url, { ...options, env }),
       prChecks: (url, options = {}) => ghPrChecks(url, { ...options, env }),
       prMerge: (url, options = {}) => ghPrMerge(url, { ...options, env }),
+      runRerun: (runId, options = {}) => ghRunRerun(runId, { ...options, env }),
       prDiffNames: (url, options = {}) => ghPrDiffNames(url, { ...options, env }),
     },
     fs: {

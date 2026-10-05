@@ -697,6 +697,75 @@ test("pending checks that outlast the budget stop resumable in preflight, and th
   assert.equal(fake.log.merges.length, 1);
 });
 
+const RUN_URL = "https://github.com/acme/api/actions/runs/555/job/9";
+const ABORTED = { ok: true, checks: [{ name: "a", bucket: "pass" }, { name: "test (24)", bucket: "aborted", detailsUrl: RUN_URL, workflowName: "CI" }], failing: [], pending: [], aborted: ["test (24)"] };
+
+const NEW_RUN_URL = "https://github.com/acme/api/actions/runs/555/job/10";
+const ABORTED_AGAIN = { ...ABORTED, checks: [ABORTED.checks[0], { ...ABORTED.checks[1], detailsUrl: NEW_RUN_URL }] };
+
+test("right after the re-run the old cancelled job is still read: it waits as pending, then merges with one re-run", async (t) => {
+  const home = closeHome(t, "close-steps-aborted-stale");
+  const { fake, now } = behindWorld({ pr: openPr(), checkReads: [ABORTED, ABORTED, HALF, GREEN] });
+  const { outcome, checklist } = await close(home, fake, { now });
+  assert.equal(outcome.status, "closed", JSON.stringify(outcome));
+  assert.equal(fake.log.reruns.length, 1);
+  assert.deepEqual(checklist.data.rerun.urls, [RUN_URL]);
+  assert.equal(fake.log.merges.length, 1);
+});
+
+test("an aborted check is re-run once on its head, the checks are waited on and the close merges", async (t) => {
+  const home = closeHome(t, "close-steps-aborted-rerun");
+  const { fake, now } = behindWorld({ pr: openPr(), checkReads: [ABORTED, GREEN] });
+  const { outcome, checklist } = await close(home, fake, { now });
+  assert.equal(outcome.status, "closed", JSON.stringify(outcome));
+  assert.deepEqual(fake.log.reruns, [{ runId: "555", failed: true }]);
+  assert.equal(checklist.data.rerun.head, HEAD_SHA);
+  assert.deepEqual(checklist.data.rerun.runIds, ["555"]);
+  assert.match(checklist.steps.preflight.note, /re-ran CI \(test \(24\)\) — cancelled before it ran/);
+  assert.equal(fake.log.merges.length, 1);
+});
+
+test("a head aborted again after its one re-run stops at checks-aborted naming the run to re-run by hand", async (t) => {
+  const home = closeHome(t, "close-steps-aborted-twice");
+  const { fake, now } = behindWorld({ pr: openPr(), checkReads: [ABORTED, ABORTED_AGAIN], checks: ABORTED_AGAIN });
+  const { outcome, checklist } = await close(home, fake, { now });
+  assert.equal(outcome.reason, "checks-aborted");
+  assert.match(checklist.steps.preflight.note, /check test \(24\) was cancelled by GitHub twice on 1111111; re-run it by hand: gh run rerun 555 --failed/);
+  assert.equal(fake.log.reruns.length, 1);
+  assert.equal(fake.log.merges.length, 0);
+});
+
+test("a re-run gh refuses, or an aborted check with no run id, stops at checks-aborted", async (t) => {
+  const refused = behindWorld({ pr: openPr(), checks: ABORTED, rerun: () => ({ ok: false, error: "run 555 cannot be rerun" }) });
+  const first = await close(closeHome(t, "close-steps-aborted-refused"), refused.fake, { now: refused.now });
+  assert.equal(first.outcome.reason, "checks-aborted");
+  assert.match(first.checklist.steps.preflight.note, /run 555 cannot be rerun/);
+
+  const noRun = { ...ABORTED, checks: [{ name: "test (24)", bucket: "aborted", detailsUrl: "https://ci.example.com/9" }] };
+  const second = behindWorld({ pr: openPr(), checks: noRun });
+  const result = await close(closeHome(t, "close-steps-aborted-no-run"), second.fake, { now: second.now });
+  assert.equal(result.outcome.reason, "checks-aborted");
+  assert.equal(second.fake.log.reruns.length, 0);
+});
+
+test("a real failure beside an aborted check stays checks-red and re-runs nothing", async (t) => {
+  const home = closeHome(t, "close-steps-aborted-with-red");
+  const mixed = { ...ABORTED, failing: ["lint"] };
+  const { fake, now } = behindWorld({ pr: openPr(), checks: mixed });
+  const { outcome } = await close(home, fake, { now });
+  assert.equal(outcome.reason, "checks-red");
+  assert.equal(fake.log.reruns.length, 0);
+});
+
+test("with --force, aborted checks are listed as aborted and never re-run", async () => {
+  const forced = ctxFor({}, "/work/alpha", { force: true });
+  const fake = fakeCloseDeps({ checks: ABORTED });
+  const result = await preflightStep({ ctx: forced, deps: fake.deps });
+  assert.equal(result.status, "done");
+  assert.match(result.note, /checks ignored with --force: aborted: test \(24\)/);
+  assert.equal(fake.log.reruns.length, 0);
+});
+
 test("a BEHIND update after a preflight wait spends only what is left of the one close budget", async (t) => {
   const home = closeHome(t, "close-steps-preflight-then-behind");
   const firstWait = [HALF, HALF, HALF, HALF, HALF, HALF, HALF];

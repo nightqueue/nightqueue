@@ -67,6 +67,7 @@ export function fakeCloseDeps(changes = {}) {
       current.pr = mergedPr();
       return { ok: true, stderr: "" };
     },
+    rerun: () => ({ ok: true, error: null }),
     suite: { ok: true, output: "", timedOut: false },
     testScript: "node --test",
     exists: () => true,
@@ -74,7 +75,7 @@ export function fakeCloseDeps(changes = {}) {
     merger: async () => NO_MERGER_ANSWER,
     ...changes,
   };
-  const log = { git: [], prReads: 0, checkReads: 0, merges: [], tests: [], tempDirs: [], removedDirs: [], sleeps: [], linked: [], mergers: [] };
+  const log = { git: [], prReads: 0, checkReads: 0, merges: [], reruns: [], tests: [], tempDirs: [], removedDirs: [], sleeps: [], linked: [], mergers: [] };
   const deps = {
     git: async (args, options = {}) => {
       log.git.push({ args, cwd: options.cwd });
@@ -94,6 +95,10 @@ export function fakeCloseDeps(changes = {}) {
         return world.merge(world);
       },
       prDiffNames: async () => world.diffNames,
+      runRerun: async (runId, options = {}) => {
+        log.reruns.push({ runId, failed: options.failed ?? null });
+        return world.rerun(world, runId);
+      },
     },
     fs: {
       exists: (path) => world.exists(path),

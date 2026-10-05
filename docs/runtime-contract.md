@@ -477,7 +477,14 @@ at least one check (`checksOnHead` in the preflight data) skips the local suite 
 gate the new head, with the note `rebased onto origin/<base>, suite skipped (CI gates the head),
 pushed <a> -> <b>`; with no checks, or after a merger resolution, the suite runs. `force: true` skips the pull request checks and the
 rebase suite only - status and attribution still stop the close, and a conflict stops a forced
-close (the merger never runs under force). A pull request
+close (the merger never runs under force). A check GitHub cancelled before it ran
+(`cancelled`, `timed_out`, `startup_failure` or `stale`) is `aborted`, never red: with no real
+failure beside it the close re-runs its failed jobs once per head (`gh run rerun <runId> --failed`,
+recorded as `rerun: { head, runIds, urls, at }` in the close checklist `data`, not in a step entry)
+and waits for the checks; an aborted check whose details URL is one recorded in `urls` is the old
+job GitHub still shows and counts as pending. The same head aborted again under a new details URL,
+a refused re-run or a check with no run id stops the close with
+`checks-aborted`, and `force` lists such checks as `aborted`. A pull request
 closed without merge ends the close by cancelling the job, one merged by hand is recorded as
 `merged outside a close`, and the settle step accepts the job's proposed decisions in the same write that closes it. Inside a job
 it is refused, like the CLI (see [Queue](queue.md#closing-a-job)).

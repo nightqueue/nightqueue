@@ -9,6 +9,7 @@ const MERGE_TIMEOUT_MS = 60000;
 const PR_DETAIL_FIELDS = "state,mergeable,mergeStateStatus,headRefName,headRefOid,baseRefName,mergeCommit,mergedAt,title,number,isDraft";
 const STATUS_PENDING = new Set(["PENDING", "EXPECTED"]);
 const CHECK_PASSED = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+const CHECK_ABORTED = new Set(["CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "STALE"]);
 const LOGIN_RE = /\blogged in to \S+ (?:account|as) ([A-Za-z0-9][A-Za-z0-9-]*)/i;
 
 // Path of the GitHub CLI, the resolver every call of this module goes through.
@@ -141,14 +142,21 @@ function firstLine(text) {
   return String(text ?? "").trim().split("\n")[0]?.trim() || "no output";
 }
 
-// The bucket of one entry of a status check rollup: `pass`, `pending` or `fail`.
+// The bucket of one entry of a status check rollup: `pass`, `pending`, `aborted` (GitHub cancelled it before it ran) or `fail`.
 function checkBucket(item) {
   if (typeof item?.state === "string") {
     if (STATUS_PENDING.has(item.state)) return "pending";
     return item.state === "SUCCESS" ? "pass" : "fail";
   }
   if (item?.status !== "COMPLETED") return "pending";
-  return CHECK_PASSED.has(item?.conclusion) ? "pass" : "fail";
+  if (CHECK_PASSED.has(item?.conclusion)) return "pass";
+  return CHECK_ABORTED.has(item?.conclusion) ? "aborted" : "fail";
+}
+
+// The id of the workflow run a check's details URL points to, or null when it names none.
+export function parseRunId(detailsUrl) {
+  const match = /\/actions\/runs\/(\d+)(?:\/|$)/.exec(String(detailsUrl ?? ""));
+  return match ? match[1] : null;
 }
 
 // Parses the status check rollup of a pull request; an empty rollup is no check at all, which is green.
@@ -157,17 +165,29 @@ function parsePrChecks(text) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const rollup = payload.statusCheckRollup ?? [];
   if (!Array.isArray(rollup)) return null;
-  const checks = rollup.map((item) => ({ name: textOrNull(item?.name) ?? textOrNull(item?.context) ?? "unnamed check", bucket: checkBucket(item) }));
+  const checks = rollup.map((item) => ({
+    name: textOrNull(item?.name) ?? textOrNull(item?.context) ?? "unnamed check",
+    bucket: checkBucket(item),
+    detailsUrl: textOrNull(item?.detailsUrl),
+    workflowName: textOrNull(item?.workflowName),
+  }));
   const named = (bucket) => checks.filter((check) => check.bucket === bucket).map((check) => check.name);
   const head = textOrNull(payload.headRefOid);
-  return { ok: true, checks, failing: named("fail"), pending: named("pending"), ...(head ? { headSha: head } : {}) };
+  return { ok: true, checks, failing: named("fail"), pending: named("pending"), aborted: named("aborted"), ...(head ? { headSha: head } : {}) };
 }
 
 // The checks of one pull request and the head they were read with, parsed from what gh printed even when it exited non-zero; never rejects.
 export async function ghPrChecks(url, { env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
   const result = await runGhAsync(["pr", "view", String(url ?? ""), "--json", "statusCheckRollup,headRefOid"], { env, execFileImpl, timeoutMs, signal });
   const parsed = parsePrChecks(result.stdout);
-  return parsed ?? { ok: false, checks: [], failing: [], pending: [], error: firstLine(result.stderr) };
+  return parsed ?? { ok: false, checks: [], failing: [], pending: [], aborted: [], error: firstLine(result.stderr) };
+}
+
+// Re-runs the failed jobs of one workflow run, never rejecting: `ok: false` carries gh's first error line.
+export async function ghRunRerun(runId, { failed = true, env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
+  const args = ["run", "rerun", String(runId ?? ""), ...(failed ? ["--failed"] : [])];
+  const result = await runGhAsync(args, { env, execFileImpl, timeoutMs, signal });
+  return result.ok ? { ok: true, error: null } : { ok: false, error: firstLine(result.stderr) };
 }
 
 // Squash-merges one pull request pinned to its head commit, never deleting its branch; an unpinned merge is refused without calling gh.
