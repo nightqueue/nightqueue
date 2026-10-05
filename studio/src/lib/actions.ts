@@ -62,6 +62,11 @@ export function canClose(job: Job): boolean {
   return job.status === "done" && Boolean(job.pr_url) && !job.studio.closing;
 }
 
+// Tells whether a close needs no confirm: the pull request is already merged, so nothing gets merged.
+export function closesWithoutConfirm(job: Pick<Job, "pr_state">): boolean {
+  return job.pr_state === "merged";
+}
+
 // Tells whether the job has a session to resume: it ran, and no runner owns it now.
 export function hasSession(job: Pick<Job, "status">): boolean {
   return job.status !== "pending" && job.status !== "running";

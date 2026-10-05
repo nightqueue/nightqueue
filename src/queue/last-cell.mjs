@@ -9,14 +9,20 @@ export function tokenCountersOf(job) {
   return [job.tokens_in, job.tokens_out, job.cache_read, job.cache_creation];
 }
 
+// A token total, compact: `374k`, `1.2M`, `~` in front when estimated, `-` when nothing was spent or the total is not a number.
+export function compactTokens(total, { estimated = false } = {}) {
+  if (!Number.isFinite(total) || total <= 0) return "-";
+  const mark = estimated ? "~" : "";
+  if (total < 1000) return `${mark}${total}`;
+  if (total < 1_000_000) return `${mark}${Math.round(total / 1000)}k`;
+  return `${mark}${(total / 1_000_000).toFixed(1)}M`;
+}
+
 // Tokens the job spent, cache included, compact: `374k`, `1.2M`, `~66.9M` while estimated, `-` before the first usage report.
 export function formatTokens(job) {
   const total = tokenCountersOf(job).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
-  if (total <= 0) return "-";
-  const estimated = job.status === "running" && job.live?.tokens && job.live.tokens_estimated === true ? "~" : "";
-  if (total < 1000) return `${estimated}${total}`;
-  if (total < 1_000_000) return `${estimated}${Math.round(total / 1000)}k`;
-  return `${estimated}${(total / 1_000_000).toFixed(1)}M`;
+  const estimated = job.status === "running" && Boolean(job.live?.tokens) && job.live.tokens_estimated === true;
+  return compactTokens(total, { estimated });
 }
 
 // What a running job is doing as the table says it: the agent glyph, its intent, then the last action; a job without a readable log shows `-`.

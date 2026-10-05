@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { clockLabel } from "./hints.mjs";
-import { extractNotice, extractPrUrl, hasGateMarker, laneName, parseEventLine, parseSlugLine } from "./stream.mjs";
+import { extractNotice, extractPrUrl, hasGateMarker, laneName, parseEventLine, parseSlugLine, tokensFromEvent } from "./stream.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { trackPhaseNumbers } from "./routing.mjs";
 
@@ -20,7 +20,7 @@ const MAX_PLAIN_LINES = 20;
 const FILE_TOOLS = new Set(["Read", "Edit", "Write", "NotebookEdit"]);
 const MCP_TARGET_FIELDS = ["file_path", "path", "pattern", "project", "repo_root", "slug", "query", "name", "key", "id"];
 const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
-const PHASES = new Map([
+export const PHASES = new Map([
   ["triager", 1],
   ["explore", 2],
   ["architect", 3],
@@ -173,10 +173,10 @@ function laneLine(state, kind, text, lane, { dim = "", fields = {} } = {}) {
   return narrationEvent(state, kind, text, { indent: true, lane: state.lanes.size > 1 ? lane.name : null, dim, fields });
 }
 
-// The structured fields of a lane event: the agent, its pipeline phase and the model, each null when unknown.
-function laneFields(lane) {
+// The structured fields of a lane event: the agent, its pipeline phase, the model and the lane's tool_use id, each null when unknown.
+function laneFields(lane, laneId = lane?.id ?? null) {
   const agent = lane?.name ?? null;
-  return { agent, phase: PHASES.get(agent) ?? null, model: lane?.model ?? null };
+  return { agent, phase: PHASES.get(agent) ?? null, model: lane?.model ?? null, laneId };
 }
 
 // The phase an orchestrator Bash command marks (`nightqueue run start|publish|report`), or null.
@@ -317,7 +317,7 @@ function narrateText(state, raw, lane) {
 
 // Opens a lane for a subagent, the only event that indents everything reported under it.
 function openLane(state, { toolUseId, subagentType, description, model = null }) {
-  const lane = { name: laneName(subagentType), label: laneLabel(subagentType, model), model: clip(model, MODEL_LIMIT) || null, openMs: state.clockMs, tools: 0, edits: 0 };
+  const lane = { id: toolUseId ?? null, name: laneName(subagentType), label: laneLabel(subagentType, model), model: clip(model, MODEL_LIMIT) || null, openMs: state.clockMs, tools: 0, edits: 0 };
   if (toolUseId) state.lanes.set(toolUseId, lane);
   const detail = clip(description, DESCRIPTION_LIMIT);
   return narrationEvent(state, "laneOpen", detail ? `${lane.label} — ${detail}` : lane.label, { fields: laneFields(lane) });
@@ -370,12 +370,23 @@ function laneOf(state, event) {
   return state.lanes.get(parent) ?? state.closedLanes.get(parent) ?? null;
 }
 
-// An `assistant` or `user` event, the two that carry the blocks of a message.
+// The silent usage event of an assistant message that carries usage, only when the narrator was asked for them; the four counters summed like the TOKENS column.
+function usageEvents(state, event, lane) {
+  if (!state.usage || event.type !== "assistant" || !event.message?.usage) return [];
+  const counters = tokensFromEvent(event);
+  const tokens = counters.tokensIn + counters.tokensOut + counters.cacheRead + counters.cacheCreation;
+  const parent = typeof event.parent_tool_use_id === "string" && event.parent_tool_use_id ? event.parent_tool_use_id : null;
+  const { agent, phase } = laneFields(lane);
+  return [narrationEvent(state, "usage", "", { fields: { laneId: parent, agent, phase, messageId: counters.id, tokens } })];
+}
+
+// An `assistant` or `user` event, the two that carry the blocks of a message, followed by its usage when asked for.
 function narrateMessage(state, event) {
   const blocks = Array.isArray(event.message?.content) ? event.message.content : [];
   const lane = laneOf(state, event);
   const out = [];
   for (const block of blocks) out.push(...narrateBlock(state, block, lane));
+  out.push(...usageEvents(state, event, lane));
   return out;
 }
 
@@ -403,7 +414,8 @@ function closeLane(state, event) {
   if (id) state.closedLanes.set(id, lane ?? { name: "subagent", label: "subagent", model: null, openMs: null, tools: 0, edits: 0 });
   const status = typeof event.status === "string" && event.status ? event.status : "finished";
   const label = lane?.label ?? "subagent";
-  const fields = { ...laneFields(lane), durationMs: laneDurationMs(state, lane, event.usage) };
+  const laneTokens = Number.isFinite(event.usage?.total_tokens) ? event.usage.total_tokens : null;
+  const fields = { ...laneFields(lane, id || null), durationMs: laneDurationMs(state, lane, event.usage), laneTokens };
   return [narrationEvent(state, "laneClose", `${label} ${status} (${laneSummary(state, lane, event.usage)})`, { fields })];
 }
 
@@ -475,9 +487,9 @@ function finishNarration(state, { running = false } = {}) {
   return [...out, ...flushSkipped(state)];
 }
 
-// A narrator of one job log: it takes raw lines, one at a time, and answers with the lines to print.
-export function createNarrator({ all = false, jobId = null } = {}) {
-  const state = { all: all === true, jobId: jobId ?? null, anchorMs: null, clockMs: null, lanes: new Map(), closedLanes: new Map(), bashTasks: new Set(), tools: new Map(), seen: new Map(), skipped: 0, plain: 0 };
+// A narrator of one job log: it takes raw lines, one at a time, and answers with the lines to print, plus silent usage events when `usage` is on.
+export function createNarrator({ all = false, jobId = null, usage = false } = {}) {
+  const state = { all: all === true, jobId: jobId ?? null, usage: usage === true, anchorMs: null, clockMs: null, lanes: new Map(), closedLanes: new Map(), bashTasks: new Set(), tools: new Map(), seen: new Map(), skipped: 0, plain: 0 };
   return {
     push: (rawLine) => narrateLine(state, rawLine),
     finish: (options) => finishNarration(state, options),

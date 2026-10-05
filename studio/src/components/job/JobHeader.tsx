@@ -5,6 +5,7 @@ import { durationLabel, hhmmssUtc, hhmmUtc, isoMs, timeoutLabel } from "../../li
 import { jobRef, jobTitle } from "../../lib/queue";
 import type { IssueSummary, JobDetail, JobStatus } from "../../lib/types";
 import { useNow } from "../../lib/useNow";
+import { NO_PR_TOOLTIP } from "../JobCells";
 import { Button } from "../ui";
 
 const PILL_STYLE: Record<JobStatus, string> = {
@@ -21,7 +22,15 @@ interface JobHeaderProps {
   job: JobDetail;
   statusLabel: string;
   issue: IssueSummary | undefined;
+  runTier: string | null;
+  close: CloseState;
   onCancel: () => void;
+}
+
+export interface CloseState {
+  closing: boolean;
+  closingText: string | null;
+  onClose: () => void;
 }
 
 // The breadcrumb above the header: back to the queue, then the job's ref.
@@ -81,8 +90,22 @@ function TimingLine({ job }: { job: JobDetail }) {
   return <StoppedLine job={job} />;
 }
 
-// The header actions: raw log, copy the session command, cancel.
-function HeaderActions({ job, onCancel }: { job: JobDetail; onCancel: () => void }) {
+// The close slot of a done job: the primary Close job, or the close pipeline's progress while it runs.
+function CloseAction({ job, close }: { job: JobDetail; close: CloseState }) {
+  if (job.status !== "done") return null;
+  if (close.closing) return <span className="inline-flex min-h-9 items-center text-sm text-muted">{close.closingText ?? "closing…"}</span>;
+  const noPr = !job.pr_url;
+  return (
+    <span title={noPr ? NO_PR_TOOLTIP : undefined}>
+      <Button variant="primary" disabled={noPr} onClick={close.onClose}>
+        Close job
+      </Button>
+    </span>
+  );
+}
+
+// The header actions: raw log, copy the session command, close, cancel.
+function HeaderActions({ job, close, onCancel }: { job: JobDetail; close: CloseState; onCancel: () => void }) {
   return (
     <div className="flex shrink-0 flex-wrap gap-2 md:ml-auto">
       {hasLog(job) ? (
@@ -97,6 +120,7 @@ function HeaderActions({ job, onCancel }: { job: JobDetail; onCancel: () => void
       <Button disabled={!hasSession(job)} onClick={() => void copyText(sessionCommand(job), "the session command")}>
         Copy session cmd
       </Button>
+      <CloseAction job={job} close={close} />
       <Button variant="danger" disabled={!canCancel(job)} onClick={onCancel}>
         Cancel job
       </Button>
@@ -105,7 +129,8 @@ function HeaderActions({ job, onCancel }: { job: JobDetail; onCancel: () => void
 }
 
 // The job header: ref, title, status and chips; origin line; timing line; actions.
-export function JobHeader({ job, statusLabel, issue, onCancel }: JobHeaderProps) {
+export function JobHeader({ job, statusLabel, issue, runTier, close, onCancel }: JobHeaderProps) {
+  const tier = job.tier ?? runTier;
   return (
     <section aria-label="job header" className="flex flex-col gap-4 md:flex-row md:items-start">
       <div className="flex min-w-0 flex-col gap-1.5">
@@ -113,7 +138,7 @@ export function JobHeader({ job, statusLabel, issue, onCancel }: JobHeaderProps)
           <span className="font-mono text-xl font-medium">{jobRef(job.id)}</span>
           <span className="min-w-0 text-xl font-semibold break-words">{jobTitle(job)}</span>
           <StatusPill status={job.status} label={statusLabel} />
-          {job.tier && <HeaderChip>{job.tier}</HeaderChip>}
+          {tier && <HeaderChip>{tier}</HeaderChip>}
           <HeaderChip>{`p${job.priority}`}</HeaderChip>
           <HeaderChip>{`attempt ${job.attempts} / ${job.max_attempts}`}</HeaderChip>
         </div>
@@ -122,7 +147,7 @@ export function JobHeader({ job, statusLabel, issue, onCancel }: JobHeaderProps)
           <TimingLine job={job} />
         </div>
       </div>
-      <HeaderActions job={job} onCancel={onCancel} />
+      <HeaderActions job={job} close={close} onCancel={onCancel} />
     </section>
   );
 }

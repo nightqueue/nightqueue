@@ -1,3 +1,4 @@
+import { compactTokens } from "./last-cell.mjs";
 import { routingRow, trackPhaseNumbers } from "./routing.mjs";
 
 const PHASE_NAMES = new Map([
@@ -21,99 +22,201 @@ const ROUTING_AGENTS = new Map([
   [6, "verifier"],
 ]);
 
-const LANE_PHASES = new Set(ROUTING_AGENTS.keys());
-
 // The elapsed time of a narration event, null when the narrator had no clock for it.
 function offsetOf(event) {
   return Number.isFinite(event?.elapsedMs) ? event.elapsedMs : null;
 }
 
-// Tells whether a narration event marks the start of a pipeline phase: a lane opening or an orchestrator phase command.
-function phaseStartOf(event) {
-  if (!Number.isInteger(event?.phase)) return null;
-  if (event.kind === "laneOpen" || event.kind === "tool") return event.phase;
-  return null;
+// The key a lane is tracked by: its tool_use id, else its phase when the stream gave it no id.
+function laneKey(event) {
+  return typeof event.laneId === "string" && event.laneId ? event.laneId : `phase-${event.phase}`;
 }
 
-// Where a lane close puts the end of its phase: the later of the clock at the close and the lane's own reported duration from its opening.
-function laneEnd(event, openedAt) {
-  const atClose = offsetOf(event);
-  const reported = openedAt !== null && Number.isFinite(event.durationMs) ? openedAt + event.durationMs : null;
-  if (atClose === null) return reported;
-  return reported === null ? atClose : Math.max(atClose, reported);
+// The time between two readings of the same attempt's clock, 0 when either is unknown.
+function span(fromMs, toMs) {
+  return Number.isFinite(fromMs) && Number.isFinite(toMs) ? Math.max(0, toMs - fromMs) : 0;
 }
 
-// The first start, the last lane close and the model of every phase the events reached.
-function collectSpans(events) {
-  const spans = new Map();
-  const lastOpen = new Map();
-  if (events.length) spans.set(0, { start: 0, end: null, model: null });
-  for (const event of events) {
-    const phase = phaseStartOf(event);
-    if (phase !== null && !spans.has(phase)) spans.set(phase, { start: offsetOf(event), end: null, model: event.model ?? null });
-    if (phase !== null && event.kind === "laneOpen") lastOpen.set(phase, offsetOf(event));
-    if (event.kind === "laneClose" && Number.isInteger(event.phase) && spans.has(event.phase)) spans.get(event.phase).end = laneEnd(event, lastOpen.get(event.phase) ?? null);
+// A fresh accumulator: no phase reached, no lane open, the orchestrator at the brief.
+function freshState() {
+  return { phases: new Map(), openLanes: new Map(), laneUsage: new Map(), seenMessages: new Set(), orchPhase: 0, idleSince: null, lastElapsed: null, current: null };
+}
+
+// The totals of one phase, created the first time the phase is reached.
+function phaseEntry(state, number) {
+  if (!state.phases.has(number)) state.phases.set(number, { durationMs: 0, tokens: 0, model: null });
+  return state.phases.get(number);
+}
+
+// Adds lane-less time to the orchestrator phase it belongs to, up to the given clock reading, and closes that idle segment.
+function closeIdle(state, atMs) {
+  if (state.idleSince === null || state.openLanes.size) return;
+  phaseEntry(state, state.orchPhase).durationMs += span(state.idleSince, atMs);
+  state.idleSince = null;
+}
+
+// Starts counting lane-less time again once the last open lane is gone.
+function openIdle(state, atMs) {
+  if (!state.openLanes.size && state.idleSince === null) state.idleSince = atMs;
+}
+
+// Ends the attempt the accumulator is in: lanes that never came back count up to the attempt's last clock reading, and so does the idle segment.
+function endAttempt(state) {
+  for (const lane of state.openLanes.values()) phaseEntry(state, lane.phase).durationMs += span(lane.openedAt, state.lastElapsed);
+  state.openLanes.clear();
+  closeIdle(state, state.lastElapsed);
+}
+
+// A new attempt: the previous one ends, the clock restarts and the orchestrator is back at the brief; the current phase is kept.
+function onAttempt(state, atMs) {
+  endAttempt(state);
+  state.orchPhase = 0;
+  state.lastElapsed = atMs;
+  state.idleSince = atMs ?? 0;
+  phaseEntry(state, 0);
+  if (state.current === null) state.current = 0;
+}
+
+// A lane opening: the idle segment closes and the lane's phase becomes the current one; a lane already open is not opened twice.
+function onLaneOpen(state, event, atMs) {
+  if (!Number.isInteger(event.phase) || state.openLanes.has(laneKey(event))) return;
+  closeIdle(state, atMs);
+  state.openLanes.set(laneKey(event), { phase: event.phase, openedAt: atMs });
+  const entry = phaseEntry(state, event.phase);
+  if (!entry.model && event.model) entry.model = event.model;
+  state.current = event.phase;
+}
+
+// A lane closing: its own measured duration is added to its phase, and its reported total stands in when no assistant usage was seen for it.
+function onLaneClose(state, event, atMs) {
+  state.openLanes.delete(laneKey(event));
+  if (Number.isInteger(event.phase)) {
+    const entry = phaseEntry(state, event.phase);
+    if (Number.isFinite(event.durationMs)) entry.durationMs += event.durationMs;
+    if (Number.isFinite(event.laneTokens) && !(state.laneUsage.get(laneKey(event)) > 0)) entry.tokens += event.laneTokens;
   }
-  return spans;
+  openIdle(state, atMs);
 }
 
-// The phase reached after this one, by start time; the end of every phase that has no close of its own.
-function nextStart(spans, number) {
-  const own = spans.get(number)?.start ?? null;
-  const later = [...spans.entries()].filter(([other, span]) => other !== number && span.start !== null && own !== null && span.start > own);
-  return later.length ? Math.min(...later.map(([, span]) => span.start)) : null;
+// A lane that never reported back: it counts from its opening to the last clock reading.
+function onLaneOrphan(state, event, atMs) {
+  const lane = state.openLanes.get(laneKey(event));
+  if (lane) phaseEntry(state, lane.phase).durationMs += span(lane.openedAt, atMs);
+  state.openLanes.delete(laneKey(event));
+  openIdle(state, atMs);
 }
 
-// Closes the spans of the orchestrator phases (0, 7, 8) at the start of the next phase reached, or at the last event once the job stopped.
-function closeOrchestratorSpans(spans, { lastOffset, running }) {
-  for (const [number, span] of spans) {
-    if (LANE_PHASES.has(number) || span.end !== null) continue;
-    span.end = nextStart(spans, number) ?? (running ? null : lastOffset);
+// An orchestrator command that marks a phase: the idle time so far goes to the previous phase, the rest to the marked one.
+function onMarker(state, event, atMs) {
+  closeIdle(state, atMs);
+  state.orchPhase = event.phase;
+  phaseEntry(state, event.phase);
+  state.current = event.phase;
+  openIdle(state, atMs);
+}
+
+// The tokens of one assistant message, counted once per message id: to its lane's phase, else to the orchestrator's.
+function onUsage(state, event) {
+  if (event.messageId) {
+    if (state.seenMessages.has(event.messageId)) return;
+    state.seenMessages.add(event.messageId);
   }
+  const tokens = Number.isFinite(event.tokens) ? event.tokens : 0;
+  const inLane = typeof event.laneId === "string" && event.laneId && Number.isInteger(event.phase);
+  phaseEntry(state, inLane ? event.phase : state.orchPhase).tokens += tokens;
+  if (inLane) state.laneUsage.set(event.laneId, (state.laneUsage.get(event.laneId) ?? 0) + tokens);
 }
 
-// The number of the phase the job stands at: the one reached last, by start time.
-function currentPhase(spans) {
-  let current = null;
-  for (const [number, span] of spans) {
-    if (current === null || (span.start ?? -1) >= (spans.get(current).start ?? -1)) current = number;
-  }
-  return current;
+// Tells whether a narration event is an orchestrator command that marks a phase.
+function isMarker(event) {
+  return event.kind === "tool" && Number.isInteger(event.phase) && !event.indent;
 }
 
-// The state of one phase of the track, from what the events reached and the status of the job.
-function phaseState(number, { spans, current, status, lastReached }) {
-  const span = spans.get(number);
-  if (!span) return number < lastReached ? "skip" : "pending";
-  if (number === current && status === "running") return "now";
-  if (number === current && status === "gate") return "gate";
-  return span.end !== null || status !== "running" ? "done" : "now";
+// Folds one narration event into the accumulator.
+function pushEvent(state, event) {
+  if (!event || typeof event !== "object") return;
+  const atMs = offsetOf(event) ?? state.lastElapsed;
+  if (event.kind === "attempt") return onAttempt(state, atMs);
+  if (state.lastElapsed === null && state.current === null) onAttempt(state, atMs);
+  if (atMs !== null) state.lastElapsed = atMs;
+  if (event.kind === "laneOpen") onLaneOpen(state, event, atMs);
+  else if (event.kind === "laneClose") onLaneClose(state, event, atMs);
+  else if (event.kind === "laneOrphan") onLaneOrphan(state, event, atMs);
+  else if (event.kind === "usage") onUsage(state, event);
+  else if (isMarker(event)) onMarker(state, event, atMs);
 }
 
 // The model a phase runs on: the one its lane was opened with, else the routing row's for the tier, null for the orchestrator phases.
-function phaseModel(number, span, models) {
-  if (span?.model) return span.model;
+function phaseModel(number, entry, models) {
+  if (entry?.model) return entry.model;
   const agent = ROUTING_AGENTS.get(number);
   return agent ? (models[agent] ?? null) : null;
 }
 
-// The phase track of a job's current attempt, derived from its narration events alone and never from state.json.
-export function phaseTimeline(events, { tier, status }) {
+// The clock reading since which a phase is still accruing time, null when nothing of it is open.
+function liveSince(state, number) {
+  const opened = [...state.openLanes.values()].filter((lane) => lane.phase === number).map((lane) => lane.openedAt).filter(Number.isFinite);
+  if (state.idleSince !== null && !state.openLanes.size && state.orchPhase === number) opened.push(state.idleSince);
+  return opened.length ? Math.min(...opened) : null;
+}
+
+// The time still open in a phase at the last clock reading, counted only once the job stopped.
+function openTime(state, number) {
+  const since = liveSince(state, number);
+  return since === null ? 0 : span(since, state.lastElapsed);
+}
+
+// The state of one phase of the track, from what the job reached across every attempt and the status of the job.
+function phaseState(number, { state, status, lastReachedIndex, index }) {
+  const running = status === "running";
+  const open = [...state.openLanes.values()].some((lane) => lane.phase === number);
+  if (number === state.current && running) return "now";
+  if (number === state.current && status === "gate") return "gate";
+  if (open && running) return "now";
+  if (state.phases.has(number)) return "done";
+  return index < lastReachedIndex ? "skip" : "pending";
+}
+
+// One phase of the wire: name, model, state, summed duration, the clock its open part runs from and its estimated tokens.
+function phaseWire(number, { state, status, models, lastReachedIndex, index }) {
+  const entry = state.phases.get(number) ?? null;
+  const running = status === "running";
+  const durationMs = entry ? entry.durationMs + (running ? 0 : openTime(state, number)) : null;
+  const tokens = entry ? entry.tokens : 0;
+  return {
+    number,
+    name: PHASE_NAMES.get(number),
+    model: phaseModel(number, entry, models),
+    state: phaseState(number, { state, status, lastReachedIndex, index }),
+    durationMs,
+    liveSinceMs: running ? liveSince(state, number) : null,
+    tokens,
+    tokens_label: compactTokens(tokens, { estimated: true }),
+  };
+}
+
+// The phase track of a job as it stands: every phase of the tier's track with what every attempt so far reached.
+function snapshotOf(state, { tier, status }) {
   const numbers = trackPhaseNumbers(tier);
   if (!numbers) return { track: null, phases: [] };
   const { track, models } = routingRow(tier);
-  const list = Array.isArray(events) ? events : [];
-  const spans = collectSpans(list);
-  const running = status === "running";
-  const lastOffset = list.reduce((last, event) => offsetOf(event) ?? last, null);
-  closeOrchestratorSpans(spans, { lastOffset, running });
-  const current = currentPhase(spans);
-  const lastReached = Math.max(-1, ...spans.keys());
-  const phases = numbers.map((number) => {
-    const span = spans.get(number) ?? null;
-    const offsetMs = span?.start ?? null;
-    const durationMs = span && span.end !== null && offsetMs !== null ? Math.max(0, span.end - offsetMs) : null;
-    return { number, name: PHASE_NAMES.get(number), model: phaseModel(number, span, models), state: phaseState(number, { spans, current, status, lastReached }), offsetMs, durationMs };
-  });
+  const lastReachedIndex = Math.max(-1, ...numbers.map((number, index) => (state.phases.has(number) ? index : -1)));
+  const phases = numbers.map((number, index) => phaseWire(number, { state, status, models, lastReachedIndex, index }));
   return { track, phases };
+}
+
+// An accumulator of a job's phase track: narration events of every attempt go in one by one, a snapshot comes out at any time.
+export function createTimeline({ tier = null } = {}) {
+  const state = freshState();
+  return {
+    push: (event) => pushEvent(state, event),
+    snapshot: ({ status, tier: snapshotTier = tier } = {}) => snapshotOf(state, { tier: snapshotTier, status }),
+  };
+}
+
+// The phase track of a job from a list of its narration events, every attempt included; never read from state.json.
+export function phaseTimeline(events, { tier, status }) {
+  const timeline = createTimeline({ tier });
+  for (const event of Array.isArray(events) ? events : []) timeline.push(event);
+  return timeline.snapshot({ status });
 }

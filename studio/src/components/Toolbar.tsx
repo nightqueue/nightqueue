@@ -31,11 +31,11 @@ function ProjectSelect({ value, onChange }: { value: string; onChange: (projectI
   const projects = useProjects();
   const fallback = projects.isPending ? "loading projects…" : projects.isError ? "projects unavailable" : "all projects";
   return (
-    <span className="flex items-center gap-2">
+    <span className="flex min-w-0 items-center gap-2">
       <label htmlFor="queue-project" className="text-sm text-muted">
         Project
       </label>
-      <select id="queue-project" className={`${FIELD_CLASS} max-w-[200px]`} value={value} onChange={(event) => onChange(event.target.value)}>
+      <select id="queue-project" className={`${FIELD_CLASS} min-w-0 max-w-[200px]`} value={value} onChange={(event) => onChange(event.target.value)}>
         <option value={ALL_PROJECTS}>{fallback}</option>
         {(projects.data ?? []).map((project) => (
           <option key={project.id} value={project.id}>
@@ -66,19 +66,22 @@ function SearchBox({ value, onChange }: { value: string; onChange: (search: stri
   );
 }
 
-// The toolbar above the queue: status filters, project select, search and `+ Add job`.
+// The toolbar above the queue: project and search over the status chips, `+ Add job` at the height of both rows.
 export function Toolbar({ counts, filters, onFilters, onAddJob }: ToolbarProps) {
   return (
-    <section aria-label="filters" className="flex flex-wrap items-center gap-2">
-      <StatusChips counts={counts} filters={filters} onFilters={onFilters} />
-      <span className="mx-1 hidden h-5 w-px bg-line sm:inline-block" aria-hidden="true" />
-      <ProjectSelect value={filters.projectId} onChange={(projectId) => onFilters({ ...filters, projectId })} />
-      <SearchBox value={filters.search} onChange={(search) => onFilters({ ...filters, search })} />
-      <div className="ml-auto flex gap-2">
-        <Button variant="primary" disabled={!onAddJob} onClick={onAddJob}>
-          + Add job
-        </Button>
+    <section aria-label="filters" className="flex items-stretch gap-2">
+      <div className="flex min-w-0 grow flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <ProjectSelect value={filters.projectId} onChange={(projectId) => onFilters({ ...filters, projectId })} />
+          <SearchBox value={filters.search} onChange={(search) => onFilters({ ...filters, search })} />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusChips counts={counts} filters={filters} onFilters={onFilters} />
+        </div>
       </div>
+      <Button variant="primary" className="shrink-0 self-stretch" disabled={!onAddJob} onClick={onAddJob}>
+        + Add job
+      </Button>
     </section>
   );
 }

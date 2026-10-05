@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
 import { packageRoot } from "../host/paths.mjs";
+import { jobView } from "../memory/jobs.mjs";
 import { parseJobRef } from "../memory/refs.mjs";
 import { respond } from "../mcp/transports/http-gate.mjs";
 import { listedProjects } from "../cli/project.mjs";
@@ -9,16 +11,23 @@ import { runtimeLabel } from "../cli/runtime-versions.mjs";
 import { readVersion } from "../cli/version.mjs";
 import { blockerLines } from "../queue/claim.mjs";
 import { readLogTail } from "../queue/follow.mjs";
+import { jobRecalls } from "../queue/recalls.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { pauseQueue, resumeQueue } from "../queue/pause.mjs";
 import { WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
+import { withReadOnlyStore } from "../store/open.mjs";
+import { jobDiffstat } from "./diffstat.mjs";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const RAW_LOG_BYTES = 1024 * 1024;
 const MAX_INTERVAL_S = 86400;
 const JOB_LOG_PATH = /^\/api\/jobs\/([^/]+)\/log$/;
+const JOB_DIFFSTAT_PATH = /^\/api\/jobs\/([^/]+)\/diffstat$/;
+const JOB_RECALLS_PATH = /^\/api\/jobs\/([^/]+)\/recalls$/;
+const RECALLS_CACHE_LIMIT = 16;
+const recallsCache = new Map();
 
 // Answers a JSON body with a status code.
 function sendJson(res, status, body) {
@@ -122,6 +131,37 @@ function sendJobLog(res, { env, ref }) {
   res.end(text);
 }
 
+// Answers the files a job touched with their line counts, 404 when the job does not exist.
+async function sendJobDiffstat(res, { env, ref }) {
+  const id = parseJobRef(ref);
+  const row = await withReadOnlyStore(env, (store) => store.jobs.getJob(id));
+  if (!row) return respond(res, 404, `no job \`${id}\``);
+  return sendJson(res, 200, await jobDiffstat(jobView(row, { full: true }), env));
+}
+
+// Answers every memory recall of a job's whole log grouped by phase and agent, 404 when the job does not exist.
+async function sendJobRecalls(res, { env, ref }) {
+  const id = parseJobRef(ref);
+  const row = await withReadOnlyStore(env, (store) => store.jobs.getJob(id));
+  if (!row) return respond(res, 404, `no job \`${id}\``);
+  const path = jobLogPath(id, env);
+  const groups = existsSync(path) ? await cachedRecalls(path) : [];
+  return sendJson(res, 200, { groups });
+}
+
+// The recalls of a log, scanned again only when the log's size or mtime changed since the last poll.
+async function cachedRecalls(path) {
+  const { size, mtimeMs } = await stat(path);
+  const key = `${size}:${mtimeMs}`;
+  const cached = recallsCache.get(path);
+  if (cached?.key === key) return cached.groups;
+  const groups = await jobRecalls(await readFile(path, "utf8"));
+  recallsCache.delete(path);
+  recallsCache.set(path, { key, groups });
+  if (recallsCache.size > RECALLS_CACHE_LIMIT) recallsCache.delete(recallsCache.keys().next().value);
+  return groups;
+}
+
 // Routes one `/api` request to its handler, or answers 404/405 for a path or method this API does not have.
 async function routeApi(req, res, { env, origin, path }) {
   const isGet = req.method === "GET";
@@ -133,6 +173,10 @@ async function routeApi(req, res, { env, origin, path }) {
   if (path === "/api/queue/resume" && isPost) return sendJson(res, 200, setPaused(env, false));
   const log = JOB_LOG_PATH.exec(path);
   if (log && isGet) return sendJobLog(res, { env, ref: log[1] });
+  const diffstat = JOB_DIFFSTAT_PATH.exec(path);
+  if (diffstat && isGet) return await sendJobDiffstat(res, { env, ref: diffstat[1] });
+  const recalls = JOB_RECALLS_PATH.exec(path);
+  if (recalls && isGet) return await sendJobRecalls(res, { env, ref: recalls[1] });
   return respond(res, 404, `unknown studio API route \`${req.method} ${path}\``);
 }
 
