@@ -57,6 +57,12 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `queue close` no longer stops at `checks-red` for a check GitHub cancelled before it ran
+  (`cancelled`, `timed_out`, `startup_failure`, `stale`): it re-runs the failed jobs once per head
+  (`gh run rerun <runId> --failed`) and waits for the checks (the old cancelled job still shown
+  right after the re-run counts as pending), and stops with the new
+  `checks-aborted` when the same head is aborted again, the re-run is refused or no run id can be
+  read from the check.
 - The STATUS cell of a job whose close stopped reads `close failed` (red `✗`) or `close stalled`
   (`◐`) instead of `done · close failed at <step>: <reason>`, which ran over DURATION in the
   Studio and widened the CLI column. The step and reason stay in TITLE/LAST.

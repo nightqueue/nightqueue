@@ -934,7 +934,9 @@ agent, never a second job, never queue work:
    step note. A pull request closed without being merged cancels the job (see *A closed pull
    request cancels* below); one that is already merged is recorded as merged by the operator
    and nothing else is checked. Otherwise the checks must be
-   green - a red check stops the close naming it (`checks-red`), and a pending one is waited
+   green - a red check stops the close naming it (`checks-red`), a check GitHub cancelled before
+   it ran (`cancelled`, `timed_out`, `startup_failure`, `stale`) has its failed jobs re-run once per
+   head and is then waited on (`checks-aborted` when it is aborted again), and a pending one is waited
    on in the same run with the same poll, backoff and `waiting for checks on <sha>: 2/3 done`
    line as the `BEHIND` wait below, out of the one `queue.closeTimeoutS` budget the whole
    close shares (a later `BEHIND` wait spends only what is left of it); when the budget is

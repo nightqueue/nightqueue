@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge } from "../../src/host/gh.mjs";
+import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge, ghRunRerun, parseRunId } from "../../src/host/gh.mjs";
 
 const URL = "https://github.com/acme/api/pull/7";
 
@@ -105,11 +105,37 @@ test("ghPrChecks sorts the status check rollup into pass, pending and fail", asy
 
 test("ghPrChecks carries the head the checks were read with when gh answers it", async () => {
   const execFileImpl = fakeExecFile({ stdout: JSON.stringify({ statusCheckRollup: [], headRefOid: "1111111aaaa" }) });
-  assert.deepEqual(await ghPrChecks(URL, { env: {}, execFileImpl }), { ok: true, checks: [], failing: [], pending: [], headSha: "1111111aaaa" });
+  assert.deepEqual(await ghPrChecks(URL, { env: {}, execFileImpl }), { ok: true, checks: [], failing: [], pending: [], aborted: [], headSha: "1111111aaaa" });
+});
+
+test("ghPrChecks buckets checks GitHub aborted apart from real failures and keeps their run link and workflow", async () => {
+  const url = "https://github.com/acme/api/actions/runs/555/job/9";
+  const rollup = ["CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "STALE"].map((conclusion) => ({ name: conclusion, status: "COMPLETED", conclusion, detailsUrl: url, workflowName: "CI" }));
+  rollup.push({ name: "lint", status: "COMPLETED", conclusion: "FAILURE" }, { name: "gate", status: "COMPLETED", conclusion: "ACTION_REQUIRED" }, { context: "ci/deploy", state: "ERROR" });
+  const checks = await ghPrChecks(URL, { env: {}, execFileImpl: fakeExecFile({ stdout: JSON.stringify({ statusCheckRollup: rollup }) }) });
+  assert.deepEqual(checks.aborted, ["CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "STALE"]);
+  assert.deepEqual(checks.failing, ["lint", "gate", "ci/deploy"]);
+  assert.equal(checks.checks[0].detailsUrl, url);
+  assert.equal(checks.checks[0].workflowName, "CI");
+});
+
+test("parseRunId reads the workflow run id of a check details URL, and null when it names none", () => {
+  assert.equal(parseRunId("https://github.com/acme/api/actions/runs/12345/job/678"), "12345");
+  assert.equal(parseRunId("https://github.com/acme/api/actions/runs/12345"), "12345");
+  assert.equal(parseRunId("https://ci.example.com/build/9"), null);
+  assert.equal(parseRunId(null), null);
+});
+
+test("ghRunRerun re-runs the failed jobs of a run and never rejects", async () => {
+  const ok = fakeExecFile();
+  assert.deepEqual(await ghRunRerun("555", { failed: true, env: {}, execFileImpl: ok }), { ok: true, error: null });
+  assert.deepEqual(ok.calls[0].args, ["run", "rerun", "555", "--failed"]);
+  const refused = await ghRunRerun("555", { failed: true, env: {}, execFileImpl: fakeExecFile({ err: exitError(1), stderr: "run 555 cannot be rerun\nmore" }) });
+  assert.deepEqual(refused, { ok: false, error: "run 555 cannot be rerun" });
 });
 
 test("ghPrChecks reads an empty rollup as green, parses stdout of a non-zero exit, and answers ok:false on a timeout", async () => {
-  assert.deepEqual(await ghPrChecks(URL, { env: {}, execFileImpl: fakeExecFile({ stdout: '{"statusCheckRollup":[]}' }) }), { ok: true, checks: [], failing: [], pending: [] });
+  assert.deepEqual(await ghPrChecks(URL, { env: {}, execFileImpl: fakeExecFile({ stdout: '{"statusCheckRollup":[]}' }) }), { ok: true, checks: [], failing: [], pending: [], aborted: [] });
   const nonZero = fakeExecFile({ err: exitError(8), stdout: JSON.stringify({ statusCheckRollup: [{ name: "test", status: "QUEUED" }] }) });
   assert.deepEqual((await ghPrChecks(URL, { env: {}, execFileImpl: nonZero })).pending, ["test"]);
   const timedOut = await ghPrChecks(URL, { env: {}, execFileImpl: fakeExecFile({ err: timeoutError() }) });
