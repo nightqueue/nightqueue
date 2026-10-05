@@ -73,6 +73,7 @@ export const PROMPT_SOURCE_MISSING = "queue_add needs `prompt`, or `issue_id` to
 
 export { ALL_PROJECTS };
 
+const CLOSED_LOCKED_FIELDS = ["title", "detail", "type", "priority", "decision_id"];
 const RELATED_RECALL_LIMIT = 9;
 const RELATED_PROMPT_LIMIT = 8;
 const LIVE_JOB_LIST = sqlList(LIVE_JOB_STATUSES);
@@ -337,6 +338,16 @@ function writeUpdate(row, { columns, values, status, author }, env) {
   });
 }
 
+// Refuses a text, type, priority or decision edit of an issue already done or cancelled: it is reopened first.
+function refuseClosedEdit(row, changes) {
+  if (row.status !== "done" && row.status !== "cancelled") return;
+  const edited = CLOSED_LOCKED_FIELDS.filter((field) => hasValue(changes, field));
+  if (!edited.length) return;
+  throw new UserError(
+    `the issue is \`${row.status}\`, so ${edited.map((field) => `\`${field}\``).join(", ")} cannot be changed; reopen it first: issue_update { id, status: "todo" }`,
+  );
+}
+
 // Updates the fields present in the patch and returns the stored row; `priority` or `position` also renumbers, and
 // `author` (the operator by default) signs the comment a move back from review or done leaves.
 export function updateIssue(id, patch = {}, env = process.env) {
@@ -344,6 +355,7 @@ export function updateIssue(id, patch = {}, env = process.env) {
   refuseHorizon(changes);
   const row = getIssue(id, env);
   if (!row) throw new UserError(`unknown issue \`${id}\``);
+  refuseClosedEdit(row, changes);
   if (hasValue(changes, "priority")) requirePriority(changes.priority);
   const author = hasValue(changes, "author") ? requireAuthor(changes.author) : OPERATOR_AUTHOR;
   const { columns, values } = updateAssignments(changes, row, env);

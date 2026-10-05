@@ -2,7 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { errorText } from "../lib/actions";
 import { useProjects } from "../lib/api";
-import { filterIssues, ISSUE_STATUS_ORDER, issueCounts, issueRowAction, type IssueStatusFilter, shownJobRef, shownStatus, useAllProjectsIssues, useProjectIssues } from "../lib/issues";
+import { filterIssues, ISSUE_STATUS_ORDER, issueCounts, issueRowAction, type IssueStatusFilter, readDoneGroupOpen, shownJobRef, shownStatus, splitClosedIssues, useAllProjectsIssues, useProjectIssues, writeDoneGroupOpen } from "../lib/issues";
 import { ALL_PROJECTS } from "../lib/queue";
 import type { IssueItem } from "../lib/types";
 import { AddIssueDrawer } from "./AddIssueDrawer";
@@ -239,19 +239,50 @@ function searchIssues(items: IssueItem[], search: string): IssueItem[] {
   return items.filter((item) => [item.ref, item.title, item.project ?? ""].some((field) => field.toLowerCase().includes(needle)));
 }
 
-// The list as a table on wide screens and cards on narrow ones, or the note that nothing is left to show.
-function IssuesList({ items, shown, onQueue, showProject, project }: IssueRowsProps & { shown: IssueItem[] }) {
-  if (shown.length === 0) {
-    return <SectionNote>{items.length === 0 ? (showProject ? "No project has an issue yet." : "This project has no issue.") : "No issue matches the filters."}</SectionNote>;
-  }
+// The rows as a table on wide screens and cards on narrow ones.
+function IssueRows(props: IssueRowsProps) {
   return (
     <>
       <div className="hidden lg:block">
-        <IssuesTable items={shown} onQueue={onQueue} showProject={showProject} project={project} />
+        <IssuesTable {...props} />
       </div>
       <div className="lg:hidden">
-        <IssueCards items={shown} onQueue={onQueue} showProject={showProject} project={project} />
+        <IssueCards {...props} />
       </div>
+    </>
+  );
+}
+
+// The collapsed `Done · N` group of done and cancelled issues; it stays expanded while a pill shows only them.
+function DoneGroup({ forced, ...rows }: IssueRowsProps & { forced: boolean }) {
+  const [open, setOpen] = useState(readDoneGroupOpen);
+  const expanded = forced || open;
+  const toggle = () => {
+    writeDoneGroupOpen(!open);
+    setOpen(!open);
+  };
+  return (
+    <div className="border-t border-line first:border-t-0">
+      <button type="button" aria-expanded={expanded} onClick={toggle} className="flex w-full cursor-pointer items-center gap-2 bg-transparent px-3 py-2.5 text-left text-sm font-medium text-muted">
+        <span aria-hidden>{expanded ? "▾" : "▸"}</span>
+        Done · {rows.items.length}
+      </button>
+      {expanded && <IssueRows {...rows} />}
+    </div>
+  );
+}
+
+// The open issues first, then the collapsed Done group, or the note that nothing is left to show.
+function IssuesList({ items, shown, onQueue, showProject, project, forceDone }: IssueRowsProps & { shown: IssueItem[]; forceDone: boolean }) {
+  if (shown.length === 0) {
+    return <SectionNote>{items.length === 0 ? (showProject ? "No project has an issue yet." : "This project has no issue.") : "No issue matches the filters."}</SectionNote>;
+  }
+  const { open, closed } = splitClosedIssues(shown);
+  const rows = { onQueue, showProject, project };
+  return (
+    <>
+      {open.length > 0 && <IssueRows items={open} {...rows} />}
+      {closed.length > 0 && <DoneGroup items={closed} forced={forceDone} {...rows} />}
     </>
   );
 }
@@ -286,7 +317,7 @@ export function IssuesSection({ projectId, onQueue }: IssuesSectionProps) {
         ) : !all && !project ? (
           <SectionNote>This project is no longer registered.</SectionNote>
         ) : (
-          <IssuesList items={items} shown={shown} showProject={all} project={project} onQueue={(ref, itemProject) => onQueue({ ref, project: itemProject ?? project ?? "" })} />
+          <IssuesList items={items} shown={shown} forceDone={filters.status === "done" || filters.status === "cancelled"} showProject={all} project={project} onQueue={(ref, itemProject) => onQueue({ ref, project: itemProject ?? project ?? "" })} />
         )}
       </SectionFrame>
       {adding && <AddIssueDrawer onClose={() => setAdding(false)} initialProject={project ?? undefined} />}

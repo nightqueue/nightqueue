@@ -2,10 +2,11 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { CancelJobDialog } from "../components/CancelJobDialog";
 import { CloseJobDialog } from "../components/CloseJobDialog";
+import { RetryDialog } from "../components/RetryDialog";
 import { CostCard } from "../components/job/CostCard";
 import { FilesCard } from "../components/job/FilesCard";
 import { GateCard } from "../components/job/GateCard";
-import { Breadcrumb, type CloseState, JobHeader } from "../components/job/JobHeader";
+import { Breadcrumb, type CloseState, type HeaderStatusActions, JobHeader } from "../components/job/JobHeader";
 import { JobSkeleton } from "../components/job/JobSkeleton";
 import { LiveLog } from "../components/job/LiveLog";
 import { MemoryCard } from "../components/job/MemoryCard";
@@ -14,7 +15,7 @@ import { NoticeCard } from "../components/job/NoticeCard";
 import { PhaseTimeline } from "../components/job/PhaseTimeline";
 import { PrCard } from "../components/job/PrCard";
 import { RunCard } from "../components/job/RunCard";
-import { closeJob, closesWithoutConfirm, errorText } from "../lib/actions";
+import { closeJob, closesWithoutConfirm, errorText, runJob } from "../lib/actions";
 import { type JobStreamState, useJobStream } from "../lib/events";
 import { isoMs } from "../lib/format";
 import { useIssueSummary, useJobDetail, useQueueRowOf } from "../lib/job";
@@ -70,7 +71,10 @@ function useCloseState(job: JobDetail, row: Job | undefined): { close: CloseStat
 // The loaded job screen: header, track, the gate card when gated, then the log beside the cards.
 function JobScreen({ job, row, runnersOnline }: { job: JobDetail; row: Job | undefined; runnersOnline: number | null }) {
   const [cancelling, setCancelling] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const { close, confirming, endConfirm } = useCloseState(job, row);
+  const onRun = useAction(runJob, byJob);
+  const actions: HeaderStatusActions = { close, onRun: () => onRun(job), onRetry: () => setRetrying(true), retryReady: row !== undefined && runnersOnline !== null };
   const stream = useJobStream(jobRef(job.id), job.started_at ?? "never-started");
   const issue = useIssueSummary(job.item_ref);
   const gatePhase = stream.timeline?.phases.find((phase) => phase.state === "gate")?.number ?? null;
@@ -78,7 +82,7 @@ function JobScreen({ job, row, runnersOnline }: { job: JobDetail; row: Job | und
   return (
     <>
       <Breadcrumb jobRefText={jobRef(job.id)} />
-      <JobHeader job={job} statusLabel={row?.studio.status_label || job.status} issue={issue.data} runTier={stream.meta?.tier ?? null} close={close} onCancel={() => setCancelling(true)} />
+      <JobHeader job={job} statusLabel={row?.studio.status_label || job.status} issue={issue.data} runTier={stream.meta?.tier ?? null} actions={actions} onCancel={() => setCancelling(true)} />
       <LiveTimeline job={job} stream={stream} reason={reason} />
       {job.status === "gate" && <GateCard job={job} runnersOnline={runnersOnline} gatePhase={gatePhase} />}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -86,6 +90,7 @@ function JobScreen({ job, row, runnersOnline }: { job: JobDetail; row: Job | und
         <SideCards job={job} stream={stream} />
       </div>
       {cancelling && <CancelJobDialog job={job} onClose={() => setCancelling(false)} />}
+      {retrying && row && runnersOnline !== null && <RetryDialog job={row} runnersOnline={runnersOnline} onClose={() => setRetrying(false)} />}
       {confirming && <CloseJobDialog job={job} onClose={endConfirm} />}
     </>
   );
