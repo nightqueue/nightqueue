@@ -85,6 +85,7 @@ export interface IssueItem {
   job_ref: string | null;
   project_status?: IssueStatus | null;
   project_job_ref?: string | null;
+  project?: string;
 }
 
 export interface Runner {

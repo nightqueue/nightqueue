@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import type { Project } from "./types";
 import { callTool } from "./mcp";
 import type { IssueItem, IssueStatus } from "./types";
 
@@ -25,6 +26,31 @@ export function useProjectIssues(project: string | null) {
     queryKey: ["issues", project],
     queryFn: async () => itemsOf(await callTool<{ items?: unknown }>("issue_get", { project })),
     enabled: project !== null,
+    staleTime: 10_000,
+  });
+}
+
+// The issues of every registered project at once, each item tagged with its project; an org item is listed once, under the first project that sees it.
+export function useAllProjectsIssues(projects: Project[] | undefined) {
+  const names = (projects ?? []).map((project) => project.name);
+  return useQuery({
+    queryKey: ["issues", "all", names],
+    queryFn: async () => {
+      const listings = await Promise.all(names.map(async (project) => ({ project, items: itemsOf(await callTool<{ items?: unknown }>("issue_get", { project })) })));
+      const seen = new Set<string>();
+      const merged: IssueItem[] = [];
+      for (const { project, items } of listings) {
+        for (const item of items) {
+          if (item.scope === "org") {
+            if (seen.has(item.ref)) continue;
+            seen.add(item.ref);
+          }
+          merged.push({ ...item, project });
+        }
+      }
+      return merged;
+    },
+    enabled: names.length > 0,
     staleTime: 10_000,
   });
 }

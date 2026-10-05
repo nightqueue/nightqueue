@@ -27,15 +27,15 @@ function StatusChips({ counts, filters, onFilters }: Omit<ToolbarProps, "onAddJo
 }
 
 // The project select, built from the registered projects; it says so when they cannot be read.
-function ProjectSelect({ value, onChange }: { value: string; onChange: (projectId: string) => void }) {
+export function ProjectSelect({ id = "queue-project", value, onChange }: { id?: string; value: string; onChange: (projectId: string) => void }) {
   const projects = useProjects();
   const fallback = projects.isPending ? "loading projects…" : projects.isError ? "projects unavailable" : "all projects";
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <label htmlFor="queue-project" className="text-sm text-muted">
+      <label htmlFor={id} className="text-sm text-muted">
         Project
       </label>
-      <select id="queue-project" className={`${FIELD_CLASS} min-w-0 max-w-[200px]`} value={value} onChange={(event) => onChange(event.target.value)}>
+      <select id={id} className={`${FIELD_CLASS} min-w-0 max-w-[200px]`} value={value} onChange={(event) => onChange(event.target.value)}>
         <option value={ALL_PROJECTS}>{fallback}</option>
         {(projects.data ?? []).map((project) => (
           <option key={project.id} value={project.id}>
@@ -48,16 +48,16 @@ function ProjectSelect({ value, onChange }: { value: string; onChange: (projectI
 }
 
 // The search box over the loaded rows: ref, title, slug, branch or PR number.
-function SearchBox({ value, onChange }: { value: string; onChange: (search: string) => void }) {
+export function SearchBox({ id = "queue-search", label = "Search jobs", placeholder = "search ref, title, branch, PR…", value, onChange }: { id?: string; label?: string; placeholder?: string; value: string; onChange: (search: string) => void }) {
   return (
     <>
-      <label htmlFor="queue-search" className="sr-only">
-        Search jobs
+      <label htmlFor={id} className="sr-only">
+        {label}
       </label>
       <input
-        id="queue-search"
+        id={id}
         type="search"
-        placeholder="search ref, title, branch, PR…"
+        placeholder={placeholder}
         className={`${FIELD_CLASS} w-full px-2.5 sm:w-[260px]`}
         value={value}
         onChange={(event) => onChange(event.target.value)}

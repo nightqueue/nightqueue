@@ -2,9 +2,11 @@ import { Link } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { errorText } from "../lib/actions";
 import { useProjects } from "../lib/api";
-import { filterIssues, ISSUE_STATUS_ORDER, issueCounts, issueRowAction, type IssueStatusFilter, shownJobRef, shownStatus, useProjectIssues } from "../lib/issues";
+import { filterIssues, ISSUE_STATUS_ORDER, issueCounts, issueRowAction, type IssueStatusFilter, shownJobRef, shownStatus, useAllProjectsIssues, useProjectIssues } from "../lib/issues";
 import { ALL_PROJECTS } from "../lib/queue";
 import type { IssueItem } from "../lib/types";
+import { AddIssueDrawer } from "./AddIssueDrawer";
+import { ProjectSelect, SearchBox } from "./Toolbar";
 import { Button, Chip } from "./ui";
 
 interface IssuesSectionProps {
@@ -12,10 +14,17 @@ interface IssuesSectionProps {
   onQueue: (issue: { ref: string; project: string }) => void;
 }
 
-type QueueIssue = (ref: string) => void;
+type QueueIssue = (ref: string, project?: string) => void;
+
+interface IssueFilters {
+  projectId: string;
+  search: string;
+  status: IssueStatusFilter;
+}
 
 const COLUMNS: { label: string; width?: string }[] = [
   { label: "REF", width: "w-[96px]" },
+  { label: "PROJECT", width: "w-[170px]" },
   { label: "TITLE" },
   { label: "TYPE", width: "w-[110px]" },
   { label: "PRIO", width: "w-[64px]" },
@@ -25,11 +34,12 @@ const COLUMNS: { label: string; width?: string }[] = [
 
 const SKELETON_ROWS = [0, 1, 2];
 
-// The frame of the issues section: a heading line over its body.
-function SectionFrame({ title, children }: { title: string; children: ReactNode }) {
+// The frame of the issues section: a heading line, the toolbar, then its body.
+function SectionFrame({ title, toolbar, children }: { title: string; toolbar: ReactNode; children: ReactNode }) {
   return (
     <section aria-label="issues" className="overflow-hidden rounded-lg border border-line bg-surface">
       <h2 className="m-0 border-b border-line px-3 py-2.5 text-sm font-medium text-muted">{title}</h2>
+      <div className="border-b border-line px-3 py-2.5">{toolbar}</div>
       {children}
     </section>
   );
@@ -40,11 +50,10 @@ function SectionNote({ children, tone = "text-muted" }: { children: ReactNode; t
   return <p className={`m-0 px-3 py-6 text-center ${tone}`}>{children}</p>;
 }
 
-// The loading state: the pills line and three rows shaped like the final ones.
+// The loading state: three rows shaped like the final ones.
 function IssuesSkeleton() {
   return (
     <div className="flex flex-col gap-3 p-3" aria-label="loading issues">
-      <div className="h-7 w-2/3 animate-pulse rounded-md bg-row-line" />
       {SKELETON_ROWS.map((row) => (
         <div key={row} className="flex items-center gap-3">
           <div className="h-4 w-16 animate-pulse rounded bg-row-line" />
@@ -56,11 +65,11 @@ function IssuesSkeleton() {
   );
 }
 
-// The status pills: `All N` then one pill per issue status with its count.
+// The status pills: `All N` then one pill per issue status with its count over the items the project and search left.
 function IssuePills({ items, filter, onFilter }: { items: IssueItem[]; filter: IssueStatusFilter; onFilter: (next: IssueStatusFilter) => void }) {
   const counts = issueCounts(items);
   return (
-    <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
+    <>
       <Chip on={filter === "all"} onClick={() => onFilter("all")}>
         All {items.length}
       </Chip>
@@ -69,6 +78,26 @@ function IssuePills({ items, filter, onFilter }: { items: IssueItem[]; filter: I
           {status} {counts[status]}
         </Chip>
       ))}
+    </>
+  );
+}
+
+// The toolbar of the section, shaped like the queue's: project and search over the status pills, `+ Add issue` at the height of both rows.
+function IssuesToolbar({ items, filters, onFilters, onAdd }: { items: IssueItem[]; filters: IssueFilters; onFilters: (next: IssueFilters) => void; onAdd: () => void }) {
+  return (
+    <div className="flex items-stretch gap-2">
+      <div className="flex min-w-0 grow flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <ProjectSelect id="issues-project" value={filters.projectId} onChange={(projectId) => onFilters({ ...filters, projectId })} />
+          <SearchBox id="issues-search" label="Search issues" placeholder="search ref, title, project…" value={filters.search} onChange={(search) => onFilters({ ...filters, search })} />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <IssuePills items={items} filter={filters.status} onFilter={(status) => onFilters({ ...filters, status })} />
+        </div>
+      </div>
+      <Button variant="primary" className="shrink-0 self-stretch" onClick={onAdd}>
+        + Add issue
+      </Button>
     </div>
   );
 }
@@ -77,7 +106,7 @@ function IssuePills({ items, filter, onFilter }: { items: IssueItem[]; filter: I
 function IssueAction({ item, onQueue }: { item: IssueItem; onQueue: QueueIssue }) {
   if (issueRowAction(item) === "queue") {
     return (
-      <Button size="sm" onClick={() => onQueue(item.ref)}>
+      <Button size="sm" onClick={() => onQueue(item.ref, item.project)}>
         Queue as job
       </Button>
     );
@@ -101,14 +130,15 @@ function Cell({ className = "", children }: { className?: string; children: Reac
   return <td className={`border-b border-row-line px-3 py-2.5 align-middle ${className}`}>{children}</td>;
 }
 
-// The issues table for wide screens: ref, title, type, priority, status and the linked job.
-function IssuesTable({ items, onQueue }: { items: IssueItem[]; onQueue: QueueIssue }) {
+// The issues table for wide screens: ref, project (when every project is shown), title, type, priority, status and the linked job.
+function IssuesTable({ items, onQueue, showProject }: { items: IssueItem[]; onQueue: QueueIssue; showProject: boolean }) {
+  const columns = showProject ? COLUMNS : COLUMNS.filter((column) => column.label !== "PROJECT");
   return (
     <div className="max-h-[480px] overflow-y-auto">
       <table className="w-full table-fixed border-collapse">
         <thead>
           <tr>
-            {COLUMNS.map((column) => (
+            {columns.map((column) => (
               <th key={column.label} className={`sticky top-0 z-10 border-b border-line bg-surface px-3 py-2 text-left text-sm font-medium text-muted ${column.width ?? ""}`}>
                 {column.label}
               </th>
@@ -117,8 +147,9 @@ function IssuesTable({ items, onQueue }: { items: IssueItem[]; onQueue: QueueIss
         </thead>
         <tbody>
           {items.map((item) => (
-            <tr key={item.ref}>
-              <Cell className="font-mono">{item.ref}</Cell>
+            <tr key={`${item.project ?? ""}:${item.ref}`}>
+              <Cell className="font-mono whitespace-nowrap">{item.ref}</Cell>
+              {showProject && <Cell className="truncate text-muted">{item.project ?? "-"}</Cell>}
               <Cell className="truncate">{item.title}</Cell>
               <Cell>{item.type ?? "-"}</Cell>
               <Cell className="font-mono">{item.priority === null ? "-" : `p${item.priority}`}</Cell>
@@ -134,14 +165,15 @@ function IssuesTable({ items, onQueue }: { items: IssueItem[]; onQueue: QueueIss
   );
 }
 
-// The issues as stacked cards for narrow screens: ref and status, title, then type and the action.
-function IssueCards({ items, onQueue }: { items: IssueItem[]; onQueue: QueueIssue }) {
+// The issues as stacked cards for narrow screens: ref, project and status, title, then type and the action.
+function IssueCards({ items, onQueue, showProject }: { items: IssueItem[]; onQueue: QueueIssue; showProject: boolean }) {
   return (
     <ul className="m-0 flex list-none flex-col p-0">
       {items.map((item) => (
-        <li key={item.ref} className="flex flex-col gap-1.5 border-b border-row-line px-3 py-2.5">
+        <li key={`${item.project ?? ""}:${item.ref}`} className="flex flex-col gap-1.5 border-b border-row-line px-3 py-2.5">
           <div className="flex items-center gap-2">
             <span className="font-mono">{item.ref}</span>
+            {showProject && item.project && <span className="truncate text-sm text-muted">{item.project}</span>}
             <span className="ml-auto text-sm text-muted">{shownStatus(item)}</span>
           </div>
           <div className="min-w-0 break-words">{item.title}</div>
@@ -157,53 +189,64 @@ function IssueCards({ items, onQueue }: { items: IssueItem[]; onQueue: QueueIssu
   );
 }
 
-// The pills over the issues, as a table on wide screens and cards on narrow ones.
-function IssuesList({ items, onQueue }: { items: IssueItem[]; onQueue: QueueIssue }) {
-  const [filter, setFilter] = useState<IssueStatusFilter>("all");
-  const shown = filterIssues(items, filter);
+// The items the search box keeps: ref, title or project containing the text, case-insensitively.
+function searchIssues(items: IssueItem[], search: string): IssueItem[] {
+  const needle = search.trim().toLowerCase();
+  if (!needle) return items;
+  return items.filter((item) => [item.ref, item.title, item.project ?? ""].some((field) => field.toLowerCase().includes(needle)));
+}
+
+// The list as a table on wide screens and cards on narrow ones, or the note that nothing is left to show.
+function IssuesList({ items, shown, onQueue, showProject }: { items: IssueItem[]; shown: IssueItem[]; onQueue: QueueIssue; showProject: boolean }) {
+  if (shown.length === 0) {
+    return <SectionNote>{items.length === 0 ? (showProject ? "No project has an issue yet." : "This project has no issue.") : "No issue matches the filters."}</SectionNote>;
+  }
   return (
     <>
-      <IssuePills items={items} filter={filter} onFilter={setFilter} />
-      {shown.length === 0 ? (
-        <SectionNote>{items.length === 0 ? "This project has no issue." : "No issue has this status."}</SectionNote>
-      ) : (
-        <>
-          <div className="hidden lg:block">
-            <IssuesTable items={shown} onQueue={onQueue} />
-          </div>
-          <div className="lg:hidden">
-            <IssueCards items={shown} onQueue={onQueue} />
-          </div>
-        </>
-      )}
+      <div className="hidden lg:block">
+        <IssuesTable items={shown} onQueue={onQueue} showProject={showProject} />
+      </div>
+      <div className="lg:hidden">
+        <IssueCards items={shown} onQueue={onQueue} showProject={showProject} />
+      </div>
     </>
   );
 }
 
-// The issues of one named project, with their loading and failed states.
-function ProjectIssues({ project, onQueue }: { project: string; onQueue: IssuesSectionProps["onQueue"] }) {
-  const issues = useProjectIssues(project);
-  if (issues.isPending) return <IssuesSkeleton />;
-  if (issues.isError) return <SectionNote tone="text-red">The issues cannot be read: {errorText(issues.error)}</SectionNote>;
-  return <IssuesList key={project} items={issues.data} onQueue={(ref) => onQueue({ ref, project })} />;
+// The issues the toolbar's project selects: every project's when all are shown, else the named project's and its org's.
+function useShownIssues(projectId: string, projects: ReturnType<typeof useProjects>) {
+  const all = projectId === ALL_PROJECTS;
+  const project = all ? null : (projects.data?.find((entry) => entry.id === projectId)?.name ?? null);
+  const everyProject = useAllProjectsIssues(all ? projects.data : undefined);
+  const oneProject = useProjectIssues(project);
+  const query = all ? everyProject : oneProject;
+  const pending = projects.isPending || (query.isPending && query.fetchStatus !== "idle");
+  return { all, project, pending, error: projects.isError ? "The projects cannot be read; reload the page." : query.isError ? `The issues cannot be read: ${errorText(query.error)}` : null, items: query.data ?? [] };
 }
 
-// The body of the section once the project is resolved from its id: a hint, the projects' loading or failed state, or its issues.
-function SectionBody({ projectId, project, projects, onQueue }: IssuesSectionProps & { project: string | null; projects: ReturnType<typeof useProjects> }) {
-  if (projectId === ALL_PROJECTS) return <SectionNote>Choose a project to see its issues.</SectionNote>;
-  if (project) return <ProjectIssues project={project} onQueue={onQueue} />;
-  if (projects.isPending) return <IssuesSkeleton />;
-  if (projects.isError) return <SectionNote tone="text-red">The projects cannot be read; reload the page.</SectionNote>;
-  return <SectionNote>This project is no longer registered.</SectionNote>;
-}
-
-// The Issues section under the jobs: the toolbar's project's issues plus its org's, or a hint while every project is shown.
+// The Issues section under the jobs: its own project select, search and status pills, every project's issues by default, and `+ Add issue`.
 export function IssuesSection({ projectId, onQueue }: IssuesSectionProps) {
   const projects = useProjects();
-  const project = projectId === ALL_PROJECTS ? null : (projects.data?.find((entry) => entry.id === projectId)?.name ?? null);
+  const [filters, setFilters] = useState<IssueFilters>({ projectId, search: "", status: "all" });
+  const [adding, setAdding] = useState(false);
+  const { all, project, pending, error, items } = useShownIssues(filters.projectId, projects);
+  const searched = searchIssues(items, filters.search);
+  const shown = filterIssues(searched, filters.status);
+  const title = all ? "Issues · all projects" : project ? `Issues · ${project}` : "Issues";
   return (
-    <SectionFrame title={project ? `Issues · ${project}` : "Issues"}>
-      <SectionBody projectId={projectId} project={project} projects={projects} onQueue={onQueue} />
-    </SectionFrame>
+    <>
+      <SectionFrame title={title} toolbar={<IssuesToolbar items={searched} filters={filters} onFilters={setFilters} onAdd={() => setAdding(true)} />}>
+        {pending ? (
+          <IssuesSkeleton />
+        ) : error ? (
+          <SectionNote tone="text-red">{error}</SectionNote>
+        ) : !all && !project ? (
+          <SectionNote>This project is no longer registered.</SectionNote>
+        ) : (
+          <IssuesList items={items} shown={shown} showProject={all} onQueue={(ref, itemProject) => onQueue({ ref, project: itemProject ?? project ?? "" })} />
+        )}
+      </SectionFrame>
+      {adding && <AddIssueDrawer onClose={() => setAdding(false)} initialProject={project ?? undefined} />}
+    </>
   );
 }
