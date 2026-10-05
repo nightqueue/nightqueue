@@ -81,7 +81,7 @@ commands:
   setup [--from <dir>] [--remove]           install the runtime in the home and register the MCP server, hooks and plugin in the host
   doctor [--json] [--check-updates] [--fix] [--db]  check the host and the home, one line per check; --db reports more of the database, --fix also folds its WAL and moves broken sidecars aside; exits 1 on any failure
   init [path] [--key <KEY>] [--gh|--no-gh]  install the runtime and register the git repository at [path] (default: .) as a project
-  open [project] [--resume <session>]       open the operator in a terminal: it investigates, plans and queues jobs, and never edits the code
+  open [project] [--resume <session>] [--prompt <text>]  open the operator in a terminal: it investigates, plans and queues jobs, and never edits the code; --prompt starts it with a request
   update [<version>] [--from] [--force]     reinstall the runtime at the newest version (or at <version>) and re-point the host at it
   org add <name> [--key <KEY>]              create an org; without --key a terminal is asked, else a key is suggested from the name
   org list [--json]                         list orgs, their key, connection slots and project counts
@@ -126,7 +126,7 @@ commands:
   queue repair [<id>] [--from-disk]         re-classify a gated or failed job from its own log; corrects a lost PR link; bare, replays every run's pending writes; --from-disk recreates the jobs the table lost from their runs on disk
   queue pause | resume                      stop claiming new jobs, or claim again
   queue log <id> [--follow] [--raw] [--all] narrate the stream of a job; --raw prints it as it was written
-  queue session <id> [--print] [--json]     resume the claude session of a job's last attempt as the operator (nightqueue open --resume); --print shows it without exec'ing
+  queue session <id> [--print] [--json] [--prompt]  resume the claude session of a job's last attempt as the operator (nightqueue open --resume); --print shows it without exec'ing
   verify [--scope touched|full|+poc]        run the project's own checks in a fixed order, one line per check; exits 1 on any failure
   verify [--files <list>]                   narrow the checks that accept a file list to those paths (comma-separated, repeatable)
   sandbox <command> [args...]               run one command against a throwaway NIGHTQUEUE_HOME and CLAUDE_CONFIG_DIR

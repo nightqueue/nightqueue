@@ -123,6 +123,33 @@ test("`queue session` resumes through the operator launcher in the resolved cwd,
   assert.ok(calls.some((call) => call.bin === "git" && call.args.join(" ") === "worktree prune"), "git worktree prune did not run first");
 });
 
+test("`queue session --prompt` prints the quoted request, passes it after `--resume <sid>`, and refuses one starting with `-`", async (t) => {
+  const home = makeSessionHome(t, "session-prompt");
+  const worktree = addWorktree(home.checkout, "feat+prompt");
+  const id = jobWithSession(home, { slug: "prompt-run", status: "done", session: "sess-exec", attempt: 1, worktree: worktree.path });
+
+  const printed = await runQueueSession(home.env, ["queue", "session", String(id), "--print", "--prompt", "it's done"]);
+  assert.equal(printed.code, 0, printed.err.join("\n"));
+  assert.equal(printed.out[1], `cd '${worktree.path}' && nightqueue open --resume sess-exec --prompt 'it'\\''s done'`);
+
+  const calls = [];
+  const spawnSyncImpl = (bin, args, options) => {
+    calls.push({ bin, args, options });
+    return args[0] === "--help" ? { status: 0, stdout: "  --agent <agent>  Agent for the current session\n" } : { status: 0 };
+  };
+  const ctx = { resolveBinImpl: () => ({ bin: "/opt/claude/claude", via: "test" }), spawnSyncImpl };
+  const resumed = await runQueueSession(home.env, ["queue", "session", String(id), "--prompt=look"], ctx);
+  assert.equal(resumed.code, 0, resumed.err.join("\n"));
+  const claude = calls.find((call) => call.args.includes("--resume"));
+  assert.deepEqual(claude.args.slice(-3), ["--resume", "sess-exec", "look"]);
+
+  calls.length = 0;
+  const refused = await runQueueSession(home.env, ["queue", "session", String(id), "--prompt=-x"], ctx);
+  assert.equal(refused.code, 1);
+  assert.match(refused.err.join("\n"), /--prompt/);
+  assert.deepEqual(calls, []);
+});
+
 test("MCP queue_session returns the attempt, session and cwd of the last attempt, and never execs", async (t) => {
   const home = makeSessionHome(t, "session-mcp");
   const worktree = addWorktree(home.checkout, "feat+mcp-session");

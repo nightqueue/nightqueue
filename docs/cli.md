@@ -349,6 +349,7 @@ nightqueue queue status                               # the table; TOKENS is the
 nightqueue queue session 42                          # resume the session of a job's last attempt
 nightqueue queue session 42 --print                   # print the resume command instead of running it
 nightqueue queue session 42 --json                    # session, attempt and cwd, as the only thing on stdout
+nightqueue queue session 42 --prompt "look at the gate"   # resume it with a request as the next message
 
 nightqueue queue close 42                             # merge a done job's pull request and close the job, detached
 nightqueue queue close 42 --foreground                # run the four steps in this process, one line per step
@@ -425,7 +426,9 @@ runner owns a running job's session, a pending one has none yet - and so is a jo
 reached the agent at all. `--print` stops there and prints the equivalent `cd '<cwd>' && nightqueue
 open --resume <session>` line instead of running it, and `--json` prints `{ jobId, attempt, session,
 cwd, worktreeReleased, command }` as the only thing on stdout; without either flag the exit
-code is the resumed session's own. The MCP tool `queue_session` resolves the same session but
+code is the resumed session's own. `--prompt <text>` is passed to `nightqueue open --resume
+<session> --prompt <text>`; `--print`/`--json` include it, shell-quoted, and, as with
+[Open](#open), `ps` shows it while the session runs. The MCP tool `queue_session` resolves the same session but
 only ever reads it - it answers `job_id`, `attempt`, `session`, `cwd` and `worktree_released`,
 and never resumes or executes anything itself.
 
@@ -584,6 +587,14 @@ outside its run or ran a Bash command outside its closed list - see
 [the queue](queue.md)) and every registered
 project. It exits `1` when any check fails, `0` otherwise - a `warn` never fails
 the run.
+
+The `studio terminal` line says whether the studio can embed a terminal. `ok` reads
+`node-pty <version>: the studio can embed a terminal`. Otherwise it is a `warn`, `node-pty
+unavailable (<reason>)` - the package is missing, failed to build or was built for another
+Node - with the hint that the studio falls back to copy-the-command and that `nightqueue
+update` on a host with a C++ toolchain installs it. On darwin a `spawn-helper` that is not
+executable gives `spawn-helper not executable (<path>)` with the hint `chmod +x <path>`;
+doctor only reports it, the studio fixes it itself when it loads `node-pty`.
 
 Each stored connection gets one `connection <name>` line: doctor runs the same test as
 `nightqueue connection test <name>`, all connections in parallel, each within 5 seconds.
@@ -856,11 +867,13 @@ serves nightqueue studio, the local web cockpit, on `127.0.0.1` only. One proces
   `studio/dist is missing — run \`npm run studio:build\``);
 - `/mcp`, the same stateless Streamable HTTP endpoint as `nightqueue mcp --http`;
 - `/api`: `GET /api/info`, `GET /api/projects`, `POST /api/runners/start` (a watch runner,
-  with an optional `from`/`until` window), `POST /api/queue/pause|resume` and
-  `GET /api/jobs/<ref>/log` (the last mebibyte of the job's log, as text);
+  with an optional `from`/`until` window), `POST /api/queue/pause|resume`,
+  `GET /api/jobs/<ref>/log` (the last mebibyte of the job's log, as text) and
+  `GET|POST /api/terminals`, `DELETE /api/terminals/<id>` (below);
 - `/events`: a server-sent event stream with the `queue_status` snapshot and, every second,
   the patch of what changed; `/events?job=J-<n>` streams the narrated current attempt of one
-  job, its phase timeline and its touched files.
+  job, its phase timeline and its touched files;
+- `/term/<id>`: the WebSocket of one embedded terminal (below).
 
 The process also runs the maintenance timer of the home, as `mcp --http` does; the
 `/events` poll itself only reads.
@@ -874,16 +887,73 @@ with 401 unless it carries that cookie or `Authorization: Bearer <token>`. A res
 the new URL.
 
 **Security.** The `Host` must be loopback and any `Origin` must be loopback (a repeated
-one is refused), as for `mcp --http`. A request that changes state (`POST /mcp`, `POST
-/api/*`) authorised by the cookie must also carry the studio's own origin exactly, port
-included, so a page served on another local port cannot drive the queue. No response
+one is refused), as for `mcp --http`. A request that changes state (`POST /mcp`, `POST` or
+`DELETE /api/*`) authorised by the cookie must also carry the studio's own origin exactly, port
+included, so a page served on another local port cannot drive the queue. A `/term/<id>`
+upgrade needs that exact origin from every caller, the bearer one included, and any other
+upgrade is refused with a short HTTP answer (see [the runtime
+contract](runtime-contract.md)). No response
 carries CORS headers, and every one carries a strict `Content-Security-Policy`,
 `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
 
+**Terminals.** The studio can embed a `claude` terminal, shown in a dock at the bottom of
+every page (tabs, a height kept in the browser, hide, full page at `/terminal/<id>`) and
+drawn by xterm.js. It needs the optional dependency `node-pty`; on darwin the studio makes its
+`spawn-helper` executable (`0755`) inside nightqueue's own runtime the first time it loads it.
+Without `node-pty`, or when it fails to load, the install still succeeds, `GET /api/terminals`
+answers `available: false` with the reason, a create answers `503`, and every entry point
+shows `terminal unavailable: <reason>` with the command to copy instead
+(`nightqueue queue session J-<n>` or `nightqueue open <project>`).
+
+`POST /api/terminals` takes only `{kind, job | project, instruction?}`; any other key, `cwd`
+included, is a `400`: the directory, the session and the binary always come from the job row,
+its run state and the project registry. Two kinds exist:
+
+- `session`: runs `nightqueue queue session J-<n>`, which resumes the job's Claude session in
+  its worktree, or the project checkout when the worktree was released. Only a job in `gate`,
+  `failed`, `done` or `cancelled` is accepted; any other status is a `409` naming it. One live
+  session per job: a second create returns the same terminal (`reused: true`), or a `409` when
+  it carries an instruction.
+- `operator`: runs `nightqueue open <project>`, the operator session in the registered
+  checkout.
+
+Both run the current runtime's CLI (`node <runtime>/bin/nightqueue.mjs`), which starts
+`claude` exactly as when typed, with `TERM=xterm-256color`, 120x32, as foreground children of
+`nightqueue studio` - never detached. The child's environment is the studio's minus every
+`NIGHTQUEUE_STUDIO_*` variable, so the studio's token never reaches `claude` or the tools it
+runs. Like `nightqueue open`, opening a terminal runs `git worktree prune` in the checkout,
+with no `--expire`: every stale worktree entry of that repository (one whose directory is gone)
+is dropped at once, not after git's own expiry. At most 6 terminals
+are open at once; the 7th is a `409` (`6 terminals are open, the cap; close one first`). A
+create from inside a job against the runner's own home is a `403`. An optional `instruction`
+(at most 1000 characters, refused above, never cut; control characters and newlines become
+spaces; one that starts with `-` is refused) is passed as `--prompt`; claude submits it once
+its own prompt is up, and the studio never types into the terminal on your behalf. The listing
+marks it `given`. The listing (`GET /api/terminals`) is in memory; an exited terminal stays in
+it as `exited` for 60 s.
+
+Hiding the dock or switching tabs ends nothing. `DELETE /api/terminals/<id>` (the tab's `×`,
+after a confirm) sends `SIGHUP` to the process group of the `nightqueue` child, which holds
+`claude` and its MCP servers and tools, and `SIGKILL` 2 s later if anything of it is still
+alive. When the `nightqueue` child ends while something of its group still runs, the studio
+ends the group the same way. Ctrl+C on `nightqueue studio` does
+the same to every terminal before the server closes, and an exit handler sends `SIGKILL` to
+whatever is left. A studio that died without that cleanup is covered by the registration
+files described in [the runtime contract](runtime-contract.md): the next start on that port
+reaps them. `nightqueue doctor` reports whether `node-pty` loads (`studio terminal`).
+
+The entry points are `Resume in terminal` on a job page (disabled, with the reason as its
+tooltip, outside the four statuses; `Copy session cmd` stays beside it), `Open operator` in
+the issues toolbar and `Operator` on each issue (instruction `Analyse <ref>: <title>`), and
+`Operator` in the header for the project picked in the queue toolbar; the ones that need a
+project are disabled on all projects.
+
 **Development.** `--api-only` serves no page; `--dev-origin <url>` (only with `--api-only`,
-a loopback `http://host:port`) is the second origin the write rule accepts.
-`npm run studio:dev` starts both sides: this API on port 4747 and the Vite dev server on
-`http://127.0.0.1:5173`, whose proxy adds the bearer token.
+a loopback `http://host:port`) is the second origin the write rule and the `/term` upgrade
+accept. `npm run studio:dev` starts both sides: this API on port 4747 and the Vite dev server
+on `http://127.0.0.1:5173`, whose proxy adds the bearer token, `/term` included. It sets
+`NIGHTQUEUE_STUDIO_SPAWN_SELF=1` on the API side, so its terminals run the working tree's
+CLI (the tree the studio runs from) instead of the installed runtime's.
 
 ## Sandbox
 
@@ -910,9 +980,10 @@ binary).
 nightqueue open                          # the operator session of the project registered for this checkout
 nightqueue open my-app                   # the same for a registered project by name, from any directory
 nightqueue open --resume <session>       # resume an operator (or job) session
+nightqueue open my-app --prompt "Analyse KEY-3: fix the login"   # start the session with a request
 ```
 
-`nightqueue open [project] [--resume <session>]` starts an interactive `claude` with the
+`nightqueue open [project] [--resume <session>] [--prompt <text>]` starts an interactive `claude` with the
 `nightqueue:nightqueue-operator` agent as the main thread (`--append-system-prompt` with the
 agent's body when `claude --help` does not list `--agent`; `nightqueue doctor` reports which),
 the job settings, `--setting-sources project,local` (the operator's interactive session keeps
@@ -920,7 +991,9 @@ the `local` source; a queued job's child gets `--setting-sources project` only),
 the nightqueue MCP server,
 and `NIGHTQUEUE_MODE=operator`, which puts the guard hook in operator mode: reads only under
 the runs, plugin and spill roots, and a closed read-only Bash list. `git worktree prune` runs
-first. The cwd is the registered checkout, or with `--resume` the current directory when it
+first, with no `--expire`: every stale worktree entry of the repository (one whose directory is
+gone) is dropped at once, not after git's own expiry; `queue session` and a studio terminal
+run it too. The cwd is the registered checkout, or with `--resume` the current directory when it
 lies inside that checkout. An unregistered directory is refused with one line naming
 `nightqueue setup`. It never holds the config lock.
 
@@ -930,6 +1003,17 @@ repository suggests. A resumed session is not greeted again. The `nightqueue` MC
 pre-approved for the session (`permissions.allow: ["mcp__nightqueue__*"]` in the settings it
 is started with), so the operator never asks before reading the queue, the issues or the
 memory; every other tool keeps Claude Code's own prompts.
+
+`--prompt <text>` starts the session with that request instead of the opening prompt (after
+`--resume <session>` when resuming): it is passed verbatim as claude's first positional
+prompt, which claude submits itself once its own prompt is up, after any startup dialog
+(workspace trust, MCP approval) has been answered. A value that starts with `-` or is empty is
+refused. A value that is exactly one of claude's command names (`mcp`, `update`, `purge`,
+`plugin`, `help`, ...) is passed with one trailing space: claude dispatches its first operand
+as a command when it names one, even after `--`, so the bare word would run that command
+instead of opening the session with it as the first message. The text is on the command line of the `claude` process (and of `nightqueue`
+itself), so `ps` shows it to any user of the machine while the session runs; do not put
+secrets in it.
 
 ## Libs
 

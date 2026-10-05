@@ -19,6 +19,7 @@ import { startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
 import { withReadOnlyStore } from "../store/open.mjs";
 import { jobDiffstat } from "./diffstat.mjs";
+import { TerminalRefusal } from "./terminal.mjs";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const RAW_LOG_BYTES = 1024 * 1024;
@@ -26,6 +27,7 @@ const MAX_INTERVAL_S = 86400;
 const JOB_LOG_PATH = /^\/api\/jobs\/([^/]+)\/log$/;
 const JOB_DIFFSTAT_PATH = /^\/api\/jobs\/([^/]+)\/diffstat$/;
 const JOB_RECALLS_PATH = /^\/api\/jobs\/([^/]+)\/recalls$/;
+const TERMINAL_PATH = /^\/api\/terminals\/([0-9a-f]{16})$/;
 const RECALLS_CACHE_LIMIT = 16;
 const recallsCache = new Map();
 
@@ -162,8 +164,26 @@ async function cachedRecalls(path) {
   return groups;
 }
 
+// Opens a terminal from a JSON body: 201 for a fresh one, 200 when the job's live session is reused.
+async function createTerminal(req, res, terminals) {
+  const body = await readJsonBody(req);
+  const created = await terminals.create(body);
+  return sendJson(res, created.reused ? 200 : 201, created);
+}
+
+// Routes one `/api/terminals` request (the listing, a create, or a close by id), answering whether it was one.
+async function routeTerminals(req, res, { path, terminals }) {
+  const one = TERMINAL_PATH.exec(path);
+  if (path === "/api/terminals" && req.method === "GET") sendJson(res, 200, await terminals.list());
+  else if (path === "/api/terminals" && req.method === "POST") await createTerminal(req, res, terminals);
+  else if (one && req.method === "DELETE") sendJson(res, 200, terminals.remove(one[1]));
+  else return false;
+  return true;
+}
+
 // Routes one `/api` request to its handler, or answers 404/405 for a path or method this API does not have.
-async function routeApi(req, res, { env, origin, path }) {
+async function routeApi(req, res, { env, origin, path, terminals }) {
+  if (terminals && (await routeTerminals(req, res, { path, terminals }))) return;
   const isGet = req.method === "GET";
   const isPost = req.method === "POST";
   if (path === "/api/info" && isGet) return sendJson(res, 200, infoAnswer({ env, origin }));
@@ -186,6 +206,7 @@ export async function serveApi(req, res, context) {
     await routeApi(req, res, context);
   } catch (err) {
     if (res.headersSent) return res.destroy();
+    if (err instanceof TerminalRefusal) return respond(res, err.status, err.message);
     if (err instanceof UserError) return respond(res, 400, err.message);
     process.stderr.write(`studio api ${req.method} ${context.path} failed: ${err?.stack ?? String(err)}\n`);
     return respond(res, 500, "the studio API failed; see the server output");

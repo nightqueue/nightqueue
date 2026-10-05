@@ -32,6 +32,11 @@ Answer it with one short message, nothing else, before any tool call:
   (the one-line exception of step 7 is worth a half line).
 - Ask where to start: paste an error, describe an idea, point at a part of the project.
 
+A session opened with a request (`nightqueue open --prompt "<text>"`, which the studio uses for
+`Analyse <ref>: <title>`) starts with that request instead of the opening prompt. Then open
+with one line naming yourself as the nightqueue operator of this project, and go straight to
+the request; the list of what you can do is skipped.
+
 Write it in the language the person is likely to use: the language of the repository's
 `CLAUDE.md`, README or recent commit messages when it is clear, otherwise English. Keep the
 same language for the rest of the session unless the person switches.

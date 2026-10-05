@@ -16,16 +16,16 @@ function viteBin() {
   return bin;
 }
 
-// Starts one child sharing this terminal, with the studio token in its environment.
-function startChild(args, token) {
-  return spawn(process.execPath, args, { cwd: ROOT, stdio: "inherit", env: { ...process.env, NIGHTQUEUE_STUDIO_TOKEN: token } });
+// Starts one child sharing this terminal, with the studio token and any extra settings in its environment.
+function startChild(args, token, extraEnv = {}) {
+  return spawn(process.execPath, args, { cwd: ROOT, stdio: "inherit", env: { ...process.env, ...extraEnv, NIGHTQUEUE_STUDIO_TOKEN: token } });
 }
 
 // Runs the API-only studio and the Vite dev server side by side; Ctrl-C stops both, and either one exiting stops the other.
 function main() {
   const token = randomBytes(24).toString("hex");
   const children = [
-    startChild([CLI, "studio", "--api-only", "--port", API_PORT, "--token", token, "--dev-origin", DEV_ORIGIN], token),
+    startChild([CLI, "studio", "--api-only", "--port", API_PORT, "--token", token, "--dev-origin", DEV_ORIGIN], token, { NIGHTQUEUE_STUDIO_SPAWN_SELF: "1" }),
     startChild([viteBin(), "--config", "studio/vite.config.mts"], token),
   ];
   const stopAll = (signal = "SIGTERM") => {

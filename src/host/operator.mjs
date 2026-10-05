@@ -45,6 +45,12 @@ export function probeOperatorLaunch({ bin, ctx }) {
 // The tools the operator session may call without asking: the nightqueue MCP server is its own product, every prompt would be noise.
 export const OPERATOR_ALLOWED_TOOLS = ["mcp__nightqueue__*"];
 
+// The commands (and aliases) claude dispatches when its first operand names one, `--` included; a prompt equal to one would run it.
+export const CLAUDE_COMMAND_NAMES = new Set([
+  "agents", "attach", "auth", "auto-mode", "config", "doctor", "gateway", "help", "import", "install", "kill", "logs", "mcp",
+  "migrate-installer", "plugin", "plugins", "purge", "respawn", "rm", "setup-token", "stop", "ultrareview", "update", "upgrade",
+]);
+
 // The prompt that opens a fresh operator session: the agent answers with its opening message (its contract says what it holds).
 export const OPERATOR_OPENING_PROMPT = "The session just opened. Give your opening message.";
 
@@ -53,8 +59,8 @@ export function operatorSettings(env) {
   return { ...jobSettings(env), permissions: { allow: [...OPERATOR_ALLOWED_TOOLS] } };
 }
 
-// The argv that makes the operator the main thread: the agent (or its body as a fallback), the plugin, the nightqueue MCP server, the jobs' own hooks, and — on a fresh session — the opening prompt.
-export function operatorArgs({ env, mode, resumeSession = null }) {
+// The argv that makes the operator the main thread: the agent (or its body as a fallback), the plugin, the nightqueue MCP server, the jobs' own hooks, and the first prompt (the request given, else the opening prompt on a fresh session).
+export function operatorArgs({ env, mode, resumeSession = null, prompt = null }) {
   const agent = mode === OPERATOR_MODE_AGENT ? ["--agent", OPERATOR_AGENT] : ["--append-system-prompt", operatorAgentBody()];
   return [
     ...agent,
@@ -66,8 +72,25 @@ export function operatorArgs({ env, mode, resumeSession = null }) {
     "project,local",
     "--settings",
     JSON.stringify(operatorSettings(env)),
-    ...(resumeSession === null ? [OPERATOR_OPENING_PROMPT] : ["--resume", resumeSession]),
+    ...(resumeSession === null
+      ? [promptOperand(prompt ?? OPERATOR_OPENING_PROMPT)]
+      : ["--resume", resumeSession, ...(prompt === null ? [] : [promptOperand(prompt)])]),
   ];
+}
+
+// A first prompt claude can never dispatch as one of its commands: a claude command name gets one trailing space, which no command name holds.
+export function promptOperand(prompt) {
+  return CLAUDE_COMMAND_NAMES.has(prompt) ? `${prompt} ` : prompt;
+}
+
+// The `--prompt` value of `open` / `queue session`, verbatim, or null when absent; empty or option-like values are refused.
+export function operatorPrompt(value, usage) {
+  if (value === undefined) return null;
+  if (value.trim() === "") throw new UserError(`\`--prompt\` is empty; usage: ${usage}`);
+  if (value.startsWith("-")) {
+    throw new UserError(`\`--prompt\` cannot start with \`-\`: claude would read it as an option; usage: ${usage}`);
+  }
+  return value;
 }
 
 // Environment of the operator session: the mode the guard reads, and the plugin copy its reads are scoped to.
@@ -93,18 +116,29 @@ function launchLine(cwd, mode) {
   return `operator · ${cwd} · ${how}`;
 }
 
-// Starts the interactive operator session in a directory, optionally resuming one, and returns the exit code of `claude`.
-export function launchOperator({ cwd, resumeSession = null, ctx }) {
+// The binary, argv, environment and mode of an operator session in a directory, probing the mode only when the caller did not pass one.
+export function operatorLaunch({ cwd, resumeSession = null, prompt = null, ctx, mode = null }) {
   if (resumeSession !== null && !isSessionIdSafe(resumeSession)) {
     throw new UserError(`\`${resumeSession}\` is not a session id: letters, digits, \`-\` and \`_\`, 8 to 64 characters`);
   }
   const bin = (ctx.resolveBinImpl ?? resolveClaudeBin)(ctx.env);
   if (!bin?.bin) throw new UserError(CLAUDE_MISSING_MESSAGE);
+  const launchMode = mode ?? probeOperatorLaunch({ bin: bin.bin, ctx }).mode;
+  return {
+    bin: bin.bin,
+    args: operatorArgs({ env: ctx.env, mode: launchMode, resumeSession, prompt }),
+    env: operatorEnv(ctx.env),
+    mode: launchMode,
+    line: launchLine(cwd, launchMode),
+  };
+}
+
+// Starts the interactive operator session in a directory, optionally resuming one, and returns the exit code of `claude`.
+export function launchOperator({ cwd, resumeSession = null, prompt = null, ctx }) {
+  const launch = operatorLaunch({ cwd, resumeSession, prompt, ctx });
   pruneWorktrees({ cwd, ctx });
-  const { mode } = probeOperatorLaunch({ bin: bin.bin, ctx });
-  ctx.out(launchLine(cwd, mode));
-  const args = operatorArgs({ env: ctx.env, mode, resumeSession });
-  const result = ctx.spawnSyncImpl(bin.bin, args, { stdio: "inherit", cwd, env: operatorEnv(ctx.env) });
-  if (result?.error) throw new UserError(`could not run \`${bin.bin}\` in ${cwd}: ${result.error.message}`);
+  ctx.out(launch.line);
+  const result = ctx.spawnSyncImpl(launch.bin, launch.args, { stdio: "inherit", cwd, env: launch.env });
+  if (result?.error) throw new UserError(`could not run \`${launch.bin}\` in ${cwd}: ${result.error.message}`);
   return childExitCode(result);
 }

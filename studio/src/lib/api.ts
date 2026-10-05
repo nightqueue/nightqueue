@@ -1,8 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import type { Project, StudioInfo } from "./types";
 
-// A failed call of the studio API, carrying the server's own message.
-export class ApiError extends Error {}
+// A failed call of the studio API, carrying the server's own message and the HTTP status.
+export class ApiError extends Error {
+  readonly status: number | null;
+
+  constructor(message: string, status: number | null = null) {
+    super(message);
+    this.status = status;
+  }
+}
 
 // The error message of a failed answer: the server's `{ error }` when it sent one, the status otherwise.
 async function errorMessage(response: Response): Promise<string> {
@@ -18,7 +25,7 @@ async function errorMessage(response: Response): Promise<string> {
 // Reads one JSON route of the studio API, throwing an ApiError with the server's message on failure.
 export async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { headers: { accept: "application/json" }, credentials: "same-origin" });
-  if (!response.ok) throw new ApiError(await errorMessage(response));
+  if (!response.ok) throw new ApiError(await errorMessage(response), response.status);
   return (await response.json()) as T;
 }
 
@@ -30,7 +37,14 @@ export async function postJson<T>(path: string, body: unknown = {}): Promise<T> 
     credentials: "same-origin",
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw new ApiError(await errorMessage(response));
+  if (!response.ok) throw new ApiError(await errorMessage(response), response.status);
+  return (await response.json()) as T;
+}
+
+// Deletes one resource of the studio API, throwing an ApiError with the server's message on failure.
+export async function deleteJson<T>(path: string): Promise<T> {
+  const response = await fetch(path, { method: "DELETE", headers: { accept: "application/json" }, credentials: "same-origin" });
+  if (!response.ok) throw new ApiError(await errorMessage(response), response.status);
   return (await response.json()) as T;
 }
 

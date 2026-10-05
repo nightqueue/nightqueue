@@ -23,6 +23,6 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     strictPort: true,
-    proxy: Object.fromEntries(PROXIED_PATHS.map((path) => [path, proxyEntry()])),
+    proxy: { ...Object.fromEntries(PROXIED_PATHS.map((path) => [path, proxyEntry()])), "/term": { ...proxyEntry(), ws: true } },
   },
 });

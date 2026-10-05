@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { Shell } from "./components/Shell";
 import { JobPage } from "./routes/JobPage";
 import { QueuePage } from "./routes/QueuePage";
+import { TerminalPage } from "./routes/TerminalPage";
 import "./styles.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false } } });
@@ -22,7 +23,16 @@ const jobRoute = createRoute({
   },
 });
 
-const router = createRouter({ routeTree: rootRoute.addChildren([queueRoute, jobRoute]) });
+const terminalRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/terminal/$id",
+  component: function TerminalRoute() {
+    const { id } = terminalRoute.useParams();
+    return <TerminalPage id={id} />;
+  },
+});
+
+const router = createRouter({ routeTree: rootRoute.addChildren([queueRoute, jobRoute, terminalRoute]) });
 
 declare module "@tanstack/react-router" {
   interface Register {

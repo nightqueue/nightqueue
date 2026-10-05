@@ -278,6 +278,32 @@ test("the operator row says how `nightqueue open` loads the agent, and a fallbac
   assert.match(silent.report.checks.find((check) => check.name === "operator").detail, /claude did not answer/);
 });
 
+test("the studio terminal row names node-pty's version, and an unavailable node-pty only warns with its reason", async (t) => {
+  const host = makeHostEnv(t, "doctor-terminal");
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+  const asked = [];
+  const loaded = async (options) => {
+    asked.push(options);
+    return { available: true, version: "1.1.0" };
+  };
+  const ok = await diagnose(host.env, { loadPtyImpl: loaded });
+  const okRow = ok.report.checks.find((check) => check.name === "studio terminal");
+  assert.equal(okRow.status, "ok");
+  assert.equal(okRow.detail, "node-pty 1.1.0: the studio can embed a terminal");
+  assert.deepEqual(asked, [{ fix: false }], "the diagnosis let the loader chmod");
+
+  const missing = await diagnose(host.env, { loadPtyImpl: async () => ({ available: false, reason: "Cannot find package 'node-pty'" }) });
+  const missingRow = missing.report.checks.find((check) => check.name === "studio terminal");
+  assert.equal(missingRow.status, "warn");
+  assert.equal(missingRow.detail, "node-pty unavailable (Cannot find package 'node-pty')");
+  assert.match(missingRow.hint, /copy-the-command/);
+  assert.equal(missing.code, ok.code, "an unavailable node-pty changed the exit code of the diagnosis");
+
+  const helper = "/rt/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper";
+  const helperless = await diagnose(host.env, { loadPtyImpl: async () => ({ available: false, reason: `spawn-helper not executable (${helper})`, helper }) });
+  assert.equal(helperless.report.checks.find((check) => check.name === "studio terminal").hint, `chmod +x ${helper}`);
+});
+
 test("a claude CLI that cannot run is the only failure of an otherwise clean host", async (t) => {
   const host = makeHostEnv(t, "doctor-no-claude");
   await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });

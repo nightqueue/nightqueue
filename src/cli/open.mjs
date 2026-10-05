@@ -2,13 +2,13 @@ import { existsSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { normalizePath } from "../config/projects.mjs";
-import { launchOperator } from "../host/operator.mjs";
+import { launchOperator, operatorPrompt } from "../host/operator.mjs";
 import { isSessionIdSafe } from "../queue/stream.mjs";
 import { openRegistryReader } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
-const USAGE = "nightqueue open [project] [--resume <session>]";
-const OPTIONS = { resume: { type: "string" } };
+const USAGE = "nightqueue open [project] [--resume <session>] [--prompt <text>]";
+const OPTIONS = { resume: { type: "string" }, prompt: { type: "string" } };
 
 // The project the session opens: the one named, else the one registered for the current directory.
 async function openProject(name, ctx) {
@@ -44,8 +44,9 @@ export async function run(argv, ctx) {
   if (resumeSession !== null && !isSessionIdSafe(resumeSession)) {
     throw new UserError(`\`--resume ${resumeSession}\` is not a session id; usage: ${USAGE}`);
   }
+  const prompt = operatorPrompt(values.prompt, USAGE);
   const project = await openProject(positionals[0], ctx);
   const checkout = normalizePath(project.path);
   if (!existsSync(checkout)) throw new UserError(`the checkout of \`${project.name}\` is gone (${checkout}); run \`nightqueue project list\``);
-  return launchOperator({ cwd: sessionCwd({ checkout, resumeSession, cwd: ctx.cwd }), resumeSession, ctx });
+  return launchOperator({ cwd: sessionCwd({ checkout, resumeSession, cwd: ctx.cwd }), resumeSession, prompt, ctx });
 }

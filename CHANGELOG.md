@@ -39,6 +39,21 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   authorised by the cookie must also carry the studio's exact Origin. `--api-only` with
   `npm run studio:dev` serves the page through Vite instead; `npm run studio:build` builds
   and stamps the dist, and `release:check` refuses a missing or stale one.
+- **An embedded terminal in the studio.** A dock at the bottom of every page (and a full page
+  at `/terminal/<id>`) runs `claude` in a pty through the nightqueue CLI: `Resume in terminal`
+  on a job in `gate`, `failed`, `done` or `cancelled` runs `nightqueue queue session J-<n>` in
+  its worktree, and `Operator` (header, issues toolbar, each issue with `Analyse <ref>: <title>`
+  passed to claude as its first prompt through `nightqueue open --prompt`) runs `nightqueue
+  open <project>`. The directory, session and binary come only from the job and the
+  registry; at most 6 terminals; the children are foreground, ended by process group with
+  `SIGHUP` then `SIGKILL` on close and on Ctrl+C, and a restarted studio reaps what a dead
+  one left under `<home>/studio/terminals/`. The bytes travel over a hand-written WebSocket,
+  `/term/<id>`, on the studio's own server, which needs the token and the studio's exact
+  Origin from every caller. `node-pty` is the one optional dependency: without it the install
+  still succeeds, the studio offers the command to copy, and `doctor` warns `studio terminal:
+  node-pty unavailable (<reason>)`.
+- `nightqueue open` and `nightqueue queue session` take `--prompt <text>`: the session starts
+  with that request (refused when it starts with `-`).
 
 ### Removed
 

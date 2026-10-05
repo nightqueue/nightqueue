@@ -214,6 +214,42 @@ export interface Project {
   exists: boolean;
 }
 
+export type TerminalKind = "session" | "operator";
+
+export interface TerminalExit {
+  code: number | null;
+  signal: number | string | null;
+}
+
+export interface TerminalInfo {
+  id: string;
+  kind: TerminalKind;
+  label: string;
+  job_ref: string | null;
+  project: string | null;
+  cwd: string;
+  note: string | null;
+  created_at: string;
+  attached: boolean;
+  exited: false | TerminalExit;
+  instruction: null | "given";
+}
+
+export interface TerminalsAnswer {
+  available: boolean;
+  reason: string | null;
+  cap: number;
+  instruction_max: number;
+  terminals: TerminalInfo[];
+}
+
+export interface TerminalCreated {
+  terminal: TerminalInfo;
+  reused: boolean;
+}
+
+export type TerminalRequest = { kind: "session"; job: string; instruction?: string } | { kind: "operator"; project: string; instruction?: string };
+
 export type RunnerChoice =
   | { mode: "drain" }
   | { mode: "loop"; intervalS: number }

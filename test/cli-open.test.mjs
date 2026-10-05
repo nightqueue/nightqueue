@@ -185,3 +185,31 @@ test("a registered checkout that is gone is refused with a reason, and claude ne
   assert.match(result.err.join("\n"), /the checkout of `alpha` is gone/);
   assert.equal(existsSync(home.callsPath), false);
 });
+
+test("`--prompt <text>` replaces the opening prompt verbatim, and follows `--resume <session>` when resuming", async (t) => {
+  const home = openHome(t, "open-prompt");
+
+  const fresh = await runOpen(home.env, ["--prompt", "Analyse KEY-3: fix it"], home.checkout);
+  assert.equal(fresh.code, 0, fresh.err.join("\n"));
+  const [first] = launches(home.callsPath);
+  assert.equal(first.argv.at(-1), "Analyse KEY-3: fix it");
+  assert.equal(first.argv.includes(OPERATOR_OPENING_PROMPT), false);
+
+  const resumed = await runOpen(home.env, ["--resume", "abc-12345", "--prompt=hi"], home.checkout);
+  assert.equal(resumed.code, 0, resumed.err.join("\n"));
+  assert.deepEqual(launches(home.callsPath)[1].argv.slice(-3), ["--resume", "abc-12345", "hi"]);
+});
+
+test("a `--prompt` that starts with `-` or is empty is refused, and claude never starts", async (t) => {
+  const home = openHome(t, "open-prompt-refused");
+
+  for (const argv of [["--prompt=-x"], ["--prompt=--dangerously-skip-permissions"], ["--prompt", "   "]]) {
+    const refused = await runOpen(home.env, argv, home.checkout);
+    assert.equal(refused.code, 1, argv.join(" "));
+    assert.match(refused.err.join("\n"), /--prompt/);
+    assert.equal(existsSync(home.callsPath), false, `claude started for ${argv.join(" ")}`);
+  }
+  const ambiguous = await runOpen(home.env, ["--prompt", "-x"], home.checkout);
+  assert.equal(ambiguous.code, 1);
+  assert.equal(existsSync(home.callsPath), false);
+});

@@ -6,6 +6,7 @@ import { filterIssues, ISSUE_STATUS_ORDER, issueCounts, issueRowAction, type Iss
 import { ALL_PROJECTS } from "../lib/queue";
 import type { IssueItem } from "../lib/types";
 import { AddIssueDrawer } from "./AddIssueDrawer";
+import { TerminalLaunchButton } from "./TerminalLaunchButton";
 import { ProjectSelect, SearchBox } from "./Toolbar";
 import { Button, Chip } from "./ui";
 
@@ -15,6 +16,13 @@ interface IssuesSectionProps {
 }
 
 type QueueIssue = (ref: string, project?: string) => void;
+
+interface IssueRowsProps {
+  items: IssueItem[];
+  onQueue: QueueIssue;
+  showProject: boolean;
+  project: string | null;
+}
 
 interface IssueFilters {
   projectId: string;
@@ -30,6 +38,7 @@ const COLUMNS: { label: string; width?: string }[] = [
   { label: "PRIO", width: "w-[64px]" },
   { label: "STATUS", width: "w-[110px]" },
   { label: "JOB", width: "w-[130px]" },
+  { label: "TERMINAL", width: "w-[110px]" },
 ];
 
 const SKELETON_ROWS = [0, 1, 2];
@@ -82,8 +91,14 @@ function IssuePills({ items, filter, onFilter }: { items: IssueItem[]; filter: I
   );
 }
 
-// The toolbar of the section, shaped like the queue's: project and search over the status pills, `+ Add issue` at the height of both rows.
-function IssuesToolbar({ items, filters, onFilters, onAdd }: { items: IssueItem[]; filters: IssueFilters; onFilters: (next: IssueFilters) => void; onAdd: () => void }) {
+// Why the toolbar's `Open operator` cannot open the selected project's operator, null when it can.
+function toolbarOperatorBlock(filters: IssueFilters, project: string | null): string | null {
+  if (filters.projectId === ALL_PROJECTS) return "pick a project first";
+  return project ? null : "this project is no longer registered";
+}
+
+// The toolbar of the section, shaped like the queue's: project and search over the status pills, `Open operator` and `+ Add issue` at the height of both rows.
+function IssuesToolbar({ items, filters, project, onFilters, onAdd }: { items: IssueItem[]; filters: IssueFilters; project: string | null; onFilters: (next: IssueFilters) => void; onAdd: () => void }) {
   return (
     <div className="flex items-stretch gap-2">
       <div className="flex min-w-0 grow flex-col gap-2">
@@ -95,10 +110,34 @@ function IssuesToolbar({ items, filters, onFilters, onAdd }: { items: IssueItem[
           <IssuePills items={items} filter={filters.status} onFilter={(status) => onFilters({ ...filters, status })} />
         </div>
       </div>
+      <TerminalLaunchButton
+        variant="run"
+        className="shrink-0 self-stretch"
+        request={project ? { kind: "operator", project } : null}
+        blockedReason={toolbarOperatorBlock(filters, project)}
+        title={project ? `Open the ${project} operator in a terminal` : undefined}
+      >
+        Open operator
+      </TerminalLaunchButton>
       <Button variant="primary" className="shrink-0 self-stretch" onClick={onAdd}>
         + Add issue
       </Button>
     </div>
+  );
+}
+
+// A row's `Operator`: opens the item's project operator with the instruction to analyse the item.
+function IssueOperator({ item, project }: { item: IssueItem; project: string | null }) {
+  const target = item.project ?? project;
+  return (
+    <TerminalLaunchButton
+      size="sm"
+      request={target ? { kind: "operator", project: target, instruction: `Analyse ${item.ref}: ${item.title}` } : null}
+      blockedReason={target ? null : "the item's project is unknown"}
+      title={`Open the operator and ask it to analyse ${item.ref}`}
+    >
+      Operator
+    </TerminalLaunchButton>
   );
 }
 
@@ -130,8 +169,8 @@ function Cell({ className = "", children }: { className?: string; children: Reac
   return <td className={`border-b border-row-line px-3 py-2.5 align-middle ${className}`}>{children}</td>;
 }
 
-// The issues table for wide screens: ref, project (when every project is shown), title, type, priority, status and the linked job.
-function IssuesTable({ items, onQueue, showProject }: { items: IssueItem[]; onQueue: QueueIssue; showProject: boolean }) {
+// The issues table for wide screens: ref, project (when every project is shown), title, type, priority, status, the linked job and the Operator.
+function IssuesTable({ items, onQueue, showProject, project }: IssueRowsProps) {
   const columns = showProject ? COLUMNS : COLUMNS.filter((column) => column.label !== "PROJECT");
   return (
     <div className="max-h-[480px] overflow-y-auto">
@@ -157,6 +196,9 @@ function IssuesTable({ items, onQueue, showProject }: { items: IssueItem[]; onQu
               <Cell>
                 <IssueAction item={item} onQueue={onQueue} />
               </Cell>
+              <Cell>
+                <IssueOperator item={item} project={project} />
+              </Cell>
             </tr>
           ))}
         </tbody>
@@ -165,8 +207,8 @@ function IssuesTable({ items, onQueue, showProject }: { items: IssueItem[]; onQu
   );
 }
 
-// The issues as stacked cards for narrow screens: ref, project and status, title, then type and the action.
-function IssueCards({ items, onQueue, showProject }: { items: IssueItem[]; onQueue: QueueIssue; showProject: boolean }) {
+// The issues as stacked cards for narrow screens: ref, project and status, title, then type, the Operator and the action.
+function IssueCards({ items, onQueue, showProject, project }: IssueRowsProps) {
   return (
     <ul className="m-0 flex list-none flex-col p-0">
       {items.map((item) => (
@@ -179,7 +221,8 @@ function IssueCards({ items, onQueue, showProject }: { items: IssueItem[]; onQue
           <div className="min-w-0 break-words">{item.title}</div>
           <div className="flex flex-wrap items-center gap-2 text-sm text-dim">
             <span>{typeLabel(item)}</span>
-            <span className="ml-auto">
+            <span className="ml-auto flex items-center gap-2">
+              <IssueOperator item={item} project={project} />
               <IssueAction item={item} onQueue={onQueue} />
             </span>
           </div>
@@ -197,17 +240,17 @@ function searchIssues(items: IssueItem[], search: string): IssueItem[] {
 }
 
 // The list as a table on wide screens and cards on narrow ones, or the note that nothing is left to show.
-function IssuesList({ items, shown, onQueue, showProject }: { items: IssueItem[]; shown: IssueItem[]; onQueue: QueueIssue; showProject: boolean }) {
+function IssuesList({ items, shown, onQueue, showProject, project }: IssueRowsProps & { shown: IssueItem[] }) {
   if (shown.length === 0) {
     return <SectionNote>{items.length === 0 ? (showProject ? "No project has an issue yet." : "This project has no issue.") : "No issue matches the filters."}</SectionNote>;
   }
   return (
     <>
       <div className="hidden lg:block">
-        <IssuesTable items={shown} onQueue={onQueue} showProject={showProject} />
+        <IssuesTable items={shown} onQueue={onQueue} showProject={showProject} project={project} />
       </div>
       <div className="lg:hidden">
-        <IssueCards items={shown} onQueue={onQueue} showProject={showProject} />
+        <IssueCards items={shown} onQueue={onQueue} showProject={showProject} project={project} />
       </div>
     </>
   );
@@ -224,7 +267,7 @@ function useShownIssues(projectId: string, projects: ReturnType<typeof useProjec
   return { all, project, pending, error: projects.isError ? "The projects cannot be read; reload the page." : query.isError ? `The issues cannot be read: ${errorText(query.error)}` : null, items: query.data ?? [] };
 }
 
-// The Issues section under the jobs: its own project select, search and status pills, every project's issues by default, and `+ Add issue`.
+// The Issues section under the jobs: its own project select, search and status pills, every project's issues by default, `Open operator` and `+ Add issue`.
 export function IssuesSection({ projectId, onQueue }: IssuesSectionProps) {
   const projects = useProjects();
   const [filters, setFilters] = useState<IssueFilters>({ projectId, search: "", status: "all" });
@@ -235,7 +278,7 @@ export function IssuesSection({ projectId, onQueue }: IssuesSectionProps) {
   const title = all ? "Issues · all projects" : project ? `Issues · ${project}` : "Issues";
   return (
     <>
-      <SectionFrame title={title} toolbar={<IssuesToolbar items={searched} filters={filters} onFilters={setFilters} onAdd={() => setAdding(true)} />}>
+      <SectionFrame title={title} toolbar={<IssuesToolbar items={searched} filters={filters} project={project} onFilters={setFilters} onAdd={() => setAdding(true)} />}>
         {pending ? (
           <IssuesSkeleton />
         ) : error ? (
@@ -243,7 +286,7 @@ export function IssuesSection({ projectId, onQueue }: IssuesSectionProps) {
         ) : !all && !project ? (
           <SectionNote>This project is no longer registered.</SectionNote>
         ) : (
-          <IssuesList items={items} shown={shown} showProject={all} onQueue={(ref, itemProject) => onQueue({ ref, project: itemProject ?? project ?? "" })} />
+          <IssuesList items={items} shown={shown} showProject={all} project={project} onQueue={(ref, itemProject) => onQueue({ ref, project: itemProject ?? project ?? "" })} />
         )}
       </SectionFrame>
       {adding && <AddIssueDrawer onClose={() => setAdding(false)} initialProject={project ?? undefined} />}
