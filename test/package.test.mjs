@@ -31,13 +31,16 @@ function trackedFiles() {
   return files.length ? files : null;
 }
 
-test("`nightqueue` is the only command name npm installs and the embedding library is not a dependency", () => {
+test("`nightqueue` is the only command name npm installs, the embedding library is not a dependency, and node-pty is only optional", () => {
   // npm strips a bin path that starts with `./` at publish time ("script name was invalid and removed"),
   // which would publish a package with no command at all: the path stays bare.
   assert.equal(MANIFEST.name, "@nightqueue/nq");
   assert.deepEqual(MANIFEST.bin, { nightqueue: "bin/nightqueue.mjs" });
-  assert.equal(MANIFEST.optionalDependencies, undefined);
+  assert.deepEqual(MANIFEST.optionalDependencies, { "node-pty": "^1.1.0" });
   assert.equal(Object.hasOwn(MANIFEST.dependencies, "@huggingface/transformers"), false);
+  for (const group of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+    assert.equal(Object.hasOwn(MANIFEST[group] ?? {}, "ws"), false, `\`ws\` is in ${group}`);
+  }
   assert.deepEqual(MANIFEST.files, [".claude-plugin", "bin", "plugin", "src", "studio/dist", "README.md", "LICENSE", "CHANGELOG.md"]);
 });
 

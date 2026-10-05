@@ -3,9 +3,11 @@ import { canCancel, hasLog, hasSession, rawLogUrl, sessionCommand } from "../../
 import { copyText } from "../../lib/clipboard";
 import { durationLabel, hhmmssUtc, hhmmUtc, isoMs, timeoutLabel } from "../../lib/format";
 import { jobRef, jobTitle } from "../../lib/queue";
+import { sessionBlockReason } from "../../lib/terminals";
 import type { IssueSummary, JobDetail, JobStatus } from "../../lib/types";
 import { useNow } from "../../lib/useNow";
 import { NO_PR_TOOLTIP } from "../JobCells";
+import { TerminalLaunchButton } from "../TerminalLaunchButton";
 import { Button } from "../ui";
 
 const PILL_STYLE: Record<JobStatus, string> = {
@@ -104,7 +106,16 @@ function CloseAction({ job, close }: { job: JobDetail; close: CloseState }) {
   );
 }
 
-// The header actions: raw log, copy the session command, close, cancel.
+// Resumes the job's session in a studio terminal, disabled with its reason while the status does not allow it.
+function ResumeInTerminal({ job }: { job: JobDetail }) {
+  return (
+    <TerminalLaunchButton variant="run" request={{ kind: "session", job: jobRef(job.id) }} blockedReason={sessionBlockReason(job.status)} title="Resume this job's claude session in a studio terminal">
+      Resume in terminal
+    </TerminalLaunchButton>
+  );
+}
+
+// The header actions: raw log, resume in a terminal, copy the session command, close, cancel.
 function HeaderActions({ job, close, onCancel }: { job: JobDetail; close: CloseState; onCancel: () => void }) {
   return (
     <div className="flex shrink-0 flex-wrap gap-2 md:ml-auto">
@@ -117,6 +128,7 @@ function HeaderActions({ job, close, onCancel }: { job: JobDetail; close: CloseS
           Raw log
         </Button>
       )}
+      <ResumeInTerminal job={job} />
       <Button disabled={!hasSession(job)} onClick={() => void copyText(sessionCommand(job), "the session command")}>
         Copy session cmd
       </Button>

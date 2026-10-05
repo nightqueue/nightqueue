@@ -57,6 +57,80 @@ export function sendRaw(port, lines) {
   });
 }
 
+// One fake pty child: records what the studio writes, resizes and pauses, and lets a test emit output and an exit.
+function fakeChild({ pid, file, args, options }) {
+  const listeners = { data: [], exit: [] };
+  return {
+    pid,
+    file,
+    args,
+    options,
+    writes: [],
+    resizes: [],
+    paused: false,
+    exited: false,
+    onData: (fn) => listeners.data.push(fn),
+    onExit: (fn) => listeners.exit.push(fn),
+    write(data) {
+      this.writes.push(Buffer.isBuffer(data) ? data.toString("utf8") : String(data));
+    },
+    resize(cols, rows) {
+      this.resizes.push({ cols, rows });
+    },
+    pause() {
+      this.paused = true;
+    },
+    resume() {
+      this.paused = false;
+    },
+    emitData(text) {
+      for (const fn of listeners.data) fn(Buffer.from(text));
+    },
+    emitExit(exitCode = 0, signal = 0) {
+      if (this.exited) return;
+      this.exited = true;
+      for (const fn of listeners.exit) fn({ exitCode, signal });
+    },
+  };
+}
+
+// A node-pty stand-in for the terminal manager, plus a signal recorder that ends a fake child on SIGKILL (and on SIGHUP unless told it ignores hang-ups); with `groupOutlivesLeader` the child's group (claude under node) survives a SIGHUP until a SIGKILL.
+export function fakePtyFactory({ ignoresHangUp = false, groupOutlivesLeader = false } = {}) {
+  const spawned = [];
+  const signals = [];
+  let nextPid = 4_000_000;
+  const pty = {
+    spawn(file, args, options) {
+      nextPid += 1;
+      const child = fakeChild({ pid: nextPid, file, args, options });
+      child.groupAlive = true;
+      spawned.push(child);
+      return child;
+    },
+  };
+  const isAlive = (child, pid) => Boolean(child) && (pid < 0 && groupOutlivesLeader ? child.groupAlive : !child.exited);
+  const killImpl = (pid, signal) => {
+    const child = spawned.find((entry) => entry.pid === Math.abs(pid));
+    const alive = isAlive(child, pid);
+    if (signal === 0) {
+      if (!alive) throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+      return;
+    }
+    signals.push({ pid, signal });
+    if (!alive) throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+    if (signal === "SIGKILL") child.groupAlive = false;
+    if (signal === "SIGKILL" || (signal === "SIGHUP" && !ignoresHangUp)) child.emitExit(null, signal === "SIGKILL" ? 9 : 1);
+  };
+  return { pty, spawned, signals, killImpl, loadPty: async () => ({ available: true, pty, version: "fake" }) };
+}
+
+// Opens a WebSocket to a studio terminal with Node's global client, carrying the headers (Origin, Cookie) a browser would send.
+export function openTerm(port, id, { headers = {} } = {}) {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/term/${id}`, { headers });
+  socket.binaryType = "arraybuffer";
+  return socket;
+}
+
 // Opens a server-sent event stream and collects its events until `until` says it has what it needs, or the timeout fails it.
 export function readEvents(port, { path = "/events", headers = {}, until, timeoutMs = 10000 }) {
   return new Promise((resolve, reject) => {

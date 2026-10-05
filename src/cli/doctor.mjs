@@ -32,6 +32,7 @@ import { marketplaceIsCurrent, pluginRef, readInstalledPlugin, readKnownMarketpl
 import { isOwnShim, legacyShimState, packageVersion, registrySpec, runtimeVersion, shimState } from "../host/runtime.mjs";
 import { hookStatus, readHostSettings } from "../host/settings.mjs";
 import { TOOL_CONTRACT } from "../mcp/tool-contract.mjs";
+import { loadPty } from "../studio/pty.mjs";
 import { PATH_MARK, binDirInPath, rcFilePath, shadowingDir } from "../host/shell.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
 import { HOST_COMMANDS_SAMPLE_SIZE } from "../memory/jobs.mjs";
@@ -109,6 +110,16 @@ function checkOperator(ctx) {
     "claude does not list `--agent`: `nightqueue open` appends the agent body with `--append-system-prompt`; the agent's tool restriction does not apply",
     "update Claude Code",
   );
+}
+
+// Checks whether the studio can embed a terminal: node-pty loads and, on darwin, its spawn-helper is executable; it only reports, never chmods.
+async function checkStudioTerminal(ctx) {
+  const loaded = await (ctx.loadPtyImpl ?? loadPty)({ fix: false });
+  if (loaded.available) return check("studio terminal", "ok", `node-pty ${loaded.version}: the studio can embed a terminal`);
+  const hint = loaded.helper
+    ? `chmod +x ${loaded.helper}`
+    : "the studio falls back to copy-the-command; `nightqueue update` on a host with a C++ toolchain installs it";
+  return check("studio terminal", "warn", `node-pty unavailable (${loaded.reason})`, hint);
 }
 
 // Checks the GitHub CLI, which the pipeline uses but the memory does not require.
@@ -1390,6 +1401,7 @@ async function collect(ctx, values) {
     checkNode(),
     checkClaude(ctx),
     checkOperator(ctx),
+    await checkStudioTerminal(ctx),
     checkGh(ctx),
     checkConfig(ctx),
     checkSecrets(ctx),

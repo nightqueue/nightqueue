@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AddJobDrawer } from "../components/AddJobDrawer";
 import { CancelJobDialog } from "../components/CancelJobDialog";
 import { CloseJobDialog } from "../components/CloseJobDialog";
@@ -15,6 +15,7 @@ import { Kbd } from "../components/ui";
 import { closeJob, closesWithoutConfirm, runJob, setQueuePaused, startRunner, stopRunner } from "../lib/actions";
 import { useQueueSnapshot } from "../lib/events";
 import { ALL_PROJECTS, filterJobs, normalizeSnapshot, totalCount } from "../lib/queue";
+import { setSelectedProject } from "../lib/selectedProject";
 import type { Job, QueueFilters, Runner, RunnerChoice } from "../lib/types";
 import { useAction } from "../lib/useAction";
 
@@ -109,6 +110,7 @@ export function QueuePage() {
   const closeDialog = useCallback(() => setDialog(null), []);
   const closeDrawer = useCallback(() => setDrawer(null), []);
   const queueIssue = useCallback(({ ref, project }: { ref: string; project: string }) => setDrawer({ issueRef: ref, project }), []);
+  useEffect(() => setSelectedProject(filters.projectId), [filters.projectId]);
   const snapshot = useMemo(() => (raw ? normalizeSnapshot(raw) : undefined), [raw]);
   const shown = useMemo(() => (snapshot ? filterJobs(snapshot.jobs, filters) : []), [snapshot, filters]);
   if (!snapshot) return <QueueSkeleton />;

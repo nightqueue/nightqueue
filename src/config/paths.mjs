@@ -257,6 +257,11 @@ export function runnerRegistryPath(pid, env = process.env) {
   return join(runnersDir(env), `${pid}.json`);
 }
 
+// Directory of the studio's terminal registrations: one file per claude a studio spawned, read by the reaper of the next studio.
+export function studioTerminalsDir(env = process.env) {
+  return join(homeDir(env), "studio", "terminals");
+}
+
 // Path of the single pidfile an installation before the registry wrote; it is read until it is stopped or pruned, and never written again.
 export function legacyRunnerPidPath(env = process.env) {
   return join(homeDir(env), "runner.pid");

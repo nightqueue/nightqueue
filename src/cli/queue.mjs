@@ -4,7 +4,7 @@ import { withLock } from "../config/lock.mjs";
 import { jobLogPath } from "../config/paths.mjs";
 import { registrationOffer, issueQueueTarget } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
-import { launchOperator } from "../host/operator.mjs";
+import { launchOperator, operatorPrompt } from "../host/operator.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { ALL_PROJECTS } from "../memory/issues.mjs";
@@ -71,7 +71,7 @@ export const USAGE = {
   pause: "nightqueue queue pause",
   resume: "nightqueue queue resume",
   log: "nightqueue queue log <id> [--follow] [--raw] [--all]",
-  session: "nightqueue queue session <id> [--print] [--json]",
+  session: "nightqueue queue session <id> [--print] [--json] [--prompt <text>]",
 };
 
 const ADD_HELP_FLAGS = new Set(["--help", "-h"]);
@@ -1526,7 +1526,7 @@ async function runLog(argv, ctx) {
   return await runLogNarrated(id, { follow, all: values.all === true }, ctx);
 }
 
-const SESSION_OPTIONS = { print: { type: "boolean" }, json: { type: "boolean" } };
+const SESSION_OPTIONS = { print: { type: "boolean" }, json: { type: "boolean" }, prompt: { type: "string" } };
 
 // The one line printed before a session resumes: the job, attempt, session id and cwd, with a note when the worktree behind it is gone.
 function sessionLine(resolved) {
@@ -1534,10 +1534,15 @@ function sessionLine(resolved) {
   return resolved.worktreeReleased ? `${base} (worktree released, using the checkout)` : base;
 }
 
-// The shell command `--print` answers: the operator resuming the session, run from its cwd.
-function sessionCommand(resolved) {
-  const cwd = `'${resolved.cwd.replaceAll("'", "'\\''")}'`;
-  return `cd ${cwd} && nightqueue open --resume ${resolved.session}`;
+// Wraps a text in single quotes for a POSIX shell.
+function shellQuote(text) {
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+// The shell command `--print` answers: the operator resuming the session, run from its cwd, with the request when one was given.
+function sessionCommand(resolved, prompt) {
+  const command = `cd ${shellQuote(resolved.cwd)} && nightqueue open --resume ${resolved.session}`;
+  return prompt === null ? command : `${command} --prompt ${shellQuote(prompt)}`;
 }
 
 // Runs `nightqueue queue session`, which resumes the session of a job's last attempt through the operator launcher, in the run's worktree or, when that is gone, the project's checkout.
@@ -1545,17 +1550,18 @@ async function runSession(argv, ctx) {
   const { values, positionals } = parseCommand(argv, SESSION_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.session });
   const id = parseJobRef(positionals[0]);
+  const prompt = operatorPrompt(values.prompt, USAGE.session);
   const job = await openStore(ctx.env).jobs.getJob(id);
   if (!job) throw new UserError(`unknown job \`${id}\``);
   const resolved = resolveJobSession(job, ctx.env);
-  const command = sessionCommand(resolved);
+  const command = sessionCommand(resolved, prompt);
   if (values.json) ctx.out(JSON.stringify({ ...resolved, command }));
   else ctx.out(sessionLine(resolved));
   if (values.print) {
     if (!values.json) ctx.out(command);
     return 0;
   }
-  return launchOperator({ cwd: resolved.cwd, resumeSession: resolved.session, ctx });
+  return launchOperator({ cwd: resolved.cwd, resumeSession: resolved.session, prompt, ctx });
 }
 
 const SUBCOMMANDS = new Map([

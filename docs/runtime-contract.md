@@ -255,11 +255,42 @@ as a cookie, because a page load, its assets and `EventSource` cannot send that 
 URL it prints carries the token once as `?t=<token>`, and a GET with a valid `t` answers
 `303` to the same target without `t` and `Set-Cookie: nq_studio_<port>=<token>; Path=/;
 HttpOnly; SameSite=Strict` (one cookie name per port, so two studios on one host never share
-one). A request that changes state (`POST /mcp`, `POST /api/*`) authorised by that cookie must
-also carry an `Origin` equal to the studio's own `http://127.0.0.1:<port>` - or the
+one). A request that changes state (`POST /mcp`, `POST` or `DELETE /api/*`) authorised by that
+cookie must also carry an `Origin` equal to the studio's own `http://127.0.0.1:<port>` - or the
 `--dev-origin` of an `--api-only` studio - exactly, port included, since `SameSite` does not
 tell two loopback ports apart; a bearer request keeps the loopback rule alone. The `/mcp`
 endpoint stays stateless either way: the cookie is one more header checked in front of it.
+
+The studio's one WebSocket, `/term/<id>`, is an RFC 6455 upgrade on that same server, with no
+`ws` dependency, and its gate is stricter than the HTTP one. In order: the loopback gate
+(`403`), the token by cookie or bearer (`401`), then an `Origin` equal to one of the studio's
+own origins - or the `--dev-origin` of an `--api-only` studio - exactly, for the cookie AND the
+bearer caller alike, an absent `Origin` included (`403`). Then the path must be
+`/term/<16 hex>` (`404`), the handshake must be version 13 with a valid key (`400`) and the
+terminal must be live (`404`). Every refusal, and any upgrade on another path (`/events`,
+`/mcp`, ...), is a short HTTP answer with a JSON `{error}` and `Connection: close`; a plain GET
+on `/term/...` is a `426`. The answer never negotiates an extension nor a subprotocol. Binary
+frames carry the pty's bytes both ways; the one text frame understood is
+`{"resize":{"cols":<2-500>,"rows":<1-200>}}`, any other text is ignored. A frame not masked,
+with a reserved bit or a bad control frame closes with `1002`, a message over 1 MiB with
+`1009`, invalid UTF-8 text with `1007`. The newest attach to one terminal wins: the older
+socket closes with `4001 attached elsewhere`. When the child exits its socket closes with
+`1000 exited <code>`. Upgraded sockets are tracked by the server, and `close()` sends each one
+`1001 studio closing` and ends it. The CSP `connect-src` lists the `ws://` form of every
+allowed origin.
+
+The terminals themselves live in memory; each child is the runtime's CLI
+(`nightqueue open` or `nightqueue queue session`), which starts `claude` in its own process
+group. Each one also writes a registration file `<home>/studio/terminals/<port>-<id>.json`
+(`id`, `port`, `owner_pid`, `pid`, `lstart`, `bin` (node), `entry` (the CLI path), `kind`,
+`job_id`, `project`, `created_at`), removed when its child exits. A starting studio reaps those
+files before it answers: an unreadable file, or one without `bin` or `entry`, is removed; a
+file of another port whose `owner_pid` is alive is kept; every other file is removed, and its
+pid's process group is sent `SIGHUP` (then `SIGKILL` after 2 s while the group lives) only when
+a start time was recorded and `ps -ww -p <pid> -o lstart= -o command=` shows that same start
+time and a command line containing the recorded `entry`, so a recycled pid, a registration
+without a start time, or the operator's own `nightqueue open` in a shell is never killed. It
+prints `studio: reaped N terminal(s) left by an earlier studio` when N > 0.
 
 The thirty-one MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
