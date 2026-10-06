@@ -245,6 +245,8 @@ nightqueue setup                                   # install the runtime and reg
 nightqueue setup --remove --purge                  # undo the registrations, or delete the home as well
 nightqueue update                                  # reinstall the runtime, migrate the database with it, and re-point the host at it
 nightqueue update 0.2.0                            # ...at one exact version from the registry
+nightqueue update --from .                         # ...from a checkout: npm ci when node_modules is missing or package-lock.json changed since the last studio build, then the studio build
+nightqueue update --from . --no-install            # ...never run npm ci; the dependencies line says what it would have done
 nightqueue update --schema-only                    # internal: the database migration alone, run by update/setup from the installed runtime
 nightqueue doctor --json                           # check the host and the home, exit 1 on any failure
 nightqueue doctor --check-updates                  # ...and ask the registry for the newest version
@@ -558,6 +560,18 @@ nightqueue doctor --fix            # ...and git worktree repair the job worktree
 nightqueue doctor --db             # ...plus the database files, a quick_check and the jobs on disk the table lost
 ```
 
+`nightqueue update --from <dir> [--no-install]` installs a checkout. Before building the studio
+it runs `npm ci --no-audit --no-fund` in `<dir>` when `node_modules` is missing, when the sha256
+of `package-lock.json` differs from the `lock_sha256` of `studio/dist/.stamp.json`, or once
+when the build fails on a missing module or command (then it builds once more), and prints
+`dependencies: installed (<why>)` or `dependencies: up to date`. `--no-install` skips the
+install and prints `dependencies: skipped (--no-install; would run npm ci: <why>)`. A studio
+build that cannot pass never blocks the runtime: the step prints `studio: degraded - <first
+error line>; the studio serves the previous build (or no build) until npm run studio:build
+passes`, and the shims, MCP, hooks and plugin are installed as usual. `nightqueue doctor` has
+a `studio build` line: `ok` with the stamp's sha, a `warn` when the runtime has no stamp or it
+was written for another version than the runtime.
+
 `nightqueue doctor` reads the host and the home and writes nothing, except `git worktree
 repair`, the removal of the `db shm` orphans and the database actions with `--fix` (below): it never creates
 the database, never touches `settings.json` and never asks `claude` about
@@ -863,8 +877,9 @@ nightqueue studio --api-only --port 4747 --token <t> --dev-origin http://127.0.0
 `nightqueue studio [--port <n>] [--token <t>] [--api-only] [--dev-origin <url>] [--no-open]`
 serves nightqueue studio, the local web cockpit, on `127.0.0.1` only. One process answers:
 
-- the built page, `studio/dist` of the installed package (a missing dist is refused with
-  `studio/dist is missing — run \`npm run studio:build\``);
+- the built page, `studio/dist` of the installed package (a missing dist is warned about on
+  stderr and the page answers a minimal "Studio not built" with `503`; the API and `/mcp` keep
+  working);
 - `/mcp`, the same stateless Streamable HTTP endpoint as `nightqueue mcp --http`;
 - `/api`: `GET /api/info`, `GET /api/projects`, `POST /api/runners/start` (a watch runner,
   with an optional `from`/`until` window), `POST /api/queue/pause|resume`,

@@ -7,7 +7,7 @@ import { makeReport } from "./report.mjs";
 import { migrateHomeSchema } from "./schema-migrate.mjs";
 import { finish, registerHost } from "./setup.mjs";
 
-const USAGE = "nightqueue update [<version>] [--from <dir>] [--force]";
+const USAGE = "nightqueue update [<version>] [--from <dir>] [--no-install] [--force]";
 
 const VERSION_SHAPE = /^[A-Za-z0-9][A-Za-z0-9.+-]*$/;
 
@@ -36,6 +36,7 @@ export async function run(argv, ctx) {
   const { values, positionals } = parseCommand(argv, {
     from: { type: "string" },
     force: { type: "boolean" },
+    "no-install": { type: "boolean" },
     "schema-only": { type: "boolean" },
   });
   if (values["schema-only"] === true) return await schemaOnly(values, positionals, ctx);
@@ -44,7 +45,7 @@ export async function run(argv, ctx) {
   await guardIdleRuntime(ctx, { force: values.force });
   const report = makeReport(ctx);
   ensureHome(ctx.env);
-  const ready = await setupRuntime(ctx, report, { from: values.from, force: true, version });
+  const ready = await setupRuntime(ctx, report, { from: values.from, force: true, version, install: values["no-install"] !== true });
   const schemaOk = migrateSchemaStep(ctx, report, { ready });
   registerHost(ctx, report, { ready });
   const code = finish(ctx, report);

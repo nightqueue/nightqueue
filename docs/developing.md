@@ -49,13 +49,16 @@ stamp or a stamp of other sources, and checks that the tarball carries
 `studio/dist/index.html` and no studio source. The release workflow builds the studio
 before that check.
 
-The contributor flow is `npm ci` once, then `nq update --from .`: a `--from <dir>`
-install (on `update`, `setup` and `init`) checks the stamp of that directory first,
-builds nothing when `studio/dist` is fresh, and otherwise runs `npm run studio:build`
-there before anything is packed or installed. Without `node_modules/.bin/tsc` and
-`vite` it refuses with `run npm ci there`; a failed or timed-out build refuses with
-the tail of its output. `--force` does not skip the check. Tarballs and the registry
-are installed as they are.
+The contributor flow is `nq update --from .`: a `--from <dir>` install (on `update`,
+`setup` and `init`) checks the stamp of that directory first and builds nothing when
+`studio/dist` is fresh. Otherwise it runs `npm ci` there when `node_modules` is missing
+or `package-lock.json` differs from the `lock_sha256` the stamp recorded (`update
+--no-install` only says so), then `npm run studio:build`, before anything is packed or
+installed; a build that fails on a missing module or command installs once and builds
+once more. A build that still fails or times out degrades only the studio step
+(`studio: degraded - <error>`): the runtime is installed with the previous `studio/dist`,
+if any. `--force` does not skip the check. Tarballs and the registry are installed as
+they are.
 
 ## Schema steps that rewrite tables
 

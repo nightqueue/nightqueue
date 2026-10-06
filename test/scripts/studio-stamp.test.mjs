@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { checkStudioStamp, studioSourceHash, writeStudioStamp } from "../../scripts/studio-stamp.mjs";
@@ -34,6 +34,15 @@ test("the source hash is stable, and changes with a source file or a devDependen
   assert.notEqual(edited, first);
   writeFileSync(join(root, "package-lock.json"), JSON.stringify({ packages: { "node_modules/vite": { version: "8.4.0" } } }));
   assert.notEqual(studioSourceHash(root), edited);
+});
+
+test("the stamp records the lockfile sha, and the check ignores it", (t) => {
+  const root = makeRoot(t);
+  const hash = build(root);
+  const stamp = JSON.parse(readFileSync(join(root, "studio", "dist", ".stamp.json"), "utf8"));
+  assert.match(stamp.lock_sha256, /^[0-9a-f]{64}$/);
+  writeFileSync(join(root, "studio", "dist", ".stamp.json"), JSON.stringify({ hash, builtAt: stamp.builtAt }));
+  assert.equal(checkStudioStamp(root).ok, true);
 });
 
 test("a changed public asset changes the source hash", (t) => {

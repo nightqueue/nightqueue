@@ -30,9 +30,11 @@ import { npmBin, npmView } from "../host/npm.mjs";
 import { OPERATOR_AGENT, OPERATOR_MODE_AGENT, operatorAgentPath, probeOperatorLaunch } from "../host/operator.mjs";
 import { marketplaceIsCurrent, pluginRef, readInstalledPlugin, readKnownMarketplace } from "../host/plugin.mjs";
 import { isOwnShim, legacyShimState, packageVersion, registrySpec, runtimeVersion, shimState } from "../host/runtime.mjs";
+import { spawnRoot } from "../host/paths.mjs";
 import { hookStatus, readHostSettings } from "../host/settings.mjs";
 import { TOOL_CONTRACT } from "../mcp/tool-contract.mjs";
 import { loadPty } from "../studio/pty.mjs";
+import { readStudioStampFile } from "../studio/stamp.mjs";
 import { PATH_MARK, binDirInPath, rcFilePath, shadowingDir } from "../host/shell.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
 import { HOST_COMMANDS_SAMPLE_SIZE } from "../memory/jobs.mjs";
@@ -264,6 +266,18 @@ function checkRuntime(ctx) {
     return check("runtime", "warn", detail, "run `nightqueue update`");
   }
   return check("runtime", "ok", `v${installed} at ${location}`);
+}
+
+// Checks the studio build the runtime serves: ok with the sha of its stamp, a warning when there is no stamp or it was written for an older version than the runtime.
+function checkStudioBuild(ctx) {
+  const stamp = readStudioStampFile(spawnRoot(ctx.env));
+  const rebuild = "run `npm run studio:build` in the source, then `nightqueue update --from <dir>`";
+  if (typeof stamp?.hash !== "string" || !stamp.hash) return check("studio build", "warn", "no studio build stamp in the runtime", rebuild);
+  const installed = runtimeVersion(ctx.env);
+  if (installed && stamp.version !== installed) {
+    return check("studio build", "warn", `built for ${stamp.version ? `v${stamp.version}` : "an older version"}, the runtime is v${installed}`, rebuild);
+  }
+  return check("studio build", "ok", stamp.hash.slice(0, 12));
 }
 
 // Shows the tool contract this server publishes, the number a client's cached tool definitions are compared with.
@@ -1474,6 +1488,7 @@ async function collect(ctx, values) {
     checkSecrets(ctx),
     ...(await checkConnections(ctx)),
     checkRuntime(ctx),
+    checkStudioBuild(ctx),
     checkToolContract(),
     ...checkShims(ctx),
     ...checkLegacyShim(ctx),

@@ -42,21 +42,47 @@ export function studioSourceHash(root) {
   return hash.digest("hex");
 }
 
-// Writes the stamp of a fresh build: the source hash the dist was built from.
+// The sha256 of the lockfile of a root, or null when it has none.
+export function lockSha256(root) {
+  try {
+    return createHash("sha256").update(readFileSync(join(root, "package-lock.json"))).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+// The version a root's manifest declares, or null when it cannot be read.
+function manifestVersion(root) {
+  try {
+    const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))?.version;
+    return typeof version === "string" && version ? version : null;
+  } catch {
+    return null;
+  }
+}
+
+// Reads the stamp of a root as an object, or null when it is missing or unreadable.
+export function readStudioStampFile(root) {
+  try {
+    const stamp = JSON.parse(readFileSync(join(root, STAMP_FILE), "utf8"));
+    return stamp && typeof stamp === "object" ? stamp : null;
+  } catch {
+    return null;
+  }
+}
+
+// Writes the stamp of a fresh build: the source hash the dist was built from, the lockfile sha it was built with and the version it belongs to.
 export function writeStudioStamp(root) {
   const hash = studioSourceHash(root);
-  writeFileSync(join(root, STAMP_FILE), `${JSON.stringify({ hash, builtAt: new Date().toISOString() }, null, 2)}\n`);
+  const stamp = { hash, builtAt: new Date().toISOString(), lock_sha256: lockSha256(root), version: manifestVersion(root) };
+  writeFileSync(join(root, STAMP_FILE), `${JSON.stringify(stamp, null, 2)}\n`);
   return hash;
 }
 
 // The hash a stamp records, or null when it cannot be read.
 function stampedHash(root) {
-  try {
-    const hash = JSON.parse(readFileSync(join(root, STAMP_FILE), "utf8"))?.hash;
-    return typeof hash === "string" && hash ? hash : null;
-  } catch {
-    return null;
-  }
+  const hash = readStudioStampFile(root)?.hash;
+  return typeof hash === "string" && hash ? hash : null;
 }
 
 // Checks that the dist exists, carries a stamp, and was built from the sources on disk now: `{ ok, reason, hash }`.

@@ -95,6 +95,28 @@ test("a host that went through setup has no failing check", async (t) => {
   assert.equal(report.checks.some((check) => check.name === "embedding audit"), false, "the audit ran on an absent prefix");
 });
 
+test("the studio build row is ok with the sha of the stamp, and warns when the stamp is missing or was written for another version", async (t) => {
+  const host = makeHostEnv(t, "doctor-studio-build");
+  await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
+  const row = (report) => report.checks.find((check) => check.name === "studio build");
+
+  const missing = row((await diagnose(host.env)).report);
+  assert.equal(missing.status, "warn");
+  assert.match(missing.detail, /no studio build stamp/);
+
+  const dist = join(host.runtimePackage, "studio", "dist");
+  mkdirSync(dist, { recursive: true });
+  const stamp = { hash: "abcdef0123456789abcdef", builtAt: "2026-01-01T00:00:00.000Z", lock_sha256: "x", version: VERSION };
+  writeFileSync(join(dist, ".stamp.json"), JSON.stringify(stamp));
+  const fresh = row((await diagnose(host.env)).report);
+  assert.deepEqual({ status: fresh.status, detail: fresh.detail }, { status: "ok", detail: "abcdef012345" });
+
+  writeFileSync(join(dist, ".stamp.json"), JSON.stringify({ ...stamp, version: "0.0.1" }));
+  const older = row((await diagnose(host.env)).report);
+  assert.equal(older.status, "warn");
+  assert.match(older.detail, /built for v0\.0\.1, the runtime is /);
+});
+
 test("a PreToolUse hook registered with an older tool matcher warns, pointing at setup", async (t) => {
   const host = makeHostEnv(t, "doctor-stale-matcher");
   await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });

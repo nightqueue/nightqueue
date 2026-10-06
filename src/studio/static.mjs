@@ -59,12 +59,22 @@ async function sendFile(req, res, file, path) {
   res.end(req.method === "HEAD" ? undefined : body);
 }
 
-// Serves the built studio: a file of the dist, index.html for a page navigation, 404 for anything else or anything outside it.
+// Answers a page navigation when the studio was never built: a minimal page that names the command that builds it.
+function sendNotBuilt(req, res) {
+  const body = Buffer.from("<!doctype html><title>nightqueue studio</title><h1>Studio not built</h1><p>This runtime has no studio build. Run <code>npm run studio:build</code> in the nightqueue source, then <code>nightqueue update --from &lt;dir&gt;</code>.</p>");
+  res.writeHead(503, { "content-type": CONTENT_TYPES[".html"], "content-length": body.length, "cache-control": "no-store" });
+  res.end(req.method === "HEAD" ? undefined : body);
+}
+
+// Serves the built studio: a file of the dist, index.html for a page navigation (the "studio not built" page when there is none), 404 for anything else or anything outside it.
 export async function serveStatic(req, res, { distDir }) {
   if (req.method !== "GET" && req.method !== "HEAD") return respond(res, 405, "the studio pages only answer GET");
   const path = decodedPath(req.url);
   const file = path === null ? null : fileInside(distDir, path === "/" ? "/index.html" : path);
   if (file && (await isFile(file))) return await sendFile(req, res, file, path);
-  if (path !== null && isPageNavigation(req, path)) return await sendFile(req, res, resolve(distDir, "index.html"), "/index.html");
+  if (path !== null && isPageNavigation(req, path)) {
+    const index = resolve(distDir, "index.html");
+    return (await isFile(index)) ? await sendFile(req, res, index, "/index.html") : sendNotBuilt(req, res);
+  }
   return respond(res, 404, "not found");
 }
