@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { saveRunState } from "../../src/queue/resume.mjs";
@@ -42,12 +42,45 @@ test("a live worktree answers its diff against the merge base, uncommitted edits
   assert.equal(answer.source, "worktree");
   assert.equal(answer.base, "origin/main");
   assert.deepEqual(answer.files, [
-    { path: "a.txt", added: 1, deleted: 1 },
-    { path: "new file.txt", added: 2, deleted: 0 },
-    { path: "scratch.txt", added: null, deleted: null, untracked: true },
+    { path: "a.txt", added: 1, deleted: 1, kind: "mod" },
+    { path: "new file.txt", added: 2, deleted: 0, kind: "new" },
+    { path: "scratch.txt", added: null, deleted: null, untracked: true, kind: "new" },
   ]);
   assert.deepEqual(answer.totals, { added: 3, deleted: 1 });
   assert.equal(git(["-C", path, "status", "--porcelain"]), statusBefore);
+});
+
+// A job worktree that renames, deletes and edits seeded files, with spaces and non-ASCII names, plus an untracked file.
+function reshapedWorktree(t) {
+  const { checkout } = publishedCheckout(t, "diffstat-kinds");
+  writeFileSync(join(checkout, "a.txt"), "one\ntwo\nthree\nfour\n");
+  writeFileSync(join(checkout, "gone.txt"), "bye\n");
+  writeFileSync(join(checkout, "keep.txt"), "same\n");
+  git(["-C", checkout, "add", "a.txt", "gone.txt", "keep.txt"]);
+  git(["-C", checkout, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed"]);
+  git(["-C", checkout, "push", "-q", "origin", "main"]);
+  const { path } = addWorktree(checkout, "job", { push: false });
+  mkdirSync(join(path, "dir é"));
+  git(["-C", path, "mv", "a.txt", "dir é/b c.txt"]);
+  git(["-C", path, "rm", "-q", "gone.txt"]);
+  git(["-C", path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "reshape"]);
+  writeFileSync(join(path, "keep.txt"), "changed\n");
+  writeFileSync(join(path, "ação nova.txt"), "olá\n");
+  return path;
+}
+
+test("a live worktree tags each file with its kind: a rename is one ren entry with its old name, a delete del, an edit mod, an untracked file new", async (t) => {
+  const env = makeHome(t, "diffstat-kinds");
+  const path = reshapedWorktree(t);
+  const answer = await jobDiffstat(jobAt(env, path), env);
+  assert.equal(answer.source, "worktree");
+  const byPath = new Map(answer.files.map((file) => [file.path, file]));
+  assert.equal(answer.files.length, 4, `one entry per file, got ${answer.files.map((file) => file.path).join(", ")}`);
+  assert.deepEqual(byPath.get("dir é/b c.txt"), { path: "dir é/b c.txt", added: 0, deleted: 0, kind: "ren", from: "a.txt" });
+  assert.deepEqual(byPath.get("gone.txt"), { path: "gone.txt", added: 0, deleted: 1, kind: "del" });
+  assert.deepEqual(byPath.get("keep.txt"), { path: "keep.txt", added: 1, deleted: 1, kind: "mod" });
+  assert.deepEqual(byPath.get("ação nova.txt"), { path: "ação nova.txt", added: null, deleted: null, untracked: true, kind: "new" });
+  assert.equal(answer.files.some((file) => file.path === "a.txt"), false, "the rename's old name showed up as its own entry");
 });
 
 test("a released worktree answers the run's recorded names with the note, and nothing at all answers none", async (t) => {
@@ -56,7 +89,7 @@ test("a released worktree answers the run's recorded names with the note, and no
   git(["-C", checkout, "worktree", "remove", "--force", path]);
   const released = await jobDiffstat(jobAt(env, path, { files: ["a.txt", "new file.txt"] }), env);
   assert.equal(released.source, "recorded");
-  assert.deepEqual(released.files.map((file) => [file.path, file.added, file.deleted]), [["a.txt", null, null], ["new file.txt", null, null]]);
+  assert.deepEqual(released.files.map((file) => [file.path, file.added, file.deleted, file.kind]), [["a.txt", null, null, null], ["new file.txt", null, null, null]]);
   assert.equal(released.totals, null);
   assert.match(released.note, /worktree released/);
   const none = await jobDiffstat(jobAt(env, path), env);

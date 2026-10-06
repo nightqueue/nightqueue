@@ -6,9 +6,23 @@ import { eachLineYielding } from "./yielding-lines.mjs";
 const RECALL_TOOL_RE = /__(lesson_recall|memory_recall|decision_recall|index_recall)$/;
 const LIST_KEYS = ["items", "hits", "results", "files", "decisions"];
 const REF_PREFIX = { lesson_recall: "L", memory_recall: "M" };
+const KIND_OF_TOOL = { decision_recall: "decision", lesson_recall: "lesson", index_recall: "index", memory_recall: "memory" };
+const LESSON_TEXT_FIELDS = [
+  ["root_cause", "Root cause"],
+  ["solution", "Solution"],
+  ["prevention", "Prevention"],
+];
 const TITLE_LIMIT = 120;
+const TEXT_LIMIT = 2000;
 const ERROR_LIMIT = 200;
 const ORCHESTRATOR = "orchestrator";
+
+// Milliseconds of an ISO timestamp, or null when the value is not a date.
+function isoMs(value) {
+  if (typeof value !== "string" || !value) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
 
 // The content blocks of an assistant or user event, an empty list for anything else.
 function contentBlocks(event) {
@@ -48,7 +62,30 @@ function titleOf(entry) {
   return truncateByCodePoint(title ?? null, TITLE_LIMIT);
 }
 
-// Turns a recall's tool_result into its refs/titles, or the reason it cannot be read.
+// The similarity a recalled entry scored: its cosine, else a score or similarity field; null when none is a number.
+function scoreOf(entry) {
+  const score = [entry.cosine, entry.score, entry.similarity].find((value) => typeof value === "number" && Number.isFinite(value));
+  return score ?? null;
+}
+
+// The text the drawer shows for a hit: a lesson's labelled fields or a memory's value; null for the other kinds.
+function textOf(tool, entry) {
+  if (tool === "memory_recall") return typeof entry.value === "string" && entry.value ? truncateByCodePoint(entry.value, TEXT_LIMIT) : null;
+  if (tool !== "lesson_recall") return null;
+  const lines = LESSON_TEXT_FIELDS.filter(([field]) => typeof entry[field] === "string" && entry[field]).map(([field, label]) => `${label}: ${entry[field]}`);
+  return lines.length ? truncateByCodePoint(lines.join("\n"), TEXT_LIMIT) : null;
+}
+
+// One hit of a recall: its ref, title and score, plus the fallback flag and the drawer text when present.
+function hitOf(tool, entry) {
+  const hit = { ref: refOf(tool, entry), title: titleOf(entry), score: scoreOf(entry) };
+  if (typeof entry.via === "string" && entry.via) hit.via = entry.via;
+  const text = textOf(tool, entry);
+  if (text) hit.text = text;
+  return hit;
+}
+
+// Turns a recall's tool_result into its hits, or the reason it cannot be read.
 function parseRecallResult(tool, block) {
   const text = resultText(block.content);
   if (block.is_error === true) return { error: truncateByCodePoint(text || "the recall failed", ERROR_LIMIT) };
@@ -60,17 +97,14 @@ function parseRecallResult(tool, block) {
   }
   const entries = entriesOf(value);
   if (!entries) return { error: "unreadable result" };
-  const results = entries.filter((entry) => entry && typeof entry === "object").map((entry) => ({ ref: refOf(tool, entry), title: titleOf(entry) }));
-  return { results };
+  const hits = entries.filter((entry) => entry && typeof entry === "object").map((entry) => hitOf(tool, entry));
+  return { hits };
 }
 
-// The input fields of a recall worth showing beside its query.
-function inputSubset(input) {
-  const subset = {};
-  for (const name of ["project", "target"]) {
-    if (typeof input?.[name] === "string" && input[name]) subset[name] = input[name];
-  }
-  return subset;
+// Seconds from the attempt's anchor to an event's instant, null when either is unknown.
+function secondsSince(anchorMs, stampMs) {
+  if (anchorMs === null || stampMs === null) return null;
+  return Math.max(0, Math.round((stampMs - anchorMs) / 1000));
 }
 
 // Records the agent a subagent lane runs, from the tool call that launched it or its task_started event.
@@ -86,7 +120,7 @@ function trackLane(state, event) {
 }
 
 // Opens a pending recall for every recall tool call of an assistant event.
-function collectCalls(state, event) {
+function collectCalls(state, event, stampMs) {
   if (event.type !== "assistant") return;
   const parent = typeof event.parent_tool_use_id === "string" && event.parent_tool_use_id ? event.parent_tool_use_id : null;
   const agent = parent ? (state.lanes.get(parent) ?? "subagent") : ORCHESTRATOR;
@@ -96,14 +130,15 @@ function collectCalls(state, event) {
     const recall = {
       id: block.id ?? null,
       tool: match[1],
+      kind: KIND_OF_TOOL[match[1]],
       query: typeof block.input?.query === "string" ? block.input.query : null,
-      input: inputSubset(block.input),
       agent,
       phase: PHASES.get(agent) ?? null,
       attempt: state.attempt,
+      at_s: secondsSince(state.anchorMs, stampMs),
       pending: true,
-      results: [],
       error: null,
+      hits: [],
     };
     state.recalls.push(recall);
     if (recall.id) state.pending.set(recall.id, recall);
@@ -117,8 +152,15 @@ function collectResults(state, event) {
     const recall = block?.type === "tool_result" ? state.pending.get(block.tool_use_id) : null;
     if (!recall) continue;
     state.pending.delete(block.tool_use_id);
-    Object.assign(recall, { pending: false, results: [], error: null }, parseRecallResult(recall.tool, block));
+    Object.assign(recall, { pending: false, hits: [], error: null }, parseRecallResult(recall.tool, block));
   }
+}
+
+// The instant of an event, which also anchors the attempt's clock when no marker anchored it.
+function eventStamp(state, event) {
+  const stampMs = isoMs(event.timestamp);
+  if (stampMs !== null && state.anchorMs === null) state.anchorMs = stampMs;
+  return stampMs;
 }
 
 // Folds one raw log line into the scan state: an attempt marker, or a stream event.
@@ -126,29 +168,20 @@ function scanLine(state, line) {
   const marker = parseAttemptMarker(line);
   if (marker) {
     state.attempt = marker.attempt;
+    state.anchorMs = isoMs(marker.at);
     return;
   }
   const event = parseEventLine(line);
   if (!event) return;
+  const stampMs = eventStamp(state, event);
   trackLane(state, event);
-  collectCalls(state, event);
+  collectCalls(state, event, stampMs);
   collectResults(state, event);
 }
 
-// Groups recalls by phase and agent, in the order each group first appears in the log.
-function groupRecalls(recalls) {
-  const groups = new Map();
-  for (const { agent, phase, ...recall } of recalls) {
-    const key = `${phase ?? "-"}:${agent}`;
-    if (!groups.has(key)) groups.set(key, { phase, agent, recalls: [] });
-    groups.get(key).recalls.push(recall);
-  }
-  return [...groups.values()];
-}
-
-// Every lesson/memory/decision/index recall of a job's whole log, grouped by phase and agent, scanned without stalling the event loop.
+// Every lesson/memory/decision/index recall of a job's whole log, in run order, scanned without stalling the event loop.
 export async function jobRecalls(logText) {
-  const state = { attempt: 1, lanes: new Map(), pending: new Map(), recalls: [] };
+  const state = { attempt: 1, anchorMs: null, lanes: new Map(), pending: new Map(), recalls: [] };
   await eachLineYielding(logText, (line) => scanLine(state, line));
-  return groupRecalls(state.recalls);
+  return state.recalls;
 }

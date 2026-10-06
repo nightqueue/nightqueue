@@ -3,8 +3,10 @@ import { readFile, stat } from "node:fs/promises";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
 import { packageRoot } from "../host/paths.mjs";
+import { EMBEDDING_MODEL_ID } from "../memory/embedding.mjs";
 import { jobView } from "../memory/jobs.mjs";
 import { parseJobRef } from "../memory/refs.mjs";
+import { RECALL_COS_CUT } from "../memory/search.mjs";
 import { respond } from "../mcp/transports/http-gate.mjs";
 import { listedProjects } from "../cli/project.mjs";
 import { runtimeLabel } from "../cli/runtime-versions.mjs";
@@ -19,6 +21,7 @@ import { startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
 import { withReadOnlyStore } from "../store/open.mjs";
 import { jobDiffstat } from "./diffstat.mjs";
+import { appliedRefs } from "./recall-applied.mjs";
 import { TerminalRefusal } from "./terminal.mjs";
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -141,14 +144,25 @@ async function sendJobDiffstat(res, { env, ref }) {
   return sendJson(res, 200, await jobDiffstat(jobView(row, { full: true }), env));
 }
 
-// Answers every memory recall of a job's whole log grouped by phase and agent, 404 when the job does not exist.
+// The recalls of a job with the refs each one's hits went on to apply, plus the total and the embedding they were ranked with.
+async function recallsAnswer(job, recalls, env) {
+  const applied = await appliedRefs({ job, recalls, env });
+  const withApplied = recalls.map((recall, index) => ({ ...recall, applied: applied[index] ?? [] }));
+  return {
+    recalls: withApplied,
+    applied_total: withApplied.reduce((sum, recall) => sum + recall.applied.length, 0),
+    embedding: { model: EMBEDDING_MODEL_ID, threshold: RECALL_COS_CUT },
+  };
+}
+
+// Answers every memory recall of a job's whole log in run order, 404 when the job does not exist.
 async function sendJobRecalls(res, { env, ref }) {
   const id = parseJobRef(ref);
   const row = await withReadOnlyStore(env, (store) => store.jobs.getJob(id));
   if (!row) return respond(res, 404, `no job \`${id}\``);
   const path = jobLogPath(id, env);
-  const groups = existsSync(path) ? await cachedRecalls(path) : [];
-  return sendJson(res, 200, { groups });
+  const recalls = existsSync(path) ? await cachedRecalls(path) : [];
+  return sendJson(res, 200, await recallsAnswer(jobView(row, { full: true }), recalls, env));
 }
 
 // The recalls of a log, scanned again only when the log's size or mtime changed since the last poll.
@@ -156,12 +170,12 @@ async function cachedRecalls(path) {
   const { size, mtimeMs } = await stat(path);
   const key = `${size}:${mtimeMs}`;
   const cached = recallsCache.get(path);
-  if (cached?.key === key) return cached.groups;
-  const groups = await jobRecalls(await readFile(path, "utf8"));
+  if (cached?.key === key) return cached.recalls;
+  const recalls = await jobRecalls(await readFile(path, "utf8"));
   recallsCache.delete(path);
-  recallsCache.set(path, { key, groups });
+  recallsCache.set(path, { key, recalls });
   if (recallsCache.size > RECALLS_CACHE_LIMIT) recallsCache.delete(recallsCache.keys().next().value);
-  return groups;
+  return recalls;
 }
 
 // Opens a terminal from a JSON body: 201 for a fresh one, 200 when the job's live session is reused.

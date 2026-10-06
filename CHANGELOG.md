@@ -135,6 +135,28 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   checkout, not only the current one.
 - `nightqueue doctor` reports the QA worktrees an operator left under `<home>/operator-qa/`
   before D-58 as `operator-qa (legacy) <project>/<dir>`, read-only.
+- Studio S1 follow-up (NQ-89). One status map now drives the Studio's Lucide icons (`lucide-react`,
+  stroke 1.75). It covers the queue STATUS cells, the toolbar chips, the Job header pill and the
+  pipeline header. The spinning icon replaces the pulsing dot, and a stalled close shows a red
+  `octagon-x`. PR badges, row and page actions, the runner banner and toasts also get Lucide icons;
+  a closed PR is red and a draft is grey. A running row's TOKENS take the accent colour of its
+  ticking DURATION. The Job page's pipeline card gains a totals strip (active time, tokens, cost,
+  attempts, token share by phase), a tokens line per phase, an animated bar on the running phase
+  and a dashed gate segment per past gate. The segment's position is approximate until the job
+  API says at which phase the gate happened. The "Tokens and cost" card is folded into the
+  strip and removed; every value it showed is kept. The Files card shows `new`/`mod`/`del`/`ren`
+  tags, totals with blocks, a list that scrolls at about ten rows, and a footer naming the source
+  with `Open PR diff ↗`. The Memory card is a recall timeline: one block per recall in run order,
+  with the agent and its clock, refs coloured by kind, scores with meters, and a drawer for a
+  decision or lesson ref.
+- Studio API: `/api/jobs/<ref>/diffstat` detects renames. Every file carries
+  `kind` (`new`/`mod`/`del`/`ren`, `null` for recorded files), and a rename is one entry with
+  `from` instead of a deletion plus an addition; `untracked` and `totals` are unchanged.
+  `/api/jobs/<ref>/recalls` answers `{ recalls, applied_total, embedding }` instead of `groups`:
+  a flat list in run order, each recall with `kind`, `query`, `agent`, `at_s`, `hits` (`ref`,
+  `title`, `score`) and `applied`. `applied` is best-effort: it lists the hit refs cited in a
+  run artifact of the recall's phase or a later one, or in a commit message of the job's worktree, so a ref cited only in a PR
+  body, or after the worktree is removed, is not seen.
 
 ### Removed
 

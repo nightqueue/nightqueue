@@ -1,6 +1,8 @@
+import { Play } from "lucide-react";
 import { useState } from "react";
 import { jobRef, WATCH_INTERVAL_DEFAULT_S } from "../lib/queue";
 import type { Job, RunnerChoice } from "../lib/types";
+import { ActionIcon } from "./StatusIcon";
 import { Button, FIELD_CLASS } from "./ui";
 
 type Mode = RunnerChoice["mode"];
@@ -64,6 +66,7 @@ export function StartRunnerForm({ pendingJob, onStart, primary = false, tone = "
       </select>
       {mode === "window" && <WindowInputs times={times} onChange={setTimes} tone={tone} />}
       <Button variant={primary ? "primary" : "default"} disabled={!onStart || !choice} onClick={() => choice && onStart?.(choice)}>
+        <ActionIcon icon={Play} />
         Start runner
       </Button>
     </div>

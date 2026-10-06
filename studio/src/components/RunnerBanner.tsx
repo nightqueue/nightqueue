@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { Pause, Play, Square } from "lucide-react";
 import { useState } from "react";
 import { useStudioInfo } from "../lib/api";
 import { copyText } from "../lib/clipboard";
@@ -6,6 +7,7 @@ import { hhmmUtc } from "../lib/format";
 import { jobRef, jobTitle, oldestPendingJob, pendingWaitLabel, runnerExitRule, runnerModeLabel, runnersOnlineLabel } from "../lib/queue";
 import type { Job, QueueSnapshot, Runner, RunnerChoice } from "../lib/types";
 import { StartRunnerForm } from "./StartRunnerForm";
+import { ActionIcon } from "./StatusIcon";
 import { Button, Tag } from "./ui";
 
 export interface RunnerActions {
@@ -23,6 +25,7 @@ interface BannerProps {
 function PauseQueueButton({ paused, onToggle }: { paused: boolean; onToggle?: (paused: boolean) => void }) {
   return (
     <Button variant="ghost" disabled={!onToggle} onClick={() => onToggle?.(paused)} title={paused ? "claims resume" : "stop claiming; running jobs finish normally"}>
+      <ActionIcon icon={paused ? Play : Pause} />
       {paused ? "Resume queue" : "Pause queue"}
     </Button>
   );
@@ -70,6 +73,7 @@ function RunnerLine({ runner, jobs, onStop }: { runner: Runner; jobs: Job[]; onS
         started {hhmmUtc(runner.startedAt)} UTC · {runnerExitRule(runner)}
       </span>
       <Button variant="ghost" size="sm" className="shrink-0" disabled={!onStop} onClick={() => onStop?.(runner)} aria-label={`stop runner ${runner.pid}`}>
+        <ActionIcon icon={Square} />
         Stop
       </Button>
     </div>
@@ -118,6 +122,7 @@ function OnlineBanner({ snapshot, actions }: BannerProps) {
             Runner logs
           </Button>
           <Button aria-expanded={panel === "start"} onClick={() => toggle("start")}>
+            <ActionIcon icon={Play} />
             Start runner
           </Button>
         </div>

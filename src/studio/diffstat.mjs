@@ -1,58 +1,66 @@
-import { existsSync } from "node:fs";
-import { jobWorktreePath } from "../config/paths.mjs";
-import { runGitAsync } from "../host/git.mjs";
-import { isRunPath, readRunState } from "../queue/resume.mjs";
+import { baseOf, gitOutput, worktreeOf } from "./git-read.mjs";
 
-const GIT_TIMEOUT_MS = 5000;
-const FALLBACK_BASES = ["origin/main", "origin/master", "main", "master"];
 const RELEASED_NOTE = "worktree released — names from the run's result, no line counts";
 const NONE_NOTE = "no worktree and no recorded files yet";
 const MERGED_NOTE = "no change left against the base (already merged?) — names from the run's result, no line counts";
-const SAFE_CONFIG = ["-c", "core.quotepath=false", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"];
-
-// Runs one read-only git command in the worktree, never taking the optional index lock nor running a repo-configured command.
-function readGit(cwd, args, env) {
-  return runGitAsync({ args: [...SAFE_CONFIG, ...args], cwd, env: { ...env, GIT_OPTIONAL_LOCKS: "0" }, timeoutMs: GIT_TIMEOUT_MS });
-}
-
-// The job's worktree on disk: the one its state.json records, else the runtime's default place; null when neither exists.
-function worktreeOf(job, env) {
-  const recorded = readRunState({ projectId: job?.project_id, slug: job?.slug, env })?.worktree;
-  if (typeof recorded === "string" && recorded.trim() && existsSync(recorded.trim())) return recorded.trim();
-  if (!isRunPath(job?.project_id, job?.slug)) return null;
-  const fallback = jobWorktreePath(job.project_id, job.slug, env);
-  return existsSync(fallback) ? fallback : null;
-}
-
-// The branch the job is compared with: origin's default branch, else the first of the usual names that exists.
-async function baseOf(cwd, env) {
-  const head = await readGit(cwd, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], env);
-  if (head.ok && head.stdout.trim()) return head.stdout.trim();
-  for (const ref of FALLBACK_BASES) {
-    if ((await readGit(cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], env)).ok) return ref;
-  }
-  throw new Error(`no base branch (origin/HEAD, ${FALLBACK_BASES.join(", ")}) exists in ${cwd}`);
-}
-
-// The stdout of a git read, or an error naming the command and git's own reason.
-async function gitOutput(cwd, args, env) {
-  const answer = await readGit(cwd, args, env);
-  if (!answer.ok) throw new Error(`git ${args[0]} failed: ${answer.stderr.trim() || "no reason given"}`);
-  return answer.stdout;
-}
+const DIFF_FLAGS = ["-M", "--no-ext-diff", "--no-textconv", "-z"];
+const NUMSTAT_ENTRY = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/;
 
 // A count of `--numstat`, null for a binary file's `-`.
 function countOf(text) {
   return /^\d+$/.test(text) ? Number(text) : null;
 }
 
-// The files of a `diff --numstat -z` output, one `{ path, added, deleted }` each.
-function parseNumstat(stdout) {
-  return stdout
-    .split("\0")
-    .map((entry) => /^(\d+|-)\t(\d+|-)\t([\s\S]+)$/.exec(entry))
-    .filter(Boolean)
-    .map(([, added, deleted, path]) => ({ path, added: countOf(added), deleted: countOf(deleted) }));
+// The files of a `diff --numstat -M -z` output, one `{ path, added, deleted }` each; a rename's path is its new name.
+export function parseNumstat(stdout) {
+  const tokens = stdout.split("\0");
+  const files = [];
+  for (let at = 0; at < tokens.length; at += 1) {
+    const match = NUMSTAT_ENTRY.exec(tokens[at]);
+    if (!match) continue;
+    const [, added, deleted, inline] = match;
+    const path = inline === "" ? tokens[at + 2] : inline;
+    if (inline === "") at += 2;
+    if (path) files.push({ path, added: countOf(added), deleted: countOf(deleted) });
+  }
+  return files;
+}
+
+// The kind of change a `--name-status` letter names: new, mod, del or ren.
+function kindOf(status) {
+  if (status.startsWith("R")) return "ren";
+  if (status.startsWith("C") || status === "A") return "new";
+  if (status === "D") return "del";
+  return "mod";
+}
+
+// The kinds of a `diff --name-status -M -z` output by path, with the old name of a rename.
+export function parseNameStatus(stdout) {
+  const tokens = stdout.split("\0");
+  const kinds = new Map();
+  let at = 0;
+  while (at < tokens.length) {
+    const status = tokens[at];
+    if (!/^[A-Z]\d*$/.test(status)) {
+      at += 1;
+      continue;
+    }
+    const twoPaths = status.startsWith("R") || status.startsWith("C");
+    const from = twoPaths ? tokens[at + 1] : null;
+    const path = twoPaths ? tokens[at + 2] : tokens[at + 1];
+    at += twoPaths ? 3 : 2;
+    if (path) kinds.set(path, { kind: kindOf(status), from: kindOf(status) === "ren" ? from : null });
+  }
+  return kinds;
+}
+
+// The counted files joined with their kinds; a path git did not classify is a modification.
+function withKinds(counted, kinds) {
+  return counted.map((file) => {
+    const named = kinds.get(file.path);
+    if (!named) return { ...file, kind: "mod" };
+    return named.from ? { ...file, kind: named.kind, from: named.from } : { ...file, kind: named.kind };
+  });
 }
 
 // The sums of the counted lines, a binary or untracked file adding nothing.
@@ -64,11 +72,13 @@ function totalsOf(files) {
 async function worktreeDiffstat(cwd, env) {
   const base = await baseOf(cwd, env);
   const mergeBase = (await gitOutput(cwd, ["merge-base", base, "HEAD"], env)).trim();
-  const changed = parseNumstat(await gitOutput(cwd, ["diff", "--numstat", "--no-renames", "--no-ext-diff", "--no-textconv", "-z", mergeBase], env));
+  const counted = parseNumstat(await gitOutput(cwd, ["diff", "--numstat", ...DIFF_FLAGS, mergeBase], env));
+  const kinds = parseNameStatus(await gitOutput(cwd, ["diff", "--name-status", ...DIFF_FLAGS, mergeBase], env));
+  const changed = withKinds(counted, kinds);
   const untracked = (await gitOutput(cwd, ["ls-files", "--others", "--exclude-standard", "-z"], env))
     .split("\0")
     .filter(Boolean)
-    .map((path) => ({ path, added: null, deleted: null, untracked: true }));
+    .map((path) => ({ path, added: null, deleted: null, untracked: true, kind: "new" }));
   const files = [...changed, ...untracked];
   return { source: "worktree", base, files, totals: totalsOf(changed), note: null };
 }
@@ -86,12 +96,12 @@ function resultFiles(job) {
 
 // The names-only answer when no worktree can be read: the run's recorded files, or nothing.
 function recordedDiffstat(job, note) {
-  const files = resultFiles(job).map((path) => ({ path, added: null, deleted: null }));
+  const files = resultFiles(job).map((path) => ({ path, added: null, deleted: null, kind: null }));
   if (files.length === 0) return { source: "none", base: null, files: [], totals: null, note: note ?? NONE_NOTE };
   return { source: "recorded", base: null, files, totals: null, note: note ?? RELEASED_NOTE };
 }
 
-// The files a job touched with their line counts, read from its worktree without writing anything; names only once the worktree is gone.
+// The files a job touched with their line counts and kinds, read from its worktree without writing anything; names only once the worktree is gone.
 export async function jobDiffstat(job, env = process.env) {
   const cwd = worktreeOf(job, env);
   if (!cwd) return recordedDiffstat(job, null);

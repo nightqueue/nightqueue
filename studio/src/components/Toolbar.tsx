@@ -1,6 +1,7 @@
 import { useProjects } from "../lib/api";
 import { ALL_PROJECTS, STATUS_ORDER, totalCount } from "../lib/queue";
 import type { JobStatus, QueueFilters } from "../lib/types";
+import { StatusIcon } from "./StatusIcon";
 import { Button, Chip, FIELD_CLASS } from "./ui";
 
 interface ToolbarProps {
@@ -10,7 +11,7 @@ interface ToolbarProps {
   onAddJob?: () => void;
 }
 
-// The status chips: `All N` and one chip per status with its count, the active one highlighted.
+// The status chips: `All N` and one chip per status with its icon and count, the active one highlighted.
 function StatusChips({ counts, filters, onFilters }: Omit<ToolbarProps, "onAddJob">) {
   return (
     <>
@@ -19,7 +20,10 @@ function StatusChips({ counts, filters, onFilters }: Omit<ToolbarProps, "onAddJo
       </Chip>
       {STATUS_ORDER.map((status) => (
         <Chip key={status} on={filters.status === status} onClick={() => onFilters({ ...filters, status })}>
-          {status} {counts[status] ?? 0}
+          <span className="inline-flex items-center gap-1.5">
+            <StatusIcon status={status} closeState={null} closing={false} />
+            {status} {counts[status] ?? 0}
+          </span>
         </Chip>
       ))}
     </>

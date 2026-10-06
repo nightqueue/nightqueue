@@ -1,4 +1,4 @@
-import type { AttemptRow, Job } from "./types";
+import type { AttemptOutcome, AttemptRow, Job, JobDetail, TimelinePhase } from "./types";
 
 // Milliseconds of an ISO instant, null when it is missing or not a date.
 export function isoMs(value: string | null | undefined): number | null {
@@ -62,6 +62,24 @@ export function attemptCount(job: Pick<Job, "attempts_log">): number {
   return Array.isArray(job.attempts_log) ? job.attempts_log.length : 0;
 }
 
+const FAILED_OUTCOMES: ReadonlySet<AttemptOutcome> = new Set<AttemptOutcome>(["failed", "timed_out", "lost"]);
+
+export interface AttemptsSummary {
+  count: number;
+  gates: number | null;
+  failed: number | null;
+}
+
+// The attempts cell's figures: the history's count, gates and failures, or the job's counter alone when no history came.
+export function attemptsSummary(job: Pick<Job, "attempts" | "attempts_log">): AttemptsSummary {
+  const rows = Array.isArray(job.attempts_log) ? job.attempts_log : [];
+  const fallback = Number.isFinite(job.attempts) ? job.attempts : 0;
+  if (rows.length === 0) return { count: fallback, gates: null, failed: null };
+  const gates = rows.filter((row) => row?.outcome === "gate").length;
+  const failed = rows.filter((row) => row?.outcome != null && FAILED_OUTCOMES.has(row.outcome)).length;
+  return { count: rows.length, gates, failed };
+}
+
 // `N attempts`, singular for one.
 export function attemptsLabel(count: number): string {
   return `${count} attempt${count === 1 ? "" : "s"}`;
@@ -115,6 +133,84 @@ export function compactCount(value: number | null | undefined): string {
 // A dollar amount with cents, `-` when unknown.
 export function usdLabel(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(2)}` : "-";
+}
+
+// A count with the thousands separator: `1,204`; `-` when unknown.
+export function thousands(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("en-US") : "-";
+}
+
+export interface TokenCounters {
+  in: number | null;
+  out: number | null;
+  cacheRead: number | null;
+  cacheWrite: number | null;
+}
+
+type TokenSource = Pick<JobDetail, "status" | "live" | "tokens_in" | "tokens_out" | "cache_read" | "cache_creation">;
+
+// The four token counters of a job: the live estimate while it runs and has one, the recorded columns otherwise.
+export function tokenCounters(job: TokenSource): TokenCounters {
+  const live = job.status === "running" ? job.live?.tokens : null;
+  if (live) return { in: live.in, out: live.out, cacheRead: live.cache_read, cacheWrite: live.cache_creation };
+  return { in: job.tokens_in, out: job.tokens_out, cacheRead: job.cache_read, cacheWrite: job.cache_creation };
+}
+
+// The finite part of a counter, zero when it is unknown.
+function finiteOrZero(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+// Tokens the job spent, cache included, as the queue's TOKENS cell prints them: `374k`, `1.2M`, `~` while estimated, `-` before any.
+export function tokensTotalLabel(job: TokenSource): string {
+  const counters = tokenCounters(job);
+  const total = finiteOrZero(counters.in) + finiteOrZero(counters.out) + finiteOrZero(counters.cacheRead) + finiteOrZero(counters.cacheWrite);
+  if (total <= 0) return "-";
+  const mark = job.status === "running" && Boolean(job.live?.tokens) && job.live?.tokens_estimated === true ? "~" : "";
+  if (total < 1000) return `${mark}${total}`;
+  if (total < 1_000_000) return `${mark}${Math.round(total / 1000)}k`;
+  return `${mark}${(total / 1_000_000).toFixed(1)}M`;
+}
+
+export interface GateWait {
+  index: number;
+  attempt: number;
+  waitMs: number;
+}
+
+// The waits between a gated attempt and the next one, in attempt order; a pair without both instants is left out.
+export function gateWaits(rows: AttemptRow[] | null | undefined): GateWait[] {
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((row, index) => {
+    const next = rows[index + 1];
+    if (row.outcome !== "gate" || !next) return [];
+    const finished = isoMs(row.finished_at);
+    const resumed = isoMs(next.started_at);
+    if (finished === null || resumed === null || resumed < finished) return [];
+    return [{ index, attempt: row.attempt, waitMs: resumed - finished }];
+  });
+}
+
+// TODO(NQ-88): the gate's phase is not exposed; the segment sits at an approximate position until the job API carries it.
+export function gatePosition(phases: TimelinePhase[]): number {
+  const now = phases.findIndex((phase) => phase.state === "now");
+  if (now >= 0) return now;
+  const gate = phases.findIndex((phase) => phase.state === "gate");
+  if (gate >= 0) return gate;
+  const lastDone = phases.map((phase) => phase.state).lastIndexOf("done");
+  return lastDone + 1;
+}
+
+// GitHub's five-block proportion of a change: green for additions, red for deletions, grey when nothing changed.
+export function blocks5(added: number | null | undefined, deleted: number | null | undefined): { green: number; red: number } {
+  const adds = finiteOrZero(added);
+  const dels = finiteOrZero(deleted);
+  const total = adds + dels;
+  if (total <= 0) return { green: 0, red: 0 };
+  const green = Math.round((5 * adds) / total);
+  if (adds > 0 && green === 0) return { green: 1, red: 4 };
+  if (dels > 0 && green === 5) return { green: 4, red: 1 };
+  return { green, red: 5 - green };
 }
 
 // The number of a GitHub pull request URL, null when the URL carries none.
