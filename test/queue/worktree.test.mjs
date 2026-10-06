@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runGitAsync } from "../../src/host/git.mjs";
 import {
   finishNotice,
+  forceRemoveRunWorktree,
   inspectRunWorktree,
   keptWorktreeLine,
   lockPid,
@@ -108,6 +109,34 @@ test("a dirty worktree is kept, whatever else is true of it", async (t) => {
   makeDirty(path);
 
   assert.deepEqual(await inspectRunWorktree({ checkout, path, prRecorded: true, env: ENV }), { path, removable: false, reason: "it has uncommitted changes" });
+});
+
+test("forceRemoveRunWorktree removes a dirty, never-pushed worktree and names at most ten dropped paths", async (t) => {
+  const { checkout } = publishedCheckout(t, "wt-force");
+  const { path, branch } = addWorktree(checkout, "feat+force", { push: false });
+  for (let n = 1; n <= 12; n += 1) writeFileSync(join(path, `f${String(n).padStart(2, "0")}.txt`), "x\n");
+
+  const removed = await forceRemoveRunWorktree({ checkout, path, env: ENV });
+
+  assert.deepEqual(removed, { ok: true, reason: null, dropped: "f01.txt, f02.txt, f03.txt, f04.txt, f05.txt, f06.txt, f07.txt, f08.txt, f09.txt, f10.txt, … and 2 more" });
+  assert.equal(existsSync(path), false);
+  assert.ok(localBranches(checkout).includes(branch), "the removal deleted the local branch");
+});
+
+test("forceRemoveRunWorktree lifts a stale lock, keeps a live or manual one, and refuses a path git does not register", async (t) => {
+  const { checkout } = publishedCheckout(t, "wt-force-locks");
+  const stale = addWorktree(checkout, "feat+stale");
+  lockWorktree(checkout, stale.path, deadPid());
+  const live = addWorktree(checkout, "feat+live");
+  lockWorktree(checkout, live.path, process.pid);
+  const plain = makeDir(t, "wt-force-plain");
+
+  assert.equal((await forceRemoveRunWorktree({ checkout, path: stale.path, env: ENV })).ok, true);
+  assert.equal(existsSync(stale.path), false);
+  assert.deepEqual(await forceRemoveRunWorktree({ checkout, path: live.path, env: ENV }), { ok: false, reason: `it is locked by a live session (pid ${process.pid})`, dropped: "" });
+  assert.equal(existsSync(live.path), true);
+  assert.equal((await forceRemoveRunWorktree({ checkout, path: plain, env: ENV })).ok, false);
+  assert.equal(existsSync(plain), true);
 });
 
 test("a branch never pushed is kept, unless a pull request is recorded", async (t) => {

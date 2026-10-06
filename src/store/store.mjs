@@ -58,6 +58,7 @@
  * @property {() => Promise<object|null>} peekNextJob
  * @property {() => Promise<object[]>} listWithSlug unfinished jobs that already have a run directory
  * @property {() => Promise<object[]>} listOpenJobs every job that is not closed and already named its run, the owners of the worktrees `nightqueue doctor` reports
+ * @property {() => Promise<object[]>} listNamedJobs every job, closed or not, that already named its run, the owners `nightqueue doctor --fix` checks a leftover worktree against
  * @property {() => Promise<object[]>} recentHostCommandCounts the host-command counters of the most recently finished jobs, the sample `nightqueue doctor` sums
  * @property {() => Promise<object[]>} recentOrchestratorCounts the orchestrator counters of the most recently finished jobs, the sample `nightqueue doctor` sums
  * @property {(tier: string, options?: {limit?: number}) => Promise<{n: number, turns: number|null, ctx: number|null, cost: number|null}>} tierBaseline the medians of turns, last context and cost of the newest delivered jobs of a tier, read-only
@@ -278,6 +279,7 @@ export const STORE_CONTRACT = Object.freeze({
     "peekNextJob",
     "listWithSlug",
     "listOpenJobs",
+    "listNamedJobs",
     "recentHostCommandCounts",
     "recentOrchestratorCounts",
     "tierBaseline",
@@ -368,6 +370,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.listJobs",
   "jobs.listWithSlug",
   "jobs.listOpenJobs",
+  "jobs.listNamedJobs",
   "jobs.isJobActive",
   "jobs.existingJobIds",
   "jobs.countsByStatus",

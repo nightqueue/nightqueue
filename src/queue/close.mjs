@@ -1275,7 +1275,7 @@ export async function runClosePipeline({ store, job, worker, env = process.env, 
 export async function settleClosedJob({ store, id, worker, close, noticeLine, env = process.env, killImpl } = {}) {
   const job = await store.jobs.settleClose(id, { worker, close, noticeLine });
   if (!job) return { job: null, worktree: null };
-  const worktree = await releaseJobWorktree({ job, env, killImpl });
+  const worktree = await releaseJobWorktree({ job, env, killImpl, force: true });
   return { job, worktree };
 }
 
@@ -1286,5 +1286,6 @@ export function worktreeEntry(job, worktree) {
 
 // The text line a close prints for the worktree of a job it closed.
 export function worktreeLine(entry) {
-  return entry.status === "removed" ? `worktree removed: ${entry.path}` : `worktree kept: ${entry.path} - ${entry.reason}`;
+  if (entry.status !== "removed") return `worktree kept: ${entry.path} - ${entry.reason}`;
+  return entry.dropped ? `worktree removed: ${entry.path} (dropped uncommitted: ${entry.dropped})` : `worktree removed: ${entry.path}`;
 }

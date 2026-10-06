@@ -138,6 +138,7 @@ function jobsMethods(env, db) {
     peekNextJob: async () => jobs.peekNextJob(env),
     listWithSlug: async () => jobs.listJobsWithSlug(env, db()),
     listOpenJobs: async () => jobs.listOpenJobs(env, db()),
+    listNamedJobs: async () => jobs.listNamedJobs(env, db()),
     recentHostCommandCounts: async () => jobs.recentHostCommandCounts(env, db()),
     recentOrchestratorCounts: async () => jobs.recentOrchestratorCounts(env, db()),
     tierBaseline: async (tier, options) => jobs.tierBaseline(tier, options, env, db()),
