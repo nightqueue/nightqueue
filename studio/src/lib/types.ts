@@ -251,7 +251,7 @@ export interface TerminalCreated {
   reused: boolean;
 }
 
-export type TerminalRequest = { kind: "session"; job: string; instruction?: string } | { kind: "operator"; project: string; instruction?: string };
+export type TerminalRequest = { kind: "session"; job: string; instruction?: string } | { kind: "operator"; project?: string; instruction?: string };
 
 export type RunnerChoice =
   | { mode: "drain" }

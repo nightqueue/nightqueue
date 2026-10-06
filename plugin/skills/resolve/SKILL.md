@@ -141,8 +141,6 @@ The runtime waits for every subagent and background task of an unattended run; l
    - Safety invariant: the resume only happens on a retry of a job in a TERMINAL status
      (gate/failed/budget), or the first claim of a job queued from an operator run (no
      worktree to reuse) — NEVER reuse the worktree of a job that is still running.
-   - A `## PRIOR RUN (operator)` block in the prompt is the operator's record at queue time;
-     the `RESUME CANDIDATE` block is the runtime's decision, and it wins when they differ.
    - No candidate block in the context: proceed normally from step 1.
 
 0.6. **Post-merge resume (the operator contradicts what this job already delivered).** Trigger:

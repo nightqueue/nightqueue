@@ -15,7 +15,7 @@ nightqueue queue add fix the flaky worker --run                # enqueue and sta
 nightqueue queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
 nightqueue queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
 nightqueue queue add "fix it" --origin <kind>:<ref>            # name the service the job came from instead of detecting it
-nightqueue queue add --issue NQ-12 [--run-dir <dir>] "mind the slow disk"     # an issue's job, with an operator note and/or a prior operator run
+nightqueue queue add --issue NQ-12 "mind the slow disk"        # an issue's job, with an operator note
 nightqueue queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightqueue queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
 nightqueue queue status --blocked                              # only the gated jobs a preflight block stopped
@@ -72,12 +72,12 @@ in the queue. `--foreground` on a command that was not given `--run` is a usage
 error, never a silent no-op. An explicit job id ignores the pause sentinel, so
 `--run` runs even on a paused queue.
 
-**An issue's job takes a note and a run.** `queue add --issue <ref> [--run-dir <dir>]
-["<note>"]` (`queue_add` with `issue_id`, `prompt` and `run_dir`) keeps the item as
-the brief and adds the words as a `## Operator note` section right after it; `--run-dir` binds
-the job to a prior operator run (a project item only), checked as for a free prompt, its
-`## PRIOR RUN (operator)` block after the note. Section order: item, note, prior run, decisions.
-The note is recorded as the job's `operator_note` and in the item's `queued` comment, with the run dir.
+**An issue's job takes a note.** `queue add --issue <ref> ["<note>"]` (`queue_add` with
+`issue_id` and `prompt`) keeps the item as the brief and adds the words as a `## Operator note`
+section right after it. Section order: item, note, decisions. The note is recorded as the job's
+`operator_note` and in the item's `queued` comment. Operator runs no longer exist (D-58):
+`--run-dir` (`queue_add`'s `run_dir`) is refused with a reason naming D-58, and what an
+investigation found goes in the note or an `issue_comment`.
 
 **A job records where it came from.** Every queued job gets an `origin` (`{kind, ref}`)
 when its prompt names a service a provider of this build recognizes - the first provider,
@@ -638,8 +638,12 @@ tracked `.gitignore` (an operator commit; nightqueue never writes it). The
 `/.claude/worktrees/` and `/.claude/settings.local.json` lines an older nightqueue wrote into
 a checkout's `.git/info/exclude` are harmless, but they hide interactive worktrees from the
 dirty check too; delete them by hand once no job that started before the upgrade is open, and
-from then on an interactive worktree gates as above. The operator's QA worktrees live apart
-from every job's, at `<NIGHTQUEUE_HOME>/operator-qa/<project_id>/<slug>`.
+from then on an interactive worktree gates as above. The operator's QA worktrees (D-58) live
+apart from every job's, at `<NIGHTQUEUE_HOME>/qa/<project_id>/<id>`: outside the checkout, so
+they never gate a job, and ephemeral - `nightqueue sandbox worktree` creates and drops them, and
+`nightqueue open`, `nightqueue doctor --fix` and the operator's SubagentStop hook sweep them (see
+[the CLI](cli.md#sandbox)). An operator before D-58 left its own under
+`<NIGHTQUEUE_HOME>/operator-qa/`, which `nightqueue doctor` reports as legacy leftovers.
 Two same-project jobs whose slugs collide on one branch name fail safely, one job at a
 time. The ``2 runners on `<project>` ``
 advisory line is what warns about it while it happens.

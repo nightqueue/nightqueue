@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { stateDir } from "../config/paths.mjs";
 import { writeFileAtomic } from "../config/store.mjs";
 import { sanitizeLesson } from "../memory/lessons.mjs";
-import { projectFromCwd } from "../memory/registry-access.mjs";
+import { sessionProject } from "../memory/registry-access.mjs";
 import { openStore } from "../store/open.mjs";
 import { lessonIdsFromRefs, readSessionState } from "./state.mjs";
 
@@ -323,7 +323,7 @@ async function reflect({ transcriptPath, cwd, sessionId }, { env, runClaude, jud
   entry.last_run = now;
   sessions.set(id, entry);
   writeReflectState(sessions, env);
-  const project = projectFromCwd(cwd || process.cwd(), env);
+  const project = sessionProject(cwd || process.cwd(), env);
   if (!project) return skipped("project not registered");
   const model = env?.NIGHTQUEUE_REFLECT_MODEL || DEFAULT_MODEL;
   const store = openStore(env);

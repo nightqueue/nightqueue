@@ -483,7 +483,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
   assert.equal(second.hint, "queued J-2 for `alpha` (2 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.");
 
   const add = (await client.listTools()).tools.find((tool) => tool.name === "queue_add");
-  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "issue_id", "key", "max_attempts", "origin", "priority", "project", "prompt", "register", "run_dir", "tier", "timeout_s"]);
+  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "issue_id", "key", "max_attempts", "origin", "priority", "project", "prompt", "register", "tier", "timeout_s"]);
   assert.ok(add.description.includes("start the whole batch later with `queue_run`"), add.description);
 
   const byPath = await client.callTool({ name: "queue_add", arguments: { project: "/tmp/alpha", prompt: "fix the worker" } });

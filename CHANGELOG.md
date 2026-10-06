@@ -27,8 +27,34 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   build's update, which installs the new runtime without the schema step, and every command
   then refuses with the message above; a second `nightqueue update` (or `nightqueue setup`)
   migrates the database.
+- **The operator is generalist and never edits or executes (D-58).** `nightqueue open` runs
+  in the nightqueue home, from anywhere, with no project required: `open <project>` or a
+  directory inside a registered checkout only preselects it (`NIGHTQUEUE_PROJECT`, named by the
+  SessionStart block as `Current project (preselected by nightqueue open): <name>`), and
+  `--resume` runs in the directory the session was born in. The operator guard now also fences
+  `Edit`/`Write`/`MultiEdit`/`NotebookEdit` and refuses them on the main thread, with one
+  `D-58:` line: reads only under the registered checkouts, `<home>/qa|runs|worktrees` and the
+  plugin; Bash only `nightqueue|nq` reads and records (`queue`, `issues`, `decision`, `project`,
+  `org`, `connection`, `doctor`, `memory`, `libs`, `version`; not `queue session`,
+  `--follow`, `--foreground`) and read-only `git -C <checkout>`; subagents only `triage`, `qa`
+  and `reviewer`. The guard fails closed.
+- **`queue_add` `run_dir` and `queue add --run-dir` are refused** with a reason naming D-58, as
+  are `run_set` `origin`, `evidence_level` and `plan_status`; a `null` or blank value is still
+  accepted. Put what an investigation found in the job's prompt or an `issue_comment`.
 
 ### Added
+
+- **Ephemeral QA worktrees for the operator.** `nightqueue sandbox worktree <project>` creates a
+  worktree detached at the checkout's HEAD under `<home>/qa/<project id>/<id>`, locked to the
+  operator session's pid, and prints `QA_WORKTREE: <path>`; `--drop <path>` removes it. A qa
+  worktree older than 6 hours or whose session is gone is dropped by `nightqueue open`, listed
+  by `nightqueue doctor` (one `qa <project>/<id>` row each) and dropped by `doctor --fix`; the
+  operator's new SubagentStop hook (`nightqueue hook subagent-stop`) drops the one its `qa`
+  subagent announced. The `qa` subagent may edit only inside its worktree and runs Bash only as
+  `cd <worktree> && …` - a best-effort anchor, not a sandbox.
+- **Three operator subagents:** `nightqueue:triage` (read-only investigation over any registered
+  checkout), `nightqueue:qa` (reproduces in an ephemeral QA worktree) and `nightqueue:reviewer`
+  (reviews a job's pull request). The job pipeline's agents are unchanged.
 
 - **`nightqueue studio`, the local web cockpit.** It serves the built page (`studio/dist`,
   shipped in the package), the same stateless `/mcp` endpoint as `mcp --http`, a small `/api`
@@ -44,7 +70,8 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   on a job in `gate`, `failed`, `done` or `cancelled` runs `nightqueue queue session J-<n>` in
   its worktree, and `Operator` (header, issues toolbar, each issue with `Analyse <ref>: <title>`
   passed to claude as its first prompt through `nightqueue open --prompt`) runs `nightqueue
-  open <project>`. The directory, session and binary come only from the job and the
+  open [project]` in the nightqueue home; the header button is never disabled and opens with
+  the project picked in the queue toolbar preselected, or none. The directory, session and binary come only from the job and the
   registry; at most 6 terminals; the children are foreground, ended by process group with
   `SIGHUP` then `SIGKILL` on close and on Ctrl+C, and a restarted studio reaps what a dead
   one left under `<home>/studio/terminals/`. The bytes travel over a hand-written WebSocket,
@@ -84,8 +111,22 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   (`◐`) instead of `done · close failed at <step>: <reason>`, which ran over DURATION in the
   Studio and widened the CLI column. The step and reason stay in TITLE/LAST.
 
+### Changed
+
+- `plugin/agents/operator.md` is rewritten to 159 lines around D-58: the operator names
+  `project` in every owner-taking call, recalls memory per project when one comes up, delegates
+  to `triage`, `qa` and `reviewer`, and queues only after an explicit go. `nightqueue open`,
+  `queue session` and a studio terminal prune the stale worktree entries of every registered
+  checkout, not only the current one.
+- `nightqueue doctor` reports the QA worktrees an operator left under `<home>/operator-qa/`
+  before D-58 as `operator-qa (legacy) <project>/<dir>`, read-only.
+
 ### Removed
 
+- Operator runs: the operator's run directory, its `## PRIOR RUN (operator)` seed of a queued
+  job, the `operator-qa` worktrees it created and the closed `nightqueue run check|dir` Bash list
+  of the operator guard. A pending job queued from an operator run before the upgrade still runs.
+  The store schema is unchanged.
 - The singular `runner` key of `nightqueue queue status --json` and of the MCP `queue_status`
   answer, deprecated in 0.2.0 as an alias of `runners[0]` and promised gone in the next minor.
   It carried the same object twice in every answer. Read `runners` (`runners[0]` for the

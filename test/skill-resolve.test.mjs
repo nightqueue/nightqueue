@@ -431,8 +431,7 @@ test("the QA methodology lives in references/qa-phase.md and its prompts in refe
   const phase5 = SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —"));
   assert.match(phase5, /Read `references\/qa-phase\.md`/, "Phase 5 no longer points to the QA reference");
   assert.match(phase5, /Read `references\/prompts\/_qa-attack-brief\.md`/, "Phase 5 no longer reads the definitions its validations audit");
-  assert.ok(OPERATOR.includes("skills/resolve/references/qa-phase.md"), "the operator no longer points to the QA reference");
-  assert.ok(QA_PHASE.includes("**An operator hunt has no `phase_prompt` run:**"), "the operator's hunt lost the way to the templates");
+  assert.equal(QA_PHASE.includes("operator hunt"), false, "references/qa-phase.md still describes the operator hunt D-58 removed");
   for (const anchor of ["**Stage A gate:**", "**Consolidation (inline"]) {
     const count = [SKILL, QA_PHASE, OPERATOR].reduce((sum, text) => sum + text.split(anchor).length - 1, 0);
     assert.equal(count, 1, `\`${anchor}\` is not written exactly once across the skill, the reference and the operator`);
@@ -456,10 +455,10 @@ test("the resolve skill directory holds only SKILL.md and references/", () => {
   assert.deepEqual(entries, ["SKILL.md", "references"], "a new top-level entry appeared under plugin/skills/resolve/");
 });
 
-test("step 0.5 reads the re-run lines and the prior-run block of a job queued from an operator run", () => {
+test("step 0.5 reads the re-run lines of a legacy job queued from an operator run, and no longer names the prior-run block", () => {
   const step = resumeStep();
   assert.ok(step.includes("Re-run:"), "step 0.5 no longer reads the phases the runtime refused to skip");
-  assert.ok(step.includes("## PRIOR RUN (operator)"), "step 0.5 no longer names the operator's block");
+  assert.equal(step.includes("## PRIOR RUN (operator)"), false, "step 0.5 still names the prior-run block D-58 removed");
   const prompt = buildPrompt({
     job: { id: 1, prompt: "p" },
     handoff: { slug: "demo-slug", runDir: "/runs/demo/demo-slug", lastPhase: null, fromPhase: "triage", reruns: [{ phase: "triage", reason: "evidence level 2 is below 3 on a bug (operator run)" }] },

@@ -14,7 +14,8 @@ import {
   embeddingDir,
   homeDir,
   legacyHomeDir,
-  operatorQaDir,
+  legacyOperatorQaDir,
+  qaDir,
   queuePausedPath,
   secretsPath,
   shimNames,
@@ -47,6 +48,7 @@ import { isRegistryFailure, killProcess, listRunnerRecords, liveRunnersReport, r
 import { closesSummary } from "../queue/close-view.mjs";
 import { canonicalPath, droppedNames, jobWorktreeOwners, lockState, parseWorktreeList, removeEmptyDir, sameDir } from "../queue/worktree.mjs";
 import { compactStamp } from "../queue/runner.mjs";
+import { QA_WORKTREE_TTL_MS, listQaWorktrees, sweepQaWorktrees } from "../queue/qa-worktree.mjs";
 import { openStore, openStoreReadOnly, releaseHomeConnections, withReadOnlyStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { firstLine } from "./report.mjs";
@@ -1429,15 +1431,63 @@ function checkHomeWorktrees(ctx, { projects, owners, releasable, fix }) {
   return scanHomeRoot({ base: worktreesDir(ctx.env), projects, label: "worktrees", rowsOf: (project, root) => homeProjectRows(ctx, { project, root, owners, releasable, fix }) });
 }
 
-// Reports the QA worktrees the operator left under the home; no job ever owns one, so each is a leftover.
+const LEGACY_OPERATOR_QA_LABEL = "operator-qa (legacy)";
+
+// Reports, read-only, the QA worktrees an operator before D-58 left under `operator-qa`; no job ever owns one, so each is a leftover.
 function checkOperatorQa(ctx, { projects }) {
-  const rowOf = (project) => (dir, entries) => leftoverCheck(ctx, { project, dir, entries, owners: new Map(), legacy: false, kind: "operator-qa" });
-  return scanHomeRoot({ base: operatorQaDir(ctx.env), projects, label: "operator-qa", rowsOf: (project, root) => scanWorktreeDir(ctx, { project, root, rowOf: rowOf(project) }) });
+  const rowOf = (project) => (dir, entries) => leftoverCheck(ctx, { project, dir, entries, owners: new Map(), legacy: false, kind: LEGACY_OPERATOR_QA_LABEL });
+  return scanHomeRoot({ base: legacyOperatorQaDir(ctx.env), projects, label: LEGACY_OPERATOR_QA_LABEL, rowsOf: (project, root) => scanWorktreeDir(ctx, { project, root, rowOf: rowOf(project) }) });
+}
+
+// An age in hours from one hour on, else in minutes.
+function ageText(ms) {
+  const minutes = Math.floor((Number.isFinite(ms) ? ms : 0) / 60000);
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}h` : `${minutes}m`;
+}
+
+// The name of a qa row: `qa <project>/<id>`, else the path under the qa root.
+function qaRowName(env, row) {
+  if (row.project && row.id) return `qa ${row.project.name}/${row.id}`;
+  return `qa ${relative(qaDir(env), row.path) || basename(row.path)}`;
+}
+
+// Why a stale qa worktree is stale: its directory gone, its age past the TTL, or its session gone.
+function staleWhy(row) {
+  if (row.missing) return "its directory is gone";
+  return row.ageMs > QA_WORKTREE_TTL_MS ? `age ${ageText(row.ageMs)}` : `session pid ${row.owner} gone`;
+}
+
+// The report of one qa worktree row, as `doctor` without `--fix` sees it.
+function qaRowCheck(env, row) {
+  const name = qaRowName(env, row);
+  if (row.foreign) return check(name, "warn", `not a qa worktree; inspect ${row.path} (${row.reason})`, `inspect ${shellQuote(row.path)}`);
+  if (row.stale) return check(name, "warn", `stale (${staleWhy(row)}): dropped by the next \`nightqueue open\` or \`nightqueue doctor --fix\``, "nightqueue doctor --fix");
+  if (row.ownerState === "live") return check(name, "ok", `in use by pid ${row.owner} (age ${ageText(row.ageMs)})`);
+  if (row.ownerState === "manual") return check(name, "warn", `locked by hand (${row.locked || "no reason"})`, `git -C ${shellQuote(row.project.path)} worktree unlock ${shellQuote(row.path)}`);
+  return check(name, "ok", `age ${ageText(row.ageMs)}, no session recorded`);
+}
+
+// The rows of `doctor --fix` over the qa worktrees: the stale ones dropped, the failures with their reason, the rest as reported.
+function fixedQaChecks(ctx, projects) {
+  const swept = sweepQaWorktrees({ env: ctx.env, projects, spawnSyncImpl: ctx.spawnSyncImpl, killImpl: ctx.killImpl ?? killProcess });
+  const dropped = swept.dropped.map((row) => check(qaRowName(ctx.env, row), "ok", row.missing ? "pruned: stale qa worktree whose directory is gone" : "removed: stale qa worktree"));
+  const failed = swept.failed.map(({ row, reason }) =>
+    check(row ? qaRowName(ctx.env, row) : "qa", "warn", `could not drop the stale qa worktree (${reason})`, row ? `inspect ${shellQuote(row.path)}` : "nightqueue doctor --fix"),
+  );
+  return [...dropped, ...failed, ...swept.kept.map((row) => qaRowCheck(ctx.env, row))];
+}
+
+// Reports every qa worktree of the home; only `--fix` drops the stale ones.
+function checkQaWorktrees(ctx, { projects, fix }) {
+  if (worktreeDirsOrNone(qaDir(ctx.env)).length === 0) return [];
+  if (fix) return fixedQaChecks(ctx, projects);
+  const rows = listQaWorktrees({ env: ctx.env, projects, spawnSyncImpl: ctx.spawnSyncImpl, killImpl: ctx.killImpl ?? killProcess });
+  return rows.map((row) => qaRowCheck(ctx.env, row));
 }
 
 // Tells whether the home holds any worktree directory doctor reports on.
 function hasHomeWorktrees(env) {
-  return worktreeDirsOrNone(worktreesDir(env)).length > 0 || worktreeDirsOrNone(operatorQaDir(env)).length > 0;
+  return [worktreesDir(env), legacyOperatorQaDir(env), qaDir(env)].some((dir) => worktreeDirsOrNone(dir).length > 0);
 }
 
 // Reports the worktrees of the home and the legacy ones under `.claude/worktrees`, with the command that cleans each; the only write is `git worktree repair` with `--fix`.
@@ -1445,14 +1495,15 @@ async function checkWorktreeLeftovers(ctx, values) {
   const projects = await checkoutsOrNone(ctx);
   const legacy = projectsWithLegacyWorktrees(projects);
   if (!legacy.length && !hasHomeWorktrees(ctx.env)) return [];
+  const qaRows = checkQaWorktrees(ctx, { projects, fix: values.fix === true });
   const owned = await ownedWorktrees(ctx, { fix: values.fix === true });
   if (owned.error !== null) {
-    return [check("worktrees", "warn", `the queue cannot be read (${owned.error}), so the owner of a worktree is unknown`, `inspect ${dbPath(ctx.env)}`)];
+    return [check("worktrees", "warn", `the queue cannot be read (${owned.error}), so the owner of a worktree is unknown`, `inspect ${dbPath(ctx.env)}`), ...qaRows];
   }
   const legacyRows = legacy.flatMap((project) =>
     scanWorktreeDir(ctx, { project, root: project.dir, rowOf: (dir, entries) => leftoverCheck(ctx, { project, dir, entries, owners: owned.owners, legacy: true }) }),
   );
-  return [...legacyRows, ...checkHomeWorktrees(ctx, { projects, owners: owned.owners, releasable: owned.releasable, fix: values.fix === true }), ...checkOperatorQa(ctx, { projects })];
+  return [...legacyRows, ...checkHomeWorktrees(ctx, { projects, owners: owned.owners, releasable: owned.releasable, fix: values.fix === true }), ...checkOperatorQa(ctx, { projects }), ...qaRows];
 }
 
 // Reason the registry could not answer, short enough for a report line.

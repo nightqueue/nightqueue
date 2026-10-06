@@ -4,7 +4,6 @@ import { closeDb, openDb } from "../../src/memory/db.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { carriesOperatorSeed, OPERATOR_SEED_HEADING, sharedSlugPending } from "../../src/memory/shared-slug-migration.mjs";
-import { PRIOR_RUN_HEADING } from "../../src/queue/operator-run.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const SHARED = "tier-complex-set-by-the-operator";
@@ -39,8 +38,8 @@ function snapshot(env, id) {
   return { slug: row.slug, status: row.status, pr_url: row.pr_url, branch: row.branch, result: row.result };
 }
 
-test("the operator seed heading the migration spares is the one the operator run writes", () => {
-  assert.equal(OPERATOR_SEED_HEADING, PRIOR_RUN_HEADING);
+test("the operator seed heading the migration spares is the one operator runs wrote before D-58", () => {
+  assert.equal(OPERATOR_SEED_HEADING, "## PRIOR RUN (operator)");
 });
 
 test("a database where no two jobs share a run slug has nothing to migrate", (t) => {

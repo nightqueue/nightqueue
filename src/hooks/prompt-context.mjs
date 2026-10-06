@@ -1,4 +1,4 @@
-import { projectFromCwd } from "../memory/registry-access.mjs";
+import { sessionProject } from "../memory/registry-access.mjs";
 import { openStore } from "../store/open.mjs";
 import { clip, section } from "./block.mjs";
 import { lessonIdsFromRefs, nextSeq, recordInjected, seenRefs } from "./state.mjs";
@@ -62,7 +62,7 @@ export async function runPromptContext({ input, env = process.env }) {
   if (body.length < MIN_PROMPT) return "";
   const cwd = typeof input?.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
   const sessionId = typeof input?.session_id === "string" ? input.session_id : "unknown";
-  const projectId = projectFromCwd(cwd, env)?.id;
+  const projectId = sessionProject(cwd, env)?.id;
   if (!projectId) return "";
   nextSeq(sessionId, env);
   const seen = seenRefs(sessionId, { reinjectAfter: REINJECT_AFTER }, env);

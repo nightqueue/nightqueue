@@ -1,13 +1,12 @@
 import {
-  describeOperatorBashRules,
   describeOrchestratorBashRules,
   insideRoots,
   isOrchestratorCall,
-  operatorBashAllowed,
   orchestratorBashAllowed,
   orchestratorRoots,
   readTarget,
 } from "../queue/orchestrator-scope.mjs";
+import { operatorDecision } from "./operator-guard.mjs";
 
 const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
 const FOREGROUND_REASON =
@@ -93,32 +92,6 @@ function orchestratorBashReason() {
   );
 }
 
-// Reason of an operator read outside its run's handoff files, the plugin and its own session's spilled tool results.
-function operatorReadReason(path, roots) {
-  const shown = path ?? "a path that cannot be resolved";
-  return (
-    `the operator does not read the repository - hand the need to the subagent of the step: ` +
-    `the operator reads only its run's handoff files and the plugin (${roots.join(", ")}), and ${shown} is outside them; ` +
-    "the triager, the explore or the architect writes what you need into a handoff file under RUN_DIR"
-  );
-}
-
-// Reason of an operator Bash command outside its closed list.
-function operatorBashReason(env) {
-  return (
-    `the operator does not run this command - hand it to the subagent of the step: ` +
-    `the operator runs only its closed command list (${describeOperatorBashRules(env)}), ` +
-    "each as the bare program name followed by its subcommand (no binary path, no `git -C`/`-c`/`--git-dir`/`--work-tree`); " +
-    "no commit, no push, no write to the repository"
-  );
-}
-
-// The read reason, Bash reason and Bash check of one guard mode.
-const MODE_SCOPE = {
-  job: { readReason: orchestratorReadReason, bashReason: orchestratorBashReason, bashAllowed: orchestratorBashAllowed },
-  operator: { readReason: operatorReadReason, bashReason: operatorBashReason, bashAllowed: operatorBashAllowed },
-};
-
 // The deny rule a Bash command trips, matched anywhere in the command; null when none applies.
 function deniedBashRule(command) {
   if (typeof command !== "string") return null;
@@ -141,16 +114,15 @@ function guardBash(toolInput) {
   return "";
 }
 
-// Deny reason for a main-thread call outside the scope of its mode, or null when the call is in scope or is a subagent's.
-function orchestratorScopeReason({ input, toolName, toolInput, env, mode }) {
+// Deny reason for a main-thread call of a queued job outside the orchestrator's scope, or null when the call is in scope or is a subagent's.
+function orchestratorScopeReason({ input, toolName, toolInput, env }) {
   if (!isOrchestratorCall(input)) return null;
-  const scope = MODE_SCOPE[mode];
   if (READ_TOOLS.has(toolName)) {
     const roots = orchestratorRoots(env, [{ transcriptPath: input.transcript_path, sessionId: input.session_id }]);
     const target = readTarget(toolName, toolInput, input.cwd);
-    return insideRoots(target, roots) ? null : scope.readReason(target, roots);
+    return insideRoots(target, roots) ? null : orchestratorReadReason(target, roots);
   }
-  if (toolName === "Bash") return scope.bashAllowed(toolInput.command, env) ? null : scope.bashReason(env);
+  if (toolName === "Bash") return orchestratorBashAllowed(toolInput.command) ? null : orchestratorBashReason();
   return null;
 }
 
@@ -163,23 +135,25 @@ function safeOrchestratorScopeReason(call) {
   }
 }
 
-// The operator's Bash guard after its scope: only a root/home scan is denied, and nothing is ever moved to the foreground.
-function guardOperatorBash(toolInput) {
-  const denied = deniedBashRule(toolInput.command);
+// The operator's answer under D-58: its guard's denial, else a root/home scan denial for Bash, and nothing is ever moved to the foreground.
+function guardOperator({ input, toolName, toolInput, env }) {
+  const reason = operatorDecision({ input, env });
+  if (reason) return denyAnswer(reason);
+  const denied = toolName === "Bash" && isPlainObject(toolInput) ? deniedBashRule(toolInput.command) : null;
   return denied ? denyAnswer(rootScanReason(denied)) : "";
 }
 
-// Normalises a subagent launch to the foreground, and a Bash call likewise, denying one that scans from the root or the home, and keeps the orchestrator's own reads and Bash inside its run; inside an unattended run, so `claude -p` never kills a background one at its wait ceiling, and for the operator of `nightqueue open`, scope and scan denial only.
+// Normalises a subagent launch to the foreground, and a Bash call likewise, denying one that scans from the root or the home, and keeps the orchestrator's own reads and Bash inside its run; inside an unattended run, so `claude -p` never kills a background one at its wait ceiling, and for the operator of `nightqueue open`, the D-58 guard and scan denial only.
 export function runAgentForeground({ input, env = process.env }) {
   const mode = guardMode(env);
   if (mode === null) return "";
   if (input?.hook_event_name !== "PreToolUse") return "";
   const toolName = input?.tool_name;
   const toolInput = input?.tool_input;
+  if (mode === "operator") return guardOperator({ input, toolName, toolInput, env });
   if (!isPlainObject(toolInput)) return "";
-  const scopeReason = safeOrchestratorScopeReason({ input, toolName, toolInput, env, mode });
+  const scopeReason = safeOrchestratorScopeReason({ input, toolName, toolInput, env });
   if (scopeReason) return denyAnswer(scopeReason);
-  if (mode === "operator") return toolName === "Bash" ? guardOperatorBash(toolInput) : "";
   if (toolName === "Agent" || toolName === "Task") return foregroundAgentOrTask(toolInput);
   if (toolName === "Bash") return guardBash(toolInput);
   return "";

@@ -6,14 +6,11 @@ import { test } from "node:test";
 import { packageRoot } from "../../src/host/paths.mjs";
 import { JOB_HOME_ENV } from "../../src/queue/home-guard.mjs";
 import {
-  OPERATOR_BASH_RULES,
   ORCHESTRATOR_BASH_RULES,
   PLUGIN_DIR_ENV,
-  describeOperatorBashRules,
   describeOrchestratorBashRules,
   insideRoots,
   isOrchestratorCall,
-  operatorBashAllowed,
   orchestratorBashAllowed,
   orchestratorRoots,
   readTarget,
@@ -323,166 +320,10 @@ test("only a payload with a non-empty agent_id is a subagent's", () => {
   assert.equal(isOrchestratorCall(null), true);
 });
 
-const QA_HOME = "/tmp/nq-operator-qa-home";
-const QA_PROJECT_ID = "01J9Z00000000000000000000A";
-const QA_ROOT = `${QA_HOME}/operator-qa/${QA_PROJECT_ID}`;
-const JOB_ROOT = `${QA_HOME}/worktrees/${QA_PROJECT_ID}`;
-
-// Runs a check with the home of the operator's QA worktrees set in this process, the way the hook process reads it.
-function withQaHome(check) {
-  const previous = process.env.NIGHTQUEUE_HOME;
-  process.env.NIGHTQUEUE_HOME = QA_HOME;
-  try {
-    return check();
-  } finally {
-    if (previous === undefined) delete process.env.NIGHTQUEUE_HOME;
-    else process.env.NIGHTQUEUE_HOME = previous;
-  }
-}
-
-const OPERATOR_ALLOWED = [
-  "git log --oneline -n 30",
-  "git diff --name-only v1.0.0..HEAD",
-  "git diff --stat",
-  `git worktree add ${QA_ROOT}/x HEAD`,
-  `git worktree add --detach ${QA_ROOT}/chat-photo origin/main`,
-  `git worktree remove --force ${QA_ROOT}/x`,
-  `git worktree remove ${QA_ROOT}/x`,
-  "git worktree list",
-  "git worktree list --porcelain",
-  "git worktree prune",
-  "gh issue list",
-  "gh issue view 12",
-  "gh pr checks 3",
-  "gh pr view 3",
-  "adb devices",
-  "nightqueue run check 01 --project p --slug s",
-  "nightqueue run log --project p --slug s",
-  "git status --short",
-  "git rev-parse HEAD",
-  "git branch --show-current",
-];
-
-const OPERATOR_DENIED = [
-  "git add .",
-  "git commit -m x",
-  "git commit --amend",
-  "git push",
-  "git push -u origin feat/x",
-  "git fetch",
-  "git fetch origin",
-  "gh pr create",
-  "gh pr merge 3",
-  "gh issue close 12",
-  "nightqueue run commit",
-  "nightqueue run pr",
-  "nightqueue run publish",
-  "nightqueue run start",
-  `git -C /x worktree add ${QA_ROOT}/x HEAD`,
-  `git worktree add --force ${QA_ROOT}/x HEAD`,
-  `git worktree add -f ${QA_ROOT}/x HEAD`,
-  `git worktree add -b y ${QA_ROOT}/x HEAD`,
-  `git worktree add -B y ${QA_ROOT}/x HEAD`,
-  `git worktree add ${QA_ROOT}/x`,
-  "git worktree add ../operator-qa-x HEAD",
-  `git worktree add ${QA_ROOT}/x/../../y HEAD`,
-  `git worktree add ${QA_ROOT}/../${QA_PROJECT_ID}/operator-qa-x HEAD`,
-  "git worktree add /abs/.claude/worktrees/operator-qa-x HEAD",
-  "git worktree add ~/.claude/worktrees/operator-qa-x HEAD",
-  `git worktree add ~/.nightqueue/operator-qa/${QA_PROJECT_ID}/x HEAD`,
-  "git worktree add .claude/worktrees/operator-qa-x HEAD",
-  `git worktree remove .claude/worktrees/operator-qa-x`,
-  `git worktree add /tmp/other-home/operator-qa/${QA_PROJECT_ID}/x HEAD`,
-  `git worktree add ${QA_HOME}/operator-qa/not-a-project-id/x HEAD`,
-  `git worktree add ${QA_HOME}/operator-qa/x HEAD`,
-  `git worktree add ${QA_ROOT}/x/extra HEAD`,
-  `git worktree add ${QA_ROOT}/ HEAD`,
-  `git worktree add ${JOB_ROOT}/operator-qa-x HEAD`,
-  `git worktree add ${JOB_ROOT}/x HEAD`,
-  `git worktree remove --force ${JOB_ROOT}/operator-qa-x`,
-  `git worktree add ${QA_ROOT}/.hidden HEAD`,
-  `git worktree add ${QA_ROOT}/x HEAD extra`,
-  `git worktree add ${QA_ROOT}/x -- HEAD`,
-  `git worktree add ${QA_ROOT}/x --no-checkout HEAD`,
-  `git worktree remove ${JOB_ROOT}/x`,
-  "git worktree remove /tmp/x",
-  "git worktree remove",
-  "git worktree move a b",
-  `git worktree lock ${QA_ROOT}/x`,
-  "git worktree",
-  "git worktree list /tmp",
-  "git worktree prune --expire now",
-  "git log --oneline -n 5 -p",
-  "git log --oneline -n 5 --output=/tmp/x",
-  "git log --oneline -n 0",
-  "git log --oneline",
-  "git log",
-  "git show HEAD",
-  "git diff --stat --output=x",
-  "git diff --stat --output x",
-  "git diff --stat --ext-diff",
-  "git diff --stat --no-index a b",
-  "git diff -p",
-  "git diff --stat -p",
-  "git diff",
-  "adb shell ls",
-  "adb devices -l",
-  "adb install app.apk",
-  "/usr/bin/git status --short",
-  "git status --short; rm -rf x",
-  "git status --short && git push",
-  "git log --oneline -n 5 > /tmp/log",
-  "npm test",
-  "cat src/app.mjs",
-  "",
-];
-
-for (const command of OPERATOR_ALLOWED) {
-  test(`the operator's closed list allows: ${JSON.stringify(command)}`, () => {
-    assert.equal(withQaHome(() => operatorBashAllowed(command)), true);
-  });
-}
-
-for (const command of OPERATOR_DENIED) {
-  test(`the operator's closed list refuses: ${JSON.stringify(command)}`, () => {
-    assert.equal(withQaHome(() => operatorBashAllowed(command)), false);
-  });
-}
-
-test("the operator's QA worktree follows the home of the process: another home refuses it, and so does no home at all", () => {
-  const command = `git worktree add ${QA_ROOT}/x HEAD`;
-  const previous = process.env.NIGHTQUEUE_HOME;
-  try {
-    process.env.NIGHTQUEUE_HOME = "/tmp/another-nq-home";
-    assert.equal(operatorBashAllowed(command), false);
-    assert.equal(operatorBashAllowed(`git worktree add /tmp/another-nq-home/operator-qa/${QA_PROJECT_ID}/x HEAD`), true);
-    assert.equal(operatorBashAllowed(`git worktree add /tmp/another-nq-home/worktrees/${QA_PROJECT_ID}/operator-qa-x HEAD`), false);
-    delete process.env.NIGHTQUEUE_HOME;
-    assert.equal(operatorBashAllowed(command), false, "a process with no resolvable home allowed a QA worktree");
-  } finally {
-    if (previous === undefined) delete process.env.NIGHTQUEUE_HOME;
-    else process.env.NIGHTQUEUE_HOME = previous;
-  }
-});
-
-test("the operator's list leaves the job's list untouched: the orchestrator still adds any worktree, commits and pushes", () => {
+test("the job's list is untouched by the operator's guard: the orchestrator still adds any worktree, commits and pushes", () => {
   assert.equal(orchestratorBashAllowed("git worktree add /tmp/x"), true);
   assert.equal(orchestratorBashAllowed("git commit -m x"), true);
   assert.equal(orchestratorBashAllowed("nightqueue run pr"), true);
   assert.equal(orchestratorBashAllowed("gh issue list"), false);
   assert.equal(orchestratorBashAllowed("adb devices"), false);
-});
-
-test("the operator's list is frozen data, and its rendering names the QA worktree and no write", () => {
-  assert.equal(Object.isFrozen(OPERATOR_BASH_RULES), true);
-  assert.equal(OPERATOR_BASH_RULES.every((rule) => Object.isFrozen(rule) && Object.isFrozen(rule.argv)), true);
-  const rendered = withQaHome(() => describeOperatorBashRules());
-  assert.match(rendered, /git log --oneline -n <N>/);
-  assert.ok(rendered.includes(`git worktree add ${QA_HOME}/operator-qa/<project_id>/<slug> <commit-ish>`), rendered);
-  assert.ok(rendered.includes(`git worktree remove [--force] ${QA_HOME}/operator-qa/<project_id>/<slug>`), rendered);
-  assert.match(rendered, /gh issue list\|view/);
-  assert.match(rendered, /nightqueue run check\|dir\|log\|index-save(,|$)/);
-  for (const write of ["git add", "git commit", "git push", "git fetch", "create", "commit|", "|pr"]) {
-    assert.equal(rendered.includes(write), false, `${write} is in ${rendered}`);
-  }
 });

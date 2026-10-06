@@ -1,7 +1,7 @@
 import { StoreUnavailableError, storeWarningLine } from "../config/errors.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { PROPOSED_HEADING, STANDING_HEADING, decisionTitleLine } from "../memory/decisions.mjs";
-import { projectFromCwd } from "../memory/registry-access.mjs";
+import { preselectedProject, projectFromCwd } from "../memory/registry-access.mjs";
 import { decisionRef } from "../memory/scope.mjs";
 import { openStore } from "../store/open.mjs";
 import { clip, section } from "./block.mjs";
@@ -111,12 +111,31 @@ export async function runSessionStart({ input, env = process.env, fetchImpl = nu
   }
 }
 
-// The context block of a session: top lessons plus the project memories and decisions.
+// The project of the session and whether `nightqueue open` preselected it (no checkout holds the session's directory).
+function blockProject(cwd, env) {
+  const found = projectFromCwd(cwd, env);
+  if (found) return { project: found, preselected: false };
+  return { project: preselectedProject(env), preselected: true };
+}
+
+// The line naming the project `nightqueue open` preselected, empty when the session's directory names it.
+function preselectedLine(project, preselected) {
+  return preselected ? `Current project (preselected by nightqueue open): ${project.name}` : "";
+}
+
+// The context block of a session: the preselected project, top lessons, and the project memories and decisions.
 async function sessionBlock({ input, env, fetchImpl }) {
   const cwd = typeof input?.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
-  const sessionId = typeof input?.session_id === "string" ? input.session_id : "unknown";
-  const project = projectFromCwd(cwd, env);
+  const { project, preselected } = blockProject(cwd, env);
   if (!project) return "";
+  const lead = preselectedLine(project, preselected);
+  const block = await memoryBlock({ input, env, fetchImpl, project, lead });
+  return block || (lead ? `${HEADER}\n\n${lead}` : "");
+}
+
+// The memory part of the session block, led by the given line, or empty when the project has no memory.
+async function memoryBlock({ input, env, fetchImpl, project, lead }) {
+  const sessionId = typeof input?.session_id === "string" ? input.session_id : "unknown";
   const store = openStore(env);
   const lessons = await store.lessons.recallLessons({ projectId: project.id, limit: LESSON_LIMIT });
   const memories = await store.memory.recentMemories({ projectId: project.id, limit: MEMORY_LIMIT });
@@ -131,6 +150,6 @@ async function sessionBlock({ input, env, fetchImpl }) {
   if (!sections.length) return "";
   await stampInjection(store, sessionId, lessons, env);
   const notice = await updateNoticeLine({ env, fetchImpl });
-  const block = `${HEADER}\n\n${sections.join("\n\n")}\n\n${FOOTER}`;
+  const block = `${HEADER}\n\n${[lead, ...sections].filter(Boolean).join("\n\n")}\n\n${FOOTER}`;
   return (notice ? `${block}\n\n${notice}` : block).slice(0, MAX_OUTPUT);
 }

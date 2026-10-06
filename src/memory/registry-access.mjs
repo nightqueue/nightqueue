@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { isId } from "../config/ids.mjs";
 import { dbPath, homeDir } from "../config/paths.mjs";
 import { loadRawConfig } from "../config/store.mjs";
 import { hasCachedWriteConnection, openDb, openDbReadOnly, retireConnection } from "./db.mjs";
@@ -60,4 +61,27 @@ export function projectFromCwd(cwd, env = process.env) {
   const target = typeof cwd === "string" ? cwd.trim() : "";
   if (!target) return null;
   return withRegistry(env, (db) => (db ? registry.projectAt(db, target) : null));
+}
+
+// The registered project with its org, by id, or null.
+export function projectByIdOrNull(id, env = process.env) {
+  if (!isId(id)) return null;
+  return withRegistry(env, (db) => (db ? registry.projectById(db, id) : null));
+}
+
+// Every registered project that has a checkout path, as `{ id, name, path }`; empty on a home without a database.
+export function registeredCheckouts(env = process.env) {
+  const rows = withRegistry(env, (db) => (db ? registry.listProjects(db) : []));
+  return (Array.isArray(rows) ? rows : []).filter((row) => row?.path).map(({ id, name, path }) => ({ id, name, path }));
+}
+
+// The project of a hook's session: the one registered for its directory, else the one `nightqueue open` preselected (never inside a job).
+export function sessionProject(cwd, env = process.env) {
+  return projectFromCwd(cwd, env) ?? preselectedProject(env);
+}
+
+// The project `nightqueue open` preselected through NIGHTQUEUE_PROJECT, or null (always null inside a job).
+export function preselectedProject(env = process.env) {
+  if (env?.NIGHTQUEUE_JOB_ID) return null;
+  return projectByIdOrNull(env?.NIGHTQUEUE_PROJECT, env);
 }

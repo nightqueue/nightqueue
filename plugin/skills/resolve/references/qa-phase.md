@@ -1,22 +1,9 @@
 # QA phase — the adversarial QA of /resolve
 
-Read via Read by the /resolve orchestrator in Phase 5, before launching any qa-guardian, and by
-the operator in its step 6b (a bug hunt). It is the single home of the Stage A gate and the
-consolidation. The QA attack brief and the LITE/ANALYST/PROVER prompts live in `prompts/`
+Read via Read by the /resolve orchestrator in Phase 5, before launching any qa-guardian. It is
+the single home of the Stage A gate and the consolidation. The QA attack brief and the LITE/ANALYST/PROVER prompts live in `prompts/`
 (`_qa-attack-brief.md`, `qa-lite.md`, `qa-analyst.md`, `qa-prover.md`): the pipeline gets them
 rendered by `phase_prompt` (`qa-lite`, `qa-analyst`, `qa-prover`), never assembled by hand.
-
-**Without a diff (operator hunt):** the hunt's scope replaces the file list of
-`04-implementation.md`, and the fronts that depend on a plan — the pre-mortem, the symptom and
-usage coverage, every read of `03-plan.md` — are omitted from the prompts. A caller without
-`Glob` takes `{{PLUGIN_ROOT}}` from this file's own path, three levels above its directory.
-Everything else below is unchanged.
-
-**An operator hunt has no `phase_prompt` run:** it reads those templates via Read and fills
-their `{{…}}` values itself — `{{PLUGIN_ROOT}}` is the plugin root, the directory three levels
-above the directory of this file (never a Glob of the repository), the one that CONTAINS
-`skills/`. If it does not resolve, omit those three lines entirely — the agent keeps its own
-`Glob` fallback for that case.
 
 **complex → two stages (analyst → parallel provers):** the analysis stays in a single
 head — it groups breaks by root (4 symptoms with the same cause = 1 fix, not 4) and crosses

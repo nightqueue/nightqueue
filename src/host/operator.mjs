@@ -1,11 +1,15 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
+import { registeredCheckouts } from "../memory/registry-access.mjs";
 import { PLUGIN_DIR_ENV } from "../queue/orchestrator-scope.mjs";
+import { sweepQaWorktrees } from "../queue/qa-worktree.mjs";
+import { killProcess } from "../queue/registry.mjs";
 import { CLAUDE_MISSING_MESSAGE, mcpConfigArg, pluginDir, resolveClaudeBin } from "../queue/spawn.mjs";
 import { isSessionIdSafe } from "../queue/stream.mjs";
 import { childExitCode } from "./child-exit.mjs";
-import { jobSettings } from "./settings.mjs";
+import { withoutOperatorSession } from "./operator-env.mjs";
+import { operatorSettings } from "./settings.mjs";
 
 export const OPERATOR_AGENT = "nightqueue:nightqueue-operator";
 export const OPERATOR_MODE_AGENT = "agent";
@@ -42,9 +46,6 @@ export function probeOperatorLaunch({ bin, ctx }) {
   }
 }
 
-// The tools the operator session may call without asking: the nightqueue MCP server is its own product, every prompt would be noise.
-export const OPERATOR_ALLOWED_TOOLS = ["mcp__nightqueue__*"];
-
 // The commands (and aliases) claude dispatches when its first operand names one, `--` included; a prompt equal to one would run it.
 export const CLAUDE_COMMAND_NAMES = new Set([
   "agents", "attach", "auth", "auto-mode", "config", "doctor", "gateway", "help", "import", "install", "kill", "logs", "mcp",
@@ -53,11 +54,6 @@ export const CLAUDE_COMMAND_NAMES = new Set([
 
 // The prompt that opens a fresh operator session: the agent answers with its opening message (its contract says what it holds).
 export const OPERATOR_OPENING_PROMPT = "The session just opened. Give your opening message.";
-
-// Settings of the operator session: the jobs' hooks and CLAUDE.md exclusions, plus the nightqueue tools pre-approved.
-export function operatorSettings(env) {
-  return { ...jobSettings(env), permissions: { allow: [...OPERATOR_ALLOWED_TOOLS] } };
-}
 
 // The argv that makes the operator the main thread: the agent (or its body as a fallback), the plugin, the nightqueue MCP server, the jobs' own hooks, and the first prompt (the request given, else the opening prompt on a fresh session).
 export function operatorArgs({ env, mode, resumeSession = null, prompt = null }) {
@@ -93,12 +89,18 @@ export function operatorPrompt(value, usage) {
   return value;
 }
 
-// Environment of the operator session: the mode the guard reads, and the plugin copy its reads are scoped to.
-export function operatorEnv(env) {
-  return { ...env, NIGHTQUEUE_MODE: "operator", [PLUGIN_DIR_ENV]: pluginDir() };
+// Environment of the operator session: the mode the guard reads, the launcher's pid, the preselected project when one is, and the plugin copy its reads are scoped to.
+export function operatorEnv(env, { projectId = null } = {}) {
+  return {
+    ...withoutOperatorSession(env),
+    NIGHTQUEUE_MODE: "operator",
+    NIGHTQUEUE_OPERATOR_PID: String(process.pid),
+    ...(projectId ? { NIGHTQUEUE_PROJECT: projectId } : {}),
+    [PLUGIN_DIR_ENV]: pluginDir(),
+  };
 }
 
-// Drops the admin entries of worktrees whose directory is gone (a QA hunt a closed terminal left behind); a failure only warns.
+// Drops the admin entries of worktrees whose directory is gone in one checkout; a failure only warns.
 function pruneWorktrees({ cwd, ctx }) {
   try {
     const result = ctx.spawnSyncImpl("git", ["worktree", "prune"], { cwd, encoding: "utf8", env: ctx.env });
@@ -110,14 +112,38 @@ function pruneWorktrees({ cwd, ctx }) {
   }
 }
 
-// One line naming where the operator runs and how the agent is loaded.
-function launchLine(cwd, mode) {
+// The registered checkouts that exist on disk, or none with a warning when the registry cannot be read.
+function existingCheckouts(ctx) {
+  try {
+    return registeredCheckouts(ctx.env).filter((project) => existsSync(project.path));
+  } catch (err) {
+    ctx.err(`nightqueue open: warning: the registered checkouts could not be read: ${err.message}`);
+    return [];
+  }
+}
+
+// Prunes the worktree entries of every registered checkout that exists; best-effort, one warning per failure.
+export function pruneRegisteredCheckouts(ctx, checkouts = existingCheckouts(ctx)) {
+  for (const project of checkouts) pruneWorktrees({ cwd: project.path, ctx });
+}
+
+// Drops the stale qa worktrees (older than the TTL or whose session is gone) of the registered checkouts; best-effort, one warning per failure.
+export function sweepStaleQaWorktrees(ctx, checkouts = existingCheckouts(ctx)) {
+  const swept = sweepQaWorktrees({ env: ctx.env, projects: checkouts, spawnSyncImpl: ctx.spawnSyncImpl, killImpl: ctx.killImpl ?? killProcess });
+  for (const { row, reason } of swept.failed) {
+    ctx.err(`nightqueue open: warning: a stale qa worktree could not be dropped${row ? ` (${row.path})` : ""}: ${reason}`);
+  }
+  if (swept.dropped.length > 0) ctx.out(`operator · dropped ${swept.dropped.length} stale qa worktree(s)`);
+}
+
+// One line naming where the operator runs, the preselected project and how the agent is loaded.
+function launchLine({ cwd, project, mode }) {
   const how = mode === OPERATOR_MODE_AGENT ? `agent ${OPERATOR_AGENT}` : "fallback --append-system-prompt";
-  return `operator · ${cwd} · ${how}`;
+  return `operator · ${cwd} · project ${project?.name ?? "none"} · ${how}`;
 }
 
 // The binary, argv, environment and mode of an operator session in a directory, probing the mode only when the caller did not pass one.
-export function operatorLaunch({ cwd, resumeSession = null, prompt = null, ctx, mode = null }) {
+export function operatorLaunch({ cwd, resumeSession = null, prompt = null, project = null, ctx, mode = null }) {
   if (resumeSession !== null && !isSessionIdSafe(resumeSession)) {
     throw new UserError(`\`${resumeSession}\` is not a session id: letters, digits, \`-\` and \`_\`, 8 to 64 characters`);
   }
@@ -127,16 +153,18 @@ export function operatorLaunch({ cwd, resumeSession = null, prompt = null, ctx, 
   return {
     bin: bin.bin,
     args: operatorArgs({ env: ctx.env, mode: launchMode, resumeSession, prompt }),
-    env: operatorEnv(ctx.env),
+    env: operatorEnv(ctx.env, { projectId: project?.id ?? null }),
     mode: launchMode,
-    line: launchLine(cwd, launchMode),
+    line: launchLine({ cwd, project, mode: launchMode }),
   };
 }
 
 // Starts the interactive operator session in a directory, optionally resuming one, and returns the exit code of `claude`.
-export function launchOperator({ cwd, resumeSession = null, prompt = null, ctx }) {
-  const launch = operatorLaunch({ cwd, resumeSession, prompt, ctx });
-  pruneWorktrees({ cwd, ctx });
+export async function launchOperator({ cwd, resumeSession = null, prompt = null, project = null, ctx }) {
+  const launch = operatorLaunch({ cwd, resumeSession, prompt, project, ctx });
+  const checkouts = existingCheckouts(ctx);
+  pruneRegisteredCheckouts(ctx, checkouts);
+  sweepStaleQaWorktrees(ctx, checkouts);
   ctx.out(launch.line);
   const result = ctx.spawnSyncImpl(launch.bin, launch.args, { stdio: "inherit", cwd, env: launch.env });
   if (result?.error) throw new UserError(`could not run \`${launch.bin}\` in ${cwd}: ${result.error.message}`);

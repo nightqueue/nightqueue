@@ -13,6 +13,11 @@ const HOOK_EVENTS = [
   { event: "PreToolUse", hook: "agent-foreground", timeout: 5, matcher: "Agent|Task|Bash|Read|Grep|Glob" },
 ];
 
+const OPERATOR_TOOL_MATCHER = "Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit";
+
+// The tools the operator session may call without asking: the nightqueue MCP server is its own product, every prompt would be noise.
+export const OPERATOR_ALLOWED_TOOLS = ["mcp__nightqueue__*"];
+
 // Command line registered in the host for one hook of this package.
 export function hookCommand(hook, env = process.env) {
   return `node ${cliEntryPath(env)} hook ${hook}`;
@@ -152,6 +157,18 @@ export function jobSettings(env = process.env) {
   const data = {};
   mergeHooks(data, env);
   return { hooks: data.hooks, claudeMdExcludes: [join(claudeConfigDir(env), "CLAUDE.md")] };
+}
+
+// The `--settings` payload of an operator session: the jobs' settings with the guard also fencing the edit tools, the qa worktree sweep on SubagentStop, plus the nightqueue tools pre-approved.
+export function operatorSettings(env = process.env) {
+  const settings = jobSettings(env);
+  const preToolUse = eventGroups(settings, "PreToolUse").map((group) => ({ ...group, matcher: OPERATOR_TOOL_MATCHER }));
+  const subagentStop = [{ hooks: [{ type: "command", command: hookCommand("subagent-stop", env), timeout: 60 }] }];
+  return {
+    ...settings,
+    hooks: { ...settings.hooks, PreToolUse: preToolUse, SubagentStop: subagentStop },
+    permissions: { allow: [...OPERATOR_ALLOWED_TOOLS] },
+  };
 }
 
 // The `--settings` payload of the close's merger agent: only the guard fencing its tools, no memory hook, plus the exclude of the operator's own CLAUDE.md.

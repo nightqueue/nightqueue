@@ -13,8 +13,6 @@ import {
 } from "./decisions.mjs";
 import { PRIORITY_RANGE, addJob, cancelJob, truncateByCodePoint } from "./jobs.mjs";
 import { queuedCommentJob, refuseMissingJob } from "./job-row.mjs";
-import { runDir } from "../config/paths.mjs";
-import { priorRunBlock, resolveOperatorRunDir } from "../queue/operator-run.mjs";
 import { escapePromptMarkers } from "./prompt-safety.mjs";
 import { GLOBAL_KEY, decisionRef, itemRef, jobRef, parseRef } from "./refs.mjs";
 import { COMMENT_JOB_COLUMNS, insertComment, jobRefs, listComments } from "./issue-comments.mjs";
@@ -502,7 +500,7 @@ export function linkIssueJob(id, jobId, env = process.env) {
   return inTransaction(db, () => {
     refuseMissingJob(db, requireId(jobId));
     if (statement.run(JOB_TO_ISSUE.queued.status, jobId, itemId).changes !== 1) return false;
-    const job = queuedCommentJob(db, jobId, (projectId, slug) => runDir(projectId, slug, env));
+    const job = queuedCommentJob(db, jobId);
     insertComment(db, { itemId, ...commentFor(job, "queued", jobRefs(db, job)) });
     return true;
   });
@@ -766,21 +764,21 @@ function tierOf(item, tier) {
   return TIER_BY_TYPE[item.type] ?? null;
 }
 
-// The sections an operator adds right after the item block: their note, verbatim, then the prior run block.
-function operatorBlocks({ operatorNote, priorRun }) {
+// The section an operator adds right after the item block: their note, verbatim.
+function operatorBlocks({ operatorNote }) {
   const note = typeof operatorNote === "string" ? operatorNote.trim() : "";
-  return [...(note ? [`## Operator note\n${note}`] : []), ...(priorRun ? [priorRun] : [])];
+  return note ? [`## Operator note\n${note}`] : [];
 }
 
-// Prompt an issue is queued with: the task, the operator's note and prior run, the decision it is linked to and the accepted decisions around it.
-export async function buildIssuePrompt({ item, embedder, operatorNote, priorRun } = {}, env = process.env) {
+// Prompt an issue is queued with: the task, the operator's note, the decision it is linked to and the accepted decisions around it.
+export async function buildIssuePrompt({ item, embedder, operatorNote } = {}, env = process.env) {
   const linked = item.decision_id ? getDecision(item.decision_id, env) : null;
   const standing = titlesBlock(STANDING_HEADING, titlesOfStatus(item, "accepted", env));
   const proposed = titlesBlock(PROPOSED_HEADING, titlesOfStatus(item, "proposed", env));
   const related = await relatedDecisions(item, linked, embedder, env);
   const blocks = [`## Task\n${escapePromptMarkers(item.title)}`];
   if (item.detail) blocks.push(escapePromptMarkers(item.detail));
-  blocks.push(issueBlock(item), ...operatorBlocks({ operatorNote, priorRun }));
+  blocks.push(issueBlock(item), ...operatorBlocks({ operatorNote }));
   if (linked) blocks.push(`## Linked decision\n${renderDecisionText(linked)}`);
   if (standing) blocks.push(standing);
   if (proposed) blocks.push(proposed);
@@ -844,29 +842,19 @@ async function queueOrgItem(item, { projectId, allProjects, embedder, operatorNo
   return { job: jobs[0], jobs, skipped, item, targetProject: jobs.length === 1 ? jobs[0].project : null };
 }
 
-// The prior-run block and slug of the operator run a `run_dir` names, validated as for a free-prompt job; nothing when none was named.
-function priorRunSeed({ runDir: raw, projectId }, env) {
-  if (typeof raw !== "string" || raw.trim() === "") return { block: null, slug: null };
-  const project = projectById(openDb(env), projectId);
-  const run = resolveOperatorRunDir({ runDir: raw, project: project?.name ?? projectId, projectId, env });
-  return { block: priorRunBlock({ projectId, slug: run.slug, state: run.state, env }), slug: run.slug };
-}
-
 // Queues the job an issue builds; a project item is linked to that job, an org item names the project id it goes to or `allProjects`.
 export async function queueIssue(
-  { id, projectId, allProjects = false, priority, maxAttempts, timeoutS, tier, embedder, operatorNote, runDir: priorRunDir, origin } = {},
+  { id, projectId, allProjects = false, priority, maxAttempts, timeoutS, tier, embedder, operatorNote, origin } = {},
   env = process.env,
 ) {
   const item = queueableIssue(id, env);
   if (item.scope === "org") {
-    if (priorRunDir) throw new UserError("`run_dir` is not supported for an org issue: a run belongs to one project, and an org item queues per project");
     return await queueOrgItem(item, { projectId, allProjects, priority, maxAttempts, timeoutS, tier, embedder, operatorNote, origin }, env);
   }
   const ownProjectId = itemProjectId(openDb(env), item, allProjects ? ALL_PROJECTS : projectId);
-  const seed = priorRunSeed({ runDir: priorRunDir, projectId: ownProjectId }, env);
-  const prompt = await buildIssuePrompt({ item, embedder, operatorNote, priorRun: seed.block }, env);
+  const prompt = await buildIssuePrompt({ item, embedder, operatorNote }, env);
   const job = addJob(
-    { projectId: ownProjectId, prompt, priority, maxAttempts, timeoutS, tier: tierOf(item, tier), slug: seed.slug, operatorNote, origin },
+    { projectId: ownProjectId, prompt, priority, maxAttempts, timeoutS, tier: tierOf(item, tier), operatorNote, origin },
     env,
   );
   if (linkIssueJob(item.id, job.id, env)) return { job, jobs: [job], skipped: [], item, targetProject: item.project };

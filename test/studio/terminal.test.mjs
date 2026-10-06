@@ -6,14 +6,14 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { runtimePackageDir, studioTerminalsDir } from "../../src/config/paths.mjs";
+import { homeDir, runtimePackageDir, studioTerminalsDir } from "../../src/config/paths.mjs";
 import { OPERATOR_OPENING_PROMPT } from "../../src/host/operator.mjs";
 import { packageRoot, spawnRoot } from "../../src/host/paths.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { loadPty } from "../../src/studio/pty.mjs";
 import { INSTRUCTION_MAX, SPAWN_SELF_ENV, TerminalRefusal, createTerminalManager, parsePsLine, parseResize } from "../../src/studio/terminal.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
-import { FIXED_PROJECT_ID, makeDir, makeHome, makeProject, registerCheckout } from "../../test-support/memory.mjs";
+import { FIXED_PROJECT_ID, dropCheckout, makeDir, makeHome, makeProject, registerCheckout } from "../../test-support/memory.mjs";
 import { fakePtyFactory } from "../../test-support/studio.mjs";
 
 const PORT = 4321;
@@ -139,18 +139,18 @@ test("on darwin the loader chmods a spawn-helper that is not executable, and onl
   assert.equal(modes.get(helper), 0o755);
 });
 
-test("an operator terminal runs `nightqueue open <project>` in the registry's checkout, and is recorded for the reaper", async (t) => {
+test("an operator terminal runs `nightqueue open <project>` in the nightqueue home, and is recorded for the reaper", async (t) => {
   const env = makeHome(t, "term-operator");
-  const checkout = realpathSync(makeProject(t, env, "alpha"));
+  makeProject(t, env, "alpha");
   const { manager, fake } = makeManager(t, env);
   const { terminal, reused } = await manager.create({ kind: "operator", project: "alpha" });
   assert.equal(reused, false);
   assert.equal(terminal.label, "alpha operator");
-  assert.equal(terminal.cwd, checkout);
+  assert.equal(terminal.cwd, homeDir(env));
   const child = fake.spawned[0];
   assert.equal(child.file, process.execPath);
   assert.deepEqual(child.args, [entryOf(env), "open", "alpha"]);
-  assert.equal(child.options.cwd, checkout);
+  assert.equal(child.options.cwd, homeDir(env));
   assert.equal(child.options.encoding, null);
   assert.equal(child.options.env.NIGHTQUEUE_HOME, env.NIGHTQUEUE_HOME);
   assert.equal(child.options.env.TERM, "xterm-256color");
@@ -162,6 +162,33 @@ test("an operator terminal runs `nightqueue open <project>` in the registry's ch
   assert.equal(registration.entry, entryOf(env));
 
   assert.equal((await refusal(manager.create({ kind: "operator", project: "nope" }))).status, 404);
+  assert.equal((await refusal(manager.create({ kind: "operator", project: "  " }))).status, 400);
+});
+
+test("an operator terminal without a project runs `nightqueue open` in the home; a project whose checkout is gone still launches", async (t) => {
+  const env = makeHome(t, "term-operator-home");
+  makeProject(t, env, "alpha");
+  dropCheckout(env, "alpha");
+  const { manager, fake } = makeManager(t, env);
+
+  const bare = await manager.create({ kind: "operator" });
+  assert.equal(bare.terminal.label, "operator");
+  assert.equal(bare.terminal.cwd, homeDir(env));
+  assert.deepEqual(fake.spawned[0].args, [entryOf(env), "open"]);
+
+  const gone = await manager.create({ kind: "operator", project: "alpha" });
+  assert.equal(gone.terminal.cwd, homeDir(env));
+  assert.deepEqual(fake.spawned[1].args, [entryOf(env), "open", "alpha"]);
+});
+
+test("an operator terminal without a project carries its instruction as `--prompt`, still in the home", async (t) => {
+  const env = makeHome(t, "term-operator-home-prompt");
+  const { manager, fake } = makeManager(t, env);
+
+  const { terminal } = await manager.create({ kind: "operator", instruction: "Which jobs are gated?" });
+
+  assert.equal(terminal.cwd, homeDir(env));
+  assert.deepEqual(fake.spawned[0].args, [entryOf(env), "open", "--prompt=Which jobs are gated?"]);
 });
 
 test("a terminal child never inherits the studio's token nor any other `NIGHTQUEUE_STUDIO_*` setting", async (t) => {

@@ -20,6 +20,12 @@ const RENAMED_FIELDS = {
   queue_add: [`${OLD_TRACKER_WORD}_item_id`],
 };
 
+// Inputs D-58 removed with the operator runs, by tool: a call that still sends one with a value is refused, never silently stripped.
+const RETIRED_FIELDS = {
+  queue_add: ["run_dir"],
+  run_set: ["origin", "evidence_level", "plan_status"],
+};
+
 // Inputs that took an internal integer id under contract 1 and take a ref now, by tool.
 const OLD_ID_FIELDS = {
   queue_add: [{ field: "issue_id", kind: "item" }],
@@ -55,6 +61,24 @@ export function refuseRenamedFields(name, args, state) {
   if (!fields.some((field) => Object.hasOwn(args, field))) return;
   state.sawOldShape = true;
   throw new StaleContractError();
+}
+
+// Tells whether a retired input carries a value: null, undefined and blank text are nothing to refuse.
+function hasValue(value) {
+  if (value === null || value === undefined) return false;
+  return typeof value !== "string" || value.trim() !== "";
+}
+
+// The refusal line of one retired input.
+export function retiredFieldLine(field) {
+  return `\`${field}\` was removed by D-58: operator runs no longer exist, so there is no run to bind or record; put what was found in \`prompt\` or an \`issue_comment\``;
+}
+
+// Refuses a call carrying a value for an input D-58 retired, before validation would strip it silently.
+export function refuseRetiredFields(name, args) {
+  if (args === null || typeof args !== "object") return;
+  const field = (RETIRED_FIELDS[name] ?? []).find((key) => Object.hasOwn(args, key) && hasValue(args[key]));
+  if (field) throw new UserError(retiredFieldLine(field));
 }
 
 // What one server instance remembers about the clients it served; in memory only, never in the database.

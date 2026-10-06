@@ -244,6 +244,8 @@ const SUBCOMMANDS = new Map([
   ["integrations", runIntegrations],
 ]);
 
+export const SUBCOMMAND_NAMES = Object.freeze([...SUBCOMMANDS.keys()]);
+
 // Dispatches the subcommands of `nightqueue project`.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;

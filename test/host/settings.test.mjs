@@ -8,7 +8,9 @@ import {
   desiredHooks,
   hookCommand,
   hookStatus,
+  jobSettings,
   mergeHooks,
+  operatorSettings,
   removeHooks,
   spacedRootWarning,
 } from "../../src/host/settings.mjs";
@@ -225,6 +227,18 @@ test("desiredHooks carries the orchestrator-scope matcher, the one source every 
   const preToolUse = desiredHooks(ENV).filter((hook) => hook.event === "PreToolUse");
   assert.equal(preToolUse.length, 1);
   assert.equal(preToolUse[0].matcher, "Agent|Task|Bash|Read|Grep|Glob");
+});
+
+test("operatorSettings fences the edit tools and sweeps qa worktrees on SubagentStop, leaving the host's hook list unchanged (D-58)", () => {
+  const before = desiredHooks(ENV);
+  const settings = operatorSettings(ENV);
+  assert.deepEqual(settings.hooks.PreToolUse.map((group) => group.matcher), ["Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit"]);
+  assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, AGENT_FOREGROUND.command);
+  assert.deepEqual(settings.hooks.SubagentStop, [{ hooks: [{ type: "command", command: hookCommand("subagent-stop", ENV), timeout: 60 }] }]);
+  assert.deepEqual(settings.permissions, { allow: ["mcp__nightqueue__*"] });
+  assert.deepEqual(desiredHooks(ENV), before);
+  assert.equal(desiredHooks(ENV).some((hook) => hook.event === "SubagentStop"), false, "the host settings would run the qa sweep in every session");
+  assert.equal(jobSettings(ENV).hooks.PreToolUse[0].matcher, "Agent|Task|Bash|Read|Grep|Glob", "a job's guard now fences the edit tools");
 });
 
 test("the status flags our own group registered with an older matcher, never a group shared with a third party", () => {

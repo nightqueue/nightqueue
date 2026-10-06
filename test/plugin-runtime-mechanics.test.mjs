@@ -85,7 +85,6 @@ test("each Repository template of the skill carries a Project line", () => {
 // The secret-in-a-log sweep is a runtime command now, and its mandatory readings survive a host where the plugin root does not resolve.
 test("the qa-guardian calls the sweep and still resolves its own plugin paths", () => {
   const agent = readAgent("qa-guardian");
-  const skill = readFileSync(QA_PHASE, "utf8");
   assert.ok(agent.includes("nightqueue run secrets-sweep --files"), "qa-guardian does not call the sweep command");
   assert.equal(agent.includes("grep -niE"), false, "qa-guardian still runs the greps the command replaced");
   assert.ok(
@@ -97,10 +96,6 @@ test("the qa-guardian calls the sweep and still resolves its own plugin paths", 
     promptTemplates().filter((name) => readFileSync(join(PROMPTS, name), "utf8").includes("{{>_qa-skill}}")),
     ["qa-analyst.md", "qa-lite.md", "qa-prover.md"],
     "the three qa-guardian prompts do not all carry the plugin paths",
-  );
-  assert.ok(
-    skill.replace(/\s+/g, " ").includes("If it does not resolve, omit those three lines entirely"),
-    "the skill does not tell the orchestrator to omit the paths it could not resolve",
   );
 });
 

@@ -68,6 +68,36 @@ test("a home with nothing to say produces no block at all", async (t) => {
   assert.equal(existsSync(sessionStatePath("s1", env)), false);
 });
 
+test("a session outside any checkout names the project nightqueue open preselected, even with no memory to recall", async (t) => {
+  const env = makeHome(t, "hook-start-preselected");
+  makeProject(t, env, "alpha");
+  const session = { ...env, NIGHTQUEUE_MODE: "operator", NIGHTQUEUE_PROJECT: projectIdOf(env, "alpha") };
+  const elsewhere = makeDir(t, "hook-start-home-cwd");
+
+  const empty = await runSessionStart({ input: { session_id: "s1", cwd: elsewhere }, env: session });
+  assert.equal(empty, "# Nightqueue context\n\nCurrent project (preselected by nightqueue open): alpha");
+
+  const id = addLesson(env, { title: "the worker leaks a file descriptor on failure" });
+  const block = await runSessionStart({ input: { session_id: "s2", cwd: elsewhere }, env: session });
+  assert.match(block, /^# Nightqueue context\n\nCurrent project \(preselected by nightqueue open\): alpha\n\n/);
+  assert.match(block, new RegExp(`\\[L${id}\\]`));
+});
+
+test("the preselected project is ignored inside a job, for a non-id value, and when the session's directory names a project", async (t) => {
+  const env = makeHome(t, "hook-start-preselected-ignored");
+  const repo = makeProject(t, env, "alpha");
+  makeProject(t, env, "beta");
+  const elsewhere = makeDir(t, "hook-start-ignored-cwd");
+  const beta = projectIdOf(env, "beta");
+
+  assert.equal(await runSessionStart({ input: { session_id: "s1", cwd: elsewhere }, env: { ...env, NIGHTQUEUE_PROJECT: beta, NIGHTQUEUE_JOB_ID: "7" } }), "");
+  assert.equal(await runSessionStart({ input: { session_id: "s2", cwd: elsewhere }, env: { ...env, NIGHTQUEUE_PROJECT: "beta" } }), "");
+  addLesson(env, { title: "the worker leaks a file descriptor on failure" });
+  const block = await runSessionStart({ input: { session_id: "s3", cwd: repo }, env: { ...env, NIGHTQUEUE_PROJECT: beta } });
+  assert.doesNotMatch(block, /Current project/);
+  assert.match(block, /the worker leaks a file descriptor/);
+});
+
 test("the reflection process gets no context block and never opens the database", async (t) => {
   const env = { ...makeHome(t, "hook-start-reflect"), NIGHTQUEUE_REFLECT: "1" };
   assert.equal(await runSessionStart({ input: { session_id: "s1", cwd: process.cwd() }, env }), "");
