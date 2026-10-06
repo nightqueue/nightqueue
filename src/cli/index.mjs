@@ -82,7 +82,7 @@ commands:
   doctor [--json] [--check-updates] [--fix] [--db]  check the host and the home, one line per check; --db reports more of the database, --fix also folds its WAL and moves broken sidecars aside; exits 1 on any failure
   init [path] [--key <KEY>] [--gh|--no-gh]  install the runtime and register the git repository at [path] (default: .) as a project
   open [project] [--resume <session>] [--prompt <text>]  open the operator in a terminal: it investigates, plans and queues jobs, and never edits the code; --prompt starts it with a request
-  update [<version>] [--from] [--force]     reinstall the runtime at the newest version (or at <version>) and re-point the host at it
+  update [<version>] [--from [--no-install]] [--force]  reinstall the runtime at the newest version (or at <version>) and re-point the host at it
   org add <name> [--key <KEY>]              create an org; without --key a terminal is asked, else a key is suggested from the name
   org list [--json]                         list orgs, their key, connection slots and project counts
   org rename <old> <new>                    rename an org (one row: its projects and bindings follow)

@@ -158,6 +158,14 @@ test("a page navigation the dist has no file for gets index.html, so a deep link
   assert.equal(missing.status, 404);
 });
 
+test("a dist that was never built serves the studio not built page instead of failing", async (t) => {
+  const env = makeHome(t, "studio-not-built");
+  const { port } = await startStudio(t, env, { distDir: `${makeDist(t)}/missing` });
+  const answer = await send(port, { path: "/", headers: { cookie: studioCookie(port), accept: "text/html" } });
+  assert.equal(answer.status, 503);
+  assert.match(answer.body, /Studio not built/);
+});
+
 test("the API-only mode serves no page, still answers the API, and is the only mode that honours a dev origin", async (t) => {
   const env = makeHome(t, "studio-api-only");
   const devOrigin = "http://127.0.0.1:5173";

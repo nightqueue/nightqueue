@@ -170,6 +170,13 @@ function runScript(rest) {
   process.exit(result.status ?? 1);
 }
 
+// Emulates `npm ci`: materializes the studio build tools in the node_modules of the working directory.
+function runCi() {
+  const bin = join(process.cwd(), "node_modules", ".bin");
+  mkdirSync(bin, { recursive: true });
+  for (const tool of ["tsc", "vite"]) writeFileSync(join(bin, tool), "");
+}
+
 // Applies the call, emulating only the subcommands the installation uses.
 function main() {
   logCall();
@@ -182,6 +189,7 @@ function main() {
   if (command === "view") return runView(rest);
   if (command === "audit") return runAudit();
   if (command === "run") return runScript(rest);
+  if (command === "ci") return runCi();
   return fail(`unknown command \`${args.join(" ")}\``);
 }
 

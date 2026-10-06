@@ -57,6 +57,16 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `nightqueue update --from <dir>` installs dependencies when they are needed and a failed
+  studio build no longer blocks the runtime. It runs `npm ci --no-audit --no-fund` in the source
+  when `node_modules` is missing, when `package-lock.json` changed since the last build
+  (`lock_sha256` in `studio/dist/.stamp.json`, which `release:check` ignores) or when the build
+  fails on a missing module or command (it then builds once more), and prints `dependencies:
+  installed (...)` or `dependencies: up to date`; `--no-install` skips it. A studio build that
+  still fails prints `studio: degraded - <error>` and the shims, MCP, hooks, plugin and database
+  schema are installed as usual (it used to skip them all, leaving `nq` on the previous version).
+  `nightqueue studio` answers a "Studio not built" page when the runtime has no build, and
+  `nightqueue doctor` has a `studio build` line.
 - A merged `queue close` now removes the job's worktree whatever its status (`git worktree
   remove --force`), naming the uncommitted paths it dropped (`worktree removed: <path> (dropped
   uncommitted: a, b, c)`, at most 10 names); a worktree locked by a live session is still kept

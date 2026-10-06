@@ -22,11 +22,11 @@ function resolveToken(values, env) {
   return randomBytes(24).toString("hex");
 }
 
-// The built pages the studio serves, refused when the dist was never built; the API-only mode serves none.
-function resolveDistDir(apiOnly) {
+// The built pages the studio serves; a dist that was never built is warned about and served as the "studio not built" page, and the API-only mode serves none.
+function resolveDistDir(apiOnly, ctx) {
   const distDir = join(packageRoot(), "studio", "dist");
   if (!apiOnly && !existsSync(join(distDir, "index.html"))) {
-    throw new UserError("studio/dist is missing — run `npm run studio:build` (a published package ships it)");
+    ctx.err("studio: studio/dist is missing, so the pages show \"studio not built\"; run `npm run studio:build` in the source and `nightqueue update --from <dir>`");
   }
   return distDir;
 }
@@ -57,7 +57,7 @@ export async function run(argv, ctx) {
   if (values["dev-origin"] !== undefined && !apiOnly) throw new UserError(`\`--dev-origin\` only applies with \`--api-only\`; usage: ${USAGE}`);
   const port = requirePort(values.port);
   const token = resolveToken(values, ctx.env);
-  const distDir = resolveDistDir(apiOnly);
+  const distDir = resolveDistDir(apiOnly, ctx);
   const { url } = await startStudioServer({ env: ctx.env, port, token, distDir, apiOnly, devOrigin: values["dev-origin"] ?? null });
   ctx.out(`studio listening on ${url}`);
   if (!apiOnly && values["no-open"] !== true) openBrowser(url, ctx);

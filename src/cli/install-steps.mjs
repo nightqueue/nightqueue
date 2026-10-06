@@ -17,6 +17,7 @@ import {
 } from "../host/runtime.mjs";
 import { PATH_MARK, addPathLine, binDirInPath, pathBlock, rcFilePath, removePathLine } from "../host/shell.mjs";
 import { EMBEDDING_PACKAGE, EMBEDDING_PACKAGE_RANGE, embeddingLibraryEntry, warmupModel } from "../memory/embedding.mjs";
+import { lockSha256, readStudioStampFile } from "../studio/stamp.mjs";
 import { confirm } from "./prompt.mjs";
 import { firstLine } from "./report.mjs";
 import { finishVersion, pruneVersions, runtimeLocation, stageInstall, switchCurrent, versionStamp } from "./runtime-versions.mjs";
@@ -26,9 +27,12 @@ const RUNTIME_LABEL = "runtime";
 const OLD_RUNTIMES_LABEL = "old runtimes";
 const RUNTIME_CHECK_LABEL = "runtime check";
 const STUDIO_LABEL = "studio";
-const STUDIO_TOOLS = ["tsc", "vite"];
+const DEPENDENCIES_LABEL = "dependencies";
+const NPM_CI_ARGS = ["ci", "--no-audit", "--no-fund"];
+const STUDIO_BUILD_ARGS = ["run", "studio:build"];
+const MISSING_DEPENDENCY = /Cannot find (module|package)|MODULE_NOT_FOUND|TS2307|command not found/i;
+const STUDIO_DEGRADED_TAIL = "; the studio serves the previous build (or no build) until npm run studio:build passes";
 const STUDIO_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
-const STUDIO_TAIL_LINES = 5;
 const STUDIO_HASH_CHARS = 12;
 const STUDIO_STAMP_SCRIPT = join("scripts", "studio-stamp.mjs");
 const STUDIO_STAMP_TIMEOUT_MS = 60 * 1000;
@@ -96,49 +100,93 @@ function readStudioStamp(ctx, dir) {
   return { ok: false, hash: null, reason: said || `${STUDIO_STAMP_SCRIPT} check exited ${result?.status ?? "?"}` };
 }
 
-// Tells whether both binaries the studio build runs are installed in the directory.
-function studioToolsInstalled(dir) {
-  return STUDIO_TOOLS.every((tool) => existsSync(join(dir, "node_modules", ".bin", tool)));
+// Why the dependencies of a source directory need an install before the build, or null when they are current.
+function installReason(dir) {
+  if (!existsSync(join(dir, "node_modules"))) return "node_modules is missing";
+  return lockfileChanged(dir) ? "lockfile changed" : null;
 }
 
-// Runs `npm run studio:build` in the directory, streaming what it prints as it prints it; `{ ok, detail }` says how it ended.
-async function runStudioBuild(ctx, dir) {
-  const result = await runNpmAsync(["run", "studio:build"], {
+// Tells whether the lockfile differs from the one the last build recorded in its stamp; a stamp without the sha counts as different.
+function lockfileChanged(dir) {
+  const sha = lockSha256(dir);
+  return sha !== null && sha !== readStudioStampFile(dir)?.lock_sha256;
+}
+
+// The first line of a command's output that mentions an error, else its first non-empty line, or "" when it printed nothing.
+function firstErrorLine(output) {
+  const lines = String(output ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
+  return firstLine(lines.find((line) => /error/i.test(line)) ?? lines[0] ?? "");
+}
+
+// Runs one npm command in the directory, streaming what it prints as it prints it; `{ ok, detail, output }` says how it ended.
+async function runNpmIn(ctx, dir, args) {
+  const result = await runNpmAsync(args, {
     cwd: dir,
     env: ctx.env,
     timeoutMs: STUDIO_BUILD_TIMEOUT_MS,
     spawnImpl: ctx.spawnImpl,
     echo: (text) => relayStderr(ctx, text),
   });
-  if (result.ok) return { ok: true, detail: "" };
-  const tail = result.output.split("\n").map((line) => line.trim()).filter(Boolean).slice(-STUDIO_TAIL_LINES).join(" | ");
+  if (result.ok) return { ok: true, detail: "", output: result.output };
   const how = result.timedOut ? "timed out" : result.missing ? "npm not found" : `exit ${result.status ?? "?"}`;
-  return { ok: false, detail: `${how}${tail ? `: ${tail}` : ""}` };
+  return { ok: false, detail: firstErrorLine(result.output) || how, output: result.output };
 }
 
-// Builds the studio of a local source directory unless its dist is already fresh, so an install from a checkout never ships without one; false refuses the whole install.
-export async function studioBuildStep(ctx, report, dir) {
+// Runs `npm ci` in the directory and reports the install; `{ ok, detail }` says how it ended.
+async function installDependencies(ctx, report, dir, reason) {
+  const result = await runNpmIn(ctx, dir, NPM_CI_ARGS);
+  if (!result.ok) return { ok: false, detail: `npm ci failed in ${dir}: ${result.detail}` };
+  report.step(DEPENDENCIES_LABEL, "installed", reason);
+  return { ok: true, detail: "" };
+}
+
+// Installs the dependencies of the directory when they are missing or the lockfile changed since the last build, or says what `--no-install` skipped.
+async function syncDependencies(ctx, report, dir, install) {
+  const reason = installReason(dir);
+  if (reason === null) {
+    report.step(DEPENDENCIES_LABEL, "up to date");
+    return { ok: true, installed: false, detail: "" };
+  }
+  if (!install) {
+    report.step(DEPENDENCIES_LABEL, "skipped", `--no-install; would run npm ci: ${reason}`);
+    return { ok: true, installed: false, detail: "" };
+  }
+  return { ...(await installDependencies(ctx, report, dir, reason)), installed: true };
+}
+
+// Builds the studio, and when the build fails on a missing module or command installs the dependencies once and builds once more.
+async function buildStudio(ctx, report, dir, { install, installed }) {
+  const first = await runNpmIn(ctx, dir, STUDIO_BUILD_ARGS);
+  if (first.ok || installed || !install || !MISSING_DEPENDENCY.test(first.output)) return first;
+  const retried = await installDependencies(ctx, report, dir, "the build needed it");
+  return retried.ok ? await runNpmIn(ctx, dir, STUDIO_BUILD_ARGS) : retried;
+}
+
+// Reports the studio step as degraded: the install goes on and the studio serves what it served before.
+function degradeStudio(report, reason) {
+  report.note(`${STUDIO_LABEL}: degraded - ${firstLine(reason)}${STUDIO_DEGRADED_TAIL}`);
+}
+
+// Builds the studio of a local source directory unless its dist is already fresh; a failure only degrades this step, never the runtime install.
+export async function studioBuildStep(ctx, report, dir, { install = true } = {}) {
   const stamp = readStudioStamp(ctx, dir);
-  if (stamp.ok) {
+  if (stamp.ok && !lockfileChanged(dir)) {
     report.step(STUDIO_LABEL, "up to date", stamp.hash.slice(0, STUDIO_HASH_CHARS));
-    return true;
+    return;
   }
-  if (!studioToolsInstalled(dir)) {
-    report.degrade(STUDIO_LABEL, `the studio devDependencies are not installed in ${dir}: run npm ci there`, `cd ${dir} && npm ci`);
-    return false;
-  }
-  const build = await runStudioBuild(ctx, dir);
+  const deps = await syncDependencies(ctx, report, dir, install);
+  if (!deps.ok) return degradeStudio(report, deps.detail);
+  const build = await buildStudio(ctx, report, dir, { install, installed: deps.installed });
   const built = build.ok ? readStudioStamp(ctx, dir) : null;
   if (built?.ok) {
     report.step(STUDIO_LABEL, `built from ${dir}`, built.hash.slice(0, STUDIO_HASH_CHARS));
-    return true;
+    return;
   }
-  report.degrade(STUDIO_LABEL, `the studio build failed in ${dir}: ${build.ok ? built.reason : build.detail}`, `cd ${dir} && npm run studio:build`);
-  return false;
+  degradeStudio(report, build.ok ? built.reason : build.detail);
 }
 
 // Where the runtime comes from: the package this process runs from, the directory or tarball of `--from`, the registry only when an update forces it.
-async function openRuntimeSource(ctx, report, { from, force, version } = {}) {
+async function openRuntimeSource(ctx, report, { from, force, version, install } = {}) {
   const target = typeof from === "string" && from.trim() ? resolve(from.trim()) : "";
   if (!target) {
     if (force === true) return { ok: true, spec: registrySpec(version), cleanup: () => {} };
@@ -150,7 +198,7 @@ async function openRuntimeSource(ctx, report, { from, force, version } = {}) {
     return { ok: false, cleanup: () => {} };
   }
   if (stat.isDirectory()) {
-    if (!(await studioBuildStep(ctx, report, target))) return { ok: false, cleanup: () => {} };
+    await studioBuildStep(ctx, report, target, { install });
     return packDirectory(ctx, report, target);
   }
   return { ok: true, spec: target, cleanup: () => {} };
@@ -174,14 +222,14 @@ function publishVersion(ctx, report, { staging, installed, stamp }) {
 }
 
 // Installs the package into a new version directory and swaps `current` onto it, so a process already running keeps executing the tree it loaded from.
-export async function setupRuntime(ctx, report, { from, force, version } = {}) {
+export async function setupRuntime(ctx, report, { from, force, version, install } = {}) {
   const wanted = packageVersion();
   const current = runtimeVersion(ctx.env);
   if (!force && !from && current && current === wanted) {
     report.step(RUNTIME_LABEL, "already present", `v${current} at ${runtimeLocation(ctx.env)}`);
     return runtimeReady(ctx.env);
   }
-  const source = await openRuntimeSource(ctx, report, { from, force, version });
+  const source = await openRuntimeSource(ctx, report, { from, force, version, install });
   if (!source.ok) return false;
   const stamp = versionStamp();
   const staging = stageInstall(ctx.env, stamp);

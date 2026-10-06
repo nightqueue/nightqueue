@@ -140,14 +140,81 @@ test("--from a directory without dist builds the studio first, then installs", a
   assert.ok(kinds.indexOf("run") < kinds.indexOf("pack") && kinds.indexOf("pack") < kinds.indexOf("install"), kinds.join(","));
 });
 
-test("--from a directory without tsc or vite is refused before any install, with the npm ci hint", async (t) => {
+// The npm calls of the run that installed the dependencies of a source.
+function ciRuns(host) {
+  return host.npmCalls().filter((call) => call[0] === "ci");
+}
+
+test("--from a directory without node_modules installs the dependencies once, then builds and installs the runtime", async (t) => {
   const host = makeHostEnv(t, "install-from-studio-no-tools");
   const source = makeStudioSource(t, "studio-no-tools-src", { tools: false });
   const { ctx, out } = makeCtx(host.env);
 
-  assert.equal(await run(["update", "--from", source, "--force"], ctx), 1);
-  assert.ok(out.includes(`studio: failed (the studio devDependencies are not installed in ${source}: run npm ci there)`), out.join("\n"));
-  assert.deepEqual(host.npmCalls(), [], "a refused update still reached npm");
+  assert.equal(await run(["update", "--from", source, "--force"], ctx), 0, out.join("\n"));
+  assert.deepEqual(ciRuns(host), [["ci", "--no-audit", "--no-fund"]]);
+  assert.ok(out.includes("dependencies: installed (node_modules is missing)"), out.join("\n"));
+  assert.deepEqual(host.npmCalls().map((call) => call[0]).slice(0, 2), ["ci", "run"]);
+  assert.equal(existsSync(join(host.runtimePackage, "package.json")), true);
+});
+
+test("--from a directory whose lockfile changed since the last build runs npm ci once", async (t) => {
+  const host = makeHostEnv(t, "install-from-studio-stale-lock");
+  const source = makeStudioSource(t, "studio-stale-lock-src", { built: true });
+  writeFileSync(join(source, "package-lock.json"), JSON.stringify({ packages: { "node_modules/@xterm/xterm": { version: "5.5.0" } } }));
+  writeFileSync(join(source, "studio", "src", "main.ts"), "export const changed = true;");
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["update", "--from", source], ctx), 0, out.join("\n"));
+  assert.equal(ciRuns(host).length, 1);
+  assert.ok(out.includes("dependencies: installed (lockfile changed)"), out.join("\n"));
+});
+
+test("--from a fresh dist whose lockfile sha differs from the stamp's is not fresh: npm ci runs once and the studio is rebuilt", async (t) => {
+  const host = makeHostEnv(t, "install-from-studio-lock-only");
+  const source = makeStudioSource(t, "studio-lock-only-src", { built: true });
+  writeFileSync(join(source, "package-lock.json"), JSON.stringify({ packages: { "node_modules/@xterm/xterm": { version: "5.5.0" } } }));
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["update", "--from", source], ctx), 0, out.join("\n"));
+  assert.equal(ciRuns(host).length, 1);
+  assert.deepEqual(scriptRuns(host), [["run", "studio:build"]]);
+  assert.ok(out.includes("dependencies: installed (lockfile changed)"), out.join("\n"));
+  assert.ok(out.some((line) => line.startsWith("studio: built from ")), out.join("\n"));
+});
+
+test("--from a directory whose lockfile matches the stamp installs nothing and says the dependencies are up to date", async (t) => {
+  const host = makeHostEnv(t, "install-from-studio-same-lock");
+  const source = makeStudioSource(t, "studio-same-lock-src", { built: true });
+  writeFileSync(join(source, "studio", "src", "main.ts"), "export const changed = true;");
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["update", "--from", source], ctx), 0, out.join("\n"));
+  assert.deepEqual(ciRuns(host), []);
+  assert.ok(out.includes("dependencies: up to date"), out.join("\n"));
+});
+
+test("--from --no-install never runs npm ci and says what it would have done", async (t) => {
+  const host = makeHostEnv(t, "install-from-studio-no-install");
+  const source = makeStudioSource(t, "studio-no-install-src", { tools: false });
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["update", "--from", source, "--no-install"], ctx), 0, out.join("\n"));
+  assert.deepEqual(ciRuns(host), []);
+  assert.ok(out.includes("dependencies: skipped (--no-install; would run npm ci: node_modules is missing)"), out.join("\n"));
+});
+
+test("--from a build that fails on a missing module installs the dependencies once and builds once more", async (t) => {
+  const host = makeHostEnv(t, "install-from-studio-retry");
+  const script = "if [ -f ran ]; then node build.mjs; else touch ran; echo \"error TS2307: Cannot find module '@xterm/xterm'\" >&2; exit 2; fi";
+  const source = makeStudioSource(t, "studio-retry-src", { built: true, script });
+  writeFileSync(join(source, "studio", "src", "main.ts"), "export const changed = true;");
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["update", "--from", source], ctx), 0, out.join("\n"));
+  assert.deepEqual(host.npmCalls().map((call) => call[0]).slice(0, 3), ["run", "ci", "run"]);
+  assert.equal(ciRuns(host).length, 1);
+  assert.ok(out.includes("dependencies: installed (the build needed it)"), out.join("\n"));
+  assert.ok(out.some((line) => line.startsWith("studio: built from ")), out.join("\n"));
 });
 
 test("--from a directory lets the source's own stamp checker judge the build, so the runtime's hash never has to match", async (t) => {
@@ -156,20 +223,24 @@ test("--from a directory lets the source's own stamp checker judge the build, so
   writeFileSync(join(source, "scripts", "studio-stamp.mjs"), 'process.stdout.write("studio/dist was built by a different checker\\n"); process.exitCode = 1;\n');
   const { ctx, out } = makeCtx(host.env, { cwd: source });
 
-  assert.equal(await run(["update", "--from", source], ctx), 1);
-  assert.ok(out.includes(`studio: failed (the studio devDependencies are not installed in ${source}: run npm ci there)`), out.join("\n"));
-  assert.equal(existsSync(join(host.runtimePackage, "package.json")), false, "a refused studio still installed the runtime");
+  assert.equal(await run(["update", "--from", source], ctx), 0, out.join("\n"));
+  assert.ok(out.some((line) => line.startsWith("studio: degraded - ") && line.includes("different checker")), out.join("\n"));
+  assert.equal(existsSync(join(host.runtimePackage, "package.json")), true, "a degraded studio blocked the runtime");
 });
 
-test("--from a directory whose studio build fails is refused before any install, with the tail of the output", async (t) => {
+test("--from a directory whose studio build fails still installs the runtime, with the studio step degraded and the tail of the output", async (t) => {
   const host = makeHostEnv(t, "install-from-studio-fails");
-  const source = makeStudioSource(t, "studio-fails-src", { script: "echo compiling >&2; echo TS2322 type mismatch >&2; exit 2" });
+  const source = makeStudioSource(t, "studio-fails-src", { script: "echo compiling >&2; echo \"error TS2322: type mismatch\" >&2; echo later >&2; exit 2" });
   const { ctx, out, err } = makeCtx(host.env);
 
-  assert.equal(await run(["update", "--from", source], ctx), 1);
-  assert.ok(err.includes("TS2322 type mismatch"), "the build output was not streamed to the operator");
-  assert.ok(out.some((line) => line.startsWith("studio: failed (") && line.includes("exit 2") && line.includes("TS2322 type mismatch")), out.join("\n"));
-  assert.deepEqual(host.npmCalls().map((call) => call[0]), ["run"], "the refused update packed or installed something");
+  assert.equal(await run(["update", "--from", source], ctx), 0, out.join("\n"));
+  assert.ok(err.includes("error TS2322: type mismatch"), "the build output was not streamed to the operator");
+  assert.ok(
+    out.includes("studio: degraded - error TS2322: type mismatch; the studio serves the previous build (or no build) until npm run studio:build passes"),
+    out.join("\n"),
+  );
+  assert.equal(existsSync(join(host.runtimePackage, "package.json")), true, "a failed studio build blocked the runtime");
+  assert.equal(packedDirs(host).length, 1);
 });
 
 test("--from packs the given checkout and reinstalls even when the version already matches", async (t) => {
