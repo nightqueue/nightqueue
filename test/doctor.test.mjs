@@ -970,6 +970,68 @@ test("a healthy home worktree of a checkout whose .git is a file is never flagge
   assert.match(fixed.detail, /^left over: registered in git/);
 });
 
+// Names a job of the given status as the owner of a worktree of the home.
+function ownWorktree(env, { slug, status, path }) {
+  const { id } = addJob({ projectId: ensureProject(env, "alpha"), prompt: `work of ${slug}` }, env);
+  const close = JSON.stringify({ data: { merged: true } });
+  openDb(env).prepare("UPDATE jobs SET status = ?, slug = ?, pr_url = ?, close = ? WHERE id = ?").run(status, slug, "https://github.com/o/r/pull/7", close, id);
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug, fields: { worktree: path }, env });
+}
+
+test("doctor --fix force-removes a worktree only closed or cancelled jobs name and says what it dropped, keeps one a live job, a manual lock or no job at all holds, and lists without --fix as before", async (t) => {
+  const host = makeHostEnv(t, "doctor-fix-leftover");
+  const checkout = registerRealCheckout(t, host.env, "doctor-fix-leftover");
+  const dirty = addHomeWorktree(host.env, checkout, "dirty-run");
+  writeFileSync(join(dirty, "notes.txt"), "uncommitted\n");
+  const cancelled = addHomeWorktree(host.env, checkout, "cancelled-run");
+  const owned = addHomeWorktree(host.env, checkout, "owned-run");
+  const manual = addHomeWorktree(host.env, checkout, "manual-run");
+  git(["-C", checkout, "worktree", "lock", "--reason", "kept on purpose", manual]);
+  const nobody = addHomeWorktree(host.env, checkout, "nobody-run");
+  ownWorktree(host.env, { slug: "dirty-run", status: "closed", path: dirty });
+  ownWorktree(host.env, { slug: "cancelled-run", status: "cancelled", path: cancelled });
+  ownWorktree(host.env, { slug: "owned-run", status: "gate", path: owned });
+  ownWorktree(host.env, { slug: "manual-run", status: "closed", path: manual });
+  closeDb(host.env);
+
+  const listed = (await diagnose(host.env)).report;
+  assert.equal(checkOf(listed, "worktree alpha/dirty-run").detail, "left over: registered in git, no open job owns it");
+  assert.equal(checkOf(listed, "worktree alpha/nobody-run").detail, "left over: registered in git, no open job owns it");
+  assert.equal(existsSync(dirty), true, "the listing deleted the worktree");
+
+  const { report } = await diagnose(host.env, {}, ["--fix"]);
+  assert.deepEqual(checkOf(report, "worktree alpha/dirty-run"), check("worktree alpha/dirty-run", "ok", "removed: left over, no open job owns it (dropped uncommitted: notes.txt)", null));
+  assert.equal(checkOf(report, "worktree alpha/cancelled-run").status, "ok");
+  assert.equal(existsSync(dirty), false, "--fix left the closed job's worktree on disk");
+  assert.equal(existsSync(cancelled), false, "--fix left the cancelled job's worktree on disk");
+  assert.equal(existsSync(owned), true, "--fix removed a worktree a live job owns");
+  assert.equal(existsSync(manual), true, "--fix removed a manually locked worktree");
+  assert.equal(existsSync(nobody), true, "--fix removed a worktree no job names");
+  assert.equal(checkOf(report, "worktree alpha/nobody-run").detail, "left over: registered in git, no open job owns it");
+});
+
+test("doctor --fix prunes an entry whose directory is gone and removes an empty orphaned directory, but only lists an orphaned directory with content", async (t) => {
+  const host = makeHostEnv(t, "doctor-fix-orphans");
+  const checkout = registerRealCheckout(t, host.env, "doctor-fix-orphans");
+  const gone = addHomeWorktree(host.env, checkout, "gone-run");
+  rmSync(gone, { recursive: true, force: true });
+  const empty = join(worktreesDir(host.env), ensureProject(host.env, "alpha"), "empty-dir");
+  mkdirSync(empty, { recursive: true });
+  const full = join(worktreesDir(host.env), ensureProject(host.env, "alpha"), "full-dir");
+  mkdirSync(full, { recursive: true });
+  writeFileSync(join(full, "keep.txt"), "mine\n");
+  closeDb(host.env);
+
+  const { report } = await diagnose(host.env, {}, ["--fix"]);
+
+  assert.equal(checkOf(report, "worktree alpha/gone-run").detail, "pruned: registered in git but its directory is gone");
+  assert.deepEqual(registeredWorktrees(checkout), [], "git still registers the gone worktree");
+  assert.equal(checkOf(report, "worktree alpha/empty-dir").status, "ok");
+  assert.equal(existsSync(empty), false, "--fix left the empty directory");
+  assert.deepEqual(checkOf(report, "worktree alpha/full-dir"), check("worktree alpha/full-dir", "warn", "left over: not registered in git (orphaned), no open job owns it", `rm -rf '${full}'`));
+  assert.equal(existsSync(join(full, "keep.txt")), true, "--fix deleted an orphaned directory with content");
+});
+
 test("doctor --fix that git cannot make hold again keeps a warning, never a repaired row", async (t) => {
   const host = makeHostEnv(t, "doctor-home-unfixable");
   const checkout = registerRealCheckout(t, host.env, "doctor-home-unfixable");

@@ -54,7 +54,7 @@ test("queue close removes the clean, pushed worktree of the job it closed, and k
   assert.equal(text.out.at(-1), `J-${clean.id} closed: PR #7 merged as abc1234; worktree removed: ${clean.path}`);
 });
 
-test("queue close keeps a dirty worktree by name, still closes the job and exits 0, and --json carries it in the checklist", async (t) => {
+test("queue close removes a dirty worktree, names what it dropped, still closes the job and exits 0, and --json carries it in the checklist", async (t) => {
   const home = makeCloseHome(t, "close-wt-dirty");
   const dirty = jobWithWorktree(home, { slug: "dirty-run", status: "done", prUrl: MERGED_PR, dirty: true });
 
@@ -64,12 +64,11 @@ test("queue close keeps a dirty worktree by name, still closes the job and exits
   assert.equal(json.out.length, 1, json.out.join("\n"));
   const payload = JSON.parse(json.out[0]);
   assert.equal(payload.job.status, "closed");
-  assert.equal(existsSync(dirty.path), true, "the dirty worktree was removed");
-  assert.deepEqual(jobView(getJob(dirty.id, home.env)).close.steps.settle.worktree, {
-    path: dirty.path,
-    status: "kept",
-    reason: "it has uncommitted changes",
-  });
+  assert.equal(existsSync(dirty.path), false, "the dirty worktree is still on disk");
+  const entry = jobView(getJob(dirty.id, home.env)).close.steps.settle.worktree;
+  assert.equal(entry.path, dirty.path);
+  assert.equal(entry.status, "removed");
+  assert.match(entry.dropped, /\S/);
 });
 
 test("a refused close touches no worktree", async (t) => {

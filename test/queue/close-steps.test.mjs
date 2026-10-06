@@ -7,14 +7,14 @@ import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { acquireClose, addJob, getJob } from "../../src/memory/jobs.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
-import { conflictStep, mergeStep, preflightStep, runClosePipeline, settleStep } from "../../src/queue/close.mjs";
+import { conflictStep, mergeStep, preflightStep, runClosePipeline, settleStep, worktreeLine } from "../../src/queue/close.mjs";
 import { closeChecklistLines, closeStoppedLine } from "../../src/queue/close-view.mjs";
 import { jobDetailView } from "../../src/queue/view.mjs";
 import { openStore, withReadOnlyStore } from "../../src/store/open.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
 import { fakeCloseDeps, gitFail, gitLines, gitOk, HEAD_SHA, MERGE_SHA, mergedPr, openPr, PUSHED_SHA, CLOSE_PR_URL, suiteVerifies, WORKFLOWS } from "../../test-support/close.mjs";
 import { doneStream } from "../../test-support/streams.mjs";
-import { addWorktree, gitVars, publishedCheckout } from "../../test-support/worktrees.mjs";
+import { addWorktree, gitVars, lockWorktree, makeDirty, publishedCheckout } from "../../test-support/worktrees.mjs";
 
 const REMAINING_MS = 600000;
 const CANONICAL_COMMANDS = /^(fetch origin|status --porcelain -z|diff --name-only HEAD origin\/|rev-parse |worktree (add|remove|prune)|pull --ff-only$)/;
@@ -603,6 +603,51 @@ test("settle closes the job, releases its worktree, appends the Closed line to t
   assert.equal(row.notice_md, "the run's notice\n\nClosed: PR #7 merged as abc1234 on 2026-09-21");
   const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
   assert.equal("run_notice" in detail, false, "the Closed line made the row's notice look replaced");
+});
+
+// A done job with a PR whose run recorded the worktree, its close acquired, ready to settle.
+function settleHome(t, name, worktreePath, checkout) {
+  const env = { ...makeHome(t, name), ...gitVars() };
+  registerCheckout(env, { path: checkout, name: "alpha" });
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
+  mkdirSync(logsDir(env), { recursive: true });
+  writeFileSync(jobLogPath(id, env), doneStream({ notice: "the run's notice" }));
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'done', slug = 'closed', pr_url = ?, notice_md = ?, result = ? WHERE id = ?")
+    .run(CLOSE_PR_URL, "the run's notice", JSON.stringify({ logPath: jobLogPath(id, env) }), id);
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: "closed", fields: { worktree: worktreePath }, env });
+  acquireClose(id, { worker: "close:test:1:aaaa", leaseS: 660 }, env);
+  return { env, checkout, id, worker: "close:test:1:aaaa", store: openStore(env) };
+}
+
+test("settle force-removes a dirty worktree and names what it dropped in the outcome, the checklist and the close line", async (t) => {
+  const { checkout } = publishedCheckout(t, "close-steps-dirty");
+  const worktree = addWorktree(checkout, "feat+dirty");
+  makeDirty(worktree.path);
+  const home = settleHome(t, "close-steps-dirty", worktree.path, checkout);
+
+  const { outcome, checklist } = await close(home, fakeCloseDeps({ pr: mergedPr() }));
+
+  assert.equal(outcome.status, "closed");
+  assert.equal(existsSync(worktree.path), false, "the dirty worktree is still on disk");
+  assert.equal(outcome.worktree.status, "removed");
+  assert.match(outcome.worktree.dropped, /\S/);
+  assert.deepEqual(checklist.steps.settle.worktree, outcome.worktree);
+  assert.equal(worktreeLine(outcome.worktree), `worktree removed: ${worktree.path} (dropped uncommitted: ${outcome.worktree.dropped})`);
+});
+
+test("settle keeps a worktree locked by a live session, with the lock reason", async (t) => {
+  const { checkout } = publishedCheckout(t, "close-steps-live-lock");
+  const worktree = addWorktree(checkout, "feat+live");
+  makeDirty(worktree.path);
+  lockWorktree(checkout, worktree.path, process.pid);
+  const home = settleHome(t, "close-steps-live-lock", worktree.path, checkout);
+
+  const { outcome } = await close(home, fakeCloseDeps({ pr: mergedPr() }));
+
+  assert.equal(outcome.status, "closed");
+  assert.deepEqual(outcome.worktree, { path: worktree.path, status: "kept", reason: `it is locked by a live session (pid ${process.pid})` });
+  assert.equal(existsSync(worktree.path), true, "a live-locked worktree was removed");
 });
 
 const GREEN = { ok: true, checks: [{ name: "a", bucket: "pass" }, { name: "b", bucket: "pass" }], failing: [], pending: [] };

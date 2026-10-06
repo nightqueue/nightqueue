@@ -1167,6 +1167,12 @@ export function listOpenJobs(env = process.env, db = openDb(env)) {
   return registry.attachNames(db, rows);
 }
 
+// Every job, closed or not, that already named its run, the owners `nightqueue doctor --fix` checks a leftover worktree against.
+export function listNamedJobs(env = process.env, db = openDb(env)) {
+  const rows = db.prepare("SELECT id, project_id, slug, status FROM jobs WHERE slug IS NOT NULL").all();
+  return registry.attachNames(db, rows);
+}
+
 // Reads the status of a job on the connection the caller holds; a job whose row is gone has no status at all.
 // The freshness a follow needs lives in `withReadOnlyStore(env, fn)`, which hands every poll its own connection.
 export function jobStatus(id, env = process.env, db = openDb(env)) {

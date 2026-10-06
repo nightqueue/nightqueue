@@ -57,6 +57,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A merged `queue close` now removes the job's worktree whatever its status (`git worktree
+  remove --force`), naming the uncommitted paths it dropped (`worktree removed: <path> (dropped
+  uncommitted: a, b, c)`, at most 10 names); a worktree locked by a live session is still kept
+  with the lock reason, and the runner's `done` path is unchanged. `nightqueue doctor --fix`
+  clears the leftovers of closed or cancelled jobs: force-removes them (a worktree no job names
+  stays listed), prunes an entry whose directory is
+  gone and removes an orphaned empty directory.
 - `queue close` no longer stops at `checks-red` for a check GitHub cancelled before it ran
   (`cancelled`, `timed_out`, `startup_failure`, `stale`): it re-runs the failed jobs once per head
   (`gh run rerun <runId> --failed`) and waits for the checks (the old cancelled job still shown

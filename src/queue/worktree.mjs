@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, rmdirSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { runGitAsync } from "../host/git.mjs";
 import { killProcess, probePid } from "./registry.mjs";
@@ -10,6 +10,7 @@ import { checkoutOfJob } from "../memory/registry-access.mjs";
 export const WORKTREE_READ_TIMEOUT_MS = 5000;
 export const WORKTREE_REMOVE_TIMEOUT_MS = 60000;
 export const KEPT_PREFIX = "Worktree kept: ";
+const DROPPED_NAMES_MAX = 10;
 const LOCK_PID_RE = /\(pid (\d+)\b/;
 const WORKTREE_FIELD = "worktree ";
 const BRANCH_FIELD = "branch ";
@@ -185,6 +186,37 @@ export async function removeRunWorktree({ checkout, path, staleLock = false, env
   return { ok: false, reason: firstLine(removed.stderr) || "git worktree remove failed" };
 }
 
+// Removes a directory that holds nothing; throws when it is not empty or cannot be removed.
+export function removeEmptyDir(dir) {
+  rmdirSync(dir);
+}
+
+// The paths a `git status --porcelain` lists, as the names of what a removal drops: the first ten, then how many more.
+export function droppedNames(porcelain) {
+  const paths = String(porcelain ?? "")
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => line.slice(3).replace(/^"(.*)"$/, "$1"));
+  const shown = paths.slice(0, DROPPED_NAMES_MAX).join(", ");
+  return paths.length > DROPPED_NAMES_MAX ? `${shown}, … and ${paths.length - DROPPED_NAMES_MAX} more` : shown;
+}
+
+// Removes a registered worktree with `git worktree remove --force` whatever its status, naming the uncommitted paths it drops; a lock held by a live session or set by hand keeps it. Only a settled close uses it, never the runner.
+export async function forceRemoveRunWorktree({ checkout, path, env = process.env, killImpl = killProcess } = {}) {
+  const listed = await linkedEntry(checkout, path, env);
+  if (listed.error) return { ok: false, reason: listed.error, dropped: "" };
+  if (!listed.entry) return { ok: false, reason: "git does not register it as a worktree of the checkout", dropped: "" };
+  const lock = lockState(listed.entry, killImpl);
+  const locked = lockReason(listed.entry, lock);
+  if (locked) return { ok: false, reason: locked, dropped: "" };
+  const status = await gitRead(["status", "--porcelain", "--untracked-files=all"], path, env);
+  const dropped = status.ok ? droppedNames(status.stdout) : "";
+  if (lock === "stale") await gitRead(["worktree", "unlock", path], checkout, env);
+  const removed = await runGitAsync({ args: ["worktree", "remove", "--force", path], cwd: checkout, env, timeoutMs: WORKTREE_REMOVE_TIMEOUT_MS });
+  if (removed.ok || isWorktreeGone(path)) return { ok: true, reason: null, dropped };
+  return { ok: false, reason: firstLine(removed.stderr) || "git worktree remove --force failed", dropped: "" };
+}
+
 // Tells whether the directory of a worktree is no longer on disk, so a racing removal that got there first is not reported as kept.
 function isWorktreeGone(path) {
   return typeof path === "string" && path !== "" && !existsSync(path);
@@ -225,8 +257,15 @@ export function finishNotice({ runNotice, rowNotice, worktree }) {
   return withKeptWorktree(hasRunNotice ? runNotice : rowNotice, worktree);
 }
 
-// The worktree a closed job's run recorded, removed when it is clean and published, else kept with its reason; null when the job has none. Never throws.
-export async function releaseJobWorktree({ job, env = process.env, killImpl = killProcess } = {}) {
+// The verdict of a forced removal: removed (naming what it dropped) or kept with the reason.
+async function forceRelease({ checkout, path, env, killImpl }) {
+  const removed = await forceRemoveRunWorktree({ checkout, path, env, killImpl });
+  if (!removed.ok) return unremovedVerdict(path, removed.reason);
+  return removed.dropped ? { path, status: "removed", dropped: removed.dropped } : { path, status: "removed" };
+}
+
+// The worktree a closed job's run recorded, removed when it is clean and published (or always with `force`, unless locked), else kept with its reason; null when the job has none. Never throws.
+export async function releaseJobWorktree({ job, env = process.env, killImpl = killProcess, force = false } = {}) {
   let path = null;
   try {
     if (typeof job?.project !== "string" || !job.project || typeof job?.slug !== "string" || !job.slug) return null;
@@ -238,6 +277,7 @@ export async function releaseJobWorktree({ job, env = process.env, killImpl = ki
     const prRecorded = isPrUrl(job.pr_url) || isPrUrl(state?.outcome?.prUrl);
     const inspected = await inspectRunWorktree({ checkout, path, prRecorded, env, killImpl });
     if (!inspected) return null;
+    if (force) return await forceRelease({ checkout, path, env, killImpl });
     if (!inspected.removable) return unremovedVerdict(path, inspected.reason);
     const removed = await removeRunWorktree({ checkout, path, staleLock: inspected.staleLock, env });
     return removed.ok ? { path, status: "removed" } : { path, status: "kept", reason: removed.reason };

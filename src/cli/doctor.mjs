@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { STORE_UNAVAILABLE_HINT, StoreUnavailableError } from "../config/errors.mjs";
 import {
   LEGACY_SHIM_NAME,
@@ -43,7 +43,7 @@ import { keepAwakeMode, resolveCaffeinateBin } from "../queue/keep-awake.mjs";
 import { findLostJobs, logOnlyTail, scanDisk } from "../queue/lost-rows.mjs";
 import { isRegistryFailure, killProcess, listRunnerRecords, liveRunnersReport, registryReadError } from "../queue/registry.mjs";
 import { closesSummary } from "../queue/close-view.mjs";
-import { canonicalPath, jobWorktreeOwners, lockState, parseWorktreeList } from "../queue/worktree.mjs";
+import { canonicalPath, droppedNames, jobWorktreeOwners, lockState, parseWorktreeList, removeEmptyDir, sameDir } from "../queue/worktree.mjs";
 import { compactStamp } from "../queue/runner.mjs";
 import { openStore, openStoreReadOnly, releaseHomeConnections, withReadOnlyStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -1181,16 +1181,25 @@ function projectsWithLegacyWorktrees(projects) {
     .filter((project) => isDirectory(project.dir));
 }
 
+// The worktrees at least one job names and only closed or cancelled jobs do, the ones `--fix` may force-remove; a worktree no job names is never in it.
+async function releasableWorktrees(store, env) {
+  const named = await store.jobs.listNamedJobs();
+  const jobs = Array.isArray(named) ? named : [];
+  const finished = (job) => job.status === "closed" || job.status === "cancelled";
+  const holding = jobWorktreeOwners(jobs.filter((job) => !finished(job)), env);
+  return new Set([...jobWorktreeOwners(jobs.filter(finished), env).keys()].filter((path) => !holding.has(path)));
+}
+
 // The worktrees a job that is not closed still names in the state of its run, canonical and mapped to that job; read through a read-only store only.
-async function ownedWorktrees(ctx) {
-  if (!existsSync(dbPath(ctx.env))) return { owners: new Map(), error: null };
+async function ownedWorktrees(ctx, { fix = false } = {}) {
+  if (!existsSync(dbPath(ctx.env))) return { owners: new Map(), releasable: new Set(), error: null };
   const store = openStoreReadOnly(ctx.env);
   try {
     const found = jobWorktreeOwners(await store.jobs.listOpenJobs(), ctx.env);
     const owners = new Map([...found].map(([path, owner]) => [path, owner.jobId]));
-    return { owners, error: null };
+    return { owners, releasable: fix ? await releasableWorktrees(store, ctx.env) : new Set(), error: null };
   } catch (err) {
-    return { owners: null, error: err?.message ?? String(err) };
+    return { owners: null, releasable: new Set(), error: err?.message ?? String(err) };
   } finally {
     await store.close();
   }
@@ -1320,17 +1329,75 @@ function homeLinks(ctx, { project, dirs, fix }) {
   return { commonDir, broken, failure, stillBroken };
 }
 
-// The row of one worktree directory of a project under the home.
-function homeRow(ctx, { project, dir, entries, owners, links, fix }) {
-  if (links.commonDir === null && existsSync(join(dir, ".git"))) return unreadableLinkCheck(project, dir);
-  if (links.broken.includes(dir)) return brokenLinkCheck(project, dir, { fix, failure: links.failure, holdsNow: !links.stillBroken.includes(dir) });
-  return leftoverCheck(ctx, { project, dir, entries, owners, legacy: false });
+// The row of a leftover `--fix` force-removed: what it dropped, or why git refused.
+function removeLeftover(ctx, { project, dir, entry, name }) {
+  const status = runCommand(ctx, "git", ["status", "--porcelain", "--untracked-files=all"], { cwd: dir });
+  const dropped = status.ok ? droppedNames(status.stdout) : "";
+  if (lockState(entry, ctx.killImpl ?? killProcess) === "stale") runCommand(ctx, "git", ["worktree", "unlock", dir], { cwd: project.path });
+  const removed = runCommand(ctx, "git", ["worktree", "remove", "--force", dir], { cwd: project.path });
+  if (!removed.ok) return check(name, "warn", `git worktree remove --force failed (${firstLine(removed.stderr) || `exit ${removed.status}`})`, `inspect ${shellQuote(dir)}`);
+  return check(name, "ok", `removed: left over, no open job owns it${dropped ? ` (dropped uncommitted: ${dropped})` : ""}`);
 }
 
-// The rows of the worktrees one project has under the home, the broken links repaired first with `--fix`.
-function homeProjectRows(ctx, { project, root, owners, fix }) {
+// Tells whether a directory holds nothing at all.
+function isEmptyDir(dir) {
+  try {
+    return readdirSync(dir).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+// The row of an orphaned empty directory `--fix` removed, or the warning when it could not.
+function removeEmptyOrphan(name, dir) {
+  try {
+    removeEmptyDir(dir);
+    return check(name, "ok", "removed: left over, orphaned and empty");
+  } catch (err) {
+    return check(name, "warn", `could not remove the empty directory (${err?.message ?? String(err)})`, `rm -rf ${shellQuote(dir)}`);
+  }
+}
+
+// What `--fix` makes of a home directory: an unregistered empty one is removed, a registered unlocked or stale-locked worktree is force-removed only when every job naming it is closed or cancelled; anything else keeps its row.
+function fixLeftover(ctx, { project, dir, entries, row, releasable }) {
+  const name = `worktree ${project.name}/${basename(dir)}`;
+  const entry = entries.find((candidate) => canonicalPath(candidate.path) === canonicalPath(dir));
+  if (!entry) return row?.status === "warn" && isEmptyDir(dir) ? removeEmptyOrphan(name, dir) : row;
+  if (!releasable.has(canonicalPath(dir))) return row;
+  const lock = lockState(entry, ctx.killImpl ?? killProcess);
+  return lock === "none" || lock === "stale" ? removeLeftover(ctx, { project, dir, entry, name }) : row;
+}
+
+// The row of one worktree directory of a project under the home.
+function homeRow(ctx, { project, dir, entries, owners, releasable, links, fix }) {
+  if (links.commonDir === null && existsSync(join(dir, ".git"))) return unreadableLinkCheck(project, dir);
+  if (links.broken.includes(dir)) return brokenLinkCheck(project, dir, { fix, failure: links.failure, holdsNow: !links.stillBroken.includes(dir) });
+  const row = leftoverCheck(ctx, { project, dir, entries, owners, legacy: false });
+  return fix ? fixLeftover(ctx, { project, dir, entries, row, releasable }) : row;
+}
+
+// With `--fix`, prunes the entries git registers under the project's home directory whose directory is gone and no open job owns, one row each.
+function pruneGoneRows(ctx, { project, root, owners }) {
+  const listed = runCommand(ctx, "git", ["worktree", "list", "--porcelain"], { cwd: project.path });
+  if (!listed.ok) return [];
+  const gone = parseWorktreeList(listed.stdout).filter(
+    (entry) => entry.prunable !== null && !existsSync(entry.path) && sameDir(dirname(entry.path), root) && !owners.has(canonicalPath(entry.path)),
+  );
+  if (!gone.length) return [];
+  const pruned = runCommand(ctx, "git", ["worktree", "prune"], { cwd: project.path });
+  const failure = `git worktree prune failed (${firstLine(pruned.stderr) || `exit ${pruned.status}`})`;
+  return gone.map((entry) => {
+    const name = `worktree ${project.name}/${basename(entry.path)}`;
+    return pruned.ok ? check(name, "ok", "pruned: registered in git but its directory is gone") : check(name, "warn", failure, `git -C ${shellQuote(project.path)} worktree prune`);
+  });
+}
+
+// The rows of the worktrees one project has under the home, the broken links repaired and the leftovers cleared first with `--fix`.
+function homeProjectRows(ctx, { project, root, owners, releasable, fix }) {
+  const pruned = fix ? pruneGoneRows(ctx, { project, root, owners }) : [];
   const links = homeLinks(ctx, { project, dirs: worktreeDirsOrNone(root), fix });
-  return scanWorktreeDir(ctx, { project, root, rowOf: (dir, entries) => homeRow(ctx, { project, dir, entries, owners, links, fix }) });
+  const rows = scanWorktreeDir(ctx, { project, root, rowOf: (dir, entries) => homeRow(ctx, { project, dir, entries, owners, releasable, links, fix }) });
+  return [...pruned, ...rows];
 }
 
 // Reports every project directory under a directory of the home: the rows of a registered project, one warning for an id no project with a checkout has.
@@ -1344,8 +1411,8 @@ function scanHomeRoot({ base, projects, label, rowsOf }) {
 }
 
 // Reports every project directory under the home's worktrees.
-function checkHomeWorktrees(ctx, { projects, owners, fix }) {
-  return scanHomeRoot({ base: worktreesDir(ctx.env), projects, label: "worktrees", rowsOf: (project, root) => homeProjectRows(ctx, { project, root, owners, fix }) });
+function checkHomeWorktrees(ctx, { projects, owners, releasable, fix }) {
+  return scanHomeRoot({ base: worktreesDir(ctx.env), projects, label: "worktrees", rowsOf: (project, root) => homeProjectRows(ctx, { project, root, owners, releasable, fix }) });
 }
 
 // Reports the QA worktrees the operator left under the home; no job ever owns one, so each is a leftover.
@@ -1364,14 +1431,14 @@ async function checkWorktreeLeftovers(ctx, values) {
   const projects = await checkoutsOrNone(ctx);
   const legacy = projectsWithLegacyWorktrees(projects);
   if (!legacy.length && !hasHomeWorktrees(ctx.env)) return [];
-  const owned = await ownedWorktrees(ctx);
+  const owned = await ownedWorktrees(ctx, { fix: values.fix === true });
   if (owned.error !== null) {
     return [check("worktrees", "warn", `the queue cannot be read (${owned.error}), so the owner of a worktree is unknown`, `inspect ${dbPath(ctx.env)}`)];
   }
   const legacyRows = legacy.flatMap((project) =>
     scanWorktreeDir(ctx, { project, root: project.dir, rowOf: (dir, entries) => leftoverCheck(ctx, { project, dir, entries, owners: owned.owners, legacy: true }) }),
   );
-  return [...legacyRows, ...checkHomeWorktrees(ctx, { projects, owners: owned.owners, fix: values.fix === true }), ...checkOperatorQa(ctx, { projects })];
+  return [...legacyRows, ...checkHomeWorktrees(ctx, { projects, owners: owned.owners, releasable: owned.releasable, fix: values.fix === true }), ...checkOperatorQa(ctx, { projects })];
 }
 
 // Reason the registry could not answer, short enough for a report line.

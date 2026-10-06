@@ -489,6 +489,19 @@ closed without merge ends the close by cancelling the job, one merged by hand is
 `merged outside a close`, and the settle step accepts the job's proposed decisions in the same write that closes it. Inside a job
 it is refused, like the CLI (see [Queue](queue.md#closing-a-job)).
 
+Worktree disposal after a merged close: the settle step removes the job's worktree with
+`git worktree remove --force` whatever its status (uncommitted changes, an unpushed branch),
+because the pull request is merged and the work is done; the branch is kept. The one exception is
+a lock held by a live session or set by hand: the worktree is kept with the lock reason. The
+status is read once before the removal and what it drops is named in the close line and in the
+settle step's `worktree` entry: `worktree removed: <path> (dropped uncommitted: a, b, c)` (at
+most 10 names, then `, … and N more`); a clean removal stays `worktree removed: <path>`. The
+runner's `done` path and a cancel are unchanged: a dirty or unpushed worktree is kept with its
+reason. `nightqueue doctor --fix` also force-removes a home worktree whose every owning job is `closed`
+or `cancelled` (naming what it dropped; one no job names stays listed), prunes an entry git registers whose directory is gone, and removes an
+orphaned empty directory; an orphaned directory with content is only listed with its `rm -rf`
+command. This reopens decision D-27 (a worktree with uncommitted work is never removed).
+
 The conflict step is the one place a close runs an agent. When the rebase stops on conflicts
 that code finds eligible (no `--force`, a `scripts.test`, no risk-list or generated file, markers
 in every file, at most 12 hunks in 6 files summed over every stop, at least 60 s of merger time
