@@ -10,8 +10,8 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const MANIFEST = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const PACKED_DIRS = ["bin", "src", "plugin", ".claude-plugin"];
 const DEV_PREFIXES = ["test/", "test-support/", "docs/", "scripts/", ".claude/", ".github/", "studio/src/"];
-// Raised from 2 MiB to 2.5 MiB for the D-55 integrations providers (src/integrations/), then to 3.5 MiB for the built studio (studio/dist, about 0.75 MiB).
-const MAX_UNPACKED_BYTES = 3.5 * 1024 * 1024;
+// Raised from 2 MiB to 2.5 MiB for the D-55 integrations providers (src/integrations/), to 3.5 MiB for the built studio (studio/dist), then to 4.5 MiB once the studio carried xterm.js (studio/dist about 1.3 MiB).
+const MAX_UNPACKED_BYTES = 4.5 * 1024 * 1024;
 
 // Description of the tarball npm would publish, or null when npm is not installed on this machine.
 function packedTarball() {
