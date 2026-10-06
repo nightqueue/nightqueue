@@ -116,9 +116,9 @@ function setLeaseAge(env, id, seconds) {
   openDb(env).prepare(`UPDATE jobs SET lease_until = datetime('now', '-${seconds} seconds') WHERE id = ?`).run(id);
 }
 
-// Moves the start of a job into the past, which is how its hard ceiling is made to expire.
+// Moves the start of a job's current attempt into the past, which is how its hard ceiling is made to expire.
 function setStartAge(env, id, seconds) {
-  openDb(env).prepare(`UPDATE jobs SET started_at = datetime('now', '-${seconds} seconds') WHERE id = ?`).run(id);
+  openDb(env).prepare(`UPDATE jobs SET attempt_started_at = datetime('now', '-${seconds} seconds') WHERE id = ?`).run(id);
 }
 
 test("a lease that expires while its owner is ALIVE never gives a second real runner a second child", async (t) => {

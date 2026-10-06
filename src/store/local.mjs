@@ -114,6 +114,7 @@ function jobsMethods(env, db) {
     finishJob: async (id, outcome) => jobs.finishJob(id, outcome, env),
     fillFinishGaps: async (id, spec) => jobs.fillFinishGaps(id, spec, env),
     fillSessionFacts: async (id, spec) => jobs.fillSessionFacts(id, spec, env),
+    recordAttemptMeasures: async (id, spec) => jobs.recordAttemptMeasures(id, spec, env),
     cancelJob: async (id, options) => jobs.cancelJob(id, options, env),
     cancelRunningJob: async (id, spec) => jobs.cancelRunningJob(id, spec, env),
     listCloseCandidates: async () => jobs.listCloseCandidates(env, db()),

@@ -11,7 +11,7 @@ import { ALL_PROJECTS } from "../memory/issues.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog } from "../queue/follow.mjs";
-import { blockedOf, formatTokens, lastCell } from "../queue/last-cell.mjs";
+import { blockedOf, compactTokens, formatTokens, lastCell } from "../queue/last-cell.mjs";
 import { jobStatusReader, narrateJob, readingLog } from "../queue/narrated-tail.mjs";
 import { pauseQueue, resumeQueue } from "../queue/pause.mjs";
 import {
@@ -526,12 +526,9 @@ function fit(text, width) {
   return width <= 3 ? value.slice(0, width) : `${value.slice(0, width - 3)}...`;
 }
 
-// How long a job ran: since its start while it runs, start to finish once it stopped, nothing before it started.
-function formatDurationCell(job, nowMs) {
-  const startedMs = Date.parse(String(job.started_at ?? ""));
-  if (!Number.isFinite(startedMs)) return "-";
-  const finishedMs = Date.parse(String(job.finished_at ?? ""));
-  return formatDuration((Number.isFinite(finishedMs) ? finishedMs : nowMs) - startedMs);
+// How long a job ran: the active time of every attempt summed, the running one up to the read, nothing before it started.
+function formatDurationCell(job) {
+  return Number.isFinite(job.active_s) ? formatDuration(job.active_s * 1000) : "-";
 }
 
 // The pull request of a job as its plain URL plus its derived state: terminals turn a bare URL into a link on their own, which an escape sequence cannot count on.
@@ -550,7 +547,7 @@ function rowCells(job, nowMs) {
   return {
     id: jobRef(job.id),
     status: statusCellOf(job, nowMs),
-    duration: formatDurationCell(job, nowMs),
+    duration: formatDurationCell(job),
     tokens: formatTokens(job),
     project: String(job.project),
     last: lastCell(job),
@@ -616,22 +613,65 @@ function formatLive(job) {
   return ["live", ...Object.entries(job.live).map(([key, value]) => `  ${key.padEnd(16)} ${value !== null && typeof value === "object" ? JSON.stringify(value) : value}`)];
 }
 
-// The fields the detail view prints as blocks of their own instead of one key/value line.
-const DETAIL_BLOCK_KEYS = new Set(["notice_md", "run_notice", "close", "live"]);
+// The outcome of one attempt as the detail prints it: `running` while open, the exit reason in parentheses when there is one.
+function attemptOutcome(attempt) {
+  if (!attempt.finished_at) return "running";
+  const outcome = attempt.outcome ?? "ended";
+  return attempt.exit_reason ? `${outcome} (${attempt.exit_reason})` : outcome;
+}
 
-// The text one detail field prints: the origin as `<kind> <ref>`, any other value as it is.
-function detailValue(key, value) {
-  return key === "origin" ? originLabel(value) : value;
+// The duration of one attempt: its own once closed, its elapsed time so far while open.
+function attemptDuration(attempt, nowMs) {
+  if (Number.isFinite(attempt.duration_s)) return formatDuration(attempt.duration_s * 1000);
+  return formatDuration(nowMs - Date.parse(String(attempt.started_at ?? "")));
+}
+
+// One line of the attempts block: ordinal, start, duration, outcome, inner spawns, tokens, cost and its marks.
+function attemptLine(attempt, nowMs) {
+  const parts = [
+    `#${attempt.attempt}`,
+    attempt.started_at ?? "-",
+    attemptDuration(attempt, nowMs),
+    attemptOutcome(attempt),
+    attempt.spawns > 1 ? `${attempt.spawns} spawns` : null,
+    `in ${compactTokens(attempt.tokens_in)} out ${compactTokens(attempt.tokens_out)}`,
+    Number.isFinite(attempt.cost_usd) ? `$${attempt.cost_usd.toFixed(2)}` : null,
+    attempt.fresh ? "fresh" : null,
+    attempt.backfilled ? "backfilled" : null,
+  ];
+  return `  ${parts.filter(Boolean).join("  ")}`;
+}
+
+// The attempts block of a job: the count of its claims, then one line per attempt; nothing for a view without attempts.
+function formatAttempts(job, nowMs = Date.now()) {
+  const attempts = Array.isArray(job.attempts_log) ? job.attempts_log : [];
+  if (attempts.length === 0) return [];
+  const title = `${"attempts_log".padEnd(16)}${attempts.length} attempt${attempts.length === 1 ? "" : "s"}`;
+  return [title, ...attempts.map((attempt) => attemptLine(attempt, nowMs))];
+}
+
+// The fields the detail view prints as blocks of their own instead of one key/value line.
+const DETAIL_BLOCK_KEYS = new Set(["notice_md", "run_notice", "close", "live", "attempts_log"]);
+
+const DURATION_KEYS = new Set(["active_s", "wall_s"]);
+
+// The text one detail field prints: the origin as `<kind> <ref>`, the retry budget counter against its ceiling, a duration readable, any other value as it is.
+function detailValue(key, value, job) {
+  if (key === "origin") return originLabel(value);
+  if (key === "attempts") return `${value} / ${job.max_attempts ?? "?"} (budget counter: inner retries count)`;
+  if (DURATION_KEYS.has(key) && Number.isFinite(value)) return `${formatDuration(value * 1000)} (${value} s)`;
+  return value;
 }
 
 // Detail block of a single job, one field per line, with the reason it stopped spelled out instead of dumped on one line.
 function formatDetail(job) {
   const fields = Object.entries(job)
     .filter(([key, value]) => !DETAIL_BLOCK_KEYS.has(key) && value !== null && value !== undefined)
-    .map(([key, value]) => `${key.padEnd(15)} ${detailValue(key, value)}`);
+    .map(([key, value]) => `${key.padEnd(15)} ${detailValue(key, value, job)}`);
   const at = fields.findIndex((line) => line.startsWith("status".padEnd(16)));
   const suggestion = closeSuggestion([job]);
   const extra = [
+    ...formatAttempts(job),
     ...closeChecklistLines(job),
     ...formatBlocked(job),
     ...formatLive(job),

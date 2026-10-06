@@ -31,7 +31,7 @@ test("doctor on a v18 home names the pending v19 migration and does not migrate"
   assert.ok(projects, "no projects check");
   assert.doesNotMatch(projects.detail, /no such column/, `doctor leaked a SQL error: ${projects.detail}`);
   assert.match(projects.detail, /v18/);
-  assert.match(projects.detail, /v22/);
+  assert.match(projects.detail, /v23/);
 
   const db = openDbReadOnly(host.env, { anySchema: true });
   try {

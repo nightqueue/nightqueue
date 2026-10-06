@@ -11,6 +11,7 @@ import {
   withFullSync,
   withWriteRetry,
 } from "./db.mjs";
+import { applyMeasures, attachAttemptRows, attemptViewKeys, closeOpenAttempt, countSpawn, noteAttemptSession, openAttempt, settleMeasures } from "./attempts.mjs";
 import { refuseMissingJob } from "./job-row.mjs";
 import { proposalsOfJob } from "./decisions.mjs";
 import { decisionRef, jobRef } from "./refs.mjs";
@@ -32,7 +33,7 @@ export const ORPHAN_PREDICATE =
      OR datetime(lease_until) < datetime('now', '-${LEASE_GRACE_S} seconds'))`;
 
 const LEASE_EXPRESSION = `datetime('now', '+' || (timeout_s + ${LEASE_SLACK_S}) || ' seconds')`;
-const HARD_CEILING_OPEN = `datetime(started_at, '+' || (timeout_s + ${LEASE_SLACK_S}) || ' seconds') > datetime('now')`;
+const HARD_CEILING_OPEN = `datetime(attempt_started_at, '+' || (timeout_s + ${LEASE_SLACK_S}) || ' seconds') > datetime('now')`;
 
 const JOB_VIEW_COLUMNS = [
   "id",
@@ -69,7 +70,7 @@ const JOB_VIEW_COLUMNS = [
   "close_status",
   "close_worker",
 ];
-const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "finished_at", "lease_until", "not_before", "close_lease_until"];
+const JOB_VIEW_TIMESTAMPS = ["created_at", "started_at", "attempt_started_at", "finished_at", "lease_until", "not_before", "close_lease_until"];
 const JOB_VIEW_TRUNCATED = ["notice_md", "result"];
 const TRUNCATION_FLAGS = { notice_md: "notice_truncated", result: "result_truncated" };
 // Host-command counters the view omits at zero, the same way a null one is left out: a regression shows only once there is one to show.
@@ -188,7 +189,7 @@ export function jobView(row, { full = false } = {}) {
   }
   view.close = parseCloseColumn(row.close);
   view.origin = parseOriginColumn(row.origin);
-  return view;
+  return Object.assign(view, attemptViewKeys(row));
 }
 
 // The close checklist of a row as an object, or null when there is none or it is not a JSON object.
@@ -297,7 +298,8 @@ function openJobForRun(db, { projectId, slug }) {
 const CLAIM_ASSIGNMENT = `SET status = 'running',
             worker = ?,
             attempts = attempts + 1,
-            started_at = datetime('now'),
+            started_at = COALESCE(started_at, datetime('now')),
+            attempt_started_at = datetime('now'),
             lease_until = ${LEASE_EXPRESSION},
             blocked_code = NULL`;
 // A job parked by a rate limit is pending but not claimable yet: it comes back into scope by itself at the instant the limit resets.
@@ -320,7 +322,19 @@ export function claimNextJob({ worker, cap } = {}, env = process.env) {
         ${ceiling.sql}
       RETURNING *`,
   );
-  return withProjectFacts(db, withWriteRetry(() => statement.get(requireText("worker", worker), ...ceiling.values)) ?? null);
+  const values = [requireText("worker", worker), ...ceiling.values];
+  return withProjectFacts(db, claimWithAttempt(db, () => statement.get(...values)));
+}
+
+// Runs a claim and opens its attempt row in one transaction; the claimed row carries the attempt's ordinal as `claim_attempt`, or null when nothing was claimed.
+function claimWithAttempt(db, claim) {
+  return inTransaction(db, () => {
+    const row = claim();
+    if (!row) return null;
+    row.claim_attempt = openAttempt(db, row);
+    row.next_attempt_fresh = null;
+    return row;
+  });
 }
 
 // Claims one specific job, refusing in the same WHERE when it is not pending or the ceiling is full.
@@ -335,7 +349,8 @@ export function claimJobById(id, { worker, cap } = {}, env = process.env) {
         ${ceiling.sql}
       RETURNING *`,
   );
-  return withProjectFacts(db, withWriteRetry(() => statement.get(requireText("worker", worker), requireId(id), ...ceiling.values)) ?? null);
+  const values = [requireText("worker", worker), requireId(id), ...ceiling.values];
+  return withProjectFacts(db, claimWithAttempt(db, () => statement.get(...values)));
 }
 
 // The ceiling clause of a claim and the value it binds; a claim with no ceiling carries no clause and binds nothing.
@@ -354,33 +369,49 @@ function requireCap(cap) {
 
 // Puts a claimed job back in the queue without spending the attempt, recording why it came back; `blockedCode` is written
 // as given, never merged with what was there, so a release with no code of its own always clears a stale one from a prior attempt.
-export function releaseJob(id, { worker, result, blockedCode } = {}, env = process.env) {
-  const statement = openDb(env).prepare(
+export function releaseJob(id, { worker, result, blockedCode, usage, hostCommands, orchestrator } = {}, env = process.env) {
+  const db = openDb(env);
+  const statement = db.prepare(
     `UPDATE jobs
         SET status = 'pending',
             worker = NULL,
             lease_until = NULL,
-            started_at = NULL,
+            attempt_started_at = NULL,
             attempts = MAX(0, attempts - 1),
             result = COALESCE(?, result),
             blocked_code = ?
       WHERE id = ? AND status = 'running' AND worker = ?`,
   );
-  const changed = withWriteRetry(() =>
-    statement.run(toJsonText(result), optionalText(blockedCode), requireId(id), requireText("worker", worker)),
-  );
-  return changed.changes === 1;
+  const code = optionalText(blockedCode);
+  const values = [toJsonText(result), code, requireId(id), requireText("worker", worker)];
+  const exitReason = code ?? (result?.interrupted === true ? "interrupted" : null);
+  return endClaim(db, {
+    id: values[2],
+    move: () => statement.run(...values),
+    attemptEnd: { outcome: "released", exitReason },
+    measures: { usage, hostCommands, orchestrator },
+  });
+}
+
+// Moves a claimed row out of `running`, then closes its attempt row and applies the attempt's measures, all in one transaction; false when the row was not this worker's.
+function endClaim(db, { id, move, attemptEnd, measures }) {
+  return inTransaction(db, () => {
+    if (move().changes !== 1) return false;
+    settleMeasures(db, id, closeOpenAttempt(db, id, attemptEnd), measures);
+    return true;
+  });
 }
 
 // Stops a claimed job at a gate on a preflight block, giving the attempt back; `blocked_code` marks the gate a retry answers with no note.
-export function gatePreflightJob(id, { worker, code, message, noticeMd } = {}, env = process.env) {
-  const statement = openDb(env).prepare(
+export function gatePreflightJob(id, { worker, code, message, noticeMd, usage, hostCommands, orchestrator } = {}, env = process.env) {
+  const db = openDb(env);
+  const statement = db.prepare(
     `UPDATE jobs
         SET status = 'gate',
             finished_at = datetime('now'),
             worker = NULL,
             lease_until = NULL,
-            started_at = NULL,
+            attempt_started_at = NULL,
             not_before = NULL,
             attempts = MAX(0, attempts - 1),
             result = ?,
@@ -391,26 +422,37 @@ export function gatePreflightJob(id, { worker, code, message, noticeMd } = {}, e
   const blockCode = requireText("blocked_code", code);
   const result = toJsonText({ blocked: { code: blockCode, message: optionalText(message) } });
   const values = [result, requireText("notice_md", noticeMd), blockCode, requireId(id), requireText("worker", worker)];
-  return withWriteRetry(() => statement.run(...values)).changes === 1;
+  return endClaim(db, {
+    id: values[3],
+    move: () => statement.run(...values),
+    attemptEnd: { outcome: "gate", exitReason: blockCode },
+    measures: { usage, hostCommands, orchestrator },
+  });
 }
 
 // Parks a claimed job on the instant a rate limit resets: it goes back to the queue without spending the attempt and is out of every claim until then.
-export function parkJob(id, { worker, notBefore, result } = {}, env = process.env) {
+export function parkJob(id, { worker, notBefore, result, usage, hostCommands, orchestrator } = {}, env = process.env) {
   const due = isoToSqlite(notBefore);
   if (due === null) throw new UserError(`invalid \`notBefore\` \`${String(notBefore)}\`; expected an instant the job may be claimed again at`);
-  const statement = openDb(env).prepare(
+  const db = openDb(env);
+  const statement = db.prepare(
     `UPDATE jobs
         SET status = 'pending',
             worker = NULL,
             lease_until = NULL,
-            started_at = NULL,
+            attempt_started_at = NULL,
             attempts = MAX(0, attempts - 1),
             not_before = ?,
             result = COALESCE(?, result)
       WHERE id = ? AND status = 'running' AND worker = ?`,
   );
-  const changed = withWriteRetry(() => statement.run(due, toJsonText(result), requireId(id), requireText("worker", worker)));
-  return changed.changes === 1;
+  const values = [due, toJsonText(result), requireId(id), requireText("worker", worker)];
+  return endClaim(db, {
+    id: values[2],
+    move: () => statement.run(...values),
+    attemptEnd: { outcome: "released", exitReason: "rate_limited" },
+    measures: { usage, hostCommands, orchestrator },
+  });
 }
 
 // Re-arms the lease of a job this worker still owns; false means the row moved on and the runner must stop.
@@ -422,14 +464,19 @@ export function renewLease(id, { worker } = {}, env = process.env) {
   return changed.changes === 1;
 }
 
-// Spends one attempt of a job this worker still owns, at the start of every retry of the loop.
+// Spends one attempt of a job this worker still owns, at the start of every retry of the loop, counting the re-spawn on the claim's attempt row.
 export function countAttempt(id, { worker } = {}, env = process.env) {
-  const statement = openDb(env).prepare(
+  const db = openDb(env);
+  const statement = db.prepare(
     `UPDATE jobs SET attempts = attempts + 1, lease_until = ${LEASE_EXPRESSION}
       WHERE id = ? AND status = 'running' AND worker = ?`,
   );
-  const changed = withWriteRetry(() => statement.run(requireId(id), requireText("worker", worker)));
-  return changed.changes === 1;
+  const values = [requireId(id), requireText("worker", worker)];
+  return inTransaction(db, () => {
+    if (statement.run(...values).changes !== 1) return false;
+    countSpawn(db, values[0]);
+    return true;
+  });
 }
 
 // Liveness seam of the sweep by default: without an implementation nothing is protected from recycling.
@@ -451,11 +498,21 @@ function excludeIdsClause(ids) {
   return ids.length ? ` AND id NOT IN (${ids.map(() => "?").join(", ")})` : "";
 }
 
+// The statement that closes, as lost, the open attempt rows of the orphans a sweep is about to move, each ending at its last lease renewal.
+function closeOrphanAttempts(exclude) {
+  const lastRenewal = `CASE WHEN j.lease_until IS NULL THEN datetime('now')
+      ELSE MIN(datetime('now'), datetime(j.lease_until, '-' || (j.timeout_s + ${LEASE_SLACK_S}) || ' seconds')) END`;
+  return `UPDATE job_attempts
+      SET outcome = 'lost', exit_reason = 'orphaned',
+          finished_at = (SELECT MAX(job_attempts.started_at, ${lastRenewal}) FROM jobs AS j WHERE j.id = job_attempts.job_id)
+    WHERE finished_at IS NULL AND job_id IN (SELECT id FROM jobs WHERE ${ORPHAN_PREDICATE}${exclude})`;
+}
+
 // Requeues every job whose runner died, failing the ones that already spent their own max_attempts.
 export function sweepOrphans(env = process.env, { liveWorkerImpl = neverLive } = {}) {
   const db = openDb(env);
   const protectable = db.prepare(
-    `SELECT id, worker FROM jobs WHERE ${ORPHAN_PREDICATE} AND started_at IS NOT NULL AND ${HARD_CEILING_OPEN}`,
+    `SELECT id, worker FROM jobs WHERE ${ORPHAN_PREDICATE} AND attempt_started_at IS NOT NULL AND ${HARD_CEILING_OPEN}`,
   );
   return inTransaction(db, () => {
     const guarded = protectable.all().filter((row) => isLiveWorker(liveWorkerImpl, row.worker)).map((row) => row.id);
@@ -466,13 +523,15 @@ export function sweepOrphans(env = process.env, { liveWorkerImpl = neverLive } =
               finished_at = datetime('now'),
               worker = NULL,
               lease_until = NULL,
+              attempt_started_at = NULL,
               result = '{"orphaned":true}'
         WHERE ${ORPHAN_PREDICATE} AND attempts >= max_attempts${exclude}`,
     );
     const requeue = db.prepare(
-      `UPDATE jobs SET status = 'pending', worker = NULL, lease_until = NULL, started_at = NULL
+      `UPDATE jobs SET status = 'pending', worker = NULL, lease_until = NULL, attempt_started_at = NULL
         WHERE ${ORPHAN_PREDICATE}${exclude}`,
     );
+    db.prepare(closeOrphanAttempts(exclude)).run(...guarded);
     return { failed: fail.run(...guarded).changes, requeued: requeue.run(...guarded).changes };
   });
 }
@@ -481,7 +540,8 @@ export function sweepOrphans(env = process.env, { liveWorkerImpl = neverLive } =
 // attempt of the run's latest attempt (`lastSessionId`/`lastSessionAttempt`), overwritten every time a new one opens.
 // A slug another row of the project already holds writes nothing at all: two jobs never share one run directory.
 export function persistRunFacts(id, { worker, slug, sessionId, branch, lastSessionId, lastSessionAttempt } = {}, env = process.env) {
-  const statement = openDb(env).prepare(
+  const db = openDb(env);
+  const statement = db.prepare(
     `UPDATE jobs
         SET slug = COALESCE(?, slug),
             session_id = COALESCE(?, session_id),
@@ -492,20 +552,23 @@ export function persistRunFacts(id, { worker, slug, sessionId, branch, lastSessi
         AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM jobs AS other WHERE other.project_id = jobs.project_id AND other.slug = ? AND other.id <> jobs.id))`,
   );
   const runSlug = optionalText(slug);
-  const changed = withWriteRetry(() =>
-    statement.run(
-      runSlug,
-      optionalText(sessionId),
-      optionalText(branch),
-      optionalText(lastSessionId),
-      optionalNumber(lastSessionAttempt),
-      requireId(id),
-      requireText("worker", worker),
-      runSlug,
-      runSlug,
-    ),
-  );
-  return changed.changes === 1;
+  const session = optionalText(lastSessionId);
+  const values = [
+    runSlug,
+    optionalText(sessionId),
+    optionalText(branch),
+    session,
+    optionalNumber(lastSessionAttempt),
+    requireId(id),
+    requireText("worker", worker),
+    runSlug,
+    runSlug,
+  ];
+  return inTransaction(db, () => {
+    if (statement.run(...values).changes !== 1) return false;
+    noteAttemptSession(db, { jobId: values[5], worker: values[6], sessionId: session });
+    return true;
+  });
 }
 
 // The id of another job of the project already bound to this slug, or null when none is, whatever its status.
@@ -599,18 +662,26 @@ function verifyWitnessed(id, written, witness, env) {
   return false;
 }
 
-// Writes the terminal columns again, only on a row still running under the finishing worker (or none): a row that moved on, e.g. retried, is left alone.
+// Writes the terminal columns again and closes the open attempt row, only on a row still running under the finishing worker (or none): a row that moved on, e.g. retried, is left alone.
 function reapplyFinish(id, written, env) {
-  const statement = openDb(env).prepare(
+  const db = openDb(env);
+  const statement = db.prepare(
     `UPDATE jobs
         SET status = ?,
             pr_url = COALESCE(?, pr_url),
             finished_at = COALESCE(finished_at, ?),
             worker = NULL,
-            lease_until = NULL
-      WHERE id = ? AND status = 'running' AND (worker IS NULL OR worker = ?)`,
+            lease_until = NULL,
+            attempt_started_at = NULL
+      WHERE id = ? AND status = 'running' AND (worker IS NULL OR worker = ?)
+      RETURNING id`,
   );
-  withWriteRetry(() => statement.run(written.status, written.pr_url ?? null, written.finished_at ?? null, id, written.worker));
+  const values = [written.status, written.pr_url ?? null, written.finished_at ?? null, id, written.worker];
+  inTransaction(db, () => {
+    if (!statement.get(...values)) return;
+    const end = written.attemptEnd ?? finishedAttemptEnd(written.status, null);
+    closeOpenAttempt(db, id, { ...end, finishedAt: written.finished_at ?? null });
+  });
 }
 
 const FINISH_WITNESS = { columns: FINISH_COLUMNS, reapply: reapplyFinish };
@@ -627,36 +698,33 @@ function ensureDurable(id, written, witness, env) {
   }
 }
 
-// Closes a job with its outcome and links the pipeline run, in one transaction; false means the job was lost.
+const FINISHED_OUTCOMES = new Set(["done", "gate", "failed", "cancelled"]);
+
+// The outcome and exit reason a finish closes its attempt row with, read from the status and the result it writes.
+function finishedAttemptEnd(status, result) {
+  const run = result && typeof result === "object" ? result : {};
+  const timedOut = run.timedOut === true || run.idleTimedOut === true;
+  const outcome = status === "failed" && timedOut ? "timed_out" : FINISHED_OUTCOMES.has(status) ? status : "released";
+  if (run.timedOut === true) return { outcome, exitReason: "timeout" };
+  if (run.idleTimedOut === true) return { outcome, exitReason: "idle_timeout" };
+  return { outcome, exitReason: Number.isInteger(run.exitCode) ? `exit:${run.exitCode}` : null };
+}
+
+// Closes a job with its outcome, closes its attempt row and adds the attempt's measures to the totals, and links the pipeline run, in one transaction; false means the job was lost.
 export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, hostCommands, baselineCtx, orchestrator } = {}, env = process.env) {
   const db = openDb(env);
-  const tokens = usage ?? {};
-  const commands = hostCommands ?? {};
-  const orch = orchestrator ?? {};
   const statement = db.prepare(
     `UPDATE jobs
         SET status = ?,
             finished_at = datetime('now'),
             worker = NULL,
             lease_until = NULL,
+            attempt_started_at = NULL,
             not_before = NULL,
             result = COALESCE(?, result),
             pr_url = COALESCE(?, pr_url),
             notice_md = COALESCE(?, notice_md),
-            tokens_in = COALESCE(?, tokens_in),
-            tokens_out = COALESCE(?, tokens_out),
-            cache_read = COALESCE(?, cache_read),
-            cache_creation = COALESCE(?, cache_creation),
-            cost_usd = COALESCE(?, cost_usd),
-            bash_timeouts = COALESCE(?, bash_timeouts),
-            tasks_backgrounded = COALESCE(?, tasks_backgrounded),
-            tasks_killed = COALESCE(?, tasks_killed),
-            baseline_ctx = COALESCE(?, baseline_ctx),
-            orch_turns = COALESCE(?, orch_turns),
-            orch_reads = COALESCE(?, orch_reads),
-            orch_bash = COALESCE(?, orch_bash),
-            orch_bash_explore = COALESCE(?, orch_bash_explore),
-            orch_ctx_last = COALESCE(?, orch_ctx_last)
+            baseline_ctx = COALESCE(?, baseline_ctx)
       WHERE id = ? AND status = 'running' AND worker = ?
       RETURNING project_id, slug, status, pr_url, finished_at`,
   );
@@ -665,32 +733,23 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
     toJsonText(result),
     optionalText(prUrl),
     optionalText(noticeMd),
-    optionalNumber(tokens.tokensIn),
-    optionalNumber(tokens.tokensOut),
-    optionalNumber(tokens.cacheRead),
-    optionalNumber(tokens.cacheCreation),
-    optionalNumber(tokens.costUsd),
-    optionalNumber(commands.bashTimeouts),
-    optionalNumber(commands.tasksBackgrounded),
-    optionalNumber(commands.tasksKilled),
     optionalNumber(baselineCtx),
-    optionalNumber(orch.turns),
-    optionalNumber(orch.reads),
-    optionalNumber(orch.bash),
-    optionalNumber(orch.bashExplore),
-    optionalNumber(orch.ctxLast),
     requireId(id),
     requireText("worker", worker),
   ];
+  const attemptEnd = finishedAttemptEnd(values[0], result);
   const written = withFullSync(db, () =>
     inTransaction(db, () => {
       const row = statement.get(...values);
-      if (row) linkRun(db, id, row.project_id, row.slug);
-      return row ?? null;
+      if (!row) return null;
+      linkRun(db, id, row.project_id, row.slug);
+      const attempt = closeOpenAttempt(db, values[5], attemptEnd);
+      settleMeasures(db, values[5], attempt, { usage, hostCommands, orchestrator });
+      return row;
     }),
   );
   if (!written) return false;
-  ensureDurable(requireId(id), { ...written, worker }, FINISH_WITNESS, env);
+  ensureDurable(requireId(id), { ...written, worker, attemptEnd }, FINISH_WITNESS, env);
   return true;
 }
 
@@ -718,7 +777,8 @@ function requireAttempt(field, value) {
 // Fills the session facts of the attempt that announced them, only while the same claim still runs the row and never over a later attempt's session; false when it landed nowhere.
 export function fillSessionFacts(id, { worker, attempts, sessionId, lastSessionId, lastSessionAttempt } = {}, env = process.env) {
   const attempt = requireAttempt("lastSessionAttempt", lastSessionAttempt);
-  const statement = openDb(env).prepare(
+  const db = openDb(env);
+  const statement = db.prepare(
     `UPDATE jobs
         SET session_id = COALESCE(session_id, ?),
             last_session_id = ?,
@@ -726,18 +786,20 @@ export function fillSessionFacts(id, { worker, attempts, sessionId, lastSessionI
       WHERE id = ? AND status = 'running' AND worker = ? AND attempts = ?
         AND (last_session_attempt IS NULL OR last_session_attempt <= ?)`,
   );
-  const changed = withWriteRetry(() =>
-    statement.run(
-      optionalText(sessionId),
-      requireText("lastSessionId", lastSessionId),
-      attempt,
-      requireId(id),
-      requireText("worker", worker),
-      requireAttempt("attempts", attempts),
-      attempt,
-    ),
-  );
-  return changed.changes === 1;
+  const values = [
+    optionalText(sessionId),
+    requireText("lastSessionId", lastSessionId),
+    attempt,
+    requireId(id),
+    requireText("worker", worker),
+    requireAttempt("attempts", attempts),
+    attempt,
+  ];
+  return inTransaction(db, () => {
+    if (statement.run(...values).changes !== 1) return false;
+    noteAttemptSession(db, { jobId: values[3], worker: values[4], sessionId: values[1] });
+    return true;
+  });
 }
 
 // Explains, from the current row, why a cancel was refused; it never decides anything, only phrases it.
@@ -764,6 +826,7 @@ export function cancelJob(id, { reason } = {}, env = process.env) {
             operator_note = COALESCE(?, operator_note),
             worker = NULL,
             lease_until = NULL,
+            attempt_started_at = NULL,
             close_status = NULL,
             close_worker = NULL,
             close_lease_until = NULL
@@ -772,7 +835,12 @@ export function cancelJob(id, { reason } = {}, env = process.env) {
       RETURNING *, json_extract(result, '$.cancelledFrom') AS cancelled_from`,
   );
   const jobId = requireId(id);
-  const row = withWriteRetry(() => statement.get(optionalText(reason), jobId));
+  const note = optionalText(reason);
+  const row = inTransaction(db, () => {
+    const cancelled = statement.get(note, jobId);
+    if (cancelled) closeOpenAttempt(db, jobId, { outcome: "cancelled", exitReason: "orphaned" });
+    return cancelled;
+  });
   if (row) return { ...jobView(withProjectFacts(openDb(env), row)), cancelled_from: row.cancelled_from ?? null };
   throw new UserError(cancelRefusal(jobId, getJob(jobId, env)));
 }
@@ -789,13 +857,19 @@ export function cancelRunningJob(id, { worker, reason } = {}, env = process.env)
             attempts = MAX(0, attempts - 1),
             worker = NULL,
             lease_until = NULL,
+            attempt_started_at = NULL,
             close_status = NULL,
             close_worker = NULL,
             close_lease_until = NULL
       WHERE id = ? AND status = 'running' AND worker = ? AND close_status IS NOT 'closing'
       RETURNING *, json_extract(result, '$.cancelledFrom') AS cancelled_from`,
   );
-  const row = withWriteRetry(() => statement.get(optionalText(reason), requireId(id), requireText("worker", worker)));
+  const values = [optionalText(reason), requireId(id), requireText("worker", worker)];
+  const row = inTransaction(db, () => {
+    const cancelled = statement.get(...values);
+    if (cancelled) closeOpenAttempt(db, values[1], { outcome: "cancelled", exitReason: "stop" });
+    return cancelled;
+  });
   return row ? { ...jobView(withProjectFacts(openDb(env), row)), cancelled_from: row.cancelled_from ?? null } : null;
 }
 
@@ -823,7 +897,8 @@ function refuseRecoveredRetry(id, env) {
 }
 
 // Columns a `--fresh` retry gives up, so the next run starts from phase 0 with a worktree of its own.
-const RETRY_FRESH_COLUMNS = ", slug = NULL, branch = NULL, session_id = NULL, last_session_id = NULL, last_session_attempt = NULL";
+const RETRY_FRESH_COLUMNS =
+  ", slug = NULL, branch = NULL, session_id = NULL, last_session_id = NULL, last_session_attempt = NULL, next_attempt_fresh = 1";
 
 // Sends a gated, failed or cancelled job back to the queue; a gate a preflight block wrote (`blocked_code` set) needs no note
 // and keeps its attempts and the operator note it had, since that attempt was already given back; the decision is in the WHERE and a refusal writes nothing.
@@ -834,7 +909,6 @@ export function retryJob(id, { note, fresh } = {}, env = process.env) {
             status = 'pending',
             worker = NULL,
             lease_until = NULL,
-            started_at = NULL,
             finished_at = NULL,
             not_before = NULL,
             max_attempts = CASE WHEN status = 'gate' AND blocked_code IS NOT NULL THEN max_attempts
@@ -1127,7 +1201,8 @@ const JOB_WITH_ISSUE_TITLE = `SELECT jobs.*, COALESCE(
 
 // Returns the raw row of a job with its project facts and issue title, or null.
 export function getJob(id, env = process.env, db = openDb(env)) {
-  return withProjectFacts(db, db.prepare(`${JOB_WITH_ISSUE_TITLE} WHERE jobs.id = ?`).get(requireId(id)) ?? null);
+  const row = db.prepare(`${JOB_WITH_ISSUE_TITLE} WHERE jobs.id = ?`).get(requireId(id)) ?? null;
+  return withProjectFacts(db, row ? attachAttemptRows(db, [row])[0] : null);
 }
 
 const BLOCKED_GATE_PREDICATE = "status = 'gate' AND blocked_code IS NOT NULL";
@@ -1136,7 +1211,16 @@ const BLOCKED_GATE_PREDICATE = "status = 'gate' AND blocked_code IS NOT NULL";
 export function listJobs({ limit, blockedOnly } = {}, env = process.env, db = openDb(env)) {
   const clamped = optionalRangedInt("limit", limit, LIST_LIMIT_RANGE);
   const where = blockedOnly === true ? `WHERE ${BLOCKED_GATE_PREDICATE} ` : "";
-  return db.prepare(`${JOB_WITH_ISSUE_TITLE} ${where}ORDER BY jobs.id DESC LIMIT ?`).all(clamped).map((row) => withProjectFacts(db, row));
+  const rows = db.prepare(`${JOB_WITH_ISSUE_TITLE} ${where}ORDER BY jobs.id DESC LIMIT ?`).all(clamped);
+  return attachAttemptRows(db, rows).map((row) => withProjectFacts(db, row));
+}
+
+// Stores the measures of one attempt a writer other than its runner already closed (a cancel, a sweep, a replay after an outage), once; false when the row was measured already or is gone.
+export function recordAttemptMeasures(id, { attempt, usage, hostCommands, orchestrator } = {}, env = process.env) {
+  const jobId = requireId(id);
+  if (!Number.isInteger(attempt) || attempt <= 0) throw new UserError(`expected a positive integer \`attempt\`, got \`${String(attempt)}\``);
+  const db = openDb(env);
+  return inTransaction(db, () => applyMeasures(db, jobId, attempt, { usage, hostCommands, orchestrator }));
 }
 
 // Done jobs that carry a pull request url, the candidates `queue close --merged` may confirm and close.
@@ -1289,14 +1373,16 @@ const NEVER_REOPENED_BY_RETRY = `json_extract(${RESULT_OBJECT_BASE}, '$.retriedF
 
 // Restores a job from the witness its runner left on disk; it writes the row only, never the file, and never touches a job that already ended or that an operator just retried.
 export function repairJobFromWitness(id, terminal, env = process.env) {
-  const statement = openDb(env).prepare(
+  const db = openDb(env);
+  const statement = db.prepare(
     `UPDATE jobs
         SET result = json_set(${RESULT_OBJECT_BASE}, '$.repairedFrom', 'state.json'),
             status = ?,
             pr_url = COALESCE(?, pr_url),
             finished_at = COALESCE(?, finished_at),
             worker = NULL,
-            lease_until = NULL
+            lease_until = NULL,
+            attempt_started_at = NULL
       WHERE id = ? AND (status = 'running' OR (status = 'pending' AND ${NEVER_REOPENED_BY_RETRY}))`,
   );
   const values = [
@@ -1305,7 +1391,12 @@ export function repairJobFromWitness(id, terminal, env = process.env) {
     isoToSqlite(terminal?.finishedAt),
     requireId(id),
   ];
-  return withWriteRetry(() => statement.run(...values)).changes === 1;
+  const attemptEnd = { outcome: finishedAttemptEnd(values[0], null).outcome, finishedAt: values[2] };
+  return inTransaction(db, () => {
+    if (statement.run(...values).changes !== 1) return false;
+    closeOpenAttempt(db, values[3], attemptEnd);
+    return true;
+  });
 }
 
 // Rewrites the outcome of a job re-derived from its own log; only a gated or failed row moves, and a refusal writes nothing.

@@ -38,8 +38,13 @@ test("an orphan with attempts left goes back to pending with its attempts preser
   assert.deepEqual(sweepOrphans(env), { failed: 0, requeued: 1 });
   const row = getJob(id, env);
   assert.deepEqual(
-    { status: row.status, attempts: row.attempts, worker: row.worker, lease: row.lease_until, started: row.started_at },
-    { status: "pending", attempts: 2, worker: null, lease: null, started: null },
+    { status: row.status, attempts: row.attempts, worker: row.worker, lease: row.lease_until, attempt: row.attempt_started_at },
+    { status: "pending", attempts: 2, worker: null, lease: null, attempt: null },
+  );
+  assert.ok(row.started_at, "the sweep forgot the first start of the job");
+  assert.deepEqual(
+    row.attempt_rows.map((attempt) => ({ attempt: attempt.attempt, outcome: attempt.outcome, exit: attempt.exit_reason, spawns: attempt.spawns, open: attempt.finished_at === null })),
+    [{ attempt: 1, outcome: "lost", exit: "orphaned", spawns: 2, open: false }],
   );
   assert.deepEqual(sweepOrphans(env), { failed: 0, requeued: 0 }, "the sweep touched a job that is already pending");
 });

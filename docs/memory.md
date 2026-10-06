@@ -17,7 +17,7 @@ offset 60), so the refusal opens no connection and creates no `-wal`/`-shm`; onl
 write-ahead log holds frames not yet folded in is read through one short read-only connection.
 The migration copies the database to `nightqueue.db.pre-v<N>` (`VACUUM INTO`, never over an
 earlier copy) before its first step. The idempotent per-open steps below (indexes, full-text
-mirrors, the default org, the v21 columns) still run on every open of a CURRENT database, and
+mirrors, the default org, the v21 columns, the v23 columns and backfill) still run on every open of a CURRENT database, and
 write nothing there; they bring a database to the current schema only inside the migration.
 
 Schema v18 identifies orgs and projects by id instead of by name. A database
@@ -93,6 +93,23 @@ rules, rebuilds the search mirrors and drops the old tables. Refs (`NQ-12`), the
 `item_id` columns, the v21 columns and text written before are untouched. The same
 orphan check and live-lease refusal apply.
 
+Schema v23 gives a job its attempt history: the table `job_attempts`, one row per claim
+keyed by `(job_id, attempt)` - an ordinal that is never reused, independent of
+`jobs.attempts` - with the claim's `worker`, `session_id`, `started_at`, `finished_at`,
+`outcome`, `exit_reason`, `spawns`, tokens, `cost_usd` and the flags `measured`, `fresh` and
+`backfilled`; `job_id` references `jobs(id)` with cascade (a project purge deletes the
+project's jobs, so their rows go with them, and the purge's footprint counts them as
+`job_attempts`), and a partial unique index allows
+at most one open row (`finished_at IS NULL`) per job. It adds `jobs.attempt_started_at` (the
+start of the current claim, the anchor of the orphan ceiling) and `jobs.next_attempt_fresh`
+(set by `queue retry --fresh`, read by the next claim). The step
+(`src/memory/migration/v23.mjs`) is additive and idempotent like v21's, with no rebuild: it
+adds the two columns, records the last attempt of every job that already ran as one
+`backfilled` row from the job's own columns (a running job's row stays open and unmeasured,
+so its finish lands on it), and anchors `attempt_started_at` of a job running at that moment
+on its `started_at`; each write sits behind a read that finds nothing once it ran, so a
+second open writes nothing. `update` takes the usual `nightqueue.db.pre-v23` copy first.
+
 **A sick database degrades, it does not kill.** The file can break under a live process - a
 home on a network or FUSE mount, a copy taken by hand, a second sqlite opened on the live
 file. Every open and every store call classifies what SQLite throws by its numeric `errcode`
@@ -120,7 +137,7 @@ A database older than the build is the same class with the code `SCHEMA_OUTDATED
 `nightqueue update` and the message `database at v<file>, this nightqueue expects v<code>: run
 \`nightqueue update\``: the MCP tools answer it as `store-unavailable`, the SessionStart hook
 and the MCP server's startup print `nightqueue memory unavailable (SCHEMA_OUTDATED at <home>):
-database at v20, this nightqueue expects v22: run \`nightqueue update\``, and `doctor` names
+database at v20, this nightqueue expects v23: run \`nightqueue update\``, and `doctor` names
 `nightqueue update`. It is never an outage: the runner does not back off on it, it stops with
 the message, since waiting never brings an older schema up to date.
 

@@ -9,6 +9,7 @@ const { DatabaseSync } = await import("node:sqlite");
 const EXCEPTIONS = Object.freeze({
   "jobs.session_id": "a Claude Code session id: external, no table holds sessions",
   "jobs.last_session_id": "a Claude Code session id: external, no table holds sessions",
+  "job_attempts.session_id": "a Claude Code session id: external, no table holds sessions",
   "pipeline_runs.session_id": "a Claude Code session id: external, no table holds sessions",
 });
 
@@ -27,6 +28,7 @@ const EXPECTED = Object.freeze({
   "issues.job_id": "jobs(id) ON DELETE SET NULL",
   "issues.org_id": "orgs(id) ON DELETE RESTRICT",
   "issues.project_id": "projects(id) ON DELETE RESTRICT",
+  "job_attempts.job_id": "jobs(id) ON DELETE CASCADE",
   "jobs.project_id": "projects(id) ON DELETE RESTRICT",
   "lessons.project_id": "projects(id) ON DELETE RESTRICT",
   "memory.project_id": "projects(id) ON DELETE RESTRICT",

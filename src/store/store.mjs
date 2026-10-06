@@ -35,6 +35,7 @@
  * @property {(id: number, outcome: object) => Promise<boolean>} finishJob
  * @property {(id: number, spec: {status: string, noticeMd?: string|null, prUrl?: string|null}) => Promise<boolean>} fillFinishGaps fills the notice and the pull request a row already at `status` is missing, never moving its status; the replay of a queued finish the row already took by another path
  * @property {(id: number, spec: {worker: string, attempts: number, sessionId?: string|null, lastSessionId: string, lastSessionAttempt: number}) => Promise<boolean>} fillSessionFacts fills the session facts of one attempt while the same claim still runs the row, never rewinding a later attempt's session; the replay of a queued `session` record
+ * @property {(id: number, spec: {attempt: number, usage?: object|null, hostCommands?: object|null, orchestrator?: object|null}) => Promise<boolean>} recordAttemptMeasures stores the measures of one attempt another writer already closed and adds them to the job's totals, once; the late write of a cancelled, swept or outage-stopped attempt
  * @property {(id: number, options?: object) => Promise<object>} cancelJob
  * @property {(id: number, spec: {worker: string, reason?: string}) => Promise<object|null>} cancelRunningJob cancels a running job only while that worker still owns it; null when the row moved on
  * @property {() => Promise<object[]>} listCloseCandidates done jobs that carry a pull request url, the candidates `queue close --merged` may confirm and close
@@ -256,6 +257,7 @@ export const STORE_CONTRACT = Object.freeze({
     "finishJob",
     "fillFinishGaps",
     "fillSessionFacts",
+    "recordAttemptMeasures",
     "cancelJob",
     "cancelRunningJob",
     "listCloseCandidates",

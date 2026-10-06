@@ -105,7 +105,7 @@ test("a runner holding a live lease refuses the migration with one line and noth
   };
   const { env, fixture } = v17Home(t, "v18-live-lease", { seed: running("+1 hour") });
   assert.throws(() => migrateTestHome(env), (err) => LEASE_REFUSAL.test(err.message) && err.message.split("\n").length === 1);
-  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v17, this nightqueue expects v22: run `nightqueue update`/.test(err.message));
+  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v17, this nightqueue expects v23: run `nightqueue update`/.test(err.message));
   assert.equal(diskVersion(env), 17);
   assert.equal(existsSync(preV18BackupPath(env)), false, "a refused migration published a copy");
   assert.ok(readFileSync(dbPath(env)).equals(fixture), "a refused migration wrote to the database");
@@ -364,9 +364,12 @@ function seedProjectRows(db) {
   for (const [runId, seq, name] of [[1, 1, "triage"], [1, 2, "coder"], [2, 1, "triage"]]) phase.run(runId, seq, name);
 }
 
-// Every row of a table in id order, keyed by column, from a raw connection, without the v21 `origin` column a v17 row never had.
+// Every row of a table in id order, keyed by column, from a raw connection, without the v21 `origin` and v23 attempt columns a v17 row never had.
 function rowsOf(db, table) {
-  return db.prepare(`SELECT * FROM ${table} ORDER BY id`).all().map(({ origin: _origin, ...row }) => ({ ...row }));
+  return db
+    .prepare(`SELECT * FROM ${table} ORDER BY id`)
+    .all()
+    .map(({ origin: _origin, attempt_started_at: _attemptStartedAt, next_attempt_fresh: _nextAttemptFresh, ...row }) => ({ ...row }));
 }
 
 // The rows of a v18 table with their owner id swapped for the name it resolves to, the shape a v17 table had.

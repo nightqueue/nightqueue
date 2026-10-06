@@ -10,6 +10,7 @@ const OWN_DECISIONS = "SELECT id FROM decisions WHERE project_id = ?";
 const DEPENDENT_COUNTS = [
   ["pipeline_phases", "SELECT COUNT(*) AS n FROM pipeline_phases WHERE run_id IN (SELECT id FROM pipeline_runs WHERE project_id = ?)"],
   ["project_key_aliases", "SELECT COUNT(*) AS n FROM project_key_aliases WHERE project_id = ?"],
+  ["job_attempts", "SELECT COUNT(*) AS n FROM job_attempts WHERE job_id IN (SELECT id FROM jobs WHERE project_id = ?)"],
 ];
 
 // The comments the project wrote on items it does not own: the append-only guard keeps them while their item exists.

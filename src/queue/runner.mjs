@@ -48,9 +48,11 @@ import {
   extractUsage,
   isPrUrl,
   sawDisabledBackgroundTask,
+  sessionBaselines,
   sumHostCommandCounts,
   sumOrchestratorCounts,
   sumUsage,
+  unpricedSessions,
 } from "./stream.mjs";
 import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
 import { resolveWindow, windowPhase } from "./window.mjs";
@@ -407,11 +409,18 @@ function attemptOrchestratorRoots(log, env) {
 }
 
 // Records what one attempt's stream measured: its tokens, its host commands, its orchestrator's activity and, on the first fresh (not resumed) attempt, the orchestrator's baseline context.
-function tallyAttempt(tally, log, ctx, { resumed = false } = {}) {
+function tallyAttempt(tally, log, ctx, { resumed = false, baselines = null } = {}) {
   if (tally.baselineCtx === null && !resumed) tally.baselineCtx = extractBaselineCtx(log);
-  tally.usages.push(extractUsage(log));
+  tally.usages.push(extractUsage(log, { baselines }));
   tally.hostCommands.push(extractHostCommandCounts(log));
   tally.orchestrator.push(extractOrchestratorCounts(log, { roots: attemptOrchestratorRoots(log, ctx.env), cwd: ctx.cwd }));
+}
+
+// Says in the job log when a resumed session had no earlier result to net its cost against, so a cost left unknown is never silent.
+function reportUnpricedResume(jobId, usage, env) {
+  const sessions = unpricedSessions(usage);
+  if (sessions.length === 0) return;
+  appendJobLog(jobId, `the resumed session ${sessions.join(", ")} has no earlier cost in the job log: this spawn counts its own tokens and no cost`, env);
 }
 
 // The totals of every attempt tallied so far, in the shape the finish of a job persists.
@@ -460,6 +469,7 @@ async function runAttempts(job, ctx) {
     if (!renewed) return { lost: true, facts, attempt, ...attemptTotals(tally), outcome: null, result: null };
     if (isSafeSegment(facts.slug)) clearRunOutcome({ projectId: job.project_id, slug: facts.slug, env });
     const resumeSessionId = resumeForced ? facts.resumableSessionId : null;
+    const baselines = resumeSessionId ? sessionBaselines(readJobLog(job.id, env)) : null;
     const attemptStartedAt = new Date().toISOString();
     const result = await spawnClaude({
       prompt: ctx.prompt,
@@ -481,10 +491,11 @@ async function runAttempts(job, ctx) {
       bashTimeoutS: deps.bashTimeoutS,
       inheritUserEnvironment: deps.inheritUserEnvironment,
     });
-    if (ownership.lost) return { lost: true, facts, attempt, ...attemptTotals(tally), outcome: null, result };
-    if (nightqueueMcpUnreachable(result.log)) return { lost: false, blocked: mcpUnreachableBlock(), facts, attempt, ...attemptTotals(tally), outcome: null, result };
-    tallyAttempt(tally, result.log, ctx, { resumed: Boolean(resumeSessionId) });
+    tallyAttempt(tally, result.log, ctx, { resumed: Boolean(resumeSessionId), baselines });
+    reportUnpricedResume(job.id, tally.usages.at(-1), env);
     const totals = attemptTotals(tally);
+    if (ownership.lost) return { lost: true, facts, attempt, ...totals, outcome: null, result };
+    if (nightqueueMcpUnreachable(result.log)) return { lost: false, blocked: mcpUnreachableBlock(), facts, attempt, ...totals, outcome: null, result };
     const notBefore = rateLimitExit(result, facts);
     if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, ...totals, outcome: null, result };
     const planPath = isRunPath(job.project_id, facts.slug) ? join(runDir(job.project_id, facts.slug, env), "03-plan.md") : null;
@@ -710,6 +721,7 @@ function finishSpec(job, run, { state, noticeMd, env }) {
     hostCommands: run.hostCommands,
     baselineCtx: run.baselineCtx,
     orchestrator: run.orchestrator,
+    attempt: Number.isInteger(job.claim_attempt) ? job.claim_attempt : null,
   };
 }
 
@@ -731,6 +743,7 @@ async function parkRun(job, run, ctx) {
     worker: job.worker,
     notBefore,
     result: { rateLimited: true, notBefore, logPath: jobLogPath(job.id, env), exitCode: run.result.exitCode, attempts: run.attempt },
+    ...runMeasures(run),
   };
   const record = { kind: "park", key: PENDING_KEYS.park(job.id, job.worker), payload: spec };
   const parked = await writeOrQueue(job, run.facts.slug, record, { write: () => store.jobs.parkJob(job.id, spec), env });
@@ -910,8 +923,8 @@ export async function openPrsForJob(job, { env = process.env, deps = {} } = {}) 
 }
 
 // Stops a job at a gate on a block found before its spawn, or on a session that never reached the MCP server, without spending the attempt; the write waits out an unavailable database.
-async function gateJob(job, check, ctx) {
-  const gated = await untilStoreAnswers(ctx, () => gate(job, check, ctx.env));
+async function gateJob(job, check, ctx, measures = null) {
+  const gated = await untilStoreAnswers(ctx, () => gate(job, check, ctx.env, measures));
   if (gated === OUTAGE_STOPPED) return stoppedInOutage(job, ctx.env);
   if (!gated) {
     noteOwnershipLost(job, ctx.env);
@@ -960,6 +973,35 @@ async function runJob(claimed, ctx) {
   }
 }
 
+// The measures a run tallied over its spawns, in the shape every writer that ends a claim takes.
+function runMeasures(run) {
+  return { usage: run.usage ?? null, hostCommands: run.hostCommands ?? null, orchestrator: run.orchestrator ?? null };
+}
+
+// The record of an attempt's measures the runner could not write itself, keyed by the attempt it belongs to; null when the claim named no attempt or nothing was spawned.
+function measuresRecord(job, run) {
+  if (!Number.isInteger(job.claim_attempt) || !run.usage) return null;
+  const payload = { attempt: job.claim_attempt, ...runMeasures(run) };
+  return { kind: "measures", key: PENDING_KEYS.measures(job.id, job.claim_attempt), payload };
+}
+
+// Writes the measures of an attempt another writer closed (a cancel, a sweep), queuing them when the database is unavailable; a failure is one job-log line.
+async function recordLateMeasures(job, run, { store, env }) {
+  const record = measuresRecord(job, run);
+  if (!record) return;
+  try {
+    await writeOrQueue(job, run.facts.slug, record, { write: () => store.jobs.recordAttemptMeasures(job.id, record.payload), env });
+  } catch (err) {
+    appendJobLog(job.id, `the measures of attempt ${job.claim_attempt} could not be recorded: ${err?.message ?? String(err)}`, env);
+  }
+}
+
+// Queues the measures of an attempt the runner stopped on while the database was unavailable, replayed before the next sweep.
+function queueMeasures(job, run, env) {
+  const record = measuresRecord(job, run);
+  if (record) queueRecord(job, run.facts.slug, record, env);
+}
+
 // Runs one held job: what comes before the spawn, its attempts and the single write of the outcome.
 async function runHeldJob(claimed, ctx) {
   const { env } = ctx;
@@ -975,13 +1017,17 @@ async function runHeldJob(claimed, ctx) {
   const run = await runAttempts(job, { ...ctx, cwd: prepared.path, sessionResumable: prepared.reused && !prepared.legacy, prompt });
   if (run.lost) {
     noteOwnershipLost(job, env);
+    await recordLateMeasures(job, run, ctx);
     return { id: job.id, status: "lost", attempts: run.attempt };
   }
-  if (run.outageStopped) return stoppedInOutage(job, env);
-  if (run.blocked) return await gateJob(job, run.blocked, ctx);
+  if (run.outageStopped) {
+    queueMeasures(job, run, env);
+    return stoppedInOutage(job, env);
+  }
+  if (run.blocked) return await gateJob(job, run.blocked, ctx, runMeasures(run));
   if (run.parked) return await parkRun(job, run, ctx);
   if (ctx.state.stopping) {
-    await release(job, { interrupted: true }, env);
+    await release(job, { interrupted: true }, env, null, runMeasures(run));
     return { id: job.id, status: "interrupted", attempts: run.attempt };
   }
   return await finalize(job, run, { ...ctx, checkout: check.cwd });

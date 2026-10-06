@@ -555,7 +555,8 @@ test("retry takes a gated job back to pending, keeping what makes the pipeline r
   assert.equal(job.max_attempts, 2, "the retry did not widen the allowance");
   assert.equal(job.worker, null);
   assert.equal(job.lease_until, null);
-  assert.equal(job.started_at, null);
+  assert.ok(job.started_at, "the retry forgot the first start of the job");
+  assert.equal(job.attempt_started_at, null);
   assert.equal(job.finished_at, null);
   assert.deepEqual(JSON.parse(getJob(id, env).result), { status: "gate", prUrl: null, retriedFrom: "gate" });
 });

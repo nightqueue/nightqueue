@@ -22,7 +22,7 @@ test("v19 migrates a home where 30 projects derive the same base key", (t) => {
   });
   try {
     const db = migrateTestHome(env);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 22);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 23);
     const keys = db.prepare("SELECT key FROM projects UNION ALL SELECT key FROM orgs").all().map((row) => row.key);
     assert.equal(new Set(keys).size, keys.length, "keys are not unique");
     for (const key of keys) assert.match(key, /^[A-Z][A-Z0-9]+$/);

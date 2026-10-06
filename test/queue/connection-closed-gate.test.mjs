@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { jobWorktreePath } from "../../src/config/paths.mjs";
-import { addJob, getJob } from "../../src/memory/jobs.mjs";
+import { addJob, getJob, jobView } from "../../src/memory/jobs.mjs";
 import { nightqueueMcpUnreachable } from "../../src/queue/classify.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
@@ -73,6 +73,17 @@ test("an init listing nightqueue as failed gates the job as store-unavailable wi
   const retried = spawnSync(process.execPath, [CLI, "queue", "retry", `J-${home.id}`], { env: home.env, encoding: "utf8" });
   assert.equal(retried.status, 0, retried.stderr);
   assert.equal(getJob(home.id, home.env).status, "pending");
+});
+
+test("the store-unavailable gate keeps the spawn's usage on the claim's attempt row and in the job's totals", async (t) => {
+  const home = realRepoJob(t, "closed-gate-measures", toNdjson([initWithNightqueue("failed")]) + failureStream(), 1);
+  assertStoreUnavailableGate(home, await runOnce(home));
+  const view = jobView(getJob(home.id, home.env));
+  assert.deepEqual(
+    view.attempts_log.map((row) => ({ outcome: row.outcome, exit: row.exit_reason, out: row.tokens_out, cost: row.cost_usd })),
+    [{ outcome: "gate", exit: "store-unavailable", out: 200, cost: 0.12 }],
+  );
+  assert.deepEqual([view.tokens_out, view.cost_usd], [200, 0.12]);
 });
 
 test("a first nightqueue call answered \"Connection closed\" alone gates the job the same way", async (t) => {

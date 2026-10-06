@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { durationLabel, hhmmUtc } from "../lib/format";
+import { activeMs, formatDurationMs, hhmmUtc } from "../lib/format";
 import { jobRef, jobTitle } from "../lib/queue";
 import type { Job } from "../lib/types";
 import { useNow } from "../lib/useNow";
@@ -26,16 +26,16 @@ export function JobRefLink({ job }: { job: Job }) {
   );
 }
 
-// A running job's duration, ticking every second in the accent colour.
-function TickingDuration({ startedAt }: { startedAt: string | null }) {
+// A running job's active time, ticking every second in the accent colour.
+function TickingDuration({ job }: { job: Job }) {
   const now = useNow(1000);
-  return <span className="font-mono text-accent">{durationLabel(startedAt, null, now)}</span>;
+  return <span className="font-mono text-accent">{formatDurationMs(activeMs(job, now))}</span>;
 }
 
-// The DURATION cell: ticking while running, start to finish once stopped, a dim `-` before the start.
+// The DURATION cell: the active time of every attempt, ticking while running, a dim `-` before the first attempt.
 export function DurationCell({ job }: { job: Job }) {
-  if (job.status === "running") return <TickingDuration startedAt={job.started_at} />;
-  const label = job.status !== "pending" && job.finished_at ? durationLabel(job.started_at, job.finished_at, 0) : "-";
+  if (job.status === "running") return <TickingDuration job={job} />;
+  const label = formatDurationMs(activeMs(job, Date.now()));
   return <span className={`font-mono ${label === "-" ? "text-dim" : ""}`}>{label}</span>;
 }
 

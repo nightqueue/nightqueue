@@ -14,16 +14,31 @@ export const PENDING_KEYS = Object.freeze({
   telemetry: (jobId, worker) => `telemetry:${jobId}:${worker}`,
   runFacts: (jobId) => `run_facts:${jobId}:branch`,
   session: (jobId, attempts) => `session:${jobId}:${attempts}`,
+  measures: (jobId, attempt) => `measures:${jobId}:${attempt}`,
   pipelineLog: (projectId, slug, at) => `pipeline_log:${projectId}/${slug}:${at}`,
   indexSave: (projectId, at) => `index_save:${projectId}:${at}`,
 });
 
-// Replays a queued finish: the guarded finish first, then only the notice and pull request the row still lacks; a row further along is never demoted.
+// Replays a queued finish: the guarded finish first, then only the notice and pull request the row still lacks, and the attempt's measures once; a row further along is never demoted.
 async function applyFinish(entry, store) {
   const payload = entry.payload;
   if (await store.jobs.finishJob(entry.jobId, payload)) return "applied";
+  const measured = await recordMeasures(entry.jobId, payload, store);
   if (await store.jobs.fillFinishGaps(entry.jobId, { status: payload.status, noticeMd: payload.noticeMd, prUrl: payload.prUrl })) return "filled";
+  if (measured) return "filled";
   return (await store.jobs.status(entry.jobId)) === null ? "refused: no row" : "superseded";
+}
+
+// Stores the measures a queued record carries on the attempt it names, once; false when it names no attempt or the attempt was measured already.
+async function recordMeasures(jobId, payload, store) {
+  if (!Number.isInteger(payload?.attempt) || payload.attempt <= 0) return false;
+  const { attempt, usage, hostCommands, orchestrator } = payload;
+  return await store.jobs.recordAttemptMeasures(jobId, { attempt, usage, hostCommands, orchestrator });
+}
+
+// Replays the measures of an attempt the runner could not write while the database was unavailable.
+async function applyMeasuresRecord(entry, store) {
+  return (await recordMeasures(entry.jobId, entry.payload, store)) ? "applied" : "superseded";
 }
 
 // Replays a queued park, which only moves a row the same worker still runs.
@@ -65,6 +80,7 @@ const APPLIERS = Object.freeze({
   telemetry: applyTelemetry,
   run_facts: applyRunFacts,
   session: applySession,
+  measures: applyMeasuresRecord,
   pipeline_log: applyPipelineLog,
   index_save: applyIndexSave,
 });

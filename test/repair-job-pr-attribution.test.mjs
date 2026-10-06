@@ -158,7 +158,7 @@ test("a dry run on a database an older build wrote refuses with the update messa
     },
   });
   const { io } = capture();
-  await assert.rejects(main(["--job", "57"], env, io), /database at v14, this nightqueue expects v22: run `nightqueue update`/);
+  await assert.rejects(main(["--job", "57"], env, io), /database at v14, this nightqueue expects v23: run `nightqueue update`/);
   const readOnly = openDbReadOnly(env, { anySchema: true });
   t.after(() => readOnly.close());
   assert.equal(schemaVersionOn(readOnly), 14);

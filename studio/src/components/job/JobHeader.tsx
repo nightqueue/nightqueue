@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { canCancel, hasLog, hasSession, rawLogUrl, sessionCommand } from "../../lib/actions";
 import { copyText } from "../../lib/clipboard";
-import { durationLabel, hhmmssUtc, hhmmUtc, isoMs, timeoutLabel } from "../../lib/format";
+import { activeMs, attemptCount, attemptsLabel, durationLabel, formatDurationMs, hhmmssUtc, hhmmUtc, timeoutLabel, wallMs } from "../../lib/format";
 import { jobRef, jobTitle } from "../../lib/queue";
 import { sessionBlockReason } from "../../lib/terminals";
 import type { CloseState as JobCloseState, IssueSummary, JobDetail, JobStatus } from "../../lib/types";
@@ -64,9 +64,15 @@ function StatusPill({ status, closeState, label }: { status: JobStatus; closeSta
   return <span className={`inline-block rounded-full px-2 py-0.5 text-sm leading-[18px] font-medium ${pillStyleOf(status, closeState)}`}>{label}</span>;
 }
 
-// A static caption chip of the header (tier, priority, attempt).
-function HeaderChip({ children }: { children: string }) {
-  return <span className="inline-flex min-h-7 items-center rounded-full border border-line px-2.5 text-sm text-muted">{children}</span>;
+export const BUDGET_COUNTER_TOOLTIP = "budget counter: inner retries count";
+
+// A static caption chip of the header (tier, priority, attempt), with an optional tooltip.
+function HeaderChip({ children, title }: { children: string; title?: string }) {
+  return (
+    <span title={title} className="inline-flex min-h-7 items-center rounded-full border border-line px-2.5 text-sm text-muted">
+      {children}
+    </span>
+  );
 }
 
 // The second line: project, the issue it came from, its decision and the branch.
@@ -76,34 +82,47 @@ function OriginLine({ job, issue }: { job: JobDetail; issue: IssueSummary | unde
   return <div className="font-mono text-sm break-words text-muted">{parts.join(" · ")}</div>;
 }
 
-// The third line while the job runs: start, ticking elapsed of the timeout, lease, worker and session.
+// `active X · wall Y · N attempts`: the job's whole history at a glance, N always the attempts it lists.
+function historySummary(job: JobDetail, nowMs: number): string {
+  return `active ${formatDurationMs(activeMs(job, nowMs))} · wall ${formatDurationMs(wallMs(job, nowMs))} · ${attemptsLabel(attemptCount(job))}`;
+}
+
+// The third line while the job runs: the current attempt's start and elapsed of the timeout, the history, lease, worker and session.
 function RunningLine({ job }: { job: JobDetail }) {
   const now = useNow();
+  const attemptStart = job.attempt_started_at ?? job.started_at;
   const parts = [
+    historySummary(job, now),
     job.lease_until ? `lease until ${hhmmUtc(job.lease_until)}` : null,
     job.worker ? `worker ${job.worker}` : null,
     job.session_id ? `session ${job.session_id.slice(0, 8)}…` : null,
   ].filter(Boolean);
   return (
     <>
-      started {hhmmssUtc(job.started_at)} UTC · elapsed <span className="text-accent">{durationLabel(job.started_at, null, now)}</span> of {timeoutLabel(job.timeout_s)}
+      started {hhmmssUtc(attemptStart)} UTC · elapsed <span className="text-accent">{durationLabel(attemptStart, null, now)}</span> of {timeoutLabel(job.timeout_s)}
       {parts.map((part) => ` · ${part}`).join("")}
     </>
   );
 }
 
-// The third line once the job stopped: where and when it stopped, and after how long.
+// The third line once the job stopped: its first start, where and when it stopped, and its history.
 function StoppedLine({ job }: { job: JobDetail }) {
-  const after = durationLabel(job.started_at, job.finished_at, isoMs(job.finished_at) ?? Date.now());
   const where = job.status === "gate" ? "stopped at the gate" : job.status === "failed" ? "failed" : "finished";
   const session = job.session_id ? ` · session ${job.session_id.slice(0, 8)}…` : "";
-  return <>{`started ${hhmmssUtc(job.started_at)} UTC · ${where} ${hhmmssUtc(job.finished_at)} after ${after}${session}`}</>;
+  return <>{`started ${hhmmssUtc(job.started_at)} UTC · ${where} ${hhmmssUtc(job.finished_at)} · ${historySummary(job, Date.now())}${session}`}</>;
+}
+
+// The third line of a job waiting in the queue, with what its earlier attempts already ran.
+function QueuedLine({ job }: { job: JobDetail }) {
+  const count = attemptCount(job);
+  const sofar = count > 0 ? ` · active ${formatDurationMs(activeMs(job, Date.now()))} · ${attemptsLabel(count)} so far` : "";
+  return <>{`queued ${hhmmssUtc(job.created_at)} UTC · waits for a runner${sofar}`}</>;
 }
 
 // The third line of the header, by whether the job ran, runs or waits.
 function TimingLine({ job }: { job: JobDetail }) {
   if (job.status === "running") return <RunningLine job={job} />;
-  if (!job.started_at) return <>{`queued ${hhmmssUtc(job.created_at)} UTC · waits for a runner`}</>;
+  if (job.status === "pending" || !job.started_at) return <QueuedLine job={job} />;
   return <StoppedLine job={job} />;
 }
 
@@ -186,7 +205,7 @@ export function JobHeader({ job, statusLabel, closeState, issue, runTier, action
           <StatusPill status={job.status} closeState={closeState} label={statusLabel} />
           {tier && <HeaderChip>{tier}</HeaderChip>}
           <HeaderChip>{`p${job.priority}`}</HeaderChip>
-          <HeaderChip>{`attempt ${job.attempts} / ${job.max_attempts}`}</HeaderChip>
+          <HeaderChip title={BUDGET_COUNTER_TOOLTIP}>{`attempt ${job.attempts} / ${job.max_attempts}`}</HeaderChip>
         </div>
         <OriginLine job={job} issue={issue} />
         <div className="text-sm break-words text-muted">

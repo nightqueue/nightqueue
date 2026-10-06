@@ -366,6 +366,32 @@ export function jobsDdl(name) {
 );`;
 }
 
+export const ATTEMPT_OUTCOMES = Object.freeze(["gate", "done", "failed", "cancelled", "released", "timed_out", "lost"]);
+
+// The `job_attempts` table under a given name: one row per claim of a job, its own start, end, outcome and measures.
+export function jobAttemptsDdl(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  attempt INTEGER NOT NULL,
+  worker TEXT,
+  session_id TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  outcome TEXT CHECK (outcome IS NULL OR outcome IN (${sqlList(ATTEMPT_OUTCOMES)})),
+  exit_reason TEXT,
+  spawns INTEGER NOT NULL DEFAULT 1,
+  tokens_in INTEGER,
+  tokens_out INTEGER,
+  cache_read INTEGER,
+  cache_creation INTEGER,
+  cost_usd REAL,
+  measured INTEGER NOT NULL DEFAULT 0,
+  fresh INTEGER NOT NULL DEFAULT 0,
+  backfilled INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (job_id, attempt)
+);`;
+}
+
 export const SCHEMA = `
 ${lessonsDdl("lessons")}
 ${memoryDdl("memory")}
@@ -373,6 +399,8 @@ ${projectIndexDdl("project_index")}
 ${projectLibsDdl("project_libs")}
 ${pipelineRunsDdl("pipeline_runs")}
 ${jobsDdl("jobs")}
+${jobAttemptsDdl("job_attempts")}
+CREATE UNIQUE INDEX IF NOT EXISTS job_attempts_open_idx ON job_attempts(job_id) WHERE finished_at IS NULL;
 CREATE TABLE IF NOT EXISTS pipeline_phases (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id INTEGER NOT NULL,

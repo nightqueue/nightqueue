@@ -30,6 +30,10 @@ const PR_URL_ONLY_RE = new RegExp(`^${PR_URL_SOURCE}$`);
 const PR_DELIVERY_LINE_RE = new RegExp(`${PR_URL_SOURCE}[)\\]>.,;:'"\`*_ \\t]*$`);
 const PR_DENIAL_RE = /\b(?:fail(?:ed|s|ing|ure)?|could not|cannot|can't|unable|error|refused|denied|not opened?|no pull request|example|would be)\b/i;
 const USAGE_FIELDS = ["tokensIn", "tokensOut", "cacheRead", "cacheCreation"];
+// The baseline a resumed session gets when the log holds no earlier result of it: nothing to net against, so only its own invocation's figures count.
+const MISSING_BASELINE = Object.freeze({ models: null, costUsd: null });
+// The cumulative cost each session of an extracted usage reported and the resumed sessions it could not net, read by sumUsage.
+const sessionCostFacts = new WeakMap();
 
 // Parses one raw NDJSON line of the stream; a truncated or non-JSON line is simply not an event.
 export function parseEventLine(rawLine) {
@@ -558,10 +562,55 @@ function usageTotal(usage) {
   return usage ? USAGE_FIELDS.reduce((sum, field) => sum + finite(usage[field]), 0) : 0;
 }
 
-// Usage of one result event: the two blocks describe the SAME tokens, so each field keeps the larger of them and a truncated block never shadows a complete one; nothing is ever summed twice.
-function resultUsage(event) {
+// The per-model usage of a resumed session's result minus what that session had already reported, never below zero: the CLI's per-model block is cumulative across a `--resume`.
+function sinceBaseline(models, baseline) {
+  if (!models || !baseline) return models;
+  if (!baseline.models) return null;
+  const delta = emptyUsage();
+  for (const field of USAGE_FIELDS) delta[field] = Math.max(0, models[field] - baseline.models[field]);
+  return delta;
+}
+
+// The cumulative per-model usage and cost one result event reported.
+function resultBaseline(event) {
+  return { models: usageFromModels(event), costUsd: Number.isFinite(event.total_cost_usd) ? event.total_cost_usd : null };
+}
+
+// Adds the estimate of one assistant turn to its session's baseline: a spawn killed before its result was counted from its assistants, at no cost.
+function addAssistantToBaseline(baselines, id, tokens) {
+  const baseline = baselines.get(id) ?? { models: emptyUsage(), costUsd: 0 };
+  baselines.set(id, baseline);
+  if (baseline.models) addUsage(baseline.models, tokens);
+}
+
+// What a resumed session's next result already includes, per session of a log: its last result's cumulative usage and cost plus the assistant turns counted after it.
+export function sessionBaselines(log) {
+  const baselines = new Map();
+  const seenIds = new Set();
+  for (const line of String(log ?? "").split("\n")) {
+    const event = parseEventLine(line);
+    const id = String(event?.session_id ?? "");
+    if (event?.type === "result") baselines.set(id, resultBaseline(event));
+    if (event?.type !== "assistant" || !event.message?.usage) continue;
+    const tokens = tokensFromEvent(event);
+    if (tokens.id !== null && seenIds.has(tokens.id)) continue;
+    if (tokens.id !== null) seenIds.add(tokens.id);
+    addAssistantToBaseline(baselines, id, tokens);
+  }
+  return baselines;
+}
+
+// The baseline one session is netted against: none outside a resume, else its earlier result, or the empty one when the log holds none of it.
+function baselineFor(baselines, id) {
+  if (!baselines) return null;
+  return baselines.get(id) ?? MISSING_BASELINE;
+}
+
+// Usage of one result event: the two blocks describe the SAME tokens, so each field keeps the larger of them and a truncated block never shadows a complete one; a resumed session counts its cumulative block net of what was already counted, or its own invocation's block when it cannot be netted.
+function resultUsage(event, baseline = null) {
   const aggregate = usageFromAggregate(event);
-  const models = usageFromModels(event);
+  const models = sinceBaseline(usageFromModels(event), baseline);
+  if (baseline) return models ?? aggregate;
   if (!aggregate || !models) return aggregate ?? models;
   const merged = emptyUsage();
   for (const field of USAGE_FIELDS) merged[field] = Math.max(aggregate[field], models[field]);
@@ -618,36 +667,77 @@ function sessionsFromLog(log) {
 }
 
 // What ONE session contributes: its own result telemetry when the result reported tokens, otherwise the estimate from its own assistants.
-function sessionUsage(session) {
-  const reported = resultUsage(session.result);
+function sessionUsage(session, baseline = null) {
+  const reported = resultUsage(session.result, baseline);
   if (usageTotal(reported) > 0) return { usage: reported, estimated: false };
   if (session.hasAssistantUsage) return { usage: session.estimate, estimated: true };
   return { usage: reported ?? emptyUsage(), estimated: false };
 }
 
-// Cost of an attempt: the sum of what its result events reported, null when none of them reported any.
-function attemptCost(sessions) {
+// Cost one session's result reported for this invocation alone: its cumulative cost minus what the session had already reported before a resume, null when a resume has no cost to net against.
+function sessionCost(session, baseline) {
+  const total = session.result?.total_cost_usd;
+  if (!Number.isFinite(total)) return null;
+  if (!baseline) return total;
+  return Number.isFinite(baseline.costUsd) ? Math.max(0, total - baseline.costUsd) : null;
+}
+
+// Cost of an attempt: the sum of what its result events reported, net of a resumed session's earlier cost, null when none of them reported any.
+function attemptCost(sessions, baselines) {
   let costUsd = null;
-  for (const session of sessions) {
-    if (Number.isFinite(session.result?.total_cost_usd)) costUsd = (costUsd ?? 0) + session.result.total_cost_usd;
+  for (const [id, session] of sessions) {
+    const cost = sessionCost(session, baselineFor(baselines, id));
+    if (cost !== null) costUsd = (costUsd ?? 0) + cost;
   }
   return costUsd;
 }
 
-// Usage of one attempt: every session contributes its own tokens, so a session whose result carried no telemetry falls back to its assistants instead of contributing zero.
-export function extractUsage(log) {
+// The cumulative cost each session reported and the resumed sessions whose own share could not be netted from the log.
+function costFactsOf(sessions, baselines) {
+  const reported = new Map();
+  const unpriced = new Set();
+  for (const [id, session] of sessions) {
+    const total = session.result?.total_cost_usd;
+    if (!Number.isFinite(total)) continue;
+    reported.set(id, total);
+    if (sessionCost(session, baselineFor(baselines, id)) === null) unpriced.add(id);
+  }
+  return { reported, unpriced };
+}
+
+// Usage of one attempt: every session contributes its own tokens (a result with no telemetry falls back to its assistants), net of what a resumed session had already reported in `baselines`; a resumed session with no earlier result counts its own invocation's tokens and no cost.
+export function extractUsage(log, { baselines = null } = {}) {
   const sessions = sessionsFromLog(log);
   if (!sessions.size) return null;
   const total = emptyUsage();
   let anyReported = false;
   let anyEstimated = false;
-  for (const session of sessions.values()) {
-    const { usage, estimated } = sessionUsage(session);
+  for (const [id, session] of sessions) {
+    const { usage, estimated } = sessionUsage(session, baselineFor(baselines, id));
     addUsage(total, usage);
     anyReported = anyReported || (!estimated && usageTotal(usage) > 0);
     anyEstimated = anyEstimated || estimated;
   }
-  return { ...total, costUsd: attemptCost(sessions.values()), sessions: sessions.size, estimated: anyEstimated && !anyReported };
+  const extracted = { ...total, costUsd: attemptCost(sessions, baselines), sessions: sessions.size, estimated: anyEstimated && !anyReported };
+  sessionCostFacts.set(extracted, costFactsOf(sessions, baselines));
+  return extracted;
+}
+
+// The resumed sessions of an extracted usage whose cost could not be netted from the log, so the caller can say so.
+export function unpricedSessions(usage) {
+  return usage && typeof usage === "object" ? [...(sessionCostFacts.get(usage)?.unpriced ?? [])] : [];
+}
+
+// The cost of a usage's unpriced resumed sessions, netted against what an earlier usage of the same list reported for them; records what this usage reported.
+function costNetOfEarlier(usage, lastReported) {
+  const facts = sessionCostFacts.get(usage);
+  if (!facts) return null;
+  let cost = null;
+  for (const id of facts.unpriced) {
+    if (lastReported.has(id)) cost = (cost ?? 0) + Math.max(0, facts.reported.get(id) - lastReported.get(id));
+  }
+  for (const [id, value] of facts.reported) lastReported.set(id, value);
+  return cost;
 }
 
 // Partial tokens of the attempt a log tail is in the middle of, or null before any usage was written; a cost is never estimated.
@@ -662,10 +752,13 @@ export function sumUsage(usages) {
   const list = (Array.isArray(usages) ? usages : []).filter((usage) => usage && typeof usage === "object");
   if (!list.length) return null;
   const total = { ...emptyUsage(), costUsd: null, sessions: 0, estimated: false };
+  const lastReported = new Map();
   for (const usage of list) {
     addUsage(total, usage);
     total.sessions += finite(usage.sessions);
     if (Number.isFinite(usage.costUsd)) total.costUsd = (total.costUsd ?? 0) + usage.costUsd;
+    const netted = costNetOfEarlier(usage, lastReported);
+    if (netted !== null) total.costUsd = (total.costUsd ?? 0) + netted;
     if (usage.estimated) total.estimated = true;
   }
   return total;

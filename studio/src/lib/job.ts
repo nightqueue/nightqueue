@@ -47,7 +47,7 @@ export function useJobDetail(ref: string) {
 // What of a queue row tells the detail is out of date: status, attempt, notice, PR and close.
 function rowSignature(row: Job | undefined): string | null {
   if (!row) return null;
-  return [row.status, row.attempts, row.started_at, row.notice_md, row.pr_url, row.pr_state, row.studio?.closing].join("|");
+  return [row.status, row.attempts, row.attempt_started_at, row.notice_md, row.pr_url, row.pr_state, row.studio?.closing].join("|");
 }
 
 // The live queue row of a job (with its studio cells) and the runners online; refetches the detail whenever that row changes.

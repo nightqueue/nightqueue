@@ -105,7 +105,7 @@ What a runtime has to provide, and what it can rely on:
   `<runDir>/pending-writes.jsonl.lock`. An entry is
   `{"v":1,"key","kind","at","jobId","projectId","slug","payload"}`, and its key is fixed by its
   kind: `finish:<jobId>:<worker>`, `park:<jobId>:<worker>`, `telemetry:<jobId>:<worker>`,
-  `run_facts:<jobId>:branch`, `session:<jobId>:<attempts>`,
+  `run_facts:<jobId>:branch`, `session:<jobId>:<attempts>`, `measures:<jobId>:<attempt>`,
   `pipeline_log:<projectId>/<slug>:<at>` and `index_save:<projectId>:<at>` - a key already in
   the file is not appended twice. The writers are the runner's finish, park, telemetry, branch
   and session ids (the stream's session, queued per attempt; the slug a `SLUG:` line declares
@@ -124,7 +124,11 @@ What a runtime has to provide, and what it can rely on:
   `closed` row is never rewritten. A `pipeline_log` entry is skipped when its run already
   logged since the entry's time, so applying twice changes nothing. A `session` entry only fills
   the row while the same claim runs it (`running`, same worker, same `attempts`) and never over
-  a later attempt's session. An `index_save` entry writes only the files and libs no save touched
+  a later attempt's session. A `measures` entry (the usage of an attempt the runner stopped on
+  while the database was unavailable, or whose row a cancel or a sweep closed first) lands on
+  the attempt row it names once - `superseded` when that row was already measured - and a
+  finish that is `superseded` still lands the measures of the attempt it names the same way
+  (`filled`). An `index_save` entry writes only the files and libs no save touched
   since the entry's time (a save in the same second counts as later), with the queued
   modification times, and is `superseded` when it wrote none. Once every key carries a
   marker the file is renamed to `pending-writes.<stamp>.done.jsonl` under the lock, so an
@@ -479,6 +483,22 @@ with `issues` in the listing query), otherwise the first non-empty line of the p
 with its leading markdown heading marker stripped (a bare `## Brief` or `# Task` heading
 yields to the next line), clipped at 120 characters with the `…` counted in the 120; `null`
 for an empty prompt without an issue. The field is additive: `contract` is unchanged.
+Every job `queue_status` answers also carries, derived on read from `job_attempts` with
+SELECTs only: `attempts_log`, one entry per claim of the job in order (`attempt`, `worker`,
+`session_id`, `started_at`, `finished_at`, `duration_s` - null while the attempt is open -,
+`outcome` among `gate|done|failed|cancelled|released|timed_out|lost` or null while open,
+`exit_reason`, `spawns` - the host spawns inside that claim, above 1 when the runner
+re-spawned after a transient failure -, `tokens_in`, `tokens_out`, `cache_read`,
+`cache_creation`, `cost_usd`, `fresh`, `backfilled`); `active_s`, the sum of the attempts'
+durations with the open one counted up to the read; and `wall_s`, from the job's first start
+to the end of its last attempt (the read, while one is open); the three are null/empty for a
+job that never ran. `started_at` is the first claim of the job and `attempt_started_at` the
+current one (null outside `running`); `tokens_*`, `cache_*`, `cost_usd` and the host and
+orchestrator counters are totals across every attempt, `orch_ctx_last` and `baseline_ctx`
+the last value. `attempts` stays the retry budget counter, which inner re-spawns increment
+too - the history count is `attempts_log.length`. A row answered by a write (the job a
+cancel or a retry returns) carries none of the three keys. The keys are additive:
+`contract` is unchanged.
 `queue_status` never returns the prompt of a job and truncates `notice_md` and `result` at 500
 characters in a listing; a row whose text was cut carries `notice_truncated: true` or
 `result_truncated: true` (the key is absent when the text fits, and the detail of one job by
