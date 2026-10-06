@@ -79,6 +79,14 @@ test("an unchanged queue makes no patch, and a changed one patches only what mov
   assert.deepEqual(snapshotPatch(base, next), { set: { counts: { pending: 0 } }, jobs: { upsert: [{ id: 1, status: "running" }], remove: [], order: [1] } });
 });
 
+test("a running row whose only change is the active and wall time a read derives makes no patch, and a new attempt row does", () => {
+  const job = { id: 1, status: "running", attempts_log: [{ attempt: 1, finished_at: null }], active_s: 10, wall_s: 10 };
+  const base = { runners: [], counts: { running: 1 }, jobs: [job] };
+  assert.equal(snapshotPatch(base, { ...base, jobs: [{ ...job, active_s: 12, wall_s: 12 }] }), null);
+  const moved = { ...job, attempts_log: [...job.attempts_log, { attempt: 2, finished_at: null }], active_s: 12 };
+  assert.deepEqual(snapshotPatch(base, { ...base, jobs: [moved] })?.jobs.upsert, [moved]);
+});
+
 // The log of one finished attempt: a coder lane that edits a file, then the orchestrator publishing.
 function writeAttemptLog(env, id) {
   const path = jobLogPath(id, env);

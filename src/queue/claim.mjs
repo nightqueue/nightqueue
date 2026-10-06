@@ -101,9 +101,9 @@ export async function acquire({ jobId = null, cap, env = process.env } = {}) {
   return { job: null, reason: await refusalReason({ jobId, cap, env }) };
 }
 
-// Gives a claimed job back to the queue without spending the attempt, recording why it came back; null `blockedCode` clears a stale one.
-export async function release(job, result, env = process.env, blockedCode = null) {
-  return await openStore(env).jobs.releaseJob(job.id, { worker: job.worker, result, blockedCode });
+// Gives a claimed job back to the queue without spending the attempt, recording why it came back and what its spawns measured; null `blockedCode` clears a stale one.
+export async function release(job, result, env = process.env, blockedCode = null, measures = null) {
+  return await openStore(env).jobs.releaseJob(job.id, { worker: job.worker, result, blockedCode, ...measures });
 }
 
 // The notice of a job a preflight block stopped: the block first, then the retry that answers it.
@@ -112,9 +112,9 @@ export function preflightNotice(job, check) {
   return `${check.code}: ${check.message}\n${fix}`;
 }
 
-// Stops a claimed job at a gate on a preflight block without spending the attempt; false means this runner no longer owns it.
-export async function gate(job, check, env = process.env) {
-  const spec = { worker: job.worker, code: check.code, message: check.message, noticeMd: preflightNotice(job, check) };
+// Stops a claimed job at a gate on a preflight block without spending the attempt, with what its spawns measured when it ran any; false means this runner no longer owns it.
+export async function gate(job, check, env = process.env, measures = null) {
+  const spec = { worker: job.worker, code: check.code, message: check.message, noticeMd: preflightNotice(job, check), ...measures };
   return await openStore(env).jobs.gatePreflightJob(job.id, spec);
 }
 

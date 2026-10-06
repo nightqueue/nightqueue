@@ -203,7 +203,7 @@ function v20Home(t, name) {
   return { env, repo };
 }
 
-const OUTDATED_WARNING = /^nightqueue memory unavailable \(SCHEMA_OUTDATED at .+\): database at v20, this nightqueue expects v22: run `nightqueue update`$/;
+const OUTDATED_WARNING = /^nightqueue memory unavailable \(SCHEMA_OUTDATED at .+\): database at v20, this nightqueue expects v23: run `nightqueue update`$/;
 
 test("a nightqueue mcp subprocess on a v20 home warns once with the update message, answers SCHEMA_OUTDATED, and never migrates", async (t) => {
   const { env } = v20Home(t, "mcp-outdated-subprocess");
@@ -221,7 +221,7 @@ test("a nightqueue mcp subprocess on a v20 home warns once with the update messa
   const payload = JSON.parse(textOf(result));
   assert.equal(result.isError, true);
   assert.deepEqual({ error: payload.error, code: payload.code, hint: payload.hint }, { error: "store-unavailable", code: "SCHEMA_OUTDATED", hint: "nightqueue update" });
-  assert.match(payload.message, /database at v20, this nightqueue expects v22: run `nightqueue update`/);
+  assert.match(payload.message, /database at v20, this nightqueue expects v23: run `nightqueue update`/);
   assert.equal(stderr.split("\n").filter((line) => OUTDATED_WARNING.test(line)).length, 1, stderr);
   assert.ok(readFileSync(join(homeDir(env), "nightqueue.db")).equals(before), "the MCP server wrote to an older database");
 });

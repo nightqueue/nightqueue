@@ -3,6 +3,7 @@ import { useState } from "react";
 import { CancelJobDialog } from "../components/CancelJobDialog";
 import { CloseJobDialog } from "../components/CloseJobDialog";
 import { RetryDialog } from "../components/RetryDialog";
+import { AttemptsCard } from "../components/job/AttemptsCard";
 import { CostCard } from "../components/job/CostCard";
 import { FilesCard } from "../components/job/FilesCard";
 import { GateCard } from "../components/job/GateCard";
@@ -34,10 +35,10 @@ function JobUnavailable({ jobRefText, reason }: { jobRefText: string; reason: st
   );
 }
 
-// The phase track, ticking the running phase from the job's start.
+// The phase track, ticking the running phase from the start of the current attempt.
 function LiveTimeline({ job, stream, reason }: { job: JobDetail; stream: JobStreamState; reason: string | null }) {
   const now = useNow();
-  const started = isoMs(job.started_at);
+  const started = isoMs(job.attempt_started_at ?? job.started_at);
   const runElapsedMs = job.status === "running" && started !== null ? now - started : null;
   return <PhaseTimeline timeline={stream.timeline} status={job.status} reason={reason} runElapsedMs={runElapsedMs} />;
 }
@@ -49,6 +50,7 @@ function SideCards({ job, stream }: { job: JobDetail; stream: JobStreamState }) 
       {job.status !== "gate" && <NoticeCard job={job} />}
       <PrCard job={job} />
       <CostCard job={job} baseline={stream.meta?.baseline} timeline={stream.timeline} />
+      <AttemptsCard job={job} />
       <NoteCard note={job.operator_note} />
       <FilesCard jobRef={jobRef(job.id)} running={job.status === "running"} />
       <MemoryCard jobRef={jobRef(job.id)} running={job.status === "running"} />
@@ -75,7 +77,7 @@ function JobScreen({ job, row, runnersOnline }: { job: JobDetail; row: Job | und
   const { close, confirming, endConfirm } = useCloseState(job, row);
   const onRun = useAction(runJob, byJob);
   const actions: HeaderStatusActions = { close, onRun: () => onRun(job), onRetry: () => setRetrying(true), retryReady: row !== undefined && runnersOnline !== null };
-  const stream = useJobStream(jobRef(job.id), job.started_at ?? "never-started");
+  const stream = useJobStream(jobRef(job.id), job.attempt_started_at ?? job.started_at ?? "never-started");
   const issue = useIssueSummary(job.item_ref);
   const gatePhase = stream.timeline?.phases.find((phase) => phase.state === "gate")?.number ?? null;
   const reason = row?.studio.reason ?? null;

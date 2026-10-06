@@ -1,4 +1,4 @@
-export const DB_USER_VERSION = 22;
+export const DB_USER_VERSION = 23;
 
 export const LEASE_GRACE_S = 60;
 

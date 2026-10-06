@@ -84,6 +84,21 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A job that was gated or released and retried now shows all of its attempts instead of the
+  last one. Schema v23 keeps one `job_attempts` row per claim (start, end, outcome, exit reason,
+  inner `spawns`, tokens and cost), and the job's `tokens_*`, `cache_*`, `cost_usd`, host and
+  orchestrator counters are the totals of its rows - each attempt's measures applied exactly
+  once, the usage of a released, parked, MCP-unreachable or cancelled claim included.
+  `started_at` stays the first claim and the new `attempt_started_at` anchors the orphan
+  ceiling of the current one. `queue status`, the MCP `queue_status` and the studio show
+  `attempts_log`, `active_s` (`DURATION`) and `wall_s`; the CLI detail and the studio chip label
+  `attempts X / max` as the retry budget counter next to the `N attempts` history count, and the
+  studio job screen gains an Attempts card. A resumed session's cumulative per-model usage and
+  cost are netted out of its previous result, so a `--resume` no longer counts the earlier
+  invocation twice; with nothing to net against it counts its own invocation's tokens and no
+  cost. The migration is additive (`update` copies `nightqueue.db.pre-v23` first);
+  older jobs keep their duration and tokens as one `backfilled` attempt. Known gap: a finish
+  repaired from the `state.json` witness closes its attempt without its usage.
 - `nightqueue update --from <dir>` installs dependencies when they are needed and a failed
   studio build no longer blocks the runtime. It runs `npm ci --no-audit --no-fund` in the source
   when `node_modules` is missing, when `package-lock.json` changed since the last build

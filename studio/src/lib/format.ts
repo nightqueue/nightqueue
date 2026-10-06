@@ -1,3 +1,5 @@
+import type { AttemptRow, Job } from "./types";
+
 // Milliseconds of an ISO instant, null when it is missing or not a date.
 export function isoMs(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -21,6 +23,48 @@ export function durationLabel(startedAt: string | null, finishedAt: string | nul
   if (started === null) return "-";
   const finished = isoMs(finishedAt);
   return formatDurationMs((finished ?? nowMs) - started);
+}
+
+type AttemptTiming = Pick<Job, "started_at" | "attempt_started_at" | "attempts_log" | "active_s">;
+
+// The attempt rows of a job, none when the view carried no history.
+function attemptRows(job: AttemptTiming): AttemptRow[] {
+  return Array.isArray(job.attempts_log) ? job.attempts_log : [];
+}
+
+// How long one attempt ran: its own duration once closed, up to now while it is open.
+function attemptMs(row: AttemptRow, nowMs: number, attemptStartedAt: string | null | undefined): number {
+  if (row.finished_at !== null && typeof row.duration_s === "number" && Number.isFinite(row.duration_s)) return Math.max(0, row.duration_s * 1000);
+  const started = isoMs(row.started_at) ?? isoMs(attemptStartedAt);
+  return started === null ? 0 : Math.max(0, nowMs - started);
+}
+
+// The active time of a job: every attempt's duration summed, the open one up to now; null before the first attempt.
+export function activeMs(job: AttemptTiming, nowMs: number): number | null {
+  const rows = attemptRows(job);
+  if (rows.length === 0) return typeof job.active_s === "number" && Number.isFinite(job.active_s) ? job.active_s * 1000 : null;
+  return rows.reduce((sum, row) => sum + attemptMs(row, nowMs, job.attempt_started_at), 0);
+}
+
+// The wall time of a job: from its first start to the end of its last attempt, the open one ending now; null before the first attempt.
+export function wallMs(job: AttemptTiming, nowMs: number): number | null {
+  const rows = attemptRows(job);
+  if (rows.length === 0) return null;
+  const starts = rows.map((row) => isoMs(row.started_at)).filter((ms): ms is number => ms !== null);
+  const start = isoMs(job.started_at) ?? (starts.length ? Math.min(...starts) : null);
+  const ends = rows.map((row) => (row.finished_at === null ? nowMs : isoMs(row.finished_at))).filter((ms): ms is number => ms !== null);
+  if (start === null || ends.length === 0) return null;
+  return Math.max(0, Math.max(...ends) - start);
+}
+
+// The number of attempts a job's history lists, one per claim.
+export function attemptCount(job: Pick<Job, "attempts_log">): number {
+  return Array.isArray(job.attempts_log) ? job.attempts_log.length : 0;
+}
+
+// `N attempts`, singular for one.
+export function attemptsLabel(count: number): string {
+  return `${count} attempt${count === 1 ? "" : "s"}`;
 }
 
 // The UTC wall clock of an instant as `hh:mm`.

@@ -137,6 +137,8 @@ const JOB_COLUMNS = [
   "close_lease_until",
   "close_worker",
   "origin",
+  "attempt_started_at",
+  "next_attempt_fresh",
 ];
 
 // Everything a database written by the schema version before the merge sweep does NOT have yet.
@@ -568,7 +570,7 @@ test("an open of an older read-only database names `nightqueue update`, the fix 
   t.after(() => chmodSync(dbPath(env), 0o644));
 
   assert.throws(() => openDb(env), (err) => {
-    assert.match(err.message, /database at v5, this nightqueue expects v22: run `nightqueue update`/);
+    assert.match(err.message, /database at v5, this nightqueue expects v23: run `nightqueue update`/);
     assert.doesNotMatch(err.message, /nightqueue doctor/);
     return true;
   });
@@ -767,7 +769,7 @@ test("a v10 database gains decisions.job_id and its index, keeping every decisio
   first.exec("DROP INDEX decisions_job_idx; ALTER TABLE decisions DROP COLUMN job_id; PRAGMA user_version = 10;");
   closeDb(env);
 
-  assert.equal(DB_USER_VERSION, 22);
+  assert.equal(DB_USER_VERSION, 23);
   for (const pass of [1, 2]) {
     const db = migrateTestHome(env);
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION, `pass ${pass}`);

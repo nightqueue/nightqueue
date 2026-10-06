@@ -21,7 +21,7 @@ import { restorePreV22Names } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
-const MESSAGE = /^database at v20, this nightqueue expects v22: run `nightqueue update` \(.+nightqueue\.db\); when the installed nightqueue is already current, a second `nightqueue update` finishes the migration$/;
+const MESSAGE = /^database at v20, this nightqueue expects v23: run `nightqueue update` \(.+nightqueue\.db\); when the installed nightqueue is already current, a second `nightqueue update` finishes the migration$/;
 
 // A home stamped v20 with the project `alpha`, one job and the tracker under its pre-v22 names, closed so the file alone is the whole database.
 function v20Home(t, name) {

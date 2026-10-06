@@ -49,10 +49,35 @@ export interface Job {
   title: string | null;
   created_at: string | null;
   started_at: string | null;
+  attempt_started_at?: string | null;
   finished_at: string | null;
   lease_until: string | null;
+  attempts_log?: AttemptRow[] | null;
+  active_s?: number | null;
+  wall_s?: number | null;
   live: LiveBlock | null;
   studio: StudioCells;
+}
+
+export type AttemptOutcome = "gate" | "done" | "failed" | "cancelled" | "released" | "timed_out" | "lost";
+
+export interface AttemptRow {
+  attempt: number;
+  worker: string | null;
+  session_id: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_s: number | null;
+  outcome: AttemptOutcome | null;
+  exit_reason: string | null;
+  spawns: number;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  cache_read: number | null;
+  cache_creation: number | null;
+  cost_usd: number | null;
+  fresh: boolean;
+  backfilled: boolean;
 }
 
 export interface JobDetail extends Omit<Job, "studio"> {

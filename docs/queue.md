@@ -341,9 +341,11 @@ another runner.
 the columns of the cockpit: `ID STATUS DURATION TOKENS PROJECT SLUG/LAST PR`.
 `STATUS` carries an icon (`● running`, `✓ done`, `■ closed`, `⚑ gate`, `✗ failed`,
 `⊘ cancelled`, `○ pending`) and a color on a terminal; a job whose close is in progress
-reads `◐ closing` alone, and a closed one `■ closed` alone. `DURATION` is how long a
-running job has been up (from its own `started_at`) or how long a finished one
-took; `TOKENS` is what it spent so far (`374k`, `1.2M`). `SLUG/LAST` is the last
+reads `◐ closing` alone, and a closed one `■ closed` alone. `DURATION` is the job's
+active time, `active_s`: the durations of every attempt summed, the running one counted
+up to the read, so a job that was gated, retried and finished shows all of its work and a
+pending job that already ran shows what it ran so far (see **Attempts** below); `TOKENS`
+is what it spent so far over every attempt (`374k`, `1.2M`). `SLUG/LAST` is the last
 thing the orchestrator said in its log while the job runs (`» ...`), `⛔ <code>: <message>`
 for a `gate` job a preflight block stopped, the first line of the notice of any other
 `gate` or `failed` job, and the slug otherwise; `PR` is
@@ -679,13 +681,58 @@ project, it may be spent on jobs of a single repository. The claim arms a lease 
 the same write that answers whether it still owns the job. A `running` row
 becomes an orphan only 60 seconds after its lease expired, and even then it is
 left alone while the process named in `worker` is alive on this host - unless
-`started_at + timeout_s + 600` has already passed, in which case it is recycled
-anyway, because reclaiming never depends on a healthy process. The next claim
-returns an orphan to `pending` (keeping its attempts) or fails it once it spent
-the `max_attempts` of its own row. A runner that loses ownership kills its child
+`attempt_started_at + timeout_s + 600` has already passed (the start of the current
+claim, never the job's first start, so a retried job gets a whole ceiling again), in
+which case it is recycled anyway, because reclaiming never depends on a healthy
+process. The next claim returns an orphan to `pending` (keeping its attempts and its
+first `started_at`) or fails it once it spent the `max_attempts` of its own row; its
+attempt row is closed `lost` (`exit_reason` `orphaned`) at the last lease renewal,
+`lease_until - timeout_s - 600`. A runner that loses ownership kills its child
 in the same heartbeat and writes nothing but one line in the job log: the row
 belongs to somebody else. `queue cancel` refuses a job that is running under a
 live lease: stop that runner first.
+
+**Attempts.** Every claim of a job opens one row of `job_attempts` and whatever takes
+the job out of `running` closes it: a finish (`done`, `gate`, `failed`, `cancelled`, or
+`timed_out` for a failed attempt that hit a timeout), a preflight or MCP-unreachable gate
+(`gate`), a release or a rate-limit park (`released`, with `interrupted` or
+`rate_limited` as `exit_reason`), a cancel (`cancelled`) and the orphan sweep (`lost`).
+The row keeps its own start, end, outcome, exit reason and usage; the job's
+`tokens_*`, `cache_*`, `cost_usd`, `bash_timeouts`, `tasks_*` and `orch_*` (except
+`orch_ctx_last` and `baseline_ctx`, which stay the last value) are the totals of its
+rows, each attempt's measures applied exactly once - a replayed finish or a late write
+never counts twice. `started_at` is the first claim and never moves again;
+`attempt_started_at` is the current claim and is cleared when the job leaves `running`.
+`queue status`, `queue status <id>` and the MCP `queue_status` expose `attempts_log`
+(one entry per claim: `attempt`, `started_at`, `finished_at`, `duration_s`, `outcome`,
+`exit_reason`, `spawns`, the tokens, `cost_usd`, `fresh`, `backfilled`), `active_s` (the
+sum of the durations) and `wall_s` (the first start to the end of the last attempt).
+
+A claim is one row however many times the runner re-spawns inside it after a transient
+failure: `spawns` counts those inner spawns and the row sums their usage. That is why
+two numbers are shown side by side and never merged: `N attempts` is the length of
+`attempts_log`, one per claim, while `attempts X / max` is the retry budget counter,
+which every inner re-spawn also increments and which a release, a gate or a park gives
+back - the CLI prints it as `attempts        X / max (budget counter: inner retries
+count)` and the studio chip carries the same tooltip. `queue retry --fresh` keeps the
+history: the next row is marked `fresh: true`. A job that ran before schema v23 has only
+its last attempt, rebuilt once from the job's own columns and marked `backfilled`; its
+`DURATION` and tokens read exactly as before.
+
+A resumed session (`--resume`, after a rate-limit park or with `queue.resumeSession`)
+reports in its `result` a per-model usage and a `total_cost_usd` that are cumulative over
+the whole session; the runner nets out what the session's previous `result` in the job
+log already reported, plus the assistant turns of a spawn killed before its `result`
+(counted from those turns, at no cost), so each attempt counts only its own invocation.
+When the log holds nothing of that session (the log is gone, or the result names another
+session), or its previous `result` lacked the per-model block or the cost, the attempt
+counts the result's own per-invocation `usage` and no cost, and the job log says so; it
+never stores the session's cumulative figures as its own.
+
+**Known gap.** A finish whose commit failed with a non-outage database error is repaired
+from the `state.json` witness without its usage: that attempt's row is closed with its
+outcome, but its tokens and cost are missing from the row and from the job's totals.
+Follow-up: carry the attempt's measures in the state.json terminal witness.
 
 **Timeouts.** Each job has its own total timeout (`--timeout`, default 4 hours)
 and every attempt also dies after 20 minutes without a single line on the

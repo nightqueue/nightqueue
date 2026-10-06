@@ -178,7 +178,7 @@ test("(i) a random -shm is survived: SQLite rebuilds the index, --db reports it 
   const inspected = await diagnose(host.env, { args: ["--db"] });
   const files = requireRow(inspected.checks, "db files");
   assert.equal(files.status, "ok");
-  assert.match(files.detail, /^main \d+(\.\d)? (B|KB), wal \d+(\.\d)? (B|KB), shm 32\.0 KB \(inode \d+:\d+\)$/);
+  assert.match(files.detail, /^main \d+(\.\d)? (B|KB), wal \d+(\.\d)? (B|KB|MB), shm 32\.0 KB \(inode \d+:\d+\)$/);
   assert.deepEqual(requireRow(inspected.checks, "db integrity"), { name: "db integrity", status: "ok", detail: "quick_check ok", hint: null });
   assert.equal(rowOf(inspected.checks, "db checkpoint"), undefined, "--db changed what --fix does");
   assert.ok(sizeOf(dbWalPath(host.env)) > 0, "the WAL was folded before --fix");

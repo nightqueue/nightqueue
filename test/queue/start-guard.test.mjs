@@ -200,7 +200,7 @@ test("a v20 home gets no runner: `queue run` refuses with the update message, sp
   const started = await runCli(env, ["queue", "run", "--watch", "10"]);
 
   assert.equal(started.code, 1);
-  assert.match(started.stderr, /database at v20, this nightqueue expects v22: run `nightqueue update`/);
+  assert.match(started.stderr, /database at v20, this nightqueue expects v23: run `nightqueue update`/);
   assert.equal(started.calls.length, 0, "a runner was spawned on an older database");
   assert.deepEqual(liveRunners(env, fakeKill(new Set([CHILD_PID]))), []);
 });
@@ -219,7 +219,7 @@ test("a close on a v20 home refuses with the update message and registers no clo
   const closed = await runCli(env, ["queue", "close", "1"]);
 
   assert.equal(closed.code, 1);
-  assert.match(closed.stderr, /database at v20, this nightqueue expects v22: run `nightqueue update`/);
+  assert.match(closed.stderr, /database at v20, this nightqueue expects v23: run `nightqueue update`/);
   assert.equal(closed.calls.length, 0, "a close was spawned on an older database");
   assert.deepEqual(liveRunners(env, fakeKill(new Set([CHILD_PID]))), []);
 });

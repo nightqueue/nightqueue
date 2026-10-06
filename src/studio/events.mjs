@@ -55,11 +55,16 @@ function changedKeys(previous, next) {
   return set;
 }
 
+// The signature a row is compared by, without the durations a read derives from its own clock: the client ticks those itself.
+function jobSignature(job) {
+  return JSON.stringify({ ...job, active_s: undefined, wall_s: undefined });
+}
+
 // The rows that changed, appeared or left since the previous snapshot, plus the new order; null when nothing moved.
 function changedJobs(previous, next) {
-  const before = new Map((previous.jobs ?? []).map((job) => [job.id, JSON.stringify(job)]));
+  const before = new Map((previous.jobs ?? []).map((job) => [job.id, jobSignature(job)]));
   const after = next.jobs ?? [];
-  const upsert = after.filter((job) => before.get(job.id) !== JSON.stringify(job));
+  const upsert = after.filter((job) => before.get(job.id) !== jobSignature(job));
   const ids = new Set(after.map((job) => job.id));
   const remove = [...before.keys()].filter((id) => !ids.has(id));
   const order = after.map((job) => job.id);

@@ -1173,7 +1173,8 @@ function toolDefinitions(env, state) {
           "The listing cuts `notice_md` and `result` at 500 characters and marks a cut row with `notice_truncated: true` or `result_truncated: true` (the key is absent when the text fits); call again with that `job_id` for the whole text. " +
           "`sections` carries each part of the read with `ok`, `error` and elapsed `ms`, and `pr_state` of each job comes from a cache refreshed outside the answer (`unknown` until gh answered); " +
           "a `running` job carries `live` (agent, lane intent, last action, partial tokens, `source: \"log-tail\"`), every other job `live: null`, and `sections` has a `live` entry; " +
-          "a merged pull request on a `done` job is listed in `suggestions`, and closing it is `queue_close`. `closes` groups the closes in flight, failed and stalled.",
+          "a merged pull request on a `done` job is listed in `suggestions`, and closing it is `queue_close`. `closes` groups the closes in flight, failed and stalled. " +
+          "`tokens_*`, `cache_*`, `cost_usd` and the host/orchestrator counters are totals across every attempt; `attempts_log` lists one row per claim of the job (released, parked and lost ones included, `spawns` counts the runner's inner re-spawns inside that claim, `fresh: true` after a `--fresh` retry); `attempts` stays the retry budget counter, which inner re-spawns also increment; `active_s` is the sum of the rows' durations and `wall_s` the span from the first start.",
         inputSchema: {
           job_id: jobRefInput.nullable().optional().describe("One job by its ref (`J-77`) or its plain id."),
           pr_url: optionalText.describe(

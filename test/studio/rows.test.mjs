@@ -30,3 +30,11 @@ test("a done job never closed carries a null close_state and its own status", as
   assert.equal(cells.close_state, null);
   assert.equal(cells.status_label, "done");
 });
+
+test("the TOKENS cell of a retried job reads the totals of every attempt, and the attempt keys pass through untouched", async () => {
+  const attempts = [{ attempt: 1, tokens_out: 400 }, { attempt: 2, tokens_out: 600 }];
+  const job = { id: 7, status: "done", tokens_in: 0, tokens_out: 1000, cache_read: 0, cache_creation: 0, attempts_log: attempts, active_s: 90, wall_s: 300 };
+  const answer = await decorateSnapshot({ jobs: [job], runners: [] }, { env: {}, store: STORE, itemRefs: new Map(), nowMs: NOW });
+  assert.equal(answer.jobs[0].studio.tokens_label, "1k");
+  assert.deepEqual([answer.jobs[0].attempts_log, answer.jobs[0].active_s, answer.jobs[0].wall_s], [attempts, 90, 300]);
+});
