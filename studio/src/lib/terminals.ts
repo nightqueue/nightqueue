@@ -68,7 +68,8 @@ export function useOpenTerminal() {
 
 // The command a terminal request runs by hand when the studio cannot embed it.
 export function fallbackCommand(request: TerminalRequest): string {
-  return request.kind === "session" ? `nightqueue queue session ${request.job}` : `nightqueue open ${request.project}`;
+  if (request.kind === "session") return `nightqueue queue session ${request.job}`;
+  return request.project ? `nightqueue open ${request.project}` : "nightqueue open";
 }
 
 // Opens a terminal from an entry point: the copy-the-command fallback when the studio cannot embed one, a toast on any other refusal, the full page when already on one.

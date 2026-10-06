@@ -417,6 +417,8 @@ const SUBCOMMANDS = new Map([
   ["update", runUpdate],
 ]);
 
+export const SUBCOMMAND_NAMES = Object.freeze([...SUBCOMMANDS.keys()]);
+
 // Dispatches the subcommands of `nightqueue decision`.
 export async function run(argv, ctx) {
   const [sub, ...rest] = argv;

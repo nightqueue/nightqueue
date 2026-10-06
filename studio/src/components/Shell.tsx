@@ -6,6 +6,7 @@ import { utcClock } from "../lib/format";
 import { useMcpStatus } from "../lib/mcp";
 import { ALL_PROJECTS } from "../lib/queue";
 import { useSelectedProject } from "../lib/selectedProject";
+import type { TerminalRequest } from "../lib/types";
 import { dismissToast, useToasts, type ToastTone } from "../lib/toast";
 import { useNow } from "../lib/useNow";
 import { TerminalDock, useDockPadding } from "./TerminalDock";
@@ -103,22 +104,20 @@ function ToastHost() {
   );
 }
 
-// The project the header's Operator opens, from the queue toolbar's select, or why there is none.
-function useHeaderOperatorProject(): { name: string | null; blockedReason: string | null } {
+// The project the header's Operator preselects, from the queue toolbar's select, or null when there is none to name.
+function useHeaderOperatorProject(): string | null {
   const projectId = useSelectedProject();
   const projects = useProjects();
-  if (projectId === ALL_PROJECTS) return { name: null, blockedReason: "pick a project in the queue toolbar" };
-  if (projects.isPending) return { name: null, blockedReason: "loading the projects" };
-  if (projects.isError) return { name: null, blockedReason: "the projects cannot be read; reload the page" };
-  const name = projects.data?.find((entry) => entry.id === projectId)?.name ?? null;
-  return name ? { name, blockedReason: null } : { name: null, blockedReason: "this project is no longer registered" };
+  if (projectId === ALL_PROJECTS || !projects.isSuccess || !Array.isArray(projects.data)) return null;
+  return projects.data.find((entry) => entry.id === projectId)?.name ?? null;
 }
 
-// The header's Operator: opens the operator of the queue toolbar's project in a terminal.
+// The header's Operator: opens the operator in the nightqueue home, preselecting the queue toolbar's project when one is picked.
 function HeaderOperatorButton() {
-  const { name, blockedReason } = useHeaderOperatorProject();
+  const name = useHeaderOperatorProject();
+  const request: TerminalRequest = name ? { kind: "operator", project: name } : { kind: "operator" };
   return (
-    <TerminalLaunchButton size="sm" variant="run" request={name ? { kind: "operator", project: name } : null} blockedReason={blockedReason} title={name ? `Open the ${name} operator in a terminal` : undefined}>
+    <TerminalLaunchButton size="sm" variant="run" request={request} blockedReason={null} title={name ? `Open the operator (${name} preselected)` : "Open the operator"}>
       Operator
     </TerminalLaunchButton>
   );

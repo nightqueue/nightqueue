@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { makeDir } from "../test-support/memory.mjs";
+import { isId } from "../src/config/ids.mjs";
+import { qaDir } from "../src/config/paths.mjs";
+import { initGitRepo } from "../test-support/git.mjs";
+import { makeDir, makeHome, registerCheckout } from "../test-support/memory.mjs";
+import { git, gitVars, registeredWorktrees } from "../test-support/worktrees.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const PROBE = fileURLToPath(new URL("../test-support/sandbox-probe.mjs", import.meta.url));
@@ -75,4 +80,59 @@ test("a command that cannot be spawned exits 127 with a message on stderr", (t) 
 
   assert.equal(result.code, 127);
   assert.match(result.stderr, /nightqueue-sandbox-command-that-does-not-exist/);
+});
+
+// A temporary home with one registered git checkout `alpha`, its env free of any job or operator identity.
+function worktreeHome(t) {
+  const env = { ...makeHome(t, "sandbox-worktree"), ...gitVars() };
+  delete env.NIGHTQUEUE_MODE;
+  delete env.NIGHTQUEUE_OPERATOR_PID;
+  const checkout = realpathSync(initGitRepo(makeDir(t, "sandbox-worktree-alpha")));
+  const project = registerCheckout(env, { path: checkout, name: "alpha" });
+  return { env, checkout, project };
+}
+
+// Runs `nightqueue sandbox worktree ...` as a real subprocess with exactly the given env.
+function runWorktree(env, args) {
+  const result = spawnSync(process.execPath, [CLI, "sandbox", "worktree", ...args], { env, encoding: "utf8" });
+  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+test("`sandbox worktree <project>` prints one QA_WORKTREE line of a detached worktree under qa/<project id>, and --drop removes it", (t) => {
+  const { env, checkout, project } = worktreeHome(t);
+
+  const created = runWorktree(env, ["alpha"]);
+  assert.equal(created.code, 0, created.stderr);
+  const lines = created.stdout.trim().split("\n");
+  assert.equal(lines.length, 1);
+  const [, path] = /^QA_WORKTREE: (.+)$/.exec(lines[0]);
+  assert.equal(realpathSync(dirname(path)), realpathSync(join(qaDir(env), project.id)));
+  assert.equal(isId(basename(path)), true);
+  assert.equal(git(["-C", path, "rev-parse", "--abbrev-ref", "HEAD"]).trim(), "HEAD");
+  assert.equal(registeredWorktrees(checkout).length, 1);
+
+  const dropped = runWorktree(env, ["--drop", path]);
+  assert.equal(dropped.code, 0, dropped.stderr);
+  assert.equal(dropped.stdout.trim(), `dropped ${path}`);
+  assert.equal(existsSync(path), false);
+  assert.deepEqual(registeredWorktrees(checkout), []);
+  assert.equal(runWorktree(env, ["--drop", path]).stdout.trim(), `gone ${path}`);
+});
+
+test("`sandbox worktree` refuses a wrong shape, an unknown project and a --drop outside qa/, touching nothing", (t) => {
+  const { env, checkout } = worktreeHome(t);
+
+  for (const args of [[], ["--drop"], ["alpha", "beta"], ["--keep", "alpha"]]) {
+    const refused = runWorktree(env, args);
+    assert.equal(refused.code, 1, args.join(" "));
+    assert.match(refused.stderr, /nightqueue sandbox worktree <project> \| --drop <path>/, args.join(" "));
+  }
+  const unknown = runWorktree(env, ["beta"]);
+  assert.equal(unknown.code, 1);
+  assert.match(unknown.stderr, /unknown project `beta`/);
+  const outside = runWorktree(env, ["--drop", checkout]);
+  assert.equal(outside.code, 1);
+  assert.match(outside.stderr, /is not a qa worktree of this home/);
+  assert.ok(existsSync(join(checkout, ".git")));
+  assert.equal(existsSync(qaDir(env)), false);
 });

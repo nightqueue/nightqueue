@@ -211,19 +211,21 @@ test("outside a job `pipeline_log` records the operator's outcomes, and inside a
   assert.match(textOf(refused), /outcome `investigated` is the operator's/);
 });
 
-test("outside a job `run_set` records the operator fields, the evidence level as a number, and the schema refuses a level out of range", async (t) => {
-  const env = makeHome(t, "mcp-run-set-operator");
+test("`run_set` refuses the operator fields D-58 retired, and a null one is ignored", async (t) => {
+  const env = makeHome(t, "mcp-run-set-retired");
   makeProject(t, env, "alpha");
   const client = await connect(t, env);
   const run = { project: "alpha", slug: "hunt-the-notice" };
 
-  payloadOf(await client.callTool({ name: "run_set", arguments: { ...run, origin: "operator", evidence_level: 3, plan_status: "draft" } }));
-  const state = readState(env, "alpha", run.slug);
-  assert.deepEqual({ origin: state.origin, evidenceLevel: state.evidenceLevel, planStatus: state.planStatus }, { origin: "operator", evidenceLevel: 3, planStatus: "draft" });
+  for (const [field, value] of [["origin", "operator"], ["evidence_level", 3], ["plan_status", "draft"]]) {
+    const refused = await client.callTool({ name: "run_set", arguments: { ...run, type: "bug/error", [field]: value } });
+    assert.equal(refused.isError, true, field);
+    assert.match(textOf(refused), new RegExp(`\`${field}\` was removed by D-58`));
+  }
 
-  const outOfRange = await client.callTool({ name: "run_set", arguments: { ...run, evidence_level: 5 } });
-  assert.equal(outOfRange.isError, true);
-  assert.equal(readState(env, "alpha", run.slug).evidenceLevel, 3);
+  payloadOf(await client.callTool({ name: "run_set", arguments: { ...run, type: "bug/error", origin: null, evidence_level: null, plan_status: null } }));
+  const state = readState(env, "alpha", run.slug);
+  assert.deepEqual({ type: state.type, origin: state.origin, evidenceLevel: state.evidenceLevel }, { type: "bug/error", origin: undefined, evidenceLevel: undefined });
 });
 
 test("a phase, a status or a call with nothing to record is refused with the accepted contract", async (t) => {

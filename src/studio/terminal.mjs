@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
-import { studioTerminalsDir } from "../config/paths.mjs";
+import { homeDir, studioTerminalsDir } from "../config/paths.mjs";
 import { packageRoot, spawnRoot } from "../host/paths.mjs";
 import { jobRef, parseJobRef } from "../memory/refs.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
@@ -371,14 +371,24 @@ function resolveOrRefuse(m, job) {
   }
 }
 
-// The launch of an operator terminal: a fresh operator in the project's registered checkout.
+// The launch of an operator terminal: a fresh operator in the nightqueue home, the named project only preselected.
 async function operatorPlan(m, body, instruction) {
-  if (typeof body.project !== "string" || body.project.trim() === "") throw new TerminalRefusal(400, "`project` must name a registered project");
-  const project = await m.deps.readProject(body.project.trim());
-  if (!project) throw new TerminalRefusal(404, `unknown project \`${body.project}\``);
-  if (!project.path || !existsSync(project.path)) throw new TerminalRefusal(409, `the checkout of \`${project.name}\` is gone (${project.path ?? "none registered"})`);
+  const cwd = homeDir(m.env);
+  if (body.project === undefined) {
+    const launch = m.deps.launch(["open", ...promptArg(instruction)]);
+    return { kind: "operator", label: "operator", jobId: null, project: null, cwd, note: null, launch };
+  }
+  const project = await readOperatorProject(m, body.project);
   const launch = m.deps.launch(["open", project.name, ...promptArg(instruction)]);
-  return { kind: "operator", label: `${project.name} operator`, jobId: null, project: project.name, cwd: project.path, note: null, launch };
+  return { kind: "operator", label: `${project.name} operator`, jobId: null, project: project.name, cwd, note: null, launch };
+}
+
+// The registered project an operator body names, refused when the name is empty or unknown.
+async function readOperatorProject(m, name) {
+  if (typeof name !== "string" || name.trim() === "") throw new TerminalRefusal(400, "`project` must name a registered project");
+  const project = await m.deps.readProject(name.trim());
+  if (!project) throw new TerminalRefusal(404, `unknown project \`${name}\``);
+  return project;
 }
 
 // Path of the registration file of one terminal of this studio.

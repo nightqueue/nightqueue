@@ -1,7 +1,6 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { ID_RE } from "../config/ids.mjs";
-import { homeDir, operatorQaDir } from "../config/paths.mjs";
+import { homeDir } from "../config/paths.mjs";
 import { claudeConfigDir, claudePluginsDir, hostPackageRoot, packageRoot } from "../host/paths.mjs";
 
 export const PLUGIN_DIR_ENV = "NIGHTQUEUE_PLUGIN_DIR";
@@ -35,80 +34,13 @@ export const ORCHESTRATOR_BASH_RULES = Object.freeze(
   ].map(freezeRule),
 );
 
-const QA_WORKTREE_LEAF = "[A-Za-z0-9][A-Za-z0-9._-]{0,79}";
-const PROJECT_ID_SEGMENT = ID_RE.source.slice(1, -1);
-const COMMIT_ISH = /^[A-Za-z0-9][A-Za-z0-9._/~^-]{0,199}$/;
-
-// Escapes every character a regular expression reads as syntax, so a path is matched literally.
-function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-// The operator's QA directory of the home the environment names, or null when no home can be resolved.
-function operatorQaRoot(env) {
-  try {
-    return resolve(operatorQaDir(env));
-  } catch {
-    return null;
-  }
-}
-
-// A QA worktree of the operator: the absolute `<home>/operator-qa/<project id>/<slug>` of the caller's home, never a job's worktree, so `..`, `~`, a relative path or another home never match.
-const OPERATOR_QA_WORKTREE = Object.freeze({
-  test(value, env = process.env) {
-    const root = operatorQaRoot(env);
-    if (root === null || typeof value !== "string") return false;
-    return new RegExp(`^${escapeRegExp(root)}/${PROJECT_ID_SEGMENT}/${QA_WORKTREE_LEAF}$`).test(value);
-  },
-});
-
-// The QA worktree path as a refusal shows it, with the caller's home resolved.
-function qaWorktreeShown(env) {
-  return `${operatorQaRoot(env) ?? "<NIGHTQUEUE_HOME>/operator-qa"}/<project_id>/<slug>`;
-}
-
-// The closed list of commands the operator of `nightqueue open` may run: read-only git, its own QA worktree, and nothing that commits, pushes or fetches.
-export const OPERATOR_BASH_RULES = Object.freeze(
-  [
-    { argv: ["git", "rev-parse"] },
-    { argv: ["git", "status"], anyOf: ["--short", "-s", "--porcelain"] },
-    { argv: ["git", "branch"], anyOf: ["--show-current"] },
-    { argv: ["git", "log"], exact: [/^--oneline$/, /^-n$/, /^[1-9]\d{0,3}$/], describe: "git log --oneline -n <N>" },
-    {
-      argv: ["git", "diff"],
-      anyOf: ["--stat", "--shortstat", "--name-only", "--name-status"],
-      noneOf: ["-p", "-u", "--patch", "--output", "--ext-diff", "--no-index"],
-    },
-    {
-      argv: ["git", "worktree", "add"],
-      flags: ["--detach", "-q", "--quiet"],
-      positionals: [OPERATOR_QA_WORKTREE, COMMIT_ISH],
-      minPositionals: 2,
-      describe: (env) => `git worktree add ${qaWorktreeShown(env)} <commit-ish>`,
-    },
-    {
-      argv: ["git", "worktree", "remove"],
-      flags: ["--force", "-f"],
-      positionals: [OPERATOR_QA_WORKTREE],
-      minPositionals: 1,
-      describe: (env) => `git worktree remove [--force] ${qaWorktreeShown(env)}`,
-    },
-    { argv: ["git", "worktree", "list"], flags: ["--porcelain", "-v", "--verbose"], positionals: [] },
-    { argv: ["git", "worktree", "prune"], flags: ["-n", "--dry-run", "-v", "--verbose"], positionals: [] },
-    { argv: ["gh", "pr"], next: ["view", "list", "status", "checks"] },
-    { argv: ["gh", "issue"], next: ["list", "view"] },
-    { argv: ["adb", "devices"], exact: [] },
-    { argv: ["nightqueue", "run"], next: ["check", "dir", "log", "index-save"] },
-  ].map(freezeRule),
-);
-
-const FORBIDDEN_SHELL_CHARS = /[\n\r;&|`<>$]/;
+export const FORBIDDEN_SHELL_CHARS = /[\n\r;&|`<>$]/;
 const GLOB_CHARS = /[*?[{]/;
 const SHORT_FLAG_CLUSTER = /^-[A-Za-z]{2,}$/;
 const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/;
 
 // Splits a command into whitespace-separated tokens, keeping a single- or double-quoted run inside one token.
-function tokenize(command) {
+export function tokenize(command) {
   const tokens = command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
   return tokens.map((token) => token.replace(/"([^"]*)"|'([^']*)'/g, (_, double, single) => double ?? single ?? ""));
 }
@@ -120,38 +52,18 @@ function isFlag(token, flag) {
 }
 
 // Tells whether one argument is a denied flag, including the unambiguous abbreviation git accepts for a long one (`--mir`).
-function isDeniedFlag(token, flag) {
+export function isDeniedFlag(token, flag) {
   if (isFlag(token, flag)) return true;
   const name = token.split("=")[0];
   return flag.startsWith("--") && name.length > 2 && name.startsWith("--") && flag.startsWith(name);
 }
 
-// Tells whether the arguments are exactly as many as the patterns, each matching its own in order.
-function matchesExactly(patterns, rest) {
-  return rest.length === patterns.length && patterns.every((pattern, index) => pattern.test(rest[index]));
-}
-
-// Tells whether every flag among the arguments is one of the closed list.
-function onlyListedFlags(flags, rest) {
-  return rest.every((token) => !token.startsWith("-") || flags.includes(token));
-}
-
-// Tells whether the non-flag arguments are between the minimum and the pattern count, each matching the pattern of its position.
-function positionalsMatch({ positionals, minPositionals = 0 }, rest, env) {
-  const values = rest.filter((token) => !token.startsWith("-"));
-  if (values.length < minPositionals || values.length > positionals.length) return false;
-  return values.every((value, index) => positionals[index].test(value, env));
-}
-
 // Tells whether the arguments after the subcommand satisfy the constraints of one rule.
-function ruleAccepts(rule, rest, env) {
+function ruleAccepts(rule, rest) {
   if (rule.anyOf && !rest.some((token) => rule.anyOf.some((flag) => isFlag(token, flag)))) return false;
   if (rule.noneOf && rest.some((token) => rule.noneOf.some((flag) => isDeniedFlag(token, flag)))) return false;
   if (rule.noPrefix && rest.some((token) => rule.noPrefix.some((prefix) => token.startsWith(prefix)))) return false;
   if (rule.next && !rule.next.includes(rest[0])) return false;
-  if (rule.exact && !matchesExactly(rule.exact, rest)) return false;
-  if (rule.flags && !onlyListedFlags(rule.flags, rest)) return false;
-  if (rule.positionals && !positionalsMatch(rule, rest, env)) return false;
   return true;
 }
 
@@ -162,11 +74,11 @@ function matchingRule(rules, tokens) {
 }
 
 // Tells whether a Bash command is one row of a closed list: no shell operator, the bare program name, the row's own constraints.
-function bashAllowed(rules, command, env) {
+function bashAllowed(rules, command) {
   if (typeof command !== "string" || FORBIDDEN_SHELL_CHARS.test(command)) return false;
   const tokens = tokenize(command.trim());
   const rule = matchingRule(rules, tokens);
-  return rule ? ruleAccepts(rule, tokens.slice(rule.argv.length), env) : false;
+  return rule ? ruleAccepts(rule, tokens.slice(rule.argv.length)) : false;
 }
 
 // Tells whether a Bash command is one of the closed list the orchestrator of a queued job may run.
@@ -174,15 +86,8 @@ export function orchestratorBashAllowed(command) {
   return bashAllowed(ORCHESTRATOR_BASH_RULES, command);
 }
 
-// Tells whether a Bash command is one of the closed list the operator of `nightqueue open` may run.
-export function operatorBashAllowed(command, env = process.env) {
-  return bashAllowed(OPERATOR_BASH_RULES, command, env);
-}
-
 // Human rendering of one rule: the program and subcommand, what must follow, and what never may.
-function describeRule({ argv, anyOf, noneOf, noPrefix, next, describe }, env) {
-  if (typeof describe === "function") return describe(env);
-  if (describe) return describe;
+function describeRule({ argv, anyOf, noneOf, noPrefix, next }) {
   const allowed = next ?? anyOf;
   const never = [...(noneOf ?? []), ...(noPrefix ?? []).map((prefix) => `a ${prefix}refspec`)];
   const head = allowed ? `${argv.join(" ")} ${allowed.join("|")}` : argv.join(" ");
@@ -191,16 +96,11 @@ function describeRule({ argv, anyOf, noneOf, noPrefix, next, describe }, env) {
 
 // Human rendering of the closed list, one entry per rule, for a deny reason or a document.
 export function describeOrchestratorBashRules() {
-  return ORCHESTRATOR_BASH_RULES.map((rule) => describeRule(rule, process.env)).join(", ");
-}
-
-// Human rendering of the operator's closed list, one entry per rule, for a deny reason.
-export function describeOperatorBashRules(env = process.env) {
-  return OPERATOR_BASH_RULES.map((rule) => describeRule(rule, env)).join(", ");
+  return ORCHESTRATOR_BASH_RULES.map(describeRule).join(", ");
 }
 
 // Real path of a path, or of its nearest existing ancestor with the missing rest appended, so a symlink never hides where a path really points.
-function canonicalPath(path) {
+export function canonicalPath(path) {
   const absolute = resolve(path);
   let existing = absolute;
   while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
@@ -238,22 +138,25 @@ export function sessionTranscriptPath(env, sessionId) {
   }
 }
 
+// Every copy of the plugin a session may load its agents and skills from, canonical.
+export function pluginRoots(env = process.env) {
+  const pluginEnv = typeof env?.[PLUGIN_DIR_ENV] === "string" ? env[PLUGIN_DIR_ENV].trim() : "";
+  const candidates = [pluginEnv, join(packageRoot(), "plugin"), join(hostPackageRoot(env), "plugin"), claudePluginsDir(env)];
+  return candidates.filter(Boolean).map(canonicalPath);
+}
+
 // Directories the orchestrator of a queued job may read: the runs of its home, every copy of the plugin it may load the skill from, and the host's spill of a large tool result of its own sessions only.
 export function orchestratorRoots(env = process.env, sessions = []) {
-  const pluginEnv = typeof env?.[PLUGIN_DIR_ENV] === "string" ? env[PLUGIN_DIR_ENV].trim() : "";
   const candidates = [
     join(jobHome(env), "runs"),
-    pluginEnv,
-    join(packageRoot(), "plugin"),
-    join(hostPackageRoot(env), "plugin"),
-    claudePluginsDir(env),
+    ...pluginRoots(env),
     ...(Array.isArray(sessions) ? sessions : []).map(sessionSpillRoot),
   ];
   return [...new Set(candidates.filter(Boolean).map(canonicalPath))];
 }
 
 // Static directory prefix of an absolute glob pattern, up to the first segment carrying a glob character.
-function globStaticPrefix(pattern) {
+export function globStaticPrefix(pattern) {
   const segments = pattern.split("/");
   const firstGlob = segments.findIndex((segment) => GLOB_CHARS.test(segment));
   const kept = firstGlob === -1 ? segments : segments.slice(0, firstGlob);

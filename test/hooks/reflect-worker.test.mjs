@@ -284,6 +284,17 @@ test("a session outside a registered project is not reflected upon", async (t) =
   assert.equal(claude.calls.length, 0);
 });
 
+test("an operator session in the home reflects into the project nightqueue open preselected", async (t) => {
+  const env = makeHome(t, "worker-preselected");
+  makeProject(t, env, "alpha");
+  const session = { ...env, NIGHTQUEUE_MODE: "operator", NIGHTQUEUE_PROJECT: projectIdOf(env, "alpha") };
+  const claude = fakeClaude(LESSON_ANSWER);
+
+  const result = await runReflectWorker({ transcriptPath: leakTranscript(t), cwd: makeDir(t, "worker-home-cwd"), sessionId: "s1" }, { env: session, runClaude: claude.run });
+  assert.deepEqual({ saved: result.saved, skipped: result.skipped }, { saved: 1, skipped: null });
+  assert.equal(lessonRows(env)[0].project_id, projectIdOf(env, "alpha"));
+});
+
 test("a missing transcript is a clean skip", async (t) => {
   const env = makeHome(t, "worker-missing");
   const repo = makeProject(t, env, "alpha");

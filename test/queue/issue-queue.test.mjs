@@ -19,7 +19,6 @@ import {
 } from "../../src/memory/issues.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
-import { recordPhaseDone, recordRunFields } from "../../src/queue/run-state.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { fakeEmbedder, makeDir, makeHome, makeProject, mergedChecklist, projectIdOf, settleThroughStore, ensureProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
@@ -261,23 +260,12 @@ test("a job built from an issue carries the operator's tier, through the tool an
   assert.equal(getJob(getIssue(item.id, env).job_id, env).tier, "complex");
 });
 
-const RUN_SLUG = "hunt-the-notice";
 const NOTE = "mind the slow disk; keep the lease renewal in one place";
 const ITEM_END = "Commit type: refactor or perf\n\n";
 
 // The expected prompt with `sections` placed right after the item block and before the decisions.
 function promptWith(...sections) {
   return EXPECTED_PROMPT.replace(ITEM_END, () => `${ITEM_END}${sections.map((section) => `${section}\n\n`).join("")}`);
-}
-
-// An operator run of `alpha` with its triage done, and the block the runtime writes for it.
-function makeOperatorRun(env) {
-  const projectId = ensureProject(env, "alpha");
-  recordRunFields({ projectId, slug: RUN_SLUG, fields: { origin: "operator", type: "bug/error", evidenceLevel: 3 }, env });
-  recordPhaseDone({ projectId, slug: RUN_SLUG, phase: "triage", artifact: "01-triage.md", verdict: "PROCEED", env });
-  const dir = runDir(projectId, RUN_SLUG, env);
-  const block = ["## PRIOR RUN (operator)", `RUN_DIR: ${dir}`, "Last completed phase: triage", "Evidence level: 3", "Resume from phase: explore"].join("\n");
-  return { dir, block };
 }
 
 // The `queued` comment of an item, newest last.
@@ -298,73 +286,23 @@ test("queue_add from an issue with a note puts it verbatim after the item block 
   assert.equal(queuedComments(env, item)[0].body, `J-${queued.id} queued\n\n${NOTE}`);
 });
 
-test("queue_add from an issue with a run_dir binds the run and places its block right after the item block", async (t) => {
-  const { env, item } = makeIssuesHome(t, "issue-queue-run-dir");
-  const { dir, block } = makeOperatorRun(env);
-  const client = await connect(t, env);
-
-  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { issue_id: item.ref, run_dir: dir } }));
-
-  const job = getJob(queued.id, env);
-  assert.equal(job.prompt, promptWith(block));
-  assert.equal(job.slug, RUN_SLUG);
-  assert.equal(job.operator_note, null);
-  assert.equal(queuedComments(env, item)[0].body, `J-${queued.id} queued\n\nRun dir: ${dir}`);
-});
-
-test("queue_add from an issue with a note and a run_dir orders item, note, prior run, decisions", async (t) => {
-  const { env, item } = makeIssuesHome(t, "issue-queue-note-run-dir");
-  const { dir, block } = makeOperatorRun(env);
-  const client = await connect(t, env);
-
-  const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { issue_id: item.ref, prompt: NOTE, run_dir: dir } }));
-
-  const job = getJob(queued.id, env);
-  assert.equal(job.prompt, promptWith(`## Operator note\n${NOTE}`, block));
-  assert.equal(job.slug, RUN_SLUG);
-  assert.equal(job.operator_note, NOTE);
-  assert.equal(queuedComments(env, item)[0].body, `J-${queued.id} queued\n\n${NOTE}\n\nRun dir: ${dir}`);
-});
-
-test("queue_add from an issue refuses a run_dir as for a free prompt, and queues nothing", async (t) => {
-  const { env, item } = makeIssuesHome(t, "issue-queue-run-dir-refusals");
-  const { dir } = makeOperatorRun(env);
-  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: "plain-run", fields: { type: "bug/error" }, env });
-  const client = await connect(t, env);
-  const refuse = async (run_dir) => {
-    const result = await client.callTool({ name: "queue_add", arguments: { issue_id: item.ref, run_dir } });
-    assert.equal(result.isError, true, textOf(result));
-    return textOf(result);
-  };
-
-  assert.match(await refuse(join(env.NIGHTQUEUE_HOME, "elsewhere", RUN_SLUG)), /`run_dir` must be `/);
-  assert.match(await refuse(runDir(ensureProject(env, "alpha"), "plain-run", env)), /is not an operator run/);
-  assert.match(await refuse("runs/alpha/x"), /must be an absolute or `~\/` path/);
-  assert.equal(getIssue(item.id, env).status, "todo");
-
-  const first = payloadOf(await client.callTool({ name: "queue_add", arguments: { issue_id: item.ref, run_dir: dir } }));
-  const other = saveIssue({ type: "chore", projectId: projectIdOf(env, "alpha"), title: "index the logs" }, env);
-  const taken = await client.callTool({ name: "queue_add", arguments: { issue_id: other.ref, run_dir: dir } });
-  assert.equal(taken.isError, true);
-  assert.match(textOf(taken), new RegExp(`J-${first.id} already runs from `));
-  assert.equal(getIssue(other.id, env).status, "todo");
-});
-
-test("nightqueue queue add --issue takes a note and a --run-dir", async (t) => {
+test("nightqueue queue add --issue takes a note, and refuses --run-dir with D-58", async (t) => {
   const { env, item } = makeIssuesHome(t, "issue-queue-cli-note");
-  const { dir, block } = makeOperatorRun(env);
 
-  const added = spawnSync(process.execPath, [CLI, "queue", "add", "--issue", item.ref, "--run-dir", dir, NOTE], { env, encoding: "utf8" });
+  const added = spawnSync(process.execPath, [CLI, "queue", "add", "--issue", item.ref, NOTE], { env, encoding: "utf8" });
 
   assert.equal(added.status, 0, added.stderr);
   const job = getJob(1, env);
-  assert.equal(job.prompt, promptWith(`## Operator note\n${NOTE}`, block));
+  assert.equal(job.prompt, promptWith(`## Operator note\n${NOTE}`));
   assert.equal(job.operator_note, NOTE);
-  assert.equal(job.slug, RUN_SLUG);
+  assert.equal(job.slug, null);
 
-  const alone = spawnSync(process.execPath, [CLI, "queue", "add", "--run-dir", dir, "fix it"], { env, encoding: "utf8" });
-  assert.equal(alone.status, 1);
-  assert.match(alone.stderr, /`--run-dir` goes with `--issue`/);
+  for (const argv of [["--issue", item.ref, "--run-dir", "/x"], ["--run-dir", "/x", "fix it"]]) {
+    const refused = spawnSync(process.execPath, [CLI, "queue", "add", ...argv], { env, encoding: "utf8" });
+    assert.equal(refused.status, 1, refused.stdout);
+    assert.match(refused.stderr, /`--run-dir` was removed by D-58/);
+  }
+  assert.equal(getJob(2, env), null);
 });
 
 const RELATED_HEADING = "## Related decisions";

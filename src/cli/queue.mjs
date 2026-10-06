@@ -61,7 +61,7 @@ import { coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { originLabel } from "../integrations/origin.mjs";
 
 export const USAGE = {
-  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--origin <kind>:<ref>] [--issue <ref> [--project <name|all>] [--run-dir <dir>] [<note...>]]",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--origin <kind>:<ref>] [--issue <ref> [--project <name|all>] [<note...>]]",
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
@@ -354,7 +354,6 @@ async function addFromIssue(positionals, values, ctx) {
     ...target,
     ...addLimits(values),
     operatorNote: positionals.join(" ").trim() || undefined,
-    runDir: values["run-dir"],
   });
   for (const line of issueQueuedLines(queued)) ctx.out(line);
   return queued.jobs;
@@ -379,6 +378,9 @@ async function runAdd(argv, ctx) {
   if (origin) ctx.out(origin);
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }
+
+const RUN_DIR_RETIRED =
+  "`--run-dir` was removed by D-58: operator runs no longer exist, so there is no run to bind; put what was found in the prompt or the issue's note";
 
 const ADD_OPTIONS = {
   priority: { type: "string" },
@@ -441,9 +443,7 @@ function splitAddArgv(argv) {
 function parseAdd(argv) {
   const { optionTokens, words } = splitAddArgv(argv);
   const { values } = parseCommand(optionTokens, ADD_OPTIONS);
-  if (values.issue === undefined && values["run-dir"] !== undefined) {
-    throw new UserError(`\`--run-dir\` goes with \`--issue\`; usage: ${USAGE.add}`);
-  }
+  if (values["run-dir"] !== undefined) throw new UserError(RUN_DIR_RETIRED);
   if (values.issue === undefined) checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
   return { values, positionals: words };
 }
@@ -1563,7 +1563,7 @@ async function runSession(argv, ctx) {
     if (!values.json) ctx.out(command);
     return 0;
   }
-  return launchOperator({ cwd: resolved.cwd, resumeSession: resolved.session, prompt, ctx });
+  return await launchOperator({ cwd: resolved.cwd, resumeSession: resolved.session, prompt, ctx });
 }
 
 const SUBCOMMANDS = new Map([
@@ -1579,6 +1579,8 @@ const SUBCOMMANDS = new Map([
   ["log", runLog],
   ["session", runSession],
 ]);
+
+export const SUBCOMMAND_NAMES = Object.freeze([...SUBCOMMANDS.keys()]);
 
 // Dispatches the subcommands of `nightqueue queue`, returning the exit code the subcommand decided.
 export async function run(argv, ctx) {

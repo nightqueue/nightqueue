@@ -116,10 +116,9 @@ function acceptedSuffix(notice) {
   return match ? match[1] : "";
 }
 
-// The operator note and the prior run a job was queued with, as paragraphs, or an empty text.
+// The operator note a job was queued with, or an empty text.
 function queuedDetails(job) {
-  const note = typeof job.operator_note === "string" ? job.operator_note.trim() : "";
-  return [note, job.run_dir ? `Run dir: ${job.run_dir}` : ""].filter(Boolean).join("\n\n");
+  return typeof job.operator_note === "string" ? job.operator_note.trim() : "";
 }
 
 const COMMENT_BODIES = Object.freeze({

@@ -509,6 +509,28 @@ test("an inherited value of the no-orphan-background vars never leaks into the c
   assert.equal(capturedEnv.BASH_MAX_TIMEOUT_MS, "3600000", "an inherited max timeout leaked into the child");
 });
 
+test("a job started from inside an operator session never inherits the operator mode, project or pid (D-58)", async (t) => {
+  const env = makeHome(t, "spawn-operator-session");
+  env.NIGHTQUEUE_MODE = "operator";
+  env.NIGHTQUEUE_PROJECT = FIXED_PROJECT_ID;
+  env.NIGHTQUEUE_OPERATOR_PID = "4242";
+  const capturedEnvs = [];
+  const spawnImpl = (bin, args, opts) => {
+    capturedEnvs.push(opts.env);
+    return fakeChild();
+  };
+
+  await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(108, env), env, spawnImpl });
+  await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(109, env), env, jobId: 9, spawnImpl });
+
+  for (const captured of capturedEnvs) {
+    for (const key of ["NIGHTQUEUE_MODE", "NIGHTQUEUE_PROJECT", "NIGHTQUEUE_OPERATOR_PID"]) {
+      assert.equal(Object.hasOwn(captured, key), false, `${key} leaked into the child`);
+    }
+  }
+  assert.equal(env.NIGHTQUEUE_MODE, "operator", "the caller's own env was mutated");
+});
+
 // A fake child that prints one line, ends its stdout and closes only after the end was seen.
 function talkingChild() {
   const child = new EventEmitter();

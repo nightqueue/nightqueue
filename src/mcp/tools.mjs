@@ -57,7 +57,6 @@ import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume
 import { resolveJobRun } from "../queue/job-run.mjs";
 import { appendPendingWrite, PENDING_KEYS } from "../queue/pending-writes.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
-import { priorRunBlock, resolveOperatorRunDir, withPriorRun } from "../queue/operator-run.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
 import { startCloseDetached } from "../queue/close-start.mjs";
 import { cancelJobAndWorktree, stopAndCancelJob } from "../queue/cancel.mjs";
@@ -88,6 +87,7 @@ import { readVersion } from "../cli/version.mjs";
 import {
   newContractState,
   refuseRenamedFields,
+  refuseRetiredFields,
   STALE_CONTRACT_ADVISORY,
   StaleContractError,
   TOOL_CONTRACT,
@@ -309,16 +309,13 @@ const RUN_SET_FIELDS = {
   tier_raise_reason: "tierRaiseReason",
   branch: "branch",
   worktree: "worktree",
-  origin: "origin",
-  plan_status: "planStatus",
 };
 
 // The fields `run_set` was asked to change, under the names state.json uses; an absent or empty one is not a change.
 function runSetFields(args) {
   const asked = Object.entries(RUN_SET_FIELDS).filter(([arg]) => typeof args[arg] === "string" && args[arg].trim() !== "");
   const fields = Object.fromEntries(asked.map(([arg, field]) => [field, args[arg].trim()]));
-  const withLevel = args.evidence_level === undefined || args.evidence_level === null ? fields : { ...fields, evidenceLevel: args.evidence_level };
-  return args.qa_stage_a ? { ...withLevel, qaStageA: args.qa_stage_a } : withLevel;
+  return args.qa_stage_a ? { ...fields, qaStageA: args.qa_stage_a } : fields;
 }
 
 // Requires the absolute working directory of the caller, because the directory of this server is never the user's.
@@ -499,18 +496,6 @@ async function changeProjectIntegrationsAnswer(args, env) {
     const integrations = await changeProjectIntegrations({ store, project, action: args.action, changes: [change], env });
     return integrationsView(project, integrations);
   });
-}
-
-// Tells whether `queue_add` was asked to seed the job from an operator run.
-function hasRunDir(args) {
-  return typeof args.run_dir === "string" && args.run_dir.trim() !== "";
-}
-
-// The prompt and the run slug of a job queued from an operator run: the run is checked and its block is built by the runtime; `addJob` refuses a run already bound.
-function operatorRunSeed({ args, project, env }) {
-  const run = resolveOperatorRunDir({ runDir: args.run_dir, project: project.name, projectId: project.id, env });
-  const block = priorRunBlock({ projectId: project.id, slug: run.slug, state: run.state, env });
-  return { prompt: withPriorRun(args.prompt, block), slug: run.slug };
 }
 
 // Requires a source for the prompt of a job: the issue that builds it (its `prompt` is then an operator note), or the text itself.
@@ -1069,7 +1054,7 @@ function toolDefinitions(env, state) {
           "Enqueues an unattended /nightqueue:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
           "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. The hint reports how many runners are live right now, and a job queued with none online waits until `nightqueue queue run` starts one. " +
           "With `project` omitted, `cwd` (the absolute working directory of the caller) resolves the project. When no project is registered for it, the answer is `needs_registration`: ask the user to confirm, then call again with the same `cwd` and `register: true`. Registration never happens without `register: true`. " +
-          "With `issue_id` (the item's ref, `NQ-12`), the job prompt is built from that issue, its linked decision and the accepted decisions related to it; the item stays the brief. An optional `prompt` is then an operator note, written verbatim as a `## Operator note` section right after the item (recorded as the job's `operator_note` and in the item's `queued` comment), and an optional `run_dir` (a project item only) binds the job to a prior operator run, its `## PRIOR RUN (operator)` block going right after the note; a project item moves to `in_progress` and then follows its job: `in_review` once the job is done, `done` once the job is closed - its pull request merged through `queue_close` - and back to `todo` when the job fails or is cancelled (a close that finds the pull request closed without merge cancels the job)." +
+          "With `issue_id` (the item's ref, `NQ-12`), the job prompt is built from that issue, its linked decision and the accepted decisions related to it; the item stays the brief. An optional `prompt` is then an operator note, written verbatim as a `## Operator note` section right after the item (recorded as the job's `operator_note` and in the item's `queued` comment); a project item moves to `in_progress` and then follows its job: `in_review` once the job is done, `done` once the job is closed - its pull request merged through `queue_close` - and back to `todo` when the job fails or is cancelled (a close that finds the pull request closed without merge cancels the job)." +
           "An ORG issue needs an explicit `project` of that org, or `all` for every project of the org, because a job is always one project's: each project gets its own row linked to its own job (a project whose row still has a live job is skipped and reported in `skipped`; the answer lists every job in `jobs`), and the item's status is derived from its rows - `in_progress` while any row is, `done` once every row is done or cancelled, otherwise the lowest open row status. Closing it by hand cancels its open rows.",
         inputSchema: {
           project: z.string().nullable().optional(),
@@ -1105,13 +1090,6 @@ function toolDefinitions(env, state) {
             .nullable()
             .optional()
             .describe("Risk tier of the job, set by the operator. The pipeline may only raise it, with evidence, never lower it."),
-          run_dir: z
-            .string()
-            .nullable()
-            .optional()
-            .describe(
-              "The RUN_DIR of an operator run (`~/.nightqueue/runs/<project_id>/<slug>`, as `nightqueue run dir` prints it, absolute or `~/`) this job continues: the job writes into that run, and the runtime places the `## PRIOR RUN (operator)` block right after the prompt's `## Brief` section (with `issue_id`: right after the item block, or after the operator note). Never write that block yourself. A run already bound to an open job is refused; `queue_retry --fresh` of the job discards the run.",
-            ),
           origin: z
             .object({ kind: z.string(), ref: z.string() })
             .nullable()
@@ -1128,7 +1106,6 @@ function toolDefinitions(env, state) {
             id: await store.issues.itemIdOfRef(args.issue_id),
             ...(await issueQueueTarget(store, args.project)),
             operatorNote: args.prompt,
-            runDir: hasRunDir(args) ? args.run_dir : undefined,
             origin: args.origin,
             priority: args.priority,
             maxAttempts: args.max_attempts,
@@ -1141,15 +1118,13 @@ function toolDefinitions(env, state) {
         if (target.offer && args.register !== true) return needsRegistration(target);
         const registered = target.offer ? await registerOffer(target.offer, args.key, env) : null;
         const project = registered ?? target.project;
-        const seeded = hasRunDir(args) ? operatorRunSeed({ args, project, env }) : { prompt: args.prompt, slug: null };
         const job = await openStore(env).jobs.addJob({
           projectId: project.id,
-          prompt: seeded.prompt,
+          prompt: args.prompt,
           priority: args.priority,
           maxAttempts: args.max_attempts,
           timeoutS: args.timeout_s,
           tier: args.tier,
-          slug: seeded.slug,
           origin: args.origin,
         });
         return await queuedAnswer({ job, registered }, env);
@@ -1633,7 +1608,6 @@ function toolDefinitions(env, state) {
         description:
           "Records the fields of the run itself in `state.json` as the pipeline discovers them: its `type`, its `tier`, the evidence of a tier raise, and the branch and worktree the code lives in. Only the fields sent are touched. " +
           "`qa_stage_a` records the one sub-phase with a marker of its own — sent when the QA stage A gate closes, it is what makes a resume re-enter the QA phase straight at stage B instead of paying the analyst again. " +
-          "`origin: operator` marks a run an operator session recorded; `evidence_level` (1-4) is the level its triage reached and `plan_status` whether its plan was approved. A job queued from that run (`queue_add` with `run_dir`) skips its triage only at level 3 or more on a bug, and its architecture only with `plan_status: approved`. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: {
           type: z.enum(PIPELINE_TASK_TYPES).nullable().optional(),
@@ -1642,9 +1616,6 @@ function toolDefinitions(env, state) {
           branch: optionalText,
           worktree: optionalText,
           qa_stage_a: z.object({ artifact: z.string(), verdict: optionalText }).optional(),
-          origin: z.enum(["operator"]).nullable().optional(),
-          evidence_level: z.number().int().min(1).max(4).nullable().optional(),
-          plan_status: z.enum(["draft", "approved"]).nullable().optional(),
           project: optionalText,
           slug: optionalText,
         },
@@ -1689,6 +1660,7 @@ export function createServer(env = process.env) {
   // The SDK validates the call before the handler and refuses with one issue; this refusal carries every issue, the whole contract and what was received, which is what lets an agent fix the next call instead of repeating the same payload.
   server.validateToolInput = async (tool, args, toolName) => {
     refuseRenamedFields(toolName, args, state);
+    refuseRetiredFields(toolName, args);
     return validateArgs(toolName, schemas.get(toolName) ?? tool.inputSchema, args);
   };
   return server;

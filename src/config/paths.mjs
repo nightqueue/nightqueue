@@ -216,9 +216,19 @@ export function jobWorktreePath(projectId, slug, env = process.env) {
   return join(worktreesDir(env), projectId, slug);
 }
 
-// Directory holding the QA worktrees the operator creates, one sub-directory per project id, apart from every job's worktree.
-export function operatorQaDir(env = process.env) {
+// Directory where an operator before D-58 left its QA worktrees, one sub-directory per project id; only doctor still reads it.
+export function legacyOperatorQaDir(env = process.env) {
   return join(homeDir(env), "operator-qa");
+}
+
+// Directory holding the ephemeral QA worktrees of the operator's qa subagent, one sub-directory per project id.
+export function qaDir(env = process.env) {
+  return join(homeDir(env), "qa");
+}
+
+// Path of one ephemeral QA worktree, keyed by the project's id and the worktree's own id.
+export function qaWorktreePath(projectId, id, env = process.env) {
+  return join(qaDir(env), projectId, id);
 }
 
 // Path of the marker saying the run directories were moved from project names to project ids.

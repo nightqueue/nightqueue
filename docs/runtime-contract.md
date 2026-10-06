@@ -292,6 +292,66 @@ time and a command line containing the recorded `entry`, so a recycled pid, a re
 without a start time, or the operator's own `nightqueue open` in a shell is never killed. It
 prints `studio: reaped N terminal(s) left by an earlier studio` when N > 0.
 
+**Operator sessions (D-58).** `nightqueue open` (and `nightqueue queue session`, and a studio
+terminal through them) starts `claude` with `NIGHTQUEUE_MODE=operator`,
+`NIGHTQUEUE_OPERATOR_PID=<pid of the launcher>` and, only when a project is preselected,
+`NIGHTQUEUE_PROJECT=<project id>`; an inherited value of any of the three is dropped first, and
+the runner strips all three from every job it spawns. `nightqueue open` runs in the home, never
+in a checkout; a hook resolves the session's project from its directory, else from
+`NIGHTQUEUE_PROJECT` (never inside a job, and only for a well-formed id), and SessionStart then
+leads its block with `Current project (preselected by nightqueue open): <name>`. The session's
+`--settings` are the jobs' settings with two changes, neither of which reaches the host's
+`settings.json` (`desiredHooks` and the doctor hook check are unchanged, so an edit in any other
+Claude session never spawns a hook): the PreToolUse matcher becomes
+`Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit`, and a `SubagentStop` group
+runs `nightqueue hook subagent-stop` (timeout 60 s); `permissions.allow` pre-approves
+`mcp__nightqueue__*`.
+
+The `agent-foreground` hook in operator mode is the D-58 guard. Each refusal is a PreToolUse
+`deny` whose reason is one line starting `D-58:`, naming what is allowed instead; it never moves
+a call to the foreground. The main thread (no `agent_id` in the payload) may not use `Edit`,
+`Write`, `MultiEdit` or `NotebookEdit`; reads only under a registered checkout, `<home>/qa`,
+`<home>/runs`, `<home>/worktrees`, the plugin and the session spill (an absolute Glob `pattern`
+or Grep `glob` is judged by its static prefix too); Bash only as one bare command with no shell
+operator or backslash:
+`nightqueue|nq <queue|issues|decision|project|org|connection|doctor|memory|libs|version> …`
+(not `queue session`, `decision export|import`, `project add|move`, `queue add --run`,
+`doctor --fix`, `--follow` or `--foreground`) or a read-only `git -C <checkout> …`; and
+`Agent`/`Task` only for the `triage`, `qa` and `reviewer` subagents (`<role>`,
+`nightqueue:<role>` or `plugin_nightqueue_<role>`). Every top-level CLI command is classified as
+allowed or refused in one list, and so is every subcommand of `queue`, `decision` and `project`;
+a test keeps both exhaustive. Every subagent reads only under the main thread's read roots. The
+`qa` subagent may edit only inside a qa worktree `<home>/qa/<project id>/<id>`; its Bash is
+`nightqueue sandbox worktree <project>`, `nightqueue sandbox worktree --drop <path>`, or a
+command of the exact shape `cd <path inside a qa worktree> && …` - the only accepted shape for
+anything else; the text after `&&` may hold no `cd`/`pushd`/`popd`, `..` segment, `$(…)`,
+`$'…'`, backtick, backslash, `$VAR`, leading `~`, newline, glob or brace next to a dot, or
+absolute path outside the worktree except `/dev/null` (an option glued to one, `-C/etc`,
+included); in any segment of the chain `nightqueue` runs only as `nightqueue sandbox <cmd>`,
+`gh` only as a read, and `git` never as `push`, `remote` or `config`. This anchor is
+best-effort, **not a sandbox**: it reads the command line, and a program the command starts can
+still reach outside the worktree. Any other subagent may not edit, and its Bash is one bare
+`nightqueue|nq` read (`queue status|log`, `issues`, `project list`, `decision list|show`,
+`org list`, `connection list`, `memory stats`, `doctor` without `--fix`, `version`), the main
+thread's `git -C` reads, `gh pr view|diff|checks|list|status` or `gh issue view|list`. The
+guard fails closed: an error inside it refuses every tool but `Read`/`Grep`/`Glob`, an `Edit`,
+`Write`, `MultiEdit`, `NotebookEdit`, `Bash`, `Agent` or `Task` call whose `tool_input` is not
+an object is refused, and a registry it cannot read refuses the checkout reads and `git -C`.
+Job mode is unchanged and still fails open.
+
+The `subagent-stop` hook acts only in an operator session (`NIGHTQUEUE_MODE=operator`, no
+`NIGHTQUEUE_JOB_ID`), on `SubagentStop`, for the `qa` role. Its one candidate is the first line
+of `last_assistant_message` when it reads `QA_WORKTREE: <path>`; only when the payload has no
+`last_assistant_message`, it is the first `QA_WORKTREE: <path>` line of the subagent's last
+assistant entry in the final 2 MB of `agent_transcript_path` - a path the transcript merely
+quotes elsewhere is never a candidate. Backticks around the path and trailing `.,;:)` are
+dropped. The candidate is dropped (unlock, `git worktree
+remove --force`, `git worktree prune`) only when it is a qa worktree of this home whose
+project's checkout exists and whose lock names `NIGHTQUEUE_OPERATOR_PID`, or that has no lock:
+a worktree another live session holds is never dropped. It always answers nothing and never
+fails the session. What it misses, `nightqueue open` and `nightqueue doctor --fix` drop once the
+worktree is stale (see [the CLI](cli.md#sandbox)).
+
 The thirty-one MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
 | tool | parameters |
@@ -334,6 +394,18 @@ own row, and a `project` or a `slug` sent there is REFUSED instead of silently
 overridden - naming another job's run from inside one is never an accident worth
 guessing at; outside a job both are required. A row that carries no slug yet is
 answered with the `SLUG:` line to print, never with a guessed run directory.
+
+Retired fields (D-58: operator runs no longer exist). `queue_add` `run_dir`, and `run_set`
+`origin`, `evidence_level` and `plan_status`, are gone from the schemas, and a call that still
+sends one with a value is refused before validation with a `UserError` that names the field and
+D-58 and says to put what was found in `prompt` or an `issue_comment` - the schema alone would
+strip it silently. A `null`, absent
+or blank value is ignored, so an older cached client that sends `run_dir: null` still queues.
+`TOOL_CONTRACT` stays 3. The CLI `nightqueue queue add [--issue <ref>] --run-dir <dir>` is
+refused with the same D-58 reason. A legacy pending job whose stored prompt or `state.json`
+still carries the operator-run markers (`## PRIOR RUN (operator)`, `origin: operator`) runs as
+before: the resume cap and the `Re-run:` lines read them, nothing writes them.
+
 `run_outcome` never touches the issues: the item the job was queued from follows
 the job's row (see below). `context_for_phase` returns `{project, block}`: the block is
 `## Applicable lessons` + `## Project memory` (+ `## Structural index` for
@@ -398,10 +470,9 @@ unless `issue_id` names an issue, which builds the prompt and owns
 the project (see [Decisions and issues](memory.md#decisions-and-issues)). With
 `issue_id`, `prompt` is an optional operator note, written verbatim as a
 `## Operator note` section right after the item block and recorded as the job's
-`operator_note` and in the item's `queued` comment, and `run_dir` (a project item
-only) binds the job to a prior operator run, resolved and refused exactly as for a free
-prompt, its `## PRIOR RUN (operator)` block going right after the note; the item stays
-the brief and is never replaced.
+`operator_note` and in the item's `queued` comment; the item stays the brief and is never
+replaced. There is no prior-run seed any more: `run_dir` was removed by D-58 (above), and no
+code path writes a `## PRIOR RUN (operator)` block.
 Every job `queue_status` answers (listing and one job) carries `title`, a string or `null`,
 derived on read and never stored: the title of the issue the job was queued from (one join
 with `issues` in the listing query), otherwise the first non-empty line of the prompt's brief

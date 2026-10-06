@@ -56,3 +56,11 @@ export function newId(now = Date.now()) {
 export function isId(value) {
   return typeof value === "string" && ID_RE.test(value);
 }
+
+// The creation time in milliseconds an id carries in its first ten characters, or null for a value that is not an id.
+export function idTime(id) {
+  if (!isId(id)) return null;
+  let ms = 0;
+  for (const char of id.slice(0, TIME_CHARS)) ms = ms * 32 + CROCKFORD.indexOf(char);
+  return ms;
+}

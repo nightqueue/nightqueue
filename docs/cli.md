@@ -344,7 +344,7 @@ The full reference of `nightqueue queue` is [Queue](queue.md); these subcommands
 recent enough that this is their first mention here.
 
 ```sh
-nightqueue queue add --issue NQ-12 [--run-dir <dir>] ["<note>"]     # an issue's job, with an operator note and/or a prior operator run
+nightqueue queue add --issue NQ-12 ["<note>"]         # an issue's job, with an optional operator note
 nightqueue queue status J-42                          # one job, by its ref (or its plain id)
 nightqueue queue status https://github.com/acme/api/pull/7   # ...or by the pull request it opened
 nightqueue queue status                               # the table; TOKENS is the total including cache (see below)
@@ -425,7 +425,8 @@ when the job carries one, else its first `session_id` - by resuming it with `nig
 project's checkout with a warning line (`(worktree released, using the checkout)`) once the
 worktree was already released. A `pending` or a `running` job is refused by name - a live
 runner owns a running job's session, a pending one has none yet - and so is a job that never
-reached the agent at all. `--print` stops there and prints the equivalent `cd '<cwd>' && nightqueue
+reached the agent at all. The resumed session runs under the operator guard (D-58, see
+[Open](#open)): it reads and queues, and delegates only to `triage`, `qa` and `reviewer`. `--print` stops there and prints the equivalent `cd '<cwd>' && nightqueue
 open --resume <session>` line instead of running it, and `--json` prints `{ jobId, attempt, session,
 cwd, worktreeReleased, command }` as the only thing on stdout; without either flag the exit
 code is the resumed session's own. `--prompt <text>` is passed to `nightqueue open --resume
@@ -556,7 +557,7 @@ again, naming it once more.
 nightqueue doctor                  # one line per check: ok, warn or fail
 nightqueue doctor --json           # the same report, as the only thing on stdout
 nightqueue doctor --check-updates  # ...plus the newest version published in the registry
-nightqueue doctor --fix            # ...and git worktree repair the job worktrees whose checkout or home moved, remove the shm orphans and repair the database files
+nightqueue doctor --fix            # ...and git worktree repair the job worktrees whose checkout or home moved, drop the stale qa worktrees, remove the shm orphans and repair the database files
 nightqueue doctor --db             # ...plus the database files, a quick_check and the jobs on disk the table lost
 ```
 
@@ -573,7 +574,7 @@ a `studio build` line: `ok` with the stamp's sha, a `warn` when the runtime has 
 was written for another version than the runtime.
 
 `nightqueue doctor` reads the host and the home and writes nothing, except `git worktree
-repair`, the removal of the `db shm` orphans and the database actions with `--fix` (below): it never creates
+repair`, the drop of the stale qa worktrees, the removal of the `db shm` orphans and the database actions with `--fix` (below): it never creates
 the database, never touches `settings.json` and never asks `claude` about
 anything but its version. It checks the Node version, the `claude` and `gh`
 CLIs, `config.json`, the mode of `secrets.json`, each of the three shims (a
@@ -697,7 +698,8 @@ place that meets a sick database prints.
 
 Job worktrees live under the home, at `<NIGHTQUEUE_HOME>/worktrees/<project_id>/<slug>`, and
 an older nightqueue left them under `.claude/worktrees/` of each checkout; the diagnosis reads
-both places and writes nothing in either, except `git worktree repair` with `--fix`. One row
+both places and writes nothing in either, except `git worktree repair` with `--fix` (the qa
+worktrees below have their own `--fix`). One row
 `worktree <project>/<dir>` is printed per directory that needs a word:
 
 - under the home, a directory whose two-way link with its checkout broke (its `.git` file names
@@ -730,11 +732,29 @@ A directory under `<NIGHTQUEUE_HOME>/worktrees/` named after an id no registered
 checkout has (a project removed with `--purge` leaves it) is one `warn` row
 `worktrees <id>` `project not registered`, with `inspect '<dir>'`.
 
-The operator's QA worktrees live at `<NIGHTQUEUE_HOME>/operator-qa/<project_id>/<slug>`, apart
-from every job's. No job ever owns one, so each directory there is a leftover row
-`operator-qa <project>/<dir>` with the same cleanup commands as above (never `rm -rf` for a
-directory that still holds a `.git` link), and an id no registered project has is one `warn`
-row `operator-qa <id>` `project not registered`.
+The operator's QA worktrees (D-58) live at `<NIGHTQUEUE_HOME>/qa/<project_id>/<id>`, apart from
+every job's (see [Sandbox](#sandbox)); one row `qa <project>/<id>` is printed per entry:
+
+- stale (older than 6 hours, its session's pid gone, or its directory gone while git still
+  registers it): a `warn` `stale (age <n>h | session pid <N> gone | its directory is gone):
+  dropped by the next nightqueue open or nightqueue doctor --fix`, hint `nightqueue doctor
+  --fix`; with `--fix` it is dropped and the row reads `ok` `removed: stale qa worktree` (or
+  `pruned: …` for a gone directory), or stays a `warn` with git's reason;
+- held by a live session: `ok` `in use by pid <N> (age <n>m)`;
+- young and unlocked: `ok` `age <n>m, no session recorded`;
+- locked by hand: a `warn` with the `git -C '<checkout>' worktree unlock '<dir>'` command;
+- anything else under `qa/` (a name that is not an id, an id no registered project has, a
+  directory git does not register): a `warn` `not a qa worktree; inspect <path> (<reason>)`,
+  never removed, `--fix` included.
+
+Without `--fix` the qa rows write nothing.
+
+QA worktrees an operator made before D-58 live at
+`<NIGHTQUEUE_HOME>/operator-qa/<project_id>/<slug>`. Nothing creates them any more; each
+directory there is a read-only leftover row `operator-qa (legacy) <project>/<dir>` with the
+same cleanup commands as above (never `rm -rf` for a directory that still holds a `.git` link),
+and an id no registered project has is one `warn` row `operator-qa (legacy) <id>`
+`project not registered`. `--fix` never touches them.
 
 A directory a live session holds locked, and the worktree of an open job under the home (its
 cleanup is `nightqueue queue close`, or `nightqueue queue cancel` for a `done` or `failed` job),
@@ -918,9 +938,9 @@ drawn by xterm.js. It needs the optional dependency `node-pty`; on darwin the st
 Without `node-pty`, or when it fails to load, the install still succeeds, `GET /api/terminals`
 answers `available: false` with the reason, a create answers `503`, and every entry point
 shows `terminal unavailable: <reason>` with the command to copy instead
-(`nightqueue queue session J-<n>` or `nightqueue open <project>`).
+(`nightqueue queue session J-<n>`, `nightqueue open <project>` or `nightqueue open`).
 
-`POST /api/terminals` takes only `{kind, job | project, instruction?}`; any other key, `cwd`
+`POST /api/terminals` takes only `{kind, job | project?, instruction?}`; any other key, `cwd`
 included, is a `400`: the directory, the session and the binary always come from the job row,
 its run state and the project registry. Two kinds exist:
 
@@ -929,16 +949,19 @@ its run state and the project registry. Two kinds exist:
   `failed`, `done` or `cancelled` is accepted; any other status is a `409` naming it. One live
   session per job: a second create returns the same terminal (`reused: true`), or a `409` when
   it carries an instruction.
-- `operator`: runs `nightqueue open <project>`, the operator session in the registered
-  checkout.
+- `operator`: runs `nightqueue open`, the operator session in the nightqueue home (D-58), with
+  `<project>` preselected when the body names one (`nightqueue open <project>`). A named project
+  must be registered (`404` otherwise, `400` when blank); one whose checkout is gone still
+  opens.
 
 Both run the current runtime's CLI (`node <runtime>/bin/nightqueue.mjs`), which starts
 `claude` exactly as when typed, with `TERM=xterm-256color`, 120x32, as foreground children of
 `nightqueue studio` - never detached. The child's environment is the studio's minus every
 `NIGHTQUEUE_STUDIO_*` variable, so the studio's token never reaches `claude` or the tools it
-runs. Like `nightqueue open`, opening a terminal runs `git worktree prune` in the checkout,
-with no `--expire`: every stale worktree entry of that repository (one whose directory is gone)
-is dropped at once, not after git's own expiry. At most 6 terminals
+runs. Both go through the operator launcher, so opening a terminal runs `git worktree prune`
+in every registered checkout, with no `--expire` (every stale worktree entry, one whose
+directory is gone, is dropped at once, not after git's own expiry), and drops the stale qa
+worktrees. At most 6 terminals
 are open at once; the 7th is a `409` (`6 terminals are open, the cap; close one first`). A
 create from inside a job against the runner's own home is a `403`. An optional `instruction`
 (at most 1000 characters, refused above, never cut; control characters and newlines become
@@ -959,9 +982,10 @@ reaps them. `nightqueue doctor` reports whether `node-pty` loads (`studio termin
 
 The entry points are `Resume in terminal` on a job page (disabled, with the reason as its
 tooltip, outside the four statuses; `Copy session cmd` stays beside it), `Open operator` in
-the issues toolbar and `Operator` on each issue (instruction `Analyse <ref>: <title>`), and
-`Operator` in the header for the project picked in the queue toolbar; the ones that need a
-project are disabled on all projects.
+the issues toolbar and `Operator` on each issue (instruction `Analyse <ref>: <title>`), which
+open the operator with that project preselected and are disabled on all projects, and
+`Operator` in the header, never disabled: home mode with the project picked in the queue
+toolbar preselected, or no project on all projects.
 
 **Development.** `--api-only` serves no page; `--dev-origin <url>` (only with `--api-only`,
 a loopback `http://host:port`) is the second origin the write rule and the `/term` upgrade
@@ -989,11 +1013,54 @@ signal number when the child was killed by one, or `127` with a message on
 stderr when the command itself could not be spawned (for example, an unknown
 binary).
 
+```sh
+nightqueue sandbox worktree my-app                 # QA_WORKTREE: <home>/qa/<project id>/<id>
+nightqueue sandbox worktree --drop <path>          # dropped <path> (or: gone <path>)
+```
+
+`nightqueue sandbox worktree <project> | --drop <path>` is the one exception to the verbatim
+forwarding: a first argument `worktree` manages the ephemeral QA worktrees of the operator's
+`qa` subagent (D-58) instead of running a program of that name. `<project>` (a registered name,
+else id; an unknown one is refused, and git's first line is the error when the checkout cannot
+give a worktree) gets a worktree detached at the checkout's `HEAD` under
+`<NIGHTQUEUE_HOME>/qa/<project id>/<id>`, `<id>` a fresh ULID; exactly one line
+`QA_WORKTREE: <path>` is printed. Inside an operator session (`NIGHTQUEUE_OPERATOR_PID` set) the
+worktree is locked with `git worktree lock --reason "nightqueue qa (pid <N>)"`, which records
+the session that owns it. `--drop <path>` accepts only a path that is exactly
+`<qa>/<project id>/<id>` of this home, unlocks it, runs `git worktree remove --force` and
+`git worktree prune`, removes a leftover directory only when it is empty, and prints
+`dropped <path>`, or `gone <path>` when there was nothing to drop. `--drop` refuses a worktree
+whose lock names a live pid other than `NIGHTQUEUE_OPERATOR_PID`, so one session never drops
+another's; an unlocked one, one this session holds or one whose owner is gone is dropped. Both
+are refused from inside a job against the runner's own home.
+
+A qa worktree is stale when git registers it and either its id says it is older than 6 hours
+or its lock names a pid that is gone; a worktree locked by hand (no pid in the reason) is never
+stale. `nightqueue open` drops the stale ones; `nightqueue doctor` lists them and
+`nightqueue doctor --fix` drops them; the SubagentStop hook of an operator session drops the
+worktree its `qa` subagent announced on the first line of its final message
+(`QA_WORKTREE: <path>`, or, with no final message, the first such line of its last assistant
+entry in its transcript) when that session holds the lock
+or nobody does - a worktree another live session holds is never dropped. Nothing under `qa/`
+that git does not register is ever removed, except an empty directory.
+
+The `qa` subagent's Bash is held to its worktree by the guard hook, which is a best-effort
+**anchor, not a sandbox**: every command other than the two `sandbox worktree` forms must have
+the exact shape `cd <path inside a qa worktree> && …` - a bare command is refused even when the
+shell already stands in the worktree - and the rest may hold no `cd`, `pushd` or `popd`, no
+`..` segment, no `$(…)`, `$'…'`, backtick, backslash or `$VAR`, no leading `~`, no newline, no
+glob or brace next to a dot, and no absolute path outside that worktree except `/dev/null` (an
+option glued to one, `-C/etc`, included). In any segment of the chain, `nightqueue` runs only as
+`nightqueue sandbox <cmd>`, `gh` only as `gh pr view|diff|checks|list|status` or
+`gh issue view|list`, and `git` never as `push`, `remote` or `config`. A program the command
+runs can still reach outside it; tests that touch a nightqueue home go through
+`cd <path> && nightqueue sandbox <cmd>`.
+
 ## Open
 
 ```sh
-nightqueue open                          # the operator session of the project registered for this checkout
-nightqueue open my-app                   # the same for a registered project by name, from any directory
+nightqueue open                          # the operator, in the nightqueue home; the project of this checkout, if any, preselected
+nightqueue open my-app                   # the same with a registered project preselected by name (or id), from any directory
 nightqueue open --resume <session>       # resume an operator (or job) session
 nightqueue open my-app --prompt "Analyse KEY-3: fix the login"   # start the session with a request
 ```
@@ -1001,20 +1068,74 @@ nightqueue open my-app --prompt "Analyse KEY-3: fix the login"   # start the ses
 `nightqueue open [project] [--resume <session>] [--prompt <text>]` starts an interactive `claude` with the
 `nightqueue:nightqueue-operator` agent as the main thread (`--append-system-prompt` with the
 agent's body when `claude --help` does not list `--agent`; `nightqueue doctor` reports which),
-the job settings, `--setting-sources project,local` (the operator's interactive session keeps
+the operator settings, `--setting-sources project,local` (the operator's interactive session keeps
 the `local` source; a queued job's child gets `--setting-sources project` only), the plugin and
-the nightqueue MCP server,
-and `NIGHTQUEUE_MODE=operator`, which puts the guard hook in operator mode: reads only under
-the runs, plugin and spill roots, and a closed read-only Bash list. `git worktree prune` runs
-first, with no `--expire`: every stale worktree entry of the repository (one whose directory is
-gone) is dropped at once, not after git's own expiry; `queue session` and a studio terminal
-run it too. The cwd is the registered checkout, or with `--resume` the current directory when it
-lies inside that checkout. An unregistered directory is refused with one line naming
-`nightqueue setup`. It never holds the config lock.
+the nightqueue MCP server, and `NIGHTQUEUE_MODE=operator`, which puts the guard hook in operator
+mode (D-58, below). It never holds the config lock.
 
-A fresh session opens with the operator's greeting: who it is (the nightqueue operator of
-the project), what it does, what it never does, and where to start - in the language the
-repository suggests. A resumed session is not greeted again. The `nightqueue` MCP tools are
+**Home mode (D-58).** The operator is generalist: the session always runs in the nightqueue
+home (`NIGHTQUEUE_HOME`, `~/.nightqueue` by default), never in a checkout, and a missing home is
+refused with one line naming `nightqueue setup`. A project is only *preselected*: the one named
+(`open <project>`, by name, else by id; an unknown one is refused, a registered project whose
+checkout is gone still opens), else the one registered for the current directory, else none.
+The preselection reaches the session as `NIGHTQUEUE_PROJECT=<project id>` and nothing else; the
+SessionStart hook then opens its context block with `Current project (preselected by nightqueue
+open): <name>`, even when the project has no memory yet, and the memory hooks and the reflection
+read that project. With no project the operator lists the registered ones and asks which.
+`NIGHTQUEUE_OPERATOR_PID` carries the pid of the `nightqueue open` process, which owns the qa
+worktrees the session creates. A `NIGHTQUEUE_PROJECT`, `NIGHTQUEUE_MODE` or
+`NIGHTQUEUE_OPERATOR_PID` inherited from the caller is never passed on, and a job a runner
+started from inside an operator session never inherits any of the three.
+
+With `--resume <session>` the cwd is the directory the session was born in (the first `cwd` its
+transcript under `CLAUDE_CONFIG_DIR/projects` records, when that directory still exists), else
+the current directory when it lies inside the preselected project's checkout, else the home:
+claude only resumes a session from the directory it was born in.
+
+Before claude starts, `git worktree prune` runs in every registered checkout that exists, with
+no `--expire`: every stale worktree entry (one whose directory is gone) is dropped at once, not
+after git's own expiry; a failure is one warning line. Then the stale qa worktrees are dropped
+(see [Sandbox](#sandbox)) and, when there were any, one line says
+`operator · dropped <n> stale qa worktree(s)`. `queue session` and a studio terminal run both
+too, through the same launcher.
+
+**The guard (D-58).** The operator investigates, plans and queues; it never edits and never
+executes. The PreToolUse hook of an operator session (matcher
+`Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit`) answers every refusal with
+one line starting `D-58:`:
+
+- main thread: `Edit`, `Write`, `MultiEdit` and `NotebookEdit` are refused; `Read`, `Grep` and
+  `Glob` only under a registered checkout, `<home>/qa`, `<home>/runs`, `<home>/worktrees`, the
+  plugin and the session's spill directory (never the home root, which holds `config.json`,
+  `secrets.json` and the database; a `Glob` without a `path` targets the home and is refused, and
+  an absolute Glob `pattern` or Grep `glob` is judged by its static prefix);
+  Bash only as one bare command (no `;`, `&&`, `|`, redirection, substitution or backslash) that
+  is either `nightqueue|nq <command> …` with `<command>` one of `queue`, `issues`, `decision`,
+  `project`, `org`, `connection`, `doctor`, `memory`, `libs`, `version` - never `queue session`,
+  `decision export|import`, `project add|move`, `queue add --run` or `doctor --fix`, never
+  `--follow` or `--foreground` - or `git -C <checkout> [--no-optional-locks] <read> …` on a
+  registered checkout, `<read>` one of `log`, `show`, `diff`, `blame`, `ls-tree`, `ls-files`,
+  `rev-parse`, `branch --list` and `--no-optional-locks status` (never `--output*`,
+  `--ext-diff`, `--no-index`, `--exec`, nor a global option other than `-C`); `Agent`/`Task`
+  only for the `triage`, `qa` and `reviewer` subagents;
+- the `qa` subagent: `Edit`/`Write`/`MultiEdit`/`NotebookEdit` only inside a qa worktree
+  `<home>/qa/<project id>/<id>`; Bash only as `nightqueue sandbox worktree <project>`,
+  `nightqueue sandbox worktree --drop <path>`, or `cd <path inside a qa worktree> && …` (see
+  [Sandbox](#sandbox));
+- any other subagent (`triage`, `reviewer`): no edit tool; Bash is one bare nightqueue read
+  (`queue status|log`, `issues`, `project list`, `decision list|show`, `org list`,
+  `connection list`, `memory stats`, `doctor` without `--fix`, `version`), the main thread's
+  `git -C` reads, `gh pr view|diff|checks|list|status` or `gh issue view|list`;
+- every subagent reads only under the main thread's read roots, so delegating never widens them.
+
+A registry that cannot be read refuses the checkout reads and `git -C` (the reason names
+`nightqueue doctor`), an error inside the guard refuses every tool but the reads, and an edit,
+`Bash`, `Agent` or `Task` call whose `tool_input` is not an object is refused: the operator
+guard fails closed, unlike a job's.
+
+A fresh session opens with the operator's greeting: who it is (the nightqueue operator), the
+preselected project or the list of registered ones, what it does, what it never does, and
+where to start. A resumed session is not greeted again. The `nightqueue` MCP tools are
 pre-approved for the session (`permissions.allow: ["mcp__nightqueue__*"]` in the settings it
 is started with), so the operator never asks before reading the queue, the issues or the
 memory; every other tool keeps Claude Code's own prompts.

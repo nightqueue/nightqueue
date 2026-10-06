@@ -22,6 +22,8 @@ function recordLaunch() {
     mode: process.env.NIGHTQUEUE_MODE ?? null,
     pluginDirEnv: process.env.NIGHTQUEUE_PLUGIN_DIR ?? null,
     jobId: process.env.NIGHTQUEUE_JOB_ID ?? null,
+    project: process.env.NIGHTQUEUE_PROJECT ?? null,
+    operatorPid: process.env.NIGHTQUEUE_OPERATOR_PID ?? null,
   };
   appendFileSync(path, `${JSON.stringify(call)}\n`);
 }
