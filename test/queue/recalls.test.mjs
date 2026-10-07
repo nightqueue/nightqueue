@@ -170,6 +170,18 @@ test("a phase_prompt is a context recall: hits from the three memory sections on
   assert.deepEqual([qa.phase, runtime.phase], [5, 6]);
 });
 
+test("an org decision whose key starts with L or M is still a decision, never a lesson or a memory", async () => {
+  const log = logOf([attemptMarker(1), ...phasePrompt("p1", { target: "architect", check: "03", lessons: [], memories: [], decisions: ["MKT/D-9", "LNK/D-3"] })]);
+  const [context] = await jobRecalls(log);
+  assert.deepEqual(
+    context.hits.map((hit) => [hit.ref, hit.kind]),
+    [
+      ["MKT/D-9", "decision"],
+      ["LNK/D-3", "decision"],
+    ],
+  );
+});
+
 test("a context_for_phase recall reads its block and takes its phase and agent from its target, the caller only without one", async () => {
   const block = `## ${LESSONS_HEADING}\n- [L4] keep it small\n## Structural index\n- [L8] not a memory section`;
   const log = logOf([

@@ -356,6 +356,26 @@ test("a gated job's stream ends without closing, then carries the retried attemp
   assert.equal(narrationOf(events.slice(0, end)).filter((event) => event.kind === "attempt").length, 1);
 });
 
+test("a parked stream whose job reruns and finishes between two polls narrates the new attempt before the final end", async (t) => {
+  const job = gatedJob(t, "studio-events-gate-final");
+  const { port } = await startStudio(t, job.env);
+  let answered = false;
+  const until = (list) => {
+    if (!answered && list.some((event) => event.name === "end")) {
+      answered = true;
+      resumeGatedJob(job);
+      finishJob(job.id, { worker: "host:1", status: "done" }, job.env);
+    }
+    return list.some((event) => event.name === "end" && event.data.final === true);
+  };
+  const events = await readEvents(port, { path: `/events?job=J-${job.id}`, headers: { cookie: studioCookie(port) }, timeoutMs: 15000, until });
+  const finalAt = events.findIndex((event) => event.name === "end" && event.data.final === true);
+  assert.deepEqual(events[finalAt].data, { status: "done", reason: "job done", final: true });
+  const beforeFinal = narrationOf(events.slice(0, finalAt));
+  assert.ok(beforeFinal.some((event) => event.kind === "attempt" && event.text === "attempt 2"));
+  assert.ok(beforeFinal.some((event) => event.text === "Going left."));
+});
+
 test("a parked gated job's stream only reads while it waits", async (t) => {
   const job = gatedJob(t, "studio-events-gate-read-only");
   const { port } = await startStudio(t, job.env);

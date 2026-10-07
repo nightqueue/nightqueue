@@ -75,16 +75,16 @@ function trackCounter(phases: TimelinePhase[], phase: TimelinePhase): string {
 // The outcome chip of the header: the running phase, where the gate stopped it, done, or where it failed.
 function OutcomeChip({ phases, status }: { phases: TimelinePhase[]; status: JobStatus }) {
   const total = phases.length;
-  if (total === 0) return null;
-  const stopped = phases.find((phase) => phase.state === "gate");
-  if (status === "gate" && stopped) {
+  if (status === "gate") {
+    const stopped = phases.find((phase) => phase.state === "gate") ?? phases[0];
     return (
       <Chip className="border-gate-line text-red">
         <ActionIcon icon={TriangleAlert} size={12} />
-        {`gate at phase ${stopped.number}`}
+        {stopped ? `gate at phase ${stopped.number}` : "gate"}
       </Chip>
     );
   }
+  if (total === 0) return null;
   const reached = phases.find((phase) => phase.state === "now") ?? reachedPhase(phases);
   if (status === "running") {
     return (

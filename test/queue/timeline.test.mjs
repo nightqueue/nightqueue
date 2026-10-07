@@ -91,6 +91,15 @@ test("an unknown tier has no track, and no events leave every phase pending", ()
   assert.deepEqual(new Set(empty.phases.map((phase) => phase.tokens_label)), new Set(["-"]));
 });
 
+test("a gated job with no narrated event stops at the track's first phase", () => {
+  const timeline = phaseTimeline([], { tier: "complex", status: "gate" });
+  const gated = timeline.phases.filter((phase) => phase.state === "gate");
+  assert.deepEqual(
+    gated.map((phase) => phase.number),
+    [timeline.phases[0].number],
+  );
+});
+
 test("a lane killed by the attempt boundary counts up to that attempt's last clock reading, and a lane without usage counts its reported tokens", () => {
   const timeline = createTimeline({ tier: "complex" });
   for (const event of [

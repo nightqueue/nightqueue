@@ -119,7 +119,7 @@ function contextHit(line) {
   const match = CONTEXT_HIT_RE.exec(line);
   if (!match) return null;
   const ref = match[1] ?? match[2];
-  const kind = KIND_OF_PREFIX[ref[0]] ?? "decision";
+  const kind = match[1] ? KIND_OF_PREFIX[match[1][0]] : "decision";
   return { ref, title: truncateByCodePoint(match[3] || null, TITLE_LIMIT), score: null, kind };
 }
 

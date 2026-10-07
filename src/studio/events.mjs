@@ -364,8 +364,15 @@ async function readParkedStatus(state) {
   }
 }
 
-// Polls a parked job read-only until it runs again with a log; false when the client left or the status became final, after the final end.
-async function waitForRun(state) {
+// Narrates what the log gained since the stream parked, then sends the final end with the status the job stopped on.
+async function endParked(state, { status, fromOffset }) {
+  if (status && existsSync(jobLogPath(state.id, state.env))) await narrateStretch(state, { fromOffset, historyFrom: null });
+  if (state.isClosed()) return;
+  await endJobState(state, { status, reason: status ? `job ${status}` : "unknown job" }, { final: true });
+}
+
+// Polls a parked job read-only until it runs again with a log; false when the client left or the status became final, after the log is drained from `fromOffset` and the final end sent.
+async function waitForRun(state, fromOffset) {
   const path = jobLogPath(state.id, state.env);
   while (!state.isClosed()) {
     await sleep(QUEUE_POLL_MS);
@@ -374,7 +381,7 @@ async function waitForRun(state) {
     if (status === undefined) continue;
     if (status === "running" && existsSync(path)) return true;
     if (status === "running" || RESUMABLE.has(status)) continue;
-    await endJobState(state, { status, reason: status ? `job ${status}` : "unknown job" }, { final: true });
+    await endParked(state, { status, fromOffset });
     return false;
   }
   return false;
@@ -406,7 +413,7 @@ async function narrateAttempts(state) {
   while (!state.isClosed()) {
     const final = !RESUMABLE.has(result?.status);
     await endJobState(state, result, { final });
-    if (final || !(await waitForRun(state))) return;
+    if (final || !(await waitForRun(state, result.offset))) return;
     resumeJobState(state);
     result = await narrateStretch(state, { fromOffset: result.offset, historyFrom: null });
   }
@@ -417,7 +424,7 @@ async function narrateAttempts(state) {
 async function waitForFirstLog(state) {
   const waits = state.status === "running" || RESUMABLE.has(state.status);
   await endJobState(state, { status: state.status, reason: "the job has no log yet" }, { final: !waits });
-  if (!waits || !(await waitForRun(state))) return false;
+  if (!waits || !(await waitForRun(state, 0))) return false;
   resumeJobState(state);
   return true;
 }

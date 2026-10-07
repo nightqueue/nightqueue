@@ -192,11 +192,11 @@ function openTime(state, number) {
 }
 
 // The state of one phase of the track, from what the job reached across every attempt and the status of the job.
-function phaseState(number, { state, status, lastReachedIndex, index }) {
+function phaseState(number, { state, status, lastReachedIndex, index, gatePhase }) {
   const running = status === "running";
   const open = [...state.openLanes.values()].some((lane) => lane.phase === number);
   if (number === state.current && running) return "now";
-  if (number === state.current && status === "gate") return "gate";
+  if (number === gatePhase && status === "gate") return "gate";
   if (open && running) return "now";
   if (state.phases.has(number)) return "done";
   return index < lastReachedIndex ? "skip" : "pending";
@@ -214,7 +214,7 @@ function attemptsWire(state, number, entry, running) {
 }
 
 // One phase of the wire: name, model, state, summed duration, the clock its open part runs from, where it started on the job's clock, its attempts and its estimated tokens.
-function phaseWire(number, { state, status, models, lastReachedIndex, index }) {
+function phaseWire(number, { state, status, models, lastReachedIndex, index, gatePhase }) {
   const entry = state.phases.get(number) ?? null;
   const running = status === "running";
   const durationMs = entry ? entry.durationMs + (running ? 0 : openTime(state, number)) : null;
@@ -223,7 +223,7 @@ function phaseWire(number, { state, status, models, lastReachedIndex, index }) {
     number,
     name: PHASE_NAMES.get(number),
     model: phaseModel(number, entry, models),
-    state: phaseState(number, { state, status, lastReachedIndex, index }),
+    state: phaseState(number, { state, status, lastReachedIndex, index, gatePhase }),
     durationMs,
     liveSinceMs: running ? liveSince(state, number) : null,
     startMs: entry ? entry.startMs : null,
@@ -245,7 +245,8 @@ function snapshotOf(state, { tier, status }) {
   if (!numbers) return { track: null, phases: [], clockMs: clockOf(state) };
   const { track, models } = routingRow(tier);
   const lastReachedIndex = Math.max(-1, ...numbers.map((number, index) => (state.phases.has(number) ? index : -1)));
-  const phases = numbers.map((number, index) => phaseWire(number, { state, status, models, lastReachedIndex, index }));
+  const gatePhase = state.current ?? numbers[0];
+  const phases = numbers.map((number, index) => phaseWire(number, { state, status, models, lastReachedIndex, index, gatePhase }));
   return { track, phases, clockMs: clockOf(state) };
 }
 
