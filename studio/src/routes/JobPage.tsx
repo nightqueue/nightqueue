@@ -75,7 +75,8 @@ function JobScreen({ job, row, runnersOnline }: { job: JobDetail; row: Job | und
   const { close, confirming, endConfirm } = useCloseState(job, row);
   const onRun = useAction(runJob, byJob);
   const actions: HeaderStatusActions = { close, onRun: () => onRun(job), onRetry: () => setRetrying(true), retryReady: row !== undefined && runnersOnline !== null };
-  const stream = useJobStream(jobRef(job.id), job.attempt_started_at ?? job.started_at ?? "never-started");
+  const epoch = job.attempt_started_at ?? job.started_at ?? "never-started";
+  const stream = useJobStream(jobRef(job.id), epoch);
   const issue = useIssueSummary(job.item_ref);
   const gatePhase = stream.timeline?.phases.find((phase) => phase.state === "gate")?.number ?? null;
   const reason = row?.studio.reason ?? null;
@@ -86,7 +87,7 @@ function JobScreen({ job, row, runnersOnline }: { job: JobDetail; row: Job | und
       <LiveTimeline job={job} row={row} stream={stream} reason={reason} />
       {job.status === "gate" && <GateCard job={job} runnersOnline={runnersOnline} gatePhase={gatePhase} />}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <LiveLog stream={stream} running={job.status === "running"} attempt={job.attempts} />
+        <LiveLog key={epoch} stream={stream} running={job.status === "running"} attempt={job.attempts} jobRef={jobRef(job.id)} startedAtMs={isoMs(epoch)} />
         <SideCards job={job} stream={stream} />
       </div>
       {cancelling && <CancelJobDialog job={job} onClose={() => setCancelling(false)} />}

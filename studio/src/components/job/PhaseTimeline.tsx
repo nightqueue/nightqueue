@@ -49,7 +49,7 @@ interface PhaseTimelineProps {
 }
 
 // The time a phase has spent so far: its summed duration, plus the part still open while it runs.
-function spentMs(phase: TimelinePhase, runElapsedMs: number | null): number | null {
+export function spentMs(phase: TimelinePhase, runElapsedMs: number | null): number | null {
   if (phase.state !== "now" || phase.liveSinceMs === null || runElapsedMs === null) return phase.durationMs;
   return (phase.durationMs ?? 0) + Math.max(0, runElapsedMs - phase.liveSinceMs);
 }

@@ -7,7 +7,7 @@ import { isSafeSegment, readRunState } from "../queue/resume.mjs";
 const IMPLEMENTATION_ARTIFACT = "04-implementation.md";
 
 // The run directory of a job, or null while it has no slug, or a slug that is not a safe path segment.
-function runDirOf(job, env) {
+export function runDirOf(job, env) {
   if (!isSafeSegment(job?.project_id) || !isSafeSegment(job?.slug)) return null;
   return runDir(job.project_id, job.slug, env);
 }

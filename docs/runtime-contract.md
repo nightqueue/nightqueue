@@ -296,6 +296,42 @@ time and a command line containing the recorded `entry`, so a recycled pid, a re
 without a start time, or the operator's own `nightqueue open` in a shell is never killed. It
 prints `studio: reaped N terminal(s) left by an earlier studio` when N > 0.
 
+**The studio's narration wire and job artifacts.** The job stream (`/events?job=<ref>`)
+narrates in a rich mode the CLI never uses: `nightqueue queue log` gets the same lines,
+byte for byte, as before. On the wire, every narration event carries the fields `laneId`, `body`,
+`body_truncated`, `body_offset`, `at`, `artifact`, `title` and `bytes`, `null` (or `false`)
+when they do not apply.
+- `text` (orchestrator or lane) has its whole text as `body`. A `toolError` has the last 40
+  lines of the tool's output.
+- A `laneClose` has the `summary` of the subagent's `task_notification`. Without one, it falls
+  back to the report its Task `tool_result` handed back before the close, with the harness
+  frame, the two-space indent, the `agentId:` line and the `<usage>` block removed. With
+  neither, it is `null`.
+- A body is capped at 32 KiB of UTF-8, cut on a code point boundary. When the cap cuts it,
+  `body_truncated` is `true` and `body_offset` is the byte offset of its line in the job log.
+- Every event inside a lane carries the lane's `laneId`.
+- A `phase` event (`phase`, `agent`, `model`, `at` as ISO time) comes right before the event
+  that enters a phase. Those events are an attempt (phase 0), a lane opening for a pipeline
+  agent, and an orchestrator `nightqueue run start|publish|report` (0, 7, 8). A log with no
+  attempt line opens phase 0 before its first event.
+- A `report` event (`artifact`, `title` as the file's first markdown heading, `bytes`)
+  follows a `nightqueue run check <NN>`, mapped to its phase artifact, or a `run_phase_done`
+  naming a `*.md` basename. It is emitted only when the file is in the job's run directory,
+  and once per artifact per phase. A stream opened before the job had a run slug re-reads
+  the row once per batch that holds such a signal, so its reports still arrive.
+
+`GET /api/jobs/<ref>/artifacts` answers `{artifacts: [{name, bytes, title, mtime}]}` for the
+regular, non-dot `*.md` files of the job's run directory, sorted by name. The list is `[]`
+while the job has no run directory, and an unknown job is a 404.
+`GET /api/jobs/<ref>/artifacts/<name>` serves one of them as
+`text/markdown; charset=utf-8` with `no-store` and `nosniff`, up to 1 MiB cut on a code point
+boundary, adding `x-nightqueue-truncated: 1` when cut. The decoded name must be in a fresh
+listing: a symlink, a directory, a dotfile, `state.json` or a name that leaves the directory is
+a 404, and a malformed escape is a 400. `GET /api/jobs/<ref>/log?from=<byte>` answers up to
+1 MiB of the log from that byte, and empty past its end. A `from` that is not a non-negative
+integer is a 400. Without `from` the route answers the last MiB, as before. All of these are
+read-only and sit behind the same token gate as the rest of `/api`.
+
 **Operator sessions (D-58).** `nightqueue open` (and `nightqueue queue session`, and a studio
 terminal through them) starts `claude` with `NIGHTQUEUE_MODE=operator`,
 `NIGHTQUEUE_OPERATOR_PID=<pid of the launcher>` and, only when a project is preselected,

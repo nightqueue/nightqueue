@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { dbPath, jobLogPath } from "../../src/config/paths.mjs";
+import { dbPath, jobLogPath, runDir } from "../../src/config/paths.mjs";
 import { addJob, bindRunSlug, claimJobById, countsByStatus, finishJob } from "../../src/memory/jobs.mjs";
 import { saveRunState } from "../../src/queue/resume.mjs";
 import { snapshotPatch } from "../../src/studio/events.mjs";
@@ -129,6 +129,137 @@ test("a job stream narrates the current attempt with structured fields, its time
   assert.equal(timeline.phases.find((phase) => phase.number === 2).state, "skip");
   assert.deepEqual(events.find((event) => event.name === "files").data, ["worker.mjs"]);
   assert.equal(events.at(-1).data.status, "done");
+});
+
+// The log of one attempt that plans, checks its artifact and hands a coder lane's report back.
+function writeRichAttemptLog(env, id) {
+  const path = jobLogPath(id, env);
+  mkdirSync(dirname(path), { recursive: true });
+  const events = [
+    systemInitEvent(),
+    assistantEvent("Plan written.\n\n| step | file |\n|---|---|\n| 1 | worker.mjs |", { timestamp: secondsIntoAttempt(5) }),
+    toolUseEvent({ name: "Bash", id: "toolu_chk", input: { command: "nightqueue run check 03" }, timestamp: secondsIntoAttempt(6) }),
+    agentToolUseEvent({ subagentType: "nightqueue:coder", model: "opus", timestamp: secondsIntoAttempt(10) }),
+    toolUseEvent({ name: "Edit", id: "toolu_edit", input: { file_path: "/repo/src/worker.mjs" }, parentToolUseId: LANE_TOOL_USE_ID, timestamp: secondsIntoAttempt(20) }),
+    taskNotificationEvent({ summary: "## Done\nthe worker is fixed" }),
+    resultEvent(),
+  ];
+  writeFileSync(path, `${attemptMarker(1)}\n${toNdjson(events)}`);
+}
+
+test("a job stream carries the studio's rich narration: phase and report events, bodies and lane ids", async (t) => {
+  const env = makeHome(t, "studio-events-rich");
+  makeProject(t, env, "alpha");
+  const projectId = ensureProject(env, "alpha");
+  const id = addJob({ projectId, prompt: "fix the worker", tier: "complex" }, env).id;
+  claimJobById(id, { worker: "host:1", cap: 4 }, env);
+  bindRunSlug(id, { worker: "host:1", candidates: ["fix-the-worker"] }, env);
+  mkdirSync(runDir(projectId, "fix-the-worker", env), { recursive: true });
+  writeFileSync(join(runDir(projectId, "fix-the-worker", env), "03-plan.md"), "# The plan\n\nsteps\n");
+  writeRichAttemptLog(env, id);
+  finishJob(id, { worker: "host:1", status: "done", prUrl: "https://github.com/acme/api/pull/9" }, env);
+  const { port } = await startStudio(t, env);
+  const events = await readEvents(port, { path: `/events?job=J-${id}`, headers: { cookie: studioCookie(port) }, until: (list) => list.some((event) => event.name === "end") });
+  const narration = events.filter((event) => event.name === "narration").flatMap((event) => event.data);
+  assert.deepEqual(
+    narration.filter((event) => event.kind === "phase").map((event) => [event.phase, event.agent, event.model]),
+    [
+      [0, "orchestrator", null],
+      [4, "coder", "opus"],
+    ],
+  );
+  const report = narration.find((event) => event.kind === "report");
+  assert.deepEqual([report.artifact, report.title, report.bytes], ["03-plan.md", "The plan", 18]);
+  const plan = narration.find((event) => event.kind === "text");
+  assert.deepEqual([plan.text, plan.body_truncated, plan.body_offset], ["Plan written.", false, null]);
+  assert.match(plan.body, /\| 1 \| worker\.mjs \|$/);
+  assert.equal(narration.find((event) => event.tool === "Edit").laneId, LANE_TOOL_USE_ID);
+  assert.equal(narration.find((event) => event.kind === "laneClose").body, "## Done\nthe worker is fixed");
+  assert.deepEqual([report.body, report.at, narration.find((event) => event.kind === "attempt").artifact], [null, null, null]);
+  const coder = events.filter((event) => event.name === "timeline").at(-1).data.phases.find((phase) => phase.number === 4);
+  assert.deepEqual([coder.state, coder.model], ["done", "opus"]);
+});
+
+// A `run check 03` tool call of the orchestrator, `seconds` into the attempt.
+function runCheckEvent(id, seconds) {
+  return toolUseEvent({ name: "Bash", id, input: { command: "nightqueue run check 03" }, timestamp: secondsIntoAttempt(seconds) });
+}
+
+// A running job claimed with no run slug yet, its log holding the attempt and one early `run check 03`.
+function lateSlugJob(t, name) {
+  const env = makeHome(t, name);
+  makeProject(t, env, "alpha");
+  const projectId = ensureProject(env, "alpha");
+  const id = addJob({ projectId, prompt: "fix the worker", tier: "complex" }, env).id;
+  claimJobById(id, { worker: "host:1", cap: 4 }, env);
+  const path = jobLogPath(id, env);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${attemptMarker(1)}\n${toNdjson([systemInitEvent(), runCheckEvent("toolu_a", 5)])}`);
+  return { env, id, projectId, path };
+}
+
+// Binds the job's run slug, optionally writing its plan artifact, the way a run started after the stream opened does.
+function bindLateSlug({ env, id, projectId }, { plan }) {
+  bindRunSlug(id, { worker: "host:1", candidates: ["fix-the-worker"] }, env);
+  mkdirSync(runDir(projectId, "fix-the-worker", env), { recursive: true });
+  if (plan) writeFileSync(join(runDir(projectId, "fix-the-worker", env), "03-plan.md"), "# The plan\n\nsteps\n");
+}
+
+// Reads a job stream, running `act` once on the first narration batch, until `done` holds.
+async function readJobStream(t, job, { act, done }) {
+  const { port } = await startStudio(t, job.env);
+  let acted = false;
+  const until = (list) => {
+    if (!acted && list.some((event) => event.name === "narration")) {
+      acted = true;
+      act();
+    }
+    return done(list);
+  };
+  return await readEvents(port, { path: `/events?job=J-${job.id}`, headers: { cookie: studioCookie(port) }, timeoutMs: 8000, until });
+}
+
+// Every narration event of a stream, in order.
+function narrationOf(events) {
+  return events.filter((event) => event.name === "narration").flatMap((event) => event.data);
+}
+
+test("a stream opened before the job's slug was bound narrates the report signalled after it, past its tool line", async (t) => {
+  const job = lateSlugJob(t, "studio-events-late-slug");
+  const hasReport = (list) => narrationOf(list).some((event) => event.kind === "report");
+  const act = () => {
+    bindLateSlug(job, { plan: true });
+    appendFileSync(job.path, toNdjson([runCheckEvent("toolu_b", 9)]));
+  };
+  const narration = narrationOf(await readJobStream(t, job, { act, done: hasReport }));
+  const reportAt = narration.findIndex((event) => event.kind === "report");
+  assert.deepEqual([narration[reportAt].artifact, narration[reportAt].title, narration[reportAt].bytes], ["03-plan.md", "The plan", 18]);
+  assert.ok(reportAt > narration.findLastIndex((event) => event.tool === "Bash"), "the report follows its run check line");
+});
+
+test("a report whose artifact is missing after a late slug never reaches the wire, pending or not", async (t) => {
+  const job = lateSlugJob(t, "studio-events-late-slug-missing");
+  const act = () => {
+    bindLateSlug(job, { plan: false });
+    appendFileSync(job.path, toNdjson([runCheckEvent("toolu_b", 9), assistantEvent("Checked.", { timestamp: secondsIntoAttempt(10) })]));
+  };
+  const done = (list) => narrationOf(list).some((event) => event.kind === "text");
+  const narration = narrationOf(await readJobStream(t, job, { act, done }));
+  assert.equal(narration.filter((event) => event.kind === "report").length, 0);
+});
+
+test("a job that ends right after a pending report sends the resolved report before its end", async (t) => {
+  const job = lateSlugJob(t, "studio-events-late-slug-end");
+  const act = () => {
+    bindLateSlug(job, { plan: true });
+    appendFileSync(job.path, toNdjson([runCheckEvent("toolu_b", 9), resultEvent()]));
+    finishJob(job.id, { worker: "host:1", status: "done", prUrl: "https://github.com/acme/api/pull/11" }, job.env);
+  };
+  const events = await readJobStream(t, job, { act, done: (list) => list.some((event) => event.name === "end") });
+  const reportBatch = events.findIndex((event) => event.name === "narration" && event.data.some((entry) => entry.kind === "report"));
+  assert.ok(reportBatch >= 0, "a report event arrived");
+  assert.ok(reportBatch < events.findIndex((event) => event.name === "end"), "the report precedes the end");
+  assert.equal(narrationOf(events).find((event) => event.kind === "report").bytes, 18);
 });
 
 const SECOND_ATTEMPT_ISO = "2026-09-07T21:00:00.000Z";
