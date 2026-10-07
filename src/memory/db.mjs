@@ -3,7 +3,7 @@ import { SchemaOutdatedError, UserError } from "../config/errors.mjs";
 import { callerJobId, isRunnerHome } from "../config/job-home.mjs";
 import { dbPath, dbWalPath, homeDir } from "../config/paths.mjs";
 import { ensureHome, loadRawConfig } from "../config/store.mjs";
-import { DATA_TABLES, FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ISSUE_FTS, ISSUE_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
+import { DATA_TABLES, FTS, INDEXES, JOBS_FTS, JOBS_FTS_BACKFILL, OWNER_KEY_GUARDS, REGISTRY, ISSUE_FTS, ISSUE_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
 import { hasTable } from "./migration/one-shot.mjs";
 import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schemaState } from "./migration/v18.mjs";
 import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
@@ -90,6 +90,13 @@ function createRegistry(db, env) {
   });
 }
 
+// Creates the lexical index of the job history and indexes the jobs it misses, writing only when one is missing.
+function ensureJobsFts(db) {
+  db.exec(JOBS_FTS);
+  const missing = db.prepare("SELECT 1 FROM jobs WHERE NOT EXISTS (SELECT 1 FROM jobs_fts f WHERE f.rowid = jobs.id) LIMIT 1").get();
+  if (missing) inTransaction(db, () => db.exec(JOBS_FTS_BACKFILL));
+}
+
 // Brings an existing database to the current schema: the per-open shared-slug step, indexes and the FTS mirrors.
 function migrate(db) {
   const version = db.prepare("PRAGMA user_version").get().user_version;
@@ -99,6 +106,7 @@ function migrate(db) {
   if (sharedSlugPending(db)) inTransaction(db, () => migrateSharedSlugs(db));
   db.exec(INDEXES);
   db.exec(FTS);
+  ensureJobsFts(db);
   db.exec(ISSUE_FTS);
   db.exec(ISSUE_NUMBER_INDEXES);
   db.exec(OWNER_KEY_GUARDS);

@@ -14,7 +14,9 @@ import { liveState } from "./narrate.mjs";
 import { readAttemptTail } from "./follow.mjs";
 import { extractNoticeFromStream, partialTokens } from "./stream.mjs";
 import { KEPT_PREFIX } from "./worktree.mjs";
-import { slugSource } from "./spawn.mjs";
+import { jobTitle } from "./job-title.mjs";
+
+export { jobTitle } from "./job-title.mjs";
 
 // The state of the pull request of a job as the cache holds it right now: null without a GitHub pull request, `unknown` on a miss.
 function prStateOf(url, prStates) {
@@ -152,33 +154,6 @@ function withLive(jobs, env, now) {
   });
   const section = { name: "live", ok: errors.length === 0, ms: Math.max(0, Math.round(now() - startedAt)), error: errors[0] ?? null, jobs: withBlocks.filter((job) => job.live !== null).length };
   return { jobs: withBlocks, section };
-}
-
-const TITLE_LIMIT = 120;
-const HEADING_MARKER = /^#{1,6}\s+/;
-const BARE_HEADINGS = new Set(["brief", "task"]);
-
-// Whether a prompt line is a heading that only names a section (`## Brief`, `# Task`) and says nothing itself.
-function isBareHeading(line) {
-  return HEADING_MARKER.test(line) && BARE_HEADINGS.has(line.replace(HEADING_MARKER, "").trim().toLowerCase());
-}
-
-// Cuts a title to the limit, the ellipsis included in it.
-function clipTitle(text) {
-  const points = Array.from(text);
-  return points.length <= TITLE_LIMIT ? text : `${points.slice(0, TITLE_LIMIT - 1).join("")}…`;
-}
-
-// The readable title of a job, derived on read: its issue's title, else the first meaningful line of its prompt, else null.
-export function jobTitle(job, issue) {
-  const issueTitle = typeof issue?.title === "string" ? issue.title.trim() : "";
-  if (issueTitle) return clipTitle(issueTitle.replace(/\s+/g, " "));
-  const line = slugSource(job?.prompt)
-    .split("\n")
-    .map((entry) => entry.trim())
-    .find((entry) => entry !== "" && !isBareHeading(entry));
-  const title = line?.replace(HEADING_MARKER, "").trim();
-  return title ? clipTitle(title) : null;
 }
 
 // A public job view carrying its derived title, from the raw row that still holds the prompt and the joined issue title.

@@ -6,6 +6,7 @@ import * as decisions from "../memory/decisions.mjs";
 import * as dedup from "../memory/dedup.mjs";
 import * as index from "../memory/index.mjs";
 import * as jobs from "../memory/jobs.mjs";
+import * as jobSearch from "../memory/job-search.mjs";
 import * as lessons from "../memory/lessons.mjs";
 import * as memory from "../memory/memory.mjs";
 import { orphansOf } from "../memory/migration/v20.mjs";
@@ -124,6 +125,7 @@ function jobsMethods(env, db) {
     getJob: async (id) => jobs.getJob(id, env, db()),
     jobSpawnRefs: async (id) => issues.jobSpawnRefs(id, env, db()),
     listJobs: async (options) => jobs.listJobs(options, env, db()),
+    searchJobs: async (spec) => jobSearch.searchJobs(spec, env, db()),
     countsByStatus: async () => jobs.countsByStatus(env, db()),
     countBlockedGates: async () => jobs.countBlockedGates(env, db()),
     countActiveJobs: async () => jobs.countActiveJobs(env, db()),

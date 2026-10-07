@@ -449,6 +449,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS issues_org_number_idx ON issues(org_id, number
 CREATE UNIQUE INDEX IF NOT EXISTS issues_global_number_idx ON issues(number) WHERE scope = 'project' AND project_id IS NULL;
 `;
 
+// The lexical index of the job history (slug, brief, notice), kept out of FTS because the older one-shot steps exec FTS while `jobs` is being rebuilt.
+export const JOBS_FTS = `
+CREATE VIRTUAL TABLE IF NOT EXISTS jobs_fts USING fts5(slug, brief, notice);
+CREATE TRIGGER IF NOT EXISTS jobs_fts_ai AFTER INSERT ON jobs BEGIN
+  INSERT INTO jobs_fts(rowid, slug, brief, notice) VALUES (new.id, new.slug, substr(new.prompt, 1, 1500), new.notice_md);
+END;
+CREATE TRIGGER IF NOT EXISTS jobs_fts_au AFTER UPDATE OF slug, notice_md, prompt ON jobs BEGIN
+  DELETE FROM jobs_fts WHERE rowid = old.id;
+  INSERT INTO jobs_fts(rowid, slug, brief, notice) VALUES (new.id, new.slug, substr(new.prompt, 1, 1500), new.notice_md);
+END;
+CREATE TRIGGER IF NOT EXISTS jobs_fts_ad AFTER DELETE ON jobs BEGIN
+  DELETE FROM jobs_fts WHERE rowid = old.id;
+END;
+`;
+
+// Indexes every job the lexical index of the job history does not hold yet.
+export const JOBS_FTS_BACKFILL = `
+INSERT INTO jobs_fts(rowid, slug, brief, notice)
+SELECT id, slug, substr(prompt, 1, 1500), notice_md FROM jobs
+ WHERE NOT EXISTS (SELECT 1 FROM jobs_fts f WHERE f.rowid = jobs.id);
+`;
+
 export const FTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS lessons_fts USING fts5(
   title, root_cause, solution, prevention,
