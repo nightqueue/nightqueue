@@ -59,6 +59,12 @@
   --color-red-strong: #da3633;
   --color-pr-open: #238636;
   --color-pr-merged: #8957e5;
+  --color-pr-closed: #da3633;
+  --color-pr-draft: #6e7781;
+  --color-inset: #0f1219;
+  --color-mem-decision: #c4a7ff;
+  --color-mem-lesson: #f2c25c;
+  --color-mem-index: #7fb2ff;
   --color-closed: #b79cff;
   --color-run-bg: #10181a;
   --color-run-line: #2f4f3c;
@@ -80,17 +86,16 @@
   --text-sm: 12px;
   --text-xs: 11px;
 
-  --animate-pulse-live: pulse-live 1.4s ease-in-out infinite;
   --animate-blink: blink 1s step-end infinite;
+  --animate-flow: flow 1.6s linear infinite;
 }
 
-@keyframes pulse-live {
-  0%,
-  100% {
-    box-shadow: 0 0 0 3px #1b2a21;
+@keyframes flow {
+  from {
+    background-position: 200% 0;
   }
-  50% {
-    box-shadow: 0 0 0 6px #2f4f3c;
+  to {
+    background-position: -200% 0;
   }
 }
 

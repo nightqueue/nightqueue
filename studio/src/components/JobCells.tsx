@@ -1,8 +1,10 @@
 import { Link } from "@tanstack/react-router";
+import { GitMerge, Play } from "lucide-react";
 import { activeMs, formatDurationMs, hhmmUtc } from "../lib/format";
 import { jobRef, jobTitle } from "../lib/queue";
 import type { Job } from "../lib/types";
 import { useNow } from "../lib/useNow";
+import { ActionIcon } from "./StatusIcon";
 import { Button } from "./ui";
 
 export interface RowActions {
@@ -39,10 +41,16 @@ export function DurationCell({ job }: { job: Job }) {
   return <span className={`font-mono ${label === "-" ? "text-dim" : ""}`}>{label}</span>;
 }
 
-// The TOKENS cell: the runtime's token label in mono, dim when there is none yet.
+// Picks the TOKENS colour: dim without a label, accent while the job runs, plain otherwise.
+function tokensTone(job: Job, label: string): string {
+  if (label === "-") return "text-dim";
+  return job.status === "running" ? "text-accent" : "";
+}
+
+// The TOKENS cell: the runtime's token label in mono, live-coloured while running, dim when there is none yet.
 export function TokensCell({ job }: { job: Job }) {
   const label = job.studio.tokens_label || "-";
-  return <span className={`font-mono ${label === "-" ? "text-dim" : ""}`}>{label}</span>;
+  return <span className={`font-mono ${tokensTone(job, label)}`}>{label}</span>;
 }
 
 // The narrated last action of a running job, the tool call after the last ` — ` dimmed.
@@ -118,20 +126,22 @@ function InlineClose({ job, onClose }: { job: Job; onClose?: (job: Job) => void 
   return (
     <span title={noPr ? NO_PR_TOOLTIP : undefined}>
       <Button size="sm" aria-label={`close ${jobRef(job.id)}`} disabled={noPr || !onClose} onClick={() => onClose?.(job)}>
+        <ActionIcon icon={GitMerge} />
         Close
       </Button>
     </span>
   );
 }
 
-// The actions cell: inline ▶ Run on pending rows, inline Close on done rows, and the ⋯ menu.
+// The actions cell: inline Run on pending rows, inline Close on done rows, and the ⋯ menu.
 export function JobActions({ job, actions }: { job: Job; actions: RowActions }) {
   const ref = jobRef(job.id);
   return (
     <span className="inline-flex items-center gap-1 whitespace-nowrap">
       {job.status === "pending" && (
         <Button variant="run" size="sm" aria-label={`start a runner for ${ref}`} disabled={!actions.onRun} onClick={() => actions.onRun?.(job)}>
-          ▶ Run
+          <ActionIcon icon={Play} />
+          Run
         </Button>
       )}
       {closable(job) && <InlineClose job={job} onClose={actions.onClose} />}

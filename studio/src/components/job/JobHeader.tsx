@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { GitMerge, Play, RotateCcw, Terminal, X } from "lucide-react";
 import { canCancel, hasLog, hasSession, rawLogUrl, sessionCommand } from "../../lib/actions";
 import { copyText } from "../../lib/clipboard";
 import { activeMs, attemptCount, attemptsLabel, durationLabel, formatDurationMs, hhmmssUtc, hhmmUtc, timeoutLabel, wallMs } from "../../lib/format";
@@ -7,6 +8,7 @@ import { sessionBlockReason } from "../../lib/terminals";
 import type { CloseState as JobCloseState, IssueSummary, JobDetail, JobStatus } from "../../lib/types";
 import { useNow } from "../../lib/useNow";
 import { NO_PR_TOOLTIP } from "../JobCells";
+import { ActionIcon, StatusIcon } from "../StatusIcon";
 import { TerminalLaunchButton } from "../TerminalLaunchButton";
 import { Button } from "../ui";
 
@@ -52,16 +54,21 @@ export function Breadcrumb({ jobRefText }: { jobRefText: string }) {
   );
 }
 
-// The pill colour: the close state first (failed red, stalled or live close purple), the job status otherwise.
+// The pill colour: the close state first (failed or stalled red, live close purple), the job status otherwise.
 function pillStyleOf(status: JobStatus, closeState: JobCloseState | null) {
-  if (closeState === "failed") return PILL_STYLE.failed;
-  if (closeState === "stalled" || closeState === "closing") return PILL_STYLE.closed;
+  if (closeState === "failed" || closeState === "stalled") return PILL_STYLE.failed;
+  if (closeState === "closing") return PILL_STYLE.closed;
   return PILL_STYLE[status] ?? PILL_STYLE.pending;
 }
 
-// The status pill of the header, coloured by close state then status.
-function StatusPill({ status, closeState, label }: { status: JobStatus; closeState: JobCloseState | null; label: string }) {
-  return <span className={`inline-block rounded-full px-2 py-0.5 text-sm leading-[18px] font-medium ${pillStyleOf(status, closeState)}`}>{label}</span>;
+// The status pill of the header: the status icon and label, coloured by close state then status.
+function StatusPill({ status, closeState, closing, label }: { status: JobStatus; closeState: JobCloseState | null; closing: boolean; label: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-sm leading-[18px] font-medium ${pillStyleOf(status, closeState)}`}>
+      <StatusIcon status={status} closeState={closeState} closing={closing} size={16} />
+      {label}
+    </span>
+  );
 }
 
 export const BUDGET_COUNTER_TOOLTIP = "budget counter: inner retries count";
@@ -134,6 +141,7 @@ function CloseAction({ job, close }: { job: JobDetail; close: CloseState }) {
   return (
     <span title={noPr ? NO_PR_TOOLTIP : undefined}>
       <Button variant="primary" disabled={noPr} onClick={close.onClose}>
+        <ActionIcon icon={GitMerge} size={16} />
         Close job
       </Button>
     </span>
@@ -145,6 +153,7 @@ function StatusAction({ job, actions }: { job: JobDetail; actions: HeaderStatusA
   if (job.status === "pending") {
     return (
       <Button variant="primary" onClick={actions.onRun}>
+        <ActionIcon icon={Play} size={16} />
         Run
       </Button>
     );
@@ -152,6 +161,7 @@ function StatusAction({ job, actions }: { job: JobDetail; actions: HeaderStatusA
   if (job.status === "gate" || job.status === "failed" || job.status === "cancelled") {
     return (
       <Button variant="primary" disabled={!actions.retryReady} onClick={actions.onRetry}>
+        <ActionIcon icon={RotateCcw} size={16} />
         Retry
       </Button>
     );
@@ -163,6 +173,7 @@ function StatusAction({ job, actions }: { job: JobDetail; actions: HeaderStatusA
 function ResumeInTerminal({ job }: { job: JobDetail }) {
   return (
     <TerminalLaunchButton variant="run" request={{ kind: "session", job: jobRef(job.id) }} blockedReason={sessionBlockReason(job.status)} title="Resume this job's claude session in a studio terminal">
+      <ActionIcon icon={Terminal} size={16} />
       Resume in terminal
     </TerminalLaunchButton>
   );
@@ -187,6 +198,7 @@ function HeaderActions({ job, actions, onCancel }: { job: JobDetail; actions: He
       </Button>
       <StatusAction job={job} actions={actions} />
       <Button variant="danger" disabled={!canCancel(job)} onClick={onCancel}>
+        <ActionIcon icon={X} size={16} />
         Cancel job
       </Button>
     </div>
@@ -202,7 +214,7 @@ export function JobHeader({ job, statusLabel, closeState, issue, runTier, action
         <div className="flex flex-wrap items-center gap-2.5">
           <span className="font-mono text-xl font-medium">{jobRef(job.id)}</span>
           <span className="min-w-0 text-xl font-semibold break-words">{jobTitle(job)}</span>
-          <StatusPill status={job.status} closeState={closeState} label={statusLabel} />
+          <StatusPill status={job.status} closeState={closeState} closing={actions.close.closing} label={statusLabel} />
           {tier && <HeaderChip>{tier}</HeaderChip>}
           <HeaderChip>{`p${job.priority}`}</HeaderChip>
           <HeaderChip title={BUDGET_COUNTER_TOOLTIP}>{`attempt ${job.attempts} / ${job.max_attempts}`}</HeaderChip>

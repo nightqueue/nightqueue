@@ -204,20 +204,25 @@ test("the API refuses a write body that is not JSON, and an unknown job log is a
   assert.equal((await send(port, { path: "/api/jobs/nope/recalls", headers })).status, 400);
 });
 
-test("the recalls of a job read its whole log, and a job with no log answers no groups", async (t) => {
+test("the recalls of a job read its whole log, and a job with no log answers no recalls", async (t) => {
   const env = makeHome(t, "studio-api-recalls");
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const { port } = await startStudio(t, env);
   const headers = { cookie: studioCookie(port) };
   const empty = await send(port, { path: `/api/jobs/J-${id}/recalls`, headers });
-  assert.deepEqual([empty.status, JSON.parse(empty.body)], [200, { groups: [] }]);
+  const emptyBody = JSON.parse(empty.body);
+  assert.deepEqual([empty.status, emptyBody.recalls, emptyBody.applied_total], [200, [], 0]);
+  assert.deepEqual(Object.keys(emptyBody.embedding).sort(), ["model", "threshold"]);
+  assert.equal(typeof emptyBody.embedding.model, "string");
+  assert.equal(typeof emptyBody.embedding.threshold, "number");
   const call = toolUseEvent({ name: "mcp__nightqueue__lesson_recall", id: "r1", input: { query: "worker" } });
   const answer = toolResultEvent({ toolUseId: "r1", content: [{ type: "text", text: JSON.stringify([{ id: 5, title: "Guard it" }]) }] });
   mkdirSync(dirname(jobLogPath(id, env)), { recursive: true });
   writeFileSync(jobLogPath(id, env), [attemptMarker(1), JSON.stringify(call), attemptMarker(2), JSON.stringify(answer)].join("\n"));
   const full = JSON.parse((await send(port, { path: `/api/jobs/J-${id}/recalls`, headers })).body);
-  assert.equal(full.groups[0].agent, "orchestrator");
-  assert.deepEqual(full.groups[0].recalls[0].results, [{ ref: "L5", title: "Guard it" }]);
+  assert.equal(full.recalls[0].agent, "orchestrator");
+  assert.deepEqual(full.recalls[0].hits, [{ ref: "L5", title: "Guard it", score: null }]);
+  assert.deepEqual([full.recalls[0].applied, full.applied_total], [[], 0]);
 });
 
 test("the diffstat of a job with no worktree and no recorded files answers none", async (t) => {

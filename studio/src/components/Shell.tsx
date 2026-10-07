@@ -1,4 +1,5 @@
 import { Link, Outlet } from "@tanstack/react-router";
+import { CircleCheck, CircleX, Info, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { useProjects, useStudioInfo } from "../lib/api";
 import { useQueueStream } from "../lib/events";
@@ -9,6 +10,7 @@ import { useSelectedProject } from "../lib/selectedProject";
 import type { TerminalRequest } from "../lib/types";
 import { dismissToast, useToasts, type ToastTone } from "../lib/toast";
 import { useNow } from "../lib/useNow";
+import { ActionIcon } from "./StatusIcon";
 import { TerminalDock, useDockPadding } from "./TerminalDock";
 import { TerminalLaunchButton } from "./TerminalLaunchButton";
 import { TerminalUnavailable } from "./TerminalUnavailable";
@@ -79,10 +81,10 @@ function UtcClock() {
   return <span className="whitespace-nowrap">UTC {utcClock(now)}</span>;
 }
 
-const TOAST_TONES: Record<ToastTone, string> = {
-  info: "border-line text-fg",
-  success: "border-run-line text-accent",
-  error: "border-red-strong text-red",
+const TOAST_TONES: Record<ToastTone, { icon: LucideIcon; className: string }> = {
+  info: { icon: Info, className: "border-line text-fg" },
+  success: { icon: CircleCheck, className: "border-run-line text-accent" },
+  error: { icon: CircleX, className: "border-red-strong text-red" },
 };
 
 // The toasts of the page, stacked in the bottom right corner.
@@ -90,16 +92,20 @@ function ToastHost() {
   const toasts = useToasts();
   return (
     <div className="pointer-events-none fixed right-4 bottom-4 z-50 flex max-w-[calc(100vw-2rem)] flex-col gap-2" aria-live="polite">
-      {toasts.map((toast) => (
-        <button
-          key={toast.id}
-          type="button"
-          onClick={() => dismissToast(toast.id)}
-          className={`pointer-events-auto max-w-md rounded-md border bg-surface px-3 py-2 text-left text-sm shadow-lg ${TOAST_TONES[toast.tone]}`}
-        >
-          {toast.text}
-        </button>
-      ))}
+      {toasts.map((toast) => {
+        const tone = TOAST_TONES[toast.tone] ?? TOAST_TONES.info;
+        return (
+          <button
+            key={toast.id}
+            type="button"
+            onClick={() => dismissToast(toast.id)}
+            className={`pointer-events-auto inline-flex max-w-md items-start gap-2 rounded-md border bg-surface px-3 py-2 text-left text-sm shadow-lg ${tone.className}`}
+          >
+            <ActionIcon icon={tone.icon} className="mt-0.5" />
+            {toast.text}
+          </button>
+        );
+      })}
     </div>
   );
 }

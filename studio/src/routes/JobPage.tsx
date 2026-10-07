@@ -4,7 +4,6 @@ import { CancelJobDialog } from "../components/CancelJobDialog";
 import { CloseJobDialog } from "../components/CloseJobDialog";
 import { RetryDialog } from "../components/RetryDialog";
 import { AttemptsCard } from "../components/job/AttemptsCard";
-import { CostCard } from "../components/job/CostCard";
 import { FilesCard } from "../components/job/FilesCard";
 import { GateCard } from "../components/job/GateCard";
 import { Breadcrumb, type CloseState, type HeaderStatusActions, JobHeader } from "../components/job/JobHeader";
@@ -35,25 +34,24 @@ function JobUnavailable({ jobRefText, reason }: { jobRefText: string; reason: st
   );
 }
 
-// The phase track, ticking the running phase from the start of the current attempt.
-function LiveTimeline({ job, stream, reason }: { job: JobDetail; stream: JobStreamState; reason: string | null }) {
+// The phase track with the job's totals, ticking the running phase from the start of the current attempt.
+function LiveTimeline({ job, row, stream, reason }: { job: JobDetail; row: Job | undefined; stream: JobStreamState; reason: string | null }) {
   const now = useNow();
   const started = isoMs(job.attempt_started_at ?? job.started_at);
   const runElapsedMs = job.status === "running" && started !== null ? now - started : null;
-  return <PhaseTimeline timeline={stream.timeline} status={job.status} reason={reason} runElapsedMs={runElapsedMs} />;
+  return <PhaseTimeline job={job} row={row} baseline={stream.meta?.baseline} tier={stream.meta?.tier ?? job.tier} timeline={stream.timeline} reason={reason} runElapsedMs={runElapsedMs} />;
 }
 
-// The right column: notice (unless the gate card shows it), pull request, cost, note, files, memory and run paths.
+// The right column: notice (unless the gate card shows it), pull request, attempts, note, files, memory and run paths.
 function SideCards({ job, stream }: { job: JobDetail; stream: JobStreamState }) {
   return (
     <div className="flex min-w-0 flex-col gap-4">
       {job.status !== "gate" && <NoticeCard job={job} />}
       <PrCard job={job} />
-      <CostCard job={job} baseline={stream.meta?.baseline} timeline={stream.timeline} />
       <AttemptsCard job={job} />
       <NoteCard note={job.operator_note} />
-      <FilesCard jobRef={jobRef(job.id)} running={job.status === "running"} />
-      <MemoryCard jobRef={jobRef(job.id)} running={job.status === "running"} />
+      <FilesCard job={job} running={job.status === "running"} />
+      <MemoryCard job={job} running={job.status === "running"} />
       <RunCard job={job} meta={stream.meta} />
     </div>
   );
@@ -85,7 +83,7 @@ function JobScreen({ job, row, runnersOnline }: { job: JobDetail; row: Job | und
     <>
       <Breadcrumb jobRefText={jobRef(job.id)} />
       <JobHeader job={job} statusLabel={row?.studio.status_label || job.status} closeState={row?.studio.close_state ?? null} issue={issue.data} runTier={stream.meta?.tier ?? null} actions={actions} onCancel={() => setCancelling(true)} />
-      <LiveTimeline job={job} stream={stream} reason={reason} />
+      <LiveTimeline job={job} row={row} stream={stream} reason={reason} />
       {job.status === "gate" && <GateCard job={job} runnersOnline={runnersOnline} gatePhase={gatePhase} />}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <LiveLog stream={stream} running={job.status === "running"} attempt={job.attempts} />

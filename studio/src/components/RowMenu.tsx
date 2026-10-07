@@ -1,10 +1,12 @@
 import { Link } from "@tanstack/react-router";
+import { GitMerge, RotateCcw, Terminal, X, type LucideIcon } from "lucide-react";
 import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { canCancel, canClose, canRetry, hasLog, hasSession, rawLogUrl, sessionCommand } from "../lib/actions";
 import { copyText } from "../lib/clipboard";
 import { jobRef } from "../lib/queue";
 import type { Job } from "../lib/types";
 import { useEscape } from "../lib/useEscape";
+import { ActionIcon } from "./StatusIcon";
 
 export type RowMenuPick = "retry" | "cancel" | "close";
 
@@ -46,11 +48,14 @@ function useDismiss(menuRef: RefObject<HTMLDivElement | null>, anchor: HTMLEleme
   }, [menuRef, anchor, onClose]);
 }
 
-// One button entry of the menu, disabled when the tool would refuse it.
-function MenuButton({ enabled, onClick, children }: { enabled: boolean; onClick: () => void; children: ReactNode }) {
+// One button entry of the menu, with its optional icon, disabled when the tool would refuse it.
+function MenuButton({ enabled, onClick, icon, children }: { enabled: boolean; onClick: () => void; icon?: LucideIcon; children: ReactNode }) {
   return (
     <button type="button" role="menuitem" className={ITEM_CLASS} disabled={!enabled} onClick={onClick}>
-      {children}
+      <span className="flex items-center gap-2">
+        {icon && <ActionIcon icon={icon} />}
+        {children}
+      </span>
     </button>
   );
 }
@@ -74,13 +79,13 @@ export function RowMenu({ job, anchor, onPick, onClose }: RowMenuProps) {
       <Link to="/jobs/$ref" params={{ ref: jobRef(job.id) }} role="menuitem" className={ITEM_CLASS} onClick={onClose}>
         Open {jobRef(job.id)}
       </Link>
-      <MenuButton enabled={canRetry(job)} onClick={() => pick("retry")}>
+      <MenuButton enabled={canRetry(job)} icon={RotateCcw} onClick={() => pick("retry")}>
         Retry…
       </MenuButton>
-      <MenuButton enabled={canClose(job)} onClick={() => pick("close")}>
+      <MenuButton enabled={canClose(job)} icon={GitMerge} onClick={() => pick("close")}>
         Close (merge the PR)
       </MenuButton>
-      <MenuButton enabled={hasSession(job)} onClick={copySession}>
+      <MenuButton enabled={hasSession(job)} icon={Terminal} onClick={copySession}>
         Copy session cmd
       </MenuButton>
       {hasLog(job) ? (
@@ -94,7 +99,10 @@ export function RowMenu({ job, anchor, onPick, onClose }: RowMenuProps) {
       )}
       <div className="my-1 h-px bg-line" aria-hidden="true" />
       <MenuButton enabled={canCancel(job)} onClick={() => pick("cancel")}>
-        <span className={canCancel(job) ? "text-red" : ""}>{job.status === "running" ? "Cancel and stop runner…" : "Cancel…"}</span>
+        <span className={`flex items-center gap-2 ${canCancel(job) ? "text-red" : ""}`}>
+          <ActionIcon icon={X} />
+          {job.status === "running" ? "Cancel and stop runner…" : "Cancel…"}
+        </span>
       </MenuButton>
     </div>
   );

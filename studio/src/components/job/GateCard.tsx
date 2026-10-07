@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Terminal, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { APPROVE_NOTE, errorText, retryJob, sessionCommand } from "../../lib/actions";
 import { copyText } from "../../lib/clipboard";
@@ -7,6 +8,7 @@ import { jobKey, noticeOf } from "../../lib/job";
 import { jobRef } from "../../lib/queue";
 import { showToast } from "../../lib/toast";
 import type { JobDetail } from "../../lib/types";
+import { ActionIcon } from "../StatusIcon";
 import { Button, FIELD_CLASS } from "../ui";
 import { CardTitle } from "./Card";
 import { Markdown } from "./Markdown";
@@ -33,9 +35,7 @@ function GateNotice({ job }: { job: JobDetail }) {
   return (
     <div className="flex min-w-0 flex-col gap-2.5 border-b border-line px-5 py-4 lg:border-r lg:border-b-0">
       <div className="flex flex-wrap items-center gap-2.5">
-        <span className="text-lg text-red" aria-hidden="true">
-          ⚠
-        </span>
+        <ActionIcon icon={TriangleAlert} size={16} className="text-red" />
         <CardTitle className="text-red">{job.blocked_code ? "Blocked before the run" : "Requires user confirmation"}</CardTitle>
         <span className="text-sm text-muted">{`notice_md · written ${hhmmUtc(job.finished_at)} UTC`}</span>
       </div>
@@ -49,6 +49,7 @@ function ResumeInTerminal({ job }: { job: JobDetail }) {
   const command = sessionCommand(job);
   return (
     <Button variant="ghost" className="self-start" onClick={() => void copyText(command, "the session command")}>
+      <ActionIcon icon={Terminal} size={16} />
       Resume in terminal <span className="ml-1.5 hidden font-mono text-xs text-dim sm:inline">{command}</span>
     </Button>
   );

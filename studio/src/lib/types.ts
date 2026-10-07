@@ -194,7 +194,11 @@ export interface DiffstatFile {
   added: number | null;
   deleted: number | null;
   untracked?: boolean;
+  kind?: DiffKind | null;
+  from?: string;
 }
+
+export type DiffKind = "new" | "mod" | "del" | "ren";
 
 export interface Diffstat {
   source: "worktree" | "recorded" | "none";
@@ -204,26 +208,35 @@ export interface Diffstat {
   note: string | null;
 }
 
-export interface RecallResult {
+export interface RecallHit {
   ref: string | null;
   title: string | null;
+  score: number | null;
+  via?: string;
+  text?: string;
 }
+
+export type RecallKind = "decision" | "lesson" | "index" | "memory";
 
 export interface Recall {
   id: string | null;
   tool: "lesson_recall" | "memory_recall" | "decision_recall" | "index_recall";
+  kind: RecallKind;
   query: string | null;
-  input: { project?: string; target?: string };
+  agent: string;
+  phase: number | null;
   attempt: number;
+  at_s: number | null;
   pending: boolean;
-  results: RecallResult[];
   error: string | null;
+  hits: RecallHit[];
+  applied: string[];
 }
 
-export interface RecallGroup {
-  phase: number | null;
-  agent: string;
+export interface RecallsAnswer {
   recalls: Recall[];
+  applied_total: number;
+  embedding: { model: string; threshold: number } | null;
 }
 
 export interface StudioInfo {
