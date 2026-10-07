@@ -357,6 +357,7 @@ prompt changed a decision of yours in this task, add to the answer to the orches
 lines, outside the ≤10-line budget above. Do not cite a lesson that influenced
 nothing — no citation is a valid answer, and an uncited lesson gets no negative
 label anywhere.
+When a recalled lesson or decision shapes what you do, write its ref (`L379`, `D-58`) in your report.
 
 When the Intent note holds (Step 1), include BEFORE the plan the section below —
 it is what makes the pipeline pause for your confirmation. Omit it when there is no note

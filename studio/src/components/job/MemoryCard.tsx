@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Search } from "lucide-react";
+import { Scale, Search } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { errorText } from "../../lib/actions";
 import { getJson } from "../../lib/api";
@@ -8,6 +8,7 @@ import { jobRef } from "../../lib/queue";
 import type { JobDetail, Recall, RecallHit, RecallKind, RecallsAnswer } from "../../lib/types";
 import { ICON_STROKE } from "../StatusIcon";
 import { CardEmpty, CardTitle } from "./Card";
+import { LogTag } from "./log/LogBits";
 import { type MemoryEntry, MemoryDrawer } from "./MemoryDrawer";
 
 const RUNNING_REFRESH_MS = 10_000;
@@ -16,21 +17,33 @@ const SKELETON_BLOCKS = ["w-3/4", "w-2/3", "w-1/2"];
 
 const FALLBACK_VIA = "fallback";
 
-const KIND_TEXT: Record<RecallKind, string> = {
+const PREVIEW_HITS = 3;
+
+type HitKind = Exclude<RecallKind, "context">;
+
+const KIND_TEXT: Record<HitKind, string> = {
   decision: "text-mem-decision",
   lesson: "text-mem-lesson",
   index: "text-mem-index",
   memory: "text-note",
 };
 
-const KIND_BAR: Record<RecallKind, string> = {
+const KIND_BAR: Record<HitKind, string> = {
   decision: "bg-mem-decision",
   lesson: "bg-mem-lesson",
   index: "bg-mem-index",
   memory: "bg-note",
 };
 
+const KIND_WORDS: { kind: HitKind; one: string; many: string }[] = [
+  { kind: "decision", one: "decision", many: "decisions" },
+  { kind: "lesson", one: "lesson", many: "lessons" },
+  { kind: "memory", one: "memory", many: "memories" },
+];
+
 type OpenEntry = (entry: MemoryEntry) => void;
+
+type KindPart = { count: number; word: string };
 
 // The recalls of one job's whole log with the refs they applied, refreshed every 10 s while it runs.
 function useRecalls(ref: string, running: boolean) {
@@ -56,9 +69,57 @@ function isFallback(hit: RecallHit): boolean {
   return hit.via === FALLBACK_VIA;
 }
 
-// The colour family of a recall's kind, the memory one for a kind this page does not know.
-function kindOf(recall: Recall): RecallKind {
-  return recall.kind in KIND_TEXT ? recall.kind : "memory";
+// The colour family of a recall's kind, the memory one for a context block or a kind this page does not know.
+function kindOf(recall: Recall): HitKind {
+  return recall.kind in KIND_TEXT ? (recall.kind as HitKind) : "memory";
+}
+
+// The colour family of one hit: its own kind when the recall carries one per hit, else the recall's.
+function hitKindOf(hit: RecallHit, recall: Recall): HitKind {
+  return hit.kind && hit.kind in KIND_TEXT ? hit.kind : kindOf(recall);
+}
+
+// The sources that cite a hit, an empty list when the payload carries none.
+function appliedOf(hit: RecallHit): string[] {
+  return Array.isArray(hit.applied) ? hit.applied.filter((source) => typeof source === "string") : [];
+}
+
+// Whether the run went on to cite a hit.
+function isApplied(hit: RecallHit): boolean {
+  return appliedOf(hit).length > 0;
+}
+
+// The non-zero counts of a context block's hits per kind, decisions first.
+function kindParts(hits: RecallHit[], recall: Recall): KindPart[] {
+  return KIND_WORDS.map(({ kind, one, many }) => {
+    const count = hits.filter((hit) => hitKindOf(hit, recall) === kind).length;
+    return { count, word: count === 1 ? one : many };
+  }).filter((part) => part.count > 0);
+}
+
+// The kind counts as `51 decisions · 4 lessons`.
+function kindPartsLabel(parts: KindPart[]): string {
+  return parts.map((part) => `${part.count} ${part.word}`).join(" · ");
+}
+
+// Who asked and when: the agent, its call count when merged, the attempt past the first and the clock.
+function whoLabel(recall: Recall): string {
+  const calls = typeof recall.calls === "number" && recall.calls > 1 ? ` · ${recall.calls} calls` : "";
+  const attempt = recall.attempt > 1 ? `#${recall.attempt} ` : "";
+  const when = elapsedClock(typeof recall.at_s === "number" ? recall.at_s * 1000 : null);
+  return `${recall.agent}${calls} · ${attempt}${when}`;
+}
+
+// The hits a block shows at first, the ones behind its unfold button and that button's label.
+function foldHits(recall: Recall, hits: RecallHit[]): { shown: RecallHit[]; hidden: RecallHit[]; more: string } {
+  if (recall.kind !== "context") {
+    const hidden = hits.slice(PREVIEW_HITS);
+    return { shown: hits.slice(0, PREVIEW_HITS), hidden, more: `… ${hidden.length} more` };
+  }
+  const hidden = hits.filter((hit) => !isApplied(hit));
+  const [first, ...rest] = kindParts(hidden, recall);
+  const label = first ? [`${first.count} more ${first.word}`, kindPartsLabel(rest)].filter(Boolean).join(" · ") : "";
+  return { shown: hits.filter(isApplied), hidden, more: `… ${label}, not cited` };
 }
 
 // A 0..1 similarity as `.81`, or null when it is not a finite number.
@@ -68,7 +129,7 @@ function scoreLabel(score: number | null | undefined): string | null {
 }
 
 // The last path segment of an indexed file, the whole ref otherwise.
-function shortRef(ref: string, kind: RecallKind): string {
+function shortRef(ref: string, kind: HitKind): string {
   return kind === "index" ? ref.slice(ref.lastIndexOf("/") + 1) || ref : ref;
 }
 
@@ -118,10 +179,13 @@ function MemoryHeader({ answer }: { answer: RecallsAnswer | undefined }) {
   );
 }
 
+// Who asked and when, at the right end of a block's heading.
+function WhoLabel({ recall }: { recall: Recall }) {
+  return <span className="ml-auto font-sans text-[10px] whitespace-nowrap text-dim">{whoLabel(recall)}</span>;
+}
+
 // The query line of a recall: the search icon, the quoted query, then who asked and when.
 function QueryLine({ recall }: { recall: Recall }) {
-  const attempt = recall.attempt > 1 ? `#${recall.attempt} ` : "";
-  const when = elapsedClock(typeof recall.at_s === "number" ? recall.at_s * 1000 : null);
   return (
     <div className="flex items-center gap-[7px] font-mono text-xs text-fg">
       <Search size={12} strokeWidth={ICON_STROKE} aria-hidden="true" className="shrink-0 text-accent" />
@@ -130,9 +194,28 @@ function QueryLine({ recall }: { recall: Recall }) {
         {recall.query ?? "(no query)"}
         <span className="text-accent">"</span>
       </span>
-      <span className="ml-auto font-sans text-[10px] whitespace-nowrap text-dim">{`${recall.agent} · ${attempt}${when}`}</span>
+      <WhoLabel recall={recall} />
     </div>
   );
+}
+
+// The heading of a context block: the scale icon, the phase it was built for, its kind counts, then who asked and when.
+function ContextLine({ recall }: { recall: Recall }) {
+  const subject = typeof recall.phase === "number" ? `phase ${recall.phase}` : (recall.target ?? "a phase");
+  const counts = kindPartsLabel(kindParts(hitsOf(recall), recall));
+  return (
+    <div className="flex items-center gap-[7px] font-mono text-xs text-fg">
+      <Scale size={12} strokeWidth={ICON_STROKE} aria-hidden="true" className="shrink-0 text-accent" />
+      <span className="min-w-0 break-words">{`context for ${subject}`}</span>
+      {counts && <LogTag>{counts}</LogTag>}
+      <WhoLabel recall={recall} />
+    </div>
+  );
+}
+
+// The heading of a block: a context block's phase line, the quoted query of any other recall.
+function BlockHeading({ recall }: { recall: Recall }) {
+  return recall.kind === "context" ? <ContextLine recall={recall} /> : <QueryLine recall={recall} />;
 }
 
 // The ref of an index hit: a link to the file in the pull request diff, plain text without a pull request.
@@ -146,7 +229,7 @@ function IndexRef({ path, prUrl, className }: { path: string; prUrl: string; cla
 }
 
 // The ref of a hit: opens the drawer for a decision, lesson or memory, links to the PR diff for an index file.
-function HitRef({ hit, kind, job, onOpen }: { hit: RecallHit; kind: RecallKind; job: JobDetail; onOpen: OpenEntry }) {
+function HitRef({ hit, kind, job, onOpen }: { hit: RecallHit; kind: HitKind; job: JobDetail; onOpen: OpenEntry }) {
   const className = `flex-none font-mono text-[11px] font-medium ${KIND_TEXT[kind]}`;
   if (!hit.ref) return <span className={className}>?</span>;
   if (kind === "index") return job.pr_url ? <IndexRef path={hit.ref} prUrl={job.pr_url} className={className} /> : <span className={className} title={hit.ref}>{shortRef(hit.ref, kind)}</span>;
@@ -159,7 +242,7 @@ function HitRef({ hit, kind, job, onOpen }: { hit: RecallHit; kind: RecallKind; 
 }
 
 // The score of a hit and its 36px meter in the kind's colour, nothing when the hit has no score.
-function ScoreMeter({ score, kind }: { score: number | null; kind: RecallKind }) {
+function ScoreMeter({ score, kind }: { score: number | null; kind: HitKind }) {
   const label = scoreLabel(score);
   if (label === null || score === null) return null;
   const width = `${Math.round(Math.min(1, Math.max(0, score)) * 100)}%`;
@@ -173,17 +256,51 @@ function ScoreMeter({ score, kind }: { score: number | null; kind: RecallKind })
   );
 }
 
-// One hit under its query: coloured ref, title and score; a fallback hit is dimmed.
-function HitRow({ hit, kind, job, onOpen }: { hit: RecallHit; kind: RecallKind; job: JobDetail; onOpen: OpenEntry }) {
+// The green tag of an applied hit naming the first source that cites it, every source on hover.
+function AppliedTag({ sources }: { sources: string[] }) {
+  return (
+    <span className="ml-auto flex-none" title={`cited in ${sources.join(", ")}`}>
+      <LogTag tone="green">{`✓ ${sources[0].replace(/\.md$/, "")}`}</LogTag>
+    </span>
+  );
+}
+
+// One hit under its heading: coloured ref, title, then where it was cited or its score; a fallback hit is dimmed.
+function HitRow({ hit, kind, job, onOpen }: { hit: RecallHit; kind: HitKind; job: JobDetail; onOpen: OpenEntry }) {
   const fallback = isFallback(hit);
+  const sources = appliedOf(hit);
   const score = scoreLabel(hit.score);
   const title = fallback ? "recent context — did not match the query" : [hit.title, score].filter(Boolean).join(" · ");
   return (
     <div className={`flex min-w-0 items-center gap-[7px] pl-[19px] text-xs ${fallback ? "opacity-50" : ""}`} title={title}>
       <HitRef hit={hit} kind={kind} job={job} onOpen={onOpen} />
-      <span className="min-w-0 truncate text-log">{hit.title ?? ""}</span>
-      <ScoreMeter score={hit.score} kind={kind} />
+      <span className={`min-w-0 truncate ${sources.length > 0 ? "text-fg" : "text-log"}`}>{hit.title ?? ""}</span>
+      {sources.length > 0 ? <AppliedTag sources={sources} /> : <ScoreMeter score={hit.score} kind={kind} />}
     </div>
+  );
+}
+
+// The button that unfolds the hits a block keeps folded.
+function MoreHitsButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="cursor-pointer self-start border-0 bg-transparent p-0 pl-[19px] text-left font-mono text-[11px] text-dim hover:text-fg">
+      {label}
+    </button>
+  );
+}
+
+// A block's hits folded to the first few (to the cited ones for a context block), the rest behind a button.
+function FoldedHits({ recall, hits, job, onOpen }: { recall: Recall; hits: RecallHit[]; job: JobDetail; onOpen: OpenEntry }) {
+  const [unfolded, setUnfolded] = useState(false);
+  const { shown, hidden, more } = foldHits(recall, hits);
+  const visible = unfolded ? [...shown, ...hidden] : shown;
+  return (
+    <>
+      {visible.map((hit, index) => (
+        <HitRow key={`${hit.ref ?? "?"}-${index}`} hit={hit} kind={hitKindOf(hit, recall)} job={job} onOpen={onOpen} />
+      ))}
+      {!unfolded && hidden.length > 0 && <MoreHitsButton label={more} onClick={() => setUnfolded(true)} />}
+    </>
   );
 }
 
@@ -193,20 +310,14 @@ function RecallHits({ recall, job, onOpen }: { recall: Recall; job: JobDetail; o
   if (recall.pending) return <p className="m-0 pl-[19px] text-xs text-dim">waiting for the answer…</p>;
   if (recall.error) return <p className="m-0 pl-[19px] text-xs text-red">{recall.error}</p>;
   if (hits.length === 0) return <p className="m-0 pl-[19px] text-xs text-dim">none</p>;
-  return (
-    <>
-      {hits.map((hit, index) => (
-        <HitRow key={`${hit.ref ?? "?"}-${index}`} hit={hit} kind={kindOf(recall)} job={job} onOpen={onOpen} />
-      ))}
-    </>
-  );
+  return <FoldedHits recall={recall} hits={hits} job={job} onOpen={onOpen} />;
 }
 
-// One recall block: its query line, then its hits.
+// One recall block: its heading, then its hits.
 function RecallBlock({ recall, job, onOpen }: { recall: Recall; job: JobDetail; onOpen: OpenEntry }) {
   return (
     <li className="flex flex-col gap-1.5 border-b border-row-line px-3.5 py-[9px] last:border-b-0">
-      <QueryLine recall={recall} />
+      <BlockHeading recall={recall} />
       <RecallHits recall={recall} job={job} onOpen={onOpen} />
     </li>
   );

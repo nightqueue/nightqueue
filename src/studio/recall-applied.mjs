@@ -9,6 +9,7 @@ import { baseOf, gitOutput, worktreeOf } from "./git-read.mjs";
 
 const ARTIFACT_RE = /^(\d+)[a-z]?-.*\.md$/;
 const FALLBACK_VIA = "fallback";
+const COMMITS_SOURCE = "commits";
 
 // The numbered artifacts of the job's run directory (the `00-` brief excluded) with their text; none when unreadable.
 async function runArtifacts(job, env) {
@@ -25,7 +26,7 @@ async function runArtifacts(job, env) {
     const number = Number(ARTIFACT_RE.exec(name)?.[1]);
     if (!Number.isInteger(number) || number < 1) continue;
     const text = await readFile(join(dir, name), "utf8").catch(() => null);
-    if (text !== null) artifacts.push({ number, text });
+    if (text !== null) artifacts.push({ name, number, text });
   }
   return artifacts;
 }
@@ -50,30 +51,44 @@ function refPattern(ref) {
   return new RegExp(`${before}${escaped}(?![\\w-]|[./]\\w)`);
 }
 
-// The texts a recall's hits may be cited in: artifacts of its phase or later (any for the orchestrator), and the commits.
+// The named texts a recall's hits may be cited in: artifacts of its phase or later (any for the orchestrator), and the commits.
 function textsAfter(recall, { artifacts, commits }) {
   const phase = Number.isInteger(recall?.phase) ? recall.phase : null;
-  const texts = artifacts.filter((artifact) => phase === null || artifact.number >= phase).map((artifact) => artifact.text);
-  return commits ? [...texts, commits] : texts;
+  const texts = artifacts.filter((artifact) => phase === null || artifact.number >= phase);
+  return commits ? [...texts, { name: COMMITS_SOURCE, text: commits }] : texts;
 }
 
-// The refs of one recall's matched hits cited later in the run, each once.
+// The names of the texts that cite a hit's ref, none for a hit without a ref or one the recall fell back to.
+function citingNames(hit, texts) {
+  if (typeof hit?.ref !== "string" || !hit.ref || hit.via === FALLBACK_VIA) return [];
+  const pattern = refPattern(hit.ref);
+  return texts.filter((source) => pattern.test(source.text)).map((source) => source.name);
+}
+
+// For each hit of one recall, in order, the names of the later texts that cite it.
 function appliedOf(recall, sources) {
   const hits = Array.isArray(recall?.hits) ? recall.hits : [];
   const texts = textsAfter(recall, sources);
-  const applied = new Set();
-  for (const hit of hits) {
-    if (typeof hit?.ref !== "string" || !hit.ref || hit.via === FALLBACK_VIA) continue;
-    const pattern = refPattern(hit.ref);
-    if (texts.some((text) => pattern.test(text))) applied.add(hit.ref);
-  }
-  return [...applied];
+  return hits.map((hit) => citingNames(hit, texts));
 }
 
-// For each recall of the list, the refs of its hits the run went on to cite; never throws, a failed source adds nothing.
+// For each recall of the list, per hit, the artifact names (then `commits`) citing it; never throws, a failed source adds nothing.
 export async function appliedRefs({ job, recalls, env = process.env }) {
   const list = Array.isArray(recalls) ? recalls : [];
   if (list.length === 0) return [];
   const [artifacts, commits] = await Promise.all([runArtifacts(job, env), commitMessages(job, env)]);
   return list.map((recall) => appliedOf(recall, { artifacts, commits }));
+}
+
+// One recall with each hit's citing sources and the distinct refs it applied.
+function recallWithApplied(recall, perHit) {
+  const hits = (Array.isArray(recall?.hits) ? recall.hits : []).map((hit, index) => ({ ...hit, applied: perHit?.[index] ?? [] }));
+  const applied = [...new Set(hits.filter((hit) => hit.applied.length > 0).map((hit) => hit.ref))];
+  return { ...recall, hits, applied };
+}
+
+// The recalls with per-hit `applied` sources and the count of distinct refs cited across all of them.
+export function withApplied(recalls, appliedLists) {
+  const list = (Array.isArray(recalls) ? recalls : []).map((recall, index) => recallWithApplied(recall, appliedLists?.[index]));
+  return { recalls: list, applied_total: new Set(list.flatMap((recall) => recall.applied)).size };
 }

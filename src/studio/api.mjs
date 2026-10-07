@@ -23,7 +23,7 @@ import { withReadOnlyStore } from "../store/open.mjs";
 import { listArtifacts, readArtifactFile } from "./artifacts.mjs";
 import { jobDiffstat } from "./diffstat.mjs";
 import { runDirOf } from "./job-extras.mjs";
-import { appliedRefs } from "./recall-applied.mjs";
+import { appliedRefs, withApplied } from "./recall-applied.mjs";
 import { TerminalRefusal } from "./terminal.mjs";
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -211,13 +211,11 @@ async function sendJobDiffstat(res, { env, ref }) {
   return sendJson(res, 200, await jobDiffstat(jobView(row, { full: true }), env));
 }
 
-// The recalls of a job with the refs each one's hits went on to apply, plus the total and the embedding they were ranked with.
+// The recalls of a job with where each hit was cited, the distinct applied total and the embedding they were ranked with.
 async function recallsAnswer(job, recalls, env) {
   const applied = await appliedRefs({ job, recalls, env });
-  const withApplied = recalls.map((recall, index) => ({ ...recall, applied: applied[index] ?? [] }));
   return {
-    recalls: withApplied,
-    applied_total: withApplied.reduce((sum, recall) => sum + recall.applied.length, 0),
+    ...withApplied(recalls, applied),
     embedding: { model: EMBEDDING_MODEL_ID, threshold: RECALL_COS_CUT },
   };
 }

@@ -212,15 +212,19 @@ export interface RecallHit {
   score: number | null;
   via?: string;
   text?: string;
+  kind?: "decision" | "lesson" | "memory";
+  applied?: string[];
 }
 
-export type RecallKind = "decision" | "lesson" | "index" | "memory";
+export type RecallKind = "decision" | "lesson" | "index" | "memory" | "context";
 
 export interface Recall {
   id: string | null;
-  tool: "lesson_recall" | "memory_recall" | "decision_recall" | "index_recall";
+  tool: "lesson_recall" | "memory_recall" | "decision_recall" | "index_recall" | "phase_prompt" | "context_for_phase";
   kind: RecallKind;
   query: string | null;
+  target?: string | null;
+  calls?: number;
   agent: string;
   phase: number | null;
   attempt: number;
