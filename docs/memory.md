@@ -110,6 +110,18 @@ so its finish lands on it), and anchors `attempt_started_at` of a job running at
 on its `started_at`; each write sits behind a read that finds nothing once it ran, so a
 second open writes nothing. `update` takes the usual `nightqueue.db.pre-v23` copy first.
 
+Schema v24 removes the tracker and indexes the job history: the tables `issues`,
+`issue_projects` and `issue_comments` go, with the mirrors `issues_fts` and
+`issue_comments_fts` and every trigger and index of theirs, and the full-text table `jobs_fts`
+(slug, the first 1500 characters of the prompt, the notice) is created with its triggers on
+`jobs`. A v22 or v23 database migrates once, in `nightqueue update` (or `setup`) and in the
+same migration as the earlier steps when they are pending (`src/memory/migration/v24.mjs`): a
+copy `nightqueue.db.pre-v24` first (kept as it is when it is already there), then one
+transaction that rebuilds `jobs_fts` from every job, drops the tracker and checks that every job
+is kept and indexed, that no tracker object is left and that no foreign key breaks. Job ids,
+refs and titles are untouched; the tracker rows stay only in the copy. The same live-lease
+refusal applies.
+
 **A sick database degrades, it does not kill.** The file can break under a live process - a
 home on a network or FUSE mount, a copy taken by hand, a second sqlite opened on the live
 file. Every open and every store call classifies what SQLite throws by its numeric `errcode`
@@ -137,7 +149,7 @@ A database older than the build is the same class with the code `SCHEMA_OUTDATED
 `nightqueue update` and the message `database at v<file>, this nightqueue expects v<code>: run
 \`nightqueue update\``: the MCP tools answer it as `store-unavailable`, the SessionStart hook
 and the MCP server's startup print `nightqueue memory unavailable (SCHEMA_OUTDATED at <home>):
-database at v20, this nightqueue expects v23: run \`nightqueue update\``, and `doctor` names
+database at v20, this nightqueue expects v24: run \`nightqueue update\``, and `doctor` names
 `nightqueue update`. It is never an outage: the runner does not back off on it, it stops with
 the message, since waiting never brings an older schema up to date.
 
@@ -148,15 +160,14 @@ label like a name - identity stays the id - so `nightqueue project key` /
 `org key` change one row and keep the old key in `project_key_aliases` /
 `org_key_aliases`, where it still resolves to the same owner and no other owner
 can take it. Everything is printed by a **ref** built from the current key, and
-every tool and command that takes a job, an item or a decision reads one:
-`J-<id>` for a job (the plain id too), `<KEY>-<n>` for an item (`NQ-12`,
-`DLW-3`), `D-<n>` for a decision of the project in context, `<KEY>/D-<n>` for a
+every tool and command that takes a job or a decision reads one:
+`J-<id>` for a job (the plain id too), `D-<n>` for a decision of the project in context, `<KEY>/D-<n>` for a
 decision named by its owner (`DLW/D-3`), and `G` for the rows that have no owner
-(`G-4`, `G/D-2`). Items and decisions no longer take an internal id; an integer
-where one of their refs belongs is refused. Every MCP answer that carries a job,
-an item or a decision carries its `ref` next to the existing `id`/`number`.
+(`G/D-2`). Decisions no longer take an internal id; an integer
+where one of their refs belongs is refused. Every MCP answer that carries a job
+or a decision carries its `ref` next to the existing `id`/`number`.
 
-Fifteen tables plus five full text mirrors:
+Twelve tables plus four full text mirrors:
 
 | table | what it holds |
 |---|---|
@@ -171,11 +182,8 @@ Fifteen tables plus five full text mirrors:
 | `pipeline_phases` | one row per phase of a run: sequence, phase, model, status, retry and duration |
 | `jobs` | one row per queue job: project, prompt, priority, status, attempts, lease, slug, session, branch, pull request, notice, usage and cost |
 | `decisions` | one architecture decision per row: number inside its project, title, context, decision, consequences, status, the decision that superseded it, and its embedding |
-| `issues` | one intent per row: its number inside its owner, title, detail, type (`bug`, `feature`, `improvement`, `chore`, `incident`), status (`backlog`, `todo`, `in_progress`, `in_review`, `done`, `cancelled`), priority (1-9, 1 first), position inside its priority group, `closed_at`, the decision that motivated it, the job it was queued as and the job status it last followed |
-| `issue_comments` | the append-only thread of an issue: kind, author (`operator` or `job:<id>`), body, `refs` JSON, the project that owns the comment (none for the item's owner) and its date; triggers refuse every update and delete |
-| `issue_projects` | one row per project an org item was queued for: its status, `closed_at`, the job it was queued as and the job status it last followed; one row per item and project |
 | `lessons_fts`, `memory_fts`, `decisions_fts` | FTS5 mirrors of the three text tables, kept in sync by triggers on insert, update and delete |
-| `issues_fts`, `issue_comments_fts` | FTS5 mirrors of the issue titles and details (every write) and of the comment bodies (inserts; comments are append-only), read by `issue_search` |
+| `jobs_fts` | FTS5 index of each job's slug, brief (the first 1500 characters of its prompt) and notice, kept by triggers on insert, update and delete, read by the triager's `## Related jobs` |
 
 **Hybrid recall.** A recall with a query always runs BM25 over the FTS mirror,
 with a coverage floor: a row only counts as a hit when it matches enough of the
@@ -223,7 +231,7 @@ persisted, so a failed run reprocesses the same slice instead of losing it.
 **Commands.**
 
 ```sh
-nightqueue mcp                     # start the stdio MCP server with the thirty-one tools
+nightqueue mcp                     # start the stdio MCP server with the twenty-six tools
 nightqueue mcp --http --port 4747 --token <t>   # serve the same tools over Streamable HTTP on 127.0.0.1
 nightqueue hook session-start      # run a hook, reading the event JSON from stdin
 nightqueue reflect --transcript <path>   # reflect on a transcript now, in the foreground
@@ -234,8 +242,6 @@ nightqueue decision list [--project <name> | --org <name>] [--status <status>]  
 nightqueue decision show <number> [--project <name> | --org <name>]              # one decision, in full
 nightqueue decision export <number> [--dir <path>] [--force]                     # one decision as a markdown file
 nightqueue decision import <file.md> [--status <s>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]   # save a markdown decision file
-nightqueue issues [--project <name> | --org <name>] [--status <s>]... [--priority <n>]... [--type <t>]...  # the issues, grouped by status, p1 first
-nightqueue issues show <id> [--json]   # one issue in full, with its comment thread
 ```
 
 **Environment variables.**
@@ -272,11 +278,11 @@ package: `nightqueue embed install` (or a yes during `nightqueue init`) puts it 
 audits clean. Without it every recall still answers through BM25 and the whole
 test suite still passes.
 
-### Decisions and issues
+### Decisions
 
-Two more things the runtime remembers, next to the lessons and the memories.
+One more thing the runtime remembers, next to the lessons and the memories.
 
-Both belong to exactly one **owner**, and an owner is a project or an org: a
+A decision belongs to exactly one **owner**, and an owner is a project or an org: a
 decision several repos of the same product share is saved ONCE at org scope
 instead of once per repo, and every project of that org reads it. A write names
 `project` or `org`, never both; a read by `project` answers the project's rows
@@ -300,78 +306,24 @@ nothing. The other two statuses are read with `decision_list`,
 `nightqueue decision list` and `nightqueue decision show`, and never reach a
 prompt.
 
-The **issues** are where "what next" lives: one line per intent, with a
-`priority` from 1 to 9 (default 5, 1 first, the same direction as a job's) and a
-contiguous position inside its priority group (`1..N`, renumbered on every move).
-An item is numbered inside its owner, like a decision, and that number never
-changes: its ref is `<KEY>-<n>` (`NQ-12` for a project item, `DLW-3` for an org
-item).
-An item carries a status among `backlog`, `todo`, `in_progress`, `in_review`,
-`done` and `cancelled` (plus `closed_at` while it is `done`), may link to the
-decision that motivated it, and, once queued, to the job built from it. By hand
-every status may be set but `in_progress`, which only a job sets, and moving back
-from `in_review` or `done` is allowed. A linked item follows its job: queued or
-retried → `in_progress`, job `done` → `in_review`, job closed (its pull request
-merged through `nightqueue queue close`) → `done` with `closed_at`, job failed or
-cancelled → `todo` (a close that finds the pull request closed without merge
-cancels the job).
+**Related jobs.** The triager phase of `/resolve` gets a lexical search over the job
+history of the job's project - each job's slug, brief and notice - as a `## Related jobs`
+block of its phase context: at most five jobs, best first, one
+`- [J-<n>] <title> [<status> · PR #<n> · <YYYY-MM-DD>]` line each, never the caller's own job.
 
-Every item has a **type** (`bug`, `feature`, `improvement`, `chore`,
-`incident`), required on save. It sets the default tier of a job queued from it
-(`bug`, `improvement`, `incident` → `simple`; `feature` → `complex`; `chore` →
-`trivial`; an explicit tier wins) and the commit type the job is told to use
-(`fix`, `feat`, `refactor` or `perf`, `chore`). Every item also has a
-**comment thread**, append-only: each job event leaves one comment signed
-`job:<id>` (printed `J-<id>`) in the same transaction as the status (`queued`, `gate`, `pr`,
-`failed`, `closed`), with `refs` read from the job's row - the pull
-request, the branch, the merge sha, the files the implementation listed and the
-decision the job proposed; an operator's move back from `in_review` or `done`
-leaves `reopened`, and `issue_comment` adds a `note`. A one-off
-`node scripts/issue-backfill.mjs [--dry-run]` synthesizes the `queued`, `pr`
-and `closed` comments of items linked before comments existed, in the
-home `NIGHTQUEUE_HOME` names; it is idempotent, and an item closed by hand gets
-nothing.
-
-An **org item** follows its jobs through one **project row** per project it was
-queued for: each row is linked to its own job and moves exactly like a project
-item does, and its comments carry that `project`. The org item itself carries no
-job; its status is **derived** from its rows in the same transaction as every
-row change - `in_progress` while any row is, `done` once every row is `done` or
-`cancelled`, otherwise the lowest open status among them - and a derived move
-leaves an org-level comment. Closing an org item by hand (`done` or `cancelled`)
-cancels every open row, with one `closed` comment per row. A project reads only
-its own row and its own comments of an org item, never a sibling project's; the
-org reads the whole matrix. `nightqueue doctor` flags an org item whose persisted
-status disagrees with what its rows derive.
-
-**Search.** `issue_search` finds at most five items an owner sees: `query`
-matches the title, the detail and the comment thread (FTS5, relevance first),
-and `file` matches a path a job recorded in its comments, exactly or as a
-directory above it (`src/queue` matches `src/queue/x.mjs`, never
-`src/queue2/x.mjs`), with no wildcard character; file matches come first. The triager phase
-of `/resolve` gets the same search, over the job's project and the task, as a
-`## Related issues` block of its phase context.
-
-Schema v17 replaced the horizons: an `open` item of `now` became `todo`, one of
-`next` or `later` became `backlog`, `queued` became `in_progress`, `dropped`
-became `cancelled`, and every item got priority 5.
-
-**Private by design.** Both live only in `$NIGHTQUEUE_HOME/nightqueue.db`, the
+**Private by design.** Decisions live only in `$NIGHTQUEUE_HOME/nightqueue.db`, the
 same file as the rest of the memory. The runtime writes nothing into the
 repository and publishes nothing; the one thing it puts in a pull request is the
-footer `nightqueue run pr` appends (`Opened by nightqueue ·
-<KEY>-<n>` for a job queued from an issue, `Opened by nightqueue` otherwise),
-and in a commit the `Refs: <KEY>-<n>` trailer `nightqueue run commit` adds: no `docs/adr/` tree, no `ISSUES.md`; only an explicit `nightqueue decision export`
+footer `nightqueue run pr` appends (`Opened by nightqueue`): no `docs/adr/` tree, no `ISSUES.md`; only an explicit `nightqueue decision export`
 writes a file. The only ways in are the MCP tools below and the one deliberate
 terminal write, `nightqueue decision import` (see below), and the only ways to
-read them from a terminal are the four read-only commands
-(`nightqueue decision list`, `nightqueue decision show <number>`,
-`nightqueue issues` and `nightqueue issues show <ref>`), which resolve the project from the current directory when
+read them from a terminal are the two read-only commands
+(`nightqueue decision list` and `nightqueue decision show <number>`), which resolve the project from the current directory when
 `--project` is omitted, read one org alone with `--org <name>` instead, never
 write, and never register a project. Read-only
-means the database too: the four open it read-only, so they never create it and
+means the database too: the two open it read-only, so they never create it and
 never migrate it, and a home where nothing was ever saved reads as an empty one
-(`no decisions for <project>`, an `(empty)` issue list) instead of a SQLite error.
+(`no decisions for <project>`) instead of a SQLite error.
 
 **One source, moved on purpose.** `nightqueue decision export <number>` writes
 one decision as a markdown file, `<dir>/<nnnn>-<slug>.md` (default
@@ -391,7 +343,7 @@ file's header (a header written before v19, `Decision #n ...`, is still read); a
 refused, so a re-run imports nothing twice. The runtime itself never reads
 `docs/decisions/`.
 
-**The nine MCP tools** (parameters marked `?` are optional):
+**The four MCP tools** (parameters marked `?` are optional):
 
 | tool | what it does |
 |---|---|
@@ -399,11 +351,6 @@ refused, so a re-run imports nothing twice. The runtime itself never reads
 | `decision_update` | changes a decision by `id`, its ref (`D-7` in `project?` or the running job's project, `DLW/D-3` anywhere): any of `title`, `context`, `decision`, `consequences`, `status`, `superseded_by` — this is how a `proposed` one is accepted or rejected; `status: "superseded"` requires `superseded_by`, unless the row already names its successor; the row it answers is a compact one, truncated like `decision_list` |
 | `decision_list` | the log in numbering order: `project` or `org`, `status?`; compact rows, org rows first |
 | `decision_recall` | the standing constraints: `project` or `org`, `query?`, `limit?`; only `accepted` decisions, hybrid BM25 plus semantic, org rows first, and the text comes back untruncated because it feeds prompts. With `id` (a decision ref) alone, that one decision whole whatever its status (a `proposed`, `rejected` or `superseded` one too) with `job_ref` of the job that proposed it; a bare `D-<n>` is read in `project` (inside a job, the job's project), `query` or `limit` beside `id` is refused, and inside a job only a decision of the job's project or of its org is readable |
-| `issue_save` | adds an intent at the end of its priority group: `project` or `org`, `title`, `type`, `detail?`, `priority?` (default 5), `status?` (default `todo`), `decision_id?` (a decision ref of the item's owner); `horizon` is refused by name |
-| `issue_update` | changes an item by `id`, its ref (`NQ-12`): `title`, `detail`, `type`, `status`, `priority`, `position`, `decision_id`; `in_progress` is not a status that can be set by hand, a move back from `in_review` or `done` leaves a `reopened` comment, and `horizon` is refused by name |
-| `issue_get` | the issues of an owner as one list of `items`: `project` or `org`, `status?`, `priority?` and `type?` filters; in workflow order, org items first, then by priority and position, each item with its linked decision, the status of its job and `closed_at`; an org item carries `project_status` (the reading project's own row) or, read by `org`, `projects` (every row). With `id` (an item ref) alone, that one item untruncated with its comment thread in chronological order and, for an org item, its project rows |
-| `issue_comment` | appends a `note` to an item's thread by `id` (an item ref): `body`; signed `operator` outside a job and `job:<id>` inside one |
-| `issue_search` | at most five items an owner sees: `query?` (title, detail, comments), `file?` (a recorded path, exact or a directory above it), `project` or `org`, `limit?` (1-5); inside a job always the job's own project |
 
 As everywhere else in the server, an explicit `null` is treated exactly like an
 absent parameter, and `project` is the registered NAME, never a path. A name no
@@ -412,52 +359,21 @@ included - with `unknown project` and the list of the known ones, and nothing is
 written; only the lesson, memory and index tools also accept a path, which
 means the project whose checkout contains it, or the global scope when no
 checkout does.
-`decision_update` and `issue_update` take a ref and no owner, so inside an
-unattended run they are restricted to the project of the job that is running:
+`decision_update` takes a ref and no owner, so inside an
+unattended run it is restricted to the project of the job that is running:
 a ref naming a row of another project is refused, naming both projects, the same
 way `queue_retry` only retries its own job. An org row is refused there too,
 naming its org — a job reads its org's decisions and never rewrites one.
-`issue_get` by `id` and `issue_comment` inside a job reach an item of the
-job's project or of its org, never a sibling project's; the comment belongs to the
-job's project, and a thread read from a job leaves out the comments of a sibling
-project. Outside a job the restriction does not exist, and the operator updates
+Outside a job the restriction does not exist, and the operator updates
 any project from anywhere.
 
-Rows point at their owner by id: a decision or an issue carries
+Rows point at their owner by id: a decision carries
 `project_id` or `org_id`, and every other table carries `project_id` alone (a
 project's org is always the one of its `projects` row). Renaming an org or a
 project (`nightqueue org rename`, `nightqueue project rename`) changes that one
 row, and every view shows the new name at once. An org or a project that still
 owns rows cannot be removed: the database refuses the removal, and the message
 names how many rows of which table it still owns - nothing is removed.
-
-**Queueing from an issue.** `queue_add` with `issue_id` and no
-`prompt` (or `nightqueue queue add --issue <ref>`) builds the prompt from the
-item instead of asking for it again: `## Task` with the title and the detail,
-`## Issue` with `Issue: <KEY>-<n>`, its `Type:` and the `Commit type:`
-the job uses, `## Linked decision` when the item links one, `## Standing decisions` with the
-title of every accepted decision of the item's owner, `## Proposed (not binding)`
-with the title of every proposed one, and `## Related decisions`
-with at most eight accepted decisions the title recalled, in full - each heading
-disappears when it has nothing under it. A **project** item decides where the job goes by itself,
-so nothing is resolved from the current directory, and it is then linked to the
-job and moved to `in_progress`, following the job from there (see above). An **org**
-item cannot: a job is always one project's, so it needs `--project <name|all>`
-(`project` in `queue_add`), never the current directory - one project of that
-org, or `all` for every project of it. Each project gets its own row linked to
-its own job, and the item's status is derived from its rows (see above); a
-project whose row still has a live job is skipped and named, and the answer of
-`queue_add` lists every job in `jobs` and every skipped project in `skipped`.
-`--run` is refused with `all`, because it starts one job. Passing both
-`prompt` and `issue_id` is refused, because a silent precedence would let
-the caller believe the item drove the job when it did not. Re-queueing a project
-item whose job is still alive is refused too, naming that job, and so is an org
-item every named project of which still has a live job. The text the operator
-wrote - the title, the detail and the text of the decisions quoted under them -
-is escaped on its way into that prompt: a line that would read as a heading
-(`# ...` to `###### ...`) or as a `QUEUE_SLUG:` line is prefixed with a
-backslash, so operator text stays readable but can never forge one of the three
-headings above nor a literal of [Runtime contract](runtime-contract.md).
 
 **How `/resolve` uses them.** The standing decisions are already in the block the
 `SessionStart` hook injected, so the Phase 0 preflight pings `lesson_recall` alone:

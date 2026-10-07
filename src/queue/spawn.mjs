@@ -12,12 +12,14 @@ import { jobSettings } from "../host/settings.mjs";
 import { RECOVERED_PROMPT, recoveredPromptRefusal, truncateByCodePoint } from "../memory/jobs.mjs";
 import { escapePromptMarkers } from "../memory/prompt-safety.mjs";
 import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "./home-guard.mjs";
-import { briefBody } from "./prompt-brief.mjs";
+import { slugSource } from "./job-title.mjs";
 import { holdJobAwake } from "./keep-awake.mjs";
 import { PLUGIN_DIR_ENV } from "./orchestrator-scope.mjs";
 import { isRunPath, isSafeSegment, rerunLines } from "./resume.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 import { jobRef } from "../memory/refs.mjs";
+
+export { slugSource } from "./job-title.mjs";
 
 // Silence of the stream that means a dead process: no event at all for this long ends the attempt.
 export const IDLE_TIMEOUT_S = 1200;
@@ -122,7 +124,7 @@ export function resolveClaudeBin(env = process.env) {
   }
 }
 
-// Whether the prompt already holds this exact note as its own `## Operator note` section (an issue job queued with a note).
+// Whether the prompt already holds this exact note as its own `## Operator note` section.
 function carriesNoteSection(prompt, note) {
   const section = `## Operator note\n${note}`;
   const text = String(prompt ?? "");
@@ -165,21 +167,6 @@ const PROVISIONAL_SLUG_WORDS = 6;
 const SLUG_SUFFIXES = 9;
 // Longest run slug a path segment accepts.
 const MAX_SLUG_CHARS = 80;
-// A runtime header line the operator writes above the brief, which says nothing about the task itself.
-const RUNTIME_HEADER = /^\s*tier(\s+raised)?\s*:/i;
-
-// The prompt text without its leading blank and runtime-header lines.
-function withoutRuntimeHeader(text) {
-  const lines = String(text ?? "").split("\n");
-  const first = lines.findIndex((line) => line.trim() !== "" && !RUNTIME_HEADER.test(line));
-  return first < 0 ? "" : lines.slice(first).join("\n");
-}
-
-// The text a provisional slug is taken from: the brief of the prompt when it has one, the whole prompt otherwise, never a runtime header.
-export function slugSource(prompt) {
-  const brief = withoutRuntimeHeader(briefBody(prompt));
-  return brief.trim() ? brief : withoutRuntimeHeader(prompt);
-}
 
 // The slugs a job may bind its run to, in order: the base, its numbered variants, then one derived from the job id.
 export function slugCandidates(base, id) {

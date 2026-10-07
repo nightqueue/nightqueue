@@ -163,7 +163,7 @@ test("MCP queue_session returns the attempt, session and cwd of the last attempt
 
   assert.notEqual(result.isError, true, JSON.stringify(result));
   const payload = JSON.parse(result.content.map((block) => block.text).join("\n"));
-  assert.deepEqual(payload, { job_id: id, ref: `J-${id}`, attempt: 2, session: "sess-mcp", cwd: worktree.path, worktree_released: false, contract: 3 });
+  assert.deepEqual(payload, { job_id: id, ref: `J-${id}`, attempt: 2, session: "sess-mcp", cwd: worktree.path, worktree_released: false, contract: 4 });
 });
 
 test("MCP queue_session refuses a running job by name, with no session field leaked", async (t) => {

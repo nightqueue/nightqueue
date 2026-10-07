@@ -6,7 +6,6 @@ import { registerProject as registerInStore, renameProject, requireGitPath, requ
 import { runsDir } from "../config/paths.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { changeProjectIntegrations, integrationLines, integrationsView } from "../integrations/settings.mjs";
-import { keptCommentsError } from "../memory/project-purge.mjs";
 import { requireKey } from "../memory/refs.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { openRegistryReader, openRegistryWriter, openStore } from "../store/open.mjs";
@@ -131,8 +130,6 @@ async function confirmPurge(ctx, project, footprint, yes) {
 // Purges a project: the rows in one transaction, and its run directory only after that commits.
 async function purgeProject(ctx, store, project, yes) {
   const footprint = await store.projects.footprint(project.id);
-  const kept = footprint.find((entry) => entry.kept);
-  if (kept) throw keptCommentsError(project, kept.total);
   await confirmPurge(ctx, project, footprint, yes);
   await store.projects.purge(project.id);
   rmSync(join(runsDir(ctx.env), project.id), { recursive: true, force: true });

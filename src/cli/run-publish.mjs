@@ -1,9 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { ghPrCreate } from "../host/gh.mjs";
 import { runGit } from "../host/git.mjs";
-import { jobRef } from "../memory/refs.mjs";
 import { commitTypeOf, publishedBranchName } from "../queue/branch-name.mjs";
 import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
 import { publishedBodyFile } from "../queue/pr-footer.mjs";
@@ -13,7 +12,7 @@ import { checkArgs, parseCommand } from "./args.mjs";
 import { bodyProblems } from "./pr-body.mjs";
 import { lockfileRule } from "./lockfile-rule.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
-import { failureLine, outputLines, projectCheckout, readRequiredFile, resolveRun, RUN_OPTIONS, runItemRef, worktreeOf } from "./run-context.mjs";
+import { failureLine, outputLines, projectCheckout, readRequiredFile, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 import { scratchFiles } from "./scratch-files.mjs";
 
 export const PUBLISH_USAGE =
@@ -48,11 +47,8 @@ const CONVENTION_FILES = [
 
 const CONVENTIONAL_SUBJECT_RE = /^[a-z]+(\([^)]*\))?!?: \S/;
 
-// A `Refs:` trailer line, which `run commit` appends itself from the job row and refuses in the agent's message.
+// A `Refs:` trailer line, a reserved trailer `run commit` refuses in the agent's message.
 const REFS_TRAILER = /^Refs\s*:/i;
-
-// The copy of the agent's message an issue job commits with, under the run directory.
-const COMMIT_MESSAGE_FILE = "commit-message.md";
 
 // The commit message the agent wrote, refused when it is missing or empty: the message is the agent's and the command never invents one.
 export function requireMessageFile(path, usage) {
@@ -168,47 +164,15 @@ function refsTrailerLine(message) {
   return at < 0 ? null : { number: at + 1, line: lines[at].trim() };
 }
 
-// The ref of the issue the run's job came from, or null; a store that cannot answer stops the commit.
-async function commitItemRef(run, env) {
-  try {
-    return await runItemRef(run, env);
-  } catch (error) {
-    throw new UserError(`could not read the issue of ${jobRef(run.jobId)}:${error?.message ?? String(error)}; nothing was committed`);
-  }
-}
-
-// Copies the agent's message into the run directory, so the trailer is added to the copy and never to the agent's own file.
-function copyMessage(messageFile, runDirectory) {
-  const copy = join(runDirectory, COMMIT_MESSAGE_FILE);
-  try {
-    mkdirSync(runDirectory, { recursive: true });
-    writeFileSync(copy, readFileSync(messageFile, "utf8"));
-    return copy;
-  } catch (error) {
-    throw new UserError(`could not copy the commit message to ${copy}: ${error?.message ?? String(error)}; nothing was committed`);
-  }
-}
-
-// The message file git commits: the agent's own, or for an issue job a copy whose trailer block ends with `Refs: <item ref>`.
-async function commitMessageFile({ messageFile, run, cwd, env }) {
-  const ref = await commitItemRef(run, env);
-  if (ref === null) return messageFile;
-  const copy = copyMessage(messageFile, run.runDir);
-  const added = runGit({ args: ["interpret-trailers", "--in-place", "--no-divider", "--trailer", `Refs: ${ref}`, copy], cwd, env });
-  if (!added.ok) throw new UserError(`git could not add the \`Refs: ${ref}\` trailer to ${copy}: ${failureLine(added)}; nothing was committed`);
-  return copy;
-}
-
 // Commits the stageable paths with the agent's message, printing the convention and the commit; answers the exit code of the step.
-export async function commitPaths({ run, cwd, paths, messageFile, ctx }) {
+export async function commitPaths({ cwd, paths, messageFile, ctx }) {
   const trailer = refsTrailerLine(readRequiredFile(messageFile, "--message-file"));
   if (trailer !== null) {
-    ctx.out(`REFUSED: line ${trailer.number} of the message is a \`Refs:\` trailer, which \`run commit\` appends from the job row: ${trailer.line}`);
+    ctx.out(`REFUSED: line ${trailer.number} of the message is a \`Refs:\` trailer, which is reserved and never written by an agent: ${trailer.line}`);
     return 1;
   }
-  const committedMessage = await commitMessageFile({ messageFile, run, cwd, env: ctx.env });
   ctx.out(`CONVENTION: ${commitConvention(cwd, ctx.env)}`);
-  ctx.out(`COMMITTED: ${commitFiles({ cwd, paths, messageFile: committedMessage, env: ctx.env })} (${paths.length} files)`);
+  ctx.out(`COMMITTED: ${commitFiles({ cwd, paths, messageFile, env: ctx.env })} (${paths.length} files)`);
   return 0;
 }
 
@@ -298,7 +262,7 @@ function worktreeRemoval(run, path, env) {
 
 // Renames the branch to its final name, pushes it, opens the pull request and prints what happened; the body is already checked.
 export async function openPullRequest({ run, cwd, bodyFile, body, title, removeWorktree, ctx }) {
-  const published = await publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, resolveItemRef: () => runItemRef(run, ctx.env) });
+  const published = publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId });
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const current = currentBranch(cwd, ctx.env);
   const final = publishedBranchName(current, { type: state?.type, slug: run.slug, commitType: headCommitType(cwd, ctx.env) });

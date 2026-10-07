@@ -3,7 +3,6 @@ import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { commentFor } from "../../src/memory/issue-workflow.mjs";
 import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
@@ -90,14 +89,6 @@ test("close accepts every proposal of the closed job in one go, says so one line
     `accepted D-${second.number}: runners register in one table`,
   ]);
   assert.match(getJob(job, env).notice_md, new RegExp(`^Closed: PR #7 merged as abc1234 on \\d{4}-\\d{2}-\\d{2}, accepted D-${first.number}, D-${second.number}$`, "m"));
-});
-
-test("the issue's closed comment names the accepted refs, and only when there are some", () => {
-  const withRefs = { id: 9, notice_md: "gate text\n\nClosed: PR #7 merged as abc1234 on 2026-09-30, accepted D-60, D-61" };
-  const without = { id: 9, notice_md: "Closed: PR #7 merged as abc1234 on 2026-09-30" };
-
-  assert.equal(commentFor(withRefs, "closed", []).body, "J-9 closed, accepted D-60, D-61");
-  assert.equal(commentFor(without, "closed", []).body, "J-9 closed");
 });
 
 test("a detached close hands nothing down and its child accepts the proposals", async (t) => {

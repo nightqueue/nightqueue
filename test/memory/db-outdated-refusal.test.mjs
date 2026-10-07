@@ -17,11 +17,11 @@ import {
 } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { openRegistryReader, openStore, openStoreReadOnly } from "../../src/store/open.mjs";
-import { restorePreV22Names } from "../../test-support/legacy-home.mjs";
+import { plantPreV22Tracker } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
-const MESSAGE = /^database at v20, this nightqueue expects v23: run `nightqueue update` \(.+nightqueue\.db\); when the installed nightqueue is already current, a second `nightqueue update` finishes the migration$/;
+const MESSAGE = /^database at v20, this nightqueue expects v24: run `nightqueue update` \(.+nightqueue\.db\); when the installed nightqueue is already current, a second `nightqueue update` finishes the migration$/;
 
 // A home stamped v20 with the project `alpha`, one job and the tracker under its pre-v22 names, closed so the file alone is the whole database.
 function v20Home(t, name) {
@@ -30,7 +30,7 @@ function v20Home(t, name) {
   addJob({ projectId: projectIdOf(env, "alpha"), prompt: "fix the worker" }, env);
   const db = openDb(env);
   db.exec("ALTER TABLE jobs DROP COLUMN origin; ALTER TABLE projects DROP COLUMN integrations");
-  restorePreV22Names(db);
+  plantPreV22Tracker(db);
   db.exec("PRAGMA user_version = 20");
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   closeDb(env);

@@ -1,4 +1,4 @@
-export const DB_USER_VERSION = 23;
+export const DB_USER_VERSION = 24;
 
 export const LEASE_GRACE_S = 60;
 
@@ -20,6 +20,11 @@ export const RESULT_OBJECT_BASE = `CASE
               WHEN result IS NULL THEN '{}'
               WHEN json_valid(result) AND json_type(result) = 'object' THEN result
               ELSE json_object('previousResult', result) END`;
+
+// SQL literal list of a set of values, for a CHECK or an IN clause built from a constant list.
+export function sqlList(values) {
+  return values.map((value) => `'${value}'`).join(", ");
+}
 
 // Timestamp of SQLite ("YYYY-MM-DD HH:MM:SS", UTC) as ISO 8601.
 export function sqliteToIso(ts) {

@@ -4,6 +4,7 @@ import { configPath, dbPath, homeDir } from "../src/config/paths.mjs";
 import { ensureHome } from "../src/config/store.mjs";
 import { closeDb } from "../src/memory/db.mjs";
 import { bringToV17 } from "../src/memory/migration/legacy.mjs";
+import { issueCommentsDdl, issueProjectsDdl, issuesDdl } from "../src/memory/migration/tracker-shape.mjs";
 
 const { DatabaseSync } = await import("node:sqlite");
 
@@ -18,8 +19,9 @@ export function preV22Name(table) {
   return PRE_V22_NAMES.find(([current]) => current === table)?.[1] ?? table;
 }
 
-// Gives the tracker tables of a home already opened at the current schema their pre-v22 names, the only ones a legacy build knew.
+// Gives the tracker tables of a home already opened at the current schema their pre-v22 names, the only ones a legacy build knew, and drops the v24 job index it never had.
 export function restorePreV22Names(db) {
+  db.exec("DROP TRIGGER IF EXISTS jobs_fts_ai; DROP TRIGGER IF EXISTS jobs_fts_au; DROP TRIGGER IF EXISTS jobs_fts_ad; DROP TABLE IF EXISTS jobs_fts");
   const tables = PRE_V22_NAMES.map(([current]) => `'${current}'`).join(", ");
   const triggers = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name IN (${tables})`).all();
   for (const { name } of triggers) db.exec(`DROP TRIGGER "${name}"`);
@@ -27,6 +29,12 @@ export function restorePreV22Names(db) {
   for (const [current, old] of PRE_V22_NAMES) {
     if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(current)) db.exec(`ALTER TABLE ${current} RENAME TO ${old}`);
   }
+}
+
+// Gives a home opened at the current schema the tracker tables a pre-v22 build had, from their frozen shapes, under their pre-v22 names.
+export function plantPreV22Tracker(db) {
+  db.exec(`${issuesDdl("issues")}\n${issueCommentsDdl("issue_comments")}\n${issueProjectsDdl("issue_projects")}`);
+  restorePreV22Names(db);
 }
 
 // Builds the home a v17 (or older) build left behind, never through `openDb`: the frozen v17 schema on a raw connection, the named

@@ -7,11 +7,10 @@ import { fileURLToPath } from "node:url";
 import { jobLogPath, logsDir, runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob, getJob } from "../../src/memory/jobs.mjs";
-import { getIssue, linkIssueJob, saveIssue } from "../../src/memory/issues.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { reclassifyFromLog } from "../../src/queue/repair.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
-import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 import {
   attemptMarker,
   codeChangePublishedEvent,
@@ -71,34 +70,6 @@ function finishedJob(env, { status = "gate", result = CLEAN_ENDING, log = interm
   if (log !== null) writeJobLog(env, id, log);
   return id;
 }
-
-// Records an issue as linked to a job, the link the repair has to move.
-function linkedItem(env, id, title) {
-  const item = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title }, env);
-  assert.equal(linkIssueJob(item.id, id, env), true, "setup: the item was not linked to its job");
-  return item.id;
-}
-
-test("`queue repair` puts in review the issue of a job it turns into done, and sends the item of one that stays failed to todo", async (t) => {
-  const env = makeQueue(t, "repair-issue");
-  const delivered = finishedJob(env);
-  const deliveredItem = linkedItem(env, delivered, "deliver the delivery");
-  writeRunState(env);
-
-  const repaired = runCli(env, ["queue", "repair", String(delivered)]);
-  assert.equal(repaired.status, 0, repaired.stderr);
-  assert.equal(getJob(delivered, env).status, "done");
-  assert.equal(getIssue(deliveredItem, env).status, "in_review", "`queue repair` left the item of a delivered job in progress forever");
-
-  const failedSlug = "still-failing";
-  const failed = finishedJob(env, { status: "failed", result: { ...CLEAN_ENDING, status: "failed", exitCode: 1 }, slug: failedSlug });
-  const failedItem = linkedItem(env, failed, "the one that failed");
-  writeRunState(env, { slug: failedSlug, terminal: { status: "failed", prUrl: null, finishedAt: "2026-09-14T21:00:00Z" } });
-
-  const outcome = await reclassifyFromLog({ id: failed, env });
-  assert.deepEqual({ to: outcome.to, changed: outcome.changed }, { to: "failed", changed: true }, "setup: the row was not rewritten at all");
-  assert.equal(getIssue(failedItem, env).status, "todo", "a re-classification that kept the failure did not send the item back to todo");
-});
 
 test("`queue repair` turns a job that really opened a pull request into done, and rewrites the witness to match", (t) => {
   const env = makeQueue(t, "repair-cli");

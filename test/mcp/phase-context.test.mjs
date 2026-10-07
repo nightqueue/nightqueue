@@ -7,7 +7,7 @@ import { saveProjectIndex } from "../../src/memory/index.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
-import { saveIssue } from "../../src/memory/issues.mjs";
+import { openDb } from "../../src/memory/db.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const WORKER = "host:4242";
@@ -103,17 +103,36 @@ test("a project with nothing to say produces an empty block, not a header", asyn
   assert.equal(answer.block, "");
 });
 
-test("only the triager gets the related issues of its project, in the ref-title-status line", async (t) => {
-  const { env, home } = makeRunningJob(t, "phase-context-issue");
-  const item = saveIssue({ type: "bug", projectId: projectIdOf(env, "alpha"), title: "the runner drops its lease", priority: 2 }, home);
-  saveIssue({ type: "chore", projectId: projectIdOf(env, "alpha"), title: "unrelated cleanup" }, home);
+// A home with the project `alpha` whose first job is already done, with a notice and a pull request.
+function makeDoneJob(t, name) {
+  const env = makeHome(t, name);
+  makeProject(t, env, "alpha");
+  const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the runner lease renewal" }, env);
+  openDb(env)
+    .prepare("UPDATE jobs SET status = 'done', notice_md = ?, pr_url = ?, finished_at = ? WHERE id = ?")
+    .run("the lease is renewed before it expires", "https://github.com/o/r/pull/42", "2026-09-30 10:00:00", job.id);
+  return env;
+}
 
-  const triager = await phaseContextBlock({ target: "triager", query: "runner lease" }, env);
+test("the triager gets the related jobs of its project, in the ref-title-status line", async (t) => {
+  const env = makeDoneJob(t, "phase-context-jobs-triager");
+  const triager = await phaseContextBlock({ target: "triager", query: "runner lease", project: "alpha" }, env);
   assert.ok(
-    triager.block.includes(`## Related issues\n- [${item.ref}] the runner drops its lease [todo, p2, bug]`),
+    triager.block.includes("## Related jobs\n- [J-1] fix the runner lease renewal [done · PR #42 · 2026-09-30]"),
     triager.block,
   );
-  assert.equal(triager.block.includes("unrelated cleanup"), false);
-  const coder = await phaseContextBlock({ target: "coder", query: "runner lease" }, env);
-  assert.equal(coder.block.includes("## Related issues"), false);
+});
+
+test("a phase other than the triager gets no related jobs", async (t) => {
+  const env = makeDoneJob(t, "phase-context-jobs-coder");
+  const coder = await phaseContextBlock({ target: "coder", query: "runner lease", project: "alpha" }, env);
+  assert.equal(coder.block.includes("## Related jobs"), false);
+});
+
+test("the triager of a job never sees its own job among the related ones", async (t) => {
+  const { env, home } = makeRunningJob(t, "phase-context-jobs-own");
+  addJob({ projectId: projectIdOf(home, "alpha"), prompt: "the runner drops its lease" }, home);
+  const triager = await phaseContextBlock({ target: "triager", query: "runner lease" }, env);
+  assert.ok(triager.block.includes("## Related jobs\n- [J-2] the runner drops its lease [pending]"), triager.block);
+  assert.equal(triager.block.includes("[J-1]"), false);
 });

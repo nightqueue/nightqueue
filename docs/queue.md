@@ -15,7 +15,6 @@ nightqueue queue add fix the flaky worker --run                # enqueue and sta
 nightqueue queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
 nightqueue queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
 nightqueue queue add "fix it" --origin <kind>:<ref>            # name the service the job came from instead of detecting it
-nightqueue queue add --issue NQ-12 "mind the slow disk"        # an issue's job, with an operator note
 nightqueue queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightqueue queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
 nightqueue queue status --blocked                              # only the gated jobs a preflight block stopped
@@ -72,18 +71,14 @@ in the queue. `--foreground` on a command that was not given `--run` is a usage
 error, never a silent no-op. An explicit job id ignores the pause sentinel, so
 `--run` runs even on a paused queue.
 
-**An issue's job takes a note.** `queue add --issue <ref> ["<note>"]` (`queue_add` with
-`issue_id` and `prompt`) keeps the item as the brief and adds the words as a `## Operator note`
-section right after it. Section order: item, note, decisions. The note is recorded as the job's
-`operator_note` and in the item's `queued` comment. Operator runs no longer exist (D-58):
+Operator runs no longer exist (D-58):
 `--run-dir` (`queue_add`'s `run_dir`) is refused with a reason naming D-58, and what an
-investigation found goes in the note or an `issue_comment`.
+investigation found goes in the prompt.
 
 **A job records where it came from.** Every queued job gets an `origin` (`{kind, ref}`)
 when its prompt names a service a provider of this build recognizes - the first provider,
-in registry order, whose parser matches the prompt (or the issue's prompt, on the issue
-path) - or the one `--origin <kind>:<ref>` (`queue_add`'s `origin: {kind, ref}`, on both
-the prompt and the `issue_id` branches) names explicitly, split on the first `:`.
+in registry order, whose parser matches the prompt - or the one `--origin <kind>:<ref>`
+(`queue_add`'s `origin: {kind, ref}`) names explicitly, split on the first `:`.
 An explicit origin wins over detection; one whose kind no provider knows, or whose ref
 the provider does not read as its own, is refused and nothing is queued. A prompt that
 names no service queues a job with no origin, exactly as before. The answer names the
@@ -1199,7 +1194,7 @@ close killed hard blocks the next one for up to that long.
 **Decisions the job proposed.** The settle step accepts every decision with `status: proposed`
 and the job's id, in the same transaction that sets the job `closed`; there is no flag and no
 question. The close prints one `accepted D-n: <title>` line per decision (`--json` carries them
-in `decisions`), and the `Closed:` notice line and the issue's `closed` comment end with
+in `decisions`), and the `Closed:` notice line ends with
 `, accepted D-60, D-61`. A close that fails before settle, and a job that ends `cancelled` or
 `failed`, write no decision. `--decisions` is refused with the usage line. The MCP `queue_close`
 does the same, with no parameter for it.

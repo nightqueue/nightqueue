@@ -22,7 +22,7 @@ with `D-58:`. A refused call is never rephrased to slip past the check; report i
   - `gh pr view <url>`, `gh pr diff <url>` and `gh pr checks <url>`, plus `gh pr list|status`
     and `gh issue view|list`. Pass the URL or `--repo`, because the cwd is not a repository.
   - `git -C <absolute checkout path> [--no-optional-locks] log|show|diff|blame|ls-tree|ls-files|rev-parse|branch --list|status`.
-  - nightqueue reads only: `queue status|log`, `issues` (and `issues show`), `project list`,
+  - nightqueue reads only: `queue status|log`, `project list`,
     `decision list|show`, `org list`, `connection list`, `memory stats`, `doctor` (never
     `--fix`) and `version`. Never `queue close`, `project remove` or any other write.
 - **Read, Grep and Glob** only where the operator reads (the registered checkouts,

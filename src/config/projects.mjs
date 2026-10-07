@@ -124,14 +124,6 @@ export async function requireProject(store, name) {
   throw new UserError(`unknown project \`${name ?? ""}\`; known projects: ${await knownProjects(store)}`);
 }
 
-// The project an issue-built job names, resolved at the edge: none, `all` (every project of an org item's org), or a registered NAME.
-export async function issueQueueTarget(store, project) {
-  const named = typeof project === "string" ? project.trim() : "";
-  if (!named) return { projectId: null, allProjects: false };
-  if (named === ALL_PROJECTS) return { projectId: null, allProjects: true };
-  return { projectId: (await requireProject(store, named)).id, allProjects: false };
-}
-
 // Resolves a project reference: a registered name, or an absolute path inside a checkout, null (global) when it is inside none.
 export async function resolveProjectRef(store, ref) {
   const raw = typeof ref === "string" ? ref.trim() : "";
@@ -185,7 +177,7 @@ export async function setProjectKey(store, name, key) {
   return await store.projects.setKey(project.id, key);
 }
 
-// Renames a project: one registry row, so every job, decision, issue and memory keyed by its id follows it.
+// Renames a project: one registry row, so every job, decision and memory keyed by its id follows it.
 export async function renameProject(store, oldName, newName) {
   const project = await requireProject(store, oldName);
   assertName("project", newName);

@@ -8,7 +8,7 @@ import {
   issueCommentsDdl,
   issueProjectsDdl,
   issuesDdl,
-} from "../ddl.mjs";
+} from "./tracker-shape.mjs";
 import { keepSequence, sequenceOf } from "./legacy.mjs";
 import { foreignKeyViolations, hasTable, runOneShot, userVersion } from "./one-shot.mjs";
 import { refuseOrphans } from "./v20.mjs";

@@ -4,12 +4,10 @@ import { UserError } from "../config/errors.mjs";
 import { jobLogPath, runDir } from "../config/paths.mjs";
 import { registeredProject } from "../memory/registry-access.mjs";
 import { resolveJobRun } from "../queue/job-run.mjs";
-import { itemRefOfJob } from "../queue/pr-footer.mjs";
 import { formatDuration } from "../queue/narrate.mjs";
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { phaseTelemetry } from "../queue/telemetry.mjs";
-import { openStore } from "../store/open.mjs";
 
 // The options every subcommand shares: outside a job they are the only way to say which run is meant.
 export const RUN_OPTIONS = { project: { type: "string" }, slug: { type: "string" } };
@@ -80,14 +78,6 @@ export function requireRunState({ projectId, slug, runDir: dir }, env) {
     throw new UserError(`the runtime created this run at ${state.job.createdAt ?? "an unknown time"}; the pipeline has recorded no phase in ${path} yet`);
   }
   return state;
-}
-
-// The ref of the issue the run's job came from: the job block of state.json first (null for a free-prompt job), the job row otherwise.
-export async function runItemRef(run, env) {
-  const state = readRunState({ projectId: run.projectId, slug: run.slug, env });
-  const block = isStateObject(state) && isStateObject(state.job) ? state.job : null;
-  if (block !== null && run.jobId !== null && block.id === run.jobId) return block.itemRef ?? null;
-  return await itemRefOfJob(openStore(env), run.jobId);
 }
 
 // The accumulated stream of the job on disk, the only source of what the runtime measured; no log means nothing was measured.

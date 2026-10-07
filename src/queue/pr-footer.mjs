@@ -5,26 +5,16 @@ import { jobRef } from "../memory/refs.mjs";
 
 export const PUBLISHED_BODY_FILE = "pr-body.published.md";
 
-// The traceability footer `run pr` appends: the signature with the item's ref for an issue job, the bare signature otherwise.
-export function footerOf(itemRef) {
-  if (itemRef === null || itemRef === undefined) return "Opened by nightqueue";
-  return `Opened by nightqueue · ${itemRef}`;
-}
+// The traceability footer `run pr` appends to every pull request body.
+export const PR_FOOTER = "Opened by nightqueue";
 
-// The ref of the issue the job was queued from, or null outside a job or for a free-prompt job; a store failure is thrown.
-export async function itemRefOfJob(store, jobId) {
-  if (jobId === null || jobId === undefined) return null;
-  return (await store.issues.issueRefOfJob(jobId)) ?? null;
-}
-
-// The body file `run pr` publishes: a copy of the agent's body in the run directory ending with the footer of the item ref the caller resolves.
-export async function publishedBodyFile({ bodyFile, runDir, jobId, resolveItemRef }) {
+// The body file `run pr` publishes: a copy of the agent's body in the run directory ending with the footer.
+export function publishedBodyFile({ bodyFile, runDir, jobId }) {
   try {
-    const footer = footerOf(await resolveItemRef());
     const body = readFileSync(bodyFile, "utf8");
     mkdirSync(runDir, { recursive: true });
     const published = join(runDir, PUBLISHED_BODY_FILE);
-    writeFileSync(published, `${body.replace(/\s+$/, "")}\n\n${footer}\n`);
+    writeFileSync(published, `${body.replace(/\s+$/, "")}\n\n${PR_FOOTER}\n`);
     return published;
   } catch (error) {
     const source = jobId === null || jobId === undefined ? "outside a job" : `from ${jobRef(jobId)}`;

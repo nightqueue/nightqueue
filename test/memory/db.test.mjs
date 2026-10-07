@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { dbPath } from "../../src/config/paths.mjs";
+import { DatabaseSync } from "node:sqlite";
+import { dbPath, preVersionBackupPath } from "../../src/config/paths.mjs";
 import {
   DB_USER_VERSION,
   blobToVector,
@@ -225,18 +226,15 @@ test("the migration is idempotent and keeps the data across a reopen", (t) => {
   assert.deepEqual(matchIds(second, "lessons_fts", '"migration"'), [id]);
 });
 
-test("the decisions and issues tables are created with their columns, defaults and indexes", (t) => {
+test("the decisions table is created with its columns, defaults and indexes, and a fresh home has no issue table", (t) => {
   const env = makeHome(t, "db-decisions");
   const db = openDb(env);
   assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
-  assert.deepEqual(columnsOf(db, "issues"), ISSUE_COLUMNS);
+  assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'issue%'").all(), []);
   const decisionIndexes = db.prepare("PRAGMA index_list(decisions)").all();
   const unique = decisionIndexes.find((index) => index.name === "decisions_number_idx");
   assert.ok(unique, `number index missing: ${decisionIndexes.map((index) => index.name).join(", ")}`);
   assert.equal(unique.unique, 1);
-  const issueIndexes = db.prepare("PRAGMA index_list(issues)").all().map((index) => index.name);
-  assert.ok(issueIndexes.includes("issues_order_idx"), `order index missing: ${issueIndexes.join(", ")}`);
-  assert.ok(issueIndexes.includes("issues_job_idx"), `job index missing: ${issueIndexes.join(", ")}`);
 
   db.prepare("INSERT INTO decisions (project_id, number, title, context, decision) VALUES (?, 1, ?, ?, ?)").run(
     null,
@@ -250,23 +248,6 @@ test("the decisions and issues tables are created with their columns, defaults a
     /CHECK constraint failed/,
   );
 
-  db.prepare("INSERT INTO issues (project_id, number, title, position) VALUES (?, 1, ?, 1)").run(null, "deliver the issues");
-  assert.deepEqual(
-    { ...db.prepare("SELECT status, priority, type FROM issues").get() },
-    { status: "todo", priority: 5, type: "improvement" },
-  );
-  assert.throws(
-    () => db.prepare("INSERT INTO issues (project_id, number, title, type, position) VALUES (?, 2, ?, ?, 1)").run(null, "t", "epic"),
-    /CHECK constraint failed/,
-  );
-  assert.throws(
-    () => db.prepare("INSERT INTO issues (project_id, number, title, status, position) VALUES (?, 2, ?, ?, 1)").run(null, "t", "open"),
-    /CHECK constraint failed/,
-  );
-  assert.throws(
-    () => db.prepare("INSERT INTO issues (project_id, number, title, priority, position) VALUES (?, 2, ?, ?, 1)").run(null, "t", 10),
-    /CHECK constraint failed/,
-  );
 });
 
 test("the migration from user_version 2 keeps every row and adds the decisions schema", (t) => {
@@ -286,7 +267,7 @@ test("the migration from user_version 2 keeps every row and adds the decisions s
     const db = migrateTestHome(env);
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION, `pass ${pass}`);
     assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
-    assert.deepEqual(columnsOf(db, "issues"), ISSUE_COLUMNS);
+    assert.deepEqual(columnsOf(db, "issues"), [], `the tracker survived v24 on pass ${pass}`);
     assert.ok(columnsOf(db, "jobs").includes("tier"), `jobs.tier missing on pass ${pass}`);
     assert.ok(columnsOf(db, "pipeline_runs").includes("tier_operator"), `pipeline_runs.tier_operator missing on pass ${pass}`);
     assert.ok(
@@ -570,7 +551,7 @@ test("an open of an older read-only database names `nightqueue update`, the fix 
   t.after(() => chmodSync(dbPath(env), 0o644));
 
   assert.throws(() => openDb(env), (err) => {
-    assert.match(err.message, /database at v5, this nightqueue expects v23: run `nightqueue update`/);
+    assert.match(err.message, /database at v5, this nightqueue expects v24: run `nightqueue update`/);
     assert.doesNotMatch(err.message, /nightqueue doctor/);
     return true;
   });
@@ -627,13 +608,16 @@ test("the migration from user_version 5 gives every existing row the project sco
   const db = migrateTestHome(env);
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
-  assert.deepEqual(columnsOf(db, "issues").sort(), [...ISSUE_COLUMNS].sort());
+  const tracker = new DatabaseSync(preVersionBackupPath(env, 24), { readOnly: true });
+  t.after(() => tracker.close());
+  assert.deepEqual(columnsOf(tracker, "issues").sort(), [...ISSUE_COLUMNS].sort());
+  assert.deepEqual(columnsOf(db, "issues"), [], "the tracker survived v24");
   const alphaId = projectIdOf(env, "alpha");
   assert.equal(
     db.prepare("SELECT COUNT(*) AS total FROM decisions WHERE scope = 'project' AND project_id = ? AND org_id IS NULL").get(alphaId).total,
     3,
   );
-  assert.equal(db.prepare("SELECT scope FROM issues").get().scope, "project");
+  assert.equal(tracker.prepare("SELECT scope FROM issues").get().scope, "project");
   assert.deepEqual(
     db.prepare("PRAGMA index_info(decisions_number_idx)").all().map((column) => column.name),
     ["project_id", "number"],
@@ -769,7 +753,7 @@ test("a v10 database gains decisions.job_id and its index, keeping every decisio
   first.exec("DROP INDEX decisions_job_idx; ALTER TABLE decisions DROP COLUMN job_id; PRAGMA user_version = 10;");
   closeDb(env);
 
-  assert.equal(DB_USER_VERSION, 23);
+  assert.equal(DB_USER_VERSION, 24);
   for (const pass of [1, 2]) {
     const db = migrateTestHome(env);
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION, `pass ${pass}`);

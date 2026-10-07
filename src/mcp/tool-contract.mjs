@@ -1,10 +1,10 @@
 import { UserError } from "../config/errors.mjs";
-import { decisionRef, itemRef } from "../memory/refs.mjs";
+import { decisionRef } from "../memory/refs.mjs";
 import { openStore } from "../store/open.mjs";
 import { callerContext } from "./phase-context.mjs";
 
-// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the issue_* names).
-export const TOOL_CONTRACT = 3;
+// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed).
+export const TOOL_CONTRACT = 4;
 
 const INTEGER_ID_CONTRACT = 1;
 
@@ -14,10 +14,11 @@ export const GRACE_OLD_CONTRACT = true;
 export const STALE_CONTRACT_ADVISORY = "this client's tool contract is older than the server";
 
 const OLD_TRACKER_WORD = ["road", "map"].join("");
+const REMOVED_TRACKER_WORD = ["iss", "ue"].join("");
 
-// Inputs an older contract named and a newer one renamed, by tool: only a client with cached old definitions still sends them.
+// Inputs an older contract named and a newer one renamed or removed, by tool: only a client with cached old definitions still sends them.
 const RENAMED_FIELDS = {
-  queue_add: [`${OLD_TRACKER_WORD}_item_id`],
+  queue_add: [`${OLD_TRACKER_WORD}_item_id`, `${REMOVED_TRACKER_WORD}_id`],
 };
 
 // Inputs D-58 removed with the operator runs, by tool: a call that still sends one with a value is refused, never silently stripped.
@@ -26,20 +27,9 @@ const RETIRED_FIELDS = {
   run_set: ["origin", "evidence_level", "plan_status"],
 };
 
-// Inputs that took an internal integer id under contract 1 and take a ref now, by tool.
+// Decision inputs that took an internal integer id under contract 1 and take a ref now, by tool.
 const OLD_ID_FIELDS = {
-  queue_add: [{ field: "issue_id", kind: "item" }],
-  issue_get: [{ field: "id", kind: "item" }],
-  issue_comment: [{ field: "id", kind: "item" }],
-  issue_save: [{ field: "decision_id", kind: "decision" }],
-  issue_update: [
-    { field: "id", kind: "item" },
-    { field: "decision_id", kind: "decision" },
-  ],
-  decision_update: [
-    { field: "id", kind: "decision" },
-    { field: "superseded_by", kind: "decision" },
-  ],
+  decision_update: ["id", "superseded_by"],
 };
 
 // The one line a client with cached older tool definitions is answered with.
@@ -71,7 +61,7 @@ function hasValue(value) {
 
 // The refusal line of one retired input.
 export function retiredFieldLine(field) {
-  return `\`${field}\` was removed by D-58: operator runs no longer exist, so there is no run to bind or record; put what was found in \`prompt\` or an \`issue_comment\``;
+  return `\`${field}\` was removed by D-58: operator runs no longer exist, so there is no run to bind or record; put what was found in \`prompt\``;
 }
 
 // Refuses a call carrying a value for an input D-58 retired, before validation would strip it silently.
@@ -121,12 +111,12 @@ function qualifiedDecisionRef(row) {
   return row.scope !== "org" && row.project_id ? `${row.project_key}/D-${row.number}` : decisionRef(row);
 }
 
-// The ref of the row an old integer id names when the caller owns it, or null.
-async function refOfOldId({ kind, id }, owner, store) {
+// The ref of the decision an old integer id names when the caller owns it, or null.
+async function refOfOldId(id, owner, store) {
   try {
-    const row = kind === "item" ? await store.issues.getIssue(id) : await store.decisions.getDecision(id);
+    const row = await store.decisions.getDecision(id);
     if (!row || !ownedByCaller(row, owner)) return null;
-    return kind === "item" ? itemRef(row) : qualifiedDecisionRef(row);
+    return qualifiedDecisionRef(row);
   } catch {
     return null;
   }
@@ -134,7 +124,7 @@ async function refOfOldId({ kind, id }, owner, store) {
 
 // Rewrites the old integer ids of a call to refs, or refuses with the stale-contract line; notes the old shape in the server's state.
 export async function upgradeOldShapes(name, args, { env, state }) {
-  const old = (OLD_ID_FIELDS[name] ?? []).filter(({ field }) => typeof args[field] === "number");
+  const old = (OLD_ID_FIELDS[name] ?? []).filter((field) => typeof args[field] === "number");
   if (old.length === 0) return { args, deprecated: [] };
   state.sawOldShape = true;
   if (!GRACE_OLD_CONTRACT) throw new StaleContractError();
@@ -142,8 +132,8 @@ export async function upgradeOldShapes(name, args, { env, state }) {
   const owner = await callerOwner(args, store, env);
   const upgraded = { ...args };
   const deprecated = [];
-  for (const { field, kind } of old) {
-    const ref = owner ? await refOfOldId({ kind, id: args[field] }, owner, store) : null;
+  for (const field of old) {
+    const ref = owner ? await refOfOldId(args[field], owner, store) : null;
     if (ref === null) throw new StaleContractError();
     upgraded[field] = ref;
     deprecated.push(`\`${field}\` ${args[field]} is an internal id of contract ${INTEGER_ID_CONTRACT} and resolved to ${ref}; send the ref, the id will be refused after the grace release`);

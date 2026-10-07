@@ -3,7 +3,18 @@ import { SchemaOutdatedError, UserError } from "../config/errors.mjs";
 import { callerJobId, isRunnerHome } from "../config/job-home.mjs";
 import { dbPath, dbWalPath, homeDir } from "../config/paths.mjs";
 import { ensureHome, loadRawConfig } from "../config/store.mjs";
-import { DATA_TABLES, FTS, INDEXES, OWNER_KEY_GUARDS, REGISTRY, ISSUE_FTS, ISSUE_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
+import {
+  DATA_TABLES,
+  FTS,
+  INDEXES,
+  JOBS_FTS,
+  JOBS_FTS_BACKFILL,
+  JOBS_FTS_DRIFT,
+  JOBS_FTS_PRUNE,
+  OWNER_KEY_GUARDS,
+  REGISTRY,
+  SCHEMA,
+} from "./ddl.mjs";
 import { hasTable } from "./migration/one-shot.mjs";
 import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schemaState } from "./migration/v18.mjs";
 import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
@@ -11,9 +22,10 @@ import { isPendingV20, migrateToV20, refuseOrphans } from "./migration/v20.mjs";
 import { migrateV21Columns } from "./migration/v21.mjs";
 import { migrateV23 } from "./migration/v23.mjs";
 import { isPendingV22, migrateToV22 } from "./migration/v22.mjs";
+import { isPendingV24, migrateToV24 } from "./migration/v24.mjs";
 import { jobRef } from "./refs.mjs";
 import { ensureDefaultOrg } from "./registry.mjs";
-import { DB_USER_VERSION } from "./schema.mjs";
+import { DB_USER_VERSION, sqlList } from "./schema.mjs";
 import { migrateSharedSlugs, sharedSlugPending } from "./shared-slug-migration.mjs";
 import { classifyStoreError } from "./store-error.mjs";
 import { inTransaction, withWriteRetry } from "./tx.mjs";
@@ -46,6 +58,8 @@ let walWarned = false;
 let exitHookInstalled = false;
 
 const BUSY_TIMEOUT_MS = 5000;
+const SQLITE_SCHEMA = 17;
+const JOBS_FTS_OBJECTS = Object.freeze(["jobs_fts", "jobs_fts_ai", "jobs_fts_au", "jobs_fts_ad"]);
 
 // Turns WAL on and warns once on stderr when the filesystem refused it.
 function enableWal(db, path) {
@@ -62,6 +76,7 @@ const ONE_SHOT_STEPS = Object.freeze([
   { pending: isPendingV19, run: migrateToV19 },
   { pending: isPendingV20, run: migrateToV20 },
   { pending: isPendingV22, run: migrateToV22 },
+  { pending: isPendingV24, run: migrateToV24 },
 ]);
 
 // Runs every pending one-shot step in order, each gate read after the step before it committed; the orphans the last step
@@ -73,11 +88,10 @@ function runOneShotSteps(db, env) {
   }
 }
 
-// Creates the base tables of the memory runtime and the registry of orgs and projects, with the key and number guards.
+// Creates the base tables of the memory runtime and the registry of orgs and projects, with the key guards.
 function createSchema(db) {
   db.exec(REGISTRY);
   db.exec(SCHEMA);
-  db.exec(ISSUE_NUMBER_INDEXES);
   db.exec(OWNER_KEY_GUARDS);
 }
 
@@ -90,17 +104,43 @@ function createRegistry(db, env) {
   });
 }
 
+// Tells whether a failure is SQLite reporting that another connection changed the schema under this statement.
+function isSchemaChanged(err) {
+  return Number.isInteger(err?.errcode) && (err.errcode & 0xff) === SQLITE_SCHEMA;
+}
+
+// Tells, without taking the write lock, whether the job index, its triggers and its rows match the jobs; a read racing a schema change is "no".
+function jobsFtsInSync(db) {
+  try {
+    const present = db.prepare(`SELECT count(*) AS n FROM sqlite_master WHERE name IN (${sqlList(JOBS_FTS_OBJECTS)})`).get().n;
+    return present === JOBS_FTS_OBJECTS.length && !db.prepare(JOBS_FTS_DRIFT).get();
+  } catch (err) {
+    if (isSchemaChanged(err)) return false;
+    throw err;
+  }
+}
+
+// Creates the lexical index of the job history and makes its rows match the jobs, under the write lock and only when they drift.
+function ensureJobsFts(db) {
+  if (jobsFtsInSync(db)) return;
+  inTransaction(db, () => {
+    db.exec(JOBS_FTS);
+    db.exec(JOBS_FTS_PRUNE);
+    db.exec(JOBS_FTS_BACKFILL);
+  });
+}
+
 // Brings an existing database to the current schema: the per-open shared-slug step, indexes and the FTS mirrors.
 function migrate(db) {
   const version = db.prepare("PRAGMA user_version").get().user_version;
   if (version === 18) throw new UserError("the v19 migration did not run; nothing was stamped");
   if (version === 19) throw new UserError("the v20 migration did not run; nothing was stamped");
   if (version === 20 || version === 21) throw new UserError("the v22 migration did not run; nothing was stamped");
+  if (version === 22 || version === 23) throw new UserError("the v24 migration did not run; nothing was stamped");
   if (sharedSlugPending(db)) inTransaction(db, () => migrateSharedSlugs(db));
   db.exec(INDEXES);
   db.exec(FTS);
-  db.exec(ISSUE_FTS);
-  db.exec(ISSUE_NUMBER_INDEXES);
+  ensureJobsFts(db);
   db.exec(OWNER_KEY_GUARDS);
   migrateV21Columns(db);
   migrateV23(db);

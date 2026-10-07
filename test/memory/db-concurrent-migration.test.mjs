@@ -14,6 +14,8 @@ const MIGRATE_URL = new URL("../../test-support/migrate.mjs", import.meta.url).h
 const BARRIER_MS = 300;
 const ITERATIONS = 12;
 const RACERS = 6;
+const INDEX_ITERATIONS = 40;
+const INDEX_RACERS = 8;
 const DROPPED_COLUMNS = ["merged_at", "merge_sha"];
 
 // An old v9 database: still carries the merge columns v10 drops, and the pr_checked_at column migrate() has always dropped, so the racers all drop columns.
@@ -38,7 +40,12 @@ function racerSource() {
     '  const version = db.prepare("PRAGMA user_version").get().user_version;',
     '  const columns = db.prepare("PRAGMA table_info(jobs)").all().map((c) => c.name);',
     '  const statuses = db.prepare("SELECT status FROM jobs ORDER BY id").all().map((row) => row.status);',
-    '  process.stdout.write(JSON.stringify({ error: null, version, columns, statuses }) + "\\n");',
+    '  const indexed = db.prepare("SELECT COUNT(*) AS n FROM jobs_fts").get().n;',
+    "  const indexTriggers = db",
+    "    .prepare(\"SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'jobs_fts_%' ORDER BY name\")",
+    "    .all()",
+    "    .map((row) => row.name);",
+    '  process.stdout.write(JSON.stringify({ error: null, version, columns, statuses, indexed, indexTriggers }) + "\\n");',
     "}",
     "",
     "main().catch((err) => {",
@@ -126,6 +133,33 @@ test(`${RACERS} processes racing to migrate the SAME v9 database converge on the
     assert.equal(rows[1].status, "closed", `pass ${pass}: merged row was not closed`);
     closeDb(env);
   }
+});
+
+test(`${INDEX_RACERS} processes opening one v9 home at once all get the job index whole, ${INDEX_ITERATIONS} times over`, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "nightqueue-db-race-index-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const workerPath = join(dir, "racer.mjs");
+  writeFileSync(workerPath, racerSource());
+
+  const failures = [];
+  for (let pass = 0; pass < INDEX_ITERATIONS; pass += 1) {
+    const env = makeHome(t, `db-race-index-${pass}`);
+    buildLegacyHome(env, {
+      version: 9,
+      mutate(seed) {
+        seed.prepare("INSERT INTO jobs (project, prompt, status) VALUES (?, ?, 'done')").run("alpha", "fix the worker");
+        seed.exec("PRAGMA user_version = 9");
+      },
+    });
+    closeDb(env);
+    const results = await raceOnce(env, workerPath, INDEX_RACERS);
+    for (const [idx, result] of results.entries()) {
+      const parsed = result.code === 0 ? JSON.parse(result.stdout) : { error: `exited ${result.code}: ${result.stderr}` };
+      if (parsed.error !== null) failures.push(`pass ${pass} racer ${idx}: ${parsed.error}`);
+      else if (parsed.indexed !== 1 || parsed.indexTriggers.length !== 3) failures.push(`pass ${pass} racer ${idx}: ${result.stdout}`);
+    }
+  }
+  assert.deepEqual(failures, [], `${failures.length} racers failed to open the home`);
 });
 
 test("two processes opening one v19 home at once end with one v20 migration and the v19 bytes in the copy", async (t) => {

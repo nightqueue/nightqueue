@@ -8,6 +8,11 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- **The issue tracker is removed.** Gone: the `nightqueue issues` CLI, `queue add --issue`, the five
+  `issue_*` MCP tools, `queue_add`'s `issue_id`, doctor's issue drift check, the item ref of the
+  pull request footer and the commit `Refs:` trailer. The triager now gets `## Related jobs` from
+  the job history instead. Schema v24 drops the issue tables and adds `jobs_fts`, so `nightqueue
+  update` is required. Tool contract 4: MCP clients must restart.
 - **The database schema changes only in `nightqueue update` and `nightqueue setup`.** No other
   open migrates it any more - not a read command, a runner, the MCP server nor a hook, inside a
   job or outside one: a database older than the build is refused before a byte is written

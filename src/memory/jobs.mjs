@@ -1193,16 +1193,19 @@ function withProjectFacts(db, row) {
   return row;
 }
 
-// The job columns plus `issue_title`, the title of the issue the job was queued from (its own item, or an org item through its project row), read in the same statement.
-const JOB_WITH_ISSUE_TITLE = `SELECT jobs.*, COALESCE(
-    (SELECT i.title FROM issues AS i WHERE i.job_id = jobs.id ORDER BY i.id DESC LIMIT 1),
-    (SELECT r.title FROM issue_projects AS p JOIN issues AS r ON r.id = p.item_id WHERE p.job_id = jobs.id ORDER BY p.id DESC LIMIT 1)
-  ) AS issue_title FROM jobs`;
-
-// Returns the raw row of a job with its project facts and issue title, or null.
+// Returns the raw row of a job with its project facts, or null.
 export function getJob(id, env = process.env, db = openDb(env)) {
-  const row = db.prepare(`${JOB_WITH_ISSUE_TITLE} WHERE jobs.id = ?`).get(requireId(id)) ?? null;
+  const row = db.prepare("SELECT jobs.* FROM jobs WHERE jobs.id = ?").get(requireId(id)) ?? null;
   return withProjectFacts(db, row ? attachAttemptRows(db, [row])[0] : null);
+}
+
+// The facts a spawned job records about itself: the key of its project; an unknown job is refused.
+export function jobSpawnRefs(jobId, env = process.env, connection = null) {
+  const db = connection ?? openDb(env);
+  const id = requireId(jobId);
+  const job = db.prepare("SELECT j.id, p.key AS project_key FROM jobs j LEFT JOIN projects p ON p.id = j.project_id WHERE j.id = ?").get(id);
+  if (!job) throw new UserError(`unknown job \`${id}\``);
+  return { projectKey: job.project_key ?? null };
 }
 
 const BLOCKED_GATE_PREDICATE = "status = 'gate' AND blocked_code IS NOT NULL";
@@ -1211,7 +1214,7 @@ const BLOCKED_GATE_PREDICATE = "status = 'gate' AND blocked_code IS NOT NULL";
 export function listJobs({ limit, blockedOnly } = {}, env = process.env, db = openDb(env)) {
   const clamped = optionalRangedInt("limit", limit, LIST_LIMIT_RANGE);
   const where = blockedOnly === true ? `WHERE ${BLOCKED_GATE_PREDICATE} ` : "";
-  const rows = db.prepare(`${JOB_WITH_ISSUE_TITLE} ${where}ORDER BY jobs.id DESC LIMIT ?`).all(clamped);
+  const rows = db.prepare(`SELECT jobs.* FROM jobs ${where}ORDER BY jobs.id DESC LIMIT ?`).all(clamped);
   return attachAttemptRows(db, rows).map((row) => withProjectFacts(db, row));
 }
 

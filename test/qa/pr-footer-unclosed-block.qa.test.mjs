@@ -8,11 +8,10 @@ import { runDir } from "../../src/config/paths.mjs";
 import { ghBin } from "../../src/host/gh.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { linkIssueJob, saveIssue } from "../../src/memory/issues.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
-import { ensureProject, makeDir, makeHome, projectIdOf, registerCheckout } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, registerCheckout } from "../../test-support/memory.mjs";
 
 const SLUG = "login-google";
 const BRANCH = "worktree-feat+login-google";
@@ -56,7 +55,7 @@ function git(args) {
   return execFileSync("git", args, { encoding: "utf8", env: { ...process.env, ...gitVars() } });
 }
 
-// An issue job with a real worktree, a local bare remote and the fake gh installed.
+// A job with a real worktree, a local bare remote and the fake gh installed.
 function makeRun(t, name) {
   const remote = join(makeDir(t, `${name}-origin`), "origin.git");
   git(["-c", "init.defaultBranch=main", "init", "--bare", "-q", remote]);
@@ -75,8 +74,6 @@ function makeRun(t, name) {
   writeFileSync(join(evidence, "automated-verification.md"), "## Verification: PASSED\n\nnpm test: 12 passed\n");
   assert.equal(ghBin(env), env.NIGHTQUEUE_GH_BIN);
   assert.ok(existsSync(env.NIGHTQUEUE_GH_BIN) && (statSync(env.NIGHTQUEUE_GH_BIN).mode & 0o111) !== 0);
-  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
-  assert.equal(linkIssueJob(item.id, id, env), true);
   return { env, id };
 }
 
@@ -108,7 +105,7 @@ async function attempt(t, name, body) {
   });
   if (code !== 0) return;
   const published = readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "pr-body.published.md"), "utf8");
-  const footerAt = published.lastIndexOf("Opened by nightqueue · AP-1");
+  const footerAt = published.lastIndexOf("Opened by nightqueue");
   assert.ok(footerAt > 0, published);
   assert.equal(endsOpen(published.slice(0, footerAt)), null, `the footer was published inside an open ${endsOpen(published.slice(0, footerAt))}:\n${published}`);
 }

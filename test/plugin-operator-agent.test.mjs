@@ -52,13 +52,13 @@ test("the nightqueue commands operator.md names are exactly the guard's allowed 
   assert.ok(OPERATOR.includes(`\`nightqueue|nq ${OPERATOR_CLI_COMMANDS.allowed.join("|")} …\``));
 });
 
-test("the operator opens naming itself and the projects, and asks for project, memory and an issue before queueing", () => {
+test("the operator opens naming itself and the projects, and asks for project and memory before queueing", () => {
   for (const named of [
     "**the nightqueue operator**",
     "`name · key · <n> pending",
     "Current project (preselected by nightqueue open)",
     "`lesson_recall` and `decision_recall`",
-    "`issue_save`",
+    "1. Queue from the brief.",
     "call `queue_add` with `project`",
     "(set by the operator - the pipeline may only raise it, with evidence, never lower it)",
     "`nightqueue memory unavailable: run nightqueue doctor --fix and retry`",

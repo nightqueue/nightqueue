@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   decisionRef,
-  GLOBAL_KEY,
-  itemRef,
   jobRef,
   parseJobRef,
   parseRef,
@@ -31,21 +29,17 @@ test("a key is trimmed and upper-cased before it is validated", () => {
 
 test("refs render from the row's current key and number", () => {
   assert.equal(jobRef(77), "J-77");
-  assert.equal(itemRef({ scope: "project", project_id: "p1", project_key: "NQ", number: 12 }), "NQ-12");
-  assert.equal(itemRef({ scope: "org", org_id: "o1", org_key: "DLW", project_key: "NQ", number: 3 }), "DLW-3");
-  assert.equal(itemRef({ scope: "project", project_id: null, number: 2 }), `${GLOBAL_KEY}-2`);
   assert.equal(decisionRef({ scope: "project", project_id: "p1", project_key: "NQ", number: 7 }), "D-7");
   assert.equal(decisionRef({ scope: "org", org_id: "o1", org_key: "DLW", number: 3 }), "DLW/D-3");
   assert.equal(decisionRef({ scope: "project", project_id: null, number: 1 }), "G/D-1");
 });
 
 test("a ref is never rendered without its key or number", () => {
-  assert.throws(() => itemRef({ id: 9, scope: "project", project_id: "p1", number: 1 }), /issue 9: its owner key or number is missing/);
-  assert.throws(() => itemRef({ id: 9, scope: "project", project_id: "p1", project_key: "NQ" }), /issue 9/);
+  assert.throws(() => decisionRef({ id: 4, scope: "org", org_id: "o1", org_key: "DLW" }), /decision 4: its owner key or number is missing/);
   assert.throws(() => decisionRef({ id: 4, scope: "org", org_id: "o1", number: 1 }), /decision 4/);
 });
 
-test("parseRef reads every ref form", () => {
+test("parseRef reads every job and decision ref form, and an item-shaped ref is none of them", () => {
   assert.deepEqual(parseRef("J-77"), { kind: "job", id: 77 });
   assert.deepEqual(parseRef("77"), { kind: "job", id: 77 });
   assert.deepEqual(parseRef(77), { kind: "job", id: 77 });
@@ -53,13 +47,10 @@ test("parseRef reads every ref form", () => {
   assert.deepEqual(parseRef("DLW/D-3"), { kind: "decision", key: "DLW", number: 3 });
   assert.deepEqual(parseRef("NQ/D-7"), { kind: "decision", key: "NQ", number: 7 });
   assert.deepEqual(parseRef("G/D-1"), { kind: "decision", key: "G", number: 1 });
-  assert.deepEqual(parseRef("NQ-12"), { kind: "item", key: "NQ", number: 12 });
-  assert.deepEqual(parseRef("G-2"), { kind: "item", key: "G", number: 2 });
-  assert.deepEqual(parseRef("ABCDE-1"), { kind: "item", key: "ABCDE", number: 1 });
+  for (const itemShaped of ["NQ-12", "G-2", "ABCDE-1"]) assert.equal(parseRef(itemShaped), null, itemShaped);
 });
 
 test("parseRef is case-insensitive and trims the whole input", () => {
-  assert.deepEqual(parseRef("nq-12"), { kind: "item", key: "NQ", number: 12 });
   assert.deepEqual(parseRef("  j-5  "), { kind: "job", id: 5 });
   assert.deepEqual(parseRef(" dlw/d-3"), { kind: "decision", key: "DLW", number: 3 });
   assert.deepEqual(parseRef("d-7 "), { kind: "decision", key: null, number: 7 });

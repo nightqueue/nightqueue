@@ -105,9 +105,7 @@ runtime measured no lane for prints `-`.
 Modified files` (`--files-from <path>` reads the list somewhere else) plus every
 file a `--extra <pathspec>` really matches, and commits them with `git commit -F
 <the --message-file>` - the message stays the agent's, and an empty or missing
-one is refused before anything is staged. For a job queued from an issue
-it commits a copy of the message with a `Refs: <KEY>-<n>` trailer added from the
-job row; a message that already carries a `Refs:` line is refused. It prints `COMMITTED: <sha> (<n>
+one is refused before anything is staged. A message that carries a `Refs:` line is refused. It prints `COMMITTED: <sha> (<n>
 files)`. Anything under
 `.claude/` or `tmp/`, a dependency lockfile that is not paired with a changed
 manifest and a green frozen install (see the runtime contract) and any path
@@ -140,8 +138,7 @@ for every subsection. Both: no bare `#<number>` outside a `Fixes`/`Closes` line,
 `{{placeholder}}` or `<...>` example left over from the template, and none of the
 traceability the runtime appends itself - an `Opened by nightqueue` line, a whole
 `Refs` line, a job ref or the run slug. It then publishes a copy of the body with
-the footer read from the job row (`Opened by nightqueue ·
-<KEY>-<n>` for an issue's job, `Opened by nightqueue` otherwise; see
+the footer `Opened by nightqueue` (see
 [Runtime contract](runtime-contract.md)). A body that
 fails prints one `REJECTED: <reason>` or `MISSING: <what>` line per violation
 and exits `1` with nothing pushed. Otherwise it renames the branch
@@ -270,7 +267,7 @@ nightqueue project rename api api-v2               # one row: its jobs, decision
 nightqueue project move api acme                   # move a project to another org
 nightqueue project move api --path ~/code/api      # give it a new checkout (or one it never had)
 nightqueue project remove api                      # refused while it owns rows, listing them and hinting --purge
-nightqueue project remove api --purge [--yes]      # delete it and every row it owns (jobs, lessons, memory, issues, runs dir); asks first, refused while a job runs or closes, or while it has comments on org issues (they stay)
+nightqueue project remove api --purge [--yes]      # delete it and every row it owns (jobs, lessons, memory, runs dir); asks first, refused while a job runs or closes
 nightqueue project integrations api show [--json] # one <kind>.<key>=<value> line per setting, or "no integrations"
 nightqueue project integrations api set <kind>.<key>=<value> ...   # validated against the provider that declares the key
 nightqueue project integrations api unset <kind>.<key> ...         # the last key removed leaves the project without integrations
@@ -330,12 +327,11 @@ ref written with it still resolves and no other owner can take it. Everything th
 prints names things by ref, and every command and tool that takes one accepts it:
 
 - a job is `J-<id>` (the plain id is still accepted);
-- an issue is `<KEY>-<n>`, numbered within its project or org (`NQ-12`, `DLW-3`);
 - a decision is `D-<n>` inside its project, `<ORGKEY>/D-<n>` for an org decision, and
   `<KEY>/D-<n>` anywhere else;
-- a row with no owner uses the key `G` (`G-4`, `G/D-2`).
+- a row with no owner uses the key `G` (`G/D-2`).
 
-Items and decisions no longer take an internal id anywhere; the decision commands below
+Decisions no longer take an internal id anywhere; the decision commands below
 still take a plain per-owner number with `--project`/`--org`.
 
 ## Queue
@@ -344,7 +340,6 @@ The full reference of `nightqueue queue` is [Queue](queue.md); these subcommands
 recent enough that this is their first mention here.
 
 ```sh
-nightqueue queue add --issue NQ-12 ["<note>"]         # an issue's job, with an optional operator note
 nightqueue queue status J-42                          # one job, by its ref (or its plain id)
 nightqueue queue status https://github.com/acme/api/pull/7   # ...or by the pull request it opened
 nightqueue queue status                               # the table; TOKENS is the total including cache (see below)
@@ -381,8 +376,7 @@ total would be useless mid-run, while the total with cache is a good proxy that 
 The last column of the `queue status` table is `TITLE/LAST` (it was `SLUG/LAST`). A running
 job shows what it is doing, as before. Every other job shows its title, then ` — ` and the
 reason it stands there (notice first line, close note, parked label) when the width allows.
-The title is derived on read and never stored: the title of the issue the job was queued
-from, otherwise the first non-empty line of the prompt's brief without its heading marker
+The title is derived on read and never stored: the first non-empty line of the prompt's brief without its heading marker
 (a bare `## Brief` or `# Task` heading yields to the next line), clipped at 120 characters
 with `…` counted in them. The slug no longer sits in the table; `queue status <id>` prints it.
 
@@ -400,7 +394,7 @@ stream's `## Notice`, the pull request, slug and branch; the row carries
 line per job, where the result is `recovered as <status>`, `exists` (the row is there - a second
 run, or the loser of two concurrent ones), `skipped: still running` or `project-missing`, then
 the tail of the job logs no run explains, which cannot be rebuilt. Nothing is written to the
-issues or to the decisions. A recovered row is a record, not a task: its prompt was not kept on
+decisions. A recovered row is a record, not a task: its prompt was not kept on
 disk, so `queue retry` (and `queue_retry`) refuses it with ``J-<n> was rebuilt from disk by
 `nightqueue queue repair --from-disk` and its prompt was not kept, so it cannot run again; queue
 the task anew with `nightqueue queue add` ``.
@@ -767,27 +761,6 @@ settled before its job was closed, by number and job - settle it with `decision_
 (`status: accepted|rejected`) or `nightqueue decision update <number> --status
 accepted|rejected`.
 
-On a database at the current schema, the `issue workflow` row names every issue or org
-project row whose status disagrees with what its linked job's row means (for example `NQ-12
-in_progress (J-40 done, expected in_review)`, or `DLW-7 row api ...` for an org item's row): a job
-write whose issue follow failed. The next `nightqueue queue run` claim cycle re-syncs those on its
-own. It also names every org item whose persisted status disagrees with what its project rows derive
-(for example `DLW-7 todo (derived from its project rows: in_progress)`), re-derived at its next row
-change or set by hand with `issue_update`. It is a `warn`, never a failure.
-
-`nightqueue issues [--project <name> | --org <name>] [--status <s>]... [--priority <n>]...
-[--type <t>]... [--json]` prints the issues grouped by status in workflow order (`backlog`, `todo`,
-`in_progress`, `in_review`, `done`, `cancelled`), one `p<priority> <REF> <title>` line per item (`NQ-12` for a
-project item, `DLW-7` for an org item: the ref carries its owner's key), p1 first. `--status`, `--priority` and `--type` repeat to keep several values. Read by a
-project, an org item shows the status of that project's own row in parentheses; read with `--org`,
-each org item lists its project rows under it (`<project>: <status> J-<id> (<job status>)`), the
-item × project matrix. It survives a reader
-that closes the pipe early (`nightqueue issues | head`): the CLI stops writing instead of
-crashing with `EPIPE` (or `ENOTCONN`/`ECONNRESET`, the same closed reader on a socket). `nightqueue issues show <ref> [--json]` prints one issue in full - its
-ref, type, status and priority, its untruncated title and detail, an org item's project
-rows under `projects:` - and then its comment thread in chronological order, one `<when> <author> <kind>` line per comment with its body
-indented under it. Both read the database and never write to it.
-
 The diagnosis is offline: without `--check-updates` it opens no network
 connection at all. With the flag it adds one last check, `registry`, which asks
 the registry for the newest published version and compares it with the installed
@@ -981,9 +954,7 @@ files described in [the runtime contract](runtime-contract.md): the next start o
 reaps them. `nightqueue doctor` reports whether `node-pty` loads (`studio terminal`).
 
 The entry points are `Resume in terminal` on a job page (disabled, with the reason as its
-tooltip, outside the four statuses; `Copy session cmd` stays beside it), `Open operator` in
-the issues toolbar and `Operator` on each issue (instruction `Analyse <ref>: <title>`), which
-open the operator with that project preselected and are disabled on all projects, and
+tooltip, outside the four statuses; `Copy session cmd` stays beside it), and
 `Operator` in the header, never disabled: home mode with the project picked in the queue
 toolbar preselected, or no project on all projects.
 
@@ -1062,7 +1033,7 @@ runs can still reach outside it; tests that touch a nightqueue home go through
 nightqueue open                          # the operator, in the nightqueue home; the project of this checkout, if any, preselected
 nightqueue open my-app                   # the same with a registered project preselected by name (or id), from any directory
 nightqueue open --resume <session>       # resume an operator (or job) session
-nightqueue open my-app --prompt "Analyse KEY-3: fix the login"   # start the session with a request
+nightqueue open my-app --prompt "Analyse the login failure"   # start the session with a request
 ```
 
 `nightqueue open [project] [--resume <session>] [--prompt <text>]` starts an interactive `claude` with the
@@ -1110,7 +1081,7 @@ one line starting `D-58:`:
   `secrets.json` and the database; a `Glob` without a `path` targets the home and is refused, and
   an absolute Glob `pattern` or Grep `glob` is judged by its static prefix);
   Bash only as one bare command (no `;`, `&&`, `|`, redirection, substitution or backslash) that
-  is either `nightqueue|nq <command> …` with `<command>` one of `queue`, `issues`, `decision`,
+  is either `nightqueue|nq <command> …` with `<command>` one of `queue`, `decision`,
   `project`, `org`, `connection`, `doctor`, `memory`, `libs`, `version` - never `queue session`,
   `decision export|import`, `project add|move`, `queue add --run` or `doctor --fix`, never
   `--follow` or `--foreground` - or `git -C <checkout> [--no-optional-locks] <read> …` on a
@@ -1123,7 +1094,7 @@ one line starting `D-58:`:
   `nightqueue sandbox worktree --drop <path>`, or `cd <path inside a qa worktree> && …` (see
   [Sandbox](#sandbox));
 - any other subagent (`triage`, `reviewer`): no edit tool; Bash is one bare nightqueue read
-  (`queue status|log`, `issues`, `project list`, `decision list|show`, `org list`,
+  (`queue status|log`, `project list`, `decision list|show`, `org list`,
   `connection list`, `memory stats`, `doctor` without `--fix`, `version`), the main thread's
   `git -C` reads, `gh pr view|diff|checks|list|status` or `gh issue view|list`;
 - every subagent reads only under the main thread's read roots, so delegating never widens them.
@@ -1137,7 +1108,7 @@ A fresh session opens with the operator's greeting: who it is (the nightqueue op
 preselected project or the list of registered ones, what it does, what it never does, and
 where to start. A resumed session is not greeted again. The `nightqueue` MCP tools are
 pre-approved for the session (`permissions.allow: ["mcp__nightqueue__*"]` in the settings it
-is started with), so the operator never asks before reading the queue, the issues or the
+is started with), so the operator never asks before reading the queue or the
 memory; every other tool keeps Claude Code's own prompts.
 
 `--prompt <text>` starts the session with that request instead of the opening prompt (after
