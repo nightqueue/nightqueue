@@ -168,13 +168,23 @@ export interface TimelinePhase {
   state: "done" | "now" | "gate" | "pending" | "skip";
   durationMs: number | null;
   liveSinceMs: number | null;
+  startMs: number | null;
+  attempts: number;
+  byAttempt: PhaseAttempt[];
   tokens: number;
   tokens_label: string;
+}
+
+export interface PhaseAttempt {
+  attempt: number;
+  durationMs: number;
+  last: boolean;
 }
 
 export interface Timeline {
   track: string | null;
   phases: TimelinePhase[];
+  clockMs: number | null;
 }
 
 export interface JobMeta {

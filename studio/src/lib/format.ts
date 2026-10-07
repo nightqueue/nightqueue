@@ -1,4 +1,4 @@
-import type { AttemptOutcome, AttemptRow, Job, JobDetail, TimelinePhase } from "./types";
+import type { AttemptOutcome, AttemptRow, Job, JobDetail } from "./types";
 
 // Milliseconds of an ISO instant, null when it is missing or not a date.
 export function isoMs(value: string | null | undefined): number | null {
@@ -170,35 +170,6 @@ export function tokensTotalLabel(job: TokenSource): string {
   if (total < 1000) return `${mark}${total}`;
   if (total < 1_000_000) return `${mark}${Math.round(total / 1000)}k`;
   return `${mark}${(total / 1_000_000).toFixed(1)}M`;
-}
-
-export interface GateWait {
-  index: number;
-  attempt: number;
-  waitMs: number;
-}
-
-// The waits between a gated attempt and the next one, in attempt order; a pair without both instants is left out.
-export function gateWaits(rows: AttemptRow[] | null | undefined): GateWait[] {
-  if (!Array.isArray(rows)) return [];
-  return rows.flatMap((row, index) => {
-    const next = rows[index + 1];
-    if (row.outcome !== "gate" || !next) return [];
-    const finished = isoMs(row.finished_at);
-    const resumed = isoMs(next.started_at);
-    if (finished === null || resumed === null || resumed < finished) return [];
-    return [{ index, attempt: row.attempt, waitMs: resumed - finished }];
-  });
-}
-
-// TODO(NQ-88): the gate's phase is not exposed; the segment sits at an approximate position until the job API carries it.
-export function gatePosition(phases: TimelinePhase[]): number {
-  const now = phases.findIndex((phase) => phase.state === "now");
-  if (now >= 0) return now;
-  const gate = phases.findIndex((phase) => phase.state === "gate");
-  if (gate >= 0) return gate;
-  const lastDone = phases.map((phase) => phase.state).lastIndexOf("done");
-  return lastDone + 1;
 }
 
 // GitHub's five-block proportion of a change: green for additions, red for deletions, grey when nothing changed.
