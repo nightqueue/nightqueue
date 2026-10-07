@@ -1,18 +1,15 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, type RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useState } from "react";
 import { type AddJobForm, addFormProblem, buildAddArgs, DEFAULT_PRIORITY, EMPTY_ADD_FORM, PRIORITIES, queueJob, TIERS, type Tier } from "../lib/addJob";
 import { useProjects } from "../lib/api";
 import { runnersOnlineLabel } from "../lib/queue";
 import { useEscape } from "../lib/useEscape";
 import { useSubmit } from "../lib/useSubmit";
-import { IssuePicker } from "./IssuePicker";
 import { ProjectPicker } from "./ProjectPicker";
 import { Button, FIELD_CLASS, Segmented } from "./ui";
 
 interface AddJobDrawerProps {
   runnersOnline: number;
   onClose: () => void;
-  initialIssue?: string;
   initialProject?: string;
 }
 
@@ -42,31 +39,20 @@ function ProjectField({ projects, value, onChange }: { projects: ReturnType<type
   return <ProjectPicker id="add-project" projects={projects.data} value={value} onChange={onChange} />;
 }
 
-// The brief part of the form: an optional issue, then the operator note on an issue or the whole brief without one.
-function BriefFields({ form, set, textRef }: { form: AddJobForm; set: SetField; textRef: RefObject<HTMLTextAreaElement | null> }) {
-  const onIssue = form.issueRef !== null;
+// The brief of the job: the whole request, as prose.
+function BriefField({ form, set }: { form: AddJobForm; set: SetField }) {
   return (
-    <>
-      <Field id="add-issue" label="Issue" aside="(optional)">
-        <IssuePicker project={form.project} selected={form.issueRef} onSelect={(ref) => set("issueRef", ref)} />
-      </Field>
-      <Field id="add-text" label={onIssue ? "Operator note" : "Brief"} aside={onIssue ? "(optional, one-off, after the item block)" : "(the whole request, as prose)"}>
-        <textarea ref={textRef} id="add-text" rows={onIssue ? 3 : 8} className={`${INPUT_CLASS} resize-y py-2`} value={form.text} onChange={(event) => set("text", event.target.value)} />
-      </Field>
-    </>
+    <Field id="add-text" label="Brief" aside="(the whole request, as prose)">
+      <textarea id="add-text" rows={8} className={`${INPUT_CLASS} resize-y py-2`} value={form.text} onChange={(event) => set("text", event.target.value)} />
+    </Field>
   );
-}
-
-// What `auto` means on the current path: the issue type's default tier, or the pipeline's own choice.
-function autoTierAside(form: AddJobForm): string {
-  return form.issueRef ? "(auto = the issue type's default tier)" : "(auto = the pipeline decides)";
 }
 
 // Tier and priority of the job.
 function RunFields({ form, set }: { form: AddJobForm; set: SetField }) {
   return (
     <>
-      <Field label="Tier" aside={autoTierAside(form)}>
+      <Field label="Tier" aside="(auto = the pipeline decides)">
         <Segmented<Tier> label="tier" options={TIER_OPTIONS} value={form.tier} onChange={(tier) => set("tier", tier)} />
       </Field>
       <Field id="add-priority" label="Priority">
@@ -93,30 +79,17 @@ function CallPreview({ args, runnersOnline, problem }: { args: Record<string, un
   );
 }
 
-// Closes the drawer after a job is queued, refreshing the issues so a queued one shows its new state.
-function useQueuedDone(onClose: () => void) {
-  const queryClient = useQueryClient();
-  return useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["issues"] });
-    onClose();
-  }, [queryClient, onClose]);
-}
-
-// The Add job drawer: one form (project, optional issue, brief or note, tier, priority); queues with `queue_add`, optionally starting a runner.
-export function AddJobDrawer({ runnersOnline, onClose, initialIssue, initialProject }: AddJobDrawerProps) {
+// The Add job drawer: one form (project, brief, tier, priority); queues with `queue_add`, optionally starting a runner.
+export function AddJobDrawer({ runnersOnline, onClose, initialProject }: AddJobDrawerProps) {
   const projects = useProjects();
-  const [draft, setDraft] = useState<AddJobForm>({ ...EMPTY_ADD_FORM, project: initialProject ?? "", issueRef: initialIssue ?? null });
-  const textRef = useRef<HTMLTextAreaElement>(null);
+  const [draft, setDraft] = useState<AddJobForm>({ ...EMPTY_ADD_FORM, project: initialProject ?? "" });
   const form: AddJobForm = { ...draft, project: draft.project || projects.data?.[0]?.name || "" };
   const set: SetField = (key, value) => setDraft((current) => ({ ...current, project: form.project, [key]: value }));
-  const changeProject = (project: string) => setDraft((current) => ({ ...current, project, issueRef: null }));
+  const changeProject = (project: string) => setDraft((current) => ({ ...current, project }));
   const args = buildAddArgs(form);
   const problem = addFormProblem(form);
-  const submit = useSubmit(queueJob, useQueuedDone(onClose));
+  const submit = useSubmit(queueJob, onClose);
   useEscape(onClose);
-  useEffect(() => {
-    if (initialIssue) textRef.current?.focus();
-  }, [initialIssue]);
   return (
     <div className="fixed inset-0 z-40">
       <div className="absolute inset-0 bg-[rgba(5,7,10,.55)]" onMouseDown={onClose} aria-hidden="true" />
@@ -128,7 +101,7 @@ export function AddJobDrawer({ runnersOnline, onClose, initialIssue, initialProj
           <Field id="add-project" label="Project">
             <ProjectField projects={projects} value={form.project} onChange={changeProject} />
           </Field>
-          <BriefFields form={form} set={set} textRef={textRef} />
+          <BriefField form={form} set={set} />
           <RunFields form={form} set={set} />
           <CallPreview args={args} runnersOnline={runnersOnline} problem={problem} />
         </div>

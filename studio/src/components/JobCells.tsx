@@ -92,7 +92,7 @@ function pendingTail(job: Job, runnersOnline: number): string {
 
 // The second line of a pending job: item, priority, tier, queue time and why it waits.
 function pendingDetail(job: Job, runnersOnline: number): string {
-  const parts = [job.studio.item_ref, `p${job.priority}`, job.tier, `queued ${hhmmUtc(job.created_at)} UTC`, pendingTail(job, runnersOnline)];
+  const parts = [`p${job.priority}`, job.tier, `queued ${hhmmUtc(job.created_at)} UTC`, pendingTail(job, runnersOnline)];
   return parts.filter(Boolean).join(" · ");
 }
 

@@ -662,7 +662,7 @@ function repoPath(path, worktree) {
   return inside && !inside.startsWith("..") && !isAbsolute(inside) ? inside : path;
 }
 
-// The files the run's implementation artifact lists, for the issue trail; a missing or unreadable artifact lists none.
+// The files the run's implementation artifact lists, for the job's result; a missing or unreadable artifact lists none.
 function implementedFiles(job, run, state, env) {
   if (!isRunPath(job.project_id, run.facts.slug)) return [];
   try {
@@ -859,7 +859,7 @@ async function readSpawnRefs(job, ctx) {
 // Writes the job block into the run's state.json; a refusal other than "already recorded" is one job-log line.
 function writeJobBlock(job, refs, env) {
   try {
-    const block = { id: job.id, ref: jobRef(job.id), ...refs, createdAt: new Date().toISOString() };
+    const block = { id: job.id, ref: jobRef(job.id), projectKey: refs.projectKey, createdAt: new Date().toISOString() };
     const written = recordJobBlock({ projectId: job.project_id, slug: job.slug, block, env });
     if (written.status === "written" || written.reason === JOB_BLOCK_ALREADY_RECORDED) return;
     appendJobLog(job.id, `the job block could not be recorded in the state of the run: ${written.reason}`, env);

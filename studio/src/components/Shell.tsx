@@ -1,13 +1,11 @@
 import { Link, Outlet } from "@tanstack/react-router";
 import { CircleCheck, CircleX, Info, type LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
-import { useProjects, useStudioInfo } from "../lib/api";
+import type { CSSProperties, ReactNode } from "react";
+import { useStudioInfo } from "../lib/api";
 import { useQueueStream } from "../lib/events";
 import { utcClock } from "../lib/format";
 import { useMcpStatus } from "../lib/mcp";
-import { ALL_PROJECTS } from "../lib/queue";
-import { useSelectedProject } from "../lib/selectedProject";
-import type { TerminalRequest } from "../lib/types";
+import { useOperatorRequest } from "../lib/operator";
 import { dismissToast, useToasts, type ToastTone } from "../lib/toast";
 import { useNow } from "../lib/useNow";
 import { ActionIcon } from "./StatusIcon";
@@ -110,20 +108,11 @@ function ToastHost() {
   );
 }
 
-// The project the header's Operator preselects, from the queue toolbar's select, or null when there is none to name.
-function useHeaderOperatorProject(): string | null {
-  const projectId = useSelectedProject();
-  const projects = useProjects();
-  if (projectId === ALL_PROJECTS || !projects.isSuccess || !Array.isArray(projects.data)) return null;
-  return projects.data.find((entry) => entry.id === projectId)?.name ?? null;
-}
-
 // The header's Operator: opens the operator in the nightqueue home, preselecting the queue toolbar's project when one is picked.
 function HeaderOperatorButton() {
-  const name = useHeaderOperatorProject();
-  const request: TerminalRequest = name ? { kind: "operator", project: name } : { kind: "operator" };
+  const request = useOperatorRequest();
   return (
-    <TerminalLaunchButton size="sm" variant="run" request={request} blockedReason={null} title={name ? `Open the operator (${name} preselected)` : "Open the operator"}>
+    <TerminalLaunchButton size="sm" variant="run" request={request} blockedReason={null} title={request.project ? `Open the operator (${request.project} preselected)` : "Open the operator"}>
       Operator
     </TerminalLaunchButton>
   );
@@ -132,7 +121,7 @@ function HeaderOperatorButton() {
 // The header of every page: logo, navigation, Operator, MCP status, runtime version and clock.
 function Header() {
   return (
-    <header className="flex h-[52px] items-center gap-5 border-b border-line bg-header px-4 sm:px-6">
+    <header className="sticky top-0 z-20 flex h-[52px] items-center gap-5 border-b border-line bg-header px-4 sm:px-6">
       <Logo />
       <Nav />
       <div className="ml-auto flex items-center gap-4 text-sm text-muted">
@@ -154,9 +143,11 @@ export function Shell({ children }: { children?: ReactNode }) {
   useQueueStream();
   const dockPadding = useDockPadding();
   return (
-    <div className="flex min-h-screen flex-col" style={dockPadding > 0 ? { paddingBottom: dockPadding } : undefined}>
+    <div className="flex min-h-screen flex-col">
       <Header />
-      <main className="mx-auto box-border flex w-full max-w-[1280px] grow flex-col gap-4 px-4 pt-5 pb-8 sm:px-6">{children ?? <Outlet />}</main>
+      <div className="flex grow flex-col md:pl-[var(--dock-w)]" style={{ "--dock-w": `${dockPadding}px` } as CSSProperties}>
+        <main className="mx-auto box-border flex w-full max-w-[1280px] grow flex-col gap-4 px-4 pt-5 pb-8 sm:px-6">{children ?? <Outlet />}</main>
+      </div>
       <TerminalDock />
       <TerminalUnavailable />
       <ToastHost />

@@ -71,7 +71,6 @@ test("the main thread refuses the subcommands and flags that write files, widen 
     "nightqueue queue add --project alpha fix-it",
     "nightqueue queue run",
     "nightqueue doctor",
-    "nq issues show I-1",
   ];
   for (const command of allowed) assertAllowed(main("Bash", { command }), env);
   const refused = [
@@ -112,7 +111,6 @@ test("the main thread runs only the D-58 Bash list", (t) => {
   const { env, checkout } = operatorFixture(t);
   const allowed = [
     "nightqueue queue status",
-    "nq issues",
     "nightqueue doctor --json",
     `git -C ${checkout} log --oneline -5`,
     `git -C ${checkout} --no-optional-locks status`,
@@ -121,6 +119,7 @@ test("the main thread runs only the D-58 Bash list", (t) => {
   ];
   for (const command of allowed) assertAllowed(main("Bash", { command }), env);
   const refused = [
+    "nq issues",
     "nightqueue sandbox ls",
     "nightqueue run dir",
     "nightqueue open",
@@ -290,8 +289,6 @@ test("a read-only subagent runs only the nightqueue reads, never a command the m
   const allowed = [
     "nightqueue queue status",
     "nightqueue queue log J-1",
-    "nq issues",
-    "nightqueue issues show I-1",
     "nightqueue project list",
     "nightqueue decision list",
     "nightqueue decision show D-1",
@@ -300,6 +297,8 @@ test("a read-only subagent runs only the nightqueue reads, never a command the m
   ];
   for (const command of allowed) assertAllowed(sub("nightqueue:reviewer", "Bash", { command }), env);
   const refused = [
+    "nq issues",
+    "nightqueue issues show I-1",
     "nightqueue queue close J-1",
     "nightqueue queue add x",
     "nightqueue queue run",

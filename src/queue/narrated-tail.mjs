@@ -61,19 +61,35 @@ async function readLogRange(path, from, to) {
   }
 }
 
+// A pusher of raw lines into the narrator that, in rich mode alone, hands each line its byte offset in the log.
+function linePusher(narrator, { rich, start }) {
+  let next = start;
+  const push = (line) => {
+    if (!rich) return narrator.push(line);
+    const offset = next;
+    next += Buffer.byteLength(line) + 1;
+    return narrator.push(line, { offset });
+  };
+  return { push, restart: () => (next = 0) };
+}
+
 // Pushes the earlier attempts of the log through the same narrator, so the lanes it opened stay known, and hands every event to `onHistory` alone.
-async function replayHistory({ path, from, to, narrator, onHistory }) {
+async function replayHistory({ path, from, to, narrator, rich, onHistory }) {
   const text = await readLogRange(path, from, to);
+  const lines = linePusher(narrator, { rich, start: from });
   await eachLineYielding(text, (line) => {
-    for (const event of narrator.push(line)) onHistory?.(event);
+    for (const event of lines.push(line)) onHistory?.(event);
   });
 }
 
 // Turns a notice of the follow loop into a narration line, a warning, or the debug trace of one poll.
-function narrateNotice(notice, { narrator, emit, trace, warn }) {
+function narrateNotice(notice, { narrator, lines, emit, trace, warn }) {
   if (notice.kind === "poll") trace?.(notice);
   if (notice.kind === "error") warn(notice.message);
-  if (notice.kind === "truncated") emit(narrator.note("truncated", "log truncated; narration restarted"));
+  if (notice.kind === "truncated") {
+    lines.restart();
+    emit(narrator.note("truncated", "log truncated; narration restarted"));
+  }
   if (notice.kind === "quiet") emit(narrator.note("quiet", `still running (${Math.round(notice.silentMs / 1000)}s quiet)`));
 }
 
@@ -89,8 +105,9 @@ async function emitJobNotice(id, { narrator, emit, sawNotice, readJob }) {
 async function narrateOnce({ id, path, fromOffset, tail }) {
   const text = readingLog(path, () => readLogFrom(path, fromOffset));
   const running = (await tail.readJob(id))?.status === "running";
+  const lines = linePusher(tail.narrator, { rich: tail.rich, start: fromOffset });
   await eachLineYielding(text, (line) => {
-    for (const event of tail.narrator.push(line)) tail.emit(event);
+    for (const event of lines.push(line)) tail.emit(event);
   });
   for (const event of tail.narrator.finish({ running })) tail.emit(event);
   await emitJobNotice(id, tail);
@@ -100,6 +117,7 @@ async function narrateOnce({ id, path, fromOffset, tail }) {
 // Narrates the log of a job while following it until the job leaves `running`, and answers the result of the follow.
 async function narrateFollowing({ id, env, path, fromOffset, stopReason, quietMs, trace, warn, tail }) {
   const { narrator, emit } = tail;
+  const lines = linePusher(narrator, { rich: tail.rich, start: fromOffset });
   const result = await followLog(
     {
       path,
@@ -107,9 +125,9 @@ async function narrateFollowing({ id, env, path, fromOffset, stopReason, quietMs
       readStatus: jobStatusReader(id, env),
       stopReason,
       onLine: (line) => {
-        for (const event of narrator.push(line)) emit(event);
+        for (const event of lines.push(line)) emit(event);
       },
-      onNotice: (notice) => narrateNotice(notice, { narrator, emit, trace, warn }),
+      onNotice: (notice) => narrateNotice(notice, { narrator, lines, emit, trace, warn }),
     },
     { quietMs },
   );
@@ -121,8 +139,8 @@ async function narrateFollowing({ id, env, path, fromOffset, stopReason, quietMs
 }
 
 // Narrates the log of one job to `onEvent`, the one narrated tail `queue log` prints and the studio streams; answers the follow result, or null without follow.
-// With `historyFrom` below `fromOffset`, the earlier bytes are replayed first to `onHistory` only; usage events go to `onUsage`, never to `onEvent`.
-export async function narrateJob({ id, env = process.env, follow = false, all = false, fromOffset = 0, historyFrom = null, onHistory = null, onUsage = null, onEvent, stopReason, quietMs = FOLLOW_QUIET_MS, trace = null, warn = () => {}, readJob = storeJobReader(env) }) {
+// With `historyFrom` below `fromOffset`, the earlier bytes are replayed first to `onHistory` only; usage events go to `onUsage`, never to `onEvent`; `rich` (the studio alone) adds bodies, phase and report events.
+export async function narrateJob({ id, env = process.env, follow = false, all = false, rich = false, readArtifact = null, fromOffset = 0, historyFrom = null, onHistory = null, onUsage = null, onEvent, stopReason, quietMs = FOLLOW_QUIET_MS, trace = null, warn = () => {}, readJob = storeJobReader(env) }) {
   const path = jobLogPath(id, env);
   let seen = false;
   const emit = (event) => {
@@ -130,9 +148,9 @@ export async function narrateJob({ id, env = process.env, follow = false, all = 
     if (event.kind === "notice") seen = true;
     onEvent(event);
   };
-  const narrator = createNarrator({ all, jobId: id, usage: Boolean(onUsage || onHistory) });
-  if (Number.isFinite(historyFrom) && historyFrom < fromOffset) await replayHistory({ path, from: historyFrom, to: fromOffset, narrator, onHistory });
-  const tail = { narrator, emit, sawNotice: () => seen, readJob };
+  const narrator = createNarrator({ all, jobId: id, usage: Boolean(onUsage || onHistory), rich, readArtifact });
+  if (Number.isFinite(historyFrom) && historyFrom < fromOffset) await replayHistory({ path, from: historyFrom, to: fromOffset, narrator, rich, onHistory });
+  const tail = { narrator, emit, rich, sawNotice: () => seen, readJob };
   if (!follow) return await narrateOnce({ id, path, fromOffset, tail });
   return await narrateFollowing({ id, env, path, fromOffset, stopReason, quietMs, trace, warn, tail });
 }

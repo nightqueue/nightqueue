@@ -10,7 +10,8 @@ import { formatElapsed, GLYPHS } from "../queue/narrate.mjs";
 import { narrateJob } from "../queue/narrated-tail.mjs";
 import { createTimeline } from "../queue/timeline.mjs";
 import { withReadOnlyStore } from "../store/open.mjs";
-import { jobExtras, runTierOf } from "./job-extras.mjs";
+import { artifactSummary } from "./artifacts.mjs";
+import { jobExtras, runDirOf, runTierOf } from "./job-extras.mjs";
 import { decorateSnapshot } from "./rows.mjs";
 
 export const QUEUE_POLL_MS = 1000;
@@ -82,8 +83,8 @@ export function snapshotPatch(previous, next) {
 }
 
 // One read of the queue: the `queue_status` answer decorated with the studio cells; the pull request cache is refreshed outside of it.
-async function readSnapshot(env, itemRefs) {
-  const snapshot = await readQueueStatus(env, { limit: QUEUE_LIMIT, decorate: (answer, store) => decorateSnapshot(answer, { env, store, itemRefs }) });
+async function readSnapshot(env) {
+  const snapshot = await readQueueStatus(env, { limit: QUEUE_LIMIT, decorate: (answer) => decorateSnapshot(answer, { env }) });
   Promise.resolve(refreshAnsweredPrStates(snapshot, env)).catch(() => {});
   return snapshot;
 }
@@ -91,7 +92,6 @@ async function readSnapshot(env, itemRefs) {
 // One shared poller of the queue for every `/events` subscriber of a server: started with the first, stopped with the last.
 export function createQueueStream({ env, pollMs = QUEUE_POLL_MS }) {
   const clients = new Set();
-  const itemRefs = new Map();
   let last = null;
   let timer = null;
   let polling = false;
@@ -108,7 +108,7 @@ export function createQueueStream({ env, pollMs = QUEUE_POLL_MS }) {
 
   const tick = async () => {
     try {
-      deliver(await readSnapshot(env, itemRefs));
+      deliver(await readSnapshot(env));
     } catch (err) {
       for (const client of clients) sendEvent(client.res, "error", { message: err?.message ?? String(err) });
     }
@@ -171,7 +171,67 @@ function narrationWire(event) {
     durationMs: Number.isFinite(event.durationMs) ? event.durationMs : null,
     elapsedMs: Number.isFinite(event.elapsedMs) ? event.elapsedMs : null,
     file: event.file ?? null,
+    laneId: event.laneId ?? null,
+    body: typeof event.body === "string" ? event.body : null,
+    body_truncated: event.body_truncated === true,
+    body_offset: Number.isInteger(event.body_offset) ? event.body_offset : null,
+    at: event.at ?? null,
+    artifact: event.artifact ?? null,
+    title: event.title ?? null,
+    bytes: Number.isFinite(event.bytes) ? event.bytes : null,
   };
+}
+
+// The answer of the report reader while the run directory is unknown: a report whose `bytes` is not a finite number is a deferred one, resolved at flush.
+const PENDING_REPORT = Object.freeze({ title: null, bytes: null });
+
+// The title and size of one artifact of the job's run directory as the stream knows it now, a pending answer while it knows none.
+function readStreamArtifact(state, name) {
+  return state.runDir ? artifactSummary(state.runDir, name) : PENDING_REPORT;
+}
+
+// Whether a narration event is a report whose artifact was not read yet.
+function isPendingReport(event) {
+  return event.kind === "report" && !Number.isFinite(event.bytes);
+}
+
+// Re-reads the job's row once for its run directory, kept on the state when found; null when the row is gone, has no slug or the read fails.
+async function resolveRunDir(state) {
+  try {
+    const row = await withReadOnlyStore(state.env, (store) => store.jobs.getJob(state.job.id));
+    const dir = row ? runDirOf(jobView(row, { full: true }), state.env) : null;
+    if (dir) state.runDir = dir;
+    return dir;
+  } catch {
+    return null;
+  }
+}
+
+// A pending report completed with its artifact's title and size, null while the directory or the file is missing.
+function completedReport(state, event) {
+  const summary = state.runDir ? artifactSummary(state.runDir, event.artifact) : null;
+  return summary ? { ...event, title: summary.title ?? null, bytes: summary.bytes } : null;
+}
+
+// One event of a batch through the stream's report pass: a phase resets the reported artifacts, a report shows once per artifact per phase.
+function completedEvent(state, event) {
+  if (event.kind === "phase") state.reported.clear();
+  if (event.kind !== "report") return event;
+  if (state.reported.has(event.artifact)) return null;
+  const report = isPendingReport(event) ? completedReport(state, event) : event;
+  if (report) state.reported.add(event.artifact);
+  return report;
+}
+
+// The batch with its pending reports resolved in place and its unresolvable or repeated ones dropped; the row is re-read at most once per batch.
+async function completeReports(state, batch) {
+  if (!state.runDir && batch.some(isPendingReport)) await resolveRunDir(state);
+  const out = [];
+  for (const event of batch) {
+    const placed = completedEvent(state, event);
+    if (placed) out.push(placed);
+  }
+  return out;
 }
 
 // Reads the job a stream is about with its studio extras, on a store opened read-only for that read alone; null when the row is gone.
@@ -191,7 +251,7 @@ function attemptOffset(id, env) {
 
 // The state of one job stream: the timeline of every attempt, the touched files and the batch waiting to be flushed.
 function createJobState({ res, env, job, extras }) {
-  return { res, env, job, tier: extras.tier ?? job.tier ?? null, timeline: createTimeline(), timelineDirty: false, recordedFiles: extras.files, files: new Set(), pending: [], timer: null, status: job.status };
+  return { res, env, job, tier: extras.tier ?? job.tier ?? null, runDir: extras.run_dir ?? null, reported: new Set(), timeline: createTimeline(), timelineDirty: false, recordedFiles: extras.files, files: new Set(), pending: [], timer: null, flushChain: Promise.resolve(), status: job.status };
 }
 
 // Sends the timeline as it stands, re-reading the run tier while it is still unknown.
@@ -200,25 +260,39 @@ function sendTimeline(state) {
   sendEvent(state.res, "timeline", state.timeline.snapshot({ tier: state.tier, status: state.status }));
 }
 
-// Sends the waiting narration batch with the files it touched, then the timeline when anything moved it.
-function flushJobState(state) {
-  state.timer = null;
-  if (state.pending.length) {
-    const batch = state.pending;
-    state.pending = [];
-    sendEvent(state.res, "narration", batch.map(narrationWire));
-    const before = state.files.size;
-    for (const event of batch) if (event.file) state.files.add(event.file);
-    if (state.recordedFiles === null && state.files.size !== before) sendEvent(state.res, "files", [...state.files].sort());
-  }
+// Sends one narration batch, then the files it touched when the run recorded none.
+function sendNarration(state, batch) {
+  if (batch.length) sendEvent(state.res, "narration", batch.map(narrationWire));
+  const before = state.files.size;
+  for (const event of batch) if (event.file) state.files.add(event.file);
+  if (state.recordedFiles === null && state.files.size !== before) sendEvent(state.res, "files", [...state.files].sort());
+}
+
+// Sends the waiting narration batch with its reports resolved and the files it touched, then the timeline when anything moved it.
+async function flushJobState(state) {
+  const batch = state.pending;
+  state.pending = [];
+  if (batch.length) sendNarration(state, await completeReports(state, batch));
   if (!state.timelineDirty) return;
   state.timelineDirty = false;
   sendTimeline(state);
 }
 
+// Queues one flush after the ones already running, so batches leave in order; a failed flush is reported on the stream and never stops the next.
+function chainFlush(state) {
+  state.flushChain = state.flushChain
+    .then(() => flushJobState(state))
+    .catch((err) => sendEvent(state.res, "error", { message: `narration flush failed: ${err?.message ?? String(err)}` }));
+  return state.flushChain;
+}
+
 // Arms the next flush unless one is already waiting.
 function scheduleFlush(state) {
-  if (!state.timer) state.timer = setTimeout(() => flushJobState(state), NARRATION_FLUSH_MS);
+  if (state.timer) return;
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    chainFlush(state);
+  }, NARRATION_FLUSH_MS);
 }
 
 // Folds one event into the timeline alone: an earlier attempt's event or a usage report, never a narration line.
@@ -235,11 +309,13 @@ function pushJobEvent(state, event) {
 }
 
 // Ends a job stream once the follow ended: the last batch, the final timeline and the status it ended on; the response stays open for the client.
-function endJobState(state, result) {
+async function endJobState(state, result) {
   if (state.timer) clearTimeout(state.timer);
+  state.timer = null;
+  await state.flushChain;
   state.status = result?.status ?? state.status;
   state.timelineDirty = false;
-  flushJobState(state);
+  await chainFlush(state);
   sendTimeline(state);
   sendEvent(state.res, "end", { status: state.status, reason: result?.reason ?? null });
 }
@@ -267,11 +343,13 @@ export async function streamJob(req, res, { env, ref }) {
   sendEvent(res, "meta", found.extras);
   sendTimeline(state);
   if (found.extras.files !== null) sendEvent(res, "files", found.extras.files);
-  if (!existsSync(jobLogPath(id, env))) return endJobState(state, { status: found.job.status, reason: "the job has no log yet" });
+  if (!existsSync(jobLogPath(id, env))) return await endJobState(state, { status: found.job.status, reason: "the job has no log yet" });
   const result = await narrateJob({
     id,
     env,
     follow: true,
+    rich: true,
+    readArtifact: (name) => readStreamArtifact(state, name),
     fromOffset: attemptOffset(id, env),
     historyFrom: 0,
     onHistory: (event) => pushTimelineEvent(state, event),
@@ -280,6 +358,6 @@ export async function streamJob(req, res, { env, ref }) {
     stopReason: () => (closed ? "client closed" : null),
     readJob: async (jobId) => await withReadOnlyStore(env, (store) => store.jobs.getJob(jobId)),
   });
-  if (!closed) endJobState(state, result);
+  if (!closed) await endJobState(state, result);
   else if (state.timer) clearTimeout(state.timer);
 }

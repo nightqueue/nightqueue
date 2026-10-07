@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { dbPath, preV18BackupPath, preV19BackupPath, preV20BackupPath } from "../../src/config/paths.mjs";
+import { dbPath, preV18BackupPath, preV19BackupPath, preV20BackupPath, preVersionBackupPath } from "../../src/config/paths.mjs";
 import { DB_USER_VERSION, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { MigrationRefused } from "../../src/memory/migration/one-shot.mjs";
 import { migrateToV20 } from "../../src/memory/migration/v20.mjs";
@@ -55,7 +55,7 @@ const ADVERSARIAL = Object.freeze([
   { sql: "'a' || char(10) || 'b'", printed: '"a\\nb"' },
 ]);
 
-// The tracker names of a database at v20, and of one at the current schema.
+// The tracker names of a database at v20.
 const V20_NAMES = Object.freeze({
   items: "roadmap_items",
   projects: "roadmap_item_projects",
@@ -63,14 +63,6 @@ const V20_NAMES = Object.freeze({
   commentsFts: "roadmap_comments_fts",
   appendOnly: /roadmap comments are append-only/,
 });
-const CURRENT_NAMES = Object.freeze({
-  items: "issues",
-  projects: "issue_projects",
-  comments: "issue_comments",
-  commentsFts: "issue_comments_fts",
-  appendOnly: /issue comments are append-only/,
-});
-
 // A v19 home with its registry ids and the v19 bytes.
 function v19Home(t, name, options = {}) {
   const env = makeHome(t, name);
@@ -272,7 +264,7 @@ test("a v17 home reaches the current schema in one open, keeping the pre-v18, pr
   assert.equal(readRaw(preV18BackupPath(env), (raw) => schemaVersionOn(raw)), 17);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
   assert.equal(readRaw(preV20BackupPath(env), (raw) => schemaVersionOn(raw)), 19);
-  assert.deepEqual(db.prepare("SELECT title FROM issues").all().map((row) => row.title), ["old item"]);
+  assert.deepEqual(readRaw(preVersionBackupPath(env, 24), (raw) => raw.prepare("SELECT title FROM issues").all().map((row) => row.title)), ["old item"]);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 });
 
@@ -283,7 +275,7 @@ test("a v18 home reaches the current schema in one open, keeping the pre-v19 and
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
   assert.equal(readRaw(preV20BackupPath(env), (raw) => schemaVersionOn(raw)), 19);
-  assert.equal(foreignKeyOf(db, "issues", "job_id"), "jobs SET NULL");
+  assert.equal(readRaw(preVersionBackupPath(env, 24), (raw) => foreignKeyOf(raw, "issues", "job_id")), "jobs SET NULL");
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 });
 
@@ -326,11 +318,10 @@ test("a v19 column the v20 shape lacks refuses the migration naming it, and its 
   assert.equal(note, "keep me");
 });
 
-// Seeds, on a fresh home at the current schema, the same links the v19 fixture carries, and names them the same way.
+// Seeds, on a fresh home at the current schema, the links of the v19 fixture outside the removed tracker, named the same way.
 function seedFreshLinks(env) {
   const projectId = ensureProject(env, "alpha");
   const db = migrateTestHome(env);
-  const orgId = db.prepare("SELECT org_id FROM projects WHERE id = ?").get(projectId).org_id;
   const insert = (sql, ...params) => Number(db.prepare(sql).run(...params).lastInsertRowid);
   const job = insert("INSERT INTO jobs (project_id, prompt) VALUES (?, 'linked job')", projectId);
   insert("INSERT INTO jobs (project_id, prompt) VALUES (?, 'other job')", projectId);
@@ -339,16 +330,10 @@ function seedFreshLinks(env) {
   const supersededTarget = insert(decision, projectId, 2, "successor", null);
   const linkedDecision = insert(decision, projectId, 3, "linked", job);
   db.prepare("UPDATE decisions SET status = 'superseded', superseded_by = ? WHERE id = ?").run(supersededTarget, superseded);
-  const orgItem = insert("INSERT INTO issues (scope, org_id, number, title, position) VALUES ('org', ?, 1, 'org item', 1)", orgId);
-  const otherItem = insert("INSERT INTO issues (scope, project_id, number, title, position, job_id) VALUES ('project', ?, 1, 'job item', 1, ?)", projectId, job);
-  insert("INSERT INTO issues (scope, project_id, number, title, position, decision_id) VALUES ('project', ?, 2, 'decided item', 2, ?)", projectId, linkedDecision);
-  insert("INSERT INTO issue_projects (item_id, project_id, job_id) VALUES (?, ?, ?)", orgItem, projectId, job);
-  insert("INSERT INTO issue_comments (item_id, kind, author, body) VALUES (?, 'note', 'operator', 'a zebra crossed the org item')", orgItem);
-  insert("INSERT INTO issue_comments (item_id, kind, author, body) VALUES (?, 'note', 'operator', 'a giraffe on the job item')", otherItem);
   const run = insert("INSERT INTO pipeline_runs (project_id, slug, tier, outcome, job_id) VALUES (?, 'run-linked', 'M', 'done', ?)", projectId, job);
   insert("INSERT INTO pipeline_phases (run_id, seq, phase) VALUES (?, 1, 'triage')", run);
   insert("INSERT INTO pipeline_phases (run_id, seq, phase) VALUES (?, 2, 'plan')", run);
-  return { job, orgItem, otherItem, supersededTarget, linkedDecision, run, commentWord: "zebra" };
+  return { job, supersededTarget, linkedDecision, run };
 }
 
 // The ids of the rows of a table whose column points at the given row.
@@ -356,9 +341,8 @@ function idsLinking(db, table, column, id) {
   return db.prepare(`SELECT id FROM ${table} WHERE ${column} = ? ORDER BY id`).all(id).map((row) => row.id);
 }
 
-// Deleting a job keeps every row that named it and clears the link.
-function assertJobDeleteSetsNull(db, { job }, names) {
-  const linkedByJob = [names.items, names.projects, "decisions", "pipeline_runs"];
+// Deleting a job keeps every row of the given tables that named it and clears the link.
+function assertJobDeleteSetsNull(db, { job }, linkedByJob) {
   const linked = Object.fromEntries(linkedByJob.map((table) => [table, idsLinking(db, table, "job_id", job)]));
   for (const table of linkedByJob) assert.ok(linked[table].length > 0, `the fixture links no ${table} row to the job`);
   db.prepare("DELETE FROM jobs WHERE id = ?").run(job);
@@ -402,7 +386,7 @@ function assertItemDeleteCascades(db, { orgItem, otherItem, commentWord }, names
 
 // Every delete rule of the v20 references, on an open database whose tracker tables carry the given names.
 function assertReferentialActions(db, links, names) {
-  assertJobDeleteSetsNull(db, links, names);
+  assertJobDeleteSetsNull(db, links, [names.items, names.projects, "decisions", "pipeline_runs"]);
   assertDecisionDeleteRules(db, links, names);
   assertRunDeleteCascades(db, links);
   assertItemDeleteCascades(db, links, names);
@@ -417,7 +401,12 @@ test("on a migrated home, every reference follows its delete rule", (t) => {
 test("on a fresh home, every reference follows its delete rule", (t) => {
   const env = makeHome(t, "v20-actions-fresh");
   const links = seedFreshLinks(env);
-  assertReferentialActions(openDb(env), links, CURRENT_NAMES);
+  const db = openDb(env);
+  assertJobDeleteSetsNull(db, links, ["decisions", "pipeline_runs"]);
+  assert.throws(() => db.prepare("DELETE FROM decisions WHERE id = ?").run(links.supersededTarget), /FOREIGN KEY constraint failed/);
+  db.prepare("DELETE FROM decisions WHERE id = ?").run(links.linkedDecision);
+  assertRunDeleteCascades(db, links);
+  assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 });
 
 // Source of a process that runs the v20 migration on a raw connection and kills itself right after it rebuilt a table.

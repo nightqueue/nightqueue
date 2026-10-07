@@ -75,6 +75,9 @@
   --color-log-lane: #67d6e0;
   --color-log-mem: #c4a7ff;
   --color-log-dim: #5b6477;
+  --color-lane-rule: #1f3a44;
+  --color-tag-blue-line: #24405e;
+  --color-tag-red-line: #5a2a2a;
   --color-note: #b7bdc9;
   --color-gate-bar: #e5534b;
   --color-gate-line: #6b2a2a;

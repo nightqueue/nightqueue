@@ -81,17 +81,30 @@ async function indexSection({ target, projectId, repoRoot, query }, env) {
   return section("Structural index", rows, (row) => row);
 }
 
-// One issue line of the triager block: its reference, its title and where it stands.
-function issueLine(item) {
-  return `- [${item.ref}] ${clip(item.title, LINE_MAX)} [${item.status}, p${item.priority}, ${item.type}]`;
+// The pull request number a job's PR url carries, or null.
+function prNumberOf(prUrl) {
+  return /\/pull\/(\d+)(?:[/?#]|$)/.exec(prUrl ?? "")?.[1] ?? null;
 }
 
-// The issues the triager should know about before judging a request; any other phase, a run without an owner or a failed search gets nothing.
-async function issueSection({ target, projectId, query }, env) {
+// The day (YYYY-MM-DD) a job finished on, or null.
+function finishedDayOf(finishedAt) {
+  return /^(\d{4}-\d{2}-\d{2})/.exec(finishedAt ?? "")?.[1] ?? null;
+}
+
+// One job line of the triager block: its reference, its title or slug, and where it stands; an absent piece is left out.
+function jobLine(job) {
+  const name = job.title ?? job.slug;
+  const pr = prNumberOf(job.pr_url);
+  const facts = [job.status, pr ? `PR #${pr}` : null, finishedDayOf(job.finished_at)].filter(Boolean).join(" · ");
+  return [`- [${job.ref}]`, name ? clip(name, LINE_MAX) : null, `[${facts}]`].filter(Boolean).join(" ");
+}
+
+// The earlier jobs the triager should know about before judging a request; any other phase, a run without an owner or a failed search gets nothing.
+async function jobSection({ target, projectId, query, excludeJobId }, env) {
   if (target !== "triager" || !projectId || typeof query !== "string" || !query.trim()) return "";
   try {
-    const items = await openStore(env).issues.searchIssues({ projectId, query });
-    return section("Related issues", items, issueLine);
+    const jobs = await openStore(env).jobs.searchJobs({ projectId, query, excludeJobId });
+    return section("Related jobs", jobs, jobLine);
   } catch {
     return "";
   }
@@ -148,7 +161,7 @@ export async function phaseContextBlock({ target, query, project, repoRoot, excl
     section("Applicable lessons", lessons, lessonLine),
     section("Project memory", memories, memoryLine),
     await indexSection({ target, projectId: owner.id, repoRoot, query }, env),
-    await issueSection({ target, projectId: owner.id, query }, env),
+    await jobSection({ target, projectId: owner.id, query, excludeJobId: callerJobId(env) }, env),
     originSection({ target, caller }, env),
   ].filter(Boolean);
   return { project: owner.name, block: sections.join("\n\n") };

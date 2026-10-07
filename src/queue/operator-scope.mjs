@@ -17,7 +17,7 @@ export const OPERATOR_DECISION = "D-58";
 // Every top-level command of the CLI, classified for the operator's main thread: the allowed ones read or record through the
 // registry and the queue, the refused ones install, serve, run code, nest a session or act on a run; a new command must land in one.
 export const OPERATOR_CLI_COMMANDS = Object.freeze({
-  allowed: Object.freeze(["queue", "issues", "decision", "project", "org", "connection", "doctor", "memory", "libs", "version"]),
+  allowed: Object.freeze(["queue", "decision", "project", "org", "connection", "doctor", "memory", "libs", "version"]),
   refused: Object.freeze(["setup", "init", "open", "update", "mcp", "studio", "hook", "reflect", "embed", "verify", "sandbox", "run"]),
 });
 
@@ -46,7 +46,6 @@ const ANY_SUBCOMMAND = "*";
 // The nightqueue commands a read-only subagent (triage, reviewer) may run, each with the subcommands that only read.
 export const READONLY_SUBAGENT_COMMANDS = new Map([
   ["queue", Object.freeze(["status", "log"])],
-  ["issues", ANY_SUBCOMMAND],
   ["project", Object.freeze(["list"])],
   ["decision", Object.freeze(["list", "show"])],
   ["org", Object.freeze(["list"])],
@@ -319,7 +318,7 @@ function describeMainRefusals() {
   return [...subcommands, ...flags].map((shown) => `\`${shown}\``).join(", ");
 }
 
-// The nightqueue reads of a read-only subagent, as a reason shows them (`queue status|log`, `issues …`, …).
+// The nightqueue reads of a read-only subagent, as a reason shows them (`queue status|log`, `decision list|show`, …).
 function describeReadonlyCommands() {
   return [...READONLY_SUBAGENT_COMMANDS]
     .map(([command, subcommands]) => (subcommands === ANY_SUBCOMMAND ? command : `${command} ${subcommands.join("|")}`))

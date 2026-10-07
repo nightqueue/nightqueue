@@ -6,14 +6,12 @@ import * as decisions from "../memory/decisions.mjs";
 import * as dedup from "../memory/dedup.mjs";
 import * as index from "../memory/index.mjs";
 import * as jobs from "../memory/jobs.mjs";
+import * as jobSearch from "../memory/job-search.mjs";
 import * as lessons from "../memory/lessons.mjs";
 import * as memory from "../memory/memory.mjs";
 import { orphansOf } from "../memory/migration/v20.mjs";
 import * as purge from "../memory/project-purge.mjs";
 import * as registry from "../memory/registry.mjs";
-import * as issues from "../memory/issues.mjs";
-import * as issueBackfill from "../memory/issue-backfill.mjs";
-import * as issueSearch from "../memory/issue-search.mjs";
 import * as runs from "../memory/runs.mjs";
 import * as search from "../memory/search.mjs";
 import { classifyStoreError } from "../memory/store-error.mjs";
@@ -21,83 +19,8 @@ import { READ_ONLY_METHODS } from "./store.mjs";
 
 const READ_ONLY_ALLOWED = new Set(READ_ONLY_METHODS);
 
-// Every job method whose write can move a job's status; the issues follow each of them after the write succeeds.
-export const JOB_STATUS_WRITERS = Object.freeze([
-  "claimNextJob",
-  "claimJobById",
-  "releaseJob",
-  "gatePreflightJob",
-  "parkJob",
-  "finishJob",
-  "cancelJob",
-  "cancelRunningJob",
-  "retryJob",
-  "repairJobFromWitness",
-  "reclassifyJob",
-  "settleClose",
-  "cancelOnClosedPr",
-]);
-
-// Runs a write that moves a job out of a status the issues comment on in one transaction with the follow of the status it
-// left, so a writer racing the one that set it never skips its event; an id the write refuses anyway goes to the write alone.
-function followingPassedStatus({ jobId, write, fromKey }, env) {
-  if (!Number.isInteger(jobId) || jobId < 1) return write();
-  return issues.followJobWrite({ jobId, write, fromKey }, env);
-}
-
-// Brings the issues of a job in line with its row; the bookkeeping never costs the job write it follows.
-function followJobQuietly(jobId, env) {
-  try {
-    issues.followJob(jobId, env);
-  } catch {
-    return;
-  }
-}
-
-// Re-syncs every issue whose job moved without it; the bookkeeping never costs the sweep it follows.
-function followDriftedQuietly(env) {
-  try {
-    issues.followDriftedJobs(env);
-  } catch {
-    return;
-  }
-}
-
-// The job a successful write moved: the row it returned, or the id it was called with; null when the write refused.
-function writtenJobId(written, firstArg) {
-  if (!written) return null;
-  if (typeof written === "object" && Number.isInteger(written.id)) return written.id;
-  return Number.isInteger(firstArg) ? firstArg : null;
-}
-
-// Wraps every job-status writer so the issues follow the row the writer just committed.
-function followingJobWrites(domain, env) {
-  for (const name of JOB_STATUS_WRITERS) {
-    const write = domain[name];
-    domain[name] = async (...args) => {
-      const written = await write(...args);
-      const jobId = writtenJobId(written, args[0]);
-      if (jobId !== null) followJobQuietly(jobId, env);
-      return written;
-    };
-  }
-  return domain;
-}
-
-// Sweeps the orphaned jobs and then re-syncs the issues any missed event left behind.
-function sweepAndFollow(env, options) {
-  const swept = jobs.sweepOrphans(env, options);
-  followDriftedQuietly(env);
-  return swept;
-}
-
 // Every job method; the reads take the store's own connection, which is what lets a follow poll through `withReadOnlyStore` and never answer from a stale WAL snapshot.
 function jobsDomain(env, db) {
-  return followingJobWrites(jobsMethods(env, db), env);
-}
-
-// The job methods as `src/memory/jobs.mjs` answers them, before the issue follow is wrapped around the writers.
-function jobsMethods(env, db) {
   return {
     addJob: async (spec) => jobs.addJob(spec, env),
     claimNextJob: async (spec) => jobs.claimNextJob(spec, env),
@@ -107,7 +30,7 @@ function jobsMethods(env, db) {
     parkJob: async (id, spec) => jobs.parkJob(id, spec, env),
     renewLease: async (id, spec) => jobs.renewLease(id, spec, env),
     countAttempt: async (id, spec) => jobs.countAttempt(id, spec, env),
-    sweepOrphans: async (options) => sweepAndFollow(env, options),
+    sweepOrphans: async (options) => jobs.sweepOrphans(env, options),
     persistRunFacts: async (id, facts) => jobs.persistRunFacts(id, facts, env),
     bindRunSlug: async (id, spec) => jobs.bindRunSlug(id, spec, env),
     linkPipelineRun: async (jobId, ref) => jobs.linkPipelineRun(jobId, ref, env),
@@ -119,11 +42,11 @@ function jobsMethods(env, db) {
     cancelRunningJob: async (id, spec) => jobs.cancelRunningJob(id, spec, env),
     listCloseCandidates: async () => jobs.listCloseCandidates(env, db()),
     jobsWithPrNumber: async (number) => jobs.jobsWithPrNumber(number, env, db()),
-    retryJob: async (id, options) =>
-      followingPassedStatus({ jobId: id, write: () => jobs.retryJob(id, options, env), fromKey: "retriedFrom" }, env),
+    retryJob: async (id, options) => jobs.retryJob(id, options, env),
     getJob: async (id) => jobs.getJob(id, env, db()),
-    jobSpawnRefs: async (id) => issues.jobSpawnRefs(id, env, db()),
+    jobSpawnRefs: async (id) => jobs.jobSpawnRefs(id, env, db()),
     listJobs: async (options) => jobs.listJobs(options, env, db()),
+    searchJobs: async (spec) => jobSearch.searchJobs(spec, env, db()),
     countsByStatus: async () => jobs.countsByStatus(env, db()),
     countBlockedGates: async () => jobs.countBlockedGates(env, db()),
     countActiveJobs: async () => jobs.countActiveJobs(env, db()),
@@ -227,29 +150,6 @@ function decisionsDomain(env, db) {
     searchDecisionsLexical: async (spec) => decisions.searchDecisionsLexical(spec, env),
     searchDecisionsSemantic: async (spec) => decisions.searchDecisionsSemantic(spec, env),
     recallDecisions: async (spec) => decisions.recallDecisions(spec, env),
-  };
-}
-
-// The issues; `listIssues`, `searchIssues`, `getIssueDetail`, `issueRefOfJob` and `issueDrift` take the store's own connection, which is what makes them work read-only.
-function issuesDomain(env, db) {
-  return {
-    getIssue: async (id) => issues.getIssue(id, env),
-    getIssueDetail: async (id, options) => issues.getIssueDetail(id, options, env, db()),
-    saveIssue: async (item) => issues.saveIssue(item, env),
-    updateIssue: async (id, patch) => issues.updateIssue(id, patch, env),
-    addIssueComment: async (spec) => issues.addIssueComment(spec, env),
-    issueRefOfJob: async (jobId) => issues.issueRefOfJob(jobId, env, db()),
-    itemIdOfRef: async (ref) => issues.itemIdOfRef(ref, env, db()),
-    backfillIssues: async (options) => issueBackfill.backfillIssues(options, env),
-    listIssues: async (owner, filters) => issues.listIssues(owner, filters, env, db()),
-    searchIssues: async (spec) => issueSearch.searchIssues(spec, env, db()),
-    queueableIssue: async (id) => issues.queueableIssue(id, env),
-    linkIssueJob: async (id, jobId) => issues.linkIssueJob(id, jobId, env),
-    followJob: async (jobId) => issues.followJob(jobId, env),
-    followDriftedJobs: async () => issues.followDriftedJobs(env),
-    issueDrift: async () => issues.issueDrift(env, db()),
-    buildIssuePrompt: async (spec) => issues.buildIssuePrompt(spec, env),
-    queueIssue: async (spec) => issues.queueIssue(spec, env),
   };
 }
 
@@ -438,7 +338,6 @@ export function createLocalStore(env = process.env, { readOnly = false, onClose 
     memory: memoryDomain(env),
     index: indexDomain(env),
     decisions: decisionsDomain(env, db),
-    issues: issuesDomain(env, db),
     orgs: orgsDomain(db),
     projects: projectsDomain(db),
     db: dbDomain(env),

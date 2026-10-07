@@ -14,9 +14,10 @@ function claimedJob(env) {
   return id;
 }
 
-// Turns a current home back into the v22 shape: no attempt table, no attempt columns, stamped 22.
+// Turns a current home back into the v22 shape: no attempt table, no attempt columns, stamped 22, its runner stopped so the v24 step may run.
 function downgradeToV22(env) {
   const db = openDb(env);
+  db.exec("UPDATE jobs SET lease_until = datetime('now', '-1 hour') WHERE status = 'running'");
   db.exec("DROP TABLE job_attempts; ALTER TABLE jobs DROP COLUMN attempt_started_at; ALTER TABLE jobs DROP COLUMN next_attempt_fresh; PRAGMA user_version = 22;");
   closeDb(env);
 }
@@ -41,15 +42,15 @@ function attemptRows(db) {
   return db.prepare("SELECT * FROM job_attempts ORDER BY job_id, attempt").all().map((row) => ({ ...row }));
 }
 
-test("the schema is v23", () => {
-  assert.equal(DB_USER_VERSION, 23);
+test("the schema is past v22, so every home carries the v23 attempt history", () => {
+  assert.ok(DB_USER_VERSION > 22);
 });
 
 test("a v22 home gains the attempt table and columns, one backfilled row per job that ran, and a second open writes nothing", (t) => {
   const { env, ids } = makeV22Home(t, "migration-v23");
   assert.throws(() => openDbReadOnly(env), (err) => err.code === "SCHEMA_OUTDATED");
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 23);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 24);
   const rows = attemptRows(db);
   assert.deepEqual(
     rows.map(({ job_id, attempt, outcome, measured, backfilled, spawns, tokens_out, finished_at }) => ({ job_id, attempt, outcome, measured, backfilled, spawns, tokens_out, open: finished_at === null })),

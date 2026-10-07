@@ -1,31 +1,34 @@
 import { Link, useRouterState } from "@tanstack/react-router";
+import { Plus } from "lucide-react";
 import type { PointerEvent } from "react";
-import { focusTab, hideDock, resizeDock, saveDockHeight, showDock, useDock } from "../lib/dock";
+import { focusTab, hideDock, resizeDock, saveDockWidth, showDock, useDock } from "../lib/dock";
+import { useOperatorRequest } from "../lib/operator";
 import { exitText, useTerminals } from "../lib/terminals";
 import type { TerminalInfo } from "../lib/types";
 import { TerminalCloseButton } from "./TerminalCloseButton";
+import { TerminalLaunchButton } from "./TerminalLaunchButton";
 import { TerminalView } from "./TerminalView";
 import { Button } from "./ui";
 
-// The strip on the dock's top edge that resizes it while dragged and saves the height on release.
+// The strip on the dock's right edge that resizes it while dragged and saves the width on release.
 function DockResizeHandle() {
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) resizeDock(window.innerHeight - event.clientY);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) resizeDock(event.clientX);
   };
   const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
     event.currentTarget.releasePointerCapture(event.pointerId);
-    saveDockHeight();
+    saveDockWidth();
   };
   return (
     <div
       role="separator"
-      aria-orientation="horizontal"
+      aria-orientation="vertical"
       aria-label="Resize the terminal dock"
-      className="h-1.5 shrink-0 cursor-row-resize touch-none bg-line hover:bg-run-line"
+      className="absolute inset-y-0 right-0 z-10 w-1.5 cursor-col-resize touch-none bg-line hover:bg-run-line"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -48,7 +51,18 @@ function DockTab({ terminal, active }: { terminal: TerminalInfo; active: boolean
   );
 }
 
-// The dock's top bar: the tabs, scrolling sideways on a narrow screen, then the full-page and hide buttons.
+// The `+` at the end of the tab strip: opens a new operator tab, preselecting the queue toolbar's project when one is picked.
+function NewOperatorTabButton() {
+  const request = useOperatorRequest();
+  return (
+    <TerminalLaunchButton size="sm" variant="ghost" request={request} blockedReason={null} title={request.project ? `Open a new operator tab (${request.project} preselected)` : "Open a new operator tab"} className="shrink-0 self-center">
+      <Plus className="size-4" aria-hidden="true" />
+      <span className="sr-only">Open a new operator tab</span>
+    </TerminalLaunchButton>
+  );
+}
+
+// The dock's top bar: the tabs and the `+`, scrolling sideways on a narrow dock, then the full-page and hide buttons.
 function DockBar({ terminals, active }: { terminals: TerminalInfo[]; active: TerminalInfo }) {
   return (
     <div className="flex shrink-0 items-end gap-2 border-b border-line bg-header px-2 pt-1.5">
@@ -56,6 +70,7 @@ function DockBar({ terminals, active }: { terminals: TerminalInfo[]; active: Ter
         {terminals.map((terminal) => (
           <DockTab key={terminal.id} terminal={terminal} active={terminal.id === active.id} />
         ))}
+        <NewOperatorTabButton />
       </div>
       <div className="flex shrink-0 items-center gap-1 pb-1">
         <Link to="/terminal/$id" params={{ id: active.id }} className="rounded-md px-2 py-1 text-sm text-muted hover:bg-button hover:text-fg" title="Open this terminal on its own page">
@@ -86,25 +101,25 @@ function useDockView() {
   return { dock, terminals, absent: onTerminalPage || terminals.length === 0 };
 }
 
-// The dock at the bottom of every page but the full-page terminal: tabs of the studio's terminals over the active one, resizable, hidden without ending anything.
+// The dock on the left edge of every page but the full-page terminal: tabs of the studio's terminals over the active one, resizable, hidden without ending anything.
 export function TerminalDock() {
   const { dock, terminals, absent } = useDockView();
   if (absent) return null;
   if (!dock.open) return <DockReopenButton count={terminals.length} />;
   const active = terminals.find((terminal) => terminal.id === dock.activeId) ?? terminals[0];
   return (
-    <section aria-label="Terminal dock" className="fixed inset-x-0 bottom-0 z-30 flex max-h-[80vh] flex-col border-t border-line bg-bg shadow-[0_-10px_30px_rgba(0,0,0,.4)]" style={{ height: dock.height }}>
-      <DockResizeHandle />
+    <section aria-label="Terminal dock" className="fixed top-[52px] bottom-0 left-0 z-30 flex max-w-full flex-col border-r border-line bg-bg pr-1.5 shadow-[10px_0_30px_rgba(0,0,0,.4)]" style={{ width: dock.width }}>
       <DockBar terminals={terminals} active={active} />
       <div className="min-h-0 grow">
         <TerminalView key={active.id} terminal={active} />
       </div>
+      <DockResizeHandle />
     </section>
   );
 }
 
-// The bottom padding the page keeps so the open dock never covers its end.
+// The left padding the page keeps so the open dock never covers its content.
 export function useDockPadding(): number {
   const { dock, absent } = useDockView();
-  return dock.open && !absent ? dock.height : 0;
+  return dock.open && !absent ? dock.width : 0;
 }

@@ -5,15 +5,13 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { isStoreOutage } from "../../src/config/errors.mjs";
-import { jobLogPath, runDir } from "../../src/config/paths.mjs";
+import { runDir } from "../../src/config/paths.mjs";
 import { closeDb, openDb } from "../../src/memory/db.mjs";
-import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, getJob, retryJob } from "../../src/memory/jobs.mjs";
-import { queueIssue, saveIssue } from "../../src/memory/issues.mjs";
 import { diskJobRun, resolveJobRun } from "../../src/queue/job-run.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { recordJobBlock, recordOutcome, recordPhaseDone, recordRunFields, RUNTIME_ONLY_KEYS } from "../../src/queue/run-state.mjs";
-import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, gateStream, PR_URL, resultEvent, SLUG, slugTypeEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
@@ -65,7 +63,7 @@ function childWrite(env, args) {
   });
 }
 
-test("the runner writes the job block of a free-prompt job before the spawn, with every field", async (t) => {
+test("the runner writes the job block before the spawn, with its four fields", async (t) => {
   const { env, planPath, statePath } = makeBlockHome(t, "job-block-free", [{ stdout: doneStream(), exitCode: 0 }]);
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
 
@@ -73,26 +71,10 @@ test("the runner writes the job block of a free-prompt job before the spawn, wit
 
   const seen = JSON.parse(fakeCalls(planPath)[0].probedText ?? "null");
   assert.ok(seen?.job, "the session started before the runtime wrote the job block");
-  assert.deepEqual(Object.keys(seen.job).sort(), ["createdAt", "decisionRefs", "id", "itemRef", "projectKey", "ref"]);
-  assert.deepEqual({ ...seen.job, createdAt: null }, { id, ref: `J-${id}`, projectKey: "AP", itemRef: null, decisionRefs: [], createdAt: null });
+  assert.deepEqual(Object.keys(seen.job).sort(), ["createdAt", "id", "projectKey", "ref"]);
+  assert.deepEqual({ ...seen.job, createdAt: null }, { id, ref: `J-${id}`, projectKey: "AP", createdAt: null });
   assert.ok(!Number.isNaN(Date.parse(seen.job.createdAt)), seen.job.createdAt);
   assert.deepEqual(stateAt(statePath).job, seen.job, "the block changed after the spawn");
-});
-
-test("the job block of an issue job carries the item ref and the decision the item links", async (t) => {
-  const { env } = makeBlockHome(t, "job-block-issue", [{ stdout: toNdjson([systemInitEvent(), resultEvent({ text: `Done. Pull request: ${PR_URL}` })]), exitCode: 0 }]);
-  const projectId = projectIdOf(env, "alpha");
-  const decision = saveDecision({ projectId, title: "one queue", context: "c", decision: "d", consequences: "q" }, env);
-  const item = saveIssue({ type: "feature", projectId, title: "fix the worker", decision_id: decision.id }, env);
-  const { job } = await queueIssue({ id: item.id }, env);
-  assert.equal(getJob(job.id, env).slug ?? null, null, "setup: the job should start without a slug");
-
-  await runJobCycle(env, job.id);
-
-  const block = stateAt(join(runDir(projectId, getJob(job.id, env).slug, env), "state.json")).job;
-  assert.equal(block?.id, job.id, readFileSync(jobLogPath(job.id, env), "utf8"));
-  assert.equal(block.itemRef, item.ref);
-  assert.deepEqual(block.decisionRefs, [decision.ref]);
 });
 
 test("a second attempt of the same job keeps the job block and the createdAt of the first", async (t) => {
@@ -128,11 +110,11 @@ test("a re-declared SLUG moves the run directory and its job block with it", asy
 test("`run_set` refuses `job` and any `job.*` name, and no pipeline writer ever changes the block", (t) => {
   const env = makeHome(t, "job-block-runtime-only");
   const projectId = ensureProject(env, "alpha");
-  const block = { id: 7, ref: "J-7", projectKey: "AP", itemRef: "AP-3", decisionRefs: ["D-1"], createdAt: "2026-01-01T00:00:00.000Z" };
+  const block = { id: 7, ref: "J-7", projectKey: "AP", createdAt: "2026-01-01T00:00:00.000Z" };
   assert.equal(recordJobBlock({ projectId, slug: SLUG, block, env }).status, "written");
   assert.deepEqual(RUNTIME_ONLY_KEYS, ["job"]);
 
-  for (const name of ["job", "job.id", "job.itemRef"]) {
+  for (const name of ["job", "job.id", "job.projectKey"]) {
     const refused = recordRunFields({ projectId, slug: SLUG, fields: { [name]: "x" }, env });
     assert.deepEqual(refused, { status: "kept", path: null, reason: "`job` is written by the runtime only" }, name);
   }

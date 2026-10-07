@@ -4,6 +4,7 @@ import { clockLabel } from "./hints.mjs";
 import { extractNotice, extractPrUrl, hasGateMarker, laneName, parseEventLine, parseSlugLine, tokensFromEvent } from "./stream.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { trackPhaseNumbers } from "./routing.mjs";
+import { PHASE_ARTIFACTS } from "./phase-artifacts.mjs";
 
 const ATTEMPT_LINE_RE = /^=== attempt (\d+) @ (\S+) ===$/;
 const RATE_PAUSE_LINE_RE = /^=== rate limit until (\S+) @ (\S+) ===$/;
@@ -16,6 +17,10 @@ const TARGET_LIMIT = 40;
 const DESCRIPTION_LIMIT = 80;
 const MODEL_LIMIT = 20;
 const MAX_PLAIN_LINES = 20;
+const BODY_CAP_BYTES = 32768;
+const TOOL_ERROR_BODY_LINES = 40;
+const HAND_BACK_LEAD = "The report follows:\n";
+const RUN_CHECK_RE = /\bnightqueue run check\s+(\S+)/;
 
 const FILE_TOOLS = new Set(["Read", "Edit", "Write", "NotebookEdit"]);
 const MCP_TARGET_FIELDS = ["file_path", "path", "pattern", "project", "repo_root", "slug", "query", "name", "key", "id"];
@@ -170,7 +175,48 @@ function narrationEvent(state, kind, text, { indent = false, lane = null, dim = 
 // One narration line of a lane child, labelled only when more than one lane is open at that moment.
 function laneLine(state, kind, text, lane, { dim = "", fields = {} } = {}) {
   if (!lane) return narrationEvent(state, kind, text, { dim, fields });
-  return narrationEvent(state, kind, text, { indent: true, lane: state.lanes.size > 1 ? lane.name : null, dim, fields });
+  const placed = state.rich ? { laneId: lane.id ?? null, ...fields } : fields;
+  return narrationEvent(state, kind, text, { indent: true, lane: state.lanes.size > 1 ? lane.name : null, dim, fields: placed });
+}
+
+// A buffer cut to at most `maxBytes`, backing off so a multibyte character is never split.
+export function cutUtf8(buffer, maxBytes) {
+  if (buffer.length <= maxBytes) return buffer;
+  let end = maxBytes;
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) end -= 1;
+  return buffer.subarray(0, end);
+}
+
+// The body fields of a studio event: the text capped at 32 KiB, and the log offset of its line when the cap cut it.
+function capBody(text, state) {
+  const buffer = Buffer.from(text, "utf8");
+  if (buffer.length <= BODY_CAP_BYTES) return { body: text, body_truncated: false, body_offset: null };
+  return { body: cutUtf8(buffer, BODY_CAP_BYTES).toString("utf8"), body_truncated: true, body_offset: state.lineOffset ?? null };
+}
+
+// The body fields of an event in rich mode only, so the CLI shape never carries them; an empty text has a null body.
+function richBody(state, text) {
+  if (!state.rich) return {};
+  const trimmed = String(text ?? "").trimEnd();
+  return trimmed ? capBody(trimmed, state) : { body: null, body_truncated: false, body_offset: null };
+}
+
+// Removes a two-space indent when every non-empty line carries it.
+function dedentTwo(text) {
+  const lines = text.split("\n");
+  const indented = lines.every((line) => line.trim() === "" || line.startsWith("  "));
+  return indented ? lines.map((line) => line.slice(2)).join("\n") : text;
+}
+
+// The subagent's own report inside a Task tool_result: the harness frame, its indent, the agentId line and the usage block removed.
+export function handBackText(text) {
+  let body = String(text ?? "");
+  const lead = body.indexOf(HAND_BACK_LEAD);
+  if (lead >= 0) body = body.slice(lead + HAND_BACK_LEAD.length);
+  body = body.replace(/<usage>[\s\S]*?<\/usage>/g, "");
+  const agentLine = body.lastIndexOf("\nagentId:");
+  if (agentLine >= 0) body = body.slice(0, agentLine);
+  return dedentTwo(body).trim();
 }
 
 // The structured fields of a lane event: the agent, its pipeline phase, the model and the lane's tool_use id, each null when unknown.
@@ -311,8 +357,9 @@ function narrateText(state, raw, lane) {
   const text = String(raw ?? "");
   if (!text.trim()) return [];
   const line = clip(firstLine(text), TEXT_LIMIT);
-  if (lane) return [laneLine(state, "text", line, lane)];
-  return [narrationEvent(state, "text", line), ...narrateMarkers(state, text)];
+  const fields = richBody(state, text);
+  if (lane) return [laneLine(state, "text", line, lane, { fields })];
+  return [narrationEvent(state, "text", line, { fields }), ...narrateMarkers(state, text)];
 }
 
 // Opens a lane for a subagent, the only event that indents everything reported under it.
@@ -337,7 +384,26 @@ function narrateToolUse(state, block, lane) {
     if (EDIT_TOOLS.has(name)) lane.edits += 1;
   }
   const narration = toolNarration(name, block.input);
-  return [laneLine(state, "tool", narration.text, lane, { dim: narration.dim, fields: toolFields(name, block.input, lane) })];
+  const line = laneLine(state, "tool", narration.text, lane, { dim: narration.dim, fields: toolFields(name, block.input, lane) });
+  return [line, ...reportEvents(state, name, block.input, lane)];
+}
+
+// The artifact a tool call reports as written: the file of a `nightqueue run check <NN>` or the basename a `run_phase_done` names; null otherwise.
+function reportedArtifact(name, input) {
+  if (name === "Bash") {
+    const match = RUN_CHECK_RE.exec(String(input?.command ?? ""));
+    return match ? (PHASE_ARTIFACTS.get(match[1].toLowerCase())?.file ?? null) : null;
+  }
+  if (toolLabel(name) !== "run_phase_done") return null;
+  const artifact = input?.artifact;
+  return typeof artifact === "string" && artifact.endsWith(".md") && basename(artifact) === artifact ? artifact : null;
+}
+
+// The provisional report event of a tool call in rich mode; the phase pass dedups it and reads its title and size.
+function reportEvents(state, name, input, lane) {
+  if (!state.rich || !state.readArtifact) return [];
+  const artifact = reportedArtifact(name, input);
+  return artifact ? [laneLine(state, "report", `report ${artifact}`, lane, { fields: { artifact } })] : [];
 }
 
 // First readable text of a tool result, which the CLI writes either as a string or as blocks.
@@ -349,10 +415,27 @@ function resultContentText(content) {
 
 // A tool result: only a failure is narrated, and only its first line, never the output of a success.
 function narrateToolResult(state, block, lane) {
-  if (block?.is_error !== true) return [];
+  if (block?.is_error !== true) {
+    stashHandBack(state, block);
+    return [];
+  }
   const name = state.tools.get(block.tool_use_id) ?? "tool";
-  const detail = clip(firstLine(resultContentText(block.content)), TEXT_LIMIT);
-  return [laneLine(state, "toolError", detail ? `${name} failed: ${detail}` : `${name} failed`, lane, { fields: { tool: name } })];
+  const content = resultContentText(block.content);
+  const detail = clip(firstLine(content), TEXT_LIMIT);
+  const fields = { tool: name, ...richBody(state, lastLines(content, TOOL_ERROR_BODY_LINES)) };
+  return [laneLine(state, "toolError", detail ? `${name} failed: ${detail}` : `${name} failed`, lane, { fields })];
+}
+
+// The last `count` lines of a text, its trailing blank lines left out.
+function lastLines(text, count) {
+  return text.trimEnd().split("\n").slice(-count).join("\n");
+}
+
+// Keeps, in rich mode, the unframed report a Task tool_result hands back while its lane is still open, the fallback body of its close.
+function stashHandBack(state, block) {
+  if (!state.rich) return;
+  const lane = state.lanes.get(block?.tool_use_id);
+  if (lane) lane.handBack = handBackText(resultContentText(block.content));
 }
 
 // One block of a message, which is a text, a tool call, a tool result or something the narration ignores.
@@ -415,8 +498,14 @@ function closeLane(state, event) {
   const status = typeof event.status === "string" && event.status ? event.status : "finished";
   const label = lane?.label ?? "subagent";
   const laneTokens = Number.isFinite(event.usage?.total_tokens) ? event.usage.total_tokens : null;
-  const fields = { ...laneFields(lane, id || null), durationMs: laneDurationMs(state, lane, event.usage), laneTokens };
+  const fields = { ...laneFields(lane, id || null), durationMs: laneDurationMs(state, lane, event.usage), laneTokens, ...richBody(state, handBackOf(event, lane)) };
   return [narrationEvent(state, "laneClose", `${label} ${status} (${laneSummary(state, lane, event.usage)})`, { fields })];
+}
+
+// What a closing lane handed back: the notification's summary, else the report its tool_result carried before the close.
+function handBackOf(event, lane) {
+  if (typeof event.summary === "string" && event.summary.trim()) return event.summary;
+  return lane?.handBack ?? "";
 }
 
 // A `system` event: only the two that open and close a subagent lane say anything to the operator, and a background Bash task is no subagent.
@@ -487,11 +576,72 @@ function finishNarration(state, { running = false } = {}) {
   return [...out, ...flushSkipped(state)];
 }
 
-// A narrator of one job log: it takes raw lines, one at a time, and answers with the lines to print, plus silent usage events when `usage` is on.
-export function createNarrator({ all = false, jobId = null, usage = false } = {}) {
-  const state = { all: all === true, jobId: jobId ?? null, usage: usage === true, anchorMs: null, clockMs: null, lanes: new Map(), closedLanes: new Map(), bashTasks: new Set(), tools: new Map(), seen: new Map(), skipped: 0, plain: 0 };
+// The phase an event signals in rich mode: a lane opening for a pipeline phase or an orchestrator phase marker; null otherwise.
+function signalledPhase(event) {
+  if (!Number.isInteger(event.phase)) return null;
+  if (event.kind === "laneOpen") return event.phase;
+  return event.kind === "tool" && !event.indent ? event.phase : null;
+}
+
+// Moves the rich narration into a phase, emitting its `phase` event and restarting the dedup of its reports.
+function enterPhase(state, out, phase, signal) {
+  state.richPhase = phase;
+  state.reported.clear();
+  const lane = signal?.kind === "laneOpen";
+  const fields = { phase, agent: lane ? (signal.agent ?? null) : ORCHESTRATOR, model: lane ? (signal.model ?? null) : null, at: isoOf(state.clockMs) };
+  out.push(narrationEvent(state, "phase", `phase ${phase}`, { fields }));
+}
+
+// The title and size of an artifact through the injected reader, null when it answers nothing or fails.
+function readArtifactSafely(state, artifact) {
+  try {
+    return state.readArtifact(artifact) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// A provisional report completed with the artifact's title and size, or null when it was already reported in this phase or the file is not there; a sizeless answer defers the dedup to the reader's owner.
+function resolvedReport(state, event) {
+  if (state.reported.has(event.artifact)) return null;
+  const summary = readArtifactSafely(state, event.artifact);
+  if (!summary) return null;
+  if (Number.isFinite(summary.bytes)) state.reported.add(event.artifact);
+  return { ...event, title: summary.title ?? null, bytes: Number.isFinite(summary.bytes) ? summary.bytes : null };
+}
+
+// One event through the rich phase pass: the phase it opens first, then the event itself, a report only once per phase.
+function placeRichEvent(state, out, event) {
+  if (event.kind === "attempt") {
+    out.push(event);
+    return enterPhase(state, out, 0, null);
+  }
+  const phase = signalledPhase(event);
+  if (phase !== null && phase !== state.richPhase) enterPhase(state, out, phase, event);
+  else if (state.richPhase === null && event.kind !== "usage") enterPhase(state, out, 0, null);
+  const placed = event.kind === "report" ? resolvedReport(state, event) : event;
+  if (placed) out.push(placed);
+}
+
+// The events of one line with the rich-only phase events inserted and the reports resolved.
+function withRichPhases(state, events) {
+  const out = [];
+  for (const event of events) placeRichEvent(state, out, event);
+  return out;
+}
+
+// Narrates one raw line; the byte offset of the line is kept for a capped body, and rich mode adds its phase pass.
+function pushLine(state, rawLine, offset) {
+  state.lineOffset = Number.isFinite(offset) ? offset : null;
+  const events = narrateLine(state, rawLine);
+  return state.rich ? withRichPhases(state, events) : events;
+}
+
+// A narrator of one job log: it takes raw lines, one at a time, and answers with the lines to print, plus silent usage events when `usage` is on; `rich` is the studio's shape alone, never the CLI's.
+export function createNarrator({ all = false, jobId = null, usage = false, rich = false, readArtifact = null } = {}) {
+  const state = { all: all === true, jobId: jobId ?? null, usage: usage === true, rich: rich === true, readArtifact: typeof readArtifact === "function" ? readArtifact : null, lineOffset: null, richPhase: null, reported: new Set(), anchorMs: null, clockMs: null, lanes: new Map(), closedLanes: new Map(), bashTasks: new Set(), tools: new Map(), seen: new Map(), skipped: 0, plain: 0 };
   return {
-    push: (rawLine) => narrateLine(state, rawLine),
+    push: (rawLine, { offset } = {}) => pushLine(state, rawLine, offset),
     finish: (options) => finishNarration(state, options),
     note: (kind, text) => narrationEvent(state, kind, text),
   };

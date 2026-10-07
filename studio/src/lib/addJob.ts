@@ -12,31 +12,29 @@ export const DEFAULT_PRIORITY = 5;
 
 export interface AddJobForm {
   project: string;
-  issueRef: string | null;
   text: string;
   tier: Tier;
   priority: number;
 }
 
-export const EMPTY_ADD_FORM: AddJobForm = { project: "", issueRef: null, text: "", tier: "auto", priority: DEFAULT_PRIORITY };
+export const EMPTY_ADD_FORM: AddJobForm = { project: "", text: "", tier: "auto", priority: DEFAULT_PRIORITY };
 
 interface QueuedAnswer {
   ref?: unknown;
   project?: unknown;
 }
 
-// The exact arguments `queue_add` gets from the form: the issue with the text as its note, or the text as a free brief; `auto` sends no tier.
+// The exact arguments `queue_add` gets from the form: the text as the brief; `auto` sends no tier.
 export function buildAddArgs(form: AddJobForm): Record<string, unknown> {
   const text = form.text.trim();
   const tier = form.tier === "auto" ? {} : { tier: form.tier };
-  if (form.issueRef) return { project: form.project, issue_id: form.issueRef, ...(text ? { prompt: text } : {}), ...tier, priority: form.priority };
   return { project: form.project, prompt: text, ...tier, priority: form.priority };
 }
 
 // What still keeps the form from being queued, or null when it is complete.
 export function addFormProblem(form: AddJobForm): string | null {
   if (!form.project) return "choose a project";
-  if (!form.issueRef && form.text.trim() === "") return "choose an issue or write the brief";
+  if (form.text.trim() === "") return "write the brief";
   if (!Number.isInteger(form.priority) || !PRIORITIES.includes(form.priority)) return "choose a priority from 1 to 9";
   return null;
 }

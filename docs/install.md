@@ -302,7 +302,8 @@ request, no line, on every surface.
 contract number (`nightqueue doctor` shows it as `tool contract`, and every MCP answer carries
 it as `contract`). It goes up when a tool's input changes incompatibly - contract 2 is the one
 where issues and decisions are named by ref (`NQ-12`, `D-7`) instead of an internal id, and
-contract 3 the one where the tracker tools are named `issue_*` and `queue_add` takes `issue_id`.
+contract 3 the one where the tracker tools are named `issue_*` and `queue_add` takes `issue_id`,
+and contract 4 the one where the tracker is removed.
 A client keeps the tool definitions it read when it connected, so after such an update reopen
 the ones still running: Claude Code sessions (start a new one), Claude Desktop and Cowork
 conversations (open a new conversation, or restart the app), and a running `nq open`. Until

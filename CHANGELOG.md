@@ -8,6 +8,11 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- **The issue tracker is removed.** Gone: the `nightqueue issues` CLI, `queue add --issue`, the five
+  `issue_*` MCP tools, `queue_add`'s `issue_id`, doctor's issue drift check, the item ref of the
+  pull request footer and the commit `Refs:` trailer. The triager now gets `## Related jobs` from
+  the job history instead. Schema v24 drops the issue tables and adds `jobs_fts`, so `nightqueue
+  update` is required. Tool contract 4: MCP clients must restart.
 - **The database schema changes only in `nightqueue update` and `nightqueue setup`.** No other
   open migrates it any more - not a read command, a runner, the MCP server nor a hook, inside a
   job or outside one: a database older than the build is refused before a byte is written
@@ -81,6 +86,33 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   node-pty unavailable (<reason>)`.
 - `nightqueue open` and `nightqueue queue session` take `--prompt <text>`: the session starts
   with that request (refused when it starts with `-`).
+- Studio S1.5 (NQ-91): the job page's live log is a tree, phase → lane → event. Every line is
+  shown whole and wraps. The earlier phases start closed and the current one open, and opening
+  an earlier phase turns follow off. A lane shows its agent, model, tools and edits. An answer, a
+  lane's hand-back, a tool error (its last 40 lines) and a phase report become blocks you can
+  expand. A report fetches its artifact the first time it is opened. Once the job ended, its
+  last answer is shown expanded at the end as the final report. The chips are now independent
+  toggles (`narrated`, `orchestrator`, `lanes`, `all tools`), joined by `expand all` and
+  `follow`. A long run of tool lines folds into `… N more tools`. The markdown of these blocks
+  (and only these) renders `http(s)` links, opened in a new tab, and GFM pipe tables. The
+  Notice, Gate and Memory cards render as before.
+- The studio terminal dock has a `+` at the end of its tabs that opens an operator tab. It is
+  scoped to the project selected in the queue toolbar, or to no project when all are shown.
+- PR badges use the Lucide pull request icons: `git-pull-request-arrow` (open),
+  `git-pull-request` (closed), `git-merge` (merged) and `git-pull-request-draft` (draft). Their
+  colours are unchanged.
+- The studio's job narration stream carries more than `queue log` prints. `text`, `toolError`
+  and `laneClose` events carry a `body` (capped at 32 KiB, with `body_truncated` and
+  `body_offset`), and every lane child carries its `laneId`. There are two new kinds: `phase`
+  (with `phase`, `agent`, `model` and `at`), and `report` (with `artifact`, `title` and `bytes`)
+  after a `nightqueue run check <NN>` or a `run_phase_done`. The CLI narration is unchanged,
+  byte for byte.
+- Studio API: `GET /api/jobs/<ref>/artifacts` lists the `*.md` files of a job's run directory
+  with `name`, `bytes`, `title` and `mtime`. `GET /api/jobs/<ref>/artifacts/<name>` serves one
+  of them as `text/markdown`, up to 1 MiB, setting `x-nightqueue-truncated: 1` when it cuts the
+  file. Only a name in the listing is served: a symlink, a directory or a path that leaves the
+  run directory is a 404. `GET /api/jobs/<ref>/log?from=<byte>` serves up to 1 MiB of the log
+  from that byte; without `from` the answer is unchanged.
 
 ### Fixed
 
@@ -157,6 +189,11 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `title`, `score`) and `applied`. `applied` is best-effort: it lists the hit refs cited in a
   run artifact of the recall's phase or a later one, or in a commit message of the job's worktree, so a ref cited only in a PR
   body, or after the worktree is removed, is not seen.
+- The studio terminal dock moved to the left edge, under the header. The page makes room for
+  it from the `md` breakpoint up, and on a narrow screen it overlays the page. Its resize handle
+  is on its right edge. Its width (560 px by default, 320 px to 70 % of the viewport) is kept in
+  `nq.studio.dock.width`, and whether it is open is kept in `nq.studio.dock.open`. The old
+  `nq.studio.dock.height` key is ignored. The drawers still open on the right.
 
 ### Removed
 

@@ -1,4 +1,4 @@
-import { DEFAULT_ISSUE_TYPE, ISSUE_STATUSES, ISSUE_TYPES, sqlList } from "../issue-workflow.mjs";
+import { DEFAULT_ISSUE_TYPE, ISSUE_STATUSES, ISSUE_TYPES, sqlList } from "./tracker-shape.mjs";
 
 // The frozen v18 shapes of the two DDLs v19 changed: only the v18 migration builds them, so it never reaches a v19 column.
 

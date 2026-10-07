@@ -8,7 +8,7 @@ import {
   ISSUE_TYPES,
   legacyStatusSql,
   sqlList,
-} from "../issue-workflow.mjs";
+} from "./tracker-shape.mjs";
 import { carriesOperatorSeed } from "../shared-slug-migration.mjs";
 import { closeMigrationPending, migrateCloseColumns } from "./close-columns.mjs";
 

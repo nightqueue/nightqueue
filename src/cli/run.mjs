@@ -6,6 +6,7 @@ import { withMeasuredMtimes } from "../memory/index-paths.mjs";
 import { FILE_LIST } from "../queue/file-list.mjs";
 import { resolveJobRun } from "../queue/job-run.mjs";
 import { appendPendingWrite, PENDING_KEYS } from "../queue/pending-writes.mjs";
+import { PHASE_ARTIFACTS } from "../queue/phase-artifacts.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { recordPrTemplate } from "../queue/run-state.mjs";
@@ -68,26 +69,6 @@ async function runLog(argv, ctx) {
   else for (const line of logLines(rows, totalS)) ctx.out(line);
   return 0;
 }
-
-// The line the triage verdict must open with: the evidence level, 1 to 4, bold or plain.
-const EVIDENCE_FIRST_LINE = {
-  heading: "## Verdict",
-  pattern: /^(\*\*)?Evidence level:(\*\*)?\s*[1-4](\*\*)?\s*$/,
-  label: "Evidence level: <1|2|3|4> as the first line under ## Verdict",
-};
-
-// The artifact of each phase and the sections its gate requires; a phase with no required section is checked for existence alone.
-const ARTIFACTS = new Map([
-  ["00", { file: "00-brief.md", sections: ["## Brief"] }],
-  ["01", { file: "01-triage.md", sections: ["## Verdict"], firstLineUnder: EVIDENCE_FIRST_LINE }],
-  ["02", { file: "02-explore.md", sections: [] }],
-  ["03", { file: "03-plan.md", sections: ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"] }],
-  ["04", { file: "04-implementation.md", sections: [FILE_LIST] }],
-  ["05a", { file: "05a-qa-analyst.md", sections: ["## Break hypotheses", "## Test recipe"] }],
-  ["05", { file: "05-qa.md", sections: ["## Validated risks"] }],
-  ["06", { file: "06-verification.md", sections: ["## Verification"] }],
-  ["06.5", { file: "06-runtime.md", sections: ["## Runtime verdict"] }],
-]);
 
 // The artifact as it is on disk, and nothing at all when the phase never wrote it.
 function readArtifact(path) {
@@ -200,9 +181,9 @@ async function runDirCommand(argv, ctx) {
 async function runCheck(argv, ctx) {
   const { values, positionals } = parseCommand(argv, RUN_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.check });
-  const artifact = ARTIFACTS.get(positionals[0].trim().toLowerCase());
+  const artifact = PHASE_ARTIFACTS.get(positionals[0].trim().toLowerCase());
   if (!artifact) {
-    throw new UserError(`unknown phase \`${positionals[0]}\`; the artifact gate covers: ${[...ARTIFACTS.keys()].join(", ")}`);
+    throw new UserError(`unknown phase \`${positionals[0]}\`; the artifact gate covers: ${[...PHASE_ARTIFACTS.keys()].join(", ")}`);
   }
   const run = await resolveRun(values, ctx);
   ctx.out(checkArtifact(run, artifact, ctx));

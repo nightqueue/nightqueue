@@ -5,19 +5,17 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { run } from "../src/cli/index.mjs";
 import { runDir } from "../src/config/paths.mjs";
-import { ensureProject, projectIdOf, registerCheckout } from "../test-support/memory.mjs";
+import { ensureProject, registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { ghBin } from "../src/host/gh.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
-import { linkIssueJob, queueIssue, saveIssue } from "../src/memory/issues.mjs";
 import { readRunState } from "../src/queue/resume.mjs";
 import { recordJobBlock, recordRunFields } from "../src/queue/run-state.mjs";
-import { openStore } from "../src/store/open.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
 import { makeSickHome } from "../test-support/sick-home.mjs";
 import { FAKE_GH_PR_URL, isolatedHostVars } from "../test-support/host.mjs";
-import { makeDir, makeHome, orgIdOf } from "../test-support/memory.mjs";
+import { makeDir, makeHome } from "../test-support/memory.mjs";
 
 const SLUG = "login-google";
 const BRANCH = "worktree-feat+login-google";
@@ -212,23 +210,13 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
   assert.equal(existsSync(worktree), true);
 });
 
-test("`run pr` of a job queued from an issue ends the published body with only `Opened by nightqueue · <ref>`", async (t) => {
-  const { env, id } = makeRun(t, "run-pr-issue");
-  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
-  assert.equal(linkIssueJob(item.id, id, env), true);
-
-  const published = await publishedBody(t, { env, jobId: id, name: "run-pr-issue-body" });
-
-  assert.equal(published, `${BODY.trimEnd()}\n\nOpened by nightqueue · AP-1\n`);
-  assert.equal(published.includes("Refs"), false);
-});
-
-test("`run pr` inside a job with a job block publishes on an unavailable database, the footer built from state.json", async (t) => {
+test("`run pr` inside a job with a job block publishes on an unavailable database with the bare footer, an item ref a pre-update block carries ignored", async (t) => {
   const { env, id } = makeRun(t, "run-pr-sick-home");
-  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
-  assert.equal(linkIssueJob(item.id, id, env), true);
-  const block = { id, projectKey: "AP", itemRef: item.ref, createdAt: new Date().toISOString() };
+  const block = { id, projectKey: "AP", createdAt: new Date().toISOString() };
   assert.equal(recordJobBlock({ projectId: ensureProject(env, "alpha"), slug: SLUG, block, env }).status, "written");
+  const statePath = join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json");
+  const state = JSON.parse(readFileSync(statePath, "utf8"));
+  writeFileSync(statePath, JSON.stringify({ ...state, job: { ...state.job, itemRef: "AP-3", decisionRefs: ["D-1"] } }));
   const published = publishedPath(env);
   const file = writeBody(t, "run-pr-sick-home-body", BODY);
   const sick = makeSickHome(env);
@@ -238,26 +226,10 @@ test("`run pr` inside a job with a job block publishes on an unavailable databas
 
   assert.equal(code, 0, `${text}\n${errText}`);
   assert.deepEqual(ghCalls(env).at(-1).slice(4, 6), ["--body-file", published]);
-  assert.equal(readFileSync(published, "utf8"), `${BODY.trimEnd()}\n\nOpened by nightqueue · ${item.ref}\n`);
+  assert.equal(readFileSync(published, "utf8"), `${BODY.trimEnd()}\n\nOpened by nightqueue\n`);
 });
 
-test("`run pr` of a job queued from an org item ends with the org item's ref", async (t) => {
-  const { env, id } = makeRun(t, "run-pr-org-item", { org: "dlweb" });
-  const item = saveIssue({ type: "chore", orgId: orgIdOf(env, "dlweb"), title: "pin node" }, env);
-  const { jobs } = await queueIssue({ id: item.id, allProjects: true }, env);
-  assert.equal(jobs.length, 1);
-  const db = openDb(env);
-  db.prepare("UPDATE jobs SET slug = NULL WHERE id = ?").run(id);
-  db.prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, jobs[0].id);
-  const orgKey = db.prepare("SELECT key FROM orgs WHERE name = 'dlweb'").get().key;
-
-  const published = await publishedBody(t, { env, jobId: jobs[0].id, name: "run-pr-org-item-body" });
-
-  assert.equal(item.ref, `${orgKey}-1`);
-  assert.ok(published.endsWith(`\n\nOpened by nightqueue · ${orgKey}-1\n`), published);
-});
-
-test("`run pr` of a free-prompt job, or outside the queue, ends with only `Opened by nightqueue`", async (t) => {
+test("`run pr` inside a job, or outside the queue, ends with only `Opened by nightqueue`", async (t) => {
   const inside = makeRun(t, "run-pr-free-prompt");
   const free = await publishedBody(t, { env: inside.env, jobId: inside.id, name: "run-pr-free-prompt-body" });
   assert.equal(free, `${BODY.trimEnd()}\n\nOpened by nightqueue\n`);
@@ -266,17 +238,6 @@ test("`run pr` of a free-prompt job, or outside the queue, ends with only `Opene
   const argv = ["--project", "alpha", "--slug", SLUG];
   const operator = await publishedBody(t, { env: outside.env, jobId: null, name: "run-pr-outside-body", argv });
   assert.equal(operator, `${BODY.trimEnd()}\n\nOpened by nightqueue\n`);
-});
-
-test("after `project key` renames the key, the footer carries the new key", async (t) => {
-  const { env, id } = makeRun(t, "run-pr-renamed-key");
-  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "log in with google" }, env);
-  assert.equal(linkIssueJob(item.id, id, env), true);
-  await openStore(env).projects.setKey(projectIdOf(env, "alpha"), "NX");
-
-  const published = await publishedBody(t, { env, jobId: id, name: "run-pr-renamed-key-body" });
-
-  assert.ok(published.endsWith("\n\nOpened by nightqueue · NX-1\n"), published);
 });
 
 test("a body carrying the footer, a `Refs` line, a job id or the run slug is REJECTED naming the line, and nothing is pushed", async (t) => {

@@ -4,10 +4,11 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { dbPath, preV18BackupPath, preV19BackupPath, preV20BackupPath, preV22BackupPath } from "../../src/config/paths.mjs";
-import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
+import { dbPath, preV18BackupPath, preV19BackupPath, preV20BackupPath, preV22BackupPath, preVersionBackupPath } from "../../src/config/paths.mjs";
+import { closeDb, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { MigrationRefused } from "../../src/memory/migration/one-shot.mjs";
 import { migrateV21Columns } from "../../src/memory/migration/v21.mjs";
+import { migrateToV22 } from "../../src/memory/migration/v22.mjs";
 import { openStoreReadOnly } from "../../src/store/open.mjs";
 import { buildLegacyHome } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
@@ -31,8 +32,8 @@ const V21_VALUES = Object.freeze({
   integrations: JSON.stringify({ tracker: { onClosed: "resolved" } }),
 });
 const UNTOUCHED = ["decisions", "jobs", "pipeline_runs", "pipeline_phases", "lessons", "memory", "projects", "orgs"];
-const OUTDATED_V20 = /database at v20, this nightqueue expects v23: run `nightqueue update`/;
-const OUTDATED_V21 = /database at v21, this nightqueue expects v23: run `nightqueue update`/;
+const OUTDATED_V20 = /database at v20, this nightqueue expects v24: run `nightqueue update`/;
+const OUTDATED_V21 = /database at v21, this nightqueue expects v24: run `nightqueue update`/;
 const LEASE_REFUSAL = /^the database must migrate to v22, but a runner holds a live lease on J-3: stop the runners \(`nightqueue queue run --stop`\) and run the command again$/;
 
 const AUDIT = Object.freeze({
@@ -100,6 +101,21 @@ function schemaOf(db) {
     .prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name")
     .all()
     .map((row) => ({ type: row.type, name: row.name, sql: String(row.sql ?? "").replace(/^CREATE TABLE "(\w+)"/, "CREATE TABLE $1") }));
+}
+
+// Runs the v22 step alone on a raw connection, closed when the test ends, so its tables are read before v24 drops them.
+function migrateV22Step(t, env) {
+  closeDb(env);
+  const db = new DatabaseSync(dbPath(env));
+  t.after(() => db.close());
+  db.exec("PRAGMA busy_timeout = 5000");
+  migrateToV22(db, env);
+  return db;
+}
+
+// The schema objects of the tracker left in a database.
+function trackerObjects(db) {
+  return db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'issue%' OR tbl_name LIKE 'issue%'").all().map((row) => row.name);
 }
 
 // The names in the schema and in the counters that still carry the old word.
@@ -176,9 +192,8 @@ test("a v20 home migrates to v22: every row and counter kept under the new names
   const { env, fixture } = v20Home(t, "v22-migrate");
   assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED");
   assert.ok(readFileSync(dbPath(env)).equals(fixture), "a refused open wrote to the database");
-  const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 23);
-  assert.equal(DB_USER_VERSION, 23);
+  const db = migrateV22Step(t, env);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 22);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 
   assert.ok(readFileSync(preV22BackupPath(env)).equals(fixture), "the pre-v22 copy is not the v20 database byte for byte");
@@ -200,8 +215,8 @@ test("a v21 home migrates in place to v22: the tracker renamed, jobs.origin and 
   const { env, ids, fixture } = v21Home(t, "v22-from-v21");
   assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED");
   assert.ok(readFileSync(dbPath(env)).equals(fixture), "a refused open wrote to the database");
-  const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 23);
+  const db = migrateV22Step(t, env);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 22);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   assert.deepEqual(oldNames(db), []);
 
@@ -227,21 +242,21 @@ test("doctor reads a v21 home as pending, every command refuses it, and once the
   mkdirSync(join(cwd, ".git"), { recursive: true });
   buildV20Home(env, { checkout: realpathSync(cwd), extra: stampV21 });
 
-  assert.match(runCli(env, ["doctor"], cwd).stdout, /warn\s+database\s+schema v21, this nightqueue expects v23/);
+  assert.match(runCli(env, ["doctor"], cwd).stdout, /warn\s+database\s+schema v21, this nightqueue expects v24/);
   const status = runCli(env, ["queue", "status"], cwd);
   assert.equal(status.status, 1, status.stdout);
   assert.match(status.stderr, OUTDATED_V21);
   assert.equal(diskVersion(env), 21);
   migrateTestHome(env);
   closeDb(env);
-  assert.equal(diskVersion(env), 23);
+  assert.equal(diskVersion(env), 24);
   assert.equal(runCli(env, ["queue", "status"], cwd).status, 0);
-  assert.match(runCli(env, ["doctor"], cwd).stdout, /ok\s+database\s+schema v23/);
+  assert.match(runCli(env, ["doctor"], cwd).stdout, /ok\s+database\s+schema v24/);
 });
 
 test("the migrated tables keep every foreign key rule, and their counters never reuse a deleted id", (t) => {
   const { env, ids } = v20Home(t, "v22-keys");
-  const db = migrateTestHome(env);
+  const db = migrateV22Step(t, env);
   for (const [name, rule] of Object.entries(AUDIT)) {
     const [table, column] = name.split(".");
     assert.equal(foreignKeyOf(db, table, column), rule, `${name} carries the wrong foreign key`);
@@ -259,7 +274,7 @@ test("the migrated tables keep every foreign key rule, and their counters never 
 
 test("the issue mirrors find the seeded words, and a comment is never edited nor deleted on its own", (t) => {
   const { env } = v20Home(t, "v22-mirrors");
-  const db = migrateTestHome(env);
+  const db = migrateV22Step(t, env);
   assert.deepEqual(matches(db, "issues_fts", '"item 5"'), [5]);
   assert.deepEqual(matches(db, "issue_comments_fts", V20_LINKS.commentWord), [3]);
   assert.deepEqual(matches(db, "issue_comments_fts", "scratch"), [], "the index finds a deleted comment");
@@ -273,6 +288,7 @@ test("no schema object nor counter carries the old name, and the schema is exact
   const { env } = v20Home(t, "v22-shape");
   const migrated = migrateTestHome(env);
   assert.deepEqual(oldNames(migrated), []);
+  assert.deepEqual(trackerObjects(migrated), []);
   const fresh = openDb(makeHome(t, "v22-fresh"));
   assert.deepEqual(schemaOf(migrated), schemaOf(fresh));
 });
@@ -281,7 +297,7 @@ test("a second open of a migrated v22 home changes nothing, and a second migrati
   const { env } = v20Home(t, "v22-reopen");
   const db = migrateTestHome(env);
   const schema = schemaOf(db);
-  const rows = rowsOf(db, "issues");
+  const rows = rowsOf(db, "jobs");
   const copied = statSync(preV22BackupPath(env)).mtimeMs;
   closeDb(env);
   const reopened = openDb(env);
@@ -290,7 +306,7 @@ test("a second open of a migrated v22 home changes nothing, and a second migrati
   closeDb(env);
   const again = migrateTestHome(env);
   assert.deepEqual(schemaOf(again), schema);
-  assert.deepEqual(rowsOf(again, "issues"), rows);
+  assert.deepEqual(rowsOf(again, "jobs"), rows);
   assert.equal(again.prepare("SELECT total_changes() AS n").get().n, 0, "a second migration wrote to the database");
   assert.equal(statSync(preV22BackupPath(env)).mtimeMs, copied, "a second migration took another copy");
 });
@@ -316,7 +332,7 @@ test("an orphan in a v20 home refuses the v22 migration naming its row, and doct
     await store.close();
   }
   const message = refusalOf(env);
-  assert.ok(message.startsWith("the database must migrate to v23, but 1 row(s) point at a row that does not exist: "), message);
+  assert.ok(message.startsWith("the database must migrate to v24, but 1 row(s) point at a row that does not exist: "), message);
   assert.ok(message.includes(`\`${OLD_WORD}_comments\` row 500 has item_id 999 (no \`${OLD_WORD}_items\` row 999)`), message);
   assert.ok(message.endsWith("nothing was written"), message);
   assert.equal(health.danglingReferences, 1, "doctor does not count the row the migration refuses");
@@ -328,10 +344,11 @@ test("a v19 home reaches v22 in one migration, keeping the pre-v20 and pre-v22 c
   const env = makeHome(t, "v22-from-v19");
   buildV19Home(env);
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 23);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 24);
   assert.equal(readRaw(preV20BackupPath(env), (raw) => schemaVersionOn(raw)), 19);
   assert.equal(readRaw(preV22BackupPath(env), (raw) => schemaVersionOn(raw)), 20);
-  assert.equal(foreignKeyOf(db, "issues", "job_id"), "jobs SET NULL");
+  assert.equal(readRaw(preVersionBackupPath(env, 24), (raw) => foreignKeyOf(raw, "issues", "job_id")), "jobs SET NULL");
+  assert.deepEqual(trackerObjects(db), []);
   assert.deepEqual(oldNames(db), []);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 });
@@ -342,13 +359,18 @@ test("a v17 home reaches v22 in one migration, keeping every copy on the way", (
     seed: (db) => db.prepare(`INSERT INTO ${OLD_WORD}_items (scope, project, title, position) VALUES ('project', 'alpha', 'old item', 1)`).run(),
   });
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 23);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 24);
   assert.equal(readRaw(preV18BackupPath(env), (raw) => schemaVersionOn(raw)), 17);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
   assert.equal(readRaw(preV20BackupPath(env), (raw) => schemaVersionOn(raw)), 19);
   assert.equal(readRaw(preV22BackupPath(env), (raw) => schemaVersionOn(raw)), 20);
-  assert.deepEqual(db.prepare("SELECT title FROM issues").all().map((row) => row.title), ["old item"]);
-  assert.deepEqual(matches(db, "issues_fts", "old"), [1]);
+  const copy = readRaw(preVersionBackupPath(env, 24), (raw) => ({
+    version: schemaVersionOn(raw),
+    titles: raw.prepare("SELECT title FROM issues").all().map((row) => row.title),
+    matched: matches(raw, "issues_fts", "old"),
+  }));
+  assert.deepEqual(copy, { version: 22, titles: ["old item"], matched: [1] });
+  assert.deepEqual(trackerObjects(db), []);
   assert.deepEqual(oldNames(db), []);
 });
 
@@ -398,8 +420,9 @@ test("a v22 migration killed right after it built issues leaves v20 intact, and 
 
   assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED");
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 23);
-  for (const { to } of RENAMED) assert.deepEqual(rowsOf(db, to), before.rows[to], `${to} changed a row`);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 24);
+  const copied = readRaw(preVersionBackupPath(env, 24), (raw) => Object.fromEntries(RENAMED.map(({ to }) => [to, rowsOf(raw, to)])));
+  for (const { to } of RENAMED) assert.deepEqual(copied[to], before.rows[to], `${to} changed a row`);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 });
 
@@ -408,37 +431,22 @@ function runCli(env, args, cwd) {
   return spawnSync(process.execPath, [CLI, ...args], { env, cwd, encoding: "utf8" });
 }
 
-test("doctor reads a v20 home as pending, every command refuses it, and once the migration ran, the database as ok and the tracker from the new tables", (t) => {
+test("doctor reads a v20 home as pending, every command refuses it, and once the migration ran, the database as ok", (t) => {
   const env = makeHome(t, "v22-doctor");
   const cwd = join(makeDir(t, "v22-doctor-checkout"), "nightqueue");
   mkdirSync(join(cwd, ".git"), { recursive: true });
   buildV20Home(env, { checkout: realpathSync(cwd) });
 
-  assert.match(runCli(env, ["doctor"], cwd).stdout, /warn\s+database\s+schema v20, this nightqueue expects v23/);
+  assert.match(runCli(env, ["doctor"], cwd).stdout, /warn\s+database\s+schema v20, this nightqueue expects v24/);
   const status = runCli(env, ["queue", "status"], cwd);
   assert.equal(status.status, 1, status.stdout);
   assert.match(status.stderr, OUTDATED_V20);
   assert.equal(diskVersion(env), 20);
   migrateTestHome(env);
   closeDb(env);
-  assert.equal(diskVersion(env), 23);
+  assert.equal(diskVersion(env), 24);
   assert.equal(runCli(env, ["queue", "status"], cwd).status, 0);
   const report = runCli(env, ["doctor"], cwd).stdout;
-  assert.match(report, /ok\s+database\s+schema v23/);
-  const drift = "NQ-1 todo (J-1 done, expected in_review), DW-1 row nightqueue todo (J-1 done, expected in_review)";
-  assert.ok(report.includes(drift), `the workflow check did not read the drift the fixture links on the migrated rows: ${report}`);
-});
-
-test("doctor reads the tracker of a migrated v20 home whose links follow their jobs as ok", (t) => {
-  const env = makeHome(t, "v22-doctor-clean");
-  const cwd = join(makeDir(t, "v22-doctor-clean-checkout"), "nightqueue");
-  mkdirSync(join(cwd, ".git"), { recursive: true });
-  const unlink = (db) => db.exec(`UPDATE ${OLD_WORD}_items SET job_id = NULL; UPDATE ${OLD_WORD}_item_projects SET job_id = NULL`);
-  buildV20Home(env, { checkout: realpathSync(cwd), extra: unlink });
-  migrateTestHome(env);
-  closeDb(env);
-  assert.equal(runCli(env, ["queue", "status"], cwd).status, 0);
-  const report = runCli(env, ["doctor"], cwd).stdout;
-  assert.match(report, /ok\s+database\s+schema v23/);
-  assert.match(report, /ok\s+issue workflow\s+every linked item follows its job/);
+  assert.match(report, /ok\s+database\s+schema v24/);
+  assert.equal(report.includes("issue workflow"), false, report);
 });
