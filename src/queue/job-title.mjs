@@ -31,10 +31,8 @@ function clipTitle(text) {
   return points.length <= TITLE_LIMIT ? text : `${points.slice(0, TITLE_LIMIT - 1).join("")}…`;
 }
 
-// The readable title of a job, derived on read: its issue's title, else the first meaningful line of its prompt, else null.
-export function jobTitle(job, issue) {
-  const issueTitle = typeof issue?.title === "string" ? issue.title.trim() : "";
-  if (issueTitle) return clipTitle(issueTitle.replace(/\s+/g, " "));
+// The readable title of a job, derived on read: the first meaningful line of its prompt, else null.
+export function jobTitle(job) {
   const line = slugSource(job?.prompt)
     .split("\n")
     .map((entry) => entry.trim())

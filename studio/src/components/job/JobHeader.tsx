@@ -5,7 +5,7 @@ import { copyText } from "../../lib/clipboard";
 import { activeMs, attemptCount, attemptsLabel, durationLabel, formatDurationMs, hhmmssUtc, hhmmUtc, timeoutLabel, wallMs } from "../../lib/format";
 import { jobRef, jobTitle } from "../../lib/queue";
 import { sessionBlockReason } from "../../lib/terminals";
-import type { CloseState as JobCloseState, IssueSummary, JobDetail, JobStatus } from "../../lib/types";
+import type { CloseState as JobCloseState, JobDetail, JobStatus } from "../../lib/types";
 import { useNow } from "../../lib/useNow";
 import { NO_PR_TOOLTIP } from "../JobCells";
 import { ActionIcon, StatusIcon } from "../StatusIcon";
@@ -26,7 +26,6 @@ interface JobHeaderProps {
   job: JobDetail;
   statusLabel: string;
   closeState: JobCloseState | null;
-  issue: IssueSummary | undefined;
   runTier: string | null;
   actions: HeaderStatusActions;
   onCancel: () => void;
@@ -82,10 +81,9 @@ function HeaderChip({ children, title }: { children: string; title?: string }) {
   );
 }
 
-// The second line: project, the issue it came from, its decision and the branch.
-function OriginLine({ job, issue }: { job: JobDetail; issue: IssueSummary | undefined }) {
-  const item = job.item_ref ? [job.item_ref, issue?.title].filter(Boolean).join(" ") : null;
-  const parts = [job.project, item, issue?.decision_ref ?? null, job.branch ? `branch ${job.branch}` : null].filter((part): part is string => Boolean(part));
+// The second line: project and branch.
+function OriginLine({ job }: { job: JobDetail }) {
+  const parts = [job.project, job.branch ? `branch ${job.branch}` : null].filter((part): part is string => Boolean(part));
   return <div className="font-mono text-sm break-words text-muted">{parts.join(" · ")}</div>;
 }
 
@@ -206,7 +204,7 @@ function HeaderActions({ job, actions, onCancel }: { job: JobDetail; actions: He
 }
 
 // The job header: ref, title, status and chips; origin line; timing line; actions.
-export function JobHeader({ job, statusLabel, closeState, issue, runTier, actions, onCancel }: JobHeaderProps) {
+export function JobHeader({ job, statusLabel, closeState, runTier, actions, onCancel }: JobHeaderProps) {
   const tier = job.tier ?? runTier;
   return (
     <section aria-label="job header" className="flex flex-col gap-4 md:flex-row md:items-start">
@@ -219,7 +217,7 @@ export function JobHeader({ job, statusLabel, closeState, issue, runTier, action
           <HeaderChip>{`p${job.priority}`}</HeaderChip>
           <HeaderChip title={BUDGET_COUNTER_TOOLTIP}>{`attempt ${job.attempts} / ${job.max_attempts}`}</HeaderChip>
         </div>
-        <OriginLine job={job} issue={issue} />
+        <OriginLine job={job} />
         <div className="text-sm break-words text-muted">
           <TimingLine job={job} />
         </div>

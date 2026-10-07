@@ -9,7 +9,7 @@ import { dbPath, preVersionBackupPath } from "../../src/config/paths.mjs";
 import { closeDb, DB_USER_VERSION, migrateHomeDatabase, openDb, openDbReadOnly } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { openRegistryReader } from "../../src/store/open.mjs";
-import { restorePreV22Names } from "../../test-support/legacy-home.mjs";
+import { plantPreV22Tracker } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
@@ -23,7 +23,7 @@ function makeV20Home(t, name) {
   addJob({ projectId: projectIdOf(env, "alpha"), prompt: "fix the worker" }, env);
   const db = openDb(env);
   db.exec("ALTER TABLE jobs DROP COLUMN origin; ALTER TABLE projects DROP COLUMN integrations");
-  restorePreV22Names(db);
+  plantPreV22Tracker(db);
   db.exec("PRAGMA user_version = 20");
   closeDb(env);
   return env;

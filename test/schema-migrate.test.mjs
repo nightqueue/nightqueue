@@ -14,7 +14,7 @@ import { closeDb, DB_USER_VERSION, openDb } from "../src/memory/db.mjs";
 import { acquireClose, acquirePostClose, addJob } from "../src/memory/jobs.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { assertIsolatedEnv, makeHostEnv } from "../test-support/host.mjs";
-import { restorePreV22Names } from "../test-support/legacy-home.mjs";
+import { plantPreV22Tracker } from "../test-support/legacy-home.mjs";
 import { ensureProject, makeProject, seedClosedJob, seedDoneJob } from "../test-support/memory.mjs";
 
 const RUNNER_PID = 4242;
@@ -45,7 +45,7 @@ function v20Host(t, name, seed = () => {}) {
   seed(host.env, ensureProject(host.env, "alpha"));
   const db = openDb(host.env);
   db.exec("ALTER TABLE jobs DROP COLUMN origin; ALTER TABLE projects DROP COLUMN integrations");
-  restorePreV22Names(db);
+  plantPreV22Tracker(db);
   db.exec("PRAGMA user_version = 20");
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   closeDb(host.env);

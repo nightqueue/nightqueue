@@ -4,7 +4,7 @@ import { useQueueSnapshot } from "./events";
 import { MEMORY_TOOLS } from "./log-tree";
 import { callTool } from "./mcp";
 import { jobIdOfRef, normalizeSnapshot } from "./queue";
-import type { IssueSummary, Job, JobDetail, NarrationEvent } from "./types";
+import type { Job, JobDetail, NarrationEvent } from "./types";
 
 const RUNNING_REFRESH_MS = 5000;
 
@@ -51,17 +51,6 @@ export function useQueueRowOf(ref: string): { row: Job | undefined; runnersOnlin
     seen.current = signature;
   }, [signature, ref, queryClient]);
   return { row, runnersOnline: snapshot ? snapshot.runnersOnline : null };
-}
-
-// The issue a job was queued from, for its title and linked decision; read once.
-export function useIssueSummary(itemRef: string | null) {
-  return useQuery({
-    queryKey: ["issue", itemRef],
-    queryFn: () => callTool<IssueSummary>("issue_get", { id: itemRef }),
-    enabled: itemRef !== null,
-    staleTime: Infinity,
-    retry: false,
-  });
 }
 
 // The colour class of one narration line, by its kind (and memory recalls by their tool).

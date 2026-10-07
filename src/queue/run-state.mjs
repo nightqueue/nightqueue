@@ -235,18 +235,15 @@ export function recordResume({ projectId, slug, resumeCount, env = process.env }
 function invalidJobBlock(block) {
   if (!isStateObject(block) || !Number.isSafeInteger(block.id) || block.id <= 0) return kept("a job block needs the positive integer `id` of its job");
   if (trimmedText(block.createdAt) === null) return kept("a job block needs its `createdAt`");
-  if (block.decisionRefs !== undefined && !Array.isArray(block.decisionRefs)) return kept("the job block `decisionRefs` must be an array of refs");
   return null;
 }
 
-// The job block as state.json keeps it: exactly its six fields, an absent ref recorded as null.
+// The job block as state.json keeps it: exactly its four fields, an absent project key recorded as null.
 function jobBlockRecord(block) {
   return {
     id: block.id,
     ref: trimmedText(block.ref) ?? jobRef(block.id),
     projectKey: trimmedText(block.projectKey),
-    itemRef: trimmedText(block.itemRef),
-    decisionRefs: (block.decisionRefs ?? []).map(trimmedText).filter((ref) => ref !== null),
     createdAt: trimmedText(block.createdAt),
   };
 }

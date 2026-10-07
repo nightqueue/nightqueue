@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AddJobDrawer } from "../components/AddJobDrawer";
 import { CancelJobDialog } from "../components/CancelJobDialog";
 import { CloseJobDialog } from "../components/CloseJobDialog";
-import { IssuesSection } from "../components/IssuesSection";
 import type { RowActions, RowContext } from "../components/JobCells";
 import { QueueCards } from "../components/QueueCard";
 import { QueueSkeleton } from "../components/QueueSkeleton";
@@ -25,7 +24,7 @@ type Dialog = { pick: RowMenuPick; job: Job } | null;
 
 type Menu = { job: Job; anchor: HTMLElement } | null;
 
-type Drawer = { issueRef?: string; project?: string } | null;
+type Drawer = { project?: string } | null;
 
 const byJob = (job: Job) => String(job.id);
 
@@ -109,7 +108,6 @@ export function QueuePage() {
   const closeMenu = useCallback(() => setMenu(null), []);
   const closeDialog = useCallback(() => setDialog(null), []);
   const closeDrawer = useCallback(() => setDrawer(null), []);
-  const queueIssue = useCallback(({ ref, project }: { ref: string; project: string }) => setDrawer({ issueRef: ref, project }), []);
   useEffect(() => setSelectedProject(filters.projectId), [filters.projectId]);
   const snapshot = useMemo(() => (raw ? normalizeSnapshot(raw) : undefined), [raw]);
   const shown = useMemo(() => (snapshot ? filterJobs(snapshot.jobs, filters) : []), [snapshot, filters]);
@@ -120,10 +118,9 @@ export function QueuePage() {
       <Toolbar counts={snapshot.counts} filters={filters} onFilters={setFilters} onAddJob={() => setDrawer({})} />
       <RunnerBanner snapshot={snapshot} actions={runnerActions} />
       <JobsSection jobs={shown} total={totalCount(snapshot.counts)} context={context} queueEmpty={snapshot.jobs.length === 0} />
-      <IssuesSection projectId={filters.projectId} onQueue={queueIssue} />
       {menu && <RowMenu job={menu.job} anchor={menu.anchor} onPick={(pick, job) => setDialog({ pick, job })} onClose={closeMenu} />}
       {dialog && <RowDialog dialog={dialog} runnersOnline={snapshot.runnersOnline} onClose={closeDialog} />}
-      {drawer && <AddJobDrawer runnersOnline={snapshot.runnersOnline} onClose={closeDrawer} initialIssue={drawer.issueRef} initialProject={drawer.project} />}
+      {drawer && <AddJobDrawer runnersOnline={snapshot.runnersOnline} onClose={closeDrawer} initialProject={drawer.project} />}
     </>
   );
 }

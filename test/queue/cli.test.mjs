@@ -8,7 +8,6 @@ import { jobLogPath, queuePausedPath, queueResumePath, runDir } from "../../src/
 import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { linkIssueJob, saveIssue } from "../../src/memory/issues.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
@@ -1135,22 +1134,20 @@ test("`--blocked` with no blocked job says so instead of claiming the queue itse
   assert.equal(result.stdout.includes("no jobs in the queue"), false, "a non-empty queue was reported as empty under --blocked");
 });
 
-test("queue status shows a readable title on the pending issue job, the pending free-prompt job and the closed job", (t) => {
+test("queue status shows a readable title on the pending brief job, the pending free-prompt job and the closed job", (t) => {
   const env = makeCliHome(t, "cli-status-title");
   const projectId = ensureProject(env, "alpha");
-  const fromIssue = addJob({ projectId, prompt: "## Brief\n\nprompt of the issue job" }, env).id;
+  const brief = addJob({ projectId, prompt: "## Brief\n\nbrief job title" }, env).id;
   const free = addJob({ projectId, prompt: "# Task\n\nfree prompt title" }, env).id;
   const closed = seedClosedJob(env);
-  const item = saveIssue({ type: "bug", projectId, title: "Issue title wins" }, env);
-  assert.equal(linkIssueJob(item.id, fromIssue, env), true);
 
   const table = runCli(env, ["queue", "status"]);
   assert.equal(table.status, 0, table.stderr);
-  assert.match(tableLine(table.stdout, fromIssue), /Issue title wins/);
+  assert.match(tableLine(table.stdout, brief), /brief job title/);
   assert.match(tableLine(table.stdout, free), /free prompt title/);
   assert.match(tableLine(table.stdout, closed), /^J-\d+\s+■ closed/);
   assert.equal(tableLine(table.stdout, closed).includes("TITLE"), false);
   const payload = JSON.parse(runCli(env, ["queue", "status", "--json"]).stdout);
   assert.equal(payload.jobs.every((job) => job.title === null || typeof job.title === "string"), true);
-  assert.equal(payload.jobs.find((job) => job.id === fromIssue).title, "Issue title wins");
+  assert.equal(payload.jobs.find((job) => job.id === brief).title, "brief job title");
 });

@@ -124,7 +124,7 @@ export function resolveClaudeBin(env = process.env) {
   }
 }
 
-// Whether the prompt already holds this exact note as its own `## Operator note` section (an issue job queued with a note).
+// Whether the prompt already holds this exact note as its own `## Operator note` section.
 function carriesNoteSection(prompt, note) {
   const section = `## Operator note\n${note}`;
   const text = String(prompt ?? "");

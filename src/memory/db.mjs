@@ -3,7 +3,7 @@ import { SchemaOutdatedError, UserError } from "../config/errors.mjs";
 import { callerJobId, isRunnerHome } from "../config/job-home.mjs";
 import { dbPath, dbWalPath, homeDir } from "../config/paths.mjs";
 import { ensureHome, loadRawConfig } from "../config/store.mjs";
-import { DATA_TABLES, FTS, INDEXES, JOBS_FTS, JOBS_FTS_BACKFILL, OWNER_KEY_GUARDS, REGISTRY, ISSUE_FTS, ISSUE_NUMBER_INDEXES, SCHEMA } from "./ddl.mjs";
+import { DATA_TABLES, FTS, INDEXES, JOBS_FTS, JOBS_FTS_BACKFILL, OWNER_KEY_GUARDS, REGISTRY, SCHEMA } from "./ddl.mjs";
 import { hasTable } from "./migration/one-shot.mjs";
 import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schemaState } from "./migration/v18.mjs";
 import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
@@ -73,11 +73,10 @@ function runOneShotSteps(db, env) {
   }
 }
 
-// Creates the base tables of the memory runtime and the registry of orgs and projects, with the key and number guards.
+// Creates the base tables of the memory runtime and the registry of orgs and projects, with the key guards.
 function createSchema(db) {
   db.exec(REGISTRY);
   db.exec(SCHEMA);
-  db.exec(ISSUE_NUMBER_INDEXES);
   db.exec(OWNER_KEY_GUARDS);
 }
 
@@ -107,8 +106,6 @@ function migrate(db) {
   db.exec(INDEXES);
   db.exec(FTS);
   ensureJobsFts(db);
-  db.exec(ISSUE_FTS);
-  db.exec(ISSUE_NUMBER_INDEXES);
   db.exec(OWNER_KEY_GUARDS);
   migrateV21Columns(db);
   migrateV23(db);

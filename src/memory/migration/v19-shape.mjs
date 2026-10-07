@@ -5,7 +5,7 @@ import {
   ISSUE_STATUSES,
   ISSUE_TYPES,
   sqlList,
-} from "../issue-workflow.mjs";
+} from "./tracker-shape.mjs";
 
 // The frozen v19 shapes of the DDLs v20 changed: only the v18 and v19 migrations build them, so they never reach a v20 foreign key.
 

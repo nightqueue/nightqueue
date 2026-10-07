@@ -26,7 +26,7 @@ with `D-58:`. A refused call is never rephrased to slip past the check; report i
     `--no-index` or `--exec`.
   - `gh pr view|diff|checks|list|status` and `gh issue view|list`. Pass a URL or `--repo`,
     because the cwd is not a repository.
-  - nightqueue reads only: `queue status|log`, `issues` (and `issues show`), `project list`,
+  - nightqueue reads only: `queue status|log`, `project list`,
     `decision list|show`, `org list`, `connection list`, `memory stats`, `doctor` (never
     `--fix`) and `version`. `nightqueue project list` finds a project's checkout.
 

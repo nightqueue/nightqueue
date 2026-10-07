@@ -17,7 +17,7 @@ import {
 } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
 import { openRegistryReader, openStore, openStoreReadOnly } from "../../src/store/open.mjs";
-import { restorePreV22Names } from "../../test-support/legacy-home.mjs";
+import { plantPreV22Tracker } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const DB_URL = new URL("../../src/memory/db.mjs", import.meta.url).href;
@@ -30,7 +30,7 @@ function v20Home(t, name) {
   addJob({ projectId: projectIdOf(env, "alpha"), prompt: "fix the worker" }, env);
   const db = openDb(env);
   db.exec("ALTER TABLE jobs DROP COLUMN origin; ALTER TABLE projects DROP COLUMN integrations");
-  restorePreV22Names(db);
+  plantPreV22Tracker(db);
   db.exec("PRAGMA user_version = 20");
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   closeDb(env);

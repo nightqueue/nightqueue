@@ -25,7 +25,6 @@ export interface StudioCells {
   reason: string | null;
   tokens_label: string;
   glyph: string | null;
-  item_ref: string | null;
 }
 
 export interface Job {
@@ -82,7 +81,6 @@ export interface AttemptRow {
 
 export interface JobDetail extends Omit<Job, "studio"> {
   session_id: string | null;
-  item_ref: string | null;
   run_notice?: string | null;
   tokens_in: number | null;
   tokens_out: number | null;
@@ -93,27 +91,6 @@ export interface JobDetail extends Omit<Job, "studio"> {
   baseline_ctx: number | null;
   orch_turns: number | null;
   orch_ctx_last: number | null;
-}
-
-export interface IssueSummary {
-  ref: string;
-  title: string;
-  decision_ref: string | null;
-}
-
-export type IssueStatus = "backlog" | "todo" | "in_progress" | "in_review" | "done" | "cancelled";
-
-export interface IssueItem {
-  ref: string;
-  title: string;
-  type: string | null;
-  priority: number | null;
-  status: IssueStatus;
-  scope: "project" | "org";
-  job_ref: string | null;
-  project_status?: IssueStatus | null;
-  project_job_ref?: string | null;
-  project?: string;
 }
 
 export interface Runner {

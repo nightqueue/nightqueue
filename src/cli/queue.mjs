@@ -2,12 +2,11 @@ import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { jobLogPath } from "../config/paths.mjs";
-import { registrationOffer, issueQueueTarget } from "../config/projects.mjs";
+import { registrationOffer } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { launchOperator, operatorPrompt } from "../host/operator.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
-import { ALL_PROJECTS } from "../memory/issues.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { followLog } from "../queue/follow.mjs";
@@ -56,12 +55,12 @@ import { checkArgs, parseCommand } from "./args.mjs";
 import { keyOption, registerProject } from "./project.mjs";
 import { confirm } from "./prompt.mjs";
 import { runtimeLabel } from "./runtime-versions.mjs";
-import { itemRef, jobRef, parseJobRef } from "../memory/refs.mjs";
+import { jobRef, parseJobRef } from "../memory/refs.mjs";
 import { coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { originLabel } from "../integrations/origin.mjs";
 
 export const USAGE = {
-  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--origin <kind>:<ref>] [--issue <ref> [--project <name|all>] [<note...>]]",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--origin <kind>:<ref>]",
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
@@ -326,40 +325,7 @@ async function addFromPrompt(positionals, values, ctx) {
   return await openStore(ctx.env).jobs.addJob({ projectId: target.project.id, prompt, ...addLimits(values) });
 }
 
-// Refuses `--run` for an org item queued for `all`, because it starts one job and `all` fathers one per project.
-function refuseRunForAll(values) {
-  if (values.run === true && values.project === ALL_PROJECTS) {
-    throw new UserError(`\`--run\` starts one job, and \`--project ${ALL_PROJECTS}\` queues one per project; queue them, then start the batch with \`nightqueue queue run\``);
-  }
-}
-
-// The lines the issue path answers with: a project item is now `in_progress`; an org item names each project row its jobs went to and the ones skipped.
-function issueQueuedLines({ item, jobs, skipped }) {
-  if (item.scope !== "org") return [`issue ${itemRef(item)} of \`${item.project}\` is now \`in_progress\``];
-  const lines = [
-    `issue ${itemRef(item)} of org \`${item.org}\` queued for ${jobs.map((job) => `\`${job.project}\``).join(", ")}; its status is derived from its project rows`,
-  ];
-  for (const entry of skipped) lines.push(`skipped \`${entry.project}\`: ${jobRef(entry.job_id ?? "?")} (${entry.job_status ?? "unknown"}) still holds it`);
-  return lines;
-}
-
-// Queues the job an issue builds; a project item owns its project, an org item needs `--project <name|all>`.
-async function addFromIssue(positionals, values, ctx) {
-  refuseRunForAll(values);
-  const store = openStore(ctx.env);
-  const id = await store.issues.itemIdOfRef(values.issue);
-  const target = await issueQueueTarget(store, values.project);
-  const queued = await store.issues.queueIssue({
-    id,
-    ...target,
-    ...addLimits(values),
-    operatorNote: positionals.join(" ").trim() || undefined,
-  });
-  for (const line of issueQueuedLines(queued)) ctx.out(line);
-  return queued.jobs;
-}
-
-// Runs `queue add`, with the job built from the words of the command line or from the issue `--issue` names.
+// Runs `queue add`, with the job built from the words of the command line.
 async function runAdd(argv, ctx) {
   if (argv.length === 1 && ADD_HELP_FLAGS.has(argv[0])) {
     ctx.out(ADD_HELP);
@@ -367,12 +333,7 @@ async function runAdd(argv, ctx) {
   }
   const { values, positionals } = parseAdd(argv);
   checkForegroundNeedsRun(values, USAGE.add);
-  const jobs =
-    values.issue === undefined
-      ? [await addFromPrompt(positionals, values, ctx)]
-      : await addFromIssue(positionals, values, ctx);
-  const job = jobs[jobs.length - 1];
-  for (const earlier of jobs.slice(0, -1)) ctx.out(`queued ${jobRef(earlier.id)} for \`${earlier.project}\``);
+  const job = await addFromPrompt(positionals, values, ctx);
   ctx.out(await addedLine(job, values.run === true, ctx));
   const origin = await originLine(job, ctx);
   if (origin) ctx.out(origin);
@@ -380,7 +341,7 @@ async function runAdd(argv, ctx) {
 }
 
 const RUN_DIR_RETIRED =
-  "`--run-dir` was removed by D-58: operator runs no longer exist, so there is no run to bind; put what was found in the prompt or the issue's note";
+  "`--run-dir` was removed by D-58: operator runs no longer exist, so there is no run to bind; put what was found in the prompt";
 
 const ADD_OPTIONS = {
   priority: { type: "string" },
@@ -389,7 +350,6 @@ const ADD_OPTIONS = {
   run: { type: "boolean" },
   foreground: { type: "boolean" },
   yes: { type: "boolean" },
-  issue: { type: "string" },
   "run-dir": { type: "string" },
   project: { type: "string" },
   tier: { type: "string" },
@@ -444,7 +404,7 @@ function parseAdd(argv) {
   const { optionTokens, words } = splitAddArgv(argv);
   const { values } = parseCommand(optionTokens, ADD_OPTIONS);
   if (values["run-dir"] !== undefined) throw new UserError(RUN_DIR_RETIRED);
-  if (values.issue === undefined) checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
+  checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
   return { values, positionals: words };
 }
 

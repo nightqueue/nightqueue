@@ -18,7 +18,7 @@ import { createQaWorktree } from "../src/queue/qa-worktree.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
 import { buildLegacyHome } from "../test-support/legacy-home.mjs";
-import { ensureProject, makeOrg, orgIdOf, projectIdOf, registerCheckout } from "../test-support/memory.mjs";
+import { ensureProject, projectIdOf, registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { makeHostEnv, readSettingsFile, writeLegacyShim, writeSettingsFixture } from "../test-support/host.mjs";
 import { makeDir, makeProject, seedClosedJob, seedLegacyV8Home } from "../test-support/memory.mjs";
@@ -89,7 +89,7 @@ test("a host that went through setup has no failing check", async (t) => {
   assert.equal(statusOf(report, "database"), "warn");
   assert.equal(statusOf(report, "runtime"), "ok");
   assert.equal(statusOf(report, "tool contract"), "ok");
-  assert.match(report.checks.find((check) => check.name === "tool contract").detail, /^contract 3;/);
+  assert.match(report.checks.find((check) => check.name === "tool contract").detail, /^contract 4;/);
   assert.equal(statusOf(report, "shim nightqueue"), "ok");
   assert.equal(statusOf(report, "path"), "warn");
   assert.equal(statusOf(report, "embedding"), "warn");
@@ -384,44 +384,6 @@ test("the database check warns about a v8 home and points at the command that mi
   assert.match(database.detail, /schema v8, this nightqueue expects v23/);
   assert.equal(database.hint, "run `nightqueue update`");
   assert.doesNotMatch(database.hint, /nightqueue memory stats/);
-});
-
-test("the issue workflow check is ok when every linked item follows its job and warns about one left behind", async (t) => {
-  const host = makeHostEnv(t, "doctor-issue-workflow");
-  const db = openDb(host.env);
-  const job = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "deliver it" }, host.env);
-  db.prepare("INSERT INTO issues (project_id, number, title, position, status, job_id, job_status_seen) VALUES (?, 1, 'deliver it', 1, 'in_progress', ?, 'pending')").run(projectIdOf(host.env, "alpha"), job.id);
-  closeDb(host.env);
-
-  const quiet = await diagnose(host.env);
-  assert.equal(statusOf(quiet.report, "issue workflow"), "ok");
-
-  openDb(host.env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(job.id);
-  closeDb(host.env);
-  const { report } = await diagnose(host.env);
-  const check = report.checks.find((entry) => entry.name === "issue workflow");
-  assert.equal(check.status, "warn");
-  assert.equal(check.detail, `1 issue status out of step: AP-1 in_progress (J-${job.id} done, expected in_review)`);
-  assert.match(check.hint, /next `nightqueue queue run` claim cycle re-syncs the ones behind a job/);
-});
-
-test("the issue workflow check flags an org item whose status disagrees with its project rows", async (t) => {
-  const host = makeHostEnv(t, "doctor-issue-org-derived");
-  const db = openDb(host.env);
-  db.prepare("INSERT INTO issues (scope, org_id, number, title, position, status) VALUES ('org', ?, 1, 'raise node', 1, 'in_progress')").run(orgIdOf(host.env, makeOrg(host.env, "acme")));
-  db.prepare("INSERT INTO issue_projects (item_id, project_id, status) VALUES (1, ?, 'done'), (1, ?, 'in_progress')").run(ensureProject(host.env, "api"), ensureProject(host.env, "app"));
-  closeDb(host.env);
-
-  const quiet = await diagnose(host.env);
-  assert.equal(statusOf(quiet.report, "issue workflow"), "ok");
-
-  openDb(host.env).prepare("UPDATE issues SET status = 'todo' WHERE id = 1").run();
-  closeDb(host.env);
-  const { report } = await diagnose(host.env);
-  const check = report.checks.find((entry) => entry.name === "issue workflow");
-  assert.equal(check.status, "warn");
-  assert.equal(check.detail, "1 issue status out of step: AM-1 todo (derived from its project rows: in_progress)");
-  assert.match(check.hint, /re-derived at its next project row change/);
 });
 
 test("the database check fails a schema newer than this build and asks for an upgrade", async (t) => {

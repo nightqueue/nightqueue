@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { getDecision, getDecisionByNumber, saveDecision } from "../src/memory/decisions.mjs";
-import { addJob, getJob } from "../src/memory/jobs.mjs";
-import { getIssue, saveIssue } from "../src/memory/issues.mjs";
+import { addJob, getJob, listJobs } from "../src/memory/jobs.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, orgIdOf, projectIdOf, seedDoneJob } from "../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
@@ -35,7 +34,7 @@ function decision(owner, title) {
   return { ...owner, title, context: `context of ${title}`, decision: `decision of ${title}`, status: "accepted" };
 }
 
-// A home with alpha (AP, the cwd) and beta (BT) in org acme (AM), each owner holding decisions and alpha an item, then alpha renamed to NQ and acme to AC.
+// A home with alpha (AP, the cwd) and beta (BT) in org acme (AM), each owner holding decisions, then alpha renamed to NQ and acme to AC.
 function makeRefsHome(t, name) {
   const env = makeHome(t, name);
   const cwd = makeProject(t, env, "alpha", { org: "acme" });
@@ -45,24 +44,19 @@ function makeRefsHome(t, name) {
   saveDecision(decision(alpha, "alpha logs as json"), env);
   saveDecision(decision({ projectId: projectIdOf(env, "beta") }, "beta ships weekly"), env);
   saveDecision(decision({ orgId: orgIdOf(env, "acme") }, "every repo runs one node"), env);
-  const item = saveIssue({ type: "bug", ...alpha, title: "alpha crashes" }, env);
   ok(env, ["project", "key", "alpha", "NQ"], cwd);
   ok(env, ["org", "key", "acme", "AC"], cwd);
-  return { env, cwd, elsewhere: makeDir(t, `${name}-elsewhere`), item };
+  return { env, cwd, elsewhere: makeDir(t, `${name}-elsewhere`) };
 }
 
-test("issues show and queue add --issue take an item ref, old key included, and refuse an integer", (t) => {
-  const { env, cwd, elsewhere, item } = makeRefsHome(t, "cli-refs-items");
+test("`nightqueue issues` is an unknown command and `queue add --issue` an unknown option, and nothing is queued", (t) => {
+  const { env, cwd, elsewhere } = makeRefsHome(t, "cli-refs-items");
 
-  for (const ref of ["NQ-1", "AP-1", "nq-1"]) {
-    assert.equal(ok(env, ["issues", "show", ref], elsewhere).split("\n")[0], "NQ-1 [bug] todo p5", ref);
-  }
-  assert.match(refused(env, ["issues", "show", String(item.id)], elsewhere), /expected an issue ref \(`<KEY>-<number>`\), got `1`/);
-  assert.match(refused(env, ["issues", "show", "NQ-7"], elsewhere), /unknown issue `NQ-7`/);
-
-  assert.match(refused(env, ["queue", "add", "--issue", "1"], cwd), /expected an issue ref \(`<KEY>-<number>`\), got `1`/);
-  assert.match(ok(env, ["queue", "add", "--issue", "AP-1"], elsewhere), /issue NQ-1 of `alpha` is now `in_progress`/);
-  assert.equal(getIssue(item.id, env).status, "in_progress");
+  assert.match(refused(env, ["issues"], elsewhere), /unknown command `issues`/);
+  assert.match(refused(env, ["issues", "show", "NQ-1"], elsewhere), /unknown command `issues`/);
+  assert.match(refused(env, ["queue", "add", "--issue", "AP-1"], cwd), /Unknown option '--issue'/);
+  assert.match(refused(env, ["queue", "add", "fix the crash", "--issue"], cwd), /Unknown option '--issue'/);
+  assert.deepEqual(listJobs({}, env), [], "a refused `queue add` queued a job");
 });
 
 test("decision show, export and update take a number, `D-<n>` or `<KEY>/D-<n>`, old keys included", (t) => {

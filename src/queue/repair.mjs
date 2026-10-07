@@ -149,7 +149,7 @@ async function recoverEntry(entry, { store, env, isRunning }) {
   return { ...base, result: `recovered as ${outcome.status}`, status: outcome.status, prUrl: outcome.prUrl ?? null, logged: logRecovery(entry.jobId, outcome, env) };
 }
 
-// Recreates every job whose row the table lost, or only `id`, from the runs on disk; issue rows are never rebuilt, and log-only ids are reported, not recovered.
+// Recreates every job whose row the table lost, or only `id`, from the runs on disk; log-only ids are reported, not recovered.
 export async function recoverFromDisk({ id = null, env = process.env } = {}) {
   const store = openStore(env);
   const { entries, logOnly } = await recoveryTargets(id, store, env);

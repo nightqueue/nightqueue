@@ -225,18 +225,15 @@ test("the migration is idempotent and keeps the data across a reopen", (t) => {
   assert.deepEqual(matchIds(second, "lessons_fts", '"migration"'), [id]);
 });
 
-test("the decisions and issues tables are created with their columns, defaults and indexes", (t) => {
+test("the decisions table is created with its columns, defaults and indexes, and a fresh home has no issue table", (t) => {
   const env = makeHome(t, "db-decisions");
   const db = openDb(env);
   assert.deepEqual(columnsOf(db, "decisions"), DECISION_COLUMNS);
-  assert.deepEqual(columnsOf(db, "issues"), ISSUE_COLUMNS);
+  assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'issue%'").all(), []);
   const decisionIndexes = db.prepare("PRAGMA index_list(decisions)").all();
   const unique = decisionIndexes.find((index) => index.name === "decisions_number_idx");
   assert.ok(unique, `number index missing: ${decisionIndexes.map((index) => index.name).join(", ")}`);
   assert.equal(unique.unique, 1);
-  const issueIndexes = db.prepare("PRAGMA index_list(issues)").all().map((index) => index.name);
-  assert.ok(issueIndexes.includes("issues_order_idx"), `order index missing: ${issueIndexes.join(", ")}`);
-  assert.ok(issueIndexes.includes("issues_job_idx"), `job index missing: ${issueIndexes.join(", ")}`);
 
   db.prepare("INSERT INTO decisions (project_id, number, title, context, decision) VALUES (?, 1, ?, ?, ?)").run(
     null,
@@ -250,23 +247,6 @@ test("the decisions and issues tables are created with their columns, defaults a
     /CHECK constraint failed/,
   );
 
-  db.prepare("INSERT INTO issues (project_id, number, title, position) VALUES (?, 1, ?, 1)").run(null, "deliver the issues");
-  assert.deepEqual(
-    { ...db.prepare("SELECT status, priority, type FROM issues").get() },
-    { status: "todo", priority: 5, type: "improvement" },
-  );
-  assert.throws(
-    () => db.prepare("INSERT INTO issues (project_id, number, title, type, position) VALUES (?, 2, ?, ?, 1)").run(null, "t", "epic"),
-    /CHECK constraint failed/,
-  );
-  assert.throws(
-    () => db.prepare("INSERT INTO issues (project_id, number, title, status, position) VALUES (?, 2, ?, ?, 1)").run(null, "t", "open"),
-    /CHECK constraint failed/,
-  );
-  assert.throws(
-    () => db.prepare("INSERT INTO issues (project_id, number, title, priority, position) VALUES (?, 2, ?, ?, 1)").run(null, "t", 10),
-    /CHECK constraint failed/,
-  );
 });
 
 test("the migration from user_version 2 keeps every row and adds the decisions schema", (t) => {

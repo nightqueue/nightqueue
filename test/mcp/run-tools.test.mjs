@@ -9,7 +9,6 @@ import { runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
-import { getIssue, linkIssueJob, saveIssue } from "../../src/memory/issues.mjs";
 import { decideResume } from "../../src/queue/resume.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
@@ -126,21 +125,6 @@ test("outside a job the project and the slug are both required, and a registered
   const written = payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", project: "alpha", slug: SLUG } }));
   assert.equal(written.ok, true);
   assert.deepEqual(readState(env, "alpha", SLUG).phases.map((entry) => entry.phase), ["triage"]);
-});
-
-test("`run_outcome` never moves the issue the job came from: only the job's own row does", async (t) => {
-  const { env, job } = makeRunningJob(t, "mcp-run-tools-issue");
-  const item = saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "deliver the thing" }, env);
-  assert.equal(linkIssueJob(item.id, job.id, env), true, "setup: the item was not linked to its job");
-  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
-
-  payloadOf(await client.callTool({ name: "run_outcome", arguments: { status: "gate", notice: "the operator has to choose" } }));
-  assert.equal(getIssue(item.id, env).status, "in_progress");
-
-  payloadOf(await client.callTool({ name: "run_outcome", arguments: { status: "done" } }));
-  assert.equal(getIssue(item.id, env).status, "in_progress", "a run's own report moved the item before the runner wrote the job");
-  assert.equal(getIssue(item.id, env).closed_at, null);
-  assert.equal(readState(env, "alpha", SLUG).outcome.status, "done");
 });
 
 test("`run_set` records the QA stage A marker, and the resume decision reads it back as the stage B re-entry", async (t) => {

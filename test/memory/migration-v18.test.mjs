@@ -8,7 +8,6 @@ import { configPath, dbPath, homeDir, preV18BackupPath, runDir, runsIdMarkerPath
 import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { listDecisions, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
-import { getIssueDetail, listIssues, saveIssue } from "../../src/memory/issues.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recentMemories } from "../../src/memory/memory.mjs";
 import { finishV18, migrateToV18 } from "../../src/memory/migration/v18.mjs";
@@ -525,10 +524,10 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
     "a project reads its own decisions, its org's first, and the global ones, never another org's",
   );
   assert.equal(saveDecision({ projectId: api.id, title: "t", context: "c", decision: "d" }, env).id, 6, "a decision id was reused");
-  const web = listIssues({ projectId: projects.web.id }, {}, env).items;
-  assert.deepEqual(web.map((item) => [item.owner, item.project_status]), [["acme", "todo"]]);
-  assert.deepEqual(getIssueDetail(1, {}, env).projects.map((row) => row.project), ["api", "web"]);
-  assert.equal(saveIssue({ type: "bug", projectId: api.id, title: "t" }, env).id, 4, "an issue id was reused");
+  const orgRows = db.prepare("SELECT p.name, r.status FROM issue_projects r JOIN projects p ON p.id = r.project_id WHERE r.item_id = 1 ORDER BY p.name").all();
+  assert.deepEqual(orgRows.map((row) => [row.name, row.status]), [["api", "in_progress"], ["web", "todo"]]);
+  const inserted = db.prepare("INSERT INTO issues (scope, project_id, number, title, position) VALUES ('project', ?, 99, 't', 99) RETURNING id").get(api.id);
+  assert.equal(inserted.id, 4, "an issue id was reused");
 
   const config = JSON.parse(readFileSync(configPath(env), "utf8"));
   const { projects: _projects, orgs: _orgs, ...kept } = v17Config;

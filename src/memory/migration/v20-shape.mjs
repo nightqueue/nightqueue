@@ -5,7 +5,7 @@ import {
   ISSUE_STATUSES,
   ISSUE_TYPES,
   sqlList,
-} from "../issue-workflow.mjs";
+} from "./tracker-shape.mjs";
 
 // The frozen v20 shapes of the tracker tables, under their pre-v22 names: the v18, v19 and v20 migrations build them, and v22
 // renames them.

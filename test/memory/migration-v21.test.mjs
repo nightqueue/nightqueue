@@ -4,7 +4,7 @@ import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly } from "../../src/memo
 import { addJob, getJob, jobView } from "../../src/memory/jobs.mjs";
 import { projectIntegrations } from "../../src/memory/registry.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { buildLegacyHome, preV22Name, restorePreV22Names } from "../../test-support/legacy-home.mjs";
+import { buildLegacyHome, plantPreV22Tracker, preV22Name } from "../../test-support/legacy-home.mjs";
 import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { migrateTestHome } from "../../test-support/migrate.mjs";
 
@@ -21,7 +21,7 @@ function makeV20Home(t, name) {
   addJob({ projectId, prompt: "fix the worker" }, env);
   const db = openDb(env);
   db.exec("ALTER TABLE jobs DROP COLUMN origin; ALTER TABLE projects DROP COLUMN integrations");
-  restorePreV22Names(db);
+  plantPreV22Tracker(db);
   db.exec("PRAGMA user_version = 20");
   closeDb(env);
   return { env, projectId };

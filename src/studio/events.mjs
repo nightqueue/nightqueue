@@ -83,8 +83,8 @@ export function snapshotPatch(previous, next) {
 }
 
 // One read of the queue: the `queue_status` answer decorated with the studio cells; the pull request cache is refreshed outside of it.
-async function readSnapshot(env, itemRefs) {
-  const snapshot = await readQueueStatus(env, { limit: QUEUE_LIMIT, decorate: (answer, store) => decorateSnapshot(answer, { env, store, itemRefs }) });
+async function readSnapshot(env) {
+  const snapshot = await readQueueStatus(env, { limit: QUEUE_LIMIT, decorate: (answer) => decorateSnapshot(answer, { env }) });
   Promise.resolve(refreshAnsweredPrStates(snapshot, env)).catch(() => {});
   return snapshot;
 }
@@ -92,7 +92,6 @@ async function readSnapshot(env, itemRefs) {
 // One shared poller of the queue for every `/events` subscriber of a server: started with the first, stopped with the last.
 export function createQueueStream({ env, pollMs = QUEUE_POLL_MS }) {
   const clients = new Set();
-  const itemRefs = new Map();
   let last = null;
   let timer = null;
   let polling = false;
@@ -109,7 +108,7 @@ export function createQueueStream({ env, pollMs = QUEUE_POLL_MS }) {
 
   const tick = async () => {
     try {
-      deliver(await readSnapshot(env, itemRefs));
+      deliver(await readSnapshot(env));
     } catch (err) {
       for (const client of clients) sendEvent(client.res, "error", { message: err?.message ?? String(err) });
     }

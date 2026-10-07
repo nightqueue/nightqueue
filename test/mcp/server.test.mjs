@@ -33,11 +33,6 @@ const CONTRACT_TOOLS = [
   "decision_update",
   "index_recall",
   "index_save",
-  "issue_comment",
-  "issue_get",
-  "issue_save",
-  "issue_search",
-  "issue_update",
   "lesson_recall",
   "lesson_save",
   "memory_recall",
@@ -87,12 +82,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the thirty-one tools of the contract", async (t) => {
+test("the server exposes exactly the twenty-six tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 31, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 26, "the contract list and the server disagree on how many tools there are");
 });
 
 test("the server never migrates a v8 home: a tool answers store-unavailable with the update message and the file stays v8", async (t) => {
@@ -134,12 +129,11 @@ test("the handshake carries the instructions that teach the backlog model", asyn
     "read `notice_md` whole with `queue_status`",
     "queue_retry` only after the person answers",
     "`queue_close`",
-    "`issue_id`",
     "settles a design question",
   ]) {
     assert.ok(instructions.includes(idea), `\`${idea}\` is missing from the instructions:\n${instructions}`);
   }
-  for (const removed of ["Queue every task or plan the moment it comes up", "Do not start jobs as they are queued"]) {
+  for (const removed of ["Queue every task or plan the moment it comes up", "Do not start jobs as they are queued", "issue_id", "the issues are where"]) {
     assert.equal(instructions.includes(removed), false, `the removed line \`${removed}\` is back in the instructions`);
   }
 });
@@ -213,15 +207,12 @@ test("the lesson, memory, index, phase and pipeline tools refuse an unknown proj
     ["decision_save", { project: "ghost", title: "t", context: "c", decision: "d" }],
     ["decision_list", { project: "ghost" }],
     ["decision_recall", { project: "ghost" }],
-    ["issue_save", { project: "ghost", title: "t", type: "bug" }],
-    ["issue_get", { project: "ghost" }],
-    ["issue_search", { project: "ghost", query: "t" }],
   ]) {
     const refused = await client.callTool({ name, arguments: args });
     assert.equal(refused.isError, true, name);
     assert.match(textOf(refused), /unknown project `ghost`; known projects: alpha/, name);
   }
-  for (const name of ["decision_list", "issue_get"]) {
+  for (const name of ["decision_list"]) {
     const refused = await client.callTool({ name, arguments: { org: "ghost" } });
     assert.equal(refused.isError, true, name);
     assert.match(textOf(refused), /unknown org `ghost`; existing orgs: default/, name);
@@ -230,7 +221,6 @@ test("the lesson, memory, index, phase and pipeline tools refuse an unknown proj
   assert.equal(count("project_index"), 0, "a refused index_save wrote a row");
   assert.equal(count("pipeline_runs"), 0, "a refused pipeline_log wrote a row");
   assert.equal(count("decisions"), 0, "a refused decision_save wrote a row");
-  assert.equal(count("issues"), 0, "a refused issue_save wrote a row");
 
   mkdirSync(join(alpha, "src"));
   const inside = payloadOf(await client.callTool({ name: "lesson_save", arguments: { ...LESSON, project: join(alpha, "src") } }));
@@ -315,7 +305,7 @@ test("the index round trip reports the freshness of the checkout", async (t) => 
       },
     }),
   );
-  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 3 });
+  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 4 });
 
   const fresh = payloadOf(
     await client.callTool({ name: "index_recall", arguments: { project: "alpha", repo_root: repo } }),
@@ -475,7 +465,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
     priority: 2,
     timeoutS: 600,
     hint: "queued J-1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.",
-    contract: 3,
+    contract: 4,
   });
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
@@ -483,7 +473,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
   assert.equal(second.hint, "queued J-2 for `alpha` (2 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.");
 
   const add = (await client.listTools()).tools.find((tool) => tool.name === "queue_add");
-  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "issue_id", "key", "max_attempts", "origin", "priority", "project", "prompt", "register", "tier", "timeout_s"]);
+  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "key", "max_attempts", "origin", "priority", "project", "prompt", "register", "tier", "timeout_s"]);
   assert.ok(add.description.includes("start the whole batch later with `queue_run`"), add.description);
 
   const byPath = await client.callTool({ name: "queue_add", arguments: { project: "/tmp/alpha", prompt: "fix the worker" } });
@@ -1268,7 +1258,7 @@ test("queue_stop answers the CLI line per runner, and refuses an unknown pid", a
   const client = await connect(t, env);
 
   const empty = payloadOf(await client.callTool({ name: "queue_stop", arguments: {} }));
-  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 3 });
+  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 4 });
 
   const unknown = await client.callTool({ name: "queue_stop", arguments: { pid: 999999 } });
   assert.equal(unknown.isError, true, textOf(unknown));

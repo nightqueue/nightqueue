@@ -9,7 +9,7 @@ const PLACEHOLDERS = [/\{\{[^}\n]*\}\}/, /<[A-Za-z][A-Za-z0-9 _./'-]*>/];
 // A bare `#<number>`, which GitHub turns into a cross-reference to an unrelated thread of the repository; a code span hides it.
 const BARE_REFERENCE = /(^|[^`\w&])#\d+\b/;
 
-// The one line where a `#<number>` is a real reference to an issue of the repository.
+// The one line where a `#<number>` is a real `#<number>` reference of the repository.
 const REFERENCE_LINE = /^(Fixes|Closes)\b/;
 
 // The opener or closer of a fenced code block, matched on the trimmed line.

@@ -7,10 +7,9 @@ import { runDir } from "../../src/config/paths.mjs";
 import { run } from "../../src/cli/index.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { linkIssueJob, saveIssue } from "../../src/memory/issues.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
-import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const SLUG = "fix-the-worker";
 
@@ -26,16 +25,14 @@ function gitVars() {
   };
 }
 
-// An issue job bound to its slug with a real worktree, one file ready to commit.
-function issueRun(t, name) {
+// A job bound to its slug with a real worktree, one file ready to commit.
+function boundRun(t, name) {
   const env = { ...makeHome(t, name), ...gitVars() };
   makeProject(t, env, "alpha");
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
   const repo = initGitRepo(makeDir(t, "worktree"));
   recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { worktree: repo }, env });
-  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
-  assert.equal(linkIssueJob(item.id, id, env), true);
   mkdirSync(join(repo, "src"), { recursive: true });
   writeFileSync(join(repo, "src/a.mjs"), "content\n");
   const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
@@ -46,7 +43,7 @@ function issueRun(t, name) {
 
 // Commits the message as the job and returns what git recorded.
 async function commitWith(t, name, message) {
-  const { env, id, repo } = issueRun(t, name);
+  const { env, id, repo } = boundRun(t, name);
   const file = join(makeDir(t, `${name}-msg`), "message.txt");
   writeFileSync(file, message);
   const out = [];
@@ -64,17 +61,15 @@ async function commitWith(t, name, message) {
   };
 }
 
-test("a Markdown rule (---) in the message does not move the Refs trailer out of the last block", async (t) => {
-  const { refs, body } = await commitWith(
-    t,
-    "divider",
-    "feat: x\n\nbody\n---\nmore\n\nCo-Authored-By: A <a@b.c>\n",
-  );
-  assert.equal(refs, "AP-1", `git did not see Refs as a trailer:\n${body}`);
-  assert.ok(body.endsWith("Refs: AP-1"), `Refs is not at the end of the message:\n${body}`);
+test("a message with a Markdown rule (---) is committed untouched, with no Refs trailer added", async (t) => {
+  const message = "feat: x\n\nbody\n---\nmore\n\nCo-Authored-By: A <a@b.c>\n";
+  const { refs, body } = await commitWith(t, "divider", message);
+  assert.equal(refs, "", `git found a Refs trailer:\n${body}`);
+  assert.equal(body, message.trimEnd());
 });
 
-test("a subject-only message gets the Refs trailer as a trailer", async (t) => {
+test("a subject-only message is committed untouched, with no Refs trailer added", async (t) => {
   const { refs, body } = await commitWith(t, "subject-only", "feat: x");
-  assert.equal(refs, "AP-1", body);
+  assert.equal(refs, "", body);
+  assert.equal(body, "feat: x");
 });

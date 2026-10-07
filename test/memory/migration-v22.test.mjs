@@ -102,6 +102,11 @@ function schemaOf(db) {
     .map((row) => ({ type: row.type, name: row.name, sql: String(row.sql ?? "").replace(/^CREATE TABLE "(\w+)"/, "CREATE TABLE $1") }));
 }
 
+// The schema objects outside the removed tracker, which a fresh home no longer creates and the steps before v24 still build.
+function outsideTracker(schema) {
+  return schema.filter((row) => !row.name.startsWith("issue"));
+}
+
 // The names in the schema and in the counters that still carry the old word.
 function oldNames(db) {
   const pattern = `%${OLD_WORD}%`;
@@ -274,7 +279,7 @@ test("no schema object nor counter carries the old name, and the schema is exact
   const migrated = migrateTestHome(env);
   assert.deepEqual(oldNames(migrated), []);
   const fresh = openDb(makeHome(t, "v22-fresh"));
-  assert.deepEqual(schemaOf(migrated), schemaOf(fresh));
+  assert.deepEqual(outsideTracker(schemaOf(migrated)), schemaOf(fresh));
 });
 
 test("a second open of a migrated v22 home changes nothing, and a second migration takes no second copy", (t) => {
@@ -408,7 +413,7 @@ function runCli(env, args, cwd) {
   return spawnSync(process.execPath, [CLI, ...args], { env, cwd, encoding: "utf8" });
 }
 
-test("doctor reads a v20 home as pending, every command refuses it, and once the migration ran, the database as ok and the tracker from the new tables", (t) => {
+test("doctor reads a v20 home as pending, every command refuses it, and once the migration ran, the database as ok", (t) => {
   const env = makeHome(t, "v22-doctor");
   const cwd = join(makeDir(t, "v22-doctor-checkout"), "nightqueue");
   mkdirSync(join(cwd, ".git"), { recursive: true });
@@ -425,20 +430,5 @@ test("doctor reads a v20 home as pending, every command refuses it, and once the
   assert.equal(runCli(env, ["queue", "status"], cwd).status, 0);
   const report = runCli(env, ["doctor"], cwd).stdout;
   assert.match(report, /ok\s+database\s+schema v23/);
-  const drift = "NQ-1 todo (J-1 done, expected in_review), DW-1 row nightqueue todo (J-1 done, expected in_review)";
-  assert.ok(report.includes(drift), `the workflow check did not read the drift the fixture links on the migrated rows: ${report}`);
-});
-
-test("doctor reads the tracker of a migrated v20 home whose links follow their jobs as ok", (t) => {
-  const env = makeHome(t, "v22-doctor-clean");
-  const cwd = join(makeDir(t, "v22-doctor-clean-checkout"), "nightqueue");
-  mkdirSync(join(cwd, ".git"), { recursive: true });
-  const unlink = (db) => db.exec(`UPDATE ${OLD_WORD}_items SET job_id = NULL; UPDATE ${OLD_WORD}_item_projects SET job_id = NULL`);
-  buildV20Home(env, { checkout: realpathSync(cwd), extra: unlink });
-  migrateTestHome(env);
-  closeDb(env);
-  assert.equal(runCli(env, ["queue", "status"], cwd).status, 0);
-  const report = runCli(env, ["doctor"], cwd).stdout;
-  assert.match(report, /ok\s+database\s+schema v23/);
-  assert.match(report, /ok\s+issue workflow\s+every linked item follows its job/);
+  assert.equal(report.includes("issue workflow"), false, report);
 });

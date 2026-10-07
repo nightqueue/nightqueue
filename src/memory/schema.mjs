@@ -21,6 +21,11 @@ export const RESULT_OBJECT_BASE = `CASE
               WHEN json_valid(result) AND json_type(result) = 'object' THEN result
               ELSE json_object('previousResult', result) END`;
 
+// SQL literal list of a set of values, for a CHECK or an IN clause built from a constant list.
+export function sqlList(values) {
+  return values.map((value) => `'${value}'`).join(", ");
+}
+
 // Timestamp of SQLite ("YYYY-MM-DD HH:MM:SS", UTC) as ISO 8601.
 export function sqliteToIso(ts) {
   return ts ? `${String(ts).replace(" ", "T")}Z` : null;

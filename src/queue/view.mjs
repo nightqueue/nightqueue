@@ -156,9 +156,9 @@ function withLive(jobs, env, now) {
   return { jobs: withBlocks, section };
 }
 
-// A public job view carrying its derived title, from the raw row that still holds the prompt and the joined issue title.
+// A public job view carrying its derived title, from the raw row that still holds the prompt.
 function jobViewWithTitle(row) {
-  return { ...jobView(row), title: jobTitle(row, { title: row.issue_title }) };
+  return { ...jobView(row), title: jobTitle(row) };
 }
 
 // The data of the queue view in timed sections, read from SELECTs and pure file reads alone; a failed section never fails the view.
@@ -226,25 +226,15 @@ function withoutRuntimeAppendedLines(notice) {
   }
 }
 
-// The ref of the issue a job was queued from; null when it carries none or the issues cannot be read, which never fails the view.
-async function itemRefOfJob(readStore, jobId) {
-  if (typeof readStore?.issues?.issueRefOfJob !== "function") return null;
-  try {
-    return await readStore.issues.issueRefOfJob(jobId);
-  } catch {
-    return null;
-  }
-}
-
 // One job in full with the state of its pull request, or null when the row is gone. When the run's own notice (read fresh
 // from its log) really differs from the row's `notice_md` - once the lines the runtime itself appends to the row are set
 // aside - both are carried: `notice` is the row's, `run_notice` the run's whole own.
 export async function jobDetailView(readStore, id, { prStates = null, env = process.env } = {}) {
   const row = await readStore.jobs.getJob(id);
-  const job = row ? { ...jobView(row, { full: true }), title: jobTitle(row, { title: row.issue_title }) } : null;
+  const job = row ? { ...jobView(row, { full: true }), title: jobTitle(row) } : null;
   if (!job) return null;
   const live = job.status === "running" ? readLiveOf(job, env).live : null;
-  const withState = { ...withPrState(job, prStates), item_ref: await itemRefOfJob(readStore, job.id), live };
+  const withState = { ...withPrState(job, prStates), live };
   const runNotice = runNoticeOf(job);
   const rowNotice = withoutRuntimeAppendedLines(job.notice_md).trim();
   return runNotice && runNotice.trim() !== rowNotice ? { ...withState, run_notice: runNotice } : withState;

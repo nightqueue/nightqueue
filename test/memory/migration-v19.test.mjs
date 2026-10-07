@@ -64,6 +64,11 @@ function schemaOf(db) {
     .map((row) => ({ type: row.type, name: row.name, sql: String(row.sql ?? "").replace(/^CREATE TABLE "(\w+)"/, "CREATE TABLE $1") }));
 }
 
+// The schema objects outside the removed tracker, which a fresh home no longer creates and the steps before v24 still build.
+function outsideTracker(schema) {
+  return schema.filter((row) => !row.name.startsWith("issue"));
+}
+
 test("a v18 home migrates to v19: row counts kept, items numbered per owner, keys unique, decision numbers unchanged, a pre-v19 copy", (t) => {
   const { env, ids, fixture } = v18Home(t, "v19-migrate");
   const before = readRaw(dbPath(env), (raw) => ({
@@ -124,7 +129,7 @@ test("a migrated database has exactly the schema of a fresh one, table by table 
   const { env } = v18Home(t, "v19-shape");
   const migrated = schemaOf(migrateTestHome(env));
   const fresh = schemaOf(migrateTestHome(makeHome(t, "v19-fresh")));
-  assert.deepEqual(migrated, fresh);
+  assert.deepEqual(outsideTracker(migrated), fresh);
 });
 
 test("a v17 home reaches v19 in one open, keeping both the pre-v18 and the pre-v19 copies", (t) => {

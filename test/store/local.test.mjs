@@ -89,13 +89,7 @@ test("every domain of the store writes and reads back on a real home", async (t)
   });
   assert.equal((await store.decisions.listDecisions({ projectId: projectIdOf(env, "alpha") })).length, 1);
 
-  await store.issues.saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "close the boundary" });
-  const listing = await store.issues.listIssues(projectIdOf(env, "alpha"));
-  assert.deepEqual(
-    listing.items.map((item) => [item.title, item.status, item.priority]),
-    [["close the boundary", "todo", 5]],
-  );
-  assert.deepEqual(await store.issues.issueDrift(), []);
+  assert.equal(Object.hasOwn(store, "issues"), false, "the store still carries an issues domain");
 
   const acme = await store.orgs.add("acme");
   assert.equal((await store.orgs.byName("acme")).id, acme.id);
@@ -122,77 +116,27 @@ test("listWithSlug answers the jobs a witness could speak for", async (t) => {
   );
 });
 
-// A store on a fresh home with one project and one issue queued as a job of its own.
-async function queuedItem(t, name) {
+// A store on a fresh home with one project and one job of it.
+async function storeWithJob(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const store = createLocalStore(env);
-  const item = await store.issues.saveIssue({ type: "improvement", projectId: projectIdOf(env, "alpha"), title: "deliver the thing" });
   const job = await store.jobs.addJob({ projectId: projectIdOf(env, "alpha"), prompt: "deliver the thing" });
-  assert.equal(await store.issues.linkIssueJob(item.id, job.id), true, "setup: the item was not linked to its job");
-  return { store, item, job };
+  return { store, job };
 }
-
-// The status the issue carries right now.
-async function itemStatus(store, item) {
-  return (await store.issues.getIssue(item.id)).status;
-}
-
-test("a job the store finishes as done puts its issue in review, and one that gates keeps it in progress", async (t) => {
-  const gated = await queuedItem(t, "store-close-gate");
-  await gated.store.jobs.claimJobById(gated.job.id, { worker: WORKER, cap: 4 });
-  assert.equal(await gated.store.jobs.finishJob(gated.job.id, { worker: WORKER, status: "gate", noticeMd: "answer me" }), true);
-  assert.equal(await itemStatus(gated.store, gated.item), "in_progress", "a gated job moved the item it never delivered");
-
-  const delivered = await queuedItem(t, "store-close-finish");
-  await delivered.store.jobs.claimJobById(delivered.job.id, { worker: WORKER, cap: 4 });
-  assert.equal(await delivered.store.jobs.finishJob(delivered.job.id, { worker: WORKER, status: "done", prUrl: PR_URL }), true);
-  assert.equal(await itemStatus(delivered.store, delivered.item), "in_review");
-});
-
-test("a re-classification into done puts the item in review, and one that stays failed keeps it at todo", async (t) => {
-  const { store, item, job } = await queuedItem(t, "store-close-reclassify");
-  await store.jobs.claimJobById(job.id, { worker: WORKER, cap: 4 });
-  await store.jobs.finishJob(job.id, { worker: WORKER, status: "failed" });
-
-  assert.equal(await store.jobs.reclassifyJob(job.id, { status: "failed", prUrl: PR_URL }), true);
-  assert.equal(await itemStatus(store, item), "todo", "a re-classification that kept the failure moved the item");
-
-  assert.equal(await store.jobs.reclassifyJob(job.id, { status: "done", prUrl: PR_URL }), true);
-  assert.equal(await itemStatus(store, item), "in_review");
-});
-
-test("a repair from a done witness puts the item in review, and a failed witness sends it back to todo", async (t) => {
-  const failed = await queuedItem(t, "store-close-witness-failed");
-  await failed.store.jobs.claimJobById(failed.job.id, { worker: WORKER, cap: 4 });
-  assert.equal(await failed.store.jobs.repairJobFromWitness(failed.job.id, { status: "failed", prUrl: null }), true);
-  assert.equal(await itemStatus(failed.store, failed.item), "todo");
-
-  const delivered = await queuedItem(t, "store-close-witness-done");
-  await delivered.store.jobs.claimJobById(delivered.job.id, { worker: WORKER, cap: 4 });
-  assert.equal(await delivered.store.jobs.repairJobFromWitness(delivered.job.id, { status: "done", prUrl: PR_URL }), true);
-  assert.equal(await itemStatus(delivered.store, delivered.item), "in_review");
-});
 
 test("a write another worker owns reports false and moves nothing", async (t) => {
-  const { store, item, job } = await queuedItem(t, "store-close-refused");
+  const { store, job } = await storeWithJob(t, "store-close-refused");
   await store.jobs.claimJobById(job.id, { worker: WORKER, cap: 4 });
 
   assert.equal(await store.jobs.finishJob(job.id, { worker: "host:9999", status: "done", prUrl: PR_URL }), false);
-  assert.equal(await itemStatus(store, item), "in_progress", "the item of a job another worker owns was moved by a refused write");
   assert.equal((await store.jobs.getJob(job.id)).status, "running");
 });
 
-test("followJob answers 0 for an unknown job, refuses a malformed id, and is idempotent", async (t) => {
-  const { store, item, job } = await queuedItem(t, "store-follow-job");
-
-  assert.equal(await store.issues.followJob(4242), 0);
-  await assert.rejects(store.issues.followJob("not an id"), /positive integer issue id/);
-  assert.equal(await itemStatus(store, item), "in_progress");
-
-  await store.jobs.cancelJob(job.id, { reason: "not now" });
-  assert.equal(await itemStatus(store, item), "todo");
-  assert.equal(await store.issues.followJob(job.id), 0, "a second follow moved the item again");
+test("jobSpawnRefs answers the project key of a job, and refuses an unknown job", async (t) => {
+  const { store, job } = await storeWithJob(t, "store-spawn-refs");
+  assert.deepEqual(await store.jobs.jobSpawnRefs(job.id), { projectKey: "AP" });
+  await assert.rejects(store.jobs.jobSpawnRefs(4242), /unknown job `4242`/);
 });
 
 test("health answers the raw numbers of a diagnosis, never an exception", async (t) => {

@@ -9,11 +9,10 @@ import { frozenInstall } from "../src/cli/frozen-install.mjs";
 import { stageable } from "../src/cli/run-publish.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
-import { linkIssueJob, saveIssue } from "../src/memory/issues.mjs";
 import { recordJobBlock, recordRunFields } from "../src/queue/run-state.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
 import { makeSickHome } from "../test-support/sick-home.mjs";
-import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
 
 const SLUG = "fix-the-worker";
 
@@ -200,29 +199,10 @@ function readyCommit(t, env, repo, name, message) {
 
 const CO_AUTHORED = "feat: ship it\n\nRefs are resolved at the edge.\n\nCo-Authored-By: Someone <someone@example.invalid>\n";
 
-test("`run commit` of an issue job adds `Refs: <item ref>` as the last trailer of the existing block, and the agent's file is untouched", async (t) => {
-  const env = makeQueue(t, "run-commit-issue");
-  const { id, repo } = boundRun(t, env);
-  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
-  assert.equal(linkIssueJob(item.id, id, env), true);
-  const message = readyCommit(t, env, repo, "run-commit-issue-message", CO_AUTHORED);
-
-  const { code, text } = await runCli(env, ["run", "commit", "--message-file", message], { jobId: id });
-
-  assert.equal(code, 0, text);
-  assert.deepEqual(lastMessage(repo), {
-    body: "feat: ship it\n\nRefs are resolved at the edge.\n\nCo-Authored-By: Someone <someone@example.invalid>\nRefs: AP-1",
-    trailers: ["Co-Authored-By: Someone <someone@example.invalid>", "Refs: AP-1"],
-  });
-  assert.equal(readFileSync(message, "utf8"), CO_AUTHORED, "the agent's message file was edited");
-});
-
-test("`run commit` inside a job with a job block commits on an unavailable database, with the `Refs:` trailer read from state.json", async (t) => {
+test("`run commit` inside a job with a job block commits on an unavailable database, the message untouched", async (t) => {
   const env = makeQueue(t, "run-commit-sick-home");
   const { id, repo } = boundRun(t, env);
-  const item = saveIssue({ type: "feature", projectId: projectIdOf(env, "alpha"), title: "ship it" }, env);
-  assert.equal(linkIssueJob(item.id, id, env), true);
-  const block = { id, projectKey: "AP", itemRef: item.ref, createdAt: new Date().toISOString() };
+  const block = { id, projectKey: "AP", createdAt: new Date().toISOString() };
   assert.equal(recordJobBlock({ projectId: ensureProject(env, "alpha"), slug: SLUG, block, env }).status, "written");
   const message = readyCommit(t, env, repo, "run-commit-sick-home-message", "feat: ship it\n");
   const sick = makeSickHome(env);
@@ -231,7 +211,7 @@ test("`run commit` inside a job with a job block commits on an unavailable datab
   const { code, text, errText } = await runCli(env, ["run", "commit", "--message-file", message], { jobId: id });
 
   assert.equal(code, 0, `${text}\n${errText}`);
-  assert.deepEqual(lastMessage(repo), { body: `feat: ship it\n\nRefs: ${item.ref}`, trailers: [`Refs: ${item.ref}`] });
+  assert.deepEqual(lastMessage(repo), { body: "feat: ship it", trailers: [] });
 });
 
 test("`run commit` inside a job with no job block on an unavailable database refuses with the store error and commits nothing", async (t) => {
@@ -249,12 +229,13 @@ test("`run commit` inside a job with no job block on an unavailable database ref
   assert.equal(execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), head);
 });
 
-test("`run commit` of a free-prompt job, or outside the queue, commits the message untouched", async (t) => {
+test("`run commit` inside a job, or outside the queue, commits the message untouched and never edits the agent's file", async (t) => {
   const env = makeQueue(t, "run-commit-free");
   const { id, repo } = boundRun(t, env);
   const inside = readyCommit(t, env, repo, "run-commit-free-message", CO_AUTHORED);
   assert.equal((await runCli(env, ["run", "commit", "--message-file", inside], { jobId: id })).code, 0);
-  assert.equal(lastMessage(repo).body, CO_AUTHORED.trimEnd());
+  assert.deepEqual(lastMessage(repo), { body: CO_AUTHORED.trimEnd(), trailers: ["Co-Authored-By: Someone <someone@example.invalid>"] });
+  assert.equal(readFileSync(inside, "utf8"), CO_AUTHORED, "the agent's message file was edited");
 
   writeIn(repo, "src/a.mjs", "changed\n");
   const outside = writeMessage(t, "run-commit-outside-message", "fix: outside\n");
@@ -268,8 +249,8 @@ test("a message carrying a `Refs:` line is REFUSED naming the line, and nothing 
   const { id, repo } = boundRun(t, env);
   const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const cases = [
-    ["feat: x\n\nRefs: AP-1\n", "line 3 of the message is a `Refs:` trailer, which `run commit` appends from the job row: Refs: AP-1"],
-    ["feat: x\n\nbody\n\n  refs : AP-1  \n", "line 5 of the message is a `Refs:` trailer, which `run commit` appends from the job row: refs : AP-1"],
+    ["feat: x\n\nRefs: AP-1\n", "line 3 of the message is a `Refs:` trailer, which only the runtime writes: Refs: AP-1"],
+    ["feat: x\n\nbody\n\n  refs : AP-1  \n", "line 5 of the message is a `Refs:` trailer, which only the runtime writes: refs : AP-1"],
   ];
   for (const [index, [body, reason]] of cases.entries()) {
     const message = readyCommit(t, env, repo, `run-commit-refs-${index}`, body);
