@@ -33,7 +33,7 @@ async function jobRun(own, values, env) {
   if (values.project !== undefined || values.slug !== undefined) refuseNamedRun(own);
   const run = await resolveJobRun(own, env);
   if (!isSafeSegment(run.slug)) refuseMissingSlug(own);
-  return { jobId: own, project: run.project, projectId: run.projectId, slug: run.slug };
+  return { jobId: own, project: run.project, projectId: run.projectId, slug: run.slug, origin: run.origin ?? null };
 }
 
 // The run an operator names from outside a job, where nothing else can tell which one it is.
@@ -52,7 +52,7 @@ function operatorRun(values, env) {
   if (!registered) {
     throw new UserError(`unknown project \`${project}\`: pass the registered project NAME; list them with \`nightqueue project list\``);
   }
-  return { jobId: null, project: registered.name, projectId: registered.id, slug };
+  return { jobId: null, project: registered.name, projectId: registered.id, slug, origin: null };
 }
 
 // The run every `nightqueue run` subcommand acts on: the caller's own job run inside the queue, the one an operator named outside it.

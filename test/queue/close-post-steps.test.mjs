@@ -114,6 +114,20 @@ test("a project without integrations closes exactly as before: no post-close ent
   });
 });
 
+test("an org-scoped origin (sentry) in a project without integrations still closes with no post-close step", async (t) => {
+  const env = makeHome(t, "post-sentry-none");
+  const checkout = makeProject(t, env, "alpha");
+  const id = seedDoneJob(env, { prompt: "the worker crashes, see https://acme.sentry.io/issues/4507/" });
+  assert.deepEqual(jobView(getJob(id, env)).origin, { kind: "sentry", ref: "4507" });
+  const fetch = fakeFetch();
+  const { outcome, reported, row } = await closeOnce({ env, checkout, id, store: openStore(env) }, { fetch });
+
+  assert.equal(outcome.postClose, undefined);
+  assert.deepEqual(reported.map((step) => step.name), ["preflight", "conflict", "merge", "settle"]);
+  assert.equal(row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");
+  assert.equal(fetch.calls.length, 0);
+});
+
 test("with integrations the origin is resolved and the close logged once, the job stays closed and the notice is unchanged", async (t) => {
   await withProviders([closingProvider()], async () => {
     const home = postHome(t, "post-done");

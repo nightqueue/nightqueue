@@ -1,7 +1,20 @@
 import { type ReactNode, useState } from "react";
-import { type AddJobForm, addFormProblem, buildAddArgs, DEFAULT_PRIORITY, EMPTY_ADD_FORM, PRIORITIES, queueJob, TIERS, type Tier } from "../lib/addJob";
+import {
+  type AddJobForm,
+  addFormProblem,
+  buildAddArgs,
+  clearOrigin,
+  DEFAULT_PRIORITY,
+  EMPTY_ADD_FORM,
+  effectiveProject,
+  PRIORITIES,
+  queueJob,
+  TIERS,
+  type Tier,
+} from "../lib/addJob";
 import { useProjects } from "../lib/api";
 import { runnersOnlineLabel } from "../lib/queue";
+import type { JobOrigin } from "../lib/types";
 import { useEscape } from "../lib/useEscape";
 import { useSubmit } from "../lib/useSubmit";
 import { ProjectPicker } from "./ProjectPicker";
@@ -11,6 +24,10 @@ interface AddJobDrawerProps {
   runnersOnline: number;
   onClose: () => void;
   initialProject?: string;
+  initialText?: string;
+  initialOrigin?: JobOrigin;
+  initialOriginUrl?: string;
+  onQueued?: () => void;
 }
 
 type SetField = <K extends keyof AddJobForm>(key: K, value: AddJobForm[K]) => void;
@@ -37,6 +54,27 @@ function ProjectField({ projects, value, onChange }: { projects: ReturnType<type
   if (projects.isError) return <p className="m-0 text-sm text-red">The projects cannot be read; reload the page.</p>;
   if (projects.data.length === 0) return <p className="m-0 text-sm text-muted">No project is registered in this home.</p>;
   return <ProjectPicker id="add-project" projects={projects.data} value={value} onChange={onChange} />;
+}
+
+// The origin the job carries, removable with its ×.
+function OriginChip({ origin, onClear }: { origin: JobOrigin; onClear: () => void }) {
+  return (
+    <div>
+      <span className="inline-flex min-h-7 items-center gap-1.5 rounded-full border border-button-line bg-row-line py-0.5 pr-1 pl-2.5 text-sm">
+        <span className="font-mono">
+          {origin.kind} {origin.ref}
+        </span>
+        <button type="button" aria-label={`remove the ${origin.kind} origin`} className="rounded-full border-0 bg-transparent px-1.5 text-muted hover:text-fg" onClick={onClear}>
+          ×
+        </button>
+      </span>
+    </div>
+  );
+}
+
+// The first draft of the form, from what opened the drawer.
+function initialDraft({ initialProject, initialText, initialOrigin, initialOriginUrl }: Omit<AddJobDrawerProps, "runnersOnline" | "onClose" | "onQueued">): AddJobForm {
+  return { ...EMPTY_ADD_FORM, project: initialProject ?? "", text: initialText ?? "", origin: initialOrigin ?? null, originUrl: initialOriginUrl ?? null };
 }
 
 // The brief of the job: the whole request, as prose.
@@ -79,16 +117,20 @@ function CallPreview({ args, runnersOnline, problem }: { args: Record<string, un
   );
 }
 
-// The Add job drawer: one form (project, brief, tier, priority); queues with `queue_add`, optionally starting a runner.
-export function AddJobDrawer({ runnersOnline, onClose, initialProject }: AddJobDrawerProps) {
+// The Add job drawer: one form (project, brief, tier, priority, optional origin); queues with `queue_add`, optionally starting a runner.
+export function AddJobDrawer({ runnersOnline, onClose, onQueued, ...initial }: AddJobDrawerProps) {
   const projects = useProjects();
-  const [draft, setDraft] = useState<AddJobForm>({ ...EMPTY_ADD_FORM, project: initialProject ?? "" });
-  const form: AddJobForm = { ...draft, project: draft.project || projects.data?.[0]?.name || "" };
+  const [draft, setDraft] = useState<AddJobForm>(() => initialDraft(initial));
+  const firstProject = initial.initialOrigin ? "" : (projects.data?.[0]?.name ?? "");
+  const form: AddJobForm = { ...draft, project: effectiveProject(draft, firstProject) };
   const set: SetField = (key, value) => setDraft((current) => ({ ...current, project: form.project, [key]: value }));
   const changeProject = (project: string) => setDraft((current) => ({ ...current, project }));
   const args = buildAddArgs(form);
   const problem = addFormProblem(form);
-  const submit = useSubmit(queueJob, onClose);
+  const submit = useSubmit(queueJob, () => {
+    onQueued?.();
+    onClose();
+  });
   useEscape(onClose);
   return (
     <div className="fixed inset-0 z-40">
@@ -101,6 +143,7 @@ export function AddJobDrawer({ runnersOnline, onClose, initialProject }: AddJobD
           <Field id="add-project" label="Project">
             <ProjectField projects={projects} value={form.project} onChange={changeProject} />
           </Field>
+          {form.origin && <OriginChip origin={form.origin} onClear={() => setDraft(clearOrigin(form))} />}
           <BriefField form={form} set={set} />
           <RunFields form={form} set={set} />
           <CallPreview args={args} runnersOnline={runnersOnline} problem={problem} />

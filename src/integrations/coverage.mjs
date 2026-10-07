@@ -1,13 +1,18 @@
 import { loadConfig, loadSecrets } from "../config/store.mjs";
 import { publicFields, resolveForClose } from "./connections.mjs";
-import { providerOf } from "./registry.mjs";
+import { actsOnOrigin, isHomeScoped, providerOf } from "./registry.mjs";
 
 const NONE = "none";
 
-// The coverage a provider without its own rule answers: the org's single slot, when there is one.
+// Where a kind's connection lives, as the end of a sentence: the home for a home-scoped kind, the org otherwise.
+export function connectionPlace(kind) {
+  return isHomeScoped(kind) ? "in the home" : "in the org";
+}
+
+// The coverage a provider without its own rule answers: the org's single slot, or the home's connection, when there is one.
 function slotCoverage(kind, { slot }) {
   if (slot) return { connection: slot.name, detail: null };
-  return { connection: null, detail: `no ${kind} connection in the org` };
+  return { connection: null, detail: `no ${kind} connection ${connectionPlace(kind)}` };
 }
 
 // The org's connections of a kind as names and public fields only.
@@ -32,7 +37,7 @@ export function originCoverage({ origin, orgId, integrations, config, secrets })
   const base = { kind: origin.kind, ref: origin.ref };
   const provider = providerOf(origin.kind);
   if (!provider) return { ...base, connection: NONE, detail: `this build has no ${origin.kind} provider` };
-  if (!integrations?.[origin.kind]) return { ...base, connection: NONE, detail: `project has no ${origin.kind} integration` };
+  if (!actsOnOrigin(origin.kind, integrations)) return { ...base, connection: NONE, detail: `project has no ${origin.kind} integration` };
   const covered = providerCoverage(provider, origin.ref, publicConnections({ provider, orgId, config, secrets }));
   return { ...base, connection: covered.connection ?? NONE, detail: covered.detail };
 }

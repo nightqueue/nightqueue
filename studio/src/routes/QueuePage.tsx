@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AddJobDrawer } from "../components/AddJobDrawer";
 import { CancelJobDialog } from "../components/CancelJobDialog";
 import { CloseJobDialog } from "../components/CloseJobDialog";
+import { IssuesCard } from "../components/IssuesCard";
 import type { RowActions, RowContext } from "../components/JobCells";
 import { QueueCards } from "../components/QueueCard";
 import { QueueSkeleton } from "../components/QueueSkeleton";
@@ -15,7 +16,8 @@ import { closeJob, closesWithoutConfirm, runJob, setQueuePaused, startRunner, st
 import { useQueueSnapshot } from "../lib/events";
 import { ALL_PROJECTS, filterJobs, normalizeSnapshot, totalCount } from "../lib/queue";
 import { setSelectedProject } from "../lib/selectedProject";
-import type { Job, QueueFilters, Runner, RunnerChoice } from "../lib/types";
+import type { IssueDraft } from "../lib/tracker";
+import type { Job, JobOrigin, QueueFilters, Runner, RunnerChoice } from "../lib/types";
 import { useAction } from "../lib/useAction";
 
 const INITIAL_FILTERS: QueueFilters = { status: "all", projectId: ALL_PROJECTS, search: "" };
@@ -24,7 +26,7 @@ type Dialog = { pick: RowMenuPick; job: Job } | null;
 
 type Menu = { job: Job; anchor: HTMLElement } | null;
 
-type Drawer = { project?: string } | null;
+type Drawer = { project?: string; text?: string; origin?: JobOrigin; originUrl?: string } | null;
 
 const byJob = (job: Job) => String(job.id);
 
@@ -33,6 +35,9 @@ const byRunner = (runner: Runner) => String(runner.pid);
 const byChoice = (choice: RunnerChoice) => choice.mode;
 
 const byPause = () => "pause";
+
+// The drawer state that opens Add job prefilled from a tracker issue.
+const issueDrawer = (draft: IssueDraft): Drawer => ({ text: draft.text, origin: draft.origin, originUrl: draft.originUrl ?? undefined });
 
 // The runner banner's actions: start by mode, stop one runner, pause or resume the whole queue.
 function useRunnerActions(): RunnerActions {
@@ -94,6 +99,7 @@ export function QueuePage() {
   const [menu, setMenu] = useState<Menu>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [drawer, setDrawer] = useState<Drawer>(null);
+  const [issuesReload, setIssuesReload] = useState(0);
   const onRun = useAction(runJob, byJob);
   const closeMerged = useAction(closeJob, byJob);
   const runnerActions = useRunnerActions();
@@ -108,6 +114,8 @@ export function QueuePage() {
   const closeMenu = useCallback(() => setMenu(null), []);
   const closeDialog = useCallback(() => setDialog(null), []);
   const closeDrawer = useCallback(() => setDrawer(null), []);
+  const openIssueDrawer = useCallback((draft: IssueDraft) => setDrawer(issueDrawer(draft)), []);
+  const reloadIssues = useCallback(() => setIssuesReload((key) => key + 1), []);
   useEffect(() => setSelectedProject(filters.projectId), [filters.projectId]);
   const snapshot = useMemo(() => (raw ? normalizeSnapshot(raw) : undefined), [raw]);
   const shown = useMemo(() => (snapshot ? filterJobs(snapshot.jobs, filters) : []), [snapshot, filters]);
@@ -118,9 +126,20 @@ export function QueuePage() {
       <Toolbar counts={snapshot.counts} filters={filters} onFilters={setFilters} onAddJob={() => setDrawer({})} />
       <RunnerBanner snapshot={snapshot} actions={runnerActions} />
       <JobsSection jobs={shown} total={totalCount(snapshot.counts)} context={context} queueEmpty={snapshot.jobs.length === 0} />
+      <IssuesCard onQueue={openIssueDrawer} reloadKey={issuesReload} />
       {menu && <RowMenu job={menu.job} anchor={menu.anchor} onPick={(pick, job) => setDialog({ pick, job })} onClose={closeMenu} />}
       {dialog && <RowDialog dialog={dialog} runnersOnline={snapshot.runnersOnline} onClose={closeDialog} />}
-      {drawer && <AddJobDrawer runnersOnline={snapshot.runnersOnline} onClose={closeDrawer} initialProject={drawer.project} />}
+      {drawer && (
+        <AddJobDrawer
+          runnersOnline={snapshot.runnersOnline}
+          onClose={closeDrawer}
+          initialProject={drawer.project}
+          initialText={drawer.text}
+          initialOrigin={drawer.origin}
+          initialOriginUrl={drawer.originUrl}
+          onQueued={drawer.origin ? reloadIssues : undefined}
+        />
+      )}
     </>
   );
 }

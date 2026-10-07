@@ -89,7 +89,7 @@ test("a host that went through setup has no failing check", async (t) => {
   assert.equal(statusOf(report, "database"), "warn");
   assert.equal(statusOf(report, "runtime"), "ok");
   assert.equal(statusOf(report, "tool contract"), "ok");
-  assert.match(report.checks.find((check) => check.name === "tool contract").detail, /^contract 4;/);
+  assert.match(report.checks.find((check) => check.name === "tool contract").detail, /^contract 5;/);
   assert.equal(statusOf(report, "shim nightqueue"), "ok");
   assert.equal(statusOf(report, "path"), "warn");
   assert.equal(statusOf(report, "embedding"), "warn");

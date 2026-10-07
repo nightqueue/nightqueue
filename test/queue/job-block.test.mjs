@@ -184,10 +184,12 @@ test("the run of a job resolves from its row while the database answers, and fro
   assert.equal(recordJobBlock({ projectId, slug: "the-retry", block: { id, projectKey: "AP", createdAt }, env }).status, "written");
   assert.equal(recordJobBlock({ projectId, slug: "another-job", block: { id: id + 1, createdAt }, env }).status, "written");
 
-  assert.deepEqual(await resolveJobRun(id, env), { project: "alpha", projectId, slug: "the-retry", source: "db" });
+  assert.deepEqual(await resolveJobRun(id, env), { project: "alpha", projectId, slug: "the-retry", origin: null, source: "db" });
+  const traced = addJob({ projectId, prompt: "close the issue", slug: "the-traced", origin: { kind: "linear", ref: "mk-42" } }, env).id;
+  assert.deepEqual((await resolveJobRun(traced, env)).origin, { kind: "linear", ref: "MK-42" });
   const sick = makeSickHome(env);
   t.after(() => sick.restore());
-  assert.deepEqual(await resolveJobRun(id, env), { project: "AP", projectId, slug: "the-retry", source: "disk" });
+  assert.deepEqual(await resolveJobRun(id, env), { project: "AP", projectId, slug: "the-retry", origin: null, source: "disk" });
   assert.equal(diskJobRun(id + 7, env), null);
   await assert.rejects(resolveJobRun(id + 7, env), { name: "StoreUnavailableError", code: "SQLITE_NOTADB" });
 });

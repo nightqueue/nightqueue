@@ -240,6 +240,13 @@ test("`run pr` inside a job, or outside the queue, ends with only `Opened by nig
   assert.equal(operator, `${BODY.trimEnd()}\n\nOpened by nightqueue\n`);
 });
 
+test("`run pr` inside a job with an origin ends with the footer naming the origin's kind and ref", async (t) => {
+  const { env, id } = makeRun(t, "run-pr-origin");
+  openDb(env).prepare("UPDATE jobs SET origin = ? WHERE id = ?").run(JSON.stringify({ kind: "linear", ref: "MK-42" }), id);
+  const published = await publishedBody(t, { env, jobId: id, name: "run-pr-origin-body" });
+  assert.equal(published, `${BODY.trimEnd()}\n\nOpened by nightqueue · linear MK-42\n`);
+});
+
 test("a body carrying the footer, a `Refs` line, a job id or the run slug is REJECTED naming the line, and nothing is pushed", async (t) => {
   const { env, id, remote } = makeRun(t, "run-pr-traceability");
   const rejectedFor = async (line, what, index) =>

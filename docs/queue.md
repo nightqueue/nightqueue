@@ -81,8 +81,9 @@ in registry order, whose parser matches the prompt - or the one `--origin <kind>
 (`queue_add`'s `origin: {kind, ref}`) names explicitly, split on the first `:`.
 An explicit origin wins over detection; one whose kind no provider knows, or whose ref
 the provider does not read as its own, is refused and nothing is queued. A prompt that
-names no service queues a job with no origin, exactly as before. The answer names the
-origin and the org connection that covers it: `queue add` prints a line of its own,
+names no service queues a job with no origin, exactly as before. `origin: false` queues a job
+with no origin; detection runs only when `origin` is omitted or null. The answer names the
+origin and the org (or, for a home-scoped provider, home) connection that covers it: `queue add` prints a line of its own,
 `origin: <kind> <ref> (connection: <name|none>)`, and `queue_add` answers
 `origin: {kind, ref, connection, detail?}` plus `Origin: ...` in its hint (`none` with the
 reason in `detail`, e.g. `project has no <kind> integration`). `queue status <id>` shows an
@@ -90,8 +91,9 @@ reason in `detail`, e.g. `project has no <kind> integration`). `queue status <id
 
 **The runner enriches the origin at claim.** A claimed job with an origin writes one
 `origin: <kind> <ref> (connection: <name|none>)` line in its job log (the narrated log
-shows it). When the project enabled that provider (`projects.integrations` has its kind),
-the provider can read, a connection of the org covers the origin and the run has no
+shows it). When the project enabled that provider (`projects.integrations` has its kind)
+or the provider is home-scoped (Linear), the provider can read, a connection covers the
+origin (the org's, or the home's for a home-scoped provider) and the run has no
 `origin/<kind>.md` yet, the runner fetches what the service knows about it (20 s in all)
 into `<run_dir>/origin/<kind>.md`, mode 0600, capped at 16 KiB (cut on a character, marked
 `[truncated]`). The fetch never fails the job: a refusal, a timeout or a network failure
@@ -115,6 +117,30 @@ level, runtime, os, browser and the like); never its request, user, contexts, he
 cookies, nor tags such as `user`, `url` or `server_name` - and the close's **origin** step marks the issue with that status and leaves
 a best-effort note `Fixed by <pr url>, merged as <sha7>` (a note that fails is a warning, the
 issue still counts as resolved). A short id is resolved to its issue id through the API first.
+
+**Linear.** A Linear connection is home-scoped: one API key covers the whole workspace, so
+the home holds at most one (`echo "$LINEAR_API_KEY" | nightqueue connection add linear --type
+linear`, a second is refused naming the first), it binds to no org (`connection bind` and
+`--org` are refused) and the project needs no `project integrations` setting (`set linear.*`
+is refused with `linear has no settings`). It acts for the jobs of every org and project of the
+home; there is no mapping between nightqueue orgs/projects and Linear teams/projects. A prompt
+with a Linear issue link (`https://linear.app/<workspace>/issue/MK-42/...`) gets the origin
+`linear MK-42`; an identifier counts only written in upper case right after the word linear
+(`linear MK-42`, `Linear: MK-42`) or given as `--origin linear:mk-42` (any case, stored upper),
+never a bare `MK-42` in prose (the same rule as Sentry, so `J-86` and `D-55` stay safe). With
+the connection, the runner writes `origin/linear.md` at claim - identifier, title, state, team,
+priority, assignee, dates, URL, parent, the description verbatim, labels, attachments and up to
+20 comments oldest first (each cut at 2000 characters); never an email or an avatar - and the
+close's **origin** step moves the issue to its team's `completed` state of lowest position, then
+comments `Merged <pr url> (<job ref>, nightqueue)`. An issue already completed or canceled when
+its pull request merges keeps its state and only gets the comment; any other issue moves to its
+team's first completed state (lowest position) plus the comment. A team with no `completed` state still gets
+the comment (a `warning`); a failed move is a `warning` that leaves the job not notified, so
+`queue close <id> --steps origin` retries both. With no Linear connection the coverage is
+`none` (`no linear connection in the home`), enrichment logs one skipped line and the close step
+is `skipped`; the job never fails for it. The Studio's Issues card and the `tracker_issues` MCP
+tool list the workspace's issues by Linear team and project; queueing from one sends
+`origin: {kind: "linear", ref}` and the nightqueue `project` the operator picks.
 
 **Discord.** A prompt with a Discord message link
 (`https://discord.com/channels/<guild>/<channel>/<message>`, also `ptb.`/`canary.` and
@@ -1059,12 +1085,13 @@ now `closed`: **origin** tells the service the job came from (its recorded `orig
 pull request merged, through the provider of that kind, and **log** posts the close to every
 provider whose `<kind>.log.connection` the project set and whose `<kind>.log.events` (default
 `closed`) includes `closed`. They run only for a project with integrations (`nightqueue project
-integrations`): a project without them closes exactly as before, with no extra step, line or
+integrations`) or a job whose origin is home-scoped (Linear, which then runs the origin step and
+skips the log step): a project without them closes exactly as before, with no extra step, line or
 write. They never stop, fail or reopen a close and never change the job's status: each records
 `done`, `skipped` or `warning` (a failure, an exception or the budget is a `warning`) under a
 post-close lease held in `close_worker` (a closed row never carries a `close_status`), with a
 budget of its own of 60 s. A warning, and a skip worth telling (an origin with no connection in
-the org), appends `After close: <step> <status> - <note>` to the notice; a later success of the
+the org, or in the home for a home-scoped kind), appends `After close: <step> <status> - <note>` to the notice; a later success of the
 same step appends its own line. Both steps are idempotent: `data.originNotified` and
 `data.logged` (one flag per provider) make a re-run answer `already notified` / `already
 logged` without a request. `nightqueue queue close <id> --steps origin,log` re-runs only the

@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { isStoreOutage } from "../config/errors.mjs";
 import { runsDir } from "../config/paths.mjs";
+import { parseOriginColumn } from "../integrations/origin.mjs";
 import { openStore } from "../store/open.mjs";
 import { isStateObject, readRunState } from "./resume.mjs";
 
@@ -32,7 +33,7 @@ export function diskJobRun(jobId, env = process.env) {
   try {
     const [newest] = runsOfJob(Number(jobId), env).sort((a, b) => String(b.state.updatedAt ?? "").localeCompare(String(a.state.updatedAt ?? "")));
     if (!newest) return null;
-    return { project: newest.state.job.projectKey ?? null, projectId: newest.projectId, slug: newest.slug, source: "disk" };
+    return { project: newest.state.job.projectKey ?? null, projectId: newest.projectId, slug: newest.slug, origin: null, source: "disk" };
   } catch {
     return null;
   }
@@ -42,7 +43,7 @@ export function diskJobRun(jobId, env = process.env) {
 export async function resolveJobRun(jobId, env = process.env) {
   try {
     const row = await openStore(env).jobs.getJob(jobId);
-    return { project: row?.project ?? null, projectId: row?.project_id ?? null, slug: row?.slug ?? null, source: "db" };
+    return { project: row?.project ?? null, projectId: row?.project_id ?? null, slug: row?.slug ?? null, origin: parseOriginColumn(row?.origin), source: "db" };
   } catch (err) {
     if (!isStoreOutage(err)) throw err;
     const found = diskJobRun(jobId, env);

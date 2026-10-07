@@ -7,7 +7,9 @@ import path from "node:path";
 import { CONNECTION_TYPES, requireType } from "../../src/config/connections.mjs";
 import { emptySlots } from "../../src/config/schema.mjs";
 import {
+  actsOnOrigin,
   connectionTypes,
+  isHomeScoped,
   manyTypes,
   originProviders,
   providerOf,
@@ -20,13 +22,13 @@ import { requestJson } from "../../src/integrations/http.mjs";
 const INTEGRATIONS_DIR = fileURLToPath(new URL("../../src/integrations/", import.meta.url));
 const SECRET = "ghp_registrytestsecret0000000000000000";
 
-test("the registry lists github first, then sentry, then discord, in this build", () => {
-  assert.deepEqual(providers().map((provider) => provider.kind), ["github", "sentry", "discord"]);
+test("the registry lists github first, then sentry, then linear, then discord, in this build", () => {
+  assert.deepEqual(providers().map((provider) => provider.kind), ["github", "sentry", "linear", "discord"]);
   assert.equal(providerOf("github").kind, "github");
   assert.equal(providerOf("nope"), null);
   assert.deepEqual(slotTypes(), ["github", "sentry"]);
   assert.deepEqual(manyTypes(), ["discord"]);
-  assert.deepEqual(originProviders().map((provider) => provider.kind), ["sentry", "discord"]);
+  assert.deepEqual(originProviders().map((provider) => provider.kind), ["sentry", "linear", "discord"]);
 });
 
 test("emptySlots is derived from the one-cardinality providers", () => {
@@ -36,7 +38,7 @@ test("emptySlots is derived from the one-cardinality providers", () => {
 
 test("CONNECTION_TYPES is the registry's map with the github descriptor", () => {
   assert.ok(CONNECTION_TYPES instanceof Map);
-  assert.deepEqual([...CONNECTION_TYPES.keys()], ["github", "sentry", "discord"]);
+  assert.deepEqual([...CONNECTION_TYPES.keys()], ["github", "sentry", "linear", "discord"]);
   const github = CONNECTION_TYPES.get("github");
   assert.deepEqual(github.secretFields, ["token"]);
   assert.deepEqual(github.extraFields, []);
@@ -59,8 +61,18 @@ test("withProviders swaps the list for the callback and restores it after a thro
     assert.deepEqual({ ...emptySlots() }, {});
   });
   await assert.rejects(() => withProviders([fake], () => Promise.reject(new Error("boom"))), /boom/);
-  assert.deepEqual(providers().map((provider) => provider.kind), ["github", "sentry", "discord"]);
+  assert.deepEqual(providers().map((provider) => provider.kind), ["github", "sentry", "linear", "discord"]);
   await assert.rejects(() => withProviders("fake", () => null), TypeError);
+});
+
+test("a home-scoped kind has no org slot and acts on an origin without project enablement", () => {
+  assert.equal(isHomeScoped("linear"), true);
+  assert.equal(isHomeScoped("sentry"), false);
+  assert.equal(isHomeScoped("nope"), false);
+  assert.equal(actsOnOrigin("linear", null), true);
+  assert.equal(actsOnOrigin("sentry", null), false);
+  assert.equal(actsOnOrigin("sentry", { sentry: {} }), true);
+  assert.equal(slotTypes().includes("linear"), false);
 });
 
 test("provider modules import neither config/schema.mjs nor config/connections.mjs", () => {

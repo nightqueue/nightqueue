@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { useQuery } from "@tanstack/react-query";
+import type { TrackerAnswer } from "./types";
 
 // A tool call the server answered with `isError`, carrying the tool's own text.
 export class ToolError extends Error {}
@@ -40,6 +41,11 @@ export async function callTool<T>(name: string, args: Record<string, unknown> = 
   } catch {
     throw new ToolError(`${name} answered something that is not JSON`);
   }
+}
+
+// Lists the issues of the home's tracker connection; a refusal is an answer with `ok: false`, never a throw.
+export function fetchTrackerIssues(args: Record<string, unknown>): Promise<TrackerAnswer> {
+  return callTool<TrackerAnswer>("tracker_issues", args);
 }
 
 // Whether the MCP endpoint answers, and how many tools it lists, re-checked every 30 seconds.

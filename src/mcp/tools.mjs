@@ -71,6 +71,7 @@ import {
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
 import { coverageField, coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { changeProjectIntegrations, INTEGRATION_ACTIONS, integrationsView } from "../integrations/settings.mjs";
+import { TRACKER_LIMIT, TRACKER_STATES, trackerInstructionLines, trackerIssues } from "../integrations/tracker.mjs";
 import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons } from "./phase-context.mjs";
 import { phasePrompt, PROMPT_TARGETS } from "./phase-prompt.mjs";
 import { readVersion } from "../cli/version.mjs";
@@ -98,6 +99,7 @@ const SERVER_INSTRUCTIONS = [
   "Call `queue_status` to see what is pending before suggesting a batch.",
   "decisions are the project's standing constraints - recall them before proposing architecture and save one when the user settles a design question",
   "a constraint the conversation states for two or more repos of the same org is saved ONCE with `org`, never once per repo: a project reads its own decisions and its org's",
+  ...trackerInstructionLines(),
 ].join("\n");
 const PROMPT_SOURCE_MISSING = "queue_add needs `prompt`, the whole request as prose";
 const RECALL_LIMIT = 8;
@@ -736,7 +738,7 @@ async function queueCancelAnswer(args, env) {
   return { ok: true, ...(await stopAndCancelJob({ ...cancel, releaseWorktree: args.release_worktree === true })) };
 }
 
-// The twenty-six tools of the plugin contract, with the parameter names the plugin actually sends.
+// The twenty-seven tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -994,11 +996,11 @@ function toolDefinitions(env, state) {
             .optional()
             .describe("Risk tier of the job, set by the operator. The pipeline may only raise it, with evidence, never lower it."),
           origin: z
-            .object({ kind: z.string(), ref: z.string() })
+            .union([z.object({ kind: z.string(), ref: z.string() }), z.literal(false)])
             .nullable()
             .optional()
             .describe(
-              "The service the job came from, as `{kind, ref}`; omitted, the runtime detects it in the prompt with the registered providers. The answer carries `origin` with the org connection that covers it, or `none`.",
+              "The service the job came from, as `{kind, ref}`; omitted, the runtime detects it in the prompt with the registered providers. The answer carries `origin` with the org connection that covers it, or `none`. `false` queues the job with no origin and skips detection; omitted or null, the runtime detects it in the prompt.",
             ),
         },
       },
@@ -1052,6 +1054,24 @@ function toolDefinitions(env, state) {
         },
       },
       handler: async (args) => (args.action === "show" ? await showProjectIntegrations(args, env) : await changeProjectIntegrationsAnswer(args, env)),
+    },
+    {
+      name: "tracker_issues",
+      config: {
+        description:
+          "Read-only: lists the issues of the home's issue-tracker connection, newest update first, filtered by the service's own `team` key and `project` name - no nightqueue project argument. " +
+          "`state` is `open` (default), `closed` or `all`; `limit` 1..50 (default 25), `truncated: true` when more matched; `include_filters: true` adds `filters` (`teams`, `projects`), cached for five minutes. " +
+          "Answers `{ok: true, provider, items: [{ref, title, team, state, priority, priorityLabel, labels, url, updatedAt}], truncated}`, or `{ok: false, error: \"no-connection\" | \"provider-unavailable\", hint, provider}` as a normal answer. " +
+          "Queueing from an item is `queue_add` with `origin: {kind: provider, ref}` and the nightqueue `project`, after the person said yes.",
+        inputSchema: {
+          team: optionalText.describe("The tracker team key, e.g. `MK`."),
+          project: optionalText.describe("The tracker project name."),
+          state: z.enum(TRACKER_STATES).nullable().optional(),
+          limit: z.number().int().min(TRACKER_LIMIT.min).max(TRACKER_LIMIT.max).nullable().optional(),
+          include_filters: z.boolean().nullable().optional(),
+        },
+      },
+      handler: async (args) => await trackerIssues(args, { env }),
     },
     {
       name: "queue_status",
@@ -1388,7 +1408,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the twenty-six tools of the plugin contract.
+// Builds the MCP server with the twenty-seven tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {

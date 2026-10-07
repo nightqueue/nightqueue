@@ -1,7 +1,7 @@
 import { connectionRecord, orgUsesConnection, resolveForClose } from "./connections.mjs";
-import { quietFiles } from "./coverage.mjs";
+import { connectionPlace, quietFiles } from "./coverage.mjs";
 import { requestJson } from "./http.mjs";
-import { providerOf, providers } from "./registry.mjs";
+import { actsOnOrigin, providerOf, providers } from "./registry.mjs";
 import { getSetting } from "./settings.mjs";
 
 const HTTP_TIMEOUT_MS = 15000;
@@ -61,11 +61,11 @@ export async function originStep({ ctx, deps }) {
   if (!origin) return answer("skipped", "no origin");
   const provider = providerOf(origin.kind);
   if (typeof provider?.onClosed !== "function") return answer("skipped", `${origin.kind} has no close action`);
-  if (!ctx.integrations?.[origin.kind]) return answer("skipped", `project has no ${origin.kind} integration`);
+  if (!actsOnOrigin(origin.kind, ctx.integrations)) return answer("skipped", `project has no ${origin.kind} integration`);
   const { slot, connections } = resolveForClose({ kind: origin.kind, orgId: ctx.orgId, ...readFiles(ctx, deps) });
-  if (!slot && !connections.length) return answer("skipped", `no ${origin.kind} connection in the org`, { notice: true });
+  if (!slot && !connections.length) return answer("skipped", `no ${origin.kind} connection ${connectionPlace(origin.kind)}`, { notice: true });
   if (ctx.signal.aborted) return answer("warning", `interrupted before the ${origin.kind} close action`);
-  const settings = ctx.integrations[origin.kind];
+  const settings = ctx.integrations?.[origin.kind] ?? null;
   const result = await callProvider(origin.kind, "close action", () =>
     provider.onClosed({ ref: origin.ref, ...closeFacts(ctx), settings, slot, connections, http: boundHttp(ctx, deps) }),
   );

@@ -52,6 +52,7 @@ const CONTRACT_TOOLS = [
   "run_phase_done",
   "run_set",
   "run_terminate",
+  "tracker_issues",
 ];
 
 const LESSON = {
@@ -82,12 +83,25 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the twenty-six tools of the contract", async (t) => {
+test("the server exposes exactly the twenty-seven tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 26, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 27, "the contract list and the server disagree on how many tools there are");
+});
+
+test("tracker_issues with no tracker connection is a normal answer carrying the refusal and the contract", async (t) => {
+  const env = makeHome(t, "mcp-tracker-none");
+  const client = await connect(t, env);
+  const result = await client.callTool({ name: "tracker_issues", arguments: { state: "all", limit: 50, include_filters: true } });
+  assert.deepEqual(payloadOf(result), {
+    ok: false,
+    error: "no-connection",
+    provider: "linear",
+    hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
+    contract: 5,
+  });
 });
 
 test("the server never migrates a v8 home: a tool answers store-unavailable with the update message and the file stays v8", async (t) => {
@@ -305,7 +319,7 @@ test("the index round trip reports the freshness of the checkout", async (t) => 
       },
     }),
   );
-  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 4 });
+  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 5 });
 
   const fresh = payloadOf(
     await client.callTool({ name: "index_recall", arguments: { project: "alpha", repo_root: repo } }),
@@ -465,7 +479,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
     priority: 2,
     timeoutS: 600,
     hint: "queued J-1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.",
-    contract: 4,
+    contract: 5,
   });
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
@@ -1258,7 +1272,7 @@ test("queue_stop answers the CLI line per runner, and refuses an unknown pid", a
   const client = await connect(t, env);
 
   const empty = payloadOf(await client.callTool({ name: "queue_stop", arguments: {} }));
-  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 4 });
+  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 5 });
 
   const unknown = await client.callTool({ name: "queue_stop", arguments: { pid: 999999 } });
   assert.equal(unknown.isError, true, textOf(unknown));

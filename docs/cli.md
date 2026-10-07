@@ -138,7 +138,8 @@ for every subsection. Both: no bare `#<number>` outside a `Fixes`/`Closes` line,
 `{{placeholder}}` or `<...>` example left over from the template, and none of the
 traceability the runtime appends itself - an `Opened by nightqueue` line, a whole
 `Refs` line, a job ref or the run slug. It then publishes a copy of the body with
-the footer `Opened by nightqueue` (see
+the footer `Opened by nightqueue` (`Opened by nightqueue · <kind> <ref>` for a job with
+an origin, e.g. `Opened by nightqueue · linear MK-42`; see
 [Runtime contract](runtime-contract.md)). A body that
 fails prints one `REJECTED: <reason>` or `MISSING: <what>` line per violation
 and exits `1` with nothing pushed. Otherwise it renames the branch
@@ -279,6 +280,8 @@ echo "$SENTRY_AUTH_TOKEN" | nightqueue connection add sn --type sentry --set org
 nightqueue connection test sn                      # prints org=<slug>, never the token
 echo "$DISCORD_WEBHOOK_URL" | nightqueue connection add team-chat --type discord   # reads the webhook's channel and guild, added to the org's list
 nightqueue connection test team-chat               # prints channel=<id> guild=<id>, never the URL
+echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear   # serves the whole home, binds no org
+nightqueue connection test linear                  # prints viewer=<name>, never the key
 nightqueue connection list --json
 nightqueue connection remove gh                    # unbinds from every org, then deletes the secret
 ```
@@ -301,6 +304,12 @@ every list. The URL is never listed, logged or written in a notice. config.json 
 lists under `orgConnectionLists`, apart from the single-slot `orgConnections`, so an older
 nightqueue that rewrites the file keeps them as they are instead of dropping them; a webhook an
 older build removes stays listed as missing until this build's `connection remove`.
+A `linear` connection is home-scoped: its secret is a Linear personal API key, the home holds
+at most one (a second `add` is refused naming the first), and it binds to no org - `--org` on
+`add` and `connection bind` are refused, config.json is never touched, and a home with no org
+can add it. `connection list` prints `orgs=home` for it, and `--json` gives
+`{name, type, present, orgs: [], scope: "home"}` (org-scoped rows carry no `scope`). It needs
+no `project integrations` setting (`set linear.*` is refused with `linear has no settings`).
 
 **Project integrations.** `project integrations <project>` holds what a project does with the
 services its jobs come from, one setting per `<kind>.<key>` (a key may itself be dotted, stored

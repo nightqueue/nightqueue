@@ -294,3 +294,36 @@ export interface QueueFilters {
   projectId: string;
   search: string;
 }
+
+export interface JobOrigin {
+  kind: string;
+  ref: string;
+}
+
+export interface TrackerState {
+  name: string | null;
+  type: string | null;
+}
+
+export interface TrackerItem {
+  ref: string;
+  title: string;
+  team: string | null;
+  state: TrackerState;
+  priority: number;
+  priorityLabel: string | null;
+  labels: string[];
+  url: string | null;
+  updatedAt: string | null;
+}
+
+export interface TrackerFilters {
+  teams: { key: string; name: string }[];
+  projects: { name: string; teams: string[] }[];
+}
+
+export type TrackerError = "no-connection" | "provider-unavailable";
+
+export type TrackerAnswer =
+  | { ok: true; provider: string; items: TrackerItem[]; truncated: boolean; filters?: TrackerFilters }
+  | { ok: false; error: TrackerError; hint: string; provider: string | null };

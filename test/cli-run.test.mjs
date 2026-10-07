@@ -120,6 +120,7 @@ test("`run log --json` answers the whole table, with the run it resolved and the
     project: "alpha",
     projectId: projectIdOf(env, "alpha"),
     slug: SLUG,
+    origin: null,
     runDir: runDir(projectIdOf(env, "alpha"), SLUG, env),
   });
   assert.equal(report.durationS, 900);

@@ -9,6 +9,7 @@ import { checkoutOfJob } from "../memory/registry-access.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { parseOriginColumn } from "../integrations/origin.mjs";
 import { forgetLogged, forgetOrigin, logStep, originStep } from "../integrations/post-close.mjs";
+import { isHomeScoped } from "../integrations/registry.mjs";
 
 export const CLOSE_LEASE_SLACK_S = 60;
 export const POST_CLOSE_TIMEOUT_S = 60;
@@ -1133,11 +1134,13 @@ async function walkSteps(run, steps) {
   return await stopClose(run, { step: "settle", reason: "not-settled" });
 }
 
-// The project facts the post-close steps read: its org and its integrations, null when it has none or they cannot be read.
+// The project facts the post-close steps read: its org and its integrations, null when it has none (and the origin is not home-scoped) or they cannot be read.
 async function postCloseFacts(store, job) {
   try {
     const [project, integrations] = await Promise.all([store.projects.byId(job.project_id), store.projects.integrations(job.project_id)]);
-    return integrations && Object.keys(integrations).length ? { orgId: project?.org_id ?? null, integrations } : null;
+    const orgId = project?.org_id ?? null;
+    if (integrations && Object.keys(integrations).length) return { orgId, integrations };
+    return isHomeScoped(originOf(job)?.kind) ? { orgId, integrations: null } : null;
   } catch {
     return null;
   }

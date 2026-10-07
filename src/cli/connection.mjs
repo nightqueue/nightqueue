@@ -1,5 +1,6 @@
 import {
   addConnection,
+  assertHomeFree,
   bindConnection,
   completeConnection,
   connectionExtras,
@@ -25,9 +26,15 @@ async function orgNamesById(ctx) {
   return (ids) => ids.map((id) => names.get(id) ?? id);
 }
 
+// The orgs column of `connection list`: `home` for a home-wide connection, the org names, or `-`.
+function orgsColumn(connection) {
+  if (connection.scope === "home") return "home";
+  return connection.orgs.length ? connection.orgs.join(",") : "-";
+}
+
 // Formats one line of `connection list`.
 function formatConnection(connection) {
-  const orgs = connection.orgs.length ? connection.orgs.join(",") : "-";
+  const orgs = orgsColumn(connection);
   const missing = connection.present ? "" : "  MISSING SECRET";
   return `${connection.name}  ${connection.type}${missing}  orgs=${orgs}`;
 }
@@ -67,6 +74,27 @@ function parseExtraFields(assignments, usage) {
   return extra;
 }
 
+// Reads the secret of a new connection from stdin and the fields its type derives from it.
+async function readNewSecret({ ctx, name, type, descriptor, extra }) {
+  const secret = await readSecret({
+    stdin: ctx.stdin,
+    stdout: ctx.stdout,
+    prompt: `${type} ${descriptor.secretLabel ?? "secret"} for \`${name}\`: `,
+  });
+  const derived = await completeConnection({ type, secret, extra, fetchImpl: ctx.fetchImpl });
+  return { secret, derived };
+}
+
+// Stores a connection of a home-wide type: the secret only, no org and no config change.
+async function addHomeConnection({ ctx, config, secrets, name, type, descriptor, extra }) {
+  if (hasConnection(secrets, name)) throw new UserError(`connection \`${name}\` already exists; remove it first`);
+  assertHomeFree(secrets, type);
+  const { secret, derived } = await readNewSecret({ ctx, name, type, descriptor, extra });
+  const result = addConnection({ config, secrets, name, type, orgId: null, secret, extra, derived });
+  ctx.saveSecrets(result.secrets, ctx.env);
+  ctx.out(`stored connection \`${name}\` (${type}) for the whole home`);
+}
+
 // Runs `connection add`, reading the secret from stdin and never from argv.
 async function runAdd(argv, ctx) {
   const usage = "nightqueue connection add <name> --type <type> [--org <name>] [--set <field>=<value>]...";
@@ -84,15 +112,15 @@ async function runAdd(argv, ctx) {
   assertName("connection", name);
   const descriptor = requireType(values.type);
   const extra = connectionExtras(values.type, parseExtraFields(values.set, usage));
+  if (descriptor.scope === "home") {
+    if (values.org !== undefined) throw new UserError(`a ${values.type} connection serves the whole home; drop --org`);
+    await addHomeConnection({ ctx, config, secrets, name, type: values.type, descriptor, extra });
+    return;
+  }
   const target = values.org === undefined ? await defaultOrg(store, config) : await requireOrg(store, values.org);
   const org = target.name;
   if (hasConnection(secrets, name)) throw new UserError(`connection \`${name}\` already exists; remove it first`);
-  const secret = await readSecret({
-    stdin: ctx.stdin,
-    stdout: ctx.stdout,
-    prompt: `${values.type} ${descriptor.secretLabel ?? "secret"} for \`${name}\`: `,
-  });
-  const derived = await completeConnection({ type: values.type, secret, extra, fetchImpl: ctx.fetchImpl });
+  const { secret, derived } = await readNewSecret({ ctx, name, type: values.type, descriptor, extra });
   const result = addConnection({ config, secrets, name, type: values.type, orgId: target.id, secret, extra, derived });
   ctx.saveSecrets(result.secrets, ctx.env);
   saveConfigAfterSecret({ config: result.config, ctx, name, org });

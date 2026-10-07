@@ -390,7 +390,7 @@ a worktree another live session holds is never dropped. It always answers nothin
 fails the session. What it misses, `nightqueue open` and `nightqueue doctor --fix` drop once the
 worktree is stale (see [the CLI](cli.md#sandbox)).
 
-The twenty-six MCP tools, with the parameters `nightqueue mcp` actually accepts:
+The twenty-seven MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -405,6 +405,7 @@ The twenty-six MCP tools, with the parameters `nightqueue mcp` actually accepts:
 | `queue_add` | `project?`, `prompt`, `cwd?`, `register?`, `key?` (with `register`), `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`), `origin?` (`{kind, ref}`) |
 | `project_register` | `cwd`, `name?`, `key?`, `org?` (registers the repository of `cwd`, a linked worktree as its main checkout, only after the person said yes; answers `{registered, project, key, org, path, hint}`; nothing is queued) |
 | `project_integrations` | `project`, `action` (`show`, `set`, `unset`), `key?` (`<kind>.<setting>`, required by `set`/`unset`), `value?` (text, required by `set`) (answers `{project, integrations, providers: [{kind, keys}]}` with the settings each provider of the build declares; `set` validates against the provider, `unset` of the last key leaves the project without integrations; `set`/`unset` refused from inside a job; never a secret) |
+| `tracker_issues` | `team?` (the tracker's team key), `project?` (the tracker's project name), `state?` (`open` default, `closed`, `all`), `limit?` (1-50, default 25), `include_filters?` (read-only, the home's Linear connection, no nightqueue project; answers `{ok: true, provider, items, truncated, filters?}` or the normal answer `{ok: false, error: "no-connection" \| "provider-unavailable", hint, provider}`; filters cached five minutes) |
 | `queue_status` | `job_id?`, `pr_url?` (never with `job_id`), `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_stop` | `pid?` |
@@ -662,7 +663,8 @@ still treats a lockfile as an intruder (it never installs).
 
 **Traceability is the runtime's, never the agent's.** `nightqueue run pr`
 publishes a copy of the body, `<RUN_DIR>/pr-body.published.md` (the agent's file
-untouched), ending in the footer `Opened by nightqueue`. A body that already carries an
+untouched), ending in the footer `Opened by nightqueue`, or `Opened by nightqueue · <kind>
+<ref>` when the job has an origin (`Opened by nightqueue · linear MK-42`). A body that already carries an
 `Opened by nightqueue` line, a whole `Refs` line, a job ref (`J-<n>`, or the
 caller's own `job <id>`) or the run slug is rejected naming the line
 (``REJECTED: line <n> carries <what>, which `run pr` appends from the job row:
