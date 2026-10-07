@@ -1,34 +1,51 @@
 import { useSyncExternalStore } from "react";
+import { clampDockWidth, DEFAULT_WIDTH } from "./dock-geometry";
 
 export interface DockState {
   open: boolean;
   activeId: string | null;
-  height: number;
+  width: number;
 }
 
-const HEIGHT_KEY = "nq.studio.dock.height";
-const DEFAULT_HEIGHT = 320;
-const MIN_HEIGHT = 160;
-const MAX_SHARE = 0.8;
+const WIDTH_KEY = "nq.studio.dock.width";
+const OPEN_KEY = "nq.studio.dock.open";
 
 const listeners = new Set<() => void>();
-let state: DockState = { open: false, activeId: null, height: readSavedHeight() };
+let preferred = readSavedWidth();
+let state: DockState = { open: readSavedOpen(), activeId: null, width: clampWidth(preferred) };
 
-// Bounds a dock height between the minimum and 80 % of the viewport; a non-finite value falls back to the default.
-export function clampHeight(height: number): number {
-  const max = Math.max(MIN_HEIGHT, Math.round(window.innerHeight * MAX_SHARE));
-  const value = Number.isFinite(height) ? height : DEFAULT_HEIGHT;
-  return Math.min(Math.max(Math.round(value), MIN_HEIGHT), max);
+// Bounds a dock width to the current viewport.
+export function clampWidth(width: number): number {
+  return clampDockWidth(width, window.innerWidth);
 }
 
-// The dock height saved by an earlier visit, the default when none is saved or it is unreadable.
-function readSavedHeight(): number {
+// Reads one saved preference, null when none is saved or storage is unreadable.
+function readStored(key: string): string | null {
   try {
-    const saved = window.localStorage.getItem(HEIGHT_KEY);
-    return clampHeight(saved === null ? DEFAULT_HEIGHT : Number(saved));
+    return window.localStorage.getItem(key);
   } catch {
-    return DEFAULT_HEIGHT;
+    return null;
   }
+}
+
+// Saves one preference; a storage failure only loses the preference.
+function writeStored(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    return;
+  }
+}
+
+// The dock width chosen on an earlier visit, unbounded by this viewport; the default when none is saved or it is unreadable.
+function readSavedWidth(): number {
+  const saved = Number(readStored(WIDTH_KEY) ?? DEFAULT_WIDTH);
+  return Number.isFinite(saved) ? saved : DEFAULT_WIDTH;
+}
+
+// Whether the dock was left open by an earlier visit.
+function readSavedOpen(): boolean {
+  return readStored(OPEN_KEY) === "true";
 }
 
 // Replaces the dock state and tells every subscriber.
@@ -37,42 +54,58 @@ function update(next: Partial<DockState>) {
   for (const listener of listeners) listener();
 }
 
+// Changes the open state and saves it for the next visit.
+function setOpen(open: boolean, next: Partial<DockState> = {}) {
+  update({ ...next, open });
+  writeStored(OPEN_KEY, String(open));
+}
+
 // Opens the dock on one terminal's tab.
 export function focusTab(id: string) {
-  update({ open: true, activeId: id });
+  setOpen(true, { activeId: id });
 }
 
 // Opens the dock on the tab it last showed.
 export function showDock() {
-  update({ open: true });
+  setOpen(true);
 }
 
 // Hides the dock; its terminals keep running.
 export function hideDock() {
-  update({ open: false });
+  setOpen(false);
 }
 
-// Changes the dock height while it is dragged, without saving it.
-export function resizeDock(height: number) {
-  update({ height: clampHeight(height) });
+// Changes the dock width while it is dragged, without saving it.
+export function resizeDock(width: number) {
+  preferred = clampWidth(width);
+  update({ width: preferred });
 }
 
-// Saves the current dock height for the next visit; a storage failure only loses the preference.
-export function saveDockHeight() {
-  try {
-    window.localStorage.setItem(HEIGHT_KEY, String(state.height));
-  } catch {
-    return;
-  }
+// Saves the width the user chose for the next visit, never a bound the window imposed.
+export function saveDockWidth() {
+  writeStored(WIDTH_KEY, String(preferred));
 }
 
-// Subscribes a component to the dock state.
+// Re-bounds the chosen width to the resized window, telling subscribers only when the rendered width changes.
+function fitDockToWindow() {
+  const width = clampWidth(preferred);
+  if (width !== state.width) update({ width });
+}
+
+// Subscribes a component to the dock state; the first subscriber starts watching the window size, the last one stops it.
 function subscribe(listener: () => void) {
+  if (!listeners.size) {
+    window.addEventListener("resize", fitDockToWindow);
+    fitDockToWindow();
+  }
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) window.removeEventListener("resize", fitDockToWindow);
+  };
 }
 
-// The dock state right now: open or hidden, the active tab and the height.
+// The dock state right now: open or hidden, the active tab and the width.
 export function useDock(): DockState {
   return useSyncExternalStore(subscribe, () => state);
 }

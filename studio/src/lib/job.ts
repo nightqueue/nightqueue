@@ -1,24 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { useQueueSnapshot } from "./events";
+import { MEMORY_TOOLS } from "./log-tree";
 import { callTool } from "./mcp";
 import { jobIdOfRef, normalizeSnapshot } from "./queue";
 import type { IssueSummary, Job, JobDetail, NarrationEvent } from "./types";
-
-export type LogFilter = "narrated" | "orchestrator" | "lanes" | "tools";
-
-export const LOG_FILTERS: readonly { value: LogFilter; label: string }[] = [
-  { value: "narrated", label: "narrated" },
-  { value: "orchestrator", label: "orchestrator only" },
-  { value: "lanes", label: "lanes" },
-  { value: "tools", label: "all tools" },
-];
-
-const LANE_KINDS = new Set(["laneOpen", "laneClose", "laneOrphan", "attempt", "resultEnd"]);
-
-const TOOL_KINDS = new Set(["tool", "toolError"]);
-
-const MEMORY_TOOLS = new Set(["lesson_recall", "memory_recall", "decision_recall", "index_recall", "context_for_phase"]);
 
 const RUNNING_REFRESH_MS = 5000;
 
@@ -76,19 +62,6 @@ export function useIssueSummary(itemRef: string | null) {
     staleTime: Infinity,
     retry: false,
   });
-}
-
-// Tells whether a narration event passes one log chip.
-function passesFilter(event: NarrationEvent, filter: LogFilter): boolean {
-  if (filter === "orchestrator") return !event.indent;
-  if (filter === "lanes") return LANE_KINDS.has(event.kind);
-  if (filter === "tools") return TOOL_KINDS.has(event.kind);
-  return true;
-}
-
-// The narration events one log chip keeps, in order.
-export function filterNarration(events: NarrationEvent[], filter: LogFilter): NarrationEvent[] {
-  return filter === "narrated" ? events : events.filter((event) => passesFilter(event, filter));
 }
 
 // The colour class of one narration line, by its kind (and memory recalls by their tool).

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
 import { packageRoot } from "../host/paths.mjs";
@@ -20,7 +20,9 @@ import { WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
 import { withReadOnlyStore } from "../store/open.mjs";
+import { listArtifacts, readArtifactFile } from "./artifacts.mjs";
 import { jobDiffstat } from "./diffstat.mjs";
+import { runDirOf } from "./job-extras.mjs";
 import { appliedRefs } from "./recall-applied.mjs";
 import { TerminalRefusal } from "./terminal.mjs";
 
@@ -30,6 +32,9 @@ const MAX_INTERVAL_S = 86400;
 const JOB_LOG_PATH = /^\/api\/jobs\/([^/]+)\/log$/;
 const JOB_DIFFSTAT_PATH = /^\/api\/jobs\/([^/]+)\/diffstat$/;
 const JOB_RECALLS_PATH = /^\/api\/jobs\/([^/]+)\/recalls$/;
+const JOB_ARTIFACTS_PATH = /^\/api\/jobs\/([^/]+)\/artifacts$/;
+const JOB_ARTIFACT_PATH = /^\/api\/jobs\/([^/]+)\/artifacts\/([^/]+)$/;
+const LOG_FROM_RE = /^\d+$/;
 const TERMINAL_PATH = /^\/api\/terminals\/([0-9a-f]{16})$/;
 const RECALLS_CACHE_LIMIT = 16;
 const recallsCache = new Map();
@@ -126,14 +131,76 @@ function setPaused(env, paused) {
   return { queue_paused: paused };
 }
 
-// Answers the last mebibyte of a job's log as plain text, 404 when the job has no log.
-function sendJobLog(res, { env, ref }) {
+// The `from` byte offset of a log request, null when absent; anything but a non-negative integer is refused.
+function logFromOf(url) {
+  const raw = new URL(url ?? "/", "http://x").searchParams.get("from");
+  if (raw === null) return null;
+  const from = LOG_FROM_RE.test(raw) ? Number(raw) : NaN;
+  if (!Number.isSafeInteger(from)) throw new UserError(`\`from\` expects a non-negative integer byte offset, got \`${raw}\``);
+  return from;
+}
+
+// Up to `limit` bytes of a file from a byte offset, empty past its end.
+async function readFileRange(path, { from, limit }) {
+  const file = await open(path, "r");
+  try {
+    const length = Math.min(limit, Math.max(0, (await file.stat()).size - from));
+    if (length === 0) return "";
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await file.read(buffer, 0, length, from);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await file.close();
+  }
+}
+
+// Answers a job's log as plain text, the last mebibyte or a mebibyte from `?from=`, 404 when the job has no log.
+async function sendJobLog(req, res, { env, ref }) {
   const id = parseJobRef(ref);
+  const from = logFromOf(req.url);
   const path = jobLogPath(id, env);
-  const text = existsSync(path) ? readLogTail(path, RAW_LOG_BYTES) : null;
+  if (!existsSync(path)) return respond(res, 404, `no log for job \`${id}\``);
+  const text = from === null ? readLogTail(path, RAW_LOG_BYTES) : await readFileRange(path, { from, limit: RAW_LOG_BYTES });
   if (text === null) return respond(res, 404, `no log for job \`${id}\``);
   res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
   res.end(text);
+}
+
+// The run directory of a job by its ref, undefined when the job does not exist and null while it has none.
+async function jobRunDir(ref, env) {
+  const id = parseJobRef(ref);
+  const row = await withReadOnlyStore(env, (store) => store.jobs.getJob(id));
+  if (!row) return undefined;
+  return runDirOf(jobView(row, { full: true }), env);
+}
+
+// Answers the markdown artifacts of a job's run directory, an empty list while it has none, 404 when the job does not exist.
+async function sendJobArtifacts(res, { env, ref }) {
+  const dir = await jobRunDir(ref, env);
+  if (dir === undefined) return respond(res, 404, `no job \`${ref}\``);
+  return sendJson(res, 200, { artifacts: dir ? listArtifacts(dir) : [] });
+}
+
+// The artifact name of a request path segment, decoded; a malformed escape is refused.
+function artifactNameOf(segment) {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    throw new UserError(`unreadable artifact name \`${segment}\``);
+  }
+}
+
+// Answers one artifact of a job as markdown, the first mebibyte when larger, 404 unless the name is a listed artifact.
+async function sendJobArtifact(res, { env, ref, segment }) {
+  const name = artifactNameOf(segment);
+  const dir = await jobRunDir(ref, env);
+  if (dir === undefined) return respond(res, 404, `no job \`${ref}\``);
+  const artifact = dir ? readArtifactFile(dir, name) : null;
+  if (!artifact) return respond(res, 404, `no artifact \`${name}\` for job \`${ref}\``);
+  const headers = { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
+  if (artifact.truncated) headers["x-nightqueue-truncated"] = "1";
+  res.writeHead(200, headers);
+  res.end(artifact.text);
 }
 
 // Answers the files a job touched with their line counts, 404 when the job does not exist.
@@ -206,11 +273,15 @@ async function routeApi(req, res, { env, origin, path, terminals }) {
   if (path === "/api/queue/pause" && isPost) return sendJson(res, 200, setPaused(env, true));
   if (path === "/api/queue/resume" && isPost) return sendJson(res, 200, setPaused(env, false));
   const log = JOB_LOG_PATH.exec(path);
-  if (log && isGet) return sendJobLog(res, { env, ref: log[1] });
+  if (log && isGet) return await sendJobLog(req, res, { env, ref: log[1] });
   const diffstat = JOB_DIFFSTAT_PATH.exec(path);
   if (diffstat && isGet) return await sendJobDiffstat(res, { env, ref: diffstat[1] });
   const recalls = JOB_RECALLS_PATH.exec(path);
   if (recalls && isGet) return await sendJobRecalls(res, { env, ref: recalls[1] });
+  const artifacts = JOB_ARTIFACTS_PATH.exec(path);
+  if (artifacts && isGet) return await sendJobArtifacts(res, { env, ref: artifacts[1] });
+  const artifact = JOB_ARTIFACT_PATH.exec(path);
+  if (artifact && isGet) return await sendJobArtifact(res, { env, ref: artifact[1], segment: artifact[2] });
   return respond(res, 404, `unknown studio API route \`${req.method} ${path}\``);
 }
 

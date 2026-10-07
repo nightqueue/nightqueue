@@ -15,7 +15,7 @@ const QA_PHASE = readFileSync(new URL("../plugin/skills/resolve/references/qa-ph
 const OPERATOR = readFileSync(new URL("../plugin/agents/operator.md", import.meta.url), "utf8");
 const CLASSIFY = readFileSync(new URL("../src/queue/classify.mjs", import.meta.url), "utf8");
 const TOOLS = readFileSync(new URL("../src/mcp/tools.mjs", import.meta.url), "utf8");
-const CLI_RUN = ["run.mjs", "run-publish.mjs", "run-start.mjs", "run-report.mjs"].map((file) => readFileSync(new URL(`../src/cli/${file}`, import.meta.url), "utf8")).join("\n");
+const CLI_RUN = ["cli/run.mjs", "cli/run-publish.mjs", "cli/run-start.mjs", "cli/run-report.mjs", "queue/phase-artifacts.mjs"].map((file) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8")).join("\n");
 const REPORT_LAYOUT = readFileSync(new URL("../plugin/skills/resolve/references/report.md", import.meta.url), "utf8");
 const QA_AGENT = readFileSync(new URL("../plugin/agents/qa-guardian.md", import.meta.url), "utf8");
 const OPERATOR_TIER_LITERAL = "(set by the operator - the pipeline may only raise it, with evidence, never lower it)";

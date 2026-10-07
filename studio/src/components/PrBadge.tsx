@@ -1,11 +1,11 @@
-import { GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, type LucideIcon } from "lucide-react";
+import { GitMerge, GitPullRequest, GitPullRequestArrow, GitPullRequestDraft, type LucideIcon } from "lucide-react";
 import { prNumber } from "../lib/format";
 import { ActionIcon } from "./StatusIcon";
 
 const PR_VISUALS: Record<string, { Icon: LucideIcon; color: string }> = {
-  open: { Icon: GitPullRequest, color: "bg-pr-open text-white" },
+  open: { Icon: GitPullRequestArrow, color: "bg-pr-open text-white" },
   merged: { Icon: GitMerge, color: "bg-pr-merged text-white" },
-  closed: { Icon: GitPullRequestClosed, color: "bg-pr-closed text-white" },
+  closed: { Icon: GitPullRequest, color: "bg-pr-closed text-white" },
   draft: { Icon: GitPullRequestDraft, color: "bg-pr-draft text-white" },
 };
 

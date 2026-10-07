@@ -29,6 +29,13 @@ export async function getJson<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
+// Reads one text route of the studio API, throwing an ApiError with the server's message on failure.
+export async function getText(path: string): Promise<string> {
+  const response = await fetch(path, { headers: { accept: "text/plain, text/markdown" }, credentials: "same-origin" });
+  if (!response.ok) throw new ApiError(await errorMessage(response), response.status);
+  return response.text();
+}
+
 // Posts a JSON body to one route of the studio API, throwing an ApiError with the server's message on failure.
 export async function postJson<T>(path: string, body: unknown = {}): Promise<T> {
   const response = await fetch(path, {

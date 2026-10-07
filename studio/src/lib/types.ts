@@ -161,6 +161,21 @@ export interface NarrationEvent {
   durationMs: number | null;
   elapsedMs: number | null;
   file: string | null;
+  laneId: string | null;
+  body: string | null;
+  body_truncated: boolean;
+  body_offset: number | null;
+  at: string | null;
+  artifact: string | null;
+  title: string | null;
+  bytes: number | null;
+}
+
+export interface ArtifactEntry {
+  name: string;
+  bytes: number;
+  title: string | null;
+  mtime: string;
 }
 
 export interface TimelinePhase {
