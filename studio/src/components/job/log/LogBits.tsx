@@ -37,8 +37,3 @@ export function MoreToolsRow({ count }: { count: number }) {
     </div>
   );
 }
-
-// A count with its noun, singular for one.
-export function countLabel(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}

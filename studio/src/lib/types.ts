@@ -148,6 +148,12 @@ export interface NarrationEvent {
   bytes: number | null;
 }
 
+export interface JobStreamEnd {
+  status: string | null;
+  reason: string | null;
+  final: boolean;
+}
+
 export interface ArtifactEntry {
   name: string;
   bytes: number;

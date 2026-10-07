@@ -1,12 +1,13 @@
-import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import type { JobStreamState } from "../../lib/events";
-import { DEFAULT_CHIPS, type FinalReport, foldLog, type LogChips, type LogTree } from "../../lib/log-tree";
-import { type Toggles, useToggles } from "../../lib/useToggles";
+import { attemptsLabel } from "../../lib/format";
+import { DEFAULT_CHIPS, foldRows, foldStream, type LogChips, type LogRow, type LogStream, type MoreRow, rowVisible, type StreamContext } from "../../lib/log-tree";
+import type { JobDetail } from "../../lib/types";
+import { useToggles } from "../../lib/useToggles";
 import { Chip } from "../ui";
 import { CardTitle } from "./Card";
-import { FinalReportBlock } from "./log/LogBlock";
-import { PhaseSection } from "./log/PhaseSection";
-import type { TreeView } from "./log/TreeItem";
+import { MoreToolsRow } from "./log/LogBits";
+import { LogLine } from "./log/LogLine";
 
 const BOTTOM_SLACK_PX = 24;
 
@@ -17,12 +18,12 @@ const CHIP_OPTIONS: readonly { key: keyof LogChips; label: string }[] = [
   { key: "allTools", label: "all tools" },
 ];
 
+const SKELETON_WIDTHS = [30, 70, 55, 80, 40, 65];
+
 interface LiveLogProps {
   stream: JobStreamState;
-  running: boolean;
-  attempt: number;
+  job: JobDetail;
   jobRef: string;
-  startedAtMs: number | null;
 }
 
 interface LogToolbarProps {
@@ -34,21 +35,31 @@ interface LogToolbarProps {
   onFollow: () => void;
 }
 
-// What the log's caption says about the stream: live, ended, or unavailable.
-function streamCaption({ stream, running, attempt }: Pick<LiveLogProps, "stream" | "running" | "attempt">): string {
-  if (stream.error && !stream.ended) return `narrated · ${stream.error}`;
-  if (stream.ended) return `narrated · attempt ${attempt} · ended ${stream.ended.status ? `at ${stream.ended.status}` : ""}`.trim();
-  return running ? "narrated · /events tail" : `narrated · attempt ${attempt}`;
+interface LogBodyProps {
+  items: Array<LogRow | MoreRow>;
+  jobRef: string;
+  isOpen: (row: LogRow) => boolean;
+  onToggle: (row: LogRow, open: boolean) => void;
+  cursorKey: string | null;
 }
 
-// The empty or loading body of the log, shaped like phase rows with narrated lines.
+// What the log's caption says about the stream: its attempts, live or ended, or the stream unavailable.
+function streamCaption({ stream, live, attempts }: { stream: JobStreamState; live: boolean; attempts: number }): string {
+  if (stream.error && !stream.ended) return `narrated · ${stream.error}`;
+  if (stream.ended) return `${attemptsLabel(attempts)} · ended${stream.ended.status ? ` at ${stream.ended.status}` : ""}`;
+  return live ? `${attemptsLabel(attempts)} · /events tail` : attemptsLabel(attempts);
+}
+
+// The empty or loading body of the log, shaped like flat narrated lines with their clock column.
 function LogPlaceholder({ stream }: { stream: JobStreamState }) {
-  if (stream.ended) return <p className="m-0 px-3 py-3 font-sans text-muted">{stream.ended.reason ?? "Nothing narrated in this attempt."}</p>;
+  if (stream.ended) return <p className="m-0 px-3 py-3 font-sans text-muted">{stream.ended.reason ?? "Nothing narrated."}</p>;
   return (
     <div className="flex flex-col gap-2 px-3 py-3" aria-busy="true">
-      <span className="block h-4 w-1/4 animate-pulse rounded bg-row-line" />
-      {[70, 55, 80, 40, 65].map((width) => (
-        <span key={width} className="ml-5 block h-3 animate-pulse rounded bg-row-line" style={{ width: `${width}%` }} />
+      {SKELETON_WIDTHS.map((width) => (
+        <div key={width} className="flex items-center gap-2">
+          <span className="block h-3 w-[52px] flex-none animate-pulse rounded bg-row-line" />
+          <span className="block h-3 animate-pulse rounded bg-row-line" style={{ width: `${width}%` }} />
+        </div>
       ))}
     </div>
   );
@@ -89,49 +100,55 @@ function LogToolbar({ chips, onChips, expandAll, onExpandAll, follow, onFollow }
   );
 }
 
-// The phases of the tree, then the final report once the job ended; opening an earlier phase turns follow off.
-function LogTreeBody({ tree, stream, phases, view, onLeaveFollow }: { tree: LogTree; stream: JobStreamState; phases: Toggles; view: TreeView; onLeaveFollow: () => void }) {
-  const track = stream.timeline?.phases ?? [];
-  const finalReport = tree.finalReport;
-  return (
-    <>
-      {tree.phases.map((node) => {
-        const current = node.key === tree.currentKey;
-        const open = phases.isOpen(node.key, current);
-        const onToggle = () => {
-          phases.set(node.key, !open);
-          if (!open && !current) onLeaveFollow();
-        };
-        return <PhaseSection key={node.key} node={node} track={track.find((phase) => phase.number === node.number)} open={open} onToggle={onToggle} view={view} />;
-      })}
-      {finalReport && <FinalReportSection report={finalReport} view={view} />}
-    </>
-  );
+// The cyan rule a subagent lane's lines sit under.
+function LaneRule({ children }: { children: ReactNode }) {
+  return <div className="ml-3 border-l-2 border-lane-rule pl-3">{children}</div>;
 }
 
-// The final report at the end of the tree, born expanded.
-function FinalReportSection({ report, view }: { report: FinalReport; view: TreeView }) {
-  const key = `${report.key}-final`;
-  const open = view.blocks.isOpen(key, true);
+// The flat lines of the log, lane lines under their rule and folded tool runs as one count.
+function LogBody({ items, jobRef, isOpen, onToggle, cursorKey }: LogBodyProps) {
   return (
-    <div className="py-2">
-      <FinalReportBlock event={report.event} jobRef={view.jobRef} open={open} onToggle={() => view.blocks.set(key, !open)} />
+    <div className="py-1">
+      {items.map((item) => {
+        if (item.type === "more") return <LaneRule key={item.key}><MoreToolsRow count={item.count} /></LaneRule>;
+        const open = isOpen(item);
+        const line = <LogLine row={item} jobRef={jobRef} open={open} onToggle={() => onToggle(item, !open)} cursor={item.key === cursorKey} />;
+        return item.lane ? <LaneRule key={item.key}>{line}</LaneRule> : <div key={item.key}>{line}</div>;
+      })}
     </div>
   );
 }
 
-// The live log card: the current attempt folded as phase → lane → event, with its chips, expand all, follow and the blinking cursor while the job runs.
-export function LiveLog({ stream, running, attempt, jobRef, startedAtMs }: LiveLogProps) {
-  const tree = useMemo(() => foldLog(stream.events, { ended: stream.ended !== null }), [stream.events, stream.ended]);
+// The fold's context from the job row and the stream: attempts, status, the gate's notice and answer, the track's phase names.
+function streamContext(stream: JobStreamState, job: JobDetail): StreamContext {
+  const phaseNames = new Map((stream.timeline?.phases ?? []).map((phase) => [phase.number, phase.name]));
+  const attempts = Array.isArray(job.attempts_log) ? job.attempts_log : [];
+  return { ended: stream.ended !== null, attempts, status: job.status, notice: job.notice_md, operatorNote: job.operator_note, phaseNames };
+}
+
+// The folded stream with its visible lines, recomputed only when the stream, the job row or the chips move.
+function useLogItems(stream: JobStreamState, job: JobDetail, chips: LogChips): { folded: LogStream; items: Array<LogRow | MoreRow> } {
+  const folded = useMemo(() => foldStream(stream.events, streamContext(stream, job)), [stream, job]);
+  const items = useMemo(() => foldRows(folded.rows.filter((row) => rowVisible(row, chips)), { allTools: chips.allTools }), [folded, chips]);
+  return { folded, items };
+}
+
+// The live log card: every attempt of the job in one chronological stream, with its chips, expand all, follow and the blinking cursor while it runs.
+export function LiveLog({ stream, job, jobRef }: LiveLogProps) {
   const [chips, setChips] = useState<LogChips>(DEFAULT_CHIPS);
   const [expandAll, setExpandAll] = useState(false);
-  const phases = useToggles();
-  const lanes = useToggles();
+  const { folded, items } = useLogItems(stream, job, chips);
   const blocks = useToggles();
   const box = useRef<HTMLDivElement>(null);
   const { follow, setFollow, onScroll } = useFollow(box, stream.events.length);
+  const running = job.status === "running";
   const live = running && !stream.ended;
-  const view: TreeView = { jobRef, chips, lanes, blocks, expandAll, startedAtMs: live ? startedAtMs : null, cursorKey: live ? tree.lastEventKey : null, finalEvent: tree.finalReport?.event ?? null };
+  const attempts = Math.max(Array.isArray(job.attempts_log) ? job.attempts_log.length : 0, folded.attemptCount);
+  const lastKey = items.at(-1)?.key ?? null;
+  const onToggle = (row: LogRow, open: boolean) => {
+    blocks.set(row.key, open);
+    if (open && row.key !== lastKey) setFollow(false);
+  };
   const onExpandAll = () => {
     setExpandAll(!expandAll);
     blocks.reset();
@@ -140,11 +157,15 @@ export function LiveLog({ stream, running, attempt, jobRef, startedAtMs }: LiveL
     <section aria-label="live log" className="flex min-w-0 flex-col rounded-lg border border-line bg-surface">
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2.5">
         <CardTitle>{running ? "Live log" : "Log"}</CardTitle>
-        <span className="text-sm text-muted">{streamCaption({ stream, running, attempt })}</span>
+        <span className="text-sm text-muted">{streamCaption({ stream, live, attempts })}</span>
         <LogToolbar chips={chips} onChips={setChips} expandAll={expandAll} onExpandAll={onExpandAll} follow={follow} onFollow={() => setFollow(!follow)} />
       </div>
       <div ref={box} onScroll={onScroll} className="max-h-[560px] overflow-auto font-mono text-[12.5px] leading-[1.65] text-log lg:h-[720px] lg:max-h-none">
-        {stream.events.length === 0 ? <LogPlaceholder stream={stream} /> : <LogTreeBody tree={tree} stream={stream} phases={phases} view={view} onLeaveFollow={() => setFollow(false)} />}
+        {stream.events.length === 0 ? (
+          <LogPlaceholder stream={stream} />
+        ) : (
+          <LogBody items={items} jobRef={jobRef} isOpen={(row) => blocks.isOpen(row.key, expandAll || row.final)} onToggle={onToggle} cursorKey={live ? folded.lastEventKey : null} />
+        )}
       </div>
     </section>
   );
