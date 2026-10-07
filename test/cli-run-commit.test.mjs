@@ -249,8 +249,8 @@ test("a message carrying a `Refs:` line is REFUSED naming the line, and nothing 
   const { id, repo } = boundRun(t, env);
   const head = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const cases = [
-    ["feat: x\n\nRefs: AP-1\n", "line 3 of the message is a `Refs:` trailer, which only the runtime writes: Refs: AP-1"],
-    ["feat: x\n\nbody\n\n  refs : AP-1  \n", "line 5 of the message is a `Refs:` trailer, which only the runtime writes: refs : AP-1"],
+    ["feat: x\n\nRefs: AP-1\n", "line 3 of the message is a `Refs:` trailer, which is reserved and never written by an agent: Refs: AP-1"],
+    ["feat: x\n\nbody\n\n  refs : AP-1  \n", "line 5 of the message is a `Refs:` trailer, which is reserved and never written by an agent: refs : AP-1"],
   ];
   for (const [index, [body, reason]] of cases.entries()) {
     const message = readyCommit(t, env, repo, `run-commit-refs-${index}`, body);

@@ -371,7 +371,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v23/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v24/);
 });
 
 test("the database check warns about a v8 home and points at the command that migrates it", async (t) => {
@@ -381,7 +381,7 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, this nightqueue expects v23/);
+  assert.match(database.detail, /schema v8, this nightqueue expects v24/);
   assert.equal(database.hint, "run `nightqueue update`");
   assert.doesNotMatch(database.hint, /nightqueue memory stats/);
 });
@@ -394,7 +394,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, newer than this nightqueue \(v23\): update nightqueue \/ restart the client that runs the old version/);
+  assert.match(database.detail, /schema v99, newer than this nightqueue \(v24\): update nightqueue \/ restart the client that runs the old version/);
   assert.match(database.hint, /inspect/);
 });
 

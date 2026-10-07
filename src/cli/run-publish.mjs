@@ -47,7 +47,7 @@ const CONVENTION_FILES = [
 
 const CONVENTIONAL_SUBJECT_RE = /^[a-z]+(\([^)]*\))?!?: \S/;
 
-// A `Refs:` trailer line, which only the runtime writes and `run commit` refuses in the agent's message.
+// A `Refs:` trailer line, a reserved trailer `run commit` refuses in the agent's message.
 const REFS_TRAILER = /^Refs\s*:/i;
 
 // The commit message the agent wrote, refused when it is missing or empty: the message is the agent's and the command never invents one.
@@ -168,7 +168,7 @@ function refsTrailerLine(message) {
 export async function commitPaths({ cwd, paths, messageFile, ctx }) {
   const trailer = refsTrailerLine(readRequiredFile(messageFile, "--message-file"));
   if (trailer !== null) {
-    ctx.out(`REFUSED: line ${trailer.number} of the message is a \`Refs:\` trailer, which only the runtime writes: ${trailer.line}`);
+    ctx.out(`REFUSED: line ${trailer.number} of the message is a \`Refs:\` trailer, which is reserved and never written by an agent: ${trailer.line}`);
     return 1;
   }
   ctx.out(`CONVENTION: ${commitConvention(cwd, ctx.env)}`);

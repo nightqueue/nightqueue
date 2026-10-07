@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { preVersionBackupPath } from "../../src/config/paths.mjs";
 import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly } from "../../src/memory/db.mjs";
 import { addJob, getJob, jobView } from "../../src/memory/jobs.mjs";
 import { projectIntegrations } from "../../src/memory/registry.mjs";
@@ -7,6 +8,8 @@ import { openStore } from "../../src/store/open.mjs";
 import { buildLegacyHome, plantPreV22Tracker, preV22Name } from "../../test-support/legacy-home.mjs";
 import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { migrateTestHome } from "../../test-support/migrate.mjs";
+
+const { DatabaseSync } = await import("node:sqlite");
 
 // The column names of a table.
 function columnsOf(db, table) {
@@ -76,6 +79,9 @@ test("a v17 home reaches the current schema in one open with both columns", (t) 
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.ok(columnsOf(db, "jobs").includes("origin"));
   assert.ok(columnsOf(db, "projects").includes("integrations"));
-  assert.deepEqual(db.prepare("SELECT title FROM issues").all().map((row) => row.title), ["old item"]);
+  const copy = new DatabaseSync(preVersionBackupPath(env, 24), { readOnly: true });
+  t.after(() => copy.close());
+  assert.deepEqual(copy.prepare("SELECT title FROM issues").all().map((row) => row.title), ["old item"]);
+  assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'issues'").get(), undefined, "v24 kept the tracker");
   assert.equal(jobView(getJob(addJob({ projectId: projectIdOf(env, "alpha"), prompt: "x" }, env).id, env)).origin, null);
 });

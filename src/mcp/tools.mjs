@@ -736,7 +736,7 @@ async function queueCancelAnswer(args, env) {
   return { ok: true, ...(await stopAndCancelJob({ ...cancel, releaseWorktree: args.release_worktree === true })) };
 }
 
-// The thirty-one tools of the plugin contract, with the parameter names the plugin actually sends.
+// The twenty-six tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -1388,7 +1388,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the thirty-one tools of the plugin contract.
+// Builds the MCP server with the twenty-six tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {

@@ -14,7 +14,7 @@ import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const REFUSAL = /refused: the database at .* is the runner's home at schema v20, and this build \(v\d+\) would migrate it from inside J-7; nothing was changed - run this build against a temporary home \(`nightqueue sandbox <command>` or NIGHTQUEUE_HOME=\$\(mktemp -d\)\)/;
-const OUTDATED = /database at v20, this nightqueue expects v23: run `nightqueue update`/;
+const OUTDATED = /database at v20, this nightqueue expects v24: run `nightqueue update`/;
 
 // A temporary home stamped v20 with the project `alpha`, one job and the tracker under its pre-v22 names.
 function makeV20Home(t, name) {

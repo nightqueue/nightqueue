@@ -390,7 +390,7 @@ a worktree another live session holds is never dropped. It always answers nothin
 fails the session. What it misses, `nightqueue open` and `nightqueue doctor --fix` drop once the
 worktree is stale (see [the CLI](cli.md#sandbox)).
 
-The thirty-one MCP tools, with the parameters `nightqueue mcp` actually accepts:
+The twenty-six MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
 | tool | parameters |
 |---|---|

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { dbPath, preV18BackupPath, preV19BackupPath } from "../../src/config/paths.mjs";
+import { dbPath, preV18BackupPath, preV19BackupPath, preVersionBackupPath } from "../../src/config/paths.mjs";
 import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { projectFromCwd, registeredProject } from "../../src/memory/registry-access.mjs";
 import { buildLegacyHome, preV22Name } from "../../test-support/legacy-home.mjs";
@@ -14,7 +14,9 @@ import { buildV18Home } from "../../test-support/v18-home.mjs";
 const { DatabaseSync } = await import("node:sqlite");
 
 const MIGRATE_URL = new URL("../../test-support/migrate.mjs", import.meta.url).href;
-const TABLES = ["orgs", "projects", "issues", "issue_comments", "issue_projects", "decisions", "jobs", "lessons", "memory"];
+const TRACKER_TABLES = ["issues", "issue_comments", "issue_projects"];
+const KEPT_TABLES = ["orgs", "projects", "decisions", "jobs", "lessons", "memory"];
+const TABLES = [...KEPT_TABLES, ...TRACKER_TABLES];
 
 // A checkout directory the fixture registers for `nightqueue`.
 function checkout(t) {
@@ -42,8 +44,13 @@ function readRaw(file, read) {
 }
 
 // The row count of every table the fixture seeds, each read under the name the database gives it.
-function counts(db, nameOf = (table) => table) {
-  return Object.fromEntries(TABLES.map((table) => [table, db.prepare(`SELECT COUNT(*) AS n FROM ${nameOf(table)}`).get().n]));
+function counts(db, nameOf = (table) => table, tables = TABLES) {
+  return Object.fromEntries(tables.map((table) => [table, db.prepare(`SELECT COUNT(*) AS n FROM ${nameOf(table)}`).get().n]));
+}
+
+// Runs a read on the copy the v24 step took, the last state that still holds the tracker tables.
+function readTrackerCopy(env, read) {
+  return readRaw(preVersionBackupPath(env, 24), read);
 }
 
 // The schema version of the database on disk, read without migrating it.
@@ -64,11 +71,6 @@ function schemaOf(db) {
     .map((row) => ({ type: row.type, name: row.name, sql: String(row.sql ?? "").replace(/^CREATE TABLE "(\w+)"/, "CREATE TABLE $1") }));
 }
 
-// The schema objects outside the removed tracker, which a fresh home no longer creates and the steps before v24 still build.
-function outsideTracker(schema) {
-  return schema.filter((row) => !row.name.startsWith("issue"));
-}
-
 test("a v18 home migrates to v19: row counts kept, items numbered per owner, keys unique, decision numbers unchanged, a pre-v19 copy", (t) => {
   const { env, ids, fixture } = v18Home(t, "v19-migrate");
   const before = readRaw(dbPath(env), (raw) => ({
@@ -77,12 +79,18 @@ test("a v18 home migrates to v19: row counts kept, items numbered per owner, key
   }));
   const db = migrateTestHome(env);
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
-  assert.deepEqual(counts(db), before.counts, "a table lost or gained rows");
+  const tracker = readTrackerCopy(env, (raw) => ({
+    counts: counts(raw, undefined, TRACKER_TABLES),
+    numbers: raw.prepare("SELECT id, number FROM issues ORDER BY id").all().map((row) => [row.id, row.number]),
+    projectRepeats: raw.prepare("SELECT COUNT(*) AS n FROM (SELECT project_id, number FROM issues WHERE scope = 'project' GROUP BY project_id, number HAVING COUNT(*) > 1)").get().n,
+    orgRepeats: raw.prepare("SELECT COUNT(*) AS n FROM (SELECT org_id, number FROM issues WHERE scope = 'org' GROUP BY org_id, number HAVING COUNT(*) > 1)").get().n,
+    matched: raw.prepare("SELECT rowid FROM issues_fts WHERE issues_fts MATCH 'item'").all().length,
+  }));
+  assert.deepEqual({ ...counts(db, undefined, KEPT_TABLES), ...tracker.counts }, before.counts, "a table lost or gained rows");
 
-  const numbers = db.prepare("SELECT id, number FROM issues ORDER BY id").all().map((row) => [row.id, row.number]);
-  assert.deepEqual(numbers, [[1, 1], [2, 1], [3, 1], [5, 2], [6, 2], [7, 2], [8, 3]]);
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM (SELECT project_id, number FROM issues WHERE scope = 'project' GROUP BY project_id, number HAVING COUNT(*) > 1)").get().n, 0);
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM (SELECT org_id, number FROM issues WHERE scope = 'org' GROUP BY org_id, number HAVING COUNT(*) > 1)").get().n, 0);
+  assert.deepEqual(tracker.numbers, [[1, 1], [2, 1], [3, 1], [5, 2], [6, 2], [7, 2], [8, 3]]);
+  assert.equal(tracker.projectRepeats, 0);
+  assert.equal(tracker.orgRepeats, 0);
 
   const keys = Object.fromEntries(db.prepare("SELECT id, key FROM projects UNION ALL SELECT id, key FROM orgs").all().map((row) => [row.id, row.key]));
   assert.deepEqual(
@@ -95,19 +103,19 @@ test("a v18 home migrates to v19: row counts kept, items numbered per owner, key
   assert.ok(readFileSync(preV19BackupPath(env)).equals(fixture), "the pre-v19 copy is not the v18 database byte for byte");
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
-  assert.deepEqual(db.prepare("SELECT rowid FROM issues_fts WHERE issues_fts MATCH 'item'").all().length, 7);
+  assert.equal(tracker.matched, 7);
 });
 
 test("a second open of a migrated home changes nothing and takes no second copy", (t) => {
   const { env } = v18Home(t, "v19-reopen");
   const db = migrateTestHome(env);
   const schema = schemaOf(db);
-  const rows = db.prepare("SELECT * FROM issues ORDER BY id").all().map((row) => ({ ...row }));
+  const rows = db.prepare("SELECT * FROM jobs ORDER BY id").all().map((row) => ({ ...row }));
   const copied = statSync(preV19BackupPath(env)).mtimeMs;
   closeDb(env);
   const again = migrateTestHome(env);
   assert.deepEqual(schemaOf(again), schema);
-  assert.deepEqual(again.prepare("SELECT * FROM issues ORDER BY id").all().map((row) => ({ ...row })), rows);
+  assert.deepEqual(again.prepare("SELECT * FROM jobs ORDER BY id").all().map((row) => ({ ...row })), rows);
   assert.equal(again.prepare("SELECT total_changes() AS n").get().n, 0, "a second open wrote to the database");
   assert.equal(statSync(preV19BackupPath(env)).mtimeMs, copied, "a second open took another copy");
 });
@@ -129,7 +137,7 @@ test("a migrated database has exactly the schema of a fresh one, table by table 
   const { env } = v18Home(t, "v19-shape");
   const migrated = schemaOf(migrateTestHome(env));
   const fresh = schemaOf(migrateTestHome(makeHome(t, "v19-fresh")));
-  assert.deepEqual(outsideTracker(migrated), fresh);
+  assert.deepEqual(migrated, fresh);
 });
 
 test("a v17 home reaches v19 in one open, keeping both the pre-v18 and the pre-v19 copies", (t) => {
@@ -144,7 +152,7 @@ test("a v17 home reaches v19 in one open, keeping both the pre-v18 and the pre-v
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.equal(readRaw(preV18BackupPath(env), (raw) => schemaVersionOn(raw)), 17);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
-  assert.deepEqual(db.prepare("SELECT number FROM issues ORDER BY id").all().map((row) => row.number), [1, 2]);
+  assert.deepEqual(readTrackerCopy(env, (raw) => raw.prepare("SELECT number FROM issues ORDER BY id").all().map((row) => row.number)), [1, 2]);
   assert.equal(db.prepare("SELECT key FROM projects WHERE name = 'alpha'").get().key, "AP");
 });
 

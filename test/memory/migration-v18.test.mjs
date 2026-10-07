@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync,
 import { join } from "node:path";
 import { test } from "node:test";
 import { isId } from "../../src/config/ids.mjs";
-import { configPath, dbPath, homeDir, preV18BackupPath, runDir, runsIdMarkerPath } from "../../src/config/paths.mjs";
+import { configPath, dbPath, homeDir, preV18BackupPath, preVersionBackupPath, runDir, runsIdMarkerPath } from "../../src/config/paths.mjs";
 import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { listDecisions, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
@@ -104,7 +104,7 @@ test("a runner holding a live lease refuses the migration with one line and noth
   };
   const { env, fixture } = v17Home(t, "v18-live-lease", { seed: running("+1 hour") });
   assert.throws(() => migrateTestHome(env), (err) => LEASE_REFUSAL.test(err.message) && err.message.split("\n").length === 1);
-  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v17, this nightqueue expects v23: run `nightqueue update`/.test(err.message));
+  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v17, this nightqueue expects v24: run `nightqueue update`/.test(err.message));
   assert.equal(diskVersion(env), 17);
   assert.equal(existsSync(preV18BackupPath(env)), false, "a refused migration published a copy");
   assert.ok(readFileSync(dbPath(env)).equals(fixture), "a refused migration wrote to the database");
@@ -442,7 +442,9 @@ function seedAcceptanceRows(db) {
   seedOwnedRows(db);
 }
 
-const ALL_TABLES = [...PROJECT_TABLES, "jobs", "decisions", "issues", "issue_projects", "issue_comments", "pipeline_phases"];
+const TRACKER_TABLES = ["issues", "issue_projects", "issue_comments"];
+
+const ALL_TABLES = [...PROJECT_TABLES, "jobs", "decisions", ...TRACKER_TABLES, "pipeline_phases"];
 
 // The rows of a v18 table with every owner id swapped for the name it resolves to, the shape a v17 table had.
 function ownerNamedRows(db, table) {
@@ -481,12 +483,16 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
   const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
   const before = new DatabaseSync(preV18BackupPath(env), { readOnly: true });
   t.after(() => before.close());
+  const tracker = new DatabaseSync(preVersionBackupPath(env, 24), { readOnly: true });
+  t.after(() => tracker.close());
+  const source = (table) => (TRACKER_TABLES.includes(table) ? tracker : db);
   assert.ok(readFileSync(preV18BackupPath(env)).equals(fixture), "the pre-v18 copy is not the v17 database byte for byte");
+  assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'issue%'").all(), [], "v24 left a tracker object");
 
   for (const table of ALL_TABLES) {
     const count = (connection, name) => connection.prepare(`SELECT COUNT(*) AS n FROM ${name}`).get().n;
-    assert.equal(count(db, table), count(before, preV22Name(table)), `${table} lost or gained rows`);
-    const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name);
+    assert.equal(count(source(table), table), count(before, preV22Name(table)), `${table} lost or gained rows`);
+    const columns = source(table).prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name);
     assert.equal(columns.includes("project") || columns.includes("org"), false, `${table} still owns rows by name`);
   }
   const detached = rowsOf(db, "jobs").find((row) => row.prompt === "shared second");
@@ -495,7 +501,7 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
   const withoutV19Number = (table, rows) => (table === "issues" ? rows.map(({ number: _number, ...row }) => row) : rows);
   for (const table of ALL_TABLES) {
     const unchanged = (rows) => rows.filter((row) => row.id !== detached.id || table !== "jobs");
-    assert.deepEqual(unchanged(withoutV19Number(table, ownerNamedRows(db, table))), unchanged(rowsOf(before, preV22Name(table))), `${table} changed in the rebuild`);
+    assert.deepEqual(unchanged(withoutV19Number(table, ownerNamedRows(source(table), table))), unchanged(rowsOf(before, preV22Name(table))), `${table} changed in the rebuild`);
   }
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
   assert.equal(sharedSlugPending(db), false);
@@ -509,13 +515,15 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
   }
   assert.deepEqual(registry.listOrgs(db).map((org) => org.name), ["default", "acme", "orbit"]);
 
-  const match = (mirror, word) => db.prepare(`SELECT rowid FROM ${mirror} WHERE ${mirror} MATCH ?`).all(word).map((row) => row.rowid);
+  const match = (mirror, word, connection = db) => connection.prepare(`SELECT rowid FROM ${mirror} WHERE ${mirror} MATCH ?`).all(word).map((row) => row.rowid);
   assert.deepEqual(match("lessons_fts", "zebracrossing"), [1]);
   assert.deepEqual(match("decisions_fts", "zebradecision"), [1]);
-  assert.deepEqual(match("issues_fts", "zebraitem"), [1]);
-  assert.deepEqual(match("issue_comments_fts", "zebracomment"), [1]);
-  assert.throws(() => db.prepare("UPDATE issue_comments SET body = 'x' WHERE id = 1").run(), /append-only/);
-  assert.throws(() => db.prepare("DELETE FROM issue_comments WHERE id = 1").run(), /append-only/);
+  assert.deepEqual(match("issues_fts", "zebraitem", tracker), [1]);
+  assert.deepEqual(match("issue_comments_fts", "zebracomment", tracker), [1]);
+  const indexed = db.prepare("SELECT COUNT(*) AS n FROM jobs_fts").get().n;
+  assert.equal(indexed, db.prepare("SELECT COUNT(*) AS n FROM jobs").get().n, "the job index misses or repeats a job");
+  const triggers = db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'jobs' AND name LIKE 'jobs_fts_%' ORDER BY name").all();
+  assert.deepEqual(triggers.map((row) => row.name), ["jobs_fts_ad", "jobs_fts_ai", "jobs_fts_au"]);
 
   const api = projects.api;
   assert.deepEqual(
@@ -524,10 +532,8 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
     "a project reads its own decisions, its org's first, and the global ones, never another org's",
   );
   assert.equal(saveDecision({ projectId: api.id, title: "t", context: "c", decision: "d" }, env).id, 6, "a decision id was reused");
-  const orgRows = db.prepare("SELECT p.name, r.status FROM issue_projects r JOIN projects p ON p.id = r.project_id WHERE r.item_id = 1 ORDER BY p.name").all();
+  const orgRows = tracker.prepare("SELECT p.name, r.status FROM issue_projects r JOIN projects p ON p.id = r.project_id WHERE r.item_id = 1 ORDER BY p.name").all();
   assert.deepEqual(orgRows.map((row) => [row.name, row.status]), [["api", "in_progress"], ["web", "todo"]]);
-  const inserted = db.prepare("INSERT INTO issues (scope, project_id, number, title, position) VALUES ('project', ?, 99, 't', 99) RETURNING id").get(api.id);
-  assert.equal(inserted.id, 4, "an issue id was reused");
 
   const config = JSON.parse(readFileSync(configPath(env), "utf8"));
   const { projects: _projects, orgs: _orgs, ...kept } = v17Config;

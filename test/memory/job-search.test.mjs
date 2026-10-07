@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { closeDb, openDb } from "../../src/memory/db.mjs";
 import { searchJobs } from "../../src/memory/job-search.mjs";
-import { addJob } from "../../src/memory/jobs.mjs";
+import { addJob, recoverJob } from "../../src/memory/jobs.mjs";
 import { ensureProject, makeHome, seedDoneJob } from "../../test-support/memory.mjs";
 
 // Queues one pending job of a project and answers its id.
@@ -86,4 +86,52 @@ test("a deleted job leaves no row in the index", (t) => {
 
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM jobs_fts").get().n, 0);
   assert.deepEqual(searchJobs({ query: "runner", projectId: ensureProject(env, "alpha") }, env), []);
+});
+
+// Plants an index row whose job does not exist, the drift a stale index leaves behind.
+function plantOrphanRow(env, rowid) {
+  openDb(env).prepare("INSERT INTO jobs_fts(rowid, slug, brief, notice) VALUES (?, '', 'ghost', '')").run(rowid);
+}
+
+// Counts the index rows left without their job.
+function orphanRows(env) {
+  return openDb(env).prepare("SELECT COUNT(*) AS n FROM jobs_fts WHERE rowid NOT IN (SELECT id FROM jobs)").get().n;
+}
+
+test("a stale index row at the next job id never blocks the job insert", (t) => {
+  const env = makeHome(t, "job-search-stale-add");
+  const first = queue(env, "alpha", "first job");
+  plantOrphanRow(env, first + 1);
+
+  const second = queue(env, "alpha", "the runner drops its lease");
+
+  assert.equal(second, first + 1);
+  assert.equal(orphanRows(env), 0);
+  assert.deepEqual(
+    searchJobs({ query: "runner", projectId: ensureProject(env, "alpha") }, env).map((hit) => hit.id),
+    [second],
+  );
+});
+
+test("the next open removes the index rows left without their job", (t) => {
+  const env = makeHome(t, "job-search-stale-heal");
+  const first = queue(env, "alpha", "first job");
+  plantOrphanRow(env, first + 50);
+  closeDb(env);
+
+  assert.equal(orphanRows(env), 0);
+});
+
+test("a recovered job whose id has a stale index row is recovered, not refused", (t) => {
+  const env = makeHome(t, "job-search-stale-recover");
+  const projectId = ensureProject(env, "alpha");
+  plantOrphanRow(env, 77);
+
+  const outcome = recoverJob(
+    { id: 77, projectId, status: "failed", recovered: { by: "test" }, createdAt: "2026-01-01T00:00:00Z" },
+    env,
+  );
+
+  assert.equal(outcome, "recovered");
+  assert.equal(orphanRows(env), 0);
 });

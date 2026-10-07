@@ -103,12 +103,12 @@ test("the server never migrates a v8 home: a tool answers store-unavailable with
   assert.equal(status.error, "store-unavailable");
   assert.equal(status.code, "SCHEMA_OUTDATED");
   assert.equal(status.hint, "nightqueue update");
-  assert.match(status.message, /database at v8, this nightqueue expects v23: run `nightqueue update`/);
+  assert.match(status.message, /database at v8, this nightqueue expects v24: run `nightqueue update`/);
 
   const db = openDbReadOnly(env, { anySchema: true });
   t.after(() => db.close());
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, 8);
-  assert.equal(DB_USER_VERSION, 23);
+  assert.equal(DB_USER_VERSION, 24);
 });
 
 test("the handshake carries the instructions that teach the backlog model", async (t) => {

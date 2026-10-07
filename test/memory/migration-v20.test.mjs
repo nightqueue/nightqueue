@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { dbPath, preV18BackupPath, preV19BackupPath, preV20BackupPath } from "../../src/config/paths.mjs";
+import { dbPath, preV18BackupPath, preV19BackupPath, preV20BackupPath, preVersionBackupPath } from "../../src/config/paths.mjs";
 import { DB_USER_VERSION, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
 import { MigrationRefused } from "../../src/memory/migration/one-shot.mjs";
 import { migrateToV20 } from "../../src/memory/migration/v20.mjs";
@@ -264,7 +264,7 @@ test("a v17 home reaches the current schema in one open, keeping the pre-v18, pr
   assert.equal(readRaw(preV18BackupPath(env), (raw) => schemaVersionOn(raw)), 17);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
   assert.equal(readRaw(preV20BackupPath(env), (raw) => schemaVersionOn(raw)), 19);
-  assert.deepEqual(db.prepare("SELECT title FROM issues").all().map((row) => row.title), ["old item"]);
+  assert.deepEqual(readRaw(preVersionBackupPath(env, 24), (raw) => raw.prepare("SELECT title FROM issues").all().map((row) => row.title)), ["old item"]);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 });
 
@@ -275,7 +275,7 @@ test("a v18 home reaches the current schema in one open, keeping the pre-v19 and
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
   assert.equal(readRaw(preV20BackupPath(env), (raw) => schemaVersionOn(raw)), 19);
-  assert.equal(foreignKeyOf(db, "issues", "job_id"), "jobs SET NULL");
+  assert.equal(readRaw(preVersionBackupPath(env, 24), (raw) => foreignKeyOf(raw, "issues", "job_id")), "jobs SET NULL");
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 });
 

@@ -19,8 +19,9 @@ export function preV22Name(table) {
   return PRE_V22_NAMES.find(([current]) => current === table)?.[1] ?? table;
 }
 
-// Gives the tracker tables of a home already opened at the current schema their pre-v22 names, the only ones a legacy build knew.
+// Gives the tracker tables of a home already opened at the current schema their pre-v22 names, the only ones a legacy build knew, and drops the v24 job index it never had.
 export function restorePreV22Names(db) {
+  db.exec("DROP TRIGGER IF EXISTS jobs_fts_ai; DROP TRIGGER IF EXISTS jobs_fts_au; DROP TRIGGER IF EXISTS jobs_fts_ad; DROP TABLE IF EXISTS jobs_fts");
   const tables = PRE_V22_NAMES.map(([current]) => `'${current}'`).join(", ");
   const triggers = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name IN (${tables})`).all();
   for (const { name } of triggers) db.exec(`DROP TRIGGER "${name}"`);

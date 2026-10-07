@@ -110,6 +110,18 @@ so its finish lands on it), and anchors `attempt_started_at` of a job running at
 on its `started_at`; each write sits behind a read that finds nothing once it ran, so a
 second open writes nothing. `update` takes the usual `nightqueue.db.pre-v23` copy first.
 
+Schema v24 removes the tracker and indexes the job history: the tables `issues`,
+`issue_projects` and `issue_comments` go, with the mirrors `issues_fts` and
+`issue_comments_fts` and every trigger and index of theirs, and the full-text table `jobs_fts`
+(slug, the first 1500 characters of the prompt, the notice) is created with its triggers on
+`jobs`. A v22 or v23 database migrates once, in `nightqueue update` (or `setup`) and in the
+same migration as the earlier steps when they are pending (`src/memory/migration/v24.mjs`): a
+copy `nightqueue.db.pre-v24` first (kept as it is when it is already there), then one
+transaction that rebuilds `jobs_fts` from every job, drops the tracker and checks that every job
+is kept and indexed, that no tracker object is left and that no foreign key breaks. Job ids,
+refs and titles are untouched; the tracker rows stay only in the copy. The same live-lease
+refusal applies.
+
 **A sick database degrades, it does not kill.** The file can break under a live process - a
 home on a network or FUSE mount, a copy taken by hand, a second sqlite opened on the live
 file. Every open and every store call classifies what SQLite throws by its numeric `errcode`
@@ -137,7 +149,7 @@ A database older than the build is the same class with the code `SCHEMA_OUTDATED
 `nightqueue update` and the message `database at v<file>, this nightqueue expects v<code>: run
 \`nightqueue update\``: the MCP tools answer it as `store-unavailable`, the SessionStart hook
 and the MCP server's startup print `nightqueue memory unavailable (SCHEMA_OUTDATED at <home>):
-database at v20, this nightqueue expects v23: run \`nightqueue update\``, and `doctor` names
+database at v20, this nightqueue expects v24: run \`nightqueue update\``, and `doctor` names
 `nightqueue update`. It is never an outage: the runner does not back off on it, it stops with
 the message, since waiting never brings an older schema up to date.
 

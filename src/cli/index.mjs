@@ -100,7 +100,7 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the thirty-one memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the twenty-six memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   studio [--port <n>] [--api-only] [--no-open]  serve nightqueue studio, the local web cockpit, on 127.0.0.1
   hook <name>                               run a hook (session-start, prompt-context, reflect, agent-foreground, merger-guard, subagent-stop), reading the event JSON from stdin

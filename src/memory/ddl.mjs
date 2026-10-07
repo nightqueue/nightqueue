@@ -330,10 +330,11 @@ CREATE INDEX IF NOT EXISTS decisions_superseded_idx ON decisions(superseded_by);
 export const JOBS_FTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS jobs_fts USING fts5(slug, brief, notice);
 CREATE TRIGGER IF NOT EXISTS jobs_fts_ai AFTER INSERT ON jobs BEGIN
+  DELETE FROM jobs_fts WHERE rowid = new.id;
   INSERT INTO jobs_fts(rowid, slug, brief, notice) VALUES (new.id, new.slug, substr(new.prompt, 1, 1500), new.notice_md);
 END;
 CREATE TRIGGER IF NOT EXISTS jobs_fts_au AFTER UPDATE OF slug, notice_md, prompt ON jobs BEGIN
-  DELETE FROM jobs_fts WHERE rowid = old.id;
+  DELETE FROM jobs_fts WHERE rowid IN (old.id, new.id);
   INSERT INTO jobs_fts(rowid, slug, brief, notice) VALUES (new.id, new.slug, substr(new.prompt, 1, 1500), new.notice_md);
 END;
 CREATE TRIGGER IF NOT EXISTS jobs_fts_ad AFTER DELETE ON jobs BEGIN
@@ -346,6 +347,19 @@ export const JOBS_FTS_BACKFILL = `
 INSERT INTO jobs_fts(rowid, slug, brief, notice)
 SELECT id, slug, substr(prompt, 1, 1500), notice_md FROM jobs
  WHERE NOT EXISTS (SELECT 1 FROM jobs_fts f WHERE f.rowid = jobs.id);
+`;
+
+// Removes every row of the lexical index of the job history whose job no longer exists.
+export const JOBS_FTS_PRUNE = `
+DELETE FROM jobs_fts WHERE rowid NOT IN (SELECT id FROM jobs);
+`;
+
+// Finds one job missing from the lexical index of the job history, or one index row left without its job.
+export const JOBS_FTS_DRIFT = `
+SELECT 1 FROM jobs WHERE id NOT IN (SELECT rowid FROM jobs_fts)
+UNION ALL
+SELECT 1 FROM jobs_fts WHERE rowid NOT IN (SELECT id FROM jobs)
+LIMIT 1
 `;
 
 export const FTS = `

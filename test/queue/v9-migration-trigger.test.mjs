@@ -10,7 +10,7 @@ import { makeHome, makeProject, seedLegacyV8Home } from "../../test-support/memo
 import { migrateTestHome } from "../../test-support/migrate.mjs";
 
 const REDRAW = "\u001b[0J";
-const OUTDATED = /database at v8, this nightqueue expects v23: run `nightqueue update`/;
+const OUTDATED = /database at v8, this nightqueue expects v24: run `nightqueue update`/;
 
 // The schema version and the shape of `jobs` on disk right now, read on a fresh connection.
 function schemaState(env) {

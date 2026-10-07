@@ -67,9 +67,9 @@ test("the read commands refuse a database written before the owner scope until `
 
   const refused = runCli(env, ["decision", "list", "--project", "alpha"], { cwd });
   assert.equal(refused.status, 1, refused.stdout);
-  assert.match(refused.stderr, /database at v5, this nightqueue expects v23: run `nightqueue update`/);
+  assert.match(refused.stderr, /database at v5, this nightqueue expects v24: run `nightqueue update`/);
   assert.ok(readFileSync(dbPath(env)).equals(before), "a refused read wrote to the database");
-  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /warn\s+database\s+schema v5, this nightqueue expects v23/);
+  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /warn\s+database\s+schema v5, this nightqueue expects v24/);
 
   migrateTestHome(env);
   closeDb(env);
@@ -84,7 +84,7 @@ test("the read commands refuse a database written before the owner scope until `
   assert.equal(shown.status, 0, shown.stderr);
   assert.ok(shown.stdout.includes("D-2 legacy decision 2 (accepted)"), shown.stdout);
 
-  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v23/);
+  assert.match(runCli(env, ["doctor"], { cwd }).stdout, /ok\s+database\s+schema v24/);
 });
 
 test("a read-only v5 database answers with the update message, never with a raw missing column", (t) => {
@@ -95,7 +95,7 @@ test("a read-only v5 database answers with the update message, never with a raw 
 
   const listed = runCli(env, ["decision", "list", "--project", "alpha"], { cwd });
   assert.equal(listed.status, 1, listed.stdout);
-  assert.match(listed.stderr, /database at v5, this nightqueue expects v23: run `nightqueue update`/);
+  assert.match(listed.stderr, /database at v5, this nightqueue expects v24: run `nightqueue update`/);
   assert.equal(listed.stderr.includes("no such column"), false, listed.stderr);
 });
 
