@@ -121,7 +121,7 @@ function HeaderOperatorButton() {
 // The header of every page: logo, navigation, Operator, MCP status, runtime version and clock.
 function Header() {
   return (
-    <header className="flex h-[52px] items-center gap-5 border-b border-line bg-header px-4 sm:px-6">
+    <header className="sticky top-0 z-20 flex h-[52px] items-center gap-5 border-b border-line bg-header px-4 sm:px-6">
       <Logo />
       <Nav />
       <div className="ml-auto flex items-center gap-4 text-sm text-muted">
