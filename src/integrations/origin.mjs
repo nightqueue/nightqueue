@@ -40,8 +40,9 @@ export function explicitOrigin(origin) {
   return { kind, ref: parsed };
 }
 
-// Resolves the origin of a job being queued: an explicit one is validated, anything else is detected in the prompt.
+// Resolves the origin of a job being queued: `false` means none, an explicit one is validated, anything else is detected in the prompt.
 export function resolveOrigin({ origin, prompt }) {
+  if (origin === false) return null;
   if (origin && typeof origin === "object") return explicitOrigin(origin);
   return detectOrigin(prompt);
 }

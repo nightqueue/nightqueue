@@ -213,6 +213,28 @@ test("connection add warns when the org slot is already taken", (t) => {
   assert.match(bound.stdout, /bound `gh2` to org `default` \(github\) \(replaced `gh`\)/);
 });
 
+test("connection add of a home-wide type stores the secret, binds nothing and refuses --org, bind and a second one", (t) => {
+  const home = makeDir(t, "home-scope");
+  runCli(home, ["setup"]);
+  const configBefore = readFileSync(join(home, "config.json"), "utf8");
+  const withOrg = runCli(home, ["connection", "add", "lin", "--type", "linear", "--org", "default"], { input: `${SENTINEL}\n` });
+  assert.equal(withOrg.status, 1);
+  assert.match(withOrg.stderr, /a linear connection serves the whole home; drop --org/);
+  const added = runCli(home, ["connection", "add", "lin", "--type", "linear"], { input: `${SENTINEL}\n` });
+  assert.equal(added.status, 0);
+  assert.match(added.stdout, /stored connection `lin` \(linear\) for the whole home/);
+  assert.equal(readFileSync(join(home, "config.json"), "utf8"), configBefore);
+  const second = runCli(home, ["connection", "add", "lin2", "--type", "linear"], { input: "two\n" });
+  assert.equal(second.status, 1);
+  assert.match(second.stderr, /a home has one `linear` connection: `lin`; remove it first/);
+  const bind = runCli(home, ["connection", "bind", "lin", "--org", "default"]);
+  assert.equal(bind.status, 1);
+  assert.match(bind.stderr, /connection `lin` \(linear\) serves the whole home and binds to no org/);
+  assert.match(runCli(home, ["connection", "list"]).stdout, /^lin {2}linear {2}orgs=home$/m);
+  const listed = JSON.parse(runCli(home, ["connection", "list", "--json"]).stdout);
+  assert.deepEqual(listed, { connections: [{ name: "lin", type: "linear", present: true, orgs: [], scope: "home" }] });
+});
+
 test("a JSON listing survives being piped, with warnings kept on stderr", (t) => {
   const home = makeDir(t, "json-home");
   runCli(home, ["setup"]);

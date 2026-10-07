@@ -9,7 +9,7 @@ import { STALE_CONTRACT_ADVISORY, TOOL_CONTRACT } from "../../src/mcp/tool-contr
 import { makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
-const STALE_LINE = "your client has the tool definitions of an older nightqueue (contract 3, this server is 4): start a new session or restart the MCP client";
+const STALE_LINE = "your client has the tool definitions of an older nightqueue (contract 4, this server is 5): start a new session or restart the MCP client";
 
 // Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connect(t, env) {
@@ -55,9 +55,9 @@ test("the handshake and every answer publish the tool contract, and a current cl
   const { env } = makeContractHome(t, "contract-published");
   const client = await connect(t, env);
 
-  assert.equal(TOOL_CONTRACT, 4);
-  assert.match(client.getServerVersion().title, /tool contract 4/);
-  assert.match(client.getInstructions(), /tool contract 4/);
+  assert.equal(TOOL_CONTRACT, 5);
+  assert.match(client.getServerVersion().title, /tool contract 5/);
+  assert.match(client.getInstructions(), /tool contract 5/);
   const detail = await answer(client, "decision_recall", { id: "D-1", project: "alpha" });
   assert.equal(detail.contract, TOOL_CONTRACT);
   assert.equal("deprecated_input" in detail, false);

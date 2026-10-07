@@ -12,6 +12,7 @@ import {
 } from "../src/config/connections.mjs";
 import { UserError } from "../src/config/errors.mjs";
 import { emptyConfig, emptySecrets } from "../src/config/schema.mjs";
+import { resolveForClose } from "../src/integrations/connections.mjs";
 
 const TOKEN = "s3cr3t-sentinel-do-not-print";
 const DEFAULT = "01J00000000000000000000DEF";
@@ -50,8 +51,8 @@ test("addConnection binds an empty slot of an org id and reports an occupied one
 test("addConnection validates name, type, secret and duplicates", () => {
   const { config, secrets } = fixture();
   assert.throws(() => addConnection({ config, secrets, name: "GH", type: "github", orgId: DEFAULT, secret: TOKEN }), UserError);
-  assert.throws(() => addConnection({ config, secrets, name: "gh", type: "linear", orgId: DEFAULT, secret: TOKEN }), (err) => {
-    assert.match(err.message, /unknown connection type `linear`; supported: github/);
+  assert.throws(() => addConnection({ config, secrets, name: "gh", type: "jira", orgId: DEFAULT, secret: TOKEN }), (err) => {
+    assert.match(err.message, /unknown connection type `jira`; supported: github/);
     return true;
   });
   assert.throws(() => addConnection({ config, secrets, name: "gh", type: "github", orgId: DEFAULT, secret: "" }), UserError);
@@ -159,4 +160,35 @@ test("testConnection and requireType refuse unknown inputs", async () => {
   await assert.rejects(() => testConnection({ name: "nope", secrets: emptySecrets() }), UserError);
   assert.equal(requireType("github").secretFields[0], "token");
   assert.throws(() => requireType("nope"), UserError);
+});
+
+test("a home-scoped connection is stored once, binds no org and lists as home", () => {
+  const { config, secrets } = fixture();
+  const before = JSON.stringify(config);
+  const added = addConnection({ config, secrets, name: "lin", type: "linear", orgId: null, secret: TOKEN });
+  assert.deepEqual({ ...added, config: null, secrets: null }, { config: null, secrets: null, orgId: null, bound: false, home: true, occupiedBy: null });
+  assert.deepEqual(secrets.connections.lin, { type: "linear", apiKey: TOKEN });
+  assert.equal(JSON.stringify(config), before);
+  assert.throws(() => addConnection({ config, secrets, name: "lin2", type: "linear", orgId: DEFAULT, secret: "other" }), (err) => {
+    assert.equal(err.message, "a home has one `linear` connection: `lin`; remove it first");
+    return true;
+  });
+  assert.throws(() => bindConnection({ config, secrets, name: "lin", orgId: ACME }), (err) => {
+    assert.equal(err.message, "connection `lin` (linear) serves the whole home and binds to no org");
+    return true;
+  });
+  addConnection({ config, secrets, name: "gh", type: "github", orgId: DEFAULT, secret: TOKEN });
+  const rows = listConnections(config, secrets);
+  assert.deepEqual(rows.find((row) => row.name === "lin"), { name: "lin", type: "linear", present: true, orgs: [], scope: "home" });
+  assert.equal("scope" in rows.find((row) => row.name === "gh"), false);
+  assert.equal(JSON.stringify(rows).includes(TOKEN), false);
+});
+
+test("resolveForClose answers the home's one connection for a home-scoped kind, whatever the org", () => {
+  const secrets = { connections: { zlin: { type: "linear", apiKey: "z" }, alin: { type: "linear", apiKey: "a" }, gh: { type: "github", token: TOKEN } } };
+  for (const orgId of [null, DEFAULT]) {
+    const resolved = resolveForClose({ kind: "linear", orgId, config: emptyConfig(), secrets });
+    assert.deepEqual(resolved, { slot: { type: "linear", apiKey: "a", name: "alin" }, connections: [] });
+  }
+  assert.deepEqual(resolveForClose({ kind: "linear", orgId: DEFAULT, config: null, secrets: emptySecrets() }), { slot: null, connections: [] });
 });

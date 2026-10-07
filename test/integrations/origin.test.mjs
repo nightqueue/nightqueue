@@ -3,9 +3,9 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { defaultContext, run } from "../../src/cli/index.mjs";
-import { loadConfig, loadSecrets } from "../../src/config/store.mjs";
+import { loadConfig, loadSecrets, saveSecrets } from "../../src/config/store.mjs";
 import { originCoverage } from "../../src/integrations/coverage.mjs";
-import { detectOrigin, explicitOrigin, parseOriginColumn } from "../../src/integrations/origin.mjs";
+import { detectOrigin, explicitOrigin, parseOriginColumn, resolveOrigin } from "../../src/integrations/origin.mjs";
 import { withProviders } from "../../src/integrations/registry.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, getJob, jobView } from "../../src/memory/jobs.mjs";
@@ -66,6 +66,48 @@ test("detection takes the first provider in registry order whose parser matches,
   await withProviders([shadowProvider(), ...originProviders()], () => {
     assert.deepEqual(detectOrigin(PROMPT), { kind: "shadow", ref: "4507" });
   });
+});
+
+test("with the build's providers a Sentry link wins over a Linear link in one prompt, and a bare KEY-n is no origin", () => {
+  const linearUrl = "https://linear.app/acme/issue/MK-42/fix-the-login";
+  assert.deepEqual(detectOrigin(`see ${linearUrl} and https://acme.sentry.io/issues/4507/`), { kind: "sentry", ref: "4507" });
+  assert.deepEqual(detectOrigin(`see ${linearUrl}`), { kind: "linear", ref: "MK-42" });
+  assert.equal(detectOrigin("fix MK-42, J-86 and D-55"), null);
+});
+
+test("queue_add covers a linear origin with the home's connection in a project with no integrations", async (t) => {
+  const { env } = makeOriginHome(t, "origin-queue-add-linear");
+  const client = await connectInProcess(t, env);
+  const none = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix it", origin: { kind: "linear", ref: "mk-42" } } }));
+  assert.deepEqual(none.origin, { kind: "linear", ref: "MK-42", connection: "none", detail: "no linear connection in the home" });
+  const secrets = loadSecrets(env, { warn: () => {} });
+  secrets.connections.lin = { type: "linear", apiKey: TRACKER_SECRET };
+  saveSecrets(secrets, env);
+  const covered = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix it again", origin: { kind: "linear", ref: "MK-42" } } }));
+  assert.deepEqual(covered.origin, { kind: "linear", ref: "MK-42", connection: "lin" });
+  assert.equal(JSON.stringify([none, covered]).includes(TRACKER_SECRET), false);
+});
+
+test("origin false resolves to no origin whatever the prompt names; null or omitted still detects", () => {
+  const prompt = "Linear MK-9 crash";
+  assert.equal(resolveOrigin({ origin: false, prompt }), null);
+  assert.deepEqual(resolveOrigin({ origin: null, prompt }), { kind: "linear", ref: "MK-9" });
+  assert.deepEqual(resolveOrigin({ prompt }), { kind: "linear", ref: "MK-9" });
+});
+
+test("queue_add with origin false stores no origin; omitted or null detects it; true is refused", async (t) => {
+  const { env } = makeOriginHome(t, "origin-queue-add-false");
+  const client = await connectInProcess(t, env);
+  const prompt = "Linear MK-9 crash";
+  const cleared = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt, origin: false } }));
+  assert.equal(Object.hasOwn(cleared, "origin"), false);
+  assert.equal(getJob(cleared.id, env).origin, null);
+  const omitted = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt } }));
+  assert.deepEqual(jobView(getJob(omitted.id, env)).origin, { kind: "linear", ref: "MK-9" });
+  const nulled = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt, origin: null } }));
+  assert.deepEqual(jobView(getJob(nulled.id, env)).origin, { kind: "linear", ref: "MK-9" });
+  const refused = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt, origin: true } });
+  assert.equal(refused.isError, true);
 });
 
 test("an explicit origin is validated by its provider, and an unknown kind or a foreign reference is refused", async () => {

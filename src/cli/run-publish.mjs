@@ -262,7 +262,7 @@ function worktreeRemoval(run, path, env) {
 
 // Renames the branch to its final name, pushes it, opens the pull request and prints what happened; the body is already checked.
 export async function openPullRequest({ run, cwd, bodyFile, body, title, removeWorktree, ctx }) {
-  const published = publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId });
+  const published = publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, origin: run.origin ?? null });
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const current = currentBranch(cwd, ctx.env);
   const final = publishedBranchName(current, { type: state?.type, slug: run.slug, commitType: headCommitType(cwd, ctx.env) });

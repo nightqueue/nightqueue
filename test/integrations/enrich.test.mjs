@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { jobLogPath, runDir } from "../../src/config/paths.mjs";
+import { loadSecrets, saveSecrets } from "../../src/config/store.mjs";
 import { capMarkdown, enrichJobOrigin, ORIGIN_MAX_BYTES } from "../../src/integrations/enrich.mjs";
 import { withProviders } from "../../src/integrations/registry.mjs";
 import { phaseContextBlock } from "../../src/mcp/phase-context.mjs";
@@ -105,6 +106,22 @@ test("a project without the integration, or an org without the connection, gets 
     assert.deepEqual(unbound, ["origin: tracker 4507 (connection: none)", "origin enrichment skipped: no tracker connection in the org"]);
   });
   assert.equal(fetch.calls.length, 0);
+});
+
+test("a home-scoped provider enriches with no project integrations through the home's connection, whatever the org", async (t) => {
+  const { env, dir } = makeEnrichHome(t, "enrich-home");
+  const base = trackerProvider();
+  const homeTracker = { ...base, connection: { ...base.connection, scope: "home" } };
+  const secrets = loadSecrets(env, { warn: () => {} });
+  secrets.connections.trk = { type: "tracker", token: TRACKER_SECRET };
+  saveSecrets(secrets, env);
+  const fetch = fakeTrackerFetch();
+  await withProviders([homeTracker], async () => {
+    const lines = await enrich({ origin: ORIGIN, orgId: null, integrations: null, dir, env, fetchImpl: fetch.impl });
+    assert.deepEqual(lines, ["origin: tracker 4507 (connection: trk)"]);
+  });
+  assert.equal(fetch.calls.length, 1);
+  assert.equal(readFileSync(join(dir, "tracker.md"), "utf8"), "# Issue 4507\n\nworker crashes on boot\n");
 });
 
 // The origin files under every run directory of a project, wherever the run's slug ended up.

@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { PR_FOOTER, PUBLISHED_BODY_FILE, publishedBodyFile } from "../../src/queue/pr-footer.mjs";
+import { footerLine, PR_FOOTER, PUBLISHED_BODY_FILE, publishedBodyFile } from "../../src/queue/pr-footer.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 const BODY = "## Report\n\nthe thing is done.\n\n";
@@ -46,6 +46,17 @@ test("a run outside the queue ends with the bare signature too", (t) => {
   const { runDir, bodyFile } = makeFooterHome(t, "pr-footer-outside");
   const published = publishedBodyFile({ bodyFile, runDir, jobId: null });
   assert.equal(readFileSync(published, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue\n");
+});
+
+test("a job with an origin ends with the signature naming its kind and ref; a partial origin keeps the bare signature", (t) => {
+  const { runDir, bodyFile } = makeFooterHome(t, "pr-footer-origin");
+  const linear = publishedBodyFile({ bodyFile, runDir, jobId: 4, origin: { kind: "linear", ref: "MK-42" } });
+  assert.equal(readFileSync(linear, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue · linear MK-42\n");
+  const sentry = publishedBodyFile({ bodyFile, runDir, jobId: 4, origin: { kind: "sentry", ref: "4507" } });
+  assert.equal(readFileSync(sentry, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue · sentry 4507\n");
+  assert.equal(footerLine(null), "Opened by nightqueue");
+  assert.equal(footerLine({ kind: "linear", ref: "" }), "Opened by nightqueue");
+  assert.equal(footerLine({ kind: "", ref: "MK-42" }), "Opened by nightqueue");
 });
 
 test("a body that cannot be read refuses the publication, naming the job", (t) => {

@@ -49,7 +49,7 @@ test("decision_save takes project XOR org, and refuse both, neither and an unkno
   const client = await connect(t, env);
 
   const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...ORG_DECISION, status: "accepted" } }));
-  assert.deepEqual(saved, { ok: true, id: 1, number: 1, ref: "AM/D-1", scope: "org", owner: "acme", contract: 4 });
+  assert.deepEqual(saved, { ok: true, id: 1, number: 1, ref: "AM/D-1", scope: "org", owner: "acme", contract: 5 });
 
   const both = await client.callTool({
     name: "decision_save",
@@ -101,7 +101,7 @@ test("decision_list and decision_recall answer the union for a project and the o
   assert.equal(recalled[0].owner, "acme");
 
   const orgOnly = payloadOf(await client.callTool({ name: "decision_list", arguments: { org: "acme" } }));
-  assert.deepEqual(orgOnly, { org: "acme", decisions: orgOnly.decisions, contract: 4 });
+  assert.deepEqual(orgOnly, { org: "acme", decisions: orgOnly.decisions, contract: 5 });
   assert.deepEqual(orgOnly.decisions.map((row) => row.owner), ["acme"]);
   const foreign = payloadOf(await client.callTool({ name: "decision_list", arguments: { project: "orbit-app" } }));
   assert.deepEqual(foreign.decisions, [], "a acme decision reached a orbit project");

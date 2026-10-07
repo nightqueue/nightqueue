@@ -2,41 +2,22 @@ import { announceRunner, errorText, type RunnerStart } from "./actions";
 import { callTool } from "./mcp";
 import { showToast } from "./toast";
 
-export const TIERS = ["auto", "trivial", "simple", "complex"] as const;
-
-export type Tier = (typeof TIERS)[number];
-
-export const PRIORITIES = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-
-export const DEFAULT_PRIORITY = 5;
-
-export interface AddJobForm {
-  project: string;
-  text: string;
-  tier: Tier;
-  priority: number;
-}
-
-export const EMPTY_ADD_FORM: AddJobForm = { project: "", text: "", tier: "auto", priority: DEFAULT_PRIORITY };
+export {
+  type AddJobForm,
+  addFormProblem,
+  buildAddArgs,
+  clearOrigin,
+  DEFAULT_PRIORITY,
+  EMPTY_ADD_FORM,
+  effectiveProject,
+  PRIORITIES,
+  TIERS,
+  type Tier,
+} from "./addJobForm";
 
 interface QueuedAnswer {
   ref?: unknown;
   project?: unknown;
-}
-
-// The exact arguments `queue_add` gets from the form: the text as the brief; `auto` sends no tier.
-export function buildAddArgs(form: AddJobForm): Record<string, unknown> {
-  const text = form.text.trim();
-  const tier = form.tier === "auto" ? {} : { tier: form.tier };
-  return { project: form.project, prompt: text, ...tier, priority: form.priority };
-}
-
-// What still keeps the form from being queued, or null when it is complete.
-export function addFormProblem(form: AddJobForm): string | null {
-  if (!form.project) return "choose a project";
-  if (form.text.trim() === "") return "write the brief";
-  if (!Number.isInteger(form.priority) || !PRIORITIES.includes(form.priority)) return "choose a priority from 1 to 9";
-  return null;
 }
 
 // Starts a once runner for a job just queued; a failure is an error toast, never a reason to queue the job again.

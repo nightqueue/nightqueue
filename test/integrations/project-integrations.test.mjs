@@ -96,11 +96,25 @@ test("a build whose providers declare no settings shows no integrations and refu
 
     const client = await connectInProcess(t, env);
     const answer = payloadOf(await client.callTool({ name: "project_integrations", arguments: { project: "alpha", action: "show" } }));
-    assert.deepEqual(answer, { project: "alpha", integrations: null, providers: [{ kind: "github", keys: [] }], contract: 4 });
+    assert.deepEqual(answer, { project: "alpha", integrations: null, providers: [{ kind: "github", keys: [] }], contract: 5 });
     const mcpRefused = await client.callTool({ name: "project_integrations", arguments: { project: "alpha", action: "set", key: "github.x", value: "y" } });
     assert.equal(mcpRefused.isError, true);
     assert.ok(textOf(mcpRefused).includes(NO_SETTINGS), textOf(mcpRefused));
   });
+});
+
+test("a home-scoped provider has no settings: set and unset of linear.* are refused over the CLI and MCP, and nothing is stored", async (t) => {
+  const { env, projectId } = makeSettingsHome(t, "integrations-home-scoped");
+  for (const argv of [["set", "linear.onClosed=done"], ["unset", "linear.onClosed"]]) {
+    const refused = await runCli(env, ["project", "integrations", "alpha", ...argv]);
+    assert.equal(refused.code, 1, argv.join(" "));
+    assert.ok(refused.err.join("\n").includes("linear has no settings"), refused.err.join("\n"));
+  }
+  const client = await connectInProcess(t, env);
+  const mcpRefused = await client.callTool({ name: "project_integrations", arguments: { project: "alpha", action: "set", key: "linear.onClosed", value: "done" } });
+  assert.equal(mcpRefused.isError, true);
+  assert.ok(textOf(mcpRefused).includes("linear has no settings"), textOf(mcpRefused));
+  assert.equal(storedColumn(env, projectId), null);
 });
 
 test("set stores dotted keys nested under the provider, show prints them, and unsetting the last key leaves NULL", async (t) => {

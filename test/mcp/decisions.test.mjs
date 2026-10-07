@@ -6,6 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { openDb } from "../../src/memory/db.mjs";
 import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
+import { trackerInstructionLines } from "../../src/integrations/tracker.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
@@ -72,7 +73,7 @@ test("the four decision tools carry the input schema of the contract, and no iss
   assert.deepEqual(tools.filter((tool) => tool.name.startsWith("issue_")).map((tool) => tool.name), []);
 });
 
-test("the handshake tells the agent what decisions are for, and names no issue", async (t) => {
+test("the handshake tells the agent what decisions are for, and names no issue outside the tracker_issues lines", async (t) => {
   const env = makeDecisionHome(t, "mcp-decisions-instructions");
   const client = await connect(t, env);
 
@@ -82,7 +83,10 @@ test("the handshake tells the agent what decisions are for, and names no issue",
   ]) {
     assert.ok(instructions.includes(line), `\`${line}\` is missing from the instructions:\n${instructions}`);
   }
-  assert.equal(/issue/i.test(instructions), false, instructions);
+  const trackerLines = new Set(trackerInstructionLines());
+  const otherLines = instructions.split("\n").filter((line) => !trackerLines.has(line));
+  assert.equal(otherLines.length, instructions.split("\n").length - trackerLines.size, instructions);
+  assert.equal(/issue/i.test(otherLines.join("\n")), false, instructions);
 });
 
 test("a decision saved through the server is numbered, listed, updated and recalled", async (t) => {
@@ -90,7 +94,7 @@ test("a decision saved through the server is numbered, listed, updated and recal
   const client = await connect(t, env);
 
   const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, status: "accepted" } }));
-  assert.deepEqual(saved, { ok: true, id: 1, number: 1, ref: "D-1", scope: "project", owner: "alpha", contract: 4 });
+  assert.deepEqual(saved, { ok: true, id: 1, number: 1, ref: "D-1", scope: "project", owner: "alpha", contract: 5 });
   const second = payloadOf(
     await client.callTool({
       name: "decision_save",
@@ -223,7 +227,7 @@ test("an overlapping decision_save answers needs_review, writes nothing, and sav
   assert.equal(getDecision(2, env), null, "a refused save wrote a row");
 
   const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...overlapping, supersedes: [1] } }));
-  assert.deepEqual(saved, { ok: true, id: 2, number: 2, ref: "D-2", scope: "project", owner: "alpha", superseded: [1], contract: 4 });
+  assert.deepEqual(saved, { ok: true, id: 2, number: 2, ref: "D-2", scope: "project", owner: "alpha", superseded: [1], contract: 5 });
   assert.equal(getDecision(1, env).status, "superseded");
   assert.equal(getDecision(1, env).superseded_by, 2);
 });

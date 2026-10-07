@@ -8,6 +8,7 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- **Tool contract 5.** The MCP server adds the `tracker_issues` tool; MCP clients must restart.
 - **The issue tracker is removed.** Gone: the `nightqueue issues` CLI, `queue add --issue`, the five
   `issue_*` MCP tools, `queue_add`'s `issue_id`, doctor's issue drift check, the item ref of the
   pull request footer and the commit `Refs:` trailer. The triager now gets `## Related jobs` from
@@ -49,6 +50,24 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Home-scoped connections.** A provider may declare a connection that serves the whole home:
+  at most one per home, bound to no org, acting for every project with no `project
+  integrations` setting. `connection list` prints `orgs=home` for it (`--json` adds `scope:
+  "home"` to that row only); `connection bind` and `add --org` are refused for it.
+- **A Linear provider.** `echo "$LINEAR_API_KEY" | nightqueue connection add linear --type
+  linear` is the whole setup. A Linear issue link, `linear MK-42` or `--origin linear:MK-42`
+  gives the origin `linear MK-42` (never a bare identifier in prose); the runner writes the
+  whole issue to `origin/linear.md` at claim, and the close's origin step moves the issue to
+  its team's first `completed` state and comments with the merged pull request, once. An issue
+  already completed or canceled when its pull request merges keeps its state and only gets the
+  comment.
+- **`queue_add` accepts `origin: false`** (no origin, no detection); the Studio sends it when the
+  origin chip is cleared.
+- **`tracker_issues` MCP tool and the Studio Issues card.** Lists the Linear workspace's issues
+  by Linear team and project (read-only, filters cached five minutes); the card's Queue opens
+  the Add job drawer with the issue as origin and the nightqueue project to pick.
+- **The pull request footer names the origin.** A job with an origin ends its body with
+  `Opened by nightqueue · <kind> <ref>` (`Opened by nightqueue · linear MK-42`).
 - **Ephemeral QA worktrees for the operator.** `nightqueue sandbox worktree <project>` creates a
   worktree detached at the checkout's HEAD under `<home>/qa/<project id>/<id>`, locked to the
   operator session's pid, and prints `QA_WORKTREE: <path>`; `--drop <path>` removes it. A qa

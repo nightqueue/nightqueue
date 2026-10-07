@@ -173,6 +173,7 @@ install (`npm install -g @nightqueue/nq`) or a clone (`npm install` plus
 nightqueue setup                                   # install the runtime and register everything in the host
 nightqueue init                                    # register this repository as a project
 echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github
+echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear   # optional: one per home, binds no org
 ```
 
 `nightqueue setup` is idempotent and prints the state of every step (`created`,
@@ -303,7 +304,8 @@ contract number (`nightqueue doctor` shows it as `tool contract`, and every MCP 
 it as `contract`). It goes up when a tool's input changes incompatibly - contract 2 is the one
 where issues and decisions are named by ref (`NQ-12`, `D-7`) instead of an internal id, and
 contract 3 the one where the tracker tools are named `issue_*` and `queue_add` takes `issue_id`,
-and contract 4 the one where the tracker is removed.
+contract 4 the one where the tracker is removed, and contract 5 the one that adds
+`tracker_issues` (Linear issues through the home's Linear connection).
 A client keeps the tool definitions it read when it connected, so after such an update reopen
 the ones still running: Claude Code sessions (start a new one), Claude Desktop and Cowork
 conversations (open a new conversation, or restart the app), and a running `nq open`. Until

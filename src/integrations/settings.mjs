@@ -1,7 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 import { orgSlot, orgUsesConnection } from "./connections.mjs";
 import { quietFiles } from "./coverage.mjs";
-import { providerOf, providers } from "./registry.mjs";
+import { isHomeScoped, providerOf, providers } from "./registry.mjs";
 
 export const INTEGRATION_ACTIONS = Object.freeze(["show", "set", "unset"]);
 
@@ -127,6 +127,8 @@ export function applyIntegrationChange({ current, action, key, value, orgId, con
   const fullKey = typeof key === "string" ? key.trim() : "";
   if (!fullKey) throw new UserError("name the integration setting as <kind>.<key>");
   const root = isPlainObject(current) ? current : {};
+  const [kind] = keyParts(fullKey);
+  if (isHomeScoped(kind) && (action === "set" || action === "unset")) throw new UserError(`${kind} has no settings`);
   let next;
   if (action === "set") {
     const setting = requireSetting(fullKey);

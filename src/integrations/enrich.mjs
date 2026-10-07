@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { connectionRecord } from "./connections.mjs";
-import { coverageLabel, originCoverage, quietFiles } from "./coverage.mjs";
+import { connectionPlace, coverageLabel, originCoverage, quietFiles } from "./coverage.mjs";
 import { requestJson } from "./http.mjs";
-import { providerOf } from "./registry.mjs";
+import { actsOnOrigin, providerOf } from "./registry.mjs";
 
 export const ORIGIN_MAX_BYTES = 16384;
 export const ENRICH_BUDGET_MS = 20000;
@@ -26,7 +26,7 @@ export function capMarkdown(text, maxBytes = ORIGIN_MAX_BYTES) {
 
 // Tells whether the project enabled a provider that can read the origin and this run has not fetched it yet.
 function wantsEnrichment({ provider, integrations, file }) {
-  if (!provider || !integrations?.[provider.kind]) return false;
+  if (!provider || !actsOnOrigin(provider.kind, integrations)) return false;
   if (provider.capabilities?.read !== true || typeof provider.origin?.enrich !== "function") return false;
   return !existsSync(file);
 }
@@ -61,7 +61,7 @@ function writeOnce(dir, file, markdown) {
 async function enrichInto({ origin, coverage, dir, secrets, fetchImpl, log }) {
   const provider = providerOf(origin.kind);
   const connection = connectionRecord({ secrets, name: coverage.connection, kind: origin.kind });
-  if (!connection) return log(`origin enrichment skipped: ${coverage.detail ?? `no ${origin.kind} connection in the org`}`);
+  if (!connection) return log(`origin enrichment skipped: ${coverage.detail ?? `no ${origin.kind} connection ${connectionPlace(origin.kind)}`}`);
   const fetched = await fetchMarkdown({ provider, ref: origin.ref, connection, fetchImpl });
   if (!fetched.markdown) return log(`origin enrichment skipped: ${fetched.detail}`);
   try {

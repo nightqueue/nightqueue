@@ -132,6 +132,7 @@ nightqueue decision update <number|ref> --status accepted|rejected|superseded [-
 nightqueue org add|list|rename|key|remove|repair
 nightqueue project add|list|key|move|remove
 nightqueue connection bind|test|list|remove
+echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear   # Linear issues, one per home
 nightqueue doctor
 nightqueue update [<version>]
 ```

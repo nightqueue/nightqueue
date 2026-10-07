@@ -1,4 +1,5 @@
 // The integrations' view of config.json and secrets.json: a record holding a secret never leaves src/integrations.
+import { isHomeScoped } from "./registry.mjs";
 
 // The name of the connection an org's single slot of a kind holds, or null.
 export function orgSlot(config, orgId, kind) {
@@ -30,8 +31,16 @@ function namedRecord(secrets, name, kind) {
   return record && record.type === kind ? { ...record, name } : null;
 }
 
-// The org's connections of a kind, secrets included: its slot record and the records of its list.
+// The record of the home's one connection of a kind, secrets included; with several stored, the first by name.
+export function homeConnection(secrets, kind) {
+  const names = Object.keys(secrets?.connections ?? {}).sort();
+  const name = names.find((candidate) => secrets.connections[candidate]?.type === kind);
+  return namedRecord(secrets, name, kind);
+}
+
+// The connections of a kind that act for an org, secrets included: the home's one for a home-scoped kind, else the org's slot and list.
 export function resolveForClose({ kind, orgId, config, secrets }) {
+  if (isHomeScoped(kind)) return { slot: homeConnection(secrets, kind), connections: [] };
   const slot = namedRecord(secrets, orgSlot(config, orgId, kind), kind);
   const connections = orgConnectionsOf(config, orgId, kind)
     .map((name) => namedRecord(secrets, name, kind))

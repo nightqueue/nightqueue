@@ -25,6 +25,11 @@ function boundNames(binding) {
   return typeof binding === "string" && binding ? [binding] : [];
 }
 
+// Tells whether a type's connection serves the whole home and binds to no org.
+function isHomeType(type) {
+  return requireType(type).scope === "home";
+}
+
 // Tells whether a type binds an org to many connections instead of a single slot.
 function isManyType(type) {
   return requireType(type).cardinality === "many";
@@ -67,11 +72,29 @@ export function secretOf(secrets, name) {
   return secrets?.connections?.[name] ?? null;
 }
 
+// The name of the home's one stored connection of a type, the first by name when several are stored, or null.
+export function homeConnectionName(secrets, type) {
+  const names = Object.keys(secrets?.connections ?? {}).sort();
+  return names.find((name) => secrets.connections[name]?.type === type) ?? null;
+}
+
+// Refuses a second connection of a home-wide type, naming the one the home already has.
+export function assertHomeFree(secrets, type) {
+  const first = homeConnectionName(secrets, type);
+  if (first) throw new UserError(`a home has one \`${type}\` connection: \`${first}\`; remove it first`);
+}
+
+// One `connection list` row of a stored connection: a home-scoped one serves no org and says so.
+function storedRow(config, name, type) {
+  if (CONNECTION_TYPES.get(type)?.scope === "home") return { name, type, present: true, orgs: [], scope: "home" };
+  return { name, type, present: true, orgs: orgsUsingConnection(config, name) };
+}
+
 // Lists the connections with type, secret presence and the ids of the orgs bound to them, never a secret value.
 export function listConnections(config, secrets) {
   const rows = new Map();
   for (const [name, entry] of Object.entries(secrets.connections)) {
-    rows.set(name, { name, type: entry.type, present: true, orgs: orgsUsingConnection(config, name) });
+    rows.set(name, storedRow(config, name, entry.type));
   }
   for (const slots of Object.values(config?.orgConnections ?? {})) {
     for (const [type, binding] of Object.entries(slots ?? {})) {
@@ -122,14 +145,17 @@ export async function completeConnection({ type, secret, extra = {}, fetchImpl =
   return Object.fromEntries(Object.entries(completed ?? {}).filter(([field]) => !hidden.has(field)));
 }
 
-// Builds config and secrets with the new connection: bound to the org's slot only when that slot is empty, appended to the org's list for a many type.
+// Builds config and secrets with the new connection: bound to the org's slot only when that slot is empty, appended to the org's list for a many type, bound to nothing for a home type.
 export function addConnection({ config, secrets, name, type, orgId, secret, extra = {}, derived = {} }) {
   assertName("connection", name);
   const descriptor = requireType(type);
   const fields = connectionExtras(type, extra);
   if (typeof secret !== "string" || !secret) throw new UserError("empty secret; nothing was stored");
   if (hasConnection(secrets, name)) throw new UserError(`connection \`${name}\` already exists; remove it first`);
+  const home = descriptor.scope === "home";
+  if (home) assertHomeFree(secrets, type);
   secrets.connections[name] = { type, [descriptor.secretFields[0]]: secret, ...fields, ...derived };
+  if (home) return { config, secrets, orgId: null, bound: false, home: true, occupiedBy: null };
   if (isManyType(type)) {
     addToOrgList(config, orgId, type, name);
     return { config, secrets, orgId, bound: true, occupiedBy: null };
@@ -143,6 +169,7 @@ export function addConnection({ config, secrets, name, type, orgId, secret, extr
 export function bindConnection({ config, secrets, name, orgId }) {
   const type = typeOf(secrets, name);
   if (!type) throw new UserError(`unknown connection \`${name}\``);
+  if (isHomeType(type)) throw new UserError(`connection \`${name}\` (${type}) serves the whole home and binds to no org`);
   if (isManyType(type)) {
     addToOrgList(config, orgId, type, name);
     return { config, type, previous: null };
