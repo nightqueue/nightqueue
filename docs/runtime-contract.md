@@ -343,7 +343,9 @@ leads its block with `Current project (preselected by nightqueue open): <name>`.
 Claude session never spawns a hook): the PreToolUse matcher becomes
 `Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit`, and a `SubagentStop` group
 runs `nightqueue hook subagent-stop` (timeout 60 s); `permissions.allow` pre-approves
-`mcp__nightqueue__*`.
+`mcp__nightqueue__*`, `WebFetch` and `WebSearch`: the operator reads the web (a linked page, an
+issue, a library's docs) without a prompt; the guard does not judge those two tools, since they
+neither edit nor execute.
 
 The `agent-foreground` hook in operator mode is the D-58 guard. Each refusal is a PreToolUse
 `deny` whose reason is one line starting `D-58:`, naming what is allowed instead; it never moves

@@ -16,7 +16,7 @@ const HOOK_EVENTS = [
 const OPERATOR_TOOL_MATCHER = "Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit";
 
 // The tools the operator session may call without asking: the nightqueue MCP server is its own product, every prompt would be noise.
-export const OPERATOR_ALLOWED_TOOLS = ["mcp__nightqueue__*"];
+export const OPERATOR_ALLOWED_TOOLS = ["mcp__nightqueue__*", "WebFetch", "WebSearch"];
 
 // Command line registered in the host for one hook of this package.
 export function hookCommand(hook, env = process.env) {
@@ -159,7 +159,7 @@ export function jobSettings(env = process.env) {
   return { hooks: data.hooks, claudeMdExcludes: [join(claudeConfigDir(env), "CLAUDE.md")] };
 }
 
-// The `--settings` payload of an operator session: the jobs' settings with the guard also fencing the edit tools, the qa worktree sweep on SubagentStop, plus the nightqueue tools pre-approved.
+// The `--settings` payload of an operator session: the jobs' settings with the guard also fencing the edit tools, the qa worktree sweep on SubagentStop, plus the nightqueue tools and the two web reads (WebFetch, WebSearch) pre-approved.
 export function operatorSettings(env = process.env) {
   const settings = jobSettings(env);
   const preToolUse = eventGroups(settings, "PreToolUse").map((group) => ({ ...group, matcher: OPERATOR_TOOL_MATCHER }));

@@ -50,6 +50,9 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The operator reads the web.** `WebFetch` and `WebSearch` join the operator's tools and are
+  pre-approved in the session's `permissions.allow`, so it reads a linked page, an issue or a
+  library's docs without a prompt. Still no edit and no execution (D-58).
 - **Home-scoped connections.** A provider may declare a connection that serves the whole home:
   at most one per home, bound to no org, acting for every project with no `project
   integrations` setting. `connection list` prints `orgs=home` for it (`--json` adds `scope:

@@ -235,7 +235,7 @@ test("operatorSettings fences the edit tools and sweeps qa worktrees on Subagent
   assert.deepEqual(settings.hooks.PreToolUse.map((group) => group.matcher), ["Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit"]);
   assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, AGENT_FOREGROUND.command);
   assert.deepEqual(settings.hooks.SubagentStop, [{ hooks: [{ type: "command", command: hookCommand("subagent-stop", ENV), timeout: 60 }] }]);
-  assert.deepEqual(settings.permissions, { allow: ["mcp__nightqueue__*"] });
+  assert.deepEqual(settings.permissions, { allow: ["mcp__nightqueue__*", "WebFetch", "WebSearch"] });
   assert.deepEqual(desiredHooks(ENV), before);
   assert.equal(desiredHooks(ENV).some((hook) => hook.event === "SubagentStop"), false, "the host settings would run the qa sweep in every session");
   assert.equal(jobSettings(ENV).hooks.PreToolUse[0].matcher, "Agent|Task|Bash|Read|Grep|Glob", "a job's guard now fences the edit tools");
