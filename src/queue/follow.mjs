@@ -1,5 +1,6 @@
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
+import { createTurnTaker } from "./yielding-lines.mjs";
 
 export const FOLLOW_POLL_MS = 500;
 export const FOLLOW_QUIET_MS = 30000;
@@ -196,10 +197,13 @@ export async function followLog({ path, offset = 0, readStatus, onLine, onNotice
     if (typeof onNotice === "function") onNotice(notice);
   };
   const state = { lines: 0, polls: 0, statusErrors: 0, logErrors: 0, lastLineAt: now() };
-  const deliver = (lines) => {
+  const deliver = async (lines) => {
+    const turn = createTurnTaker();
     for (const line of lines) {
       state.lines += 1;
       if (typeof onLine === "function") onLine(line);
+      const pause = turn(line.length + 1);
+      if (pause) await pause;
     }
     if (lines.length) state.lastLineAt = now();
   };
@@ -210,13 +214,13 @@ export async function followLog({ path, offset = 0, readStatus, onLine, onNotice
     const batch = reader.read();
     trackLogRead(batch, state, notify);
     if (batch.truncated) notify({ kind: "truncated" });
-    deliver(batch.lines);
+    await deliver(batch.lines);
     notify({ kind: "poll", at: new Date(now()).toISOString(), size: batch.size, offset: reader.offsetNow(), lines: batch.lines.length, polls: state.polls });
     outcome = stopOutcome({ snapshot, batch, state }, { maxReadErrors, stopReason });
     if (outcome) break;
     tickQuiet(state, { now, quietMs, notify });
     await wait(pollMs);
   }
-  deliver(reader.flush());
+  await deliver(reader.flush());
   return { reason: outcome.reason, status: outcome.status, logError: outcome.logError, lines: state.lines, polls: state.polls, offset: reader.offsetNow() };
 }
