@@ -4,6 +4,7 @@ import { type ReactNode, useState } from "react";
 import { errorText } from "../../lib/actions";
 import { getJson } from "../../lib/api";
 import { elapsedClock } from "../../lib/format";
+import { usePrFileUrl } from "../../lib/pr-file";
 import { jobRef } from "../../lib/queue";
 import type { JobDetail, Recall, RecallHit, RecallKind, RecallsAnswer } from "../../lib/types";
 import { ICON_STROKE } from "../StatusIcon";
@@ -148,27 +149,6 @@ function scoreLabel(score: number | null | undefined): string | null {
 // The last path segment of an indexed file, the whole ref otherwise.
 function shortRef(ref: string, kind: HitKind): string {
   return kind === "index" ? ref.slice(ref.lastIndexOf("/") + 1) || ref : ref;
-}
-
-// The hex SHA-256 of a text, the anchor GitHub gives a file in a pull request diff.
-async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-// The link to a file in the pull request diff, the diff's file list when the anchor cannot be computed.
-function usePrFileUrl(prUrl: string, path: string) {
-  return useQuery({
-    queryKey: ["pr-file-anchor", prUrl, path],
-    queryFn: async () => {
-      try {
-        return `${prUrl}/files#diff-${await sha256Hex(path)}`;
-      } catch {
-        return `${prUrl}/files`;
-      }
-    },
-    staleTime: Number.POSITIVE_INFINITY,
-  });
 }
 
 // The header strip: title and the recall, hit and applied counts.
