@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Circle, SquareArrowRight, SquareMinus, SquarePlus, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { errorText } from "../../lib/actions";
 import { getJson } from "../../lib/api";
@@ -6,6 +7,7 @@ import { blocks5, prNumber, thousands } from "../../lib/format";
 import { jobRef } from "../../lib/queue";
 import type { DiffKind, Diffstat, DiffstatFile, JobDetail } from "../../lib/types";
 import { useNow } from "../../lib/useNow";
+import { ICON_STROKE } from "../StatusIcon";
 import { CardEmpty, CardTitle } from "./Card";
 
 const RUNNING_REFRESH_MS = 10_000;
@@ -14,11 +16,11 @@ const SKELETON_ROWS = ["w-4/5", "w-3/5", "w-2/3"];
 
 const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_34px_52px_44px_34px] items-center gap-x-2 px-3.5 py-[5px]";
 
-const KIND_STYLE: Record<DiffKind, string> = {
-  new: "text-green border-run-line",
-  mod: "text-dim border-line",
-  del: "text-red border-[#5a2a2a]",
-  ren: "text-mem-decision border-[#3d3160]",
+const KIND_ICON: Record<DiffKind, { Icon: LucideIcon; className: string; title: string; size: number; filled?: boolean }> = {
+  new: { Icon: SquarePlus, className: "text-green", title: "criado", size: 14 },
+  mod: { Icon: Circle, className: "text-amber", title: "modificado", size: 8, filled: true },
+  del: { Icon: SquareMinus, className: "text-red", title: "deletado", size: 14 },
+  ren: { Icon: SquareArrowRight, className: "text-mem-decision", title: "renomeado", size: 14 },
 };
 
 // The diffstat of one job, refreshed every 10 s while it runs.
@@ -59,10 +61,15 @@ function DiffBlocks({ added, deleted, size }: { added: number | null | undefined
   );
 }
 
-// The 10px tag naming the kind of change, empty when unknown.
-function KindTag({ kind }: { kind: DiffKind | null }) {
+// The icon naming the kind of change with its hover title, empty when unknown.
+function KindIcon({ kind }: { kind: DiffKind | null }) {
   if (!kind) return <span />;
-  return <span className={`rounded-[3px] border px-1 text-center text-[10px] leading-[14px] ${KIND_STYLE[kind]}`}>{kind}</span>;
+  const { Icon, className, title, size, filled } = KIND_ICON[kind];
+  return (
+    <span role="img" aria-label={title} title={title} className={`flex h-[14px] items-center justify-center ${className}`}>
+      <Icon size={size} strokeWidth={ICON_STROKE} fill={filled ? "currentColor" : "none"} aria-hidden />
+    </span>
+  );
 }
 
 // A repo-relative path with its directory dim and its name bright, truncated from the left.
@@ -84,7 +91,7 @@ function FileRow({ file }: { file: DiffstatFile }) {
   return (
     <li className={`${ROW_GRID} border-b border-row-line last:border-b-0`}>
       <FilePath file={file} />
-      <KindTag kind={kindOf(file)} />
+      <KindIcon kind={kindOf(file)} />
       <span className="text-right whitespace-nowrap text-green">{signedCount("+", file.added)}</span>
       <span className="text-right whitespace-nowrap text-red">{signedCount("−", file.deleted)}</span>
       <DiffBlocks added={file.added} deleted={file.deleted} size="h-[7px] w-[6px]" />
