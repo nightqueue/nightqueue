@@ -20,6 +20,7 @@ const GATED_REQUESTS = [
   { method: "GET", path: "/assets/app.js" },
   { method: "GET", path: "/api/info" },
   { method: "GET", path: "/api/jobs/J-1/diffstat" },
+  { method: "GET", path: "/api/jobs/J-1/diff?path=a.txt" },
   { method: "GET", path: "/api/jobs/J-1/recalls" },
   { method: "GET", path: "/events" },
   { method: "POST", path: "/mcp", headers: { "content-type": "application/json" }, body: "{}" },
@@ -233,6 +234,17 @@ test("the diffstat of a job with no worktree and no recorded files answers none"
   assert.equal(answer.status, 200);
   const body = JSON.parse(answer.body);
   assert.deepEqual([body.source, body.files, body.totals], ["none", [], null]);
+});
+
+test("the diff of one file needs `?path=`, and a path that is not one of the job's files is a 404", async (t) => {
+  const env = makeHome(t, "studio-api-file-diff");
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
+  const { port } = await startStudio(t, env);
+  const headers = { cookie: studioCookie(port) };
+  assert.equal((await send(port, { path: `/api/jobs/J-${id}/diff`, headers })).status, 400);
+  assert.equal((await send(port, { path: `/api/jobs/J-${id}/diff?path=${encodeURIComponent("../../etc/passwd")}`, headers })).status, 404);
+  assert.equal((await send(port, { path: "/api/jobs/J-999/diff?path=a.txt", headers })).status, 404);
+  assert.equal((await send(port, { path: "/api/jobs/nope/diff?path=a.txt", headers })).status, 400);
 });
 
 // Spawns `nightqueue studio` on an ephemeral port in a temporary home and resolves the URL it printed.

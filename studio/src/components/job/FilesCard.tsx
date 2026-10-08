@@ -1,27 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
-import { Circle, SquareArrowRight, SquareMinus, SquarePlus, type LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { errorText } from "../../lib/actions";
 import { getJson } from "../../lib/api";
 import { blocks5, prNumber, thousands } from "../../lib/format";
 import { jobRef } from "../../lib/queue";
 import type { DiffKind, Diffstat, DiffstatFile, JobDetail } from "../../lib/types";
 import { useNow } from "../../lib/useNow";
-import { ICON_STROKE } from "../StatusIcon";
 import { CardEmpty, CardTitle } from "./Card";
+import { DiffDrawer } from "./DiffDrawer";
+import { KindIcon } from "./DiffKindIcon";
 
 const RUNNING_REFRESH_MS = 10_000;
 
 const SKELETON_ROWS = ["w-4/5", "w-3/5", "w-2/3"];
 
-const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_34px_52px_44px_34px] items-center gap-x-2 px-3.5 py-[5px]";
+type OpenFile = (file: DiffstatFile) => void;
 
-const KIND_ICON: Record<DiffKind, { Icon: LucideIcon; className: string; title: string; size: number; filled?: boolean }> = {
-  new: { Icon: SquarePlus, className: "text-green", title: "criado", size: 14 },
-  mod: { Icon: Circle, className: "text-amber", title: "modificado", size: 8, filled: true },
-  del: { Icon: SquareMinus, className: "text-red", title: "deletado", size: 14 },
-  ren: { Icon: SquareArrowRight, className: "text-mem-decision", title: "renomeado", size: 14 },
-};
+const ROW_GRID ="grid grid-cols-[minmax(0,1fr)_34px_52px_44px_34px] items-center gap-x-2 px-3.5 py-[5px]";
 
 // The diffstat of one job, refreshed every 10 s while it runs.
 function useDiffstat(ref: string, running: boolean) {
@@ -61,17 +56,6 @@ function DiffBlocks({ added, deleted, size }: { added: number | null | undefined
   );
 }
 
-// The icon naming the kind of change with its hover title, empty when unknown.
-function KindIcon({ kind }: { kind: DiffKind | null }) {
-  if (!kind) return <span />;
-  const { Icon, className, title, size, filled } = KIND_ICON[kind];
-  return (
-    <span role="img" aria-label={title} title={title} className={`flex h-[14px] items-center justify-center ${className}`}>
-      <Icon size={size} strokeWidth={ICON_STROKE} fill={filled ? "currentColor" : "none"} aria-hidden />
-    </span>
-  );
-}
-
 // A repo-relative path with its directory dim and its name bright, truncated from the left.
 function FilePath({ file }: { file: DiffstatFile }) {
   const cut = file.path.lastIndexOf("/") + 1;
@@ -86,11 +70,13 @@ function FilePath({ file }: { file: DiffstatFile }) {
   );
 }
 
-// One touched file: path, kind, its own +/− and its five blocks.
-function FileRow({ file }: { file: DiffstatFile }) {
+// One touched file: its path opening its diff, kind, its own +/− and its five blocks.
+function FileRow({ file, onOpen }: { file: DiffstatFile; onOpen: OpenFile }) {
   return (
     <li className={`${ROW_GRID} border-b border-row-line last:border-b-0`}>
-      <FilePath file={file} />
+      <button type="button" className="flex min-w-0 cursor-pointer border-0 bg-transparent p-0 text-left font-[inherit] hover:underline" aria-label={`diff of ${file.path}`} onClick={() => onOpen(file)}>
+        <FilePath file={file} />
+      </button>
       <KindIcon kind={kindOf(file)} />
       <span className="text-right whitespace-nowrap text-green">{signedCount("+", file.added)}</span>
       <span className="text-right whitespace-nowrap text-red">{signedCount("−", file.deleted)}</span>
@@ -146,13 +132,13 @@ function FilesMessage({ children }: { children: ReactNode }) {
 }
 
 // The scrolling list of touched files, the empty sentence when there is none.
-function FilesList({ diffstat }: { diffstat: Diffstat }) {
+function FilesList({ diffstat, onOpen }: { diffstat: Diffstat; onOpen: OpenFile }) {
   const files = filesOf(diffstat);
   if (files.length === 0) return <FilesMessage>None yet.</FilesMessage>;
   return (
     <ul className="m-0 max-h-[276px] list-none overflow-y-auto p-0 font-mono text-sm">
       {files.map((file) => (
-        <FileRow key={file.path} file={file} />
+        <FileRow key={file.path} file={file} onOpen={onOpen} />
       ))}
     </ul>
   );
@@ -186,13 +172,15 @@ function FilesFooter({ job, diffstat, updatedAt }: { job: JobDetail; diffstat: D
 // The files touched card: the worktree's diff against its base with kinds and line counts, or the recorded names once it is released.
 export function FilesCard({ job, running }: { job: JobDetail; running: boolean }) {
   const diffstat = useDiffstat(jobRef(job.id), running);
+  const [opened, setOpened] = useState<DiffstatFile | null>(null);
   return (
     <section aria-label="files" className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-surface p-0">
       <FilesHeader diffstat={diffstat.data} />
       {diffstat.isPending && <FilesSkeleton />}
       {diffstat.isError && !diffstat.data && <FilesMessage>{`The files cannot be read: ${errorText(diffstat.error)}`}</FilesMessage>}
-      {diffstat.data && <FilesList diffstat={diffstat.data} />}
+      {diffstat.data && <FilesList diffstat={diffstat.data} onOpen={setOpened} />}
       {diffstat.data && <FilesFooter job={job} diffstat={diffstat.data} updatedAt={diffstat.dataUpdatedAt} />}
+      {opened && <DiffDrawer job={job} file={opened} kind={kindOf(opened)} onClose={() => setOpened(null)} />}
     </section>
   );
 }

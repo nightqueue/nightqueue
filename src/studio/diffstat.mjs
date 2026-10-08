@@ -68,23 +68,35 @@ function totalsOf(files) {
   return files.reduce((sum, file) => ({ added: sum.added + (file.added ?? 0), deleted: sum.deleted + (file.deleted ?? 0) }), { added: 0, deleted: 0 });
 }
 
-// The diffstat of a live worktree against the merge base with its base branch, the uncommitted edits and untracked files included.
-async function worktreeDiffstat(cwd, env) {
+// The base branch of a worktree and the commit its diff is taken against: the merge base of that branch with HEAD.
+export async function diffBase(cwd, env) {
   const base = await baseOf(cwd, env);
   const mergeBase = (await gitOutput(cwd, ["merge-base", base, "HEAD"], env)).trim();
+  return { base, mergeBase };
+}
+
+// The kinds of every tracked file changed since the merge base, by path.
+export async function changedKinds(cwd, mergeBase, env) {
+  return parseNameStatus(await gitOutput(cwd, ["diff", "--name-status", ...DIFF_FLAGS, mergeBase], env));
+}
+
+// The untracked files git would not ignore in a worktree.
+export async function untrackedPaths(cwd, env) {
+  return (await gitOutput(cwd, ["ls-files", "--others", "--exclude-standard", "-z"], env)).split("\0").filter(Boolean);
+}
+
+// The diffstat of a live worktree against the merge base with its base branch, the uncommitted edits and untracked files included.
+async function worktreeDiffstat(cwd, env) {
+  const { base, mergeBase } = await diffBase(cwd, env);
   const counted = parseNumstat(await gitOutput(cwd, ["diff", "--numstat", ...DIFF_FLAGS, mergeBase], env));
-  const kinds = parseNameStatus(await gitOutput(cwd, ["diff", "--name-status", ...DIFF_FLAGS, mergeBase], env));
-  const changed = withKinds(counted, kinds);
-  const untracked = (await gitOutput(cwd, ["ls-files", "--others", "--exclude-standard", "-z"], env))
-    .split("\0")
-    .filter(Boolean)
-    .map((path) => ({ path, added: null, deleted: null, untracked: true, kind: "new" }));
+  const changed = withKinds(counted, await changedKinds(cwd, mergeBase, env));
+  const untracked = (await untrackedPaths(cwd, env)).map((path) => ({ path, added: null, deleted: null, untracked: true, kind: "new" }));
   const files = [...changed, ...untracked];
   return { source: "worktree", base, files, totals: totalsOf(changed), note: null };
 }
 
 // The repo-relative files the finished run recorded in its result, an empty list when it has none.
-function resultFiles(job) {
+export function resultFiles(job) {
   try {
     const result = typeof job?.result === "string" ? JSON.parse(job.result) : job?.result;
     const files = Array.isArray(result?.files) ? result.files : [];

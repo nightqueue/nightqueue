@@ -22,6 +22,7 @@ import { parseWallClock } from "../queue/window.mjs";
 import { withReadOnlyStore } from "../store/open.mjs";
 import { listArtifacts, readArtifactFile } from "./artifacts.mjs";
 import { jobDiffstat } from "./diffstat.mjs";
+import { jobFileDiff } from "./file-diff.mjs";
 import { runDirOf } from "./job-extras.mjs";
 import { appliedRefs, withApplied } from "./recall-applied.mjs";
 import { TerminalRefusal } from "./terminal.mjs";
@@ -31,7 +32,8 @@ const RAW_LOG_BYTES = 1024 * 1024;
 const MAX_INTERVAL_S = 86400;
 const JOB_LOG_PATH = /^\/api\/jobs\/([^/]+)\/log$/;
 const JOB_DIFFSTAT_PATH = /^\/api\/jobs\/([^/]+)\/diffstat$/;
-const JOB_RECALLS_PATH = /^\/api\/jobs\/([^/]+)\/recalls$/;
+const JOB_DIFF_PATH = /^\/api\/jobs\/([^/]+)\/diff$/;
+const JOB_RECALLS_PATH =/^\/api\/jobs\/([^/]+)\/recalls$/;
 const JOB_ARTIFACTS_PATH = /^\/api\/jobs\/([^/]+)\/artifacts$/;
 const JOB_ARTIFACT_PATH = /^\/api\/jobs\/([^/]+)\/artifacts\/([^/]+)$/;
 const LOG_FROM_RE = /^\d+$/;
@@ -211,6 +213,18 @@ async function sendJobDiffstat(res, { env, ref }) {
   return sendJson(res, 200, await jobDiffstat(jobView(row, { full: true }), env));
 }
 
+// Answers the diff of one file a job changed, named by `?path=`; 404 when the job does not exist or the path is not one of its files.
+async function sendJobDiff(req, res, { env, ref }) {
+  const id = parseJobRef(ref);
+  const path = new URL(req.url ?? "/", "http://x").searchParams.get("path");
+  if (!path) throw new UserError("`path` expects the repo-relative path of a file the job changed");
+  const row = await withReadOnlyStore(env, (store) => store.jobs.getJob(id));
+  if (!row) return respond(res, 404, `no job \`${id}\``);
+  const answer = await jobFileDiff(jobView(row, { full: true }), path, env);
+  if (!answer) return respond(res, 404, `no change to that path in job \`${id}\``);
+  return sendJson(res, 200, answer);
+}
+
 // The recalls of a job with where each hit was cited, the distinct applied total and the embedding they were ranked with.
 async function recallsAnswer(job, recalls, env) {
   const applied = await appliedRefs({ job, recalls, env });
@@ -274,6 +288,8 @@ async function routeApi(req, res, { env, origin, path, terminals }) {
   if (log && isGet) return await sendJobLog(req, res, { env, ref: log[1] });
   const diffstat = JOB_DIFFSTAT_PATH.exec(path);
   if (diffstat && isGet) return await sendJobDiffstat(res, { env, ref: diffstat[1] });
+  const diff = JOB_DIFF_PATH.exec(path);
+  if (diff && isGet) return await sendJobDiff(req, res, { env, ref: diff[1] });
   const recalls = JOB_RECALLS_PATH.exec(path);
   if (recalls && isGet) return await sendJobRecalls(res, { env, ref: recalls[1] });
   const artifacts = JOB_ARTIFACTS_PATH.exec(path);
