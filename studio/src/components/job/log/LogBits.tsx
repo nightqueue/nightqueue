@@ -27,6 +27,11 @@ export function LogCursor() {
   return <span className="ml-1 inline-block h-[13px] w-[7px] animate-blink bg-accent align-[-2px]" aria-hidden="true" />;
 }
 
+// The cyan rule a subagent lane's lines sit under.
+export function LaneRule({ children }: { children: ReactNode }) {
+  return <div className="ml-3 border-l-2 border-lane-rule pl-3">{children}</div>;
+}
+
 // The line standing for the tool calls a long run folded away.
 export function MoreToolsRow({ count }: { count: number }) {
   return (
