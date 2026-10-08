@@ -62,7 +62,7 @@ async function routeRequest(req, res, context) {
     if (req.method !== "POST") return respond(res, 405, "the MCP endpoint only accepts POST");
     return await serveMcp(req, res, context.env);
   }
-  if (path === "/api" || path.startsWith("/api/")) return await serveApi(req, res, { env: context.env, origin: context.origin, path, terminals: context.terminals });
+  if (path === "/api" || path.startsWith("/api/")) return await serveApi(req, res, { env: context.env, origin: context.origin, path, terminals: context.terminals, fetchImpl: context.fetchImpl });
   if (path === "/term" || path.startsWith("/term/")) return respond(res, 426, "this path only accepts a WebSocket upgrade");
   if (path === "/events") {
     if (req.method !== "GET") return respond(res, 405, "the event streams only answer GET");
@@ -134,13 +134,13 @@ function shutDown({ env, server, context, dropSignals }) {
 }
 
 // Starts the studio on loopback: the built pages, `/mcp`, `/api`, `/events` and `/term`, all behind one per-start token; resolves once it accepts requests.
-export async function startStudioServer({ env = process.env, port = DEFAULT_STUDIO_PORT, token, host = "127.0.0.1", distDir, apiOnly = false, devOrigin = null, terminal = {} }) {
+export async function startStudioServer({ env = process.env, port = DEFAULT_STUDIO_PORT, token, host = "127.0.0.1", distDir, apiOnly = false, devOrigin = null, terminal = {}, fetchImpl }) {
   requireToken(token);
   const dev = requireDevOrigin(devOrigin, apiOnly);
   await checkSchemaOrWarn(env);
   await ensureStoreExists(env);
   const queueStream = createQueueStream({ env });
-  const context = { env, token, distDir, apiOnly, queueStream, port: null, origin: null, allowedOrigins: [], securityHeaders: securityHeaders(), terminals: null, upgraded: new Set() };
+  const context = { env, token, distDir, apiOnly, fetchImpl, queueStream, port: null, origin: null, allowedOrigins: [], securityHeaders: securityHeaders(), terminals: null, upgraded: new Set() };
   const server = createHttpServer((req, res) => {
     handleStudioRequest(req, res, context).catch((err) => failRequest(res, err));
   });

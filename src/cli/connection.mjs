@@ -85,13 +85,18 @@ async function readNewSecret({ ctx, name, type, descriptor, extra }) {
   return { secret, derived };
 }
 
+// Adds a home-wide connection to the secrets and writes them: no org and no config change.
+export function storeHomeConnection({ env, secrets, name, type, secret, extra = {}, derived = {}, saveSecrets }) {
+  const result = addConnection({ config: null, secrets, name, type, orgId: null, secret, extra, derived });
+  saveSecrets(result.secrets, env);
+}
+
 // Stores a connection of a home-wide type: the secret only, no org and no config change.
-async function addHomeConnection({ ctx, config, secrets, name, type, descriptor, extra }) {
+async function addHomeConnection({ ctx, secrets, name, type, descriptor, extra }) {
   if (hasConnection(secrets, name)) throw new UserError(`connection \`${name}\` already exists; remove it first`);
   assertHomeFree(secrets, type);
   const { secret, derived } = await readNewSecret({ ctx, name, type, descriptor, extra });
-  const result = addConnection({ config, secrets, name, type, orgId: null, secret, extra, derived });
-  ctx.saveSecrets(result.secrets, ctx.env);
+  storeHomeConnection({ env: ctx.env, secrets, name, type, secret, extra, derived, saveSecrets: ctx.saveSecrets });
   ctx.out(`stored connection \`${name}\` (${type}) for the whole home`);
 }
 
@@ -114,7 +119,7 @@ async function runAdd(argv, ctx) {
   const extra = connectionExtras(values.type, parseExtraFields(values.set, usage));
   if (descriptor.scope === "home") {
     if (values.org !== undefined) throw new UserError(`a ${values.type} connection serves the whole home; drop --org`);
-    await addHomeConnection({ ctx, config, secrets, name, type: values.type, descriptor, extra });
+    await addHomeConnection({ ctx, secrets, name, type: values.type, descriptor, extra });
     return;
   }
   const target = values.org === undefined ? await defaultOrg(store, config) : await requireOrg(store, values.org);

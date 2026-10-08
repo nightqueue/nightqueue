@@ -21,6 +21,7 @@ import { startQueueRunner } from "../queue/start.mjs";
 import { parseWallClock } from "../queue/window.mjs";
 import { withReadOnlyStore } from "../store/open.mjs";
 import { listArtifacts, readArtifactFile } from "./artifacts.mjs";
+import { connectLinear } from "./connect.mjs";
 import { jobDiffstat } from "./diffstat.mjs";
 import { jobFileDiff } from "./file-diff.mjs";
 import { runDirOf } from "./job-extras.mjs";
@@ -275,7 +276,7 @@ async function routeTerminals(req, res, { path, terminals }) {
 }
 
 // Routes one `/api` request to its handler, or answers 404/405 for a path or method this API does not have.
-async function routeApi(req, res, { env, origin, path, terminals }) {
+async function routeApi(req, res, { env, origin, path, terminals, fetchImpl }) {
   if (terminals && (await routeTerminals(req, res, { path, terminals }))) return;
   const isGet = req.method === "GET";
   const isPost = req.method === "POST";
@@ -284,6 +285,9 @@ async function routeApi(req, res, { env, origin, path, terminals }) {
   if (path === "/api/runners/start" && isPost) return sendJson(res, 200, await startRunner(req, env));
   if (path === "/api/queue/pause" && isPost) return sendJson(res, 200, setPaused(env, true));
   if (path === "/api/queue/resume" && isPost) return sendJson(res, 200, setPaused(env, false));
+  if (path === "/api/connections/linear" && isPost) {
+    return sendJson(res, 200, await connectLinear({ body: await readJsonBody(req), env, fetchImpl: fetchImpl ?? globalThis.fetch }));
+  }
   const log = JOB_LOG_PATH.exec(path);
   if (log && isGet) return await sendJobLog(req, res, { env, ref: log[1] });
   const diffstat = JOB_DIFFSTAT_PATH.exec(path);
