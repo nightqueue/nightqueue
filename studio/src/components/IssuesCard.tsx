@@ -19,6 +19,7 @@ import {
   trackerLabel,
 } from "../lib/tracker";
 import type { TrackerAnswer, TrackerFilters, TrackerItem } from "../lib/types";
+import { ConnectTrackerModal } from "./ConnectTrackerModal";
 import { Button, FIELD_CLASS, Kbd, Segmented } from "./ui";
 
 interface IssuesCardProps {
@@ -31,6 +32,8 @@ const PREFS_KEY = "nightqueue.studio.tracker";
 const ISSUE_LIMIT = 50;
 
 const SKELETON_ROWS = 4;
+
+const STUDIO_CONNECTABLE = "linear";
 
 const VIEW_OPTIONS: { value: TrackerView; label: string }[] = [
   { value: "open", label: "Open" },
@@ -197,8 +200,21 @@ function IssueGroups({ answer, view, onQueue }: { answer: Extract<TrackerAnswer,
   );
 }
 
+// The button that opens the connect dialog of a tracker the studio can connect.
+function ConnectTrackerButton({ provider, onConnected }: { provider: string; onConnected: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button className="self-start" onClick={() => setOpen(true)}>
+        Conectar {trackerLabel(provider)}
+      </Button>
+      {open && <ConnectTrackerModal provider={provider} onClose={() => setOpen(false)} onConnected={onConnected} />}
+    </>
+  );
+}
+
 // What the card shows when the tracker refused: how to connect it, or why it is unavailable.
-function TrackerRefusal({ answer }: { answer: Extract<TrackerAnswer, { ok: false }> }) {
+function TrackerRefusal({ answer, onConnected }: { answer: Extract<TrackerAnswer, { ok: false }>; onConnected: () => void }) {
   if (answer.error === "no-connection" && answer.provider) {
     return (
       <div className="flex flex-col gap-2 px-3 py-4 text-sm text-muted">
@@ -206,6 +222,7 @@ function TrackerRefusal({ answer }: { answer: Extract<TrackerAnswer, { ok: false
         <span className="break-all">
           <Kbd>{connectCommand(answer.provider)}</Kbd>
         </span>
+        {answer.provider === STUDIO_CONNECTABLE && <ConnectTrackerButton provider={answer.provider} onConnected={onConnected} />}
       </div>
     );
   }
@@ -229,10 +246,10 @@ function IssuesSkeleton() {
 }
 
 // The card body for the current read: skeleton, failure, refusal or the issue groups.
-function IssuesBody({ query, view, onQueue }: { query: ReturnType<typeof useTrackerIssues>["query"]; view: TrackerView; onQueue: (draft: IssueDraft) => void }) {
+function IssuesBody({ query, view, onQueue, onConnected }: { query: ReturnType<typeof useTrackerIssues>["query"]; view: TrackerView; onQueue: (draft: IssueDraft) => void; onConnected: () => void }) {
   if (query.isPending) return <IssuesSkeleton />;
   if (query.isError) return <p className="m-0 px-3 py-4 text-sm text-red">The issues cannot be read: {errorText(query.error)}</p>;
-  if (!query.data.ok) return <TrackerRefusal answer={query.data} />;
+  if (!query.data.ok) return <TrackerRefusal answer={query.data} onConnected={onConnected} />;
   return <IssueGroups answer={query.data} view={view} onQueue={onQueue} />;
 }
 
@@ -244,7 +261,7 @@ export function IssuesCard({ onQueue, reloadKey }: IssuesCardProps) {
   return (
     <section aria-label="issues" className="overflow-hidden rounded-lg border border-line bg-surface">
       <IssuesHeader title={provider ? `${trackerLabel(provider)} issues` : "Issues"} filters={filters} prefs={prefs} onPrefs={setPrefs} onRefresh={refresh} />
-      <IssuesBody query={query} view={prefs.view} onQueue={onQueue} />
+      <IssuesBody query={query} view={prefs.view} onQueue={onQueue} onConnected={refresh} />
     </section>
   );
 }

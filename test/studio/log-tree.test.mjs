@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_CHIPS, foldRows, foldStream, formatBytes, looksLikeMarkdown, rowVisible } from "../../studio/src/lib/log-tree.ts";
+import { DEFAULT_CHIPS, foldRows, foldStream, formatBytes, groupLanes, looksLikeMarkdown, rowVisible } from "../../studio/src/lib/log-tree.ts";
 
 const FOLD_BUDGET_MS = 200;
 
@@ -173,6 +173,38 @@ test("a long run of one lane's tools keeps its first 3 and last 2 lines around a
   assert.equal(foldRows(toolRows(6), { allTools: false }).length, 6, "a single hidden tool is never folded");
   assert.equal(foldRows(toolRows(10), { allTools: true }).length, 10);
   assert.equal(foldRows([...toolRows(4, "a"), ...toolRows(4, "b")], { allTools: false }).length, 8, "runs of two lanes never fold together");
+});
+
+// The shape of a grouped list: a lane block as `lane <id>: <row texts>`, a flat line as its text.
+function shapes(items) {
+  return items.map((item) => (item.type === "lane" ? `lane ${item.laneId}: ${item.rows.map((row) => row.event.text).join(", ")}` : item.event.text));
+}
+
+test("each seen lane gathers its rows at its laneOpen; interleaved lanes split and main-lane rows keep their order around them", () => {
+  const events = [attempt(1), wire("text", "Starting."), laneOpen("a", "coder"), laneOpen("b", "verifier"), laneTool("a", "a1"), laneTool("b", "b1"), wire("text", "orchestrator waits"), laneTool("a", "a2"), wire("laneClose", "coder completed", { laneId: "a", body: "## Done" }), wire("text", "Final.", { body: "## Final\n- a\n- b" })];
+  const stream = foldStream(events, context({ ended: true, status: "done", attempts: [attemptRow(1)] }));
+  const grouped = groupLanes(stream.rows, { ended: false });
+  assert.deepEqual(shapes(grouped), ["attempt 1 @ 2026-09-07T21:00:00Z", "Starting.", "lane a: a1, a2, coder completed", "lane b: b1", "orchestrator waits", "Final.", "attempt 1 done · 1m40s · 4.5k tok · $0.12"]);
+  const [laneA, laneB] = grouped.filter((item) => item.type === "lane");
+  assert.deepEqual([laneA.key, laneA.head.event.text, laneA.ended, laneA.latest.event.text, laneA.tools], ["lane-a", "coder — work", true, "a2", 2]);
+  assert.deepEqual([laneB.ended, laneB.latest.event.text, laneB.tools], [false, "b1", 1]);
+  assert.equal(grouped.find((item) => item.type === "line" && item.final)?.key, stream.finalKey);
+});
+
+test("lane rows with no laneId or an unseen laneOpen stay flat, an orphan ends its lane and the stream's end ends every lane", () => {
+  const rows = (events) => events.map((event, index) => ({ type: "line", key: `e${index}`, event, lane: event.indent, body: null, final: false }));
+  const cut = groupLanes(rows([laneTool("x", "tail of x"), laneTool(null, "no lane"), laneOpen("y"), wire("laneOrphan", "coder lost", { laneId: "y" })]), { ended: false });
+  assert.deepEqual(shapes(cut), ["tail of x", "no lane", "lane y: coder lost"]);
+  assert.deepEqual([cut[2].ended, cut[2].latest], [true, null]);
+  const ended = groupLanes(rows([laneOpen("z"), laneTool("z", "z1")]), { ended: true });
+  assert.equal(ended[0].ended, true);
+});
+
+test("the tool fold passes lane blocks through whole and never folds their rows", () => {
+  const block = groupLanes([{ type: "line", key: "open", event: laneOpen("a"), lane: false, body: null, final: false }, ...toolRows(10, "a")], { ended: false });
+  const folded = foldRows([...toolRows(10, "b"), ...block], { allTools: false });
+  assert.deepEqual(folded.map((item) => item.type), ["line", "line", "line", "more", "line", "line", "lane"]);
+  assert.equal(folded.at(-1).rows.length, 10);
 });
 
 test("a text reads as markdown with 3 or more lines led by a heading, a bullet or a pipe", () => {

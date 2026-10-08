@@ -37,6 +37,10 @@ const LANE_KINDS = new Set(["laneOpen", "laneClose", "laneOrphan"]);
 
 const GATE_KINDS = new Set(["gate", "notice"]);
 
+const LANE_END_KINDS = new Set(["laneClose", "laneOrphan"]);
+
+const TOOL_KINDS = new Set(["tool", "toolError"]);
+
 const BYTE_UNITS = ["KB", "MB", "GB"];
 
 const NOT_KEPT = " (answer not kept)";
@@ -57,6 +61,17 @@ export interface MoreRow {
   type: "more";
   key: string;
   count: number;
+}
+
+export interface LaneGroup {
+  type: "lane";
+  key: string;
+  laneId: string;
+  head: LogRow;
+  rows: LogRow[];
+  ended: boolean;
+  latest: LogRow | null;
+  tools: number;
 }
 
 export interface StreamContext {
@@ -346,22 +361,55 @@ function foldRun(run: LogRow[]): Array<LogRow | MoreRow> {
   return [...run.slice(0, TOOL_RUN_HEAD), more, ...run.slice(-TOOL_RUN_TAIL)];
 }
 
-// The visible lines with each long run of one lane's plain tool calls folded to `… N more tools`, unless all tools show.
-export function foldRows(rows: readonly LogRow[], { allTools }: { allTools: boolean }): Array<LogRow | MoreRow> {
+// A lane's block opened by its laneOpen line, holding no line yet.
+function openLaneGroup(head: LogRow, laneId: string): LaneGroup {
+  return { type: "lane", key: `lane-${laneId}`, laneId, head, rows: [], ended: false, latest: null, tools: 0 };
+}
+
+// Settles a lane's block once every line is placed: ended with the stream, its latest tool call and its tool count.
+function settleLaneGroup(group: LaneGroup, streamEnded: boolean) {
+  const tools = group.rows.filter((row) => TOOL_KINDS.has(row.event.kind));
+  group.ended ||= streamEnded;
+  group.latest = tools.at(-1) ?? null;
+  group.tools = tools.length;
+}
+
+// The visible lines with each lane whose laneOpen was seen gathered into one block at its open; every other line stays flat in place.
+export function groupLanes(rows: readonly LogRow[], { ended }: { ended: boolean }): Array<LogRow | LaneGroup> {
+  const out: Array<LogRow | LaneGroup> = [];
+  const groups = new Map<string, LaneGroup>();
+  for (const row of rows) {
+    const laneId = row.event.laneId;
+    const group = laneId ? groups.get(laneId) : undefined;
+    if (group) {
+      group.rows.push(row);
+      if (LANE_END_KINDS.has(row.event.kind)) group.ended = true;
+    } else if (laneId && row.event.kind === "laneOpen") {
+      const opened = openLaneGroup(row, laneId);
+      groups.set(laneId, opened);
+      out.push(opened);
+    } else out.push(row);
+  }
+  for (const group of groups.values()) settleLaneGroup(group, ended);
+  return out;
+}
+
+// The visible lines with each long run of one lane's plain tool calls folded to `… N more tools`, unless all tools show; a lane block passes through whole.
+export function foldRows(rows: ReadonlyArray<LogRow | LaneGroup>, { allTools }: { allTools: boolean }): Array<LogRow | MoreRow | LaneGroup> {
   if (allTools) return [...rows];
-  const out: Array<LogRow | MoreRow> = [];
+  const out: Array<LogRow | MoreRow | LaneGroup> = [];
   let run: LogRow[] = [];
   const flush = () => {
     for (const item of foldRun(run)) out.push(item);
     run = [];
   };
   for (const row of rows) {
-    if (isPlainLaneTool(row) && (run.length === 0 || run[0].event.laneId === row.event.laneId)) {
+    if (row.type === "line" && isPlainLaneTool(row) && (run.length === 0 || run[0].event.laneId === row.event.laneId)) {
       run.push(row);
       continue;
     }
     flush();
-    if (isPlainLaneTool(row)) run.push(row);
+    if (row.type === "line" && isPlainLaneTool(row)) run.push(row);
     else out.push(row);
   }
   flush();

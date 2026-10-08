@@ -2,8 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { errorText } from "../../lib/actions";
 import { callTool } from "../../lib/mcp";
 import type { RecallKind } from "../../lib/types";
-import { useEscape } from "../../lib/useEscape";
-import { Button } from "../ui";
+import { SideDrawer } from "../SideDrawer";
 import { Markdown } from "./Markdown";
 
 export interface MemoryEntry {
@@ -89,22 +88,19 @@ function RecalledBody({ entry }: { entry: MemoryEntry }) {
 
 // A read-only right drawer with the whole text of one recalled decision, lesson or memory; Esc or the backdrop closes it.
 export function MemoryDrawer({ entry, project, onClose }: { entry: MemoryEntry; project: string; onClose: () => void }) {
-  useEscape(onClose);
   return (
-    <div className="fixed inset-0 z-40">
-      <div className="absolute inset-0 bg-[rgba(5,7,10,.55)]" onMouseDown={onClose} aria-hidden="true" />
-      <aside aria-label={`${entry.kind} ${entry.ref}`} className="absolute top-0 right-0 bottom-0 flex w-full flex-col border-l border-line bg-surface text-[14px] leading-[1.45] text-fg shadow-[-20px_0_60px_rgba(0,0,0,.5)] sm:w-[480px]">
-        <div className="flex items-center gap-3 border-b border-line px-5 py-4">
-          <div className="font-mono text-base font-semibold">{entry.ref}</div>
-          <span className="text-xs text-dim">{entry.kind}</span>
-        </div>
-        <div className="grow overflow-auto p-5">{entry.kind === "decision" ? <DecisionBody entry={entry} project={project} /> : <RecalledBody entry={entry} />}</div>
-        <div className="flex border-t border-line px-5 py-4">
-          <Button variant="ghost" onClick={onClose}>
-            Close
-          </Button>
-        </div>
-      </aside>
-    </div>
+    <SideDrawer label={`${entry.kind} ${entry.ref}`} header={<MemoryDrawerHeader entry={entry} />} onClose={onClose}>
+      {entry.kind === "decision" ? <DecisionBody entry={entry} project={project} /> : <RecalledBody entry={entry} />}
+    </SideDrawer>
+  );
+}
+
+// The drawer header: the entry's ref and its kind.
+function MemoryDrawerHeader({ entry }: { entry: MemoryEntry }) {
+  return (
+    <>
+      <div className="font-mono text-base font-semibold">{entry.ref}</div>
+      <span className="text-xs text-dim">{entry.kind}</span>
+    </>
   );
 }

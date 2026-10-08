@@ -1,12 +1,13 @@
-import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import type { JobStreamState } from "../../lib/events";
 import { attemptsLabel } from "../../lib/format";
-import { DEFAULT_CHIPS, foldRows, foldStream, type LogChips, type LogRow, type LogStream, type MoreRow, rowVisible, type StreamContext } from "../../lib/log-tree";
+import { DEFAULT_CHIPS, foldRows, foldStream, groupLanes, type LaneGroup, type LogChips, type LogRow, type LogStream, type MoreRow, rowVisible, type StreamContext } from "../../lib/log-tree";
 import type { JobDetail } from "../../lib/types";
 import { useToggles } from "../../lib/useToggles";
 import { Chip } from "../ui";
 import { CardTitle } from "./Card";
-import { MoreToolsRow } from "./log/LogBits";
+import { LaneBlock } from "./log/LaneBlock";
+import { LaneRule, MoreToolsRow } from "./log/LogBits";
 import { LogLine } from "./log/LogLine";
 
 const BOTTOM_SLACK_PX = 24;
@@ -35,11 +36,15 @@ interface LogToolbarProps {
   onFollow: () => void;
 }
 
+type LogItem = LogRow | MoreRow | LaneGroup;
+
+type Openable = LogRow | LaneGroup;
+
 interface LogBodyProps {
-  items: Array<LogRow | MoreRow>;
+  items: LogItem[];
   jobRef: string;
-  isOpen: (row: LogRow) => boolean;
-  onToggle: (row: LogRow, open: boolean) => void;
+  isOpen: (item: Openable) => boolean;
+  onToggle: (item: Openable, open: boolean) => void;
   cursorKey: string | null;
 }
 
@@ -100,20 +105,21 @@ function LogToolbar({ chips, onChips, expandAll, onExpandAll, follow, onFollow }
   );
 }
 
-// The cyan rule a subagent lane's lines sit under.
-function LaneRule({ children }: { children: ReactNode }) {
-  return <div className="ml-3 border-l-2 border-lane-rule pl-3">{children}</div>;
-}
-
-// The flat lines of the log, lane lines under their rule and folded tool runs as one count.
+// The lines of the log: each seen lane as one collapsible block, other lane lines under their rule and folded tool runs as one count.
 function LogBody({ items, jobRef, isOpen, onToggle, cursorKey }: LogBodyProps) {
+  const renderRow = (row: LogRow) => {
+    const open = isOpen(row);
+    return <LogLine row={row} jobRef={jobRef} open={open} onToggle={() => onToggle(row, !open)} cursor={row.key === cursorKey} />;
+  };
   return (
     <div className="py-1">
       {items.map((item) => {
         if (item.type === "more") return <LaneRule key={item.key}><MoreToolsRow count={item.count} /></LaneRule>;
-        const open = isOpen(item);
-        const line = <LogLine row={item} jobRef={jobRef} open={open} onToggle={() => onToggle(item, !open)} cursor={item.key === cursorKey} />;
-        return item.lane ? <LaneRule key={item.key}>{line}</LaneRule> : <div key={item.key}>{line}</div>;
+        if (item.type === "lane") {
+          const open = isOpen(item);
+          return <LaneBlock key={item.key} group={item} open={open} onToggle={() => onToggle(item, !open)} cursorKey={cursorKey} renderRow={renderRow} />;
+        }
+        return item.lane ? <LaneRule key={item.key}>{renderRow(item)}</LaneRule> : <div key={item.key}>{renderRow(item)}</div>;
       })}
     </div>
   );
@@ -127,9 +133,12 @@ function streamContext(stream: JobStreamState, job: JobDetail): StreamContext {
 }
 
 // The folded stream with its visible lines, recomputed only when the stream, the job row or the chips move.
-function useLogItems(stream: JobStreamState, job: JobDetail, chips: LogChips): { folded: LogStream; items: Array<LogRow | MoreRow> } {
+function useLogItems(stream: JobStreamState, job: JobDetail, chips: LogChips): { folded: LogStream; items: LogItem[] } {
   const folded = useMemo(() => foldStream(stream.events, streamContext(stream, job)), [stream, job]);
-  const items = useMemo(() => foldRows(folded.rows.filter((row) => rowVisible(row, chips)), { allTools: chips.allTools }), [folded, chips]);
+  const items = useMemo(() => {
+    const visible = folded.rows.filter((row) => rowVisible(row, chips));
+    return foldRows(groupLanes(visible, { ended: stream.ended !== null }), { allTools: chips.allTools });
+  }, [folded, chips, stream.ended]);
   return { folded, items };
 }
 
@@ -145,10 +154,11 @@ export function LiveLog({ stream, job, jobRef }: LiveLogProps) {
   const live = running && !stream.ended;
   const attempts = Math.max(Array.isArray(job.attempts_log) ? job.attempts_log.length : 0, folded.attemptCount);
   const lastKey = items.at(-1)?.key ?? null;
-  const onToggle = (row: LogRow, open: boolean) => {
-    blocks.set(row.key, open);
-    if (open && row.key !== lastKey) setFollow(false);
+  const onToggle = (item: Openable, open: boolean) => {
+    blocks.set(item.key, open);
+    if (open && item.key !== lastKey) setFollow(false);
   };
+  const isOpen = (item: Openable) => blocks.isOpen(item.key, expandAll || (item.type === "line" && item.final));
   const onExpandAll = () => {
     setExpandAll(!expandAll);
     blocks.reset();
@@ -164,7 +174,7 @@ export function LiveLog({ stream, job, jobRef }: LiveLogProps) {
         {stream.events.length === 0 ? (
           <LogPlaceholder stream={stream} />
         ) : (
-          <LogBody items={items} jobRef={jobRef} isOpen={(row) => blocks.isOpen(row.key, expandAll || row.final)} onToggle={onToggle} cursorKey={live ? folded.lastEventKey : null} />
+          <LogBody items={items} jobRef={jobRef} isOpen={isOpen} onToggle={onToggle} cursorKey={live ? folded.lastEventKey : null} />
         )}
       </div>
     </section>

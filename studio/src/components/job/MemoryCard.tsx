@@ -4,6 +4,7 @@ import { type ReactNode, useState } from "react";
 import { errorText } from "../../lib/actions";
 import { getJson } from "../../lib/api";
 import { elapsedClock } from "../../lib/format";
+import { usePrFileUrl } from "../../lib/pr-file";
 import { jobRef } from "../../lib/queue";
 import type { JobDetail, Recall, RecallHit, RecallKind, RecallsAnswer } from "../../lib/types";
 import { ICON_STROKE } from "../StatusIcon";
@@ -41,9 +42,18 @@ const KIND_WORDS: { kind: HitKind; one: string; many: string }[] = [
   { kind: "memory", one: "memory", many: "memories" },
 ];
 
+const BADGE_KINDS: { kind: HitKind; letter: string; one: string; many: string }[] = [
+  { kind: "decision", letter: "D", one: "decision", many: "decisions" },
+  { kind: "lesson", letter: "L", one: "lesson", many: "lessons" },
+  { kind: "memory", letter: "M", one: "memory", many: "memories" },
+  { kind: "index", letter: "I", one: "index file", many: "index files" },
+];
+
 type OpenEntry = (entry: MemoryEntry) => void;
 
 type KindPart = { count: number; word: string };
+
+type BadgeCount = { kind: HitKind; letter: string; count: number; title: string };
 
 // The recalls of one job's whole log with the refs they applied, refreshed every 10 s while it runs.
 function useRecalls(ref: string, running: boolean) {
@@ -102,6 +112,14 @@ function kindPartsLabel(parts: KindPart[]): string {
   return parts.map((part) => `${part.count} ${part.word}`).join(" · ");
 }
 
+// The non-zero hit counts of a context block per badge kind, in D, L, M, I order.
+function badgeCounts(hits: RecallHit[], recall: Recall): BadgeCount[] {
+  return BADGE_KINDS.map(({ kind, letter, one, many }) => {
+    const count = hits.filter((hit) => hitKindOf(hit, recall) === kind).length;
+    return { kind, letter, count, title: `${count} ${count === 1 ? one : many}` };
+  }).filter((badge) => badge.count > 0);
+}
+
 // Who asked and when: the agent, its call count when merged, the attempt past the first and the clock.
 function whoLabel(recall: Recall): string {
   const calls = typeof recall.calls === "number" && recall.calls > 1 ? ` · ${recall.calls} calls` : "";
@@ -131,27 +149,6 @@ function scoreLabel(score: number | null | undefined): string | null {
 // The last path segment of an indexed file, the whole ref otherwise.
 function shortRef(ref: string, kind: HitKind): string {
   return kind === "index" ? ref.slice(ref.lastIndexOf("/") + 1) || ref : ref;
-}
-
-// The hex SHA-256 of a text, the anchor GitHub gives a file in a pull request diff.
-async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-// The link to a file in the pull request diff, the diff's file list when the anchor cannot be computed.
-function usePrFileUrl(prUrl: string, path: string) {
-  return useQuery({
-    queryKey: ["pr-file-anchor", prUrl, path],
-    queryFn: async () => {
-      try {
-        return `${prUrl}/files#diff-${await sha256Hex(path)}`;
-      } catch {
-        return `${prUrl}/files`;
-      }
-    },
-    staleTime: Number.POSITIVE_INFINITY,
-  });
 }
 
 // The header strip: title and the recall, hit and applied counts.
@@ -199,16 +196,36 @@ function QueryLine({ recall }: { recall: Recall }) {
   );
 }
 
-// The heading of a context block: the scale icon, the phase it was built for, its kind counts, then who asked and when.
+// One kind count of a context block as a small coloured badge like `D 51`.
+function KindBadge({ badge }: { badge: BadgeCount }) {
+  return (
+    <span title={badge.title} className={`rounded-[3px] border border-current/40 px-[5px] font-mono text-[10px] leading-[14px] ${KIND_TEXT[badge.kind]}`}>
+      {`${badge.letter} ${badge.count}`}
+    </span>
+  );
+}
+
+// The kind badges of a context block, only the kinds it brought back.
+function KindBadges({ recall }: { recall: Recall }) {
+  return badgeCounts(hitsOf(recall), recall).map((badge) => <KindBadge key={badge.kind} badge={badge} />);
+}
+
+// The heading of a context block: the one-line phase title, then its kind badges and who asked and when.
 function ContextLine({ recall }: { recall: Recall }) {
   const subject = typeof recall.phase === "number" ? `phase ${recall.phase}` : (recall.target ?? "a phase");
-  const counts = kindPartsLabel(kindParts(hitsOf(recall), recall));
+  const title = `context for ${subject}`;
   return (
-    <div className="flex items-center gap-[7px] font-mono text-xs text-fg">
-      <Scale size={12} strokeWidth={ICON_STROKE} aria-hidden="true" className="shrink-0 text-accent" />
-      <span className="min-w-0 break-words">{`context for ${subject}`}</span>
-      {counts && <LogTag>{counts}</LogTag>}
-      <WhoLabel recall={recall} />
+    <div className="flex flex-col gap-1">
+      <div className="flex min-w-0 items-center gap-[7px] font-mono text-xs text-fg">
+        <Scale size={12} strokeWidth={ICON_STROKE} aria-hidden="true" className="shrink-0 text-accent" />
+        <span className="min-w-0 flex-1 truncate" title={title}>
+          {title}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 pl-[19px]">
+        <KindBadges recall={recall} />
+        <WhoLabel recall={recall} />
+      </div>
     </div>
   );
 }

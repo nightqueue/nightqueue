@@ -216,6 +216,33 @@ export interface Diffstat {
   note: string | null;
 }
 
+export interface FileDiff {
+  path: string;
+  from: string | null;
+  kind: DiffKind | null;
+  source: "worktree" | "unavailable";
+  base: string | null;
+  untracked: boolean;
+  binary: boolean;
+  truncated: boolean;
+  diff: string | null;
+  note: string | null;
+}
+
+export type DiffLineKind = "add" | "del" | "ctx" | "meta";
+
+export interface DiffLine {
+  kind: DiffLineKind;
+  text: string;
+  oldNo: number | null;
+  newNo: number | null;
+}
+
+export interface DiffHunk {
+  header: string;
+  lines: DiffLine[];
+}
+
 export interface RecallHit {
   ref: string | null;
   title: string | null;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -8,7 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startStudioServer } from "../../src/studio/server.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { jobLogPath } from "../../src/config/paths.mjs";
+import { jobLogPath, secretsPath } from "../../src/config/paths.mjs";
 import { attemptMarker, toolResultEvent, toolUseEvent } from "../../test-support/streams.mjs";
 import { ensureProject, makeHome } from "../../test-support/memory.mjs";
 import { APP_JS, INDEX_HTML, makeDist, send, sendRaw, startStudio, STUDIO_TOKEN, studioCookie } from "../../test-support/studio.mjs";
@@ -20,8 +20,10 @@ const GATED_REQUESTS = [
   { method: "GET", path: "/assets/app.js" },
   { method: "GET", path: "/api/info" },
   { method: "GET", path: "/api/jobs/J-1/diffstat" },
+  { method: "GET", path: "/api/jobs/J-1/diff?path=a.txt" },
   { method: "GET", path: "/api/jobs/J-1/recalls" },
   { method: "GET", path: "/events" },
+  { method: "POST", path: "/api/connections/linear", headers: { "content-type": "application/json" }, body: "{\"api_key\":\"lin_api_x\"}" },
   { method: "POST", path: "/mcp", headers: { "content-type": "application/json" }, body: "{}" },
 ];
 
@@ -233,6 +235,73 @@ test("the diffstat of a job with no worktree and no recorded files answers none"
   assert.equal(answer.status, 200);
   const body = JSON.parse(answer.body);
   assert.deepEqual([body.source, body.files, body.totals], ["none", [], null]);
+});
+
+test("the diff of one file needs `?path=`, and a path that is not one of the job's files is a 404", async (t) => {
+  const env = makeHome(t, "studio-api-file-diff");
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
+  const { port } = await startStudio(t, env);
+  const headers = { cookie: studioCookie(port) };
+  assert.equal((await send(port, { path: `/api/jobs/J-${id}/diff`, headers })).status, 400);
+  assert.equal((await send(port, { path: `/api/jobs/J-${id}/diff?path=${encodeURIComponent("../../etc/passwd")}`, headers })).status, 404);
+  assert.equal((await send(port, { path: "/api/jobs/J-999/diff?path=a.txt", headers })).status, 404);
+  assert.equal((await send(port, { path: "/api/jobs/nope/diff?path=a.txt", headers })).status, 400);
+});
+
+const LINEAR_KEY = "lin_api_route_secret_0123456789";
+
+// A fake Linear fetch counting its calls, answering a viewer or an HTTP refusal.
+function fakeLinearFetch(status) {
+  const calls = [];
+  const impl = async () => {
+    calls.push(1);
+    return { status, headers: new Map(), json: async () => ({ data: { viewer: { id: "u1", name: "Ana" } } }) };
+  };
+  return { impl, calls };
+}
+
+// Captures what the process writes to stderr while one async step runs.
+async function stderrDuring(step) {
+  const written = [];
+  const write = process.stderr.write;
+  process.stderr.write = (chunk, ...rest) => {
+    written.push(String(chunk));
+    return write.call(process.stderr, chunk, ...rest);
+  };
+  try {
+    return { result: await step(), stderr: written.join("") };
+  } finally {
+    process.stderr.write = write;
+  }
+}
+
+test("the Linear connect route tests the key, stores it only when valid, and never echoes it", async (t) => {
+  for (const [status, expected] of [[401, 400], [200, 200]]) {
+    const env = makeHome(t, `studio-connect-${status}`);
+    const fetch = fakeLinearFetch(status);
+    const { port, origin } = await startStudio(t, env, { fetchImpl: fetch.impl });
+    const headers = { cookie: studioCookie(port), origin, "content-type": "application/json" };
+    const post = () => send(port, { method: "POST", path: "/api/connections/linear", body: JSON.stringify({ api_key: LINEAR_KEY }), headers });
+    const { result: answer, stderr } = await stderrDuring(post);
+    assert.equal(answer.status, expected, answer.body);
+    assert.ok(!answer.body.includes(LINEAR_KEY) && !stderr.includes(LINEAR_KEY), "the key was echoed");
+    assert.equal(fetch.calls.length, 1);
+    assert.equal(existsSync(secretsPath(env)), status === 200);
+    if (status === 200) assert.equal(JSON.parse(answer.body).viewer, "Ana");
+  }
+});
+
+test("the Linear connect route is refused from inside a job before Linear is asked", async (t) => {
+  const home = makeHome(t, "studio-connect-job");
+  const env = { ...home, NIGHTQUEUE_JOB_ID: "7", NIGHTQUEUE_JOB_HOME: home.NIGHTQUEUE_HOME };
+  const fetch = fakeLinearFetch(200);
+  const { port, origin } = await startStudio(t, env, { fetchImpl: fetch.impl });
+  const headers = { cookie: studioCookie(port), origin, "content-type": "application/json" };
+  const answer = await send(port, { method: "POST", path: "/api/connections/linear", body: JSON.stringify({ api_key: LINEAR_KEY }), headers });
+  assert.equal(answer.status, 400);
+  assert.match(answer.body, /refused: /);
+  assert.equal(fetch.calls.length, 0);
+  assert.equal(existsSync(secretsPath(env)), false);
 });
 
 // Spawns `nightqueue studio` on an ephemeral port in a temporary home and resolves the URL it printed.
