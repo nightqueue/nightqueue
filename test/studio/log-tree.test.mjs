@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_CHIPS, foldRows, foldStream, formatBytes, groupLanes, looksLikeMarkdown, rowVisible } from "../../studio/src/lib/log-tree.ts";
+import { foldStream, formatBytes, groupLanes, looksLikeMarkdown } from "../../studio/src/lib/log-tree.ts";
 
 const FOLD_BUDGET_MS = 200;
 
@@ -164,15 +164,9 @@ function toolRows(count, laneId = "a") {
   return Array.from({ length: count }, (_, index) => ({ type: "line", key: `${laneId}${index}`, event: laneTool(laneId, `tool ${index}`), lane: true, body: null, final: false }));
 }
 
-test("a long run of one lane's tools keeps its first 3 and last 2 lines around a count, unless every tool shows", () => {
-  const folded = foldRows(toolRows(10), { allTools: false });
-  assert.deepEqual(
-    folded.map((item) => (item.type === "more" ? `more ${item.count}` : item.event.text)),
-    ["tool 0", "tool 1", "tool 2", "more 5", "tool 8", "tool 9"],
-  );
-  assert.equal(foldRows(toolRows(6), { allTools: false }).length, 6, "a single hidden tool is never folded");
-  assert.equal(foldRows(toolRows(10), { allTools: true }).length, 10);
-  assert.equal(foldRows([...toolRows(4, "a"), ...toolRows(4, "b")], { allTools: false }).length, 8, "runs of two lanes never fold together");
+test("a long run of one lane's tools stays one row per call, none folded into a count", () => {
+  const items = groupLanes(toolRows(10), { ended: false });
+  assert.deepEqual(items.map((item) => item.event.text), Array.from({ length: 10 }, (_, index) => `tool ${index}`));
 });
 
 // The shape of a grouped list: a lane block as `lane <id>: <row texts>`, a flat line as its text.
@@ -200,11 +194,10 @@ test("lane rows with no laneId or an unseen laneOpen stay flat, an orphan ends i
   assert.equal(ended[0].ended, true);
 });
 
-test("the tool fold passes lane blocks through whole and never folds their rows", () => {
+test("a lane block keeps every one of its tool rows", () => {
   const block = groupLanes([{ type: "line", key: "open", event: laneOpen("a"), lane: false, body: null, final: false }, ...toolRows(10, "a")], { ended: false });
-  const folded = foldRows([...toolRows(10, "b"), ...block], { allTools: false });
-  assert.deepEqual(folded.map((item) => item.type), ["line", "line", "line", "more", "line", "line", "lane"]);
-  assert.equal(folded.at(-1).rows.length, 10);
+  assert.deepEqual(block.map((item) => item.type), ["lane"]);
+  assert.equal(block[0].rows.length, 10);
 });
 
 test("a text reads as markdown with 3 or more lines led by a heading, a bullet or a pipe", () => {
@@ -212,15 +205,11 @@ test("a text reads as markdown with 3 or more lines led by a heading, a bullet o
   assert.equal(looksLikeMarkdown("Error: boom\n- one\nat line 3"), false);
 });
 
-test("the chips show the narrated lines and lanes by default, and always show composed, report and tool-error lines", () => {
-  const row = (event) => ({ type: "line", key: "e0", event, lane: event.indent, body: null, final: false });
-  assert.equal(rowVisible(row(wire("text", "hello")), DEFAULT_CHIPS), true);
-  assert.equal(rowVisible(row(wire("tool", "Bash git status", { tool: "Bash" })), DEFAULT_CHIPS), false);
-  assert.equal(rowVisible(row(wire("tool", "lesson_recall worker", { tool: "lesson_recall" })), DEFAULT_CHIPS), true);
-  assert.equal(rowVisible(row(wire("tool", "Bash nightqueue run check 03", { tool: "Bash" })), DEFAULT_CHIPS), true);
-  const hidden = { narrated: false, orchestrator: false, lanes: false, allTools: false };
-  for (const kind of ["report", "toolError", "attempt", "attemptEnd", "gateQuestion", "operator", "phase"]) assert.equal(rowVisible(row(wire(kind, kind)), hidden), true, kind);
-  assert.equal(rowVisible(row(laneTool("a")), hidden), false);
+test("the log shows every row: narrated text, orchestrator tools and every lane tool call", () => {
+  const events = [attempt(1), wire("text", "hello"), wire("tool", "Bash git status", { tool: "Bash" }), laneOpen("a"), laneTool("a", "a1"), laneTool("a", "a2")];
+  const stream = foldStream(events, context());
+  assert.deepEqual(texts(stream), ["attempt 1", "hello", "Bash git status", "coder — work", "a1", "a2"]);
+  assert.equal(groupLanes(stream.rows, { ended: false }).find((item) => item.type === "lane").rows.length, 2);
 });
 
 test("a byte count reads as a short size", () => {
@@ -243,8 +232,8 @@ test("folding twenty thousand events stays well inside a render frame budget", (
   const events = largeStream();
   const started = performance.now();
   const stream = foldStream(events, context({ ended: true, status: "done", attempts: [attemptRow(1)] }));
-  const visible = foldRows(stream.rows.filter((row) => rowVisible(row, DEFAULT_CHIPS)), { allTools: false });
+  const grouped = groupLanes(stream.rows, { ended: true });
   const spent = performance.now() - started;
-  assert.ok(visible.length < stream.rows.length);
+  assert.ok(grouped.length < stream.rows.length);
   assert.ok(spent < FOLD_BUDGET_MS, `the fold took ${spent.toFixed(1)} ms`);
 });
