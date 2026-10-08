@@ -35,3 +35,36 @@ export function phaseAttemptsTitle(phase: TimelinePhase, attemptsLog: AttemptRow
   const entries = Array.isArray(phase.byAttempt) ? phase.byAttempt : [];
   return entries.map((entry) => `attempt ${entry.attempt}: ${formatDurationMs(entry.durationMs)}${stoppedOutcome(entry, rows)}`).join(" · ");
 }
+
+const PHASE_COLORS = ["#6b7a8f", "#5a8fd0", "#4fb0b8", "#5aa07a", "#8cc05a", "#d0b84f", "#d08a4f", "#c8605a", "#a672c8"];
+
+export interface ShareEntry {
+  number: number;
+  name: string;
+  color: string;
+  percent: string;
+  share: number;
+  running: boolean;
+}
+
+// The color of a phase, stable for the whole job because it is keyed by the phase number alone.
+export function phaseColor(number: number): string {
+  const index = Number.isInteger(number) && number >= 0 ? number % PHASE_COLORS.length : 0;
+  return PHASE_COLORS[index];
+}
+
+// A share of the total as a whole percent; `<1%` for any share above zero and below one percent.
+export function sharePercent(share: number): string {
+  if (!Number.isFinite(share) || share <= 0) return "0%";
+  return share < 0.01 ? "<1%" : `${Math.round(share * 100)}%`;
+}
+
+// The phases that spent tokens, in bar order, each with its color, share of the total and percent label.
+export function shareEntries(phases: readonly TimelinePhase[]): ShareEntry[] {
+  const spent = phases.filter((phase) => Number.isFinite(phase.tokens) && phase.tokens > 0);
+  const sum = spent.reduce((total, phase) => total + phase.tokens, 0);
+  return spent.map((phase) => {
+    const share = phase.tokens / sum;
+    return { number: phase.number, name: phase.name, color: phaseColor(phase.number), percent: sharePercent(share), share, running: phase.state === "now" };
+  });
+}

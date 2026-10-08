@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { phaseAttemptsTitle, phaseCaption, spentMs } from "../../studio/src/lib/track.ts";
+import { phaseAttemptsTitle, phaseCaption, phaseColor, shareEntries, sharePercent, spentMs } from "../../studio/src/lib/track.ts";
 
 const STUDIO = new URL("../../studio/src/", import.meta.url);
 
@@ -54,4 +54,19 @@ test("the gate is no longer a segment: format.ts drops its approximations and th
   const track = readFileSync(new URL("components/job/PhaseTimeline.tsx", STUDIO), "utf8");
   assert.doesNotMatch(track, /GateSegment/);
   assert.match(track, /gate at phase/);
+});
+
+test("the share legend lists the spending phases in bar order with a stable color per phase and whole percents", () => {
+  const phases = [phase({ number: 1, name: "triager", tokens: 600 }), phase({ number: 2, name: "explore", tokens: 0 }), phase({ number: 4, name: "coder", tokens: 399, state: "now" }), phase({ number: 5, name: "qa", tokens: 1 })];
+  const entries = shareEntries(phases);
+  assert.deepEqual(entries.map((entry) => [entry.number, entry.name, entry.percent, entry.running]), [[1, "triager", "60%", false], [4, "coder", "40%", true], [5, "qa", "<1%", false]]);
+  assert.deepEqual(entries.map((entry) => entry.color), [phaseColor(1), phaseColor(4), phaseColor(5)]);
+  const later = shareEntries([phase({ number: 0, name: "brief", tokens: 5 }), ...phases]);
+  assert.equal(later.find((entry) => entry.number === 4).color, entries[1].color, "an earlier phase spending does not recolor a later one");
+  assert.equal(new Set(Array.from({ length: 9 }, (_, number) => phaseColor(number))).size, 9);
+});
+
+test("a share percent is whole, <1% above zero and below one percent, and 0% for nothing", () => {
+  assert.deepEqual([sharePercent(0.004), sharePercent(0.01), sharePercent(0.496), sharePercent(1), sharePercent(0), sharePercent(Number.NaN)], ["<1%", "1%", "50%", "100%", "0%", "0%"]);
+  assert.deepEqual(shareEntries([]), []);
 });

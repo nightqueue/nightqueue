@@ -1,23 +1,16 @@
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import type { JobStreamState } from "../../lib/events";
 import { attemptsLabel } from "../../lib/format";
-import { DEFAULT_CHIPS, foldRows, foldStream, groupLanes, type LaneGroup, type LogChips, type LogRow, type LogStream, type MoreRow, rowVisible, type StreamContext } from "../../lib/log-tree";
+import { foldStream, groupLanes, type LaneGroup, type LogRow, type LogStream, type StreamContext } from "../../lib/log-tree";
 import type { JobDetail } from "../../lib/types";
 import { useToggles } from "../../lib/useToggles";
 import { Chip } from "../ui";
 import { CardTitle } from "./Card";
 import { LaneBlock } from "./log/LaneBlock";
-import { LaneRule, MoreToolsRow } from "./log/LogBits";
+import { LaneRule } from "./log/LogBits";
 import { LogLine } from "./log/LogLine";
 
 const BOTTOM_SLACK_PX = 24;
-
-const CHIP_OPTIONS: readonly { key: keyof LogChips; label: string }[] = [
-  { key: "narrated", label: "narrated" },
-  { key: "orchestrator", label: "orchestrator" },
-  { key: "lanes", label: "lanes" },
-  { key: "allTools", label: "all tools" },
-];
 
 const SKELETON_WIDTHS = [30, 70, 55, 80, 40, 65];
 
@@ -28,15 +21,13 @@ interface LiveLogProps {
 }
 
 interface LogToolbarProps {
-  chips: LogChips;
-  onChips: (chips: LogChips) => void;
   expandAll: boolean;
   onExpandAll: () => void;
   follow: boolean;
   onFollow: () => void;
 }
 
-type LogItem = LogRow | MoreRow | LaneGroup;
+type LogItem = LogRow | LaneGroup;
 
 type Openable = LogRow | LaneGroup;
 
@@ -85,16 +76,10 @@ function useFollow(box: RefObject<HTMLDivElement | null>, count: number) {
   return { follow, setFollow, onScroll };
 }
 
-// The chips of the log: the four filters, expand all and follow.
-function LogToolbar({ chips, onChips, expandAll, onExpandAll, follow, onFollow }: LogToolbarProps) {
+// The chips of the log: expand all and follow.
+function LogToolbar({ expandAll, onExpandAll, follow, onFollow }: LogToolbarProps) {
   return (
     <div className="flex flex-wrap gap-1.5 sm:ml-auto">
-      {CHIP_OPTIONS.map((option) => (
-        <Chip key={option.key} on={chips[option.key]} onClick={() => onChips({ ...chips, [option.key]: !chips[option.key] })}>
-          {option.label}
-        </Chip>
-      ))}
-      <span className="mx-1 w-px self-stretch bg-line" aria-hidden="true" />
       <Chip on={expandAll} onClick={onExpandAll}>
         expand all
       </Chip>
@@ -105,7 +90,7 @@ function LogToolbar({ chips, onChips, expandAll, onExpandAll, follow, onFollow }
   );
 }
 
-// The lines of the log: each seen lane as one collapsible block, other lane lines under their rule and folded tool runs as one count.
+// The lines of the log: each seen lane as one collapsible block and other lane lines under their rule.
 function LogBody({ items, jobRef, isOpen, onToggle, cursorKey }: LogBodyProps) {
   const renderRow = (row: LogRow) => {
     const open = isOpen(row);
@@ -114,7 +99,6 @@ function LogBody({ items, jobRef, isOpen, onToggle, cursorKey }: LogBodyProps) {
   return (
     <div className="py-1">
       {items.map((item) => {
-        if (item.type === "more") return <LaneRule key={item.key}><MoreToolsRow count={item.count} /></LaneRule>;
         if (item.type === "lane") {
           const open = isOpen(item);
           return <LaneBlock key={item.key} group={item} open={open} onToggle={() => onToggle(item, !open)} cursorKey={cursorKey} renderRow={renderRow} />;
@@ -132,21 +116,17 @@ function streamContext(stream: JobStreamState, job: JobDetail): StreamContext {
   return { ended: stream.ended !== null, attempts, status: job.status, notice: job.notice_md, operatorNote: job.operator_note, phaseNames };
 }
 
-// The folded stream with its visible lines, recomputed only when the stream, the job row or the chips move.
-function useLogItems(stream: JobStreamState, job: JobDetail, chips: LogChips): { folded: LogStream; items: LogItem[] } {
+// The folded stream with every line grouped by lane, recomputed only when the stream or the job row move.
+function useLogItems(stream: JobStreamState, job: JobDetail): { folded: LogStream; items: LogItem[] } {
   const folded = useMemo(() => foldStream(stream.events, streamContext(stream, job)), [stream, job]);
-  const items = useMemo(() => {
-    const visible = folded.rows.filter((row) => rowVisible(row, chips));
-    return foldRows(groupLanes(visible, { ended: stream.ended !== null }), { allTools: chips.allTools });
-  }, [folded, chips, stream.ended]);
+  const items = useMemo(() => groupLanes(folded.rows, { ended: stream.ended !== null }), [folded, stream.ended]);
   return { folded, items };
 }
 
-// The live log card: every attempt of the job in one chronological stream, with its chips, expand all, follow and the blinking cursor while it runs.
+// The live log card: every attempt of the job in one chronological stream, with expand all, follow and the blinking cursor while it runs.
 export function LiveLog({ stream, job, jobRef }: LiveLogProps) {
-  const [chips, setChips] = useState<LogChips>(DEFAULT_CHIPS);
   const [expandAll, setExpandAll] = useState(false);
-  const { folded, items } = useLogItems(stream, job, chips);
+  const { folded, items } = useLogItems(stream, job);
   const blocks = useToggles();
   const box = useRef<HTMLDivElement>(null);
   const { follow, setFollow, onScroll } = useFollow(box, stream.events.length);
@@ -168,7 +148,7 @@ export function LiveLog({ stream, job, jobRef }: LiveLogProps) {
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2.5">
         <CardTitle>{running ? "Live log" : "Log"}</CardTitle>
         <span className="text-sm text-muted">{streamCaption({ stream, live, attempts })}</span>
-        <LogToolbar chips={chips} onChips={setChips} expandAll={expandAll} onExpandAll={onExpandAll} follow={follow} onFollow={() => setFollow(!follow)} />
+        <LogToolbar expandAll={expandAll} onExpandAll={onExpandAll} follow={follow} onFollow={() => setFollow(!follow)} />
       </div>
       <div ref={box} onScroll={onScroll} className="max-h-[560px] overflow-auto font-mono text-[12.5px] leading-[1.65] text-log lg:h-[720px] lg:max-h-none">
         {stream.events.length === 0 ? (

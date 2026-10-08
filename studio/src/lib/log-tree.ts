@@ -15,25 +15,13 @@ export const PHASE_NAMES: ReadonlyMap<number, string> = new Map([
   [8, "commit · PR"],
 ]);
 
-const TOOL_RUN_HEAD = 3;
-
-const TOOL_RUN_TAIL = 2;
-
-const MIN_FOLDED_TOOLS = 2;
-
 const MARKDOWN_MIN_LINES = 3;
 
 const MARKDOWN_LEAD = /^[#|-]/;
 
-const RUN_CHECK = /\brun check\b/;
-
 const ATTEMPT_NUMBER = /^attempt (\d+)/;
 
 const NOTICE_INDENT = /^ {4}/;
-
-const ALWAYS_SHOWN_KINDS = new Set(["toolError", "report", "attempt", "attemptEnd", "gateQuestion", "operator", "phase", "truncated"]);
-
-const LANE_KINDS = new Set(["laneOpen", "laneClose", "laneOrphan"]);
 
 const GATE_KINDS = new Set(["gate", "notice"]);
 
@@ -55,12 +43,6 @@ export interface LogRow {
   body: BodyKind | null;
   final: boolean;
   dim?: boolean;
-}
-
-export interface MoreRow {
-  type: "more";
-  key: string;
-  count: number;
 }
 
 export interface LaneGroup {
@@ -89,15 +71,6 @@ export interface LogStream {
   lastEventKey: string | null;
   finalKey: string | null;
 }
-
-export interface LogChips {
-  narrated: boolean;
-  orchestrator: boolean;
-  lanes: boolean;
-  allTools: boolean;
-}
-
-export const DEFAULT_CHIPS: LogChips = { narrated: true, orchestrator: false, lanes: true, allTools: false };
 
 interface Segment {
   number: number | null;
@@ -333,34 +306,6 @@ export function foldStream(events: readonly NarrationEvent[], ctx: StreamContext
   return { rows: state.rows, attemptCount, lastEventKey: state.lastEventKey, finalKey: final?.key ?? null };
 }
 
-// Tells whether an orchestrator tool line is notable: a memory recall, a phase marker, a run check or a phase done.
-export function isNotableTool(event: NarrationEvent): boolean {
-  if (event.tool && (MEMORY_TOOLS.has(event.tool) || event.tool === "run_phase_done")) return true;
-  return Number.isInteger(event.phase) || RUN_CHECK.test(event.text);
-}
-
-// Tells whether one line of the log shows under the chips; composed, phase, report and tool-error lines always do.
-export function rowVisible(row: LogRow, chips: LogChips): boolean {
-  const event = row.event;
-  if (ALWAYS_SHOWN_KINDS.has(event.kind)) return true;
-  if (event.indent || LANE_KINDS.has(event.kind)) return chips.lanes;
-  if (event.kind === "tool") return isNotableTool(event) ? chips.narrated : chips.orchestrator;
-  return chips.narrated;
-}
-
-// Tells whether a line is a plain tool call of a lane, the only kind a long run folds.
-function isPlainLaneTool(row: LogRow): boolean {
-  return row.lane && row.event.kind === "tool" && row.body === null;
-}
-
-// One run of plain tool lines: its head and tail kept, the middle folded into a count.
-function foldRun(run: LogRow[]): Array<LogRow | MoreRow> {
-  const hidden = run.length - TOOL_RUN_HEAD - TOOL_RUN_TAIL;
-  if (hidden < MIN_FOLDED_TOOLS) return run;
-  const more: MoreRow = { type: "more", key: `${run[TOOL_RUN_HEAD].key}-more`, count: hidden };
-  return [...run.slice(0, TOOL_RUN_HEAD), more, ...run.slice(-TOOL_RUN_TAIL)];
-}
-
 // A lane's block opened by its laneOpen line, holding no line yet.
 function openLaneGroup(head: LogRow, laneId: string): LaneGroup {
   return { type: "lane", key: `lane-${laneId}`, laneId, head, rows: [], ended: false, latest: null, tools: 0 };
@@ -391,28 +336,6 @@ export function groupLanes(rows: readonly LogRow[], { ended }: { ended: boolean 
     } else out.push(row);
   }
   for (const group of groups.values()) settleLaneGroup(group, ended);
-  return out;
-}
-
-// The visible lines with each long run of one lane's plain tool calls folded to `… N more tools`, unless all tools show; a lane block passes through whole.
-export function foldRows(rows: ReadonlyArray<LogRow | LaneGroup>, { allTools }: { allTools: boolean }): Array<LogRow | MoreRow | LaneGroup> {
-  if (allTools) return [...rows];
-  const out: Array<LogRow | MoreRow | LaneGroup> = [];
-  let run: LogRow[] = [];
-  const flush = () => {
-    for (const item of foldRun(run)) out.push(item);
-    run = [];
-  };
-  for (const row of rows) {
-    if (row.type === "line" && isPlainLaneTool(row) && (run.length === 0 || run[0].event.laneId === row.event.laneId)) {
-      run.push(row);
-      continue;
-    }
-    flush();
-    if (row.type === "line" && isPlainLaneTool(row)) run.push(row);
-    else out.push(row);
-  }
-  flush();
   return out;
 }
 

@@ -31,14 +31,3 @@ export function LogCursor() {
 export function LaneRule({ children }: { children: ReactNode }) {
   return <div className="ml-3 border-l-2 border-lane-rule pl-3">{children}</div>;
 }
-
-// The line standing for the tool calls a long run folded away.
-export function MoreToolsRow({ count }: { count: number }) {
-  return (
-    <div className="flex gap-2 px-3 py-px text-log-dim">
-      <span className="w-[52px] flex-none" />
-      <span className="w-3 flex-none">·</span>
-      <span>{`… ${count} more tools`}</span>
-    </div>
-  );
-}
